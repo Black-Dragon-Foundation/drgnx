@@ -34,6 +34,74 @@
 string-pixel-width uses)")
  (:what "\\`buffer \\+\\*\\(?:Compile-Log\\|Native-compile-Log\\|Warnings\\)\\*\\'"
   :why "the logs byte and native compilation, and warnings, write to")
- (:what "\\`drgnx-keys--applied length nil -> 0\\'"
-  :why "the variable became bound because the library loaded: a load, not a change")
+ ;; The GUI tier's per-file check (DRGNX_TEST_FILE_LEAKS) reads more than the census does; what follows is what loading a
+ ;; library or a fixture does, which is no leak: a feature is never unloaded.
+ (:what "\\`registry [^ ]+ \\+"
+  :why "a library registering its commands, view types, subscribers or fillers when it loads; a feature is never unloaded, so its registry rows stay")
+ (:what "\\`feature \\+"
+  :source "\\`\\(?:themes\\|test/fixtures\\)/"
+  :why "a theme or a test fixture a test loads; a feature is never unloaded")
+ (:what "\\`\\(?:feature\\|timer\\|hook\\|advice\\|global-map\\) "
+  :source "/\\(?:childframe-elpa\\|pinned-elpa\\)/\\|\\`/elpa/"
+  :why "a pinned child-frame or modal package, or one of the user's packages (DRGNX_USER_ELPA, mounted at /elpa in a container), loaded by the test that needs it: its own hooks, timers and keys come with the load (a function variable it wraps, like the focus function, is not covered: it changes what the next file sees)")
+ (:what "\\`auto-mode .* \\+git-rebase-mode\\'"
+  :why "magit's git-rebase, loaded with magit by the GUI tier's magit ediff row, adds its file pattern (the census records no source for an auto-mode entry)")
+ (:what "\\`\\(?:minor-mode-map\\|minor-mode\\|emulation-map\\|after-load\\) "
+  :why "a library defining its minor mode and map, or an after-load form, when it loads")
+ (:what "\\`timer idle [+-]#\\[nil ((if (buffer-live-p buffer)"
+  :why "the one-shot idle timer that kills a buffer a library displayed: one fired and another is pending, a rolling pair")
+ (:what "\\`timer [+-]surfaces-usage "
+  :why "the layer's idle flush of the usage counters: re-armed by every use, a rolling pair")
+ (:what "\\`global-map [^ ]+ [^ ]* ?\\+nil\\'"
+  :why "a key set to nil: no binding, only the entry; a prefix map created on the way stays")
+ (:what "\\`buffer "
+  :why "buffers are closed by the harness's cleanup between files (ert-kill-all-test-buffers); a hidden work buffer is no state")
+ (:what "\\`frame-param drgnx-\\(?:wb-\\|intent-by\\|layouts-\\|look-\\|frame-role\\|monitor\\|platform-wm\\|work-space-shown\\)"
+  :why "the workbench's own layout and look bookkeeping in the frame parameters: every file that opens a panel sets it; the look rows' drgnx-look-gui-check-clean reads what moves pixels")
+ (:what "\\`frame-param drgnx-grid-[-a-z]+ \\+nil\\'"
+  :why "the grid's bookkeeping on the frame (ids, memory, the undo stack, the last good tree), emptied by the grid fixture's reset.  It cannot be removed: Emacs has no call that deletes a frame parameter (`modify-frame-parameters' and `set-frame-parameter' only store into the frame's alist, nil included, and `frame-parameters' returns a copy), so the census sees the name with nil")
+ (:what "\\`frame-param drgnx-popup-frame \\+nil\\'"
+  :why "the popup lane's slot on the frame, empty again: the row deleted the popup's frame (a frame parameter cannot be removed, only emptied)")
+ (:what "\\`advice server-visit-files \\+drgnx-session--visit-unasked\\'"
+  :why "drgnx-session's load-time advice (no question for a file `drgnx PATH' opens): core, loaded in every drgnx; a feature is never unloaded")
+ (:what "\\`frame-param \\(?:glitnir--[a-z-]+\\|session-name\\) "
+  :why "the renderer's and the session's own bookkeeping")
+ (:what "\\`window-param \\(?:quit-restore\\|quit-restore-prev\\|internal-region-overlay\\|drgnx-uitest-id\\) "
+  :why "what Emacs and the harness note on a window that showed a buffer, was cloned or was driven; none of it draws anything")
+ (:what "\\`window-param [^ ]+ \\+nil\\'"
+  :why "a parameter set to nil: absent, as Emacs cannot remove one")
+ (:what "\\`hook mini-frame-advice-functions \\+"
+  :why "mini-frame's defcustom list of functions it advises, filled when the library loads")
+ (:what "\\`timer [+-]x-hide-tip "
+  :why "Emacs's tooltip timer: one is pending after a tip was shown, gone after it fired")
+ (:what "\\`frame-param \\(?:font-parameter\\|nidhogg--font-height\\|nidhogg-text-zoom\\|line-spacing\\|toplevel-chrome\\|tab-bar-lines-keep-state\\|drgnx-topline-lines\\) "
+  :why "parameters the renderer and the font code derive from `font' and the bars: the look rows' clean check reads the parameters themselves (font, line-spacing, bars)")
+ (:what "\\`face [^ ]+ [+-]\\\\(unspecified\\\\ \\.\\\\ \\(?:unspecified\\|reset\\)\\\\)\\'"
+  :why "a face with no colour of its own on the frame: defined (or first realised) by a library that loaded, or gone back to that; a colour a test sets and leaves is still named")
+ (:what "\\`global-map "
+  :source "/emacs/[0-9.]+/lisp/\\|/Contents/Resources/lisp/"
+  :why "keys an Emacs library (tab-line, help, kmacro) binds in the global map when it loads")
+ (:what "\\`\\(?:hook \\(?:hack-dir-local-get-variables-functions\\|drgnx-settings?-[a-z-]+\\|drgnx-keys-after-apply-functions\\)\\|advice \\(?:hack-local-variables-filter\\|hack-dir-local--get-variables\\)\\) \\+"
+  :source "\\`\\(?:core\\|wb\\|modules\\)/"
+  :why "drgnx's settings and keys libraries wiring themselves into Emacs's file-local variable machinery and their own hooks when they load; a library is never unloaded")
+ (:what "\\`\\(?:hook after-load-functions\\|advice [^ ]+\\) \\+drgnx-keys--"
+  :source "\\`core/drgnx-keys\\.el\\'"
+  :why "the keys core's redirect, installed when drgnx-keys loads and on for the session (`drgnx-keys--install-redirect'; removed only by unload-feature): a GUI file whose session loads the keys core lazily (a bare frame, then a module that requires it) sees it arrive")
+ (:what "\\`frame  \\*drgnx-quickhelp\\* \\+"
+  :why "quick help's card, a pool of one: `drgnx-quickhelp--frame' is made the first time a card shows and reused (hidden, never deleted) by every card after it")
+ (:what "\\`frame-param drgnx-popup-frame \\+nil\\'"
+  :why "the popup lane's floating child frame, a pool of one per root (`drgnx-popup--float-frame'): a test that deletes it sets the root's parameter to nil, and Emacs keeps a parameter once set; nil reads as none")
+ (:what "\\`advice drgnx-hub--connect-socket \\+"
+  :source "\\`harness/"
+  :why "the harness's own hub-caller bookkeeping, installed when drgnx-uitest loads")
+ (:what "\\`hook \\(?:drgnx-guard-prompt-functions\\|describe-widget-functions\\) \\+"
+  :why "the prompt guard's list of prompt functions and the widget describer, filled when their libraries load")
+ (:what "\\`\\(?:hook\\|function-variable\\) "
+  :source "\\`\\(?:core/drgnx-surfaces\\|wb/drgnx-\\(?:wb\\|explorer\\|popup\\)\\|modules/tools/drgnx-replace\\)\\.el\\'"
+  :why "the workbench, surfaces and replace libraries wiring their hooks when first used in a session; each GUI test file has a session of its own, so it reaches no other file")
+ (:what "\\`hook kill-emacs-hook \\+drgnx-ui--stop-own-on-exit\\'"
+  :source "\\`harness/drgnx-ui\\.el\\'"
+  :why "the session harness wiring its stop-on-exit when it loads (a fixture that needs only `drgnx-ui-progress', the panel replay's, loads it); it stops only the sessions this process started, so with none it does nothing")
+ (:what "\\`process [+-]Compiling: "
+  :why "native compilation's own asynchronous jobs (comp-run-async-workers), started by a library's load and ended when they finish: Emacs's, not a test's")
 )

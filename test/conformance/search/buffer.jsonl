@@ -1,0 +1,20 @@
+{"scenario": "search/buffer", "requires": ["v1", "test-hooks"], "doc": "search/buffer: a buffer's text with unsaved edits is searched in place of its file, by the current search at once (a patch, and the ended search's totals again) and by every search after; without text the file is searched on disk again."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "s", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "write_file", "path": "$ROOT/proj/a.txt", "text": "one needle\n"}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}}}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": "$capture:run", "files": 1, "matches": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/buffer", "params": {"view": "s", "path": "$ROOT/proj/a.txt", "tick": 5, "text": "x\nneedle needle\n"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "ops": "$any"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": "$run", "files": 1, "matches": 2}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}}}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "files": 1, "matches": 2}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "search/buffer", "params": {"view": "s", "path": "$ROOT/proj/a.txt"}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}}}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "files": 1, "matches": 1}}, "within_ms": 10000}

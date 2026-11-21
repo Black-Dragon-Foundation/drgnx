@@ -65,6 +65,7 @@ restriction."
                                           (:ai symbol "The provider environment it gets")
                                           (:model string "The model it asks for")
                                           (:tracker-tools (enum on off) "The five tracker tools; on by default")
+                                          (:acp-v2 (enum auto off) "Ask the agent for ACP v2 (a draft): auto asks, off never does; auto by default for claude and codex")
                                           (:doc string "One line")))
                      "Your agent profiles; the built-in ones need none")
           (:default string "The profile New Agent Session… offers")
@@ -125,17 +126,55 @@ OpenRouter agents do not start until it is fixed."
   :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "bool" :schema 'boolean)
 
-(drgnx-defsetting drgnx-agents-start-env-names '("PLAYWRIGHT_MCP_CDP_ENDPOINT")
+(drgnx-defsetting drgnx-agents-start-env-names nil
   "The environment variables an editor module may add to an agent the hub starts (`drgnx-agents-env-functions'), by
 name.  The hub drops any other name, and any name that looks like a credential (it contains KEY, TOKEN, SECRET,
 PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, never a repository or an agent."
   :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "Vec<String>" :schema '(list-of string))
 
+(drgnx-defsetting drgnx-agents-trace-opens '("claude")
+  "The agents whose shell commands' opens the hub sees on Linux (\"seen open\" in the Work space), by provider:
+\"claude\", \"codex\", \"gemini\", \"kimi\" (Kimi Code), \"deepseek\" (DeepSeek Harness).  Claude Code is traced per
+shell step; the others over their whole process tree, which costs every command they run (a test suite run as one
+command: about a third longer), so they are off unless listed.  An agent not listed shows only the files its
+commands name.  Read when a session starts."
+  :type '(repeat (choice (const "claude") (const "codex") (const "gemini") (const "kimi") (const "deepseek")))
+  :group 'drgnx :scope 'global
+  :workspace 'never :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-agents-history t
+  "Non-nil: the hub reads your past Claude Code, Gemini CLI and Codex sessions from their own folders (read-only, on
+this machine only) so Agents: Past Sessions lists, searches and resumes them.  Nil: nothing is read and the hub's
+index of them (history.db) is deleted."
+  :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "bool" :schema 'boolean)
+
+(drgnx-defsetting drgnx-agents-history-providers '("claude" "gemini" "codex")
+  "The CLIs whose past sessions the hub reads (`drgnx-agents-history'): \"claude\" (Claude Code), \"gemini\" (Gemini
+CLI), \"codex\" (Codex).  A CLI taken out of the list is no longer read and its sessions leave the index."
+  :type '(repeat (choice (const "claude") (const "gemini") (const "codex")))
+  :group 'drgnx :scope 'global
+  :workspace 'never :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-agents-history-days 180
+  "Past sessions older than this many days (by the file's change time) are not listed or searched, and leave the
+index.  0 reads every session however old."
+  :type 'natnum :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "u32" :schema 'natnum)
+
+(drgnx-defsetting drgnx-agents-history-resume-writes-original nil
+  "Non-nil: Resume Here on a past session starts with \"write the original\" chosen, so the jailed agent may write
+that one CLI session file and your own CLI sees the continuation.  Nil: it starts on a copy (the default).  You still
+choose per resume."
+  :type 'boolean :group 'drgnx :scope 'global :workspace 'never :agents 'never)
+
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
   permissions reviews stderr exit stopping paused turn draining task via gateway id job remote
-  mcp-dir mcp-sid mcp-socket)           ; unused since the hub runs every session; kept so the shape stays
+  mcp-dir mcp-sid mcp-socket            ; unused since the hub runs every session; kept so the shape stays
+  hooked panel plugins-changed hooks    ; a hub session's hook reach, panel, plugin flag and ((STEP TOOL-ID ROWS)…)
+  background background-ended)         ; ACP v2's background items (nil: not reported) and the last ended ones (plists)
 
 (defvar drgnx-agents--sessions nil "Live and finished sessions, newest first.")
 
@@ -278,6 +317,25 @@ not installed (starting it says so) is left as it is."
 (defun drgnx-agents-profile-names ()
   (delete-dups (mapcar #'car (append (default-value 'drgnx-agents-profiles) drgnx-agents-builtin-profiles))))
 
+(defun drgnx-agents-profile-installed-p (name)
+  "Non-nil when profile NAME's program can be found: on the path, or the file it names."
+  (when-let* ((cmd (plist-get (cdr (assoc name (append (default-value 'drgnx-agents-profiles) drgnx-agents-builtin-profiles)))
+                              :command))
+              (prog (car (drgnx-agents-command cmd))))
+    (and (stringp prog) (or (executable-find prog) (and (file-name-absolute-p prog) (file-executable-p prog))) t)))
+
+(defun drgnx-agents-profile-read (prompt)
+  "Read a profile name with PROMPT; the ones whose program is not installed say so (and where to set them up)."
+  (let ((names (drgnx-agents-profile-names)))
+    (completing-read prompt
+                     (lambda (str pred action)
+                       (if (eq action 'metadata)
+                           `(metadata (annotation-function
+                                       . ,(lambda (n) (unless (drgnx-agents-profile-installed-p n)
+                                                        "  not installed (Onboarding: Agents sets it up)"))))
+                         (complete-with-action action names str pred)))
+                     nil t nil nil (drgnx-agents-default-profile))))
+
 (defun drgnx-agents-default-profile ()
   "The profile New Agent Session offers on Return: `drgnx-agents-default' when it names a profile, else claude."
   (let ((d (default-value 'drgnx-agents-default)))
@@ -337,59 +395,42 @@ applies through the gateway only."
                (list :data-collection (symbol-name (plist-get restrictions :data-collection))))
           (and (plist-get restrictions :zdr) (list :zdr t))))
 
+(defvar drgnx-agents--at-work 0 "How many mirrored sessions work (`drgnx-agents-at-work'), as the hub last counted them.")
+
 (defun drgnx-agents--changed (s)
-  (drgnx-agents--note-attention)
+  "Mirror S changed: run `drgnx-agents-changed-functions'.  What waits on you and the count of sessions at work are
+the hub's (`agents-attention', `drgnx-agents--take-attention'), not made from the sessions here."
   (run-hook-with-args 'drgnx-agents-changed-functions s))
+
+(defun drgnx-agents-at-work ()
+  "How many of the mirrored sessions work: run a turn, or wait on you.  The title row's agents chip shows it (module
+tools/agents sets `drgnx-topline-agents-function'); it reads a variable, so redisplay may call it."
+  drgnx-agents--at-work)
 
 ;;;; What waits on you: the `agents' set of the one "needs you" count
 
-(defvar drgnx-agents--attention-seen nil
-  "What `drgnx-agents--note-attention' last noted: one (SESSION PERMS . REVIEWS) per session, in the order of
-`drgnx-agents--sessions'; PERMS and REVIEWS are copies of its lists (nil for an exited session).")
+(defvar drgnx-agents--attention nil
+  "The notice items the hub last named (`agents-attention'), in the notice model's shape: one per pending permission.")
 
-(defun drgnx-agents--same-items-p (a b)
-  "Non-nil if lists A and B hold the same objects (`eq'), in order; allocates nothing."
-  (while (and a b (eq (car a) (car b))) (setq a (cdr a) b (cdr b)))
-  (and (null a) (null b)))
+(defun drgnx-agents--take-attention (data)
+  "DATA, the hub's `agents-attention' event (`{at_work, items}', derived there from every session's snapshot): the
+count of sessions at work, and the `agents' set of the notice model, one item per pending permission.  A lookup and a
+map over the few items, made when the list changes."
+  (setq drgnx-agents--at-work (or (plist-get data :at_work) 0))
+  (setq drgnx-agents--attention
+        (mapcar (lambda (i)
+                  (list :id (cons 'permission (cons (plist-get i :session) (plist-get i :id)))
+                        :text (plist-get i :text) :detail (plist-get i :detail)
+                        :command 'agents-answer :scope (plist-get i :job)))
+                (append (plist-get data :items) nil)))
+  (drgnx-notice-set 'agents drgnx-agents--attention))
 
-(defun drgnx-agents--attention-same-p ()
-  "Non-nil if no session came or went, and none's permissions or edits to review changed, since the last note."
-  (let ((ss drgnx-agents--sessions) (seen drgnx-agents--attention-seen) (same t))
-    (while (and same ss seen)
-      (let* ((s (car ss)) (e (car seen)) (live (not (eq (drgnx-agent-session-status s) 'exited))))
-        (setq same (and (eq s (car e))
-                        (drgnx-agents--same-items-p (and live (drgnx-agent-session-permissions s)) (cadr e))
-                        (drgnx-agents--same-items-p (and live (drgnx-agent-session-reviews s)) (cddr e)))
-              ss (cdr ss) seen (cdr seen))))
-    (and same (null ss) (null seen))))
-
-(defun drgnx-agents--note-attention ()
-  "Give the notice model the `agents' set: each live session's pending permissions and edits to review.
-Called on every change of a session (`drgnx-agents--changed', a mirror's too), so a streamed chunk costs a walk that
-allocates nothing; the set is built only when a list changed.  A review's path is the agent's: it is abbreviated
-with no file name handler."
-  (unless (drgnx-agents--attention-same-p)
-    (let ((seen nil) (items nil))
-      (dolist (s drgnx-agents--sessions)
-        (let* ((live (not (eq (drgnx-agent-session-status s) 'exited)))
-               (perms (and live (drgnx-agent-session-permissions s)))
-               (reviews (and live (drgnx-agent-session-reviews s)))
-               (sid (drgnx-agent-session-id s)) (name (drgnx-agent-session-name s)) (job (drgnx-agent-session-job s)))
-          (push (cons s (cons (copy-sequence perms) (copy-sequence reviews))) seen)
-          (dolist (p perms)
-            (push (list :id (cons 'permission (cons sid (plist-get p :id)))
-                        :text (format "%s asks: %s" name (or (plist-get p :title) "permission"))
-                        :command 'agents-answer :scope job)
-                  items))
-          (dolist (r reviews)
-            (push (list :id (cons 'review (cons sid (plist-get r :id)))
-                        :text (format "%s wants to write %s" name
-                                      (let ((path (plist-get r :path)) (file-name-handler-alist nil))
-                                        (if (stringp path) (abbreviate-file-name path) "a file")))
-                        :command 'agents-view :scope job)
-                  items))))
-      (setq drgnx-agents--attention-seen (nreverse seen))
-      (drgnx-notice-set 'agents (nreverse items)))))
+(defun drgnx-agents--attention-answered (s item)
+  "The permission ITEM of session S was answered here: its notice leaves the set at once (the hub's list follows)."
+  (let ((id (cons 'permission (cons (drgnx-agent-session-id s) (plist-get item :id)))))
+    (when (seq-find (lambda (i) (equal (plist-get i :id) id)) drgnx-agents--attention)
+      (setq drgnx-agents--attention (seq-remove (lambda (i) (equal (plist-get i :id) id)) drgnx-agents--attention))
+      (drgnx-notice-set 'agents drgnx-agents--attention))))
 
 ;;;; Transcript
 
@@ -497,29 +538,6 @@ keys, so they always go through its gateway (a token, never a key).")
 (the Live browser's endpoint, docs/guide/live.md).  One that fails is reported and skipped, and so is anything
 returned that is not a string.  Only names on `drgnx-agents-start-env-names' reach the agent.")
 
-(drgnx-defsetting drgnx-agents-scrubbed-env (copy-sequence drgnx-agent-config-vendor-env)
-  "Keys never inherited by agents: variables of Emacs's environment that an agent does not get.
-MCP Test and Hook Test on the Agent Settings page unset the same list (drgnx-agent-check.el).
-An agent gets the variables of its own route (the provider key or the gateway token, the model names) and
-nothing else from this list, so a Kimi agent never sees your DeepSeek or OpenRouter key.  A profile without a
-route (`:ai') is the user's own login and also keeps its own vendor's names (`drgnx-agents-own-env').  To pass
-another one on, remove it from this list (or set it in the profile's `:env')."
-  :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
-
-(drgnx-defsetting drgnx-agents-own-env
-  '((claude "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL"
-            "ANTHROPIC_SMALL_FAST_MODEL" "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL"
-            "ANTHROPIC_DEFAULT_OPUS_MODEL" "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL"
-            "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX")
-    (codex "OPENAI_API_KEY" "OPENAI_BASE_URL")
-    (gemini "GEMINI_API_KEY" "GOOGLE_API_KEY"))
-  "Each agent's own credentials and switches: (AGENT NAME…).  A profile without an `:ai' route runs on the user's
-own login, so the names of its agent (by its command: claude, codex, gemini) are exempt from
-`drgnx-agents-scrubbed-env' for it, and only for it.  `AWS_*' and `GOOGLE_APPLICATION_CREDENTIALS' are not scrubbed
-at all."
-  :type '(alist :key-type symbol :value-type (repeat string)) :group 'drgnx
-  :scope 'global :workspace 'never :agents 'never)
-
 (defun drgnx-agents-get (id) (seq-find (lambda (s) (equal (drgnx-agent-session-id s) id)) drgnx-agents--sessions))
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -541,6 +559,7 @@ the hub answered without an error."
   "Answer the pending permission ITEM of session S with OPTION-ID (nil: cancelled): it leaves S's list at once, and
 the hub hears the answer when S is its session's mirror."
   (setf (drgnx-agent-session-permissions s) (delq item (drgnx-agent-session-permissions s)))
+  (drgnx-agents--attention-answered s item)
   (drgnx-agents--changed s)
   (when (drgnx-agent-session-remote s)
     (drgnx-agents--remote s "agents/permission" (list :request (plist-get item :id) :option option-id))))
@@ -604,10 +623,20 @@ pending edits rejected; queued messages wait (`drgnx-agents-deliver-queue')."
   (when (drgnx-agent-session-remote s)
     (drgnx-agents--remote s "agents/stop" nil)))
 
-(defun drgnx-agents-kill (s)
-  "End session S's agent process (in the hub)."
+(defvar drgnx-agents-end-ask-functions nil
+  "Abnormal hook, run with the session by `drgnx-agents-kill' when a command the user ran ends a chat (ASK): a function
+that returns nil keeps the chat (the background work asks \"End this chat?\").  Never run from code or a timer.")
+
+(defvar drgnx-agents-background-functions nil
+  "Called with a mirror after a hub snapshot of its session was taken in (its background items may have changed).")
+
+(defun drgnx-agents-kill (s &optional ask)
+  "End session S's agent process (in the hub).  ASK: it is a command the user ran: `drgnx-agents-end-ask-functions'
+may keep the chat.  Called from code (no ASK, no running command, an automatic path) it never asks."
   (when (drgnx-agent-session-remote s)
-    (drgnx-agents--remote s "agents/kill" nil)))
+    (when (or (not ask) (not this-command) (bound-and-true-p drgnx-guard--automatic)
+              (run-hook-with-args-until-failure 'drgnx-agents-end-ask-functions s))
+      (drgnx-agents--remote s "agents/kill" nil))))
 
 (defun drgnx-agents-sessions () drgnx-agents--sessions)
 

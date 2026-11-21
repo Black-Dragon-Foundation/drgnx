@@ -63,6 +63,8 @@ fn label_of(p: BriefPart) -> &'static str {
         BriefPart::BaseBranch => "Base branch",
         BriefPart::Interfaces => "Interfaces from earlier tasks",
         BriefPart::Check => "Check to run",
+        BriefPart::Gates => "The gates (what the merge checks)",
+        BriefPart::Findings => "Recording what you learn",
         BriefPart::ViewPath => "Without drgnx's tools",
     }
 }
@@ -100,6 +102,9 @@ fn cut_at_heading(s: &str, max: usize) -> &str {
     let at = at.or_else(|| head.rfind("\n\n").filter(|&i| i > 0).map(|i| i + 1));
     &head[..at.unwrap_or(end)]
 }
+
+/// The brief's paragraph on conclusions (work-space design §7.2).
+pub const FINDINGS: &str = "When you establish a fact that changes what you do next, record it with `note_add` kind `finding`, naming its sources. When you choose between ways, use `record_decision`, as before.";
 
 /// The most of S that fits MAX bytes, with a note where it was cut.
 fn cut_with_pointer(s: &str, max: usize, pointer: &str) -> String {
@@ -178,6 +183,84 @@ fn section_from_file(file: &str, n: i64) -> Option<String> {
     Some(raw.trim().to_owned())
 }
 
+/// How an agent satisfies the gate of rule ID, in the brief's words.
+fn satisfy(id: &str) -> &'static str {
+    match id {
+        "red-first" => {
+            "commit the failing tests first and run them, so the hub records the red at that commit; then the code. A \
+             task with no test says `**Red:** none (reason)` in its plan section"
+        }
+        "author-check" => {
+            "before you report: compile, run your own tests and the rule tests at your tip, through the hub's run tools"
+        }
+        "affected-groups" => {
+            "nothing to do: the queue runs the groups your changes affect on the combined tree; a red there comes back \
+             to you"
+        }
+        "merge-notes" => {
+            "where your merge resolves a conflict or touches a shared path, record one note per hunk with both sides' \
+             intent"
+        }
+        "push-gate" => {
+            "never push yourself: the push waits for one full run on the exact commit, and it is the user's"
+        }
+        "flake-hold" => "a flaky test holds the merge: fix it at its cause, never retry it",
+        "rule-tests" => {
+            "run the repo's rule tests (lints, conventions) at your tip with the author check"
+        }
+        "trailers" => "no Co-authored-by or other attribution trailers in your commits",
+        "review" => "the plan's review reads your diff at the plan's end",
+        _ => "see the rule's words",
+    }
+}
+
+/// The Gates block of PACK: its name, each rule that gates the merge (`enforced`, `checked`) with what it checks and
+/// how to satisfy it, the pack's test globs (what counts as a test), its procedures by name and, in full, those for
+/// ROLE (the task's).  None: empty.
+fn gates_block(pack: Option<&vordr::pack::Pack>, role: &str) -> String {
+    let Some(p) = pack else {
+        return String::new();
+    };
+    let mut out = format!(
+        "The merge checks these under the rule pack {} v{}; a held task gets a card saying why.\n",
+        p.name, p.version
+    );
+    for r in p.rules.iter().filter(|r| p.on(&r.id)) {
+        out.push_str(&format!(
+            "- {} ({}): {}. To pass: {}.\n",
+            r.id,
+            r.kind,
+            r.doc.trim_end_matches('.'),
+            satisfy(&r.id)
+        ));
+    }
+    if !p.test_globs.is_empty() {
+        out.push_str(&format!(
+            "Tests are the paths {}.\n",
+            p.test_globs.join(", ")
+        ));
+    }
+    if !p.procedures.is_empty() {
+        let names: Vec<&str> = p.procedures.iter().map(|x| x.name.as_str()).collect();
+        out.push_str(&format!(
+            "Procedures (read one with `procedure_get`): {}.\n",
+            names.join(", ")
+        ));
+        for x in p
+            .procedures
+            .iter()
+            .filter(|x| x.roles.iter().any(|r| r == role))
+        {
+            out.push_str(&format!(
+                "\n### Procedure: {}\n\n{}\n",
+                x.name,
+                x.text.trim_end()
+            ));
+        }
+    }
+    out
+}
+
 /// The line of the section that names the check, if it does.
 fn check_of(section: &str) -> Option<String> {
     section
@@ -249,6 +332,10 @@ fn gather(
         None => None,
     };
     let plan_file = job.as_ref().and_then(|j| j.plan.clone());
+    let pack = match &job_id {
+        Some(j) => norn::read::evidence::pack_of_job(conn, j)?,
+        None => None,
+    };
     // the section: the plan file through saga, else what the job kept of it, else the task entity's own text
     let kept = job.as_ref().and_then(|j| j.data.as_ref()).and_then(|d| {
         d.get("tasks")?
@@ -309,6 +396,17 @@ fn gather(
         (BriefPart::BaseBranch, base),
         (BriefPart::Interfaces, interfaces(conn, ent.n)?),
         (BriefPart::Check, check),
+        (
+            BriefPart::Gates,
+            gates_block(
+                pack.as_ref(),
+                ent.data
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("implement"),
+            ),
+        ),
+        (BriefPart::Findings, FINDINGS.to_owned()),
         (BriefPart::ViewPath, view),
     ];
     Ok((parts, pointer))
@@ -341,12 +439,14 @@ pub async fn task_scope(front: &Front, task: &str) -> Option<(String, Option<Str
     let plan = plan.map_or_else(|| format!("plan:{job}"), |p| format!("plan:{p}"));
     // the project is found by git, off the db's thread
     let project = match repo {
-        Some(r) => {
-            tokio::task::spawn_blocking(move || norn::project::resolve(Path::new(&r)).map(|p| p.id))
-                .await
-                .ok()
-                .flatten()
-        }
+        Some(r) => match crate::graph::project_of(Path::new(&r)).await {
+            Ok(p) => p.map(|p| p.id),
+            // the scope is said without its project, and the log says why
+            Err(e) => {
+                tracing::warn!("a task's scope: {e}");
+                None
+            }
+        },
         None => None,
     };
     Some((plan, project))

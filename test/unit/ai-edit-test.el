@@ -243,7 +243,7 @@
   (seq-filter (lambda (p) (and (equal (process-name p) "drgnx-ai") (process-live-p p))) (process-list)))
 
 (ert-deftest drgnx-ai-edit/stop-cancels-request ()
-  (let ((drgnx-ai-edit-test--delay 1.5) (said nil))
+  (let ((drgnx-ai-edit-test--delay 1.5) (said nil) curl)
     (drgnx-ai-edit-test--with "(defun a ()\n  10)\n"
       (with-temp-buffer
         (insert "(defun a ()\n  1)\n")
@@ -251,10 +251,12 @@
           (drgnx-ai-edit "times ten" (point-min) (point-max))
           (should (= 1 (length (drgnx-ai-edit-test--curls))))
           (should (= 1 (length drgnx-ai--active)))
+          (setq curl (drgnx-ai-edit-test--curls))
           (drgnx-ai-stop)
           (should-not drgnx-ai--active)
           (should-not (drgnx-ai-edit-test--curls))                       ; the process is gone
-          (drgnx-test-pause 2.0 "past the mock's answer, nothing may come")
+          ;; a deleted process runs no filter and no sentinel: no late answer can reach the callback, whatever the server does
+          (should-not (process-live-p (car curl)))
           (should-not (drgnx-ai-edit-test--review 0.1))                  ; the callback never ran
           (should-not (seq-find (lambda (m) (string-match-p "no answer" m)) said))
           (should (seq-find (lambda (m) (string-match-p "stopped" m)) said))

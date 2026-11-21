@@ -1,0 +1,6 @@
+{
+  "name": "echo-ability",
+  "version": "0.1.0",
+  "abilities": [{"name": "echo", "description": "Returns its arguments.",
+                 "input_schema": {"type": "object"}}]
+}

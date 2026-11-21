@@ -1,0 +1,24 @@
+{"scenario": "scm/stage-and-commit", "requires": ["v1"], "doc": "scm/subscribe draws a repository's changes as rows (Changes: the modified and the untracked file); git/stage moves one to Staged Changes; git/commit commits it with the message and answers its sha; once the rest is committed with all, the view says the working tree matches HEAD. Each wait is on the view's own patch (the row that the change inserts), never a fixed time."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "s", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo/src && cd $ROOT/repo && git init -q -b main && echo one > src/a.rs && git add . && git -c user.name=t -c user.email=t@t commit -q -m init && git config user.name t && git config user.email t@t && echo more >> src/a.rs && echo new > b.txt"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "scm/subscribe", "params": {"view": "s", "roots": ["$ROOT/repo"], "view_as": "list"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "class": "gui-1", "ops": {"$contains": [{"insert": {"rows": {"$contains": [{"key": "f\t$ROOT/repo\tchanges\tsrc/a.rs"}]}}}]}}}, "within_ms": 20000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "view/resync", "params": {"view": "s", "class": "gui-1"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "class": "gui-1", "ops": [{"reset": {"$contains": [{"key": "branch\t$ROOT/repo"}, {"key": "f\t$ROOT/repo\tchanges\tsrc/a.rs"}, {"key": "f\t$ROOT/repo\tchanges\tb.txt"}]}}]}}, "within_ms": 5000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "git/stage", "params": {"root": "$ROOT/repo", "paths": ["src/a.rs"]}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}, "within_ms": 20000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "class": "gui-1", "ops": {"$contains": [{"insert": {"rows": {"$contains": [{"key": "f\t$ROOT/repo\tstaged\tsrc/a.rs"}]}}}]}}}, "within_ms": 20000}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "git/commit", "params": {"root": "$ROOT/repo", "message": "more in a", "all": false}}}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": {"sha": "$string"}}, "within_ms": 30000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cd $ROOT/repo && test \"$(git log -1 --format=%s)\" = 'more in a' && git diff --quiet HEAD -- src/a.rs && test -n \"$(git status --porcelain b.txt)\""], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 8, "method": "git/commit", "params": {"root": "$ROOT/repo", "message": "the new file", "all": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 8, "result": {"sha": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "class": "gui-1", "ops": {"$contains": [{"insert": {"rows": {"$contains": [{"key": "note\t$ROOT/repo", "text": "  No changes. Your working tree matches HEAD."}]}}}]}}}, "within_ms": 20000}
+{"do": "send", "conn": "e", "json": {"id": 10, "method": "git/stage", "params": {"root": "$ROOT/repo", "paths": ["../escape"]}}}
+{"do": "expect", "conn": "e", "json": {"id": 10, "error": {"code": "invalid-params"}}}

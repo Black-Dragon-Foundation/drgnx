@@ -1,99 +1,30 @@
 # Live view of the agents' browser
 
-Watch the browser your agents drive, live, and take it over when you need to (module `tools/live`, needs the
-`websocket` package). It works in any graphical Emacs; it needs no WebKit. It shows the page as an image, so a
-terminal window cannot show it: Watch Agents' Browser says so there and starts no browser. For a page an agent visited, or a
-Playwright report after a run, see [browser.md](browser.md).
+The Live view (module `tools/live`, needs the `websocket` package) is waiting for a later drgnx update. Until
+then it only opens and says so.
+
+## What changed
+
+drgnx used to start one headless Chrome on your machine for agents and give its debugging port to the agents it
+launched. That browser ran outside any sandbox, on your network, with the agent in full control of it, so it is gone:
+Live: Start Browser for Agents and Live: Stop Browser for Agents no longer exist, and drgnx starts no browser and
+passes no browser endpoint to agents. Agents' browsers now run inside their own sandboxes, behind the permissions of
+the sandbox ([agent-browser.md](agent-browser.md)).
+
+## What you can do now
 
 | Command | What it does |
 |---|---|
-| Live: Start Browser for Agents | Starts one headless Chrome (or Chromium) for agents. Agents drgnx starts from now on drive it. |
-| Live: Watch Agents' Browser | The page of that browser, live, in the buffer `*drgnx live*` (starts the browser if it is not running). |
-| Live: Take Over / Hand Back | Your clicks, scrolling and typing go to the page, and the agent is told to wait; run it again to hand back. `C-c C-c` in the Live view. |
-| Live: Stop Browser for Agents | Stops that browser and deletes its profile. |
+| Live: Watch Agents' Browser | Opens the buffer `*drgnx live*`, which says that watching an agent's browser arrives with a later update. |
+| Live: Take Over / Hand Back | For the view's connection, which the update brings; nothing to take over yet. `C-c C-c` in the Live view. |
 
-Apart from `C-c C-c` in the Live view, these commands have no keys by default; they are in the palette.
+Both are in the palette; neither has a key by default apart from `C-c C-c` in the Live view. For a page an agent
+visited, or a Playwright report after a run, see [browser.md](browser.md).
 
-## The browser for agents
+## What comes next
 
-drgnx starts the browser as a durable job named `live-browser` (Show Job Log, Stop Job), once per Emacs session:
+The view's screencast client (the tabs, the frames, taking over) is kept in the code as it was and is not connected
+to anything; the later update replaces it with one that watches the browser inside an agent's sandbox.
 
-- headless, with `--remote-debugging-address=127.0.0.1 --remote-debugging-port=0`: the debugging port is on this
-  machine only, and a random one;
-- with a throwaway profile, `live-profile-<pid>` under drgnx's state directory: none of your logins or cookies. It
-  is deleted when you stop the browser, quit Emacs or turn `tools/live` off (Preferences: Modules); a profile left by an Emacs that crashed is cleaned up (its
-  browser stopped) the next time a browser for agents starts;
-- capped at 1 GiB of memory (where jobs run under systemd).
-
-The first of `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` and `chrome` on your `PATH` is
-used (on macOS also the Chrome and Chromium apps); set `drgnx-live-chrome-programs` to change the list.
-
-Agents drgnx starts while the browser runs get `PLAYWRIGHT_MCP_CDP_ENDPOINT=http://127.0.0.1:PORT` in their
-environment, so the Playwright MCP server connects to this browser instead of launching its own. The endpoint gives
-full control of that one browser to local processes; that is why it listens on 127.0.0.1 only, on a random port,
-with a throwaway profile.
-
-**Not live:** agents started before the browser, agents started outside this Emacs (also those a hub runs), and
-`npx playwright test` runs, which launch their own browsers. Use Browser: Agent's Page and Browser: Test Report for
-those.
-
-**Sandboxed agents cannot drive it yet:** a sandboxed session's network reaches only the hub's proxy to its AI
-provider, so it cannot reach the browser's port. A browser for sandboxed agents is being designed.
-
-## The Live view
-
-The view shows the page through Chrome DevTools Protocol screencast frames (JPEG, quality 60, as wide as the
-window), about ten a second. Frames are drawn from a timer, never while you type; a frame that arrives before the
-last one was drawn replaces it, so a busy Emacs drops frames and never queues them. Every frame is acknowledged
-from a quick look at its message; only the frame that is drawn is parsed and decoded. When the view's window
-changes width, the screencast starts again at the new width, so Chrome scales the page, not Emacs on every frame.
-While no window shows the view, the screencast stops; it starts again when the view is shown. The view learns of
-both from the workbench state store (the `windows-changed` and `pane-resized` events, once Emacs is idle), whatever
-changed the window: a key, a divider drag, a timer's split or the window manager. It finds its window there as well.
-
-The header line lists the browser's tabs (the watched one in bold) and the watched page's address. When the agent
-opens a new tab, the view follows it; when the watched tab closes, it shows another one. (The tabs open when the
-view connects are listed, not followed: the first one is watched.)
-
-Below the page, the view says what is wrong when something is:
-
-- **No Chrome or Chromium:** the command stops with a message naming the programs it looked for.
-- **No `websocket` package:** Watch says so before it starts any browser.
-- **The browser exits at start or does not open its port** (10 s): a message with the end of its log.
-- **The port refuses the connection,** or the browser goes away while you watch: the view says so; `g` connects
-  again, and Live: Start Browser for Agents starts a new browser.
-- **An agent that does not use this browser:** a running agent started before it (or outside this Emacs) is named,
-  and so is an agent whose Playwright opened a page that no tab here shows: its MCP may not read
-  `PLAYWRIGHT_MCP_CDP_ENDPOINT`.
-
-Nothing here prompts or waits for the browser, except starting it (Start, or Watch when it is not running), which
-waits up to 10 s for its port. `C-g` stops the wait, and the browser it was starting is stopped and its profile
-deleted, as when it fails to start.
-
-## Taking over
-
-**Live: Take Over / Hand Back** (`C-c C-c` in the view) marks the view **DRIVING**. While it is on:
-
-- mouse clicks (left, middle, right, double) and the wheel on the page go to it as `Input.dispatchMouseEvent`, at
-  the point you clicked: the coordinates are scaled back from the image's size on screen to the page's. A drag moves
-  the mouse to where you let go and is released there;
-- printable characters, `RET`, `TAB`, Backspace, Delete, Escape, the arrows, Home, End, PgUp and PgDn go to it as
-  `Input.dispatchKeyEvent`; `C-…` and `M-…` keys stay Emacs's, so the palette and `C-c C-c` still work. Under Vim keys the view's leader and panel
-  keys are off meanwhile: `SPC`, `j` and `k` type on the page.
-
-Taking over steers every busy agent using this browser with "the user is driving the browser; wait" (through the
-agent's usual steering, or queued for the end of its turn when it cannot be steered); handing back steers "the user
-handed the browser back", also when driving ends because you close the view or stop the browser. Idle agents are
-not sent anything.
-
-## For module authors
-
-`drgnx-live-browser` returns `(:port N :ws URL)`, starting the browser when it is not running; it can wait up to
-10 s, so call it only from commands (`drgnx-live-running` answers at once, nil when no browser runs). Agent
-environments are extended through `drgnx-agents-env-functions` (in `core/drgnx-agents.el`): each function gets the
-session and returns a list of extra `NAME=value` strings; one that fails, or anything returned that is not a string,
-is reported in a message and left out. Only names on `drgnx-agents-start-env-names` reach the agent
-([agents.md](agents.md#what-modules-add-to-a-session)). The tests talk to a CDP stand-in, `test/fixtures/mock-cdp.el`, never to Chrome.
-
-The GUI test `test/ui/editor-m11c1-test.el` shows the Live view on the mock browser (a screenshot). The perf workload
-`live-view` types in a file while the view draws frames from the mock, 30 a second ([perf.md](../develop/perf.md)).
+The setting `drgnx-agents-start-env-names`, which names the variables an editor module may add to an agent, is now
+empty by default ([agents.md](agents.md#what-modules-add-to-a-session)).

@@ -1,0 +1,41 @@
+{"scenario": "recording/effects-land-before-the-tool-call-completes", "requires": ["v1", "test-hooks"], "doc": "Pattern B (gates on the edit step and the permission card that follows it). A mock Claude's edit of hello.txt is recorded, then a permission request the user answers. The hub snapshots the worktree when the edit's tool call completes; on replay (worktree back at its base) the replayer writes the recorded change before it sends that tool_call_update, so the replayed edit step has the live snapshot, checked while the replayer still waits for the permission answer (the turn's end is later)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && echo hello > $ROOT/work/hello.txt && cp -a $ROOT/work $ROOT/base"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict ask)))))\n"}
+{"do": "start", "hub": "live", "env": {"DRGNX_RECORD": "$ROOT/rec", "DRGNX_RECORD_PROVENANCE": "mock"}}
+{"do": "connect", "conn": "c", "hub": "live"}
+{"do": "connect", "conn": "e", "hub": "live"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "tool:edit hello.txt\nask:permission edit"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"tool_kind": "edit", "snapshot": "$capture:snap"}}}, "within_ms": 15000}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"permissions": {"$contains": [{"id": "$capture:req", "options": "$any"}]}}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/permission", "params": {"id": "$sid", "request": "$req", "option": "allow_once"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "\"stopReason\"", "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/kill", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": "$any"}, "within_ms": 10000}
+{"do": "kill", "hub": "live", "signal": "TERM"}
+{"do": "expect_exit", "hub": "live", "code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "rm -r $ROOT/work && cp -a $ROOT/base $ROOT/work && mv $DATA/work.db $ROOT/live.db && rm -f $DATA/work.db-wal $DATA/work.db-shm"], "expect_code": 0}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "replay", "env": {"DRGNX_REPLAY": "$ROOT/rec"}}
+{"do": "connect", "conn": "r", "hub": "replay"}
+{"do": "connect", "conn": "f", "hub": "replay"}
+{"do": "send", "conn": "f", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "f", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "r", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "r", "json": {"id": 1, "result": {"id": "$capture:sid2", "name": "$string"}}}
+{"do": "send", "conn": "r", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid2", "text": "tool:edit hello.txt\nask:permission edit"}}}
+{"do": "expect", "conn": "r", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "f", "json": {"event": "agent-step", "data": {"session": "$sid2", "step": {"tool_kind": "edit", "snapshot": "$snap"}}}, "within_ms": 15000}
+{"do": "expect", "conn": "f", "json": {"event": "agent", "data": {"id": "$sid2", "session": {"permissions": {"$contains": [{"id": "$capture:req2", "options": "$any"}]}}}}, "within_ms": 15000}
+{"do": "file", "path": "$ROOT/work/hello.txt", "contains": "edited by ratatoskr-mock", "count": 1, "at_most": 1}
+{"do": "send", "conn": "r", "json": {"id": 3, "method": "agents/permission", "params": {"id": "$sid2", "request": "$req2", "option": "allow_once"}}}
+{"do": "expect", "conn": "r", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "f", "json": {"event": "agent", "data": {"id": "$sid2", "session": {"status": "idle"}}}, "within_ms": 15000}
+{"do": "file", "path": "$ROOT/tmp/replay/misses.jsonl", "exists": false}

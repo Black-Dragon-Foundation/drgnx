@@ -32,21 +32,21 @@ struct GraphReadArgs {
     op: String,
     /// neighbors, history: the entity's id
     id: Option<String>,
-    /// neighbors, path: only these link kinds (required past depth 3)
+    /// neighbors, path: only these link kinds (needed past depth 3)
     kinds: Option<Vec<String>>,
     /// neighbors: out, in or both (default)
     direction: Option<String>,
-    /// neighbors: how far (1 to 4, default 1)
+    /// neighbors: 1-4, default 1
     depth: Option<i64>,
-    /// neighbors, path: as the graph was at this tx
+    /// neighbors, path: the graph at this tx
     as_of: Option<i64>,
-    /// path: start at this entity
+    /// path: from
     start: Option<String>,
-    /// path: end at this entity
+    /// path: to
     end: Option<String>,
-    /// path: at most this many links (1 to 6, default 3; kinds are required past 3)
+    /// path: max links (1-6, default 3)
     max_depth: Option<i64>,
-    /// history, who_touched: only changes from this tx on
+    /// history, who_touched: changes from this tx on
     since: Option<i64>,
     /// who_touched: the file's path
     path: Option<String>,
@@ -57,7 +57,7 @@ struct GraphRead;
 impl RichTool for GraphRead {
     type Args = GraphReadArgs;
     const NAME: &'static str = "graph_read";
-    const DESCRIPTION: &'static str = "Walk the work graph: neighbors of an entity, the shortest path between two, an entity's history (who changed what), who_touched a file. Answers say truncated and hidden";
+    const DESCRIPTION: &'static str = "Walk the work graph: an entity's neighbors or history (who changed what), the shortest path between two, who_touched a file. Answers say truncated and hidden";
 
     fn run<'a>(
         &'a self,

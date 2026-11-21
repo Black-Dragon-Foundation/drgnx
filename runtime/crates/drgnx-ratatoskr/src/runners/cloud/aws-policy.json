@@ -1,0 +1,212 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RunInstancesTaggedInstance",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/drgnx-hub": "DRGNX_HUB_ID",
+          "ec2:InstanceType": ["DRGNX_SIZE"],
+          "ec2:MetadataHttpTokens": "required",
+          "aws:RequestedRegion": ["DRGNX_REGION"]
+        }
+      }
+    },
+    {
+      "Sid": "RunInstancesTaggedVolume",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:*:*:volume/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/drgnx-hub": "DRGNX_HUB_ID",
+          "aws:RequestedRegion": ["DRGNX_REGION"]
+        }
+      }
+    },
+    {
+      "Sid": "RunInstancesTaggedNetworkInterface",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:*:*:network-interface/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/drgnx-hub": "DRGNX_HUB_ID",
+          "aws:RequestedRegion": ["DRGNX_REGION"]
+        }
+      }
+    },
+    {
+      "Sid": "RunInstancesImage",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:*::image/*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": ["DRGNX_REGION"] } }
+    },
+    {
+      "Sid": "RunInstancesSubnet",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:*:*:subnet/*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": ["DRGNX_REGION"] } }
+    },
+    {
+      "Sid": "RunInstancesSecurityGroup",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:*:*:security-group/*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": ["DRGNX_REGION"] } }
+    },
+    {
+      "Sid": "CreateTagsOnlyAtCreation",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "arn:aws:ec2:*:*:*/*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": ["RunInstances", "CreateImage"],
+          "aws:RequestedRegion": ["DRGNX_REGION"]
+        }
+      }
+    },
+    {
+      "Sid": "EndOurInstances",
+      "Effect": "Allow",
+      "Action": ["ec2:TerminateInstances", "ec2:StopInstances", "ec2:GetConsoleOutput"],
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/drgnx-hub": "DRGNX_HUB_ID",
+          "aws:RequestedRegion": ["DRGNX_REGION"]
+        }
+      }
+    },
+    {
+      "Sid": "CreateImageFromOurInstances",
+      "Effect": "Allow",
+      "Action": "ec2:CreateImage",
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/drgnx-hub": "DRGNX_HUB_ID",
+          "aws:RequestedRegion": ["DRGNX_REGION"]
+        }
+      }
+    },
+    {
+      "Sid": "CreateImageTagged",
+      "Effect": "Allow",
+      "Action": "ec2:CreateImage",
+      "Resource": "arn:aws:ec2:*::image/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/drgnx-hub": "DRGNX_HUB_ID",
+          "aws:RequestedRegion": ["DRGNX_REGION"]
+        }
+      }
+    },
+    {
+      "Sid": "CreateImageTaggedSnapshot",
+      "Effect": "Allow",
+      "Action": "ec2:CreateImage",
+      "Resource": "arn:aws:ec2:*::snapshot/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/drgnx-hub": "DRGNX_HUB_ID",
+          "aws:RequestedRegion": ["DRGNX_REGION"]
+        }
+      }
+    },
+    {
+      "Sid": "OurImages",
+      "Effect": "Allow",
+      "Action": "ec2:DeregisterImage",
+      "Resource": "arn:aws:ec2:*::image/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/drgnx-hub": "DRGNX_HUB_ID",
+          "aws:RequestedRegion": ["DRGNX_REGION"]
+        }
+      }
+    },
+    {
+      "Sid": "OurSnapshots",
+      "Effect": "Allow",
+      "Action": "ec2:DeleteSnapshot",
+      "Resource": "arn:aws:ec2:*::snapshot/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/drgnx-hub": "DRGNX_HUB_ID",
+          "aws:RequestedRegion": ["DRGNX_REGION"]
+        }
+      }
+    },
+    {
+      "Sid": "CreateSecurityGroupTagged",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSecurityGroup",
+      "Resource": "arn:aws:ec2:*:*:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/drgnx-hub": "DRGNX_HUB_ID",
+          "aws:RequestedRegion": ["DRGNX_REGION"]
+        }
+      }
+    },
+    {
+      "Sid": "CreateSecurityGroupInVpc",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSecurityGroup",
+      "Resource": "arn:aws:ec2:*:*:vpc/*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": ["DRGNX_REGION"] } }
+    },
+    {
+      "Sid": "OurSecurityGroups",
+      "Effect": "Allow",
+      "Action": ["ec2:AuthorizeSecurityGroupIngress", "ec2:DeleteSecurityGroup"],
+      "Resource": "arn:aws:ec2:*:*:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/drgnx-hub": "DRGNX_HUB_ID",
+          "aws:RequestedRegion": ["DRGNX_REGION"]
+        }
+      }
+    },
+    {
+      "Sid": "Describe",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ec2:DescribeInstanceAttribute",
+        "ec2:DescribeSpotPriceHistory",
+        "ec2:DescribeImages",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets"
+      ],
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": ["DRGNX_REGION"] } }
+    },
+    {
+      "Sid": "Prices",
+      "Effect": "Allow",
+      "Action": "pricing:GetProducts",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": ["us-east-1"] } }
+    },
+    {
+      "Sid": "MachinesGetNoRole",
+      "Effect": "Deny",
+      "Action": "iam:PassRole",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ImagesNeverPublic",
+      "Effect": "Deny",
+      "Action": ["ec2:ModifyImageAttribute", "ec2:ModifySnapshotAttribute"],
+      "Resource": "*"
+    }
+  ]
+}

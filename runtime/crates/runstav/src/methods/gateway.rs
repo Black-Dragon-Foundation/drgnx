@@ -115,6 +115,12 @@ pub struct KeysParams {
     pub keys: ProviderKeys,
 }
 
+/// The provider whose key the hub forgets (`gateway/revoke-key`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct RevokeKeyParams {
+    pub provider: Id,
+}
+
 /// The ids of the providers whose key the hub holds, never a key: `gateway/keys-held`'s answer, and the data of the
 /// event `gateway/keys-changed`.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -272,6 +278,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "gateway/keys", GatewayKeys(KeysParams) -> bool,
             classes: [User], writes: false,
             doc: "provider keys to the hub's memory (never a file)",
+        ),
+        method!(
+            "gateway/revoke-key", GatewayRevokeKey(RevokeKeyParams) -> bool,
+            classes: [User], writes: false,
+            doc: "the hub forgets one provider's key (true when it held one): the next request finds none, one already sent finishes",
         ),
         method!(
             "gateway/set-budget", GatewaySetBudget(SetBudgetParams) -> bool,

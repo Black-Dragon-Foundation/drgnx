@@ -5,7 +5,12 @@
 (require 'drgnx-modules-fingerprint)
 (require 'drgnx-timer)
 
-(defvar drgnx-keys--applied)                  ; let-bound by one test
+(defvar drgnx-keys--yours)
+(defvar drgnx-keys-user-map)
+(defvar nidhogg-define-key-redirect-function)
+(declare-function drgnx-keys--define "drgnx-keys" (map key def))
+(declare-function drgnx-keys--empty "drgnx-keys" (map))
+
 (defvar drgnx-fp-test-hook nil "A hook the fingerprint reads in these tests.")
 (defvar drgnx-fp-test-registry nil "An alist registry the fingerprint reads in these tests.")
 (defvar drgnx-fp-test-subscribers nil "An EVENT → functions registry.")
@@ -178,16 +183,31 @@
       (when (get-buffer "drgnx-fp-proc") (kill-buffer "drgnx-fp-proc")))
     (should-not (drgnx-fp-test--ours (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint))))))
 
-(ert-deftest drgnx-fingerprint/applied-keys-and-add-function-on-a-function-variable-show ()
-  (let ((drgnx-keys--applied (list '(m k p o)))
-        (drgnx-modules-fingerprint-function-variables '(drgnx-fp-test-function))
+(ert-deftest drgnx-fingerprint/add-function-on-a-function-variable-shows ()
+  (let ((drgnx-modules-fingerprint-function-variables '(drgnx-fp-test-function))
         (drgnx-fp-test-function nil))
     (let ((before (drgnx-modules-fingerprint)))
-      (push '(m2 k2 p2 o2) drgnx-keys--applied)
       (add-function :after (default-value 'drgnx-fp-test-function) #'drgnx-fp-test-fn)
       (let ((whats (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint)))))
-        (should (member "drgnx-keys--applied length 1 -> 2" whats))
         (should (member "function-variable drgnx-fp-test-function +drgnx-fp-test-fn" whats))))))
+
+(ert-deftest drgnx-fingerprint/a-key-of-yours-left-behind-shows ()
+  ;; a test that binds as you and never cleans up: your key's record and your map's binding (in an auxiliary keymap
+  ;; too) show; gone again, nothing does
+  (require 'drgnx-keys)
+  (let ((before (drgnx-modules-fingerprint)) (nidhogg-define-key-redirect-function nil))
+    (unwind-protect
+        (progn
+          (puthash "C-c C-M-z" (cons #'ignore 'command) drgnx-keys--yours)
+          (define-key drgnx-keys-user-map (kbd "C-c C-M-z") #'ignore)
+          (drgnx-keys--define drgnx-keys-user-map (vector 'normal-state ?z) #'ignore)
+          (drgnx-keys--define drgnx-keys-user-map (vector 'normal-state ?y) #'ignore)
+          (let ((whats (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint)))))
+            (should (member "keys yours +1" whats))
+            (should (member "keys user-map +3" whats))))
+      (remhash "C-c C-M-z" drgnx-keys--yours)
+      (drgnx-keys--empty drgnx-keys-user-map))
+    (should-not (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint))))))
 
 (ert-deftest drgnx-fingerprint/full-finds-advice-on-any-function ()
   (let ((before (drgnx-modules-fingerprint t)))
@@ -227,6 +247,35 @@
       (remove-hook 'find-file-hook #'drgnx-fp-test-fn)
       (remove-function after-focus-change-function #'drgnx-fp-test-fn)
       (setq-default fp-test-aliased-hook nil))))
+
+(ert-deftest drgnx-fingerprint/a-keyword-named-like-a-hook-is-not-a-hook ()
+  "A keyword is bound to itself, so `:after-hook' (`define-minor-mode''s, interned when a library using it loads) read as
+a hook holding `:after-hook': 16 GUI files leaked \"hook :after-hook +:after-hook\"."
+  (let ((before (drgnx-modules-fingerprint t)))
+    (intern (format ":drgnx-fp-test-%d-hook" (random 1000000)))
+    (should-not (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint t))))))
+
+(ert-deftest drgnx-fingerprint/a-list-of-hook-names-is-not-a-hook ()
+  "A variable ending in -hooks holds hook names (as `unload-feature-special-hooks'; `drgnx-pixels--quiet-hooks'): it is
+not a hook, so a library that defines one leaks nothing (the census named each name in the list as an entry added)."
+  (let ((before (drgnx-modules-fingerprint t)))
+    (unwind-protect
+        (progn
+          (set-default 'drgnx-fp-test-quiet-hooks '(window-size-change-functions buffer-list-update-hook))
+          (should-not (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint t)))))
+      (makunbound 'drgnx-fp-test-quiet-hooks))))
+
+(ert-deftest drgnx-fingerprint/an-autoloaded-prefix-map-is-not-loaded-by-the-scan ()
+  ;; global-map binds `kmacro-keymap' and `2C-command', autoloaded keymaps: a scan that walked them loaded their
+  ;; libraries, and the next scan showed the features as a leak
+  (autoload 'drgnx-fp-test-auto-map "drgnx-fp-test-no-such-library" nil nil 'keymap)
+  (unwind-protect
+      (let ((map (make-sparse-keymap)))
+        (define-key map (kbd "C-c a") 'drgnx-fp-test-auto-map)
+        (should (equal (list (cons (list 'fp-test "C-c a") 'drgnx-fp-test-auto-map))
+                       (mapcar (lambda (i) (cons (car i) (cdr i))) (drgnx-modules-fingerprint--keymap-items 'fp-test map))))
+        (should (autoloadp (symbol-function 'drgnx-fp-test-auto-map))))
+    (fmakunbound 'drgnx-fp-test-auto-map)))
 
 (ert-deftest drgnx-fingerprint/a-dotted-list-in-a-hook-variable-does-not-stop-the-scan ()
   (let ((before (drgnx-modules-fingerprint t)))
@@ -312,7 +361,9 @@ An absolute bound holds for one obarray, so it is measured in an Emacs of its ow
 
 (ert-deftest drgnx-fingerprint/the-full-scan-allocates-what-it-did ()
   ;; A scan that reads every hook twice, or builds a list per hook, passes the bound only by shrinking the hooks.
-  (should (<= (drgnx-fingerprint-test--child-alloc '(drgnx-modules-fingerprint t)) 111557)))
+  ;; 111557 (1.25 x the 89245 measured then) plus the 27681 the session items (`drgnx-modules-fingerprint--session-items':
+  ;; the global map's bindings, frame, window, faces, themes, line formats) measured when they came.
+  (should (<= (drgnx-fingerprint-test--child-alloc '(drgnx-modules-fingerprint t)) 139238)))
 
 (ert-deftest drgnx-fingerprint/the-first-scan-of-drgnx-symbols-allocates-what-it-did ()
   ;; One `apropos-internal' over the obarray.

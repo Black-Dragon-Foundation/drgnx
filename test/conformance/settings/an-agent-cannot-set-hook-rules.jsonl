@@ -1,0 +1,12 @@
+{"scenario": "settings/an-agent-cannot-set-hook-rules", "requires": ["v1", "test-hooks"], "doc": "[B] config/settings is the user's: an agent's connection naming the plugin list, the hook rules or the off list is not-allowed, and a user connection's project set afterwards shows nothing was kept (the editor's settings_change tool refuses the three as :agents never, which the ERT row drgnx-agents-matrix/plugin-settings-are-the-users-alone holds)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-plugins", "source": "agent", "value": []}]}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "error": {"code": "not-allowed"}}, "within_ms": 10000}
+{"do": "send", "conn": "a", "json": {"id": 2, "method": "config/settings", "params": {"project": "alpha", "overrides": [{"name": "drgnx-agents-hook-rules", "source": "agent", "value": []}, {"name": "drgnx-agents-hook-rules-off", "source": "agent", "value": ["mine"]}]}}}
+{"do": "expect", "conn": "a", "json": {"id": 2, "error": {"code": "not-allowed"}}, "within_ms": 10000}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"providers": 16}}}, "within_ms": 10000}

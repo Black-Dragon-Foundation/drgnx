@@ -37,10 +37,13 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
        ,@body)))
 
 (defmacro drgnx-tty-frames-test--state (&rest body)
-  "BODY with the state dir (XDG_STATE_HOME) a temp dir, `state'."
+  "BODY with the state dir (XDG_STATE_HOME) a temp dir, `state'.  A report written in BODY puts the fallback layer
+on the terminal and its prefix in `key-translation-map' (`drgnx-tty-frames-write-report'): taken back after, as
+ui/terminal's teardown does, so no later test finds the prefix bound."
   `(let* ((state (make-temp-file "drgnx-tty-frames" t))
           (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
      (unwind-protect (progn ,@body)
+       (drgnx-tty-fallback-off)
        (delete-directory state t))))
 
 (defun drgnx-tty-frames-test--report ()
@@ -157,16 +160,69 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
          (should (equal (car names) "kx-5"))
          (should (member "kx-3" names)))))))
 
-(ert-deftest drgnx-tty-frames/a-failed-infocmp-is-asked-again ()
-  ;; nothing printed (no infocmp, a timeout, a type it does not know) is not kept: the next frame asks again; an
-  ;; answer is kept
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (answer nil) (asked 0))
+(ert-deftest drgnx-tty-frames/a-report-written-during-another-is-not-overwritten ()
+  ;; the tmux question a report asks waits for a process, and Emacs runs other work meanwhile (a client's eval, a
+  ;; timer): a second report written then is newer.  The first must not write its older caps over it, nor drop the
+  ;; entry of another terminal written meanwhile.
+  (drgnx-tty-frames-test--state
+   (let* ((name "kx-a")
+          (caps '(:id vte :outer nil :version "8000" :keys legacy :osc52 nil :colors 256 :mouse t))
+          (nested nil))
+     (cl-letf (((symbol-function 'drgnx-tty-frame-caps) (lambda (&optional _) caps))
+               ((symbol-function 'terminal-name) (lambda (&optional _) name))
+               ((symbol-function 'drgnx-tty-frames--tmux-options)
+                (lambda (&rest _)
+                  (when nested
+                    (let ((f nested))
+                      (setq nested nil)
+                      (funcall f)))
+                  nil)))
+       ;; the same terminal: its caps change while its first report waits
+       (setq nested (lambda () (setq caps (plist-put (copy-sequence caps) :keys 'mok))
+                      (drgnx-tty-frames-write-report (selected-frame))))
+       (drgnx-tty-frames-write-report (selected-frame))
+       (let ((entries (plist-get (drgnx-tty-frames-test--report) :terminals)))
+         (should (= (length entries) 1))
+         (should (eq (plist-get (plist-get (cdr (assoc "kx-a" entries)) :caps) :keys) 'mok)))
+       ;; another terminal's report written meanwhile stays
+       (setq nested (lambda () (setq name "kx-b") (drgnx-tty-frames-write-report (selected-frame)) (setq name "kx-a")))
+       (drgnx-tty-frames-write-report (selected-frame))
+       (let ((entries (plist-get (drgnx-tty-frames-test--report) :terminals)))
+         (should (assoc "kx-a" entries))
+         (should (assoc "kx-b" entries)))))))
+
+(ert-deftest drgnx-tty-frames/a-failed-infocmp-is-asked-again-after-a-while ()
+  ;; nothing printed (no infocmp, a timeout, a type it does not know) is remembered for `--miss-ttl' seconds only
+  ;; (a hanging infocmp is not run at every new frame, M12b-F-4); then it is asked again; an answer is kept
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal))
+        (answer nil) (asked 0))
     (cl-letf (((symbol-function 'drgnx-tty--command-lines) (lambda (&rest _) (cl-incf asked) answer)))
       (should-not (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
+      (should-not (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
+      (should (= asked 1))
+      (puthash "xterm-direct" (- (float-time) drgnx-tty-frames--miss-ttl 1) drgnx-tty-frames--miss-cache)
       (setq answer (list "xterm-direct|x," "\tRGB,"))
       (should (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
       (should (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
       (should (= asked 2)))))
+
+(ert-deftest drgnx-tty-frames/an-unanswered-xtversion-leaves-no-prefix-key ()
+  ;; xterm.el's asynchronous query leaves `ESC P > |' bound until an answer comes: ESC P stays a prefix (M-P waits
+  ;; for a key). The pending handler goes after `drgnx-tty-frames-xtversion-expiry' s, with its empty prefix maps; a
+  ;; neighbour in the same maps stays (M12b-5b-1)
+  (let ((input-decode-map (make-sparse-keymap)))
+    (define-key input-decode-map "\e[1;2A" 'kx-neighbour)
+    (define-key input-decode-map "\eP>|" #'ignore)
+    (should (keymapp (lookup-key input-decode-map "\eP")))
+    (drgnx-tty-frames--drop-xtversion-handler)
+    (should-not (lookup-key input-decode-map "\eP"))
+    (should (eq (lookup-key input-decode-map "\e[1;2A") 'kx-neighbour))
+    ;; a binding next to it in the prefix map keeps the prefix
+    (define-key input-decode-map "\eP>|" #'ignore)
+    (define-key input-decode-map "\ePx" 'kx-other)
+    (drgnx-tty-frames--drop-xtversion-handler)
+    (should (eq (lookup-key input-decode-map "\ePx") 'kx-other))
+    (should-not (lookup-key input-decode-map "\eP>"))))
 
 (ert-deftest drgnx-tty-frames/kkp-later-rewrites-the-report ()
   ;; Task 5 turns kkp on after the terminal's setup: refreshing the report says so, and C-S-p is sendable then
@@ -347,7 +403,7 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
 COLORTERM unset and `drgnx-tty-true-colour' t (the terminal need not be a known one).  `asked' lists the
 types `infocmp' was asked about."
   (declare (indent 1))
-  `(let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal))
+  `(let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal))
          (drgnx-tty-true-colour t)
          (process-environment (cons "COLORTERM" process-environment))
          (asked nil))
@@ -383,7 +439,7 @@ types `infocmp' was asked about."
 
 (ert-deftest drgnx-tty-frames/true-colour-means-what-emacs-means-by-it ()
   ;; term.c: the RGB flag, or setf24 and setb24 together; not Tc, not setrgbf, not a numeric RGB#
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)))
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal)))
     (cl-letf (((symbol-function 'drgnx-tty--command-lines)
                (lambda (command &rest _)
                  (pcase (car (last command))
@@ -405,14 +461,14 @@ types `infocmp' was asked about."
     (should (equal (sort (copy-sequence asked) #'string<) '("xterm-256color" "xterm-direct")))))
 
 (ert-deftest drgnx-tty-frames/the-runner-is-given-a-timeout-and-the-bare-command ()
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) seen)
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal)) seen)
     (cl-letf (((symbol-function 'drgnx-tty--command-lines) (lambda (&rest args) (setq seen args) nil)))
       (drgnx-tty-frames--terminfo-true-colour-p "xterm-256color"))
     (should (equal (car seen) '("infocmp" "-x" "-1" "xterm-256color")))
     (should (numberp (cadr seen)))))
 
 (ert-deftest drgnx-tty-frames/no-infocmp-leaves-the-type ()
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-true-colour t))
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal)) (drgnx-tty-true-colour t))
     (cl-letf (((symbol-function 'drgnx-tty--command-lines) (lambda (&rest _) nil)))
       (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=truecolor")) "xterm-256color")))))
 
@@ -506,31 +562,52 @@ types `infocmp' was asked about."
                 (buffer-string))))
     (should (equal out "((nil nil) t)"))))
 
-(defun drgnx-tty-frames-test--status-column (graphic)
-  "The :align-to expression of the Explorer's status letter for a modified file, with the selected frame GRAPHIC or not."
+(defun drgnx-tty-frames-test--tail-columns (graphic)
+  "How a terminal draws the right edge of the Explorer's row for a modified file, painted while the selected frame is
+GRAPHIC (an 8-pixel cell, a 12-pixel ⋯ and a 7-pixel mark) or a terminal: (MARK DOTS END TEXT), the columns from the
+right edge where the mark and the ⋯ start and the tail ends (a terminal cuts a column count down to a whole one), and
+the tail's text."
   (require 'drgnx-explorer)
-  (with-temp-buffer
-    (insert "  name.txt\n")
-    (cl-letf (((symbol-function 'drgnx-git-status) (lambda (_) 'modified))
-              ((symbol-function 'display-graphic-p) (lambda (&rest _) graphic)))
-      (let ((drgnx-explorer-git t))
-        (drgnx-explorer--git-decorate (point-min) (1- (point-max)) "/x/name.txt" nil 3)))
-    (let ((s (overlay-get (car (overlays-in (point-min) (point-max))) 'after-string)))
-      (list (plist-get (cdr (get-text-property 0 'display s)) :align-to) (substring-no-properties s)))))
+  (drgnx-wb-mark-memo-clear)
+  (unwind-protect
+      (with-temp-buffer
+        (insert "  name.txt\n")
+        (cl-letf (((symbol-function 'drgnx-git-status) (lambda (_) 'modified))
+                  ((symbol-function 'display-graphic-p) (lambda (&rest _) graphic))
+                  ((symbol-function 'frame-char-width) (lambda (&rest _) (if graphic 8 1)))
+                  ((symbol-function 'drgnx-look-pixel-width)
+                   (lambda (s &optional _face) (if graphic (if (equal s "M") 7 12) (string-width s)))))
+          (let ((drgnx-explorer-git t))
+            (drgnx-explorer--git-decorate (point-min) (1- (point-max)) "/x/name.txt" nil 3)))
+        (let ((s (overlay-get (car (overlays-in (point-min) (point-max))) 'after-string)) cols)
+          (dotimes (i (length s))
+            (let ((d (get-text-property i 'display s)))
+              ;; what a terminal draws: a spec only a terminal shows, unwrapped
+              (when (equal (take 2 d) '(when (not (display-graphic-p)))) (setq d (cddr d)))
+              (when (eq (car-safe d) 'space)
+                (pcase (plist-get (cdr d) :align-to)
+                  (`(- right ,(and n (pred numberp))) (push (truncate n) cols))
+                  (other (push other cols))))))
+          (append (nreverse cols) (list (substring-no-properties s)))))
+    (drgnx-wb-mark-memo-clear)))
 
 (ert-deftest drgnx-tty-frames/the-git-letter-keeps-off-the-last-column-whoever-paints-it ()
   ;; a terminal window has no fringe: its last column shows the truncation `$', so a letter put at the edge
   ;; (right - 2) is lost.  The overlay is painted once into a buffer every frame shows: a graphical frame being
-  ;; the selected one when it is painted must not decide.
-  (should (equal (drgnx-tty-frames-test--status-column nil) '((- right 3) " M")))
-  (should (equal (drgnx-tty-frames-test--status-column t) '((- right 3) " M"))))
+  ;; the selected one when it is painted must not decide.  Pattern D (pure: the overlay's string is read).
+  (dolist (graphic '(nil t))
+    (pcase-let ((`(,mark ,dots ,end ,text) (drgnx-tty-frames-test--tail-columns graphic)))
+      (should (string-match-p "M.*⋯" text))
+      (should (and (integerp end) (>= end 2)))              ; the tail stops 2 columns in
+      (should (and (integerp dots) (>= dots (1+ end))))     ; the ⋯ (one column) ends there
+      (should (and (integerp mark) (>= mark (1+ dots)))))))  ; the mark (one column) ends before the ⋯
 
 (ert-deftest drgnx-tty-frames/ignored-files-are-told-by-more-than-colour ()
   (require 'drgnx-git)
   (should-not (equal (face-attribute 'drgnx-git-ignored :slant nil t) (face-attribute 'default :slant nil t))))
 
 (ert-deftest drgnx-tty-frames/the-state-table-names-each-group-its-faces-and-its-cue ()
-  (should (equal (mapcar #'car drgnx-tty-frames-state-faces) '(git review tabs work)))
+  (should (equal (mapcar #'car drgnx-tty-frames-state-faces) '(git review tabs)))
   (pcase-dolist (`(,group . ,spec) drgnx-tty-frames-state-faces)
     (should (symbolp group))
     (should (memq (plist-get spec :cue) '(letter word attribute label)))
@@ -547,8 +624,7 @@ types `infocmp' was asked about."
   (dolist (lib '(drgnx-git drgnx-chrome))
     (require lib))
   ;; modules, not on the load path: loaded by file, as their own tests do
-  (dolist (lib '("modules/tools/drgnx-review" "modules/tools/drgnx-work-ui"))
-    (load (expand-file-name lib drgnx-dir) nil t))
+  (load (expand-file-name "modules/tools/drgnx-review" drgnx-dir) nil t)
   (pcase-dolist (`(,_ . ,spec) drgnx-tty-frames-state-faces)
     (dolist (f (plist-get spec :faces))
       (should (facep f)))))
@@ -734,15 +810,64 @@ types `infocmp' was asked about."
         (should-not (drgnx-tty-frames--tmux-setup (selected-frame))))
       (should (= calls 0)))))
 
-(ert-deftest drgnx-tty-frames/a-hung-tmux-is-asked-once-per-terminal ()
-  ;; a tmux that does not answer costs its 1 s once, not once per frame or setup step
+;; `drgnx-timer-start' stubbed: the retry it would start, (KEY SECS FN ARGS OWNER), kept in `timers'.
+(defmacro drgnx-tty-frames-test--timers (&rest body)
+  `(let ((timers nil))
+     (cl-letf (((symbol-function 'drgnx-timer-start)
+                (cl-function (lambda (key secs fn &key args owner &allow-other-keys)
+                               (push (list key secs fn args owner) timers) key))))
+       ,@body)))
+
+(ert-deftest drgnx-tty-frames/a-hung-tmux-is-asked-once-per-miss-ttl ()
+  ;; a tmux that does not answer costs its 1 s once per `drgnx-tty-frames-tmux-miss-ttl', not once per frame or
+  ;; setup step; after that it is asked again, and a retry is due then
   (drgnx-tty-frames-test--terminal nil drgnx-tty-frames-test--tmux-env
-    (drgnx-tty-frames-test--with-tmux nil
-      (let ((drgnx-tty-frames-tmux-ttl 0))
-        (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
-        (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
-        (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
-        (should (= calls 1))))))
+    (drgnx-tty-frames-test--timers
+     (drgnx-tty-frames-test--with-tmux nil
+       (let ((drgnx-tty-frames-tmux-ttl 0))
+         (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
+         (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
+         (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
+         (should (= calls 1))
+         (should (equal (mapcar (lambda (tm) (list (car tm) (nth 1 tm) (nth 4 tm))) timers)
+                        `(((tmux-retry . ,(selected-frame)) ,drgnx-tty-frames-tmux-miss-ttl ui/terminal))))
+         ;; past the miss TTL: asked again, and the next retry waits twice as long
+         (let ((kept (terminal-parameter nil 'drgnx-tty-tmux)))
+           (set-terminal-parameter nil 'drgnx-tty-tmux (cons (- (car kept) drgnx-tty-frames-tmux-miss-ttl) nil)))
+         (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
+         (should (= calls 2))
+         (should (= (nth 1 (car timers)) (* 2 drgnx-tty-frames-tmux-miss-ttl))))))))
+
+(ert-deftest drgnx-tty-frames/a-tmux-that-answers-late-upgrades-the-terminal ()
+  ;; tmux did not answer within its 1 s at the terminal's setup (a loaded machine): its keys stayed legacy.  The retry
+  ;; asks again; the answer turns modifyOtherKeys on in the live terminal and the report says so
+  (drgnx-tty-frames-test--state
+   (let (sent answer)
+     (cl-letf (((symbol-function 'send-string-to-terminal) (lambda (s &optional _) (push s sent)))
+               ((symbol-function 'xterm--init-modify-other-keys)
+                (lambda () (send-string-to-terminal "\e[>4;1m")
+                  (set-terminal-parameter nil 'tty-mode-set-strings
+                                          (cons "\e[>4;1m" (terminal-parameter nil 'tty-mode-set-strings))))))
+       (drgnx-tty-frames-test--terminal '((drgnx-tty-mok-decoded . t)) drgnx-tty-frames-test--tmux-env
+         (drgnx-tty-frames-test--timers
+          (drgnx-tty-frames-test--with-tmux answer
+            (drgnx-tty-frames--tmux-setup (selected-frame))
+            (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'legacy))
+            (should (= calls 1))
+            (let ((retry (car timers)))
+              (should retry)
+              ;; tmux answers now; the retry comes after the miss TTL
+              (setq answer '(:version "3.8" :extended-keys "on" :extended-keys-format "xterm" :focus-events "on"
+                                      :set-clipboard "on" :rgb t))
+              (let ((kept (terminal-parameter nil 'drgnx-tty-tmux)))
+                (set-terminal-parameter nil 'drgnx-tty-tmux (cons (- (car kept) drgnx-tty-frames-tmux-miss-ttl) nil)))
+              (apply (nth 2 retry) (nth 3 retry))
+              (should (= calls 2))
+              (should (member "\e[>4;1m" sent))
+              (should (member "\e[?1004h" sent))
+              (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok))
+              (let ((entry (cdr (assoc "kx-a" (plist-get (drgnx-tty-frames-test--report) :terminals)))))
+                (should (eq (plist-get (plist-get entry :caps) :keys) 'mok)))))))))))
 
 (ert-deftest drgnx-tty-frames/the-tmux-level-setting-reaches-open-terminals ()
   ;; changing `drgnx-tty-tmux-mok-level' takes effect in the tmux windows already open, both ways

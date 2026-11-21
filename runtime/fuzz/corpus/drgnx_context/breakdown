@@ -1,0 +1,1 @@
+{"sessionId": "s1", "used": 1200, "size": 200000, "compact_frees": 300, "parts": [{"kind": "system", "tokens": 200}, {"kind": "tool-output", "tokens": 1000, "items": [{"id": "t1", "label": "Bash ls", "tokens": 1000}]}]}

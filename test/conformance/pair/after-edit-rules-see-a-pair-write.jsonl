@@ -1,0 +1,15 @@
+{"scenario": "pair/after-edit-rules-see-a-pair-write", "requires": ["v1", "test-hooks"], "doc": "[C] LINE-P3-P9-INTERPLAY-1: a paired chat's writes reach the after-edit point as the agent's fs writes do. A user rule denies edits under `secret/**`: the chat's write_file there is refused with the rule's reason and writes nothing, and its write of README, which no rule matches, lands on disk."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project/secret && cd $ROOT/project && git init -q && printf 'one\\n' > README && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "no-secrets", "point": "after-edit", "paths": ["secret/**"], "verdict": "deny", "reason": "secrets stay"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "call:write_file {\"path\": \"$ROOT/project/secret/key\", \"content\": \"k\\n\"}\ncall:read_file {\"path\": \"$ROOT/project/README\"}\ncall:write_file {\"path\": \"$ROOT/project/README\", \"content\": \"one\\ntwo\\n\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 4, "result": {"session": {"id": "$sid", "status": "idle"}, "entries": {"$contains": [{"type": "agent", "text": "call: drgnx refused the write: secrets staycall: one\ncall: written to the file on disk (no editor has it open)"}]}}}, "within_ms": 20000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test ! -e $ROOT/project/secret/key && cat $ROOT/project/README"], "expect_code": 0, "expect_stdout": "one\ntwo\n"}

@@ -17,13 +17,13 @@
 (defun drgnx-tty-frames-test--workbench (sess eval)
   "SESS's screen shows the workbench: the tab line, the status bar (the mode line), the main role, and the
 Explorer once the sidebar is shown.  EVAL evaluates a form in the frame on that screen."
-  (drgnx-tty-session-wait-screen sess "\\*scratch\\* ×" 20)            ; the editor's tab line
+  (drgnx-tty-session-wait-tab sess "×" 20)            ; the editor's tab line
   (drgnx-tty-session-wait-screen sess "Ln [0-9]+, Col [0-9]+ ")             ; the status bar (it names no buffer)
   (should (eq (funcall eval '(drgnx-frame-role)) 'main))
   (should (eq (funcall eval '(plist-get (terminal-parameter nil 'drgnx-tty-caps) :id)) 'tmux))
   (funcall eval '(progn (drgnx-wb-show-sidebar) t))
   (should (funcall eval '(and (drgnx-wb--dock-windows) t)))
-  (drgnx-tty-session-wait-screen sess "EXPLORER"))
+  (drgnx-tty-session-wait-screen sess drgnx-tty-session-explorer-heading))
 
 (ert-deftest drgnx-tty-frames/emacs-nw-gets-the-workbench ()
   (drgnx-tty-session-with (s :size "120x40")
@@ -90,7 +90,7 @@ once TEXT is on its screen."
                                      t))
         (drgnx-tty-session-wait-screen c "\\[emacsclient exited 0\\]" 10)
         (should (= (drgnx-tty-session-eval s `(length ,drgnx-tty-frames-test--clients)) 2))
-        (drgnx-tty-session-wait-screen w "EXPLORER")))))
+        (drgnx-tty-session-wait-screen w drgnx-tty-session-explorer-heading)))))
 
 (ert-deftest drgnx-tty-frames/move-editor-into-new-window-from-a-terminal-client ()
   ;; the command made from a terminal client's frame (a key there) is one command, not an "Unknown terminal type" error
@@ -101,7 +101,7 @@ once TEXT is on its screen."
                       s '(condition-case err
                              (progn (find-file-noselect (expand-file-name "kx-move.txt" temporary-file-directory))
                                     (switch-to-buffer "kx-move.txt")
-                                    (call-interactively #'drgnx-frames-move-editor)
+                                    (call-interactively #'drgnx-grid-move-tab-to-new-frame)
                                     'moved)
                            (error (list 'error (error-message-string err)))))
                      'moved))
@@ -129,7 +129,7 @@ once TEXT is on its screen."
                                                                               (current-buffer)))
                                                   (drgnx-groups-move-to-next)
                                                   t))
-      (drgnx-test-pause 0.5 "the move may not end the edit")
+      ;; ending the edit is synchronous (the daemon's own state below says it did not end), not a later event
       (should (drgnx-tty-session-eval s '(let ((b (get-buffer "COMMIT_EDITMSG")))
                                            (and b (buffer-local-value 'server-buffer-clients b) t))))
       (should-not (drgnx-tty-session-find c "emacsclient exited"))
@@ -144,7 +144,7 @@ once TEXT is on its screen."
     (drgnx-tty-session-key s "b")
     (drgnx-tty-session-wait s '(and (active-minibuffer-window) t))
     (let ((c (drgnx-tty-session-client s)))
-      (drgnx-tty-session-wait-screen c "\\*scratch\\* ×")
+      (drgnx-tty-session-wait-tab c "×")
       (should (drgnx-tty-frames-test--in-client s '(frame-parameter nil 'drgnx-tty-shown))))))
 
 (ert-deftest drgnx-tty-frames/two-clients-at-once ()
@@ -238,6 +238,11 @@ once TEXT is on its screen."
                              (and caps (list (plist-get caps :id) (plist-get caps :version))))))
                      '(unknown nil))))))
 
+(defconst drgnx-tty-frames-test--repeating-timers
+  '(mapcar (lambda (tm) (format "%S" (timer--function tm)))
+           (seq-filter #'timer--repeat-delay (append timer-list timer-idle-list)))
+  "In the daemon: the functions of its repeating timers, printed: an error that repeats comes from one of them.")
+
 (ert-deftest drgnx-tty-frames/a-killed-terminal-leaves-the-daemon-well ()
   (drgnx-tty-session-with (s :daemon t :keys 'emacs)
     (let* ((ttys '(mapcar (lambda (f) (terminal-name (frame-terminal f))) (frame-list)))
@@ -245,9 +250,11 @@ once TEXT is on its screen."
            (c (drgnx-tty-session-client s))
            (tty (car (seq-difference (drgnx-tty-session-eval s ttys) before)))
            (problems (drgnx-tty-session-eval s 'drgnx-hooks-problems))
+           (repeating drgnx-tty-frames-test--repeating-timers)
+           (repeating-before (drgnx-tty-session-eval s repeating))
            (messages (drgnx-tty-session-eval s '(with-current-buffer "*Messages*" (point-max)))))
       (should tty)
-      (drgnx-tty-session-wait-screen c "\\*scratch\\*")
+      (drgnx-tty-session-wait-tab c)
       ;; a prompt open in that terminal
       (drgnx-tty-session-key c "C-x")
       (drgnx-tty-session-key c "b")
@@ -262,8 +269,9 @@ once TEXT is on its screen."
       (let ((new (drgnx-tty-session-eval s `(with-current-buffer "*Messages*"
                                               (buffer-substring-no-properties (min ,messages (point-max)) (point-max))))))
         (should-not (string-match-p "[Ee]rror" new)))
-      ;; and keeps answering a while later (nothing errors in a loop)
-      (drgnx-test-pause 1 "nothing may error in a loop")
+      ;; and keeps answering: nothing errors in a loop, which only a repeating timer could do, and none was armed by the
+      ;; terminal's going (the daemon's timers are read at once, not after a while)
+      (should-not (cl-set-difference (drgnx-tty-session-eval s repeating) repeating-before :test #'equal))
       (should (eq (drgnx-tty-session-eval s t) t))
       (should (equal (drgnx-tty-session-eval s 'drgnx-hooks-problems) problems)))))
 

@@ -1,0 +1,26 @@
+{"scenario": "work/trail-subscribe-answers-reset", "requires": ["v1"], "doc": "A trail view and a Timeline view subscribed after a turn: each sends its rows to the display class the editor sent a view/env for as a reset (the session's steps; the axis and its lane) before the answer {hub}."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && echo one > $ROOT/work/a.rs"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$a", "text": "provider:read a.rs\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$a", "step": {"turn_id": "t1"}}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "t", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 8, 8]], "cell": [8, 17], "width_px": 1000, "tz": "+0000", "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "work/trail/subscribe", "params": {"view": "t", "session": "$a"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "t", "class": "gui-1", "hub": "$capture:hub", "base": 0, "version": 1, "env_epoch": 1, "ops": [{"reset": {"$contains": [{"key": "$string", "props": "$any"}]}}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"hub": "$hub"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "view/env", "params": {"view": "l", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 8, 8]], "cell": [8, 17], "width_px": 1000, "tz": "+0000", "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "work/trail/subscribe", "params": {"view": "l", "lanes": [{"session": "$a", "label": "one"}]}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "l", "class": "gui-1", "hub": "$hub", "base": 0, "ops": [{"reset": {"$contains": [{"key": "axis"}]}}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": {"hub": "$hub"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "work/trail/subscribe", "params": {"view": "x"}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "error": {"code": "invalid-params"}}}

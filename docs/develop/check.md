@@ -101,6 +101,14 @@ call, whose callback is not `(drgnx-guard-wrap …)`, `nil`, `#'ignore` or `#'in
   row, fails.
 - `drgnx-lint/the-guard-lint-sees-each-form`: the scanner on a scratch checkout, one string per form.
 
+**Views subscribe on the events connection** (`drgnx-lint/views-subscribe-on-the-events-connection`,
+`test/unit/lint-view-connection-test.el`). The hub sends a view's env, model and rows to the connection that asked, and
+the editor's env goes out on its subscribed connection (`drgnx-hub--events`), not the call connection
+(`drgnx-hub-call`). The lint fails on a `drgnx-hub-call` whose method is a literal `.../subscribe` or `view/...` in
+`core/`, `wb/` or `modules/` (one allowed row: who is here's old path); use `drgnx-work-client--call` or
+`drgnx-hub--call-on drgnx-hub--events`. The view tests' mock hub records the connection a call took, so a subscription
+on the wrong one fails there too.
+
 **Automatic-path messages are notices** (`drgnx-lint/echo-messages-only-fall`, `test/unit/lint-echo-test.el`). For
 every `.el` under `core/` and `wb/` it counts the text `(message "drgnx` against `drgnx-lint-echo--counts`, one count
 per file, each with its reason (a command's reply, a process with no notice model, the recorder's last resort). A file
@@ -120,7 +128,8 @@ skips is not a pass nobody sees.
 
 - **`DRGNX_TEST_NO_TIMING=1`** leaves out the tests tagged `:timing` (they assert wall-clock bounds: a hung child
   given up on, a lock waited for, a cost in milliseconds) and lists them as skipped, reason `wall clock: not run in
-  CI`. A shared runner is not a place to judge them; `bin/drgnx check` runs them alone (job 3 above). The tests that
+  CI` (a selector naming a test no file defines lists none, and the run fails with "matched 0 tests"). A shared
+  runner is not a place to judge them; `bin/drgnx check` runs them alone (job 3 above). The tests that
   bound a child or a lock *outside* drgnx (a real hung `git`, a lock held by another process) keep a generous wall
   bound and carry the tag; a give-up that is a `drgnx-timer-*` timer is tested on virtual time instead
   (`drgnx-test-with-clock`) and needs no tag.
@@ -129,6 +138,19 @@ skips is not a pass nobody sees.
   selects a class alone (`(tag :det)`, `(tag :cond)`, `(tag :timing)`: the pre-flight's runs), a listed test that
   skipped fails the run: `NAME must run on PLATFORM but skipped: REASON`. With any other selector it is ignored (a
   narrow run may not have the tool). `DRGNX_TEST_NO_SKIP=FILE` names another list (the runner's own tests).
+- **`DRGNX_NIDHOGG_STRICT=1`**: a test that needs a Nidhogg primitive calls `(drgnx-test-require-nidhogg PRESENT
+  WHAT)` (`harness/run-ert.el`) instead of `skip-unless`. Without the primitive it skips; under
+  `DRGNX_NIDHOGG_STRICT=1` it fails, `DRGNX_NIDHOGG_STRICT=1: this Emacs has no WHAT`. Set it for runs on Nidhogg's
+  integration line, where a skip would hide a stale build; `bin/drgnx test --container` passes it into the container.
+  The runner adds one rule for Sjá: under `DRGNX_NIDHOGG_STRICT=1`, in an Emacs with no Sjá (`nidhogg-view--call` and
+  `nidhogg-views`), a test that skipped with a reason naming a Sjá primitive (`nidhogg-view-…`, such as
+  `skip-unless (fboundp 'nidhogg-view-rows)`) fails the run: `DRGNX_NIDHOGG_STRICT=1: skipped for Sjá, which this
+  Emacs has not: REASON`. In an Emacs with Sjá such a skip had another reason (no display) and stays a skip.
+- **`DRGNX_TEST_STRICT_FACES=1`**: a hub row that names a face which is no face and is not in `etc/ui/faces.eld`
+  (a stale name; a known face of a module that is off is not one) is counted by `drgnx-view-patch--face` in
+  `drgnx-view-unknown-faces`. A test file whose Emacs ends with any counted is an unexpected result, `file NAME:
+  unknown faces: A (n), B (m)`; GUI sessions run the same runner, so a GUI row's file fails the same way. Outside a
+  test run nothing is counted. The check runner's strict runs set it; `bin/drgnx test --container` passes it in.
 
 ## A flake is a result (`DRGNX_TEST_RERUN`)
 
@@ -174,7 +196,8 @@ and every shard inherits. It combines with `--one-process`. It is **report only*
 - **Around every test** the runner reads the cheap fingerprint (`drgnx-modules-fingerprint`: timers, processes,
   buffers, `features`, the hooks drgnx touches, `global-mode-string`, the alists a mode writes into, drgnx's
   registries; [harness.md](harness.md#the-fingerprint)) before and after; every difference is a leak of that test.
-- **Around every test file** it reads the full fingerprint, which adds every hook variable and every advised function
+- **Around every test file** it reads the full fingerprint, which adds every hook variable (a bound symbol named
+  `…-hook` or `…-functions`; never a keyword such as `:after-hook`, bound to itself) and every advised function
   (about 10 ms), and compares the file's start with its end. What a test was already named for is not said twice. An
   advice or a hook outside the listed ones shows only here, so its line names the file, not the test (`(file)`).
 - A **timer a test left pending is cancelled** after it (and reported), so it cannot fire inside the next test; a
@@ -201,7 +224,9 @@ cheapest to find: its brackets name the module that forgot to remove it, its tes
 **The allowlist** `test/leaks-allowed.eld` holds what is not a leak: Emacs's own timers and hooks, and deliberate
 fixtures. Each entry is `(:what REGEXP :source REGEXP :why STRING)`: a leak whose line matches `:what` and whose source
 matches `:source` (leave `:source` out for any) is not reported. Always say why. `DRGNX_TEST_LEAKS_ALLOWED` names
-another file (the runner's own tests use it). An error while the census reads a fingerprint is a line of the report (`census error: …`), never an error of the run.
+another file (the runner's own tests use it). State the harness keeps across a file's tests is not allowlisted: it
+goes on `drgnx-run-ert-file-end-hook`, which runs before the per-file scan (the GUI harness closes its virtual pointer
+there). An error while the census reads a fingerprint is a line of the report (`census error: …`), never an error of the run.
 
 With the census off (the default) the runner loads nothing, advises nothing, and the summary has no `:leaks`.
 
@@ -233,6 +258,8 @@ file's top-level forms, and the first argument of every form whose head ends in 
 form with its full name spelt out: a macro that builds the name, or a `dolist` around `ert-deftest`, hides the test from
 a name selector. A full run (no selector) fails on each test its file's index lacks (`unindexed test NAME in FILE: the
 selector prefilter cannot see it`), and a string selector that matches no test fails the run (`DRGNX_TEST_SELECTOR … matched 0 tests`).
+So does a bare symbol (ERT's selector for one test) that no loaded file defines: the run selects nothing and writes
+its summary, where ERT alone signals `ert-test-unbound` and a GUI session would wait out its limit.
 A tag selector, `(tag :timing)`, keeps the files whose plain `ert-deftest` forms name the tag in a quoted `:tags`
 list, and every file that may hold it otherwise (its own `…--deftest` macro, an `ert-deftest` inside another form, a
 computed `:tags`); any other selector keeps every file.
@@ -277,7 +304,10 @@ A gated file is one whose `;; test-pattern:` line (an exact line within the firs
 file the command runs the file once with `DRGNX_TEST_GATE_SWAP=0`; each `drgnx-test-gated` run then prints
 `drgnx-gate-swap-pairs: N`, the number of adjacent pairs of released lines from different connections it met, and the
 command goes on with K = 1, 2, … up to the largest N any run of the file printed so far (a swap can meet more pairs
-than the unswapped run did), one run per K. It stops at the first red, prints the run's output and the K, and exits 1.
+than the unswapped run did), one run per K. A file's loop stops at its first red, prints the run's output and the K, and the command exits 1.
+Without `--only`, the files run `DRGNX_ORDERS_JOBS` at a time (default: the CPUs), each file's Ks still in sequence and
+its output printed whole when it ends; the other files finish, so one run names every red file. A file takes about 4 to 23 s
+per K, nearly all of it its tests, so in sequence the files outran CI's 20 minutes.
 A run that prints no count is red too (a run that swapped nothing proves nothing), and so is a run at K ≥ 1 in which a
 test skipped that ran at K = 0 (the runner's `Skipped (N):` list): its swap went unexplored.
 

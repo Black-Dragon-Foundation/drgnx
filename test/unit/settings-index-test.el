@@ -171,5 +171,17 @@
           (should (string-match-p "pyproject.toml" (drgnx-settings-page--other-tools-text root))))
       (delete-directory root t))))
 
+(ert-deftest drgnx-settings-index/the-index-file-is-looked-at-once-per-command ()
+  ;; in a session (not batch) a command asks about hundreds of variables: one stat of the index file, not one each
+  (drgnx-settings-index-test--with-package
+    (drgnx-settings-index-build)
+    (let ((noninteractive nil) (stats 0) (orig (symbol-function 'drgnx-settings-index--tables-1)))
+      (cl-letf (((symbol-function 'drgnx-settings-index--tables-1)
+                 (lambda () (cl-incf stats) (funcall orig))))
+        (setq drgnx-settings-index--cache nil drgnx-settings-index--tick nil)
+        (dotimes (_ 50) (drgnx-settings-index-entry 'fixpkg-width))
+        (should (eq 'integer (plist-get (drgnx-settings-index-entry 'fixpkg-width) :type)))
+        (should (= stats 1))))))
+
 (provide 'settings-index-test)
 ;;; settings-index-test.el ends here

@@ -37,7 +37,7 @@ request returns before drgnx may quit."
          (file (expand-file-name "café.py" project))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
          (s (progn (make-directory project) (write-region "print(1)\n" nil file nil 'silent)
-                   (drgnx-ui-start "drgnx" "1200x700" 30 t)))
+                   (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1200x700") 30 t)))
          (name (plist-get s :name))
          (sess (drgnx-ui-own-session name)))
     (unwind-protect
@@ -63,7 +63,7 @@ request returns before drgnx may quit."
               (drgnx-test-wait (lambda () (= 0 (drgnx-session-live--gui-count sess))) :secs 10 :what "the last window to close")
             (ert-test-failed nil))
           (should (= 0 (drgnx-session-live--gui-count sess)))
-          (drgnx-test-pause 1 "the daemon may not quit with its last window")
+          ;; the daemon answers (below) after the last window closed: closing is synchronous, so it did not quit with it
           (should (drgnx-session-live--alive-p sess))
           (should (eq t (drgnx-session-live--eval sess "(daemonp)")))
           ;; Quit when the last window closes: it opens again, closes, and drgnx is gone.

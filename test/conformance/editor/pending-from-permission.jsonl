@@ -1,0 +1,34 @@
+{"scenario": "editor/pending-from-permission", "requires": ["v1", "test-hooks"], "doc": "An edit waiting for the user's permission shows as pending on the lines its diff will change, before anything is written: the request's diff found once in the file gives the line, its end and the column after the last inserted character. Denied, the pending entry goes; allowed, the edit's step leaves an edit entry on its lines. Pattern B: the request in the session's snapshot is the gate (the pending entry is in place before the request is held), agents/presence/get is read only after it."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/work/a.txt", "text": "one\ntwo\nthree\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict ask)))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "provider:pending-edit a.txt two TWO"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"permissions": {"$contains": [{"id": "$capture:req", "options": "$any"}]}}}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/presence/get", "params": {"file": "$ROOT/work/a.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"entries": [{"session": "$sid", "mode": "pending", "line": 2, "line_end": 2, "col": 3, "source": "edit", "live": true, "tool_call": "$string", "step": 0}]}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/permission", "params": {"id": "$sid", "request": "$req", "option": "reject_once"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "agent", "text": "permission: reject_once"}]]}}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/presence/get", "params": {"file": "$ROOT/work/a.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"entries": []}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/send", "params": {"id": "$sid", "text": "provider:pending-edit a.txt three THREE\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"permissions": {"$contains": [{"id": "$capture:req2", "options": "$any"}]}}}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/presence/get", "params": {"file": "$ROOT/work/a.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"entries": [{"session": "$sid", "mode": "pending", "line": 3, "line_end": 3, "col": 5, "live": true}]}}}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "agents/permission", "params": {"id": "$sid", "request": "$req2", "option": "allow_once"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"tool_kind": "edit"}}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 9, "method": "agents/presence/get", "params": {"file": "$ROOT/work/a.txt"}}, "expect": {"id": 9, "result": {"entries": [{"session": "$sid", "mode": "edit", "line": 3, "line_end": 3, "live": "$absent", "step": "$number"}]}}, "within_ms": 30000, "every_ms": 50}

@@ -10,7 +10,7 @@ mod tests {
     use crate::scenario::parse;
     use std::path::Path;
 
-    const ROWS: [&str; 16] = [
+    const ROWS: [&str; 21] = [
         "extra-mount-refused",
         "volume-in-argv-is-just-argv",
         "image-not-on-the-list",
@@ -27,6 +27,21 @@ mod tests {
         "memory-cap-kills",
         "pids-cap-holds",
         "git-common-dir-not-mounted",
+        "job-cannot-reach-another-job",
+        "host-grant-one-port",
+        "host-grant-never-reaches-the-hub",
+        "sidecar-death-ends-the-job",
+        "job-cannot-take-the-relay-port",
+    ];
+
+    /// The rows of a granted network: each needs rootless podman too.
+    const NETWORKED: [&str; 6] = [
+        "network-granted-reaches-only-the-proxy",
+        "job-cannot-reach-another-job",
+        "host-grant-one-port",
+        "host-grant-never-reaches-the-hub",
+        "sidecar-death-ends-the-job",
+        "job-cannot-take-the-relay-port",
     ];
 
     #[test]
@@ -53,6 +68,11 @@ mod tests {
             let s = parse(&text).unwrap_or_else(|e| panic!("{name}: {e:?}"));
             assert_eq!(s.name, format!("container-escape/{name}"));
             assert!(s.requires.iter().any(|r| r == "podman"), "{name}");
+            assert_eq!(
+                s.requires.iter().any(|r| r == "rootless"),
+                NETWORKED.contains(&name),
+                "{name}"
+            );
         }
     }
 }

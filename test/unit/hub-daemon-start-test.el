@@ -74,5 +74,63 @@
     (let ((r (funcall check '(:commit "abc" :pid 1))))      ; a running hub: the warning as it was
       (should (equal (nth 1 r) stale)))))
 
+;;;; A command that needs the hub starts it
+
+(defmacro drgnx-hub-daemon-start-test--command (&rest body)
+  "BODY with no subscription; `drgnx-hub--ensure-running' records its callbacks in CALLS (or runs ENSURE when bound
+non-nil), `drgnx-hub-connect' records `connect', RUNNING is what `drgnx-hub-running-p' says, FAILED the reasons given."
+  (declare (indent 0))
+  `(let ((calls nil) (failed nil) (running nil) (ensure nil)
+         (drgnx-hub--events nil) (drgnx-hub--subscribing nil))
+     (cl-letf (((symbol-function 'drgnx-hub--ensure-running)
+                (lambda (cb) (if ensure (funcall ensure cb) (push cb calls)) nil))
+               ((symbol-function 'drgnx-hub-running-p) (lambda () running))
+               ((symbol-function 'drgnx-hub-connect) (lambda () (push 'connect calls))))
+       (let ((fail (lambda (why) (push why failed))))
+         ,@body))))
+
+(ert-deftest drgnx-hub-start-for-command/no-hub-is-started-then-connected-to ()
+  "A command with no hub asks for one without waiting, and connects once it answers, not before."
+  (drgnx-hub-daemon-start-test--command
+    (drgnx-hub-start-for-command fail)
+    (should (= (length calls) 1))
+    (should (functionp (car calls)))
+    (funcall (car calls) nil)                               ; the hub answered
+    (should (eq (car calls) 'connect))
+    (should-not failed)))
+
+(ert-deftest drgnx-hub-start-for-command/why-no-hub-reaches-the-caller ()
+  "A start that fails, or that cannot begin (no binary, starting off here), gives the caller the reason; no connect."
+  (drgnx-hub-daemon-start-test--command
+    (drgnx-hub-start-for-command fail)
+    (funcall (car calls) "Ratatoskr did not start: x")
+    (should (equal failed '("Ratatoskr did not start: x")))
+    (should-not (memq 'connect calls)))
+  (drgnx-hub-daemon-start-test--command
+    (setq ensure (lambda (_cb) (error "No drgnx hub runs, and starting one is off here (DRGNX_NO_HUB_START)")))
+    (drgnx-hub-start-for-command fail)
+    (should (equal failed '("No drgnx hub runs, and starting one is off here (DRGNX_NO_HUB_START)")))
+    (should-not calls)))
+
+(ert-deftest drgnx-hub-start-for-command/a-daemon-path-starts-nothing ()
+  "Under `inhibit-interaction' (a timer, a hook, startup) nothing is started: a hub already there is connected to."
+  (drgnx-hub-daemon-start-test--command
+    (let ((inhibit-interaction t))
+      (drgnx-hub-start-for-command fail)
+      (should-not calls)
+      (setq running t)
+      (drgnx-hub-start-for-command fail)
+      (should (equal calls '(connect))))
+    (should-not failed)))
+
+(ert-deftest drgnx-hub-start-for-command/a-subscription-up-is-left-alone ()
+  (drgnx-hub-daemon-start-test--command
+    (let ((p (make-pipe-process :name "drgnx-test-sub" :noquery t)))
+      (unwind-protect
+          (progn (setq drgnx-hub--subscribing p)
+                 (drgnx-hub-start-for-command fail)
+                 (should-not calls))
+        (delete-process p)))))
+
 (provide 'hub-daemon-start-test)
 ;;; hub-daemon-start-test.el ends here

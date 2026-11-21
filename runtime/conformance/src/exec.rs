@@ -30,12 +30,17 @@ pub struct Runner<'a> {
     /// The root a `root` step made: later `run` and `start` steps with no hub use it, and what `ensure` starts there
     /// is stopped with the scenario.
     active_root: Option<Arc<Root>>,
+    /// When the scenario's `bound_s` runs out: checked before each step and each `measure` repeat (a step itself
+    /// stops at its own `within_ms`).
+    deadline: Instant,
+    bound_s: u64,
 }
 
 type R<T = ()> = Result<T, String>;
 
 /// Longest first, so `$SOCKET_DIR` is not read as `$SOCKET` and `_DIR`.
-const VAR_NAMES: [&str; 14] = [
+const VAR_NAMES: [&str; 15] = [
+    "HUB_BIN",
     "BACKEND_SOCKET",
     "SCENARIOS",
     "SOCKET_DIR",
@@ -52,6 +57,40 @@ const VAR_NAMES: [&str; 14] = [
     "RUN",
 ];
 
+/// The variables whose value is a path in the scenario's root (`$ROOT $SOCKET $LOCK …`): they exist once a root does.
+const ROOT_VARS: [&str; 11] = [
+    "BACKEND_SOCKET",
+    "SOCKET_DIR",
+    "SOCKET",
+    "CONFIG",
+    "STATE",
+    "ROOT",
+    "HOME",
+    "DATA",
+    "LOCK",
+    "CAP",
+    "RUN",
+];
+
+/// The first root variable (`ROOT_VARS`) a string anywhere in OBJ names, by the longest-first reading `subst_str` uses.
+fn root_variable_in(obj: &Map<String, Value>) -> Option<&'static str> {
+    fn in_value(v: &Value) -> Option<&'static str> {
+        match v {
+            Value::String(s) => s.match_indices('$').find_map(|(i, _)| {
+                let rest = &s[i + 1..];
+                VAR_NAMES
+                    .iter()
+                    .find(|n| rest.starts_with(**n))
+                    .and_then(|n| ROOT_VARS.iter().find(|r| *r == n).copied())
+            }),
+            Value::Array(a) => a.iter().find_map(in_value),
+            Value::Object(o) => o.values().find_map(in_value),
+            _ => None,
+        }
+    }
+    obj.values().find_map(in_value)
+}
+
 /// Run `scenario`; the error says which step failed and why, and (a row not `pending`) when each step ran and how
 /// long it took, with the end of each hub's logs: what a red that will not come again needs, kept before every hub,
 /// helper and root is gone.
@@ -66,12 +105,14 @@ pub fn run_scenario(cfg: &Config, s: &Scenario, perf: &mut Vec<(String, Vec<f64>
         perf,
         started: 0,
         active_root: None,
+        deadline: Instant::now() + Duration::from_secs(s.bound_s),
+        bound_s: s.bound_s,
     };
     let start = Instant::now();
     let mut timing = Vec::new();
     for (i, step) in s.steps.iter().enumerate() {
         let at = start.elapsed();
-        let ran = r.step(step);
+        let ran = r.within_bound("").and_then(|()| r.step(step));
         timing.push(format!(
             "  {:>3} {:<16} at {:>7} ms, took {:>6} ms",
             i + 1,
@@ -83,6 +124,7 @@ pub fn run_scenario(cfg: &Config, s: &Scenario, perf: &mut Vec<(String, Vec<f64>
             let mut why = format!("step {} ({}): {e}", i + 1, step.verb);
             if s.pending.is_none() {
                 why.push_str(&r.failure_notes(&timing));
+                why.push_str(&r.failure_answers(&s.on_failure));
             }
             return Err(why);
         }
@@ -93,7 +135,57 @@ pub fn run_scenario(cfg: &Config, s: &Scenario, perf: &mut Vec<(String, Vec<f64>
 /// How many lines of each hub's logs a failure keeps.
 const FAILURE_LOG_LINES: usize = 60;
 
+/// What the hub's threads are doing (state letter, kernel wait channel, name) and the machine's load, for a failure
+/// that names a silent hub: an expect that sees nothing within its real time is either a hub that waits on something
+/// or a machine too busy to run it, and these lines tell which.  Best effort: nothing where `/proc` is not there.
+fn proc_waits(pid: u32) -> String {
+    let mut out = String::new();
+    if let Ok(load) = std::fs::read_to_string("/proc/loadavg") {
+        out.push_str(&format!("load average: {}\n", load.trim()));
+    }
+    let read = |p: String| {
+        std::fs::read_to_string(p)
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    };
+    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+        return out;
+    };
+    let mut rows: Vec<String> = tasks
+        .flatten()
+        .map(|t| {
+            let dir = t.path();
+            let stat = read(format!("{}/stat", dir.display()));
+            let state = stat
+                .rsplit_once(") ")
+                .and_then(|(_, rest)| rest.chars().next())
+                .unwrap_or('?');
+            format!(
+                "  thread {} {} state {state} wchan {}",
+                t.file_name().to_string_lossy(),
+                read(format!("{}/comm", dir.display())),
+                read(format!("{}/wchan", dir.display()))
+            )
+        })
+        .collect();
+    rows.sort();
+    out.push_str(&rows.join("\n"));
+    out
+}
+
 impl Runner<'_> {
+    /// An error once the scenario's bound has run out, saying so with WHAT it had done.
+    fn within_bound(&self, what: &str) -> R {
+        if Instant::now() < self.deadline {
+            return Ok(());
+        }
+        Err(format!(
+            "the scenario's bound of {} s ran out{what} (\"bound_s\" in its header)",
+            self.bound_s
+        ))
+    }
+
     /// The steps' TIMING and the end of each hub's logs (its stderr and its own `hub-*.jsonl`), for a failure.
     fn failure_notes(&self, timing: &[String]) -> String {
         let mut notes = format!(
@@ -102,16 +194,58 @@ impl Runner<'_> {
         );
         for h in &self.hubs {
             notes.push_str(&format!(
-                "\nhub {} (pid {}), its stderr's last lines:\n{}\nits log's last lines:\n{}",
+                "\nhub {} (pid {}), its stderr's last lines:\n{}\nits log's last lines:\n{}\nwhat it waits on:\n{}",
                 h.name,
                 h.pid,
                 h.log_tail_n(FAILURE_LOG_LINES),
-                h.jsonl_tail_n(FAILURE_LOG_LINES)
+                h.jsonl_tail_n(FAILURE_LOG_LINES),
+                proc_waits(h.pid)
             ));
         }
         notes
     }
+
+    /// The hub's answers to the row's `on_failure` ASKS, each sent on its connection (default `c`) and waited for
+    /// [`FAILURE_ASK_MS`] by its id; an ask that cannot be sent or is not answered says so.
+    fn failure_answers(&mut self, asks: &[Map<String, Value>]) -> String {
+        let mut out = String::new();
+        for a in asks {
+            let idx = self.hub_index(None).ok();
+            let json = self.subst(idx, &a["json"], true);
+            let name = str_of(a, "conn").unwrap_or("c").to_string();
+            let what = json
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_string();
+            let answer = match self.conns.get_mut(&name) {
+                None => format!("no connection named {name:?}"),
+                Some(conn) => match conn.send_line(&json.to_string(), true) {
+                    Err(e) => format!("not sent: {e}"),
+                    Ok(()) => {
+                        let mut caps = Captures::default();
+                        match conn.expect(
+                            &json!({"id": json["id"]}),
+                            Duration::from_millis(FAILURE_ASK_MS),
+                            &mut caps,
+                        ) {
+                            Ok(v) => v.to_string(),
+                            Err(e) => format!("no answer: {e}"),
+                        }
+                    }
+                },
+            };
+            let cut: String = answer.chars().take(FAILURE_ANSWER_CHARS).collect();
+            out.push_str(&format!("\non failure, {what} answered: {cut}"));
+        }
+        out
+    }
 }
+
+/// How long a failure waits for each `on_failure` answer.
+const FAILURE_ASK_MS: u64 = 3000;
+/// How much of each `on_failure` answer a failure keeps.
+const FAILURE_ANSWER_CHARS: usize = 6000;
 
 impl Drop for Runner<'_> {
     fn drop(&mut self) {
@@ -129,6 +263,14 @@ impl Drop for Runner<'_> {
         for c in self.spawned.values_mut() {
             let _ = c.kill();
             let _ = c.wait();
+        }
+        // the containers the scenario's runs and hubs left in its roots' podman stores
+        let mut roots: Vec<&Arc<hub::Root>> = self.hubs.iter().map(|h| &h.root).collect();
+        roots.extend(&self.active_root);
+        for (i, r) in roots.iter().enumerate() {
+            if !roots[..i].iter().any(|o| Arc::ptr_eq(o, r)) {
+                hub::remove_containers(r);
+            }
         }
     }
 }
@@ -473,6 +615,11 @@ impl Runner<'_> {
             "SCENARIOS".into(),
             self.cfg.scenarios.to_string_lossy().into_owned(),
         );
+        // the hub under test (its test-hooks build's `debug-mock` is the mock debug adapter)
+        // absolute: a helper started in another directory runs it too
+        let hub_bin =
+            std::fs::canonicalize(&self.cfg.hub_bin).unwrap_or_else(|_| self.cfg.hub_bin.clone());
+        m.insert("HUB_BIN".into(), hub_bin.to_string_lossy().into_owned());
         // ratatoskr-mock is built beside domr
         if let Some(dir) = std::env::current_exe()
             .ok()
@@ -652,7 +799,8 @@ impl Runner<'_> {
         if let Some(parent) = to.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
-        std::fs::copy(&self.cfg.hub_bin, &to).map_err(|e| format!("{}: {e}", to.display()))?;
+        // run by the scenario: copied through drgnx-exe, never held open for writing by another thread's fork
+        drgnx_exe::copy(&self.cfg.hub_bin, &to).map_err(|e| format!("{}: {e}", to.display()))?;
         std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| e.to_string())
     }
@@ -699,6 +847,15 @@ impl Runner<'_> {
     // ------------------------------------------------------------ steps
 
     fn step(&mut self, step: &Step) -> R {
+        if self.hubs.is_empty()
+            && self.active_root.is_none()
+            && !matches!(step.verb.as_str(), "root" | "start")
+            && let Some(var) = root_variable_in(&step.obj)
+        {
+            return Err(format!(
+                "${var} has no value yet: no root exists before a `root` or `start` step, and the step would take the literal text"
+            ));
+        }
         match step.verb.as_str() {
             "start" => self.start(step),
             "root" => {
@@ -730,6 +887,7 @@ impl Runner<'_> {
                     .expect_closed(ms(&step.obj, "within_ms", 5000), silent)
             }
             "expect_silent" => self.conn(step)?.expect_silent(ms(&step.obj, "for_ms", 300)),
+            "count_events" => self.count_events(step),
             "kill" => self.kill(step),
             "expect_exit" => self.expect_exit(step),
             "file" => self.file(step),
@@ -749,6 +907,42 @@ impl Runner<'_> {
             "file_grep" => self.file_grep(step),
             v => Err(format!("verb {v} has no executor")),
         }
+    }
+
+    /// `count_events`: the events the connection gets in `for_ms`, counted by name against `at_most` (name → N) and
+    /// `none` (names that must not arrive); no line may hold the text `lacks`.
+    fn count_events(&mut self, step: &Step) -> R {
+        let lines = self.conn(step)?.drain_for(ms(&step.obj, "for_ms", 1000));
+        let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+        for l in &lines {
+            if let Some(name) = serde_json::from_str::<Value>(l)
+                .ok()
+                .and_then(|v| v.get("event").and_then(Value::as_str).map(str::to_string))
+            {
+                *counts.entry(name).or_insert(0) += 1;
+            }
+        }
+        if let Some(most) = step.obj.get("at_most").and_then(Value::as_object) {
+            for (name, n) in most {
+                let got = counts.get(name).copied().unwrap_or(0);
+                if got > n.as_u64().unwrap_or(0) {
+                    return Err(format!(
+                        "{got} {name} events, at most {n} wanted ({counts:?})"
+                    ));
+                }
+            }
+        }
+        for name in self.strings(None, step, "none")? {
+            if let Some(got) = counts.get(&name) {
+                return Err(format!("{got} {name} events arrived, none wanted"));
+            }
+        }
+        if let Some(text) = str_of(&step.obj, "lacks")
+            && let Some(l) = lines.iter().find(|l| l.contains(text))
+        {
+            return Err(format!("a line holds {text:?}: {}", &l[..l.len().min(200)]));
+        }
+        Ok(())
     }
 
     fn conn(&mut self, step: &Step) -> R<&mut Conn> {
@@ -2137,8 +2331,15 @@ impl Runner<'_> {
                 obj,
             });
         }
-        let mut samples = Vec::new();
+        let mut samples: Vec<f64> = Vec::new();
         for _ in 0..repeat {
+            if !samples.is_empty() {
+                let mean = samples.iter().sum::<f64>() / samples.len() as f64;
+                self.within_bound(&format!(
+                    " in {name} after {} of {repeat} repeats, {mean:.1} ms each on average",
+                    samples.len()
+                ))?;
+            }
             let t = Instant::now();
             for s in &inner {
                 self.step(s)
@@ -2192,6 +2393,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_row_past_its_bound_fails_alone_with_what_it_had_done() {
+        let s = crate::scenario::parse(
+            "{\"scenario\": \"t/slow\", \"bound_s\": 1}\n\
+             {\"do\": \"root\"}\n\
+             {\"do\": \"measure\", \"name\": \"m\", \"repeat\": 1000, \"steps\": [\
+               {\"do\": \"run\", \"bin\": \"/bin/sh\", \"args\": [\"-c\", \"sleep 0.2\"], \"expect_code\": 0}]}\n",
+        )
+        .unwrap();
+        let cfg = Config {
+            hub_bin: PathBuf::from("/nonexistent"),
+            scenarios: PathBuf::from("/nonexistent"),
+        };
+        let mut perf = Vec::new();
+        let e = run_scenario(&cfg, &s, &mut perf).unwrap_err();
+        assert!(
+            e.contains("step 2 (measure)")
+                && e.contains("bound of 1 s ran out in m after ")
+                && e.contains(" of 1000 repeats, ")
+                && e.contains(" ms each on average"),
+            "{e}"
+        );
+        assert!(perf.is_empty(), "a measure cut short records nothing");
+    }
+
+    #[test]
+    fn a_root_variable_before_any_root_or_hub_fails_the_row() {
+        // `$ROOT` names a root, which exists once a `root` or a `start` step made it: before that it would stay
+        // literal, and a step that writes there makes a directory called `$ROOT` in the working directory
+        let cfg = Config {
+            hub_bin: PathBuf::from("/nonexistent"),
+            scenarios: PathBuf::from("/nonexistent"),
+        };
+        let early = crate::scenario::parse(
+            "{\"scenario\": \"t/early\"}\n\
+             {\"do\": \"run\", \"bin\": \"/bin/sh\", \"args\": [\"-c\", \"exit 0\", \"x\", \"$ROOT/a\"], \"expect_code\": 0}\n",
+        )
+        .unwrap();
+        let e = run_scenario(&cfg, &early, &mut Vec::new()).unwrap_err();
+        assert!(
+            e.contains("step 1 (run)") && e.contains("$ROOT") && e.contains("`root` or `start`"),
+            "{e}"
+        );
+        let after = crate::scenario::parse(
+            "{\"scenario\": \"t/after\"}\n{\"do\": \"root\"}\n\
+             {\"do\": \"run\", \"bin\": \"/bin/sh\", \"args\": [\"-c\", \"exit 0\", \"x\", \"$ROOT/a\"], \"expect_code\": 0}\n",
+        )
+        .unwrap();
+        run_scenario(&cfg, &after, &mut Vec::new()).unwrap();
+    }
+
+    #[test]
+    fn the_root_is_its_own_true_name() {
+        let r = Root::new().unwrap();
+        assert_eq!(std::fs::canonicalize(r.path()).unwrap(), r.path());
+    }
+
+    #[test]
     fn procargs2_splits_argv_from_the_environment() {
         let mut buf = 2i32.to_ne_bytes().to_vec();
         buf.extend_from_slice(b"/bin/x\0\0\0\0x\0--flag\0A=1\0B=2\0\0junk\0");
@@ -2223,5 +2481,14 @@ mod tests {
     fn a_dumpable_process_is_not_refused() {
         let e = environ_refused(std::process::id()).unwrap_err();
         assert!(e.contains("is dumpable"), "{e}");
+    }
+
+    /// A failure that names a silent hub says what its threads wait on and how busy the machine is.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn the_wait_report_names_the_threads_and_the_load() {
+        let r = proc_waits(std::process::id());
+        assert!(r.contains("load average: "), "{r}");
+        assert!(r.contains("  thread ") && r.contains(" wchan "), "{r}");
     }
 }

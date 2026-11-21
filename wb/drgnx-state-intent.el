@@ -22,7 +22,7 @@ outside one), a layout, a restore, a module being turned off, or anything else."
 
 (defconst drgnx-state-intent--sizes
   '((left . drgnx-wb-dock-px) (bottom . drgnx-wb-panel-px) (right . drgnx-wb-right-px))
-  "Home → the frame parameter that holds the size its pane comes back at, until B3.")
+  "Home → the frame parameter that holds the size its pane comes back at: the docks' and the grid's dock tiles'.")
 
 (defconst drgnx-state-intent--layouts
   '((:layout . drgnx-layouts-current) (:previous . drgnx-layouts-previous) (:zen-return . drgnx-layouts-zen-return))
@@ -52,7 +52,9 @@ KEY and SUBKEY, and where the answer comes from until the grid:
   `:view'       — the sidebar's view (`drgnx-wb-view'), also one no module defines now;
   `:layout', `:previous', `:zen-return' — the layout applied, the one before, Zen's return (layouts' own
                   parameters; read-only until B10);
-  `:places', `:arrangement' — nil until the grid.
+  `:arrangement' — the arrangement a tile shown full size goes back to: (ID . TREE), `drgnx-grid-full' (read-only:
+                  the grid's full size writes it); nil when no tile shows full size;
+  `:places'     — nil until the grid.
 BY is who asked (`drgnx-state-intent-bys'), nil when nobody said."
   (let ((frame (or frame (selected-frame))))
     (when (frame-live-p frame)
@@ -74,7 +76,8 @@ BY is who asked (`drgnx-state-intent-bys'), nil when nobody said."
                (nreverse out)))))
         (:view (frame-parameter frame 'drgnx-wb-view))
         ((or :layout :previous :zen-return) (frame-parameter frame (alist-get key drgnx-state-intent--layouts)))
-        ((or :places :arrangement) nil)
+        (:arrangement (frame-parameter frame 'drgnx-grid-full))
+        (:places nil)
         (_ (error "drgnx-state-intent: no intent %S" key))))))
 
 (defun drgnx-state-intent--record (frame key subkey by)
@@ -142,13 +145,16 @@ the grid: nil."
 (defun drgnx-state-intent--user-resized (data)
   "Note a size you set by hand as intent (the `idle' subscriber of `pane-resized', subscribed by core/workbench).
 DATA is the event's plist.  For a resize with `:cause' `user' of a window that holds a home with a size (the
-dock, the panel, the right dock), along the dimension that home has (width for left and right, height for
-bottom): note `:sizes' HOME (:px N) `:by' `user' and mark the window `window-preserve-size', so the frame being
-resized does not take the size back.  A window parameter; nothing moves.  Writes and everything else
+dock, the panel, the right dock, a grid's docked tool tile), along the dimension that home has (width for left
+and right, height for bottom): note `:sizes' HOME (:px N) `:by' `user' and mark the window `window-preserve-size', so
+the frame being resized does not take the size back.  A window parameter; nothing moves.  Writes and everything else
 (`:cause' `write' or `other': a popup squeezing the panel, the window manager) are not the user's."
   (let ((window (plist-get data :window)) (frame (plist-get data :frame)))
     (when (and (eq (plist-get data :cause) 'user) (window-live-p window) (frame-live-p frame))
-      (when-let* ((home (alist-get (drgnx-state-window-role window) drgnx-state-intent--role-homes)))
+      (when-let* ((role (drgnx-state-window-role window))
+                  ;; a grid's tool tile holds its dock's size
+                  (home (if (eq role 'tile) (window-parameter window 'drgnx-tile-dock)
+                          (alist-get role drgnx-state-intent--role-homes))))
         (let* ((horizontal (memq home '(left right))) (i (if horizontal 2 3))
                (px (nth i (plist-get data :new))))
           (when (and (integerp px) (not (eql px (nth i (plist-get data :old)))))

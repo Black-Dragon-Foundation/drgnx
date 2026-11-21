@@ -44,6 +44,7 @@
   (should (equal (perf-watchdog-test--env "on") '(t . 1)))
   (should (equal (perf-watchdog-test--env nil) '(t . 100)))
   (should (equal (perf-watchdog-test--env "default") '(t . 100)))
+  (should (equal (perf-watchdog-test--env "16") '(t . 16)))
   (should (null (car (perf-watchdog-test--env "off")))))
 
 (ert-deftest drgnx-perf/watchdog-env-off-is-fully-off ()
@@ -152,6 +153,54 @@
            (should (= (plist-get w :drain-max-ms) 1000.0))))))
    (should (equal (drgnx-perf--gc-row '(10.0 30.0 20.0)) '(:count 3 :max 30.0 :p95 30.0)))
    (should (equal (plist-get (drgnx-perf--typing-row '(5 10 20 30)) :ge16) 50.0))))
+
+(ert-deftest drgnx-perf/stalls-count-is-the-counter-not-the-records ()
+  ;; pattern D (pure): the watchdog keeps 32 records and the ring is not drained mid-workload, so 40 stalls reach the
+  ;; probe as 32 records.  The count is the C counter's delta; the records only give the felt count and the stacks.
+  (perf-watchdog-test--with-feature
+   (let ((calls 0) (drgnx-perf--stalls nil) (nidhogg-watchdog-record-functions nil)
+         (nidhogg-watchdog--drain-edges [4 8 16 33 50 100 250 1000]))
+     (setq nidhogg-watchdog-mode t)
+     (cl-letf (((symbol-function 'nidhogg-watchdog--stats-delta) nil)
+               ((symbol-function 'nidhogg-watchdog-drain-now) #'ignore)
+               ((symbol-function 'nidhogg-watchdog-stats)
+                (lambda (&optional _)
+                  (if (= (cl-incf calls) 1)
+                      (append '(:stalls 1) (perf-watchdog-test--stats 100 1 10.0 [1 0 0 0 0 0 0 0 0]))
+                    (append '(:stalls 41) (perf-watchdog-test--stats 300 3 13.5 [5 0 0 0 0 0 0 1 0]))))))
+       (drgnx-perf--stalls-begin)
+       (dotimes (_ 32)
+         (drgnx-perf--stall-record '(:wall-ms 30.0 :felt nil :signature "a.el:f" :culprit "f")))
+       (let ((r (drgnx-perf--stalls-end)))
+         (should (= (length drgnx-perf--stalls) 32))
+         (should (= (plist-get r :stalls) 40))
+         (should (= (plist-get r :stall-max-ms) 30.0)))))))
+
+(ert-deftest drgnx-perf/stalls-in-the-labs-own-wait-are-not-the-workloads ()
+  ;; pattern D (pure): the lab's own post-command wait for the present is a busy span to the watchdog; a stall whose
+  ;; time is in it, all but less than a threshold, is the lab's and never counts against the workload.  One whose rest
+  ;; is a threshold or more, and one with any other culprit, do.
+  (perf-watchdog-test--with-feature
+   (let ((calls 0) (drgnx-perf--stalls nil) (nidhogg-watchdog-record-functions nil)
+         (nidhogg-watchdog--drain-edges [4 8 16 33 50 100 250 1000]))
+     (setq nidhogg-watchdog-mode t)
+     (cl-letf (((symbol-function 'nidhogg-watchdog--stats-delta) nil)
+               ((symbol-function 'nidhogg-watchdog-drain-now) #'ignore)
+               ((symbol-function 'nidhogg-watchdog-stats)
+                (lambda (&optional _)
+                  (append (list :stalls (if (= (cl-incf calls) 1) 1 5))
+                          (perf-watchdog-test--stats (* calls 100) 1 10.0 [1 0 0 0 0 0 0 0 0])))))
+       (drgnx-perf--stalls-begin)
+       (dolist (r '((4100.0 "drgnx-perf--await-present" 0.98 "process-wait")    ; the lab's: 82 ms elsewhere
+                    (300.0 "drgnx-perf--await-present" 1.0 "process-wait")      ; the lab's
+                    (2000.0 "drgnx-perf--await-present" 0.9 "process-wait")     ; 200 ms elsewhere: counts
+                    (150.0 "drgnx-work-map--render" 0.9 "lisp")))               ; the map's: counts
+         (drgnx-perf--stall-record (list :wall-ms (nth 0 r) :felt nil :signature "s"
+                                         :culprit (list :fn (nth 1 r) :pkg "drgnx" :share (nth 2 r) :phase (nth 3 r)))))
+       (let ((r (drgnx-perf--stalls-end)))
+         (should (= (plist-get r :stalls) 2))
+         (should (= (plist-get r :stalls-lab) 2))
+         (should (= (plist-get r :stall-max-ms) 2000.0)))))))
 
 (defun perf-watchdog-test--probe (stats-fn)
   "Run the stalls probe over two `nidhogg-watchdog-stats' values (STATS-FN gets the call number); the :watchdog plist."

@@ -1,0 +1,15 @@
+{"scenario": "debug/run-without-debugging", "requires": ["v1", "test-hooks"], "doc": "Run Without Debugging (`no_debug`): the configuration launches with `noDebug: true`, as VS Code sends it (the mock stops only when the launch carried it)."}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/proj/.vscode/launch.json", "json": {"version": "0.2.0", "configurations": [{"type": "mocka", "request": "launch", "name": "App", "program": "p"}]}}
+{"do": "write_file", "path": "$ROOT/a.json", "json": [{"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}, {"expect": "launch", "args": {"noDebug": true, "program": "p"}, "ok": {}}, {"event": "initialized"}, {"expect": "configurationDone"}, {"event": "stopped", "body": {"reason": "pause", "threadId": 1, "allThreadsStopped": true}}, {"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}, {"expect": "stackTrace", "ok": {"stackFrames": [], "totalFrames": 0}}, {"expect": "disconnect", "ok": {}}, {"die": true}]}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "debug/trust", "params": {"root": "$ROOT/proj", "trusted": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "launch:0", "no_debug": true, "adapters": [{"id": "mocka", "name": "Mock A", "types": ["mocka"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/a.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"session": "$capture:s"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-state", "data": {"sessions": [{"id": "$s", "state": "stopped"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "debug/control", "params": {"session": "$s", "op": "stop"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-ended", "data": {"session": "$s"}}, "within_ms": 10000}

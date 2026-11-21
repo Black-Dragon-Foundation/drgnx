@@ -46,3 +46,50 @@ pub fn render(doc: &LedgerDoc) -> String {
     }
     out
 }
+
+/// A line of a ledger that says tasks are done: `Task 7: complete (commits a1b2c3d..e4f5a6b, tests: ...)`,
+/// `Task 3-5: complete (commit 1234567 ...)`, `Task 22b: complete`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoneMark {
+    /// The task numbers it covers, in order (`3-5` → 3, 4, 5; `22b` → one).
+    pub tasks: Vec<String>,
+    /// The commits it names, as written: a range's two ends, or the one commit.
+    pub commits: Vec<String>,
+}
+
+/// The tasks a ledger's text marks complete.
+pub fn done_marks(text: &str) -> Vec<DoneMark> {
+    text.lines().filter_map(done_mark).collect()
+}
+
+fn is_sha(s: &str) -> bool {
+    (4..=40).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn done_mark(line: &str) -> Option<DoneMark> {
+    let rest = line.strip_prefix("Task ")?;
+    let (head, tail) = rest.split_once(": complete")?;
+    let tasks = match head.split_once('-') {
+        Some((a, b))
+            if a.bytes().all(|c| c.is_ascii_digit()) && b.bytes().all(|c| c.is_ascii_digit()) =>
+        {
+            let (a, b): (u32, u32) = (a.parse().ok()?, b.parse().ok()?);
+            (a..=b.max(a)).map(|n| n.to_string()).collect()
+        }
+        _ if !head.is_empty() && head.bytes().all(|c| c.is_ascii_alphanumeric()) => {
+            vec![head.to_string()]
+        }
+        _ => return None,
+    };
+    let mut commits = Vec::new();
+    if let Some(at) = tail.find("commit") {
+        let after = tail[at..].trim_start_matches(|c: char| c.is_ascii_alphabetic());
+        let word: String = after
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_hexdigit() || *c == '.')
+            .collect();
+        commits.extend(word.split("..").filter(|s| is_sha(s)).map(str::to_string));
+    }
+    Some(DoneMark { tasks, commits })
+}

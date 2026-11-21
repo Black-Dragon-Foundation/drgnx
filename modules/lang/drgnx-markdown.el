@@ -185,7 +185,7 @@ one is the user's (or a theme's, or Customize's) and wins.  The module's undo pu
 
 (defun drgnx-markdown--define-command ()
   "Register Markdown: Open Preview; its key (any profile's) binds in markdown-mode's keymap only."
-  (drgnx-command-define 'markdown-preview :category "Markdown" :title "Markdown: Open Preview"
+  (drgnx-command-define 'markdown-preview :category "Markdown" :title "Open Preview"
                         :command #'drgnx-markdown-preview :map '(markdown-mode . markdown-mode-map)
                         :doc "This file rendered beside it, after each save"))
 

@@ -637,6 +637,28 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
 - **Doctor:** the `settings-migrated` check (facts `:settings-leftovers`, `:settings-stayed`) warns "no longer read"
   naming each stayed file and why, else "already migrated" naming Move Old Files Away; it has no row while neither
   holds.
+- **The wrap step** (`drgnx-settings-migrate-wrap`, called right after `drgnx-settings-migrate-maybe`, safe mode too):
+  `drgnx-face-line-wrap` folds into `drgnx-editing-word-wrap` once. When it has finished, `wrap-2026-11` is in the
+  report file's `:steps` and a later start does nothing; its report is the file's `:wrap` (`:done` and `:reported`
+  items, each `:file :line :text`), shown at the end of Settings: Migration Report, and a migration report written
+  later keeps both keys. Who set a value is read from the store that holds it, never from a comparison with the
+  current value:
+  - every wrap entry of `settings.el` and of a private workspace file (W2) is the user's: it is mapped (`word`→`on`,
+    `truncate`→`off`) into `drgnx-editing-word-wrap` in the same scope, and the old entry goes. A `drgnx-editing-word-wrap`
+    entry already in that scope wins; a disagreement is reported;
+  - a shared `.drgnx/settings.el` (W1, of the roots the private files name) is the project's: reported with its line,
+    never written;
+  - `custom.el` is never written. A `drgnx-face-line-wrap` there equal to what the old applier wrote (`word` while the
+    editing setting is `on` or unset, `truncate` while it is `off`) was drgnx's own and is dropped, so `auto` applies;
+    another literal value is the user's and goes to `settings.el`;
+  - in the user's Lisp (`config.el`, `drgnx-user-lisp-files`; never edited) a literal value at top level goes to
+    `settings.el`, and the line is reported with the `setopt` form that replaces it;
+  - a value that maps to none (`nil`, Emacs's own; any other) and a computed or conditional one are reported, left as
+    they are, never guessed.
+
+  It writes only through `drgnx-settings-file-put` and `-remove`. A file that refuses (a mistake in it) is reported
+  and leaves the step undone, so the next start tries again. Anything reported is one `warn` notice (source `config`,
+  id `settings-wrap`, command Migration Report). Tests: `test/unit/settings-migrate-wrap-test.el`.
 
 ## Agents, AI and the shipped defaults (Task 15)
 
@@ -650,7 +672,16 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
   `:runtime`, `:on-error last-good`. `drgnx-agents-allow-unsandboxed` is new (nothing reads it before the sandbox
   tasks). The sandbox's `drgnx-sandbox-memory-max`, `drgnx-sandbox-secret-files` and
   `drgnx-sandbox-proxy-pinned-addresses` (`core/drgnx-settings-runtime.el`) are settings too: `:scope global`,
-  `:workspace never`, `:agents never` (design §13).
+  `:workspace never`, `:agents never` (design §13). The pins are `:runtime "ProxyPins"` (last good on a mistake): the
+  hub pins them in every session's provider proxy and container job's proxy, from `settings.el` or, when your Lisp
+  or Customize sets them, from the editor's `config/settings` (their encoder is an object NAME → address).
+- **Every runtime setting has an encoder but the matrix.** `drgnx-settings-runtime--encoders` turns each `:runtime`
+  setting's Lisp value into its runtime type's JSON, so a value only your Lisp or Customize sets reaches the hub
+  (`drgnx-settings-runtime/every-runtime-setting-but-the-matrix-has-an-encoder`). The agent limits of
+  `drgnx-agents-matrix.el` go as they are (numbers, a string) or as objects (`drgnx-agents-net-hosts`, NAME → list of
+  hosts; `drgnx-agents-container-images`, `drgnx-agents-silent-after`). `drgnx-agents-matrix` itself has none: its
+  plist would need the wire's own shape (the hub decodes settings.el's plist through huginn), so a matrix set only in
+  your Lisp or Customize does not reach the hub; set it in Settings → User (settings.el).
 - **Callers read `default-value`.** `drgnx-agents-profile`, `-profile-names`, `-default-profile`, `-mcp-names`,
   `drgnx-ai-providers` (the function), `drgnx-ai-role` and `drgnx-ai-user-role` read the global
   value, so a buffer-local value (a `.dir-locals.el`, a `setq-local`) never reaches them. Tests bind the variable with
@@ -671,7 +702,7 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
 - **The old files.** `drgnx-config-define 'agents` and `'ai` stay, for the migration only (it reads the old files
   through them). `agents` and `ai` are out of `drgnx-settings-shim-areas`, so a file that stayed is no longer read.
   The project's `.drgnx/ai.eld` (`ai-project`) is unchanged until the workspace layers fold it in.
-- **Batch entry points.** A batch Emacs that loads no init (the hub, `search index`, `search mcp`/`query`, `onboard`)
+- **Batch entry points.** A batch Emacs that loads no init (the hub, `onboard`)
   calls `drgnx-settings-defaults-apply`: it applies drgnx's own entries of settings.el, so the profiles, routes,
   providers and roles are the user's there too.
 - **Tests.** `test/fixtures/runtime-settings-fixture.el`: `drgnx-test-with-runtime-settings` (the eight settings at
@@ -737,6 +768,16 @@ when it loads (`drgnx-settings-workspace-enable`, undone by `-disable`).
 - **Refusals** (`drgnx-settings-workspace-problems FILE`, one notice condition per file): an entry of a `:scope
   global` setting, of a `:workspace never` setting (`drgnx-setting-meta`, which holds the deny-list of design §13), and
   the pseudo-variables `eval` and `mode`. `:scope project` entries are never buffer values.
+  `drgnx-settings-workspace--refusal ENTRY SOURCE` and `--usable FILE SOURCE` take the file's source, `private` (W2,
+  your file under `<config>`, which no repository writes and the agent sandbox closes) or `shared` (W1, the
+  `.drgnx/*.eld` shims and `.dir-locals*.el`; the default). `private` lets a `:workspace never` entry through when the
+  setting's `:scope` is `project`, so a project's value of a security setting (`drgnx-agents-plugins`,
+  `drgnx-agents-hook-rules`, `drgnx-agents-hook-rules-off`) has a home that only you write: `drgnx-setting-for-root`
+  reads it, and `drgnx-settings-runtime-overrides ROOT` sends it to the hub as the project's `config/settings` set.
+  `shared` still refuses every `:workspace never` entry, `:scope global` stays refused everywhere, and a `:scope
+  buffer` never-setting stays refused in W2 too. The usable-entries memo is keyed by file and source. The Settings
+  page gives such a setting the tabs `(user workspace)` only (`drgnx-settings-page-tabs-for`), and
+  `drgnx-settings-editors-check` refuses `shared` for it as it does for `code`.
 - **W1's filter:** `drgnx-settings-workspace-filter-function`, called with ROOT, FILE and the entries left after the
   refusals, returns those to apply: workspace trust's `drgnx-settings-trust-filter` (below);
   `drgnx-settings-workspace-safe-only` passes `safe-local-variable-p` values and never an `:eval`.
@@ -746,7 +787,8 @@ when it loads (`drgnx-settings-workspace-enable`, undone by `-disable`).
 - **`(drgnx-setting-for-root VAR ROOT)`**: the global value, then W1 (the old `.drgnx/{search,ai,large-files}.eld`
   through the config layer, `drgnx-settings-workspace-old-files`, ai.eld's roles through W1's filter, then `.drgnx/settings.el`'s filtered entries), then
   W2, each over the one below by its `:merge` (`replace`, `alist`, `append`, `lower-only`: the lower of two numbers,
-  anything else keeps the lower layer). `drgnx-search-config` reads `drgnx-search-{include,exclude,off}` this way.
+  anything else keeps the lower layer). `drgnx-setting-for-root` reads `drgnx-search-{include,exclude,off}` this way, and the editor sends the resolved values
+  per project to the hub.
 - **`(drgnx-settings-workspace-file ROOT &optional CREATE)`**: by root, else by `:project` through
   `drgnx-settings-workspace-project`, which returns nil until the Urdr gate (matching a moved folder by its project id
   is a post-gate row). CREATE writes `<slug>.el` (then `-2`, `-3` …) under the file's lock, with `:roots` and

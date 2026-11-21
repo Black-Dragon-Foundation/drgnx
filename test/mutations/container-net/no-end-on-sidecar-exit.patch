@@ -1,0 +1,16 @@
+Target: row container-escape/sidecar-death-ends-the-job
+The hub never hears the relay channel end: a killed sidecar leaves the job running.
+
+diff --git a/runtime/crates/drgnx-ratatoskr/src/exec/mod.rs b/runtime/crates/drgnx-ratatoskr/src/exec/mod.rs
+index 9c65653b..d6b78e16 100644
+--- a/runtime/crates/drgnx-ratatoskr/src/exec/mod.rs
++++ b/runtime/crates/drgnx-ratatoskr/src/exec/mod.rs
+@@ -278,7 +278,7 @@ enum RelayEnd {
+ impl Net {
+     async fn ended(&mut self) -> RelayEnd {
+         tokio::select! {
+-            e = self.net.ended() => RelayEnd::Channel(e),
++            e = std::future::pending::<drgnx_px::owner::End>() => RelayEnd::Channel(e),
+             Ok((why, ack)) = &mut self.stop => RelayEnd::Stop(why, ack),
+         }
+     }

@@ -5,9 +5,13 @@
 ;;; Commentary:
 ;; Like VS Code's inline blame: after a short pause, the end of the line point is on says who last changed it, how
 ;; long ago and the commit's subject ("Ada, 3 days ago · Fix the parser"); a line you changed and have not committed
-;; says "You · Uncommitted changes".  git runs in the background for that one line, on the buffer's text (so
-;; unsaved edits line up); answers are kept until the buffer changes.  Only local files git tracks; a file git
-;; refuses is not asked again.  Blame: Show Commit of Line opens that commit in the diff view.  See docs/guide/git.md.
+;; says "You · Uncommitted changes", a line an agent wrote "agent s1 · …".  The hub does all of it: it blames the
+;; buffer's text once (`git/blame', cached by path, HEAD and text), finds the line the position is on, words the text
+;; and cuts it to the columns this window has left (`git/blame/line'), so this file counts no line, follows no edit and
+;; formats nothing: when point rests on a new line it asks, once, with the line's position and the room, and draws the
+;; answer.  Typing on a line asks nothing; a resize asks again with the new room.  Only local files the edit history
+;; tracks (the hub is connected and the file is in a git project); a file git refuses is not asked again.  Blame: Show
+;; Commit of Line opens that commit in the diff view.  See docs/guide/git.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -17,47 +21,27 @@
 (require 'drgnx-registry)
 (require 'drgnx-timer)
 (require 'drgnx-large-file)
+(require 'drgnx-pixels)                 ; `drgnx-pixels-scale'
+(require 'drgnx-history)                ; `drgnx-history-ask'
+(require 'drgnx-faces)                  ; `drgnx-text-subtle'
+(require 'drgnx-type-faces)             ; `drgnx-ui-caption'
 
 (declare-function drgnx-diff-show "drgnx-diff")
 
-(defface drgnx-blame '((t :inherit font-lock-comment-face)) "Inline blame at the end of the line." :group 'drgnx)
+(defface drgnx-blame '((t :inherit (italic drgnx-text-subtle drgnx-ui-caption)))
+  "Inline blame at the end of the line: italic subtle text in the caption face." :group 'drgnx)
 
 (defvar drgnx-blame-delay 0.6 "Seconds of idle time before the line's blame is asked for.")
-(defvar drgnx-blame-cache-seconds 30 "How long a line's answer is kept (commits made elsewhere show after this).")
 
 (defvar-local drgnx-blame--overlay nil "The overlay showing the blame.")
-(defvar-local drgnx-blame--bol nil "Where the line the overlay belongs to starts.")
-(defvar-local drgnx-blame--info nil "What the overlay shows, kept to refit it when the window changes size.")
-(defvar-local drgnx-blame--cache nil "Line → (TIME . INFO).")
-(defvar-local drgnx-blame--proc nil "The git process asking for a line.")
-(defvar-local drgnx-blame--off nil "git refused this file: not asked again.")
+(defvar-local drgnx-blame--bol nil "Where the line the overlay (or the last answer) belongs to starts.")
+(defvar-local drgnx-blame--info nil "The hub's last answer for that line: (:text :sha :time), `:text' absent when none.")
+(defvar-local drgnx-blame--request nil "The token of the `git/blame/line' question out, or nil.")
+(defvar-local drgnx-blame--off nil "The hub refused this file: not asked again.")
 (defvar drgnx-blame-mode)
 
-(defun drgnx-blame--parse (porcelain)
-  "PORCELAIN (git blame --porcelain for one line) as (:sha :author :time :summary), or nil."
-  (when (string-match "\\`\\([0-9a-f]\\{40\\}\\) " porcelain)
-    (let ((sha (match-string 1 porcelain))
-          (field (lambda (k) (and (string-match (format "^%s \\(.*\\)$" k) porcelain) (match-string 1 porcelain)))))
-      (if (string-match-p "\\`0+\\'" sha)
-          (list :sha sha :author "You" :time nil :summary "Uncommitted changes")
-        (list :sha sha :author (funcall field "author")
-              :time (let ((s (funcall field "author-time"))) (and s (string-to-number s)))
-              :summary (funcall field "summary"))))))
-
-(defun drgnx-blame--ago (seconds now)
-  "How long before NOW the time SECONDS was, in words (whole counts: NOW is a float)."
-  (let* ((d (floor (max 0 (- now seconds))))
-         (say (lambda (n unit) (format "%d %s%s ago" n unit (if (= n 1) "" "s")))))
-    (cond ((< d 60) "just now")
-          ((< d 3600) (funcall say (/ d 60) "minute"))
-          ((< d 86400) (funcall say (/ d 3600) "hour"))
-          ((< d (* 30 86400)) (funcall say (/ d 86400) "day"))
-          ((< d (* 365 86400)) (funcall say (/ d (* 30 86400)) "month"))
-          (t (funcall say (/ d (* 365 86400)) "year")))))
-
-(defconst drgnx-blame--gap 3 "Columns between the end of the line and the blame.")
-(defconst drgnx-blame--min-width 20 "Fewer columns than this left: no blame (a stump says nothing).")
-(defconst drgnx-blame--max-width 80 "The blame is never wider than this.")
+(defconst drgnx-blame--gap 3 "Columns the blame's room leaves for the gap between the end of the line and the blame.")
+(defconst drgnx-blame--gap-px 24 "The gap in logical pixels.")
 
 (defun drgnx-blame--room ()
   "Columns left in the window after the end of the current line, less the gap and a column kept free (the
@@ -69,105 +53,65 @@ screen: the screen still shows the last blame at the line's end."
          (col (save-excursion (goto-char (line-end-position)) (current-column))))
     (- text (if truncate-lines (- col (window-hscroll win)) (mod col (max text 1))) drgnx-blame--gap 1)))
 
-(defun drgnx-blame--text (info now width)
-  "INFO (see `drgnx-blame--parse') as one line in the face `drgnx-blame', at most WIDTH columns (cut with an
-ellipsis) and at most `drgnx-blame--max-width'; nil when WIDTH is under `drgnx-blame--min-width'."
-  (let ((width (min width drgnx-blame--max-width)))
-    (when (>= width drgnx-blame--min-width)
-      (let ((s (if (plist-get info :time)
-                   (format "%s, %s · %s" (plist-get info :author) (drgnx-blame--ago (plist-get info :time) now) (plist-get info :summary))
-                 (format "%s · %s" (plist-get info :author) (plist-get info :summary)))))
-        (propertize (truncate-string-to-width (replace-regexp-in-string "[\n\r]" " " s) width nil nil "…") 'face 'drgnx-blame)))))
-
 (defun drgnx-blame--hide ()
   (when drgnx-blame--overlay (delete-overlay drgnx-blame--overlay))
   (setq drgnx-blame--bol nil drgnx-blame--info nil))
 
 (defun drgnx-blame--show (info)
-  "Show INFO at the end of the current line, fitted to the room the window has there (nothing when there is none)."
+  "Show INFO (the hub's answer for the current line) at the end of it: the hub's text, in the blame's face (nothing
+when the answer has none, or inline values hold the line)."
   (setq drgnx-blame--info info drgnx-blame--bol (line-beginning-position))    ; answered for this line, shown or not
-  (if-let* ((text (drgnx-blame--text info (float-time) (drgnx-blame--room))))
+  (if-let* (((not (seq-some (lambda (o) (overlay-get o 'drgnx-blame-yield))           ; inline values hold the line
+                            (overlays-in (line-beginning-position) (1+ (line-end-position))))))
+            (text (plist-get info :text)))
       (progn
         (unless drgnx-blame--overlay (setq drgnx-blame--overlay (make-overlay 1 1 nil t nil)))
         (move-overlay drgnx-blame--overlay (line-end-position) (line-end-position))
-        (overlay-put drgnx-blame--overlay 'after-string (concat (propertize (make-string drgnx-blame--gap ?\s) 'cursor t) text)))
+        (overlay-put drgnx-blame--overlay 'after-string
+                     (concat (propertize " " 'cursor t 'display `(space :width (,(round (* drgnx-blame--gap-px (drgnx-pixels-scale))))))
+                             (propertize text 'face 'drgnx-blame))))
     (when drgnx-blame--overlay (delete-overlay drgnx-blame--overlay))))
 
 (defun drgnx-blame--resized (window)
   "`window-size-change-functions' (buffer-local; called for each WINDOW showing the buffer, with another buffer
-current): the selected window's blame is fitted again to its new width (one line, not git)."
+current): the selected window's line is asked for again, with the room it has now."
   (when (eq window (selected-window))
     (with-current-buffer (window-buffer window)
       (when (and drgnx-blame--bol drgnx-blame--info (= (line-beginning-position) drgnx-blame--bol))
-        (drgnx-blame--show drgnx-blame--info)))))
+        (drgnx-blame--ask)))))
 
 (defun drgnx-blame--follow ()
   "`post-command-hook': the blame goes when point leaves its line or a region is active."
   (when (and drgnx-blame--bol (or (/= (line-beginning-position) drgnx-blame--bol) (region-active-p)))
     (drgnx-blame--hide)))
 
-(defun drgnx-blame--forget (&rest _) (when drgnx-blame--cache (clrhash drgnx-blame--cache)))
+(defun drgnx-blame--answered (buffer token bol result error)
+  "The hub's answer RESULT (or ERROR) to the question TOKEN about the line of BUFFER that started at BOL."
+  (when (and (buffer-live-p buffer) (eq token (buffer-local-value 'drgnx-blame--request buffer)))
+    (with-current-buffer buffer
+      (setq drgnx-blame--request nil)
+      (cond (error
+             ;; git has no history for the file, or the hub could not read it: not asked again until it is turned on
+             (setq drgnx-blame--off t))
+            ;; point moved on while the answer came: not this line's to draw (the next tick asks for the new one)
+            ((and drgnx-blame-mode (eql bol (line-beginning-position)))
+             (drgnx-blame--show result))))))
 
-(defun drgnx-blame--cached (line)
-  (let ((e (and drgnx-blame--cache (gethash line drgnx-blame--cache))))
-    (and e (< (- (float-time) (car e)) drgnx-blame-cache-seconds) (cdr e))))
-
-(defun drgnx-blame--command (line contents)
-  "git blame of LINE; CONTENTS: the buffer's text comes on stdin (it has unsaved changes)."
-  (append (list "git" "blame" "--porcelain" "-L" (format "%d,%d" line line))
-          (and contents '("--contents" "-"))
-          (list "--" (file-name-nondirectory buffer-file-name))))
-
-(defun drgnx-blame--refused-p (stderr)
-  "Does git's STDERR say it will never blame this file (untracked, not a repository)?"
-  (string-match-p "no such path\\|not a git repository\\|does not exist\\|no such ref" stderr))
-
-(defun drgnx-blame--stop ()
-  "Stop the request still running, so its end is not taken for an answer."
-  (let ((p drgnx-blame--proc))
-    (setq drgnx-blame--proc nil)
-    (when (process-live-p p) (delete-process p))))
+(defun drgnx-blame--ask ()
+  "Ask the hub for the blame of the current line, fitted to the room it has (one question at a time)."
+  (unless (or drgnx-blame--request drgnx-blame--off)
+    (let ((buf (current-buffer)) (token (list 'blame)) (bol (line-beginning-position)))
+      (when (condition-case nil
+                (drgnx-history-ask buf "git/blame/line"
+                                   (lambda (result error) (drgnx-blame--answered buf token bol result error))
+                                   (list :pos bol :width (drgnx-blame--room)))
+              (error nil))
+        (setq drgnx-blame--request token)))))
 
 (defun drgnx-blame--update ()
-  "Show the blame of the current line: from the cache, else from git in the background (replacing a request that
-has not answered).  The empty line after the last newline has none."
+  "Ask for the blame of the current line.  The empty line after the last newline has none."
   (unless (or drgnx-blame--off (not buffer-file-name) (region-active-p) (and (eobp) (bolp)))
-    (let ((line (line-number-at-pos)) (buf (current-buffer)) (bol (line-beginning-position)) (modified (buffer-modified-p)))
-      (if-let* ((info (drgnx-blame--cached line)))
-          (drgnx-blame--show info)
-        (drgnx-blame--stop)
-        (let* ((out (generate-new-buffer " *drgnx-blame*" t)) (err (generate-new-buffer " *drgnx-blame err*" t))
-               (default-directory (file-name-directory buffer-file-name))
-               (p (make-process
-                   :name "drgnx-blame" :buffer out :stderr err :noquery t :connection-type 'pipe :coding 'utf-8-unix
-                   :command (drgnx-blame--command line modified)
-                   :sentinel
-                   (drgnx-guard-wrap
-                    (lambda (proc _event)
-                      (unless (process-live-p proc)
-                        (when (and (buffer-live-p buf) (eq proc (buffer-local-value 'drgnx-blame--proc buf)))
-                          (with-current-buffer buf
-                            (setq drgnx-blame--proc nil)
-                            (if (not (eql (process-exit-status proc) 0))
-                                ;; untracked, outside a repository: never again; anything else may pass
-                                (when (drgnx-blame--refused-p (with-current-buffer err (buffer-string)))
-                                  (setq drgnx-blame--off t))
-                              (when-let* ((info (drgnx-blame--parse (with-current-buffer out (buffer-string)))))
-                                (unless drgnx-blame--cache (setq drgnx-blame--cache (make-hash-table)))
-                                (puthash line (cons (float-time) info) drgnx-blame--cache)
-                                (when (= (line-beginning-position) bol) (drgnx-blame--show info))))))
-                        (when-let* ((ep (get-buffer-process err))) (delete-process ep))
-                        (kill-buffer out) (kill-buffer err)))
-                    "git blame"))))
-          (setq drgnx-blame--proc p)
-          ;; git may have ended already (it refuses an untracked file at once): its sentinel has the answer
-          (condition-case err
-              (progn
-                (when modified                               ; the text as the file has it: its coding, its line ends
-                  (set-process-coding-system p 'utf-8-unix (or buffer-file-coding-system 'utf-8-unix))
-                  (process-send-region p (point-min) (point-max)))
-                (process-send-eof p))
-            (error (when (process-live-p p) (signal (car err) (cdr err))))))))))
+    (drgnx-blame--ask)))
 
 (defun drgnx-blame--tick ()
   "The idle timer: the selected window's buffer, if it has inline blame."
@@ -188,24 +132,18 @@ has not answered).  The empty line after the last newline has none."
         (setq drgnx-blame--off nil)                          ; turned on again: asked again
         (add-hook 'post-command-hook #'drgnx-blame--follow nil t)
         (add-hook 'window-size-change-functions #'drgnx-blame--resized nil t)
-        (add-hook 'after-change-functions #'drgnx-blame--forget nil t)
-        (add-hook 'after-save-hook #'drgnx-blame--forget nil t)
-        (add-hook 'after-revert-hook #'drgnx-blame--forget nil t)
         (add-hook 'kill-buffer-hook #'drgnx-blame--release-timer nil t)
         (unless (drgnx-timer-active-p 'blame-tick)           ; one idle timer for every buffer
           (drgnx-timer-start 'blame-tick drgnx-blame-delay #'drgnx-blame--tick :repeat t :idle t)))
     (remove-hook 'post-command-hook #'drgnx-blame--follow t)
     (remove-hook 'window-size-change-functions #'drgnx-blame--resized t)
-    (remove-hook 'after-change-functions #'drgnx-blame--forget t)
-    (remove-hook 'after-save-hook #'drgnx-blame--forget t)
-    (remove-hook 'after-revert-hook #'drgnx-blame--forget t)
     (remove-hook 'kill-buffer-hook #'drgnx-blame--release-timer t)
     (drgnx-blame--release-timer)
-    (drgnx-blame--stop)
+    (setq drgnx-blame--request nil)
     (drgnx-blame--hide)))
 
 (defun drgnx-blame--maybe ()
-  "`find-file-hook': inline blame in a local file git tracks (not a large file: git blames it all)."
+  "`find-file-hook': inline blame in a local file git tracks (not a large file: the hub gives it no blame either)."
   (when (and buffer-file-name (not (drgnx-large-file-p)) (not (file-remote-p buffer-file-name))
              (eq (vc-backend buffer-file-name) 'Git))
     (drgnx-blame-mode 1)))
@@ -214,18 +152,8 @@ has not answered).  The empty line after the last newline has none."
   "Blame: Show Commit of Line — the commit that last changed this line, in the diff view."
   (interactive)
   (unless buffer-file-name (user-error "Not a file"))
-  (let* ((line (line-number-at-pos))
-         (info (or (drgnx-blame--cached line)
-                   (let ((text (buffer-substring-no-properties (point-min) (point-max)))
-                         (default-directory (file-name-directory buffer-file-name))
-                         (coding-system-for-write (or buffer-file-coding-system 'utf-8-unix))
-                         (coding-system-for-read 'utf-8-unix)
-                         (cmd (drgnx-blame--command line t)))
-                     (with-temp-buffer
-                       (insert text)
-                       (and (eql 0 (apply #'call-process-region (point-min) (point-max) (car cmd) t '(t nil) nil (cdr cmd)))
-                            (drgnx-blame--parse (buffer-string))))))))
-    (cond ((null info) (user-error "git has no history for this line"))
+  (let ((info (and drgnx-blame--bol (= drgnx-blame--bol (line-beginning-position)) drgnx-blame--info)))
+    (cond ((null info) (user-error "No blame yet for this line: the hub has not answered"))
           ((null (plist-get info :time)) (user-error "This line is not committed yet"))
           ((not (fboundp 'drgnx-diff-show)) (user-error "The diff view (module tools/diff) is off"))
           (t (drgnx-diff-show (list 'commit (plist-get info :sha)))))))

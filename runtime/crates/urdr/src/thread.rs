@@ -2,14 +2,23 @@
 
 use crate::{Connection, Error, Mode, Result, StoreSpec, open_store};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 
 const QUEUE: usize = 256;
 
 enum Job {
-    Run(Box<dyn FnOnce(&Connection) + Send>),
+    /// A request: where it was asked from (the `read` or `write` call's place), and what to run.
+    Run(
+        &'static std::panic::Location<'static>,
+        Box<dyn FnOnce(&Connection) + Send>,
+    ),
     Stop,
 }
+
+/// What the store thread runs now: where its request came from and since when.
+type Running = Arc<Mutex<Option<(&'static std::panic::Location<'static>, Instant)>>>;
 
 /// Owns the store thread. `shutdown` (or drop) stops it; pending requests fail with `Error::Closed`.
 pub struct Store {
@@ -22,6 +31,7 @@ pub struct Store {
 pub struct Handle {
     tx: mpsc::Sender<Job>,
     writable: bool,
+    running: Running,
 }
 
 impl Store {
@@ -30,16 +40,21 @@ impl Store {
         let writable = !matches!(spec.mode, Mode::ReadOnly);
         let conn = open_store(&spec)?;
         let (tx, mut rx) = mpsc::channel::<Job>(QUEUE);
+        let running: Running = Arc::default();
+        let seen = running.clone();
         let thread = std::thread::Builder::new()
             .name("urdr".into())
             .spawn(move || {
-                while let Some(Job::Run(job)) = rx.blocking_recv() {
+                while let Some(Job::Run(at, job)) = rx.blocking_recv() {
+                    *seen.lock().unwrap_or_else(|e| e.into_inner()) = Some((at, Instant::now()));
                     job(&conn);
+                    *seen.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 }
             })?;
         let handle = Handle {
             tx: tx.clone(),
             writable,
+            running,
         };
         Ok((
             Store {
@@ -73,57 +88,77 @@ impl Handle {
         self.tx.max_capacity() - self.tx.capacity()
     }
 
+    /// What the store thread runs now: the place its request was asked from (`file:line`) and for how long; none when it
+    /// is idle.  For a hub that says what holds its store.
+    pub fn running(&self) -> Option<(String, Duration)> {
+        let r = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        r.map(|(at, since)| (format!("{}:{}", at.file(), at.line()), since.elapsed()))
+    }
+
     /// Run `f` on the store thread with the connection.
-    pub async fn read<R: Send + 'static>(
+    #[track_caller]
+    pub fn read<R: Send + 'static>(
         &self,
         f: impl FnOnce(&Connection) -> Result<R> + Send + 'static,
-    ) -> Result<R> {
-        self.submit(f, false).await
+    ) -> impl std::future::Future<Output = Result<R>> + Send {
+        let at = std::panic::Location::caller();
+        self.submit(at, f, false)
     }
 
     /// Run `f` on the store thread inside `BEGIN IMMEDIATE`; committed on `Ok`, rolled back on `Err` or panic.
-    pub async fn write<R: Send + 'static>(
+    #[track_caller]
+    pub fn write<R: Send + 'static>(
         &self,
         f: impl FnOnce(&Connection) -> Result<R> + Send + 'static,
-    ) -> Result<R> {
-        if !self.writable {
-            return Err(Error::ReadOnly);
+    ) -> impl std::future::Future<Output = Result<R>> + Send {
+        let at = std::panic::Location::caller();
+        let writable = self.writable;
+        async move {
+            if !writable {
+                return Err(Error::ReadOnly);
+            }
+            self.submit(at, f, true).await
         }
-        self.submit(f, true).await
     }
 
     async fn submit<R: Send + 'static>(
         &self,
+        at: &'static std::panic::Location<'static>,
         f: impl FnOnce(&Connection) -> Result<R> + Send + 'static,
         in_txn: bool,
     ) -> Result<R> {
+        #[cfg(feature = "test-hooks")]
+        let _waiting = crate::wait::begin();
         let (reply, answer) = oneshot::channel();
-        let job = Job::Run(Box::new(move |conn: &Connection| {
-            let out = catch_unwind(AssertUnwindSafe(|| {
-                if !in_txn {
-                    return f(conn);
-                }
-                conn.execute_batch("BEGIN IMMEDIATE")?;
-                match f(conn) {
-                    // A failed COMMIT (BUSY, FULL, IOERR, a deferred constraint) may leave the transaction open:
-                    // roll it back, or every later BEGIN IMMEDIATE fails and the write lock stays held.
-                    Ok(v) => conn.execute_batch("COMMIT").map(|()| v).map_err(|e| {
-                        if !conn.is_autocommit() {
-                            let _ = conn.execute_batch("ROLLBACK");
-                        }
-                        Error::from(e)
-                    }),
-                    Err(e) => {
-                        let _ = conn.execute_batch("ROLLBACK");
-                        Err(e)
+        let job = Job::Run(
+            at,
+            Box::new(move |conn: &Connection| {
+                let out = catch_unwind(AssertUnwindSafe(|| {
+                    if !in_txn {
+                        return f(conn);
                     }
+                    conn.execute_batch("BEGIN IMMEDIATE")?;
+                    match f(conn) {
+                        // A failed COMMIT (BUSY, FULL, IOERR, a deferred constraint) may leave the transaction open:
+                        // roll it back, or every later BEGIN IMMEDIATE fails and the write lock stays held.
+                        Ok(v) => conn.execute_batch("COMMIT").map(|()| v).map_err(|e| {
+                            if !conn.is_autocommit() {
+                                let _ = conn.execute_batch("ROLLBACK");
+                            }
+                            Error::from(e)
+                        }),
+                        Err(e) => {
+                            let _ = conn.execute_batch("ROLLBACK");
+                            Err(e)
+                        }
+                    }
+                }));
+                if out.is_err() && in_txn {
+                    let _ = conn.execute_batch("ROLLBACK");
                 }
-            }));
-            if out.is_err() && in_txn {
-                let _ = conn.execute_batch("ROLLBACK");
-            }
-            let _ = reply.send(out.unwrap_or(Err(Error::Panicked)));
-        }));
+                let _ = reply.send(out.unwrap_or(Err(Error::Panicked)));
+            }),
+        );
         self.tx.send(job).await.map_err(|_| Error::Closed)?;
         answer.await.map_err(|_| Error::Closed)?
     }
@@ -131,6 +166,56 @@ impl Handle {
 
 #[cfg(test)]
 mod tests {
+    /// The store thread says what it runs now: the place its request was asked from and how long it has run; idle
+    /// when nothing runs.
+    #[tokio::test]
+    async fn the_thread_says_what_it_runs_and_since_when() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = StoreSpec {
+            path: dir.path().join("t.db"),
+            mode: Mode::ReadWrite {
+                file_mode: 0o600,
+                synchronous_full: false,
+            },
+            migrations: &[(1, "create table t(x);")],
+        };
+        let (store, h) = Store::spawn(spec).unwrap();
+        assert!(h.running().is_none(), "idle at first");
+        let (held, holding) = std::sync::mpsc::channel::<()>();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let h2 = h.clone();
+        let job = tokio::spawn(async move {
+            h2.read(move |_| {
+                let _ = held.send(());
+                let _ = released.recv();
+                Ok(())
+            })
+            .await
+        });
+        tokio::task::spawn_blocking(move || holding.recv().unwrap())
+            .await
+            .unwrap();
+        let (at, age) = h.running().expect("the job runs");
+        assert!(at.starts_with("crates/urdr/src/thread.rs:"), "{at}");
+        assert!(age < std::time::Duration::from_secs(60));
+        release.send(()).unwrap();
+        job.await.unwrap().unwrap();
+        // idle again once it ended (the thread notes it just after the reply)
+        let mut idle = false;
+        for _ in 0..200 {
+            if h.running().is_none() {
+                idle = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(idle);
+        drop(h);
+        tokio::task::spawn_blocking(move || store.shutdown())
+            .await
+            .unwrap();
+    }
+
     use crate::{Mode, Store, StoreSpec};
 
     #[tokio::test]

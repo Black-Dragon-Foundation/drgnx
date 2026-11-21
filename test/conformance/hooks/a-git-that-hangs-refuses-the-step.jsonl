@@ -1,0 +1,32 @@
+{"scenario": "hooks/a-git-that-hangs-refuses-the-step", "requires": ["v1", "test-hooks"], "doc": "[C] Fail closed: a project's hooks can be guards, so a step whose project cannot be read is refused, never run with fewer hooks. The project (a stand-in git, `DRGNX_TEST_GIT`, answers for it) denies edits under `secret/**`; while that git hangs, an edit of secret/key is refused with the reject option, the agent is told git gave no answer and the chat shows the refusal; once git answers again the project's own rule refuses it and an edit elsewhere is allowed."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/git", "mode": "755", "text": "#!/bin/sh\nif [ -e $ROOT/hang ]; then exec sleep 10; fi\ncase \"$*\" in\n  *--show-toplevel*) echo $ROOT/work ;;\n  *--max-parents=0*) echo '1700000000 0123456789abcdef0123456789abcdef01234567' ;;\n  *) exit 128 ;;\nesac\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict allow)))))\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_GIT": "$ROOT/git"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"project": "project:0123456789ab", "overrides": [{"name": "drgnx-agents-hook-rules", "source": "workspace", "value": [{"id": "no-secrets", "point": "before-tool", "tool-kinds": ["edit"], "paths": ["secret/**"], "verdict": "deny", "reason": "secrets stay"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
+{"do": "write_file", "path": "$ROOT/hang", "text": ""}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "ask:tool {\"kind\": \"edit\", \"title\": \"Edit secret/key\", \"locations\": [{\"path\": \"$ROOT/work/secret/key\"}], \"rawInput\": {\"file_path\": \"$ROOT/work/secret/key\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Edit\"}}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"permission\":{\"kind\":\"edit\",\"answer\":\"reject_once\"}}", "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "error", "text": "$string"}]]}}}, "within_ms": 10000}
+{"do": "remove", "path": "$ROOT/hang"}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "ask:tool {\"kind\": \"edit\", \"title\": \"Edit secret/key\", \"locations\": [{\"path\": \"$ROOT/work/secret/key\"}], \"rawInput\": {\"file_path\": \"$ROOT/work/secret/key\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Edit\"}}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "drgnx refused Edit; its project's hooks could not be read", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "no answer within 3000 ms", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "drgnx refused Edit; the rule no-secrets said: «secrets stay»", "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/send", "params": {"id": "$sid", "text": "ask:tool {\"kind\": \"edit\", \"title\": \"Edit src/a.rs\", \"locations\": [{\"path\": \"$ROOT/work/src/a.rs\"}], \"rawInput\": {\"file_path\": \"$ROOT/work/src/a.rs\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Edit\"}}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"permission\":{\"kind\":\"edit\",\"answer\":\"allow_once\"}}", "within_ms": 30000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select json_extract(e.data, '$.outcome'), json_extract(e.data, '$.records[0].source') from event e join tx t on t.id = e.tx where t.actor = 'hub:hooks'", "rows": [["deny", "rule:no-secrets"]]}

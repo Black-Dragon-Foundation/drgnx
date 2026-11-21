@@ -1,0 +1,19 @@
+{"scenario": "editor/projected-is-three-way", "requires": ["v1", "test-hooks"], "doc": "An agent in another worktree of the user's repository appears on the user's checkout, mapped three-way: base (the worktree's base) to agent gives its lines, base to user maps them onto the user's text, which has two lines of the user's own at the top. The agent's appended line shows on the user's last line (14), not on its own line 12, the user's lines are in no agent's gutter, the agent is marked projected with its worktree's name, and the frame is approximate (the user's text was read from disk). Pattern B: the session's base snapshot is polled through work/files before the watch; the projected frame is awaited after the edit."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q -b main && seq -f 'l%g' 1 12 > a.txt && git add a.txt && git -c user.email=t@example.invalid -c user.name=t commit -qm base && git worktree add -q -b agent $ROOT/wt"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/repo/a.txt", "text": "u1\nu2\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\nl11\nl12\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/wt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 2, "method": "work/files", "params": {"session": "$sid"}}, "expect": {"id": 2, "result": {"files": []}}, "within_ms": 30000, "every_ms": 50}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "agents/buffer/watch", "params": {"view": "v1", "file": "$ROOT/repo/a.txt", "doc_version": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"view": "v1", "version": 1, "base": 0, "agents": [], "gutter": []}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "tool:edit a.txt\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-buffer", "data": {"view": "v1", "approximate": true, "agents": [{"session": "$sid", "ordinal": 1, "mode": "edit", "projected": {"worktree_label": "wt"}}], "gutter": [{"session": "$sid", "kind": "changed", "start": 14, "end": 14, "projected": {"worktree_label": "wt"}, "help": "$string"}]}}, "within_ms": 30000}

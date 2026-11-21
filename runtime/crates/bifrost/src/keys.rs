@@ -2,11 +2,13 @@
 //!
 //! [`Keys`] has no `Debug`, `Display`, `Clone` or `Serialize`: a key can reach a log, a file or the wire only through
 //! [`secrecy::ExposeSecret`], which the gateway calls in one place, building the upstream request's sensitive header
-//! (`rewrite::headers`). Each [`SecretString`] is zeroed when it is dropped or replaced.
+//! (`rewrite::headers`), and [`Keys::scrub`] here, which only compares. Each [`SecretString`] is zeroed when it is
+//! dropped or replaced.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 
 /// Provider id → its key.
 #[derive(Default)]
@@ -22,6 +24,12 @@ impl Keys {
         self.0.insert(id.into(), key);
     }
 
+    /// Forget the key held for provider `id` (zeroed as it drops): whether one was held.  A request after this finds no
+    /// key; one already sent upstream finished with it.
+    pub fn remove(&mut self, id: &str) -> bool {
+        self.0.remove(id).is_some()
+    }
+
     /// [`Keys::set`] for each pair.
     pub fn set_many(&mut self, keys: impl IntoIterator<Item = (String, SecretString)>) {
         for (id, key) in keys {
@@ -33,6 +41,27 @@ impl Keys {
         self.0.get(id)
     }
 
+    /// DATA with every held key replaced by `$SECRET` (a recording's scrub): the keys never leave this module.
+    pub fn scrub<'a>(&self, data: &'a [u8]) -> Cow<'a, [u8]> {
+        let mut out = Cow::Borrowed(data);
+        for key in self.0.values() {
+            let key = key.expose_secret().as_bytes();
+            if key.is_empty() || !contains(&out, key) {
+                continue;
+            }
+            let mut next = Vec::with_capacity(out.len());
+            let mut rest: &[u8] = &out;
+            while let Some(at) = find(rest, key) {
+                next.extend_from_slice(&rest[..at]);
+                next.extend_from_slice(b"$SECRET");
+                rest = &rest[at + key.len()..];
+            }
+            next.extend_from_slice(rest);
+            out = Cow::Owned(next);
+        }
+        out
+    }
+
     /// The ids among `ids` with no key held, in their order.
     pub fn missing(&self, ids: &[&str]) -> Vec<String> {
         ids.iter()
@@ -42,11 +71,31 @@ impl Keys {
     }
 }
 
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    find(hay, needle).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use secrecy::ExposeSecret;
 
     use super::*;
+
+    #[test]
+    fn remove_forgets_one_key_and_says_whether_it_held_it() {
+        let mut keys = Keys::new();
+        keys.set("openrouter", SecretString::from("sk-or"));
+        keys.set("anthropic", SecretString::from("sk-ant"));
+        assert!(keys.remove("openrouter"));
+        assert!(keys.get("openrouter").is_none());
+        assert_eq!(keys.get("anthropic").unwrap().expose_secret(), "sk-ant");
+        assert!(!keys.remove("openrouter"), "once");
+        assert!(!keys.remove("never-held"));
+    }
 
     #[test]
     fn set_many_then_missing_names_the_rest() {

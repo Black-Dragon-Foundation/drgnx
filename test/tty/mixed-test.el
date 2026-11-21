@@ -7,7 +7,6 @@
 (require 'seq)
 (require 'drgnx-ui)
 (require 'drgnx-tty-session)
-(load (expand-file-name "test/fixtures/wait-fixture" drgnx-ui-repo-dir) nil t)
 
 (defconst drgnx-tty-mixed-test--state
   '(let ((gui (seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list)))
@@ -18,19 +17,25 @@
            :tty (list (frame-width tty) (frame-height tty)
                       (mapcar (lambda (w) (list (buffer-name (window-buffer w)) (window-edges w)))
                               (window-list tty 'nomini)))
+           ;; under Glitnir the popup lane floats in a child frame: the frame it belongs to is the child's root
            :transient (let ((w (get-buffer-window " *transient*" t)))
-                        (and w (if (eq (window-frame w) gui) 'gui 'tty)))))
-  "A form, in the daemon: the graphical frame's and the terminal frame's windows with buffers and edges, and
-which frame (`gui' or `tty') shows the transient menu, if any.")
+                        (and w (let ((f (window-frame w)))
+                                 (while (frame-parent f) (setq f (frame-parent f)))
+                                 (if (eq f gui) 'gui 'tty))))
+           :floating (let ((w (get-buffer-window " *transient*" t)))
+                       (and w (frame-parent (window-frame w)) t))))
+  "A form, in the daemon: the graphical frame's and the terminal frame's windows with buffers and edges, which
+frame (`gui' or `tty') shows the transient menu, if any, and whether it shows in a child frame of it.")
 
 (defun drgnx-tty-mixed-test--wait (gui form &optional timeout)
-  "FORM's value in the daemon once it is non-nil (`drgnx-test-wait', at least 30 s or TIMEOUT); else fail with FORM and
-the state."
+  "FORM's value in the daemon once it is non-nil (`drgnx-tty-session-wait': at least 30 s or TIMEOUT of the session's
+progress clock, so a loaded machine that starves it is no failure); else fail with FORM and the state."
   (condition-case err
-      (drgnx-test-wait (lambda () (drgnx-tty-session-eval gui form 5)) :secs (max 30 (or timeout 0)) :what form)
-    (ert-test-failed
+      (drgnx-tty-session-wait gui form (max 30 (or timeout 0)))
+    (drgnx-ui-error
      (signal 'ert-test-failed
-             (append (cdr err) (list :windows (ignore-errors (drgnx-tty-session-eval gui drgnx-tty-mixed-test--state))))))))
+             (list :waited-for form :error (error-message-string err)
+                   :windows (ignore-errors (drgnx-tty-session-eval gui drgnx-tty-mixed-test--state)))))))
 
 (defun drgnx-tty-mixed-test--state (gui)
   (drgnx-tty-session-eval gui drgnx-tty-mixed-test--state))
@@ -53,20 +58,24 @@ frame and an `emacsclient -t' client of one daemon.  Both are stopped afterwards
                     :size "100x30"
                     :command (format "%s -a false -t -s %s; echo \"[emacsclient exited $?]\"; sh"
                                      (drgnx-ui--emacsclient) (shell-quote-argument (plist-get ,(nth 0 spec) :socket)))))
-             (drgnx-tty-session-wait-screen ,(nth 1 spec) "\\*\\(?:scratch\\|drgnx start\\)\\*" 30)
+             (drgnx-tty-session-wait-tab ,(nth 1 spec) nil 30 '("*scratch*" "*drgnx start*") ,(nth 0 spec))
              (drgnx-tty-session-wait ,(nth 0 spec) '(seq-some (lambda (f) (and (frame-parameter f 'client) (not (display-graphic-p f)))) (frame-list)) 30)
+             (drgnx-tty-session-wait-stages ,(nth 0 spec))   ; no module stage rebinds a key or eats a C-g mid-row
              ,@body)
          (when ,(nth 1 spec) (drgnx-tty-session-stop ,(nth 1 spec)))
          (drgnx-ui-stop (plist-get ,(nth 0 spec) :name))
          (delete-directory root t)))))
 
 (defun drgnx-tty-mixed-test--transient (gui)
-  "A one-key transient on <f9> in the daemon."
+  "A one-key transient on <f7> (a key no key profile claims) in the daemon."
   (should (drgnx-tty-session-eval
            gui '(progn (require 'transient)
-                       (transient-define-prefix drgnx-tty-mixed-tr () [("a" "Do A" ignore)])
-                       (keymap-global-set "<f9>" #'drgnx-tty-mixed-tr)
-                       (eq (key-binding (kbd "<f9>")) 'drgnx-tty-mixed-tr)))))
+                       ;; the graphical window is driven by calls, so its focus reaches the daemon as a `switch-frame'
+                       ;; after the call, which a menu would take for the user's command and close on: it stays
+                       (transient-define-prefix drgnx-tty-mixed-tr () :transient-non-suffix #'transient--do-stay
+                                                [("a" "Do A" ignore)])
+                       (keymap-global-set "<f7>" #'drgnx-tty-mixed-tr)
+                       (eq (key-binding (kbd "<f7>")) 'drgnx-tty-mixed-tr)))))
 
 (defconst drgnx-tty-mixed-test--gui-frame
   '(seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list))
@@ -82,6 +91,13 @@ queueing events, which a daemon with a terminal client reads for the terminal la
 window is driven by calls, the terminal window by real keys."
   (drgnx-tty-session-eval gui `(with-selected-frame ,drgnx-tty-mixed-test--gui-frame ,form)))
 
+(defun drgnx-tty-mixed-test--in-tty (gui form)
+  "FORM's value in the daemon with the terminal frame selected and its window's buffer current.  A popup opened by a
+real key there is closed by a call: C-g typed into a terminal is Emacs's interrupt while the daemon is busy (a
+redisplay, a test's eval), a quit of whatever runs then, and never the key the popup's map would see."
+  (drgnx-tty-session-eval gui `(with-selected-frame ,drgnx-tty-mixed-test--tty-frame
+                                 (with-current-buffer (window-buffer (selected-window)) ,form))))
+
 (ert-deftest drgnx-tty-mixed/a-popup-stays-in-its-own-window ()
   ;; a transient in the graphical window never touches the terminal window, and the other way round
   (drgnx-tty-mixed-test--with (gui tty)
@@ -93,18 +109,19 @@ window is driven by calls, the terminal window by real keys."
       (let ((during (drgnx-tty-mixed-test--state gui)))
         (should (eq (plist-get during :transient) 'gui))
         (should (equal (plist-get during :tty) (plist-get before :tty)))
-        (should-not (equal (plist-get during :gui) (plist-get before :gui))))
+        ;; in a window of the graphical frame, or floating above it
+        (should (or (plist-get during :floating) (not (equal (plist-get during :gui) (plist-get before :gui))))))
       (drgnx-tty-mixed-test--in-gui gui '(progn (transient--emergency-exit) t))
       (drgnx-tty-mixed-test--wait gui '(null (get-buffer-window " *transient*" t)))
       (should (equal (drgnx-tty-mixed-test--state gui) before))
       ;; in the terminal window
-      (drgnx-tty-session-key tty "<f9>" 'legacy)
+      (drgnx-tty-session-key tty "<f7>" 'legacy)
       (drgnx-tty-mixed-test--wait gui '(and (get-buffer-window " *transient*" t) t))
       (let ((during (drgnx-tty-mixed-test--state gui)))
         (should (eq (plist-get during :transient) 'tty))
         (should (equal (plist-get during :gui) (plist-get before :gui)))
         (should-not (equal (plist-get during :tty) (plist-get before :tty))))
-      (drgnx-tty-session-key tty "C-g" 'legacy)
+      (drgnx-tty-mixed-test--in-tty gui '(progn (transient--emergency-exit) t))
       (drgnx-tty-mixed-test--wait gui '(null (get-buffer-window " *transient*" t)))
       (should (equal (drgnx-tty-mixed-test--state gui) before)))))
 
@@ -138,7 +155,7 @@ window is driven by calls, the terminal window by real keys."
           (should (eq (drgnx-tty-session-eval gui parent-kind) 'tty))
           (should (drgnx-tty-session-eval gui '(eq (frame-parent (seq-find (lambda (f) (and (frame-parent f) (frame-visible-p f))) (frame-list)))
                                                    (seq-find (lambda (f) (and (not (display-graphic-p f)) (not (frame-parent f)) (frame-parameter f 'client))) (frame-list)))))
-          (drgnx-tty-session-key tty "C-g" 'legacy)
+          (drgnx-tty-mixed-test--in-tty gui '(progn (corfu-quit) t))
           (drgnx-tty-mixed-test--wait gui `(null ,visible-child) 10)
           ;; completion started in the graphical window
           (drgnx-tty-mixed-test--in-gui

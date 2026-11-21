@@ -86,6 +86,38 @@
    (should (drgnx-module-running-p 'test/ok))
    (dolist (m '(test/needs-pkg test/needs-mod test/off test/never-defined)) (should-not (drgnx-module-running-p m)))))
 
+(ert-deftest drgnx-modules/a-retry-lists-each-load-path-directory-once ()
+  ;; after a job, every waiting module's packages are looked for: one listing of each `load-path' directory for all of
+  ;; them, not a search of the whole path per package (EXT-ACTIVATE-NEW-PERF-1: `locate-library' per package was most
+  ;; of a job's end with 40 packages on the path)
+  (drgnx-modules-test--with-config
+   (let* ((dirs (cl-loop for i below 5 collect (make-temp-file "drgnx-mods-path" t)))
+          (load-path (append dirs load-path))
+          (listed 0) (ran nil) (searched nil))
+     (unwind-protect
+         (progn
+           (dotimes (i 10)
+             (drgnx-module-define (intern (format "test/waits-%d" i)) :doc "w"
+                                  :packages (list (intern (format "drgnx-test-pkg-%d" i)) 'drgnx-test-pkg-new)
+                                  :setup (let ((i i)) (lambda () (push i ran)))))
+           (drgnx-modules-run 'startup)
+           (should (eq (drgnx-modules-test--status 'test/waits-0) 'missing-packages))
+           ;; the job put the packages' files in the path's directories: one .el, one .elc, one compressed
+           (dotimes (i 10)
+             (write-region "" nil (expand-file-name (format "drgnx-test-pkg-%d.%s" i (nth (% i 3) '("el" "elc" "el.gz")))
+                                                    (nth (% i 5) dirs))))
+           (write-region "" nil (expand-file-name "drgnx-test-pkg-new.el" (car dirs)))
+           (cl-letf* ((list-dir (symbol-function 'directory-files)) (locate (symbol-function 'locate-library))
+                      ((symbol-function 'directory-files)
+                       (lambda (&rest args) (cl-incf listed) (apply list-dir args)))
+                      ((symbol-function 'locate-library)
+                       (lambda (&rest args) (push (car args) searched) (apply locate args))))
+             (should (= 10 (length (drgnx-modules-retry-waiting)))))
+           (should (equal (sort ran #'<) (number-sequence 0 9)))
+           (should-not searched)
+           (should (<= listed (length load-path))))
+       (dolist (d dirs) (delete-directory d t))))))
+
 (ert-deftest drgnx-modules/the-new-stages-run-on-their-hooks ()
   :tags '(:cond)
   (drgnx-modules-test--with-config
@@ -281,6 +313,28 @@
            (should-not (drgnx-modules-test--idle-keys)))           ; one-shots: nothing left
        (drgnx-timer-reset)))))
 
+(ert-deftest drgnx-modules/an-idle-module-started-early-is-left-alone-by-its-tick ()
+  :tags '(:cond)
+  ;; A module of the idle stage that something started before its tick (a command, `drgnx-modules-run') keeps
+  ;; running when the tick fires: no second setup, and no teardown of what it made (the agent panel's tick closed a
+  ;; panel opened before it).
+  (drgnx-modules-test--with-config
+   (let* ((log nil) (timers nil) (drgnx-first-gui-frame-hook nil) (drgnx-first-file-hook nil) (drgnx-first-input-hook nil))
+     (drgnx-module-define 'test/i1 :doc "1" :stage 'idle :setup (lambda () (push 'setup log))
+                          :teardown (lambda () (push 'teardown log)))
+     (unwind-protect
+         (cl-letf (((symbol-function 'run-with-idle-timer)
+                    (lambda (secs _repeat fn &rest args) (push (list secs fn args) timers)))
+                   ((symbol-function 'drgnx-modules-load-external) #'ignore))
+           (drgnx-modules-start cfg)
+           (drgnx-modules-run 'idle)
+           (should (equal log '(setup)))
+           (pcase-dolist (`(,_ ,fn ,args) (sort timers (lambda (a b) (< (car a) (car b))))) (apply fn args))
+           (should (equal log '(setup)))
+           (should (drgnx-module-running-p 'test/i1)))
+       (drgnx-module-teardown 'test/i1)
+       (drgnx-timer-reset)))))
+
 (ert-deftest drgnx-modules/a-load-error-names-the-file-that-failed ()
   ;; M4-9: an error inside a library the module file loads names that library, not only the module.
   (drgnx-test--fresh-modules
@@ -419,15 +473,17 @@
     (drgnx-modules--record 'test/m 'startup 0 'disabled)
     (should-not (drgnx-modules-test--notice 'test/m))))
 
-(ert-deftest drgnx-modules/missing-packages-and-requires-are-warn ()
+(ert-deftest drgnx-modules/missing-packages-and-requires-are-info ()
+  "Audit L2: a module waiting for packages is something to know, listed in Notices, not a problem: a fresh start
+showed a warning count in the status bar for modules whose optional packages were not installed yet."
   (drgnx-modules-test--noticing
     (drgnx-modules--record 'test/p 'startup 0 'missing-packages nil '(foo bar))
     (drgnx-modules--record 'test/r 'startup 0 'missing-requires nil '(test/p))
     (let ((p (drgnx-modules-test--notice 'test/p)) (r (drgnx-modules-test--notice 'test/r)))
-      (should (eq (plist-get p :severity) 'warn))
+      (should (eq (plist-get p :severity) 'info))
       (should (equal (plist-get p :text) "test/p waits for packages: foo bar"))
       (should (equal (plist-get p :fix) "drgnx sync installs them"))
-      (should (eq (plist-get r :severity) 'warn))
+      (should (eq (plist-get r :severity) 'info))
       (should (equal (plist-get r :text) "test/r needs test/p, which did not start")))))
 
 (ert-deftest drgnx-modules/problems-are-warn ()

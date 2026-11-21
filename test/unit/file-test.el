@@ -383,6 +383,26 @@
       (should (equal (drgnx-file-test--bytes f) "(:items (a))\n"))
       (should (equal (drgnx-file-lock-holder f) owner)))))              ; somebody else's lock is left alone
 
+(ert-deftest drgnx-file/a-lock-that-changes-hands-is-waited-for ()
+  ;; Another writer with many changes takes the lock again at once after each one; between two attempts here the
+  ;; lock always has a new holder.  The timeout bounds one holder's time, not the queue: this update waits while the
+  ;; lock changes hands and lands after the other writer's last change (two trusts at once both kept, under load).
+  (drgnx-file-test--with-dir dir
+    (let* ((f (expand-file-name "q.eld" dir)) (now (float-time)) (turns 0)
+           (lock (progn (drgnx-file-test--put f "(:items (a))\n")
+                        (drgnx-file-test--hold f (drgnx-file-test--live-owner)))))
+      (cl-letf (((symbol-function 'drgnx-file--now) (lambda () now))
+                ((symbol-function 'drgnx-file--sleep)
+                 (lambda (s)
+                   (setq now (+ now s 0.3))                             ; each of its changes takes 0.3 s
+                   (delete-directory lock t)
+                   (when (< (cl-incf turns) 10)                         ; then it takes the lock again, as a new holder
+                     (drgnx-file-test--hold f (drgnx-file-test--live-owner))))))
+        (let ((inhibit-interaction t))
+          (drgnx-file-update f (drgnx-file-test--add 'x) :timeout 1.0)))
+      (should (= turns 10))
+      (should (equal (plist-get (plist-get (drgnx-file-read f) :data) :items) '(x a))))))
+
 (ert-deftest drgnx-file/an-unreadable-file-is-refused-untouched ()
   (drgnx-file-test--with-dir dir
     (let ((f (expand-file-name "u.eld" dir)) (called nil))

@@ -990,7 +990,7 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
 
 (ert-deftest drgnx-install/plan-names-the-rust-toolchain-path ()
   (drgnx-install-test--with-tmp tmp
-    ;; 1. cargo and rustc >= 1.88 on PATH
+    ;; 1. cargo and rustc >= 1.95 on PATH
     (let ((out (cdr (drgnx-install-test--rust-plan "fedora-45" tmp (list drgnx-install-test--cargo drgnx-install-test--rustc
                                                                          drgnx-install-test--cc drgnx-install-test--dnf)
                                                    "RUST_CAND=1.99.0"))))
@@ -998,26 +998,27 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
       (should (string-search "C compiler: cc" out))
       (should-not (string-search "dnf install -y cargo" out))
       (should (string-search "/cargo (the update timer finds the same cargo)" out)))
-    ;; 2. the distro's default package, when its candidate is >= 1.88
+    ;; 2. the distro's default package, when its candidate is >= 1.95
     (let ((out (cdr (drgnx-install-test--rust-plan "fedora-45" tmp (list drgnx-install-test--dnf) "RUST_CAND=1.99.0"))))
       (should (string-search "Rust toolchain: sudo dnf install -y cargo rust gcc (the distro's rust 1.99.0)" out)))
-    (let ((out (cdr (drgnx-install-test--rust-plan "ubuntu-26.04" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.93.1+dfsg1-0ubuntu1"))))
-      (should (string-search "Rust toolchain: sudo apt-get install -y cargo rustc gcc (the distro's rust 1.93.1)" out)))
-    ;; 3. a versioned package where the default is too old (Ubuntu 24.04: 1.75 and rustc-1.91); the newest >= 1.88 is taken
+    (let ((out (cdr (drgnx-install-test--rust-plan "ubuntu-26.04" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.96.0+dfsg1-0ubuntu1"))))
+      (should (string-search "Rust toolchain: sudo apt-get install -y cargo rustc gcc (the distro's rust 1.96.0)" out)))
+    ;; 3. a versioned package where the default is too old (Ubuntu 26.04's 1.93); the newest >= 1.95 with its cargo is
+    ;; taken (rustc-1.97 has none here)
     (let ((out (cdr (drgnx-install-test--rust-plan
-                     "ubuntu-26.04" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.75.0+dfsg0ubuntu1"
-                     (concat "APT_SEARCH=rustc-1.91 - Rust\ncargo-1.91 - Cargo\nrustc-1.85 - Rust\ncargo-1.85 - Cargo\n"
-                             "rustc-1.89 - Rust\nrustc-1.75 - Rust\ncargo-1.75 - Cargo\n")))))
-      (should (string-search "Rust toolchain: sudo apt-get install -y rustc-1.91 cargo-1.91 gcc" out))
-      (should (string-search "/usr/lib/rust-1.91/bin" out))
-      (should-not (string-search "1.75" out)))
+                     "ubuntu-26.04" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.93.1+dfsg1-0ubuntu1"
+                     (concat "APT_SEARCH=rustc-1.96 - Rust\ncargo-1.96 - Cargo\nrustc-1.93 - Rust\ncargo-1.93 - Cargo\n"
+                             "rustc-1.97 - Rust\nrustc-1.91 - Rust\ncargo-1.91 - Cargo\n")))))
+      (should (string-search "Rust toolchain: sudo apt-get install -y rustc-1.96 cargo-1.96 gcc" out))
+      (should (string-search "/usr/lib/rust-1.96/bin" out))
+      (should-not (string-search "rustc-1.93" out)))
     ;; 4. Debian trixie (1.85) and no versioned package: a private rustup, from the versioned archive
     (let ((out (cdr (drgnx-install-test--rust-plan "debian-13" tmp (list drgnx-install-test--apt-cache) "RUST_CAND=1.85.0+dfsg1-1"
                                                    ;; no Nidhogg recipe for Debian 13: a Nidhogg already installed is kept
                                                    (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk 31.1-nidhogg.5"))
                                                    "APT_SEARCH=rustc-1.85 - Rust\ncargo-1.85 - Cargo\n"))))
       (should (string-search "Rust toolchain: a private rustup 1.28.2" out))
-      (should (string-search "/rustup with Rust 1.93.1" out))
+      (should (string-search "/rustup with Rust 1.99.1" out))
       (should (string-search "https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init" out))
       (should (string-search "sha256" out)))))
 
@@ -1118,3 +1119,103 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
               drgnx-install-test--roomy)
        (format "podman container (%s)" (nth 2 c)) (format "nidhogg/deps/%s.runtime" (nth 1 c))))
     (drgnx-install-test--expect (drgnx-install-test--plan (car c)) (format "nidhogg/deps/%s.build" (nth 1 c)))))
+
+;;; Zig (the terminal's engine is built from source with it; docs/develop/terminal.md)
+;; DRGNX_INSTALL_ZIG_ONLY=1 runs just the Zig step.  Stub tarballs come from a file:// mirror and a stub minisign;
+;; DRGNX_INSTALL_ZIG_SHA256 stands in for the pinned checksum of the real tarball.
+
+(defun drgnx-install-test--zig-stub (path version)
+  "A `zig' script in the directory PATH that prints VERSION; return PATH."
+  (make-directory path t)
+  (let ((f (expand-file-name "zig" path)))
+    (write-region (format "#!/bin/sh\necho %s\n" version) nil f)
+    (set-file-modes f #o755))
+  path)
+
+(defun drgnx-install-test--zig-mirror (tmp)
+  "A file:// mirror under TMP with a stub Zig 0.17.0 tarball for x86_64 Linux; return (URL . SHA256)."
+  (let* ((top (expand-file-name "mirror/0.17.0" tmp))
+         (src (expand-file-name "src/zig-x86_64-linux-0.17.0" tmp))
+         (tar (expand-file-name "zig-x86_64-linux-0.17.0.tar.xz" top)))
+    (make-directory top t)
+    (drgnx-install-test--zig-stub src "0.17.0")
+    (call-process "tar" nil nil nil "-cJf" tar "-C" (expand-file-name "src" tmp) "zig-x86_64-linux-0.17.0")
+    (write-region "sig" nil (concat tar ".minisig"))
+    (cons (concat "file://" (expand-file-name "mirror" tmp))
+          (with-temp-buffer
+            (call-process "sha256sum" nil t nil tar)
+            (car (split-string (buffer-string)))))))
+
+(defun drgnx-install-test--zig-run (tmp &rest env)
+  "Run the Zig step with ENV on a Linux x86_64 machine, a stub minisign (exit 0 unless ENV says MINISIGN_EXIT=n) in a
+PATH of its own; return (EXIT . OUTPUT).  The data dir is TMP/data.  The host's directories that hold a `zig' are
+left out of PATH (the Rust test image has Zig 0.17 for the terminal's engine, which the step would take and so fetch
+nothing): the only Zig on PATH is a stub a test put in TMP/bin."
+  (let* ((bin (expand-file-name "bin" tmp))
+         (ms (expand-file-name "minisign" bin))
+         (exit (or (cl-some (lambda (e) (and (string-prefix-p "MINISIGN_EXIT=" e) (substring e 14))) env) "0")))
+    (make-directory bin t)
+    (write-region (format "#!/bin/sh\nexit %s\n" exit) nil ms)
+    (set-file-modes ms #o755)
+    (apply #'drgnx-install-test--run
+           (append (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
+                         "DRGNX_INSTALL_UNAME=Linux" "DRGNX_INSTALL_ARCH=x86_64" "DRGNX_INSTALL_ZIG_ONLY=1"
+                         (concat "DRGNX_DATA_DIR=" tmp "/data")
+                         (concat "PATH=" bin ":"
+                                 (mapconcat #'identity
+                                            (cl-remove-if (lambda (d) (file-executable-p (expand-file-name "zig" d)))
+                                                          (split-string (or (getenv "PATH") "") ":" t))
+                                            ":")))
+                   (cl-remove-if (lambda (e) (string-prefix-p "MINISIGN_EXIT=" e)) env))
+           nil)))
+
+(ert-deftest drgnx-install/zig-on-path-0-17-is-used ()
+  (drgnx-install-test--with-tmp tmp
+    (drgnx-install-test--zig-stub (expand-file-name "bin" tmp) "0.17.2")
+    (let ((r (drgnx-install-test--zig-run tmp "DRGNX_INSTALL_ZIG_URL=file:///nonexistent")))
+      (should (= (car r) 0))
+      (should (string-search "Zig 0.17.2 on PATH" (cdr r)))
+      (should (string-search (expand-file-name "bin/zig" tmp)
+                             (with-temp-buffer (insert-file-contents (expand-file-name "data/zig-path" tmp)) (buffer-string)))))))
+
+(ert-deftest drgnx-install/zig-wrong-minor-is-refused-and-fetched ()
+  (drgnx-install-test--with-tmp tmp
+    (drgnx-install-test--zig-stub (expand-file-name "bin" tmp) "0.16.0")
+    (let* ((m (drgnx-install-test--zig-mirror tmp))
+           (r (drgnx-install-test--zig-run tmp (concat "DRGNX_INSTALL_ZIG_URL=" (car m))
+                                           (concat "DRGNX_INSTALL_ZIG_SHA256=" (cdr m)))))
+      (should (= (car r) 0))
+      (should (string-search "Zig 0.16.0 on PATH is not 0.17" (cdr r)))
+      (should (file-executable-p (expand-file-name "data/zig/zig-x86_64-linux-0.17.0/zig" tmp)))
+      (should (string-search "data/zig/zig-x86_64-linux-0.17.0/zig"
+                             (with-temp-buffer (insert-file-contents (expand-file-name "data/zig-path" tmp)) (buffer-string)))))))
+
+(ert-deftest drgnx-install/zig-bad-checksum-stops-with-a-message ()
+  (drgnx-install-test--with-tmp tmp
+    (let* ((m (drgnx-install-test--zig-mirror tmp))
+           (r (drgnx-install-test--zig-run tmp (concat "DRGNX_INSTALL_ZIG_URL=" (car m))
+                                           (concat "DRGNX_INSTALL_ZIG_SHA256=" (make-string 64 ?0)))))
+      (should-not (= (car r) 0))
+      (should (string-search "is not the file install.sh pins" (cdr r)))
+      (should-not (file-exists-p (expand-file-name "data/zig-path" tmp)))
+      (should-not (file-exists-p (expand-file-name "data/zig/zig-x86_64-linux-0.17.0" tmp))))))
+
+(ert-deftest drgnx-install/zig-bad-signature-stops ()
+  (drgnx-install-test--with-tmp tmp
+    (let* ((m (drgnx-install-test--zig-mirror tmp))
+           (r (drgnx-install-test--zig-run tmp (concat "DRGNX_INSTALL_ZIG_URL=" (car m))
+                                           (concat "DRGNX_INSTALL_ZIG_SHA256=" (cdr m)) "MINISIGN_EXIT=1")))
+      (should-not (= (car r) 0))
+      (should (string-search "signature" (cdr r)))
+      (should-not (file-exists-p (expand-file-name "data/zig-path" tmp))))))
+
+(ert-deftest drgnx-install/zig-pins-match-the-ci-script ()
+  (let ((read (lambda (f)
+                (with-temp-buffer
+                  (insert-file-contents (expand-file-name f drgnx-install-test--root))
+                  (list (and (re-search-forward "^ZIG_VERSION=\\(.*\\)$" nil t) (match-string 1))
+                        (progn (goto-char (point-min))
+                               (let (l) (while (re-search-forward "\\(?:x86_64\\|aarch64\\)-\\(?:linux\\|macos\\))[^0-9]\\{1,12\\}\\([0-9a-f]\\{64\\}\\)" nil t) (push (match-string 1) l))
+                                    (sort l #'string<))))))))
+    (should (equal (funcall read "install.sh") (funcall read "test/container/zig.sh")))
+    (should (= 4 (length (cadr (funcall read "install.sh")))))))

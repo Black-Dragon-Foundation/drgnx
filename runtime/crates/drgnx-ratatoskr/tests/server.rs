@@ -1,7 +1,7 @@
 //! The server core against the real binary, each hub in its own temporary root with a clean environment (`support`):
 //! nothing reaches `~` or the user's runtime dir.
 
-mod support;
+use crate::support;
 
 use runstav::paths;
 use std::os::unix::fs::PermissionsExt;
@@ -368,6 +368,56 @@ fn test_clock_emits_on_advance_only() {
     );
 }
 
+/// What a live hub answers `agents/list` and `agents/get` with passes the registry's own check of those results
+/// (R-FIX-M3: the hub builds its snapshots typed and in-process, so one session can never make the whole answer fail the
+/// check; a drift between a snapshot and the registry's type fails here).
+#[cfg(feature = "test-hooks")]
+#[test]
+fn every_snapshot_the_hub_builds_passes_the_registry_check() {
+    let root = Root::new();
+    let socket = root.socket();
+    let config = root.dir.path().join("h/c");
+    std::fs::create_dir_all(&config).unwrap();
+    let settings = config.join("settings.el");
+    std::fs::write(
+        &settings,
+        format!(
+            "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock\" :command ({:?} \"acp\" \"--as\" \"claude\")))))\n",
+            mock_binary().display().to_string()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut hub = Hub::start(&root, 1);
+    hub.wait_ready(&socket);
+    let mut c = Client::open(&socket);
+    c.hello(&socket);
+    let mut sids = Vec::new();
+    for n in 1..=2u64 {
+        c.send(json!({"id": n, "method": "agents/start",
+            "params": {"profile": "mock", "cwd": root.dir.path().join("h")}}));
+        let (started, _) = c.answer(n);
+        sids.push(
+            started["result"]["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{started}: {}", hub.stderr_text()))
+                .to_string(),
+        );
+    }
+    c.send(json!({"id": 10, "method": "agents/list"}));
+    let list = c.answer(10).0["result"].clone();
+    assert_eq!(list["sessions"].as_array().map(Vec::len), Some(2), "{list}");
+    let m = runstav::registry::find("agents/list").unwrap();
+    assert!((m.check_result)(&list).is_ok(), "{list}");
+    for (i, sid) in sids.iter().enumerate() {
+        let id = 20 + i as u64;
+        c.send(json!({"id": id, "method": "agents/get", "params": {"id": sid}}));
+        let got = c.answer(id).0["result"].clone();
+        let m = runstav::registry::find("agents/get").unwrap();
+        assert!((m.check_result)(&got).is_ok(), "{got}");
+    }
+}
+
 #[cfg(feature = "test-hooks")]
 #[test]
 fn the_lines_a_client_sent_before_it_left_are_served() {
@@ -537,6 +587,124 @@ fn a_second_sigterm_during_the_store_wait_abandons_it() {
         None,
         "the write queued behind the held job was abandoned: {log}"
     );
+}
+
+/// `ratatoskr stop`/`ensure` in ROOT's environment, with ARGS.
+#[cfg(feature = "test-hooks")]
+fn cli(root: &Root, args: &[&str]) -> std::process::Output {
+    Command::new(BIN)
+        .args(args)
+        .env_clear()
+        .envs(root.vars())
+        .output()
+        .unwrap()
+}
+
+#[cfg(feature = "test-hooks")]
+#[test]
+fn stop_answers_when_the_hub_stopped_serving_and_its_store_finishes_under_the_lock() {
+    // a hub that ignores `shutdown` (so stop's SIGTERM) with runtime.db's thread held at its end and a write queued
+    // behind it (`--test-hold-store`): `stop` answers within its 2 s once the hub serves no more and has marked its lock
+    // stopping; the hub still writes, under the lock, and `ensure` meanwhile starts no second hub on its store;
+    // released, the queued write is written and the hub ends 0, nothing abandoned
+    let root = Root::new();
+    let socket = root.socket();
+    let lock = paths::lock_path(&socket);
+    let mut hub = Hub::start_with(&root, 1, &["--test-ignore-shutdown", "--test-hold-store"]);
+    hub.wait_ready(&socket);
+    let out = cli(&root, &["stop", "--timeout", "2"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?} {}", hub.stderr_text());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!(
+            "stopped Ratatoskr (pid {}, by SIGTERM)",
+            hub.pid()
+        )),
+        "{out:?}"
+    );
+    assert!(!socket.exists() && !ping(&socket), "nothing serves");
+    assert!(
+        hub.exited().is_none(),
+        "the hub ended with a write still queued: {}",
+        hub.stderr_text()
+    );
+    // the hold is in place (its SIGUSR1 handler too) once the hub says the thread is still stopping
+    let logs = |root: &Root| -> String {
+        std::fs::read_dir(root.log_dir())
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+            .collect()
+    };
+    skuld::wait_until(
+        "the hub says runtime.db's thread is still stopping",
+        FAILED_AFTER.as_secs(),
+        || {
+            logs(&root)
+                .contains("runtime.db's thread is still stopping")
+                .then_some(())
+        },
+    );
+    let text = std::fs::read_to_string(&lock).unwrap();
+    assert!(
+        text.starts_with(&format!("{} ", hub.pid())) && text.trim_end().ends_with(" stopping"),
+        "the lock says the hub is stopping: {text:?}"
+    );
+    let out = cli(&root, &["ensure", "--timeout", "1"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains(&format!("a hub is ending here (pid {})", hub.pid())),
+        "{out:?}"
+    );
+    assert!(!ping(&socket), "no second hub started");
+    assert_eq!(
+        std::fs::read_to_string(&lock).unwrap(),
+        text,
+        "the lock is still the ending hub's"
+    );
+    unsafe { libc::kill(hub.pid() as i32, libc::SIGUSR1) };
+    assert_eq!(hub.wait_exit().code(), Some(0), "{}", hub.stderr_text());
+    let logs = logs(&root);
+    let closed = logs
+        .find("stopping: the connections closed")
+        .expect("the stages are logged");
+    let ended = logs
+        .find("stopping: the store's threads ended")
+        .expect("the stages are logged");
+    assert!(closed < ended, "{logs}");
+    assert!(!logs.contains("abandoned"), "nothing was abandoned: {logs}");
+    let db = urdr::open_readonly(&root.dir.path().join("s/drgnx/hub/runtime.db")).unwrap();
+    assert_eq!(
+        urdr::meta(&db, "test-hold-store").unwrap().as_deref(),
+        Some("written"),
+        "the write queued behind the held job: {logs}"
+    );
+}
+
+#[cfg(feature = "test-hooks")]
+#[test]
+fn a_stopping_hub_that_is_killed_leaves_ensure_nothing_to_wait_for() {
+    // the stopping hub of the row above dies (SIGKILL) while its store is held: its lock went with it, so `ensure`
+    // starts a hub within its usual budget instead of waiting for a mark nobody holds
+    let root = Root::new();
+    let socket = root.socket();
+    let mut hub = Hub::start_with(&root, 1, &["--test-ignore-shutdown", "--test-hold-store"]);
+    hub.wait_ready(&socket);
+    let out = cli(&root, &["stop", "--timeout", "2"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?} {}", hub.stderr_text());
+    unsafe { libc::kill(hub.pid() as i32, libc::SIGKILL) };
+    hub.wait_exit();
+    assert!(
+        std::fs::read_to_string(paths::lock_path(&socket))
+            .unwrap()
+            .trim_end()
+            .ends_with(" stopping"),
+        "the dead hub's file still says stopping"
+    );
+    let out = cli(&root, &["ensure", "--timeout", "5"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(ping(&socket), "a hub serves again");
+    let out = cli(&root, &["stop", "--timeout", "10"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
 }
 
 /// The image PID runs: `/proc/PID/exe` on Linux; macOS has no `/proc`, so `proc_pidpath`.

@@ -75,7 +75,10 @@ manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Ch
 - **Speed:** no freezes while Lisp works; parsing, process output and JSON move off the main thread; smooth scrolling.
 - **Agents:** the agent runtime in Rust is built: the hub runs sessions, plan runs, managers, budgets and the permissions
   matrix ([docs/guide/agents.md](docs/guide/agents.md)), and since Ratatoskr's phase 7 (done) it is the only agent
-  runtime: the old Lisp one is deleted. Next, a panel that shows what agents do in detail (each step,
+  runtime: the old Lisp one is deleted. Agent sessions can drive a headless browser inside their own sandbox, reaching
+  only what you allow ([docs/guide/agent-browser.md](docs/guide/agent-browser.md)); watching it comes later. Plugins (WebAssembly components with tools for agents and hooks that narrow what they do) are
+built: [docs/guide/plugins.md](docs/guide/plugins.md) for users, [docs/develop/plugins.md](docs/develop/plugins.md) for
+authors. Next, a panel that shows what agents do in detail (each step,
   diffs, permissions, context and cost), with collapse per step type that remembers your choice.
 - **Extensions:** WebAssembly extensions, so tools can be written in any language (agent tools first). Community
   Emacs packages keep working.
@@ -91,7 +94,11 @@ drgnx is free software under the **GNU General Public License v3.0 or later** (s
 Code derived from [Emacs Bedrock](https://codeberg.org/ashton314/emacs-bedrock) keeps its MIT notice.
 The Seatbelt base policy in `runtime/crates/gleipnir/src/sbpl/base.sbpl` is OpenAI Codex's, Copyright 2025 OpenAI, under the
 Apache License 2.0 (`LICENSES/Apache-2.0.txt`).
+The language packs' fold queries (`packs/*/queries/folds.scm`) are drgnx's own; which nodes fold follows
+[nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter)'s `folds.scm` files, under the Apache License 2.0.
 The Black Dragon Foundation logo (`etc/images/banner.jpg`, `etc/images/drgnx-logo.jpg`) is Copyright 2026 Black Dragon
 Foundation, under the GPL v3.0 or later like the rest of drgnx.
+The app icon (`etc/images/icon/`) is an AI redraw of the project's dragon art, made at 1024 px and scaled down for the
+other sizes; it is under the same licence.
 A separate `drgnx-pro` add-on may follow later under a source-available license that stays free for
 individuals, open-source developers and small businesses.

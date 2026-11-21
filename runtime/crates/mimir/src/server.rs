@@ -14,7 +14,7 @@ use runstav::jsonrpc::{
 };
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::jsonrpc_glue as glue;
 use crate::tool::{Tool, ToolResult, valid_name};
@@ -89,10 +89,32 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let conn = Conn::new(ctx, tools, info);
+    serve_with(ctx, tools, None, info, r, w, limits).await
+}
+
+/// The tools a live server holds, as they change.
+type Live<Ctx> = watch::Receiver<Arc<[Box<dyn Tool<Ctx>>]>>;
+
+/// [`serve`] and [`serve_live`]: TOOLS, changed as LIVE says when there is one.
+async fn serve_with<Ctx, R, W>(
+    ctx: Arc<Ctx>,
+    tools: Arc<[Box<dyn Tool<Ctx>>]>,
+    live: Option<Live<Ctx>>,
+    info: ServerInfo,
+    r: R,
+    w: W,
+    limits: Limits,
+) -> End
+where
+    Ctx: Send + Sync + 'static,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut conn = Conn::new(ctx, tools, info);
+    conn.live = live.is_some();
     let (tx, rx) = mpsc::channel(QUEUE);
     let reader = read_lines(BufReader::new(r), tx, limits.max_in);
-    let worker = conn.work(rx, w, limits.max_out);
+    let worker = conn.work(rx, live, w, limits.max_out);
     tokio::pin!(reader);
     tokio::pin!(worker);
     let first = tokio::select! {
@@ -109,6 +131,26 @@ where
         // only after the reader dropped its sender, so it is done too
         First::Work(Ok(())) => reader.await,
     }
+}
+
+/// [`serve`], with the tools TOOLS holds as they change: each change is served from the next line on, and the client is
+/// told (`notifications/tools/list_changed`) once it has been answered anything. An answer is never cut by a change:
+/// a call runs to its end on the tool it started with.
+pub async fn serve_live<Ctx, R, W>(
+    ctx: Arc<Ctx>,
+    tools: watch::Receiver<Arc<[Box<dyn Tool<Ctx>>]>>,
+    info: ServerInfo,
+    r: R,
+    w: W,
+    limits: Limits,
+) -> End
+where
+    Ctx: Send + Sync + 'static,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let now = tools.borrow().clone();
+    serve_with(ctx, now, Some(tools), info, r, w, limits).await
 }
 
 enum First {
@@ -176,15 +218,35 @@ async fn read_line<R: AsyncBufRead + Unpin>(
 struct Conn<Ctx> {
     ctx: Arc<Ctx>,
     tools: Arc<[Box<dyn Tool<Ctx>>]>,
-    by_name: HashMap<&'static str, usize>,
+    by_name: HashMap<String, usize>,
     /// `tools/list`'s `tools`, in name order (deterministic, storage §6).
     listing: Value,
     info: ServerInfo,
     legacy: bool,
+    /// The list can change ([`serve_live`]): `initialize` says so.
+    live: bool,
+    /// A request was answered: a change of the list is told from then on.
+    greeted: bool,
 }
 
 impl<Ctx: Send + Sync + 'static> Conn<Ctx> {
     fn new(ctx: Arc<Ctx>, tools: Arc<[Box<dyn Tool<Ctx>>]>, info: ServerInfo) -> Self {
+        let mut c = Conn {
+            ctx,
+            tools: Arc::from(Vec::new()),
+            by_name: HashMap::new(),
+            listing: Value::Null,
+            info,
+            legacy: false,
+            live: false,
+            greeted: false,
+        };
+        c.set_tools(tools);
+        c
+    }
+
+    /// Serve TOOLS from now on.
+    fn set_tools(&mut self, tools: Arc<[Box<dyn Tool<Ctx>>]>) {
         let mut order: Vec<usize> = (0..tools.len()).collect();
         order.sort_by_key(|&i| tools[i].name());
         let mut by_name = HashMap::new();
@@ -192,7 +254,7 @@ impl<Ctx: Send + Sync + 'static> Conn<Ctx> {
         for i in order {
             let t = &tools[i];
             debug_assert!(valid_name(t.name()), "bad tool name {:?}", t.name());
-            let twice = by_name.insert(t.name(), i);
+            let twice = by_name.insert(t.name().to_owned(), i);
             debug_assert!(twice.is_none(), "two tools named {}", t.name());
             let mut entry = json!({
                 "name": t.name(),
@@ -204,27 +266,47 @@ impl<Ctx: Send + Sync + 'static> Conn<Ctx> {
             }
             listing.push(entry);
         }
-        Conn {
-            ctx,
-            tools,
-            by_name,
-            listing: Value::Array(listing),
-            info,
-            legacy: false,
-        }
+        self.tools = tools;
+        self.by_name = by_name;
+        self.listing = Value::Array(listing);
     }
 
     /// Answer every queued line in order, writing each answer before reading the next line.
+    /// A change of the list (LIVE) is taken between answers, never during one.
     async fn work<W: AsyncWrite + Unpin>(
         mut self,
         mut rx: mpsc::Receiver<Option<String>>,
+        mut live: Option<Live<Ctx>>,
         mut w: W,
         max_out: usize,
     ) -> Result<(), ErrorKind> {
-        while let Some(line) = rx.recv().await {
+        loop {
+            let line = tokio::select! {
+                l = rx.recv() => match l {
+                    Some(l) => l,
+                    None => break,
+                },
+                changed = async { live.as_mut().expect("guarded").changed().await }, if live.is_some() => {
+                    match changed {
+                        Ok(()) => {
+                            let tools = live.as_mut().expect("guarded").borrow_and_update().clone();
+                            self.set_tools(tools);
+                            if self.greeted {
+                                let note = json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"});
+                                w.write_all(format!("{note}\n").as_bytes()).await.map_err(|e| e.kind())?;
+                                w.flush().await.map_err(|e| e.kind())?;
+                            }
+                        }
+                        // the list's owner went: the list stays as it is
+                        Err(_) => live = None,
+                    }
+                    continue;
+                }
+            };
             let Some(answer) = self.answer(line).await else {
                 continue;
             };
+            self.greeted = true;
             let mut text = answer.to_string();
             if text.len() > max_out {
                 text = json!({
@@ -305,7 +387,7 @@ impl<Ctx: Send + Sync + 'static> Conn<Ctx> {
         self.legacy = true;
         Ok(json!({
             "protocolVersion": version::negotiate(requested),
-            "capabilities": {"tools": {"listChanged": false}},
+            "capabilities": {"tools": {"listChanged": self.live}},
             "serverInfo": {"name": self.info.name, "version": self.info.version},
         }))
     }
@@ -624,6 +706,59 @@ mod tests {
 
     fn calls(ctx: &Calls) -> usize {
         ctx.0.load(Ordering::SeqCst)
+    }
+
+    /// A live list: the server says it can change, tells the client when it does, and serves the new list (a tool
+    /// that left is unknown from then on).
+    #[tokio::test]
+    async fn a_live_list_tells_the_client_when_it_changes() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let (client, server) = tokio::io::duplex(1 << 16);
+        let (sr, sw) = tokio::io::split(server);
+        let (cr, mut cw) = tokio::io::split(client);
+        let (tx, rx) = watch::channel(tools());
+        let serving = tokio::spawn(serve_live(
+            Arc::new(Calls::default()),
+            rx,
+            ServerInfo::default(),
+            sr,
+            sw,
+            Limits::default(),
+        ));
+        let mut lines = tokio::io::BufReader::new(cr).lines();
+        let send = async |cw: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>, line: String| {
+            cw.write_all(format!("{line}\n").as_bytes()).await.unwrap();
+        };
+        let mut next = async || -> Value {
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap()
+        };
+        send(&mut cw, init("2025-11-25")).await;
+        assert_eq!(
+            next().await["result"]["capabilities"]["tools"]["listChanged"],
+            true
+        );
+        send(&mut cw, req(1, "tools/list", json!({}))).await;
+        assert_eq!(next().await["result"]["tools"].as_array().unwrap().len(), 4);
+        let one: Vec<Box<dyn Tool<Calls>>> = vec![Box::new(Echo)];
+        tx.send(Arc::from(one)).unwrap();
+        assert_eq!(
+            next().await,
+            json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+        );
+        send(&mut cw, req(2, "tools/list", json!({}))).await;
+        assert_eq!(next().await["result"]["tools"].as_array().unwrap().len(), 1);
+        send(&mut cw, call(3, "fail", json!({}))).await;
+        let a = next().await;
+        assert!(
+            a["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Unknown tool"),
+            "{a}"
+        );
+        // a write half dropped leaves the duplex open (the read half holds it): end it as a client does
+        cw.shutdown().await.unwrap();
+        assert_eq!(serving.await.unwrap(), End::ClientClosed);
     }
 
     #[tokio::test]
@@ -973,5 +1108,89 @@ mod tests {
         assert_eq!(end, End::ClientClosed);
         assert_eq!(a[1]["id"], 1);
         assert_eq!(a[1]["error"]["code"], INTERNAL_ERROR);
+    }
+
+    /// A tool whose name and description are made at run time, as a plugin's ability is.
+    struct Dynamic {
+        name: String,
+        description: String,
+    }
+
+    impl Tool<Calls> for Dynamic {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            &self.description
+        }
+        fn input_schema(&self) -> Value {
+            typed::<NoArgs>().schema()
+        }
+        fn check(&self, args: &Value) -> Result<(), ArgsError> {
+            typed::<NoArgs>().check(args)
+        }
+        fn call<'a>(&'a self, _: &'a Calls, _: Value) -> BoxFuture<'a, ToolResult> {
+            Box::pin(async move {
+                ToolResult::Ok {
+                    text: format!("ran {}", self.name),
+                    structured: None,
+                }
+            })
+        }
+    }
+
+    // [D] pure: the names of a served list need not be 'static
+    #[tokio::test]
+    async fn dynamic_names_listed() {
+        let made = |n: &str| -> Box<dyn Tool<Calls>> {
+            Box::new(Dynamic {
+                name: format!("plug-{n}_run"),
+                description: format!("what {n} does"),
+            })
+        };
+        let all: Vec<Box<dyn Tool<Calls>>> = vec![made("b"), made("a")];
+        let (client, server) = tokio::io::duplex(1 << 16);
+        let (sr, sw) = tokio::io::split(server);
+        let (mut cr, mut cw) = tokio::io::split(client);
+        let input = [
+            init("2025-11-25"),
+            req(1, "tools/list", json!({})),
+            call(2, "plug-b_run", json!({})),
+            call(3, "plug-c_run", json!({})),
+        ]
+        .join("\n")
+            + "\n";
+        let serving = serve(
+            Arc::new(Calls::default()),
+            all.into(),
+            ServerInfo::default(),
+            sr,
+            sw,
+            Limits::default(),
+        );
+        let feeding = async move {
+            let _ = cw.write_all(input.as_bytes()).await;
+            let _ = cw.shutdown().await;
+        };
+        let reading = async move {
+            let mut out = String::new();
+            cr.read_to_string(&mut out).await.expect("UTF-8");
+            out
+        };
+        let (_, (), out) = tokio::join!(serving, feeding, reading);
+        let a: Vec<Value> = out
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("JSON"))
+            .collect();
+        let listed: Vec<&str> = a[1]["result"]["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert_eq!(listed, ["plug-a_run", "plug-b_run"]);
+        assert_eq!(a[1]["result"]["tools"][0]["description"], "what a does");
+        assert_eq!(a[2]["result"]["content"][0]["text"], "ran plug-b_run");
+        assert_eq!(a[3]["error"]["code"], INVALID_PARAMS);
     }
 }

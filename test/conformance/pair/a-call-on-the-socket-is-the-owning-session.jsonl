@@ -1,0 +1,14 @@
+{"scenario": "pair/a-call-on-the-socket-is-the-owning-session", "requires": ["v1", "test-hooks"], "doc": "Gated (B). Two chats in one project, each with its own mcp.sock. Chat A calls a tool naming chat B's session (as `session`, then as `sid`): both are refused as identity arguments, before any tool runs, because the socket is the session. What makes it fail: a tool that takes a session id from its arguments."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project && echo readme > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:b"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$a", "text": "call:plan_read {\"plan\": \"plan:none\", \"session\": \"$b\"}\ncall:plan_read {\"plan\": \"plan:none\", \"sid\": \"$b\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/get", "params": {"id": "$a"}}, "expect": {"id": 4, "result": {"session": {"id": "$a", "status": "idle", "role": "chat"}, "entries": {"$contains": [{"type": "agent", "text": "call: session: tools never take an identitycall: sid: tools never take an identity"}]}}}, "within_ms": 20000}

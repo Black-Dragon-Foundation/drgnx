@@ -1,0 +1,30 @@
+{"scenario": "fork/survives-restart", "requires": ["v1", "test-hooks"], "doc": "After a fork, the hub stops (TERM) and a second hub starts on the same root: both agents are listed again, each in its own tree, and the two branches of the edit history can still be compared and the fork dropped."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work $ROOT/state && cd $ROOT/work && git init -q && echo base > a.txt && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--state\" \"$ROOT/state\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "say first\nfs:write b.txt one\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:s1", "class": "think", "turn_id": "t1"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "say second\nfs:write b.txt one\\ntwo\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:s2", "class": "think", "turn_id": "t2"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "history/fork", "params": {"session": "$sid", "seq": "$s1", "message": "say forked\nfs:write f.txt fork\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$capture:fid", "path": "$capture:fpath", "branch": "$capture:fbranch", "source_branch": "$capture:sbranch"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$fid", "step": {"class": "think", "turn_id": "$any"}}}, "within_ms": 30000}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "poll", "conn": "c2", "json": {"id": 10, "method": "agents/list"}, "expect": {"id": 10, "result": {"sessions": {"$contains": [{"id": "$sid", "cwd": "$ROOT/work"}, {"id": "$fid", "cwd": "$fpath"}]}}}, "within_ms": 30000, "every_ms": 100}
+{"do": "send", "conn": "c2", "json": {"id": 11, "method": "history/compare", "params": {"a": "$sbranch", "b": "$fbranch"}}}
+{"do": "expect", "conn": "c2", "json": {"id": 11, "result": {"files": "$any"}}, "within_ms": 30000}
+{"do": "send", "conn": "c2", "json": {"id": 12, "method": "history/fork/drop", "params": {"id": "$fid"}}}
+{"do": "expect", "conn": "c2", "json": {"id": 12, "result": {"ok": true}}, "within_ms": 30000}

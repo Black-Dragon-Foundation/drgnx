@@ -23,21 +23,59 @@
   "The group you are in, else the one used last."
   (if (drgnx-signal-editor-window-p (selected-window)) (selected-window) (drgnx-wb-editor-window)))
 
+(declare-function drgnx-wb-grid-p "drgnx-wb")
+(declare-function drgnx-grid-tile-window-p "drgnx-grid" (window))
+(declare-function drgnx-grid-split-tile "drgnx-grid" (window side))
+(declare-function drgnx-grid-pick-kind "drgnx-grid" (window))
+(declare-function drgnx-grid--adopt "drgnx-grid" (window))
+(declare-function drgnx-grid-leave-full-size "drgnx-grid" (&optional frame))
+(declare-function drgnx-grid-room-p "drgnx-grid" (window side))
+
+(defun drgnx-groups--on-tile-p ()
+  "Non-nil when the grid is on and the selected window belongs to a tool tile (a dock, the panel, a moved kind)."
+  (and (drgnx-wb-grid-p) (drgnx-grid-tile-window-p (selected-window))))
+
 (defun drgnx-groups--split (side)
-  (let* ((g (drgnx-groups--current)) (b (window-buffer g))
-         (new (split-window g nil side)))
-    (set-window-parameter new 'drgnx-tabs nil)
-    (set-window-buffer new b)
-    (select-window new)
-    (drgnx-chrome-apply nil t)
-    new))
+  "Split the editor group you are in on SIDE, the new one showing its file.  On a tool tile (the grid on), a new tile
+beside the whole tile instead, showing what you pick (`drgnx-grid-pick-kind').  With the grid on, a tile shown full
+size comes back first, with every other tile."
+  (when (drgnx-wb-grid-p) (drgnx-grid-leave-full-size))
+  (if (drgnx-groups--on-tile-p)
+      (let ((new (drgnx-grid-split-tile (selected-window) side)))
+        (drgnx-grid-pick-kind new)
+        (drgnx-chrome-apply nil t)
+        new)
+    (let* ((g (drgnx-groups--current)) (b (window-buffer g))
+           (new (progn (when (and (drgnx-wb-grid-p) (not (drgnx-grid-room-p g side))) (user-error "No room there"))
+                       (split-window g nil side))))
+      (set-window-parameter new 'drgnx-tabs nil)
+      (set-window-buffer new b)
+      (when (drgnx-wb-grid-p) (drgnx-grid--adopt new))
+      (select-window new)
+      (drgnx-chrome-apply nil t)
+      new)))
 
 (defun drgnx-groups-split-right () "Split the editor: a new group to the right, same file." (interactive) (drgnx-groups--split 'right))
 (defun drgnx-groups-split-down () "Split the editor: a new group below, same file." (interactive) (drgnx-groups--split 'below))
 
+(declare-function drgnx-wb-hide-sidebar "drgnx-wb")
+(declare-function drgnx-wb-area-hide "drgnx-area" (area))
+(declare-function drgnx-grid-hide "drgnx-grid" (kind))
+(defvar drgnx-wb--areas)
+
 (defun drgnx-groups-close ()
-  "Close this editor group (its files stay open); the last group stays."
+  "Close this tile: an editor group closes (its files stay open; the last group stays), a tool tile hides (the grid
+on: a dock, the panel, the right side, a moved kind)."
   (interactive)
+  (if (drgnx-groups--on-tile-p)
+      (let* ((w (selected-window)) (role (window-parameter w 'drgnx-role)))
+        (cond ((eq role 'tile) (drgnx-grid-hide (car (window-parameter w 'drgnx-pane-stack))))
+              ((eq role 'dock) (drgnx-wb-hide-sidebar))
+              ((alist-get role drgnx-wb--areas) (drgnx-wb-area-hide role))))
+    (drgnx-groups--close-editor)))
+
+(defun drgnx-groups--close-editor ()
+  "Close the editor group you are in (R8: the last one stays)."
   (let ((g (drgnx-groups--current)))
     (when (<= (length (drgnx-groups-list)) 1) (user-error "The last editor group stays"))
     (delete-window g)

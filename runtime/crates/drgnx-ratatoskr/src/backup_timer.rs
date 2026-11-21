@@ -1,5 +1,6 @@
 //! The nightly backup's schedule (Urdr Task 17; storage §8.1): at 03:00 local time, or at the first idle minute after
-//! a missed one, the hub makes a checked copy of `work.db` (`graph::backup_now`: `VACUUM INTO`, check, rotate).
+//! a missed one, the hub makes a checked copy of `work.db` (`graph::backup_now`: `VACUUM INTO`, check, rotate) and one of
+//! each project's `history.db` beside it (`history::backup`, replaced, never rotated; [`record_history`]).
 //!
 //! [`due`] is pure (the clock is its arguments), so the catch-up is tested without waiting for a night.  The hub's
 //! schema tick asks it every 2 s.  What the last copy was stays in a process-wide record that `status.store` shows
@@ -15,6 +16,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 /// 03:00, in minutes after local midnight.
 pub const AT_MINUTE: u32 = 3 * 60;
 
+/// How long a hub has run before it starts a copy (seconds): a stop in a hub's first minutes does not wait for one, and
+/// a hub that was down at 03:00 copies at its first tick after it has settled, not in the middle of its start (the
+/// copy is a request on the store's writer, which a shutdown waits out).
+pub const SETTLE: u64 = 300;
+
 /// After a failed copy, how long before the next try (seconds).
 pub const RETRY_AFTER: u64 = 3600;
 
@@ -27,8 +33,9 @@ pub struct Local {
 
 /// Whether a copy is due now: it is 03:00 or later and no good copy was made today, and the last try (if any) is not
 /// recent.  A hub that was down at 03:00 therefore copies at its first tick after it starts.
-pub fn due(now: Local, last_ok: Option<Local>, since_attempt: Option<u64>) -> bool {
-    now.minute >= AT_MINUTE
+pub fn due(now: Local, last_ok: Option<Local>, since_attempt: Option<u64>, up_secs: u64) -> bool {
+    up_secs >= SETTLE
+        && now.minute >= AT_MINUTE
         && last_ok.is_none_or(|l| l.day != now.day)
         && since_attempt.is_none_or(|s| s >= RETRY_AFTER)
 }
@@ -70,6 +77,19 @@ pub fn last() -> Last {
     *LAST.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The last night's copies of the edit histories: when, and whether every project's copy was good.
+static HISTORY: Mutex<Option<(u64, bool)>> = Mutex::new(None);
+
+/// The edit histories were copied (or failed to be) at AT.
+pub fn record_history(at: u64, ok: bool) {
+    *HISTORY.lock().unwrap_or_else(|e| e.into_inner()) = Some((at, ok));
+}
+
+/// The last copy of the edit histories, as it is now.
+pub fn last_history() -> Option<(u64, bool)> {
+    *HISTORY.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// A copy made (or failed) at AT.
 pub fn record(at: u64, ok: bool) {
     let mut l = LAST.lock().unwrap_or_else(|e| e.into_inner());
@@ -97,7 +117,11 @@ fn newest_copy(dir: &Path) -> Option<u64> {
 }
 
 /// At start: the newest `work-*.db` in DIR is the last good copy (only checked copies are renamed into place).
+/// When this hub's timer was first looked at (its start).
+static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 pub fn seed(dir: &Path) {
+    STARTED.get_or_init(std::time::Instant::now);
     if let Some(at) = newest_copy(dir) {
         let mut l = LAST.lock().unwrap_or_else(|e| e.into_inner());
         if l.attempt.is_none() {
@@ -133,6 +157,18 @@ pub fn finish() {
     RUNNING.store(false, Ordering::SeqCst);
 }
 
+/// Run the copy FUT that [`begin`] allowed, then [`finish`] on every way out: a panic or a dropped task included.
+pub async fn guarded<F: std::future::Future<Output = ()>>(fut: F) {
+    struct Finish;
+    impl Drop for Finish {
+        fn drop(&mut self) {
+            finish();
+        }
+    }
+    let _finish = Finish;
+    fut.await;
+}
+
 /// Whether the tick at NOW (unix seconds) should start the nightly copy.
 pub fn due_at(now: u64) -> bool {
     let l = last();
@@ -140,7 +176,25 @@ pub fn due_at(now: u64) -> bool {
         local(now),
         l.ok_at.map(local),
         l.attempt.map(|(at, _)| now.saturating_sub(at)),
+        up_secs(),
     )
+}
+
+/// How long the hub has run, as [`due`] counts it.  With the `test-hooks` feature, `DRGNX_TEST_BACKUP_SETTLE_SECS=N`
+/// counts a hub settled after N seconds instead of [`SETTLE`] (a live row does not wait five minutes for its copy).
+fn up_secs() -> u64 {
+    let up = STARTED
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs();
+    #[cfg(feature = "test-hooks")]
+    if let Some(n) = std::env::var("DRGNX_TEST_BACKUP_SETTLE_SECS")
+        .ok()
+        .and_then(|n| n.parse::<u64>().ok())
+    {
+        return if up >= n { up.max(SETTLE) } else { 0 };
+    }
+    up
 }
 
 #[cfg(test)]
@@ -155,20 +209,50 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_hub_waits_to_settle_before_its_copy() {
+        // a missed night, past 03:00, nothing copied today: due only once the hub has run SETTLE seconds, so a stop in its
+        // first minutes never waits for a copy
+        assert!(!due(at(5, 14, 0), None, None, 0));
+        assert!(!due(at(5, 14, 0), None, None, SETTLE - 1));
+        assert!(due(at(5, 14, 0), None, None, SETTLE));
+    }
+
+    #[test]
     fn backup_timer_catches_up_after_a_missed_night() {
         // a copy was made on day 10 at 03:00; the clock is a number of minutes since then
         let ok = Some(at(10, 3, 0));
-        assert!(!due(at(10, 3, 1), ok, Some(60)), "already copied today");
-        assert!(!due(at(11, 2, 59), ok, Some(23 * 3600)), "before 03:00");
-        assert!(due(at(11, 3, 0), ok, Some(24 * 3600)), "03:00 sharp");
+        assert!(
+            !due(at(10, 3, 1), ok, Some(60), 3600),
+            "already copied today"
+        );
+        assert!(
+            !due(at(11, 2, 59), ok, Some(23 * 3600), 3600),
+            "before 03:00"
+        );
+        assert!(due(at(11, 3, 0), ok, Some(24 * 3600), 3600), "03:00 sharp");
         // the hub was down all of day 11 and starts on day 12 at 09:12: the first tick copies
-        assert!(due(at(12, 9, 12), ok, Some(54 * 3600)));
+        assert!(due(at(12, 9, 12), ok, Some(54 * 3600), 3600));
         // never copied: a hub started at 14:00 copies, one started at 01:00 waits for 03:00
-        assert!(due(at(5, 14, 0), None, None));
-        assert!(!due(at(5, 1, 0), None, None));
+        assert!(due(at(5, 14, 0), None, None, 3600));
+        assert!(!due(at(5, 1, 0), None, None, 3600));
         // a failed try is not repeated every tick
-        assert!(!due(at(12, 9, 13), ok, Some(60)));
-        assert!(due(at(12, 10, 13), ok, Some(RETRY_AFTER)));
+        assert!(!due(at(12, 9, 13), ok, Some(60), 3600));
+        assert!(due(at(12, 10, 13), ok, Some(RETRY_AFTER), 3600));
+    }
+
+    /// Pattern D (pure): no clock, no order; one task whose copy panics.
+    #[test]
+    fn a_panicking_copy_does_not_stop_the_next_nightly() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            assert!(begin(), "the first nightly starts");
+            let panicked = tokio::spawn(guarded(async { panic!("the copy panicked") })).await;
+            assert!(panicked.is_err(), "the copy task panicked");
+            assert!(begin(), "the next nightly can start after a panic");
+            finish();
+        });
     }
 
     #[test]

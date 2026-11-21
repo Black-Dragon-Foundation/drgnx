@@ -1,0 +1,110 @@
+# What every macOS job of runtime.yml needs before its own steps (the tests, the conformance shards, the perf
+# baseline run as separate jobs so each fits its limit): sccache, the image's rustup with clippy, the cargo caches, the
+# git draugr trusts, the model files, the plugin fixtures, Zig and libghostty-vt's tarballs, vttest and, with
+# `nidhogg: true`, Nidhogg (DRGNX_EMACS). docs/develop/ci.md
+name: macOS runtime setup
+description: The toolchain, caches and test inputs of runtime.yml's macOS jobs
+inputs:
+  nidhogg:
+    description: "true: install Nidhogg 31.1 (writes DRGNX_EMACS to the environment)"
+    default: "false"
+outputs:
+  registry-hit:
+    description: "true: the cargo registry cache was restored by its exact key"
+    value: ${{ steps.registry.outputs.cache-hit }}
+  registry-key:
+    description: the cargo registry cache's key, for the job that saves it
+    value: ${{ steps.registry.outputs.cache-primary-key }}
+  target-hit:
+    description: "true: runtime/target was restored by its exact key"
+    value: ${{ steps.cache.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    # the image's rustup (as the Linux runner jobs), not Homebrew's rust: no formula download and install per run
+    - uses: ./.github/actions/sccache
+    - shell: bash
+      run: bash .github/ci/rust.sh --component clippy
+    - id: rv
+      shell: bash
+      run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
+    - id: registry
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+        key: cargo-registry-${{ runner.os }}-${{ hashFiles('runtime/Cargo.lock') }}
+        restore-keys: cargo-registry-${{ runner.os }}-
+    - id: cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: runtime/target
+        key: cargo-${{ runner.os }}-rustup-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
+        restore-keys: cargo-${{ runner.os }}-rustup-mt1-${{ steps.rv.outputs.v }}-
+    - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
+      shell: bash
+      run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
+    # draugr runs only the git of the developer dir xcode-select's link names, and refuses Xcode under the
+    # admin-writable /Applications (on the runner even its git is the runner user's); the Command Line Tools, which
+    # the image installs, pass. Before the tests: draugr's git tests and the escape rows run that git.
+    - name: xcode-select points at the Command Line Tools (the git draugr trusts)
+      shell: bash
+      run: |
+        xcode-select -p
+        sudo xcode-select -s /Library/Developer/CommandLineTools
+        xcode-select -p
+    # the model files, as the Fedora 45 job (one cache for both)
+    - id: models
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ../test-models
+        key: models-${{ hashFiles('.github/ci/models.txt') }}
+        enableCrossOsArchive: true
+    - name: the model files (DRGNX_TEST_MODELS)
+      id: models-fetch
+      shell: bash
+      run: |
+        /bin/bash .github/ci/models.sh ../test-models
+        echo "DRGNX_TEST_MODELS=$(cd ../test-models && pwd)" >> "$GITHUB_ENV"
+    - if: ${{ env.CACHE_SAVE == 'true' && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ../test-models
+        key: ${{ steps.models.outputs.cache-primary-key }}
+        enableCrossOsArchive: true
+    # the plugin tests and rows load WASM components built for wasm32-wasip2
+    - name: wasm32-wasip2 and the plugin fixtures
+      shell: bash
+      run: bash .github/ci/wasm-target.sh
+    # the terminal engine is built from source with a pinned Zig (test/container/zig.sh)
+    - name: Zig
+      shell: bash
+      run: /bin/bash test/container/zig.sh macos
+    - name: libghostty-vt's pinned tarballs (build.rs never downloads)
+      shell: bash
+      run: /bin/bash runtime/crates/ghostty-vt-sys/fetch.sh
+    # drgnx-term's vttest rows drive the real vttest (the Linux test images carry it; a missing one fails the rows)
+    - name: vttest (the terminal's conformance rows)
+      shell: bash
+      run: brew install vttest
+    # the pinned release tarball, kept by the hash of nidhogg.sh (which holds the version and the checksums; the
+    # tarball is checked against them on every use); main saves it once per pin, every run restores it
+    - id: nidhogg-tarball
+      if: ${{ inputs.nidhogg == 'true' }}
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/nidhogg-downloads
+        key: nidhogg-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('test/container/nidhogg.sh') }}
+    - name: Nidhogg 31.1 (writes DRGNX_EMACS to the environment)
+      id: nidhogg
+      if: ${{ inputs.nidhogg == 'true' }}
+      shell: bash
+      env:
+        NIDHOGG_DOWNLOADS: ${{ runner.temp }}/nidhogg-downloads
+      run: /bin/bash test/container/nidhogg.sh macos
+    - if: ${{ inputs.nidhogg == 'true' && env.CACHE_SAVE == 'true' && steps.nidhogg.outcome == 'success' && steps.nidhogg-tarball.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/nidhogg-downloads
+        key: ${{ steps.nidhogg-tarball.outputs.cache-primary-key }}

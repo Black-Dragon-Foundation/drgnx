@@ -1,0 +1,21 @@
+{"scenario": "runner/a-gate-run-keeps-the-agents-sandbox", "requires": ["v1", "test-hooks"], "doc": "Red first's run of a task's own command is the agent's command, so the hub runs it in an agent's sandbox: the worker commits its test, then its change, and runs a job at the tip that tries to write a file outside its tree and to reach a port on the host's loopback, and fails.  At the merge, red first has nothing at the test commit and the hub runs that same command there, in a detached tree.  Neither run writes the file or reaches the port: the gate's run has no network the session's jobs lack and writes only its detached tree (docs/develop/orchestration.md, \"Runs the gates start\").", "on_failure": [{"conn": "c", "json": {"id": 90, "method": "job/status", "params": {"id": "$job"}}}, {"conn": "c", "json": {"id": 91, "method": "exec/list"}}, {"conn": "c", "json": {"id": 92, "method": "orch/evidence", "params": {"task": "$job#1"}}}]}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && mkdir test && touch test/.keep && git add test && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/net.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w1.txt\" \"--log\" \"$ROOT/w1.log\")) (\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/r.txt\" \"--log\" \"$ROOT/r.log\")))) (drgnx-agents-routes ((implement \"mock-claude\") (review \"mock-gemini\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the check\n\n**Role:** implement\n\nAdd test/check.txt, then check.txt.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "write_file", "path": "$ROOT/w1.txt", "text": "tool:edit test/check.txt\\ncommit test\\ntool:edit check.txt\\ncommit change\\ncall:job_start {\"argv\": [\"sh\", \"-c\", \"touch $ROOT/escaped; curl -s -m 3 --noproxy '*' http://127.0.0.1:$port/gate-net; exit 1\"]}\ncall:complete_task {\"task\": \"$job#1\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/r.txt", "text": "say VERDICT: pass\n"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "poll", "conn": "c", "json": {"id": 9, "method": "orch/evidence", "params": {"task": "$job#1"}}, "expect": {"id": 9, "result": {"evidence": ["$any", "$any"]}}, "within_ms": 180000, "every_ms": 500}
+{"do": "file", "path": "$ROOT/escaped", "exists": false}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "! grep -q gate-net $ROOT/net.log"], "expect_code": 0}

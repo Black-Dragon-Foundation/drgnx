@@ -1,0 +1,14 @@
+{"scenario": "perf/search-handoff", "requires": ["v1", "test-hooks", "perf"], "doc": "Ask an Agent's brief: search/handoff of 1,000 ticked matches (100 files of 10) to a live mock session, from the request to its answer (the brief built, the hand-off recorded, the prompt sent), 20 samples (--perf records every sample, no budget; spec: 100 ms)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/proj && cd $ROOT/proj && i=0; while [ $i -lt 10 ]; do echo \"fn f$i() { needle(1, x); }\"; i=$((i+1)); done > one.rs && n=0; while [ $n -lt 100 ]; do cp one.rs f$n.rs; n=$((n+1)); done; rm one.rs"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/proj"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}}, "context": false}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": "$any", "files": 100, "matches": 1000}}, "within_ms": 30000}
+{"do": "measure", "name": "search-handoff-brief-1000", "repeat": 20, "steps": [{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/handoff", "params": {"view": "s", "instruction": "Rename needle to pin.", "to": {"session": {"id": "$sid"}}}}}, {"do": "expect", "conn": "e", "json": {"id": 4, "result": {"handoff": "$any", "session": "$sid", "ids": "$any", "sent": "$any", "more": "$any"}}, "within_ms": 10000}]}

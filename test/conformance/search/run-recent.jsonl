@@ -1,0 +1,21 @@
+{"scenario": "search/run-recent", "requires": ["v1"], "doc": "a search/run that stood for the typing pause is recorded as recent when the next one comes; one sent with count true (a pinned saved search's live count, on a view of its own) gets only its totals (search-run-done, no model or rows) and is never recorded."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "write_file", "path": "$ROOT/p/a.txt", "text": "one two three four\n"}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "search/run", "params": {"view": "pin-1", "root": "$ROOT/p", "search": {"query": {"mode": "text", "text": "one"}}, "count": true}}}
+{"do": "expect_next", "conn": "e", "json": {"id": 2, "result": {"run": "$any"}}, "within_ms": 10000}
+{"do": "expect_next", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "pin-1", "run": "$any", "files": 1, "matches": 1}}, "within_ms": 10000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "sleep 0.4"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/run", "params": {"view": "pin-1", "root": "$ROOT/p", "search": {"query": {"mode": "text", "text": "two"}}, "count": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "pin-1", "run": "$any", "files": 1, "matches": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/recent", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"recent": []}}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "search/run", "params": {"view": "s", "root": "$ROOT/p", "search": {"query": {"mode": "text", "text": "three"}}}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": "$any", "files": 1, "matches": 1}}, "within_ms": 10000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "sleep 0.4"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "search/run", "params": {"view": "s", "root": "$ROOT/p", "search": {"query": {"mode": "text", "text": "four"}}}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": "$any", "files": 1, "matches": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "search/recent", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": {"recent": [{"query": {"mode": "text", "text": "three"}}]}}}

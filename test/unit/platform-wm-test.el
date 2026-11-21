@@ -42,7 +42,7 @@
   (let ((before (make-symbol "before")) (idle (make-symbol "idle")))
     `(let ((,before (copy-sequence timer-list)) (,idle (copy-sequence timer-idle-list)))
        (prog1 (progn ,@body)
-         (drgnx-test-pause 0.1 "no timer may be left armed")
+         (drgnx-test-wait (lambda () (not (drgnx-test-wait--due-p))) :what "the zero-delay timers have run")
          (should-not (cl-set-difference timer-list ,before))
          (should-not (cl-set-difference timer-idle-list ,idle))))))
 
@@ -55,20 +55,62 @@
 (defun drgnx-platform-wm-test--write (name text)
   (with-temp-file (expand-file-name name drgnx-platform-wm-test--dir) (insert text)))
 
+(defvar drgnx-platform-wm-test--marks nil
+  "The running row's marks: a cons whose car is a list of (SECONDS WHAT...), newest first, SECONDS from the row's
+start (`drgnx-platform-wm-test--with-replies' prints them when the row fails).")
+
+(defvar drgnx-platform-wm-test--start nil "When the running row started (`float-time').")
+
+(defun drgnx-platform-wm-test--mark (&rest what)
+  "Add WHAT, with the seconds since the row started, to the row's marks."
+  (when drgnx-platform-wm-test--marks
+    (push (cons (- (float-time) drgnx-platform-wm-test--start) what) (car drgnx-platform-wm-test--marks))))
+
+(defun drgnx-platform-wm-test--mark-call (call argv &rest keys)
+  "Around `drgnx-platform-call': mark when each call to the fake tool starts and ends (its sentinel or its cut), with its
+status."
+  (let ((cb (plist-get keys :callback)) (args (cdr argv)))
+    (drgnx-platform-wm-test--mark 'call args)
+    (apply call argv (plist-put (copy-sequence keys) :callback
+                                (lambda (status out)
+                                  (drgnx-platform-wm-test--mark 'ended status args)
+                                  (when cb (funcall cb status out)))))))
+
+(defun drgnx-platform-wm-test--mark-cut (&rest _)
+  "Before `drgnx-platform--call-cut': mark that a call's time limit fired."
+  (drgnx-platform-wm-test--mark 'call-cut))
+
+(defun drgnx-platform-wm-test--mark-expired (&rest _)
+  "Before `drgnx-platform-wm--place-expired': mark that a placement's deadline fired."
+  (drgnx-platform-wm-test--mark 'place-expired))
+
 (defmacro drgnx-platform-wm-test--with-replies (files &rest body)
   "Run BODY inside `drgnx-platform-test--with-fake-wm' with a reply directory holding FILES, an alist
-\(NAME . TEXT) evaluated now, plus ok.json.  Write more with `drgnx-platform-wm-test--write'."
+\(NAME . TEXT) evaluated now, plus ok.json.  Write more with `drgnx-platform-wm-test--write'.
+When BODY fails, the failure lists the row's marks: each call to the fake tool started and ended (with its status), a
+call's time limit or a placement's deadline fired, and when, so a red names the stage that was late."
   (declare (indent 1))
-  `(drgnx-platform-test--with-fake-wm (:map drgnx-platform-wm-test--map)
-     (let* ((drgnx-platform-wm-test--dir (make-temp-file "drgnx-wm-replies" t))
-            (process-environment (cons (concat "DRGNX_FAKE_WM_DIR=" drgnx-platform-wm-test--dir)
-                                       process-environment)))
-       (unwind-protect
-           (progn (drgnx-platform-wm-test--write "ok.json" "[{\"success\":true}]")
-                  (dolist (f (list ,@(mapcar (lambda (f) `(cons ,(car f) ,(cdr f))) files)))
-                    (drgnx-platform-wm-test--write (car f) (cdr f)))
-                  ,@body)
-         (delete-directory drgnx-platform-wm-test--dir t)))))
+  (let ((marks (make-symbol "marks")))
+    `(drgnx-platform-test--with-fake-wm (:map drgnx-platform-wm-test--map)
+       (let* ((drgnx-platform-wm-test--dir (make-temp-file "drgnx-wm-replies" t))
+              (,marks (list nil))
+              (drgnx-platform-wm-test--marks ,marks)
+              (drgnx-platform-wm-test--start (float-time))
+              (process-environment (cons (concat "DRGNX_FAKE_WM_DIR=" drgnx-platform-wm-test--dir)
+                                         process-environment)))
+         (advice-add 'drgnx-platform-call :around #'drgnx-platform-wm-test--mark-call)
+         (advice-add 'drgnx-platform--call-cut :before #'drgnx-platform-wm-test--mark-cut)
+         (advice-add 'drgnx-platform-wm--place-expired :before #'drgnx-platform-wm-test--mark-expired)
+         (unwind-protect
+             (ert-info ((lambda () (format "marks (seconds from the row's start): %S" (reverse (car ,marks)))))
+               (drgnx-platform-wm-test--write "ok.json" "[{\"success\":true}]")
+               (dolist (f (list ,@(mapcar (lambda (f) `(cons ,(car f) ,(cdr f))) files)))
+                 (drgnx-platform-wm-test--write (car f) (cdr f)))
+               ,@body)
+           (advice-remove 'drgnx-platform-call #'drgnx-platform-wm-test--mark-call)
+           (advice-remove 'drgnx-platform--call-cut #'drgnx-platform-wm-test--mark-cut)
+           (advice-remove 'drgnx-platform-wm--place-expired #'drgnx-platform-wm-test--mark-expired)
+           (delete-directory drgnx-platform-wm-test--dir t))))))
 
 (defmacro drgnx-platform-wm-test--focused (state &rest body)
   "Run BODY with `frame-focus-state' answering STATE for every frame."
@@ -191,13 +233,17 @@
                                 (drgnx-platform-test--with-frame 'pgtk '("SWAYSOCK=/s" "WAYLAND_DISPLAY=wayland-1")
                                   (set-frame-parameter frame 'title "before")
                                   (let ((seen nil))
-                                    ;; the window shows up with its placing title only after about 0.3 s
-                                    (run-at-time 0.3 nil (lambda ()
-                                                           (setq seen (frame-parameter frame 'title))
-                                                           (drgnx-platform-wm-test--write "get_tree.json" (drgnx-platform-wm-test--ours seen))))
+                                    ;; the window shows up with its placing title only after the first poll's answer
+                                    ;; (the reply the fake tool serves next), never by the clock: under load a timer
+                                    ;; at 0.3 s came before the first poll ran, which then saw the window at once
                                     (should (eq 'ok (drgnx-platform-wm-test--leaving-no-timer
                                                       (drgnx-platform-wm-test--result
-                                                       (lambda (cb) (drgnx-platform-place-frame frame (drgnx-platform-wm-test--monitor "HEADLESS-2" 1280) cb))))))
+                                                       (lambda (cb)
+                                                         (drgnx-platform-place-frame frame (drgnx-platform-wm-test--monitor "HEADLESS-2" 1280)
+                                                                                     (lambda (r) (drgnx-platform-wm-test--mark 'placed r) (funcall cb r)))
+                                                         (setq seen (frame-parameter frame 'title))
+                                                         (drgnx-platform-wm-test--write "get_tree.json.next" (drgnx-platform-wm-test--ours seen))
+                                                         (drgnx-platform-wm-test--mark 'next-tree-written))))))
                                     (should (string-match-p (format "\\`drgnx \\[placing %d-[0-9]+\\]\\'" (emacs-pid)) seen))
                                     (should (equal "before" (frame-parameter frame 'title)))
                                     (let ((cmds (drgnx-platform-wm-test--commands)))

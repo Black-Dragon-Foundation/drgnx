@@ -10,7 +10,7 @@
 //! - a canary's text anywhere in the output or the result file fails the row.
 
 use crate::fixture::{Canary, Fixture};
-use crate::row::{After, KillWho, Need, Platform, Raw, Row, Setup, TierName};
+use crate::row::{After, KillWho, Layer, Need, Platform, Raw, Row, Setup, TierName};
 use crate::{ProbeLine, errno_from_name};
 use serde_json::Value;
 use std::fmt;
@@ -35,6 +35,9 @@ pub struct Host {
     pub root: bool,
     pub landlock_abi: u8,
     pub x32: bool,
+    /// `io_uring_setup` works for an unfiltered process here: a container's own seccomp (podman's default profile
+    /// answers ENOSYS) or `kernel.io_uring_disabled` can say no, and then our filter's refusal cannot be told from it.
+    pub host_open: bool,
 }
 
 /// The only reasons a row may be skipped (review B2).
@@ -45,6 +48,7 @@ pub enum Skip {
     NeedsLinux,
     NeedsX86_64,
     X32Off,
+    HostFilterBlocks,
     NeedsRoot,
     LandlockBelow { have: u8, need: u8 },
 }
@@ -57,6 +61,9 @@ impl fmt::Display for Skip {
             Skip::NeedsLinux => f.write_str("needs linux"),
             Skip::NeedsX86_64 => f.write_str("needs x86_64"),
             Skip::X32Off => f.write_str("x32 is off"),
+            Skip::HostFilterBlocks => {
+                f.write_str("the host blocks io_uring, the keyring calls or vsock")
+            }
             Skip::NeedsRoot => f.write_str("needs root"),
             Skip::LandlockBelow { have, need } => write!(f, "Landlock ABI {have} below {need}"),
         }
@@ -90,6 +97,8 @@ pub fn skip_reason(row: &Row, host: &Host) -> Option<Skip> {
             Need::Seccomp,
             Need::Netns,
             Need::X32,
+            Need::HostOpen,
+            Need::Browser,
         ]
         .into_iter()
         .any(needs);
@@ -102,13 +111,18 @@ pub fn skip_reason(row: &Row, host: &Host) -> Option<Skip> {
     if needs(Need::X32) && !host.x32 {
         return Some(Skip::X32Off);
     }
+    if needs(Need::HostOpen) && !host.host_open {
+        return Some(Skip::HostFilterBlocks);
+    }
     if needs(Need::Root) && !host.root {
         return Some(Skip::NeedsRoot);
     }
     if (needs(Need::Bwrap) || needs(Need::Netns)) && host.in_container {
         return Some(Skip::InContainer);
     }
-    let landlock = if needs(Need::Reduced) {
+    let landlock = if needs(Need::Browser) {
+        Some(gleipnir::LANDLOCK_FLOOR_BROWSER)
+    } else if needs(Need::Reduced) {
         Some(gleipnir::LANDLOCK_FLOOR_REDUCED)
     } else if needs(Need::Landlock) {
         Some(gleipnir::LANDLOCK_FLOOR_FULL)
@@ -140,6 +154,9 @@ pub fn detect_host(probe: &Path) -> Host {
         .and_then(|l| l.detail?.parse().ok())
         .unwrap_or(0);
     let x32 = probe_one(&["syscall", "x32-getpid"]).is_some_and(|l| l.result == "reached");
+    let host_open = ["io-uring", "keyctl", "add-key", "vsock"]
+        .iter()
+        .all(|p| probe_one(&["syscall", p]).is_some_and(|l| l.result == "reached"));
     let root = rustix::process::geteuid().is_root()
         || Command::new("sudo")
             .args(["-n", "true"])
@@ -153,6 +170,7 @@ pub fn detect_host(probe: &Path) -> Host {
         root,
         landlock_abi,
         x32,
+        host_open,
     }
 }
 
@@ -463,30 +481,53 @@ pub fn build_spec_for(fx: &Fixture, row: &Row, bin: &Path, linux: bool) -> Resul
         let m = spec.as_object_mut().expect("object");
         m.entry("chdir").or_insert_with(|| "${W}".into());
         let mut env = serde_json::json!([["PATH", "/usr/bin:/bin"]]);
+        if linux && row.layer == Some(Layer::Browser) {
+            browser_layer_spec(m, bin, &mut env);
+        }
+        // `"net": "loopback"`: a debug session's network, the default one below with `loopback` on (and, on macOS,
+        // `${FREE_PORT}` its own port).
+        let loopback = m.get("net").and_then(|v| v.as_str()) == Some("loopback");
+        if loopback {
+            m.remove("net");
+        }
         if !m.contains_key("net") {
             // The session's own network: isolated, with the relay to the fixture's proxy (Linux needs one). The
-            // full tier uses 3128; the reduced tier's relay shares the host's loopback, so it gets a free port.
+            // full tier uses 3128; the reduced tier's relay shares the host's loopback, so it gets a free port. A
+            // `web` row's relay goes to the web proxy instead, on the web relay's port (3130).
             let tier = if reduced {
                 gleipnir::Tier::Reduced
             } else {
                 gleipnir::Tier::Full
             };
+            let (wanted, socket) = if row.web.is_some() {
+                (3130, "${RUN}/web.sock")
+            } else {
+                (3128, "${RUN}/proxy.sock")
+            };
             if linux {
-                let port = gleipnir::backend::relay_ports(tier, &[3128])
+                let port = gleipnir::backend::relay_ports(tier, &[wanted])
                     .map_err(|e| format!("relay port: {e}"))?[0];
-                m.insert("net".into(), serde_json::json!({"isolated": {"relay": [{"port": port, "socket": "${RUN}/proxy.sock"}]}}));
+                fx.set_relay_port(port);
+                m.insert(
+                    "net".into(),
+                    serde_json::json!({"isolated": {"relay": [{"port": port, "socket": socket}]}}),
+                );
                 m.entry("run").or_insert_with(
                     || serde_json::json!({"mode": "ro", "source": "${RUN}", "dest": "${RUN}"}),
                 );
                 m.entry("sockets")
-                    .or_insert_with(|| serde_json::json!(["${RUN}/proxy.sock"]));
+                    .or_insert_with(|| serde_json::json!([socket]));
                 env.as_array_mut().expect("array").push(serde_json::json!([
                     "HTTPS_PROXY",
                     format!("http://127.0.0.1:{port}")
                 ]));
             } else {
                 // macOS: no relay and no namespace; Seatbelt lists the one loopback port the proxy listens on.
-                let port = fx.addrs.proxy_tcp.port();
+                let port = if row.web.is_some() {
+                    fx.addrs.web_tcp.port()
+                } else {
+                    fx.addrs.proxy_tcp.port()
+                };
                 m.insert(
                     "net".into(),
                     serde_json::json!({"isolated": {"mac_tcp_ports": [port]}}),
@@ -495,6 +536,20 @@ pub fn build_spec_for(fx: &Fixture, row: &Row, bin: &Path, linux: bool) -> Resul
                     "HTTPS_PROXY",
                     format!("http://127.0.0.1:{port}")
                 ]));
+            }
+        }
+        if loopback {
+            let iso = m
+                .get_mut("net")
+                .and_then(|n| n.get_mut("isolated"))
+                .and_then(|i| i.as_object_mut())
+                .ok_or("a loopback row's net is isolated")?;
+            iso.insert("loopback".into(), true.into());
+            if !linux {
+                iso.insert(
+                    "mac_loopback_ports".into(),
+                    serde_json::json!([fx.addrs.free_port]),
+                );
             }
         }
         m.entry("env").or_insert(env);
@@ -516,6 +571,78 @@ pub fn build_spec_for(fx: &Fixture, row: &Row, bin: &Path, linux: bool) -> Resul
         }
     }
     expand_all(fx, &spec)
+}
+
+/// The web relay's port in a browser-layer row: the browser's way out.
+pub const BROWSER_WEB_PORT: u16 = 3130;
+/// The CDP relay's port in a browser-layer row: the agent's, never the browser's.
+pub const BROWSER_CDP_PORT: u16 = 9222;
+/// The agent's local server in a browser-layer row (the stand-in listens on it): a port the browser may reach.
+pub const BROWSER_LOCAL_PORT: u16 = 5173;
+
+/// A browser-layer row's sandbox, as a session with the browser has it: relays to the provider (3128), the web
+/// (3130) and the CDP endpoint (9222); the session's sockets; the agent's local port; and the `browser`, whose
+/// program is the probe (its directory a read root of the browser layer). What the row's spec says itself is kept.
+fn browser_layer_spec(m: &mut serde_json::Map<String, Value>, bin: &Path, env: &mut Value) {
+    let run = |s: &str| format!("${{RUN}}/{s}");
+    if !m.contains_key("net") {
+        let relay: Vec<Value> = [
+            (3128, "proxy.sock"),
+            (BROWSER_WEB_PORT, "web.sock"),
+            (BROWSER_CDP_PORT, "cdp.sock"),
+        ]
+        .into_iter()
+        .map(|(port, s)| serde_json::json!({"port": port, "socket": run(s)}))
+        .collect();
+        m.insert(
+            "net".into(),
+            serde_json::json!({"isolated": {"relay": relay}}),
+        );
+        if let Some(a) = env.as_array_mut() {
+            a.push(serde_json::json!(["HTTPS_PROXY", "http://127.0.0.1:3128"]));
+        }
+    }
+    m.entry("run")
+        .or_insert_with(|| serde_json::json!({"mode": "ro", "source": "${RUN}", "dest": "${RUN}"}));
+    m.entry("sockets").or_insert_with(|| {
+        let mut s = vec!["proxy.sock"];
+        s.extend(crate::fixture::SESSION_SOCKETS);
+        serde_json::json!(s.into_iter().map(run).collect::<Vec<_>>())
+    });
+    m.entry("extra_tcp_ports")
+        .or_insert_with(|| serde_json::json!([BROWSER_LOCAL_PORT]));
+    m.entry("browser").or_insert_with(|| {
+        serde_json::json!({
+            "program": bin.join("gleipnir-probe"),
+            "own_dir": gleipnir::BROWSER_DIR_FULL,
+            "web_port": BROWSER_WEB_PORT,
+            "local_ports": [BROWSER_LOCAL_PORT],
+            "extra_read": [bin],
+        })
+    });
+}
+
+/// The browser-layer run's two argvs: the browser host's (`--browser-probe`, one argument each) and the agent's
+/// (the stand-in). The probes run in the browser, or in the stand-in agent for the control run.
+fn browser_layer_argv(
+    fx: &Fixture,
+    probe: &Path,
+    probes: Vec<String>,
+    control: bool,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let p = probe.to_string_lossy().into_owned();
+    let dir = gleipnir::BROWSER_DIR_FULL.to_string();
+    let mut browser = vec![p.clone(), "--as-browser".into(), dir.clone()];
+    let mut agent = vec![
+        p,
+        "--stand-in".into(),
+        dir,
+        fx.value("ABSTRACT")?,
+        BROWSER_LOCAL_PORT.to_string(),
+    ];
+    let runs_them = if control { &mut agent } else { &mut browser };
+    runs_them.extend(probes);
+    Ok((browser, agent))
 }
 
 fn find_children(pid: u32) -> Vec<u32> {
@@ -782,6 +909,17 @@ fn sudo(args: &[&str]) -> Result<(), String> {
 
 fn setup(fx: &mut Fixture, row: &Row, control: bool) -> Result<Prepared, String> {
     let mut p = Prepared::default();
+    if let Some(web) = row.web {
+        let grants = row
+            .grants
+            .iter()
+            .map(|g| {
+                let g = expand_all(fx, g)?;
+                serde_json::from_value(g.clone()).map_err(|e| format!("grant {g}: {e}"))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        fx.use_web_proxy(web, grants, &row.dns)?;
+    }
     for step in &row.setup {
         match step {
             Setup::StartSleep {} => fx.start_sleep().map_err(|e| format!("start-sleep: {e}"))?,
@@ -967,7 +1105,7 @@ fn run_direct(opts: &Opts, row: &Row) -> Result<(Fixture, RunData), String> {
     let d = drive(cmd, None, None)?;
     drop(tty);
     let (lines, bad) = parse_lines(&d.stdout_lines);
-    let data = RunData {
+    let mut data = RunData {
         direct: true,
         lines,
         bad_lines: bad,
@@ -976,16 +1114,36 @@ fn run_direct(opts: &Opts, row: &Row) -> Result<(Fixture, RunData), String> {
         exit: d.exit,
         ..RunData::default()
     };
+    // An unsandboxed row is judged on this run: its listeners and the proxies' events too.
+    if row.unsandboxed {
+        data.silent = row
+            .listeners_silent
+            .iter()
+            .map(|n| (n.clone(), fx.seen(n)))
+            .collect();
+        data.events = fx.proxy_events();
+        data.events_wanted = row
+            .proxy_events
+            .as_ref()
+            .map(|w| expand_list(&fx, w))
+            .transpose()?;
+    }
     Ok((fx, data))
 }
 
-/// `ratatoskr sandbox run` (or the raw command) in a fresh fixture.
-fn run_sandboxed(opts: &Opts, row: &Row) -> Result<(Fixture, RunData), String> {
+/// `ratatoskr sandbox run` (or the raw command) in a fresh fixture. `control`: a layer row's control run, whose
+/// probes the stand-in agent runs (`browser_layer_argv`).
+fn run_sandboxed(opts: &Opts, row: &Row, control: bool) -> Result<(Fixture, RunData), String> {
     let mut fx = Fixture::new().map_err(|e| format!("fixture: {e}"))?;
+    if row.layer.is_some() {
+        fx.session_sockets()
+            .map_err(|e| format!("the session's sockets: {e}"))?;
+    }
     let prep = setup(&mut fx, row, false)?;
     let bin = fx.path("bin");
     let probe_copy = bin.join("gleipnir-probe");
-    std::fs::copy(&opts.probe, &probe_copy).map_err(|e| format!("copy the probe: {e}"))?;
+    // run at once: copied through drgnx-exe, never held open for writing by another thread's fork
+    drgnx_exe::copy(&opts.probe, &probe_copy).map_err(|e| format!("copy the probe: {e}"))?;
     let path = match &prep.path_dir {
         Some(d) => format!("{}:/usr/bin:/bin", d.display()),
         None => "/usr/bin:/bin".to_string(),
@@ -1032,7 +1190,19 @@ fn run_sandboxed(opts: &Opts, row: &Row) -> Result<(Fixture, RunData), String> {
             .iter()
             .map(|p| expand_list(&fx, p))
             .collect::<Result<Vec<_>, _>>()?;
-        cmd.arg("--").arg(&probe_copy).args(probe_args(&probes));
+        match row.layer {
+            None => {
+                cmd.arg("--").arg(&probe_copy).args(probe_args(&probes));
+            }
+            Some(Layer::Browser) => {
+                let (browser, agent) =
+                    browser_layer_argv(&fx, &probe_copy, probe_args(&probes), control)?;
+                for a in browser {
+                    cmd.arg("--browser-probe").arg(a);
+                }
+                cmd.arg("--").args(agent);
+            }
+        }
     }
     // Held open until the run has ended, so the fd numbers below stay valid for the fork.
     let mut canary_file = None;
@@ -1138,11 +1308,15 @@ fn run_checked(opts: &Opts, row: &Row) -> Result<(), String> {
         return judge_run(row, &data, &fx.canaries);
     }
     if row.control {
-        let (_fx, data) = run_direct(opts, row)?;
+        // A layer row's control is the same sandbox with the probes run by the agent: what the layer alone takes.
+        let (_fx, data) = match row.layer {
+            None => run_direct(opts, row)?,
+            Some(_) => run_sandboxed(opts, row, true)?,
+        };
         judge_control(row, &data.lines)
             .map_err(|e| format!("{e}; stderr: {}", tail(&data.stderr)))?;
     }
-    let (fx, data) = run_sandboxed(opts, row)?;
+    let (fx, data) = run_sandboxed(opts, row, false)?;
     judge_run(row, &data, &fx.canaries)
 }
 

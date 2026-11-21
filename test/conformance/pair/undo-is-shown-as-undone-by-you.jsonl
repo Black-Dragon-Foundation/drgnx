@@ -1,0 +1,35 @@
+{"scenario": "pair/undo-is-shown-as-undone-by-you", "requires": ["v1", "test-hooks"], "doc": "Gated (B). The user's undo of a paired chat's edit (their own record that removes the agent's text) makes history/op/hunks for the session report the hunk undone, with the user as the author of the record that undid it: the panel shows undone by you."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project && cd $ROOT/project && git init -q && echo readme > README && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "pair/open", "params": {"file": "$ROOT/project/README", "kind": "normal"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "history/register", "params": {"path": "README", "worktree_root": "$ROOT/project", "buffer_id": "b1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"tracked": true}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:edit_file {\"path\": \"$ROOT/project/README\", \"old\": \"readme\", \"new\": \"README\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w", "session": "$sid", "file": "$ROOT/project/README", "step": "$capture:st"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 6, "inserted": "README", "origin": "agent:$sid#$st"}], "region_hash": "57bb905d0f2ccecbb9d81d40daa17e1e05b109c833ddc766edb0b59561088f20", "version": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"ok": true}}, "within_ms": 15000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "pair/answer", "params": {"write": "$w", "result": "applied", "version": 2, "saved": false}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "__test_advance", "params": {"ms": 36000}}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 7, "old_len": 0, "inserted": "more\n"}], "region_hash": "d3de0a5fa70c6f2d5d060d6252f8dd752bfdb4f284281385959f514ede8a2310", "version": 2}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": {"ok": true}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "__test_advance", "params": {"ms": 36000}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 11, "method": "history/op/hunks", "params": {"worktree": "$ROOT/project", "session": "$sid"}}, "expect": {"id": 11, "result": {"hunks": {"$contains": [{"op": "$capture:op", "path": "README", "index": 0, "state": "live"}]}}}, "within_ms": 20000, "every_ms": 200}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 6, "inserted": "readme"}], "region_hash": "5168d418e65b6ff407a45f12193b689899b167a415714ee88fdfa6d7adad6066", "version": 3}}}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": {"ok": true}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 13, "method": "__test_advance", "params": {"ms": 36000}}}
+{"do": "expect", "conn": "c", "json": {"id": 13, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 14, "method": "history/op/hunks", "params": {"worktree": "$ROOT/project", "session": "$sid"}}, "expect": {"id": 14, "result": {"hunks": {"$contains": [{"op": "$op", "state": "undone", "undone_by": {"$contains": [{"author": {"kind": "user"}}]}}]}}}, "within_ms": 20000, "every_ms": 200}

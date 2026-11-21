@@ -1,0 +1,6 @@
+{
+  "name": "big-alloc",
+  "version": "0.1.0",
+  "abilities": [{"name": "alloc", "description": "Allocates and touches the given number of MiB.",
+                 "input_schema": {"type": "object", "properties": {"mib": {"type": "integer"}}}}]
+}

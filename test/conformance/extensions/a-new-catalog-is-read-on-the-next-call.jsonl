@@ -1,0 +1,13 @@
+{"scenario": "extensions/a-new-catalog-is-read-on-the-next-call", "requires": ["v1"], "doc": "With no catalog the list says so and holds only what the lock and modules give; a catalog written afterwards, by a refresh run from anywhere, is read on the next call; a catalog that does not read keeps the last good one and says so in details."}
+{"do": "root"}
+{"do": "write_file", "path": "$CONFIG/drgnx.lock.eld", "text": "(:version 1 :packages ((solo :version \"1\" :kind tar :requires nil)))"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "extensions/search", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"total": 1, "rows": [{"id": "pkg:solo", "why": ["by-hand"]}]}}}
+{"do": "write_file", "path": "$ROOT/cache/drgnx/extensions/catalog.json", "text": "{\"version\":1,\"packages\":[{\"name\":\"alpha\",\"summary\":\"A\"}]}"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "extensions/search", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"total": 2}}}
+{"do": "write_file", "path": "$ROOT/cache/drgnx/extensions/catalog.json", "text": "{\"version\":1,\"packages\":[{\"name\":\"alp"}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "extensions/details", "params": {"id": "pkg:alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"row": {"id": "pkg:alpha"}, "notes": {"$contains": ["$string"]}}}}

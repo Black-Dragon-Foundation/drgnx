@@ -1,0 +1,10 @@
+{"scenario": "work/machines-move-from-an-agent-is-refused", "requires": ["v1", "test-hooks"], "doc": "Pattern B. Only a user connection moves work between machines: over an agent's session socket machines/move is not-allowed, as machines/report is. A user's move of a session the hub doesn't hold is refused at its target, and one to `auto` at its machine."}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "machines/move", "params": {"target": "session:s1", "machine": "local"}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "error": {"code": "not-allowed", "message": "$string"}}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "machines/move", "params": {"target": "session:nobody", "machine": "local"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "invalid-params", "path": "target"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "machines/move", "params": {"target": "job:x1", "machine": "auto"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params", "path": "machine"}}}

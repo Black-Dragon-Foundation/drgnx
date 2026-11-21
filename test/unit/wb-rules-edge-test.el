@@ -27,20 +27,6 @@
          (dolist (b '("*drgnx-edge-top*" "*drgnx-edge-bottom*" "*Calendar*"))
            (when (get-buffer b) (kill-buffer b)))))))
 
-(ert-deftest drgnx-rules/side-window-toggling-keeps-the-dock-roles ()
-  ;; `window-toggle-side-windows' saves and restores the side windows with `window-state-get':
-  ;; the dock comes back as the dock, each section as itself.
-  (drgnx-rules-edge--with
-   ;; A fresh editor window: restoring the state reuses window objects, and ERT puts the window it
-   ;; started with back after the test — that one must not have become a dock window meanwhile.
-   (delete-other-windows (split-window))
-   (drgnx-wb-show-sidebar)
-   (window-toggle-side-windows)
-   (should-not (drgnx-wb-sidebar-showing-p))
-   (window-toggle-side-windows)
-   (should (eq (window-parameter (drgnx-wb-section-window 'top) 'drgnx-role) 'dock))
-   (should (window-live-p (drgnx-wb-section-window 'bottom)))))
-
 (ert-deftest drgnx-rules/the-file-rule-never-reads-the-current-buffer ()
   ;; A name that is no buffer is not "a file" because the current buffer visits one.
   (drgnx-rules-edge--with

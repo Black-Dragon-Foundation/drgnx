@@ -191,10 +191,11 @@ killed after."
         (drgnx-large-files-chunks-test--run 'large-file-next-chunk)
         (should (equal (drgnx-large-files-chunks-position) '(2 . 4))))
       (drgnx-large-files-chunks-test--never-asks
-        (pcase-let ((`(,n ,skipped ,undo) (drgnx-replace--apply-file f (list m) "XXXXXXXXXX")))
-          (should (= n 0))
-          (should-not undo)
-          (should (equal (mapcar (lambda (s) (plist-get s :reason)) skipped)
+        (let ((r (drgnx-replace-apply-edits
+                  (list :change 1 :path f :edits (vector (list :id "m:1:0" :line 10 :col 0 :end_line 10 :end_col 10
+                                                               :old (plist-get m :text) :new "XXXXXXXXXX"))))))
+          (should (equal (plist-get r :applied) []))
+          (should (equal (mapcar (lambda (s) (plist-get s :why)) (plist-get r :skipped))
                          '("open in chunks: Large File: Open Whole first")))))
       (should-not (buffer-modified-p buf))
       (should (equal (drgnx-large-files-chunks-test--disk f) disk))

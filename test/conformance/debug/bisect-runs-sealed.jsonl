@@ -1,0 +1,12 @@
+{"scenario": "debug/bisect-runs-sealed", "requires": ["v1", "test-hooks"], "doc": "A bisect's predicate is a command the hub does not trust (the project's own test, run over states an agent may have written), so each run is a sealed job: an agent's sandbox, the slot's tree its only writable folder.  Three commits; the third breaks `state`; the predicate also tries to write a file outside its slot, and fails to; the bisect still names the third commit."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/proj && cd $ROOT/proj && git init -q && echo ok > state && git add state && git -c user.name=t -c user.email=t@t commit -q -m good && echo more > other && git add other && git -c user.name=t -c user.email=t@t commit -q -m 'another file' && echo broken > state && git -c user.name=t -c user.email=t@t commit -qam 'break the state'"], "expect_code": 0}
+{"do": "spawn", "capture": "goodpid", "argv": ["/bin/sh", "-c", "cd $ROOT/proj && echo GOOD $(git rev-parse HEAD~2) && exec sleep 300"], "capture_stdout": {"regex": "GOOD (\\w+)", "name": "good"}}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "debug/bisect", "params": {"root": "$ROOT/proj", "good": {"kind": "commit", "id": "$good"}, "predicate": {"kind": "test", "argv": ["sh", "-c", "touch $ROOT/escaped; grep -q '^ok' state"], "timebox_s": 60}}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"bisect": "$capture:b"}}, "within_ms": 20000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-bisect", "data": {"bisect": "$b", "state": "found", "result": {"first_bad": {"label": "break the state"}}}}, "within_ms": 120000}
+{"do": "file", "path": "$ROOT/escaped", "exists": false}

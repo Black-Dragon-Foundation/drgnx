@@ -1,0 +1,24 @@
+{"scenario": "work/files-and-hunks-against-the-base", "requires": ["v1", "test-hooks"], "doc": "Pattern B. A session in a repository folder is measured from the folder as it was at its start: before any edit work/files is empty; after the agent creates a file (untracked in git's terms) work/files lists it as new and not the committed file it left alone, work/hunks answers its diff, work/file-at answers the snapshot's bytes (base64), and a path that leaves the worktree is refused."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && git init -q && echo kept > keep.txt && git add keep.txt && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "poll", "conn": "c", "json": {"id": 2, "method": "work/files", "params": {"session": "$sid"}}, "expect": {"id": 2, "result": {"files": []}}, "within_ms": 15000, "every_ms": 50}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "tool:edit note.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "work/files", "params": {"session": "$sid"}}, "expect": {"id": 4, "result": {"files": [{"path": "note.txt", "plus": "$number", "minus": 0, "untracked": true}]}}, "within_ms": 15000, "every_ms": 50}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "work/hunks", "params": {"session": "$sid", "path": "note.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"diff": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "work/file-at", "params": {"session": "$sid", "path": "keep.txt", "seq": 1000}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"bytes": "a2VwdAo=", "seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "work/file-at", "params": {"session": "$sid", "path": "../outside", "seq": 1000}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "error": {"code": "invalid-params", "message": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "work/files", "params": {"session": "no-such-session"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "error": {"code": "invalid-params", "message": "$string"}}}

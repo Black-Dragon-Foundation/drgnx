@@ -19,6 +19,7 @@
 ;; See docs/develop/harness.md ("Tests that set modules up").
 
 ;;; Code:
+(require 'drgnx-grid)
 (require 'cl-lib)
 (require 'ert)
 (require 'seq)
@@ -66,7 +67,7 @@ Returns the names of the modules ENTRIES stand for."
               (unless (or (null file) (member file loaded))
                 (push file loaded)
                 (load (file-name-sans-extension file) nil t)))
-            ;; also when another file's `require' defined it already (tools/cockpit loads tools/work's file)
+            ;; also when another file's `require' defined it already
             (dolist (r (plist-get (alist-get entry drgnx-modules--table) :requires)) (push r todo))))))
     (nreverse names)))
 
@@ -142,13 +143,54 @@ The features come back after (unless BODY loaded them again)."
 ;;;; What the product's after-teardown leaves behind
 
 (defconst drgnx-test-modules--ui-variables
-  '(drgnx-keys--applied drgnx-keys-last drgnx-keys--generation drgnx-keys--saved-modifiers drgnx-keys-problems
-                        drgnx-surfaces--which-key-entries which-key-replacement-alist)
+  '(drgnx-keys--profile-keys drgnx-keys-last drgnx-keys--generation drgnx-keys--saved-modifiers drgnx-keys-problems
+                             drgnx-surfaces--which-key-entries which-key-replacement-alist)
   "Variables `drgnx-keys-apply' and `drgnx-surfaces-refresh' (the after-teardown function) write.")
 
+(defvar drgnx-keys-user-map)
+(defvar drgnx-keys--yours-everywhere)
+(defvar drgnx-keys--pending-parents)
+
+(defconst drgnx-test-modules--yours-tables '(drgnx-keys--yours drgnx-keys--yours-in-maps drgnx-keys--loading)
+  "drgnx-keys' hash tables of your keys: copied before the setups and put back after.")
+
+(defun drgnx-test-modules--map-leaves (map &optional prefix)
+  "MAP's own bindings, ((KEY . DEF) …) with KEY a vector, sub-keymaps walked (evil's auxiliary ones), the parent left out."
+  (let (out)
+    (map-keymap-internal
+     (lambda (ev def)
+       (let ((k (vconcat prefix (vector ev))))
+         (if (and (consp def) (keymapp def)) (setq out (nconc (drgnx-test-modules--map-leaves def k) out))
+           (push (cons k def) out))))
+     map)
+    out))
+
+(defun drgnx-test-modules--yours-snapshot ()
+  "Your keys as drgnx-keys records them, once that library is loaded: its tables (copied), the `:everywhere' list,
+the layers waiting for a parent and their hook, and the bindings of your map."
+  (when (boundp 'drgnx-keys-user-map)
+    (list :tables (mapcar (lambda (s) (cons s (copy-hash-table (symbol-value s)))) drgnx-test-modules--yours-tables)
+          :everywhere (copy-sequence drgnx-keys--yours-everywhere)
+          :pending (copy-sequence drgnx-keys--pending-parents)
+          :hook (and (memq 'drgnx-keys--complete-parents (default-value 'after-load-functions)) t)
+          :user-map (drgnx-test-modules--map-leaves drgnx-keys-user-map))))
+
+(defun drgnx-test-modules--yours-restore (y)
+  "Put Y (`drgnx-test-modules--yours-snapshot') back; your map in place (the global map holds it), emptied and
+filled again only when it differs."
+  (when y
+    (pcase-dolist (`(,s . ,table) (plist-get y :tables)) (set s (copy-hash-table table)))
+    (setq drgnx-keys--yours-everywhere (plist-get y :everywhere) drgnx-keys--pending-parents (plist-get y :pending))
+    (if (plist-get y :hook) (add-hook 'after-load-functions #'drgnx-keys--complete-parents)
+      (remove-hook 'after-load-functions #'drgnx-keys--complete-parents))
+    (unless (equal (plist-get y :user-map) (drgnx-test-modules--map-leaves drgnx-keys-user-map))
+      (drgnx-keys--empty drgnx-keys-user-map)
+      (pcase-dolist (`(,k . ,d) (plist-get y :user-map)) (drgnx-keys--define drgnx-keys-user-map k d)))))
+
 (defun drgnx-test-modules--ui-snapshot ()
-  "The key and surface state that `drgnx-modules-after-teardown-functions' change."
-  (list :variables (delq nil (mapcar (lambda (v) (and (boundp v) (cons v (symbol-value v))))
+  "The key and surface state that `drgnx-modules-after-teardown-functions' change, and your keys."
+  (list :yours (drgnx-test-modules--yours-snapshot)
+        :variables (delq nil (mapcar (lambda (v) (and (boundp v) (cons v (symbol-value v))))
                                      ;; with the record of the Mac modifiers the apply saved, their values: on macOS
                                      ;; the apply sets them for VS Code's keys (`drgnx-keys--set-mac-modifiers')
                                      (append drgnx-test-modules--ui-variables
@@ -167,13 +209,14 @@ The features come back after (unless BODY loaded them again)."
 applied before; when some were, the after-teardown function's re-application stays, as it would in a session.
 The everywhere alist goes back in its place in `emulation-mode-map-alists' when it was there."
   (let ((variables (plist-get snap :variables)))
-    (when (and (fboundp 'drgnx-keys--restore) (null (alist-get 'drgnx-keys--applied variables)))
+    (when (and (fboundp 'drgnx-keys--restore) (null (alist-get 'drgnx-keys--profile-keys variables)))
       (drgnx-keys--restore))
     ;; the menus the registry built: with an empty registry all of them are stale, so the build retracts them
     (when (and (eql (plist-get snap :menu-items) 0) (fboundp 'drgnx-surfaces-build-menus))
       (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
         (drgnx-surfaces-build-menus)))
     (pcase-dolist (`(,var . ,value) variables) (set var value))
+    (drgnx-test-modules--yours-restore (plist-get snap :yours))
     (let ((at (plist-get snap :everywhere-at)))
       (when (and at (not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists)))
         (setq emulation-mode-map-alists (append (seq-take emulation-mode-map-alists at) '(drgnx-keys--everywhere-alist)
@@ -209,6 +252,13 @@ snapshot, so no leak is hidden.  A library that cannot be found or does not load
         (unless (or (featurep f) (not (locate-library (symbol-name f))))
           (ignore-errors (require f)))))))
 
+(defun drgnx-test-modules-preload (modules)
+  "Load the files of MODULES and the libraries their setups load, as a test file does at its top.
+The leak census reads the state around each test: a library first loaded by a test's `drgnx-test-with-modules'
+shows its top-level registrations (rules, places, view types, config definitions) as that test's leaks.  A file
+whose tests set MODULES up calls this once at load, so the first test finds them loaded like the rest."
+  (drgnx-test-modules--preload (drgnx-test-modules--closure (drgnx-test-modules--load modules))))
+
 (defun drgnx-test-modules--without-emacs-timers (fp)
   "FP without the timers the recorder leaves alone too: those whose function drgnx does not define
 \(`drgnx-modules--undoable-timer-p'), such as Emacs's own lazy singletons (undo's boundary timer…) and an ELPA
@@ -225,13 +275,23 @@ library's; the recorder lists them in `drgnx-modules--left'.  Layer timers stay:
 test/leaks-allowed.eld): not a module's.  ` *work*' is the pool `with-work-buffer' reuses (shr's pixel widths).  Native compilation's log too: Emacs 31 compiles a trampoline the first
 time a primitive is advised (a test's advice on `y-or-n-p'), whichever body that is.")
 
+(defconst drgnx-test-modules--allowed-state
+  '(("nidhogg-workers-treesit--start-created"
+     . "Nidhogg's tree-sitter workers add this hook the first time a tree-sitter mode loads (a notebook's parser test loads python-ts-mode): a third-party mode's hook, not a module's")
+    ("\\`after-load .*\\(ffap\\|grep\\)"
+     . "python-ts-mode requires ffap and grep, whose after-load forms Emacs registers: loading a mode, not a module's setup"))
+  "What a fingerprint difference may hold after a module's teardown without being the module's: (REGEXP . REASON), a load a
+test caused of a third-party mode's or an Emacs library's own state.")
+
 (defun drgnx-test-modules--diff-lines (before after)
-  "Readable lines for what differs between the fingerprints BEFORE and AFTER, features and Emacs's own work
-buffers excepted."
+  "Readable lines for what differs between the fingerprints BEFORE and AFTER, features, Emacs's own work buffers and
+`drgnx-test-modules--allowed-state' excepted."
   (mapcar (lambda (d) (if (plist-get d :source) (format "%s (%s)" (plist-get d :what) (plist-get d :source))
                         (plist-get d :what)))
           (seq-remove (lambda (d) (or (string-prefix-p "feature " (plist-get d :what))
-                                      (string-match-p drgnx-test-modules--emacs-buffers (plist-get d :what))))
+                                      (string-match-p drgnx-test-modules--emacs-buffers (plist-get d :what))
+                                      (seq-some (lambda (a) (string-match-p (car a) (plist-get d :what)))
+                                                drgnx-test-modules--allowed-state)))
                       (drgnx-modules-fingerprint-diff before after))))
 
 (defun drgnx-test-modules--ran ()

@@ -1,0 +1,6 @@
+# The jobs of Nidhogg's build.yml that build the tarballs drgnx's line mode installs: ARTIFACT|JOB NAME, the name the
+# run's job list shows (`name:` of the job, matrix values filled in). nidhogg-line.sh's job_of must give each ARTIFACT's
+# name here (the ci-workflows test holds it); a rename in Nidhogg's build.yml changes this file and job_of together, or
+# no run ever matches (the "macOS (NS app)" -> "macOS (Naglfar app)" rename did exactly that).
+tarball-fedora-45|Linux (fedora-45)
+tarball-macos|macOS (Naglfar app)

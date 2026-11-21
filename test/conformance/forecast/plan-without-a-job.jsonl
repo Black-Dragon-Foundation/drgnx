@@ -1,0 +1,19 @@
+{"scenario": "forecast/plan-without-a-job", "requires": ["v1", "test-hooks"], "doc": "Two plans in the graph, three tasks each, none with a job. forecast/plan over both answers one joint forecast of six tasks (numbered plan index * 1000 + n) with nothing running, and over one plan three tasks; nothing is recorded (forecast_made stays empty). Before there was no forecast for a plan without a job, so a spec's total could only be summed from per-plan proposals."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/alpha && cd $ROOT/work/alpha && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m alpha"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "tasks/write", "params": {"op": "create", "title": "alpha work", "cwd": "$ROOT/work/alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$any"}}}
+{"do": "sql_expect", "sql": "select id from entity where kind = 'project' order by n", "rows": [["$capture:pa"]]}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "plans/write", "params": {"project": "$pa", "title": "A plan", "tasks": [{"number": "1", "title": "t1"}, {"number": "2", "title": "t2"}, {"number": "3", "title": "t3"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "plans/write", "params": {"project": "$pa", "title": "B plan", "tasks": [{"number": "1", "title": "t1"}, {"number": "2", "title": "t2"}, {"number": "3", "title": "t3"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {}}}
+{"do": "sql_expect", "sql": "select id from entity where kind = 'plan' order by n", "rows": [["$capture:p1"], ["$capture:p2"]]}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "forecast/plan", "params": {"plans": ["$p1", "$p2"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"forecast": {"tasks": [{"n": 1001}, {"n": 1002}, {"n": 1003}, {"n": 2001}, {"n": 2002}, {"n": 2003}]}, "running": []}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 11, "method": "forecast/plan", "params": {"plans": ["$p1"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 11, "result": {"forecast": {"tasks": [{"n": 1001}, {"n": 1002}, {"n": 1003}]}}}, "within_ms": 15000}
+{"do": "sql_expect", "sql": "select count(*) from forecast_made", "rows": [[0]]}

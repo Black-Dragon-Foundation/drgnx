@@ -100,7 +100,7 @@ fn serve(stream: UnixStream) {
 fn wrapper(dir: &Path) -> PathBuf {
     let path = dir.join("scripted-hub.sh");
     let exe = std::env::current_exe().unwrap();
-    std::fs::write(
+    drgnx_exe::write(
         &path,
         format!(
             "#!/bin/sh\nRTSK_SCRIPTED_HUB=1 exec '{}' --exact scripted_hub --nocapture\n",
@@ -108,7 +108,6 @@ fn wrapper(dir: &Path) -> PathBuf {
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     path
 }
 

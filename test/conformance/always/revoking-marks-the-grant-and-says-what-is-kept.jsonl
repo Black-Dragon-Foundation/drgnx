@@ -1,0 +1,28 @@
+{"scenario": "always/revoking-marks-the-grant-and-says-what-is-kept", "requires": ["v1", "test-hooks"], "doc": "Gated (B). After an Always, agents/grants/revoke takes it back: the ledger shows it revoked, the answer says the agent's own rule is kept (no adapter takes a grant back) and that a restart would clear it; revoking it again, or a grant the session never had, is invalid-params."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict ask)))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "ask:permission edit"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy", "permissions": {"$contains": [{"id": "$capture:req", "options": "$any"}]}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/permission", "params": {"id": "$sid", "request": "$req", "option": "allow_always"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/grants", "params": {"id": "$sid"}}, "expect": {"id": 4, "result": {"grants": {"$contains": [{"id": "$capture:grant", "revoked": false}]}}}, "within_ms": 10000, "every_ms": 50}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/grants/revoke", "params": {"id": "$sid", "grant": "$grant"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"grant": "$grant", "agent_rule": "kept", "restart": true}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/grants", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"grants": {"$contains": [{"id": "$grant", "revoked": true}]}}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/grants/revoke", "params": {"id": "$sid", "grant": "$grant"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "error": {"code": "invalid-params"}}}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "agents/grants/revoke", "params": {"id": "$sid", "grant": "always:nobody:none"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "error": {"code": "invalid-params"}}}

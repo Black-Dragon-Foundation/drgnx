@@ -1,0 +1,27 @@
+{"scenario": "panel/config-uses-set-config-option-with-fallback", "requires": ["v1", "test-hooks"], "doc": "[C] The hub switches mode and model with session/set_config_option; an agent without the method (-32601) gets session/set_mode and session/set_model instead."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"new-agent\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--config-options\" \"--log\" \"$ROOT/new.log\")) (\"old-agent\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/old.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "new-agent", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:nw", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/config", "params": {"id": "$nw", "option": "mode", "value": "plan"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/config", "params": {"id": "$nw", "option": "model", "value": "opus"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}, "within_ms": 15000}
+{"do": "file", "path": "$ROOT/new.log", "contains": "{\"config_option\":{\"configId\":\"mode\",\"value\":\"plan\"}}", "within_ms": 10000}
+{"do": "file", "path": "$ROOT/new.log", "contains": "{\"config_option\":{\"configId\":\"model\",\"value\":\"opus\"}}", "within_ms": 10000}
+{"do": "file_grep", "paths": ["$ROOT/new.log"], "absent": "\"set_model\""}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/start", "params": {"profile": "old-agent", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$capture:od", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/config", "params": {"id": "$od", "option": "mode", "value": "plan"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/config", "params": {"id": "$od", "option": "model", "value": "opus"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": true}, "within_ms": 15000}
+{"do": "file", "path": "$ROOT/old.log", "contains": "{\"set_mode\":{\"modeId\":\"plan\"}}", "within_ms": 10000}
+{"do": "file", "path": "$ROOT/old.log", "contains": "{\"set_model\":{\"modelId\":\"opus\"}}", "within_ms": 10000}
+{"do": "file_grep", "paths": ["$ROOT/old.log"], "absent": "\"config_option\""}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/config", "params": {"id": "$od", "option": "temperature", "value": "1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "error": {"code": "not-allowed", "message": "$string"}}, "within_ms": 15000}

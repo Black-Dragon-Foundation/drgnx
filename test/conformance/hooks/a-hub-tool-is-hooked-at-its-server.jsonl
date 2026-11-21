@@ -1,0 +1,21 @@
+{"scenario": "hooks/a-hub-tool-is-hooked-at-its-server", "requires": ["v1", "test-hooks"], "doc": "[C] The hub's own tools are hooked once, at their server, with kind `drgnx` and their full name. A rule on `drgnx` refuses the agent's record_decision: the tool answers the refusal in the hub's words, nothing is recorded, and the hook row says it ran at the hub's server."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "hub-tools", "point": "before-tool", "tool-kinds": ["drgnx"], "verdict": "deny", "reason": "no hub tools"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "call:record_decision {\"kind\": \"build\", \"subject\": \"use the shared parser\", \"reason\": \"one parser\", \"seen_version\": 0}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "agent", "text": "call: drgnx refused mcp__drgnx__record_decision; the rule hub-tools said: «no hub tools»"}]]}}}, "within_ms": 30000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from decision where subject like '%shared parser%'", "rows": [[0]]}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select json_extract(e.data, '$.outcome'), json_extract(e.data, '$.at'), json_extract(e.data, '$.tool') from event e join tx t on t.id = e.tx where t.actor = 'hub:hooks'", "rows": [["deny", "hub-server", "mcp__drgnx__record_decision"]]}

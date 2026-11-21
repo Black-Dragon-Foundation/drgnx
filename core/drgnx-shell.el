@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; One line in the user's shell rc file sources etc/shell/drgnx.SHELL (completion, eat's shell integration;
+;; One line in the user's shell rc file sources etc/shell/drgnx.SHELL (completion, the terminal's shell integration;
 ;; docs/guide/shell.md).  The line is added only when the user says yes: `drgnx-shell-install' asks (a function
 ;; of one question string), shows what it will change, and never writes without the answer.  With no ASK it
 ;; prints the line, as install.sh does under --yes.  Nothing here runs by itself: no timer, no hook.

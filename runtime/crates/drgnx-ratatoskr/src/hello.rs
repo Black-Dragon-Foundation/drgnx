@@ -150,6 +150,7 @@ mod tests {
             client: None,
             proof: proof.map(|x| Hex64::new(x).unwrap()),
             cwd: None,
+            session: None,
         };
         (p, nonce)
     }

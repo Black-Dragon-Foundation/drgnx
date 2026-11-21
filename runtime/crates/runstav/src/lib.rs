@@ -10,6 +10,7 @@
 //!   types.
 //! - [`text`]: the one sanitizer for user-visible text; [`url`]: the URL rule and the provider-base rule.
 //! - [`secrets`]: the one list of secret patterns, for refusing credentials in stored text.
+//! - [`recording`]: live recordings' format, normalizers, match key, secret scrub and lint.
 
 pub mod decode;
 pub mod events;
@@ -18,6 +19,7 @@ pub mod line;
 pub mod methods;
 pub mod paths;
 pub mod proof;
+pub mod recording;
 pub mod registry;
 pub mod secrets;
 pub mod text;

@@ -132,11 +132,19 @@ pub struct Snapshot {
         skip_serializing_if = "Option::is_none"
     )]
     pub entries_count: Option<u64>,
+    /// How many turns this hub process has started for the session: an editor that saw the count rise and no `busy`
+    /// knows whole turns went by between two snapshots (a turn can be shorter than the update throttle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enforced: Option<bool>,
     /// Why the provider's lock is not enforced (shown "not enforced").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enforced_why: Option<String>,
+    /// Why a session whose `browser` cell allows the agent browser started without it, and the fix (a host that
+    /// cannot give one: no full sandbox tier, Landlock below ABI 9, no browser found).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_why: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<Role>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,9 +162,469 @@ pub struct Snapshot {
         skip_serializing_if = "Option::is_none"
     )]
     pub waiting_on: Option<String>,
+    /// Which tool kinds the `before-tool` hooks of its plugin set at start see, and how (none: nothing subscribes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hooked: Option<Hooked>,
+    /// The plugins that run for the session differ from the ones it started with: abilities are fixed when the agent
+    /// starts, so a new set reaches it only through a new session.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plugins_changed: bool,
+    /// What its agent's `_drgnx/panel` extension offers, and the context breakdown it sent last (none: the agent
+    /// offers nothing; an editor hides the actions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<Panel>,
+    /// Its place among its workspace's live agents (1, 2, …; kept for its life): each display's colour and mark come
+    /// from it. Absent once it has ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordinal: Option<u32>,
+    /// Its name, unique in its workspace: the model's short name, numbered from the second agent of that model on
+    /// ("Opus", "Opus 2").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
+    /// The handle's short form for badges ("O", "O2").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monogram: Option<String>,
+    /// The hub's time of its latest update (seconds since the epoch): which identity a display reuses past its
+    /// capacity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_active: Option<f64>,
+    /// A paired chat whose writes of one file were refused twice within a minute: it waits for the user (or asks)
+    /// until a write of that file applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<Waiting>,
+    /// A chat in a project: whether pair mode is on for it (its edits of your checkout go through the editor).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paired: Option<bool>,
+    /// Who holds the session's wheel (`user`, from `agents/wheel/take` until the give): the agent stops after its
+    /// step and nothing of it is written until the wheel is given back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_by: Option<String>,
+    /// The model it uses, as its agent reported it when the session opened and as each accepted switch changed it
+    /// (none: the agent reported none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The MCP servers the hub gave it at its start: the coordination tools (`drgnx`), the search tool
+    /// (`drgnx-search`) and the plugins' abilities (`drgnx-plugins`).
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub mcp: Vec<String>,
+    /// What runs in the background of the session now (ACP v2's list: terminals, tool calls that outlive their turn,
+    /// child sessions; and the hub's own jobs).  None: the agent does not report it (a v1 agent never does): not "nothing".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<Vec<BackgroundItem>>,
+    /// The last background items that ended (at most 20), the newest last: each with how it ended.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_ended: Vec<BackgroundItem>,
+    /// The turns the agent started by itself after an item ended (the last 20): the turn's first entry and the item that
+    /// woke it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caused: Vec<BackgroundCause>,
+    /// The ACP version its agent speaks (`v1` or `v2`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proto: Option<String>,
+    /// Why a profile that asked for ACP v2 got v1: `rejected: MESSAGE` (the agent answered the v2 `initialize` with an
+    /// error and was asked again as v1 on the same connection) or `exited: WHY` (it exited at the v2 `initialize` and
+    /// was started again as v1).  Absent: no fallback (the agent answered 1, or v2 was not asked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v2_fallback: Option<String>,
 }
 
-/// What a transcript entry is (`usage`, `notice` and `compaction` are reserved).
+/// What woke the agent: the background item whose end came before a turn nobody asked for.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BackgroundCause {
+    /// The first entry of the turn.
+    pub entry: u64,
+    /// The item's id and its description (the item may have left the ended list by the time the turn is shown).
+    pub item: String,
+    pub description: String,
+}
+
+/// What kind of background work an item is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundKind {
+    /// A process: a display terminal of the agent, or one of the hub's own jobs.
+    Terminal,
+    /// Work without a process of its own that keeps reporting status on its tool call (a watcher, a workflow).
+    ToolCall,
+    /// A child session.
+    Subagent,
+}
+
+/// Whether a listed item runs.  `unknown`: the agent cannot tell (never shown as running or done).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundStatus {
+    Running,
+    Pending,
+    Paused,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundEndStatus {
+    Completed,
+    Failed,
+    Stopped,
+}
+
+/// How a background item ended.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BackgroundEnd {
+    pub status: BackgroundEndStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+}
+
+/// One item of a session's background work.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BackgroundItem {
+    pub kind: BackgroundKind,
+    /// The agent's id of it (terminal id, tool call id, child session id), or the hub's job id.
+    pub id: String,
+    /// What it is: the command, the tool call's title, the child's title.
+    pub description: String,
+    /// When the hub first saw it (milliseconds since the epoch).
+    pub started_ms: u64,
+    /// Its last output line or progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<String>,
+    pub status: BackgroundStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<BackgroundEnd>,
+    /// The agent lets a client stop this item on its own (`capabilities.cancel`), or the hub can (its own job).
+    pub can_cancel: bool,
+}
+
+/// The file (and the user's lines in it) a paired chat waits on.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Waiting {
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<[u64; 2]>,
+}
+
+/// Where a session's wheel is: `held` once the turn the take stopped has ended, `free` once it is given back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WheelState {
+    Held,
+    Free,
+}
+
+/// `agent-wheel`: session ID's wheel is now in STATE.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentWheel {
+    pub id: String,
+    pub state: WheelState,
+}
+
+/// Where a huddle is: `asked` while its card waits for the user's yes (the matrix's `huddles` is ask), `open` while
+/// the two agents state their positions, `agreed` or `split` once they are done (a card for the user either way),
+/// `decided` once the user decided, `closed` when it ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum HuddleState {
+    Asked,
+    Open,
+    Agreed,
+    Split,
+    Decided,
+    Closed,
+}
+
+/// One agent's reply in a huddle: its position (agent text, quoted to the other side, never an instruction) and the
+/// decision it proposes, if any.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HuddleReply {
+    pub from: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<String>,
+}
+
+/// A huddle's record (Urdr kind `huddle`, written by the hub), as `agents/huddle/get` answers it and the `huddle`
+/// event carries it: the clash it is about (none: the user started it on two sessions), the two sessions, its state,
+/// the replies, the proposed decision of an agreement, the user's decision, and its card.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Huddle {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    pub participants: Vec<String>,
+    pub state: HuddleState,
+    #[serde(default)]
+    pub replies: Vec<HuddleReply>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<i64>,
+}
+
+/// `agents/huddle/start`: a huddle between two SESSIONS, or about the clash whose card has key CLASH (one of the two).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HuddleStart {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions: Option<Vec<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clash: Option<String>,
+}
+
+/// One "Always" the user gave a session, as the hub's ledger keeps it (Urdr kind `always`, written by the hub):
+/// the tool step it covers (the kind of tool call and a key made of its title), the card it was answered on, when, and
+/// whether the user took it back.  A revoked grant makes the hub ask again for a matching request.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Grant {
+    /// `always:SESSION:KEY`.
+    pub id: String,
+    pub session: String,
+    /// The tool call's kind (`edit`, `execute`, …).
+    pub tool: String,
+    /// What the grant matches: the kind and a hash of the tool call's title.
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<i64>,
+    /// Seconds since the epoch.
+    pub at: f64,
+    pub revoked: bool,
+}
+
+/// `agents/grants`: a session's Always grants, revoked ones included, oldest first.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Grants {
+    pub grants: Vec<Grant>,
+}
+
+/// `agents/grants/revoke`: take back grant GRANT (its id) of session ID.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GrantRevoke {
+    pub id: Id,
+    pub grant: String,
+}
+
+/// Whether the agent's own rule is gone: `cleared` when its adapter took the grant back, `kept` when only the hub's
+/// ledger did (the agent may still go on without asking until it starts again: a restart at the current step clears it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentRule {
+    Cleared,
+    Kept,
+}
+
+/// The answer of `agents/grants/revoke`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Revoked {
+    pub grant: String,
+    pub agent_rule: AgentRule,
+    /// Whether a restart at the current step would clear the agent's rule (a session with steps to restart at).
+    pub restart: bool,
+}
+
+/// `wheel-save`: the user gives back the wheel of session ID, which works in WORKTREE (a worktree of its own): the
+/// editor saves its buffers there and answers `agents/wheel/saved` with the same REQ.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WheelSave {
+    pub req: u64,
+    pub id: String,
+    pub worktree: String,
+}
+
+/// `agents/wheel/saved` (the editor): the answer to `wheel-save` REQ, with the files whose buffers stayed unsaved
+/// (empty: everything there is on disk).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct WheelSaved {
+    pub req: u64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub unsaved: Vec<AbsPath>,
+}
+
+/// The agent's `_drgnx/panel` extension: the features it advertised in `initialize` (`context`, `drop`, `pin`,
+/// `compact-preview`, `before-tool`) and its last `_drgnx/context`.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Panel {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub features: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<Context>,
+}
+
+/// What a part of the context window holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContextKind {
+    System,
+    Tools,
+    Files,
+    ToolOutput,
+    Conversation,
+}
+
+/// One thing in a part (a file, a tool output) that the agent can drop or pin by its `id`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ContextItem {
+    pub id: Bounded<String, 256>,
+    pub label: Bounded<String, 256>,
+    pub tokens: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ContextPart {
+    pub kind: ContextKind,
+    pub tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub items: Option<Bounded<Vec<ContextItem>, 200>>,
+}
+
+/// The agent's context breakdown (`_drgnx/context`, as the agent counts it): tokens used of the window's size, by
+/// part, and what a compaction would free.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Context {
+    pub used: u64,
+    pub size: u64,
+    pub parts: Bounded<Vec<ContextPart>, 8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_frees: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ContextDropParams {
+    pub id: Id,
+    /// The item's `id` in the session's context breakdown.
+    pub item: Bounded<String, 256>,
+}
+
+/// `agents/background-output`: the output of one item of the session's background list.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct BackgroundOutputParams {
+    pub id: Id,
+    /// The item's `id` in the session's `background` list.
+    pub item: Bounded<String, 256>,
+}
+
+/// `agents/background-cancel`: stop one item of the session's background list.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct BackgroundCancelParams {
+    pub id: Id,
+    /// The item's `id` in the session's `background` list.
+    pub item: Bounded<String, 256>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ContextPinParams {
+    pub id: Id,
+    pub item: Bounded<String, 256>,
+    /// True pins it (a compaction keeps it), false unpins it.
+    pub pinned: bool,
+}
+
+/// What a compaction would do now, as the agent says (nothing is compacted): the tokens it would free, the items it
+/// keeps and the ones it summarises, and a note (e.g. "costs one model call").
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CompactPreview {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frees: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<Bounded<Vec<ContextItem>, 200>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summarised: Option<Bounded<Vec<ContextItem>, 200>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<Bounded<String, 1024>>,
+}
+
+/// The user's switch of a session's mode or model.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ConfigParams {
+    pub id: Id,
+    /// `mode` or `model`.
+    pub option: Bounded<String, 32>,
+    /// The mode id or model id; a mode must be on the provider's lock allow-list.
+    pub value: Bounded<String, 256>,
+}
+
+/// What `agents/explain` explains: a chip of the agent panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExplainItem {
+    Context,
+    Cost,
+    Mode,
+    Model,
+    Waiting,
+    Mcp,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ExplainParams {
+    pub id: Id,
+    pub item: ExplainItem,
+}
+
+/// One fact behind a chip: a name and what it is, in words.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Fact {
+    pub name: String,
+    pub value: String,
+}
+
+/// The facts behind a chip, as the hub knows them (nothing is guessed; an unknown value is not listed).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Explained {
+    pub item: ExplainItem,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub facts: Vec<Fact>,
+}
+
+/// The tool kinds a session's `before-tool` hooks and rules subscribe to, by how each reaches them: through the
+/// permission seam (the lock makes the agent ask), through the adapter's `_drgnx/before_tool`, or not at all (the
+/// agent runs them without asking). Fixed at the session's start; never faked.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Hooked {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub before_tool: Vec<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub by_adapter: Vec<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub unhooked: Vec<String>,
+    /// Why the unhooked kinds are (shown as "not hooked: KINDS (WHY)").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+}
+
+/// What a transcript entry is (`usage`, `notice` and `compaction` are reserved; a `note` is a hook's annotation under
+/// its step).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum EntryType {
@@ -170,6 +638,7 @@ pub enum EntryType {
     Usage,
     Notice,
     Compaction,
+    Note,
 }
 
 /// One transcript entry: its `type`, and the rest as the backend sent it (ACP's fields; phase 5 types them).
@@ -243,6 +712,18 @@ pub struct SendParams {
     /// sent and the answer is `false` (busy).  For the editor's own deliveries, which never join a running turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub if_free: Option<bool>,
+    /// What the message asks of the agent: `steer` (the default: queued, or steering, as the mode says) or `ask`
+    /// (answer only: the agent answers the question without changing its plan or touching a file).  Neither cancels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<SendIntent>,
+}
+
+/// What a message asks of the agent (`agents/send`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SendIntent {
+    Steer,
+    Ask,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -298,6 +779,96 @@ pub struct SliceParams {
     /// At most 50 steps (default 20).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub n: Option<u64>,
+}
+
+/// A session, for the entry subscription.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct SessionRef {
+    pub session: Id,
+}
+
+/// `agents/panel/look`: what the user chose for an agent panel (docs/develop/hub.md, "The agent panel's rows").  Each
+/// field given replaces the one before; none given builds the rows again.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PanelLook {
+    /// The panel's view, `agent-panel/SESSION`.
+    pub view: Bounded<String, 256>,
+    /// The step types whose detail is open (`thinking`, `read`, `search`, `edit`, `execute`, `fetch`, `other`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<Vec<Bounded<String, 16>>>,
+    /// Rows opened or folded by hand: `[entry index, open]` each.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<Vec<(u64, bool)>>,
+    /// The rows go back one window further (the editor scrolled to their top).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older: Option<bool>,
+    /// The header's lens: the presets' names, in order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lens: Option<Vec<Bounded<String, 32>>>,
+    /// The preset in force, from 1 (0: none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lens_on: Option<u32>,
+    /// The background item selected in the pinned list (its actions show on its row); the empty string: none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg_selected: Option<Bounded<String, 256>>,
+    /// The pinned cards' texts, oldest first: each is a card under the strip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pins: Option<Vec<Bounded<String, 512>>>,
+    /// Whether the edits ledger lists its files; opening it sets the mark the "new since you looked" counts from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ledger_open: Option<bool>,
+    /// A step that took longer than this many seconds shows its time in the warning face
+    /// (`drgnx-agent-panel-slow-seconds`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slow_secs: Option<f64>,
+    /// A step that cost more than this shows its cost in the warning face (`drgnx-agent-panel-expensive-cost`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dear_cost: Option<f64>,
+}
+
+/// The change number a subscription to a session's entries continues from.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EntriesSubscribed {
+    pub seq: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ToolInputParams {
+    pub session: Id,
+    /// The tool call's id (the `id` of its `tool` entry).
+    pub tool_call: Bounded<String, 256>,
+}
+
+/// A tool call's raw input: the input, or (when `truncated`) its JSON text cut at 256 KiB.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ToolInput {
+    pub raw_input: Value,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ToolOutputParams {
+    /// The session.
+    pub id: Id,
+    /// The tool call's id (the `id` of its `tool` entry).
+    pub tool_call: Bounded<String, 256>,
+    /// The first byte of the output wanted.
+    pub from: u64,
+    /// The byte after the last one wanted.
+    pub to: u64,
+}
+
+/// A range of a tool call's output: bytes `from..to` of it (cut at character boundaries), the size of the whole, and
+/// whether the answer holds less than was asked (the page cap, or output the hub did not keep).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ToolOutput {
+    pub text: String,
+    pub total_bytes: u64,
+    pub truncated: bool,
 }
 
 /// A slice of a session's transcript by steps (never a whole transcript): the steps and their entries.
@@ -382,7 +953,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "agents/send", AgentsSend(SendParams) -> bool,
             classes: [User], writes: true,
-            doc: "a prompt to the session (queued or steering as its mode says; with if_free, only when it is free, else false)",
+            doc: "a prompt to the session (queued or steering as its mode says; intent ask: answer only, no plan change and no file touched; with if_free, only when it is free, else false)",
         ),
         method!(
             "agents/stop", AgentsStop(ById) -> bool,
@@ -421,10 +992,110 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_slice,
         ),
         method!(
+            "agents/entries/subscribe", AgentsEntriesSubscribe(SessionRef) -> EntriesSubscribed,
+            classes: [User], writes: false,
+            doc: "this connection gets the session's `agent-entries` events from now on (they go to no one else); the change number to continue from",
+        ),
+        method!(
+            "agents/entries/unsubscribe", AgentsEntriesUnsubscribe(SessionRef) -> bool,
+            classes: [User], writes: false,
+            doc: "this connection no longer gets the session's `agent-entries` events",
+        ),
+        method!(
+            "agents/panel/look", AgentsPanelLook(PanelLook) -> bool,
+            classes: [User], writes: false,
+            doc: "what the user chose for an agent panel's rows (the step types open, rows opened or folded by hand, one window further back): its view-patch follows",
+        ),
+        method!(
+            "agents/tool-input", AgentsToolInput(ToolInputParams) -> ToolInput,
+            classes: [User], writes: false,
+            doc: "a tool call's raw input, which no event carries (at most 256 KiB, else its JSON text cut and `truncated`)",
+        ),
+        method!(
+            "agents/tool-output", AgentsToolOutput(ToolOutputParams) -> ToolOutput,
+            classes: [User], writes: false,
+            doc: "bytes `from`..`to` of a tool call's output, at most 256 KiB an answer (beyond what the hub kept: its head and tail, `truncated`), with the whole size",
+        ),
+        method!(
+            "agents/pause", AgentsPause(ById) -> bool,
+            classes: [User], writes: true,
+            doc: "the session's turn is cancelled once the tool call running now completes, and its queue is held",
+        ),
+        method!(
+            "agents/grants", AgentsGrants(ById) -> Grants,
+            classes: [User], writes: false,
+            doc: "the Always grants the user gave a session, as the hub's ledger keeps them (revoked ones included)",
+        ),
+        method!(
+            "agents/grants/revoke", AgentsGrantsRevoke(GrantRevoke) -> Revoked,
+            classes: [User], writes: true,
+            doc: "the user takes back an Always: the ledger marks it revoked, so the hub asks again for a matching request; says whether the agent's own rule is cleared or kept until it starts again, and whether a restart at the current step would clear it",
+        ),
+        method!(
+            "agents/huddle/get", AgentsHuddleGet(ById) -> Huddle,
+            classes: [User], writes: false,
+            doc: "a huddle's record: its clash, the two sessions, its state, the replies (agent text), the agreement's proposal and the user's decision",
+        ),
+        method!(
+            "agents/huddle/start", AgentsHuddleStart(HuddleStart) -> Huddle,
+            classes: [User], writes: true,
+            doc: "the user opens a huddle between two sessions, or about a clash card's key (never a clash against a decision): each gets a brief of the facts and states its position with huddle_reply",
+        ),
+        method!(
+            "agents/wheel/take", AgentsWheelTake(ById) -> bool,
+            classes: [User], writes: true,
+            doc: "the user takes the session's wheel: it stops after its current step, and once that turn has ended (agent-wheel held) nothing of it is written until the give",
+        ),
+        method!(
+            "agents/wheel/give", AgentsWheelGive(ById) -> bool,
+            classes: [User], writes: true,
+            doc: "the user gives the wheel back (refused until held, and while the editor has unsaved buffers in the session's own worktree): the user's changes since the take go to the agent first, then its queue",
+        ),
+        method!(
+            "agents/wheel/saved", AgentsWheelSaved(WheelSaved) -> bool,
+            classes: [User], writes: false,
+            doc: "the editor's answer to wheel-save: the files it left unsaved (true when a give was waiting for it)",
+        ),
+        method!(
             "agents/probe", AgentsProbe(ProbeParams) -> ProbeResult,
             classes: [User], writes: false,
             doc: "whether a profile's agent starts and answers initialize (it is started in its sandbox, asked, and ended; no session is made)",
             check: check_probe,
+        ),
+        method!(
+            "agents/background-cancel", AgentsBackgroundCancel(BackgroundCancelParams) -> bool,
+            classes: [User], writes: false,
+            doc: "stop one item of the session's background list by its own request (`terminal/cancel`, `tool_call/cancel`, `session/cancel` of the child session; a job of the hub's own: its stop); an item that does not advertise cancel is refused with nothing sent (not-allowed), an item that is not listed: invalid-params",
+        ),
+        method!(
+            "agents/background-output", AgentsBackgroundOutput(BackgroundOutputParams) -> ToolOutput,
+            classes: [User], writes: false,
+            doc: "the output of one item of the session's background list: a terminal's newest bytes as the hub kept them (at most 256 KiB, `truncated` when older ones were left out), a tool call's output; an item that is not listed or has no output: invalid-params",
+        ),
+        method!(
+            "agents/context-drop", AgentsContextDrop(ContextDropParams) -> bool,
+            classes: [User], writes: false,
+            doc: "the agent drops an item of its context (`_drgnx/context/drop`, 10 s); an agent without the `drop` feature: invalid-params",
+        ),
+        method!(
+            "agents/context-pin", AgentsContextPin(ContextPinParams) -> bool,
+            classes: [User], writes: false,
+            doc: "the agent pins or unpins an item of its context (`_drgnx/context/pin`, 10 s); an agent without the `pin` feature: invalid-params",
+        ),
+        method!(
+            "agents/config", AgentsConfig(ConfigParams) -> bool,
+            classes: [User], writes: true,
+            doc: "the user switches a session's mode or model (`option` mode|model): a mode only to one on the provider's lock allow-list, else refused with the reason; the agent is asked by `session/set_config_option`, falling back to `session/set_mode` / `session/set_model` when it lacks the method",
+        ),
+        method!(
+            "agents/explain", AgentsExplain(ExplainParams) -> Explained,
+            classes: [User], writes: false,
+            doc: "the facts behind a chip (context, cost, mode, model, waiting, mcp): facts only, from the hub's own state and the adapter's last report",
+        ),
+        method!(
+            "agents/compact-preview", AgentsCompactPreview(ById) -> CompactPreview,
+            classes: [User], writes: false,
+            doc: "what a compaction would free, keep and summarise now, as the agent says (`_drgnx/compact/preview`, 10 s; nothing is compacted); an agent without the `compact-preview` feature: invalid-params",
         ),
     ]
 }

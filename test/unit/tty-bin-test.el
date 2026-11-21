@@ -54,7 +54,8 @@ esac"
 (defconst tty-bin-test--defaults
   '(("DISPLAY" . ":99") ("WAYLAND_DISPLAY") ("SSH_CONNECTION") ("SSH_TTY") ("VTE_VERSION") ("TERM_PROGRAM")
     ("TERM" . "xterm-256color") ("DRGNX_EMACS") ("DRGNX_OPEN_WAIT" . "5")
-    ("DRGNX_MODAL_ELPA"))   ; a machine that runs the modal tests has it set; `test --container' would mount it
+    ("DRGNX_MODAL_ELPA")    ; a machine that runs the modal tests has it set; `test --container' would mount it
+    ("DRGNX_TEST_HUB_BUILD" . "0") ("DRGNX_RATATOSKR_BIN"))   ; `test --tty' builds no test hub here
   "What a test starts from: a graphical, local terminal; a cons without a value unsets the variable.")
 
 (defmacro tty-bin-test--with (&rest body)
@@ -90,6 +91,12 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
                          (with-temp-buffer (cons (apply #'call-process tty-bin-test--bin nil t nil args) (buffer-string)))))))
            ,@body)
        (delete-directory dir t))))
+
+(defun tty-bin-test--settled (dir)
+  "Wait until no process runs a fake tool of DIR (the fake kitty, the fake client).  A launch of kitty is made before the
+script exits, so once none runs, an absent kitty.log is final."
+  (drgnx-test-wait (lambda () (not (eql 0 (call-process "pgrep" nil nil nil "-f" "--" (regexp-quote dir)))))
+                   :what "the fake tools' processes ended"))
 
 (defun tty-bin-test--calls (dir &optional name)
   "The fake emacsclient's (or NAME's) calls so far, each a list of its arguments."
@@ -271,7 +278,7 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
       (should (eql 0 (car (call '("-t") env))))
       (should (member "-t" (car (last (tty-bin-test--calls dir)))))
       (should-not (seq-find (lambda (c) (member tty-bin-test--capable c)) (tty-bin-test--calls dir)))
-      (drgnx-test-pause 0.3 "kitty may not be started")
+      (tty-bin-test--settled dir)
       (should-not (file-exists-p (expand-file-name "kitty.log" dir))))))
 
 (ert-deftest drgnx-bin/open-t-stays-here-by-default ()
@@ -280,14 +287,14 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
     ;; the daemon has no capable terminal to offer (the option is off): this terminal, kitty not started
     (should (eql 0 (car (call '("-t") '(("VTE_VERSION" . "7600"))))))
     (should (member "-t" (car (last (tty-bin-test--calls dir)))))
-    (drgnx-test-pause 0.3 "kitty may not be started")
+    (tty-bin-test--settled dir)
     (should-not (file-exists-p (expand-file-name "kitty.log" dir)))
     ;; a terminal that sends every key is not asked about at all
     (write-region "(\"kitty\" \"--\")\n" nil (expand-file-name "capable" dir))
     (delete-file (expand-file-name "client.log" dir))
     (should (eql 0 (car (call '("-t") '(("TERM" . "xterm-kitty"))))))
     (should-not (seq-find (lambda (c) (member tty-bin-test--capable c)) (tty-bin-test--calls dir)))
-    (drgnx-test-pause 0.3 "kitty may not be started")
+    (tty-bin-test--settled dir)
     (should-not (file-exists-p (expand-file-name "kitty.log" dir)))))
 
 (ert-deftest drgnx-bin/test-tty-tiers-are-listed ()
@@ -315,26 +322,35 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
 (ert-deftest drgnx-bin/container-tty-builds-and-runs-the-tty-image ()
   (tty-bin-test--with
     (let ((log (expand-file-name "rt.log" dir)))
-      (tty-bin-test--script (expand-file-name "fake-rt" dir) (format "echo \"$*\" >> %s" log))
+      ;; an empty store and no GHCR copy (`image inspect' and `pull' fail, unlogged): the image is built
+      (tty-bin-test--script (expand-file-name "fake-rt" dir)
+                            (format "case \"$1\" in image|pull) exit 1 ;; esac\necho \"$*\" >> %s" log))
       (dolist (case '((nil "45") (("--fedora" "45") "45")))
         (when (file-exists-p log) (delete-file log))
         (let ((env `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)) ("DRGNX_TEST_TTY_IMAGE")
                      ("DRGNX_TEST_SELECTOR" . "\"x\""))))
           (should (eql 0 (car (call (append '("test" "--container" "--tty") (car case)) env)))))
         (let ((lines (split-string (tty-bin-test--slurp log) "\n" t)) (n (cadr case)))
-          (should (= (length lines) 2))
+          ;; the base of the Fedora packages first, then the image on it, then the run
+          (should (= (length lines) 3))
           (should (string-prefix-p "build " (car lines)))
-          ;; the local image's tag is the hash of its inputs (test/container/image-tag.sh)
-          (dolist (s (list "-t drgnx-test-tty:" (format "--build-arg FEDORA=%s" n)
-                           "/test/container/Containerfile.tty"))
-            (should (string-search s (car lines))))
-          (should (string-match " -t \\(drgnx-test-tty:[0-9a-f]\\{16\\}\\) " (car lines)))
-          (let ((image (match-string 1 (car lines))))
-            (should (string-prefix-p "run --rm " (cadr lines)))
+          (should (string-prefix-p "build " (cadr lines)))
+          (should (string-match " -t \\(drgnx-base-tty:[0-9a-f]\\{16\\}\\) " (car lines)))
+          (should (string-search "/test/container/base/Containerfile.tty" (car lines)))
+          (let ((base (match-string 1 (car lines))))
+            ;; the local image's tag is the hash of its inputs (test/container/image-tag.sh)
+            (dolist (s (list "-t drgnx-test-tty:" (format "--build-arg FEDORA=%s" n) (format "--build-arg BASE=%s" base)
+                             "/test/container/Containerfile.tty"))
+              (should (string-search s (cadr lines)))))
+          (should (string-match " -t \\(drgnx-test-tty:[0-9a-f]\\{16\\}\\) " (cadr lines)))
+          (let ((image (match-string 1 (cadr lines))) (run (nth 2 lines)))
+            (should (string-prefix-p "run --rm " run))
             (dolist (s '("--memory 3g" "seccomp=unconfined" "label=disable"))
-              (should (string-search s (cadr lines))))
-            (should (string-suffix-p (format " %s bin/drgnx test --tty" image) (cadr lines))))
-          (should (string-search "DRGNX_TEST_SELECTOR=\"x\"" (cadr lines)))))
+              (should (string-search s run)))
+            (should (string-suffix-p (format " %s bin/drgnx test --tty" image) run))
+            (should (string-search "DRGNX_TEST_SELECTOR=\"x\"" run))
+            ;; the test hub is the host's (`test_hub'): the run inside builds none
+            (should (string-search "DRGNX_TEST_HUB_BUILD=0" run)))))
       ;; a Fedora we have no image for is refused, and --fedora belongs to --tty
       (should (eql 2 (car (call '("test" "--container" "--ui" "--tty") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)))))))
       (should (eql 2 (car (call '("test" "--container" "--tty" "--ui") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)))))))

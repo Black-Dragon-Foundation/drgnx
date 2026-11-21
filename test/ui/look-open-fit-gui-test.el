@@ -1,0 +1,219 @@
+;;; look-open-fit-gui-test.el --- GUI tests: the Open section fits its rows (run by `drgnx test --ui') -*- lexical-binding: t -*-
+;; test-class: cond
+;; test-pattern: handshake
+
+;; Pattern D: the dock (Open above the Explorer) on the root frame with the store on; the frame is resized by a pixel
+;; and the store's `frame-resized' runs through `drgnx-uitest-run'.  Run at each scale (s1, s1.25, s2): the Open
+;; section is as tall as its rows (at s2 this frame caps it: whole rows, scrolled), and the Explorer's top does not
+;; move.
+
+(require 'ert)
+(require 'cl-lib)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-uitest)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
+
+(defconst drgnx-ui-look-open-fit--repo
+  (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
+(dolist (d '("core" "wb" "harness"))
+  (add-to-list 'load-path (expand-file-name d drgnx-ui-look-open-fit--repo)))
+(require 'drgnx)
+(require 'drgnx-state)
+(require 'drgnx-buffers)
+(load (expand-file-name "test/fixtures/ui-hub-fixture" drgnx-ui-look-open-fit--repo) nil t)   ; the hub builds the Open rows
+(require 'drgnx-explorer)
+(load (expand-file-name "modules/ui/drgnx-look-fonts" drgnx-ui-look-open-fit--repo) nil t)
+(load (expand-file-name "modules/ui/drgnx-look-density" drgnx-ui-look-open-fit--repo) nil t)
+(load (expand-file-name "themes/drgnx-theme-gen" drgnx-ui-look-open-fit--repo) nil t)
+
+(defun drgnx-ui-look-open-fit--settle ()
+  "Run the store's events and wait for the picture, until the dock's edges stop moving (a header line's height is
+known after the first redisplay, and the store sees the change on the next observation; at most 5 rounds)."
+  (let ((edges nil) (n 0))
+    (while (and (< n 5) (not (equal edges (setq edges (mapcar #'window-pixel-edges (drgnx-wb--dock-windows))))))
+      (setq n (1+ n))
+      (drgnx-uitest-run (drgnx-uitest-key-events "C-l"))
+      (drgnx-signal--flush)
+      (drgnx-test-wait-presented))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-open-fit/a-pixel-of-frame-never-moves-the-explorer ()
+  "Four open files: the Open section's body is their rows exactly (no empty row below the last), or the whole rows
+that fit in 0.3 of the frame, and growing or shrinking the frame by one pixel leaves the Explorer's top where it was."
+  (let* ((root (drgnx-uitest-root-frame))
+         (dir (file-name-as-directory (make-temp-file "look-open-fit" t)))
+         (size (list (frame-pixel-width root) (frame-pixel-height root)))
+         (config (with-selected-frame root (current-window-configuration)))
+         (drgnx-wb--sections nil)
+         (drgnx-wb--collapsed (list (cons 'buffers nil)))   ; Open unfolded (it starts folded), as its user left it
+         (drgnx-explorer--roots (list dir)) opened want)
+    (unwind-protect
+        (with-selected-frame root
+          (delete-other-windows)
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'drgnx-dark t)
+          (drgnx-look-density-on)
+          (drgnx-state-mode 1)
+          (drgnx-ui-hub-start drgnx-ui-look-open-fit--repo)
+          ;; set up as a module's setup does, so their hooks, subscriptions and focus functions are recorded and undone
+          (let ((drgnx-modules--current 'look-open-fit-row) (drgnx-modules--setup-load load-file-name))
+            (drgnx-buffers-setup)
+            (drgnx-explorer-setup))
+          (dolist (n '("a.txt" "b.txt" "c.txt" "d.txt"))
+            (let ((f (expand-file-name n dir)))
+              (write-region "x\n" nil f nil 'silent)
+              (push (find-file-noselect f) opened)))
+          (drgnx-signal--flush)                       ; the store has seen the frame: the sidebar is a change
+          (drgnx-wb-show-sidebar)
+          ;; the env goes out on an idle timer after a window change; a test's wait never idles
+          (drgnx-view-env-update drgnx-buffers-hub-view)
+          (drgnx-test-wait (lambda () (with-current-buffer drgnx-buffers-buffer-name
+                                        (>= (count-lines (point-min) (point-max)) 4)))
+                           :what "the hub's Open rows")
+          (drgnx-ui-look-open-fit--settle)
+          (let* ((open (get-buffer-window drgnx-buffers-buffer-name root))
+                 (explorer (get-buffer-window drgnx-explorer-buffer-name root))
+                 (rows (with-current-buffer drgnx-buffers-buffer-name (count-lines (point-min) (point-max))))
+                 (row (round (* (drgnx-pixels-scale root) (drgnx-look-density-value 'tree-row))))
+                 (top (window-pixel-top explorer)))
+            (should (>= rows 4))
+            ;; all its rows, or, past 0.3 of the frame (s2 in this 900-pixel frame), the whole rows that fit there
+            (setq want (min (* rows row)
+                            (* row (/ (- (floor (* 0.3 (frame-inner-height root)))
+                                         (- (window-pixel-height open) (window-body-height open t)))
+                                      row))))
+            (should (= (window-body-height open t) want))
+            (dolist (dh '(1 -1 -1 1))
+              (set-frame-size root (car size) (+ (frame-pixel-height root) dh) t)
+              (drgnx-ui-look-open-fit--settle)
+              (should (equal (list dh (frame-inner-height root) (window-pixel-top explorer) (window-body-height open t))
+                             (list dh (frame-inner-height root) top want))))))
+      (drgnx-wb-hide-sidebar)
+      (dolist (u (alist-get 'look-open-fit-row drgnx-modules--stacks)) (funcall (cdr u)))
+      (setf (alist-get 'look-open-fit-row drgnx-modules--stacks nil t) nil)
+      (drgnx-state-mode -1)
+      (drgnx-ui-hub-stop)
+      (drgnx-look-density-off)
+      (mapc #'disable-theme custom-enabled-themes)
+      (set-frame-size root (car size) (cadr size) t)
+      (with-selected-frame root (set-window-configuration config))
+      (dolist (b opened) (kill-buffer b))
+      (dolist (b (list drgnx-buffers-buffer-name drgnx-explorer-buffer-name)) (when (get-buffer b) (kill-buffer b)))
+      (delete-directory dir t))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-open-fit/a-folded-open-shows-its-whole-header-under-the-island ()
+  "The user's side bar, 2026-11-16 (6.png, 7.png): Open folded (as it starts) is the dock's top window, under the
+island header, and its header row was half hidden under the Files header.  Settled, the folded row is drawn whole:
+fully visible, the window's body at least the row's height."
+  (let* ((root (drgnx-uitest-root-frame))
+         (dir (file-name-as-directory (make-temp-file "look-open-folded" t)))
+         (config (with-selected-frame root (current-window-configuration)))
+         (drgnx-wb--sections nil)
+         (drgnx-wb--collapsed nil)                           ; Open as it starts: folded
+         (drgnx-explorer--roots (list dir)))
+    (unwind-protect
+        (with-selected-frame root
+          (delete-other-windows)
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'drgnx-dark t)
+          (drgnx-look-density-on)
+          (drgnx-state-mode 1)
+          (drgnx-ui-hub-start drgnx-ui-look-open-fit--repo)
+          (let ((drgnx-modules--current 'look-open-fit-row) (drgnx-modules--setup-load load-file-name))
+            (drgnx-buffers-setup)
+            (drgnx-explorer-setup))
+          (drgnx-signal--flush)
+          (drgnx-wb-show-sidebar)
+          (drgnx-ui-look-open-fit--settle)
+          (let ((w (drgnx-wb-section-window 'buffers)))
+            (should (window-live-p w))
+            (should (window-parameter w 'drgnx-folded))
+            (should (window-parameter w 'drgnx-wb-island))    ; the island header is on it: the dock's top window
+            (let ((vis (pos-visible-in-window-p 1 w t)))
+              (should vis)
+              (unless (= 2 (length vis))                       ; fully visible: no part of the row cut off
+                (ert-fail (list "the folded row is cut" :vis vis :body (window-body-height w t)
+                                :line (with-selected-window w (line-pixel-height))
+                                :row (drgnx-wb--row-px root) :tab (window-tab-line-height w)
+                                :total (window-pixel-height w)))))
+            (should (>= (window-body-height w t) (with-selected-window w (line-pixel-height))))))
+      (drgnx-wb-hide-sidebar)
+      (dolist (u (alist-get 'look-open-fit-row drgnx-modules--stacks)) (funcall (cdr u)))
+      (setf (alist-get 'look-open-fit-row drgnx-modules--stacks nil t) nil)
+      (drgnx-state-mode -1)
+      (drgnx-ui-hub-stop)
+      (drgnx-look-density-off)
+      (mapc #'disable-theme custom-enabled-themes)
+      (with-selected-frame root (set-window-configuration config))
+      (dolist (b (list drgnx-buffers-buffer-name drgnx-explorer-buffer-name)) (when (get-buffer b) (kill-buffer b)))
+      (delete-directory dir t))))
+
+(defun drgnx-ui-look-open-fit--squeezed-grows (rows)
+  "A dock window squeezed below its tab line (the island header, taller once its font is measured) and header line,
+drawn so, then grown, with ROWS (the Open rows arrived) or with its buffer as it was (a fit after the header grew): an
+error unless its header line is drawn where it belongs, as a full redraw draws it."
+  (let* ((root (drgnx-uitest-root-frame))
+         (config (with-selected-frame root (current-window-configuration)))
+         (first (frame-selected-window root))      ; the window that becomes the squeezed one
+         (buf (get-buffer-create " *open-fit-squeezed*")))
+    (unwind-protect
+        (with-selected-frame root
+          (delete-other-windows)
+          (let ((top (selected-window)) (below (split-window nil 8))
+                (window-resize-pixelwise t) (window-min-height 1))
+            (with-current-buffer buf (erase-buffer) (setq-local cursor-type nil))
+            (set-window-buffer top buf)
+            (set-window-parameter top 'tab-line-format " island")
+            (set-window-parameter top 'header-line-format " Open")
+            (set-window-parameter top 'mode-line-format 'none)
+            (set-window-parameter below 'header-line-format " Files")
+            (drgnx-test-wait-presented)
+            ;; fitted to its chrome while its island header was short, then the header grows: squeezed
+            (adjust-window-trailing-edge top (- (window-min-size top nil nil t) (window-pixel-height top)) nil t)
+            (drgnx-test-wait-presented)
+            ;; its tab line all but its height: the header line drawn past its bottom, its upper part inside
+            (set-window-parameter top 'tab-line-format
+                                  (concat " island" (propertize " " 'display `(space :width (10)
+                                                                                     :height (,(- (window-pixel-height top) 7))))))
+            (with-current-buffer buf (force-mode-line-update))
+            (drgnx-test-wait-presented)
+            (should (< (window-tab-line-height top) (window-pixel-height top)
+                       (+ (window-tab-line-height top) (window-header-line-height top))))
+            ;; the window below drawn after it, over the part of its header line past its bottom
+            (set-window-parameter below 'header-line-format " Files ")
+            (with-current-buffer (window-buffer below) (force-mode-line-update))
+            (drgnx-test-wait-presented)
+            ;; the rows arrive and the section grows to them
+            (when rows
+              (with-current-buffer buf (insert "one\ntwo\nthree"))
+              (set-window-point top 1))
+            (adjust-window-trailing-edge top (+ (- (+ (window-tab-line-height top) (window-header-line-height top))
+                                                   (window-pixel-height top))
+                                                (* 3 (default-line-height)))
+                                         nil t)
+            (drgnx-test-wait-presented)
+            (let* ((s (drgnx-uitest-device-scale root))
+                   (rect (mapcar (lambda (v) (round (* v s)))
+                                 (list 0 0 (nth 2 (window-pixel-edges top))
+                                       (+ (window-tab-line-height top) (window-header-line-height top)))))
+                   (drawn (drgnx-uitest-snapshot root)))
+              (redraw-frame root)
+              (drgnx-test-wait-presented)
+              (should (drgnx-uitest-region-equal-p drawn (drgnx-uitest-snapshot root) rect :ignore-alpha t)))))
+      (with-selected-frame root (set-window-configuration config))
+      ;; its lines are window parameters, which a window configuration does not give back
+      (dolist (p '(tab-line-format header-line-format mode-line-format)) (set-window-parameter first p nil))
+      (kill-buffer buf))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-open-fit/a-squeezed-window-draws-its-header-line-when-it-grows ()
+  "The notebook scene kept the pixels of the Explorer's header line where the Open section's belongs, half covered by
+the Open rows: the section, squeezed below its island header, drew its header line past its bottom, the Explorer drew
+over it, and growing to its rows changed neither the row's glyphs nor its place, so it was not drawn again."
+  (drgnx-ui-look-open-fit--squeezed-grows t))
+
+(drgnx-look-gui-deftest drgnx-ui-look-open-fit/a-squeezed-window-grown-with-no-new-rows-draws-its-header-line ()
+  "As above, grown with its buffer unchanged (no mode line, nothing modified): its header line is drawn again all the
+same."
+  (drgnx-ui-look-open-fit--squeezed-grows nil))
+
+(provide 'look-open-fit-gui-test)
+;;; look-open-fit-gui-test.el ends here

@@ -21,8 +21,8 @@ use urdr::graph::{OpenOutcome, Writer, WriterHandle, WriterOpts};
 use urdr::graph::{TxMeta, WriteError};
 use urdr::{Handle, Mode, Store, StoreSpec};
 
-/// The schema the store writes (schema 8).
-pub const SCHEMA: u32 = crate::migrate8::SCHEMA;
+/// The schema the store writes (schema 15).
+pub const SCHEMA: u32 = crate::migrate15::SCHEMA;
 
 /// What a read closure sees: the connection (read-only).
 pub type Tx = urdr::Connection;
@@ -342,11 +342,48 @@ pub(crate) mod tests {
         .unwrap();
     }
 
-    /// A fresh in-memory database as the opening rule leaves it (schema 8) for a writer's unit tests (`tx_of`
+    /// A fresh in-memory database as the opening rule leaves it (schema 15) for a writer's unit tests (`tx_of`
     /// makes the transaction).  The name is from schema 7.
     pub(crate) fn db7() -> urdr::Connection {
+        let mut c = db14();
+        assert!(crate::migrate15::upgrade(&mut c).unwrap());
+        c
+    }
+
+    /// A fresh in-memory database at schema 14, before the `node` view lists the importer's tasks.
+    pub(crate) fn db14() -> urdr::Connection {
+        let mut c = db13();
+        assert!(crate::migrate14::upgrade(&mut c).unwrap());
+        c
+    }
+
+    /// A fresh in-memory database at schema 13, before the forecasts' finish times.
+    pub(crate) fn db13() -> urdr::Connection {
+        let mut c = db12();
+        assert!(crate::migrate13::upgrade(&mut c).unwrap());
+        c
+    }
+
+    /// A fresh in-memory database at schema 12, before the step's machine and slots.
+    pub(crate) fn db12() -> urdr::Connection {
+        let mut c = db11();
+        assert!(crate::migrate12::upgrade(&mut c).unwrap());
+        c
+    }
+
+    /// A fresh in-memory database at schema 11, before the timeline's step columns.
+    pub(crate) fn db11() -> urdr::Connection {
+        let mut c = db10();
+        assert!(crate::migrate11::upgrade(&mut c).unwrap());
+        c
+    }
+
+    /// A fresh in-memory database at schema 10, before the forecast tables.
+    pub(crate) fn db10() -> urdr::Connection {
         let mut c = db7_only();
         assert!(crate::migrate8::upgrade(&mut c).unwrap());
+        assert!(crate::migrate9::upgrade(&mut c).unwrap());
+        assert!(crate::migrate10::upgrade(&mut c).unwrap());
         c
     }
 
@@ -451,13 +488,13 @@ pub(crate) mod tests {
             "work.db is schema 5; open it once with drgnx 6 first, or remove it (installs are disposable)"
         );
         // A newer schema: readable, never written.
-        make(&next, 9);
+        make(&next, 99);
         replace(&next);
         handle.tick().await;
         db.tick();
         assert_eq!(
             db.write(hub_meta(), |_| Ok(())).await.unwrap_err(),
-            CoordError::ReadOnly { schema: 9 }
+            CoordError::ReadOnly { schema: 99 }
         );
         db.read(|c| Ok(c.query_row("select count(*) from meta", [], |r| r.get::<_, i64>(0))?))
             .await
@@ -490,7 +527,7 @@ pub(crate) mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(kv, "8");
+        assert_eq!(kv, "15");
         let other = dir.path().join("other").join("work.db");
         std::fs::create_dir_all(other.parent().unwrap()).unwrap();
         make(&other, 6);

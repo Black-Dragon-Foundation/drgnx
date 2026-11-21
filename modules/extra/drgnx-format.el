@@ -12,6 +12,7 @@
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-packs)
 (declare-function apheleia-global-mode "apheleia")
 (declare-function apheleia-mode "apheleia")
 (defvar apheleia-mode)
@@ -20,23 +21,11 @@
 (defvar apheleia-mode-alist)
 (defvar apheleia-inhibit-functions)
 
-(defvar drgnx-format-standard-modes '(go-mode go-ts-mode rust-mode rust-ts-mode zig-mode elixir-mode elixir-ts-mode
-                                              terraform-mode dart-mode)
-  "Languages whose formatter is their community's standard (gofmt, rustfmt, …): formatted in any project.")
-
-(defvar drgnx-format-config-files
-  '(".prettierrc" ".prettierrc.json" ".prettierrc.yaml" ".prettierrc.yml" ".prettierrc.js" ".prettierrc.cjs"
-    ".prettierrc.mjs" ".prettierrc.toml" "prettier.config.js" "prettier.config.cjs" "prettier.config.mjs" ".clang-format"
-    "ruff.toml" ".ruff.toml" "biome.json" "biome.jsonc" "deno.json" "deno.jsonc" "stylua.toml" ".stylua.toml"
-    ".rubocop.yml" ".php-cs-fixer.php" ".scalafmt.conf")
-  "Files that say a project formats its code: other languages are formatted only under one (or a pyproject.toml with
-black or ruff).")
-
 (defun drgnx-format--configured-p ()
   "Does this file's project say it formats its code?"
   (and buffer-file-name
        (let ((dir (file-name-directory buffer-file-name)))
-         (or (seq-some (lambda (f) (locate-dominating-file dir f)) drgnx-format-config-files)
+         (or (seq-some (lambda (f) (locate-dominating-file dir f)) (drgnx-packs-format-config-files))
              (when-let* ((root (locate-dominating-file dir "pyproject.toml")))
                (with-temp-buffer
                  (insert-file-contents (expand-file-name "pyproject.toml" root))
@@ -45,7 +34,7 @@ black or ruff).")
 (defun drgnx-format--inhibit-p ()
   "`apheleia-inhibit-functions': no format on save here — not a standard-formatter language, and the project has no
 formatter of its own (prettier, clang-format, black… would reformat code its authors never ran them on)."
-  (not (or (apply #'derived-mode-p drgnx-format-standard-modes) (drgnx-format--configured-p))))
+  (not (or (apply #'derived-mode-p (drgnx-packs-format-modes)) (drgnx-format--configured-p))))
 
 (defun drgnx-format--setup ()
   (require 'apheleia)

@@ -15,11 +15,50 @@ pub struct LinkKind {
 /// The entity kinds of storage §5.3 (its table, plus `worktree`, the end of `in_worktree`), plus `project`, plus
 /// `option` (a setting's history: Urdr Task 10b, unified-settings design §12), plus schema 8's `exec` (a job: a
 /// command the hub runs), `report` (what an agent ends a task with) and `proposal` (a generated view's edit, as a
-/// proposal the user decides: agent system part 1, Tasks 4 and 14b).
+/// proposal the user decides: agent system part 1, Tasks 4 and 14b), `huddle` (two agents' positions on a clash,
+/// for the user to decide: agent system part 3), `always` (an Always the user gave a session: part 3), and the
+/// orchestration records: `evidence` (one fact a gate reads), `rule_pack` (a project's gate rules), `batch` (a merge
+/// batch) and `followup` (a held line's DEFERRED row), `debug_run` (a recorded debug run: graphical debugging D1) and
+/// `debug_hypothesis` (a partner agent's hypothesis about a bug: D4), and `comment` (a thread on a paragraph of a spec,
+/// plan, decision or task: the frontend flow's paragraph comments), and `anchor` (a fold or pinned region the editor
+/// keeps for a file: the minimap and folding design, F7).
 pub const ENTITY_KINDS: &[&str] = &[
-    "task", "decision", "note", "grant", "agent", "session", "commit", "branch", "file", "symbol",
-    "spec", "plan", "step", "ruling", "todo", "worktree", "project", "option", "exec", "report",
+    "task",
+    "decision",
+    "note",
+    "grant",
+    "agent",
+    "session",
+    "commit",
+    "branch",
+    "file",
+    "symbol",
+    "spec",
+    "plan",
+    "step",
+    "ruling",
+    "todo",
+    "worktree",
+    "project",
+    "option",
+    "exec",
+    "report",
     "proposal",
+    "ask",
+    "runner",
+    "cloud_spend",
+    "key_sent",
+    "key_use",
+    "huddle",
+    "always",
+    "evidence",
+    "rule_pack",
+    "batch",
+    "followup",
+    "debug_run",
+    "debug_hypothesis",
+    "comment",
+    "anchor",
 ];
 
 const ANY: &[&str] = &["*"];
@@ -94,6 +133,23 @@ pub const LINKS: &[LinkKind] = &[
         false,
     ),
     link("narrows", &["grant"], &["grant"], false),
+    // schema 9: what the user asked, and the work it led to
+    link(
+        "asked",
+        &["ask"],
+        &["spec", "plan", "task", "session"],
+        false,
+    ),
+    // schema 12: a session forked from another one's conversation
+    link("forked_from", &["session"], &["session"], false),
+    // a paragraph comment on a record (its anchor in the link's data), and a reply in its thread
+    link(
+        "comments_on",
+        &["comment"],
+        &["spec", "plan", "decision", "task"],
+        false,
+    ),
+    link("replies_to", &["comment"], &["comment"], false),
 ];
 
 /// Whether KIND is one of [`ENTITY_KINDS`].
@@ -124,9 +180,42 @@ mod tests {
         assert_eq!(
             ENTITY_KINDS,
             [
-                "task", "decision", "note", "grant", "agent", "session", "commit", "branch",
-                "file", "symbol", "spec", "plan", "step", "ruling", "todo", "worktree", "project",
-                "option", "exec", "report", "proposal"
+                "task",
+                "decision",
+                "note",
+                "grant",
+                "agent",
+                "session",
+                "commit",
+                "branch",
+                "file",
+                "symbol",
+                "spec",
+                "plan",
+                "step",
+                "ruling",
+                "todo",
+                "worktree",
+                "project",
+                "option",
+                "exec",
+                "report",
+                "proposal",
+                "ask",
+                "runner",
+                "cloud_spend",
+                "key_sent",
+                "key_use",
+                "huddle",
+                "always",
+                "evidence",
+                "rule_pack",
+                "batch",
+                "followup",
+                "debug_run",
+                "debug_hypothesis",
+                "comment",
+                "anchor"
             ]
         );
         let rows: Vec<(&str, Vec<&str>, Vec<&str>, bool)> = LINKS
@@ -191,6 +280,20 @@ mod tests {
                 false,
             ),
             ("narrows", vec!["grant"], vec!["grant"], false),
+            (
+                "asked",
+                vec!["ask"],
+                vec!["spec", "plan", "task", "session"],
+                false,
+            ),
+            ("forked_from", vec!["session"], vec!["session"], false),
+            (
+                "comments_on",
+                vec!["comment"],
+                vec!["spec", "plan", "decision", "task"],
+                false,
+            ),
+            ("replies_to", vec!["comment"], vec!["comment"], false),
         ];
         assert_eq!(rows, expect);
         // Every named end is an entity kind, and only the two readiness links affect ready.
@@ -214,6 +317,8 @@ mod tests {
         assert!(link_allowed("narrows", "grant", "grant"));
         assert!(link_allowed("proposes", "proposal", "report"));
         assert!(!link_allowed("report_of", "report", "plan"));
+        assert!(link_allowed("asked", "ask", "session"));
+        assert!(!link_allowed("asked", "task", "ask"));
     }
 
     #[test]

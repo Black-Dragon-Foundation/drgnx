@@ -1,0 +1,25 @@
+{"scenario": "pair/stale-native-read-cannot-revert-saved-edits", "requires": ["v1", "test-hooks"], "doc": "Gated (B). The agent read README natively (Claude's Read stays allowed), the user then edited and saved it, and the agent writes the whole file from its stale text: the hub refuses it, naming read_file, and the editor gets nothing (the hub never diffs against the disk, whose text the user's save changed). After read_file the same write travels as hunks against the editor's text."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project && printf 'saved by the user\\n' > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 90, "method": "pair/open", "params": {"file": "$ROOT/project/README", "kind": "normal"}}}
+{"do": "expect", "conn": "e", "json": {"id": 90, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:write_file {\"path\": \"$ROOT/project/README\", \"content\": \"from the stale read\\n\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 3, "result": {"session": {"status": "idle"}, "entries": {"$contains": [{"type": "agent", "text": "call: this file exists and you have not read it through drgnx: read it with read_file (the editor's text, unsaved edits included), then retry"}]}}}, "within_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "call:read_file {\"path\": \"$ROOT/project/README\"}\ncall:write_file {\"path\": \"$ROOT/project/README\", \"content\": \"saved by the user\\nand the agent\\n\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-read", "data": {"req": "$capture:r", "file": "$ROOT/project/README"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "pair/read-answer", "params": {"req": "$r", "text": "saved by the user\n", "version": 9}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w", "version": 9, "edits": [{"kind": "lines", "line": 2, "delete": 0, "text": "and the agent\n"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "pair/answer", "params": {"write": "$w", "result": "applied", "version": 10, "saved": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}

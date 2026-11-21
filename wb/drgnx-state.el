@@ -82,9 +82,9 @@ user's, so only then is a frame switch seen.  A sync or write may run inside `wi
 
 (defvar drgnx-state--roles nil
   "Alist ROLE → (:chrome C): every non-editor role, C one of `drgnx-state--chromes' (what the chrome
-draws for its windows: `dock', `area', `lane' or nothing).")
+draws for its windows: `dock', `area', `lane', `tile' or nothing).")
 
-(defconst drgnx-state--chromes '(dock area lane nil))
+(defconst drgnx-state--chromes '(dock area lane tile nil))
 
 (defun drgnx-state--put-role (role entry)
   "Make ENTRY, (ROLE :chrome C), ROLE's entry in the role table, in its place; ENTRY nil removes ROLE."
@@ -96,7 +96,7 @@ draws for its windows: `dock', `area', `lane' or nothing).")
 
 (cl-defun drgnx-state-define-role (role &key chrome)
   "Define ROLE, a non-editor window role (the value of the `drgnx-role' window parameter); return ROLE.
-CHROME, what the chrome draws for its windows, is one of `dock', `area', `lane' or nil.  Re-defining
+CHROME, what the chrome draws for its windows, is one of `dock', `area', `lane', `tile' or nil.  Re-defining
 replaces.  Called from a module's setup, the definition claims ROLE and records its undo \"state role
 ROLE\": the previous definition put back, or ROLE removed — only while ROLE is still the one defined
 here.  Two modules defining the same ROLE may be torn down in either order (`drgnx-module--claim')."
@@ -127,11 +127,11 @@ observation.  Non-nil if ROLE was defined."
     t))
 
 (defun drgnx-state-role-chrome (role)
-  "What the chrome draws for ROLE's windows: `dock', `area', `lane' or nil (also for an unknown role)."
+  "What the chrome draws for ROLE's windows: `dock', `area', `lane', `tile' or nil (also for an unknown role)."
   (plist-get (cdr (assq role drgnx-state--roles)) :chrome))
 
 ;; The built-in roles belong to core (defined at load: never undone).
-(dolist (r '((dock . dock) (panel . area) (right . area) (popup . lane)))
+(dolist (r '((dock . dock) (panel . area) (right . area) (popup . lane) (tile . tile)))
   (drgnx-state-define-role (car r) :chrome (cdr r)))
 
 (defun drgnx-state--classify (window)
@@ -159,13 +159,15 @@ observation.  Non-nil if ROLE was defined."
 
 (defun drgnx-state--kind (window role frame)
   "The pane kind WINDOW (of ROLE, on FRAME) shows, or nil.
-A dock window: its section.  An area: its front tab.  An editor window: its layouts pane, or the
+A dock window: its section.  An area: its front tab (an area tab's companion above or below shows none: the tab is
+its main window's).  A grid's tool tile: the kind in front of its stack (`drgnx-pane-stack').  An editor window: the
 editor-home kind whose last buffer it shows."
   (pcase (drgnx-state-role-chrome role)
     ('dock (window-parameter window 'drgnx-section))
-    ('area (drgnx-state--area-front role frame))
+    ('tile (car (window-parameter window 'drgnx-pane-stack)))
+    ('area (and (not (window-parameter window 'drgnx-area-part)) (drgnx-state--area-front role frame)))
     (_ (and (eq role 'editor)
-            (or (window-parameter window 'drgnx-layouts-pane) (drgnx-state--editor-kind window frame))))))
+            (drgnx-state--editor-kind window frame)))))
 
 (defun drgnx-state--mru-editor (selected records previous)
   "The MRU editor window among RECORDS: SELECTED when it is an editor window; else PREVIOUS (the
@@ -251,7 +253,7 @@ changes the area's buffer anyway.  Walks the windows with `next-window': it allo
                  (eq (window-dedicated-p w) (drgnx-state--win-dedicated r))
                  (cond ((eq role 'editor)
                         (eq (drgnx-state--win-kind r)
-                            (or (window-parameter w 'drgnx-layouts-pane) (car (rassq (window-buffer w) last)))))
+                            (car (rassq (window-buffer w) last))))
                        ((eq (plist-get (cdr (assq role drgnx-state--roles)) :chrome) 'dock)
                         (eq (drgnx-state--win-kind r) (window-parameter w 'drgnx-section)))
                        (t t)))

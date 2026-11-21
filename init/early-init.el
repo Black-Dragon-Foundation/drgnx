@@ -39,6 +39,10 @@
                     nil custom-file nil 'silent))))
 (when (getenv "DRGNX_STARTUP_TRACE")      ; where startup time goes (docs/develop/perf.md)
   (load (expand-file-name "../core/drgnx-startup-trace" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+;; ui/look's echo box: graphical frames born without the echo row (core/drgnx-echo-early.el); `drgnx safe' skips it.
+(unless (getenv "DRGNX_SAFE")
+  (load (expand-file-name "../core/drgnx-echo-early" (file-name-directory (or load-file-name buffer-file-name))) nil t)
+  (drgnx-echo-early-setup))
 ;; Your early Lisp files (`:early t' in settings.el, read as data); `drgnx safe' skips them.
 (unless (getenv "DRGNX_SAFE")
   (load (expand-file-name "../core/drgnx-user-lisp" (file-name-directory (or load-file-name buffer-file-name))) nil t)

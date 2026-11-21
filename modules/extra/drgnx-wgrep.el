@@ -11,9 +11,9 @@
                      :stage 'idle :packages '(wgrep)
                      :setup (lambda ()
                               (require 'wgrep)
-                              (drgnx-command-define 'search-edit-results :category "Search" :title "Edit Results"
-                                                    :command 'wgrep-change-to-wgrep-mode :doc "Make the search results editable")
-                              (drgnx-command-define 'search-apply-edits :category "Search" :title "Apply Edited Results"
+                              (drgnx-command-define 'grep-edit-results :category "Search" :title "Edit Grep Results"
+                                                    :command 'wgrep-change-to-wgrep-mode :doc "Make a grep buffer's results editable")
+                              (drgnx-command-define 'grep-apply-edits :category "Search" :title "Apply Edited Grep Results"
                                                     :command 'wgrep-finish-edit :doc "Write the edited results to their files")))
 
 (provide 'drgnx-wgrep)

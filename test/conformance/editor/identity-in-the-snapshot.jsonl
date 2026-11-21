@@ -1,0 +1,19 @@
+{"scenario": "editor/identity-in-the-snapshot", "requires": ["v1", "test-hooks"], "doc": "Every live agent's snapshot carries its identity: the lowest free ordinal of its workspace, a handle unique there (the model's short name, numbered from the second agent of it), its monogram and when it was last active. A stopped session's ordinal and handle are free again, lowest first. Pattern B: each agents/start's answer is the gate for the next read of agents/list."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:s1", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:s2", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"sessions": [{"id": "$s1", "ordinal": 1, "handle": "Claude", "monogram": "C", "last_active": "$number"}, {"id": "$s2", "ordinal": 2, "handle": "Claude 2", "monogram": "C2", "last_active": "$number"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/stop", "params": {"id": "$s1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$capture:s3", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"sessions": {"$contains": [{"id": "$s2", "ordinal": 2, "handle": "Claude 2"}, {"id": "$s3", "ordinal": 1, "handle": "Claude", "monogram": "C"}]}}}}

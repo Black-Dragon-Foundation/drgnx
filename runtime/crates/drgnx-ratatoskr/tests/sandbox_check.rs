@@ -46,13 +46,26 @@ fn the_reduced_tier_passes_the_real_probe() {
     assert_eq!(v["layers"]["seccomp"], true);
     assert!(v["landlock_abi"].as_u64().unwrap() >= 9);
 
+    assert_eq!(
+        v["pins_note"],
+        drgnx_ratatoskr::sandbox_settings::REDUCED_CANNOT_PIN
+    );
+
+    // the backend's line, then the note on what the reduced tier cannot pin (design §13)
     let out = run(&["sandbox", "check", "--tier", "reduced"]);
     let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines();
+    let first = lines.next().unwrap_or_default();
     assert!(
-        text.starts_with("backend reduced: ok (Landlock ABI "),
+        first.starts_with("backend reduced: ok (Landlock ABI "),
         "{text}"
     );
-    assert!(text.trim_end().ends_with(", seccomp)"), "{text}");
+    assert!(first.ends_with(", seccomp)"), "{text}");
+    assert_eq!(
+        lines.collect::<Vec<_>>(),
+        [drgnx_ratatoskr::sandbox_settings::REDUCED_CANNOT_PIN],
+        "{text}"
+    );
 }
 
 /// The probe leaves nothing behind in the temp dir.

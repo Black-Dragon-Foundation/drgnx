@@ -4,6 +4,7 @@
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-explorer)
+(setq drgnx-explorer--lisp-listing t)       ; the Lisp listing (a remote root's, plan sja-complete Q3): on local folders here
 (require 'drgnx-buffers)
 (require 'drgnx-outline)
 
@@ -28,11 +29,14 @@
            (progn
              (drgnx-explorer-edge--tree ,root '("README.md" "docs/guide.md" "docs/sub/" "src/app/main.py" "tests/test_main.py"))
              (delete-other-windows)
-             (drgnx-explorer-setup)
+             ;; set up as a module's setup does, so its teardown below removes what it added
+             (let ((drgnx-modules--current 'test/explorer-edge) (drgnx-modules--setup-load load-file-name))
+               (drgnx-explorer-setup))
              (drgnx-explorer-set-roots (list ,root))
              ,@body)
          (setq drgnx-explorer--find nil)
          (drgnx-wb-hide-sidebar)
+         (drgnx-modules--unwind 'test/explorer-edge)
          (delete-other-windows)
          (drgnx-explorer-set-roots nil)
          (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
@@ -284,7 +288,8 @@
     (drgnx-explorer--find-apply "main")
     (drgnx-explorer-set-roots (list root))
     (let ((title (window-parameter (drgnx-wb-section-window 'explorer) 'header-line-format)))
-      (should (string-prefix-p (concat " " (drgnx-wb-close-glyph) " EXPLORER") title))         ; the ✕, then the title
+      (should-not (string-search (drgnx-wb-close-glyph) title))                 ; no close button: the island's ⋯ has it
+      (should (string-search " Files " title))
       (should-not (string-search "—" title)))))
 
 ;;;; M3a-1, M3b-16: a held button
@@ -309,7 +314,8 @@
   (drgnx-explorer-edge--with root
     (drgnx-test-with-state
       (let ((drgnx-buffers--pressed nil) (drgnx-buffers--pending nil))
-        (drgnx-buffers-setup)
+        (let ((drgnx-modules--current 'test/explorer-edge) (drgnx-modules--setup-load load-file-name))
+          (drgnx-buffers-setup))                       ; the edge macro's teardown removes it
         (drgnx-wb-show-sidebar)
         (drgnx-explorer-edge--press (drgnx-wb-section-window 'explorer))
         (setq drgnx-buffers--pressed t)

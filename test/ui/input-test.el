@@ -2,6 +2,7 @@
 ;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defun drgnx-test--lines-buffer ()
   "Show a fresh buffer with 60 numbered lines in a single window; return it."
@@ -27,9 +28,12 @@
 
 (ert-deftest drgnx-ui-input/click-by-target ()
   (drgnx-test--lines-buffer)
-  (let ((xy (drgnx-uitest-target-xy "*drgnx-lines*" "line 25")))
+  ;; a line near the window's foot, from the window's own height: at scale 2 the session's 1600x900 is 450 px high,
+  ;; about 20 lines, so a fixed line 25 was below it
+  (let* ((n (- (window-body-height) 2)) (target (format "line %02d" n))
+         (xy (progn (should (>= n 10)) (drgnx-uitest-target-xy "*drgnx-lines*" target))))
     (drgnx-uitest-run (drgnx-uitest-click-events (drgnx-uitest-posn (car xy) (cdr xy))))
-    (should (equal (buffer-substring (pos-bol) (pos-eol)) "line 25"))))
+    (should (equal (buffer-substring (pos-bol) (pos-eol)) target))))
 
 (ert-deftest drgnx-ui-input/target-by-major-mode ()
   (drgnx-test--lines-buffer)
@@ -75,6 +79,21 @@
     (with-current-buffer buf (overlay-put (make-overlay 16 22) 'invisible t))
     (redisplay t)
     (should-error (drgnx-uitest-target-xy "*drgnx-invisible*" "HIDDEN"))))
+
+(ert-deftest drgnx-ui-input/target-whose-first-glyph-is-narrow ()
+  "Text whose first glyph is narrower than half a column (a proportional font's `t', a row in the UI font) is
+clicked on that glyph, not on the next one.  Pattern D (one redisplayed frame read)."
+  (let ((buf (get-buffer-create "*drgnx-narrow*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (insert "aaa " (propertize "N" 'face '(:height 0.3)) "ARROW\n")
+      (goto-char (point-min)))
+    (delete-other-windows)
+    (switch-to-buffer buf)
+    (redisplay t)
+    (let ((xy (drgnx-uitest-target-xy "*drgnx-narrow*" "NARROW")))
+      (drgnx-uitest-run (drgnx-uitest-click-events (drgnx-uitest-posn (car xy) (cdr xy))))
+      (should (= (point) 5)))))
 
 (defun drgnx-test--record-clicks ()
   "In the current buffer, record clicks and drags into the returned list cell."
@@ -140,6 +159,7 @@
 (ert-deftest drgnx-ui-input/driven-commands-are-not-timer-code-for-the-guard ()
   ;; GUI suites start from a timer; commands driven by drgnx-uitest-run must not inherit
   ;; that timer context (drgnx's no-prompt guard would refuse their prompts).
+  (drgnx-test-wait-stages)
   (keymap-global-set "C-c g" #'drgnx-test--record-guard-context)
   (unwind-protect
       (let ((drgnx-guard--timer-fn 'outer-timer))

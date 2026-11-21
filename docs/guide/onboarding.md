@@ -23,7 +23,7 @@ with the three keys that open everything and a button to open a folder ([face.md
 - **Run the steps from the top** (the Welcome's header line says so): the cursor starts on the first step; press
   **Return** to run the step under it, and when it is done the cursor moves to the next one. Each step's status and
   result show on its row.
-- **Walk down the list with Next.** A step that has run ends its row with a **Next: <step>** button (click it, or
+- **Walk down the list with Next.** A step that has run ends its row with a **Next: \<step\>** button (click it, or
   press `n` anywhere in the Welcome): the cursor moves to the next step that is not done — one that failed or
   warned counts as not done, and after the last step it goes on from the top. It only moves; **Return** still
   runs the step, so every step asks its own questions and installs only what you agreed to. There is no "Run
@@ -107,15 +107,6 @@ the background; if nothing answers and no drgnx job runs it, it starts it again 
 start` — without `lms` it says to open LM Studio) and says so once: "Starting Ollama…". A request that finds nothing
 listening there (a crashed server) does the same, at most once a minute. Nothing starts at login or when the drgnx
 daemon starts — only once you open a window — and nothing is ever asked.
-
-**Chat needs its module.** Chat is gptel, module `extra/llm`, which the `minimal` and `ide` presets leave off. The
-step checks it: run interactively it asks "Turn on Chat (module extra/llm)?", turns it on and, when gptel is not in
-drgnx's packages yet, installs it (`drgnx sync` as a job, as Look and Keys does); Chat then works from the next start
-(the result says so, and in the app the Finish step offers the restart; in `drgnx onboard` it says "loads at drgnx's
-next start", since Finish offers nothing there). A module that is already on with gptel installed but not loaded yet
-says the same, and asks for no restart. A module that is on with gptel not installed yet is reported with "run drgnx
-sync"; with `--non-interactive` an off module is reported as "Chat needs module extra/llm
-(Preferences: Modules)" and the step warns.
 
 **OpenRouter (cloud key).** In the drgnx app it asks for your key (`read-passwd`: never shown, never written to a file
 or log; the string you type is cleared once it is stored, but drgnx keeps one copy of the key in memory for the session) and keeps it in the macOS Keychain or your Linux keyring

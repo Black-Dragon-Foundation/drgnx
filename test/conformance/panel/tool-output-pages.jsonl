@@ -1,0 +1,26 @@
+{"scenario": "panel/tool-output-pages", "requires": ["v1", "test-hooks"], "doc": "A tool call prints 600000 bytes. The editor that subscribed to the session's entries gets the tool entry with the head and tail of the output and its whole size (outputBytes), and pages the output with agents/tool-output: an answer is at most 256 KiB and says truncated when it holds less than was asked, the last page does not, a range past the end is empty, and a call that does not exist is refused."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "tool:exec yes x | head -c 600000"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "tool", "id": "$capture:tid", "status": "completed", "outputBytes": 600000}]]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle"}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/tool-output", "params": {"id": "$sid", "tool_call": "$tid", "from": 0, "to": 1000000}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"text": "$string", "total_bytes": 600000, "truncated": true}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/tool-output", "params": {"id": "$sid", "tool_call": "$tid", "from": 524288, "to": 1000000}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"text": "$string", "total_bytes": 600000, "truncated": false}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/tool-output", "params": {"id": "$sid", "tool_call": "$tid", "from": 600000, "to": 700000}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"text": "", "total_bytes": 600000, "truncated": false}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/tool-output", "params": {"id": "$sid", "tool_call": "nope", "from": 0, "to": 10}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "error": {"code": "invalid-params"}}}

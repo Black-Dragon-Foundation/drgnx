@@ -69,16 +69,25 @@ pub fn add(
 ) -> Result<Added, WriteError> {
     check_end(tx, src)?;
     check_end(tx, dst)?;
-    let current: Option<i64> = tx
+    let current: Option<(i64, String)> = tx
         .sql()
         .query_row(
-            "select id from link where src = ?1 and kind = ?2 and dst = ?3 and tx_to = ?4",
+            "select id, origin from link where src = ?1 and kind = ?2 and dst = ?3 and tx_to = ?4",
             params![src, kind, dst, SENTINEL],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
-    if let Some(id) = current {
-        return Ok(Added { id, existed: true });
+    if let Some((id, have)) = current {
+        // a link the hub recorded (a job's commit, the user's) must outlive whatever inferred or parsed the same link
+        // before it: that row is closed and a recorded one opens, so no scan that stops saying it retires it
+        if origin == Origin::Recorded && have != Origin::Recorded.as_str() {
+            tx.sql().execute(
+                "update link set tx_to = ?1 where id = ?2",
+                params![tx.id(), id],
+            )?;
+        } else {
+            return Ok(Added { id, existed: true });
+        }
     }
     let data = data.map(|v| v.to_string());
     tx.sql().execute(

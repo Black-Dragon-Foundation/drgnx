@@ -1,0 +1,8 @@
+[Unit]
+Description=Turn linger off for runner when a test asks (a file in the fleet's share)
+
+[Path]
+PathExists=/fleet/share/disable-linger
+
+[Install]
+WantedBy=multi-user.target

@@ -15,8 +15,21 @@
        (drgnx-ui-stop (plist-get s :name))
        (delete-directory root t))))
 
+(defun drgnx-observer--compiling (sess)
+  "How many files SESS's native compiler still has queued or running (0 without native compilation)."
+  (plist-get (drgnx-ui-call sess "(drgnx-uitest--json
+                (list :n (if (and (boundp 'comp-files-queue) (fboundp 'comp--async-runnings))
+                             (+ (length comp-files-queue) (comp--async-runnings))
+                           0)))")
+             :n))
+
 (ert-deftest drgnx-live/harness-calls-run-no-session-hooks ()
+  "Pattern C: the hooks go in once the session's native compiler is done with the files it loaded at start (a cold
+eln cache compiles them in the background, and each compile's output in its log buffer runs `first-change-hook'
+there); then nothing but the harness's calls runs, and they may run no hook."
   (drgnx-observer--with-session sess
+    (drgnx-test-wait (lambda () (eql 0 (drgnx-observer--compiling sess)))
+                     :what "the session's background native compilation drained")
     (drgnx-ui-call sess "(progn (defvar obs-n 0)
       (add-hook 'first-change-hook (lambda () (setq obs-n (1+ obs-n))))
       (add-hook 'buffer-list-update-hook (lambda () (setq obs-n (1+ obs-n))))
@@ -34,15 +47,18 @@
       (dotimes (i 40) (insert (format \"line %02d\\n\" i)))
       (goto-char (point-min))
       (defvar obs-timer nil)
+      (defvar obs-fired 0)
       (defun obs-schedule (&rest _)
         (when (timerp obs-timer) (cancel-timer obs-timer))
         (setq obs-timer (run-with-timer 0.15 nil (lambda ()
-          (with-selected-window (get-buffer-window \"*obs*\") (goto-char (point-min)))))))
+          (with-selected-window (get-buffer-window \"*obs*\") (goto-char (point-min)))
+          (setq obs-fired (1+ obs-fired))))))
       (add-hook 'post-command-hook #'obs-schedule)
       (add-hook 'first-change-hook #'obs-schedule)
       (drgnx-uitest--json (list :ok t)))")
-    ;; the call's own 0.15 s timer runs first (a pause lasts at least its length), so the measure starts at rest
-    (drgnx-test-pause 0.5 "no command may run before the measure")
+    ;; the call's own 0.15 s timer runs first: wait until none is pending (its run is the event), so the measure starts at rest
+    (drgnx-test-wait (lambda () (eq t (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :idle (if (and (timerp obs-timer) (memq obs-timer timer-list)) :false t)))") :idle)))
+                     :what "the debounce timer's first run")
     (let ((r (drgnx-ui-measure sess (list (list :buffer "*obs*" :text "line 10")))))
       (should (>= (plist-get r :oscillations) 1))
       (should (>= (plist-get r :settle_ms) 100)))))

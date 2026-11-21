@@ -315,23 +315,31 @@ pub fn choose(env: &Env) -> Mode {
 }
 
 /// Start this binary detached from the caller: a session of its own (`setsid`), stdio on `/dev/null`, running `serve
-/// --supervisor self`.  Every descriptor Rust opens is close-on-exec, so nothing else is inherited.  The child is
-/// handed back so the caller can see it end early.
+/// --supervisor self`.  Nothing above stderr is inherited, a descriptor a caller left inheritable included
+/// ([`isolate`]).  The child is handed back so the caller can see it end early.
 pub fn detach(exe: &Path) -> io::Result<std::process::Child> {
     let mut cmd = Command::new(exe);
     cmd.args(["serve", "--supervisor", "self"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    // SAFETY: only `setsid(2)`, which is async-signal-safe, runs between fork and exec.
+    isolate(&mut cmd);
+    cmd.spawn()
+}
+
+/// CMD's child is a session of its own (`setsid`).  What it inherits stops at stderr: every descriptor from 3 up is
+/// close-on-exec in the child, whatever the caller left inheritable.
+fn isolate(cmd: &mut Command) {
+    // SAFETY: `close_range(2)` or `fcntl(2)` and `setsid(2)`, all async-signal-safe and allocation-free, run between
+    // fork and exec.
     unsafe {
         cmd.pre_exec(|| {
+            draugr::spawn::cloexec_from(3);
             rustix::process::setsid()
                 .map(|_| ())
                 .map_err(io::Error::from)
         });
     }
-    cmd.spawn()
 }
 
 /// What `ensure` runs once nothing answers.  Err is the reason it could not start one.
@@ -444,6 +452,16 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
         }
         return 0;
     }
+    let deadline = crate::clock::real_now() + timeout;
+    // a hub that has stopped serving still writes its store's queue under the lock: no second hub starts on that store
+    // until it has ended (a killed one releases the lock at once)
+    if let Some(pid) = ending(&lock_path, deadline) {
+        eprintln!(
+            "ratatoskr ensure: a hub is ending here (pid {}): it still writes its store; try again once it has ended",
+            pid.map_or_else(|| "unknown".to_string(), |p| p.to_string())
+        );
+        return 1;
+    }
     let exe = match crate::idle::resolve_exe() {
         Ok(e) => e,
         Err(e) => {
@@ -458,7 +476,6 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
             return 1;
         }
     };
-    let deadline = crate::clock::real_now() + timeout;
     let mut ended = None;
     loop {
         if client::ping(&socket, Duration::from_secs(1)).is_some() {
@@ -498,16 +515,36 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
     1
 }
 
-/// Wait up to WITHIN for the lock at PATH to be released (nobody holds it any more).
-fn wait_released(path: &Path, within: Duration) -> bool {
+/// Wait up to WITHIN for the hub holding the lock at PATH to have stopped: the lock released, or marked stopping (it
+/// serves no more and only finishes its store's queue, under the lock: [`lock::Lock::mark_stopping`]).
+fn wait_stopped(path: &Path, within: Duration) -> bool {
     let deadline = crate::clock::real_now() + within;
     loop {
         match lock::holder(path, &lock::System) {
-            Ok(Holder::Ratatoskr { .. }) => {}
+            Ok(Holder::Ratatoskr {
+                stopping: false, ..
+            }) => {}
             _ => return true,
         }
         if crate::clock::real_now() >= deadline {
             return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Wait until DEADLINE for a hub that marked the lock at PATH stopping to end.  Its pid (when the file names one) if it
+/// is still ending then; None when no hub is ending, or it ended.
+fn ending(path: &Path, deadline: std::time::Instant) -> Option<Option<u32>> {
+    loop {
+        match lock::holder(path, &lock::System) {
+            Ok(Holder::Ratatoskr {
+                pid,
+                stopping: true,
+                ..
+            }) if crate::clock::real_now() >= deadline => return Some(pid),
+            Ok(Holder::Ratatoskr { stopping: true, .. }) => {}
+            _ => return None,
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -563,7 +600,7 @@ pub fn stop(env: &Env, timeout: Duration) -> i32 {
             0
         }
         Ok(Holder::Lisp { pid }) => stop_lisp(&socket, &lock_path, pid, timeout),
-        Ok(Holder::Ratatoskr { pid, start }) => {
+        Ok(Holder::Ratatoskr { pid, start, .. }) => {
             stop_ratatoskr(&socket, &lock_path, pid, start, timeout)
         }
     }
@@ -585,7 +622,7 @@ fn stop_ratatoskr(
     if let Err(e) = asked {
         eprintln!("ratatoskr stop: the hub did not take a shutdown ({e})");
     }
-    if wait_released(lock_path, timeout) {
+    if wait_stopped(lock_path, timeout) {
         println!("stopped Ratatoskr{}", named(pid));
         return 0;
     }
@@ -599,7 +636,7 @@ fn stop_ratatoskr(
     });
     match signalled {
         Ok(p) => {
-            if wait_released(lock_path, timeout) {
+            if wait_stopped(lock_path, timeout) {
                 println!("stopped Ratatoskr (pid {p}, by SIGTERM)");
                 0
             } else {
@@ -670,6 +707,41 @@ fn stop_lisp(socket: &Path, lock_dir: &Path, pid: Option<u32>, timeout: Duration
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a detached child inherits stops at stderr: a descriptor the caller left inheritable (here a high one, so
+    /// the child's own numbers cannot be mistaken for it) is not in the child's table.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_detached_child_inherits_nothing_above_stderr() {
+        let mut p = [0; 2];
+        // SAFETY: pipe(2) fills the two integers; fcntl(2) and close(2) take descriptors this test owns.
+        let leaked = unsafe {
+            assert_eq!(libc::pipe(p.as_mut_ptr()), 0);
+            let high = libc::fcntl(p[0], libc::F_DUPFD, 200);
+            libc::close(p[0]);
+            libc::close(p[1]);
+            high
+        };
+        assert!(leaked >= 200);
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "ls /proc/self/fd"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        isolate(&mut cmd);
+        let out = cmd.output().unwrap();
+        // SAFETY: closing the descriptor made above.
+        unsafe { libc::close(leaked) };
+        let seen: Vec<i32> = String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .filter_map(|w| w.parse().ok())
+            .collect();
+        assert!(!seen.is_empty(), "the child listed nothing");
+        assert!(
+            !seen.contains(&leaked),
+            "the child holds {leaked}: {seen:?}"
+        );
+    }
     use std::cell::RefCell;
 
     fn env(vars: &[(&str, &str)]) -> Env {

@@ -1,0 +1,25 @@
+# The documentation book: all of docs/ (guide, reference, develop, design) under one sidebar, built with mdBook
+# (.github/workflows/design-pages.yml, which pins the version). docs/SUMMARY.md is the table of contents.
+# Build it here with: mdbook build docs -d /some/folder
+[book]
+title = "drgnx"
+description = "drgnx: a workbench-first Emacs framework"
+language = "en"
+src = "."
+
+[build]
+# the book is plain Markdown through mdBook's own renderer: no preprocessors
+use-default-preprocessors = false
+
+[output.html]
+# the colours are the design system's generated tokens (docs/design/tokens.css); book.css maps mdBook's own
+# variables to them. mdBook picks its light or dark theme from the reader's system.
+default-theme = "light"
+preferred-dark-theme = "coal"
+additional-css = ["design/tokens.css", "design/book.css"]
+git-repository-url = "https://github.com/Black-Dragon-Foundation/drgnx"
+site-url = "/drgnx/"
+
+[output.html.search]
+# the reference pages are long: a smaller index, split at the top-level headings only
+heading-split-level = 1

@@ -1,0 +1,26 @@
+{"scenario": "debug/compound-stop-all", "requires": ["v1", "test-hooks"], "doc": "A launch.json compound: listed after the configurations as compound:N; started, its preLaunchTask runs once first and every member starts; with stopAll, stopping one stops the others. A member named but not in the file, and a failing compound task, start nothing."}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/proj/.vscode/launch.json", "json": {"version": "0.2.0", "configurations": [{"type": "mocka", "request": "launch", "name": "Server", "program": "s"}, {"type": "mockb", "request": "launch", "name": "Client", "program": "c"}], "compounds": [{"name": "Both", "configurations": ["Server", "Client"], "preLaunchTask": "prep", "stopAll": true}, {"name": "Broken", "configurations": ["Server", "Nope"]}, {"name": "Failing", "configurations": ["Server"], "preLaunchTask": "fail"}]}}
+{"do": "write_file", "path": "$ROOT/proj/.vscode/tasks.json", "json": {"version": "2.0.0", "tasks": [{"label": "prep", "type": "shell", "command": "echo ran > ${workspaceFolder}/prep.txt"}, {"label": "fail", "type": "shell", "command": "exit 3"}]}}
+{"do": "write_file", "path": "$ROOT/a.json", "json": [{"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}, {"expect": "launch", "ok": {}}, {"event": "initialized"}, {"expect": "configurationDone"}, {"expect": "disconnect", "ok": {}}, {"die": true}]}
+{"do": "write_file", "path": "$ROOT/b.json", "json": [{"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}, {"expect": "launch", "ok": {}}, {"event": "initialized"}, {"expect": "configurationDone"}, {"expect": "disconnect", "ok": {}}, {"die": true}]}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "debug/trust", "params": {"root": "$ROOT/proj", "trusted": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "debug/configs", "params": {"root": "$ROOT/proj"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"configs": [{"id": "launch:0", "name": "Server"}, {"id": "launch:1", "name": "Client"}, {"id": "compound:0", "name": "Both", "source": "compound"}, {"id": "compound:1", "name": "Broken", "source": "compound"}, {"id": "compound:2", "name": "Failing", "source": "compound"}]}}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "compound:1", "adapters": [{"id": "mocka", "name": "Mock A", "types": ["mocka"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/a.json"]}}, {"id": "mockb", "name": "Mock B", "types": ["mockb"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/b.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "error": {"code": "internal", "message": "compound Broken: no configuration named Nope"}}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "compound:2", "adapters": [{"id": "mocka", "name": "Mock A", "types": ["mocka"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/a.json"]}}, {"id": "mockb", "name": "Mock B", "types": ["mockb"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/b.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "error": {"code": "internal"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "compound:0", "adapters": [{"id": "mocka", "name": "Mock A", "types": ["mocka"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/a.json"]}}, {"id": "mockb", "name": "Mock B", "types": ["mockb"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/b.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": {"sessions": ["$capture:a", "$capture:b"]}}, "within_ms": 10000}
+{"do": "file", "path": "$ROOT/proj/prep.txt", "contains": "ran", "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "debug/control", "params": {"session": "$a", "op": "stop"}}}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": true}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-ended", "data": {"session": "$a", "name": "Server"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-ended", "data": {"session": "$b", "name": "Client"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 8, "method": "debug/configs", "params": {"root": "$ROOT/proj"}}}
+{"do": "expect", "conn": "e", "json": {"id": 8, "result": {"last": "compound:0"}}}

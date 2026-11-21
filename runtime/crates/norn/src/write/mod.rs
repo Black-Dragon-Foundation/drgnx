@@ -7,21 +7,28 @@ use urdr::graph::excise::{Blanker, Excised};
 use urdr::graph::{Tx, WriteError};
 
 pub mod agents;
+pub mod always;
 pub mod cards;
+pub mod debug;
 pub mod decisions;
 pub mod event;
+pub mod evidence;
 pub mod exec;
+pub mod huddles;
 pub mod jobs;
 pub mod messages;
 pub mod meta;
+pub mod notes;
 pub mod notices;
 pub mod options;
 pub mod prune;
 pub mod reports;
 pub mod review;
+pub mod runners;
 pub mod spend;
 pub mod steps;
 pub mod tasks;
+pub mod work;
 
 /// A coordination writer's error as the graph writer's.
 fn writer_error(e: CoordError) -> WriteError {

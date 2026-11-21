@@ -1,0 +1,14 @@
+{"scenario": "locks/codex-unconfirmed-mode-refuses-the-session", "requires": ["v1", "test-hooks"], "doc": "[C] Codex's lock asks codex-acp for its `read-only` mode (`INITIAL_AGENT_MODE`), and holds only when `session/new`'s answer says the session is in it. A wrapper that puts back a mode id codex-acp does not know (it falls back to `agent`, its auto-review mode, as the Codex personality does) gets a session the hub refuses, naming the mode, whether or not the lock is proven; nothing is listed. The plain profile starts, its mode confirmed."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-codex\" :provider codex :command (\"$MOCK\" \"acp\" \"--as\" \"codex\" \"--log\" \"$ROOT/acp.log\")) (\"codex-wrapped\" :provider codex :command (\"/usr/bin/env\" \"INITIAL_AGENT_MODE=permission-profile:drgnx\" \"$MOCK\" \"acp\" \"--as\" \"codex\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "codex-wrapped", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "not-allowed", "message": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sessions": []}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/start", "params": {"profile": "mock-codex", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"mode\":\"read-only\"", "within_ms": 15000}

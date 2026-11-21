@@ -22,11 +22,29 @@ pub enum ExecKind {
     Container,
 }
 
+/// The OS a job needs: `linux` (the default; this machine and Linux runners) or `macos` (a Mac runner's host job: it
+/// waits for one and never runs on this machine).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum JobOs {
+    Linux,
+    Macos,
+}
+
+/// The lane a job runs in: `work` (the default) or `timing` (a measurement: on a runner's timing island, or with
+/// `whole_machine` the whole machine; never joined, never cached).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum JobLane {
+    Work,
+    Timing,
+}
+
 /// Where a job is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ExecStatus {
-    /// Waiting for a machine slot (no process yet); it starts when one frees.
+    /// In the queue (no process yet): it starts where and when a machine admits it; `waiting` says why not yet.
     Queued,
     Running,
     /// Ended by itself (any exit code).
@@ -37,6 +55,9 @@ pub enum ExecStatus {
     TimedOut,
     /// Its unit or process was gone at a hub start and left no exit.
     Lost,
+    /// Ended by the hub's own infrastructure, not by the job (`infra: proxy`: a networked job's relay ended, or the hub
+    /// stopped or restarted under it); the reason is the last line of its log.
+    Infra,
 }
 
 /// A job's end, as the wake and `exec/get` give it: at most 20 lines.
@@ -87,6 +108,22 @@ pub struct ExecRow {
     pub unit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<ExecSummary>,
+    /// Where it runs or ran: `local`, or a runner's name; absent while it waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    /// Its attempt on a runner (1, then 2 after a requeue); absent for a job of this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
+    /// Why a queued job waits, in words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<String>,
+    /// Its priority, 1 (the user's) to 5 (background work), as the hub set it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u8>,
+    /// Why it was placed on `machine` and not elsewhere ("r1: about 4 min, warm cache; local: …", or "pinned by
+    /// you"); absent while it waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placed_why: Option<String>,
 }
 
 /// One argument: at most 4096 characters.
@@ -107,6 +144,14 @@ pub struct StartParams {
     /// `exec/stop` and the hub's stop still end it.  With `timebox_s` it is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_timebox: Option<bool>,
+    /// The progress guard's stall limit: seconds with no output, CPU under a tenth of a core and no IO before the job
+    /// ends `infra: stuck (stall)` (1 to 86400; default 1200).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall_s: Option<u64>,
+    /// The progress guard's silent limit: seconds with no output, whatever the CPU, before the job ends
+    /// `infra: stuck (silent)` (1 to 86400; default 2700).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silent_s: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<ExecKind>,
     /// A container job's image: a name on `agents-container-images` (kind container only).
@@ -116,9 +161,43 @@ pub struct StartParams {
     /// matrix's Network cell instead, and this field changes nothing for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<bool>,
-    /// The machine: only `local` in part 1 (any other is refused: Calls made 3).
+    /// The machine: `auto` (the default: whichever allowed machine finishes it first), `local`, or a runner's name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<Id>,
+    /// The job is heavy: under the project's `drgnx-runners-send heavy` (the default) only heavy jobs leave this
+    /// machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heavy: Option<bool>,
+    /// The keys the job needs, by name (never a value; at most 16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keys: Option<Bounded<Vec<Bounded<String, 128>>, 16>>,
+    /// The jobs (ids) this one needs: it waits, holding nothing, until each passed, and ends as infra if one did not
+    /// (at most 64; each one the queue knows, and no cycle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs: Option<Bounded<Vec<Id>, 64>>,
+    /// The job runs on this machine only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_only: Option<bool>,
+    /// Work nobody waits for: priority 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<bool>,
+    /// The paths (globs) the job may write back into the tree (at most 64).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writes: Option<Bounded<Vec<Bounded<String, 512>>, 64>>,
+    /// The OS it needs (default `linux`); a `macos` job needs a Mac runner with its project's Homebrew packages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<JobOs>,
+    /// The lane (default `work`): a `timing` job runs on its runner's timing island while no other timing job holds it
+    /// (a machine without an island refuses it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<JobLane>,
+    /// A `timing` job that takes the whole machine instead of the island: it needs a named `machine`, waits while P1–P2
+    /// work is pending, then drains the machine (no new work starts there) and starts once it is empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whole_machine: Option<bool>,
+    /// The job's priority, 1 (highest) to 5: the user's connections only (a session's request is refused).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u8>,
     /// What the job is called in lists (the user's jobs only; at most 128 characters).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<Bounded<String, 128>>,
@@ -132,6 +211,21 @@ pub struct StartParams {
     /// How much nicer than the hub the job runs, 0 to 19 (the user's jobs only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nice: Option<i8>,
+    /// A test job whose suite selects rows: its argv holds `{rows}` where the selector of the rows to run goes (an
+    /// Emacs regexp of the names). Every row runs at first; a job a lost runner sends back runs only the rows that have
+    /// no result yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<RowsParam>,
+}
+
+/// `exec/start`'s `rows`: the parser that reads the rows from the job's log, and the rows in listing order.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RowsParam {
+    /// `ert`, `cargo-test` or `plist`.
+    pub parser: Bounded<String, 16>,
+    /// The rows' names (at most 20000, each at most 512 characters).
+    pub listed: Bounded<Vec<Bounded<String, 512>>, 20000>,
 }
 
 impl StartParams {
@@ -152,6 +246,65 @@ impl StartParams {
             None
         }
     }
+}
+
+/// `job_start`'s arguments: `exec/start`'s without `priority` (the hub sets an agent's job's priority; `background`
+/// can only lower it). A request that names a priority is refused as an unknown field.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JobStartParams {
+    /// The command and its arguments (at most 256); never run through a shell by the hub.
+    pub argv: Bounded<Vec<Arg>, 256>,
+    /// The folder it runs in: your worktree or a folder under it (default: your worktree).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<AbsPath>,
+    /// Seconds before it is ended: 1 to 86400 (default 3600).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timebox_s: Option<u64>,
+    /// The user's jobs only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_timebox: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ExecKind>,
+    /// A container job's image: a name on `agents-container-images` (kind container only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<Bounded<String, 256>>,
+    /// The user's container jobs only (yours get the matrix's Network cell).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<bool>,
+    /// `auto` (the default), `local`, or a runner's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<Id>,
+    /// The user's jobs only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<Bounded<String, 128>>,
+    /// The user's jobs only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<Bounded<Vec<EnvVar>, 16>>,
+    /// The user's jobs only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_max: Option<Bounded<String, 16>>,
+    /// The user's jobs only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nice: Option<i8>,
+    /// The job is heavy (a long build, a whole test suite): it may run on another machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heavy: Option<bool>,
+    /// The keys the job needs, by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keys: Option<Bounded<Vec<Bounded<String, 128>>, 16>>,
+    /// The job runs on this machine only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_only: Option<bool>,
+    /// Work nobody waits for: it runs after everything else (priority 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<bool>,
+    /// The paths (globs) the job may write back into your tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writes: Option<Bounded<Vec<Bounded<String, 512>>, 64>>,
+    /// `macos`: the job needs a Mac runner (a Naglfar build, macOS tests); default `linux`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<JobOs>,
 }
 
 /// `exec/start`'s answer (and `job_start`'s): the job's id and what the agent does now.
@@ -238,6 +391,11 @@ fn check_start(p: &StartParams) -> Result<(), Error> {
     if p.timebox_s.is_some_and(|t| !(1..=86_400).contains(&t)) {
         return Err(invalid("timebox_s", "a time box of 1 to 86400 seconds"));
     }
+    for (name, v) in [("stall_s", p.stall_s), ("silent_s", p.silent_s)] {
+        if v.is_some_and(|t| !(1..=86_400).contains(&t)) {
+            return Err(invalid(name, "a limit of 1 to 86400 seconds"));
+        }
+    }
     if p.no_timebox == Some(true) && p.timebox_s.is_some() {
         return Err(invalid(
             "no_timebox",
@@ -256,6 +414,9 @@ fn check_start(p: &StartParams) -> Result<(), Error> {
     }
     if p.nice.is_some_and(|n| !(0..=19).contains(&n)) {
         return Err(invalid("nice", "a niceness of 0 to 19"));
+    }
+    if p.priority.is_some_and(|n| !(1..=5).contains(&n)) {
+        return Err(invalid("priority", "a priority of 1 (highest) to 5"));
     }
     if let Some(vars) = &p.env {
         for (i, v) in vars.iter().enumerate() {
@@ -301,8 +462,13 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "exec/start", ExecStart(StartParams) -> Started,
             classes: [User], writes: true,
-            doc: "a job the hub runs as a unit of its own (in a project folder; a container job from the allowed images only); local only",
+            doc: "a job the hub queues and runs on whichever allowed machine finishes it first (machine auto), this one (local) or a runner; a container job from the allowed images only",
             check: check_start,
+        ),
+        method!(
+            "exec/bump", ExecBump(ById) -> ExecRow,
+            classes: [User], writes: true,
+            doc: "a queued job raised to priority 1 (the user's own connections only)",
         ),
         method!(
             "exec/get", ExecGet(ById) -> ExecRow,

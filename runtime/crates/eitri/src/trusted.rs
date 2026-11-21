@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 
 use rustix::fs::{Mode, fstat};
 
-use crate::{FsError, Kind, open_path};
+use crate::{FsError, Kind, Pinned, open_path};
 
 /// A program only root can change, and the identity it was checked under.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +26,9 @@ const WHY_NOT_ROOT: &str = "not owned by root";
 const WHY_WRITABLE: &str = "group- or world-writable";
 const WHY_PARENT_NOT_ROOT: &str = "a parent directory is not owned by root";
 const WHY_PARENT_WRITABLE: &str = "a parent directory is group- or world-writable";
+const WHY_NOT_SYSTEM: &str = "not owned by root or a system account";
+const WHY_PARENT_NOT_SYSTEM: &str = "a parent directory is not owned by root or a system account";
+const WHY_CHANGED: &str = "its path changed while it was checked";
 const WHY_NO_CANDIDATE: &str = "no candidate given";
 
 /// The first of `candidates` that only root can change, never looked up through `PATH`:
@@ -38,7 +41,7 @@ const WHY_NO_CANDIDATE: &str = "no candidate given";
 pub fn trusted_program(candidates: &[&Path]) -> Result<TrustedProgram, FsError> {
     let mut last = (PathBuf::new(), WHY_NO_CANDIDATE);
     for path in candidates {
-        match check(path) {
+        match check(path, true, 0) {
             Ok(t) => return Ok(t),
             Err(Why::Unsupported(w)) => return Err(FsError::Unsupported(w)),
             Err(Why::Untrusted(why)) => last = (path.to_path_buf(), why),
@@ -50,6 +53,36 @@ pub fn trusted_program(candidates: &[&Path]) -> Result<TrustedProgram, FsError> 
     })
 }
 
+/// A file only root can change, with no execute bit asked: the same checks as [`trusted_program`] (an absolute path
+/// with no link, a regular file owned by uid 0 and not group- or world-writable, root-owned directories up to `/`).
+/// For data bound into a sandbox by path, such as the resolver's file (GL-T7-4).
+pub fn root_only_file(path: &Path) -> Result<(), FsError> {
+    system_owned_file(path, 0)
+}
+
+/// [`root_only_file`] with the owners widened from root to root or a system account: the file and every directory up
+/// to `/` are owned by a uid of at most `max_uid` (the system-uid boundary, 999 and below), and none of them is group-
+/// or world-writable; the path has no link. For a file a system service makes, such as systemd-resolved's stub
+/// `/run/systemd/resolve/stub-resolv.conf` (its directory belongs to `systemd-resolve`), which only that account or
+/// root can change.
+pub fn system_owned_file(path: &Path, max_uid: u32) -> Result<(), FsError> {
+    pin_system_owned_file(path, max_uid).map(drop)
+}
+
+/// [`system_owned_file`], keeping what it opened: the file's fd, the one that was checked (its owner and mode read from
+/// the fd, the path's directories walked, and the path opened again to be the same file). A caller that binds or reads
+/// the fd, never the path again, sees the checked file even if the path is swapped for a link afterwards.
+pub fn pin_system_owned_file(path: &Path, max_uid: u32) -> Result<Pinned, FsError> {
+    match check_pinned(path, false, max_uid) {
+        Ok(p) => Ok(p),
+        Err(Why::Unsupported(w)) => Err(FsError::Unsupported(w)),
+        Err(Why::Untrusted(why)) => Err(FsError::Untrusted {
+            path: path.to_path_buf(),
+            why,
+        }),
+    }
+}
+
 /// Why one candidate failed: a refusal, or `Unsupported`, which ends the search (no candidate can pass).
 #[derive(Debug, PartialEq, Eq)]
 enum Why {
@@ -57,7 +90,17 @@ enum Why {
     Unsupported(&'static str),
 }
 
-fn check(path: &Path) -> Result<TrustedProgram, Why> {
+fn check(path: &Path, need_exec: bool, max_uid: u32) -> Result<TrustedProgram, Why> {
+    let pinned = check_pinned(path, need_exec, max_uid)?;
+    Ok(TrustedProgram {
+        path: path.to_path_buf(),
+        dev: pinned.dev,
+        ino: pinned.ino,
+    })
+}
+
+/// [`check`], with the fd it opened.
+fn check_pinned(path: &Path, need_exec: bool, max_uid: u32) -> Result<Pinned, Why> {
     // Compared as bytes: `Path`'s own equality ignores `.` components, repeated and trailing slashes.
     let plain = path.components().collect::<PathBuf>();
     if !path.is_absolute()
@@ -75,25 +118,30 @@ fn check(path: &Path) -> Result<TrustedProgram, Why> {
     })?;
     let st = fstat(&pinned.fd).map_err(|_| Why::Untrusted(WHY_CANNOT_OPEN))?;
     let mode = Mode::from_raw_mode(st.st_mode);
-    if !mode.intersects(Mode::XUSR | Mode::XGRP | Mode::XOTH) {
+    if need_exec && !mode.intersects(Mode::XUSR | Mode::XGRP | Mode::XOTH) {
         return Err(Why::Untrusted(WHY_NOT_EXECUTABLE));
     }
-    if st.st_uid != 0 {
-        return Err(Why::Untrusted(WHY_NOT_ROOT));
+    if st.st_uid > max_uid {
+        return Err(Why::Untrusted(if max_uid == 0 {
+            WHY_NOT_ROOT
+        } else {
+            WHY_NOT_SYSTEM
+        }));
     }
     if mode.intersects(Mode::WGRP | Mode::WOTH) {
         return Err(Why::Untrusted(WHY_WRITABLE));
     }
-    ancestors(path)?;
-    Ok(TrustedProgram {
-        path: path.to_path_buf(),
-        dev: pinned.dev,
-        ino: pinned.ino,
-    })
+    ancestors(path, max_uid)?;
+    // the directories were read after the file was opened: a path swapped in between would be a different file
+    let again = open_path(path, Kind::File).map_err(|_| Why::Untrusted(WHY_CHANGED))?;
+    if (again.dev, again.ino) != (pinned.dev, pinned.ino) {
+        return Err(Why::Untrusted(WHY_CHANGED));
+    }
+    Ok(pinned)
 }
 
-/// Every ancestor of `path` up to `/`: a directory, owned by uid 0, not group- or world-writable.
-fn ancestors(path: &Path) -> Result<(), Why> {
+/// Every ancestor of `path` up to `/`: a directory, owned by a uid of at most `max_uid`, not group- or world-writable.
+fn ancestors(path: &Path, max_uid: u32) -> Result<(), Why> {
     for dir in path.ancestors().skip(1) {
         let pinned = open_path(dir, Kind::Dir).map_err(|e| match e {
             FsError::Unsupported(w) => Why::Unsupported(w),
@@ -101,8 +149,12 @@ fn ancestors(path: &Path) -> Result<(), Why> {
             _ => Why::Untrusted(WHY_CANNOT_OPEN),
         })?;
         let st = fstat(&pinned.fd).map_err(|_| Why::Untrusted(WHY_CANNOT_OPEN))?;
-        if st.st_uid != 0 {
-            return Err(Why::Untrusted(WHY_PARENT_NOT_ROOT));
+        if st.st_uid > max_uid {
+            return Err(Why::Untrusted(if max_uid == 0 {
+                WHY_PARENT_NOT_ROOT
+            } else {
+                WHY_PARENT_NOT_SYSTEM
+            }));
         }
         if Mode::from_raw_mode(st.st_mode).intersects(Mode::WGRP | Mode::WOTH) {
             return Err(Why::Untrusted(WHY_PARENT_WRITABLE));
@@ -137,6 +189,11 @@ mod tests {
     fn uid0(test: &str) -> bool {
         let root = rustix::process::geteuid().is_root();
         if !root {
+            // a lane that is meant to run these as root sets the variable: a skip there is a failure, never a pass
+            assert!(
+                std::env::var_os("DRGNX_REQUIRE_ROOT_TESTS").is_none(),
+                "{test}: needs uid 0, and DRGNX_REQUIRE_ROOT_TESTS says this lane runs as root"
+            );
             eprintln!("{test}: needs uid 0; skipped");
         }
         root
@@ -277,6 +334,78 @@ mod tests {
         assert_eq!(why(trusted_program(&[&prog])), WHY_WRITABLE);
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    /// Sets `system.posix_acl_access` to: owner rwx, user `uid` rwx, group r-x, mask `mask`, other r-x. False when the
+    /// filesystem takes no ACLs (the test is skipped, never passed).
+    fn set_acl(p: &Path, uid: u32, mask: u16) -> bool {
+        use std::os::unix::ffi::OsStrExt;
+        let mut v = 2u32.to_le_bytes().to_vec(); // POSIX_ACL_XATTR_VERSION
+        for (tag, perm, id) in [
+            (0x01u16, 7u16, u32::MAX), // USER_OBJ
+            (0x02, 7, uid),            // USER
+            (0x04, 5, u32::MAX),       // GROUP_OBJ
+            (0x10, mask, u32::MAX),    // MASK
+            (0x20, 5, u32::MAX),       // OTHER
+        ] {
+            v.extend_from_slice(&tag.to_le_bytes());
+            v.extend_from_slice(&perm.to_le_bytes());
+            v.extend_from_slice(&id.to_le_bytes());
+        }
+        let c = std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+        let name = c"system.posix_acl_access";
+        // SAFETY: valid NUL-terminated strings and a buffer of the stated length.
+        unsafe { libc::setxattr(c.as_ptr(), name.as_ptr(), v.as_ptr().cast(), v.len(), 0) == 0 }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn a_file_or_parent_whose_acl_grants_write_is_refused() {
+        if !uid0("a_file_or_parent_whose_acl_grants_write_is_refused") {
+            return;
+        }
+        let (_top, prog) = root_owned_fixture();
+        assert_eq!(trusted_program(&[&prog]).unwrap().path, prog);
+        // GL-T1-4: a named-user ACL entry with write raises the mask, and the mask is the file's group bits, so the
+        // mode check sees it. An ACL that only reads or executes (mask r-x) stays trusted.
+        if !set_acl(&prog, 65534, 0o7) {
+            eprintln!("a_file_or_parent_whose_acl_grants_write_is_refused: no ACLs here; skipped");
+            return;
+        }
+        assert_eq!(why(trusted_program(&[&prog])), WHY_WRITABLE);
+        assert!(set_acl(&prog, 65534, 0o5));
+        assert_eq!(trusted_program(&[&prog]).unwrap().path, prog);
+        let sub = prog.parent().unwrap();
+        assert!(set_acl(sub, 65534, 0o7));
+        assert_eq!(why(trusted_program(&[&prog])), WHY_PARENT_WRITABLE);
+    }
+
+    #[test]
+    fn root_only_file_needs_no_execute_bit_but_the_same_ownership() {
+        if !uid0("root_only_file_needs_no_execute_bit_but_the_same_ownership") {
+            return;
+        }
+        let (_top, prog) = root_owned_fixture();
+        chmod(&prog, 0o644);
+        root_only_file(&prog).unwrap();
+        chmod(&prog, 0o664);
+        assert!(matches!(
+            root_only_file(&prog),
+            Err(FsError::Untrusted {
+                why: WHY_WRITABLE,
+                ..
+            })
+        ));
+        chmod(&prog, 0o644);
+        chown(prog.parent().unwrap(), Some(65534), None).unwrap();
+        assert!(matches!(
+            root_only_file(&prog),
+            Err(FsError::Untrusted {
+                why: WHY_PARENT_NOT_ROOT,
+                ..
+            })
+        ));
+    }
+
     #[test]
     fn a_file_without_an_execute_bit_is_refused() {
         if !uid0("a_file_without_an_execute_bit_is_refused") {
@@ -313,7 +442,7 @@ mod tests {
             "/tmp"
         });
         assert_eq!(
-            ancestors(&tmp.join("prog")).unwrap_err(),
+            ancestors(&tmp.join("prog"), 0).unwrap_err(),
             Why::Untrusted(WHY_PARENT_WRITABLE)
         );
         if !uid0("tmp_is_never_a_trusted_parent (the whole candidate)") {
@@ -332,6 +461,121 @@ mod tests {
 
     #[test]
     fn ancestors_of_a_system_program_pass() {
-        ancestors(Path::new("/usr/bin/env")).unwrap();
+        ancestors(Path::new("/usr/bin/env"), 0).unwrap();
+    }
+
+    fn why_of(r: Result<(), FsError>) -> &'static str {
+        match r {
+            Err(FsError::Untrusted { why, .. }) => why,
+            Ok(()) => panic!("expected Untrusted, got Ok"),
+            Err(_) => panic!("expected Untrusted, got another error"),
+        }
+    }
+
+    /// The fixture's directories and file made over to a system account (uid 100): systemd-resolved's own shape.
+    fn system_owned_fixture() -> (tempfile::TempDir, PathBuf) {
+        let (top, prog) = root_owned_fixture();
+        let sub = prog.parent().unwrap().to_path_buf();
+        for p in [top.path(), sub.as_path(), prog.as_path()] {
+            chown(p, Some(100), None).unwrap();
+        }
+        chmod(&prog, 0o644);
+        (top, prog)
+    }
+
+    /// systemd-resolved's stub: a file and its directories owned by a system account, not writable by anyone else.
+    /// `root_only_file` refuses it; `system_owned_file` takes it up to the system-uid boundary only.
+    #[test]
+    fn a_chain_of_system_owners_is_trusted_as_a_system_file_only() {
+        if !uid0("a_chain_of_system_owners_is_trusted_as_a_system_file_only") {
+            return;
+        }
+        let (_top, prog) = system_owned_fixture();
+        system_owned_file(&prog, 999).unwrap();
+        system_owned_file(&prog, 100).unwrap();
+        assert_eq!(why_of(system_owned_file(&prog, 99)), WHY_NOT_SYSTEM);
+        assert_eq!(why_of(root_only_file(&prog)), WHY_NOT_ROOT);
+        // the owners may be mixed: root's file under a system account's directory
+        chown(&prog, Some(0), None).unwrap();
+        system_owned_file(&prog, 999).unwrap();
+        assert_eq!(why_of(root_only_file(&prog)), WHY_PARENT_NOT_ROOT);
+    }
+
+    #[test]
+    fn a_user_owner_or_a_writable_directory_is_still_refused_as_a_system_file() {
+        if !uid0("a_user_owner_or_a_writable_directory_is_still_refused_as_a_system_file") {
+            return;
+        }
+        let (_top, prog) = system_owned_fixture();
+        let sub = prog.parent().unwrap().to_path_buf();
+        // a login user's file (uid 1000, the first past the boundary) and nobody (65534)
+        for uid in [1000u32, 65534] {
+            chown(&prog, Some(uid), None).unwrap();
+            assert_eq!(
+                why_of(system_owned_file(&prog, 999)),
+                WHY_NOT_SYSTEM,
+                "{uid}"
+            );
+        }
+        chown(&prog, Some(100), None).unwrap();
+        // ... or a login user's directory above it
+        chown(&sub, Some(1000), None).unwrap();
+        assert_eq!(why_of(system_owned_file(&prog, 999)), WHY_PARENT_NOT_SYSTEM);
+        chown(&sub, Some(100), None).unwrap();
+        // group- or world-writable: the file, then the directory
+        for mode in [0o664, 0o646] {
+            chmod(&prog, mode);
+            assert_eq!(
+                why_of(system_owned_file(&prog, 999)),
+                WHY_WRITABLE,
+                "{mode:o}"
+            );
+        }
+        chmod(&prog, 0o644);
+        for mode in [0o775, 0o757] {
+            chmod(&sub, mode);
+            assert_eq!(
+                why_of(system_owned_file(&prog, 999)),
+                WHY_PARENT_WRITABLE,
+                "{mode:o}"
+            );
+        }
+        chmod(&sub, 0o755);
+        system_owned_file(&prog, 999).unwrap();
+    }
+
+    #[test]
+    fn a_link_in_a_system_files_path_is_refused() {
+        if !uid0("a_link_in_a_system_files_path_is_refused") {
+            return;
+        }
+        let (top, prog) = system_owned_fixture();
+        let link = top.path().join("link");
+        symlink(prog.parent().unwrap(), &link).unwrap();
+        assert_eq!(why_of(system_owned_file(&link.join("prog"), 999)), WHY_LINK);
+        let file_link = top.path().join("file-link");
+        symlink(&prog, &file_link).unwrap();
+        assert_eq!(why_of(system_owned_file(&file_link, 999)), WHY_LINK);
+    }
+
+    /// The fd a pin returns is the file that was checked: the path swapped for a link to another file afterwards does
+    /// not change what the fd is (a caller binds the fd, not the path).
+    #[test]
+    fn a_pinned_file_stays_the_checked_one_when_its_path_is_swapped() {
+        if !uid0("a_pinned_file_stays_the_checked_one_when_its_path_is_swapped") {
+            return;
+        }
+        let (_top, prog) = system_owned_fixture();
+        let pinned = pin_system_owned_file(&prog, 999).unwrap();
+        let original = (pinned.dev, pinned.ino);
+        let other = prog.parent().unwrap().join("shadow");
+        fs::write(&other, b"secret\n").unwrap();
+        fs::remove_file(&prog).unwrap();
+        symlink(&other, &prog).unwrap();
+        let st = rustix::fs::fstat(&pinned.fd).unwrap();
+        assert_eq!((st.st_dev as u64, st.st_ino as u64), original);
+        assert_ne!(original.1, fs::metadata(&other).unwrap().ino());
+        // and the path, now a link, is refused if checked again
+        assert_eq!(why_of(system_owned_file(&prog, 999)), WHY_LINK);
     }
 }

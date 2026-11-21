@@ -1,0 +1,23 @@
+Target: test drgnx-px orders::every_order_rst_crossing_data_leaves_the_channel_whole
+A frame for a closed stream is a violation instead of discarded (RFC 9113 §5.1): a DATA crossing an RST ends the
+whole channel.
+
+diff --git a/runtime/crates/drgnx-px/src/mux.rs b/runtime/crates/drgnx-px/src/mux.rs
+index a4915f05..6bf09e13 100644
+--- a/runtime/crates/drgnx-px/src/mux.rs
++++ b/runtime/crates/drgnx-px/src/mux.rs
+@@ -393,11 +393,11 @@ impl Mux {
+                 }
+                 *left -= len;
+             }
+-            out.push(Out::Discarded {
++            let _ = Out::Discarded {
+                 stream: s,
+                 kind: f.kind,
+-            });
+-            return Ok(());
++            };
++            return Err(StreamViolation::AboveHighest(s));
+         };
+         match f.kind {
+             Kind::Data => {

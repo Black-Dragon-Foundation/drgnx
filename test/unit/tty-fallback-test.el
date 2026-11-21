@@ -69,7 +69,6 @@ binding are taken off afterwards."
           (process-environment (append (list (concat "XDG_STATE_HOME=" state) (concat "DRGNX_CONFIG_DIR=" cfg))
                                        process-environment))
           (real-frame-parameter (symbol-function 'frame-parameter))
-          (drgnx-keys--defaults tty-fallback-test--defaults)
           (drgnx-tty-fallback t) (drgnx-tty-fallback-hint t) (drgnx-tty-chord-prefix "<f6>")
           (drgnx-tty-fallback--cache nil)
           (drgnx-hooks-problems nil)
@@ -79,6 +78,7 @@ binding are taken off afterwards."
          (cl-letf (((symbol-function 'frame-parameter)
                     (lambda (f p) (if (eq p 'environment) ,env (funcall real-frame-parameter f p))))
                    ((symbol-function 'frame-terminal) (lambda (&optional _) tty-fallback-test--term))
+                   ((symbol-function 'drgnx-tty-fallback-global-map) (lambda () tty-fallback-test--defaults))
                    ((symbol-function 'terminal-name) (lambda (&optional term) (symbol-name term)))
                    ((symbol-function 'terminal-live-p) (lambda (_term) t))
                    ;; the editor tabs' close glyph (drgnx-face-glyph) asks the terminal for its coding system; a
@@ -231,12 +231,11 @@ binding are taken off afterwards."
   (let* ((dir (make-temp-file "drgnx-cfg" t))
          (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
          (drgnx-keys-last (list :bindings (tty-fallback-test--bindings "VS Code")))
-         (drgnx-keys--defaults tty-fallback-test--defaults)
          (drgnx-settings-apply--entries nil)           ; a process that has not applied settings.el
          (drgnx-keys-tty-fallback nil)
          (drgnx-tty-fallback--cache nil))
     (unwind-protect
-        (progn
+        (cl-letf (((symbol-function 'drgnx-tty-fallback-global-map) (lambda () tty-fallback-test--defaults)))
           (with-temp-file (expand-file-name "settings.el" dir)
             (insert "(drgnx-settings\n :version 1\n (drgnx-keys-tty-fallback ((\"C-S-p\" . \"M-Z\"))))\n"))
           (should (equal (plist-get (tty-fallback-test--row (drgnx-tty-fallback-active-table) "C-S-p") :alt) "M-Z")))
@@ -435,7 +434,7 @@ binding are taken off afterwards."
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
         (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
         (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
-        (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
+        (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
         (drgnx-keys-problems nil) (drgnx-keys-last nil))
     (drgnx--core-commands)
     (unwind-protect
@@ -536,13 +535,13 @@ binding are taken off afterwards."
         (tty-fallback-test--reading events
           (should (equal (cons events (drgnx-tty-fallback--prefix nil)) (cons events (key-parse chord))))
           (should (equal (car (last prompts)) "Ctrl+Shift+…"))))
-      ;; twice: F6 itself; ESC alone: nothing; C-g: C-g, so a pending prefix (C-x F6 C-g) quits too
+      ;; twice: F6 itself; ESC alone: C-<escape> (Switch Tile); C-g: C-g, so a pending prefix (C-x F6 C-g) quits too
       (tty-fallback-test--reading (list ?\e ?\[ ?1 ?7 ?~)
         (should (equal (drgnx-tty-fallback--prefix nil) [f6])))
       (tty-fallback-test--reading (list ?\C-g)
         (should (equal (drgnx-tty-fallback--prefix nil) [?\C-g])))
       (tty-fallback-test--reading (list ?\e)
-        (should (equal (drgnx-tty-fallback--prefix nil) [])))
+        (should (equal (drgnx-tty-fallback--prefix nil) [C-escape])))
       ;; a click, a paste or a focus report after F6 is no key: F6 is dropped, and what was read of the
       ;; sequence goes back to the input in order, where Emacs decodes it whole (with the rest still unread)
       (pcase-dolist (`(,read ,rest) '(((?\e ?\[ ?<) (?0 ?\; ?5 ?\; ?5 ?M))              ; SGR mouse press
@@ -575,14 +574,25 @@ binding are taken off afterwards."
          (md (lambda (s) (if (string-search "`" s) (format "`` %s ``" s) (format "`%s`" s))))
          (table (tty-fallback-test--table "VS Code")))
     (pcase-dolist (`(,chord . ,row) table)
-      (should (equal (list chord t)
-                     (list chord (and (string-match-p
-                                       (format "^| %s | [^|\n]+ | %s | %s |$" (regexp-quote (funcall md chord))
-                                               (regexp-quote (if (plist-get row :alt) (funcall md (drgnx-tty-fallback-label (plist-get row :alt))) "—"))
-                                               (regexp-quote (funcall md (drgnx-tty-fallback-label (plist-get row :prefix)))))
-                                       section)
-                                      t)))))
+      ;; a row without its Alt+Shift key says why the key was not free (macOS's run left C-S-d without M-D)
+      (ert-info ((let ((alt (drgnx-tty-fallback--alt-of (aref (key-parse chord) 0))))
+                   (format "%s: %S; %s: %s" chord row alt
+                           (and alt (drgnx-tty-fallback--why-not alt tty-fallback-test--defaults
+                                                                 (tty-fallback-test--keys "VS Code"))))))
+        (should (equal (list chord t)
+                       (list chord (and (string-match-p
+                                         (format "^| %s | [^|\n]+ | %s | %s |$" (regexp-quote (funcall md chord))
+                                                 (regexp-quote (if (plist-get row :alt) (funcall md (drgnx-tty-fallback-label (plist-get row :alt))) "—"))
+                                                 (regexp-quote (funcall md (drgnx-tty-fallback-label (plist-get row :prefix)))))
+                                         section)
+                                        t))))))
     (should (= (length table) (with-temp-buffer (insert section) (how-many "^| `" (point-min) (point-max)))))))
+
+;; C-[ is ESC: a key ending in it (C-k C-[) runs on the ESC that starts every key a terminal sends as a sequence, so
+;; C-k then F6, an arrow or Alt+x would run it.  ESC alone (the Vim profile's) is no sequence and fine.
+(ert-deftest drgnx-tty-fallback/no-key-ends-in-esc ()
+  (should-not (seq-filter (lambda (k) (let ((v (key-parse k))) (and (> (length v) 1) (eq (aref v (1- (length v))) ?\e))))
+                          (tty-fallback-test--keys "VS Code"))))
 
 (ert-deftest drgnx-tty-fallback/facts-for-the-doctor ()
   (let ((report '(:terminals (("/dev/pts/3" :caps (:id vte :keys legacy) :fallback t

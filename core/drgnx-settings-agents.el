@@ -223,6 +223,8 @@ A variable that is not `drgnx-settings-agents--explainable-p' gets a row with no
 
 ;;;; The events
 
+(put 'drgnx-settings-agents--event 'hub-events-taken '("settings/proposed" "settings/explain"))
+
 (defun drgnx-settings-agents--event (event data)
   "`drgnx-hub-event-functions': the agents' `settings/proposed' and `settings/explain', from a hub that proved itself."
   (when (and (member event '("settings/proposed" "settings/explain"))

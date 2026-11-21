@@ -33,8 +33,9 @@
         (progn
           (make-directory project t)
           (dolist (f (list a b)) (write-region "x\n" nil f nil 'silent))
-          ;; The layout is made and saved (the last window closes) by one daemon.
-          (let* ((name (plist-get (drgnx-ui-start "drgnx" "1400x800" 30 t) :name))
+          ;; The layout is made and saved (the last window closes) by one daemon, on the tier's monitor size (mutter
+          ;; has no scale 2 for a 1400x800 one).
+          (let* ((name (plist-get (drgnx-ui-start "drgnx" nil 30 t) :name))
                  (sess (progn (push name names) (drgnx-ui-own-session name))))
             (should (eql 0 (plist-get (drgnx-ui-new-frame sess) :exit)))
             (drgnx-persist-first-client--eval
@@ -48,7 +49,7 @@
             (drgnx-ui-stop name)
             (setq names nil))
           ;; A fresh daemon with that state; its first window, no file asked for.
-          (let* ((name (plist-get (drgnx-ui-start "drgnx" "1400x800" 30 t) :name))
+          (let* ((name (plist-get (drgnx-ui-start "drgnx" nil 30 t) :name))
                  (sess (progn (push name names) (drgnx-ui-own-session name))))
             (drgnx-persist-first-client--eval
              sess (format "(progn (make-directory (file-name-directory (drgnx-persist--file)) t)

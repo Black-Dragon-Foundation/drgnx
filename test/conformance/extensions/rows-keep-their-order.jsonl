@@ -1,0 +1,9 @@
+{"scenario": "extensions/rows-keep-their-order", "requires": ["v1"], "doc": "extensions/rows answers the rows of the ids it is given in the ids' order and leaves out an unknown id; a module the editor sent is a row too."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/cache/drgnx/extensions/catalog.json", "text": "{\"version\":1,\"packages\":[{\"name\":\"alpha\",\"summary\":\"A\"},{\"name\":\"beta\",\"summary\":\"B\"}],\"builtins\":[{\"name\":\"eglot\",\"version\":\"1.17\",\"summary\":\"LSP\"}]}"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "extensions/modules", "params": {"modules": [{"name": "git", "doc": "Git tools.\nMore.", "packages": ["alpha"], "flags": [], "state": "on"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "extensions/rows", "params": {"ids": ["pkg:beta", "emacs:eglot", "pkg:missing", "module:git", "pkg:alpha"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"rows": [{"id": "pkg:beta", "state": "available"}, {"id": "emacs:eglot", "state": "built-in", "version": "1.17"}, {"id": "module:git", "kind": "module", "state": "on", "summary": "Git tools."}, {"id": "pkg:alpha", "state": "missing", "why": [{"module": "git"}]}]}}}

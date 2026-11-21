@@ -168,15 +168,15 @@ and answered yes."
          (should (equal (length drgnx-modules-off-test--prompts) 1))
          (should (string-match-p "\\`Also turn off test/[ac], test/[ac]\\? \\'" (car drgnx-modules-off-test--prompts)))
          (dolist (m '(test/a test/b test/c)) (should (eq (drgnx-modules-off-test--status m) 'off)))
-         ;; The same row again turns it on, without a question.
+         ;; The same row again turns it on, without a question, and the settings' :apply brings back the dependents
+         ;; that went with it (they were never chosen off).
          (setq drgnx-modules-off-test--prompts nil)
          (drgnx-modules-off-test--press 'test/b)
          (should-not drgnx-modules-off-test--prompts)
-         (should (eq (drgnx-modules-off-test--status 'test/b) 'ok))
-         ;; A dependent that went with it is turned on by the same key, then off again without asking.
+         (dolist (m '(test/a test/b test/c)) (should (eq (drgnx-modules-off-test--status m) 'ok)))
+         ;; A dependent turns off alone, without asking.
          (drgnx-modules-off-test--press 'test/c)
-         (should (eq (drgnx-modules-off-test--status 'test/c) 'ok))
-         (drgnx-modules-off-test--press 'test/c)
+         (should (eq (drgnx-modules-off-test--status 'test/c) 'off))
          (should-not drgnx-modules-off-test--prompts)
          (should (drgnx-module-disabled-p 'test/c)))
      (kill-buffer "*drgnx modules*"))))

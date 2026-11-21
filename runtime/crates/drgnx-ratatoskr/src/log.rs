@@ -1,7 +1,8 @@
 //! Logging (design 11): tracing as JSON lines to `<state>/hub/log/hub-YYYY-MM-DD.jsonl` (UTC days, 0600, the newest 7
 //! kept), written by tracing-appender's non-blocking worker; warnings and errors also to stderr, with `<4>` / `<3>`
-//! priority prefixes when `JOURNAL_STREAM` says stderr is the journal.  The level comes from `DRGNX_RATATOSKR_LOG` (a
-//! `Targets` string such as `info` or `warn,drgnx_ratatoskr::conn=debug`; default `info`).  Never logged: the cap,
+//! priority prefixes when `JOURNAL_STREAM` says stderr is the journal, through a worker of their own too (a stderr that
+//! does not drain holds no hub thread; lines a full queue drops are counted and told, [`to_stderr`]).  The level comes from `DRGNX_RATATOSKR_LOG` (a
+//! `Targets` string such as `info` or `warn,drgnx_ratatoskr::conn=debug`; default `info`, Loro's crates `warn`).  Never logged: the cap,
 //! keys, params.
 
 use std::fs::File;
@@ -11,30 +12,48 @@ use std::path::{Path, PathBuf};
 /// How many daily files are kept.
 pub const KEEP: usize = 7;
 
-/// Flushes the log when dropped (at the end of `serve`).
-pub struct Guard(#[allow(dead_code)] tracing_appender::non_blocking::WorkerGuard);
+/// Flushes the log when dropped (at the end of `serve`): the lines stderr dropped are told first, then both queues
+/// are written out.
+pub struct Guard {
+    stderr: ToStderr,
+    _stderr_flush: Flush,
+    _file: tracing_appender::non_blocking::WorkerGuard,
+}
 
-/// Start logging into DIR (made 0700 by the caller).
-pub fn init(dir: &Path) -> io::Result<Guard> {
-    use tracing_subscriber::Layer;
+impl Drop for Guard {
+    fn drop(&mut self) {
+        self.stderr.send(None, b"");
+    }
+}
+
+/// The file log's filter: LEVEL (`DRGNX_RATATOSKR_LOG`, a `Targets` string), or by default `info` with Loro at `warn`:
+/// loro-internal logs nine info lines for every block it encodes, hundreds a save.
+fn targets(level: &str) -> io::Result<tracing_subscriber::filter::Targets> {
     use tracing_subscriber::filter::{LevelFilter, Targets};
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-    let (file, guard) = tracing_appender::non_blocking(Daily::open(dir)?);
-    let level = std::env::var("DRGNX_RATATOSKR_LOG").unwrap_or_default();
-    let targets = if level.is_empty() {
-        Targets::new().with_default(LevelFilter::INFO)
+    if level.is_empty() {
+        Ok(Targets::new()
+            .with_default(LevelFilter::INFO)
+            .with_target("loro_internal", LevelFilter::WARN)
+            .with_target("loro", LevelFilter::WARN))
     } else {
         level.parse::<Targets>().map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("DRGNX_RATATOSKR_LOG={level:?}: {e}"),
             )
-        })?
-    };
-    let stderr = Stderr {
-        journal: std::env::var_os("JOURNAL_STREAM").is_some(),
-    };
+        })
+    }
+}
+
+/// Start logging into DIR (made 0700 by the caller).
+pub fn init(dir: &Path) -> io::Result<Guard> {
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    let (file, guard) = tracing_appender::non_blocking(Daily::open(dir)?);
+    let targets = targets(&std::env::var("DRGNX_RATATOSKR_LOG").unwrap_or_default())?;
+    let journal = std::env::var_os("JOURNAL_STREAM").is_some();
+    let (stderr, stderr_flush) = to_stderr(io::stderr(), journal, STDERR_LINES);
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
@@ -42,17 +61,14 @@ pub fn init(dir: &Path) -> io::Result<Guard> {
                 .with_writer(file)
                 .with_filter(targets),
         )
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .without_time()
-                .with_target(false)
-                .with_writer(stderr)
-                .with_filter(LevelFilter::WARN),
-        )
+        .with(stderr_layer(stderr.clone()))
         .try_init()
         .map_err(|e| io::Error::other(format!("cannot start logging: {e}")))?;
-    Ok(Guard(guard))
+    Ok(Guard {
+        stderr,
+        _stderr_flush: stderr_flush,
+        _file: guard,
+    })
 }
 
 /// The UTC day of SECS since the epoch, as `YYYY-MM-DD` (H. Hinnant's `civil_from_days`).
@@ -88,44 +104,140 @@ fn today() -> String {
     day(secs)
 }
 
-/// stderr, each event behind a journal priority (`<3>` error, `<4>` warning) when stderr is the journal.
-struct Stderr {
-    journal: bool,
+/// How many lines stderr's queue holds before it drops (and counts) them.
+const STDERR_LINES: usize = 4096;
+
+/// What a [`ToStderr`]'s queue flushes when dropped.
+type Flush = tracing_appender::non_blocking::WorkerGuard;
+
+/// W as the stderr of warnings and errors, each event behind a journal priority (`<3>` error, `<4>` warning) when
+/// JOURNAL says it is the journal.  Written by tracing-appender's own thread: a stderr that does not drain (a pipe
+/// its reader left full, a file on a disk that waits) holds no hub thread.  The queue holds LINES; a full one drops
+/// lines, counted, and the next line that finds room says how many first ("N log lines dropped"), as does the hub's
+/// end ([`Guard`]), so a loss is never silent.
+fn to_stderr(w: impl Write + Send + 'static, journal: bool, lines: usize) -> (ToStderr, Flush) {
+    let (to, flush) = tracing_appender::non_blocking::NonBlockingBuilder::default()
+        .lossy(true)
+        .buffered_lines_limit(lines)
+        .thread_name("ratatoskr-stderr")
+        .finish(w);
+    let dropped = to.error_counter();
+    (
+        ToStderr {
+            journal,
+            to,
+            dropped,
+            told: std::sync::Arc::default(),
+        },
+        flush,
+    )
 }
 
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Stderr {
+/// See [`to_stderr`].
+#[derive(Clone)]
+struct ToStderr {
+    journal: bool,
+    to: tracing_appender::non_blocking::NonBlocking,
+    dropped: tracing_appender::non_blocking::ErrorCounter,
+    /// Of the lines dropped, the ones told.
+    told: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ToStderr {
+    /// Lines the queue could not take.
+    #[cfg(test)]
+    fn dropped(&self) -> usize {
+        self.dropped.dropped_lines()
+    }
+
+    /// Of those, the ones told.
+    #[cfg(test)]
+    fn told(&self) -> usize {
+        self.told.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// BUF behind PREFIX, with the count of the lines dropped since the last told ahead of it (nothing when both are
+    /// empty).  A notice the queue drops too is told again with the next line.
+    fn send(&self, prefix: Option<&'static str>, buf: &[u8]) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (dropped, told) = (self.dropped.dropped_lines(), self.told.load(SeqCst));
+        let telling = dropped > told
+            && self
+                .told
+                .compare_exchange(told, dropped, SeqCst, SeqCst)
+                .is_ok();
+        let mut line = Vec::with_capacity(buf.len() + 64);
+        if telling {
+            if self.journal {
+                line.extend_from_slice(b"<4>");
+            }
+            line.extend_from_slice(
+                format!(
+                    "ratatoskr: {} log lines dropped (stderr was full)\n",
+                    dropped - told
+                )
+                .as_bytes(),
+            );
+        }
+        if !buf.is_empty() {
+            line.extend_from_slice(prefix.unwrap_or_default().as_bytes());
+            line.extend_from_slice(buf);
+        }
+        if line.is_empty() {
+            return;
+        }
+        let _ = self.to.clone().write_all(&line);
+        if telling && self.dropped.dropped_lines() > dropped {
+            self.told.fetch_sub(dropped - told, SeqCst);
+        }
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for ToStderr {
     type Writer = Prefixed;
 
     fn make_writer(&'a self) -> Prefixed {
-        Prefixed(None)
+        Prefixed(None, self.clone())
     }
 
     fn make_writer_for(&'a self, meta: &tracing::Metadata<'_>) -> Prefixed {
-        Prefixed(self.journal.then(|| {
+        let prefix = self.journal.then(|| {
             if *meta.level() == tracing::Level::ERROR {
                 "<3>"
             } else {
                 "<4>"
             }
-        }))
+        });
+        Prefixed(prefix, self.clone())
     }
 }
 
-struct Prefixed(Option<&'static str>);
+/// One event's writer: its priority, then the event.
+struct Prefixed(Option<&'static str>, ToStderr);
 
 impl Write for Prefixed {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut err = io::stderr().lock();
-        if let Some(p) = self.0.take() {
-            err.write_all(p.as_bytes())?;
-        }
-        err.write_all(buf)?;
+        self.1.send(self.0.take(), buf);
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        io::stderr().flush()
+        Ok(())
     }
+}
+
+/// stderr's layer: warnings and errors, without times or targets.
+fn stderr_layer<S>(to: ToStderr) -> impl tracing_subscriber::Layer<S>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    use tracing_subscriber::Layer;
+    tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .without_time()
+        .with_target(false)
+        .with_writer(to)
+        .with_filter(tracing_subscriber::filter::LevelFilter::WARN)
 }
 
 /// The daily file writer.
@@ -201,8 +313,29 @@ impl Write for Daily {
 }
 
 #[cfg(test)]
+#[path = "log_tests.rs"]
+mod stderr_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_default_level_keeps_loros_diagnostics_out() {
+        // loro-internal logs nine info lines per block it encodes (`diagnose_block`): hundreds a save
+        let t = targets("").unwrap();
+        let info = tracing::Level::INFO;
+        assert!(!t.would_enable("loro_internal::oplog::change_store::block_encode", &info));
+        assert!(!t.would_enable("loro::doc", &info));
+        assert!(t.would_enable("loro_internal::oplog", &tracing::Level::WARN));
+        assert!(t.would_enable("drgnx_ratatoskr::conn", &info));
+        // a level asked for is taken as it is
+        assert!(
+            targets("info")
+                .unwrap()
+                .would_enable("loro_internal::oplog", &info)
+        );
+    }
 
     #[test]
     fn utc_days() {

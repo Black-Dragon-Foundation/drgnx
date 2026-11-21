@@ -1,5 +1,5 @@
-//! The helper's inner spec decoded from arbitrary bytes (serde, `deny_unknown_fields`); a success re-encodes and
-//! decodes to the same value.
+//! The helper's inner spec decoded from arbitrary bytes (serde, `deny_unknown_fields`; version 1, and version 2 with
+//! the browser host's plan, `corpus/inner_spec/browser.json`); a success re-encodes and decodes to the same value.
 #![no_main]
 
 use gleipnir::inner::InnerSpec;

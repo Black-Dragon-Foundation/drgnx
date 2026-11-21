@@ -1,0 +1,20 @@
+{"scenario": "debug/background-task", "requires": ["v1", "test-hooks"], "doc": "An isBackground preLaunchTask: the session starts once the task's output matches its problem matcher's endsPattern (after its beginsPattern), the task runs on with its output in the session's Debug Console, and it ends with the session. One without an endsPattern is refused, naming the task."}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/proj/.vscode/launch.json", "json": {"version": "0.2.0", "configurations": [{"type": "mocka", "request": "launch", "name": "App", "program": "a", "preLaunchTask": "watch"}, {"type": "mocka", "request": "launch", "name": "Untracked", "program": "a", "preLaunchTask": "untracked"}]}}
+{"do": "write_file", "path": "$ROOT/proj/.vscode/tasks.json", "json": {"version": "2.0.0", "tasks": [{"label": "watch", "type": "shell", "command": "trap 'echo stopped > ${workspaceFolder}/stopped.txt; exit 0' TERM; echo 'Watching ready' ; echo begin; echo ready > ${workspaceFolder}/ready.txt; echo 'Watching ready'; while true; do echo tick; sleep 1; done", "isBackground": true, "problemMatcher": {"owner": "x", "pattern": {"regexp": "^error: (.*)$", "message": 1}, "background": {"beginsPattern": "^begin", "endsPattern": {"regexp": "^Watching ready"}}}}, {"label": "untracked", "type": "shell", "command": "sleep 600", "isBackground": true, "problemMatcher": "$gcc"}]}}
+{"do": "write_file", "path": "$ROOT/a.json", "json": [{"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}, {"expect": "launch", "ok": {}}, {"event": "initialized"}, {"expect": "configurationDone"}, {"expect": "disconnect", "ok": {}}, {"die": true}]}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "debug/trust", "params": {"root": "$ROOT/proj", "trusted": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "launch:1", "adapters": [{"id": "mocka", "name": "Mock A", "types": ["mocka"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/a.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "error": {"code": "internal", "message": "task untracked is isBackground: the session starts when its output matches its problemMatcher's background endsPattern, and it has none (drgnx does not know $gcc)"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "launch:0", "adapters": [{"id": "mocka", "name": "Mock A", "types": ["mocka"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/a.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"session": "$capture:s"}}, "within_ms": 10000}
+{"do": "file", "path": "$ROOT/proj/ready.txt", "contains": "ready", "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-output", "data": {"session": "$s", "lines": [{"text": "tick", "category": "console"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "debug/control", "params": {"session": "$s", "op": "stop"}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-ended", "data": {"session": "$s"}}, "within_ms": 10000}
+{"do": "file", "path": "$ROOT/proj/stopped.txt", "contains": "stopped", "within_ms": 10000}

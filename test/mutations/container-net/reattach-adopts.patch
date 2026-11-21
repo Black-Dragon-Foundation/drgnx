@@ -1,0 +1,16 @@
+Target: row container-net/a-hub-restart-ends-the-networked-job
+A restarted hub adopts a networked job as before instead of ending it: the job runs on with no relay.
+
+diff --git a/runtime/crates/drgnx-ratatoskr/src/exec/mod.rs b/runtime/crates/drgnx-ratatoskr/src/exec/mod.rs
+index 9c65653b..22f7a9ad 100644
+--- a/runtime/crates/drgnx-ratatoskr/src/exec/mod.rs
++++ b/runtime/crates/drgnx-ratatoskr/src/exec/mod.rs
+@@ -1596,7 +1596,7 @@ impl Inner {
+                 }
+                 // a networked job lost its relay with the last hub: it is ended, not adopted (B3), and left out of
+                 // `running`, so the sweep below takes its sidecar
+-                if m.relay.is_some() {
++                if false && m.relay.is_some() {
+                     let me = self.clone();
+                     crate::clock::spawn("exec:end-relayed", async move {
+                         if let (Some(podman), Ok(name)) =

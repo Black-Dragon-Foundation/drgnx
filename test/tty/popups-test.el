@@ -4,6 +4,7 @@
 ;; is whatever `emacs' is on PATH (31.1 or later: tty child frames).
 (require 'ert)
 (require 'seq)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-tty-session)
 
 ;;;; Helpers
@@ -23,8 +24,8 @@
 
 (defun drgnx-tty-popups-test--ready (sess &optional close)
   "Wait until SESS shows the workbench: the *scratch* tab with its CLOSE mark (default: ×; a UTF-8 terminal
-keeps the glyph)."
-  (drgnx-tty-session-wait-screen sess (concat "\\*scratch\\* " (or close "×")) 20))
+keeps the glyph), its title as SESS draws it (`drgnx-tty-session-wait-tab')."
+  (drgnx-tty-session-wait-tab sess (or close "×") 20))
 
 (defun drgnx-tty-popups-test--corfu-dirs ()
   "The corfu and compat directories (the version etc/drgnx.lock.eld pins, when there), read-only; the test is
@@ -32,7 +33,8 @@ skipped, saying how to supply them, when they are not there."
   (drgnx-tty-session-require-packages '(corfu compat)))
 
 (defun drgnx-tty-popups-test--round (sess open shown close)
-  "OPEN a popup (a function), wait until SHOWN (a form) holds in the inner Emacs, then CLOSE it.  Opened, the
+  "OPEN a popup (a function), wait until SHOWN (a form) holds in the inner Emacs, then CLOSE it once the Emacs waits
+for input (`drgnx-tty-session-input-barrier').  Opened, the
 screen and the windows' edges differ from before; closed, every window has its buffer and edges again and the
 frame count is what it was."
   (let* ((before (drgnx-tty-session-eval sess drgnx-tty-popups-test--state))
@@ -43,6 +45,9 @@ frame count is what it was."
           (open-state (drgnx-tty-session-eval sess drgnx-tty-popups-test--state)))
       (should-not (equal screen-before screen-open))
       (should-not (equal (plist-get before :windows) (plist-get open-state :windows))))
+    ;; the evals above leave Lisp running behind them (their connection's sentinel, a redisplay): a C-g that arrives
+    ;; then is a quit of that Lisp ("[Quit]" in the minibuffer, which stays), not the key that ends the prompt
+    (drgnx-tty-session-input-barrier sess)
     (funcall close)
     (drgnx-tty-session-wait sess `(equal ',(plist-get before :windows) ,drgnx-tty-popups-test--windows) 10)
     (should (equal (plist-get before :frames)
@@ -55,22 +60,23 @@ frame count is what it was."
   (declare (indent 1))
   `(drgnx-tty-session-with ,spec
      (drgnx-tty-popups-test--ready ,(car spec))
+     (drgnx-tty-session-wait-stages ,(car spec))   ; no module stage rebinds a key or eats a C-g mid-row
      ,@body))
 
 ;;;; The popups drgnx owns or routes (wb/drgnx-rules.el): each shows, and leaves no trace
 
 (defun drgnx-tty-popups-test--transient (s)
-  "Define a one-key transient on <f9> in SESS and open it by that key."
+  "Define a one-key transient on <f7> (a key no key profile claims) in SESS and open it by that key."
   (should (drgnx-tty-session-eval
            s '(progn (require 'transient)
                      (transient-define-prefix drgnx-tty-popups-test-tr () [("a" "Do A" ignore)])
-                     (keymap-global-set "<f9>" #'drgnx-tty-popups-test-tr)
-                     (eq (key-binding (kbd "<f9>")) 'drgnx-tty-popups-test-tr)))))
+                     (keymap-global-set "<f7>" #'drgnx-tty-popups-test-tr)
+                     (eq (key-binding (kbd "<f7>")) 'drgnx-tty-popups-test-tr)))))
 
 (ert-deftest drgnx-tty-popups/transient-shows-and-leaves-no-trace ()
   (drgnx-tty-popups-test--with (s :size "80x24")
     (drgnx-tty-popups-test--transient s)
-    (drgnx-tty-popups-test--round s (lambda () (drgnx-tty-popups-test--key s "<f9>"))
+    (drgnx-tty-popups-test--round s (lambda () (drgnx-tty-popups-test--key s "<f7>"))
                                   '(and (get-buffer-window " *transient*") t)
                                   (lambda () (drgnx-tty-popups-test--key s "C-g")))))
 
@@ -141,16 +147,99 @@ Lisp file in the editor."
   '(seq-filter (lambda (f) (and (eq (frame-parent f) (selected-frame)) (frame-visible-p f))) (frame-list))
   "A form, in the inner Emacs: the visible child frames of the selected frame.")
 
+(defconst drgnx-tty-popups-test--popup-up-and-quiet
+  `(let ((idle (float-time (or (current-idle-time) 0))))
+     (and (not (input-pending-p))
+          (with-current-buffer "x.el" (equal (buffer-string) "(with-"))
+          (not (and (boundp 'corfu-auto--timer) (memq corfu-auto--timer timer-list)))
+          ,drgnx-tty-popups-test--child-frames-of-selected
+          ;; no timer due within 1 s, nor an idle timer not yet run this idle time
+          (not (seq-some (lambda (tm) (< (float-time (time-subtract (timer--time tm) nil)) 1)) timer-list))
+          (not (seq-some (lambda (tm) (and (not (timer--triggered tm)) (< (- (float-time (timer--time tm)) idle) 1)))
+                         timer-idle-list))
+          t))
+  "A form, in the inner Emacs: \"(with-\" typed in x.el and read, corfu's popup up, and the daemon quiet: no input
+pending, corfu's auto timer run, and no other timer due within 1 s.")
+
+(defconst drgnx-tty-popups-test--record
+  '(progn (defvar kx-seen nil) (setq kx-seen nil)
+          (defun kx-seen-record ()
+            (push (cons this-command (key-description (this-command-keys-vector))) kx-seen))
+          (add-hook 'pre-command-hook #'kx-seen-record)
+          t)
+  "A form, in the inner Emacs: record each command and the key that ran it in `kx-seen', newest first.")
+
 (ert-deftest drgnx-tty-popups/completion-as-you-type ()
   ;; corfu's popup is a child frame of the selected frame, hidden by C-g; nothing is inserted
   (let ((dirs (drgnx-tty-popups-test--corfu-dirs)))
     (drgnx-tty-popups-test--with (s :size "100x30")
       (should (drgnx-tty-popups-test--corfu s dirs))
       (drgnx-tty-session-send s "(with-")
-      (drgnx-tty-session-wait s `(and ,drgnx-tty-popups-test--child-frames-of-selected t) 10)
+      ;; C-g is what this row is about, so it is sent only once the daemon waits for input: every typed key read,
+      ;; corfu's auto timer run, the popup drawn and read by tmux, no timer due within 1 s, and the test's own last
+      ;; eval done with (its connection's sentinel, its redisplay: `drgnx-tty-session-input-barrier').  A C-g typed
+      ;; while Lisp runs is a quit, not a key (process output, which no form here sees coming, can still run Lisp
+      ;; then); the row tells by what ran: corfu-quit, from C-g
+      (drgnx-tty-session-wait s drgnx-tty-popups-test--popup-up-and-quiet 10)
+      (drgnx-tty-session-eval s drgnx-tty-popups-test--record)
+      (drgnx-tty-session-input-barrier s)
       (drgnx-tty-popups-test--key s "C-g")
+      (drgnx-tty-session-wait s '(member '(corfu-quit . "C-g") kx-seen) 10)
       (drgnx-tty-session-wait s `(null ,drgnx-tty-popups-test--child-frames-of-selected) 10)
       (should (equal (drgnx-tty-session-eval s '(with-current-buffer "x.el" (buffer-string))) "(with-")))))
+
+(ert-deftest drgnx-tty-popups/completion-popup-goes-on-a-quit ()
+  ;; extra/completion as the product runs it: a C-g typed while Lisp runs comes as a quit, not a key, so corfu's own
+  ;; C-g never runs; the popup goes all the same, as Esc hides VS Code's, and nothing is inserted
+  (let ((dirs (drgnx-tty-session-require-packages '(vertico orderless marginalia corfu compat))))
+    (drgnx-tty-popups-test--with (s :size "100x30")
+      (let ((busy (expand-file-name "kx-busy" (plist-get s :run))))
+        (should (drgnx-tty-session-eval
+                 s `(progn (dolist (d ',dirs) (add-to-list 'load-path d))
+                           (drgnx-modules-turn-on 'extra/completion)
+                           (drgnx-wb-show-in-editor (find-file-noselect ,(expand-file-name "x.el" (plist-get s :run))) t)
+                           (emacs-lisp-mode)
+                           (and (drgnx-module-running-p 'extra/completion) (bound-and-true-p corfu-mode) t))))
+        (drgnx-tty-session-send s "(with-")
+        (drgnx-tty-session-wait s drgnx-tty-popups-test--popup-up-and-quiet 10)
+        (drgnx-tty-session-eval s drgnx-tty-popups-test--record)
+        ;; the daemon busy in a timer (quit inhibited) until the C-g arrives, as a quit, or 10 s pass
+        (drgnx-tty-session-eval
+         s `(progn (defvar kx-quit 'not-yet)
+                   (defun kx-busy ()
+                     (write-region "" nil ,busy nil 'quiet)
+                     (let ((end (+ (float-time) 10))) (while (and (not quit-flag) (< (float-time) end))))
+                     (setq kx-quit quit-flag))
+                   (run-with-timer 0 nil #'kx-busy)
+                   t))
+        (drgnx-test-wait (lambda () (file-exists-p busy)) :what "the daemon busy")
+        (drgnx-tty-popups-test--key s "C-g")
+        (should (eq t (drgnx-tty-session-wait s '(and (not (eq kx-quit 'not-yet)) kx-quit) 15)))
+        (drgnx-tty-session-wait s `(null ,drgnx-tty-popups-test--child-frames-of-selected) 10)
+        (should-not (drgnx-tty-session-eval s '(assq 'corfu-quit kx-seen)))
+        (should (equal (drgnx-tty-session-eval s '(with-current-buffer "x.el" (buffer-string))) "(with-"))))))
+
+(ert-deftest drgnx-tty-popups/a-typed-absolute-path-replaces-the-prompt-s-folder ()
+  ;; Open Folder starts at ~/; typing /tmp there reads as /tmp in the input, as VS Code's path box does, not as
+  ;; ~//tmp (the shadowed ~/ is dropped once something is typed after it)
+  (let ((dirs (drgnx-tty-session-require-packages '(vertico orderless marginalia corfu compat))))
+    (drgnx-tty-popups-test--with (s :size "100x30")
+      (should (drgnx-tty-session-eval
+               s `(progn (dolist (d ',dirs) (add-to-list 'load-path d))
+                         (drgnx-modules-turn-on 'extra/completion)
+                         ;; a prompt only from a key the user types (<f8>: no key profile claims it)
+                         (global-set-key (kbd "<f8>") (lambda () (interactive)
+                                                        (let ((default-directory "~/"))
+                                                          (read-directory-name "Open folder: " nil nil t))))
+                         (drgnx-module-running-p 'extra/completion))))
+      (drgnx-tty-popups-test--key s "<f8>")
+      (drgnx-tty-session-wait s '(and (active-minibuffer-window) t) 10)
+      (drgnx-tty-session-send s "/tmp")
+      (let ((input '(with-current-buffer (window-buffer (active-minibuffer-window)) (minibuffer-contents))))
+        (drgnx-tty-session-wait s `(string-suffix-p "tmp" ,input) 10)
+        (should (equal (drgnx-tty-session-eval s input) "/tmp")))
+      (drgnx-tty-popups-test--key s "C-g")
+      (drgnx-tty-session-wait s '(null (active-minibuffer-window)) 10))))
 
 ;;;; The cursor line stays visible
 
@@ -171,7 +260,7 @@ Lisp file in the editor."
         (should (drgnx-tty-session-eval s visible))
         ;; the probe tells: the first line of the file is off the screen
         (should-not (drgnx-tty-session-eval s '(let ((w (get-buffer-window "big.txt"))) (pos-visible-in-window-p (point-min) w))))
-        (dolist (popup `(("transient" ,(lambda () (drgnx-tty-popups-test--key s "<f9>")) (get-buffer-window " *transient*")
+        (dolist (popup `(("transient" ,(lambda () (drgnx-tty-popups-test--key s "<f7>")) (get-buffer-window " *transient*")
                           ,(lambda () (drgnx-tty-popups-test--key s "C-g")))
                          ("which-key" ,(lambda () (drgnx-tty-popups-test--key s "C-x")) (get-buffer-window " *which-key*")
                           ,(lambda () (drgnx-tty-popups-test--key s "C-g")))
@@ -185,6 +274,9 @@ Lisp file in the editor."
             (drgnx-tty-session-quiet s)
             (should (eq (drgnx-tty-session-eval s visible) t))
             (ignore name)
+            ;; the evals above leave Lisp running behind them: a C-g then is a quit of it, not the key that closes
+            ;; the popup (`drgnx-tty-popups-test--round')
+            (drgnx-tty-session-input-barrier s)
             (funcall close)
             (drgnx-tty-session-wait s `(null ,shown) 10)
             (drgnx-tty-session-quiet s)))))))
@@ -227,14 +319,15 @@ Lisp file in the editor."
       (make-directory (expand-file-name "src" dir) t)
       (with-temp-file (expand-file-name "a.txt" dir) (insert "alpha\n"))
       (with-temp-file (expand-file-name "src/c.el" dir) (insert "(x)\n"))
+      (drgnx-tty-session-hub s)                   ; the Explorer's rows are the hub's listing
       (drgnx-tty-session-eval s `(progn (drgnx-explorer-set-roots (list ,dir))
                                         (drgnx-wb-show-sidebar)
                                         (drgnx-wb-show-in-editor (find-file-noselect ,(expand-file-name "a.txt" dir)) t)
                                         (with-current-buffer "a.txt" (insert "z"))
                                         t))
-      (drgnx-tty-session-wait-screen s "a\\.txt \\* x")                ; tab: name, changed mark, close mark
-      (drgnx-tty-session-wait-screen s "^v PROJECT")                   ; Explorer: open root
-      (drgnx-tty-session-wait-screen s "^> src")                       ; …closed folder
+      (drgnx-tty-session-wait-screen s "a\\.txt \\*$")                  ; tab: name, the changed mark in the close's slot
+      (drgnx-tty-session-wait-screen s (concat "^" drgnx-tty-session-rail " v Files"))                    ; the Explorer's section, open (one root: no root row)
+      (drgnx-tty-session-wait-screen s (concat "^" drgnx-tty-session-rail "> src"))                       ; …closed folder
       (drgnx-tty-session-wait-screen s "| [a-z]+ > [a-zA-Z0-9.-]+ > ")  ; breadcrumb (cut off at the window's edge)
       (drgnx-tty-popups-test--bordered-child s)
       (drgnx-tty-session-wait-screen s "[+]-----")
@@ -253,7 +346,7 @@ Lisp file in the editor."
       (let ((screen (drgnx-tty-session-quiet c)))
         (should-not (string-match-p "\\\\u[0-9A-F]\\{4\\}" screen))
         (should-not (string-match-p "[^[:ascii:]]" screen)))
-      (should (drgnx-tty-session-find s "\\*scratch\\* ×"))
+      (should (drgnx-tty-session-find s (drgnx-tty-session-tab-regexp s "×")))
       (should-not (string-match-p "\\\\u[0-9A-F]\\{4\\}" (drgnx-tty-session-screen s)))
       ;; the ASCII hooks are there while that client is, and go with it
       (should (drgnx-tty-session-eval s '(and (memq 'drgnx-tty-popups--pre-redisplay pre-redisplay-functions) t)))
@@ -270,6 +363,6 @@ Lisp file in the editor."
     (should-not (drgnx-tty-session-eval s '(or (memq 'drgnx-tty-popups--pre-redisplay pre-redisplay-functions)
                                                (memq 'drgnx-tty-popups--windows-changed window-configuration-change-hook)
                                                (advice-member-p #'drgnx-tty-popups--chrome-set 'drgnx-chrome--set))))
-    (should (drgnx-tty-session-find s "\\*scratch\\* ×"))))
+    (should (drgnx-tty-session-find s (drgnx-tty-session-tab-regexp s "×")))))
 
 ;;; popups-test.el ends here

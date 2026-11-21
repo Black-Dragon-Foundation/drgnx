@@ -1,8 +1,8 @@
 # drgnx shell integration for fish.  Add one line to ~/.config/fish/config.fish:
 #   source /path/to/drgnx/etc/shell/drgnx.fish
 # (docs/guide/shell.md).  It prints nothing, runs no program while it loads, and never touches fish_prompt or your
-# plugin manager.  What it does: tab completion for drgnx, and inside drgnx's own terminal (eat) the few lines of
-# eat's integration that fish needs (eat ships none for fish): directory tracking and "is a command running".
+# plugin manager.  What it does: tab completion for drgnx; inside drgnx's own terminal, Ghostty's shell integration
+# (prompt marks, the folder) and an ssh that gives the host a TERM it knows.
 if not set -q _drgnx_sourced
     set -g _drgnx_sourced 1
 
@@ -32,16 +32,23 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n __fish_use_subcommand -a rollback -d 'The packages of an earlier generation'
     complete -c drgnx -n __fish_use_subcommand -a generations -d 'List the package generations'
     complete -c drgnx -n __fish_use_subcommand -a lock -d 'The package lock'
+    complete -c drgnx -n __fish_use_subcommand -a plugins -d 'The plugins drgnx runs'
+    complete -c drgnx -n __fish_use_subcommand -a packs -d 'Language packs: installed, synced, checked'
+    complete -c drgnx -n __fish_use_subcommand -a extensions -d "The catalog of the archives' packages"
+    complete -c drgnx -n __fish_use_subcommand -a record -d 'Record the outside ends of a run'
+    complete -c drgnx -n __fish_use_subcommand -a replay -d 'Run drgnx with a recording backing the outside ends'
     complete -c drgnx -n __fish_use_subcommand -a bisect -d 'Find the module that breaks'
     complete -c drgnx -n __fish_use_subcommand -a service-unit -d 'Print the systemd user unit'
     complete -c drgnx -n __fish_use_subcommand -a onboard -d 'Set drgnx up'
     complete -c drgnx -n __fish_use_subcommand -a check -d 'Build, then every test tier'
     complete -c drgnx -n __fish_use_subcommand -a lease -d 'Run a command in a slot of the host lease'
     complete -c drgnx -n __fish_use_subcommand -a fmt -d "Format drgnx's Emacs Lisp"
+    complete -c drgnx -n __fish_use_subcommand -a design -d "Write the design system's generated pages"
     complete -c drgnx -n __fish_use_subcommand -a work -d 'The work tracker'
     complete -c drgnx -n __fish_use_subcommand -a hub -d 'The hub behind agents and jobs'
     complete -c drgnx -n __fish_use_subcommand -a runtime -d 'Build and install Ratatoskr, the agent runtime'
     complete -c drgnx -n __fish_use_subcommand -a job -d 'Jobs from plans'
+    complete -c drgnx -n __fish_use_subcommand -a runner -d 'The machines that run jobs'
     complete -c drgnx -n __fish_use_subcommand -a search -d 'Semantic search'
     complete -c drgnx -n __fish_use_subcommand -a keys -d 'Compare key profiles'
     complete -c drgnx -n __fish_use_subcommand -a safe -d "Emacs with drgnx's core only"
@@ -53,6 +60,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n __fish_use_subcommand -a coord -d 'Serve the coordination tools to an agent outside drgnx'
     complete -c drgnx -n __fish_use_subcommand -a graph -d 'The store'"'"'s commands (export, backup, revert, …)'
     complete -c drgnx -n __fish_use_subcommand -a childframe-elpa -d '(Tests) the pinned child-frame packages into a new folder'
+    complete -c drgnx -n __fish_use_subcommand -a browser -d 'The browser sandboxed agents get (install, list)'
     complete -c drgnx -n __fish_use_subcommand -s t -d 'Open in this terminal'
     complete -c drgnx -n __fish_use_subcommand -l gui -d 'Open in a window'
 
@@ -76,6 +84,12 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l ab -r -d 'Judge wall clock against a git ref (paired A/B)'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l ab-env -x -d 'Paired A/B by an environment variable (VAR=JUDGED,REF)'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l n -r -d 'Samples per side for --ab'
+    complete -c drgnx -n '__fish_seen_subcommand_from test' -l aa -d 'Run every workload against itself first (the default with --ab-env)'
+    complete -c drgnx -n '__fish_seen_subcommand_from test' -l no-aa -d 'Skip that A/A run'
+    complete -c drgnx -n '__fish_seen_subcommand_from build' -f -a runner-bundle -d 'The runner bundle (static)'
+    complete -c drgnx -n '__fish_seen_subcommand_from build' -f -a terminfo -d "The terminal's terminfo entry"
+    complete -c drgnx -n '__fish_seen_subcommand_from build; and __fish_seen_subcommand_from runner-bundle' -l arch -x -a 'x86_64 aarch64' -d "The bundle's architecture"
+    complete -c drgnx -n '__fish_seen_subcommand_from build; and __fish_seen_subcommand_from runner-bundle' -l target -x -a 'aarch64-apple-darwin' -d "A Mac runner's bundle, built on a Mac"
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l soak -d 'The workloads in a loop'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l day -d 'The synthetic day'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l container -d 'Inside a container'
@@ -98,6 +112,31 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from sync' -l seed -r -d 'Copy another elpa first'
     complete -c drgnx -n '__fish_seen_subcommand_from sync' -l prune -d 'Remove packages the manifest no longer needs'
     complete -c drgnx -n '__fish_seen_subcommand_from sync' -l dry-run -d 'With --prune: only list them'
+    complete -c drgnx -n '__fish_seen_subcommand_from sync' -l add -x -d 'Install packages and mark them as yours'
+    complete -c drgnx -n '__fish_seen_subcommand_from sync' -l remove -x -d 'Remove packages'
+    complete -c drgnx -n '__fish_seen_subcommand_from sync' -l pending -d "Run the Extensions view's queue"
+    complete -c drgnx -n '__fish_seen_subcommand_from sync' -l wait -d 'Wait for a running sync'
+    complete -c drgnx -n '__fish_seen_subcommand_from upgrade' -l only -x -d 'Upgrade only these'
+    complete -c drgnx -n '__fish_seen_subcommand_from upgrade' -l stage -d 'Fetch and check into the cache only'
+    complete -c drgnx -n '__fish_seen_subcommand_from upgrade' -l staged -d 'Install what was staged'
+    complete -c drgnx -n '__fish_seen_subcommand_from sync upgrade rollback extensions' -l progress -r -d 'JSON steps for the editor'
+    complete -c drgnx -n '__fish_seen_subcommand_from extensions' -f -a 'refresh fetch-readme'
+    complete -c drgnx -n '__fish_seen_subcommand_from plugins' -a 'install list remove'
+    complete -c drgnx -n '__fish_seen_subcommand_from plugins' -l replace -d 'Replace an installed plugin'
+    complete -c drgnx -n '__fish_seen_subcommand_from plugins' -l json -d 'The list as JSON'
+    complete -c drgnx -n '__fish_seen_subcommand_from packs' -f -a 'list install remove sync migrate check pin'
+    complete -c drgnx -n '__fish_seen_subcommand_from packs' -l add -x -d 'Install these packs'
+    complete -c drgnx -n '__fish_seen_subcommand_from packs' -l remove -x -d 'Remove these packs'
+    complete -c drgnx -n '__fish_seen_subcommand_from packs' -l builtin -d 'Check a built-in pack'
+    complete -c drgnx -n '__fish_seen_subcommand_from packs' -l other -r -d 'A pack whose claims count'
+    complete -c drgnx -n '__fish_seen_subcommand_from packs' -l src -x -d "The grammar's source folder"
+    complete -c drgnx -n '__fish_seen_subcommand_from record' -f -a 'start stop lint export'
+    complete -c drgnx -n '__fish_seen_subcommand_from record' -l cap-usd -x -d 'Spending cap'
+    complete -c drgnx -n '__fish_seen_subcommand_from record' -l cap-weekly -x -d 'Weekly cap'
+    complete -c drgnx -n '__fish_seen_subcommand_from record' -l max-minutes -x -d 'Time cap'
+    complete -c drgnx -n '__fish_seen_subcommand_from record' -l to -r -d 'Export into this folder'
+    complete -c drgnx -n '__fish_seen_subcommand_from replay' -l speed -x -d '0, 1 or N times'
+    complete -c drgnx -n '__fish_seen_subcommand_from replay' -l strict -d 'Refuse what the recording lacks'
     complete -c drgnx -n '__fish_seen_subcommand_from lock' -l ship -d 'Write etc/drgnx.lock.eld'
     complete -c drgnx -n '__fish_seen_subcommand_from onboard' -l non-interactive -d 'No questions'
     complete -c drgnx -n '__fish_seen_subcommand_from onboard' -l again -d 'Run the steps again'
@@ -113,6 +152,8 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from check' -l shards -x -d 'Shards'
     complete -c drgnx -n '__fish_seen_subcommand_from lease' -l wait -x -d 'Seconds to wait for a slot'
     complete -c drgnx -n '__fish_seen_subcommand_from fmt' -l check -d 'Only report'
+    complete -c drgnx -n '__fish_seen_subcommand_from design' -l check -d 'Only say which pages are stale'
+    complete -c drgnx -n '__fish_seen_subcommand_from design' -l shots -d 'Cut the component pictures from look-scene output'
 
     # work, hub, runtime, job, search, keys, ui
     complete -c drgnx -n '__fish_seen_subcommand_from work; and not __fish_seen_subcommand_from record scan status' -f -a record -d 'Link commits to a task'
@@ -130,6 +171,11 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from runtime; and not __fish_seen_subcommand_from build install' -a install -d "The built binary into drgnx's data folder"
     complete -c drgnx -n '__fish_seen_subcommand_from runtime; and __fish_seen_subcommand_from build' -l install -d 'Install it after the build'
     complete -c drgnx -n '__fish_seen_subcommand_from runtime; and __fish_seen_subcommand_from build install' -l prefix -x -a '(__fish_complete_directories)' -d 'Also link bin/ratatoskr and bin/rtsk here'
+    complete -c drgnx -n '__fish_seen_subcommand_from browser' -f
+    complete -c drgnx -n '__fish_seen_subcommand_from browser; and not __fish_seen_subcommand_from install list' -a install -d 'Download the pinned headless shell'
+    complete -c drgnx -n '__fish_seen_subcommand_from browser; and not __fish_seen_subcommand_from install list' -a list -d 'The browsers sessions can get'
+    complete -c drgnx -n '__fish_seen_subcommand_from browser; and __fish_seen_subcommand_from install' -l version -x -d 'A pinned version'
+    complete -c drgnx -n '__fish_seen_subcommand_from browser; and __fish_seen_subcommand_from install list' -l json -d 'Machine-readable'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and not __fish_seen_subcommand_from propose approve resume stop status' -f -a propose -d 'A job from a plan'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and not __fish_seen_subcommand_from propose approve resume stop status' -f -a approve -d 'Run a proposed job'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and not __fish_seen_subcommand_from propose approve resume stop status' -f -a resume -d 'Resume a paused job'
@@ -138,11 +184,26 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from job; and __fish_seen_subcommand_from propose' -l repo -r -d 'Repository'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and __fish_seen_subcommand_from propose approve resume' -l budget -x -d 'Budget in USD'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and __fish_seen_subcommand_from propose' -l auto -d 'Approve at once'
+    complete -c drgnx -n '__fish_seen_subcommand_from job; and __fish_seen_subcommand_from propose' -l gate -x -a 'review review+accept' -d 'Merge gate'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and __fish_seen_subcommand_from status' -l json -d 'Machine-readable'
+    set -l _drgnx_runner_subs list add check bench trust unbench remove audit
+    for sub in $_drgnx_runner_subs
+        complete -c drgnx -n "__fish_seen_subcommand_from runner; and not __fish_seen_subcommand_from $_drgnx_runner_subs" -f -a $sub
+    end
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from list' -l json -d 'Machine-readable'
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from add' -l trust -x -a 'mine my-cloud shared' -d 'What it may see'
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from add' -l name -x -d "The runner's name"
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from add' -l profile -x -a 'dedicated workstation' -d 'Whether somebody sits at it'
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from add' -l accept -x -a 'all heavy' -d 'Which jobs it takes'
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from add' -l root -x -d 'Its folder there'
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from add' -l prefix -x -d 'What its units are named after'
+    complete -c drgnx -n '__fish_seen_subcommand_from runner; and __fish_seen_subcommand_from remove' -l yes -d 'Delete its folder'
     complete -c drgnx -n '__fish_seen_subcommand_from search; and not __fish_seen_subcommand_from index query mcp' -f -a index -d 'Build or refresh a project index'
     complete -c drgnx -n '__fish_seen_subcommand_from search; and not __fish_seen_subcommand_from index query mcp' -f -a query -d 'Ask a question'
     complete -c drgnx -n '__fish_seen_subcommand_from search; and not __fish_seen_subcommand_from index query mcp' -f -a mcp -d 'Serve the search tool to an agent'
     complete -c drgnx -n '__fish_seen_subcommand_from search; and __fish_seen_subcommand_from index' -l rebuild -d 'From scratch'
+    complete -c drgnx -n '__fish_seen_subcommand_from search; and __fish_seen_subcommand_from index' -l now -d 'Also on battery'
+    complete -c drgnx -n '__fish_seen_subcommand_from search; and __fish_seen_subcommand_from query' -l scope -x -a 'code tests docs all' -d 'What to search'
     complete -c drgnx -n '__fish_seen_subcommand_from search; and __fish_seen_subcommand_from query' -s k -x -d 'Number of chunks'
     complete -c drgnx -n '__fish_seen_subcommand_from keys; and not __fish_seen_subcommand_from ui diff' -f -a diff -d 'Compare against gryphn'
     complete -c drgnx -n '__fish_seen_subcommand_from keys; and __fish_seen_subcommand_from diff' -l against -x -d 'What to compare with'
@@ -192,23 +253,110 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l yes -d 'Confirm the age/chezmoi install and the key import'
     complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l replace -d 'Overwrite a different key in the keyring'
 
-    # Inside eat only.  The prompt-end mark is bash and zsh only: fish cannot add it without redefining fish_prompt.
-    if string match -q '*eat*' -- "$INSIDE_EMACS"; and set -q EAT_SHELL_INTEGRATION_DIR
-        function __drgnx_eat_preexec --on-event fish_preexec
-            set -g __drgnx_eat_ran 1
-            printf '\e]51;e;F;%s\e\\\\' (printf %s $argv[1] | base64 | string join '')
-            printf '\e]51;e;G\e\\\\'
+    # Inside drgnx's own terminal (DRGNX_TERMINAL, set by drgnx-term.el).  Ghostty's shell integration, vendored in
+    # ghostty/ next to this file (ghostty/NOTICE): prompt and command marks, a sudo that keeps TERMINFO.  Its features
+    # are the terminal's GHOSTTY_SHELL_FEATURES (drgnx-term-shell-integration-features; unset: the integration is off)
+    # without Ghostty's ssh ones, which need Ghostty's own program: drgnx's ssh is below.  DRGNX_TERMINAL_SHELL, when
+    # set, names the one shell that loads it.  Ghostty's folder report stays quiet when INSIDE_EMACS is set, as it is
+    # here, so drgnx reports the folder itself (OSC 7).
+    if set -q DRGNX_TERMINAL; and set -q GHOSTTY_SHELL_FEATURES; and test "$DRGNX_TERMINAL_SHELL" = fish -o -z "$DRGNX_TERMINAL_SHELL"
+        and test -r $__drgnx_dir/ghostty/shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish
+        set -l features $GHOSTTY_SHELL_FEATURES
+        set -gx GHOSTTY_SHELL_FEATURES ''
+        string split , -- $features | string match -v -- 'ssh-*' | string join , | read -gx GHOSTTY_SHELL_FEATURES
+        set -gx GHOSTTY_RESOURCES_DIR $__drgnx_dir/ghostty
+        set -e GHOSTTY_BIN_DIR
+        source $GHOSTTY_RESOURCES_DIR/shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish
+
+        function __drgnx_term_cwd --on-variable PWD --on-event fish_prompt
+            test "$__drgnx_term_cwd" = "$PWD"; and return
+            set -g __drgnx_term_cwd $PWD
+            string escape --style=url -- $PWD | read -l path
+            printf '\e]7;file://%s%s\a' $hostname $path
+        end
+    end
+
+    # ssh from drgnx's terminal (TERM=xterm-ghostty): a host knows that entry only once it is installed there.
+    # fallback (DRGNX_TERMINAL_SSH, from drgnx-term-ssh-terminfo): ssh says TERM=xterm-256color.  install: the first
+    # ssh to a host sends the entry to its tic (into the remote ~/.terminfo) and records the outcome in
+    # <state>/terminal-ssh-hosts, one "USER@HOST:PORT TERM" line per host (delete a line to try again).
+    if set -q DRGNX_TERMINAL
+        function ssh --wraps ssh --description 'ssh with a TERM the host knows'
+            if test "$TERM" != xterm-ghostty
+                command ssh $argv
+                return
+            end
+            set -g __drgnx_term xterm-256color
+            set -g __drgnx_cp
+            if test "$DRGNX_TERMINAL_SSH" = install
+                __drgnx_ssh_terminfo $argv
+            end
+            # after the tic call, this ssh joins its connection (one password prompt, not two)
+            if test -n "$__drgnx_cp"
+                TERM=$__drgnx_term command ssh -o ControlMaster=no -o ControlPath=$__drgnx_cp/%C $argv
+            else
+                TERM=$__drgnx_term command ssh $argv
+            end
         end
 
-        function __drgnx_eat_prompt --on-event fish_prompt
-            set -l last $status
-            if set -q __drgnx_eat_ran
-                set -e __drgnx_eat_ran
-                printf '\e]51;e;H;%s\e\\\\' $last
+        function __drgnx_ssh_terminfo -d "sets __drgnx_term for this ssh's host"
+            set -l user
+            set -l host
+            set -l port
+            set -l rec $HOME/.local/state/drgnx/terminal-ssh-hosts
+            string match -q -- '/*' "$XDG_STATE_HOME"; and set rec $XDG_STATE_HOME/drgnx/terminal-ssh-hosts
+            command ssh -G $argv 2>/dev/null | while read -l k v
+                switch $k
+                    case user
+                        set user $v
+                    case hostname
+                        set host $v
+                    case port
+                        set port $v
+                end
             end
-            printf '\e]51;e;J\e\\\\'
-            printf '\e]51;e;A;%s;%s\e\\\\' (printf %s $hostname | base64 | string join '') (printf %s $PWD | base64 | string join '')
-            printf '\e]51;e;B\e\\\\'
+            test -n "$host"; or return 0
+            set -l key $user@$host:$port
+            if test -r $rec
+                while read -l k v
+                    if test "$k" = "$key"
+                        set -g __drgnx_term $v
+                        return 0
+                    end
+                end < $rec
+            end
+            # the options, then the destination: the host's tic runs instead of any command of yours
+            set -l opts
+            set -l dest
+            set -l rest $argv
+            while set -q rest[1]
+                set -l a $rest[1]
+                set -e rest[1]
+                if test "$a" = --
+                    set dest $rest[1]
+                    break
+                else if string match -qr -- '^-[BbcDEeFIiJLlmOoPpQRSWw]$' $a
+                    set -a opts $a $rest[1]
+                    set -q rest[1]; and set -e rest[1]
+                else if string match -q -- '-*' $a
+                    set -a opts $a
+                else
+                    set dest $a
+                    break
+                end
+            end
+            test -n "$dest"; or return 0
+            # the tic call's connection stays 10 s for this ssh to join (a short path: macOS caps a socket's at 104 bytes)
+            set -l cp /tmp/drgnx-ssh-user
+            test -n "$USER"; and set cp /tmp/drgnx-ssh-$USER
+            command mkdir -p -m 700 $cp; and set -g __drgnx_cp $cp
+            set -l cm
+            test -n "$__drgnx_cp"; and set cm -o ControlMaster=auto -o ControlPath=$cp/%C -o ControlPersist=10
+            if command infocmp -x xterm-ghostty 2>/dev/null | TERM=xterm-256color command ssh $cm $opts -- $dest 'tic -x -'
+                set -g __drgnx_term xterm-ghostty
+            end
+            string replace -r '/[^/]*$' '' -- $rec | read -l dir
+            command mkdir -p $dir; and printf '%s %s\n' $key $__drgnx_term >> $rec
         end
     end
 end

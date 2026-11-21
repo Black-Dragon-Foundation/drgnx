@@ -11,5 +11,5 @@
 {"do": "run", "args": ["job", "stop", "$job"], "expect_code": 0, "expect_stdout": "[stopped]"}
 {"do": "run", "args": ["job", "resume", "$job", "--budget", "lots"], "expect_code": 2, "expect_stderr": "--budget"}
 {"do": "run", "args": ["job", "resume", "$job", "--budget", "10"], "expect_code": 0, "expect_stdout": "budget 10.0 USD"}
-{"do": "run", "args": ["job", "status", "$job", "--json"], "expect_code": 0, "expect_stdout": {"id": "$job", "status": "running", "budget": 10.0}}
+{"do": "run", "args": ["job", "status", "$job", "--json"], "expect_code": 0, "expect_stdout": {"id": "$job", "status": "running", "limits": [{"amount": 10.0, "unit": "usd"}]}}
 {"do": "run", "args": ["job", "stop", "$job"], "expect_code": 0, "expect_stdout": "[stopped]"}

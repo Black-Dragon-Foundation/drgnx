@@ -39,6 +39,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-paths)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
 (require 'drgnx-tty)
 (require 'drgnx-wb)
 (require 'drgnx-tty-fallback)
@@ -96,6 +97,25 @@ without asking)."
     (when (eq chr ?\e) (xterm--read-event-for-query))   ; the final backslash
     (set-terminal-parameter nil 'drgnx-tty-xtversion (concat "\eP>|" text "\e\\"))))
 
+(defconst drgnx-tty-frames--xtversion-keys "\eP>|" "What an XTVERSION answer starts with.")
+
+(defvar drgnx-tty-frames-xtversion-expiry 5
+  "Seconds after XTVERSION was asked that its answer may still arrive; then the pending handler goes.")
+
+(defun drgnx-tty-frames--drop-xtversion-handler (&optional frame)
+  "Take the pending XTVERSION handler out of FRAME's terminal's `input-decode-map' (xterm.el's asynchronous query
+registers it and removes it only when the answer comes), with the prefix maps it made that are empty now: left,
+`ESC P' stays a prefix key, so M-P waits for a key (M12b-5b-1).  A late answer is typed as text after that."
+  (with-selected-frame (if (frame-live-p frame) frame (selected-frame))
+    (let ((keys drgnx-tty-frames--xtversion-keys))
+      (when (functionp (lookup-key input-decode-map keys))
+        (define-key input-decode-map keys nil t))
+      (cl-loop for n from (1- (length keys)) downto 1
+               for prefix = (substring keys 0 n)
+               for map = (lookup-key input-decode-map prefix)
+               when (and (keymapp map) (not (let (any) (map-keymap (lambda (&rest _) (setq any t)) map) any)))
+               do (define-key input-decode-map prefix nil t)))))
+
 (defun drgnx-tty-frames--ask (frame)
   "FRAME's terminal's answer to XTVERSION, or nil: asked once, waiting `drgnx-tty-frames-query-timeout'
 seconds at most; a later answer is taken off the input by Emacs's xterm.el.  Not on the Linux console."
@@ -103,7 +123,10 @@ seconds at most; a later answer is taken off the input by Emacs's xterm.el.  Not
     (require 'term/xterm)
     (with-selected-frame frame
       (let ((xterm-query-timeout drgnx-tty-frames-query-timeout))
-        (xterm--query "\e[>0q" '(("\eP>|" . drgnx-tty-frames--xtversion-handler))))
+        (xterm--query "\e[>0q" `((,drgnx-tty-frames--xtversion-keys . drgnx-tty-frames--xtversion-handler))))
+      (unless (terminal-parameter nil 'drgnx-tty-xtversion)
+        (drgnx-timer-start (cons 'xtversion-expiry frame) drgnx-tty-frames-xtversion-expiry
+                           #'drgnx-tty-frames--drop-xtversion-handler :args (list frame) :owner 'ui/terminal))
       (terminal-parameter nil 'drgnx-tty-xtversion))))
 
 (defun drgnx-tty-frames-mok-trusted-p (id)
@@ -277,6 +300,10 @@ prompt in a daemon hook), no fsync (a report is made again)."
 (defconst drgnx-tty-frames-report-terminals 16
   "How many terminals terminal-report.eld keeps: the newest, by when each was last set up or refreshed.")
 
+(defvar drgnx-tty-frames--report-pending nil
+  "The reports being written now, innermost first: (KEY . NEWER) each, KEY the terminal's name; NEWER is set when
+a report of the same terminal was written while this one waited, which then writes nothing.")
+
 (defun drgnx-tty-frames-write-report (frame)
   "Add FRAME's terminal to terminal-report.eld in the state dir: (:terminals ((TTY . (:caps CAPS :unsendable
 KEYS :seen TIME)) …)), newest first, one entry per terminal device (two clients never replace each other's), the
@@ -285,30 +312,45 @@ newest `drgnx-tty-frames-report-terminals' (16) only;
 \(`drgnx-tty-fallback-install': on where they need it, off where not); the entry then has :fallback (on or not),
 :fallbacks (rows (CHORD NATIVE-P ALT PREFIX) for the doctor); the fallback's problems are `terminal' notices
 \(`drgnx-tty-fallback-notify'), not in the report.  The report's other keys
-\(:hinted) are kept.  Nothing when the terminal is gone."
+\(:hinted) are kept.  Nothing when the terminal is gone.
+Asking tmux waits for a process, and Emacs runs other work meanwhile (a client's eval, a timer), which may write a
+report too: the file is read again just before it is written, so another terminal's entry written meanwhile stays,
+and a newer report of this terminal written meanwhile is not overwritten with these older caps
+\(`drgnx-tty-frames--report-pending')."
   (when-let* ((caps (drgnx-tty-frame-caps frame)))
-    (let* ((layer (and (fboundp 'drgnx-tty-fallback-install)
-                       (drgnx-tty-frames--guard "fallback" #'drgnx-tty-fallback-install frame caps)))
-           (data (drgnx-tty-frames--read-report-data))
-           (key (terminal-name (frame-terminal frame)))
-           (keys (seq-uniq (delq nil (mapcar (lambda (b) (plist-get b :key))
-                                             (plist-get (bound-and-true-p drgnx-keys-last) :bindings)))))
-           (read (plist-get data :terminals))
-           (old (and (proper-list-p read) (seq-every-p #'consp read) read))   ; a broken report heals
-           (table (drgnx-tty-fallback-active-table))
-           (entry (append (list :caps caps :unsendable (drgnx-tty-unsendable keys (plist-get caps :keys) (plist-get caps :folded))
-                                :seen (format-time-string "%FT%T%z"))
-                          ;; inside tmux: the lines to add to ~/.tmux.conf for what it lacks (never written)
-                          (when-let* ((lines (drgnx-tty-tmux-conf-lines (drgnx-tty-frames--tmux-options frame (plist-get caps :id)))))
-                            (list :tmux-conf lines))
-                          (list :fallback (and layer t)
-                                :fallbacks (drgnx-tty-fallback-report-rows
-                                            table caps (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback-table))))))
-      (drgnx-tty-fallback-notify key table (drgnx-tty-fallback--overrides))
-      (drgnx-tty-frames--save-report
-       (append (list :terminals (seq-take (cons (cons key entry) (assoc-delete-all key (copy-sequence old)))
-                                          drgnx-tty-frames-report-terminals))
-               (when-let* ((hinted (plist-get data :hinted))) (and (proper-list-p hinted) (list :hinted hinted))))))))
+    (let ((cell (list (terminal-name (frame-terminal frame)))))
+      (push cell drgnx-tty-frames--report-pending)
+      (unwind-protect (drgnx-tty-frames--write-entry frame caps cell)
+        (setq drgnx-tty-frames--report-pending (delq cell drgnx-tty-frames--report-pending))))))
+
+(defun drgnx-tty-frames--write-entry (frame caps cell)
+  "`drgnx-tty-frames-write-report''s work for FRAME with CAPS; CELL is its `drgnx-tty-frames--report-pending' cell."
+  (let* ((layer (and (fboundp 'drgnx-tty-fallback-install)
+                     (drgnx-tty-frames--guard "fallback" #'drgnx-tty-fallback-install frame caps)))
+         (key (car cell))
+         (keys (seq-uniq (delq nil (mapcar (lambda (b) (plist-get b :key))
+                                           (plist-get (bound-and-true-p drgnx-keys-last) :bindings)))))
+         (table (drgnx-tty-fallback-active-table))
+         (entry (append (list :caps caps :unsendable (drgnx-tty-unsendable keys (plist-get caps :keys) (plist-get caps :folded))
+                              :seen (format-time-string "%FT%T%z"))
+                        ;; inside tmux: the lines to add to ~/.tmux.conf for what it lacks (never written)
+                        (when-let* ((lines (drgnx-tty-tmux-conf-lines (drgnx-tty-frames--tmux-options frame (plist-get caps :id)))))
+                          (list :tmux-conf lines))
+                        (list :fallback (and layer t)
+                              :fallbacks (drgnx-tty-fallback-report-rows
+                                          table caps (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback-table))))))
+    (drgnx-tty-fallback-notify key table (drgnx-tty-fallback--overrides))
+    (unless (cdr cell)                    ; a newer report of this terminal was written meanwhile
+      (let* ((data (drgnx-tty-frames--read-report-data))   ; read now: what was written meanwhile stays
+             (read (plist-get data :terminals))
+             (old (and (proper-list-p read) (seq-every-p #'consp read) read)))   ; a broken report heals
+        (drgnx-tty-frames--save-report
+         (append (list :terminals (seq-take (cons (cons key entry) (assoc-delete-all key (copy-sequence old)))
+                                            drgnx-tty-frames-report-terminals))
+                 (when-let* ((hinted (plist-get data :hinted))) (and (proper-list-p hinted) (list :hinted hinted)))))
+        ;; the reports of this terminal still waiting are older now
+        (dolist (c drgnx-tty-frames--report-pending)
+          (when (and (not (eq c cell)) (equal (car c) key)) (setcdr c t)))))))
 
 (defun drgnx-tty-frames-refresh-report (frame)
   "Write FRAME's terminal's entry in terminal-report.eld again, from what it can do now (ui/terminal-keys calls
@@ -470,21 +512,52 @@ once it has no file left."
 the focus step of one setup share one call; a window made later asks again, so a `tmux source ~/.tmux.conf'
 shows.")
 
+(defvar drgnx-tty-frames-tmux-miss-ttl 5
+  "Seconds a tmux that gave no answer within its 1 s is not asked again (`drgnx-tty-frames--tmux-options'); the
+retry after a miss waits this long, each later one twice as long as the one before.")
+
+(defconst drgnx-tty-frames-tmux-retries 5
+  "How many retries a tmux that gives no answer gets (`drgnx-tty-frames--tmux-retry'): at 5, 10, 20, 40 and 80 s
+with the default miss TTL.  After that only a setup step (a new window, a module stage) asks again.")
+
 (defun drgnx-tty-frames--tmux-options (frame &optional id)
   "tmux's options (`drgnx-tty-tmux-options') for FRAME's client, when it is inside tmux and tmux answers; else
 nil.  ID is the terminal's id when the caller has it (else `drgnx-tty-frames--identity' finds it).  Kept in
-the terminal parameter `drgnx-tty-tmux' for `drgnx-tty-frames-tmux-ttl' seconds; a tmux that gave no answer (it
-hung for its 1 s, or is too old to say) is remembered as such until the terminal goes away, so a hung server costs
-that second once, not once per window or setup step."
+the terminal parameter `drgnx-tty-tmux' for `drgnx-tty-frames-tmux-ttl' seconds.  A tmux that gave no answer
+within its 1 s (a hung server, or a loaded machine) is not asked again for `drgnx-tty-frames-tmux-miss-ttl'
+seconds, so it costs that second once per miss TTL, not once per window or setup step; a retry is due then
+\(`drgnx-tty-frames--tmux-retry'), and an answer that comes later sets the terminal up as it would have at first."
   (let* ((term (frame-terminal frame))
          (kept (terminal-parameter term 'drgnx-tty-tmux)))
-    (if (and kept (or (null (cdr kept)) (< (- (float-time) (car kept)) drgnx-tty-frames-tmux-ttl)))
+    (if (and kept (< (- (float-time) (car kept))
+                     (if (cdr kept) drgnx-tty-frames-tmux-ttl drgnx-tty-frames-tmux-miss-ttl)))
         (cdr kept)
-      (let ((options (and (eq (or id (plist-get (drgnx-tty-frames--identity frame) :id)) 'tmux)
-                          (drgnx-tty-tmux-options (drgnx-tty-env frame)))))
+      (let* ((tmux (eq (or id (plist-get (drgnx-tty-frames--identity frame) :id)) 'tmux))
+             (options (and tmux (drgnx-tty-tmux-options (drgnx-tty-env frame)))))
         (when (terminal-live-p term)
-          (set-terminal-parameter term 'drgnx-tty-tmux (cons (float-time) options)))
+          (set-terminal-parameter term 'drgnx-tty-tmux (cons (float-time) options))
+          (if options
+              (set-terminal-parameter term 'drgnx-tty-tmux-misses nil)
+            ;; inside tmux (its socket known) and no answer: try again later, less often each time
+            (when-let* ((tmux)
+                        ((not (string-empty-p (or (drgnx-tty--env-get (drgnx-tty-env frame) "TMUX") ""))))
+                        (misses (1+ (or (terminal-parameter term 'drgnx-tty-tmux-misses) 0)))
+                        ((<= misses drgnx-tty-frames-tmux-retries)))
+              (set-terminal-parameter term 'drgnx-tty-tmux-misses misses)
+              (drgnx-timer-start (cons 'tmux-retry frame) (* drgnx-tty-frames-tmux-miss-ttl (expt 2 (1- misses)))
+                                 #'drgnx-tty-frames--tmux-retry :args (list frame) :owner 'ui/terminal))))
         options))))
+
+(defun drgnx-tty-frames--tmux-retry (frame)
+  "Ask tmux again for FRAME's terminal, which gave no answer before (`drgnx-tty-frames--tmux-options'), and set the
+terminal up from the answer: modifyOtherKeys asked for when extended-keys is on (its keys were legacy), focus
+reports, the copy, the report.  A timer of its own: it types nothing and draws nothing; one 1 s ask at most."
+  (when (and (frame-live-p frame) (terminal-live-p (frame-terminal frame)))
+    (when (drgnx-tty-frames--tmux-options frame)
+      (drgnx-tty-frames--tmux-setup frame)
+      (when (fboundp 'drgnx-tty-clip-setup)
+        (drgnx-tty-frames--guard "clipboard" #'drgnx-tty-clip-setup frame))
+      (drgnx-tty-frames-refresh-report frame))))
 
 (defconst drgnx-tty-frames--focus-on "\e[?1004h" "The request for focus reports (xterm.el's).")
 (defconst drgnx-tty-frames--focus-off "\e[?1004l" "Its reset.")
@@ -551,11 +624,17 @@ as CSI 27 ; M ; K ~ (Shift, Meta, Control)."
   "Under tmux with `extended-keys' on or always, after modifyOtherKeys was asked for (level 1): ask for
 `drgnx-tty-tmux-mok-level' when that is 2 (default 1: nothing to do) so C-S- chords arrive, once per terminal and
 kept for a resume; back to 1, level 1 is asked again and level 2's resume string dropped.  The report is written
-again either way (C-g waits at level 2).  With `extended-keys-format csi-u', the terminal also decodes that form."
+again either way (C-g waits at level 2).  With `extended-keys-format csi-u', the terminal also decodes that form.
+A terminal whose tmux gave no answer at its setup (`drgnx-tty-frames--keys-setup' then left modifyOtherKeys off)
+gets it now that tmux says extended-keys is on, and its report says so."
   (let* ((term (frame-terminal frame))
          (options (drgnx-tty-frames--tmux-options frame))
          (level-1 "\e[>4;1m") (level-2 "\e[>4;2m"))
     (when (and (terminal-live-p term) (member (plist-get options :extended-keys) '("on" "always")))
+      (when (and (terminal-parameter term 'drgnx-tty-mok-decoded) (not (drgnx-tty-frames-mok-asked-p term))
+                 (not (string-empty-p (or (drgnx-tty--env-get (drgnx-tty-env frame) "TMUX") ""))))
+        (drgnx-tty-frames--ask-mok frame)
+        (unless (eql drgnx-tty-tmux-mok-level 2) (drgnx-tty-frames-refresh-report frame)))   ; level 2 writes it below
       (let ((set (terminal-parameter term 'tty-mode-set-strings)))
         (cond ((and (eql drgnx-tty-tmux-mok-level 2) (member level-1 set) (not (member level-2 set)))
                (send-string-to-terminal level-2 term)
@@ -649,16 +728,28 @@ variant of its TERM, when that terminfo exists on the machine running the daemon
 (defvar drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)
   "Terminal type → whether its terminfo has true colour as Emacs reads it, from infocmp's answer.  Bounded by its
 keys, never evicted: the TERM types clients used and their `-direct' variants (a handful).  Only answers are kept:
-an infocmp that printed nothing (missing, timed out, an unknown type) is asked again at the next frame.")
+an infocmp that printed nothing (missing, timed out, an unknown type) is remembered only for
+`drgnx-tty-frames--miss-ttl' seconds (`drgnx-tty-frames--miss-cache'), so a hanging infocmp is not run, up to
+`drgnx-tty-frames--infocmp-timeout' seconds, at every new frame.")
+
+(defconst drgnx-tty-frames--miss-ttl 60 "Seconds an infocmp that printed nothing is not asked again.")
+
+(defvar drgnx-tty-frames--miss-cache (make-hash-table :test #'equal)
+  "Terminal type → `float-time' of its last infocmp that printed nothing.  Bounded like
+`drgnx-tty-frames--direct-cache' (its keys).")
 
 (defun drgnx-tty-frames--terminfo-true-colour-p (type)
   "Whether the terminfo of terminal type TYPE (on this machine) has true colour as Emacs's term.c reads it: the
 `RGB' flag, or `setf24' together with `setb24'.  Asked of `infocmp' (bounded: `drgnx-tty--command-lines'); its
-answer is kept per type.  Nil when there is no such terminfo or no infocmp, which is not kept."
-  (let ((hit (gethash type drgnx-tty-frames--direct-cache 'unknown)))
+answer is kept per type.  Nil when there is no such terminfo or no infocmp, which is asked again only after
+`drgnx-tty-frames--miss-ttl' seconds."
+  (let ((hit (gethash type drgnx-tty-frames--direct-cache 'unknown))
+        (missed (gethash type drgnx-tty-frames--miss-cache)))
     (if (not (eq hit 'unknown)) hit
       (when-let* (((and (stringp type) (not (string-empty-p type))))
-                  (lines (drgnx-tty--command-lines (list "infocmp" "-x" "-1" type) drgnx-tty-frames--infocmp-timeout)))
+                  ((not (and missed (< (- (float-time) missed) drgnx-tty-frames--miss-ttl))))
+                  (lines (or (drgnx-tty--command-lines (list "infocmp" "-x" "-1" type) drgnx-tty-frames--infocmp-timeout)
+                             (progn (puthash type (float-time) drgnx-tty-frames--miss-cache) nil))))
         (puthash type
                  (let ((has (lambda (re) (seq-some (lambda (l) (string-match-p re l)) lines))))
                    (and (or (funcall has "\\`[ \t]+RGB,")
@@ -707,13 +798,11 @@ asked."
 (defconst drgnx-tty-frames-state-faces
   '((git :faces (drgnx-git-modified drgnx-git-added drgnx-git-deleted drgnx-git-conflict drgnx-git-ignored)
          :attribute-faces (drgnx-git-ignored)
-         :cue letter :doc "The status letter (M, A, U, D, C) at the row's edge in the Explorer; ignored files, which have none, are italic")
+         :cue letter :doc "The status letter (M, A, U, D, C) at the row's edge in the Explorer; ignored files, which have none, are italic (an I on the Linux console)")
     (review :faces (drgnx-review-critical drgnx-review-important drgnx-review-minor)
             :cue word :doc "The severity word that starts a finding's line")
-    (tabs :faces (drgnx-chrome-tab drgnx-chrome-tab-current)
-          :cue attribute :doc "The shown tab differs from the others in weight or inverse video")
-    (work :faces (drgnx-work-ui-spec drgnx-work-ui-done drgnx-work-ui-stale drgnx-work-ui-branch)
-          :cue label :doc "The glyph and the words of a node's line (warning sign, merged, the branch in brackets)"))
+    (tabs :faces (drgnx-kit-tab drgnx-kit-tab-current-inactive drgnx-kit-tab-current)
+          :cue attribute :doc "The shown tab is in inverse video on a terminal frame, a shown tab of another group underlined (a graphical one tells them by colour)"))
   "The faces that mark a state, by group, and the cue besides colour that tells the state on an 8-colour terminal:
 `letter', `word' and `label' are in the text on the screen; `attribute' is in the faces themselves.  :attribute-faces
 are the faces of a group that rely on an attribute because their state has no text.")
@@ -752,7 +841,7 @@ module turned on again sets it up anew.  What Emacs asked the terminal for stays
     (set-terminal-parameter term 'tty-mode-reset-strings
                             (remove drgnx-tty-frames--focus-off (terminal-parameter term 'tty-mode-reset-strings))))
   (dolist (param '(drgnx-tty-set-up drgnx-tty-mok-decoded drgnx-tty-csi-u drgnx-tty-mok-level drgnx-tty-tmux
-                                    drgnx-tty-asked-mok drgnx-tty-asked-focus))
+                                    drgnx-tty-tmux-misses drgnx-tty-asked-mok drgnx-tty-asked-focus))
     (when (terminal-parameter term param) (set-terminal-parameter term param nil))))
 
 (defun drgnx-tty-frames--teardown ()

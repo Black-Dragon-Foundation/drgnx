@@ -39,7 +39,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
                                        process-environment))
           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
           (drgnx-keys-profiles (copy-tree drgnx-shortcuts-test--profiles))
-          (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
+          (drgnx-keys--session-layers nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
           (drgnx-keys-presets '(("Alpha" . ((alpha app editing window))) ("Beta" . ((beta app editing window)))))
           (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil)
           (drgnx-settings-apply--entries nil)
@@ -112,7 +112,8 @@ the usage counts go there, never the user's), no usage counted, and every bindin
   (drgnx-shortcuts-test--with
     (drgnx-keys-edit-bind 'sc-c "C-c q")
     (keymap-set global-map "C-c 9" #'drgnx-shortcuts-test-sc-n)   ; a key a package bound itself
-    (drgnx-shortcuts)
+    (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 120)))   ; a window with room for the titles
+      (drgnx-shortcuts))
     (with-current-buffer "*drgnx keyboard shortcuts*" (should (eq major-mode 'drgnx-shortcuts-mode)))
     (let ((a (drgnx-shortcuts-test--row 'sc-a)) (b (drgnx-shortcuts-test--row 'sc-b))
           (c (drgnx-shortcuts-test--row 'sc-c)) (n (drgnx-shortcuts-test--row 'sc-n)) (d (drgnx-shortcuts-test--row 'sc-d)))
@@ -128,6 +129,23 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (should (string-match-p "Test: Gamma +C-c q +keys\\.eld +global" (drgnx-shortcuts-test--line 'sc-c)))
     (should (string-match-p "Native One +C-c 9 +package" (drgnx-shortcuts-test--line 'sc-n)))
     (should (equal (length (drgnx-shortcuts-test--shown)) (length drgnx-shortcuts-test--commands)))))
+
+(ert-deftest drgnx-shortcuts/audit-k2-keyed-first-vscode-notation-and-fitting-widths ()
+  (drgnx-shortcuts-test--with
+    (drgnx-shortcuts)
+    ;; commands with keys come first, the ones without after them
+    (let* ((rows (drgnx-shortcuts--keyed-first (drgnx-shortcuts--rows)))
+           (keyed (mapcar (lambda (r) (and (or (plist-get r :keys) (plist-get r :yours)) t)) rows)))
+      (should (car keyed))
+      (should (equal keyed (append (seq-filter #'identity keyed) (seq-remove #'identity keyed)))))
+    ;; the VS Code profile writes keys as VS Code does
+    (cl-letf (((symbol-function 'drgnx-shortcuts--profile-text) (lambda () "VS Code")))
+      (let ((s (substring-no-properties (drgnx-shortcuts--keys-text '(("C-k C-o" . global-map))))))
+        (should (string-match-p "Ctrl\\+K Ctrl\\+O" s))))
+    (should (string-match-p "C-k C-o" (substring-no-properties (drgnx-shortcuts--keys-text '(("C-k C-o" . global-map))))))
+    ;; a table's width is the window's
+    (dolist (total '(80 100 140))
+      (should (<= (+ 2 4 (apply #'+ (drgnx-shortcuts--widths total))) total)))))
 
 (ert-deftest drgnx-shortcuts/where-names-the-modal-maps ()
   ;; The Vim profile's keys: the leader map reads where it works (not the keymap's name), the others as the modal
@@ -162,7 +180,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (drgnx-shortcuts-record-filter)
     ;; Conflicts, No key, Changed by me
     (drgnx-shortcuts-toggle-conflicts)
-    (should (equal (drgnx-shortcuts-test--shown) '(sc-a sc-f)))
+    (should (equal (drgnx-shortcuts-test--shown) '(sc-f sc-a)))   ; sc-a lost its key to Zeta: keyless rows come last
     (drgnx-shortcuts-toggle-conflicts)
     (drgnx-shortcuts-toggle-no-key)
     (should (equal (drgnx-shortcuts-test--shown) '(sc-a sc-d sc-g sc-n)))
@@ -181,7 +199,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (drgnx-shortcuts-test--goto 'sc-d)
     (let ((unread-command-events (list ?\C-c ?\C-d))) (drgnx-shortcuts-change))
     (should (equal (drgnx-shortcuts-test--user) '(((sc-d "C-c C-d")) nil)))
-    (should (eq (keymap-lookup global-map "C-c C-d") #'drgnx-shortcuts-test-sc-d))
+    (should (eq (keymap-lookup (current-global-map) "C-c C-d") #'drgnx-shortcuts-test-sc-d))
     (should (string-match-p "Delta +C-c C-d +keys\\.eld +global" (drgnx-shortcuts-test--line 'sc-d)))
     ;; nothing after the first key within the wait: that key alone
     (drgnx-shortcuts-test--goto 'sc-g)
@@ -194,7 +212,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (drgnx-shortcuts-test--goto 'sc-a)
     (let ((unread-command-events (list ?\C-c ?x))) (drgnx-shortcuts-add))
     (should (equal (drgnx-shortcuts-test--keys 'sc-a) '("C-c y" "C-c x")))
-    (should (eq (keymap-lookup global-map "C-c x") #'drgnx-shortcuts-test-sc-a))
+    (should (eq (keymap-lookup (current-global-map) "C-c x") #'drgnx-shortcuts-test-sc-a))
     ;; a key in a view's keymap stays in that keymap
     (drgnx-shortcuts-test--goto 'sc-b)
     (let ((unread-command-events (list ?\C-c ?v))) (drgnx-shortcuts-change))
@@ -202,6 +220,30 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (should (eq (keymap-lookup drgnx-shortcuts-test-mode-map "C-c v") #'drgnx-shortcuts-test-sc-b))
     ;; point stays on the row it was on
     (should (eq (get-text-property (point) 'drgnx-shortcuts-id) 'sc-b))))
+
+(ert-deftest drgnx-shortcuts/your-own-keys-show-and-are-read-only ()
+  "A key of yours (config.el, M-:) is shown as yours; Change refuses it, a new key cannot take it, Reset keeps it."
+  (drgnx-shortcuts-test--with
+    (unwind-protect
+        (progn
+          (let ((this-command 'eval-expression))
+            (keymap-global-set "C-c 9" #'drgnx-shortcuts-test-sc-d))
+          (drgnx-keys-apply)
+          (drgnx-shortcuts)
+          (should (equal (plist-get (drgnx-shortcuts-test--row 'sc-d) :yours) '(("C-c 9" . command))))
+          (should (string-match-p (concat "Delta +C-c 9 +" (regexp-quote "yours (this session)")) (drgnx-shortcuts-test--line 'sc-d)))
+          (should (equal (drgnx-shortcuts--yours-label "/cfg/config") "yours (config.el)"))   ; the record has no extension
+          (drgnx-shortcuts-test--goto 'sc-d)
+          (should-error (drgnx-shortcuts-change) :type 'user-error)
+          ;; another command cannot take the key from here
+          (drgnx-shortcuts-test--goto 'sc-g)
+          (let ((unread-command-events (list ?\C-c ?9)))
+            (let ((err (should-error (drgnx-shortcuts-change) :type 'user-error)))
+              (should (string-search "your own key" (cadr err)))))
+          (drgnx-shortcuts-test--goto 'sc-d)
+          (drgnx-shortcuts-reset)
+          (should (eq (keymap-lookup (current-global-map) "C-c 9") #'drgnx-shortcuts-test-sc-d)))
+      (drgnx-keys-forget-yours))))
 
 (ert-deftest drgnx-shortcuts/record-cancels-and-prefixes ()
   (drgnx-shortcuts-test--with
@@ -259,7 +301,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
       (should (string-search "global" (car asked))))
     (should (equal (drgnx-shortcuts-test--keys 'sc-d) '("C-c a")))
     (should-not (drgnx-shortcuts-test--keys 'sc-a))
-    (should (eq (keymap-lookup global-map "C-c a") #'drgnx-shortcuts-test-sc-d))
+    (should (eq (keymap-lookup (current-global-map) "C-c a") #'drgnx-shortcuts-test-sc-d))
     (should-not (seq-filter (lambda (r) (plist-get r :conflicts)) (drgnx-shortcuts--rows)))
     ;; one Undo takes the whole Replace back: Alpha has its key again
     (drgnx-shortcuts-undo)
@@ -313,6 +355,15 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (should (seq-find (lambda (c) (eq (plist-get c :kind) 'claim)) (plist-get drgnx-keys-last :conflicts)))
     (should (plist-get (drgnx-shortcuts-test--row 'sc-a) :conflicts))
     (should-not (plist-get (drgnx-shortcuts-test--row 'sc-k) :conflicts))))
+
+(ert-deftest drgnx-shortcuts/a-chord-under-the-profile-s-prefix-asks-nothing ()
+  "The profile made C-k a prefix (Kappa's C-k C-q, as VS Code's C-k chords): recording C-k C-9 for a command finds
+no clash with Emacs' C-k, `kill-line', which the profile's keys sit over."
+  (drgnx-shortcuts-test--with
+    (drgnx-shortcuts)
+    (drgnx-shortcuts-test--goto 'sc-n)
+    (let ((unread-command-events (list ?\C-k ?\C-9))) (drgnx-shortcuts-change))   ; a question would fail here
+    (should (equal (drgnx-shortcuts-test--keys 'sc-n) '("C-k C-9")))))
 
 (ert-deftest drgnx-shortcuts/filter-as-you-type ()
   (drgnx-shortcuts-test--with
@@ -450,8 +501,8 @@ table is the terminal's, as the layer would have put it there for a legacy termi
     (should (equal (plist-get (drgnx-keys-read-user) :layers) '((beta app editing window))))
     (should (equal (drgnx-shortcuts-test--keys 'sc-a) '("C-c z")))
     (should (string-match-p "Open Alpha +C-c z +Beta" (drgnx-shortcuts-test--line 'sc-a)))
-    (should (eq (keymap-lookup global-map "C-c z") #'drgnx-shortcuts-test-sc-a))
-    (should-not (eq (keymap-lookup global-map "C-c a") #'drgnx-shortcuts-test-sc-a))))
+    (should (eq (keymap-lookup (current-global-map) "C-c z") #'drgnx-shortcuts-test-sc-a))
+    (should-not (eq (keymap-lookup (current-global-map) "C-c a") #'drgnx-shortcuts-test-sc-a))))
 
 (ert-deftest drgnx-shortcuts/every-command-has-keys-in-every-profile ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
@@ -497,7 +548,7 @@ table is the terminal's, as the layer would have put it there for a legacy termi
     (drgnx-shortcuts-undo)
     (should-not (drgnx-shortcuts-test--keys 'sc-d))
     (should-not (drgnx-settings-area-has-entry-p 'drgnx-keys-bind))
-    (should-not (keymap-lookup global-map "C-c C-d"))
+    (should-not (keymap-lookup (current-global-map) "C-c C-d"))
     (should-error (drgnx-shortcuts-undo) :type 'user-error)
     ;; r: one command back to its profile key
     (drgnx-shortcuts-test--goto 'sc-a)
@@ -515,7 +566,7 @@ table is the terminal's, as the layer would have put it there for a legacy termi
     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))) (drgnx-shortcuts-reset-all))
     (should (equal (drgnx-shortcuts-test--user) '(nil nil)))
     (should-not (drgnx-shortcuts-test--keys 'sc-g))
-    (should-not (keymap-lookup global-map "C-c w"))
+    (should-not (keymap-lookup (current-global-map) "C-c w"))
     ;; and undo brings them back
     (drgnx-shortcuts-undo)
     (should (equal (drgnx-shortcuts-test--keys 'sc-g) '("C-c w")))

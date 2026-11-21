@@ -1,0 +1,23 @@
+{"scenario": "panel/context-relayed-and-coalesced", "requires": ["v1", "test-hooks"], "doc": "[C] The agent's _drgnx/context breakdown becomes the snapshot's panel.context as it sent it; a burst of 30 is coalesced (at most 4 a second) and the last one is shown; one that does not fit its schema (a field of its own) is dropped and the shown breakdown stays."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-panel\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--panel\" \"context\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-panel", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "panel:context {\"used\": 1200, \"size\": 200000, \"compact_frees\": 300, \"parts\": [{\"kind\": \"system\", \"tokens\": 200}, {\"kind\": \"tool-output\", \"tokens\": 1000, \"items\": [{\"id\": \"t1\", \"label\": \"Bash ls\", \"tokens\": 1000}]}]}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"panel": {"features": ["context"], "context": {"used": 1200, "size": 200000, "compact_frees": 300, "parts": [{"kind": "system", "tokens": 200}, {"kind": "tool-output", "tokens": 1000, "items": [{"id": "t1", "label": "Bash ls", "tokens": 1000}]}]}}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "panel:contexts 30"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"panel": {"context": {"used": 30, "parts": [{"kind": "conversation", "tokens": 30}]}}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "panel:context {\"used\": 5, \"size\": 10, \"parts\": [], \"grants\": {\"execute\": \"allow\"}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle", "turns": 3}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"session": {"id": "$sid", "panel": {"context": {"used": 30, "size": 200000}}}}}, "within_ms": 10000}

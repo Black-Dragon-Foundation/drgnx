@@ -40,8 +40,8 @@
                        '(256 16777216 256)))      ; B, A, and the session's own first client
         ;; a tmux-256color client with COLORTERM=truecolor is a tmux-direct frame, the others keep their TERM
         (should (equal (drgnx-tty-colours-test--types s) '("tmux-256color" "tmux-direct" "tmux-256color")))
-        (should (drgnx-tty-session-find b "\\*scratch\\*"))
-        (should (drgnx-tty-session-find a "\\*scratch\\*"))))))
+        (should (drgnx-tty-session-find b (drgnx-tty-session-tab-regexp b)))
+        (should (drgnx-tty-session-find a (drgnx-tty-session-tab-regexp a)))))))
 
 (ert-deftest drgnx-tty-colours/the-setting-decides-which-clients-are-swapped ()
   (drgnx-tty-session-with (s :daemon t)
@@ -77,8 +77,14 @@
 
 ;;;; No face is invisible
 
+(defconst drgnx-tty-colours-test--not-text
+  "\\`drgnx-\\(?:term-color-[0-9]+\\|term-cursor\\|debug-console-\\(?:bright-\\)?\\(?:black\\|red\\|green\\|yellow\\|blue\\|magenta\\|cyan\\|white\\)\\|work-seg-[a-z]+\\)\\'"
+  "The drgnx faces the check leaves out: a program's own colours (a terminal's palette, its cursor, a debuggee's SGR
+colours: foregrounds on the terminal's background, which a program may make the same, as in any terminal) and fills
+drawn as spaces (the Timeline's segments), whose colour is the block.")
+
 (defconst drgnx-tty-colours-test--invisible
-  '(let ((resolve (lambda (face attr)
+  `(let ((resolve (lambda (face attr)
                     (let ((c (face-attribute face attr nil t)))
                       (if (and (stringp c) (not (string-prefix-p "unspecified" c))) c
                         (let ((d (face-attribute 'default attr nil)))
@@ -91,7 +97,8 @@
        (mapc #'disable-theme custom-enabled-themes)
        (when theme (load-theme theme t))
        (dolist (f (face-list))
-         (when (string-prefix-p "drgnx-" (symbol-name f))
+         (when (and (string-prefix-p "drgnx-" (symbol-name f))
+                    (not (string-match-p ,drgnx-tty-colours-test--not-text (symbol-name f))))
            (cl-incf seen)
            (let* ((fg (funcall resolve f :foreground)) (bg (funcall resolve f :background))
                   (afg (car (tty-color-approximate (tty-color-values fg))))
@@ -99,7 +106,8 @@
              (when (equal afg abg) (push (list theme f fg bg afg) bad))))))
      (mapc #'disable-theme custom-enabled-themes)
      (list seen (nreverse bad)))
-  "A form, in the inner daemon, in a terminal frame: how many drgnx faces it looked at, and those whose
+  "A form, in the inner daemon, in a terminal frame: how many drgnx faces it looked at (all but
+`drgnx-tty-colours-test--not-text'), and those whose
 foreground and background are the same colour on this terminal, in the default theme and in modus-vivendi.")
 
 (ert-deftest drgnx-tty-colours/no-face-is-invisible ()
@@ -111,8 +119,8 @@ foreground and background are the same colour on this terminal, in the default t
       (should (= (drgnx-tty-colours-test--cells s) cells))
       ;; the faces the groups of states are made of are loaded, so the check is not empty
       (should (drgnx-tty-colours-test--in-client
-               s '(seq-every-p #'facep '(drgnx-git-modified drgnx-review-critical drgnx-chrome-tab
-                                                            drgnx-work-ui-stale drgnx-explorer-file))))
+               s '(seq-every-p #'facep '(drgnx-git-modified drgnx-review-critical drgnx-kit-tab
+                                                            drgnx-explorer-file))))
       (pcase-let ((`(,seen ,bad) (drgnx-tty-colours-test--in-client s drgnx-tty-colours-test--invisible)))
         (should (> seen 25))
         (should (equal (cons cells bad) (list cells)))))))
@@ -133,6 +141,7 @@ foreground and background are the same colour on this terminal, in the default t
       (with-temp-file (expand-file-name "new.txt" dir) (insert "x\n"))
       (call-process "git" nil nil nil "add" "new.txt")
       (with-temp-file (expand-file-name "loose.txt" dir) (insert "y\n")))
+    (drgnx-tty-session-hub sess)                  ; the Explorer's rows (and their git letters) are the hub's
     (drgnx-tty-session-eval sess `(progn (drgnx-explorer-set-roots (list ,dir)) (drgnx-wb-show-sidebar) t))
     dir))
 
@@ -140,14 +149,29 @@ foreground and background are the same colour on this terminal, in the default t
   '(:weight :slant :underline :overline :strike-through :box :inverse-video)
   "The face attributes that tell without colour.")
 
+(ert-deftest drgnx-tty-colours/selection-is-inverse-and-unfocused-underlined ()
+  ;; the kit's state table on a terminal (etc/ui/components.eld :tty): selected and focus inverse video, the inactive
+  ;; selection an underline with no fill and no bold, hover nothing, disabled dim
+  (drgnx-tty-session-with (s :daemon t :size "120x40")
+    (drgnx-tty-session-client s :env '("TERM=xterm"))
+    (should (equal (drgnx-tty-colours-test--in-client
+                    s '(list (face-attribute 'drgnx-selected :inverse-video nil t)
+                             (face-attribute 'drgnx-focus :inverse-video nil t)
+                             (and (face-attribute 'drgnx-selected-inactive :underline nil t) t)
+                             (face-attribute 'drgnx-selected-inactive :background nil t)
+                             (face-attribute 'drgnx-selected-inactive :weight nil t)
+                             (face-attribute 'drgnx-text-disabled :weight nil t)
+                             (face-attribute 'drgnx-hover :background nil t)))
+                   '(t t t unspecified normal light unspecified)))))
+
 (ert-deftest drgnx-tty-colours/states-are-told-apart-without-colour ()
   (drgnx-tty-session-with (s :daemon t :size "120x40")
     (let ((c (drgnx-tty-session-client s :env '("TERM=xterm"))))
       (should (= (drgnx-tty-colours-test--cells s) 8))
-      (drgnx-tty-session-wait-screen c "\\*scratch\\* ×" 20)
+      (drgnx-tty-session-wait-tab c "×" 20)
       ;; the table is there and names the four groups
       (should (equal (drgnx-tty-colours-test--in-client s '(mapcar #'car drgnx-tty-frames-state-faces))
-                     '(git review tabs work)))
+                     '(git review tabs)))
       ;; git: the letter sits in the row, M for a changed file, A for an added one, U for an untracked one
       (drgnx-tty-colours-test--in-client s '(progn (drgnx-wb-show-sidebar) t))
       (drgnx-tty-colours-test--git-fixture s)
@@ -167,21 +191,16 @@ foreground and background are the same colour on this terminal, in the default t
                              (seq-filter (lambda (w) (string-match-p (concat "^" w " ") (buffer-string)))
                                          '("critical" "important" "minor")))))
                      '("critical" "important" "minor")))
-      ;; the tabs: the shown tab differs from the others in an attribute that is not a colour
-      (should (drgnx-tty-colours-test--in-client
-               s `(seq-some (lambda (a)
-                              (not (equal (face-attribute 'drgnx-chrome-tab a nil t)
-                                          (face-attribute 'drgnx-chrome-tab-current a nil t))))
-                            ',drgnx-tty-colours-test--attributes)))
-      ;; work: the label says what a node is
+      ;; the tabs: each shown tab (of the active group and of another) differs from the others in an attribute that is
+      ;; not a colour
       (should (equal (drgnx-tty-colours-test--in-client
-                      s '(list (string-match-p "\\`⚠ Task 1: t  (its commits are on no branch)"
-                                               (drgnx-work-ui--line '(:kind task :ord 1 :title "t" :stale t)))
-                               (string-match-p "\\`☑ t" (drgnx-work-ui--line '(:kind step :title "t" :status "done")))
-                               (string-match-p "\\`☐ t" (drgnx-work-ui--line '(:kind step :title "t")))
-                               (string-match-p "\\`✓ TODO t" (drgnx-work-ui--line '(:kind todo :title "t" :status "done")))
-                               (string-match-p "\\`○ TODO t" (drgnx-work-ui--line '(:kind todo :title "t")))))
-                     '(0 0 0 0 0)))
+                      s `(mapcar (lambda (f)
+                                   (seq-some (lambda (a)
+                                               (not (equal (face-attribute 'drgnx-kit-tab a nil t)
+                                                           (face-attribute f a nil t))))
+                                             ',drgnx-tty-colours-test--attributes))
+                                 '(drgnx-kit-tab-current-inactive drgnx-kit-tab-current)))
+                     '(t t)))
       ;; ignored files have no letter: their face differs from the default in an attribute that is not a colour
       (should (equal (drgnx-tty-colours-test--in-client
                       s `(mapcar (lambda (f)
@@ -195,19 +214,6 @@ foreground and background are the same colour on this terminal, in the default t
                s '(seq-every-p (lambda (g) (seq-every-p #'facep (plist-get (cdr g) :faces))) drgnx-tty-frames-state-faces))))))
 
 ;;;; Images
-
-(ert-deftest drgnx-tty-colours/the-work-graph-says-it-cannot-show-here ()
-  (drgnx-tty-session-with (s :daemon t)
-    (drgnx-tty-session-client s)
-    (let ((r (drgnx-tty-colours-test--in-client
-              s '(condition-case err (progn (call-interactively #'drgnx-work-ui-graph) 'shown)
-                   (user-error (cadr err))
-                   (error (list 'error err))))))
-      (should (stringp r))
-      (should (string-match-p "needs a graphical frame" r))
-      (should (string-match-p "Work tab shows the same tree" r)))
-    ;; no graph buffer was made on the way
-    (should-not (drgnx-tty-session-eval s '(and (get-buffer "*work graph*") t)))))
 
 (ert-deftest drgnx-tty-colours/the-browser-pane-says-it-cannot-show-here ()
   ;; a page needs a graphical frame: the system browser gets it (stubbed: no browser starts), once, with the reason
@@ -231,18 +237,20 @@ foreground and background are the same colour on this terminal, in the default t
       (should (nth 3 r)))
     (should-not (drgnx-tty-session-eval s '(and (get-buffer "*drgnx: browser*") (get-buffer-window "*drgnx: browser*") t)))))
 
-(ert-deftest drgnx-tty-colours/the-live-view-says-it-cannot-show-here ()
-  ;; the Live view is an image of the page: a text saying so, and the browser for agents is not started
+(ert-deftest drgnx-tty-colours/the-live-view-says-why-it-is-empty-here ()
+  ;; the Live view waits for a later update: in a terminal too it opens, says so, and connects to nothing
   (drgnx-tty-session-with (s :daemon t)
-    (drgnx-tty-session-client s)
-    (drgnx-tty-session-wait s '(fboundp 'drgnx-live-view) 20)
-    (let ((r (drgnx-tty-colours-test--in-client
-              s '(condition-case err (progn (call-interactively #'drgnx-live-view) 'shown)
-                   (user-error (cadr err))
-                   (error (list 'error err))))))
-      (should (stringp r))
-      (should (string-match-p "needs a graphical frame" r)))
-    (should-not (drgnx-tty-session-eval s '(or (and (drgnx-live-running) t) (and (get-buffer "*drgnx live*") t))))))
+    (let ((c (drgnx-tty-session-client s)))
+      (drgnx-tty-session-wait s '(fboundp 'drgnx-live-view) 20)
+      (let ((r (drgnx-tty-colours-test--in-client
+                s '(condition-case err
+                       (let ((buf (call-interactively #'drgnx-live-view)))
+                         (list (eq (window-frame (get-buffer-window buf t)) (selected-frame))
+                               (with-current-buffer buf (and (string-search drgnx-live--dormant-text (buffer-string)) t))
+                               (with-current-buffer buf drgnx-live--ws)))
+                     (error (list 'error err))))))
+        (should (equal r '(t t nil))))
+      (drgnx-tty-session-wait-screen c "arrives with a later drgnx update"))))
 
 (provide 'drgnx-tty-colours-test)
 ;;; colours-test.el ends here

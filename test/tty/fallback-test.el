@@ -28,7 +28,7 @@
   "A new VTE client of S, once its frame shows; it has the fallback layer."
   (drgnx-tty-session-eval s (drgnx-tty-fallback-test--says "VTE(7800)"))
   (let ((c (drgnx-tty-session-client s :env drgnx-tty-fallback-test--vte)))
-    (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
+    (drgnx-tty-session-wait-tab c nil 20)
     (should (equal (mapcar (lambda (k) (plist-get (drgnx-tty-keys-test--caps s c) k)) '(:id :keys)) '(vte legacy)))
     (should (drgnx-tty-session-eval s `(terminal-parameter (frame-terminal ,(drgnx-tty-keys-test--frame c)) 'drgnx-tty-fallback)))
     c))
@@ -42,12 +42,25 @@
   "Wait until COMMAND ran (whatever the key looked like)."
   (drgnx-tty-session-wait s `(and (assq ',command kx-seen) t) 10))
 
+(defun drgnx-tty-fallback-test--barrier (s c)
+  "Wait until the daemon has read and run everything sent to client C before this call: one more key, F7 (a command that
+only notes itself), goes down the same input stream, and keys are read in order.  What \"nothing else may follow\"
+means is then settled, with no time passed; the note is taken out of the record.  F7 is a key no key profile claims,
+so no stage rebinds it; the module stages are over first all the same."
+  (drgnx-tty-session-wait-stages s)
+  (drgnx-tty-session-eval s '(progn (unless (fboundp 'kx-sentinel) (defun kx-sentinel () (interactive) nil))
+                                    (global-set-key (kbd "<f7>") #'kx-sentinel) t))
+  (drgnx-tty-session-eval s '(setq kx-seen (assq-delete-all 'kx-sentinel kx-seen)))
+  (drgnx-tty-session-send c "\e[18~")
+  (drgnx-tty-session-wait s '(assq 'kx-sentinel kx-seen) 10)
+  (drgnx-tty-session-eval s '(progn (setq kx-seen (assq-delete-all 'kx-sentinel kx-seen)) t)))
+
 (defun drgnx-tty-fallback-test--not-run (s command bytes c)
   "Send BYTES to C; once some command ran from them, COMMAND was not it."
   (drgnx-tty-session-eval s '(setq kx-seen nil))
   (drgnx-tty-session-send c bytes)
   (drgnx-tty-session-wait s 'kx-seen 10)
-  (drgnx-test-pause 0.3 "COMMAND may not run from the rest of the bytes")
+  (drgnx-tty-fallback-test--barrier s c)             ; the rest of the bytes has been read: COMMAND did not run from it
   (should-not (drgnx-tty-session-eval s `(assq ',command kx-seen))))
 
 (ert-deftest drgnx-tty-fallback/alt-shift-p-is-not-the-palette ()
@@ -88,7 +101,8 @@
                                                                   (frame-list)))
                             (drgnx-tty-session-eval s count))))
         (drgnx-tty-fallback-test--legacy s)
-        (drgnx-test-pause 1.5 "the second VTE client may get no hint")
+        ;; a client's hint is a timer until it is said: none left on any frame means the second client got none or has had it
+        (drgnx-tty-session-wait s '(cl-notany (lambda (f) (drgnx-timer-active-p (cons 'tty-fallback-hint f))) (frame-list)))
         (should (= before (drgnx-tty-session-eval s count))))
       (should (= 1 (seq-count (lambda (id) (eq id 'vte)) (drgnx-tty-session-eval s '(plist-get (drgnx-tty--read-report) :hinted))))))))
 
@@ -134,8 +148,11 @@
       (drgnx-tty-keys-test--quit s c 'legacy)
       ;; F6 ` : the panel
       (should-not (drgnx-tty-session-eval s `(drgnx-wb-area-window 'panel ,frame)))
+      ;; a terminal tab with a buffer of its own: Toggle Terminal shows it and starts no shell, which would take the keys after
+      (drgnx-tty-session-eval s `(with-selected-frame ,frame (drgnx-wb-area-show 'panel 'terminal (get-buffer-create "*terminal*"))
+                                                      (drgnx-wb-area-hide 'panel)))
       (drgnx-tty-session-send c (concat f6 "`"))
-      (drgnx-tty-keys-test--ran s 'drgnx-wb-toggle-panel "C-`")
+      (drgnx-tty-keys-test--ran s 'drgnx-terminal-toggle "C-`")
       (drgnx-tty-session-wait s `(drgnx-wb-area-window 'panel ,frame))
       ;; F6 p : the palette
       (drgnx-tty-session-send c (concat f6 "p"))
@@ -149,7 +166,7 @@
       (drgnx-tty-session-send c (concat "\C-x" f6))
       (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
       (drgnx-tty-session-send c "\a")
-      (drgnx-test-pause 0.5 "the bell may run no command but a quit")
+      (drgnx-tty-fallback-test--barrier s c)             ; the bell has been read: no command but a quit ran from it
       (should-not (drgnx-tty-session-eval s '(seq-remove (lambda (c) (memq (car c) '(keyboard-quit nil))) kx-seen)))
       ;; a click after F6 is a click: F6 is dropped, nothing of the mouse report is typed
       (let ((text `(with-current-buffer "*scratch*" (buffer-string))))
@@ -157,7 +174,7 @@
           (drgnx-tty-session-send c f6)
           (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
           (drgnx-tty-session-send c "\e[<0;60;6M\e[<0;60;6m")
-          (drgnx-test-pause 0.5 "nothing of the mouse report may be typed")
+          (drgnx-tty-fallback-test--barrier s c)             ; the mouse report has been read: nothing of it was typed
           (should (equal (drgnx-tty-session-eval s text) before))
           (should-not (drgnx-tty-session-find c "60;6\\|\\[<0"))
           (should-not (drgnx-tty-session-find c "Ctrl\\+Shift\\+…"))))
@@ -167,7 +184,54 @@
       ;; and the next F6 p is the palette again
       (drgnx-tty-session-send c (concat f6 "p"))
       (drgnx-tty-keys-test--ran s 'drgnx-palette "C-S-p")
-      (drgnx-tty-keys-test--quit s c 'legacy))))
+      (drgnx-tty-keys-test--quit s c 'legacy)
+      ;; F6 Shift+Tab : Ctrl+Shift+Tab (the terminal sends Shift+Tab's ESC [ Z for both, so F6 is its way in)
+      (drgnx-tty-session-send c (concat f6 "\e[Z"))
+      (drgnx-tty-keys-test--ran s 'drgnx-chrome-recent-editor-up "C-S-<tab>"))))
+
+(ert-deftest drgnx-tty-fallback/f6-types-the-fold-level-chords ()
+  ;; VS Code's Fold Level is C-k C-1 … C-k C-7; a legacy terminal sends no C-4 (nor most of the others): C-k then F6 4
+  ;; is the chord, each of the seven arriving as the profile spells it
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28" :options '(("set" "-s" "extended-keys" "off")))
+    (let ((c (drgnx-tty-fallback-test--legacy s))
+          (f6 (drgnx-tty-session-encode "<f6>" 'legacy)))
+      (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
+      (dotimes (i 7)
+        (let ((n (number-to-string (1+ i))))
+          (drgnx-tty-session-wait-stages s)
+          (drgnx-tty-session-send c (concat "\C-k" f6 n))
+          (drgnx-tty-keys-test--ran s 'drgnx-fold-fold-level (concat "C-k C-" n)))))))
+
+(ert-deftest drgnx-tty-fallback/the-hint-waits-while-f6-waits ()
+  ;; the hint's timer comes due while F6 waits for its key: the prompt stays, and the hint is said once the key is in.
+  ;; The order is the test's: the client's hint is held when its frame is set up, and armed only once F6 waits, by a
+  ;; module stage's end: its keys apply sets every terminal's layer up again, which asks for each frame's hint again.
+  ;; Hints are held per frame, so a stage that ends before F6 is seen holding another client's.
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28" :options '(("set" "-s" "extended-keys" "off")))
+    (drgnx-tty-session-eval s '(progn (defvar kx-held-hints nil)
+                                      (advice-add 'drgnx-tty-fallback--hint :override
+                                                  (lambda (&rest args) (push args kx-held-hints)) '((name . kx-hold)))
+                                      t))
+    (let* ((c (drgnx-tty-fallback-test--legacy s))
+           (frame (drgnx-tty-keys-test--frame c))
+           (hinted '(memq 'vte (plist-get (drgnx-tty--read-report) :hinted))))
+      (should (drgnx-tty-session-eval s `(assq ,frame kx-held-hints)))
+      (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
+      (drgnx-tty-session-send c (drgnx-tty-session-encode "<f6>" 'legacy))
+      (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
+      ;; F6 waits: the hold goes, then a module stage's end (its hook, which applies the keys) asks for every frame's
+      ;; hint again, the product's own call: the hint's timer is armed now, and runs while F6 still waits
+      (should (drgnx-tty-session-eval s `(progn (advice-remove 'drgnx-tty-fallback--hint 'kx-hold)
+                                                (run-hook-with-args 'drgnx-modules-after-stage-functions 'idle)
+                                                (drgnx-timer-active-p (cons 'tty-fallback-hint ,frame)))))
+      (drgnx-tty-session-wait s `(not (drgnx-timer-active-p (cons 'tty-fallback-hint ,frame))))
+      (should (equal "Ctrl+Shift+…" (drgnx-tty-session-eval s `(with-selected-frame ,frame (current-message)))))
+      (should-not (drgnx-tty-session-eval s hinted))
+      ;; …the key: the chord runs, then the hint is said
+      (drgnx-tty-session-send c ".")
+      (drgnx-tty-keys-test--ran s 'drgnx-lang-quick-fix "C-.")
+      (drgnx-tty-session-wait s hinted)
+      (drgnx-tty-session-wait-screen c "This terminal can't send Ctrl\\+Shift keys"))))
 
 (ert-deftest drgnx-tty-fallback/a-mode-that-binds-alt-shift-f-keeps-it ()
   ;; Alt+Shift+P is reserved (ESC P), so the mode here binds M-F: in its buffer, Alt+Shift+F is the mode's;
@@ -221,7 +285,7 @@
   (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28")
     (let* ((c (drgnx-tty-session-client s :env (list (format "TMUX=%s,1,0" (plist-get s :tmux)))))
            (frame (drgnx-tty-keys-test--frame c)))
-      (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
+      (drgnx-tty-session-wait-tab c nil 20)
       (let ((caps (drgnx-tty-keys-test--caps s c)))
         (should (equal (list (plist-get caps :id) (plist-get caps :keys)) '(tmux mok)))
         (should (member "C-S-f" (plist-get caps :folded))))
@@ -242,7 +306,7 @@
     (let* ((l (drgnx-tty-fallback-test--legacy s))
            (m (progn (drgnx-tty-session-eval s (drgnx-tty-fallback-test--says "WezTerm 20240203-110809-5046fc22"))
                      (drgnx-tty-session-client s :env '("TERM=xterm-256color")))))
-      (drgnx-tty-session-wait-screen m "\\*scratch\\*" 20)
+      (drgnx-tty-session-wait-tab m nil 20)
       (should (equal (mapcar (lambda (k) (plist-get (drgnx-tty-keys-test--caps s m) k)) '(:id :keys :folded))
                      '(wezterm mok nil)))
       (should-not (drgnx-tty-session-eval s `(terminal-parameter (frame-terminal ,(drgnx-tty-keys-test--frame m)) 'drgnx-tty-fallback)))
@@ -271,7 +335,7 @@
         (drgnx-tty-session-wait-screen l "SEARCH")
         (drgnx-tty-keys-test--quit s l 'legacy)
         ;; K's ESC F: not Search; K's kkp C-S-f: Search
-        (drgnx-tty-session-wait-screen k "\\*scratch\\*")
+        (drgnx-tty-session-wait-tab k)
         (drgnx-tty-fallback-test--not-run s 'drgnx-wb-view-search "\eF" k)
         (drgnx-tty-session-key k "C-S-f" 'kkp)
         (drgnx-tty-keys-test--ran s 'drgnx-wb-view-search "C-S-f")
@@ -293,7 +357,7 @@
                      :size "100x30"
                      :command (format "env TERM=xterm-256color VTE_VERSION=7800 %s -a false -t -s %s; sh"
                                       (drgnx-ui--emacsclient) (shell-quote-argument (plist-get gui :socket)))))
-          (drgnx-tty-session-wait-screen tty "\\*drgnx start\\*" 30)   ; a fresh client opens on the start page
+          (drgnx-tty-session-wait-tab tty nil 30 '("*drgnx start*") gui)   ; a fresh client opens on the start page
           (let ((g '(seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list)))
                 (tf '(seq-find (lambda (f) (and (not (display-graphic-p f)) (frame-parameter f 'client))) (frame-list))))
             (drgnx-tty-session-wait gui `(terminal-parameter (frame-terminal ,tf) 'drgnx-tty-fallback) 20)

@@ -1,0 +1,25 @@
+{"scenario": "view/minimap-heat", "requires": ["v1"], "doc": "The minimap's heat layer (design X3): minimap/watch with heat sends heat:S with the labels, [first, last, value, fact] spans: coverage from the newest report the coverage paths name (read again when a test run rewrites it: its folder is watched), git blame (one commit: every line newest), a speedscope profile (the hottest line 1000); asking for another layer removes the last one (items null), and so does watching no longer. Real clock: the rewritten report is read again after the hub's quiet time."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo/src $ROOT/repo/coverage && cd $ROOT/repo && git init -q -b main && printf 'fn a() {}\\nfn b() {}\\nfn c() {}\\n' > src/a.rs && git add src/a.rs && git -c user.email=t@example.invalid -c user.name=t commit -qm base && printf 'SF:src/a.rs\\nDA:1,3\\nDA:2,0\\nend_of_record\\n' > coverage/lcov.info && printf '%s' '{\"shared\": {\"frames\": [{\"name\": \"f\", \"file\": \"src/a.rs\", \"line\": 2}, {\"name\": \"g\", \"file\": \"src/a.rs\", \"line\": 3}]}, \"profiles\": [{\"type\": \"sampled\", \"name\": \"cpu\", \"unit\": \"none\", \"startValue\": 0, \"endValue\": 3, \"samples\": [[0], [1], [1]], \"weights\": [1, 1, 1]}]}' > $ROOT/prof.json"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "minimap/watch", "params": {"file": "$ROOT/repo/src/a.rs", "on": true, "heat": "coverage", "coverage": ["coverage/*.info"]}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/src/a.rs", "layer": "heat:coverage", "version": "$number", "items": [[1, 1, 1000, "$string"], [2, 2, 0, "$string"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cd $ROOT/repo/coverage && printf 'SF:src/a.rs\\nDA:1,3\\nDA:2,5\\nend_of_record\\n' > new.tmp && mv new.tmp lcov.info"], "expect_code": 0}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/src/a.rs", "layer": "heat:coverage", "version": "$number", "items": [[1, 1, 1000, "$string"], [2, 2, 1000, "$string"]]}}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "minimap/watch", "params": {"file": "$ROOT/repo/src/a.rs", "on": true, "heat": "blame"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/src/a.rs", "layer": "heat:coverage", "version": "$number", "items": null}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/src/a.rs", "layer": "heat:blame", "version": "$number", "items": [[1, 3, 1000, "$string"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "minimap/watch", "params": {"file": "$ROOT/repo/src/a.rs", "on": true, "heat": "profile", "profile": "$ROOT/prof.json"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/src/a.rs", "layer": "heat:blame", "version": "$number", "items": null}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/src/a.rs", "layer": "heat:profile", "version": "$number", "items": [[2, 2, 500, "$string"], [3, 3, 1000, "$string"]]}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "minimap/watch", "params": {"file": "$ROOT/repo/src/a.rs", "on": false}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"minimap": {"file": "$ROOT/repo/src/a.rs", "layer": "heat:profile", "version": "$number", "items": null}}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "minimap/watch", "params": {"file": "$ROOT/repo/src/a.rs", "on": true, "heat": "warmth"}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "error": {"code": "invalid-params"}}}

@@ -88,7 +88,7 @@ The process is waited for before the temp directories go."
          (process-environment
           (append (list (concat "HOME=" home) (concat "ZDOTDIR=" home) (concat "XDG_CONFIG_HOME=" home "/.config")
                         "HISTFILE=/dev/null" "TERM=dumb")
-                  (seq-remove (lambda (e) (string-match-p "\\`\\(HOME\\|ZDOTDIR\\|XDG_CONFIG_HOME\\|HISTFILE\\|TERM\\|INSIDE_EMACS\\|EAT_SHELL_INTEGRATION_DIR\\)=" e))
+                  (seq-remove (lambda (e) (string-match-p "\\`\\(HOME\\|ZDOTDIR\\|XDG_CONFIG_HOME\\|HISTFILE\\|TERM\\|INSIDE_EMACS\\)=" e))
                               process-environment))))
     (unwind-protect
         (with-temp-buffer
@@ -254,7 +254,8 @@ PRE is run before the completion file is sourced (set -u, ...)."
         (progn
           (make-directory dir t)
           (make-directory (expand-file-name "my dir/keys" base) t)
-          (dolist (f (directory-files drgnx-shell-completion-test--shell-dir t "\\`[^.]")) (copy-file f dir))
+          (dolist (f (directory-files drgnx-shell-completion-test--shell-dir t "\\`[^.]"))   ; the files, not ghostty/
+            (when (file-regular-p f) (copy-file f dir)))
           (dolist (f '("emacs.eld" "vim.eld")) (with-temp-file (expand-file-name (concat "my dir/keys/" f) base)))
           (dolist (pre '("set -u" "set -eu" "set -euo pipefail"))
             (should (equal (drgnx-shell-completion-test--sorted (drgnx-shell-completion-test--bash '("drgnx" "o") dir pre))

@@ -7,9 +7,9 @@
 //! The edges the shell keeps: a turn's `PromptDone` or `PromptFailed` comes after its `StartTurn`, and after every
 //! update the agent sent in that turn (the reader drains them first); a `PermissionAsked` names the turn that was
 //! running when the reader received the request; a `Kill` for a stop's deadline names the turn that Stop stopped; a
-//! turn's prompt goes to the agent only when its `Sending` step answers `Prompt` (the hub's end, or the user's kill,
-//! may come between the turn's start and its send: the hub's end then puts the prompt back at the front of the queue,
-//! the user's kill names it with what it discards).
+//! turn's prompt goes to the agent only when its `Sending` step answers `Prompt` (the hub's end, a Stop, the agent's
+//! exit or the user's kill may come between the turn's start and its send: the hub's end, the Stop and the exit then
+//! put the prompt back at the front of the queue, the user's kill names it with what it discards).
 
 use super::super::queue::{Origin, Queue, Queued};
 use runstav::methods::agents::SessionStatus;
@@ -24,18 +24,35 @@ pub(crate) enum TurnEvent {
         steer_mode: bool,
         if_free: bool,
     },
-    /// The agent answered the turn's prompt; CANCELLED: its stop reason is `cancelled`.  JOBS: a job the session
-    /// started still runs.
-    PromptDone { cancelled: bool, jobs: bool },
-    /// The turn's prompt failed; CLOSED: the agent's connection closed.
-    PromptFailed { closed: bool, jobs: bool },
+    /// The agent answered turn TURN's prompt; CANCELLED: its stop reason is `cancelled`.  JOBS: a job the session
+    /// started still runs.  The answer of a turn a [`TurnEvent::Detach`] cut off changes nothing.
+    PromptDone {
+        turn: u64,
+        cancelled: bool,
+        jobs: bool,
+    },
+    /// Turn TURN's prompt failed; CLOSED: the agent's connection closed.
+    PromptFailed { turn: u64, closed: bool, jobs: bool },
+    /// The session's conversation is being swapped (a rewind): a running turn is cancelled and cut off (its later
+    /// answer changes nothing), a prompt that has not reached the agent goes back to the queue's front, and no turn
+    /// starts until [`TurnEvent::Reattach`]; a prompt sent meanwhile queues, and a Stop holds the queue.
+    #[cfg_attr(not(test), allow(dead_code, reason = "sent by the rewind"))]
+    Detach,
+    /// The new conversation is live: TOLD (a summary, the user's message) goes ahead of the queue, as
+    /// [`TurnCore::resume`]'s does; then, unless the queue is held, the next prompt starts.
+    Reattach { told: Option<String> },
     /// The user's Stop (or the refused waits'); AFTER_TOOL: the pause, which cancels once the running tool call
     /// completes (`Hub::cancel_after_tool`).
     Stop { after_tool: bool },
     /// The agent's process is to end.
     Kill { why: KillWhy },
-    /// The matrix asks the user about permission request REQUEST, which the agent sent during TURN.
-    PermissionAsked { request: u64, turn: u64 },
+    /// The matrix asks the user about permission request REQUEST, which the agent sent during TURN, through matrix
+    /// card CARD when the store made one.
+    PermissionAsked {
+        request: u64,
+        turn: u64,
+        card: Option<i64>,
+    },
     /// The user answered REQUEST (or settled its matrix card).
     PermissionAnswered { request: u64 },
     /// A tool call completed or failed.
@@ -50,6 +67,9 @@ pub(crate) enum TurnEvent {
     Exited,
     /// The shell is about to hand turn TURN's prompt to the agent (`Session::turn`).
     Sending { turn: u64 },
+    /// Turn TURN's prompt line is on its way to the agent: a `session/cancel` sent from now on reaches it after the
+    /// prompt.  A cancel decided between `Sending` and this waited for it.
+    Written { turn: u64 },
 }
 
 /// Why the agent's process ends.
@@ -74,6 +94,8 @@ pub(crate) enum QueueEdit {
     Requeue(usize, String),
     /// TEXT goes ahead of the ordinary queued prompts, without starting a turn (the freshness gate's notice).
     SteerIn(String),
+    /// The user gave the wheel back: ITEM goes first, the hold lifts and the next prompt starts.
+    Resume(Queued),
 }
 
 /// What the shell does about a step.
@@ -93,10 +115,10 @@ pub(crate) enum TurnEffect {
     /// Turn TURN starts with ITEM: its prompt is to go to the agent ([`TurnEvent::Sending`] says whether it still
     /// does).
     StartTurn { turn: u64, item: Queued },
-    /// Turn TURN's prompt goes to the agent now.
+    /// Turn TURN's prompt goes to the agent now (with a `Persist`: it leaves the queue on disk).
     Prompt { turn: u64 },
-    /// Turn TURN's prompt never reached the agent and is back at the front of the queue (the hub's end): what the
-    /// turn began (its entry, its step) is undone.
+    /// Turn TURN's prompt never reached the agent and is back at the front of the queue (the hub's end, a Stop, or
+    /// the agent's exit): what the turn began (its entry, its step) is undone.
     PutBack { turn: u64 },
     /// The user's kill drops these prompts, which never reached the agent (the queue, and a turn not yet sent).
     Discard(Vec<Queued>),
@@ -118,7 +140,9 @@ pub(crate) enum TurnEffect {
     Answer { request: u64 },
     /// The request is answered cancelled.
     Cancel { request: u64 },
-    /// The queue and the pause are kept on disk.
+    /// Matrix card CARD is withdrawn: every request that waited on it was answered cancelled, so nobody answers it.
+    Withdraw { card: i64 },
+    /// The queue and the pause are kept on disk ([`TurnCore::kept`]).
     Persist,
     /// The snapshot changed: its change number goes up and an event pair is due.
     Announce,
@@ -145,17 +169,28 @@ pub(crate) struct TurnCore {
     unsent: Option<Queued>,
     /// The agent was told to cancel this turn.
     cancelling: bool,
+    /// The turn whose prompt the shell is handing to the agent (after `Sending`, before `Written`): the shell awaits
+    /// in between (the tree's snapshot), and a `session/cancel` written then would reach the agent before its prompt.
+    unwritten: Option<u64>,
+    /// A cancel that waits for that turn's `Written`, and whether a Stop's deadline is armed with it.
+    cancel_on_write: Option<(u64, bool)>,
     /// A Stop armed its deadline for this turn.
     stopped: bool,
     /// The process is being ended (a kill, a Stop's deadline): no turn starts, and unless the hub is ending, no prompt
     /// is taken.
     killed: bool,
-    /// The hub is ending: a turn's end holds nothing and starts nothing.
+    /// The hub is ending: a turn's end holds nothing and starts nothing, and no event pair is armed or sent.
     ending: bool,
-    /// The requests the user is asked, oldest first.
-    held: Vec<u64>,
+    /// The requests the user is asked, oldest first, with the matrix card each waits on.
+    held: Vec<(u64, Option<i64>)>,
     /// The event pair's timer runs.
     emit_armed: bool,
+    /// The conversation is being swapped: nothing starts.
+    detached: bool,
+    /// Turns a detach cut off: their answers change nothing.
+    abandoned: Vec<u64>,
+    /// The user holds the wheel (`agents::wheel`): no turn starts, whatever is sent or delivered, until the give.
+    wheel: bool,
 }
 
 impl Default for TurnCore {
@@ -168,11 +203,16 @@ impl Default for TurnCore {
             turn: 0,
             unsent: None,
             cancelling: false,
+            unwritten: None,
+            cancel_on_write: None,
             stopped: false,
             killed: false,
             ending: false,
             held: Vec::new(),
             emit_armed: false,
+            detached: false,
+            abandoned: Vec::new(),
+            wheel: false,
         }
     }
 }
@@ -211,10 +251,64 @@ impl TurnCore {
                 fx.push(E::Announce);
                 fx
             }
-            TurnEvent::PromptDone { cancelled, jobs } => {
+            TurnEvent::PromptDone {
+                turn,
+                cancelled,
+                jobs,
+            } => {
+                if self.forget_abandoned(turn) {
+                    return Vec::new();
+                }
                 self.finish(cancelled && !self.ending, jobs)
             }
-            TurnEvent::PromptFailed { closed, jobs } => self.finish(!closed && !self.ending, jobs),
+            TurnEvent::PromptFailed { turn, closed, jobs } => {
+                if self.forget_abandoned(turn) {
+                    return Vec::new();
+                }
+                self.finish(!closed && !self.ending, jobs)
+            }
+            TurnEvent::Detach => {
+                if self.status == SessionStatus::Exited {
+                    return vec![E::Exited];
+                }
+                self.detached = true;
+                let mut fx = Vec::new();
+                if let Some(item) = self.unsent.take() {
+                    // its prompt never reached the old conversation: it goes to the new one
+                    self.queue.push_front(item);
+                    self.status = SessionStatus::Idle;
+                    fx.push(E::PutBack { turn: self.turn });
+                } else if self.status == SessionStatus::Busy {
+                    if !self.cancelling {
+                        fx.extend(self.cancel());
+                    }
+                    self.abandoned.push(self.turn);
+                    self.status = SessionStatus::Idle;
+                }
+                self.hold = false;
+                fx.extend([E::Persist, E::Announce]);
+                fx
+            }
+            TurnEvent::Reattach { told } => {
+                self.detached = false;
+                if let Some(text) = told {
+                    self.queue.push_front(Queued {
+                        text,
+                        origin: Origin::Hub,
+                        steer: false,
+                        key: None,
+                    });
+                }
+                let mut fx = vec![E::Persist];
+                fx.extend(self.next());
+                fx.push(E::Announce);
+                fx
+            }
+            TurnEvent::Stop { .. } if self.detached => {
+                // no turn runs while detached: the Stop holds what waits
+                self.paused = true;
+                vec![E::Persist, E::Announce]
+            }
             TurnEvent::Stop { after_tool: true } => {
                 match self.status {
                     SessionStatus::Exited => return vec![E::Exited],
@@ -227,6 +321,15 @@ impl TurnCore {
                 if self.status != SessionStatus::Busy {
                     return vec![E::NotRunning];
                 }
+                if let Some(item) = self.unsent.take() {
+                    // the turn's prompt has not reached the agent: Stop wins, the turn never ran (no cancel, no
+                    // deadline), and its prompt waits at the front of the held queue
+                    self.queue.push_front(item);
+                    self.status = SessionStatus::Idle;
+                    self.paused = true;
+                    self.hold = false;
+                    return vec![E::PutBack { turn: self.turn }, E::Persist, E::Announce];
+                }
                 if self.stopped {
                     // stopped already: the turn ends once, at the agent's answer or the first deadline
                     return Vec::new();
@@ -235,11 +338,12 @@ impl TurnCore {
                 self.hold = false;
                 self.stopped = true;
                 let mut fx = self.cancel();
-                fx.extend([
-                    E::Persist,
-                    E::Announce,
-                    E::ArmStopDeadline { turn: self.turn },
-                ]);
+                fx.extend([E::Persist, E::Announce]);
+                // the deadline runs from the cancel: one still waiting for the prompt's line arms it at `Written`
+                match &mut self.cancel_on_write {
+                    Some((turn, deadline)) if *turn == self.turn => *deadline = true,
+                    _ => fx.push(E::ArmStopDeadline { turn: self.turn }),
+                }
                 fx
             }
             TurnEvent::Kill {
@@ -277,24 +381,57 @@ impl TurnCore {
                 fx
             }
             TurnEvent::Sending { turn } => {
-                // the turn is still to send: not put back by the hub's end, not on a process being ended
+                // the turn is still to send: not put back by the hub's end, not on a process being ended; from now on
+                // its prompt is the agent's, and no longer on disk
                 if turn == self.turn && !self.killed && self.unsent.take().is_some() {
-                    vec![E::Prompt { turn }]
+                    self.unwritten = Some(turn);
+                    vec![E::Prompt { turn }, E::Persist]
                 } else {
                     Vec::new()
                 }
             }
-            TurnEvent::PermissionAsked { request, turn } => {
+            TurnEvent::Written { turn } => {
+                if self.unwritten == Some(turn) {
+                    self.unwritten = None;
+                }
+                match self.cancel_on_write {
+                    Some((t, deadline)) if t == turn => {
+                        self.cancel_on_write = None;
+                        // a kill since ends the process anyway; a later turn has its own cancel
+                        if self.killed || turn != self.turn {
+                            return Vec::new();
+                        }
+                        let mut fx = vec![E::CancelTurn];
+                        if deadline {
+                            fx.push(E::ArmStopDeadline { turn });
+                        }
+                        fx
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            TurnEvent::PermissionAsked {
+                request,
+                turn,
+                card,
+            } => {
                 let asked = self.status == SessionStatus::Busy
                     && turn == self.turn
                     && !self.cancelling
                     && !self.killed;
                 if asked {
-                    self.held.push(request);
+                    self.held.push((request, card));
                     vec![E::Hold { request }]
                 } else {
-                    // its turn is cancelled or over: nobody will answer it
-                    vec![E::Cancel { request }]
+                    // its turn is cancelled or over: nobody will answer it, nor its card unless another request waits
+                    // on that
+                    let mut fx = vec![E::Cancel { request }];
+                    if let Some(card) =
+                        card.filter(|c| !self.held.iter().any(|(_, h)| *h == Some(*c)))
+                    {
+                        fx.push(E::Withdraw { card });
+                    }
+                    fx
                 }
             }
             TurnEvent::PermissionAnswered { request } => {
@@ -317,10 +454,15 @@ impl TurnCore {
             }
             TurnEvent::EmitTick => {
                 self.emit_armed = false;
+                // while the hub ends no pair goes out: the snapshot is read at the send and may show the session's own
+                // exit, and the editors learn of the end from their connection's end of file
+                if self.ending {
+                    return Vec::new();
+                }
                 vec![E::Emit]
             }
             TurnEvent::Changed => {
-                if self.emit_armed {
+                if self.emit_armed || self.ending {
                     return Vec::new();
                 }
                 self.emit_armed = true;
@@ -351,13 +493,28 @@ impl TurnCore {
                         }
                     }
                     QueueEdit::SteerIn(text) => self.queue.push(text, Origin::Hub, true),
+                    QueueEdit::Resume(item) => {
+                        self.wheel = false;
+                        self.paused = false;
+                        self.queue.push_front(item);
+                        let mut fx = vec![E::Persist];
+                        fx.extend(self.next());
+                        fx.push(E::Announce);
+                        return fx;
+                    }
                 }
                 vec![E::Persist, E::Announce]
             }
             TurnEvent::Exited => {
                 self.status = SessionStatus::Exited;
-                self.unsent = None;
-                self.cancel_held()
+                let mut fx = self.cancel_held();
+                // a turn whose prompt never reached the agent never ran: the prompt waits at the front of the queue,
+                // on disk too, for the next start or resume
+                if let Some(item) = self.unsent.take() {
+                    self.queue.push_front(item);
+                    fx.extend([E::PutBack { turn: self.turn }, E::Persist]);
+                }
+                fx
             }
         }
     }
@@ -371,20 +528,35 @@ impl TurnCore {
         };
     }
 
-    /// The queue and pause kept on disk, for a session not yet shared.
-    pub(crate) fn restore(&mut self, queue: Queue, paused: bool) {
+    /// A session back after a restart, not yet shared: QUEUE and PAUSED as kept on disk, and TOLD (a fresh start's
+    /// notice, a manager's brief) at the queue's front, so its agent reads it first and the queue stays as it was.
+    pub(crate) fn resume(&mut self, queue: Queue, paused: bool, told: Option<String>) {
         self.queue = queue;
         self.paused = paused;
+        if let Some(text) = told {
+            self.queue.push_front(Queued {
+                text,
+                origin: Origin::Hub,
+                steer: false,
+                key: None,
+            });
+        }
     }
 
-    /// The queue, for a session not yet shared (a resume's first prompt).
+    #[cfg(test)]
     pub(crate) fn queue_mut(&mut self) -> &mut Queue {
         &mut self.queue
     }
 
+    /// The user holds the wheel (ON) or no longer does: while held no turn starts.
+    pub(crate) fn set_wheel(&mut self, on: bool) {
+        self.wheel = on;
+    }
+
     /// The next queued prompt starts when the session is idle (or waiting on a job), not held, and not ending.
     pub(crate) fn next(&mut self) -> Vec<TurnEffect> {
-        if !self.idle() || self.paused || self.killed || self.ending {
+        if !self.idle() || self.paused || self.wheel || self.killed || self.ending || self.detached
+        {
             return Vec::new();
         }
         let Some(item) = self.queue.pop() else {
@@ -438,19 +610,35 @@ impl TurnCore {
     fn cancel(&mut self) -> Vec<TurnEffect> {
         self.cancelling = true;
         let mut fx = self.cancel_held();
-        fx.push(TurnEffect::CancelTurn);
+        if self.unwritten == Some(self.turn) {
+            // the prompt's line is not out yet: the cancel goes after it, at `Written`
+            self.cancel_on_write = Some((self.turn, false));
+        } else {
+            fx.push(TurnEffect::CancelTurn);
+        }
         fx
     }
 
+    /// Every held request answered cancelled, then each card they waited on withdrawn (none waits on it now).
     fn cancel_held(&mut self) -> Vec<TurnEffect> {
-        std::mem::take(&mut self.held)
-            .into_iter()
-            .map(|request| TurnEffect::Cancel { request })
+        let held = std::mem::take(&mut self.held);
+        let mut cards: Vec<i64> = held.iter().filter_map(|(_, c)| *c).collect();
+        cards.sort_unstable();
+        cards.dedup();
+        held.into_iter()
+            .map(|(request, _)| TurnEffect::Cancel { request })
+            .chain(cards.into_iter().map(|card| TurnEffect::Withdraw { card }))
             .collect()
     }
 
+    /// Whether TURN is one a detach cut off (its answer is then forgotten with it).
+    fn forget_abandoned(&mut self, turn: u64) -> bool {
+        let at = self.abandoned.iter().position(|t| *t == turn);
+        at.map(|i| self.abandoned.remove(i)).is_some()
+    }
+
     fn take_held(&mut self, request: u64) -> bool {
-        let at = self.held.iter().position(|r| *r == request);
+        let at = self.held.iter().position(|(r, _)| *r == request);
         at.map(|i| self.held.remove(i)).is_some()
     }
 
@@ -461,15 +649,36 @@ impl TurnCore {
     /// Can a new turn start now without joining anything: idle (not busy, not waiting on a job), not held, nothing
     /// queued, and its process not being ended.
     pub(crate) fn is_free(&self) -> bool {
-        self.status == SessionStatus::Idle && !self.paused && self.queue.is_empty() && !self.killed
+        self.status == SessionStatus::Idle
+            && !self.paused
+            && !self.wheel
+            && self.queue.is_empty()
+            && !self.killed
+            && !self.detached
     }
 
     pub(crate) fn status(&self) -> SessionStatus {
         self.status
     }
 
+    /// Whether a permission request of TURN would still be held now (the turn runs, and is not being cancelled):
+    /// what `PermissionAsked` checks.
+    pub(crate) fn asks_in(&self, turn: u64) -> bool {
+        self.status == SessionStatus::Busy && turn == self.turn && !self.cancelling && !self.killed
+    }
+
     pub(crate) fn queue(&self) -> &Queue {
         &self.queue
+    }
+
+    /// What the queue on disk holds: the waiting prompts, behind the prompt of a turn that has not reached the agent
+    /// yet (a hub that dies before the send finds it there at the next start).
+    pub(crate) fn kept(&self) -> Queue {
+        let mut q = self.queue.clone();
+        if let Some(item) = &self.unsent {
+            q.push_front(item.clone());
+        }
+        q
     }
 
     pub(crate) fn paused(&self) -> bool {
@@ -485,8 +694,8 @@ impl TurnCore {
     }
 
     #[cfg(test)]
-    pub(crate) fn held(&self) -> &[u64] {
-        &self.held
+    pub(crate) fn held(&self) -> Vec<u64> {
+        self.held.iter().map(|(r, _)| *r).collect()
     }
 }
 

@@ -1,0 +1,18 @@
+{"scenario": "view/resync-answers-reset", "requires": ["v1", "test-hooks"], "doc": "A view's rows go to its (view, class) as patches: a reset first, then what changed against the version the editor holds; view/resync answers a reset of the rows last sent, and the next patch names the reset's version."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "demo", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [["accent", "#123456"]], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "__test_view_rows", "params": {"view": "demo", "rows": [{"key": "a", "text": "one", "runs": [[0, 3, "drgnx-dim"]]}]}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "demo", "class": "gui-1", "hub": "$capture:hub", "base": 0, "version": 1, "env_epoch": 1, "ops": [{"reset": [{"key": "a", "text": "one", "runs": [[0, 3, "drgnx-dim"]]}]}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "__test_view_rows", "params": {"view": "demo", "rows": [{"key": "a", "text": "one", "runs": [[0, 3, "drgnx-dim"]]}, {"key": "b", "text": "two"}]}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "demo", "class": "gui-1", "hub": "$hub", "base": 1, "version": 2, "env_epoch": 1, "ops": [{"insert": {"after": "a", "rows": [{"key": "b", "text": "two"}]}}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "view/resync", "params": {"view": "demo", "class": "gui-1", "version": 1}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"hub": "$hub", "base": 2, "version": 3, "env_epoch": 1, "ops": [{"reset": [{"key": "a", "text": "one", "runs": [[0, 3, "drgnx-dim"]]}, {"key": "b", "text": "two"}]}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "__test_view_rows", "params": {"view": "demo", "rows": [{"key": "b", "text": "two"}]}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"base": 3, "version": 4, "ops": [{"remove": ["a"]}]}}, "within_ms": 10000}

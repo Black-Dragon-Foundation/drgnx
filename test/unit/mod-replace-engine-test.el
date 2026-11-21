@@ -1,4 +1,4 @@
-;;; mod-replace-engine-test.el --- batch tests: the replace engine — text through rg/git grep/grep, symbols through the server, one-step undo -*- lexical-binding: t -*-
+;;; mod-replace-engine-test.el --- batch tests: the replace engine — writing matches, symbols through the server, one-step undo -*- lexical-binding: t -*-
 ;; test-class: cond
 (require 'ert)
 (require 'drgnx)
@@ -10,16 +10,27 @@
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defun drgnx-replace-test--run (query)
-  "Search QUERY to the end: (MATCHES . EVENTS), EVENTS being every non-batch value the callback got, in order."
-  (let ((matches nil) (events nil))
-    (drgnx-replace-search query (lambda (x)
-                                  (if (and (consp x) (consp (car x))) (setq matches (append matches x))
-                                    (setq events (append events (list x))))))
-    (drgnx-test-wait (lambda () (memq :done events)) :secs 10 :what "the search to finish")
-    (cons matches events)))
-
-(defun drgnx-replace-test--files (matches root)
-  (sort (delete-dups (mapcar (lambda (m) (file-relative-name (plist-get m :file) root)) matches)) #'string<))
+  "QUERY's matches in the files under its root, each of the pattern in each line (`drgnx-replace--match'): (MATCHES .
+\(:done)).  The hub searches the text (search/run); here only the writing is tested."
+  (let* ((root (plist-get query :root)) (case (plist-get query :case)) (regexp (plist-get query :regexp))
+         (text (plist-get query :text))
+         (re (drgnx-replace--line-regexp query))
+         (extra (when regexp (list :pattern (drgnx-replace--emacs-regexp text) :case case)))
+         (matches nil))
+    (dolist (file (sort (directory-files-recursively root "" nil (lambda (d) (not (equal (file-name-nondirectory d) ".git"))))
+                        #'string<))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (let ((case-fold-search (not case)) (n 0))
+          (dolist (line (split-string (buffer-string) "\n"))
+            (setq n (1+ n))
+            (let ((line (string-trim-right line "\r")) (start 0))
+              (with-syntax-table drgnx-replace--syntax
+                (while (and (<= start (length line)) (string-match re line start))
+                  (setq matches (append matches (list (drgnx-replace--match file n line (match-beginning 0)
+                                                                            (match-end 0) extra)))
+                        start (max (match-end 0) (1+ (match-beginning 0)))))))))))
+    (cons matches (list :done))))
 
 (defun drgnx-replace-test--read (file)
   (with-temp-buffer (insert-file-contents file) (buffer-string)))
@@ -27,37 +38,9 @@
 (defun drgnx-replace-test--q (root text &rest more)
   (append more (list :root root :text text :case t)))
 
-(ert-deftest drgnx-replace/finds-with-include-and-exclude ()
-  (drgnx-git-test-with-repo
-    (drgnx-git-test-write repo "src/a.el" ";; a needle here\n")
-    (drgnx-git-test-write repo "src/notes.md" "needle\n")
-    (drgnx-git-test-write repo "test/b.el" "(needle)\n")
-    (drgnx-git-test-write repo "x.md" "needle\n")
-    (let* ((r (drgnx-replace-test--run (drgnx-replace-test--q repo "needle" :include '("src/**") :exclude '("*.md"))))
-           (m (car (car r))))
-      (should (equal (drgnx-replace-test--files (car r) repo) '("src/a.el")))
-      (should (= (length (car r)) 1))
-      (should (equal (expand-file-name "src/a.el" repo) (plist-get m :file)))
-      (should (equal (list (plist-get m :line) (plist-get m :col) (plist-get m :end)) '(1 5 11)))
-      (should (equal (list (plist-get m :before) (plist-get m :text) (plist-get m :after)) '(";; a " "needle" " here"))))
-    ;; a comma-separated string works too
-    (let ((r (drgnx-replace-test--run (drgnx-replace-test--q repo "needle" :include "src/**, test/**" :exclude "*.md"))))
-      (should (equal (drgnx-replace-test--files (car r) repo) '("src/a.el" "test/b.el"))))))
-
-(ert-deftest drgnx-replace/case-word-regexp-toggles ()
+(ert-deftest drgnx-replace/regexp-groups-in-the-new-text ()
   (drgnx-git-test-with-repo
     (drgnx-git-test-write repo "f.txt" "Foo foo food\nfoo_bar é foo\n")
-    (let ((count (lambda (&rest q) (length (car (drgnx-replace-test--run (apply #'drgnx-replace-test--q repo q)))))))
-      (should (= (funcall count "foo") 4))
-      (should (= (funcall count "foo" :case nil) 5))
-      (should (= (funcall count "foo" :word t) 2))
-      (should (= (funcall count "foo" :case nil :word t) 3))
-      (should (= (funcall count "fo+d" :regexp t) 1))
-      (should (= (funcall count "fo+d") 0)))           ; literal without regexp
-    ;; columns are characters, after a multibyte one too
-    (let ((last (car (last (car (drgnx-replace-test--run (drgnx-replace-test--q repo "foo")))))))
-      (should (equal (list (plist-get last :line) (plist-get last :col) (plist-get last :end)) '(2 10 13))))
-    ;; regexp groups in the new text
     (let ((m (car (car (drgnx-replace-test--run (drgnx-replace-test--q repo "(f)o+(d)" :regexp t))))))
       (should (equal (plist-get m :text) "food"))
       (should (equal (drgnx-replace-new-text m "\\2-\\1") "d-f")))
@@ -65,66 +48,99 @@
     (let ((m (car (car (drgnx-replace-test--run (drgnx-replace-test--q repo "food"))))))
       (should (equal (drgnx-replace-new-text m "\\1&") "\\1&")))))
 
-(ert-deftest drgnx-replace/apply-and-undo-one-step ()
-  (drgnx-git-test-with-repo
-    (drgnx-git-test-write repo "a.txt" "x foo y\nfoo\n")
-    (drgnx-git-test-write repo "sub/b.txt" "foo bar\n")
-    (let* ((ms (car (drgnx-replace-test--run (drgnx-replace-test--q repo "foo"))))
-           (res (drgnx-replace-apply ms "quux"))
-           (a (expand-file-name "a.txt" repo)) (b (expand-file-name "sub/b.txt" repo)))
-      (should (= (plist-get res :written) 3))
-      (should (= (plist-get res :files) 2))
-      (should (null (plist-get res :skipped)))
-      (should (equal (drgnx-replace-test--read a) "x quux y\nquux\n"))
-      (should (equal (drgnx-replace-test--read b) "quux bar\n"))
-      (should-not (buffer-modified-p (get-file-buffer a)))
-      (let ((u (drgnx-replace-undo (plist-get res :undo))))
-        (should (= (plist-get u :undone) 2))
-        (should (null (plist-get u :skipped))))
-      (should (equal (drgnx-replace-test--read a) "x foo y\nfoo\n"))
-      (should (equal (drgnx-replace-test--read b) "foo bar\n"))
-      (should-not (buffer-modified-p (get-file-buffer b))))))
+;; Replace All, Replace This and Undo go through the hub (`search/edits', `search/apply', `search/undo'): it writes
+;; closed files itself (test/conformance/search/write.jsonl, the hub's tests) and sends each file this Emacs has open
+;; (`search-apply'), which `drgnx-replace-apply-edits' writes into its buffer and answers.
 
-(ert-deftest drgnx-replace/stale-matches-are-skipped ()
-  ;; Review Focus 1: a file changed underneath (in its buffer, or on disk) — its stale matches are skipped and
-  ;; reported, the others go through, nothing is written blind.
+(defun drgnx-replace-test--apply (file tick &rest edits)
+  "The answer to a `search-apply' of EDITS ((ID LINE COL END-COL OLD NEW), one line each) for FILE, TICK given."
+  (drgnx-replace-apply-edits
+   (list :view "s" :change 1 :path file :ttl_ms 2000 :tick tick
+         :edits (vconcat (mapcar (pcase-lambda (`(,id ,line ,col ,end ,old ,new))
+                                   (list :id id :line line :col col :end_line line :end_col end :old old :new new))
+                                 edits)))))
+
+(defun drgnx-replace-test--undo (file answer)
+  "Put back what ANSWER (`drgnx-replace-apply-edits') wrote into FILE's buffer: its inverse edits, at its tick."
+  (drgnx-replace-apply-edits (list :view "s" :change 2 :path file :ttl_ms 2000 :tick (plist-get answer :tick)
+                                   :edits (plist-get answer :inverse))))
+
+(ert-deftest drgnx-replace/an-open-file-is-written-in-its-buffer-and-saved ()
+  "A `search-apply' for a file open here goes into its buffer, one undo step, saved (it held no unsaved edits); the
+answer carries the inverse edits, which put it back while the buffer is as the write left it."
   (drgnx-git-test-with-repo
-    (dolist (f '(("a.txt" . "foo 1\nfoo 2\n") ("b.txt" . "foo 3\n") ("c.txt" . "foo 4\n") ("d.txt" . "foo 5\n")
-                 ("e.txt" . "foo 6\n")))
+    (drgnx-git-test-write repo "a.txt" "x foo y\nfoo é foo\n")
+    (let* ((a (expand-file-name "a.txt" repo)) (buf (find-file-noselect a))
+           (r (drgnx-replace-test--apply a nil '("m:1:0" 1 2 5 "foo" "quux") '("m:1:1" 2 0 3 "foo" "q")
+                                         '("m:1:2" 2 6 9 "foo" "quux"))))
+      (should (equal (plist-get r :applied) ["m:1:0" "m:1:1" "m:1:2"]))
+      (should (equal (plist-get r :skipped) []))
+      (should (eq (plist-get r :saved) t))
+      (should (equal (drgnx-replace-test--read a) "x quux y\nq é quux\n"))
+      (should-not (buffer-modified-p buf))
+      (should (equal (mapcar (lambda (e) (list (plist-get e :line) (plist-get e :col) (plist-get e :end_col)
+                                               (plist-get e :old) (plist-get e :new)))
+                             (plist-get r :inverse))
+                     '((1 2 6 "quux" "foo") (2 0 1 "q" "foo") (2 4 8 "quux" "foo"))))
+      ;; one undo step puts the whole file back
+      (with-current-buffer buf
+        (let ((last-command nil)) (undo))
+        (should (equal (buffer-string) "x foo y\nfoo é foo\n"))
+        (undo-boundary)                                 ; as the command loop puts after a command
+        (let ((last-command nil)) (undo)))
+      (should (equal (with-current-buffer buf (buffer-string)) "x quux y\nq é quux\n"))
+      (with-current-buffer buf (save-buffer))
+      ;; the hub's Undo: the inverse at the tick it answered, refused once the buffer was edited since
+      (with-current-buffer buf (goto-char (point-max)) (insert "z") (delete-char -1))
+      (let ((u (drgnx-replace-test--undo a r)))
+        (should (equal (plist-get u :applied) []))
+        (should (equal (plist-get (aref (plist-get u :skipped) 0) :why) "edited since the replacement")))
+      (let* ((r2 (drgnx-replace-test--apply a nil '("m:2:0" 1 0 1 "x" "w")))
+             (u (drgnx-replace-test--undo a r2)))
+        (should (equal (plist-get u :applied) ["m:2:0"]))
+        (should (equal (drgnx-replace-test--read a) "x quux y\nq é quux\n"))))))
+
+(ert-deftest drgnx-replace/stale-edits-are-skipped-in-the-buffer ()
+  "An edit whose old text is no longer where the edit set read it is skipped with why, the others go in; a buffer
+whose file changed on disk is read again when it holds no edits of yours, left alone when it does; a file no buffer
+visits is the hub's to write (`not_open'); of two edits that overlap the first goes in."
+  (drgnx-git-test-with-repo
+    (dolist (f '(("a.txt" . "foo 1\nfoo 2\n") ("c.txt" . "nope foo\n") ("d.txt" . "foo 5\n")))
       (drgnx-git-test-write repo (car f) (cdr f)))
-    (let* ((ms (car (drgnx-replace-test--run (drgnx-replace-test--q repo "foo"))))
-           (file (lambda (n) (expand-file-name n repo)))
-           (later (time-add nil 10)))
-      (should (= (length ms) 6))
-      ;; a.txt: line 1 edited in its buffer, not saved
+    (let* ((file (lambda (n) (expand-file-name n repo))) (later (time-add nil 10)))
+      ;; a.txt: line 1 edited in its buffer, not saved: line 2 still takes its edit, the buffer stays unsaved
       (with-current-buffer (find-file-noselect (funcall file "a.txt"))
         (goto-char (point-min)) (delete-char 3) (insert "bar"))
-      ;; b.txt: not visited, changed on disk so the match moved
-      (write-region "xx foo 3\n" nil (funcall file "b.txt") nil 'silent)
-      ;; c.txt: visited, unchanged in Emacs, changed on disk
+      (let ((r (drgnx-replace-test--apply (funcall file "a.txt") nil '("m:1" 1 0 3 "foo" "qux") '("m:2" 2 0 3 "foo" "qux"))))
+        (should (equal (plist-get r :applied) ["m:2"]))
+        (should (equal (plist-get (aref (plist-get r :skipped) 0) :why) "its text changed"))
+        (should (eq (plist-get r :saved) :false))
+        (should (equal (drgnx-replace-test--read (funcall file "a.txt")) "foo 1\nfoo 2\n"))
+        (should (equal (with-current-buffer (get-file-buffer (funcall file "a.txt")) (buffer-string)) "bar 1\nqux 2\n")))
+      ;; c.txt: visited, unchanged in Emacs, changed on disk: read again, then the edit is placed against it
       (find-file-noselect (funcall file "c.txt"))
-      (write-region "nope\n" nil (funcall file "c.txt") nil 'silent)
+      (write-region "xx nope foo\n" nil (funcall file "c.txt") nil 'silent)
       (set-file-times (funcall file "c.txt") later)
-      ;; d.txt: visited and edited in its buffer, and changed on disk too
+      (let ((r (drgnx-replace-test--apply (funcall file "c.txt") nil '("m:3" 1 5 8 "foo" "qux"))))
+        (should (equal (plist-get r :applied) []))
+        (should (equal (with-current-buffer (get-file-buffer (funcall file "c.txt")) (buffer-string)) "xx nope foo\n")))
+      ;; d.txt: edited in its buffer and changed on disk: left alone
       (with-current-buffer (find-file-noselect (funcall file "d.txt")) (goto-char (point-max)) (insert "more\n"))
       (write-region "foo 5\ndisk\n" nil (funcall file "d.txt") nil 'silent)
       (set-file-times (funcall file "d.txt") later)
-      ;; e.txt: deleted
-      (delete-file (funcall file "e.txt"))
-      (let* ((res (drgnx-replace-apply ms "qux"))
-             (skipped (plist-get res :skipped)))
-        (should (= (plist-get res :written) 1))
-        (should (equal (sort (mapcar (lambda (m) (file-name-nondirectory (plist-get m :file))) skipped) #'string<)
-                       '("a.txt" "b.txt" "c.txt" "d.txt" "e.txt")))
-        (should (cl-every (lambda (m) (stringp (plist-get m :reason))) skipped))
-        ;; a.txt held unsaved edits: it gets the replacement, unsaved
-        (should (equal (drgnx-replace-test--read (funcall file "a.txt")) "foo 1\nfoo 2\n"))
-        (should (equal (with-current-buffer (get-file-buffer (funcall file "a.txt")) (buffer-string)) "bar 1\nqux 2\n"))
-        (should (equal (drgnx-replace-test--read (funcall file "b.txt")) "xx foo 3\n"))
-        (should (equal (drgnx-replace-test--read (funcall file "c.txt")) "nope\n"))
+      (let ((r (drgnx-replace-test--apply (funcall file "d.txt") nil '("m:4" 1 0 3 "foo" "qux"))))
+        (should (equal (plist-get (aref (plist-get r :skipped) 0) :why) "changed on disk and in its buffer"))
         (should (equal (drgnx-replace-test--read (funcall file "d.txt")) "foo 5\ndisk\n"))
-        (should (equal (with-current-buffer (get-file-buffer (funcall file "d.txt")) (buffer-string)) "foo 5\nmore\n"))
-        (should-not (file-exists-p (funcall file "e.txt")))))))
+        (should (equal (with-current-buffer (get-file-buffer (funcall file "d.txt")) (buffer-string)) "foo 5\nmore\n")))
+      ;; no buffer: the hub writes it
+      (should (equal (drgnx-replace-test--apply (funcall file "e.txt") nil '("m:5" 1 0 3 "foo" "qux")) '(:not_open t)))
+      ;; overlapping edits: the first goes in
+      (drgnx-git-test-write repo "f.txt" "aaaa\n")
+      (find-file-noselect (funcall file "f.txt"))
+      (let ((r (drgnx-replace-test--apply (funcall file "f.txt") nil '("m:6" 1 0 3 "aaa" "b") '("m:7" 1 1 4 "aaa" "c"))))
+        (should (equal (plist-get r :applied) ["m:6"]))
+        (should (equal (plist-get (aref (plist-get r :skipped) 0) :why) "overlaps another match"))
+        (should (equal (drgnx-replace-test--read (funcall file "f.txt")) "ba\n"))))))
 
 (defun drgnx-replace-test--edit (line char len new)
   (list :range (list :start (list :line line :character char) :end (list :line line :character (+ char len)))
@@ -174,12 +190,12 @@
         ;; and nothing was applied
         (should (equal (drgnx-replace-test--read b) "(foo)\n;; 😀 x foo\n"))
         (should-not (buffer-modified-p (get-file-buffer a)))
-        ;; applying them is the caller's choice
-        (let ((res (drgnx-replace-apply ms "bar")))
-          (should (= (plist-get res :written) 4))
-          (should (equal (drgnx-replace-test--read a) "(defun bar () (bar))\n"))
-          (should (equal (drgnx-replace-test--read b) "(bar)\n;; 😀 x bar\n"))
-          (drgnx-replace-undo (plist-get res :undo))))
+        ;; Replace All sends them to the hub as edits it is given (`search/edits' `edits')
+        (should (equal (append (drgnx-replace--given ms "bar") nil)
+                       (list (list :path a :line 1 :col 7 :end_col 10 :old "foo" :new "bar")
+                             (list :path a :line 1 :col 15 :end_col 18 :old "foo" :new "bar")
+                             (list :path b :line 1 :col 1 :end_col 4 :old "foo" :new "bar")
+                             (list :path b :line 2 :col 7 :end_col 10 :old "foo" :new "bar")))))
       ;; `documentChanges' (preferred over `changes' when both come); resource operations are not text edits
       (setq reply (list :changes (list (intern (concat ":" ub)) (vector (drgnx-replace-test--edit 0 1 3 "nope")))
                         :documentChanges
@@ -248,35 +264,28 @@
           (should (eq (nth 2 got) :done)))))))
 
 (ert-deftest drgnx-replace/unsaved-buffers-stay-unsaved ()
-  ;; a buffer with unsaved edits gets the replacement but is not saved (as in VS Code); Undo still works for it
+  "A buffer with unsaved edits gets the replacement but is not saved (as in VS Code); its inverse still puts it back."
   (drgnx-git-test-with-repo
     (drgnx-git-test-write repo "a.txt" "foo\nmine\n")
-    (drgnx-git-test-write repo "b.txt" "foo\n")
-    (let* ((ms (car (drgnx-replace-test--run (drgnx-replace-test--q repo "foo"))))
-           (a (expand-file-name "a.txt" repo)) (b (expand-file-name "b.txt" repo))
-           (abuf (find-file-noselect a)))
+    (let* ((a (expand-file-name "a.txt" repo)) (abuf (find-file-noselect a)))
       (with-current-buffer abuf (goto-char (point-max)) (insert "unsaved\n"))
-      (let ((res (drgnx-replace-apply ms "bar")))
-        (should (= (plist-get res :written) 2))
+      (let ((r (drgnx-replace-test--apply a nil '("m:1" 1 0 3 "foo" "bar"))))
+        (should (eq (plist-get r :saved) :false))
         (should (equal (with-current-buffer abuf (buffer-string)) "bar\nmine\nunsaved\n"))
         (should (buffer-modified-p abuf))
         (should (equal (drgnx-replace-test--read a) "foo\nmine\n"))
-        (should (equal (drgnx-replace-test--read b) "bar\n"))
-        (should (= (plist-get (drgnx-replace-undo (plist-get res :undo)) :undone) 2))
+        (should (equal (plist-get (drgnx-replace-test--undo a r) :applied) ["m:1"]))
         (should (equal (with-current-buffer abuf (buffer-string)) "foo\nmine\nunsaved\n"))
-        (should (buffer-modified-p abuf))
-        (should (equal (drgnx-replace-test--read a) "foo\nmine\n"))
-        (should (equal (drgnx-replace-test--read b) "foo\n"))))))
+        (should (buffer-modified-p abuf))))))
 
 (defvar apheleia-format-after-save-in-progress)
 
 (ert-deftest drgnx-replace/format-on-save-keeps-undo ()
-  ;; a formatter on save (apheleia, extra/format) would rewrite the file after apply saves it, and Undo would then
-  ;; skip the file: apply's and undo's saves run without it
+  "A formatter on save (apheleia, extra/format) would rewrite the file after the write saves it, and Undo would then
+skip the file: the write's and the undo's saves run without it."
   (drgnx-git-test-with-repo
     (drgnx-git-test-write repo "a.txt" "foo\n")
-    (let* ((ms (car (drgnx-replace-test--run (drgnx-replace-test--q repo "foo"))))
-           (a (expand-file-name "a.txt" repo)))
+    (let ((a (expand-file-name "a.txt" repo)))
       (with-current-buffer (find-file-noselect a)
         (add-hook 'after-save-hook
                   (lambda ()
@@ -285,150 +294,9 @@
                       (insert ";; formatted\n")
                       (let ((apheleia-format-after-save-in-progress t)) (save-buffer))))
                   nil t))
-      (let ((res (drgnx-replace-apply ms "bar")))
+      (let ((r (drgnx-replace-test--apply a nil '("m:1" 1 0 3 "foo" "bar"))))
         (should (equal (drgnx-replace-test--read a) "bar\n"))
-        (should (= (plist-get (drgnx-replace-undo (plist-get res :undo)) :undone) 1))
+        (should (equal (plist-get (drgnx-replace-test--undo a r) :applied) ["m:1"]))
         (should (equal (drgnx-replace-test--read a) "foo\n"))))))
-
-(ert-deftest drgnx-replace/a-search-tool-that-ended-already-is-no-error ()
-  ;; grep can finish before Emacs closes its input (a busy machine): the search still ends with its results, no error
-  (drgnx-git-test-with-repo
-    (drgnx-git-test-write repo "a.txt" "foo\n")
-    (let ((done nil) (got nil))
-      (cl-letf (((symbol-function 'process-send-eof)
-                 (lambda (&optional p) (error "Process %s not running: finished\n" (process-name p)))))
-        (drgnx-replace-search (drgnx-replace-test--q repo "foo")
-                              (lambda (x) (if (eq x :done) (setq done t) (setq got (append got x))))))
-      (drgnx-test-wait (lambda () done) :secs 10 :what "the search to finish"))))
-
-(ert-deftest drgnx-replace/no-rg-falls-back ()
-  (let ((real (symbol-function 'executable-find)))
-    (cl-letf (((symbol-function 'executable-find) (lambda (name &rest r) (unless (equal name "rg") (apply real name r)))))
-      ;; in a git repository: git grep, globs as pathspecs
-      (drgnx-git-test-with-repo
-        (drgnx-git-test-write repo "src/a.el" "Foo foo food\n")
-        (drgnx-git-test-write repo "src/n.md" "foo\n")
-        (drgnx-git-test-write repo "x.el" "foo\n")
-        (let ((h nil) (done nil))
-          (setq h (drgnx-replace-search (drgnx-replace-test--q repo "foo") (lambda (x) (when (eq x :done) (setq done t)))))
-          (should (equal (car (process-command h)) "git"))
-          (drgnx-test-wait (lambda () done) :secs 10 :what "the git grep search to finish"))
-        (let ((ms (car (drgnx-replace-test--run (drgnx-replace-test--q repo "foo" :word t :include '("src/**") :exclude '("*.md"))))))
-          (should (equal (drgnx-replace-test--files ms repo) '("src/a.el")))
-          (should (equal (mapcar (lambda (m) (plist-get m :col)) ms) '(4))))
-        (should (= 3 (length (car (drgnx-replace-test--run (drgnx-replace-test--q repo "Fo+" :regexp t :case nil :include "src/*.el"))))))
-        ;; outside a repository: grep
-        (let ((dir (expand-file-name "plain/" tmp)))
-          (drgnx-git-test-write dir "p.txt" "a foo b foo\n")
-          (drgnx-git-test-write dir "q.md" "foo\n")
-          (let ((h nil) (done nil))
-            (setq h (drgnx-replace-search (drgnx-replace-test--q dir "foo") (lambda (x) (when (eq x :done) (setq done t)))))
-            (should (equal (car (process-command h)) "grep"))
-            (should (member "--null" (process-command h))) ; -Z is --decompress in BSD/macOS grep
-            (should-not (member "-Z" (process-command h)))
-            (drgnx-test-wait (lambda () done) :secs 10 :what "the grep search to finish"))
-          (let ((ms (car (drgnx-replace-test--run (drgnx-replace-test--q dir "foo" :exclude "*.md")))))
-            (should (equal (drgnx-replace-test--files ms dir) '("p.txt")))
-            (should (equal (mapcar (lambda (m) (plist-get m :col)) ms) '(2 8)))
-            (should (equal (plist-get (cadr ms) :before) "a foo b "))))))))
-
-(ert-deftest drgnx-replace/cancel-kills-the-process ()
-  (drgnx-git-test-with-repo
-    (drgnx-git-test-write repo "f.txt" "foo\n")
-    (let* ((got nil) (backend (symbol-name (drgnx-replace--backend repo)))
-           ;; the search is held at its start: a search of one file ends before a test looks at it
-           (h (drgnx-test-with-held-gate backend
-                (drgnx-replace-search (drgnx-replace-test--q repo "foo") (lambda (x) (push x got))))))
-      (should (process-live-p h))                         ; held: it cannot have ended
-      (drgnx-replace-cancel h)
-      (should-not (process-live-p h))                     ; deleted by the cancel itself
-      (drgnx-test-pause 0.5 "a cancelled search reports nothing")
-      (should (null got))
-      ;; a newer search replaces the one still running
-      (let* ((first-got nil) (second-got nil) h1 h2)
-        (drgnx-test-with-held-gate backend
-          (setq h1 (drgnx-replace-search (drgnx-replace-test--q repo "foo") (lambda (x) (push x first-got))))
-          (should (process-live-p h1))                    ; held: still running when the newer search comes
-          (setq h2 (drgnx-replace-search (drgnx-replace-test--q repo "foo") (lambda (x) (push x second-got)))))
-        (should-not (process-live-p h1))
-        (drgnx-test-wait (lambda () (memq :done second-got)) :secs 10 :what "the newer search to finish")
-        (should (null first-got))
-        (should-not (process-live-p h2))))))
-
-(defmacro drgnx-replace-test--with-stream (&rest body)
-  "BODY on the virtual clock with PROC a pipe process set up as a search's (each line parsed to itself, the
-callback pushing what it gets on GOT, newest first), ERR its stderr buffer."
-  (declare (indent 0))
-  `(drgnx-test-with-clock (:allow-pending t)
-     (let* ((got nil) (err (generate-new-buffer " *drgnx-replace-test err*" t))
-            (proc (make-pipe-process :name "drgnx-replace-test" :noquery t)))
-       (unwind-protect
-           (cl-letf (((symbol-function 'process-exit-status) (lambda (_) 0)))
-             (drgnx-replace--stream-init proc #'list (lambda (x) (push x got)) err)
-             ,@body)
-         (when (buffer-live-p err) (kill-buffer err))
-         (delete-process proc)))))
-
-(ert-deftest drgnx-replace/the-filter-parses-a-bounded-part-per-call ()
-  ;; a 64 KB chunk is not parsed in one filter call: at most `drgnx-replace-parse-lines' lines per call or
-  ;; continuation, in order; the end of the stream comes after the last line
-  (let ((lines (mapcar (lambda (i) (format "l%d" i)) (number-sequence 0 299))))
-    (drgnx-replace-test--with-stream
-      (drgnx-replace--output proc (concat (mapconcat #'identity (take 299 lines) "\n") "\nl2"))
-      (should (equal (list (take drgnx-replace-parse-lines lines)) got))
-      (should (drgnx-timer-active-p (cons 'replace-parse proc)))
-      (drgnx-replace--output proc "99\n")                ; the partial line's end
-      (delete-process proc)
-      (drgnx-replace--finished proc)
-      (should-not (memq :done got))                      ; lines are still queued
-      (drgnx-test-advance 0)
-      (setq got (reverse got))
-      (should (eq :done (car (last got))))
-      (should (equal lines (apply #'append (butlast got))))
-      (should (> (length got) 4))
-      (should (cl-every (lambda (b) (<= (length b) drgnx-replace-parse-lines)) (butlast got)))
-      (should-not (buffer-live-p err)))))
-
-(ert-deftest drgnx-replace/a-cancelled-stream-sends-nothing-more ()
-  (drgnx-replace-test--with-stream
-    (drgnx-replace--output proc (mapconcat (lambda (i) (format "l%d\n" i)) (number-sequence 1 200) ""))
-    (should (= 1 (length got)))
-    (drgnx-replace-cancel proc)
-    (should-not (drgnx-timer-active-p (cons 'replace-parse proc)))   ; the continuation goes with the search
-    (drgnx-test-advance 0)
-    (should (= 1 (length got)))))
-
-(defun drgnx-replace-test--parse-but-l10 (line)
-  (if (equal line "l10") (error "Bad line") (list line)))
-
-(ert-deftest drgnx-replace/a-line-that-does-not-parse-never-stops-the-stream ()
-  ;; review I-1: the line is dropped, the others and :done still come, the error once
-  (drgnx-replace-test--with-stream
-    (drgnx-replace--stream-init proc #'drgnx-replace-test--parse-but-l10 (lambda (x) (push x got)) err)
-    (drgnx-replace--output proc (mapconcat (lambda (i) (format "l%d\n" i)) (number-sequence 0 99) ""))
-    (delete-process proc)
-    (drgnx-replace--finished proc)
-    (drgnx-test-advance 0)
-    (setq got (reverse got))
-    (should (eq :done (car (last got))))
-    (should (equal (delete "l10" (mapcar (lambda (i) (format "l%d" i)) (number-sequence 0 99)))
-                   (apply #'append (seq-filter (lambda (x) (stringp (car-safe x))) got))))
-    (should (= 1 (seq-count (lambda (x) (eq (car-safe x) :error)) got)))))
-
-(ert-deftest drgnx-replace/a-line-in-many-chunks-is-joined-once ()
-  ;; review M-4: the pieces of a partial line are kept and joined at its newline, never re-concatenated per chunk
-  (drgnx-replace-test--with-stream
-    (let* ((piece (make-string 4096 ?x)) (n 128)
-           (before (nth 4 (memory-use-counts))))        ; string characters made
-      (dotimes (_ n) (drgnx-replace--output proc piece))
-      (drgnx-replace--output proc "\nij")
-      ;; a few copies of the 512 KB line, not one per chunk (128 × 256 KB on average)
-      (should (< (- (nth 4 (memory-use-counts)) before) (* 4 n 4096)))
-      (should (equal (list (list (apply #'concat (make-list n piece)))) got)))
-    (drgnx-replace--output proc "kl")
-    (delete-process proc)
-    (drgnx-replace--finished proc)
-    (drgnx-test-advance 0)
-    (should (equal '(:done ("ijkl")) (take 2 got)))))   ; newest first
 
 ;;; mod-replace-engine-test.el ends here

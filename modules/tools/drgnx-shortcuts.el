@@ -23,6 +23,7 @@
 (require 'drgnx-keys-edit)
 (require 'drgnx-tty-fallback)
 (require 'drgnx-modal)
+(require 'drgnx-palette)   ; `drgnx-palette-keycap-names'
 
 (defcustom drgnx-shortcuts-chord-wait 1.0
   "Seconds to wait, after the first key recorded, for the second key of a chord."
@@ -131,6 +132,24 @@ conflict of the resolution."
                                   (equal (plist-get c :map) (plist-get conflict :map))))
                  all)))
 
+(defun drgnx-shortcuts--file-name (source)
+  "SOURCE, a Lisp file of yours as `drgnx-keys--yours' names it (no extension: .el, .elc and .eln are one), as its
+.el name."
+  (concat (file-name-nondirectory source) ".el"))
+
+(defun drgnx-shortcuts--yours-label (source)
+  "Where a key of yours comes from, for the Source column: its Lisp file (SOURCE a file, `drgnx-shortcuts--file-name')
+or this session."
+  (if (stringp source) (format "yours (%s)" (drgnx-shortcuts--file-name source)) "yours (this session)"))
+
+(defun drgnx-shortcuts--yours-keys (cmd)
+  "The global keys of yours that run CMD's command: ((KEY . SOURCE) …), SOURCE a Lisp file or `command'.  Read-only
+here: they are lines in your Lisp (config.el), or bound from the keyboard, and win over every profile key."
+  (let ((c (drgnx-cmd-command cmd)) out)
+    (when (and c (symbolp c) (boundp 'drgnx-keys--yours))
+      (maphash (lambda (k v) (when (eq (car v) c) (push (cons k (cdr v)) out))) drgnx-keys--yours))
+    (sort out (lambda (a b) (string< (car a) (car b))))))
+
 (defun drgnx-shortcuts--rows ()
   "One plist per registry command: :id :cmd :title :category :keys ((KEY . MAP-SPEC)…) :native :source :where
 :conflicts (TEXT…) :over (the Emacs defaults its profile keys shadow) :changed."
@@ -151,8 +170,10 @@ conflict of the resolution."
                      (native (and (null bs) (not (memq id changed)) (drgnx-shortcuts--native-keys cmd)))
                      (keys (if bs (mapcar (lambda (b) (cons (plist-get b :key) (plist-get b :map))) bs) native)))
                 (list :id id :cmd cmd :title (drgnx-cmd-title cmd) :category (drgnx-cmd-category cmd)
-                      :keys keys :native (and native t)
-                      :source (cond (bs (drgnx-shortcuts--source (plist-get (car bs) :layer)))
+                      :keys keys :native (and native t) :yours (drgnx-shortcuts--yours-keys cmd)
+                      :source (cond ((and (null bs) (drgnx-shortcuts--yours-keys cmd))
+                                     (drgnx-shortcuts--yours-label (cdr (car (drgnx-shortcuts--yours-keys cmd)))))
+                                    (bs (drgnx-shortcuts--source (plist-get (car bs) :layer)))
                                     ((memq id changed) "keys.eld")
                                     (native "package")
                                     (t ""))
@@ -160,6 +181,11 @@ conflict of the resolution."
                       :conflicts (reverse (gethash id conflicts)) :over (reverse (gethash id over))
                       :changed (and (memq id changed) t))))
             (drgnx-commands-all))))
+
+(defun drgnx-shortcuts--keyed-first (rows)
+  "ROWS with the commands that have a key (or one of yours) first, each part in the registry's order."
+  (let ((keyed (lambda (r) (or (plist-get r :keys) (plist-get r :yours)))))
+    (append (seq-filter keyed rows) (seq-remove keyed rows))))
 
 (defun drgnx-shortcuts--shown-p (row)
   "Non-nil if ROW passes this buffer's filters."
@@ -171,7 +197,7 @@ conflict of the resolution."
              (seq-some (lambda (k) (drgnx-shortcuts--starts-with-p (car k) drgnx-shortcuts--keys-filter))
                        (plist-get row :keys)))
          (or (not (memq 'conflicts drgnx-shortcuts--only)) (plist-get row :conflicts))
-         (or (not (memq 'no-key drgnx-shortcuts--only)) (null (plist-get row :keys)))
+         (or (not (memq 'no-key drgnx-shortcuts--only)) (and (null (plist-get row :keys)) (null (plist-get row :yours))))
          (or (not (memq 'changed drgnx-shortcuts--only)) (plist-get row :changed)))))
 
 (defun drgnx-shortcuts--suggestion (rows)
@@ -199,8 +225,14 @@ conflict of the resolution."
   (propertize (format "[%s] %s" (if (memq flag drgnx-shortcuts--only) "x" " ") label)
               'face (if (memq flag drgnx-shortcuts--only) 'drgnx-shortcuts-on 'drgnx-shortcuts-dim)))
 
+(defun drgnx-shortcuts--key-display (key)
+  "KEY as the table shows it: in the VS Code profile as VS Code writes it (\"Ctrl+K Ctrl+O\"), else as Emacs does."
+  (if (equal (drgnx-shortcuts--profile-text) "VS Code")
+      (mapconcat (lambda (chord) (string-join (drgnx-palette-keycap-names chord) "+")) (split-string key " " t) " ")
+    key))
+
 (defun drgnx-shortcuts--keys-text (keys)
-  (mapconcat (lambda (k) (concat (propertize (car k) 'face 'drgnx-shortcuts-key)
+  (mapconcat (lambda (k) (concat (propertize (drgnx-shortcuts--key-display (car k)) 'face 'drgnx-shortcuts-key)
                                  (unless (drgnx-shortcuts-terminal-p (car k))
                                    (propertize "†" 'face 'drgnx-shortcuts-warning
                                                'help-echo (drgnx-shortcuts--terminal-note (car k))))))
@@ -211,13 +243,25 @@ conflict of the resolution."
   (let ((s (truncate-string-to-width s width nil nil "…")))
     (concat s (make-string (max 0 (- width (string-width s))) ?\s))))
 
+(defun drgnx-shortcuts--widths (total)
+  "The column widths (COMMAND KEYS SOURCE WHERE) that make a row, with its mark and gaps, fit TOTAL columns."
+  (let* ((keys 18) (source 20) (where 16)
+         (command (max 20 (- total 2 4 keys source where))))
+    (list command keys source where)))
+
+(defvar-local drgnx-shortcuts--widths nil "The column widths of the table being drawn (`drgnx-shortcuts--widths').")
+
 (defun drgnx-shortcuts--insert-row (row)
   (let ((start (point)) (conflicts (plist-get row :conflicts)))
     (insert (if conflicts (propertize "!" 'face 'drgnx-shortcuts-conflict 'help-echo (string-join conflicts "\n")) " ")
-            " " (drgnx-shortcuts--pad (format "%s: %s" (plist-get row :category) (plist-get row :title)) 46)
-            " " (drgnx-shortcuts--pad (drgnx-shortcuts--keys-text (plist-get row :keys)) 26)
-            " " (propertize (drgnx-shortcuts--pad (plist-get row :source) 12) 'face 'drgnx-shortcuts-dim)
-            " " (apply #'propertize (plist-get row :where) 'face 'drgnx-shortcuts-dim
+            " " (drgnx-shortcuts--pad (format "%s: %s" (plist-get row :category) (plist-get row :title)) (nth 0 drgnx-shortcuts--widths))
+            " " (drgnx-shortcuts--pad (drgnx-shortcuts--keys-text
+                                       (append (plist-get row :keys)
+                                               (mapcar (lambda (y) (cons (car y) 'global-map)) (plist-get row :yours))))
+                                      (nth 1 drgnx-shortcuts--widths))
+            " " (propertize (drgnx-shortcuts--pad (plist-get row :source) (nth 2 drgnx-shortcuts--widths)) 'face 'drgnx-shortcuts-dim)
+            " " (apply #'propertize (drgnx-shortcuts--pad (plist-get row :where) (nth 3 drgnx-shortcuts--widths))
+                       'face 'drgnx-shortcuts-dim
                        (and (plist-get row :over)
                             (list 'help-echo (concat "Over Emacs' " (string-join (plist-get row :over) ", "))))))
     (put-text-property start (point) 'drgnx-shortcuts-id (plist-get row :id))
@@ -226,8 +270,10 @@ conflict of the resolution."
 (defun drgnx-shortcuts--draw ()
   "Draw the editor in the current buffer, keeping point on the row it was on."
   (let* ((inhibit-read-only t) (id (get-text-property (point) 'drgnx-shortcuts-id))
-         (line (line-number-at-pos)) (rows (drgnx-shortcuts--rows)) (suggest (drgnx-shortcuts--suggestion rows)))
+         (line (line-number-at-pos)) (rows (drgnx-shortcuts--keyed-first (drgnx-shortcuts--rows))) (suggest (drgnx-shortcuts--suggestion rows)))
     (erase-buffer)
+    (setq drgnx-shortcuts--widths
+          (drgnx-shortcuts--widths (window-body-width)))
     (insert (propertize "Keyboard Shortcuts" 'face 'drgnx-shortcuts-heading) " — keys: "
             (propertize (drgnx-shortcuts--profile-text) 'face 'drgnx-shortcuts-heading) "  ")
     (drgnx-shortcuts--button "[Switch Profile…]" #'drgnx-shortcuts-switch-profile
@@ -250,8 +296,9 @@ conflict of the resolution."
             (drgnx-shortcuts--toggle-text 'changed "Changed by me") "\n"
             (propertize "! a key conflict (hover for which)   † a terminal cannot send this key (hover: what to press here)\n\n"
                         'face 'drgnx-shortcuts-dim)
-            (propertize (format "  %s %s %s %s\n" (drgnx-shortcuts--pad "Command" 46) (drgnx-shortcuts--pad "Keys" 26)
-                                (drgnx-shortcuts--pad "Source" 12) "Where")
+            (propertize (format "  %s %s %s %s\n" (drgnx-shortcuts--pad "Command" (nth 0 drgnx-shortcuts--widths))
+                                (drgnx-shortcuts--pad "Keys" (nth 1 drgnx-shortcuts--widths))
+                                (drgnx-shortcuts--pad "Source" (nth 2 drgnx-shortcuts--widths)) "Where")
                         'face 'drgnx-shortcuts-heading))
     (let ((shown (seq-filter #'drgnx-shortcuts--shown-p rows)))
       (mapc #'drgnx-shortcuts--insert-row shown)
@@ -326,8 +373,20 @@ or (:kind same-key|prefix :native DESCRIPTION)."
           (cond ((equal v (key-parse k)) (push (list :kind 'same-key :id (plist-get b :id) :key k :map (plist-get b :map)) out))
                 ((or (drgnx-shortcuts--starts-with-p k key) (drgnx-shortcuts--starts-with-p key k))
                  (push (list :kind 'prefix :id (plist-get b :id) :key k :map (plist-get b :map)) out))))))
+    ;; your own keys: in the global map they sit above every profile key and cannot be replaced from here
+    (when (and (eq mapsym 'global-map) (boundp 'drgnx-keys--yours))
+      (maphash (lambda (k cell)
+                 (cond ((equal (key-parse k) v) (push (list :kind 'same-key :yours (cdr cell) :key k) out))
+                       ((and (car cell) (or (drgnx-shortcuts--starts-with-p key k)
+                                            (drgnx-shortcuts--starts-with-p k key)))
+                        (push (list :kind 'prefix :yours (cdr cell) :key k) out))))
+               drgnx-keys--yours))
     (unless out
-      (when-let* ((m (and (boundp mapsym) (keymapp (symbol-value mapsym)) (symbol-value mapsym)))
+      ;; the global map as keys are read: the profile's keys over Emacs' (VS Code's C-k is a prefix there, not
+      ;; `kill-line', so C-k C-9 is free)
+      (when-let* ((m (if (and (eq mapsym 'global-map) (boundp 'drgnx-keys--global-map))
+                         drgnx-keys--global-map
+                       (and (boundp mapsym) (keymapp (symbol-value mapsym)) (symbol-value mapsym))))
                   (def (ignore-errors (keymap-lookup m key nil t))))
         (cond ((keymapp def) (push (list :kind 'prefix :native (format "the %s prefix" key)) out))
               ((numberp def)
@@ -339,15 +398,21 @@ or (:kind same-key|prefix :native DESCRIPTION)."
     (nreverse out)))
 
 (defun drgnx-shortcuts--clash-text (c)
-  (let ((who (if-let* ((id (plist-get c :id)))
-                 (format "%s (%s)" (drgnx-cmd-title (drgnx-commands-get id)) (plist-get c :key))
-               (format "%s (Emacs or a package)" (plist-get c :native)))))
+  (let ((who (cond ((plist-member c :yours)
+                    (format "%s, %s" (plist-get c :key) (drgnx-shortcuts--yours-label (plist-get c :yours))))
+                   ((plist-get c :id)
+                    (format "%s (%s)" (drgnx-cmd-title (drgnx-commands-get (plist-get c :id))) (plist-get c :key)))
+                   (t (format "%s (Emacs or a package)" (plist-get c :native))))))
     (if (eq (plist-get c :kind) 'prefix) (format "%s — a prefix clash" who) (format "taken by %s" who))))
 
 (defun drgnx-shortcuts--settle (id key map)
   "Ask what to do when KEY in MAP is taken: Replace (take it from the drgnx commands that have it), Keep both, or
 Cancel.  Non-nil to go on."
   (let ((clashes (drgnx-shortcuts--clashes id key map)))
+    (when-let* ((mine (seq-find (lambda (c) (plist-member c :yours)) clashes)))
+      (user-error "%s is taken by your own key (%s): it wins over every profile key and is read-only here; change it in %s"
+                  key (drgnx-shortcuts--clash-text mine)
+                  (if (stringp (plist-get mine :yours)) (drgnx-shortcuts--file-name (plist-get mine :yours)) "your Lisp")))
     (or (null clashes)
         (pcase (car (read-multiple-choice
                      (format "%s in %s: %s. " key (drgnx-shortcuts--where map)
@@ -382,8 +447,13 @@ has several), or gives them to a command without keys; `add' adds them to its ke
                        (assoc (completing-read "Change which key: " (mapcar #'car own) nil t) own)
                      (car own))))
          (map (cond (old (cdr old)) (own (cdr (car own))) (t (drgnx-shortcuts--default-map cmd))))
-         (key (drgnx-shortcuts-read-keys
-               (format "Keys for %s (C-g cancels): " (drgnx-commands-label cmd)))))
+         (key (progn
+                (when (and (null own) (plist-get row :yours) (eq mode 'change))
+                  (user-error "%s: %s is yours (%s); change it there, or use Add for one more key"
+                              (drgnx-commands-label cmd) (car (car (plist-get row :yours)))
+                              (drgnx-shortcuts--yours-label (cdr (car (plist-get row :yours))))))
+                (drgnx-shortcuts-read-keys
+                 (format "Keys for %s (C-g cancels): " (drgnx-commands-label cmd))))))
     (cond ((null key) (message "Keyboard Shortcuts: nothing recorded"))
           ((seq-some (lambda (k) (equal (key-parse (car k)) (key-parse key))) own)
            (message "%s already has %s" (drgnx-commands-label cmd) key))
@@ -484,8 +554,12 @@ It goes into `drgnx-keys-tty-fallback' in settings.el."
 (defun drgnx-shortcuts-reset ()
   "Give the command on this line its profile's keys again."
   (interactive)
-  (drgnx-keys-edit-reset (drgnx-shortcuts--id-at-point))
-  (drgnx-shortcuts--redraw))
+  (let* ((id (drgnx-shortcuts--id-at-point)) (yours (plist-get (drgnx-shortcuts--row id) :yours)))
+    (drgnx-keys-edit-reset id)
+    (drgnx-shortcuts--redraw)
+    (when yours
+      (message "Reset keeps %s: it is yours (%s), a line in your Lisp that this page cannot remove"
+               (mapconcat #'car yours ", ") (drgnx-shortcuts--yours-label (cdr (car yours)))))))
 
 (defun drgnx-shortcuts-reset-all ()
   "After a confirmation, give every command its profile's keys again (keys.eld keeps its profile and comments)."

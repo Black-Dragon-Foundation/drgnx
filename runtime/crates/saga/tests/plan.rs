@@ -89,6 +89,15 @@ fn a_task_number_like_22b_is_kept() {
 }
 
 #[test]
+fn a_lettered_task_number_like_a1_is_kept_and_a_word_is_none() {
+    let d = plan::parse(
+        "# P\n\n### Task A1 (now): lettered\n- [ ] c\n\n### Task Force: no task\n\n### Task B: two\n",
+    );
+    assert_eq!(numbers(&d), ["A1", "B"]);
+    assert_eq!(d.tasks[0].title, "(now): lettered");
+}
+
+#[test]
 fn body_span_slices_the_source() {
     for f in FIXTURES {
         for t in plan::parse(f).tasks {

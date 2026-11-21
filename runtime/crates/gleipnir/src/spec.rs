@@ -88,6 +88,10 @@ pub const LANDLOCK_FLOOR_REDUCED: u8 = 9;
 /// scopes them. `Net::Isolated` has a namespace of its own and keeps [`LANDLOCK_FLOOR_FULL`].
 pub const LANDLOCK_FLOOR_SHARED_NET: u8 = 6;
 
+/// The agent browser's Landlock floor, on both Linux tiers: TCP rules need ABI 4, the scopes 6, and refusing every
+/// Unix connect 9. Without all three the browser layer is no boundary, so a session gets the browser only at 9.
+pub const LANDLOCK_FLOOR_BROWSER: u8 = 9;
+
 /// The highest Landlock ABI a spec may require: the last one the `landlock` crate knows. A newer kernel runs the
 /// ABI-9 rule set.
 pub const LANDLOCK_ABI_MAX: u8 = 9;
@@ -131,7 +135,80 @@ pub struct Spec {
     /// TCP ports the program may connect to besides the relay's, under `Net::Isolated` (Landlock's port rule).
     #[serde(default)]
     pub extra_tcp_ports: Vec<u16>,
+    /// Caps on the program's resources (Linux, both tiers): set by the inner helper just before it execs the program,
+    /// so the relay and the browser host it started are not held by them, and the program cannot raise them (soft and
+    /// hard alike). None: the host's limits as they are. Refused on macOS, which has no helper to set them: a cap that
+    /// is not enforced is not offered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rlimits: Option<Rlimits>,
+    /// Whether the files the program's shell steps open are seen ([`crate::trace`]): off unless asked.
+    #[serde(default, skip_serializing_if = "Trace::is_off")]
+    pub trace: Trace,
+    /// The agent browser: a host the inner helper forks under a Landlock layer and seccomp filter of its own, on an
+    /// inherited socketpair end (the full tier only; validation refuses it elsewhere).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<SpecBrowser>,
 }
+
+/// The browser's own dir on the full tier: a place in bwrap's private `/tmp`.
+pub const BROWSER_DIR_FULL: &str = "/tmp/drgnx-browser";
+
+/// What the browser host gets. Every path is seen inside; `program` and `extra_read` lie where the host has them too.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpecBrowser {
+    /// The Chromium binary: absolute, under `/usr`, `/opt` or an `extra_read` entry.
+    pub program: PathBuf,
+    /// The browser's own dir ([`BROWSER_DIR_FULL`] on the full tier); the helper makes it.
+    pub own_dir: PathBuf,
+    /// The web relay's port (one of the spec's relay ports): the browser's way out.
+    pub web_port: u16,
+    /// The agent's local servers the browser may reach; each one of `extra_tcp_ports`, none a relay port.
+    #[serde(default)]
+    pub local_ports: Vec<u16>,
+    /// More read-only roots of the browser layer (the hub passes `/var/cache/fontconfig`).
+    #[serde(default)]
+    pub extra_read: Vec<PathBuf>,
+    /// The browser host's own flags, after the ones gleipnir passes. Never a secret: at most 4 KiB in all, and no
+    /// `=` value may equal an env value of the spec.
+    #[serde(default)]
+    pub host_args: Vec<String>,
+}
+
+/// Seeing opens ([`crate::trace`]): `"off"`, `{"per_step": {"socket": …}}` or `{"tree": {"socket": …}}`. `socket`
+/// is the supervisor's hand-off socket, as a path inside; it must be one of the spec's `sockets`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Trace {
+    /// Nothing is traced.
+    #[default]
+    Off,
+    /// Per shell step: the program runs each shell command through [`TRACE_INSIDE`] (`gleipnir-trace`), which
+    /// offers the command at `socket` (in `GLEIPNIR_TRACE_SOCK`). The full tier only: the wrapper lives at a reserved
+    /// dest.
+    PerStep { socket: PathBuf },
+    /// The program's whole tree: the inner helper installs the listener on itself after seccomp, so on everything
+    /// the program starts, and offers it at `socket`. Linux only.
+    Tree { socket: PathBuf },
+}
+
+impl Trace {
+    pub fn is_off(&self) -> bool {
+        *self == Trace::Off
+    }
+
+    /// The hand-off socket, when there is one.
+    pub fn socket(&self) -> Option<&PathBuf> {
+        match self {
+            Trace::Off => None,
+            Trace::PerStep { socket } | Trace::Tree { socket } => Some(socket),
+        }
+    }
+}
+
+/// Where `gleipnir-trace`, the per-step wrapper, is seen inside bwrap: a link to the helper, which runs as the wrapper
+/// when it is started by this name ([`crate::trace::wrapper_main`]).
+pub const TRACE_INSIDE: &str = "/run/gleipnir/gleipnir-trace";
 
 /// A path seen inside at `dest`, from `source` outside.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,20 +227,58 @@ pub enum Mode {
     Rw,
 }
 
-/// The network: `"shared"`, or `{"isolated": {"relay": [...], "mac_tcp_ports": [...]}}`.
+/// The network: `"shared"`, `"none"`, or `{"isolated": {"relay": [...], "mac_tcp_ports": [...], "loopback": false}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Net {
     /// The host's network (bwrap `--share-net`; Seatbelt allows any remote address).
     Shared,
+    /// No network at all, for a program that needs none (a grammar worker). Linux full tier: a new network namespace
+    /// with nothing in it, no relay, and Landlock's TCP rules kept with no port allowed (every connect and bind is
+    /// refused, the loopback's too). Linux reduced tier: no namespace, so the same Landlock rules alone (no TCP
+    /// connect or bind anywhere) and the tier's seccomp filter, which already refuses UDP and raw sockets. macOS:
+    /// Seatbelt's `(deny network*)` and no localhost port. `extra_tcp_ports`, a browser and a relay have nothing to
+    /// reach, so a spec that names one is refused.
+    None,
     /// No network of its own. Linux: a new network namespace, and the relay forwards loopback ports inside to Unix
-    /// sockets outside (`relay` must not be empty). macOS: only `localhost` on `mac_tcp_ports`.
+    /// sockets outside (`relay` must not be empty, except with `loopback`: a sealed debug fork has no way out).
+    /// macOS: only `localhost` on `mac_tcp_ports`.
     Isolated {
         #[serde(default)]
         relay: Vec<RelayPort>,
         #[serde(default)]
         mac_tcp_ports: Vec<u16>,
+        /// The program's own loopback traffic, for a debug session (an adapter and its debuggee); nothing else sets
+        /// it. Linux full tier: no Landlock TCP port rule, the network namespace alone isolates (its loopback is not
+        /// the host's). macOS, which has no namespace: `localhost` bound, accepted and connected to on
+        /// `mac_loopback_ports` only (the hub picks them free per session), Unix sockets bound and accepted under
+        /// `tmp`, and an Xcode developer dir's `../SharedFrameworks` (LLDB.framework) read. Refused in the reduced
+        /// tier, which has no namespace.
+        #[serde(default)]
+        loopback: bool,
+        /// macOS, with `loopback`: the loopback ports the program may bind, accept on and connect to.
+        #[serde(default)]
+        mac_loopback_ports: Vec<u16>,
     },
+}
+
+/// Resource caps for the program ([`Spec::rlimits`]). A field left out sets no cap of its own; `RLIMIT_CORE` is always 0
+/// when the `rlimits` field is present (no core dump leaves the sandbox's memory on disk).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rlimits {
+    /// `RLIMIT_AS`: bytes of address space; a program over it fails its allocations.
+    #[serde(default)]
+    pub address_space: Option<u64>,
+    /// `RLIMIT_DATA`: bytes of data segment and heap (`brk`, and anonymous `mmap` on Linux 4.7 and later).
+    #[serde(default)]
+    pub data: Option<u64>,
+    /// `RLIMIT_CPU`: seconds of CPU time; the program is sent `SIGXCPU`, then killed at the hard limit one second on.
+    #[serde(default)]
+    pub cpu_seconds: Option<u64>,
+    /// `RLIMIT_NOFILE`: the highest file descriptor number plus one.
+    #[serde(default)]
+    pub open_files: Option<u64>,
 }
 
 /// A loopback port inside, forwarded to a Unix socket; `socket` is the socket's path inside.
@@ -273,7 +388,7 @@ mod tests {
             "env": [["PATH", "/usr/bin"], ["LANG", "C.UTF-8"]],
             "chdir": "/work/task",
             "net": {"isolated": {"relay": [{"port": 3128, "socket": "/run/drgnx/proxy.sock"}],
-                                 "mac_tcp_ports": []}},
+                                 "mac_tcp_ports": [], "loopback": false, "mac_loopback_ports": []}},
             "tmp": "/state/tmp-1",
             "layers": {"landlock_min_abi": 1},
             "extra_tcp_ports": [8080]
@@ -314,7 +429,9 @@ mod tests {
                     port: 3128,
                     socket: "/run/drgnx/proxy.sock".into()
                 }],
-                mac_tcp_ports: vec![]
+                mac_tcp_ports: vec![],
+                loopback: false,
+                mac_loopback_ports: vec![],
             }
         );
         assert_eq!(spec.env[1], ("LANG".to_owned(), "C.UTF-8".to_owned()));
@@ -400,7 +517,9 @@ mod tests {
             minimal.net,
             Net::Isolated {
                 relay: vec![],
-                mac_tcp_ports: vec![]
+                mac_tcp_ports: vec![],
+                loopback: false,
+                mac_loopback_ports: vec![],
             }
         );
         let err = decode(json!({"chdir": "/w", "net": "shared", "layers": {}})).unwrap_err();
@@ -422,11 +541,35 @@ mod tests {
 
     #[test]
     fn the_helper_lies_under_a_reserved_dest() {
-        assert!(
-            RESERVED_DESTS
-                .iter()
-                .any(|r| HELPER_INSIDE.starts_with(&format!("{r}/")))
+        for p in [HELPER_INSIDE, TRACE_INSIDE] {
+            assert!(
+                RESERVED_DESTS
+                    .iter()
+                    .any(|r| p.starts_with(&format!("{r}/"))),
+                "{p}"
+            );
+        }
+    }
+
+    /// Off is the default and is left out of the wire form; the other two carry their socket.
+    #[test]
+    fn trace_is_off_unless_asked() {
+        let spec = decode(full()).unwrap();
+        assert_eq!(spec.trace, Trace::Off);
+        assert!(serde_json::to_value(&spec).unwrap().get("trace").is_none());
+        let per = decode(with(
+            "/trace",
+            Some(json!({"per_step": {"socket": "/run/drgnx/trace.sock"}})),
+        ))
+        .unwrap();
+        assert_eq!(
+            per.trace.socket(),
+            Some(&PathBuf::from("/run/drgnx/trace.sock"))
         );
+        let tree = decode(with("/trace", Some(json!({"tree": {"socket": "/s"}})))).unwrap();
+        assert!(matches!(tree.trace, Trace::Tree { .. }));
+        assert!(decode(with("/trace", Some(json!({"tree": {}})))).is_err());
+        assert!(decode(with("/trace", Some(json!("everything")))).is_err());
     }
 
     /// The lists are the plan's, entry for entry; a change here is a change of the sandbox's rules.

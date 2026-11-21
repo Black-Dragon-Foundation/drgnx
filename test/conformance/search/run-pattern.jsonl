@@ -1,0 +1,16 @@
+{"scenario": "search/run-pattern", "requires": ["v1", "test-hooks"], "doc": "search/run with a pattern query: the files holding the pattern's longest name are parsed and searched (hrafn::structural); a match over lines is its first line's row with `+N lines` dim; a pattern not valid in its language ends the run with the language and column; a replacement is refused."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "s", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "write_file", "path": "$ROOT/proj/a.rs", "text": "fn f() {\n    foo(1,\n        2);\n    foo(3);\n}\n"}
+{"do": "write_file", "path": "$ROOT/proj/b.rs", "text": "fn g() { bar(1, 2); }\n"}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "pattern", "pattern": "foo($A, $B)", "lang": "rust"}}, "context": false}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "ops": [{"insert": {"after": null, "rows": [{"key": "f:a.rs"}, {"key": "m:1:0", "text": "  [x] foo(1,  +1 line"}]}}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": 1, "files": 1, "matches": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "pattern", "pattern": "fn $F() { let = 1; }", "lang": "rust"}}}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": 2, "files": 0, "matches": 0, "error": "pattern is not valid Rust at col 14"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "pattern", "pattern": "foo($A)"}, "replace": "bar($A)"}}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "error": {"code": "invalid-params", "path": "search.replace"}}}

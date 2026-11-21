@@ -13,7 +13,7 @@
           (s (progn
                (dolist (f '("README.md" "a.txt" "b.txt")) (make-directory project t)
                        (write-region (format "%s\n" f) nil (expand-file-name f project) nil 'silent))
-               (drgnx-ui-start "drgnx" "1400x800" 30)))
+               (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)))
           (,sess (drgnx-ui-own-session (plist-get s :name))))
      (unwind-protect
          (progn
@@ -42,7 +42,7 @@
       (drgnx-ui-measure sess nil)
       (should (equal (drgnx-frames-test--eval sess "(list (drgnx-frame-role kx-f1) (drgnx-frame-role kx-f2))") '(main aux)))
       (should (equal (drgnx-frames-test--eval sess "(length (drgnx-wb--dock-windows kx-f2))") 0))
-      (should (> (drgnx-frames-test--eval sess "(window-tab-line-height (frame-first-window kx-f2))") 0))
+      (should (> (drgnx-frames-test--eval sess "(window-tab-line-height (with-selected-frame kx-f2 (drgnx-wb-editor-window)))") 0))
       ;; The sidebar of the second window, help shown from it: frame 1 does not move (RF2).
       (drgnx-frames-test--eval sess "(progn (select-frame-set-input-focus kx-f2) t)")
       (drgnx-ui-measure sess (list (list :keys "C-b")))
@@ -60,16 +60,17 @@
 
 (ert-deftest drgnx-frames/editors-and-groups-move-to-new-windows ()
   (drgnx-frames-test--with sess
-    ;; Move Editor to New Window: README leaves frame 1's tabs.
+    ;; Move to New Window: a.txt leaves frame 1's tabs.
     (drgnx-frames-test--eval sess "(progn (find-file (expand-file-name \"a.txt\" kx-dir)) (drgnx-chrome-apply nil t) t)")
-    (drgnx-frames-test--eval sess "(progn (drgnx-frames-move-editor) (setq kx-f2 (selected-frame)) t)")
+    (drgnx-frames-test--eval sess "(progn (drgnx-grid-move-tab-to-new-frame) (setq kx-f2 (selected-frame)) t)")
     (drgnx-ui-measure sess nil)
-    (should (equal (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-chrome-tabs (frame-first-window kx-f2)))") '("a.txt")))
+    (should (equal (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-chrome-tabs (with-selected-frame kx-f2 (drgnx-wb-editor-window))))") '("a.txt")))
     (should-not (member "a.txt" (drgnx-frames-test--eval sess "(with-selected-frame kx-f1 (mapcar #'buffer-name (drgnx-chrome-tabs (car (drgnx-groups-list)))))")))
     ;; Open in New Window: the same buffer in both; closing its tab in one keeps it in the other (RF4).
     (drgnx-frames-test--eval sess "(progn (select-frame-set-input-focus kx-f1) (drgnx-frames-open-editor) t)")
     (drgnx-ui-measure sess nil)
-    (should (= 3 (drgnx-frames-test--eval sess "(length (frame-list))")))
+    ;; three windows; the echo box and the popup lane are child frames
+    (should (= 3 (drgnx-frames-test--eval sess "(length (seq-remove #'frame-parent (frame-list)))")))
     (drgnx-frames-test--eval sess "(progn (drgnx-chrome-close-tab) t)")
     (should (member "README.md" (drgnx-frames-test--eval sess "(with-selected-frame kx-f1 (mapcar #'buffer-name (drgnx-chrome-tabs (car (drgnx-groups-list)))))")))
     ;; Move Editor Group to New Window: frame 1's second group (b.txt) moves with its tabs.
@@ -77,20 +78,27 @@
     (drgnx-frames-test--eval sess "(progn (drgnx-frames-move-group) t)")
     (drgnx-ui-measure sess nil)
     (should (= 1 (drgnx-frames-test--eval sess "(length (drgnx-groups-list kx-f1))")))
-    (should (member "b.txt" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-chrome-tabs (frame-first-window (selected-frame))))")))))
+    (should (member "b.txt" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-chrome-tabs (drgnx-wb-editor-window)))")))))
 
 (ert-deftest drgnx-frames/each-window-lists-its-own-buffers ()
   (drgnx-frames-test--with sess
-    (drgnx-frames-test--eval sess "(progn (find-file (expand-file-name \"a.txt\" kx-dir)) (drgnx-chrome-apply nil t) (drgnx-frames-move-editor) (setq kx-f2 (selected-frame)) (drgnx-chrome-apply kx-f2 t) t)")
+    (drgnx-frames-test--eval sess "(progn (find-file (expand-file-name \"a.txt\" kx-dir)) (drgnx-chrome-apply nil t) (drgnx-grid-move-tab-to-new-frame) (setq kx-f2 (selected-frame)) (drgnx-chrome-apply kx-f2 t) t)")
     (drgnx-ui-measure sess nil)
     (should (equal (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-frame-buffers kx-f2))") '("a.txt")))
     (should-not (member "a.txt" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-frame-buffers kx-f1))")))
     (should (member "README.md" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-frame-buffers kx-f1))")))
-    ;; The Buffers panel lists the selected window's buffers; the toggle lists all.
-    (drgnx-frames-test--eval sess "(progn (select-frame-set-input-focus kx-f2) (drgnx-wb-show-sidebar) t)")
+    ;; The Buffers panel lists the selected window's buffers, and its rows are the hub's: the session has a hub of its own.
+    (drgnx-frames-test--eval sess "(progn (load (expand-file-name \"test/fixtures/ui-hub-fixture\" drgnx-dir) nil t) (drgnx-ui-hub-start drgnx-dir) t)")
+    ;; Open unfolded (it starts folded), as its user would
+    (drgnx-frames-test--eval sess "(progn (select-frame-set-input-focus kx-f2) (drgnx-wb-show-sidebar)
+                                          (when (drgnx-wb-section-collapsed-p 'buffers) (drgnx-wb-toggle-section 'buffers))
+                                          t)")
     (drgnx-ui-measure sess nil)                     ; the bus re-renders the panel for this window
+    (should (member "a.txt" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-buffers--shown))")))
     (should-not (member "README.md" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-buffers--shown))")))
+    ;; the toggle lists all
     (drgnx-frames-test--eval sess "(progn (drgnx-buffers-toggle-all-windows) t)")
+    (drgnx-ui-measure sess nil)
     (should (member "README.md" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-buffers--shown))")))))
 
 (ert-deftest drgnx-frames/every-window-survives-a-restart ()
@@ -102,25 +110,25 @@
     (dolist (f '("README.md" "a.txt")) (make-directory project t)
             (write-region "x\n" nil (expand-file-name f project) nil 'silent))
     (unwind-protect
-        (let* ((s (drgnx-ui-start "drgnx" "1400x800" 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
+        (let* ((s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
           (drgnx-ui-call sess (format "(progn (setq drgnx-persist-file %S)
                                          (find-file %S) (drgnx-chrome-apply nil t)
                                          (find-file %S) (drgnx-chrome-apply nil t)
-                                         (drgnx-frames-move-editor)
+                                         (drgnx-grid-move-tab-to-new-frame)
                                          (drgnx-uitest--json (list :ok t)))"
                                       file (expand-file-name "README.md" project) (expand-file-name "a.txt" project)))
           (drgnx-ui-measure sess nil)
           (drgnx-ui-stop (plist-get s :name))
           (should (= 2 (length (plist-get (with-temp-buffer (insert-file-contents file) (read (current-buffer))) :frames))))
-          (let* ((s2 (drgnx-ui-start "drgnx" "1400x800" 30)) (sess2 (drgnx-ui-own-session (plist-get s2 :name))))
+          (let* ((s2 (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)) (sess2 (drgnx-ui-own-session (plist-get s2 :name))))
             (unwind-protect
                 (progn
                   (drgnx-ui-call sess2 (format "(progn (setq drgnx-persist-file %S) (drgnx-persist-restore) (drgnx-uitest--json (list :ok t)))" file))
                   (drgnx-ui-measure sess2 nil)
                   (should (equal (drgnx-frames-test--eval sess2 "(length (seq-remove #'frame-parent (frame-list)))") 2))
                   (should (eq (drgnx-frames-test--eval sess2 "(drgnx-frame-role (selected-frame))") 'main))
-                  (should (equal (drgnx-frames-test--eval sess2 "(mapcar #'buffer-name (drgnx-chrome-tabs (frame-first-window (selected-frame))))") '("README.md")))
+                  (should (equal (drgnx-frames-test--eval sess2 "(mapcar #'buffer-name (drgnx-chrome-tabs (drgnx-wb-editor-window)))") '("README.md")))
                   (should (member "a.txt" (drgnx-frames-test--eval
-                                           sess2 "(mapcar #'buffer-name (seq-mapcat (lambda (f) (drgnx-chrome-tabs (frame-first-window f))) (seq-remove (lambda (f) (eq f (selected-frame))) (frame-list))))"))))
+                                           sess2 "(mapcar #'buffer-name (seq-mapcat (lambda (f) (drgnx-chrome-tabs (with-selected-frame f (drgnx-wb-editor-window)))) (seq-remove (lambda (f) (eq f (selected-frame))) (frame-list))))"))))
               (drgnx-ui-stop (plist-get s2 :name)))))
       (delete-directory root t))))

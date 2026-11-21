@@ -1,0 +1,6 @@
+{
+  "name": "http-commit-hook",
+  "version": "0.1.0",
+  "hooks": [{"point": "before-commit", "verdicts": ["deny", "annotate"], "deadline_ms": 5000}],
+  "hosts": ["api.example.com"]
+}

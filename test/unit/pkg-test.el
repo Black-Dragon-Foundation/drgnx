@@ -268,13 +268,14 @@
 (require 'drgnx-doctor)
 
 (ert-deftest drgnx-pkg/the-guard-refuses-installs-from-automatic-code ()
-  (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)))
-    (let ((this-command nil))                                      ; a timer, a hook at startup, …
-      (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error))
-    (let ((this-command 'package-install))                         ; the user asked
-      (should (eq (drgnx-pkg--guard orig 'foo) 'installed)))
-    (let ((this-command 'package-install) (after-init-time nil))   ; still starting up
-      (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error)))
+  (drgnx-pkg-test--with root                                       ; an allowed install takes the sync lock: in the sandbox
+    (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)))
+      (let ((this-command nil))                                    ; a timer, a hook at startup, …
+        (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error))
+      (let ((this-command 'package-install))                       ; the user asked
+        (should (eq (drgnx-pkg--guard orig 'foo) 'installed)))
+      (let ((this-command 'package-install) (after-init-time nil)) ; still starting up
+        (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error))))
   (unwind-protect
       (progn (drgnx-pkg-guard-mode 1)
              (dolist (f '(package-install package-refresh-contents package-vc-install package-upgrade package-upgrade-all))
@@ -301,10 +302,11 @@
 (ert-deftest drgnx-pkg/the-guard-allows-installs-the-user-started ()
   ;; Review I1: M-x list-packages, describe-package's Install button (push-button), M-: and a third-party command
   ;; are the user's own: only hooks, timers, startup and automatic code are refused.
-  (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)))
-    (dolist (c '(list-packages push-button eval-expression package-install package-menu-execute auto-package-update-now))
-      (let ((this-command c))
-        (should (eq (drgnx-pkg--guard orig 'foo) 'installed))))))
+  (drgnx-pkg-test--with root                                       ; each install takes the sync lock: in the sandbox
+    (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)))
+      (dolist (c '(list-packages push-button eval-expression package-install package-menu-execute auto-package-update-now))
+        (let ((this-command c))
+          (should (eq (drgnx-pkg--guard orig 'foo) 'installed)))))))
 
 (ert-deftest drgnx-pkg/use-package-ensure-only-records ()
   (drgnx-pkg-test--with root
@@ -714,9 +716,73 @@
   (let ((invocation-directory "/usr/bin/") (invocation-name "emacs") (drgnx-dir "/src/drgnx/"))
     (should (string-match-p "\nExecStart=/usr/bin/emacs --fg-daemon=drgnx --init-directory=/src/drgnx/init\n" (drgnx-pkg-service-unit)))))
 
+(ert-deftest drgnx-pkg/the-launch-agent-starts-the-daemon-at-login ()
+  ;; macOS: a per-user LaunchAgent, the systemd unit's counterpart
+  (let ((invocation-directory "/Applications/A & B.app/Contents/MacOS/") (invocation-name "Emacs")
+        (drgnx-dir "/src/drgnx/"))
+    (let ((p (drgnx-pkg-launch-agent)))
+      (should (string-search "<key>Label</key><string>org.blackdragonfoundation.drgnx</string>" p))
+      (should (string-search (concat "<key>ProgramArguments</key><array>"
+                                     "<string>/Applications/A &amp; B.app/Contents/MacOS/Emacs</string>"
+                                     "<string>--fg-daemon=drgnx</string><string>--init-directory=/src/drgnx/init</string>"
+                                     "</array>")
+                             p))
+      (should (string-search "<key>RunAtLoad</key><true/>" p))
+      (should (equal (cdr (drgnx-pkg--agent-program p)) '("/Applications/A & B.app/Contents/MacOS/Emacs" t)))))
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-launch-agent (concat root "agents"))
+    (should (file-exists-p (concat root "agents/org.blackdragonfoundation.drgnx.plist")))
+    (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
+      (should (string-suffix-p "/Library/LaunchAgents/org.blackdragonfoundation.drgnx.plist" (drgnx-pkg-service-unit-file))))))
+
+(ert-deftest drgnx-pkg/the-launch-agent-follows-the-emacs-drgnx-uses ()
+  (drgnx-pkg-test--with root
+    (let* ((file (concat root "LaunchAgents/org.blackdragonfoundation.drgnx.plist"))
+           (old (let ((invocation-directory "/old/") (invocation-name "emacs")) (drgnx-pkg-launch-agent))))
+      (make-directory (file-name-directory file) t)
+      ;; a key the user added stays
+      (write-region (string-replace "<key>RunAtLoad</key>" "<key>Nice</key><integer>5</integer><key>RunAtLoad</key>" old)
+                    nil file nil 'silent)
+      (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos))
+                ((symbol-function 'drgnx-pkg--systemctl-reload) (lambda () (error "systemd on macOS"))))
+        (let ((r (drgnx-pkg-service-unit-refresh file))
+              (text (with-temp-buffer (insert-file-contents file) (buffer-string))))
+          (should (eq (plist-get r :status) 'rewritten))
+          (should (equal (plist-get r :old) "/old/emacs"))
+          (should (string-search "<key>Nice</key><integer>5</integer>" text))
+          (should (equal (cadr (drgnx-pkg--agent-program text)) (expand-file-name invocation-name invocation-directory))))
+        (should (eq (plist-get (drgnx-pkg-service-unit-refresh file) :status) 'current))
+        (write-region "<plist><dict><key>ProgramArguments</key><array><string>/bin/sleep</string></array></dict></plist>"
+                      nil file nil 'silent)
+        (should (eq (plist-get (drgnx-pkg-service-unit-refresh file) :status) 'foreign))))))
+
+(ert-deftest drgnx-pkg/service-unit-install-loads-the-launch-agent-on-macos ()
+  (drgnx-pkg-test--with root
+    (let* ((process-environment (cons (concat "HOME=" root "home") process-environment))
+           (file (concat root "home/Library/LaunchAgents/org.blackdragonfoundation.drgnx.plist"))
+           (calls nil))
+      (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos))
+                ((symbol-function 'drgnx-pkg--launchctl) (lambda (&rest args) (push args calls) 0)))
+        (should (eql (drgnx-pkg-cli-run '("service-unit" "--install")) 0))
+        (should (equal (cdr (drgnx-pkg--agent-program (with-temp-buffer (insert-file-contents file) (buffer-string))))
+                       (list (expand-file-name invocation-name invocation-directory) t)))
+        ;; out (if loaded) and in: launchd reads the file and starts the daemon (RunAtLoad)
+        (should (equal (reverse calls)
+                       (list (list "bootout" (format "gui/%d/org.blackdragonfoundation.drgnx" (user-uid)))
+                             (list "bootstrap" (format "gui/%d" (user-uid)) file))))
+        ;; launchctl refusing it is an error
+        (cl-letf (((symbol-function 'drgnx-pkg--launchctl) (lambda (&rest _) 5)))
+          (should (eql (drgnx-pkg-cli-run '("service-unit" "--install")) 1))))
+      ;; Linux: the unit is installed by onboarding; nothing is written here
+      (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux))
+                ((symbol-function 'drgnx-pkg--launchctl) (lambda (&rest _) (error "launchctl on Linux"))))
+        (should (eql (drgnx-pkg-cli-run '("service-unit" "--install")) 2))))))
+
 (defmacro drgnx-pkg-test--with-unit (vars unit-text &rest body)
   "BODY with XDG_CONFIG_HOME a temp dir (VARS: ROOT UNIT RELOADS), UNIT-TEXT written as its drgnx.service
-\(nil: no file), and the systemctl reload replaced by a counter: nothing reaches the real unit or systemd."
+\(nil: no file), and the systemctl reload replaced by a counter: nothing reaches the real unit or systemd.
+The platform is Linux, whatever the host: these rows are the systemd unit's (on macOS the service is the launch
+agent, whose rows are `drgnx-pkg/the-launch-agent-follows-the-emacs-drgnx-uses' and its neighbours)."
   (declare (indent 2))
   (pcase-let ((`(,root ,unit ,reloads) vars))
     `(drgnx-pkg-test--with ,root
@@ -726,7 +792,8 @@
          (when ,unit-text
            (make-directory (file-name-directory ,unit) t)
            (write-region ,unit-text nil ,unit nil 'silent))
-         (cl-letf (((symbol-function 'drgnx-pkg--systemctl-reload) (lambda () (cl-incf ,reloads) 'ok)))
+         (cl-letf (((symbol-function 'drgnx-pkg--systemctl-reload) (lambda () (cl-incf ,reloads) 'ok))
+                   ((symbol-function 'drgnx-platform) (lambda () 'linux)))
            ,@body)))))
 
 (defun drgnx-pkg-test--slurp (file)
@@ -1223,5 +1290,105 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
           (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) unit))))
       (should (equal (directory-files dir nil "\\`[^.]\\|\\`\\.[^.]") '("drgnx.service"))))))
 
+(ert-deftest drgnx-pkg/eat-is-retired-once-by-the-next-sync ()
+  ;; eat, the old terminal backend, is gone: the first sync removes its package directory, a later one leaves a copy
+  ;; the user installed again alone
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0")))))
+      (drgnx-pkg-test--want root 'fa)
+      (cl-flet ((seed ()
+                  (make-directory (expand-file-name "eat-0.9.4" (drgnx-elpa-dir)) t)
+                  (write-region "" nil (expand-file-name "eat-0.9.4/eat.el" (drgnx-elpa-dir)) nil 'silent))
+                (sync () (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok)))
+                (eat-p () (file-exists-p (expand-file-name "eat-0.9.4" (drgnx-elpa-dir)))))
+        (seed) (sync)
+        (should-not (eat-p))
+        (seed) (sync)
+        (should (eat-p))))))
+
+(defun drgnx-pkg-test--stale-elc (file)
+  "Put an .elc at FILE that another build compiled: its `fa-hello' says \"stale\"."
+  (let ((src (make-temp-file "drgnx-stale" nil ".el")))
+    (unwind-protect
+        (progn (write-region "(defun fa-hello () \"stale\")\n(provide 'fa)\n" nil src nil 'silent)
+               (let ((byte-compile-dest-file-function (lambda (_) file))) (byte-compile-file src)))
+      (delete-file src))))
+
+(defun drgnx-pkg-test--hello-of (elc)
+  "What `fa-hello' says after loading ELC."
+  (fmakunbound 'fa-hello)
+  (load elc nil t t)
+  (fa-hello))
+
+;; The look scenes failed after a minute with `corfu-mode--set-explicitly' void: the JIT native-compiled corfu's .el
+;; (this build's macros) and swapped the functions in while the .elc (Emacs 30.2's) never defined the variable.
+(ert-deftest drgnx-pkg/the-jit-leaves-packages-another-build-compiled-alone ()
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-jit" t)))
+         (own (concat root "own/")) (other (concat root "other/")) (unknown (concat root "unknown/")) (bare (concat root "bare/"))
+         (file (lambda (dir) (concat dir "corfu-1/corfu.el"))))
+    (unwind-protect
+        (progn
+          (dolist (d (list own other unknown bare)) (make-directory (concat d "corfu-1") t))
+          (dolist (d (list own other unknown)) (with-temp-file (concat d "corfu-1/corfu.elc") (insert ";ELC")))
+          (with-temp-file (concat own drgnx-pkg-build-file) (insert (prin1-to-string (drgnx-pkg-emacs-build))))
+          (with-temp-file (concat other drgnx-pkg-build-file) (insert (prin1-to-string "30.2 x86_64-pc-linux-gnu")))
+          (let ((native-comp-jit-compilation-deny-list nil))
+            (should-not (drgnx-pkg-jit-guard own))                 ; built by this Emacs: the JIT may compile it
+            (should-not (drgnx-pkg-jit-guard bare))                ; nothing compiled, nothing says: no .elc to skew
+            (should-not (drgnx-pkg-jit-guard (concat root "nowhere/")))
+            (should-not native-comp-jit-compilation-deny-list)
+            (should (drgnx-pkg-jit-guard other))                   ; another build's .elc
+            (should (drgnx-pkg-jit-guard unknown))                 ; .elc files and no record of who made them
+            (should (cl-some (lambda (re) (string-match-p re (funcall file other))) native-comp-jit-compilation-deny-list))
+            (should (cl-some (lambda (re) (string-match-p re (funcall file unknown))) native-comp-jit-compilation-deny-list))
+            (should-not (cl-some (lambda (re) (string-match-p re (funcall file own))) native-comp-jit-compilation-deny-list))))
+      (delete-directory root t))))
+
+(ert-deftest drgnx-pkg/activating-guards-the-jit ()
+  (drgnx-pkg-test--with root
+    (let ((guarded nil) (package-quickstart-file (concat root "q.el")))
+      (cl-letf (((symbol-function 'drgnx-pkg-jit-guard) (lambda (dir) (push dir guarded)))
+                ((symbol-function 'package-activate-all) #'ignore))
+        (make-directory (drgnx-elpa-dir) t)
+        (drgnx-pkg-activate)
+        (should (equal guarded (list (drgnx-elpa-dir))))))))
+
+(ert-deftest drgnx-pkg/a-new-emacs-build-recompiles-every-package ()
+  ;; A package compiled by another Emacs build (an older Nidhogg, a stock Emacs) loads its old macro expansions:
+  ;; diff-hl's from Emacs 30 next to the JIT's newer functions gave `diff-hl-mode--set-explicitly' void in every hook.
+  ;; A sync notices the packages directory was compiled by another build and compiles every package again.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fb "1.0" ((fa "1.0"))))))
+          (elc (lambda () (expand-file-name "fa-1.0/fa.elc" (drgnx-elpa-dir)))))
+      (drgnx-pkg-test--want root 'fb)
+      (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok))
+      (should (equal (drgnx-pkg-elpa-build) (drgnx-pkg-emacs-build)))          ; the sync records the build
+      ;; the same build: a sync leaves the compiled files alone
+      (drgnx-pkg-test--stale-elc (funcall elc))
+      (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok))
+      (should (equal (drgnx-pkg-test--hello-of (funcall elc)) "stale"))
+      ;; another build compiled them (or nothing says which one did): the next sync compiles them all again
+      (drgnx-file-write-text (expand-file-name drgnx-pkg-build-file (drgnx-elpa-dir)) "\"30.2 another build\"\n")
+      (should-not (equal (drgnx-pkg-elpa-build) (drgnx-pkg-emacs-build)))
+      (should (plist-get (drgnx-pkg-test--sync root :offline t) :ok))
+      (should (equal (drgnx-pkg-test--hello-of (funcall elc)) "1.0"))
+      (should (file-exists-p (expand-file-name "fb-1.0/fb.elc" (drgnx-elpa-dir))))
+      (should (equal (drgnx-pkg-elpa-build) (drgnx-pkg-emacs-build))))))
+
+(ert-deftest drgnx-pkg/the-doctor-says-when-another-build-compiled-the-packages ()
+  (let ((check (lambda (p) (drgnx-doctor-check 'packages (list :packages p)))))
+    (let ((r (funcall check '(:manifest (fa) :installed (fa) :lock t :generations 1 :build-stale "30.2"))))
+      (should (eq (car r) 'warn))
+      (should (string-search "30.2" (nth 1 r)))
+      (should (string-search "drgnx sync" (nth 2 r))))
+    (should (eq (car (funcall check '(:manifest (fa) :installed (fa) :lock t :generations 1 :build-stale nil))) 'ok)))
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-test--want root 'fa)
+    (drgnx-pkg-test--sync root :archives `(("fx" . ,(drgnx-pkg-test--archive (concat root "arch") '((fa "1.0"))))))
+    (should-not (plist-get (drgnx-pkg-status (concat root "mods")) :build-stale))
+    (drgnx-file-write-text (expand-file-name drgnx-pkg-build-file (drgnx-elpa-dir)) "\"30.2 another build\"\n")
+    (should (equal (plist-get (drgnx-pkg-status (concat root "mods")) :build-stale) "30.2 another build"))
+    (delete-file (expand-file-name drgnx-pkg-build-file (drgnx-elpa-dir)))   ; a directory from before the record
+    (should (equal (plist-get (drgnx-pkg-status (concat root "mods")) :build-stale) "an unknown build"))))
 
 ;;; pkg-test.el ends here

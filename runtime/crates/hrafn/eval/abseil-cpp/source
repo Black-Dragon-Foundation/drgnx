@@ -1,0 +1,5 @@
+url https://github.com/abseil/abseil-cpp
+commit be93ce230ef75c5e57366c500e71cac4f4f4241a
+language C++
+licence Apache-2.0
+fetched at test time by commit; never vendored

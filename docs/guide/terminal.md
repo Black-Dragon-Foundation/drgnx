@@ -228,14 +228,16 @@ graphical window, get none, and each terminal window on one drgnx has its own (k
   F6 p is `C-S-p`, F6 . is `C-.`, F6 Enter is `C-<return>`, F6 Tab is `C-<tab>`, F6 Shift+Tab is `C-S-<tab>`. A
   Shift+punctuation chord is typed with the character Shift makes (`` C-S-` `` is F6 ~); Enter and Backspace, which
   a terminal sends no Shift with, take Alt for it (`C-S-<return>` is F6 Alt+Enter); `C-SPC` is F6 Ctrl+Space. While
-  F6 waits, the echo area says `Ctrl+Shift+…`; `C-g` quits, a key typed before F6 included (C-x F6 C-g); Esc
-  cancels F6 alone; F6 twice is F6. A click, a paste or a focus change after F6 drops F6 and happens as usual.
+  F6 waits, the echo area says `Ctrl+Shift+…`; `C-g` quits, a key typed before F6 included (C-x F6 C-g); F6 Esc
+  is `C-<escape>` (Switch Tile); F6 twice is F6. A click, a paste or a focus change after F6 drops F6 and happens as
+  usual.
 
 The first time a kind of terminal with the layer connects, one message says so: "This terminal can't send Ctrl+Shift
 keys: use Alt+Shift (or F6 then the key). drgnx doctor has details." It is never a question, and it is said once per
 kind of terminal, ever (`terminal-report.eld` remembers it as `:hinted`). It comes half a second after the window
 opens, and only if the layer is still on then: a kitty has no kitty keyboard protocol for the moment before its answer
-arrives, and gets no message.
+arrives, and gets no message. If F6 is waiting for its key then, the message waits too and comes half a second after
+the key, so `Ctrl+Shift+…` stays in the echo area.
 
 `terminal-report.eld` keeps the 16 terminals set up most recently (one entry per terminal device). It has, for each
 terminal, `:fallback` (the layer is on) and `:fallbacks`: every chord of your
@@ -267,7 +269,9 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-s` | Save As… | `Alt+Shift+S` | `F6 s` |
 | `C-S-t` | Reopen Closed Tab | `Alt+Shift+T` | `F6 t` |
 | `C-S-n` | New Window | `Alt+Shift+N` | `F6 n` |
-| `` C-` `` | Toggle Panel | — | `` F6 ` `` |
+| `C-S-w` | Close Window | `Alt+Shift+W` | `F6 w` |
+| `C-S-u` | View: Output | `Alt+Shift+U` | `F6 u` |
+| `` C-` `` | Toggle Terminal | — | `` F6 ` `` |
 | `C-1` | Focus First Editor Group | — | `F6 1` |
 | `C-2` | Focus Second Editor Group | — | `F6 2` |
 | `C-3` | Focus Third Editor Group | `Alt+Shift+3` | `F6 3` |
@@ -278,7 +282,6 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-b` | Focus Buffers | `Alt+Shift+B` | `F6 b` |
 | `C-{` | Fold | — | `F6 {` |
 | `C-}` | Unfold | — | `F6 }` |
-| `C-S-a` | Select All | `Alt+Shift+A` | `F6 a` |
 | `C-S-z` | Redo | `Alt+Shift+Z` | `F6 z` |
 | `C-/` | Toggle Comment | — | `F6 /` |
 | `C-S-k` | Delete Line | `Alt+Shift+K` | `F6 k` |
@@ -288,16 +291,27 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-SPC` | Show Hover | — | `F6 Space` |
 | `C-.` | Quick Fix | — | `F6 .` |
 | `C-S-m` | Problems | `Alt+Shift+M` | `F6 m` |
+| `C-S-x` | View: Extensions | — | `F6 x` |
 | `C-S-f` | View: Search | `Alt+Shift+F` | `F6 f` |
 | `C-S-o` | Go to Symbol | — | `F6 o` |
-| `C-<tab>` | Recent Buffers | — | `F6 Tab` |
+| `C-<tab>` | Open Previous Editor in Group | — | `F6 Tab` |
+| `C-S-<tab>` | Open Previous Editor in Group (Up) | — | `F6 Shift+Tab` |
 | `C-S-h` | Replace in Files | `Alt+Shift+H` | `F6 h` |
 | `` C-S-` `` | New Terminal | — | `F6 ~` |
 | `C-S-g` | Source Control | `Alt+Shift+G` | `F6 g` |
+| `C-S-d` | Run and Debug | `Alt+Shift+D` | `F6 d` |
+| `C-<escape>` | Switch Tile… | — | `F6 Esc` |
+| `C-S-y` | Debug Console | `Alt+Shift+Y` | `F6 y` |
+| `C-S-c` | Copy (in a terminal) | `Alt+Shift+C` | `F6 c` |
+| `C-S-v` | Paste (in a terminal) | `Alt+Shift+V` | `F6 v` |
 | `C-=` | Zoom In | `Alt+Shift+=` | `F6 =` |
 | `C-+` | Zoom In | — | `F6 +` |
 | `C--` | Zoom Out | — | `F6 -` |
 | `C-0` | Reset Zoom | — | `F6 0` |
+| `C-4` | Fold Level… (after C-k) | — | `F6 4` |
+| `C-5` | Fold Level… (after C-k) | — | `F6 5` |
+| `C-6` | Fold Level… (after C-k) | — | `F6 6` |
+| `C-7` | Fold Level… (after C-k) | — | `F6 7` |
 | `C-!` | Replace This Match (the Replace bar) | — | `F6 !` |
 
 The Replace bar's `S-<return>` (Previous Match) and `C-M-<return>` (Replace All) have no F6 form, since F6 adds Ctrl and
@@ -317,7 +331,9 @@ connect with `TERM=xterm-256color`.
 Inside tmux, drgnx talks to tmux, not to your terminal: tmux decides which keys, copies and focus changes get
 through, and its defaults block most of them. drgnx reads tmux's settings when a terminal window opens (`tmux show`,
 asked of the tmux the window runs in, 1 second at most), works with what tmux allows, and writes the lines you can
-add for the rest into `terminal-report.eld`. **drgnx never writes `~/.tmux.conf`.** Add the
+add for the rest into `terminal-report.eld`. A tmux that does not answer in time (a busy machine) is asked again
+5 seconds later, then less often (10, 20, 40 and 80 s); when it answers, the open window gets its keys, focus and
+copy as if it had answered at once. **drgnx never writes `~/.tmux.conf`.** Add the
 lines you want yourself, then run `tmux source ~/.tmux.conf` and open a new terminal window (settings are read when
 one opens). The lines, in this order, each only if it is missing:
 
@@ -378,7 +394,8 @@ terminal window on one daemon, a transient in one leaves the other alone.
 - **Completion** (corfu, when you have it) draws its popup (corfu, when you have it) as a floating child frame of the
   terminal window, as in a graphical window. A child frame with a border draws it with box-drawing characters
   (`┌ ─ ┐ │ └ ┘`) while every terminal on the daemon writes UTF-8, and with `+ - |` as soon as one does not. The border
-  glyphs are one shared table, so the choice follows the terminals that are connected.
+  glyphs are one shared table, so the choice follows the terminals that are connected. The border between side-by-side
+  windows follows the same choice (`│`, or `|`).
 - **A terminal that does not write UTF-8** (a window started with `LANG=C`) cannot show `×`, `●`, `›`, `▾`, `▸` or
   `│`. drgnx draws ASCII marks in their place in that window only (`x`, `*`, `>`, `v`, `>`, `|`), in the tab line,
   the breadcrumb, the Explorer and the docks' headings, instead of Emacs's `\u00D7` escapes. A UTF-8 terminal is not
@@ -437,6 +454,16 @@ fit a dock never shows an error. The two sizes are the settings `drgnx-tty-layou
 `drgnx-tty-layout-lines` (30) (`M-x customize-variable`). A window opened for one file (`emacsclient -t FILE`) shows
 the editor only and is left alone.
 
+### Tiles in a terminal
+
+The workbench's tiles work in a terminal as in a graphical window. The sidebar, the panel and the right side are
+tiles, and you can split the editor beside them. A tile's tab row starts with its grip (`⠿`, `::` where the terminal
+does not write UTF-8). Drag the grip with the mouse onto another tile's edge to put the tile there, or onto its middle
+to stack the two. **Full-Size Tile** shows one tile alone and brings every tile back where it was. The status bar is
+the mode line of the editor you used last, and tool tiles have none. When the terminal shrinks, the tiles get smaller
+and none closes; they come back to their sizes when it grows. Each tile keeps at least 12 columns and 3 lines while
+there is room for that.
+
 ## Clipboard
 
 Copying in drgnx puts the text on your computer's clipboard through OSC 52 when the terminal takes it (the table's
@@ -485,8 +512,9 @@ terminal; on 256 colours it is approximated, on 8 colours only the basic ones re
   fixes are in the SSH section above.
 - **Nothing is told by colour alone.** On 8 colours drgnx still tells states apart: git status by its letter at the
   edge of an Explorer row (`M` changed, `A` added, `U` untracked, `D` deleted, `C` conflict; ignored files, which have
-  no letter, are italic), a review finding by its
-  severity word, the shown tab by its weight or inverse video, and Work items by their glyph and words. Each of
+  no letter, are italic on a terminal, and an `I` on the Linux console, which draws no italic), a review finding by its
+  severity word, the shown tab in inverse video and a shown tab of another group underlined (on a terminal frame only; a
+  graphical window keeps the look's colour cue), and Work items by their glyph and words. Each of
   these faces is checked on 8, 256 and 24-bit terminals: none draws its text in its own background colour.
   `drgnx-tty-frames-state-faces` lists them with the cue each relies on.
 

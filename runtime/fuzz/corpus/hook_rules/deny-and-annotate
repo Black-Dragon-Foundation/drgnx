@@ -1,0 +1,1 @@
+[{"id": "no-rm", "point": "before-tool", "tool-kinds": ["execute"], "command": "^rm ", "verdict": "deny", "reason": "no rm"}, {"point": "after-edit", "paths": ["**/*.rs"], "verdict": "annotate", "reason": "format it"}]

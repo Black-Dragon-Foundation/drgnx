@@ -12,6 +12,19 @@ pub struct SpendSum {
     pub requests: u64,
 }
 
+/// What the gateway charged for the jobs filed under plan scope SCOPE.  A job's scope is its plan when that already
+/// starts with `plan:`, `plan:` and its plan otherwise, `plan:` and its own id when it has none (the hub's
+/// `plan_scope`).
+pub fn plan_usd(conn: &Tx, scope: &str) -> Result<f64, CoordError> {
+    Ok(conn.query_row(
+        "select coalesce(sum(cost), 0.0) from spend where job in (select id from job where \
+         case when plan like 'plan:%' then plan when plan is not null then 'plan:' || plan \
+         else 'plan:' || id end = ?1)",
+        [scope],
+        |r| r.get(0),
+    )?)
+}
+
 /// The requests of JOB, TASK and AGENT (each when given; none: every request) summed.
 pub fn spend_sum(
     conn: &Tx,

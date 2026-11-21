@@ -20,6 +20,7 @@ fn profile(command: &str, ai: Option<&str>) -> AgentProfile {
         doc: None,
         provider: None,
         job_safe: false,
+        acp_v2: None,
     }
 }
 
@@ -119,6 +120,16 @@ fn provider_hosts_union() {
     for p in [profile("claude", None), profile("/bin/sh", None)] {
         assert!(provider_hosts(&p, &providers, &hosts(), NetCell::Open).is_empty());
     }
+}
+
+/// Pattern D. A session's proxy pins the names the setting pins (`drgnx-sandbox-proxy-pinned-addresses`).
+#[test]
+fn a_sessions_pins_are_the_settings() {
+    let v = crate::settings::RuntimeValues {
+        sandbox_proxy_pins: vec![("registry.corp".into(), "10.0.0.5".parse().unwrap())],
+        ..Default::default()
+    };
+    assert_eq!(pins(&v), v.sandbox_proxy_pins);
 }
 
 #[test]

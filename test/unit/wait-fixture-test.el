@@ -117,6 +117,21 @@ is signalled) and the root frame stubbed; the variable `calls' counts the sample
       (let ((d (drgnx-wait-test--fail (lambda () (drgnx-test-wait-presented :secs 0.1)))))
         (should (equal (car (plist-get d :waited-for)) "a presented frame"))))))
 
+(defvar drgnx-test--deleted-frames)
+
+(ert-deftest drgnx-test-wait-presented/a-dead-frame-fails-at-once-and-says-who-deleted-it ()
+  ;; a frame deleted before or during the wait never presents: the wait fails at its first look, naming the frame
+  ;; and the callers that deleted it, instead of sampling a dead frame until the deadline
+  (let ((dead nil)
+        (drgnx-test--deleted-frames (list (cons 'root '(drgnx-look-echo-swap drgnx-timer--fire)))))
+    (drgnx-wait-test--with-frames '("a")
+      (cl-letf (((symbol-function 'drgnx-test--frame-dead-p) (lambda (f) (and dead (eq f 'root)))))
+        (setq dead t)
+        (let ((d (drgnx-wait-test--fail (lambda () (drgnx-test-wait-presented :secs 5)))))
+          (should (eq (plist-get d :dead-frame) 'root))
+          (should (equal (plist-get d :deleted-by) '(drgnx-look-echo-swap drgnx-timer--fire)))
+          (should (= calls 0)))))))
+
 (ert-deftest drgnx-test-wait-presented/no-paint-at-all-fails-and-says-why ()
   (drgnx-wait-test--with-frames '(error)
     (let ((d (drgnx-wait-test--fail (lambda () (drgnx-test-wait-presented :secs 0.1)))))
@@ -138,6 +153,18 @@ is signalled) and the root frame stubbed; the variable `calls' counts the sample
         (drgnx-test-wait-presented)
         (should (equal drgnx-test--settled-counts '(6 . 6)))
         (should (>= calls 4))))))
+
+(ert-deftest drgnx-test-wait-presented/a-packet-merged-into-a-stuck-one-is-not-presented ()
+  ;; KWin with no render device (the counters it gave): one commit, then every packet merges into one still waiting.
+  ;; A change adds a packet and a merge at once, so the commits owed do not grow; the presenter's own count of the
+  ;; requests gone out (:presented) stays behind the newest (:published), and the wait must not end on it.
+  (let ((stats '(:packets 11 :superseded 9 :commits 1 :bare-commits 2 :published 15 :presented 5)))
+    (drgnx-wait-test--with-frames '("a")
+      (cl-letf (((symbol-function 'nhwl-presenter-stats) (lambda (_frame) stats)))
+        (setq drgnx-test--settled-counts (drgnx-test--presenter-counts 'root))   ; the last wait's settle
+        (setq stats '(:packets 12 :superseded 10 :commits 1 :bare-commits 2 :published 16 :presented 5))   ; a change
+        (let ((d (drgnx-wait-test--fail (lambda () (drgnx-test-wait-presented :secs 0.1)))))
+          (should (equal (car (plist-get d :waited-for)) "a presented frame")))))))
 
 (ert-deftest drgnx-test-pause/runs-processes-and-a-timer-chain-for-its-window ()
   ;; A test that asserts something does NOT happen gives it a short window: the whole window, every link of a chain

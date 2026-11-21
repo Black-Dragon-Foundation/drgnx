@@ -1,0 +1,13 @@
+{"scenario": "git/letters-error", "requires": ["v1", "test-hooks"], "doc": "git/letters of a folder git cannot read the status of (no repository) sends the event git-letters-error with git's complaint instead of saying nothing; a root that is no folder is an invalid-params error."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "g", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/plain"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "git/letters", "params": {"view": "g", "root": "$ROOT/plain"}}}
+{"do": "expect", "conn": "e", "json": {"event": "git-letters-error", "data": {"view": "g", "root": "$ROOT/plain", "error": "$string"}}, "within_ms": 20000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "git/letters", "params": {"view": "g", "root": "$ROOT/missing"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "error": {"code": "invalid-params", "path": "root"}}}

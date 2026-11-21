@@ -1,0 +1,19 @@
+{"scenario": "work/machines-expire-after-ttl", "requires": ["v1", "test-hooks"], "doc": "Pattern B, on the hub's virtual clock. A machine reported for 2 s is still listed 1 s later, gone 2.5 s after the report with a machines-changed to a subscriber; local stays; reporting again brings the machine back. (Each advance is short: a hub-wide timer past about 3 s of one advance holds `__test_advance` for 5 s of real time.)"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "machines/report", "params": {"machine": "laptop", "ttl": 2, "slots": [{"id": "l1", "kind": "test"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"machine": "laptop"}}}
+{"do": "expect", "conn": "c", "json": {"event": "machines-changed", "data": {"machines": [{"machine": "local"}, {"machine": "laptop"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "__test_advance", "params": {"ms": 1000}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "machines/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"machines": [{"machine": "local"}, {"machine": "laptop"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "__test_advance", "params": {"ms": 1500}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"event": "machines-changed", "data": {"machines": [{"machine": "local"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "machines/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"machines": [{"machine": "local"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "machines/report", "params": {"machine": "laptop", "ttl": 2}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"machine": "laptop"}}}

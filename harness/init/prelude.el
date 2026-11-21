@@ -182,7 +182,7 @@ DRGNX_UI_SESSION_SIZE.  GTK 3 gets a scale from the compositor after the frame e
   ;; drgnx's no-prompt guard may count them as such.
   (drgnx-run-ert-refuse-idle-prompts)   ; a question nobody answers fails its test, not the session
   (let ((drgnx-jank-guard--timer-fn nil) (drgnx-guard--timer-fn nil))
-    (kill-emacs (if (drgnx-run-ert (getenv "DRGNX_UI_TEST") (getenv "DRGNX_UI_RESULTS")) 0 1))))
+    (kill-emacs (if (drgnx-run-ert (or (getenv "DRGNX_UI_TEST_FILE") (getenv "DRGNX_UI_TEST")) (getenv "DRGNX_UI_RESULTS")) 0 1))))
 
 (add-hook 'window-setup-hook #'drgnx-ui--late 90)
 

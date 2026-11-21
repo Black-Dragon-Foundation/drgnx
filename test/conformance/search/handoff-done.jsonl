@@ -1,0 +1,20 @@
+{"scenario": "search/handoff-done", "requires": ["v1", "test-hooks"], "doc": "Ask an Agent closes the loop: a search's matches handed to a new pair (a mock agent in the checkout, Autonomous) are held in Edit Results while it works; it edits them (read_file, write_file to disk), and search-handoff-state reaches done with every match done and none left; then the file holds the agent's text, and search/edit-doc offers no line of it (it changed on disk since the search) and holds none."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/proj && cd $ROOT/proj && printf 'one needle\\nctx\\ntwo needle\\n' > a.txt && git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}}, "context": false}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": "$capture:run", "files": 1, "matches": 2}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/handoff", "params": {"view": "s", "instruction": "Rename needle to pin.\ncall:read_file {\"path\": \"$ROOT/proj/a.txt\"}\ncall:write_file {\"path\": \"$ROOT/proj/a.txt\", \"content\": \"one pin\\nctx\\ntwo pin\\n\"}", "to": {"pair": {"profile": "mock-claude"}}}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"handoff": "$capture:h", "session": "$capture:pid", "ids": "$any", "sent": 2, "more": 0}}, "within_ms": 10000}
+{"do": "poll", "conn": "e", "json": {"id": 5, "method": "agents/get", "params": {"id": "$pid"}}, "expect": {"id": 5, "result": {"session": {"id": "$pid", "status": "idle"}, "entries": {"$contains": [{"type": "agent", "text": "$string"}]}}}, "within_ms": 20000, "every_ms": 200}
+{"do": "poll", "conn": "e", "json": {"id": 9, "method": "history/blame", "params": {"path": "a.txt", "worktree_root": "$ROOT/proj", "start": 0, "end": 7}}, "expect": {"id": 9, "result": {"spans": {"$contains": [{"author": {"kind": "agent", "session": "$pid"}}]}}}, "within_ms": 30000, "every_ms": 200}
+{"do": "poll", "conn": "e", "json": {"id": 8, "method": "history/op/hunks", "params": {"worktree": "$ROOT/proj", "session": "$pid"}}, "expect": {"id": 8, "result": {"hunks": {"$contains": [{"path": "a.txt"}]}}}, "within_ms": 60000, "every_ms": 500}
+{"do": "poll", "conn": "e", "json": {"id": 7, "method": "search/handoff-state", "params": {"handoff": "$h"}}, "expect": {"id": 7, "result": {"handoff": "$h", "view": "s", "session": "$pid", "phase": "done", "done": ["m:1:0", "m:1:1"], "left": []}}, "within_ms": 20000, "every_ms": 200}
+{"do": "run", "bin": "/bin/cat", "args": ["$ROOT/proj/a.txt"], "expect_code": 0, "expect_stdout": "one pin\nctx\ntwo pin\n"}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/edit-doc", "params": {"view": "s"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"lines": [], "total": 0, "skipped": [{"path": "$ROOT/proj/a.txt", "why": "changed on disk since the search"}]}}, "within_ms": 10000}

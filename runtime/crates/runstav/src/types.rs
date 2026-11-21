@@ -538,6 +538,94 @@ impl JsonSchema for ProviderKeys {
     }
 }
 
+named_string!(
+    /// A job key's name, which is also the variable the job reads it from: `[A-Za-z_][A-Za-z0-9_]*`, at most 128.
+    KeyName, max: 128, pattern: Some("^[A-Za-z_][A-Za-z0-9_]*$"),
+    ok: |s| {
+        let mut cs = s.chars();
+        cs.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    },
+    what: "a key name: ASCII letters, digits and _ (not a digit first), at most 128"
+);
+
+/// A job key's name → its value: at most 32, each at most 64 KiB with no NUL (the job helper's limits).  Kept secret
+/// as [`ProviderKeys`] is: no `Debug`; the hub keeps them in memory and sends each only in a runner's `key` frame.
+pub struct RunnerKeys(BTreeMap<KeyName, SecretString>);
+
+impl RunnerKeys {
+    pub const MAX_KEYS: usize = 32;
+    pub const MAX_KEY: usize = 64 << 10;
+
+    /// The names (not the values).
+    pub fn names(&self) -> impl Iterator<Item = &KeyName> {
+        self.0.keys()
+    }
+
+    /// Name → value, taken.
+    pub fn into_pairs(self) -> impl Iterator<Item = (String, SecretString)> {
+        self.0.into_iter().map(|(n, v)| (n.as_str().to_owned(), v))
+    }
+}
+
+impl Serialize for RunnerKeys {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut m = s.serialize_map(Some(self.0.len()))?;
+        for (k, v) in &self.0 {
+            m.serialize_entry(k, v.expose_secret())?;
+        }
+        m.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RunnerKeys {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = RunnerKeys;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("an object of key name → value")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<RunnerKeys, A::Error> {
+                let mut out = BTreeMap::new();
+                while let Some(k) = a.next_key::<KeyName>()? {
+                    let v: String = a.next_value()?;
+                    // never quoted back: the refusal names the key, not the value
+                    if v.len() > RunnerKeys::MAX_KEY || v.contains('\0') {
+                        return Err(de::Error::custom(format!(
+                            "key {}: at most 64 KiB, with no NUL",
+                            k.as_str()
+                        )));
+                    }
+                    if v.is_empty() {
+                        continue;
+                    }
+                    if out.insert(k, SecretString::from(v)).is_some() {
+                        return Err(de::Error::custom("a key is named twice"));
+                    }
+                    if out.len() > RunnerKeys::MAX_KEYS {
+                        return Err(de::Error::custom("at most 32 keys"));
+                    }
+                }
+                Ok(RunnerKeys(out))
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
+impl JsonSchema for RunnerKeys {
+    fn schema_name() -> Cow<'static, str> {
+        "RunnerKeys".into()
+    }
+    fn json_schema(g: &mut SchemaGenerator) -> Schema {
+        let name = g.subschema_for::<KeyName>();
+        json_schema!({"type": "object", "maxProperties": 32, "propertyNames": name,
+                      "additionalProperties": {"type": "string", "maxLength": 65536},
+                      "description": "key name → value"})
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

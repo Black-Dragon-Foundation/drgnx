@@ -1,60 +1,71 @@
-;;; mod-layouts-test.el --- batch tests: layouts (Agent, Editor, Zen, Browser and your own) -*- lexical-binding: t -*-
+;;; mod-layouts-test.el --- batch tests: layouts on the grid (Agent, Editor, Zen, Browser and your own) -*- lexical-binding: t -*-
 ;; test-class: det
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/grid-fixture" drgnx-dir) nil t)
 (require 'drgnx)
 (require 'drgnx-wb)
 (require 'drgnx-area)
 (require 'drgnx-groups)
-(load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-agent-panel-list" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-agent-panel" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(drgnx-test-modules-preload '(tools/work-space))     ; layout Work follows a shown Work lens
+(declare-function drgnx-work-space--follow-layout "drgnx-work-space" (frame))
+(declare-function drgnx-work-flow-mode "drgnx-work-flow")
 
 (defconst drgnx-layouts-test--buffers
   '("*drgnx-layouts-explorer*" "*drgnx-layouts-code*" "*drgnx-layouts-a*" "*drgnx-layouts-b*" "*drgnx-layouts-proc*"
-    "*drgnx Agents*" "*agent: alpha*" "*agent: beta*" "*drgnx: no agent*" "*drgnx-layouts-output*"))
+    "*drgnx Agents*" "*drgnx agent: a1*" "*drgnx agent: b1*" "*drgnx: no agent*" "*drgnx-layouts-output*"))
 
 (defmacro drgnx-layouts-test--with (&rest body)
-  "BODY in a 200×60 frame with one editor window on *drgnx-layouts-code*, an Explorer section, the right dock's
-Agents tab, no agent session, no layout state and a temp config dir (layouts.eld goes there)."
+  "BODY in a 200×60 frame with the grid on, one editor on *drgnx-layouts-code*, an Explorer section, the right dock's
+Agents tab, the pane kind `agent', no agent session, no layout state and a temp config dir (layouts.eld goes there)
+and state dir (the project's layouts)."
   (declare (indent 0))
   `(drgnx-test-with-state
      (let* ((dir (make-temp-file "drgnx-layouts" t))
-            (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
+            (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
+                                         process-environment))
             (drgnx-config--defs (copy-hash-table drgnx-config--defs))      ; layouts.eld's definition is this test's own
             (drgnx-config--state (copy-hash-table drgnx-config--state))
             (drgnx-config--notified (copy-hash-table drgnx-config--notified))
             (drgnx-wb--sections nil)
             (drgnx-wb--areas (copy-tree drgnx-wb--areas))
             (drgnx-agents--sessions nil)
-            (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
-            (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))     ; no job directory is read
+            (drgnx-agent-panel-list--last (make-hash-table :test #'eq :weakness 'key))
             (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
             (size (cons (frame-width) (frame-height))))
        (drgnx-layouts--define-config)
        (set-frame-size nil 200 60)
-       (delete-other-windows)
-       (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px
+       (drgnx-grid-test--reset)
+       (clrhash drgnx-layouts--project-ids)
+       (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px drgnx-layouts-project
                                   drgnx-layouts-state drgnx-layouts-current drgnx-layouts-previous drgnx-layouts-zen-return))
          (set-frame-parameter nil p nil))
        (drgnx-wb-define-section 'files :slot 0 :title "EXPLORER"
                                 :buffer (lambda () (get-buffer-create "*drgnx-layouts-explorer*")))
-       (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agents-ui-list-buffer)
+       (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agent-panel-list-buffer)
+       (drgnx-layouts-define-pane 'agent #'drgnx-layouts--fill-agent "Agent")
        (drgnx-rules-mode 1)
+       (drgnx-grid-mode 1)
        (switch-to-buffer (get-buffer-create "*drgnx-layouts-code*"))
        (set-window-parameter nil 'drgnx-tabs nil)
-       (unwind-protect (progn ,@body)
+       (unwind-protect (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) 1))) ,@body)  ; a panel asks the hub, which is not there
+         (drgnx-timer-cancel '(layouts-save . "global"))
          (remove-hook 'window-size-change-functions #'drgnx-layouts--zen-resize)
-         (drgnx-rules-mode -1)
          (drgnx-wb-hide-sidebar)
          (drgnx-wb-area-hide 'panel)
          (drgnx-wb-area-hide 'right)
-         (delete-other-windows)
+         (drgnx-grid-mode -1)
+         (drgnx-rules-mode -1)
+         (drgnx-pane-undefine-kind 'agent)
+         (drgnx-grid-test--reset)
          (set-window-margins nil 0 0)
          (set-window-parameter nil 'drgnx-tabs nil)
-         (set-window-parameter nil 'drgnx-layouts-pane nil)
-         (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px
+         (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px drgnx-layouts-project
                                     drgnx-layouts-state drgnx-layouts-current drgnx-layouts-previous drgnx-layouts-zen-return))
            (set-frame-parameter nil p nil))
          (set-frame-size nil (car size) (cdr size))
@@ -67,6 +78,10 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
 
 (defun drgnx-layouts-test--code () (get-buffer "*drgnx-layouts-code*"))
 
+(defun drgnx-layouts-test--agent-tile ()
+  "The tile of the agent's chat (kind `agent'), or nil."
+  (seq-find (lambda (w) (memq 'agent (window-parameter w 'drgnx-pane-stack))) (drgnx-grid-tiles)))
+
 (defun drgnx-layouts-test--margins (w)
   (let ((m (window-margins w))) (list (or (car m) 0) (or (cdr m) 0))))
 
@@ -77,25 +92,25 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
 
 (ert-deftest drgnx-layouts/agent-arranges-like-zed ()
   (drgnx-layouts-test--with
-    (let ((alpha (drgnx-agents--make :id "a1" :name "alpha" :status 'idle))
-          (beta (drgnx-agents--make :id "b1" :name "beta" :status 'idle)))
+    (let ((alpha (drgnx-agents--make :id "a1" :remote "a1" :name "alpha" :status 'idle))
+          (beta (drgnx-agents--make :id "b1" :remote "b1" :name "beta" :status 'idle)))
       (setq drgnx-agents--sessions (list beta alpha))           ; beta is newer, alpha acted last
-      (puthash alpha (float-time) drgnx-agents-ui--last)
-      (puthash beta (- (float-time) 600) drgnx-agents-ui--last)
+      (puthash alpha (float-time) drgnx-agent-panel-list--last)
+      (puthash beta (- (float-time) 600) drgnx-agent-panel-list--last)
       (drgnx-wb-area-show 'panel 'output (drgnx-layouts-test--output))
       (drgnx-layouts-apply 'agent)
       (should (eq (drgnx-layouts-current) 'agent))
       ;; the file tree on the left
       (should (drgnx-wb-sidebar-showing-p))
       (should (eq (drgnx-wb-sidebar-view) 'explorer))
-      ;; one editor and the agent's chat side by side
-      (let ((groups (drgnx-groups-list)))
-        (should (= 2 (length groups)))
+      ;; one editor and the agent's chat tile side by side
+      (let ((groups (drgnx-groups-list)) (chat (drgnx-layouts-test--agent-tile)))
+        (should (= 1 (length groups)))
         (should (eq (window-buffer (car groups)) (drgnx-layouts-test--code)))
-        (should (equal (buffer-name (window-buffer (cadr groups))) "*agent: alpha*"))
-        (should (eq (buffer-local-value 'major-mode (window-buffer (cadr groups))) 'drgnx-agents-transcript-mode))
-        (should (< (window-left-column (car groups)) (window-left-column (cadr groups))))
-        (should (= (window-top-line (car groups)) (window-top-line (cadr groups))))
+        (should (equal (buffer-name (window-buffer chat)) "*drgnx agent: a1*"))
+        (should (eq (buffer-local-value 'major-mode (window-buffer chat)) 'drgnx-agent-panel-mode))
+        (should (< (window-left-column (car groups)) (window-left-column chat)))
+        (should (= (window-top-line (car groups)) (window-top-line chat)))
         (should (eq (selected-window) (car groups))))             ; focus stays in the editor
       ;; the agents list, narrow, on the right; no bottom panel until asked
       (let ((right (drgnx-wb-area-window 'right)))
@@ -109,14 +124,14 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
   (drgnx-layouts-test--with
     (setq drgnx-agents--sessions (list (drgnx-agents--make :id "x" :name "gone" :status 'exited)))
     (drgnx-layouts-apply 'agent)
-    (let ((pane (cadr (drgnx-groups-list))))
+    (let ((pane (drgnx-layouts-test--agent-tile)))
       (should (window-live-p pane))
       (with-current-buffer (window-buffer pane)
         (should (string-search "No agent yet — Agents: New" (buffer-string)))))))
 
 (ert-deftest drgnx-layouts/switching-back-restores ()
   (drgnx-layouts-test--with
-    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle)))
+    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :remote "a1" :name "alpha" :status 'idle)))
     (drgnx-layouts-apply 'agent)
     ;; the user changes the Agent arrangement: a wider right dock, the panel on Output
     (let ((window-resize-pixelwise t))
@@ -139,8 +154,8 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
       (should (= right-px (window-pixel-width (drgnx-wb-area-window 'right))))
       (should (window-live-p (drgnx-wb-area-window 'panel)))
       (should (drgnx-wb-sidebar-showing-p))
-      (should (= 2 (length (drgnx-groups-list))))
-      (should (equal (buffer-name (window-buffer (cadr (drgnx-groups-list)))) "*agent: alpha*"))
+      (should (= 1 (length (drgnx-groups-list))))
+      (should (equal (buffer-name (window-buffer (drgnx-layouts-test--agent-tile))) "*drgnx agent: a1*"))
       (should (drgnx-signal-editor-window-p (selected-window)))
       (drgnx-layouts-apply 'editor)
       (should-not (drgnx-wb-sidebar-showing-p))
@@ -162,7 +177,8 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
 (ert-deftest drgnx-layouts/switching-loses-nothing ()
   :tags '(:cond)
   (drgnx-layouts-test--with
-    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle)))
+    (setq drgnx-layouts (assq-delete-all 'work-and-code (copy-alist drgnx-layouts)))   ; two windows: the GUI rows
+    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :remote "a1" :name "alpha" :status 'idle)))
     (let* ((a (get-buffer-create "*drgnx-layouts-a*")) (b (get-buffer-create "*drgnx-layouts-b*"))
            (code (drgnx-layouts-test--code))
            (proc (make-process :name "drgnx-layouts-sleep" :buffer (get-buffer-create "*drgnx-layouts-proc*")
@@ -181,11 +197,11 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
           (should (seq-every-p #'buffer-live-p buffers))
           (should (process-live-p proc)))
         (let ((groups (drgnx-groups-list)))
-          (should (= 2 (length groups)))
+          (should (= 1 (length groups)))
           (should (equal (window-parameter (car groups) 'drgnx-tabs) (list a code b)))
           (should (eq (window-buffer (car groups)) code))
           (should (= pt (window-point (car groups))))
-          (should (equal (buffer-name (window-buffer (cadr groups))) "*agent: alpha*")))
+          (should (equal (buffer-name (window-buffer (drgnx-layouts-test--agent-tile))) "*drgnx agent: a1*")))
         (should (eq (window-buffer (drgnx-wb-area-window 'panel)) (process-buffer proc)))
         ;; one key cycles every layout and comes back
         (let ((names (drgnx-layouts-names)) (seen nil))
@@ -203,7 +219,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
     (should (= 2 (length (drgnx-groups-list))))
     (drgnx-layouts-zen)
     (should (eq (drgnx-layouts-current) 'zen))
-    (should (= 1 (length (window-list nil 'nomini))))
+    (should (= 1 (length (drgnx-grid-tiles))))
     (should-not (drgnx-wb-sidebar-showing-p))
     (should-not (drgnx-wb-area-window 'panel))
     (should-not (drgnx-wb-area-window 'right))
@@ -235,7 +251,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
       (should-not (drgnx-layouts-current))
       (drgnx-layouts-zen)
       (should (eq (drgnx-layouts-current) 'zen))
-      (should (= 1 (length (window-list nil 'nomini))))
+      (should (= 1 (length (drgnx-grid-tiles))))
       (drgnx-layouts-zen)
       (should-not (drgnx-layouts-current))
       (let ((groups (drgnx-groups-list)))
@@ -249,23 +265,52 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
       (should-not (drgnx-wb-sidebar-showing-p))
       (should-not (memq #'drgnx-layouts--zen-resize window-size-change-functions)))))
 
+(ert-deftest drgnx-layouts/a-shown-work-lens-keeps-the-explorer-and-a-file-opened-shows ()
+  ;; tools/work-space: a Work lens shown in an editor window keeps the layout, the sidebar and the groups, and shows
+  ;; its Detail in the right dock; a file opened over it shows in that window, and the Detail goes with the lens
+  (drgnx-layouts-test--with
+    (drgnx-wb-define-tab 'right 'work-detail :title "Detail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-a*")))
+    (drgnx-wb-define-tab 'panel 'work-trail :title "Trail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-b*")))
+    (drgnx-wb-show-sidebar)
+    (let ((lens (get-buffer-create "*drgnx-layouts-proc*")) (frame (selected-frame)) (code (drgnx-layouts-test--code)))
+      (with-current-buffer lens (drgnx-work-flow-mode))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-pane-show)
+                     (lambda (kind &rest _) (drgnx-wb-area-show 'right kind))))
+            (drgnx-work-space--follow-layout frame)
+            (should-not (drgnx-wb-area-window 'right))
+            (set-window-buffer (drgnx-wb-editor-window) lens)
+            (drgnx-work-space--follow-layout frame)
+            (should-not (drgnx-layouts-current))
+            (should (drgnx-wb-sidebar-showing-p))
+            (should (eq (window-buffer (drgnx-wb-editor-window)) lens))
+            (should (eq (drgnx-wb-area-tab 'right) 'work-detail))
+            (should (drgnx-wb-area-window 'right))
+            ;; Ctrl+P over it: the file is in that window and stays there
+            (set-window-buffer (drgnx-wb-editor-window) code)
+            (drgnx-work-space--follow-layout frame)
+            (should (eq (window-buffer (drgnx-wb-editor-window)) code))
+            (should (drgnx-wb-sidebar-showing-p))
+            (should-not (drgnx-wb-area-window 'right)))
+        (set-frame-parameter frame 'drgnx-work-space-shown nil)))))
+
 (ert-deftest drgnx-layouts/agent-zen-editor-builds-editor-from-before-zen ()
   ;; Editor's first visit, just out of Zen: built from the arrangement Zen was entered from, not Zen's one window.
   (drgnx-layouts-test--with
-    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle)))
+    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :remote "a1" :name "alpha" :status 'idle)))
     (let ((a (get-buffer-create "*drgnx-layouts-a*")) (code (drgnx-layouts-test--code)))
       (drgnx-layouts-apply 'agent)
       (set-window-parameter (car (drgnx-groups-list)) 'drgnx-tabs (list a code))
       (drgnx-groups-split-right)                              ; a group of the user's, besides the chat
       (select-window (car (drgnx-groups-list)))
-      (should (= 3 (length (drgnx-groups-list))))
+      (should (= 2 (length (drgnx-groups-list))))
       (drgnx-wb-area-show 'panel 'output (drgnx-layouts-test--output))
       (drgnx-layouts-zen)
       (drgnx-layouts-apply 'editor)
       (let ((groups (drgnx-groups-list)))
-        (should (= 2 (length groups)))                        ; the chat pane gone, the user's group kept
+        (should (= 2 (length groups)))                        ; the chat tile gone, the user's editor kept
         (should (equal (window-parameter (car groups) 'drgnx-tabs) (list a code)))
-        (should-not (seq-some (lambda (w) (window-parameter w 'drgnx-layouts-pane)) groups)))
+        (should-not (drgnx-layouts-test--agent-tile)))
       (should (window-live-p (drgnx-wb-area-window 'panel)))  ; Editor keeps the panel as it was before Zen
       (should (drgnx-wb-sidebar-showing-p)))))
 
@@ -275,17 +320,19 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
     (drgnx-wb-hide-sidebar)
     (drgnx-wb-area-show 'panel 'output (drgnx-layouts-test--output))
     (drgnx-groups-split-right)
-    (drgnx-layouts-save "review")
-    (should (eq (drgnx-layouts-current) 'review))
-    (should (memq 'review (drgnx-layouts-names)))
-    (let ((saved (alist-get 'review (with-temp-buffer
-                                      (insert-file-contents (expand-file-name "layouts.eld" (drgnx-user-dir)))
-                                      (read (current-buffer))))))
-      (should (null (plist-get saved :left)))
-      (should (eq (plist-get saved :panel) 'output))
-      (should (null (plist-get saved :right))))
+    (drgnx-layouts-save "mine")
+    (should (eq (drgnx-layouts-current) 'mine))
+    (should (memq 'mine (drgnx-layouts-names)))
+    (let* ((saved (alist-get 'mine (with-temp-buffer
+                                     (insert-file-contents (expand-file-name "layouts.eld" (drgnx-user-dir)))
+                                     (read (current-buffer)))))
+           (docks (mapcar (lambda (l) (plist-get (cdr l) :dock)) (drgnx-grid-tree-leaves (plist-get saved :tree)))))
+      (should (drgnx-grid-valid-tree-p (plist-get saved :tree)))      ; the grid, as data
+      (should-not (memq 'left docks))
+      (should (memq 'bottom docks))
+      (should-not (memq 'right docks)))
     (drgnx-layouts-apply 'agent)
-    (drgnx-layouts-apply 'review)
+    (drgnx-layouts-apply 'mine)
     (should-not (drgnx-wb-sidebar-showing-p))
     (should (eq (drgnx-wb-area-tab 'panel) 'output))
     (should (window-live-p (drgnx-wb-area-window 'panel)))
@@ -293,10 +340,10 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
     (should (= 2 (length (drgnx-groups-list))))
     ;; a new session: no remembered arrangement, the file builds it
     (drgnx-wb-area-hide 'panel)
-    (delete-other-windows)
+    (drgnx-grid-test--reset)
     (set-frame-parameter nil 'drgnx-layouts-state nil)
     (set-frame-parameter nil 'drgnx-layouts-current nil)
-    (drgnx-layouts-apply 'review)
+    (drgnx-layouts-apply 'mine)
     (should-not (drgnx-wb-sidebar-showing-p))
     (should (window-live-p (drgnx-wb-area-window 'panel)))
     (should (= 2 (length (drgnx-groups-list))))
@@ -310,16 +357,16 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
     (should (eq (drgnx-layouts-current) 'browser))
     (should-not (drgnx-wb-sidebar-showing-p))
     (should-not (drgnx-wb-area-window 'right))
-    (should (= 2 (length (drgnx-groups-list))))))       ; until Task 6's shape: the groups as they are
+    (should (= 2 (length (drgnx-groups-list))))))       ; no browser shape (its module is off): the editors as they are
 
-;;;; Shapes and pane fillers: defined through the API, removed by the module's undo
+;;;; Shapes and panes: defined through the API, removed by the module's undo
 
 (defmacro drgnx-layouts-shape-test--as-module (&rest body)
   "BODY as the setup of module `test/shape' (its registrations record their undos), then the undone stack's
-problems.  The shape and filler registries are restored afterwards."
+problems.  The shape and pane kind registries are restored afterwards."
   (declare (indent 0))
   `(let ((drgnx-layouts-shapes (copy-sequence drgnx-layouts-shapes))
-         (drgnx-layouts-pane-fillers (copy-sequence drgnx-layouts-pane-fillers))
+         (drgnx-pane--kinds (copy-sequence drgnx-pane--kinds))
          (drgnx-modules--stacks nil))
      (let ((drgnx-modules--current 'test/shape) (drgnx-modules--setup-load load-file-name))
        ,@body)))
@@ -359,7 +406,7 @@ problems.  The shape and filler registries are restored afterwards."
   (drgnx-layouts-test--with
     (drgnx-layouts-shape-test--as-module
       (let ((calls 0))
-        (drgnx-layouts-define-shape 'editor+browser (lambda (_editor) (cl-incf calls)))
+        (drgnx-layouts-define-shape 'editor+browser (lambda (editor &rest _) (cl-incf calls) editor))
         (drgnx-layouts-apply 'browser)
         (should (= calls 1))
         (drgnx-layouts-shape-test--teardown)
@@ -368,44 +415,46 @@ problems.  The shape and filler registries are restored afterwards."
         (should (eq (drgnx-layouts-current) 'browser))))))   ; the layout, its intent, stays
 
 (ert-deftest drgnx-layouts-shape/undefine-pane-keeps-shown-windows ()
+  ;; a pane kind's tile stays when the kind goes: it shows its placeholder, and fills in place when defined again
   (drgnx-layouts-test--with
     (drgnx-layouts-shape-test--as-module
-      (let* ((editor (selected-window)) (pane (drgnx-groups--split 'right)) (filled nil))
-        (drgnx-layouts--mark-pane (cons pane 'test-kind))
-        (drgnx-layouts-define-pane 'test-kind (lambda (w) (push w filled)))
-        (should (equal filled (list pane)))         ; a pane already shown is filled when the kind is defined
-        (should (alist-get 'test-kind drgnx-layouts-pane-fillers))
-        (drgnx-layouts-undefine-pane 'test-kind)
-        (should-not (assq 'test-kind drgnx-layouts-pane-fillers))
-        (should (alist-get 'agent drgnx-layouts-pane-fillers))
-        (should (window-live-p pane))                ; the window and its mark stay until the next layout
-        (should (eq (window-parameter pane 'drgnx-layouts-pane) 'test-kind))
-        (should (window-live-p editor))
-        ;; the module's undo does the same
-        (drgnx-layouts-define-pane 'test-kind #'ignore)
-        (should-not (drgnx-layouts-shape-test--teardown))
-        (should-not (assq 'test-kind drgnx-layouts-pane-fillers))
-        (should (window-live-p pane))
-        ;; turned on again: the pane that was shown is filled again
-        (setq filled nil)
-        (drgnx-layouts-define-pane 'test-kind (lambda (w) (push w filled)))
-        (should (equal filled (list pane)))
-        ;; the next layout removes the pane, whatever its kind
-        (drgnx-layouts-apply 'editor)
-        (should-not (window-live-p pane))))))
+      (let* ((filled nil) (fill (lambda (w) (push w filled) (set-window-buffer w (get-buffer-create "*drgnx-layouts-a*")))))
+        (drgnx-layouts-define-pane 'test-kind fill)
+        (let ((pane (drgnx-layouts-pane-window 'test-kind)))
+          (should (equal filled (list pane)))
+          (should (eq (window-buffer pane) (get-buffer "*drgnx-layouts-a*")))
+          (drgnx-layouts-undefine-pane 'test-kind)
+          (should-not (drgnx-pane-kind 'test-kind))
+          (should (window-live-p pane))
+          (should (equal (buffer-name (window-buffer pane)) " *drgnx tile: test-kind*"))
+          ;; the module's undo does the same
+          (drgnx-layouts-define-pane 'test-kind fill)
+          (should (eq (window-buffer pane) (get-buffer "*drgnx-layouts-a*")))
+          (should-not (drgnx-layouts-shape-test--teardown))
+          (should-not (drgnx-pane-kind 'test-kind))
+          (should (window-live-p pane))
+          ;; turned on again: the tile that was shown is filled again
+          (setq filled nil)
+          (drgnx-layouts-define-pane 'test-kind fill)
+          (should (equal filled (list pane)))
+          ;; the next layout removes the tile
+          (drgnx-layouts-apply 'editor)
+          (should-not (window-live-p pane))
+          (drgnx-layouts-undefine-pane 'test-kind))))))
 
 (ert-deftest drgnx-layouts-shape/a-pane-define-puts-the-previous-filler-back ()
-  (drgnx-layouts-shape-test--as-module
-    (let ((agent (alist-get 'agent drgnx-layouts-pane-fillers)))
-      (drgnx-layouts-define-pane 'agent #'ignore)
-      (should (eq (alist-get 'agent drgnx-layouts-pane-fillers) #'ignore))
-      (drgnx-layouts-shape-test--teardown)
-      (should (eq (alist-get 'agent drgnx-layouts-pane-fillers) agent))
-      ;; an entry someone else set since stays
-      (drgnx-layouts-define-pane 'agent #'ignore)
-      (setf (alist-get 'agent drgnx-layouts-pane-fillers) #'identity)
-      (drgnx-layouts-shape-test--teardown)
-      (should (eq (alist-get 'agent drgnx-layouts-pane-fillers) #'identity)))))
+  (drgnx-layouts-test--with
+    (drgnx-layouts-shape-test--as-module
+      (let ((agent (plist-get (drgnx-pane-kind 'agent) :fill)))
+        (drgnx-layouts-define-pane 'agent #'ignore)
+        (should (eq (plist-get (drgnx-pane-kind 'agent) :fill) #'ignore))
+        (drgnx-layouts-shape-test--teardown)
+        (should (eq (plist-get (drgnx-pane-kind 'agent) :fill) agent))
+        ;; a definition someone else made since stays
+        (drgnx-layouts-define-pane 'agent #'ignore)
+        (let ((drgnx-modules--current nil)) (drgnx-pane-define-kind 'agent :home 'right :fill #'identity))
+        (drgnx-layouts-shape-test--teardown)
+        (should (eq (plist-get (drgnx-pane-kind 'agent) :fill) #'identity))))))
 
 (ert-deftest drgnx-layouts-shape/browser-registers-through-the-api ()
   ;; no module writes the shape registry itself
@@ -422,10 +471,10 @@ problems.  The shape and filler registries are restored afterwards."
     (load (expand-file-name "modules/tools/drgnx-browser" drgnx-dir) nil t)
     (drgnx-browser--register-shape)
     (should (eq (alist-get 'editor+browser drgnx-layouts-shapes) 'drgnx-browser--shape))
-    (should (eq (alist-get 'browser drgnx-layouts-pane-fillers) 'drgnx-browser--fill))
+    (should (eq (plist-get (drgnx-pane-kind 'browser) :fill) 'drgnx-browser--fill))
     (should-not (drgnx-layouts-shape-test--teardown))
     (should-not (assq 'editor+browser drgnx-layouts-shapes))
-    (should-not (assq 'browser drgnx-layouts-pane-fillers))))
+    (should-not (drgnx-pane-kind 'browser))))
 
 (ert-deftest drgnx-layouts/off-forgets-the-layouts-and-zens-margins ()
   ;; Zen's margins, its resize hook and the frame's layout parameters are live state: the :teardown's.
@@ -451,3 +500,10 @@ problems.  The shape and filler registries are restored afterwards."
     (drgnx-layouts-test--with (ignore))
     (read-event nil nil 0.01)                           ; a terminal frame takes its new size at the next wait
     (should (equal (cons (frame-width) (frame-height)) size))))
+
+(ert-deftest drgnx-layouts/a-size-in-logical-pixels-is-scaled-to-the-frame ()
+  "A built-in layout may give an area's size as `(logical N)': it is N logical pixels, scaled to the frame
+\(`drgnx-px'); a plain number stays the device pixels it is."
+  (let ((def '(:left nil :right some-tab :panel nil :px (:right (logical 100) :left 120))))
+    (should (eql (drgnx-px 100) (drgnx-layouts--px def :right)))
+    (should (eql 120 (drgnx-layouts--px def :left)))))

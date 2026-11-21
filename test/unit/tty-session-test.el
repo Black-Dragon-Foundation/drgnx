@@ -1,7 +1,22 @@
 ;;; tty-session-test.el --- batch tests: the tty harness's key, mouse and screen helpers -*- lexical-binding: t -*-
 ;; test-class: det
 (require 'ert)
+(require 'cl-lib)
 (require 'drgnx-tty-session)
+
+(ert-deftest drgnx-tty-session/a-wait-on-a-graphical-session-times-out-as-a-timeout ()
+  "`drgnx-tty-session-wait' on a session with no terminal (no tmux pane, no kitty: a `drgnx-ui-start' session):
+a form that turns true is its value; one that stays nil fails as the timeout it is, saying the session has no screen,
+not with the error of reading a screen there is none of (which hid the timeout)."
+  (let* ((answer "nil") (sess (list :name "drgnx-ui-9" :socket "/nonexistent")))
+    (cl-letf (((symbol-function 'drgnx-ui-call) (lambda (&rest _) (vector answer)))
+              ((symbol-function 'drgnx-tty-session--tmux-ok) (lambda (&rest _) (error "No tmux pane to read"))))
+      (let ((err (should-error (drgnx-tty-session-wait sess '(ignore) 0.2))))
+        (should (equal (list t t)
+                       (list (and (string-match-p "stayed nil for 0.2s" (format "%S" err)) t)
+                             (and (string-match-p "a graphical session" (format "%S" err)) t)))))
+      (setq answer "42")
+      (should (equal 42 (drgnx-tty-session-wait sess '(ignore) 0.2))))))
 
 (ert-deftest drgnx-tty-session/encodes-keys ()
   (should (equal (drgnx-tty-session-encode "C-S-p" 'kkp) "\e[112;6u"))
@@ -66,7 +81,7 @@
     (cl-letf (((symbol-function 'drgnx-ui--run)
                (lambda (&rest _) (cons 0 "43 tmux -L drgnx-tty-2-1 -f /dev/null -D\n")))
               ((symbol-function 'drgnx-tty-session--owner-alive-p) (lambda (_) nil))
-              ((symbol-function 'drgnx-tty-session--run-of) (lambda (_) "/run/x"))
+              ((symbol-function 'drgnx-ui--run-of) (lambda (_) "/run/x"))
               ((symbol-function 'drgnx-tty-session--remove-stale) (lambda (name run) (push (cons name run) removed))))
       ;; its own namespace: a dead runner's session, removed
       (cl-letf (((symbol-function 'drgnx-tty-session--same-pid-namespace-p) (lambda (_) t)))
@@ -191,3 +206,17 @@
     (should (equal (drgnx-tty-session--session-bus "unix:path=/tmp/dbus-x" "drgnx-ui-1") "unix:path=/tmp/dbus-x"))
     (should-error (drgnx-tty-session--session-bus nil "drgnx-ui-1") :type 'drgnx-ui-error)
     (should-error (drgnx-tty-session--session-bus "unix:path=/run/user/1/bus" "drgnx-ui-1") :type 'drgnx-ui-error)))
+
+(ert-deftest drgnx-tty-session/the-settle-rule-waits-for-a-repeater-only-close-to-its-run ()
+  "`kx-unsettled' (the one settle rule): a one-shot timer due within 1 s is still to run; a repeating one only within
+0.25 s of its run (one that repeats every second is always due within 1 s)."
+  (eval drgnx-tty-session--unsettled-defun t)
+  (cl-flet ((tm (in repeat) (let ((tm (timer-create)))
+                              (timer-set-time tm (time-add nil in) repeat)
+                              (timer-set-function tm #'ignore)
+                              tm)))
+    (let ((timer-idle-list nil))
+      (let ((timer-list (list (tm 0.5 nil)))) (should (kx-unsettled)))
+      (let ((timer-list (list (tm 0.5 1)))) (should-not (kx-unsettled)))
+      (let ((timer-list (list (tm 0.1 1)))) (should (kx-unsettled)))
+      (let ((timer-list (list (tm 5 nil)))) (should-not (kx-unsettled))))))

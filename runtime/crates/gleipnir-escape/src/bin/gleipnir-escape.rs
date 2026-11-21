@@ -1,6 +1,10 @@
 //! gleipnir-escape: runs the escape rows against `ratatoskr` and writes the report (Task 14).
 //!
-//! `gleipnir-escape --ratatoskr BIN --probe BIN --rows DIR… [--only GLOB] [--require-all] --report FILE`
+//! `gleipnir-escape --ratatoskr BIN --probe BIN --rows DIR… [--only GLOB]… [--require-all] [--bwrap-in-container]
+//! --report FILE`
+//!
+//! `--only` may be given more than once (a row matching any runs). `--bwrap-in-container` says the container lets
+//! bwrap run (`ctr.sh --sandbox`), so rows that need `bwrap` or `netns` are not skipped there.
 //!
 //! Exits 1 when a row fails (with `--require-all`, when one is skipped too), 2 on a usage error or a row that does
 //! not parse.
@@ -33,9 +37,10 @@ fn glob(pattern: &str, text: &str) -> bool {
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let (mut ratatoskr, mut probe, mut report_path, mut only) = (None, None, None, None);
+    let (mut ratatoskr, mut probe, mut report_path) = (None, None, None);
+    let mut only: Vec<String> = Vec::new();
     let mut dirs: Vec<PathBuf> = Vec::new();
-    let mut require_all = false;
+    let (mut require_all, mut bwrap_in_container) = (false, false);
     while let Some(a) = args.next() {
         let mut value = |name: &str| {
             args.next()
@@ -45,9 +50,10 @@ fn main() {
             "--ratatoskr" => ratatoskr = Some(PathBuf::from(value("--ratatoskr"))),
             "--probe" => probe = Some(PathBuf::from(value("--probe"))),
             "--rows" => dirs.push(PathBuf::from(value("--rows"))),
-            "--only" => only = Some(value("--only")),
+            "--only" => only.push(value("--only")),
             "--report" => report_path = Some(PathBuf::from(value("--report"))),
             "--require-all" => require_all = true,
+            "--bwrap-in-container" => bwrap_in_container = true,
             other => die(&format!("unknown argument {other:?}")),
         }
     }
@@ -73,11 +79,14 @@ fn main() {
             Err(e) => die(&e),
         }
     }
-    if let Some(g) = &only {
-        rows.retain(|r| glob(g, &r.row));
+    if !only.is_empty() {
+        rows.retain(|r| only.iter().any(|g| glob(g, &r.row)));
     }
 
-    let host = run::detect_host(&opts.probe);
+    let mut host = run::detect_host(&opts.probe);
+    if bwrap_in_container {
+        host.in_container = false;
+    }
     let mut entries = Vec::new();
     for r in &rows {
         let outcome = run::run_row(&opts, &host, r);

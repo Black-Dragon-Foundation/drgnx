@@ -10,8 +10,12 @@
   (let ((root (make-temp-file "drgnx-build" t)))
     (unwind-protect
         (progn
-          (dolist (d '("core" "wb" "modules" "harness" "settings"))
-            (copy-directory (expand-file-name d drgnx-dir) (expand-file-name d root)))
+          ;; etc/ui too: the kit's faces are defined from etc/ui/components.eld when core/drgnx-ui-kit.el compiles
+          (dolist (d '("core" "wb" "modules" "harness" "settings" "etc/ui"))
+            (copy-directory (expand-file-name d drgnx-dir) (expand-file-name d root) nil t))
+          ;; the sources only: a copy's files are all new, each .elc newer than its .el, so a stale one in the checkout
+          ;; was loaded (`load-prefer-newer') by a file that requires it, and warned of what its source has since defined
+          (mapc #'delete-file (directory-files-recursively root "\\.elc\\'"))
           (let ((r (drgnx-build-test--build root)))
             (should (null (plist-get r :errors)))
             (should (equal (plist-get r :warnings) nil))
@@ -108,3 +112,13 @@ never hides a warning.  Returns its result."
                             (plist-get (drgnx-build-test--build root) :warnings))))
       (fmakunbound 'drgnx-build-test--preloaded)
       (delete-directory root t))))
+
+(ert-deftest drgnx-build/a-function-pair-in-quoted-data-quotes-nothing ()
+  "The scan reads `#\='f' as a function quote only as a proper two-element list: the alist entry (function . foo) is
+data, and `(car foo)' of it used to signal."
+  (should-not (drgnx-build--quoted '(function . foo)))
+  (should-not (drgnx-build--quoted '(function foo bar)))
+  (should (eq 'foo (drgnx-build--quoted '(function foo))))
+  (should (eq 'foo (drgnx-build--quoted '(quote foo))))
+  (should-not (drgnx-build--scan-form '(setq x '((a . 1) (function . foo))) nil))
+  (should (equal '(bar) (drgnx-build--scan-form '(progn (setq x '((a . 1) (function . foo))) (advice-add 'bar :around #'ignore)) nil))))

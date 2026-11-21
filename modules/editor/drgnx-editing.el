@@ -1,10 +1,9 @@
-;;; drgnx-editing.el --- Module editor/editing: folding, case, selection -*- lexical-binding: t -*-
+;;; drgnx-editing.el --- Module editor/editing: case, selection, lines -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Editing commands people expect from VS Code, on built-ins: fold and unfold (hideshow in code,
-;; outline elsewhere), change case (camelCase, snake_case, kebab-case, cycle), expand and shrink
+;; Editing commands people expect from VS Code, on built-ins (folding is editor/fold's): change case (camelCase, snake_case, kebab-case, cycle), expand and shrink
 ;; the selection (tree-sitter nodes when the buffer has a parser, else words and balanced
 ;; expressions), go to line; the VS Code line commands (move, select, duplicate, delete, new line
 ;; above/below), redo, comment, back/forward; VS Code's cursor moves and deletes (Home, End, word,
@@ -13,32 +12,13 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
-(require 'hideshow)
-(require 'outline)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-setting)
 (declare-function treesit-node-on "treesit.c")
 (declare-function treesit-node-start "treesit.c")
 (declare-function treesit-node-end "treesit.c")
 (declare-function treesit-node-parent "treesit.c")
-
-;;;; Fold
-
-(defun drgnx-editing-fold ()
-  "Fold the block at point (code: the definition or block; text: the section)."
-  (interactive)
-  (if (derived-mode-p 'prog-mode)
-      (progn (unless hs-minor-mode (hs-minor-mode 1)) (hs-hide-block))
-    (unless outline-minor-mode (outline-minor-mode 1))
-    (outline-hide-subtree)))
-
-(defun drgnx-editing-unfold ()
-  "Unfold the block at point."
-  (interactive)
-  (if (derived-mode-p 'prog-mode)
-      (progn (unless hs-minor-mode (hs-minor-mode 1)) (hs-show-block))
-    (unless outline-minor-mode (outline-minor-mode 1))
-    (outline-show-subtree)))
 
 ;;;; Case
 
@@ -210,12 +190,14 @@ Without a selection they stay Emacs' prefixes.")
   (let ((keys (this-command-keys-vector)))
     (and (> (length keys) 0) (eq (lookup-key drgnx-editing-region-map keys) this-command))))
 
-(defcustom drgnx-editing-prefix-delay 0.3
-  "Seconds C-c or C-x wait with a selection for a key that makes it Emacs' prefix; nil: act at once.
-In the VS Code profile C-c copies and C-x cuts the selection.  Typed as the start of `C-x b', `C-x C-s' or a
-mode's `C-c C-c', they would cut or copy the text first.  So they wait this long for the next key: one that
-arrives in time drops the selection and goes on as the prefix; none, and they copy or cut.  Like CUA mode's
-prefix delay.  Keys that are no prefix (Cmd+C on a Mac) act at once."
+(defcustom drgnx-editing-prefix-delay nil
+  "Seconds C-c or C-x wait with a selection for a key that makes it Emacs' prefix; nil (the default): act at once.
+In the VS Code profile C-c copies and C-x cuts the selection, at once, as VS Code's do.  Typed as the start of
+`C-x b', `C-x C-s' or a mode's `C-c C-c' with a selection, they would copy or cut first: Escape drops the selection
+first, and F1 or M-x reaches every command.  Set a number (0.3 was the old default) to have them wait that long for
+a next key instead: one that arrives in time drops the selection and goes on as the prefix, none, and they copy or
+cut, like CUA mode's prefix delay (the price is that wait on every copy and cut).  Keys that are no prefix (Cmd+C
+on a Mac) always act at once."
   :type '(choice (const :tag "Act at once" nil) (number :tag "Seconds"))
   :group 'drgnx)
 
@@ -248,9 +230,13 @@ untouched.  Only runs as a typed command, and the wait ends at the delay."
         (if-let* ((event (condition-case nil        ; a keyboard macro that ends here has no next key
                              (with-timeout (drgnx-editing-prefix-delay nil) (read-key))
                            (args-out-of-range nil))))
-            (if (eq event ?\C-g)
-                (progn (deactivate-mark) (keyboard-quit))    ; C-x C-g would be undefined
-              (drgnx-editing--hand-back (append (listify-key-sequence keys) (list event))))
+            (cond ((eq event ?\C-g)
+                   (deactivate-mark) (keyboard-quit))    ; C-x C-g would be undefined
+                  ((and (consp event) (symbolp (car event)) (string-match-p "mouse" (symbol-name (car event))))
+                   ;; a click is no key of the prefix: the key acts, the click is its own event
+                   (funcall action)
+                   (setq unread-command-events (cons event unread-command-events)))
+                  (t (drgnx-editing--hand-back (append (listify-key-sequence keys) (list event)))))
           (funcall action))
       (funcall action))))
 
@@ -278,15 +264,157 @@ kill ring, so a hung owner or a terminal that refuses the read costs its timeout
   (deactivate-mark)
   (let ((interprogram-paste-function nil)) (yank arg)))
 
+(defvar drgnx-editing-tab-size)
+(defvar drgnx-editing-word-wrap)
+(defvar drgnx-editing-word-wrap-column)
+(declare-function drgnx-look-fonts--settings-apply "drgnx-look-fonts")
+
+;;;; The Editor settings a VS Code user looks for first
+
+(defun drgnx-editing--font-size-p (v) "Non-nil when V is a code size in pixels." (and (numberp v) (<= 6 v 72)))
+(defun drgnx-editing--tab-size-p (v) "Non-nil when V is a tab size in columns." (and (integerp v) (<= 1 v 16)))
+
+(defun drgnx-editing--apply-font-size ()
+  "`:apply' of `drgnx-editing-font-size': the code font's size is redrawn (ui/look reads the setting as a layer)."
+  (when (fboundp 'drgnx-look-fonts--settings-apply) (drgnx-look-fonts--settings-apply)))
+
+(drgnx-defsetting drgnx-editing-font-size 13.5
+  "The size of the code font in pixels (VS Code's editor.fontSize).  13.5 is drgnx's own code size; the code font
+role (`drgnx-look-font-code') still sets a size of its own on top.  A change applies at once."
+  :type 'number :group 'drgnx :scope 'global :agents 'never :apply #'drgnx-editing--apply-font-size
+  :schema '(pred drgnx-editing--font-size-p "a size in pixels from 6 to 72"))
+
+(defvar drgnx-editing--tab-saved nil
+  "(TAB-WIDTH STANDARD-INDENT INDENT-TABS-MODE) the defaults `drgnx-editing-tab-size' and the spaces default replaced.")
+
+(defun drgnx-editing--apply-tab-size ()
+  "`:apply' of `drgnx-editing-tab-size': the default `tab-width' and `standard-indent', as VS Code's editor.tabSize
+sets how many columns a tab and an indent are, and indents made of spaces (`indent-tabs-mode' nil by default, VS Code's
+editor.insertSpaces), whatever the key profile: with a tab of 4 columns Emacs's default would turn every 4-column
+indent into a tab.  Buffers whose mode sets an indent or tabs of its own (Makefile, Go) keep them."
+  (unless drgnx-editing--tab-saved
+    (setq drgnx-editing--tab-saved (list (default-value 'tab-width) (default-value 'standard-indent)
+                                         (default-value 'indent-tabs-mode))))
+  (setq-default tab-width drgnx-editing-tab-size standard-indent drgnx-editing-tab-size indent-tabs-mode nil))
+
+(drgnx-defsetting drgnx-editing-tab-size 4
+  "How many columns a tab character, and one level of indent where the mode has none of its own, take (VS Code's
+editor.tabSize).  A change applies at once.  A mode that sets its own indent keeps it."
+  :type 'integer :group 'drgnx :scope 'global :agents 'never :apply #'drgnx-editing--apply-tab-size
+  :schema '(pred drgnx-editing--tab-size-p "a number of columns from 1 to 16"))
+
+;;;; Word wrap (the wrap addendum §3.3)
+
+;; Resolved per buffer when its major mode is set (`after-change-major-mode-hook'), and again once its file and
+;; directory locals are in (`hack-local-variables-hook': a workspace file's value counts; a file's own
+;; `truncate-lines' or `word-wrap' wins).  Only buffers of a code, data or text mode are touched: special buffers set
+;; their own.  The mode is buffer-local state: `off' cuts (`truncate-lines'), `on' wraps at a word, `column' and
+;; `bounded' wrap at `drgnx-editing-word-wrap-column' (Nidhogg's `nidhogg-wrap-column'; at the window's edge when it
+;; is narrower).
+
+(defconst drgnx-editing-wrap-auto-cut
+  '(yaml-mode yaml-ts-mode toml-ts-mode conf-toml-mode nxml-mode sgml-mode html-mode mhtml-mode html-ts-mode css-mode
+              css-ts-mode json-ts-mode js-json-mode)
+  "Data and markup modes `auto' cuts: checked first, since several derive from `text-mode'.")
+
+(defconst drgnx-editing-wrap-auto-prose
+  '(markdown-mode markdown-ts-mode gfm-mode org-mode rst-mode adoc-mode tex-mode latex-mode LaTeX-mode git-commit-mode
+                  log-edit-mode message-mode)
+  "Prose modes `auto' wraps (plain `text-mode' too, matched exactly).")
+
+(defvar-local drgnx-editing--wrap-shown nil
+  "The wrap mode drgnx gave this buffer (`off', `on', `column', `bounded'), or nil when it left the buffer alone.")
+
+(defvar-local drgnx-editing--wrap-toggled nil
+  "Non-nil when Toggle Word Wrap set this buffer's wrap: it stays until the buffer is killed (no session keeps it).")
+
+(defvar nidhogg-wrap-column)
+
+(defun drgnx-editing--wrap-p (v) "Non-nil when V is a wrap mode." (memq v '(off on column bounded auto)))
+(defun drgnx-editing--wrap-column-p (v) "Non-nil when V is a wrap column." (and (integerp v) (<= 20 v 1000)))
+
+(defun drgnx-editing-wrap-resolve (&optional value)
+  "The wrap mode VALUE (default `drgnx-editing-word-wrap' here) gives the current buffer: `off', `on', `column' or
+`bounded'; nil for a buffer of another kind (left alone).  `auto' goes by the major mode: the data and markup list
+cuts, the prose list (and plain `text-mode') wraps, code and configuration cut, other text modes wrap."
+  (let ((value (or value drgnx-editing-word-wrap)))
+    (cond ((apply #'derived-mode-p drgnx-editing-wrap-auto-cut) (if (eq value 'auto) 'off value))
+          ((or (apply #'derived-mode-p drgnx-editing-wrap-auto-prose) (eq major-mode 'text-mode))
+           (if (eq value 'auto) 'on value))
+          ((derived-mode-p 'prog-mode 'conf-mode) (if (eq value 'auto) 'off value))
+          ((derived-mode-p 'text-mode) (if (eq value 'auto) 'on value)))))
+
+(defun drgnx-editing--wrap-set (mode)
+  "Give the current buffer wrap MODE (`off', `on', `column', `bounded'), buffer-locally."
+  (setq drgnx-editing--wrap-shown mode)
+  ;; narrow windows too: Emacs cuts a window under 50 columns whatever `truncate-lines' says
+  (setq-local truncate-lines (eq mode 'off) word-wrap (not (eq mode 'off)) truncate-partial-width-windows nil)
+  (setq-local nidhogg-wrap-column (and (memq mode '(column bounded)) drgnx-editing-word-wrap-column))
+  ;; a line wrapped at a word shows no continuation arrows (VS Code draws none: audit G4)
+  (setq-local fringe-indicator-alist
+              (if (eq mode 'off) (default-value 'fringe-indicator-alist)
+                (cons '(continuation nil nil)
+                      (assq-delete-all 'continuation (copy-alist (default-value 'fringe-indicator-alist)))))))
+
+(defun drgnx-editing--wrap-clear ()
+  "Take back what `drgnx-editing--wrap-set' gave the current buffer."
+  (when drgnx-editing--wrap-shown
+    (dolist (v '(truncate-lines word-wrap truncate-partial-width-windows nidhogg-wrap-column fringe-indicator-alist))
+      (kill-local-variable v))
+    (setq drgnx-editing--wrap-shown nil drgnx-editing--wrap-toggled nil)))
+
+(defun drgnx-editing--wrap-buffer ()
+  "`after-change-major-mode-hook' and `hack-local-variables-hook': the current buffer's wrap from the setting.  A file
+or directory's own `truncate-lines' or `word-wrap' wins, and so does Toggle Word Wrap."
+  (unless (or drgnx-editing--wrap-toggled
+              (assq 'truncate-lines file-local-variables-alist) (assq 'word-wrap file-local-variables-alist)
+              (assq 'truncate-lines dir-local-variables-alist) (assq 'word-wrap dir-local-variables-alist))
+    (let ((mode (drgnx-editing-wrap-resolve)))
+      (if mode (drgnx-editing--wrap-set mode) (drgnx-editing--wrap-clear)))))
+
+(defun drgnx-editing--apply-word-wrap ()
+  "`:apply' of the wrap settings: every open buffer again."
+  (dolist (b (buffer-list))
+    (with-current-buffer b (drgnx-editing--wrap-buffer))))
+
+(defun drgnx-editing--wrap-org ()
+  "Under `auto' and `on', drgnx owns Org's wrapping: `org-startup-truncated' nil (Org sets `truncate-lines' from it
+itself), as the module's claim (`drgnx-module-set'): a value the user set in settings.el, custom.el or their Lisp
+wins over it, and the module's undo drops it.  A buffer's wrap is resolved after Org's own mode body, so a later
+change of the setting reaches Org buffers through the hook."
+  (when (memq (default-value 'drgnx-editing-word-wrap) '(auto on))
+    (drgnx-module-set 'org-startup-truncated nil)))
+
+(drgnx-defsetting drgnx-editing-word-wrap 'auto
+  "What a line longer than its window does, as VS Code's editor.wordWrap: `off' runs it off the edge, `on' continues it
+on the next row at a word, `column' wraps it at `drgnx-editing-word-wrap-column' (VS Code's wordWrapColumn),
+`bounded' at that column or the window's edge, whichever comes first.  `auto' (the default) wraps prose (Markdown,
+Org, plain text) and cuts code, configuration and data (YAML, HTML, JSON).  Buffers of other kinds keep their own.
+A `(:mode MODE …)' entry gives one language another; Toggle Word Wrap flips one buffer.  A change applies at once."
+  :type '(choice (const auto) (const on) (const off) (const column) (const bounded)) :group 'drgnx :scope 'buffer
+  :agents 'never :apply #'drgnx-editing--apply-word-wrap :schema '(enum off on column bounded auto))
+
+(drgnx-defsetting drgnx-editing-word-wrap-column 80
+  "The column long lines wrap at when `drgnx-editing-word-wrap' is `column' or `bounded' (VS Code's
+editor.wordWrapColumn); the other modes ignore it.  A change applies at once."
+  :type 'integer :group 'drgnx :scope 'buffer :agents 'never :apply #'drgnx-editing--apply-word-wrap
+  :schema '(pred drgnx-editing--wrap-column-p "a column from 20 to 1000"))
+
+(defun drgnx-editing-toggle-word-wrap ()
+  "Wrap long lines at a word, or cut them at the window's edge, in this buffer only (until it is killed)."
+  (interactive)
+  (drgnx-editing--wrap-set (if truncate-lines 'on 'off))
+  (setq drgnx-editing--wrap-toggled t)
+  (force-mode-line-update)
+  (message "Word wrap %s" (if truncate-lines "off" "on")))
+
 (drgnx-module-define 'editor/editing
-                     :doc "Fold, change case, expand and shrink the selection, go to line."
+                     :doc "Change case, expand and shrink the selection, go to line."
                      :stage 'startup
                      :setup
                      (lambda ()
                        (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((edit-fold "Fold" drgnx-editing-fold "Fold the block at point")
-                                        (edit-unfold "Unfold" drgnx-editing-unfold "Unfold the block at point")
-                                        (edit-case-cycle "Change Case: Cycle" drgnx-editing-case-cycle "camelCase → snake_case → kebab-case")
+                                      '((edit-case-cycle "Change Case: Cycle" drgnx-editing-case-cycle "camelCase → snake_case → kebab-case")
                                         (edit-case-camel "Change Case: camelCase" drgnx-editing-case-camel "The word or selection in camelCase")
                                         (edit-case-snake "Change Case: snake_case" drgnx-editing-case-snake "The word or selection in snake_case")
                                         (edit-case-kebab "Change Case: kebab-case" drgnx-editing-case-kebab "The word or selection in kebab-case")
@@ -295,6 +423,7 @@ kill ring, so a hung owner or a terminal that refuses the read costs its timeout
                                         (go-line "Go to Line…" goto-line "Go to a line number")
                                         (edit-select-all "Select All" mark-whole-buffer "Select the whole buffer")
                                         (edit-select-line "Select Line" drgnx-editing-select-line "Select the line; again for the next")
+                                        (edit-undo "Undo" undo "Undo the last change (in the selection, with one)")
                                         (edit-redo "Redo" undo-redo "Redo the last undone change")
                                         (edit-comment "Toggle Comment" comment-line "Comment or uncomment the line or the selection")
                                         (edit-delete-line "Delete Line" kill-whole-line "Delete the whole line")
@@ -318,7 +447,23 @@ kill ring, so a hung owner or a terminal that refuses the read costs its timeout
                                         (edit-paste "Paste" drgnx-editing-paste "Paste the last copy, replacing the selection")))
                          (drgnx-command-define id :category (if (string-prefix-p "go-" (symbol-name id)) "Go" "Edit") :title title
                                                :command fn :scope 'editing :doc doc))
-                       (add-to-list 'emulation-mode-map-alists 'drgnx-editing--region-alist)))
+                       (drgnx-command-define 'face-toggle-wrap :category "View" :title "Toggle Word Wrap" :menu '("View")
+                                             :command #'drgnx-editing-toggle-word-wrap
+                                             :doc "Wrap long lines at a word, or cut them at the window's edge, in this buffer")
+                       (drgnx-editing--apply-tab-size)
+                       (add-hook 'after-change-major-mode-hook #'drgnx-editing--wrap-buffer)
+                       (add-hook 'hack-local-variables-hook #'drgnx-editing--wrap-buffer)
+                       (drgnx-editing--apply-word-wrap)
+                       (drgnx-editing--wrap-org)
+                       (add-to-list 'emulation-mode-map-alists 'drgnx-editing--region-alist))
+                     :teardown
+                     (lambda ()
+                       (dolist (b (buffer-list)) (with-current-buffer b (drgnx-editing--wrap-clear)))
+                       (when drgnx-editing--tab-saved
+                         (setq-default tab-width (nth 0 drgnx-editing--tab-saved)
+                                       standard-indent (nth 1 drgnx-editing--tab-saved)
+                                       indent-tabs-mode (nth 2 drgnx-editing--tab-saved))
+                         (setq drgnx-editing--tab-saved nil))))
 
 (provide 'drgnx-editing)
 ;;; drgnx-editing.el ends here

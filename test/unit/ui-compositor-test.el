@@ -126,9 +126,10 @@ paths no WM serves."
            (run (plist-get s :run))
            (xdg (plist-get s :xdg_runtime_dir))
            (env (drgnx-ui-session-env s)))
-      ;; its own bus; KWin lives as long as the session's Emacs
+      ;; its own bus; KWin lives as long as the session's Emacs and offers every client its fake input
       (should (equal (drgnx-ui-compositor-argv s)
-                     (list "dbus-run-session" "--" "kwin_wayland" "--virtual" "--width" "1280" "--height" "800"
+                     (list "dbus-run-session" "--" "env" "KWIN_WAYLAND_NO_PERMISSION_CHECKS=1"
+                           "kwin_wayland" "--virtual" "--width" "1280" "--height" "800"
                            "--output-count" "2" "--socket" "wayland-1" "--no-lockscreen" "--no-global-shortcuts"
                            "--exit-with-session"
                            (concat (drgnx-ui-emacs-bin) " --init-directory " (expand-file-name "init" run)))))
@@ -563,9 +564,12 @@ paths no WM serves."
   (expand-file-name "../../bin/drgnx" (file-name-directory (or load-file-name buffer-file-name))))
 
 (defun drgnx-ui-compositor-test--bin-call (dir env &rest args)
-  "Run bin/drgnx with ARGS in DIR, HOME and config there, ENV on top; return (EXIT . OUTPUT)."
+  "Run bin/drgnx with ARGS in DIR, HOME and config there, ENV on top; return (EXIT . OUTPUT).  The GUI tiers' test
+hub is not built (DRGNX_TEST_HUB_BUILD=0, no DRGNX_RATATOSKR_BIN): these rows read what bin/drgnx hands the container
+or the session, and a checkout with no cargo, or a run without CI's hub binary, made every one exit 1."
   (let ((process-environment (append env (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config")
-                                               "DRGNX_EMACS" "DRGNX_UI_COMPOSITOR" "DRGNX_TEST_SELECTOR")
+                                               "DRGNX_EMACS" "DRGNX_UI_COMPOSITOR" "DRGNX_TEST_SELECTOR"
+                                               "DRGNX_TEST_HUB_BUILD=0" "DRGNX_RATATOSKR_BIN")
                                      process-environment))
         (default-directory (file-name-as-directory dir)))
     (with-temp-buffer (cons (apply #'call-process drgnx-ui-compositor-test--bin nil t nil args) (buffer-string)))))
@@ -621,7 +625,8 @@ paths no WM serves."
     (unwind-protect
         (progn
           (make-directory path)
-          (write-region (format "#!/bin/sh\necho --- >> %s\nfor a in \"$@\"; do printf '%%s\\n' \"$a\" >> %s; done\n" log log)
+          ;; an empty store and no GHCR copy (`image inspect' and `pull' fail, unlogged): the image is built
+          (write-region (format "#!/bin/sh\ncase \"$1\" in image|pull) exit 1 ;; esac\necho --- >> %s\nfor a in \"$@\"; do printf '%%s\\n' \"$a\" >> %s; done\n" log log)
                         nil (expand-file-name "podman" path) nil 'silent)
           (set-file-modes (expand-file-name "podman" path) #o755)
           (dolist (c '("kwin" "niri"))
@@ -630,7 +635,7 @@ paths no WM serves."
             (should (eql 0 (car (drgnx-ui-compositor-test--bin-call
                                  dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman"
                                            "DRGNX_TEST_GUI_IMAGE=an-image" "DRGNX_TEST_GUI_MEMORY" "DRGNX_TEST_WM_IMAGE"
-                                           "DRGNX_TEST_BUILD_MEMORY")
+                                           "DRGNX_TEST_BUILD_MEMORY" "DRGNX_TEST_UDMABUF=/dev/null")
                                  "test" "--container" "--ui" "--compositor" c))))
             (let* ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t))
                    (build (cdr (member "build" args)))
@@ -644,11 +649,24 @@ paths no WM serves."
               (should (equal (cadr (member "--memory-swap" build)) "3g"))
               (should (equal (cadr (member "--memory" run)) "3g"))
               (should (equal (cadr (member "--memory-swap" run)) "3g"))
-              (should (equal (last run 5) (list "bin/drgnx" "test" "--ui" "--compositor" c)))))
+              (should (equal (last run 5) (list "bin/drgnx" "test" "--ui" "--compositor" c)))
+              ;; KWin gets its render device (DRGNX_TEST_UDMABUF stands in for /dev/udmabuf), niri none
+              (should (equal (cadr (member "--device" run)) (and (equal c "kwin") "/dev/null")))))
+          ;; no udmabuf on the host: a KWin run is refused with the reason, before any container (it would answer no
+          ;; frame callback, and a presented wait could pass on a picture that never went out)
+          (when (file-exists-p log) (delete-file log))
+          (let ((r (drgnx-ui-compositor-test--bin-call
+                    dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_WM_IMAGE=wm-image"
+                              (concat "DRGNX_TEST_UDMABUF=" dir "/no-udmabuf"))
+                    "test" "--container" "--ui" "--compositor" "kwin")))
+            (should (eql (car r) 2))
+            (should (string-match-p "udmabuf" (cdr r)))
+            (should-not (file-exists-p log)))
           ;; its own prebuilt override
           (delete-file log)
           (drgnx-ui-compositor-test--bin-call
-           dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_WM_IMAGE=wm-image")
+           dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_WM_IMAGE=wm-image"
+                     "DRGNX_TEST_UDMABUF=/dev/null")
            "test" "--container" "--ui" "--compositor" "kwin")
           (let ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t)))
             (should-not (member "build" args))
@@ -669,7 +687,12 @@ paths no WM serves."
            dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_BUILD_MEMORY=4g"
                      "DRGNX_UI_COMPOSITOR" "DRGNX_TEST_GUI_IMAGE")
            "test" "--container" "--ui")
-          (let ((build (cdr (member "build" (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t)))))
+          ;; the GUI image is built on its base: the base's build comes first
+          (let* ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t))
+                 (base (cdr (member "build" args)))
+                 (build (cdr (member "build" base))))
+            (should (string-match-p "\\`drgnx-base-gui:[0-9a-f]\\{16\\}\\'" (cadr (member "-t" base))))
+            (should (equal (cadr (member "--build-arg" build)) (concat "BASE=" (cadr (member "-t" base)))))
             (should (string-match-p "\\`drgnx-test-gui:[0-9a-f]\\{16\\}\\'" (cadr (member "-t" build))))
             (should (equal (cadr (member "--memory" build)) "4g")))
           ;; an image override is an image reference, never an option for podman

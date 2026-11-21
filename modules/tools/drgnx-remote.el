@@ -91,13 +91,17 @@
          (podman (executable-find "podman")))
     (when podman
       (let* ((out (generate-new-buffer " *drgnx-podman*" t))
-             (proc (make-process :name "drgnx-podman" :buffer out :noquery t :connection-type 'pipe :sentinel #'ignore
+             (ended nil)
+             ;; the sentinel runs once Emacs has read the rest of the output: an exit alone can be seen before that
+             (proc (make-process :name "drgnx-podman" :buffer out :noquery t :connection-type 'pipe
+                                 :sentinel (drgnx-guard-wrap (lambda (p _) (unless (process-live-p p) (setq ended t)))
+                                                             "podman ps")
                                  :command (list podman "ps" "--format" "{{.Names}}")))
              (deadline (+ (float-time) drgnx-remote-podman-timeout)))
         (unwind-protect
             (progn
-              (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05))
-              (if (process-live-p proc) (delete-process proc)
+              (while (and (not ended) (< (float-time) deadline)) (accept-process-output proc 0.05))
+              (if (not ended) (delete-process proc)
                 (when (eql (process-exit-status proc) 0)
                   (with-current-buffer out (split-string (buffer-string) "\n" t)))))
           (when (process-live-p proc) (delete-process proc))

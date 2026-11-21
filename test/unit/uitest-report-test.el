@@ -184,3 +184,18 @@
     (cl-letf (((symbol-function 'frame-live-p) (lambda (f) (and (not (eq f 'drgnx-test-dead-frame)) (funcall orig f)))))
       (drgnx-uitest-record--snapshot "other"))
     (should-not drgnx-uitest-record--log)))
+
+(ert-deftest drgnx-uitest/a-command-is-recorded-by-name-in-under-1-kb ()
+  "Pattern D: the recorder names a command by its symbol, and anything else (a closure, a keymap) by a short tag: a
+command holding a keymap that is a prefix of itself (`mouse-drag-line''s) printed hundreds of MB once."
+  (let* ((map (make-sparse-keymap)) (_ (define-key map [down-mouse-1] map))
+         (closure (let ((m map)) (lambda () (interactive) m))))
+    (cl-letf (((symbol-function 'drgnx-uitest-record--snapshot) #'ignore))
+      (dolist (cmd (list 'forward-char closure map))
+        (let ((this-command cmd) (drgnx-uitest-record--command nil))
+          (drgnx-uitest-record--before-command)
+          (should (stringp drgnx-uitest-record--command))
+          (should (< (length drgnx-uitest-record--command) 1024))
+          (should (equal (cond ((symbolp cmd) "command:forward-char") ((keymapp cmd) "command:<keymap>")
+                               (t "command:<lambda>"))
+                         drgnx-uitest-record--command)))))))

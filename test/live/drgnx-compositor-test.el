@@ -11,7 +11,7 @@
   (declare (indent 2))
   `(let* ((root (make-temp-file "drgnx-wm" t))
           (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
-          (s (drgnx-ui-start "minimal" "1280x800" 60 nil 2 ,compositor))
+          (s (drgnx-ui-start "minimal" (drgnx-ui-size-at-scale "1280x800") 60 nil 2 ,compositor))
           (,sess (drgnx-ui-own-session (plist-get s :name))))
      (unwind-protect (progn ,@body)
        (drgnx-ui-stop (plist-get s :name))

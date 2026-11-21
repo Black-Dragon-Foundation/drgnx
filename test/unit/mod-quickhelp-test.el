@@ -4,6 +4,7 @@
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
@@ -122,35 +123,47 @@
 ;;;; Collecting docs (eldoc's functions)
 
 (ert-deftest drgnx-quickhelp/collect-gathers-every-backend-and-drops-stale-answers ()
-  :tags '(:cond)
+  (drgnx-test-with-clock (:allow-pending t)
+    (drgnx-quickhelp-test--with
+      (drgnx-quickhelp-test--elisp "(car x)\n(cdr y)\n"
+        (let* ((pending nil) (seen-point nil) (got1 :none) (got2 :none)
+               (sync (lambda (cb) (push (point) seen-point) (funcall cb "one" :thing 'car)))
+               (legacy (lambda (_cb) "two"))
+               (nothing (lambda (_cb) nil))
+               (broken (lambda (_cb) (error "A backend that fails")))
+               (async (lambda (cb) (push cb pending) t)))
+          (setq-local eldoc-documentation-functions (list sync legacy nothing broken async))
+          (goto-char (point-max))
+          (drgnx-quickhelp-collect 2 (selected-window) (lambda (docs) (setq got1 docs)))
+          ;; ran with point at POS, which is given back
+          (should (equal seen-point '(2)))
+          (should (= (point) (point-max)))
+          (should (eq got1 :none))                 ; still waiting on the async one
+          ;; a newer request: the older one never answers, even when its backend does
+          (drgnx-quickhelp-collect 10 (selected-window) (lambda (docs) (setq got2 docs)))
+          (should (= (length pending) 2))
+          (funcall (cadr pending) "stale" :thing 'old)
+          (should (eq got1 :none))
+          (should (eq got2 :none))
+          (funcall (car pending) "four")
+          (should (equal got2 '(("one" :thing car) ("two") ("four"))))
+          ;; a second answer from the same backend changes nothing
+          (funcall (car pending) "again")
+          (should (equal got2 '(("one" :thing car) ("two") ("four"))))
+          (drgnx-test-advance 1.2)   ; the older request's timeout may not fire its callback
+          (should (eq got1 :none)))))))
+
+(defun drgnx-quickhelp-test--terse (_cb) "terse")
+(defun drgnx-quickhelp-test--full (_cb) "full")
+
+(ert-deftest drgnx-quickhelp/the-card-asks-a-modules-fuller-function ()
+  "A module's pair in `drgnx-quickhelp-fuller-functions': the card asks the fuller one, the echo area keeps its own."
   (drgnx-quickhelp-test--with
-    (drgnx-quickhelp-test--elisp "(car x)\n(cdr y)\n"
-      (let* ((pending nil) (seen-point nil) (got1 :none) (got2 :none)
-             (sync (lambda (cb) (push (point) seen-point) (funcall cb "one" :thing 'car)))
-             (legacy (lambda (_cb) "two"))
-             (nothing (lambda (_cb) nil))
-             (broken (lambda (_cb) (error "A backend that fails")))
-             (async (lambda (cb) (push cb pending) t)))
-        (setq-local eldoc-documentation-functions (list sync legacy nothing broken async))
-        (goto-char (point-max))
-        (drgnx-quickhelp-collect 2 (selected-window) (lambda (docs) (setq got1 docs)))
-        ;; ran with point at POS, which is given back
-        (should (equal seen-point '(2)))
-        (should (= (point) (point-max)))
-        (should (eq got1 :none))                 ; still waiting on the async one
-        ;; a newer request: the older one never answers, even when its backend does
-        (drgnx-quickhelp-collect 10 (selected-window) (lambda (docs) (setq got2 docs)))
-        (should (= (length pending) 2))
-        (funcall (cadr pending) "stale" :thing 'old)
-        (should (eq got1 :none))
-        (should (eq got2 :none))
-        (funcall (car pending) "four")
-        (should (equal got2 '(("one" :thing car) ("two") ("four"))))
-        ;; a second answer from the same backend changes nothing
-        (funcall (car pending) "again")
-        (should (equal got2 '(("one" :thing car) ("two") ("four"))))
-        (drgnx-test-pause 1.2 "the older request's timeout may not fire its callback")
-        (should (eq got1 :none))))))
+    (drgnx-quickhelp-test--elisp "(car x)\n"
+      (let ((got :none) (drgnx-quickhelp-fuller-functions '((drgnx-quickhelp-test--terse . drgnx-quickhelp-test--full))))
+        (setq-local eldoc-documentation-functions (list #'drgnx-quickhelp-test--terse))
+        (drgnx-quickhelp-collect 2 (selected-window) (lambda (docs) (setq got docs)))
+        (should (equal got '(("full"))))))))
 
 (ert-deftest drgnx-quickhelp/collect-never-waits ()
   :tags '(:timing)
@@ -360,21 +373,21 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
           (should-not (drgnx-timer-active-p 'quickhelp-look)))))))
 
 (ert-deftest drgnx-quickhelp/a-quick-move-to-the-next-symbol-gets-its-card ()
-  :tags '(:cond)
-  (drgnx-quickhelp-test--with
-    (drgnx-quickhelp-test--elisp "(car x)\n(cdr y)\n"
-      (drgnx-quickhelp-test--pointer
-        (let ((drgnx-quickhelp-delay 0.05))
-          ;; a hover card is up for `car' (its state stands in for one); the pointer moves on to `cdr'
-          (setq drgnx-quickhelp--origin (list :window (selected-window) :buffer (current-buffer) :pos 2 :key nil)
-                symbol (cons (selected-window) 10))
-          (drgnx-quickhelp--hover-look)          ; the card for `car' goes, `cdr' starts resting
-          (should-not drgnx-quickhelp--origin)
-          (should-not requests)
-          ;; never too short: a pause lasts at least its length, so the rest is past the delay on any machine
-          (drgnx-test-pause 0.08 "the pointer may not move while it rests past the 0.05 s delay")
-          (drgnx-quickhelp--hover-look)          ; rested: its card, the pointer did not have to move again
-          (should (equal requests (list (list (selected-window) 10 nil)))))))))
+  (drgnx-test-with-clock (:allow-pending t)
+    (drgnx-quickhelp-test--with
+      (drgnx-quickhelp-test--elisp "(car x)\n(cdr y)\n"
+        (drgnx-quickhelp-test--pointer
+          (let ((drgnx-quickhelp-delay 0.05))
+            ;; a hover card is up for `car' (its state stands in for one); the pointer moves on to `cdr'
+            (setq drgnx-quickhelp--origin (list :window (selected-window) :buffer (current-buffer) :pos 2 :key nil)
+                  symbol (cons (selected-window) 10))
+            (drgnx-quickhelp--hover-look)          ; the card for `car' goes, `cdr' starts resting
+            (should-not drgnx-quickhelp--origin)
+            (should-not requests)
+            ;; never too short: a pause lasts at least its length, so the rest is past the delay on any machine
+            (drgnx-test-advance 0.08)   ; the pointer may not move while it rests past the 0.05 s delay
+            (drgnx-quickhelp--hover-look)          ; rested: its card, the pointer did not have to move again
+            (should (equal requests (list (list (selected-window) 10 nil))))))))))
 
 (ert-deftest drgnx-quickhelp/a-card-goes-when-its-window-scrolls-hover-or-not ()
   (drgnx-quickhelp-test--with
@@ -584,6 +597,19 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
           (funcall late "(LIST)" :thing 'car)
           (should (string-search "car: (LIST)" (funcall text))))))))
 
+(ert-deftest drgnx-quickhelp/a-data-tip-is-its-own-small-card ()
+  "Docs marked `:drgnx-data-tip' (a debugger's value) draw alone: their own faces kept, no name prefix, no links
+and no ✕, on the raised surface in the small code font (debugging-extras.html `.dtip'); other docs keep the card."
+  (let* ((tip (concat (propertize "shortfall" 'face 'font-lock-function-name-face) " = 8"))
+         (buf (drgnx-quickhelp--render (list (list tip :thing 'shortfall :drgnx-data-tip t)) 60 12 nil)))
+    (with-current-buffer buf
+      (should (equal (buffer-string) "shortfall = 8"))
+      (should (eq (get-text-property 1 'face) 'font-lock-function-name-face))
+      (should (equal (alist-get 'default face-remapping-alist) '(drgnx-quickhelp-data-tip)))))
+  (with-current-buffer (drgnx-quickhelp--render (list (list "(LIST)" :thing 'car)) 60 12 nil)
+    (should (string-search "car: (LIST)" (buffer-string)))
+    (should (string-search "Find References" (buffer-string)))))
+
 (ert-deftest drgnx-quickhelp/no-strip-in-a-window-too-small ()
   (drgnx-quickhelp-test--with
     (drgnx-quickhelp-test--elisp "(car x)\n"
@@ -613,26 +639,26 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
      ,@body))
 
 (ert-deftest drgnx-quickhelp/the-card-stands-out-from-the-editor ()
-  (should (= (drgnx-quickhelp--contrast "#000000" "#ffffff") 21.0))
-  (should-not (drgnx-quickhelp--contrast "unspecified-bg" "#ffffff"))
+  (should (= (drgnx-color-contrast "#000000" "#ffffff") 21.0))
+  (should-not (drgnx-color-contrast "unspecified-bg" "#ffffff"))
   ;; a dark theme whose tooltip is the editor's own background (kusanagi's): the card is lighter, and its
   ;; border is a third colour between the text and the card
   (drgnx-quickhelp-test--with-faces '(((default :background) . "#050810") ((default :foreground) . "#68b8cc")
                                       ((drgnx-quickhelp :background) . "#050810") ((drgnx-quickhelp :foreground) . "#68b8cc"))
     (pcase-let ((`(,bg . ,border) (drgnx-quickhelp-colors)))
       (should-not (equal bg "#050810"))
-      (should (>= (drgnx-quickhelp--contrast bg "#050810") drgnx-quickhelp--distinct))
-      (should (> (drgnx-quickhelp--contrast bg "#68b8cc") 4.5))             ; the text stays readable
+      (should (>= (drgnx-color-contrast bg "#050810") drgnx-quickhelp--distinct))
+      (should (> (drgnx-color-contrast bg "#68b8cc") 4.5))             ; the text stays readable
       (should-not (member border (list bg "#68b8cc" "#050810")))
-      (should (>= (drgnx-quickhelp--contrast border bg) 1.3))))
+      (should (>= (drgnx-color-contrast border bg) 1.3))))
   ;; a light theme with the same: the card is darker than the page, not lighter than white
   (drgnx-quickhelp-test--with-faces '(((default :background) . "#ffffff") ((default :foreground) . "#000000")
                                       ((drgnx-quickhelp :background) . "#ffffff") ((drgnx-quickhelp :foreground) . "#000000"))
     (pcase-let ((`(,bg . ,border) (drgnx-quickhelp-colors)))
       (should-not (equal bg "#ffffff"))
-      (should (>= (drgnx-quickhelp--contrast bg "#ffffff") drgnx-quickhelp--distinct))
-      (should (> (drgnx-quickhelp--contrast bg "#000000") 7))
-      (should (>= (drgnx-quickhelp--contrast border bg) 1.3))))
+      (should (>= (drgnx-color-contrast bg "#ffffff") drgnx-quickhelp--distinct))
+      (should (> (drgnx-color-contrast bg "#000000") 7))
+      (should (>= (drgnx-color-contrast border bg) 1.3))))
   ;; a face background that already stands out (modus-operandi's tooltip) is kept
   (drgnx-quickhelp-test--with-faces '(((default :background) . "#ffffff") ((default :foreground) . "#000000")
                                       ((drgnx-quickhelp :background) . "#c4c4c4") ((drgnx-quickhelp :foreground) . "#000000"))

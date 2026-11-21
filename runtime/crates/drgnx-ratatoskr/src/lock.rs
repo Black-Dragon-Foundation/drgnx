@@ -1,6 +1,8 @@
 //! One hub per data dir (design 3.2; review I2, I3): an exclusive `flock` on `hub-HASH.sock.lock`, held for the hub's
 //! life (the kernel drops it when the process ends, so a crashed hub leaves no stale lock), with `"PID START_TIME\n"`
-//! inside for display.
+//! inside for display.  A hub that has stopped serving and only writes its store's queue before it ends marks the file
+//! `"PID START_TIME stopping\n"` ([`Lock::mark_stopping`]): `stop` is answered by that mark, and `ensure` waits for the
+//! release before it starts a hub, so two hubs never write the same store.
 //!
 //! A Lisp hub from before Ratatoskr locks the same path as a *directory* holding `pid` (`drgnx-hub--take-lock`).
 //! While that pid is alive and its command line names `drgnx-hub-main`, the directory is respected, whether or not
@@ -24,6 +26,24 @@ pub const LISP_HUB_SERVES: &str = "a Lisp hub from before Ratatoskr serves here:
 pub struct Lock {
     _file: File,
     pub path: PathBuf,
+}
+
+/// The third word of a stopping hub's lock file.
+const STOPPING: &str = "stopping";
+
+impl Lock {
+    /// The hub serves no more and only finishes its store before it ends: the file says so (the lock stays held).  The
+    /// text only grows, written over the old in place, so a reader sees the old text or the new, never an empty file.
+    pub fn mark_stopping(&self) -> io::Result<()> {
+        use std::os::unix::fs::FileExt;
+        let mut buf = [0u8; 64];
+        let n = self._file.read_at(&mut buf, 0)?;
+        let line = format!(
+            "{} {STOPPING}\n",
+            String::from_utf8_lossy(&buf[..n]).trim_end()
+        );
+        self._file.write_all_at(line.as_bytes(), 0)
+    }
 }
 
 /// Dropping unlocks before the descriptor closes: a child another thread forked shares the open file until its exec,
@@ -66,6 +86,9 @@ impl Procs for System {
     }
 }
 
+/// Set (to `1`) by a hub that re-executes itself for a restart, so the new image retries the lock it finds held.
+pub const RESTARTED: &str = "RATATOSKR_RESTARTED";
+
 /// What to do with a Lisp hub's lock directory.
 #[derive(Debug, PartialEq, Eq)]
 pub enum LispLock {
@@ -83,6 +106,27 @@ pub fn judge_lisp_lock(pid: Option<u32>, age: Duration, procs: &impl Procs) -> L
         // between the Lisp hub's mkdir and its pid write
         None if age < LISP_LOCK_GRACE => LispLock::Respect,
         None => LispLock::TakeOver,
+    }
+}
+
+/// [`acquire`], trying again up to TRIES times (calling PAUSE before each) while another process holds the lock: a hub
+/// started by a restart (`RATATOSKR_RESTARTED`) waits for the lock its predecessor let go of with its exec.  Any other
+/// answer comes at once.
+pub fn acquire_retrying(
+    path: &Path,
+    procs: &impl Procs,
+    tries: u32,
+    mut pause: impl FnMut(),
+) -> Result<Lock, LockError> {
+    let mut left = tries;
+    loop {
+        match acquire(path, procs) {
+            Err(LockError::Held) if left > 0 => {
+                left -= 1;
+                pause();
+            }
+            other => return other,
+        }
     }
 }
 
@@ -149,10 +193,12 @@ pub fn acquire(path: &Path, procs: &impl Procs) -> Result<Lock, LockError> {
 pub enum Holder {
     /// Nothing: no file, a file nobody holds, or a stale Lisp lock directory.
     Nobody,
-    /// A Ratatoskr holds the `flock`; the file says `"PID START_TIME"` (none where it does not read).
+    /// A Ratatoskr holds the `flock`; the file says `"PID START_TIME"` (none where it does not read), and STOPPING when
+    /// it has stopped serving and finishes its store ([`Lock::mark_stopping`]).
     Ratatoskr {
         pid: Option<u32>,
         start: Option<u64>,
+        stopping: bool,
     },
     /// A Lisp hub's lock directory that [`judge_lisp_lock`] respects (its pid, when it reads).
     Lisp { pid: Option<u32> },
@@ -212,7 +258,12 @@ pub fn holder(path: &Path, procs: &impl Procs) -> io::Result<Holder> {
         .and_then(|p| p.parse().ok())
         .filter(|p| *p > 0);
     let start = fields.next().and_then(|s| s.parse().ok());
-    Ok(Holder::Ratatoskr { pid, start })
+    let stopping = fields.next() == Some(STOPPING);
+    Ok(Holder::Ratatoskr {
+        pid,
+        start,
+        stopping,
+    })
 }
 
 /// The pid `stop` may signal for a held lock that names LOCK_PID and LOCK_START (call 14): only the process LISTENER
@@ -413,6 +464,17 @@ mod tests {
             Holder::Ratatoskr {
                 pid: Some(p),
                 start: Some(_),
+                stopping: false,
+            } => assert_eq!(p, me),
+            other => panic!("{other:?}"),
+        }
+        // marked: still held, by the same pid, now stopping
+        held.mark_stopping().unwrap();
+        match holder(&path, &Fake(vec![])).unwrap() {
+            Holder::Ratatoskr {
+                pid: Some(p),
+                start: Some(_),
+                stopping: true,
             } => assert_eq!(p, me),
             other => panic!("{other:?}"),
         }
@@ -534,7 +596,8 @@ mod tests {
             holder(&path, &Fake(vec![])).unwrap(),
             Holder::Ratatoskr {
                 pid: None,
-                start: Some(5)
+                start: Some(5),
+                stopping: false
             }
         );
         // the same lock with the directory open to others: refused, never "held by" what the file names
@@ -555,6 +618,35 @@ mod tests {
             holder(&root.path().join("gone/hub-x.sock.lock"), &Fake(vec![])).unwrap(),
             Holder::Nobody
         );
+    }
+
+    /// A hub started by a restart waits a little for the lock its predecessor's exec released: the predecessor's
+    /// descriptor goes with the exec, an instant after which an `ensure` could take the lock first.
+    #[test]
+    fn a_restarted_hub_retries_a_held_lock_and_an_ordinary_start_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hub-r.sock.lock");
+        let mut held = Some(acquire(&path, &Fake(vec![])).unwrap());
+        // no retries: held at once
+        assert!(matches!(
+            acquire_retrying(&path, &Fake(vec![]), 0, || panic!("no retry asked")),
+            Err(LockError::Held)
+        ));
+        // retries: the holder lets go during the first pause (its exec), and the second try holds the lock
+        let mut pauses = 0;
+        let got = acquire_retrying(&path, &Fake(vec![]), 5, || {
+            pauses += 1;
+            held.take();
+        });
+        assert!(got.is_ok(), "the second try holds the lock");
+        assert_eq!(pauses, 1);
+        drop(got);
+        // a lock that stays held: the tries run out, and the error is the same
+        let _again = acquire(&path, &Fake(vec![])).unwrap();
+        let mut pauses = 0;
+        let got = acquire_retrying(&path, &Fake(vec![]), 3, || pauses += 1);
+        assert!(matches!(got, Err(LockError::Held)));
+        assert_eq!(pauses, 3);
     }
 
     #[test]

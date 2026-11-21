@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
 const USAGE: &str = "usage: domr --hub-bin PATH --scenarios DIR [--only GLOB] [--only-tag TAG] [--require-all]\n\
-    \x20      [--perf OUT.json]\n\
+    \x20      [--perf OUT.json] [--shard K/N]\n\
     \x20      domr connect-as --socket PATH";
 
 struct Args {
@@ -28,12 +28,26 @@ struct Args {
     only_tag: Option<String>,
     require_all: bool,
     perf: Option<PathBuf>,
+    /// `--shard K/N`: of the rows the other filters select, in path order, the Kth of every N (1-based K).
+    shard: Option<(usize, usize)>,
+}
+
+/// `K/N` with 1 <= K <= N.
+fn parse_shard(v: &str) -> Result<(usize, usize), String> {
+    let bad = || format!("--shard {v}: K/N with 1 <= K <= N");
+    let (k, n) = v.split_once('/').ok_or_else(bad)?;
+    let (k, n): (usize, usize) = (k.parse().map_err(|_| bad())?, n.parse().map_err(|_| bad())?);
+    if k == 0 || k > n {
+        return Err(bad());
+    }
+    Ok((k, n))
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let (mut hub_bin, mut scenarios, mut only, mut only_tag, mut perf) =
         (None, None, None, None, None);
     let mut require_all = false;
+    let mut shard = None;
     let mut it = argv.iter();
     while let Some(a) = it.next() {
         let mut value = |name: &str| {
@@ -48,6 +62,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--only-tag" => only_tag = Some(value("--only-tag")?),
             "--perf" => perf = Some(PathBuf::from(value("--perf")?)),
             "--require-all" => require_all = true,
+            "--shard" => shard = Some(parse_shard(&value("--shard")?)?),
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -60,6 +75,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         only_tag,
         require_all,
         perf,
+        shard,
     })
 }
 
@@ -92,6 +108,55 @@ fn no_real_sandbox(bin: &std::path::Path) -> Option<String> {
             c["reason"].as_str().unwrap_or("the check failed")
         )),
         None => Some("no sandbox here: `sandbox check --json` gave no answer".into()),
+    }
+}
+
+/// The JSON `bin ARGS` prints, run in a fresh root (nothing of `~` is read).
+fn hub_json(bin: &std::path::Path, args: &[&str]) -> Option<serde_json::Value> {
+    let root = hub::Root::new().ok()?;
+    let out = Command::new(bin)
+        .args(args)
+        .env_clear()
+        .envs(root.base_env(vec![]))
+        .output()
+        .ok()?;
+    serde_json::from_slice(&out.stdout).ok()
+}
+
+/// Why the hub `bin` gives sessions no browser here, for a `chromium` row: its kernel's Landlock ABI (from its
+/// `sandbox check`) is below the browser's 9, or it resolves no Chromium (`browser list`).  `None`: it does.
+fn no_browser(bin: &std::path::Path) -> Option<String> {
+    let abi = hub_json(bin, &["sandbox", "check", "--json"])
+        .and_then(|c| c["landlock_abi"].as_u64())
+        .unwrap_or(0);
+    if abi < 9 {
+        return Some(format!(
+            "Landlock ABI {abi} is below 9: the hub gives sessions no browser here"
+        ));
+    }
+    match hub_json(bin, &["browser", "list", "--json"]) {
+        Some(l) if !l["browser"].is_null() => None,
+        Some(l) => Some(format!(
+            "no Chromium for sessions here: {}",
+            l["fix"].as_str().unwrap_or("`browser list` found none")
+        )),
+        None => Some("no Chromium for sessions here: `browser list --json` gave no answer".into()),
+    }
+}
+
+/// Why `ratatoskr-mock cdp-drive` cannot run Playwright MCP here: no `node` on the PATH, or no Playwright MCP in
+/// `/opt/pw-mcp` (the browser test image's).  `None`: it can.
+fn no_playwright() -> Option<String> {
+    let node = std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("node").is_file()));
+    let cli = std::path::Path::new("/opt/pw-mcp/node_modules/@playwright/mcp/cli.js");
+    match (node, cli.is_file()) {
+        (false, _) => Some("needs node on the PATH (the browser test image)".into()),
+        (_, false) => Some(format!(
+            "needs Playwright MCP at {} (the browser test image)",
+            cli.display()
+        )),
+        _ => None,
     }
 }
 
@@ -135,6 +200,20 @@ fn main() -> ExitCode {
             }
         };
     }
+    // an outside agent's identity is its bridge's parent process, and an orphan's is refused (`sessions::outside`):
+    // the harness plays the bridge, so straight under a container's init (`podman run --init … sh -c '… && domr …'`) its
+    // parent is PID 1 and `mcp/an-outside-bridge-is-ext-and-unverified` is refused there only. Then it runs as its own
+    // child, whose parent is this one, as under a desktop's or CI's shell.
+    if std::os::unix::process::parent_id() == 1 {
+        let status = std::env::current_exe().and_then(|me| Command::new(me).args(&argv).status());
+        return match status {
+            Ok(s) => ExitCode::from(s.code().map_or(1, |c| u8::try_from(c).unwrap_or(1))),
+            Err(e) => {
+                eprintln!("domr: cannot run as its own child: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
     let args = match parse_args(&argv) {
         Ok(a) => a,
         Err(e) => {
@@ -152,6 +231,18 @@ fn main() -> ExitCode {
     let hooks_needed = scenarios
         .iter()
         .any(|s| s.requires.iter().any(|t| t == "test-hooks"));
+    // a tag's probe runs only when a row this run selects needs it
+    let selected_need = |tag: &str| {
+        scenarios
+            .iter()
+            .filter(|s| {
+                args.only
+                    .as_deref()
+                    .is_none_or(|g| scenario::glob(g, &s.name))
+            })
+            .any(|s| s.requires.iter().any(|t| t == tag))
+    };
+    let on = |name: &str| std::env::var(name).as_deref() == Ok("1");
     let host = Host {
         sudo: scenarios
             .iter()
@@ -162,17 +253,22 @@ fn main() -> ExitCode {
         test_hooks: hooks_needed && test_hooks(&args.hub_bin),
         perf: args.perf.is_some(),
         podman: scenario::podman_available(),
+        no_rootless: selected_need("rootless")
+            .then(scenario::no_rootless)
+            .flatten(),
+        user_t: scenario::selinux_user_t(),
         ptrace_stays: scenario::ptrace_effective() && !scenario::setpriv_available(),
-        no_real_sandbox: scenarios
-            .iter()
-            .filter(|s| {
-                args.only
-                    .as_deref()
-                    .is_none_or(|g| scenario::glob(g, &s.name))
-            })
-            .any(|s| s.requires.iter().any(|t| t == "real-sandbox"))
+        no_real_sandbox: selected_need("real-sandbox")
             .then(|| no_real_sandbox(&args.hub_bin))
             .flatten(),
+        no_browser: selected_need("chromium")
+            .then(|| no_browser(&args.hub_bin))
+            .flatten(),
+        no_playwright: selected_need("playwright-mcp")
+            .then(no_playwright)
+            .flatten(),
+        browsers_required: on("DRGNX_TEST_REAL_BROWSER"),
+        internet: on("DRGNX_TEST_INTERNET"),
     };
     let cfg = exec::Config {
         hub_bin: args.hub_bin.clone(),
@@ -180,6 +276,7 @@ fn main() -> ExitCode {
             .unwrap_or_else(|_| args.scenarios.clone()),
     };
     let mut report = Report::default();
+    let mut selected = 0usize;
     for s in &scenarios {
         if args
             .only
@@ -189,6 +286,12 @@ fn main() -> ExitCode {
                 .only_tag
                 .as_deref()
                 .is_some_and(|t| !s.requires.iter().any(|r| r == t))
+        {
+            continue;
+        }
+        selected += 1;
+        if let Some((k, n)) = args.shard
+            && (selected - 1) % n != k - 1
         {
             continue;
         }
@@ -210,4 +313,18 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     ExitCode::from(report.exit_code(args.require_all) as u8)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shard_is_k_of_n() {
+        assert_eq!(parse_shard("1/2"), Ok((1, 2)));
+        assert_eq!(parse_shard("3/3"), Ok((3, 3)));
+        for bad in ["0/2", "3/2", "1", "a/2", "1/0", "-1/2"] {
+            assert!(parse_shard(bad).is_err(), "--shard {bad} is an error");
+        }
+    }
 }

@@ -968,13 +968,13 @@ Line), Move into Settings…, Move to My Lisp…, Undo Move, Tidy custom.el and 
   (drgnx-command-define 'settings-move-to-lisp :category "Settings" :title "Move to My Lisp…"
                         :command #'drgnx-settings-move-to-lisp
                         :doc "Move a setting of settings.el to the end of config.el as a setopt: a diff first, one Undo")
-  (drgnx-command-define 'settings-move-undo :category "Settings" :title "Undo Move"
+  (drgnx-command-define 'settings-move-undo :category "Settings" :title "Undo Move" :icon 'rotate-ccw
                         :command #'drgnx-settings-move-undo
                         :doc "Put both files of the last Move into Settings or Move to My Lisp back as they were")
   (drgnx-command-define 'settings-tidy-custom-file :category "Settings" :title "Tidy custom.el"
                         :command #'drgnx-settings-tidy-custom-file
                         :doc "Drop custom.el's entries equal to the default, print it as Customize does: a diff, one Undo")
-  (drgnx-command-define 'settings-tidy-undo :category "Settings" :title "Undo Tidy"
+  (drgnx-command-define 'settings-tidy-undo :category "Settings" :title "Undo Tidy" :icon 'rotate-ccw
                         :command #'drgnx-settings-tidy-undo
                         :doc "Put custom.el back as it was before the last Tidy custom.el")
   (drgnx-config-register-page-commands))
@@ -1019,7 +1019,7 @@ Line), Move into Settings…, Move to My Lisp…, Undo Move, Tidy custom.el and 
     (drgnx-command-define 'settings-page-convert :category "Settings" :title "Convert to .drgnx/settings.el"
                           :command #'drgnx-settings-page-convert-old-files
                           :map map :when when :doc "Write the project's old .drgnx files as entries of the shared settings file"))
-  (drgnx-command-define 'settings-undo :category "Settings" :title "Undo"
+  (drgnx-command-define 'settings-undo :category "Settings" :title "Undo" :icon 'rotate-ccw
                         :command #'drgnx-settings-page-undo
                         :doc "Put the previous value of a setting back (the row at point on the Settings page, else you choose)"))
 

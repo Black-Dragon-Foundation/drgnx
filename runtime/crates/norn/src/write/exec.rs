@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use urdr::graph::entity::{self, Changes, EntityNew, Origin};
 
 /// The statuses an exec ends in.
-pub const END_STATUSES: &[&str] = &["done", "stopped", "timed-out", "lost"];
+pub const END_STATUSES: &[&str] = &["done", "stopped", "timed-out", "lost", "infra"];
 
 /// A job that starts.
 #[derive(Clone, Debug, PartialEq)]

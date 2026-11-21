@@ -1,0 +1,13 @@
+{"scenario": "agents/v2-agent-that-always-exits-is-restarted-once", "requires": ["v1", "test-hooks"], "doc": "An agent that exits at every initialize is started twice (v2, then v1) and the start is refused: no third start."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--exit-on-init\" \"$ROOT/attempts.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "$string", "message": "$string"}}, "within_ms": 30000}
+{"do": "file_grep", "paths": ["$ROOT/attempts.log"], "absent": "\"attempt\":3"}

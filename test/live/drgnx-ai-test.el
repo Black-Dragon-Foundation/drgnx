@@ -37,7 +37,7 @@
                                     (drgnx-ai-providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" (process-get mock :port)) :caps (chat fim))))
                                     (drgnx-ai-roles ((complete (o . "coder")) (edit (o . "coder")))))
                    (current-buffer)))
-          (setq s (drgnx-ui-start "drgnx" "1400x800" 30) sess (drgnx-ui-own-session (plist-get s :name)))
+          (setq s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30) sess (drgnx-ui-own-session (plist-get s :name)))
           ;; the session's providers: the mock, found running by the probe
           (drgnx-live-ai--q sess (format "(progn (setenv \"DRGNX_CONFIG_DIR\" %S) (drgnx-settings-apply-global) (drgnx-ai-probe nil) t)" (concat root "config")))
           (should (drgnx-live-ai--until sess "(drgnx-ai-usable-p 'o 'fim)" 10))

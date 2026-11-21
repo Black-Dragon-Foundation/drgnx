@@ -17,10 +17,13 @@
 (defvar drgnx-lease-test--procs nil "Holders the running test started.")
 
 (defun drgnx-lease-test--env (&rest extra)
-  "The environment of a bin/drgnx lease: a temp lease dir, 2 light and 1 heavy slot, EXTRA on top."
+  "The environment of a bin/drgnx lease: a temp lease dir, 2 light and 1 heavy slot, EXTRA on top.
+No test hub is built (DRGNX_TEST_HUB_BUILD=0): `test --ui' builds one before its Emacs runs, and where none can be
+built (no DRGNX_RATATOSKR_BIN, no cargo) the stub Emacs never ran."
   (append extra
           (list (concat "DRGNX_LEASE_DIR=" drgnx-lease-test--dir "/lease") "DRGNX_LEASE_LIGHT=2"
                 "DRGNX_LEASE_HEAVY=1" "DRGNX_LEASE_POLL=0.2" "DRGNX_LEASE_CAP=off" "CI=false"
+                "DRGNX_TEST_HUB_BUILD=0"
                 (concat "HOME=" drgnx-lease-test--dir) "DRGNX_LEASE_HELD" "DRGNX_LEASE")
           process-environment))
 
@@ -121,7 +124,9 @@ the temp dir) and sleeps.  Return the process."
                                 :command (list drgnx-lease-test--bin "lease" "exclusive" "--wait" "60" "--" "touch"
                                                exclusive-ran)))))
         (push ex drgnx-lease-test--procs)
-        (drgnx-test-pause 1 "the exclusive holder may not run while the light one holds")
+        ;; the exclusive lease tried the lock, failed and sleeps its poll: its `sleep' child is the observable
+        (drgnx-test-wait (lambda () (eql 0 (call-process "pgrep" nil nil nil "-P" (number-to-string (process-id ex)) "sleep")))
+                         :what "the exclusive lease's first poll sleep")
         (should-not (file-exists-p exclusive-ran))            ; it waits for the light holder
         ;; a new light holder starts while the exclusive polls
         (should (= 0 (car (drgnx-lease-test--call env "lease" "light" "--wait" "5" "--" "true"))))

@@ -1,0 +1,22 @@
+{"scenario": "huddle/against-decision-opens-none", "requires": ["v1", "test-hooks"], "doc": "Gated (B). A clash against a decision never opens a huddle: agents/huddle/start on such a clash's key is refused with its reason, and a key no card has is refused too; the one huddle there is the one the user opened on two sessions. Pattern D on the answers, then the store read."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:b", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "agents/huddle/start", "params": {"sessions": ["$a", "$b"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"id": "$capture:h", "state": "open", "participants": ["$a", "$b"]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "huddle", "data": {"id": "$h", "state": "open"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 20, "method": "agents/huddle/start", "params": {"clash": "against:j1#1:abcd"}}}
+{"do": "expect", "conn": "c", "json": {"id": 20, "error": {"code": "invalid-params"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 21, "method": "agents/huddle/start", "params": {"clash": "conflict:x:y"}}}
+{"do": "expect", "conn": "c", "json": {"id": 21, "error": {"code": "invalid-params"}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'huddle' and retired_tx is null", "rows": [[1]]}

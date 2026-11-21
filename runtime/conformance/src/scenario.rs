@@ -2,7 +2,8 @@
 
 use serde_json::{Map, Value};
 
-pub const VERBS: [&str; 34] = [
+pub const VERBS: [&str; 35] = [
+    "count_events",
     "start",
     "root",
     "rename",
@@ -56,6 +57,12 @@ pub struct Scenario {
     /// `"pending": REASON`: a known red until REASON's task lands (a failure counts as expected, a pass fails the run
     /// so the mark goes).
     pub pending: Option<String>,
+    /// `"bound_s": N`: the whole row's time, `DEFAULT_BOUND_S` without it.  Past it the row fails at its next step
+    /// (or `measure` repeat) with what it had done, so one slow row does not hold up the run.
+    pub bound_s: u64,
+    /// `"on_failure": [{"conn": NAME, "json": REQUEST}, …]`: what a failure asks the hub, its answers in the failure
+    /// (a row whose red comes only on another machine names what the next run must show).
+    pub on_failure: Vec<Map<String, Value>>,
     pub steps: Vec<Step>,
 }
 
@@ -65,7 +72,7 @@ pub struct ParseError {
     pub msg: String,
 }
 
-pub const TAGS: [&str; 9] = [
+pub const TAGS: [&str; 14] = [
     "v1",
     "sudo",
     "test-hooks",
@@ -75,6 +82,11 @@ pub const TAGS: [&str; 9] = [
     "agent-locks",
     "podman",
     "real-sandbox",
+    "chromium",
+    "playwright-mcp",
+    "internet",
+    "rootless",
+    "selinux-user-t",
 ];
 
 fn err(line: usize, msg: impl Into<String>) -> ParseError {
@@ -83,6 +95,9 @@ fn err(line: usize, msg: impl Into<String>) -> ParseError {
         msg: msg.into(),
     }
 }
+
+/// A row's time when its header gives no `bound_s`.
+pub const DEFAULT_BOUND_S: u64 = 600;
 
 /// One scenario file: line 1 is the header, every other non-blank line a step.
 pub fn parse(text: &str) -> Result<Scenario, ParseError> {
@@ -135,6 +150,27 @@ pub fn parse(text: &str) -> Result<Scenario, ParseError> {
             ));
         }
     };
+    let bound_s = match h.get("bound_s") {
+        None => DEFAULT_BOUND_S,
+        Some(v) => v
+            .as_u64()
+            .filter(|&n| n > 0)
+            .ok_or_else(|| err(hl, "\"bound_s\" is a whole number of seconds above 0"))?,
+    };
+    let on_failure = match h.get("on_failure") {
+        None => Vec::new(),
+        Some(Value::Array(asks)) => asks
+            .iter()
+            .map(|a| match a {
+                Value::Object(o) if o.get("json").and_then(|j| j.get("id")).is_some() => Ok(o.clone()),
+                _ => Err(err(
+                    hl,
+                    "\"on_failure\" is an array of {\"conn\": NAME, \"json\": REQUEST}, each request with an \"id\"",
+                )),
+            })
+            .collect::<Result<_, _>>()?,
+        Some(_) => return Err(err(hl, "\"on_failure\" is an array of requests")),
+    };
     let mut steps = Vec::new();
     for (line, text) in lines {
         let v: Value =
@@ -157,6 +193,8 @@ pub fn parse(text: &str) -> Result<Scenario, ParseError> {
         requires,
         doc,
         pending,
+        bound_s,
+        on_failure,
         steps,
     })
 }
@@ -209,11 +247,25 @@ pub struct Host {
     pub perf: bool,
     /// `podman` is on the PATH.
     pub podman: bool,
+    /// Why the `rootless` rows cannot run here (podman is not rootless, or `podman info` fails); `None`: rootless.
+    pub no_rootless: Option<String>,
+    /// This login runs in SELinux's confined `user_t` (a `user_u` login), for the `selinux-user-t` rows.
+    pub user_t: bool,
     /// The harness has `CAP_SYS_PTRACE` and no `setpriv` to run a `drop_ptrace` step without it.
     pub ptrace_stays: bool,
     /// Why a `real-sandbox` row cannot run here (the hub has test hooks, so its sessions start unsandboxed, or its
     /// `sandbox check` fails); `None`: a release hub whose sandbox starts.
     pub no_real_sandbox: Option<String>,
+    /// Why the hub gives sessions no browser here (a Landlock ABI below 9, or no Chromium it resolves), for the
+    /// `chromium` rows; `None`: it does.
+    pub no_browser: Option<String>,
+    /// Why Playwright MCP cannot run here (no `node`, or nothing in `/opt/pw-mcp`), for the `playwright-mcp` rows.
+    pub no_playwright: Option<String>,
+    /// `DRGNX_TEST_REAL_BROWSER=1`: real browsers were asked for, so a `chromium` or `playwright-mcp` row that cannot
+    /// run is a red under `--require-all`, not an excused skip.
+    pub browsers_required: bool,
+    /// `DRGNX_TEST_INTERNET=1`: the `internet` rows may reach the outside network.
+    pub internet: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -247,6 +299,14 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
     if has("podman") && !h.podman {
         return skip("needs podman on the PATH", true);
     }
+    if has("rootless")
+        && let Some(why) = &h.no_rootless
+    {
+        return skip(why, true);
+    }
+    if has("selinux-user-t") && !h.user_t {
+        return skip("needs a confined SELinux user_u login (user_t)", true);
+    }
     if has("perf") && !h.perf {
         return skip("needs --perf", true); // a mode of the run, not a missing capability: --require-all lets it be
     }
@@ -255,6 +315,23 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
     {
         // the test-hooks hub of the main run, or a host without a sandbox: neither is a red of this row
         return skip(why, true);
+    }
+    // a host without them (CI's runners) skips; one that was to have them fails
+    if has("chromium")
+        && let Some(why) = &h.no_browser
+    {
+        return skip(why, !h.browsers_required);
+    }
+    if has("playwright-mcp")
+        && let Some(why) = &h.no_playwright
+    {
+        return skip(why, !h.browsers_required);
+    }
+    if has("internet") && !h.internet {
+        return skip(
+            "needs DRGNX_TEST_INTERNET=1 (it reaches the outside network)",
+            true,
+        );
     }
     if h.ptrace_stays
         && s.steps
@@ -278,6 +355,13 @@ pub fn ptrace_effective() -> bool {
                 .and_then(|v| u64::from_str_radix(v.trim(), 16).ok())
         })
         .is_some_and(|caps| caps & (1 << 19) != 0)
+}
+
+/// Does this process run in SELinux's `user_t` (the type, third field of `/proc/self/attr/current`)?  False without
+/// SELinux.
+pub fn selinux_user_t() -> bool {
+    std::fs::read_to_string("/proc/self/attr/current")
+        .is_ok_and(|c| c.trim_end_matches(['\0', '\n']).split(':').nth(2) == Some("user_t"))
 }
 
 /// Can `setpriv` run here?
@@ -305,6 +389,22 @@ pub fn probe_sudo(cmd: &str) -> bool {
 pub fn podman_available() -> bool {
     std::env::var_os("PATH")
         .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("podman").is_file()))
+}
+
+/// Why podman here is not rootless (`podman info`'s `host.security.rootless`), or `None` when it is.
+pub fn no_rootless() -> Option<String> {
+    let out = std::process::Command::new("podman")
+        .args(["info", "--format", "{{.Host.Security.Rootless}}"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+    match out {
+        Ok(o) if o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true" => None,
+        Ok(o) if o.status.success() => {
+            Some("needs rootless podman (this podman runs as root)".into())
+        }
+        _ => Some("needs rootless podman (`podman info` failed)".into()),
+    }
 }
 
 /// May another uid be used?  Root can; otherwise passwordless sudo (the command is $SUDO, default `sudo`).
@@ -336,6 +436,7 @@ mod tests {
 {"do": "poll", "conn": "c", "json": {"id": 3, "method": "ping"}, "expect": {"id": 3, "result": "$any"}, "within_ms": 100, "every_ms": 10}
 {"do": "expect_closed", "conn": "c"}
 {"do": "expect_silent", "conn": "c", "for_ms": 50}
+{"do": "count_events", "conn": "c", "for_ms": 50, "at_most": {"agent": 30}, "none": ["agent-entries"], "lacks": "rawInput"}
 {"do": "kill", "hub": "h", "signal": "TERM"}
 {"do": "expect_exit", "hub": "h", "code": 0}
 {"do": "file", "path": "$CAP", "exists": true, "mode": "0600"}
@@ -447,6 +548,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn on_failure_is_requests_with_ids() {
+        assert!(row("").on_failure.is_empty());
+        let s = parse(
+            "{\"scenario\": \"t/f\", \"on_failure\": [{\"conn\": \"c\", \"json\": {\"id\": 90, \"method\": \"exec/list\"}}]}\n",
+        )
+        .unwrap();
+        assert_eq!(s.on_failure.len(), 1);
+        assert_eq!(s.on_failure[0]["json"]["method"], "exec/list");
+        for bad in [
+            "true",
+            "[1]",
+            "[{\"conn\": \"c\", \"json\": {\"method\": \"x\"}}]",
+        ] {
+            assert!(
+                parse(&format!(
+                    "{{\"scenario\": \"t/f\", \"on_failure\": {bad}}}\n"
+                ))
+                .is_err(),
+                "on_failure {bad} is an error"
+            );
+        }
+    }
+
+    #[test]
+    fn bound_s_is_a_positive_whole_number_with_a_default() {
+        assert_eq!(row("").bound_s, DEFAULT_BOUND_S);
+        let s = parse("{\"scenario\": \"t/b\", \"bound_s\": 30}\n").unwrap();
+        assert_eq!(s.bound_s, 30);
+        for bad in ["0", "-1", "1.5", "\"30\""] {
+            assert!(
+                parse(&format!("{{\"scenario\": \"t/b\", \"bound_s\": {bad}}}\n")).is_err(),
+                "bound_s {bad} is an error"
+            );
+        }
+    }
+
     fn row(requires: &str) -> Scenario {
         parse(&format!(
             "{{\"scenario\": \"t/row\", \"requires\": [{requires}]}}\n"
@@ -530,6 +668,119 @@ mod tests {
             ..Host::default()
         };
         assert_eq!(gate(&s, &with), Gate::Run);
+    }
+
+    #[test]
+    fn a_user_t_row_runs_only_on_a_user_t_login() {
+        let s = row("\"linux\", \"selinux-user-t\"");
+        let other = Host {
+            linux: true,
+            ..Host::default()
+        };
+        assert_eq!(
+            gate(&s, &other),
+            Gate::Skip {
+                reason: "needs a confined SELinux user_u login (user_t)".into(),
+                excused: true
+            }
+        );
+        let confined = Host {
+            linux: true,
+            user_t: true,
+            ..Host::default()
+        };
+        assert_eq!(gate(&s, &confined), Gate::Run);
+    }
+
+    #[test]
+    fn a_rootless_row_is_skipped_with_its_reason_where_podman_is_not_rootless() {
+        let s = row("\"podman\", \"rootless\"");
+        let without = Host {
+            linux: true,
+            podman: true,
+            no_rootless: Some("needs rootless podman (this podman runs as root)".into()),
+            ..Host::default()
+        };
+        assert_eq!(
+            gate(&s, &without),
+            Gate::Skip {
+                reason: "needs rootless podman (this podman runs as root)".into(),
+                excused: true
+            }
+        );
+        let with = Host {
+            linux: true,
+            podman: true,
+            ..Host::default()
+        };
+        assert_eq!(gate(&s, &with), Gate::Run);
+    }
+
+    #[test]
+    fn a_browser_row_is_excused_unless_real_browsers_were_asked_for() {
+        let s = row("\"real-sandbox\", \"chromium\", \"playwright-mcp\"");
+        let bare = Host {
+            linux: true,
+            no_browser: Some("Landlock ABI 8 is below 9".into()),
+            no_playwright: Some("no Playwright MCP".into()),
+            ..Host::default()
+        };
+        assert_eq!(
+            gate(&s, &bare),
+            Gate::Skip {
+                reason: "Landlock ABI 8 is below 9".into(),
+                excused: true
+            }
+        );
+        // DRGNX_TEST_REAL_BROWSER=1: a missing browser is a red under --require-all
+        let asked = Host {
+            browsers_required: true,
+            ..bare.clone()
+        };
+        assert!(matches!(
+            gate(&s, &asked),
+            Gate::Skip { excused: false, .. }
+        ));
+        let no_mcp = Host {
+            no_browser: None,
+            ..asked.clone()
+        };
+        assert_eq!(
+            gate(&s, &no_mcp),
+            Gate::Skip {
+                reason: "no Playwright MCP".into(),
+                excused: false
+            }
+        );
+        let all = Host {
+            no_playwright: None,
+            ..no_mcp
+        };
+        assert_eq!(gate(&s, &all), Gate::Run);
+        // a sandbox missing comes first, excused whatever was asked for
+        let no_sandbox = Host {
+            no_real_sandbox: Some("the hub binary has test-hooks".into()),
+            ..asked
+        };
+        assert!(matches!(
+            gate(&s, &no_sandbox),
+            Gate::Skip { excused: true, .. }
+        ));
+    }
+
+    #[test]
+    fn an_internet_row_runs_only_when_asked_for() {
+        let s = row("\"internet\"");
+        let host = Host {
+            linux: true,
+            ..Host::default()
+        };
+        assert!(matches!(gate(&s, &host), Gate::Skip { excused: true, .. }));
+        let asked = Host {
+            internet: true,
+            ..host
+        };
+        assert_eq!(gate(&s, &asked), Gate::Run);
     }
 
     #[test]

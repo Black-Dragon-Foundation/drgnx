@@ -6,7 +6,7 @@
 ;; The coordination writers' local path, kept for tests only: it seeds work.db with the rows the hub writes (jobs and
 ;; their tasks, the decision log, messages, cards, events, the agent registry, review marks) and reads back what the
 ;; seeding changed (inbox, queued, tasks, cards, ...).  The product's writer is Ratatoskr; the readers the product uses
-;; are in core/drgnx-coord-read.el.
+;; are Ratatoskr's.
 ;;
 ;; Every write goes through the read-write handle `drgnx-work-db', which opens only where
 ;; `drgnx-work-db-gate-hub-standin' is bound: run the writers inside `drgnx-work-fixture-as-hub'
@@ -17,7 +17,22 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-work-db)
-(require 'drgnx-coord-read)
+
+(defconst drgnx-coord-control-chars (concat "\0-\37\177-" (string #x9f #x61c #x200e #x200f #x202a ?- #x202e #x2066 ?- #x2069
+                                                                  #x2028 #x2029))
+  "Characters an agent's text must not carry, as the inside of a regexp bracket: the C0 controls, DEL, the C1
+controls, the BiDi controls (the Arabic letter mark, marks, embeddings, overrides, isolates) that make text
+read other than it is, and the line and paragraph separators (U+2028, U+2029) that start a line a reader sees.")
+
+(defconst drgnx-coord--agent-cols "id, kind, name, cwd, worktree, branch, base, plan, task, pid, started, seen")
+(defconst drgnx-coord--message-cols "id, job, sender, recipient, text, state, reason, at, delivered, read, acted")
+
+(defun drgnx-coord--meta (db key) (caar (sqlite-select db "select value from meta where key = ?" (list key))))
+
+(defun drgnx-coord--message-plist (row)
+  (pcase-let ((`(,id ,job ,sender ,recipient ,text ,state ,reason ,at ,delivered ,read ,acted) row))
+    (list :id id :job job :sender sender :recipient recipient :text text :state state :reason reason :at at
+          :delivered delivered :read read :acted acted)))
 
 (defvar drgnx-coord-lease-minutes 15 "A claim not renewed for this long is released.")
 (defvar drgnx-coord-queue-limit 20 "Undelivered messages an agent may have waiting; more are held.")
@@ -134,7 +149,7 @@ CLEAR is a list of fields (:kind :name :cwd :worktree :branch :base :plan :task 
 
 (cl-defun drgnx-coord-job-create (&key id title plan repo tasks data)
   "Make job ID with TASKS ((:n :title :role :deps (N…))…): those without dependencies ready, the rest pending.  DATA:
-a plist kept with it (`drgnx-coord-job')."
+a plist kept with it (read back with `sqlite-select')."
   (drgnx-coord--tx
    (lambda (db)
      (sqlite-execute db "insert into job values (?, ?, ?, ?, 'proposed', ?, ?)"

@@ -1,14 +1,20 @@
-{"scenario": "exec/an-agent-cannot-ask-for-no-time-box", "requires": ["v1"], "doc": "A session (an agent) that asks job_start for no_timebox is refused (the tool's error names the field) and no job starts: only the user's jobs may run without a time box."}
+{"scenario": "exec/an-agent-cannot-ask-for-no-time-box", "requires": ["v1", "test-hooks"], "doc": "An agent session the hub holds (its own worktree, code.edit allowed, so a plain job of it starts) asks job_start for no_timebox: the hub refuses it by name and no job starts; only the user's jobs may run without a time box."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "job": "j1", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
-{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-matrix", "source": "row", "value": {"cells": [{"action": "code.edit", "column": {"role": "chat"}, "verdict": "allow"}]}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$SOCKET_DIR/s/$sid/mcp.sock", "as": "raw"}
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
-{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "job_start", "arguments": {"argv": ["true"], "no_timebox": true}}}}
-{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}], "isError": true}}, "within_ms": 10000}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "no_timebox: only the user sets this on a job"}], "isError": true}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/list", "params": {}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"jobs": []}}, "within_ms": 10000}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "job_start", "arguments": {"argv": ["true"]}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}, "within_ms": 30000}

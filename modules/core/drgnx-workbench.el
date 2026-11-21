@@ -8,6 +8,13 @@
 (require 'drgnx-surfaces)
 (require 'drgnx-memo)
 (declare-function drgnx-signal-mode "drgnx-signal")
+(declare-function drgnx-grid-mode "drgnx-grid")
+(declare-function drgnx-grid-full-size-toggle "drgnx-grid" (&optional window))
+(declare-function drgnx-grid-placeholder-open "drgnx-grid")
+(declare-function drgnx-grid-placeholder-close "drgnx-grid")
+(declare-function drgnx-grid-unstack-tile "drgnx-grid-ops" ())
+(declare-function drgnx-grid-resize-mode "drgnx-grid-ops" ())
+(declare-function drgnx-grid-restore-previous "drgnx-grid-frames" ())
 (declare-function drgnx-state-mode "drgnx-state")
 (declare-function drgnx-state-subscribe "drgnx-state")
 (declare-function drgnx-state-intent--user-resized "drgnx-state-intent")
@@ -17,8 +24,12 @@
 (declare-function drgnx-wb-view-search "drgnx-wb")
 (declare-function drgnx-wb-focus-editor "drgnx-wb")
 (declare-function drgnx-explorer-setup "drgnx-explorer")
+(declare-function drgnx-explorer-add-folder "drgnx-explorer" (dir))
+(declare-function drgnx-explorer-remove-folder "drgnx-explorer")
+(declare-function drgnx-explorer--root-row-p "drgnx-explorer")
 (declare-function drgnx-rules-mode "drgnx-rules")
 (declare-function drgnx-chrome-mode "drgnx-chrome")
+(declare-function drgnx-chrome-switch-tab "drgnx-chrome")
 (declare-function drgnx-buffers-save-row "drgnx-actions")
 (declare-function drgnx-buffers-copy-path-row "drgnx-actions")
 (declare-function drgnx-buffers-reveal-row "drgnx-actions")
@@ -29,7 +40,9 @@
 (declare-function drgnx-wb-panel-next-tab "drgnx-actions")
 (declare-function drgnx-help-mode-menu "drgnx-actions")
 (declare-function drgnx-frames-mode "drgnx-frames")
-(declare-function drgnx-frames-move-editor "drgnx-frames")
+(declare-function drgnx-pane--frame-replaced "drgnx-panes")
+(declare-function drgnx-popup--frame-replaced "drgnx-popup")
+(declare-function drgnx-grid-move-tab-to-new-frame "drgnx-grid-frames" (&optional window kind))
 (declare-function drgnx-frames-open-editor "drgnx-frames")
 (declare-function drgnx-frames-move-group "drgnx-frames")
 (declare-function drgnx-buffers-toggle-all-windows "drgnx-buffers")
@@ -55,9 +68,13 @@
 (declare-function drgnx-groups-move-to-next "drgnx-groups")
 (declare-function drgnx-chrome-close-tab "drgnx-chrome")
 (declare-function drgnx-chrome-next-tab "drgnx-chrome")
+(declare-function drgnx-chrome-recent-editor "drgnx-chrome")
+(declare-function drgnx-chrome-recent-editor-up "drgnx-chrome")
 (declare-function drgnx-chrome-previous-tab "drgnx-chrome")
 (declare-function drgnx-wb-toggle-panel "drgnx-area")
 (declare-function drgnx-wb-focus-panel "drgnx-area")
+(declare-function drgnx-wb-output-select-channel "drgnx-area")
+(declare-function drgnx-wb-view-output "drgnx-area")
 (declare-function drgnx-wb-toggle-right-dock "drgnx-area")
 (declare-function drgnx-wb-show-unrouted "drgnx-rules")
 (declare-function drgnx-wb-place "drgnx-rules")
@@ -67,6 +84,23 @@
 (declare-function drgnx-buffers-save-all "drgnx-buffers")
 (declare-function drgnx-buffers-close-saved "drgnx-buffers")
 (declare-function drgnx-buffers-close-all "drgnx-buffers")
+(require 'warnings)
+(require 'drgnx-notice)
+
+(defun drgnx-workbench--warning (fn type message level buffer-name)
+  "Around `display-warning' (FN): a warning to *Warnings* is logged there and posted as a notice (the status bar
+counts it; its button opens *Warnings*), and takes no window by itself.  An `:emergency' still shows; a warning to
+another buffer (BUFFER-NAME) is left as it was."
+  (if (or buffer-name (eq level :emergency))
+      (funcall fn type message level buffer-name)
+    (let ((warning-minimum-level :emergency))
+      (funcall fn type message level buffer-name))
+    (unless (or noninteractive (warning-suppress-p type warning-suppress-log-types)
+                (< (warning-numeric-level (or level :warning)) (warning-numeric-level warning-minimum-log-level)))
+      (let ((type (if (consp type) (car type) type)))
+        (drgnx-notify 'wb (if (eq level :error) 'fail 'warn)
+                      (format "%s: %s" type (car (split-string (format "%s" message) "\n")))
+                      :id (cons 'warning type) :command '(pop-to-buffer "*Warnings*"))))))
 
 (drgnx-module-define 'core/workbench
                      :doc "The workbench: the change bus, the left dock (Buffers, Explorer) and editor windows."
@@ -90,11 +124,89 @@
                        (drgnx-rules-mode 1)
                        ;; The bottom panel and the right dock; popups borrow the panel.
                        (require 'drgnx-area)
+                       ;; The tiled grid: the side bar, the panel and the right side are tiles of the window tree,
+                       ;; not side windows (docs/develop/core.md, "The grid").
+                       (require 'drgnx-grid)
+                       (drgnx-grid-mode 1)
+                       (drgnx-command-define 'tile-full-size :category "View" :title "Full-Size Tile" :scope 'window
+                                             :command #'drgnx-grid-full-size-toggle
+                                             :doc "Show this tile alone, at the grid's full size; again to put every tile back as it was")
+                       ;; a tile waiting for its kind (its module off, its content gone): `drgnx-grid-tile-placeholder'
+                       (drgnx-command-define 'tile-placeholder-open :category "View" :title "Open Tile Content"
+                                             :command #'drgnx-grid-placeholder-open :map 'drgnx-grid-placeholder-mode-map
+                                             :when (lambda () (derived-mode-p 'drgnx-grid-placeholder-mode))
+                                             :doc "In a tile waiting for its content: show it, or choose what the tile shows")
+                       (drgnx-command-define 'tile-placeholder-close :category "View" :title "Close Waiting Tile"
+                                             :command #'drgnx-grid-placeholder-close :map 'drgnx-grid-placeholder-mode-map
+                                             :when (lambda () (derived-mode-p 'drgnx-grid-placeholder-mode))
+                                             :doc "In a tile waiting for its content: hide the tile")
+                       ;; Emacs's and Vim's "this window only" keys (C-x 1, C-w o, C-w _, C-w |) toggle full size:
+                       ;; the other tiles come back, where `delete-other-windows' would lose the layout
+                       (dolist (cmd '(delete-other-windows evil-window-delete-others evil-window-set-height
+                                                           evil-window-set-width))
+                         (drgnx-module-define-key 'global-map (vector 'remap cmd) #'drgnx-grid-full-size-toggle))
+                       ;; Moving tiles by keys (docs/guide/workbench.md, "Moving tiles")
+                       (pcase-dolist (`(,dir ,title) '((left "Left") (right "Right") (up "Up") (down "Down")))
+                         (drgnx-command-define (intern (format "tile-move-%s" dir)) :category "View" :scope 'window
+                                               :title (format "Move Tile %s" title)
+                                               :command (intern (format "drgnx-grid-move-tile-%s" dir))
+                                               :doc (format "Move this tile beyond the tile to its %s" (downcase title)))
+                         (drgnx-command-define (intern (format "tile-swap-%s" dir)) :category "View" :scope 'window
+                                               :title (format "Swap Tile with %s" title)
+                                               :command (intern (format "drgnx-grid-swap-tile-%s" dir))
+                                               :doc (format "Swap this tile with the one to its %s; the sizes stay" (downcase title)))
+                         (drgnx-command-define (intern (format "tile-stack-%s" dir)) :category "View" :scope 'window
+                                               :title (format "Stack Tile onto %s" title)
+                                               :command (intern (format "drgnx-grid-stack-tile-%s" dir))
+                                               :doc (format "Stack this tile's tabs onto the tile to its %s" (downcase title)))
+                         ;; Resize Tiles' arrows, in its own map (`drgnx-grid-resize-map')
+                         (drgnx-command-define (intern (format "tile-resize-%s" dir)) :category "View" :scope 'window
+                                               :title (format "Resize Tile %s" title)
+                                               :command (intern (format "drgnx-grid-resize-%s" dir))
+                                               :doc (format "Grow this tile toward the %s by one step (shrink it at the grid's edge)"
+                                                            (downcase title))))
+                       (require 'drgnx-grid-frames)
+                       ;; Each window's own shell (docs/guide/workbench.md, "Several windows")
+                       (require 'drgnx-frame-shell)
+                       (pcase-dolist (`(,id ,title ,fn ,doc)
+                                      '((shell-toggle-rail "Toggle Rail in This Window" drgnx-shell-toggle-rail "Show or hide this window's rail; the other windows keep theirs")
+                                        (shell-toggle-title "Toggle Title Bar in This Window" drgnx-shell-toggle-title "Show or hide this window's title bar; the other windows keep theirs")
+                                        (shell-toggle-right "Toggle Right Side in This Window" drgnx-shell-toggle-right "Show or hide this window's right side; the other windows keep theirs")))
+                         (drgnx-command-define id :category "View" :title title :command fn :doc doc))
+                       (drgnx-command-define 'layout-restore-previous :category "View" :title "Restore Previous Layout"
+                                             :command #'drgnx-grid-restore-previous
+                                             :doc "Put back the layout before the last change to it: a move, a preset, a tear-out, a package that collapsed the tiles")
+                       (drgnx-command-define 'tile-unstack :category "View" :title "Unstack the Shown Tab" :scope 'window
+                                             :command #'drgnx-grid-unstack-tile
+                                             :doc "Put this tile's shown tab into a new tile beside it")
+                       (drgnx-command-define 'tile-resize :category "View" :title "Resize Tiles" :scope 'window
+                                             :command #'drgnx-grid-resize-mode
+                                             :doc "The arrows grow or shrink this tile, one step each; any other key ends")
+                       ;; Vim's C-w H/L/K/J move the tile, C-w x swaps it (right, else below)
+                       (pcase-dolist (`(,cmd . ,ours) '((evil-window-move-far-left . drgnx-grid-move-tile-left)
+                                                        (evil-window-move-far-right . drgnx-grid-move-tile-right)
+                                                        (evil-window-move-very-top . drgnx-grid-move-tile-up)
+                                                        (evil-window-move-very-bottom . drgnx-grid-move-tile-down)
+                                                        (evil-window-exchange . drgnx-grid-exchange)))
+                         (drgnx-module-define-key 'global-map (vector 'remap cmd) ours))
                        (require 'drgnx-popup)
+                       ;; A warning is logged and counted on the status bar, never shown by itself (as VS Code's Output)
+                       (drgnx-module-advice 'display-warning :around quiet-warning (fn type message &optional level buffer-name)
+                         (drgnx-workbench--warning fn type message level buffer-name))
+                       ;; A frame replaced by one like it (the echo box's swap): the panes and the popup lanes move.
+                       (drgnx-module-hook 'drgnx-frame-replaced-functions frame-replaced (old new)
+                         (when (featurep 'drgnx-panes) (drgnx-pane--frame-replaced old new))
+                         (drgnx-popup--frame-replaced old new))
                        (drgnx-command-define 'toggle-panel :category "View" :title "Toggle Panel" :scope 'window
                                              :command #'drgnx-wb-toggle-panel :menu '("View") :doc "Show or hide the bottom panel (Terminal, Problems, Output, Results, Help)")
                        (drgnx-command-define 'focus-panel :category "View" :title "Focus Panel" :scope 'window
                                              :command #'drgnx-wb-focus-panel :doc "Show the bottom panel and move focus to it")
+                       (drgnx-command-define 'view-output :category "View" :title "Output" :scope 'window
+                                             :command #'drgnx-wb-view-output :menu '("View")
+                                             :doc "Show the panel's Output tab and focus it")
+                       (drgnx-command-define 'output-select-channel :category "View" :title "Output: Select Channel…" :scope 'window
+                                             :command #'drgnx-wb-output-select-channel
+                                             :doc "Show one of the Output tab's channels (Messages, Warnings, Backtrace) in the panel")
                        (drgnx-command-define 'toggle-right-dock :category "View" :title "Toggle Right Dock" :scope 'window
                                              :command #'drgnx-wb-toggle-right-dock :menu '("View") :doc "Show or hide the right dock")
                        ;; The Notices list (core) is a panel tab.
@@ -102,12 +214,15 @@
                        ;; Chrome by role: tab lines and breadcrumbs in editor windows.
                        (require 'drgnx-chrome)
                        (drgnx-chrome-mode 1)
+                       (drgnx-command-define 'switch-tab :category "View" :title "Go to Tab…" :scope 'window
+                                             :command #'drgnx-chrome-switch-tab
+                                             :doc "Show one of this editor group's tabs, chosen by name (the overflow button of the tab row)")
                        ;; Editor groups (made only by these commands).
                        (require 'drgnx-groups)
                        (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((split-editor-right "Split Editor Right" drgnx-groups-split-right "A new editor group to the right, same file")
-                                        (split-editor-down "Split Editor Down" drgnx-groups-split-down "A new editor group below, same file")
-                                        (close-group "Close Editor Group" drgnx-groups-close "Close this group (its files stay open); the last one stays")
+                                      '((split-editor-right "Split Editor Right" drgnx-groups-split-right "A new editor group to the right, same file; on a tool tile, a new tile showing what you pick")
+                                        (split-editor-down "Split Editor Down" drgnx-groups-split-down "A new editor group below, same file; on a tool tile, a new tile showing what you pick")
+                                        (close-group "Close Tile" drgnx-groups-close "Close this tile: an editor group closes (its files stay open; the last one stays), a tool tile hides")
                                         (close-group-editors "Close All Editors in Group" drgnx-groups-close-all-editors "Close every tab of this group (its files stay open); the group closes unless it is the last")
                                         (focus-group-1 "Focus First Editor Group" drgnx-groups-focus-1 "Focus group 1")
                                         (focus-group-2 "Focus Second Editor Group" drgnx-groups-focus-2 "Focus group 2 (made if there is one group)")
@@ -118,7 +233,7 @@
                        (require 'drgnx-frames)
                        (drgnx-frames-mode 1)
                        (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((move-editor-to-new-window "Move Editor into New Window" drgnx-frames-move-editor "Move the shown file to a new window")
+                                      '((move-editor-to-new-window "Move to New Window" drgnx-grid-move-tab-to-new-frame "Move the shown tab to a new window: a file leaves its group's tabs, a tile's only tab takes the tile, whole")
                                         (open-editor-in-new-window "Open Editor in New Window" drgnx-frames-open-editor "Show the file in a new window too")
                                         (move-group-to-new-window "Move Editor Group into New Window" drgnx-frames-move-group "Move this group and its tabs to a new window")
                                         (buffers-toggle-all-windows "Buffers: Show All Windows" drgnx-buffers-toggle-all-windows "List the buffers of every window, or of this one")))
@@ -147,10 +262,10 @@
                                         (help-mode-menu "Menu for This Mode" drgnx-help-mode-menu nil "The major mode's menu, at point")))
                          (drgnx-command-define id :category "View" :title title :scope 'window :command fn :context ctx :doc doc))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
-                                      '((focus-left "Focus Left" drgnx-wb-focus-left "Move focus to the editor group or dock on the left")
-                                        (focus-right "Focus Right" drgnx-wb-focus-right "Move focus to the editor group or dock on the right")
-                                        (focus-up "Focus Above" drgnx-wb-focus-up "Move focus to the editor group or dock above")
-                                        (focus-down "Focus Below" drgnx-wb-focus-down "Move focus to the editor group or dock below")))
+                                      '((focus-left "Focus Tile Left" drgnx-wb-focus-left "Move focus to the tile on the left")
+                                        (focus-right "Focus Tile Right" drgnx-wb-focus-right "Move focus to the tile on the right")
+                                        (focus-up "Focus Tile Up" drgnx-wb-focus-up "Move focus to the tile above")
+                                        (focus-down "Focus Tile Down" drgnx-wb-focus-down "Move focus to the tile below")))
                          (drgnx-command-define id :category "View" :title title :scope 'window :command fn :doc doc))
                        ;; The layout survives a restart.
                        (require 'drgnx-persist)
@@ -165,14 +280,20 @@
                                              :command #'drgnx-chrome-next-tab :doc "Show the next tab of this editor group")
                        (drgnx-command-define 'previous-tab :category "View" :title "Previous Tab" :scope 'window
                                              :command #'drgnx-chrome-previous-tab :doc "Show the previous tab of this editor group")
+                       (drgnx-command-define 'editor-recent :category "View" :title "Open Previous Editor in Group"
+                                             :scope 'window :command #'drgnx-chrome-recent-editor
+                                             :doc "This group's editors, most recently used first: the one used before this selected (again moves down)")
+                       (drgnx-command-define 'editor-recent-up :category "View" :title "Open Previous Editor in Group (Up)"
+                                             :scope 'window :command #'drgnx-chrome-recent-editor-up
+                                             :doc "As Open Previous Editor in Group; while its list is open, move the selection up")
                        (drgnx-command-define 'wb-unrouted :category "View" :title "Show Unrouted Buffers" :scope 'window
                                              :command #'drgnx-wb-show-unrouted :doc "Buffers no placement rule matched (each one is a rule to add)")
                        (drgnx-command-define 'toggle-sidebar :category "View" :title "Toggle Sidebar" :scope 'window
                                              :command #'drgnx-wb-toggle-sidebar :menu '("View") :doc "Show or hide the Buffers panel and the Explorer")
-                       (drgnx-command-define 'view-explorer :category "View" :title "View: Explorer" :scope 'window
+                       (drgnx-command-define 'view-explorer :category "View" :title "Explorer" :scope 'window
                                              :command #'drgnx-wb-view-explorer
                                              :doc "Show the Buffers panel and the Explorer in the sidebar and focus the file tree")
-                       (drgnx-command-define 'view-search :category "View" :title "View: Search" :scope 'window
+                       (drgnx-command-define 'view-search :category "View" :title "Search" :scope 'window
                                              :command #'drgnx-wb-view-search
                                              :doc "Show the Search view in the sidebar and focus it")
                        (drgnx-command-define 'focus-editor :category "View" :title "Focus Editor" :scope 'window
@@ -216,7 +337,16 @@
                                           (explorer-copy-relative-path "Copy Relative Path" drgnx-explorer-copy-relative-path "The path from the root, to the clipboard")
                                           (explorer-reveal-externally "Reveal in File Manager" drgnx-explorer-reveal-externally "Open the folder in the system's file manager")))
                            (drgnx-command-define id :category "Explorer" :title title :command fn :doc doc
-                                                 :map 'drgnx-explorer-mode-map :when in-explorer :context 'explorer)))
+                                                 :map 'drgnx-explorer-mode-map :when in-explorer :context 'explorer))
+                         ;; A folder of the workspace: its top row's right-click menu.
+                         (drgnx-surfaces-define-context 'explorer-root #'drgnx-explorer--root-row-p)
+                         (drgnx-command-define 'explorer-add-folder :category "Explorer" :title "Add Folder to Workspace…"
+                                               :command #'drgnx-explorer-add-folder
+                                               :doc "Show another folder in the Explorer, after the ones it shows (drgnx DIR shows DIR alone)")
+                         (drgnx-command-define 'explorer-remove-folder :category "Explorer" :title "Remove Folder from Workspace"
+                                               :command #'drgnx-explorer-remove-folder :map 'drgnx-explorer-mode-map
+                                               :when in-explorer :context 'explorer-root
+                                               :doc "Take this folder out of the Explorer (nothing on disk changes)"))
                        ;; The Outline, below the Explorer.
                        (require 'drgnx-outline)
                        (drgnx-outline-setup)

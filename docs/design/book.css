@@ -1,0 +1,55 @@
+/* The documentation book's theme: mdBook's variables, set from the design system's colour tokens (tokens.css, which
+   is generated from themes/drgnx-tokens.eld). No colour is written here. Its light themes take the light tokens, its
+   dark ones the dark tokens, and a reader who asks for more contrast gets the high-contrast ones (tokens.css). */
+html, html.light, html.rust, html.coal, html.navy, html.ayu {
+  --bg: var(--drgnx-editor);
+  --fg: var(--drgnx-fg);
+  --sidebar-bg: var(--drgnx-panel);
+  --sidebar-fg: var(--drgnx-muted);
+  --sidebar-non-existant: var(--drgnx-disabled);
+  --sidebar-active: var(--drgnx-accent);
+  --sidebar-spacer: var(--drgnx-border-subtle);
+  --scrollbar: var(--drgnx-border-strong);
+  --icons: var(--drgnx-subtle);
+  --icons-hover: var(--drgnx-fg);
+  --links: var(--drgnx-accent);
+  --inline-code-color: var(--drgnx-fg);
+  --theme-popup-bg: var(--drgnx-raised);
+  --theme-popup-border: var(--drgnx-border-strong);
+  --theme-hover: var(--drgnx-hover);
+  --quote-bg: var(--drgnx-panel);
+  --quote-border: var(--drgnx-border);
+  --warning-border: var(--drgnx-warn);
+  --table-border-color: var(--drgnx-border);
+  --table-header-bg: var(--drgnx-panel);
+  --table-alternate-bg: var(--drgnx-panel);
+  --searchbar-border-color: var(--drgnx-border-strong);
+  --searchbar-bg: var(--drgnx-raised);
+  --searchbar-fg: var(--drgnx-fg);
+  --searchbar-shadow-color: var(--drgnx-border);
+  --searchresults-header-fg: var(--drgnx-muted);
+  --searchresults-border-color: var(--drgnx-border);
+  --searchresults-li-bg: var(--drgnx-panel);
+  --search-mark-bg: var(--drgnx-match);
+}
+html, html.coal, html.navy, html.ayu { color-scheme: dark; }
+html.light, html.rust { color-scheme: light; }
+
+body { font-family: "Adwaita Sans", Inter, system-ui, sans-serif; }
+code, pre, .hljs { font-family: "JetBrains Mono", ui-monospace, monospace; }
+.content a:focus-visible, .sidebar a:focus-visible, button:focus-visible {
+  outline: 2px solid var(--drgnx-focus); outline-offset: 2px;
+}
+.content img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--drgnx-border); }
+.content table td, .content table th { vertical-align: top; }
+.content table td { overflow-wrap: anywhere; }
+/* the tokens tables: swatch, token and value stay on one line; the definition and the faces wrap */
+.content table:has(.swatch) :is(td, th):nth-child(-n+3) { white-space: nowrap; overflow-wrap: normal; }
+.content code:not(pre code) { background: var(--drgnx-sel-quiet); border-radius: 4px; }
+.content pre { background: var(--drgnx-panel); border: 1px solid var(--drgnx-border); border-radius: 8px; }
+
+/* a colour swatch beside a token on the tokens page: its colour is written inline, from the token */
+.swatch {
+  display: inline-block; width: 2.2em; height: 1.2em; vertical-align: middle;
+  border-radius: 4px; border: 1px solid var(--drgnx-border-strong);
+}

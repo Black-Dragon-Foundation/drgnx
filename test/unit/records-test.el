@@ -4,7 +4,7 @@
 (require 'cl-lib)
 (require 'drgnx-records)
 (require 'drgnx-agents)                 ; the session struct the transcript round trips build
-(require 'drgnx-work-scan)
+(require 'drgnx-work-db)
 (load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
 
 (defconst records-test--dir (file-name-directory (or load-file-name buffer-file-name)))
@@ -87,35 +87,20 @@
        (drgnx-work-db-close-all)
        (delete-directory root t))))
 
-(ert-deftest drgnx-records/nodes-a-scan-makes-round-trip ()
-  :tags '(:cond)                        ; runs git
+(ert-deftest drgnx-records/nodes-the-importer-makes-round-trip ()
+  ;; the data the hub's importer keeps on a node (a commit's sha and date, a plan's branch, a task's stale mark)
   (records-test--with-root
-    (let ((code (concat root "code/")) (shas nil))
-      (make-directory code t)
-      (cl-flet ((git (&rest args)
-                  (with-temp-buffer
-                    (let ((default-directory code))
-                      (apply #'call-process "git" nil t nil "-c" "user.name=t" "-c" "user.email=t@t.invalid" args)
-                      (string-trim (buffer-string))))))
-        (git "init" "-q" "-b" "main")
-        (dolist (msg '("base" "task one" "task one, more"))
-          (write-region msg nil (concat code "f") nil 'silent)
-          (git "add" "-A")
-          (git "commit" "-q" "-m" msg)
-          (push (git "rev-parse" "--short" "HEAD") shas)))
-      (make-directory (concat code ".superpowers/sdd/p") t)
-      (make-directory (concat root "docs/plans") t)
-      (write-region "# Plan P\n\n### Task 1: First\n- [x] one\n" nil (concat root "docs/plans/p.md") nil 'silent)
-      (write-region (format "# SDD ledger — plan: %sdocs/plans/p.md\nTask 1: complete (commits %s..%s, tests: ok)\n" root
-                            (nth 2 shas) (nth 0 shas))
-                    nil (concat code ".superpowers/sdd/p/progress.md") nil 'silent)
-      (drgnx-work-fixture-with-hub (drgnx-work-scan (list root)))
-      (let ((nodes (apply #'append (mapcar #'drgnx-work-nodes '(spec plan task step commit branch ruling todo)))))
-        (should (cl-some (lambda (node) (plist-get node :sha)) nodes))   ; commits: data to carry
-        (dolist (node nodes)
-          (let ((data (cl-loop for (k v) on node by #'cddr
-                               unless (memq k '(:id :kind :title :path :line :status :parent :ord :source)) append (list k v))))
-            (should (records-test--round 'drgnx-records-node-data data))))))))
+    (drgnx-work-fixture-put-node "plan:/p.md" :kind 'plan :title "Plan P" :path "/p.md" :line 1 :status "open" :source "/p.md"
+                                 :branch "feat" :merged t :repo "/r/")
+    (drgnx-work-fixture-put-node "task:/p.md#1" :kind 'task :title "First" :parent "plan:/p.md" :ord 1 :source "/p.md" :stale t)
+    (drgnx-work-fixture-put-node "commit:abc" :kind 'commit :title "task one, more" :path "/r/" :source "commit"
+                                 :sha "abc" :date 1767225603 :repo "/r/" :seq -1)
+    (let ((nodes (apply #'append (mapcar #'drgnx-work-nodes '(plan task commit)))))
+      (should (cl-some (lambda (node) (plist-get node :sha)) nodes))   ; commits: data to carry
+      (dolist (node nodes)
+        (let ((data (cl-loop for (k v) on node by #'cddr
+                             unless (memq k '(:id :kind :title :path :line :status :parent :ord :source)) append (list k v))))
+          (should (records-test--round 'drgnx-records-node-data data)))))))
 
 ;;;; The rules
 
@@ -183,19 +168,25 @@
   (should (equal (drgnx-records-encode '(map integer) '(:a 1)) "{\"a\":1}"))
   (should-error (drgnx-records-decode '(alist string integer) "{\"a\":\"x\"}") :type 'drgnx-records-invalid))
 
-;;;; Reviewing a hand edit (Task 14c): a real Ratatoskr, a view edited by hand in a temp org folder
+;;;; A project's records kept in step: the notice and conflicts, with a real Ratatoskr and a temp org folder
 
 (require 'drgnx-records-review)
-(load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
+(load (expand-file-name "test/fixtures/hub-client-fixture" drgnx-dir) nil t)   ; its Ratatoskr helpers
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
 (defconst records-test--deferred
   "# Deferred items: Orchard\n\n| # | Area | Item | Status |\n|---|---|---|---|\n| M1-1 | harness | A timer | open |\n| M1-2 | sync | Retry budget is hard-coded | open |\n"
-  "A DEFERRED.md for the hub to import.")
+  "A DEFERRED.md for the hub to adopt.")
 
-(defmacro records-test--with-proposal (&rest body)
-  "BODY with Ratatoskr serving, subscribed, an org folder imported and its DEFERRED.md edited by hand; once the
-`view-proposal' notice is there, `id' is the proposal's id."
+(defun records-test--rewrite (file from to)
+  "FILE's text with FROM replaced by TO, written back."
+  (write-region (string-replace from to (with-temp-buffer (insert-file-contents file) (buffer-string)))
+                nil file nil 'silent))
+
+(defmacro records-test--with-conflict (&rest body)
+  "BODY with Ratatoskr serving, subscribed, an org folder adopted and one of its DEFERRED.md rows in conflict (an
+editor saved the text it loaded before the hub's last change); once the conflict's notice is there, `id' is the
+record's id and `file' the DEFERRED.md."
   (declare (indent 0))
   `(drgnx-notice-test-with-model
      (drgnx-hub-client-test--with-ratatoskr
@@ -207,42 +198,45 @@
              (progn
                (write-region records-test--deferred nil file nil 'silent)
                (drgnx-hub-call-sync "records/import" (list :root (directory-file-name org)) 20)
-               ;; inside the follower's debounce: the next flush finds a hand edit
-               (write-region (string-replace "Retry budget is hard-coded | open" "Retry budget is hard-coded | fixed in M2"
-                                             (with-temp-buffer (insert-file-contents file) (buffer-string)))
-                             nil file nil 'silent)
-               (drgnx-hub-client-test--wait (lambda () (drgnx-notices :source 'hub)) "the proposal notice")
-               (setq id (plist-get (car (plist-get (drgnx-hub-call-sync "records/proposals" nil 10) :proposals)) :id))
+               (drgnx-hub-client-test--wait (lambda () (drgnx-notices :source 'hub)) "the adoption notice")
+               ;; a hand edit reaches the graph (a look at the status reads it) ...
+               (records-test--rewrite file "Retry budget is hard-coded" "Retry budget is a setting")
+               (drgnx-hub-call-sync "records/status" nil 10)
+               ;; ... then an editor saves the text it had before
+               (write-region records-test--deferred nil file nil 'silent)
+               (drgnx-hub-call-sync "records/status" nil 10)
+               (drgnx-hub-client-test--wait
+                (lambda () (cl-some (lambda (n) (eq (car-safe (plist-get n :command)) 'drgnx-records-resolve))
+                                    (drgnx-notices :source 'hub)))
+                "the conflict notice")
+               (setq id (car (drgnx-records-review--conflicts)))
                ,@body)
            (delete-directory org t)
            (dolist (b (buffer-list)) (when (buffer-local-value 'drgnx-records-review--id b) (kill-buffer b))))))))
 
-(ert-deftest drgnx-records/notice-on-proposal ()
+(ert-deftest drgnx-records/the-adoption-and-a-conflict-are-notices ()
   :tags '(:cond)                        ; a real hub process and socket
-  (records-test--with-proposal
+  (records-test--with-conflict
     (should (stringp id))
-    (let ((n (car (drgnx-notices :source 'hub))))
-      (should (equal (plist-get n :command) (list 'drgnx-records-review id)))
-      (should (string-match-p "DEFERRED.md" (plist-get n :text))))))
+    (let ((ns (drgnx-notices :source 'hub)))
+      (should (cl-some (lambda (n) (string-match-p "keeps 1 record file" (plist-get n :text))) ns))
+      (should (cl-some (lambda (n) (equal (plist-get n :command) (list 'drgnx-records-resolve id))) ns)))
+    ;; the file keeps its text
+    (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) records-test--deferred))))
 
-(ert-deftest drgnx-records/review-shows-the-diff ()
+(ert-deftest drgnx-records/resolve-shows-both-and-keeps-one ()
   :tags '(:cond)                        ; a real hub process and socket
-  (records-test--with-proposal
-    (drgnx-records-review id)
-    (with-current-buffer (get-buffer "*drgnx proposal: DEFERRED.md*")
-      (should (derived-mode-p 'diff-mode))
+  (records-test--with-conflict
+    (drgnx-records-resolve id)
+    (with-current-buffer (get-buffer "*drgnx conflict: DEFERRED.md*")
+      (should (derived-mode-p 'drgnx-records-review-mode))
       (should (equal drgnx-records-review--id id))
-      (should (string-match-p "fixed in M2" (buffer-string))))))
-
-(ert-deftest drgnx-records/accept-calls-decide ()
-  :tags '(:cond)                        ; a real hub process and socket
-  (records-test--with-proposal
-    (drgnx-records-review id)
-    (with-current-buffer (get-buffer "*drgnx proposal: DEFERRED.md*")
-      (let ((result (drgnx-records-review-accept)))
-        (should (equal (plist-get result :status) "accepted"))))
-    (should-not (get-buffer "*drgnx proposal: DEFERRED.md*"))
-    (should-not (drgnx-notices :source 'hub))))
+      (should (string-match-p "hard-coded" (buffer-string)))
+      (should (string-match-p "a setting" (buffer-string)))
+      (should (equal (plist-get (drgnx-records-keep-graph) :keep) "graph")))
+    (should-not (get-buffer "*drgnx conflict: DEFERRED.md*"))
+    (should-not (drgnx-records-review--conflicts))
+    (should (string-match-p "a setting" (with-temp-buffer (insert-file-contents file) (buffer-string))))))
 
 (ert-deftest drgnx-records/no-prompt-from-the-event ()
   :tags '(:cond)
@@ -256,9 +250,10 @@
                       ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "prompted")))
                       ((symbol-function 'drgnx-hub-call-sync) (lambda (&rest _) (cl-incf calls) nil)))
               (let ((inhibit-interaction t) (drgnx-hub--event-conn conn))
-                (drgnx-records-review--event "view-proposal" '(:id "proposal:x" :path "/o/DEFERRED.md"))))
+                (drgnx-records-review--event "records-conflict" '(:ids ["todo:x"] :path "/o/DEFERRED.md"))
+                (drgnx-records-review--event "records-notice" '(:root "/o" :files ["/o/DEFERRED.md"]))))
             (should (= calls 0))
-            (should (drgnx-notices :source 'hub)))
+            (should (= (length (drgnx-notices :source 'hub)) 2)))
         (delete-process conn)))))
 
 (provide 'records-test)

@@ -1,0 +1,19 @@
+[package]
+name = "drgnx-clock"
+description = "The time source the runtime's timers read: tokio's, or one a test installs (a virtual clock)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# `Manual`: a clock a test moves by hand (the hub's own virtual clock installs itself the same way)
+test-hooks = []
+
+[dependencies]
+tokio.workspace = true
+
+[dev-dependencies]
+skuld = { path = "../skuld", version = "0.1.0" }
+drgnx-clock = { path = ".", features = ["test-hooks"] }

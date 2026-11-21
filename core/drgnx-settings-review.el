@@ -16,6 +16,7 @@
 
 ;;; Code:
 (require 'cl-lib)
+(require 'drgnx-ui-kit)
 (require 'subr-x)
 (require 'seq)
 (require 'pp)
@@ -132,8 +133,7 @@ something waits).  Never signals."
       (user-error "No piece of code here")))
 
 (defun drgnx-settings-review--button (label action)
-  (insert-text-button (format "[%s]" label) 'action (lambda (_) (funcall action)) 'follow-link t
-                      'help-echo label 'face 'button))
+  (insert (drgnx-ui-kit-text-button (format "[%s]" label) action label 'secondary 'sm)))
 
 (defun drgnx-settings-review--insert-item (item trusted)
   (let ((start (point)) (diff (drgnx-settings-review-item-diff item)))

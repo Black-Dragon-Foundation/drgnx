@@ -1,0 +1,1814 @@
+//! The map's model: the facts the hub fed, and what they mean (items, edges, overlaps, needs-you).
+//!
+//! Facts are kept as the hub sent them, each source's latest value per key, so the model is the same whatever order
+//! its sources' events arrive in. Everything shown is *derived* from the facts after each event: an edge exists only
+//! while both of its ends do, an item's liveness and block follow from the records around it. Ids are interned to
+//! numbers inside the model (the derivation runs once per event); everything public is keyed by [`ItemId`].
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::{Deserialize, Serialize};
+
+use crate::overlap::{self, OverlapD};
+use crate::{Delta, Edge, EdgeKind, Event, ItemId, Kind, Overlap};
+
+/// An Urdr record the map reads.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "record", rename_all = "kebab-case")]
+pub enum GraphFact {
+    /// `ask:KEY`: the user's words that started work.
+    Ask { key: String, text: String },
+    /// `spec:ID`.
+    Spec {
+        id: String,
+        title: String,
+        /// When the record last changed, in minutes.
+        #[serde(default)]
+        updated: u64,
+    },
+    /// A spec's or plan's target date (`spec:ID` or `plan:ID`; none: no target).
+    Target { item: String, at: Option<Instant> },
+    /// A spec's or plan's paragraph comments that wait because no agent is writing it (`spec:ID` or `plan:ID`).
+    Comments { item: String, waiting: u32 },
+    /// A spec's, plan's, task's or agent's budget (`spec:ID`, `plan:ID`, `task:ID` or `agent:ID`; none: no limit).
+    Budget {
+        item: String,
+        budget: Option<ItemBudget>,
+    },
+    /// What a task or plan not yet run is forecast to cost and take (`task:ID` or `plan:ID`; hub H12's `forecast/plan`): dollars
+    /// and hours, each as (p50, p90); none: no forecast.
+    Forecast {
+        item: String,
+        usd: Option<(Num, Num)>,
+        hours: Option<(Num, Num)>,
+    },
+    /// `plan:ID`; `rank` orders the plans (and so their blocks).
+    Plan {
+        id: String,
+        title: String,
+        rank: u64,
+        #[serde(default)]
+        progress: Option<(u32, u32)>,
+        #[serde(default)]
+        updated: u64,
+    },
+    /// A task of a plan (`parent_of` plan → task): an item in layer 4.
+    Task {
+        id: String,
+        plan: String,
+        title: String,
+        #[serde(default)]
+        done: bool,
+        #[serde(default)]
+        updated: u64,
+    },
+    /// Link `asked`: ask `ask` (its key) → `to`, one of `spec:ID`, `plan:ID`, `task:ID` or `agent:SID`.
+    Asked { ask: String, to: String },
+    /// Link `derives`: plan → spec.
+    Derives { plan: String, spec: String },
+}
+
+/// A session's live state (design §5.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum State {
+    Queued,
+    Running,
+    Waiting,
+    NeedsYou,
+    Review,
+    Paused,
+    Stalled,
+    /// The session ended; the agent stays on the map until its branch merges or its task is done.
+    Finished,
+}
+
+/// A session's (or subagent's) snapshot. A subagent's `id` is `SID/TOOLID`: its parent is `SID`, and it shares the
+/// parent's branch and worktree.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionFact {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub model: String,
+    pub state: State,
+    /// The minute its current state began.
+    #[serde(default)]
+    pub since: u64,
+    /// How many minutes the session has run, when the feed knows (the Detail's `running 47 min`); else the minutes in
+    /// its state.
+    #[serde(default)]
+    pub age: Option<u64>,
+    /// Start order (the team order inside a block).
+    #[serde(default)]
+    pub seq: u64,
+    /// The task it works on (`works_on`).
+    #[serde(default)]
+    pub task: Option<String>,
+    /// The session that started it.
+    #[serde(default)]
+    pub manager: Option<String>,
+    /// `REPO/NAME`.
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub worktree: Option<String>,
+    /// The base commit recorded when its worktree was created (`worktree_base`).
+    #[serde(default)]
+    pub base: Option<String>,
+    /// The machine it holds a slot on, or waits for.
+    #[serde(default)]
+    pub machine: Option<String>,
+    /// The slot it holds on that machine (the mockup's "desk 3").
+    #[serde(default)]
+    pub slot: Option<u32>,
+    /// Spend with its unit, as the card shows it (`$1.20`, `≈$1.20`, `2.1 % wk`).
+    #[serde(default)]
+    pub spend: Option<String>,
+    /// Context use, percent.
+    #[serde(default)]
+    pub context: Option<u8>,
+    /// Its own plan entries done/total, when its task has no plan steps.
+    #[serde(default)]
+    pub progress: Option<(u32, u32)>,
+    /// The job it started that runs or waits now.
+    #[serde(default)]
+    pub job: Option<JobFact>,
+}
+
+/// A job a session started, as its card and its machine's queue show it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobFact {
+    pub id: String,
+    pub name: String,
+    /// The machine it runs on; none while it waits.
+    #[serde(default)]
+    pub runner: Option<String>,
+    /// `running` or `waiting`.
+    pub state: String,
+    /// When it started (seconds since the epoch), as the hub's row says; the card works the elapsed time out.
+    pub started: u64,
+    /// Its time box, in whole minutes.
+    #[serde(default)]
+    pub limit_min: Option<u32>,
+    /// The names of the keys sent to it (never their values).
+    #[serde(default)]
+    pub keys: Vec<String>,
+    /// Why it runs on its machine and not elsewhere, as the hub's queue placed it.
+    #[serde(default)]
+    pub why: Option<String>,
+}
+
+/// A closed timeline step.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepFact {
+    pub session: String,
+    pub step: i64,
+    /// The step's class (`edit`, `read`, `test`, …), shown as the card's activity.
+    pub class: String,
+    pub minute: u64,
+    /// A conclusion recorded at this step (a decision or a finding), one line.
+    #[serde(default)]
+    pub conclusion: Option<String>,
+}
+
+/// A presence entry's mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Mode {
+    Read,
+    Edit,
+    Listed,
+    Write,
+}
+
+impl Mode {
+    fn edits(self) -> bool {
+        matches!(self, Mode::Edit | Mode::Write)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresenceEntry {
+    pub session: String,
+    pub mode: Mode,
+    #[serde(default)]
+    pub line: Option<u32>,
+}
+
+/// The presence model's entries for one file (`REPO/PATH`) now.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresenceFact {
+    pub file: String,
+    pub entries: Vec<PresenceEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineFact {
+    pub name: String,
+    pub slots: u32,
+    pub used: u32,
+    /// Reported by `machines/report` (jobq), not the hub's own pool.
+    #[serde(default)]
+    pub reported: bool,
+    /// What the hub knows of it when it is one of its runners.
+    #[serde(default)]
+    pub runner: Option<RunnerFact>,
+}
+
+/// A runner's side of a machine: trust, state (its reason when it is out of rotation), jobs, icon and, for cloud, the
+/// cost text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunnerFact {
+    pub trust: String,
+    pub state: String,
+    pub jobs: u32,
+    /// `monitor`, `laptop`, `server` or `cloud`.
+    pub icon: String,
+    #[serde(default)]
+    pub cost: Option<String>,
+    /// A Mac runner: its chip says `macOS` after its name. Absent means false, so other runners' frames are as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mac: bool,
+}
+
+/// What a needs-you card is (part 1's cards).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CardKind {
+    Permission,
+    Push,
+    SignOff,
+    Question,
+    Supervisor,
+    Budget,
+    Clash,
+    Proposal,
+    /// An open huddle (the hub's own, not a stored card): on the strip, about its two agents, marking neither.
+    Huddle,
+}
+
+/// A card. A clash card names the two agents it is about.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CardFact {
+    pub id: String,
+    pub kind: CardKind,
+    /// The items it is about (item ids).
+    #[serde(default)]
+    pub about: Vec<String>,
+    pub text: String,
+    /// Open until settled.
+    pub open: bool,
+}
+
+/// One branch's ancestry and merge state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefFact {
+    /// `REPO/NAME`.
+    pub branch: String,
+    /// The branch it was cut from, `REPO/NAME`.
+    #[serde(default)]
+    pub based_on: Option<String>,
+    #[serde(default)]
+    pub merged: bool,
+}
+
+/// A number that compares by its bits, so the fields stay `Eq`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Num(pub f64);
+impl Eq for Num {}
+
+/// What a plan or task not yet run is forecast to cost and take: dollars and hours as (p50, p90).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemForecast {
+    pub usd: Option<(Num, Num)>,
+    pub hours: Option<(Num, Num)>,
+}
+
+/// What an item has spent against its binding limit (the unit whose remaining share is least; the hub's
+/// `BudgetState` as `ok`, `nearing`, `reached` or `none`).  `limit` is none when only an ancestor's limit counts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemBudget {
+    pub spent: Num,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<Num>,
+    pub unit: String,
+    pub state: String,
+}
+
+/// What a card's fields show (design §5.3); only what the item's kind has is set.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Fields {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<State>,
+    /// Minutes in the current state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minutes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// A task item's state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_state: Option<TaskState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    /// An agent's task's id (`task:ID`), which tells two tasks of one title apart: the hub's Board puts the agent on
+    /// that card only. The hub's own; the editor gets the title.
+    #[serde(skip)]
+    pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spend: Option<String>,
+    /// Spec, plan, task and agent items: spend against the binding limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<ItemBudget>,
+    /// A plan or task not yet run: its forecast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forecast: Option<ItemForecast>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<(u32, u32)>,
+    /// A spec's or plan's paragraph comments waiting because no agent is writing it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comments_waiting: Option<u32>,
+    /// A spec's or plan's target date, seconds since the epoch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_at: Option<Instant>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conclusion: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manager: Option<ItemId>,
+    /// A branch's repository (its caption).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// A branch's "edits N" chip: files, plus, minus.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edits: Option<(u32, u32, u32)>,
+    /// A branch's tag: the machine its agent runs on, abbreviated, and the slot (`desk 3`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    /// A file's `+/−` on the branch that changes it most.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change: Option<(u32, u32)>,
+    /// How many minutes an agent has run, when its feed says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age: Option<u64>,
+    /// An agent's worktree, by its name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
+    /// An agent's reads, counted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reads: Option<u32>,
+    /// A machine's slots: used, total.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slots: Option<(u32, u32)>,
+    /// A machine that is one of the hub's runners.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runner: Option<RunnerFact>,
+    /// An agent's job.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<JobFact>,
+}
+
+/// A point in time, in seconds since the epoch (a finite number: the wire refuses the others), ordered by value.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Instant(pub f64);
+
+impl Eq for Instant {}
+
+/// One item of the map.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Item {
+    pub id: ItemId,
+    pub kind: Kind,
+    pub label: String,
+    /// A live agent is under it (or it is a live branch or file): on the map in Active.
+    pub live: bool,
+    /// The plan whose block it sits in (agents and branches); `None`: the "No plan" block.
+    pub block: Option<ItemId>,
+    /// A subagent's parent agent; a branch's agent.
+    pub parent: Option<ItemId>,
+    /// Order inside its row: a plan's rank, an agent's start order.
+    pub order: u64,
+    /// Carries an overlap or a clash (the ⚠ chip).
+    pub warn: bool,
+    pub needs_you: bool,
+    /// A file in an overlap: drawn as a node by default.
+    pub shared: bool,
+    /// Finished: a done task, or what has nothing live and nothing waiting under it.
+    pub done: bool,
+    /// Not started: no agent has worked on it yet (a spec, plan or task).
+    pub ready: bool,
+    /// The latest change of the item or of what is under it, in minutes.
+    pub touched: u64,
+    pub fields: Fields,
+    /// A machine's jobs, one chip each, each linking to the agent that started it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chips: Vec<JobChip>,
+}
+
+/// One job on a machine's item.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobChip {
+    pub id: String,
+    pub name: String,
+    /// `running` or `waiting`.
+    pub state: String,
+    /// The agent that started it, when it is on the map.
+    pub links_to: Option<ItemId>,
+}
+
+/// A task's state, each shown as a glyph plus its word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TaskState {
+    Done,
+    Running,
+    NeedsYou,
+    NotStarted,
+}
+
+impl TaskState {
+    pub fn glyph(self) -> &'static str {
+        match self {
+            TaskState::Done => "✓",
+            TaskState::Running => "▶",
+            TaskState::NeedsYou => "●",
+            TaskState::NotStarted => "○",
+        }
+    }
+
+    pub fn word(self) -> &'static str {
+        match self {
+            TaskState::Done => "done",
+            TaskState::Running => "running",
+            TaskState::NeedsYou => "needs you",
+            TaskState::NotStarted => "not started",
+        }
+    }
+}
+
+/// One chip of the needs-you strip.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NeedsYou {
+    pub card: String,
+    pub kind: CardKind,
+    pub text: String,
+    pub about: Vec<ItemId>,
+}
+
+impl NeedsYou {
+    /// Where the chip sits on the strip: its rank (permission asks 0, questions 1, clashes 2, sign-offs 3, pushes
+    /// 4, budget pauses 5, supervisor 6, proposals 7), then the oldest first. A card's age is its id (the store
+    /// numbers them as they open); a card with a word for an id counts as the newest.
+    pub fn urgency(&self) -> (u8, u64) {
+        let rank = match self.kind {
+            CardKind::Permission => 0,
+            CardKind::Question => 1,
+            CardKind::Clash => 2,
+            CardKind::SignOff => 3,
+            CardKind::Push => 4,
+            CardKind::Budget => 5,
+            CardKind::Supervisor => 6,
+            CardKind::Proposal | CardKind::Huddle => 7,
+        };
+        (rank, self.card.parse().unwrap_or(u64::MAX))
+    }
+}
+
+pub(crate) type Sym = u32;
+
+/// The interner: every id string the model has seen, and its kind.
+#[derive(Clone, Default)]
+pub(crate) struct Names {
+    names: Vec<String>,
+    kinds: Vec<Option<Kind>>,
+    ids: BTreeMap<String, Sym>,
+}
+
+impl Names {
+    fn intern(&mut self, s: &str) -> Sym {
+        if let Some(&y) = self.ids.get(s) {
+            return y;
+        }
+        let y = Sym::try_from(self.names.len()).expect("fewer than 2^32 names");
+        self.names.push(s.to_string());
+        self.kinds.push(Kind::of(s));
+        self.ids.insert(s.to_string(), y);
+        y
+    }
+
+    fn intern_as(&mut self, prefix: &str, key: &str) -> Sym {
+        self.intern(&format!("{prefix}:{key}"))
+    }
+
+    pub(crate) fn get(&self, s: &str) -> Option<Sym> {
+        self.ids.get(s).copied()
+    }
+
+    pub(crate) fn name(&self, y: Sym) -> &str {
+        &self.names[y as usize]
+    }
+
+    pub(crate) fn id(&self, y: Sym) -> ItemId {
+        ItemId(self.names[y as usize].clone())
+    }
+
+    fn kind(&self, y: Sym) -> Option<Kind> {
+        self.kinds[y as usize]
+    }
+}
+
+#[derive(Clone)]
+struct Sess {
+    fact: SessionFact,
+    /// The parent agent of a subagent.
+    parent: Option<Sym>,
+    task: Option<Sym>,
+    manager: Option<Sym>,
+    branch: Option<Sym>,
+    wt: Option<Sym>,
+    machine: Option<Sym>,
+}
+
+#[derive(Clone, Default, PartialEq, Eq)]
+struct Steps {
+    last: i64,
+    class: String,
+    conclusion: Option<(i64, String)>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct Changed {
+    base: String,
+    /// (file, plus, minus), sorted by file.
+    files: Vec<(Sym, u32, u32)>,
+}
+
+/// A plan's title, rank and progress.
+type PlanF = (String, u64, Option<(u32, u32)>);
+
+/// Every fact, each source's latest per key.
+#[derive(Clone, Default)]
+struct Facts {
+    asks: BTreeMap<Sym, String>,
+    specs: BTreeMap<Sym, String>,
+    plans: BTreeMap<Sym, PlanF>,
+    /// spec or plan → its target date
+    targets: BTreeMap<Sym, Instant>,
+    /// spec or plan → its comment threads that wait for a writer (none: 0)
+    waiting: BTreeMap<Sym, u32>,
+    /// spec, plan, task or agent → its budget
+    budgets: BTreeMap<Sym, ItemBudget>,
+    /// plan or task → its forecast before it runs
+    forecasts: BTreeMap<Sym, ItemForecast>,
+    /// spec, plan and task → when its record last changed (minutes)
+    stamps: BTreeMap<Sym, u64>,
+    /// task → (plan, title, done)
+    tasks: BTreeMap<Sym, (Sym, String, bool)>,
+    asked: BTreeSet<(Sym, Sym)>,
+    /// (plan, spec)
+    derives: BTreeSet<(Sym, Sym)>,
+    sessions: BTreeMap<Sym, Sess>,
+    steps: BTreeMap<Sym, Steps>,
+    changed: BTreeMap<Sym, Changed>,
+    /// file → (agent, mode, line), sorted
+    presence: BTreeMap<Sym, Vec<(Sym, Mode, Option<u32>)>>,
+    machines: BTreeMap<Sym, MachineFact>,
+    /// card → (fact, about)
+    cards: BTreeMap<Sym, (CardFact, Vec<Sym>)>,
+    /// branch → (based on, merged)
+    refs: BTreeMap<Sym, (Option<Sym>, bool)>,
+    minute: u64,
+}
+
+/// What is derived for one present item.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ItemD {
+    pub(crate) kind: Kind,
+    pub(crate) live: bool,
+    pub(crate) block: Option<Sym>,
+    pub(crate) parent: Option<Sym>,
+    pub(crate) order: u64,
+    pub(crate) warn: bool,
+    pub(crate) needs_you: bool,
+    pub(crate) shared: bool,
+    /// Finished, for the Completed filter.
+    pub(crate) done: bool,
+    /// Not started: nothing has worked on it yet.
+    pub(crate) ready: bool,
+    /// A machine's job chips ride on its card: the room they take, in layout units (4 px).
+    pub(crate) job_units: u32,
+    /// The latest change of the item or of what is under it, in minutes.
+    pub(crate) touched: u64,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct Derived {
+    pub(crate) items: BTreeMap<Sym, ItemD>,
+    /// Sorted, without duplicates.
+    pub(crate) edges: Vec<(Sym, Sym, EdgeKind)>,
+    /// Keyed by the pair, the first sorting first by name.
+    pub(crate) overlaps: BTreeMap<(Sym, Sym), OverlapD>,
+    /// Open cards, sorted by sym.
+    pub(crate) needs_you: Vec<Sym>,
+}
+
+/// What one event changed: per item, before and after, and whether its fields changed.
+#[derive(Default)]
+pub(crate) struct Change {
+    items: Vec<(Sym, Option<ItemD>, Option<ItemD>, bool)>,
+    edges: bool,
+    needs_you: bool,
+}
+
+impl Change {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.items.is_empty() && !self.edges && !self.needs_you
+    }
+}
+
+/// The map's model.
+#[derive(Clone, Default)]
+pub struct Model {
+    pub(crate) names: Names,
+    facts: Facts,
+    pub(crate) d: Derived,
+}
+
+impl Model {
+    /// Applies one fact (never a view event) and derives the model again.
+    pub(crate) fn apply(&mut self, ev: Event) -> Change {
+        let Some((mut touched, card)) = self.ingest(ev) else {
+            return Change::default();
+        };
+        // a task's row says its agents' state: it changes when they do
+        let tasks: Vec<Sym> = touched
+            .iter()
+            .filter_map(|y| self.facts.sessions.get(y))
+            .filter_map(|s| {
+                s.task
+                    .or_else(|| s.parent.and_then(|p| self.facts.sessions.get(&p)?.task))
+            })
+            .collect();
+        touched.extend(tasks);
+        let new = self.derive();
+        let old = std::mem::replace(&mut self.d, new);
+        let mut change = Change {
+            edges: old.edges != self.d.edges,
+            needs_you: card || old.needs_you != self.d.needs_you,
+            ..Change::default()
+        };
+        let mut syms: BTreeSet<Sym> = touched.clone();
+        syms.extend(old.items.keys());
+        syms.extend(self.d.items.keys());
+        for y in syms {
+            let a = old.items.get(&y);
+            let b = self.d.items.get(&y);
+            let fields = b.is_some() && touched.contains(&y);
+            if a != b || fields {
+                change.items.push((y, a.cloned(), b.cloned(), fields));
+            }
+        }
+        change
+    }
+
+    /// The delta a view with FILTERS gets for a change.
+    pub(crate) fn delta_for(&self, change: &Change, filters: &crate::Filters) -> Delta {
+        let now = self.facts.minute;
+        let mut delta = Delta {
+            edges: change.edges,
+            needs_you: change.needs_you,
+            ..Delta::default()
+        };
+        for (y, a, b, fields) in &change.items {
+            let shown = |d: &Option<ItemD>| {
+                d.as_ref().is_some_and(|d| {
+                    crate::view::visibility(
+                        d.kind, d.live, d.done, d.ready, d.touched, filters, now,
+                    ) != crate::Visibility::Hidden
+                })
+            };
+            let (was, is) = (shown(a), shown(b));
+            if is && (!was || a != b || *fields) {
+                delta.changed.push(self.names.id(*y));
+            }
+            if was && !is {
+                delta.removed.push(self.names.id(*y));
+            }
+            let moved = match (a, b) {
+                (Some(a), Some(b)) => a.block != b.block || a.parent != b.parent,
+                _ => false,
+            };
+            if was != is || (is && moved) {
+                delta.structural = true;
+            }
+        }
+        if !delta.changed.is_empty() || !delta.removed.is_empty() || delta.structural {
+            delta.changed.sort();
+            delta.removed.sort();
+        } else if !(delta.edges || delta.needs_you) {
+            return Delta::default();
+        }
+        delta
+    }
+
+    // ---- the public reads ----
+
+    /// Every present item (live or finished).
+    pub fn items(&self) -> BTreeMap<ItemId, Item> {
+        self.d
+            .items
+            .keys()
+            .map(|&y| (self.names.id(y), self.materialize(y)))
+            .collect()
+    }
+
+    pub fn item(&self, id: &ItemId) -> Option<Item> {
+        let y = self.names.get(id.as_str())?;
+        self.d.items.contains_key(&y).then(|| self.materialize(y))
+    }
+
+    /// Every edge, sorted by (from, to, kind).
+    pub fn edges(&self) -> Vec<Edge> {
+        let mut out: Vec<Edge> = self
+            .d
+            .edges
+            .iter()
+            .map(|&(a, b, kind)| Edge {
+                from: self.names.id(a),
+                to: self.names.id(b),
+                kind,
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Every overlap and clash, sorted by its pair.
+    pub fn overlaps(&self) -> Vec<Overlap> {
+        let mut out: Vec<Overlap> = self
+            .d
+            .overlaps
+            .iter()
+            .map(|(&(a, b), o)| Overlap {
+                a: self.names.id(a),
+                b: self.names.id(b),
+                files: {
+                    let mut f: Vec<ItemId> = o.files.iter().map(|&y| self.names.id(y)).collect();
+                    f.sort();
+                    f
+                },
+                clash: o.clash,
+            })
+            .collect();
+        out.sort_by(|x, y| (&x.a, &x.b).cmp(&(&y.a, &y.b)));
+        out
+    }
+
+    /// The needs-you strip: open cards, sorted by id.
+    pub fn needs_you(&self) -> Vec<NeedsYou> {
+        let mut out: Vec<NeedsYou> = self
+            .d
+            .needs_you
+            .iter()
+            .map(|y| {
+                let (c, about) = &self.facts.cards[y];
+                let mut about: Vec<ItemId> = about
+                    .iter()
+                    .filter(|a| self.d.items.contains_key(a))
+                    .map(|&a| self.names.id(a))
+                    .collect();
+                about.sort();
+                NeedsYou {
+                    card: c.id.clone(),
+                    kind: c.kind,
+                    text: c.text.clone(),
+                    about,
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| a.card.cmp(&b.card));
+        out
+    }
+
+    /// A task's state: needs you if any session working on it does, else running if one is queued, running or
+    /// waiting, else done if the record is, else not started.
+    pub fn task_state(&self, id: &ItemId) -> TaskState {
+        let f = &self.facts;
+        let Some(t) = self
+            .names
+            .get(id.as_str())
+            .filter(|t| f.tasks.contains_key(t))
+        else {
+            return TaskState::NotStarted;
+        };
+        let mine = || f.sessions.iter().filter(move |(_, s)| s.task == Some(t));
+        if mine().any(|(y, s)| {
+            s.fact.state == State::NeedsYou || self.d.items.get(y).is_some_and(|i| i.needs_you)
+        }) {
+            TaskState::NeedsYou
+        } else if mine().any(|(_, s)| {
+            matches!(
+                s.fact.state,
+                State::Queued | State::Running | State::Waiting
+            )
+        }) {
+            TaskState::Running
+        } else if f.tasks[&t].2 {
+            TaskState::Done
+        } else {
+            TaskState::NotStarted
+        }
+    }
+
+    /// The chain ID works under, outermost first, as `(kind, bare id, title)`: a task's spec, plan and itself; a plan's
+    /// spec and itself; a spec alone; an agent's (or a subagent's parent's) task's chain. Empty for an item the model
+    /// does not hold. A plan derived from several specs names the first.
+    pub fn breadcrumb(&self, id: &ItemId) -> Vec<(String, String, String)> {
+        let f = &self.facts;
+        let Some(y) = self.names.get(id.as_str()) else {
+            return Vec::new();
+        };
+        let crumb = |kind: &str, s: Sym, title: &str| {
+            let full = self.names.id(s);
+            let bare = full
+                .as_str()
+                .strip_prefix(&format!("{kind}:"))
+                .unwrap_or(full.as_str())
+                .to_owned();
+            (kind.to_owned(), bare, title.to_owned())
+        };
+        let spec_of = |p: Sym| {
+            f.derives
+                .iter()
+                .find(|(pp, _)| *pp == p)
+                .and_then(|&(_, s)| f.specs.get(&s).map(|t| crumb("spec", s, t)))
+        };
+        let plan_chain = |p: Sym| {
+            let mut out: Vec<_> = spec_of(p).into_iter().collect();
+            if let Some((title, ..)) = f.plans.get(&p) {
+                out.push(crumb("plan", p, title));
+            }
+            out
+        };
+        let task_chain = |t: Sym| {
+            let Some((p, title, _)) = f.tasks.get(&t) else {
+                return Vec::new();
+            };
+            let mut out = plan_chain(*p);
+            out.push(crumb("task", t, title));
+            out
+        };
+        if f.tasks.contains_key(&y) {
+            task_chain(y)
+        } else if f.plans.contains_key(&y) {
+            plan_chain(y)
+        } else if let Some(t) = f.specs.get(&y) {
+            vec![crumb("spec", y, t)]
+        } else if let Some(s) = f.sessions.get(&y) {
+            s.task
+                .or_else(|| s.parent.and_then(|p| f.sessions.get(&p)?.task))
+                .map(task_chain)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// The clock's minute.
+    pub fn minute(&self) -> u64 {
+        self.facts.minute
+    }
+
+    fn materialize(&self, y: Sym) -> Item {
+        let d = &self.d.items[&y];
+        let f = &self.facts;
+        let mut fields = Fields::default();
+        let mut chips = Vec::new();
+        let label = match d.kind {
+            Kind::Ask => f.asks.get(&y).cloned().unwrap_or_default(),
+            Kind::Spec => {
+                fields.target_at = f.targets.get(&y).copied();
+                fields.comments_waiting = f.waiting.get(&y).copied();
+                fields.budget = f.budgets.get(&y).cloned();
+                f.specs.get(&y).cloned().unwrap_or_default()
+            }
+            Kind::Plan => {
+                let (title, _, progress) = &f.plans[&y];
+                fields.progress = *progress;
+                fields.target_at = f.targets.get(&y).copied();
+                fields.comments_waiting = f.waiting.get(&y).copied();
+                fields.budget = f.budgets.get(&y).cloned();
+                title.clone()
+            }
+            Kind::Task => {
+                fields.task_state = Some(self.task_state(&self.names.id(y)));
+                fields.budget = f.budgets.get(&y).cloned();
+                fields.forecast = f.forecasts.get(&y).cloned();
+                f.tasks[&y].1.clone()
+            }
+            Kind::Agent | Kind::Subagent => {
+                let s = &f.sessions[&y];
+                fields.state = Some(s.fact.state);
+                fields.minutes = Some(f.minute.saturating_sub(s.fact.since));
+                fields.model = (!s.fact.model.is_empty()).then(|| s.fact.model.clone());
+                fields.spend = s.fact.spend.clone();
+                fields.budget = f.budgets.get(&y).cloned();
+                fields.age = s.fact.age;
+                fields.worktree = s
+                    .fact
+                    .worktree
+                    .as_deref()
+                    .map(|w| w.rsplit('/').next().unwrap_or(w).to_owned());
+                fields.job = s.fact.job.clone();
+                fields.context = s.fact.context;
+                let task = s.task.or_else(|| {
+                    s.parent
+                        .and_then(|p| f.sessions.get(&p))
+                        .and_then(|p| p.task)
+                });
+                let task = task.filter(|t| f.tasks.contains_key(t));
+                fields.task = task.map(|t| f.tasks[&t].1.clone());
+                fields.task_id = task.map(|t| self.names.name(t).to_owned());
+                fields.progress = s.fact.progress;
+                fields.manager = s
+                    .manager
+                    .filter(|m| self.d.items.contains_key(m))
+                    .map(|m| self.names.id(m));
+                if let Some(st) = f.steps.get(&y) {
+                    fields.activity = Some(st.class.clone());
+                    fields.conclusion = st.conclusion.as_ref().map(|c| c.1.clone());
+                }
+                let reads = f
+                    .presence
+                    .values()
+                    .filter(|es| es.iter().any(|&(a, m, _)| a == y && !m.edits()))
+                    .count();
+                fields.reads = Some(u32::try_from(reads).unwrap_or(u32::MAX));
+                // its branch's changes (the card's `edits N (+P −M)`)
+                if let Some(set) = s
+                    .branch
+                    .map(|b| self.branch_set(b))
+                    .filter(|s| !s.is_empty())
+                {
+                    let (p, m) = set.iter().fold((0, 0), |(p, m), &(_, a, b)| (p + a, m + b));
+                    fields.edits = Some((u32::try_from(set.len()).unwrap_or(u32::MAX), p, m));
+                }
+                if s.fact.model.is_empty() {
+                    s.fact.name.clone()
+                } else {
+                    format!("{} · {}", s.fact.model, s.fact.name)
+                }
+            }
+            Kind::Branch => {
+                let name = self.names.name(y).trim_start_matches("branch:");
+                let (repo, short) = name.split_once('/').unwrap_or(("", name));
+                fields.repo = Some(repo.to_string());
+                fields.tag = self.branch_tag(y);
+                let set = self.branch_set(y);
+                if !set.is_empty() {
+                    let (p, m) = set.iter().fold((0, 0), |(p, m), &(_, a, b)| (p + a, m + b));
+                    fields.edits = Some((u32::try_from(set.len()).unwrap_or(u32::MAX), p, m));
+                }
+                short.to_string()
+            }
+            Kind::File => {
+                let path = self.names.name(y).trim_start_matches("file:");
+                fields.change = f
+                    .changed
+                    .values()
+                    .flat_map(|c| c.files.iter().filter(|e| e.0 == y))
+                    .map(|&(_, p, m)| (p, m))
+                    .max();
+                path.to_string()
+            }
+            Kind::Machine => {
+                let m = &f.machines[&y];
+                fields.slots = Some((m.used, m.slots));
+                fields.runner = m.runner.clone();
+                chips = f
+                    .sessions
+                    .iter()
+                    .filter(|(_, s)| s.parent.is_none() && s.machine == Some(y))
+                    .filter_map(|(&a, s)| s.fact.job.as_ref().map(|j| (a, j)))
+                    .map(|(a, j)| JobChip {
+                        id: j.id.clone(),
+                        name: j.name.clone(),
+                        state: j.state.clone(),
+                        links_to: Some(self.names.id(a)),
+                    })
+                    .collect();
+                m.name.clone()
+            }
+        };
+        Item {
+            id: self.names.id(y),
+            kind: d.kind,
+            label,
+            live: d.live,
+            block: d.block.map(|b| self.names.id(b)),
+            parent: d.parent.map(|p| self.names.id(p)),
+            order: d.order,
+            warn: d.warn,
+            needs_you: d.needs_you,
+            shared: d.shared,
+            done: d.done,
+            ready: d.ready,
+            touched: d.touched,
+            fields,
+            chips,
+        }
+    }
+
+    /// A branch's chip tag: the machine its agent runs on, abbreviated, and the slot it holds there (`desk 3`).
+    fn branch_tag(&self, b: Sym) -> Option<String> {
+        let owner = self
+            .facts
+            .sessions
+            .iter()
+            .filter(|(_, s)| s.parent.is_none() && s.branch == Some(b))
+            .min_by(|x, y| {
+                (x.1.fact.seq, self.names.name(*x.0)).cmp(&(y.1.fact.seq, self.names.name(*y.0)))
+            })?
+            .1;
+        let machine = owner.fact.machine.as_deref()?;
+        let short = if machine == "desktop" {
+            "desk"
+        } else {
+            machine
+        };
+        Some(match owner.fact.slot {
+            Some(n) => format!("{short} {n}"),
+            None => short.to_owned(),
+        })
+    }
+
+    /// A branch's changed files with counts, against its recorded base (for its chip).
+    fn branch_set(&self, b: Sym) -> Vec<(Sym, u32, u32)> {
+        let f = &self.facts;
+        let owner = f
+            .sessions
+            .iter()
+            .filter(|(_, s)| s.parent.is_none() && s.branch == Some(b))
+            .min_by(|x, y| {
+                (x.1.fact.seq, self.names.name(*x.0)).cmp(&(y.1.fact.seq, self.names.name(*y.0)))
+            });
+        let Some((_, s)) = owner else {
+            return Vec::new();
+        };
+        match s.wt.and_then(|w| f.changed.get(&w)) {
+            Some(c) if s.fact.base.as_ref().is_none_or(|base| *base == c.base) => c.files.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    // ---- ingest ----
+
+    /// Stores a fact; returns the items whose fields it changed and whether it changed a card, or `None` when it
+    /// changes nothing (the same record again).
+    fn ingest(&mut self, ev: Event) -> Option<(BTreeSet<Sym>, bool)> {
+        let mut touched = BTreeSet::new();
+        let mut card = false;
+        let n = &mut self.names;
+        let f = &mut self.facts;
+        match ev {
+            Event::Graph(g) => match g {
+                GraphFact::Ask { key, text } => {
+                    let y = n.intern_as("ask", &key);
+                    if f.asks.get(&y) == Some(&text) {
+                        return None;
+                    }
+                    f.asks.insert(y, text);
+                    touched.insert(y);
+                }
+                GraphFact::Spec { id, title, updated } => {
+                    let y = n.intern_as("spec", &id);
+                    if f.specs.get(&y) == Some(&title) && f.stamps.get(&y) == Some(&updated) {
+                        return None;
+                    }
+                    f.specs.insert(y, title);
+                    f.stamps.insert(y, updated);
+                    touched.insert(y);
+                }
+                GraphFact::Plan {
+                    id,
+                    title,
+                    rank,
+                    progress,
+                    updated,
+                } => {
+                    let y = n.intern_as("plan", &id);
+                    let v = (title, rank, progress);
+                    if f.plans.get(&y) == Some(&v) && f.stamps.get(&y) == Some(&updated) {
+                        return None;
+                    }
+                    f.plans.insert(y, v);
+                    f.stamps.insert(y, updated);
+                    touched.insert(y);
+                }
+                GraphFact::Target { item, at } => {
+                    let (kind, id) = item
+                        .split_once(':')
+                        .filter(|(k, _)| matches!(*k, "spec" | "plan"))?;
+                    let y = n.intern_as(kind, id);
+                    let now = at;
+                    if f.targets.get(&y).copied() == now {
+                        return None;
+                    }
+                    match now {
+                        Some(a) => f.targets.insert(y, a),
+                        None => f.targets.remove(&y),
+                    };
+                    touched.insert(y);
+                }
+                GraphFact::Comments { item, waiting } => {
+                    let (kind, id) = item
+                        .split_once(':')
+                        .filter(|(k, _)| matches!(*k, "spec" | "plan"))?;
+                    let y = n.intern_as(kind, id);
+                    let now = (waiting > 0).then_some(waiting);
+                    if f.waiting.get(&y).copied() == now {
+                        return None;
+                    }
+                    match now {
+                        Some(w) => f.waiting.insert(y, w),
+                        None => f.waiting.remove(&y),
+                    };
+                    touched.insert(y);
+                }
+                GraphFact::Forecast { item, usd, hours } => {
+                    let (kind, id) = item
+                        .split_once(':')
+                        .filter(|(k, _)| matches!(*k, "plan" | "task"))?;
+                    let y = n.intern_as(kind, id);
+                    let new =
+                        (usd.is_some() || hours.is_some()).then_some(ItemForecast { usd, hours });
+                    if f.forecasts.get(&y) == new.as_ref() {
+                        return None;
+                    }
+                    match new {
+                        Some(v) => f.forecasts.insert(y, v),
+                        None => f.forecasts.remove(&y),
+                    };
+                    touched.insert(y);
+                }
+                GraphFact::Budget { item, budget } => {
+                    let (kind, id) = item
+                        .split_once(':')
+                        .filter(|(k, _)| matches!(*k, "spec" | "plan" | "task" | "agent"))?;
+                    let y = n.intern_as(kind, id);
+                    if f.budgets.get(&y) == budget.as_ref() {
+                        return None;
+                    }
+                    match budget {
+                        Some(b) => f.budgets.insert(y, b),
+                        None => f.budgets.remove(&y),
+                    };
+                    touched.insert(y);
+                }
+                GraphFact::Task {
+                    id,
+                    plan,
+                    title,
+                    done,
+                    updated,
+                } => {
+                    let t = n.intern_as("task", &id);
+                    let v = (n.intern_as("plan", &plan), title, done);
+                    if f.tasks.get(&t) == Some(&v) && f.stamps.get(&t) == Some(&updated) {
+                        return None;
+                    }
+                    f.tasks.insert(t, v);
+                    f.stamps.insert(t, updated);
+                    // the task's title is on its agents' cards
+                    touched.extend(
+                        f.sessions
+                            .iter()
+                            .filter(|(_, s)| s.task == Some(t))
+                            .map(|(&a, _)| a),
+                    );
+                }
+                GraphFact::Asked { ask, to } => {
+                    let a = n.intern_as("ask", &ask);
+                    let t = n.intern(&to);
+                    if !f.asked.insert((a, t)) {
+                        return None;
+                    }
+                }
+                GraphFact::Derives { plan, spec } => {
+                    let p = n.intern_as("plan", &plan);
+                    let s = n.intern_as("spec", &spec);
+                    if !f.derives.insert((p, s)) {
+                        return None;
+                    }
+                }
+            },
+            Event::Session(s) => {
+                let y = n.intern_as("agent", &s.id);
+                let old = f.sessions.get(&y).map(|o| &o.fact);
+                if old == Some(&s) {
+                    return None;
+                }
+                // a branch's chip counts against its owner's worktree and base
+                if old.is_none_or(|o| {
+                    (&o.branch, &o.worktree, &o.base) != (&s.branch, &s.worktree, &s.base)
+                }) {
+                    touched.extend(f.sessions.get(&y).and_then(|o| o.branch));
+                    touched.extend(s.branch.as_deref().map(|b| n.intern_as("branch", b)));
+                }
+                let parent = s.id.split_once('/').map(|(p, _)| n.intern_as("agent", p));
+                let sess = Sess {
+                    parent,
+                    task: s.task.as_deref().map(|t| n.intern_as("task", t)),
+                    manager: s.manager.as_deref().map(|m| n.intern_as("agent", m)),
+                    branch: s.branch.as_deref().map(|b| n.intern_as("branch", b)),
+                    wt: s.worktree.as_deref().map(|w| n.intern_as("wt", w)),
+                    machine: s.machine.as_deref().map(|m| n.intern_as("machine", m)),
+                    fact: s,
+                };
+                f.sessions.insert(y, sess);
+                touched.insert(y);
+            }
+            Event::Step(st) => {
+                let y = n.intern_as("agent", &st.session);
+                let agg = f.steps.entry(y).or_default();
+                let mut new = agg.clone();
+                if st.step >= new.last {
+                    new.last = st.step;
+                    new.class = st.class;
+                }
+                if let Some(c) = st.conclusion
+                    && new.conclusion.as_ref().is_none_or(|(at, _)| st.step >= *at)
+                {
+                    new.conclusion = Some((st.step, c));
+                }
+                if *agg == new {
+                    return None;
+                }
+                *agg = new;
+                touched.insert(y);
+            }
+            Event::Changed {
+                worktree,
+                base,
+                files,
+            } => {
+                let w = n.intern_as("wt", &worktree);
+                let mut list: Vec<(Sym, u32, u32)> = files
+                    .iter()
+                    .map(|(p, &(a, b))| (n.intern_as("file", p), a, b))
+                    .collect();
+                list.sort_unstable();
+                let new = Changed { base, files: list };
+                let old = f.changed.insert(w, new.clone());
+                if old.as_ref() == Some(&new) {
+                    return None;
+                }
+                touched.extend(new.files.iter().map(|e| e.0));
+                touched.extend(old.iter().flat_map(|c| c.files.iter().map(|e| e.0)));
+                touched.extend(
+                    f.sessions
+                        .values()
+                        .filter(|s| s.wt == Some(w))
+                        .filter_map(|s| s.branch),
+                );
+            }
+            Event::Presence(p) => {
+                let file = n.intern_as("file", &p.file);
+                let mut list: Vec<(Sym, Mode, Option<u32>)> = p
+                    .entries
+                    .iter()
+                    .map(|e| (n.intern_as("agent", &e.session), e.mode, e.line))
+                    .collect();
+                list.sort_unstable();
+                list.dedup();
+                let old = if list.is_empty() {
+                    f.presence.remove(&file)
+                } else {
+                    f.presence.insert(file, list.clone())
+                };
+                if old.as_ref().unwrap_or(&Vec::new()) == &list {
+                    return None;
+                }
+                touched.insert(file);
+                touched.extend(list.iter().map(|e| e.0));
+                touched.extend(old.iter().flatten().map(|e| e.0));
+            }
+            Event::Machines(ms) => {
+                let new: BTreeMap<Sym, MachineFact> = ms
+                    .into_iter()
+                    .map(|m| (n.intern_as("machine", &m.name), m))
+                    .collect();
+                if new == f.machines {
+                    return None;
+                }
+                touched.extend(new.keys());
+                touched.extend(f.machines.keys());
+                f.machines = new;
+            }
+            Event::Card(c) => {
+                let y = n.intern_as("card", &c.id);
+                if f.cards.get(&y).is_some_and(|(old, _)| *old == c) {
+                    return None;
+                }
+                let about = c.about.iter().map(|a| n.intern(a)).collect();
+                f.cards.insert(y, (c, about));
+                card = true;
+            }
+            Event::Refs(rs) => {
+                let new: BTreeMap<Sym, (Option<Sym>, bool)> = rs
+                    .iter()
+                    .map(|r| {
+                        let b = n.intern_as("branch", &r.branch);
+                        (
+                            b,
+                            (
+                                r.based_on.as_deref().map(|x| n.intern_as("branch", x)),
+                                r.merged,
+                            ),
+                        )
+                    })
+                    .collect();
+                if new == f.refs {
+                    return None;
+                }
+                f.refs = new;
+            }
+            Event::Tick { minute } => {
+                if minute <= f.minute {
+                    return None;
+                }
+                f.minute = minute;
+                touched.extend(f.sessions.keys());
+            }
+            Event::View(_) => return None,
+        }
+        Some((touched, card))
+    }
+
+    // ---- derive ----
+
+    /// Everything shown, from the facts alone.
+    fn derive(&self) -> Derived {
+        let f = &self.facts;
+        let n = &self.names;
+        let mut d = Derived::default();
+
+        // agents: a subagent takes its parent's task and branch
+        struct A {
+            top: bool,
+            parent: Option<Sym>,
+            plan: Option<Sym>,
+            task: Option<Sym>,
+            branch: Option<Sym>,
+            live: bool,
+        }
+        let mut agents: BTreeMap<Sym, A> = BTreeMap::new();
+        for (&a, s) in &f.sessions {
+            let p = s.parent.and_then(|p| f.sessions.get(&p).map(|ps| (p, ps)));
+            let task = s.task.or(p.and_then(|(_, ps)| ps.task));
+            let branch = if s.parent.is_some() {
+                p.and_then(|(_, ps)| ps.branch)
+            } else {
+                s.branch
+            };
+            let plan = task
+                .and_then(|t| f.tasks.get(&t))
+                .map(|t| t.0)
+                .filter(|pl| f.plans.contains_key(pl));
+            let done = task.and_then(|t| f.tasks.get(&t)).is_some_and(|t| t.2);
+            let merged = branch.and_then(|b| f.refs.get(&b)).is_some_and(|r| r.1);
+            let live = s.fact.state != State::Finished || !(done || merged);
+            agents.insert(
+                a,
+                A {
+                    top: s.parent.is_none(),
+                    parent: p.map(|(p, _)| p),
+                    plan,
+                    task,
+                    branch,
+                    live,
+                },
+            );
+        }
+        let order = |a: Sym| (f.sessions[&a].fact.seq, n.name(a));
+
+        // branches: an agent's branch, and the branch a present one was cut from
+        struct B {
+            owner: Option<Sym>,
+            block: Option<Sym>,
+            live: bool,
+        }
+        let mut branches: BTreeMap<Sym, B> = BTreeMap::new();
+        for (&a, ag) in &agents {
+            let Some(b) = ag.branch else { continue };
+            let e = branches.entry(b).or_insert(B {
+                owner: None,
+                block: None,
+                live: false,
+            });
+            e.live |= ag.live;
+            if ag.top && e.owner.is_none_or(|o| order(a) < order(o)) {
+                e.owner = Some(a);
+                e.block = ag.plan;
+            }
+        }
+        let mut bases: Vec<(Sym, Sym, bool, Option<Sym>)> = Vec::new();
+        for (&b, br) in &branches {
+            if let Some(&(Some(base), _)) = f.refs.get(&b)
+                && base != b
+            {
+                bases.push((base, b, br.live, br.block));
+            }
+        }
+        // the dependent branch that sorts first gives a base-only branch its block
+        bases.sort_by(|x, y| (x.0, n.name(x.1)).cmp(&(y.0, n.name(y.1))));
+        for (base, _, live, block) in bases {
+            let e = branches.entry(base).or_insert(B {
+                owner: None,
+                block,
+                live: false,
+            });
+            e.live |= live;
+        }
+
+        // each branch's changed files: the edit history against its base, plus edits in flight
+        let mut sets: BTreeMap<Sym, BTreeSet<Sym>> = BTreeMap::new();
+        for (&b, br) in &branches {
+            let Some(o) = br.owner else { continue };
+            let s = &f.sessions[&o];
+            if let Some(c) = s.wt.and_then(|w| f.changed.get(&w))
+                && s.fact.base.as_ref().is_none_or(|base| *base == c.base)
+            {
+                sets.entry(b)
+                    .or_default()
+                    .extend(c.files.iter().map(|e| e.0));
+            }
+        }
+        // per agent: its edits and reads in flight (the presence model)
+        let mut agent_edits: BTreeMap<Sym, BTreeSet<Sym>> = BTreeMap::new();
+        let mut agent_reads: BTreeMap<Sym, BTreeSet<Sym>> = BTreeMap::new();
+        for (&file, es) in &f.presence {
+            for &(a, m, _) in es {
+                let Some(ag) = agents.get(&a) else { continue };
+                if m.edits() {
+                    agent_edits.entry(a).or_default().insert(file);
+                    if let Some(b) = ag.branch.filter(|b| branches.contains_key(b)) {
+                        sets.entry(b).or_default().insert(file);
+                    }
+                } else {
+                    agent_reads.entry(a).or_default().insert(file);
+                }
+            }
+        }
+
+        // files: changed by a present branch or touched by a present agent
+        let mut files: BTreeMap<Sym, bool> = BTreeMap::new();
+        for (b, set) in &sets {
+            let live = branches[b].live;
+            for &x in set {
+                *files.entry(x).or_default() |= live;
+            }
+        }
+        for (a, set) in agent_edits.iter().chain(&agent_reads) {
+            let live = agents[a].live;
+            for &x in set {
+                *files.entry(x).or_default() |= live;
+            }
+        }
+
+        // the layers above: live while a live agent is under them, or a live ask links them
+        let live_plans: BTreeSet<Sym> = agents
+            .values()
+            .filter(|a| a.live)
+            .filter_map(|a| a.plan)
+            .collect();
+        let mut live_specs: BTreeSet<Sym> = f
+            .derives
+            .iter()
+            .filter(|(p, _)| live_plans.contains(p))
+            .map(|&(_, s)| s)
+            .collect();
+        let target_live = |t: Sym| match n.kind(t) {
+            Some(Kind::Agent | Kind::Subagent) => agents.get(&t).is_some_and(|a| a.live),
+            Some(Kind::Plan) => live_plans.contains(&t),
+            Some(Kind::Spec) => live_specs.contains(&t),
+            _ => agents.values().any(|a| a.live && a.task == Some(t)),
+        };
+        let live_asks: BTreeSet<Sym> = f
+            .asked
+            .iter()
+            .filter(|&&(a, t)| f.asks.contains_key(&a) && target_live(t))
+            .map(|&(a, _)| a)
+            .collect();
+        let mut live_plans = live_plans;
+        for &(a, t) in &f.asked {
+            if live_asks.contains(&a) {
+                match n.kind(t) {
+                    Some(Kind::Plan) => {
+                        live_plans.insert(t);
+                    }
+                    Some(Kind::Spec) => {
+                        live_specs.insert(t);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // the items
+        let item = |kind, live, block, parent, order| ItemD {
+            kind,
+            live,
+            block,
+            parent,
+            order,
+            warn: false,
+            needs_you: false,
+            shared: false,
+            done: false,
+            ready: false,
+            touched: 0,
+            job_units: 0,
+        };
+        for &a in f.asks.keys() {
+            d.items
+                .insert(a, item(Kind::Ask, live_asks.contains(&a), None, None, 0));
+        }
+        for &s in f.specs.keys() {
+            d.items
+                .insert(s, item(Kind::Spec, live_specs.contains(&s), None, None, 0));
+        }
+        for (&p, (_, rank, _)) in &f.plans {
+            d.items.insert(
+                p,
+                item(Kind::Plan, live_plans.contains(&p), None, None, *rank),
+            );
+        }
+        for (&t, (plan, _, _)) in &f.tasks {
+            let live = agents.values().any(|a| a.live && a.task == Some(t));
+            let block = Some(*plan).filter(|pl| f.plans.contains_key(pl));
+            d.items.insert(t, item(Kind::Task, live, block, None, 0));
+        }
+        for (&a, ag) in &agents {
+            let kind = if ag.top { Kind::Agent } else { Kind::Subagent };
+            let block = if ag.top {
+                ag.plan
+            } else {
+                ag.parent.and_then(|p| agents[&p].plan).or(ag.plan)
+            };
+            d.items.insert(
+                a,
+                item(kind, ag.live, block, ag.parent, f.sessions[&a].fact.seq),
+            );
+        }
+        for (&b, br) in &branches {
+            d.items
+                .insert(b, item(Kind::Branch, br.live, br.block, br.owner, 0));
+        }
+        for (&x, &live) in &files {
+            d.items.insert(x, item(Kind::File, live, None, None, 0));
+        }
+        for &m in f.machines.keys() {
+            d.items.insert(m, item(Kind::Machine, true, None, None, 0));
+            let units: u32 = f
+                .sessions
+                .values()
+                .filter(|s| s.parent.is_none() && s.machine == Some(m))
+                .filter_map(|s| s.fact.job.as_ref())
+                .map(|j| (j.name.chars().count() + j.state.chars().count() + 6) as u32 * 2)
+                .sum();
+            if let Some(it) = d.items.get_mut(&m) {
+                it.job_units = units;
+            }
+        }
+
+        // the edges, between present items only
+        let present = |y: &Sym| d.items.contains_key(y);
+        let mut edges: Vec<(Sym, Sym, EdgeKind)> = Vec::new();
+        for &(a, t) in &f.asked {
+            if !present(&a) {
+                continue;
+            }
+            edges.push((a, t, EdgeKind::CameFrom));
+        }
+        edges.extend(f.derives.iter().map(|&(p, s)| (s, p, EdgeKind::CameFrom)));
+        for (&t, (pl, _, _)) in &f.tasks {
+            edges.push((*pl, t, EdgeKind::CameFrom));
+        }
+        for (&a, ag) in &agents {
+            let s = &f.sessions[&a];
+            match ag.parent {
+                Some(p) => edges.push((p, a, EdgeKind::CameFrom)),
+                None => {
+                    match ag.task.filter(|t| f.tasks.contains_key(t)) {
+                        Some(t) => edges.push((t, a, EdgeKind::CameFrom)),
+                        None => {
+                            if let Some(pl) = ag.plan {
+                                edges.push((pl, a, EdgeKind::CameFrom));
+                            }
+                        }
+                    }
+                    if let Some(b) = ag.branch {
+                        edges.push((a, b, EdgeKind::CameFrom));
+                    }
+                }
+            }
+            if let Some(m) = s.machine {
+                edges.push((a, m, EdgeKind::RunsOn));
+            }
+            if let Some(m) = s.manager {
+                edges.push((m, a, EdgeKind::Manages));
+            }
+        }
+        for (&a, set) in &agent_reads {
+            edges.extend(set.iter().map(|&x| (a, x, EdgeKind::Reads)));
+        }
+        for (&b, set) in &sets {
+            edges.extend(set.iter().map(|&x| (b, x, EdgeKind::Edits)));
+        }
+        for (&b, &(base, _)) in &f.refs {
+            if let Some(base) = base
+                && base != b
+            {
+                edges.push((b, base, EdgeKind::BasedOn));
+            }
+        }
+        // reading a file another live branch is changing
+        for (&a, set) in &agent_reads {
+            let mine = agents[&a].branch;
+            for &x in set {
+                if sets
+                    .iter()
+                    .any(|(b, s)| Some(*b) != mine && branches[b].live && s.contains(&x))
+                {
+                    edges.push((a, x, EdgeKind::ReadVsEdit));
+                }
+            }
+        }
+
+        // overlaps and clashes
+        let live_sets: BTreeMap<Sym, &BTreeSet<Sym>> = sets
+            .iter()
+            .filter(|(b, _)| branches[*b].live)
+            .map(|(&b, s)| (b, s))
+            .collect();
+        let mut owners: BTreeMap<Sym, Vec<Sym>> = BTreeMap::new();
+        let mut on_branch: BTreeMap<Sym, Vec<Sym>> = BTreeMap::new();
+        for (&a, ag) in &agents {
+            if let (true, Some(b)) = (ag.live, ag.branch) {
+                if ag.top {
+                    owners.entry(b).or_default().push(a);
+                }
+                on_branch.entry(b).or_default().push(a);
+            }
+        }
+        let clashes: Vec<(Sym, Sym)> = f
+            .cards
+            .values()
+            .filter(|(c, about)| c.open && c.kind == CardKind::Clash && about.len() == 2)
+            .map(|(_, about)| (about[0], about[1]))
+            .filter(|(x, y)| x != y && agents.contains_key(x) && agents.contains_key(y))
+            .collect();
+        d.overlaps = overlap::compute(
+            &live_sets,
+            &owners,
+            &on_branch,
+            &agent_edits,
+            &clashes,
+            |y| n.name(y),
+        );
+        for (&(a, b), o) in &d.overlaps {
+            edges.push((a, b, EdgeKind::Overlap));
+            for y in [a, b] {
+                if let Some(it) = d.items.get_mut(&y) {
+                    it.warn = true;
+                }
+            }
+            for x in &o.files {
+                if let Some(it) = d.items.get_mut(x) {
+                    it.shared = true;
+                }
+            }
+        }
+
+        // needs you
+        for (&c, (card, about)) in &f.cards {
+            if card.open {
+                d.needs_you.push(c);
+                // a huddle that talks waits for nobody: its agents are not marked
+                for y in about.iter().filter(|_| card.kind != CardKind::Huddle) {
+                    if let Some(it) = d.items.get_mut(y) {
+                        it.needs_you = true;
+                    }
+                }
+            }
+        }
+
+        // finished, not started, and last touched (the Show filter reads these)
+        let mut touched: BTreeMap<Sym, u64> = BTreeMap::new();
+        let mut started: BTreeSet<Sym> = BTreeSet::new();
+        for (&a, sess) in &f.sessions {
+            touched.insert(a, sess.fact.since);
+            if let Some(t) = sess.task {
+                started.insert(t);
+                let e = touched.entry(t).or_default();
+                *e = (*e).max(sess.fact.since);
+            }
+        }
+        let stamp = |y: Sym| f.stamps.get(&y).copied().unwrap_or(0);
+        let mut plan_tasks: BTreeMap<Sym, Vec<Sym>> = BTreeMap::new();
+        for (&t, (pl, _, _)) in &f.tasks {
+            plan_tasks.entry(*pl).or_default().push(t);
+            let e = touched.entry(t).or_default();
+            *e = (*e).max(stamp(t));
+        }
+        let mut ready: BTreeSet<Sym> = BTreeSet::new();
+        let mut done: BTreeSet<Sym> = BTreeSet::new();
+        for (&t, (_, _, finished)) in &f.tasks {
+            if *finished {
+                done.insert(t);
+            } else if !started.contains(&t) {
+                ready.insert(t);
+            }
+        }
+        for (&p, (_, _, progress)) in &f.plans {
+            let tasks = plan_tasks.get(&p).map_or(&[][..], Vec::as_slice);
+            let mut at = stamp(p);
+            at = tasks.iter().map(|t| touched[t]).fold(at, u64::max);
+            touched.insert(p, at);
+            let live = d.items[&p].live;
+            let complete = progress.is_some_and(|(x, y)| y > 0 && x >= y)
+                || (!tasks.is_empty() && tasks.iter().all(|t| done.contains(t)));
+            if !live && !complete && !tasks.iter().any(|t| started.contains(t)) {
+                ready.insert(p);
+            } else if !live {
+                done.insert(p);
+            }
+        }
+        for &sp in f.specs.keys() {
+            let plans: Vec<Sym> = f
+                .derives
+                .iter()
+                .filter(|(_, s)| *s == sp)
+                .map(|&(p, _)| p)
+                .collect();
+            let at = plans
+                .iter()
+                .filter_map(|p| touched.get(p))
+                .fold(stamp(sp), |x, &y| x.max(y));
+            touched.insert(sp, at);
+            let live = d.items[&sp].live;
+            if !live
+                && plans
+                    .iter()
+                    .all(|p| ready.contains(p) || !f.plans.contains_key(p))
+            {
+                ready.insert(sp);
+            } else if !live {
+                done.insert(sp);
+            }
+        }
+        for &a in f.asks.keys() {
+            let at = f
+                .asked
+                .iter()
+                .filter(|(x, _)| *x == a)
+                .filter_map(|(_, t)| touched.get(t))
+                .fold(0, |x, &y| x.max(y));
+            touched.insert(a, at);
+            if !d.items[&a].live {
+                done.insert(a);
+            }
+        }
+        for (&y, it) in d.items.iter_mut() {
+            match it.kind {
+                Kind::Agent | Kind::Subagent | Kind::File => it.done = !it.live,
+                Kind::Branch => {
+                    it.done = !it.live;
+                    it.touched = it
+                        .parent
+                        .and_then(|o| touched.get(&o).copied())
+                        .unwrap_or(0);
+                    continue;
+                }
+                Kind::Machine => continue,
+                _ => {
+                    it.done = done.contains(&y);
+                    it.ready = ready.contains(&y);
+                }
+            }
+            it.touched = touched.get(&y).copied().unwrap_or(0);
+        }
+
+        edges.retain(|(a, b, _)| a != b && d.items.contains_key(a) && d.items.contains_key(b));
+        edges.sort_unstable();
+        edges.dedup();
+        d.edges = edges;
+        d
+    }
+}

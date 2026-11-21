@@ -38,8 +38,12 @@ What happens:
   ([workbench.md](workbench.md#the-layout-survives-a-restart)) — and the paths in front of it.
 - **A window is open:** the paths open there and the window comes to the front.
 
-A **folder** becomes the Explorer's first folder (the others stay) and the Explorer is selected, as in VS Code after
-`code .`, so quick open and the Search view (`C-p`, `C-S-f`; ⌘P, ⌘⇧F on a Mac) work in that folder's project right away; it does not
+A **folder** becomes the Explorer's only folder and the Explorer is selected, as in VS Code after `code .`: every
+folder it showed before goes (the one it took by itself at the start, the folder of the first file in front, often your
+home, and the ones opened before; **Add Folder to Workspace…** in the palette adds another one, Remove Folder from
+Workspace, on a folder's top row, takes one out), the layout file keeps only the folders you opened, the editor area
+shows no start page (it stays empty, as after `code .`; a start with no folder still shows the page), and every window
+showing the Explorer shows the new folder at its top, so quick open and the Search view (`C-p`, `C-S-f`; ⌘P, ⌘⇧F on a Mac) work in that folder's project right away; it does not
 open as a directory listing. A **file** opens in the editor. drgnx started by hand as a normal Emacs (not a daemon) answers
 `drgnx PATH` too, as long as no other drgnx does.
 
@@ -54,7 +58,12 @@ chunks (or in the mode you chose for it before), with a header line that switche
 that chunk ([large-files.md](large-files.md)).
 
 Inside drgnx, **File → Open Folder…** (palette; `C-k C-o` in the VS Code profile, `SPC f o` in Vim's) asks for a
-folder and shows it the same way.
+folder and shows it the same way. It opens in the palette's box, as VS Code's does: **Browse…** first (your
+desktop's folder dialog; in a terminal frame, a folder prompt), then the ten folders you opened last, newest first,
+each with its parent folder beside it. You can also type a path to a folder and press Enter. The recent folders are
+kept in `recent-folders.eld` in drgnx's state folder; a folder that no longer exists drops off the list. In the
+folder prompt, a path you type that starts with `/` or `~` replaces the prompt's start, so the input reads `/tmp`,
+not `~//tmp`.
 
 ## In a terminal: `drgnx -t`
 
@@ -159,22 +168,25 @@ run `drgnx macos-app` again. To remove it, delete `~/Applications/drgnx.app`. Co
 
 ## Keep running or quit
 
-When you close drgnx's last window — its close button, or Close Window (`C-q` in the VS Code profile, ⌘⇧W on a Mac;
+When you close drgnx's last window — its close button, or Close Window (`C-S-w` in the VS Code profile, ⌘⇧W on a Mac;
 the palette) — drgnx does one of two things, your choice:
 
 - **Keep running in the background** (the default, like VS Code on a Mac): drgnx stays running without a window, so
-  the next `drgnx PATH` or `drgnx open` is instant and brings your windows back. File → **Quit drgnx** (⌘Q on a Mac;
+  the next `drgnx PATH` or `drgnx open` is instant and brings your windows back. File → **Quit drgnx** (`C-q` in the VS Code profile, ⌘Q on a Mac;
   in the palette too) stops it; it then stays stopped until you open drgnx again. It never starts at login: the first open
   starts it, and after a reboot or logout the next open starts it fresh with your windows restored. (The one
   exception: on Linux, if you enabled the systemd user service `drgnx`, it starts at login, as enabled services do.)
 - **Quit when the last window closes:** closing the last window quits drgnx.
 
-Quitting — Quit drgnx, or closing the last window in quit mode — first offers to save each file with changes, and
-each New Untitled buffer (tab) you typed in (it asks for a file name); the `*scratch*` buffer is not offered. Press
-Ctrl+G (`C-g`, Emacs' cancel), or keep one unsaved and then answer no to "quit and lose the changes?", and drgnx
-stays running with everything open: nothing is lost. If terminals or other programs are still running, drgnx then
-asks once whether to quit and stop them (no keeps everything running). A drgnx that is not a daemon has nothing to
-keep running, so closing its last window always quits (asking the same way).
+Quitting — Quit drgnx, or closing the last window in quit mode — asks **one** question when files have changes, as
+VS Code does: "Do you want to save the changes you made to NAME?" for one file, or "…to the following N files?" with
+the files listed (the first eight, then "and N more") for several, answered Save (Save All for several), Don't Save or
+Cancel. Keys: `s`, `d`, `c`; `Escape` and `C-g` cancel; a quit clicked with the mouse (the window's close button) asks
+in a dialog box where the window can show one. Each New Untitled buffer (tab) you typed in counts as a changed file
+(Save asks it for a file name); the `*scratch*` buffer does not. Cancel, or a file still unsaved after Save, and drgnx
+stays running with everything open: nothing is lost. Don't Save quits and the changes go. If terminals or other
+programs are still running, drgnx then asks once whether to quit and stop them (no keeps everything running). A drgnx
+that is not a daemon has nothing to keep running, so closing its last window always quits (asking the same way).
 
 The keys close a window the same way. `C-x C-c` (Save Buffers Kill Terminal) and `C-x 5 0` (Delete Frame) in a
 graphical window do what its close button does: another window is open, so only this one closes; it is the last one,
@@ -210,9 +222,9 @@ their own, so they never reach your drgnx); a server named anything but `drgnx` 
 to the front with `(drgnx-session-raise)`, has it read the AI keys once per start (`drgnx-ai-load-keys-soon`: from
 a timer, [ai.md](ai.md#keys)), sends files as file arguments and each folder as
 `(drgnx-session-open-folder "…")`. Every call but `--wait`'s file call has `-n` (no waiting); with no display,
-`--wait` is just `emacsclient -t -- FILE…`. In drgnx's terminal (`INSIDE_EMACS` names eat and `DRGNX_SERVER_NAME`
-is set: the terminal's Emacs's socket) none of that runs: the files and folders go straight to that server, with
-neither `-c` nor `-t`, so they open in its selected frame. `drgnx -t` sends each file as
+`--wait` is just `emacsclient -t -- FILE…`. In drgnx's terminal (`DRGNX_TERMINAL` and
+`DRGNX_SERVER_NAME` are set: the terminal's Emacs's socket) none of that runs but the AI keys: the files and folders go
+straight to that server, with neither `-c` nor `-t`, so they open in its selected frame. `drgnx -t` sends each file as
 `(drgnx-session-open-file "…")`. Emacs asks in the server's process filter about an open buffer whose file changed
 (`server-visit-files` reverts it with `(revert-buffer t nil)`; `find-file` asks "Reread from disk?"), so an advice
 on `server-visit-files`, put there when `core/drgnx-session.el` loads, and `drgnx-session-open-file` run the visit
@@ -232,5 +244,5 @@ runs `emacsclient` with `env -u XDG_RUNTIME_DIR`, so Terminal and Finder reach t
 `test/unit/bin-test.el` (fake `emacs`, `emacsclient` and `systemctl`, and one real
 headless `open --check`), and the live scenario `test/live/drgnx-session-keep-or-quit-test.el` (a daemon session:
 `bin/drgnx open` with a file and a folder with a space and an accent, then the last window closed in each mode).
-From drgnx's terminal: `test/unit/terminal-bin-test.el` (the emacsclient calls inside and outside eat) and the live
-`test/live/drgnx-terminal-test.el` (zsh in eat: `cd` followed, `drgnx` with odd names, `git commit`, the key split).
+From drgnx's terminal: `test/unit/terminal-bin-test.el` (the emacsclient calls inside and outside drgnx's terminal) and the live
+the terminal's own tests (`test/unit/term-*-test.el`).

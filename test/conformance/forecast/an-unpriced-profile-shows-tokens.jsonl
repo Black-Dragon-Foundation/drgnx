@@ -1,0 +1,10 @@
+{"scenario": "forecast/an-unpriced-profile-shows-tokens", "requires": ["v1", "test-hooks"], "doc": "A plan routed to a profile with no price (no model row, no gateway price, a CLI the table does not name: the mock as Codex): the estimate lists the profile as unpriced and has no cost range, and the proposal card says tokens and the word unpriced, never 0.00. Pattern B."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"local\" :command (\"$MOCK\" \"acp\" \"--as\" \"codex\")))) (drgnx-agents-routes ((implement \"local\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# One\n\n**Repo:** $ROOT/repo\n\n### Task 1: One\n\n**Role:** implement\n\nDo it.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "estimate": {"unpriced": ["local"], "tokens": "$number", "forecast": {"cost": []}}}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select count(*) from card where job = '$job' and kind = 'proposal' and title like '%unpriced%' and title like '%tokens%' and title not like '%0.00%'", "rows": [[1]]}

@@ -31,6 +31,19 @@ pub struct Step {
     pub cache_write: i64,
     pub cost: Option<f64>,
     pub cost_unit: Option<String>,
+    /// The agent conversation the step ran in.
+    pub acp: Option<String>,
+    /// The worktree's commit when the step's snapshot was taken (from ref files: a hint, checked before use).
+    pub head: Option<String>,
+    /// The edit history's record the step anchors.
+    pub history_op: Option<i64>,
+    /// The revert record that abandoned the step.
+    pub undone_by: Option<i64>,
+    /// The machine the step ran on (none: the hub's own, or not known).
+    pub machine: Option<String>,
+    /// A machine-queue step: the slots in use and in all when the wait began.
+    pub slots_used: Option<i64>,
+    pub slots_total: Option<i64>,
 }
 
 /// SESSION's steps with `seq` above SINCE_SEQ, in order.
@@ -46,16 +59,42 @@ pub fn for_scope(
     since: i64,
     limit: i64,
 ) -> Result<Vec<Step>, CoordError> {
+    query(conn, scope, id, ">", "", since, limit)
+}
+
+/// The LIMIT steps of SCOPE ID just before BEFORE (a session's `seq`, else a step id), in order: the newest last.
+pub fn before_scope(
+    conn: &Tx,
+    scope: Scope,
+    id: &str,
+    before: i64,
+    limit: i64,
+) -> Result<Vec<Step>, CoordError> {
+    let mut rows = query(conn, scope, id, "<", " desc", before, limit)?;
+    rows.reverse();
+    Ok(rows)
+}
+
+fn query(
+    conn: &Tx,
+    scope: Scope,
+    id: &str,
+    cmp: &str,
+    dir: &str,
+    bound: i64,
+    limit: i64,
+) -> Result<Vec<Step>, CoordError> {
     let (col, key) = match scope {
         Scope::Session => ("session", "seq"),
         Scope::Task => ("task", "id"),
         Scope::Plan => ("plan", "id"),
         Scope::Project => ("project", "id"),
     };
+    let since = bound;
     let mut st = conn.prepare(&format!(
         "select id, session, task, plan, project, agent, provider, seq, class, start, end, tool, tool_kind, \
          message_id, turn_id, snapshot, log_version, tokens_in, tokens_out, cache_read, cache_write, cost, \
-         cost_unit from step where {col} = ?1 and {key} > ?2 order by {key} limit ?3",
+         cost_unit, acp, head, history_op, undone_by, machine, slots_used, slots_total from step where {col} = ?1 and {key} {cmp} ?2 order by {key}{dir} limit ?3",
     ))?;
     let rows = st.query_map((id, since, limit), |r| {
         let class: String = r.get(8)?;
@@ -83,10 +122,54 @@ pub fn for_scope(
             cache_write: r.get(20)?,
             cost: r.get(21)?,
             cost_unit: r.get(22)?,
+            acp: r.get(23)?,
+            head: r.get(24)?,
+            history_op: r.get(25)?,
+            undone_by: r.get(26)?,
+            machine: r.get(27)?,
+            slots_used: r.get(28)?,
+            slots_total: r.get(29)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
+
+/// One step as a Timeline's window reads it: what its segment needs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowStep {
+    pub id: i64,
+    pub seq: i64,
+    pub class: StepClass,
+    pub start: f64,
+    pub end: Option<f64>,
+    pub tool: Option<String>,
+    /// The detail's kind (`read`, `search`, `fetch`, `edit`, …).
+    pub kind: Option<String>,
+}
+
+/// SESSION's steps (the column's `session:ID`) that overlap `[FROM, TO]`, an open step from its start on, by start:
+/// one query on the index `step_session_start`, the detail's kind joined.
+pub fn window(conn: &Tx, session: &str, from: f64, to: f64) -> Result<Vec<WindowStep>, CoordError> {
+    let mut st = conn.prepare(WINDOW_SQL)?;
+    let rows = st.query_map((session, from, to), |r| {
+        let class: String = r.get(2)?;
+        Ok(WindowStep {
+            id: r.get(0)?,
+            seq: r.get(1)?,
+            class: StepClass::parse(&class).unwrap_or(StepClass::Think),
+            start: r.get(3)?,
+            end: r.get(4)?,
+            tool: r.get(5)?,
+            kind: r.get(6)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// [`window`]'s query.
+pub const WINDOW_SQL: &str = "select s.id, s.seq, s.class, s.start, s.end, s.tool, d.kind \
+     from step s indexed by step_session_start left join step_detail d on d.step = s.id \
+     where s.session = ?1 and s.start <= ?3 and (s.end is null or s.end >= ?2) order by s.start, s.seq";
 
 /// What a roll-up is over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,6 +195,9 @@ pub struct Rollup {
     pub secs_by_class: BTreeMap<String, f64>,
     pub cost_by_unit: BTreeMap<String, f64>,
     pub tokens: Tokens,
+    /// The first step's start and the last step's end (none while a step is open: nothing has ended yet).
+    pub first: Option<f64>,
+    pub last: Option<f64>,
 }
 
 /// The roll-up of the steps of SCOPE ID.
@@ -144,6 +230,15 @@ pub fn rollup(conn: &Tx, scope: Scope, id: &str) -> Result<Rollup, CoordError> {
         out.tokens.cache_read += t[2];
         out.tokens.cache_write += t[3];
     }
+    let (first, last, open): (Option<f64>, Option<f64>, i64) = conn.query_row(
+        &format!(
+            "select min(start), max(end), coalesce(sum(end is null), 0) from step where {col} = ?1"
+        ),
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    out.first = first;
+    out.last = if open == 0 { last } else { None };
     let mut st = conn.prepare(&format!(
         "select cost_unit, sum(cost) from step where {col} = ?1 and cost is not null and cost_unit is not null \
          group by cost_unit"
@@ -152,5 +247,88 @@ pub fn rollup(conn: &Tx, scope: Scope, id: &str) -> Result<Rollup, CoordError> {
         let (unit, cost) = row?;
         out.cost_by_unit.insert(unit, cost);
     }
+    // the gateway's own charge is exact dollars, kept beside the agents' estimates
+    let usd = match scope {
+        Scope::Task => super::spend::spend_sum(conn, None, Some(id), None)?.cost,
+        Scope::Plan => super::spend::plan_usd(conn, id)?,
+        _ => 0.0,
+    };
+    if usd > 0.0 {
+        out.cost_by_unit.insert("usd".into(), usd);
+    }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::tests::db7;
+
+    /// Pattern D: ten thousand steps, a page back from `before`.
+    #[test]
+    fn before_and_limit_page_backwards() {
+        let c = db7();
+        c.execute_batch(
+            "with recursive n(i) as (select 1 union all select i + 1 from n where i < 10000) \
+             insert into step (session, seq, class, start) select 'session:s', i, 'tool', i from n",
+        )
+        .unwrap();
+        let seqs = |before: i64, limit: i64| -> Vec<i64> {
+            before_scope(&c, Scope::Session, "session:s", before, limit)
+                .unwrap()
+                .iter()
+                .map(|s| s.seq)
+                .collect()
+        };
+        let page = seqs(9941, 200);
+        assert_eq!(
+            (page.first(), page.last(), page.len()),
+            (Some(&9741), Some(&9940), 200)
+        );
+        // the first page reaches seq 1 and no further
+        assert_eq!(seqs(4, 200), [1, 2, 3]);
+        assert!(seqs(1, 200).is_empty());
+        // another session's steps never appear
+        assert!(
+            before_scope(&c, Scope::Session, "session:other", 9941, 200)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// A Timeline's window reads only the steps that overlap it (an open one from its start, one that ends inside
+    /// it), of its own session, in one query on the session-and-start index, with each step's detail kind.
+    #[test]
+    fn the_window_reads_only_its_steps() {
+        let c = db7();
+        c.execute_batch(
+            "with recursive n(i) as (select 1 union all select i + 1 from n where i < 10000) \
+             insert into step (session, seq, class, start, end) select 'session:s', i, 'tool', i * 10, i * 10 + 5 from n; \
+             insert into step (session, seq, class, start, end) values ('session:t', 1, 'tool', 50005, 50006); \
+             insert into step (session, seq, class, start) values ('session:s', 10001, 'think', 30); \
+             insert into step_detail (step, kind, origin) select id, 'edit', 'acp' from step where session = 'session:s' and seq = 5000;",
+        )
+        .unwrap();
+        let w = window(&c, "session:s", 50_002.0, 50_031.0).unwrap();
+        // 5000 ends at 50005 (inside), 5001..=5003 start inside, the open think from 30 on; 5004 starts after
+        assert_eq!(
+            w.iter().map(|s| s.seq).collect::<Vec<_>>(),
+            [10001, 5000, 5001, 5002, 5003]
+        );
+        assert_eq!(w[1].kind.as_deref(), Some("edit"));
+        assert_eq!(w[0].end, None);
+        // the index the plan asked for, and no scan of the table
+        let plan: Vec<String> = c
+            .prepare(&format!("explain query plan {WINDOW_SQL}"))
+            .unwrap()
+            .query_map(("session:s", 0.0, 1.0), |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|d| d.contains("step_session_start")),
+            "{plan:?}"
+        );
+        assert!(!plan.iter().any(|d| d.starts_with("SCAN s")), "{plan:?}");
+    }
 }

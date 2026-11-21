@@ -85,10 +85,21 @@ their roots and their entries as last synced.  Emptied with `drgnx-settings-work
   "The folder of your private workspace files: <config>/workspaces/."
   (expand-file-name "workspaces/" (drgnx-user-dir)))
 
+(defvar drgnx-settings-workspace--private-list nil
+  "(DIR STAMP . FILES): the private workspace folder DIR as last listed, kept while its stamp is STAMP.  A stamp
+less than a second old is not kept: a file added within the same mtime tick would leave it the same.")
+
 (defun drgnx-settings-workspace--private-files ()
-  "Your private workspace files, sorted."
-  (let ((dir (drgnx-settings-workspace-private-dir)))
-    (and (file-directory-p dir) (directory-files dir t "\\`[^.].*\\.el\\'"))))
+  "Your private workspace files, sorted; listed again only when their folder changed."
+  (let* ((dir (drgnx-settings-workspace-private-dir))
+         (stamp (and (file-directory-p dir) (drgnx-file-stamp dir)))
+         (hit drgnx-settings-workspace--private-list))
+    (cond ((null stamp) (setq drgnx-settings-workspace--private-list nil))
+          ((and hit (equal (car hit) dir) (equal (cadr hit) stamp)) (cddr hit))
+          (t (let ((files (directory-files dir t "\\`[^.].*\\.el\\'")))
+               (setq drgnx-settings-workspace--private-list
+                     (and (time-less-p (nth 1 stamp) (time-subtract nil 1)) (cons dir (cons stamp files))))
+               files)))))
 
 (defun drgnx-settings-workspace-file-p (file)
   "Non-nil when FILE is a workspace settings file: a private one (W2) or a shared .drgnx/settings.el (W1)."
@@ -139,35 +150,79 @@ The first read of a file records it for live changes and says its problems; a la
                (drgnx-settings-workspace--say file)
                doc)))))
 
+(defvar drgnx-settings-workspace--roots-memo (make-hash-table :test 'eq :weakness 'key)
+  "DOC -> its roots resolved (`drgnx-settings-workspace--roots'): once per read of the file (weak: a doc replaced
+by a new read is forgotten).")
+
 (defun drgnx-settings-workspace--roots (doc)
-  "The roots DOC's `:roots' names, as `drgnx-settings-workspace--norm' gives them."
-  (let ((roots (and doc (plist-get (drgnx-settings-doc-meta doc) :roots))))
-    (and (proper-list-p roots)
-         (mapcar #'drgnx-settings-workspace--norm (cl-remove-if-not #'stringp roots)))))
+  "The roots DOC's `:roots' names, as `drgnx-settings-workspace--norm' gives them; resolved once per read of DOC's
+file."
+  (when doc
+    (let ((hit (gethash doc drgnx-settings-workspace--roots-memo 'none)))
+      (if (not (eq hit 'none))
+          hit
+        (let* ((roots (plist-get (drgnx-settings-doc-meta doc) :roots))
+               (result (and (proper-list-p roots)
+                            (mapcar #'drgnx-settings-workspace--norm (cl-remove-if-not #'stringp roots)))))
+          (puthash doc result drgnx-settings-workspace--roots-memo)
+          result)))))
 
 ;;;; Refusals and problems
 
-(defun drgnx-settings-workspace--refusal (entry)
-  "Why ENTRY may not be in a workspace file, as text; nil when it may."
+(defun drgnx-settings-workspace--refusal (entry &optional source)
+  "Why ENTRY may not be in a workspace file, as text; nil when it may.
+SOURCE is `private' (W2, your own file under the config folder, which no repository writes) or `shared' (W1, the
+shims and anything else; the default).  Only `private' lets through a `:workspace never' entry of a `:scope project'
+setting: your own per-project security choice."
   (let ((var (drgnx-settings-entry-var entry)))
     (cond ((eq var :eval) nil)
           ((memq var '(eval mode))
            (format "%s is a pseudo-variable of .dir-locals.el; workspace code goes in an (:eval …) section" var))
           (t (let ((meta (drgnx-setting-meta var)))
-               (cond ((eq (plist-get meta :workspace) 'never)
+               (cond ((and (eq (plist-get meta :workspace) 'never)
+                           (not (and (eq source 'private) (eq (plist-get meta :scope) 'project))))
                       (format "%s is never set by a workspace (it guards your security); set it in Settings → User"
                               var))
                      ((eq (plist-get meta :scope) 'global)
                       (format "%s has one value for all of Emacs; set it in Settings → User" var))))))))
 
-(defun drgnx-settings-workspace--usable (file)
+(defvar drgnx-setting--names)
+(defvar drgnx-setting-meta-functions)
+
+(defvar drgnx-settings-workspace--usable-memo (make-hash-table :test 'equal)
+  "(FILE . SOURCE) -> (DOC EXTRA RESULT): `drgnx-settings-workspace--usable' of a doc read once, kept while the settings declared
+\(which decide what is refused) are the same.  Emptied past `drgnx-settings-workspace-cache-max'.")
+
+(defun drgnx-settings-workspace--source (file)
+  "FILE's source: `private' when it is in your private workspace folder (W2), else `shared'."
+  (if (file-in-directory-p (expand-file-name file) (drgnx-settings-workspace-private-dir)) 'private 'shared))
+
+(defun drgnx-settings-workspace--usable (file &optional source)
   "Workspace FILE's entries and problems: (ENTRIES . PROBLEMS).  ENTRIES are those not refused, in file order;
-PROBLEMS the file's own and one per refused entry, plists (:file :line :text :var)."
-  (let ((doc (drgnx-settings-workspace--doc file)) (entries nil) (problems nil))
+PROBLEMS the file's own and one per refused entry, plists (:file :line :text :var).  Worked out once per read of
+the file, so the same ENTRIES come back at every open.  SOURCE (`private' or `shared', see
+`drgnx-settings-workspace--refusal') defaults to where FILE is."
+  (let* ((doc (drgnx-settings-workspace--doc file))
+         (source (or source (drgnx-settings-workspace--source file)))
+         (key (cons (expand-file-name file) source))
+         (extra (list (length drgnx-setting--names) drgnx-setting-meta-functions))
+         (hit (gethash key drgnx-settings-workspace--usable-memo)))
+    (if (and doc hit (eq (nth 0 hit) doc) (equal (nth 1 hit) extra))
+        (nth 2 hit)
+      (let ((result (drgnx-settings-workspace--usable-1 file doc source)))
+        (when doc
+          (when (>= (hash-table-count drgnx-settings-workspace--usable-memo) drgnx-settings-workspace-cache-max)
+            (clrhash drgnx-settings-workspace--usable-memo))
+          (puthash key (list doc extra result) drgnx-settings-workspace--usable-memo))
+        result))))
+
+(defun drgnx-settings-workspace--usable-1 (_file doc source)
+  "`drgnx-settings-workspace--usable' of DOC (the file read, of SOURCE), worked out now."
+  (let ((entries nil) (problems nil))
     (when doc
       (setq problems (copy-sequence (drgnx-settings-doc-problems doc)))
       (dolist (e (drgnx-settings-doc-entries doc))
-        (if-let* ((why (drgnx-settings-workspace--refusal e)))
+        (if-let* ((why (drgnx-settings-workspace--refusal e source)))
             (push (list :file (drgnx-settings-doc-file doc) :line (drgnx-settings-entry-line e) :text why
                         :var (drgnx-settings-entry-var e))
                   problems)
@@ -308,12 +363,12 @@ holding DIR; else the file whose `:project' is DIR's Urdr project, with that pro
 
 (defun drgnx-settings-workspace--shared-entries (file root)
   "Shared FILE's entries (of ROOT) that apply: not refused, then passed by `drgnx-settings-workspace-filter-function'."
-  (funcall drgnx-settings-workspace-filter-function root file (car (drgnx-settings-workspace--usable file))))
+  (funcall drgnx-settings-workspace-filter-function root file (car (drgnx-settings-workspace--usable file 'shared))))
 
 (defun drgnx-settings-workspace--private-groups (place)
   "The W2 groups at PLACE ((DIR . NAME)), with the file: (FILE . GROUPS), or nil."
   (when-let* ((match (drgnx-settings-workspace--private-for (car place))))
-    (cons (car match) (drgnx-settings-workspace--groups (car (drgnx-settings-workspace--usable (car match)))
+    (cons (car match) (drgnx-settings-workspace--groups (car (drgnx-settings-workspace--usable (car match) 'private))
                                                         (cdr match) (cdr place)))))
 
 (defun drgnx-settings-workspace--shared-groups (place)
@@ -408,7 +463,7 @@ private file.  Only top-level entries count; refused ones never do.  Never signa
     (dolist (e (append (funcall top (cl-remove-if #'drgnx-settings-workspace--refusal
                                                   (drgnx-settings-workspace--old-entries root)))
                        (funcall top (drgnx-settings-workspace--shared-entries shared root))
-                       (and private (funcall top (car (drgnx-settings-workspace--usable private))))))
+                       (and private (funcall top (car (drgnx-settings-workspace--usable private 'private))))))
       (setq value (drgnx-settings-workspace--merge var e value)))
     value))
 

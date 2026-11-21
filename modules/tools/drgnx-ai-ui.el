@@ -638,7 +638,9 @@ the commands go with the cleanup stack; the probe's timer ends with the module's
                                                  "Cancel the Edit with AI or Ask the Codebase request in flight" nil)
                                         (ai-choose "Choose AI Provider/Model…" drgnx-ai-choose "A role's provider and model, tested first" nil)
                                         (ai-load-keys "Load Keys" drgnx-ai-load-keys
-                                                      "Read your providers' keys from the Keychain or keyring, for ghost text and the background" nil)))
+                                                      "Read your providers' keys from the Keychain or keyring, for ghost text and the background" nil)
+                                        (ai-remove-key "Remove Key…" drgnx-ai-remove-key
+                                                       "Delete a provider's key from the Keychain or keyring and make the hub forget it" nil)))
                          (apply #'drgnx-command-define id :category "AI" :title title :command fn :doc doc (and map (list :map map))))))
 
 (provide 'drgnx-ai-ui)

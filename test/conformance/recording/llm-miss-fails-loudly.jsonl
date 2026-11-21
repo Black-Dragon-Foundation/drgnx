@@ -1,0 +1,33 @@
+{"scenario": "recording/llm-miss-fails-loudly", "requires": ["v1"], "doc": "Pattern B (gates on the recorded line and the hub's exit). A recorded editor chat, replayed with one changed message: the replayer answers 500 (with x-drgnx-replay: miss, which the gateway does not pass on) and a replay_miss error naming the run, the model, the message count and the nearest exchange's first differing path, and appends the request and that path to the replay's misses.jsonl. Never an improvised answer."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/chat/completions", "body": "{\"id\":\"chat-1\",\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "live", "env": {"DRGNX_RECORD": "$ROOT/missed", "DRGNX_RECORD_PROVENANCE": "mock"}}
+{"do": "connect", "conn": "c", "hub": "live"}
+{"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"mock":{"kind":"openai","url":"http://127.0.0.1:$port","caps":["chat"],"messages":false}}}]}}}
+{"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/editor-token"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok", "url": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw"}}}}
+{"do": "http", "conn": "e", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/p/mock/chat/completions", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"be brief\"},{\"role\":\"user\",\"content\":\"hi\"}]}"}
+{"do": "expect_http", "conn": "e", "status": 200, "body_json": {"id": "chat-1"}}
+{"do": "file", "path": "$ROOT/missed/llm.jsonl", "contains": "\"end\":\"complete\"", "count": 1}
+{"do": "kill", "hub": "live", "signal": "TERM"}
+{"do": "expect_exit", "hub": "live", "code": 0}
+{"do": "kill", "pid": "$mock", "signal": "KILL"}
+{"do": "expect_exit", "pid": "$mock", "signal": "KILL"}
+{"do": "start", "hub": "replay", "env": {"DRGNX_REPLAY": "$ROOT/missed"}}
+{"do": "connect", "conn": "r", "hub": "replay"}
+{"do":"send","conn":"r","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"mock":{"kind":"openai","url":"http://127.0.0.1:$port","caps":["chat"],"messages":false}}}]}}}
+{"do":"expect","conn":"r","json":{"id":1,"result":{"applied":1}}}
+{"do": "send", "conn": "r", "json": {"id": 2, "method": "gateway/editor-token"}}
+{"do": "expect", "conn": "r", "json": {"id": 2, "result": {"token": "$capture:tok2", "url": "$string"}}}
+{"do": "send", "conn": "r", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "r", "json": {"id": 3, "result": {"gateway": {"port": "$capture:gw2"}}}}
+{"do": "http", "conn": "e2", "to": "tcp:127.0.0.1:$gw2", "method": "POST", "path": "/p/mock/chat/completions", "headers": {"Host": "127.0.0.1:$gw2", "Authorization": "Bearer $tok2", "content-type": "application/json"}, "body": "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"be brief\"},{\"role\":\"user\",\"content\":\"bye\"}]}"}
+{"do": "expect_http", "conn": "e2", "status": 500, "body_json": {"type": "error", "error": {"type": "replay_miss"}}}
+{"do": "expect_http", "conn": "e2", "status": 500, "body_contains": "not in the recording missed: m, 2 messages; nearest x1 differs at messages[1].content; re-record"}
+{"do": "file", "path": "$ROOT/tmp/replay/misses.jsonl", "contains": "\"differs_at\":\"messages[1].content\"", "count": 1}
+{"do": "file", "path": "$ROOT/tmp/replay/misses.jsonl", "contains": "\"nearest\":\"x1\"", "count": 1}

@@ -1,0 +1,6 @@
+chunk 1 22 2 3 None true bb7aabbc20142b9a787633a50fee7936aa65765ed262bb55e8848d44103df6fc
+chunk 24 150 5 11 Some("add") true 4fa4b7c9672cfff15336114e68dadf0b5023b00f1bcc5d724db106adff641ba4
+chunk 152 182 13 14 None true bc95d00dc9d3d154a442816d0338b76d90482c31c897762984c3d8f7d60b3444
+symbol add function 24 85 1 function_definition Some("The sum of A and B.")
+symbol Cache class 87 150 1 class_definition None
+symbol get method 104 150 1 class_definition None

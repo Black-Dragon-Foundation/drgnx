@@ -25,6 +25,68 @@ watches): while one waits in the input queue, Emacs runs no process sentinel —
 their processes end.  The runner calls this after every test."
   (dotimes (_ 2) (read-event nil nil 0.002)))     ; 0 reads nothing: the event must be fetched first
 
+(defvar drgnx-run-ert--progress nil
+  "The file each test's start and end go to while `drgnx-run-ert' runs with a results file (RESULTS.progress): a run
+killed at its deadline leaves no results, and its runner reads this instead, to say how far it got and which test ran.")
+
+(defun drgnx-run-ert--progress-note (line)
+  "Append LINE to `drgnx-run-ert--progress', when there is one."
+  (when drgnx-run-ert--progress
+    (let ((coding-system-for-write 'utf-8-unix))
+      (write-region (concat line "\n") nil drgnx-run-ert--progress t 'silent))))
+
+(defun drgnx-run-ert--progress-around (run test &rest args)
+  "`ert-run-test' advice: note TEST's start, run it (RUN), note how it ended."
+  (drgnx-run-ert--progress-note (format "start %s" (ert-test-name test)))
+  (prog1 (apply run test args)
+    (let ((r (ert-test-most-recent-result test)))
+      (drgnx-run-ert--progress-note
+       (format "end %s %s" (ert-test-name test)
+               (cond ((ert-test-passed-p r) "passed") ((ert-test-skipped-p r) "skipped") (t "failed")))))))
+
+(defconst drgnx-run-ert--report-string-max 2000
+  "The characters of each string in a failure's condition that ERT's report prints (`drgnx-run-ert--cut-strings').")
+
+(defun drgnx-run-ert--cut-strings (obj &optional depth)
+  "OBJ with every string longer than `drgnx-run-ert--report-string-max' cut to it (saying how much was left out), in
+conses and vectors to DEPTH (default 8) levels; a copy where something was cut, else OBJ itself."
+  (let ((depth (or depth 8)) (max drgnx-run-ert--report-string-max))
+    (cond ((and (stringp obj) (> (length obj) max))
+           (format "%s… (%d more characters)" (substring obj 0 max) (- (length obj) max)))
+          ((<= depth 0) obj)
+          ((consp obj)
+           (let* ((a (drgnx-run-ert--cut-strings (car obj) (1- depth)))
+                  (d (drgnx-run-ert--cut-strings (cdr obj) (1- depth))))
+             (if (and (eq a (car obj)) (eq d (cdr obj))) obj (cons a d))))
+          ((and (vectorp obj) (not (recordp obj)))
+           (let ((v (vconcat (mapcar (lambda (x) (drgnx-run-ert--cut-strings x (1- depth))) obj))))
+             (if (cl-every #'eq v obj) obj v)))
+          (t obj))))
+
+(defun drgnx-run-ert--report-off-the-echo-area (args)
+  "`ert-run-tests' advice (:filter-args) on ARGS (SELECTOR LISTENER …): ERT's report (the LISTENER) is bounded and,
+in a graphical session, kept off the echo area.  A failure's condition can be megabytes (a row's pixels): the report
+prints each string in it cut (`drgnx-run-ert--cut-strings'; the results keep it whole), and in a graphical session
+the listener runs with `inhibit-message', so the report goes to *Messages* only.  The echo area resizing to a 5 MB
+message laid out all of it without a quit check, so the session hung between rows (2026-11-17, kwin: a failed
+Explorer row, then 150 s in `bidi_find_bracket_pairs')."
+  (if (not (functionp (nth 1 args)))
+      args
+    (let ((listener (nth 1 args)) (gui (not noninteractive)))
+      (append (list (car args)
+                    (lambda (&rest event)
+                      (let* ((result (and (eq (car event) 'test-ended) (nth 3 event)))
+                             (condition (and (ert-test-result-with-condition-p result)
+                                             (ert-test-result-with-condition-condition result)))
+                             (inhibit-message (or gui inhibit-message)))
+                        (if (not condition)
+                            (apply listener event)
+                          (setf (ert-test-result-with-condition-condition result)
+                                (drgnx-run-ert--cut-strings condition))
+                          (unwind-protect (apply listener event)
+                            (setf (ert-test-result-with-condition-condition result) condition))))))
+              (nthcdr 2 args)))))
+
 (defvar drgnx-run-ert--self)
 
 (defun drgnx-run-ert--off-files ()
@@ -71,6 +133,12 @@ The files test/class-exempt.eld turns off are left out (`drgnx-run-ert--off-file
 (defun drgnx-run-ert--leaks-on-p ()
   "Whether DRGNX_TEST_LEAKS asks for the census."
   (let ((s (getenv "DRGNX_TEST_LEAKS"))) (and s (not (string-empty-p s)))))
+
+(defun drgnx-run-ert--file-leaks-p ()
+  "Whether DRGNX_TEST_FILE_LEAKS asks for the per-file leak check: a test file that leaves global state behind
+\(a hook, a timer, advice, the default mode lines, the global keymap, a frame parameter, …) fails, the leftover named.
+The GUI tier's per-file sessions set it.  Only the per-file scan runs, not the per-test one."
+  (let ((s (getenv "DRGNX_TEST_FILE_LEAKS"))) (and s (not (string-empty-p s)) (not (equal s "0")))))
 
 (defun drgnx-run-ert--leaks-allowed-file ()
   "The allowlist: DRGNX_TEST_LEAKS_ALLOWED (a file), else test/leaks-allowed.eld of this checkout."
@@ -120,9 +188,16 @@ it never ends a run."
                  drgnx-run-ert--leaks)
            nil)))
 
+(defvar drgnx-run-ert-file-end-hook nil
+  "Run when the census ends a test file, before it reads what the file left: the harness's own state that a session
+keeps across a file's tests (the virtual pointer, `drgnx-uitest-pointer-set') goes here.  A file's GUI session ends
+with its file, so this is that session's teardown.")
+
 (defun drgnx-run-ert--census-leave-file ()
-  "End the current file: the full fingerprint against the one at its start, then its test buffers go."
+  "End the current file: `drgnx-run-ert-file-end-hook', the full fingerprint against the one at its start, then its
+test buffers go."
   (when drgnx-run-ert--census-start
+    (drgnx-run-ert--census-guard :null drgnx-run-ert--census-file (lambda () (run-hooks 'drgnx-run-ert-file-end-hook)))
     (drgnx-run-ert--census-guard
      :null drgnx-run-ert--census-file
      (lambda ()
@@ -148,7 +223,12 @@ it never ends a run."
 the test left pending is cancelled, so it cannot fire inside the next test; a layer timer (core/drgnx-timer.el) by
 its key, so the layer forgets it too.  An error in the census is a line of the report
 \(`drgnx-run-ert--census-guard'), never an error of the test run."
-  (if drgnx-run-ert--census-busy
+  (if (or drgnx-run-ert--census-busy
+          ;; the per-file check alone: only the file's start is taken here, its end is read by `census-finish'
+          (and (not (drgnx-run-ert--leaks-on-p))
+               (progn (drgnx-run-ert--census-guard (symbol-name (ert-test-name test)) (ert-test-file-name test)
+                                                   (lambda () (drgnx-run-ert--census-enter-file (ert-test-file-name test))))
+                      t)))
       (apply run test args)
     (let* ((file (ert-test-file-name test)) (name (symbol-name (ert-test-name test)))
            (drgnx-run-ert--census-busy t) before)
@@ -181,6 +261,22 @@ its key, so the layer forgets it too.  An error in the census is a line of the r
   (drgnx-run-ert--census-leave-file)
   (advice-remove 'ert-run-test #'drgnx-run-ert-census)
   (nreverse (prog1 drgnx-run-ert--leaks (setq drgnx-run-ert--leaks nil))))
+
+(defun drgnx-run-ert--leak-failures (leaks)
+  "One failure per test file of LEAKS (plists): \"leak FILE\", with each leftover the file's tests left behind."
+  (let (files out)
+    (dolist (l leaks) (cl-pushnew (plist-get l :file) files :test #'equal))
+    (dolist (f (nreverse files))
+      (let ((mine (seq-filter (lambda (l) (equal (plist-get l :file) f)) leaks)))
+        (push (list :name (format "leak %s" (if (stringp f) (file-name-nondirectory f) "?"))
+                    :condition (concat "the file left global state behind (fix the test's or the module's teardown):\n"
+                                       (mapconcat (lambda (l)
+                                                    (let ((src (plist-get l :source)))
+                                                      (format "    %s%s" (plist-get l :what)
+                                                              (if (stringp src) (format "  [%s]" src) ""))))
+                                                  mine "\n")))
+              out)))
+    (nreverse out)))
 
 (defun drgnx-run-ert-leaks-report (leaks)
   "LEAKS (plists, or the vector of them) as text: \"Leaks (N)\" and a line each (test, file, what, source); \"\" for none."
@@ -269,7 +365,13 @@ as skipped (CI's shared runners)."
 \(:name :reason), when `drgnx-run-ert--no-timing-p'; else nil.  They are loaded, not run."
   (when (and (drgnx-run-ert--no-timing-p) (not drgnx-run-ert--order-in))
     (mapcar (lambda (tt) (list :name (symbol-name (ert-test-name tt)) :reason "wall clock: not run in CI"))
-            (ert-select-tests `(and ,(or selector t) (tag :timing)) t))))
+            (drgnx-run-ert--select-tagged selector :timing))))
+
+(defun drgnx-run-ert--select-tagged (selector tag)
+  "The tests SELECTOR (nil for every test) picks that carry TAG.  A test name no file defines picks none here (ERT
+signals `ert-test-unbound'); the run's summary says the selector matched 0 tests."
+  (condition-case nil (ert-select-tests `(and ,(or selector t) (tag ,tag)) t)
+    (ert-test-unbound nil)))
 
 ;; The one-writer gate (test/support/work-db-gate.el): with DRGNX_WORK_DB_GATE=1 opening work.db read-write signals,
 ;; and the tests tagged `:work-db-writer' (the `local' writer mode: Rust-bound Lisp) are left out and listed as skipped.
@@ -289,7 +391,7 @@ as skipped (CI's shared runners)."
 \(:name :reason), in gate mode; else nil.  They are loaded, not run."
   (when (and (drgnx-run-ert--gate-p) (not drgnx-run-ert--order-in))
     (mapcar (lambda (tt) (list :name (symbol-name (ert-test-name tt)) :reason "one-writer gate: a test of the local writer mode"))
-            (ert-select-tests `(and ,(or selector t) (tag :work-db-writer)) t))))
+            (drgnx-run-ert--select-tagged selector :work-db-writer))))
 
 (defun drgnx-run-ert--no-skip-file ()
   "The must-run list: DRGNX_TEST_NO_SKIP (a file), else test/no-skip.eld of this checkout."
@@ -316,6 +418,48 @@ this `system-type'.  The list is `((PLATFORM NAME…)…)'; a file that is missi
                         :condition (format "%s must run on %s but skipped: %s" (plist-get s :name) system-type (plist-get s :reason)))
                   failures)))))
     (nreverse failures)))
+
+(defun drgnx-test-require-nidhogg (present what)
+  "Skip the current test unless PRESENT (non-nil when this Emacs has the Nidhogg feature WHAT, a string naming it).
+With DRGNX_NIDHOGG_STRICT=1 (a run on Nidhogg's integration line) a missing feature fails the test instead: there a
+skip would hide a stale or wrong Nidhogg build.  A function, not a macro: test files may be compiled without the runner."
+  (unless present
+    (if (equal (getenv "DRGNX_NIDHOGG_STRICT") "1")
+        (ert-fail (format "DRGNX_NIDHOGG_STRICT=1: this Emacs has no %s (is it Nidhogg's integration line?)" what))
+      (ert-skip (format "this Emacs has no Nidhogg %s" what)))))
+
+(defun drgnx-run-ert--sja-p ()
+  "Non-nil when this Emacs has Sjá, Nidhogg's row store: its primitive and its Lisp door."
+  (and (fboundp 'nidhogg-view--call) (require 'nidhogg-views nil t) (fboundp 'nidhogg-view-rows)))
+
+(defun drgnx-run-ert--strict-sja-failures (skipped sja)
+  "Under DRGNX_NIDHOGG_STRICT=1, failures (:name :condition) for the SKIPPED entries (:name :reason) that skipped
+for a Sjá primitive (`nidhogg-view-…') when SJA is nil (this Emacs has no Sjá, `drgnx-run-ert--sja-p'): on
+Nidhogg's line such a skip hides a stale or wrong build.  With Sjá the skip had another reason (no display), and
+stays a skip."
+  (when (and (equal (drgnx-run-ert--env "DRGNX_NIDHOGG_STRICT") "1") (not sja))
+    (cl-loop for s in skipped
+             when (string-match-p "nidhogg-view-" (or (plist-get s :reason) ""))
+             collect (list :name (plist-get s :name)
+                           :condition (format "DRGNX_NIDHOGG_STRICT=1: skipped for Sjá, which this Emacs has not: %s"
+                                              (plist-get s :reason))))))
+
+;; With DRGNX_TEST_STRICT_FACES=1 (the check runner's strict runs) a hub row that names a face which is none and is not
+;; in etc/ui/faces.eld (a stale name: a module's face that is off is known) is counted by `drgnx-view-patch--face';
+;; a file whose Emacs ends with any counted is an unexpected result.
+(defvar drgnx-test-strict-faces)
+(defvar drgnx-view-unknown-faces)
+
+(defun drgnx-run-ert--unknown-face-failures (files)
+  "Under DRGNX_TEST_STRICT_FACES=1, one failure (:name :condition) for the test FILES when their rows named unknown
+faces (`drgnx-view-unknown-faces'), naming each with its count; else nil."
+  (when (and (bound-and-true-p drgnx-test-strict-faces) (boundp 'drgnx-view-unknown-faces)
+             (> (hash-table-count drgnx-view-unknown-faces) 0))
+    (let (pairs)
+      (maphash (lambda (k v) (push (format "%s (%d)" k v) pairs)) drgnx-view-unknown-faces)
+      (let ((text (format "file %s: unknown faces: %s" (mapconcat #'file-name-nondirectory files ", ")
+                          (string-join (sort pairs #'string<) ", "))))
+        (list (list :name text :condition (concat text " (a row names a face that is none: fix the name at its source)")))))))
 
 (defun drgnx-run-ert--flaky-file ()
   "The listed flakes: DRGNX_TEST_FLAKY (a file), else test/flaky.eld of this checkout."
@@ -371,15 +515,38 @@ is a failure.  Prints the flakes."
 (defvar drgnx-run-ert--audit-current nil "The name of the :det test that runs now (a string), while the audit is on.")
 (defvar drgnx-run-ert--audit-seen nil "The (TEST . PRIMITIVE) pairs recorded this run, newest first.")
 (defvar drgnx-run-ert--audit-file nil "A file the rows are appended to, or nil.")
+(defvar drgnx-run-ert--audit-only nil
+  "The primitives the audit records for the test that runs now, or nil for all: a `cond' test may wait for events and
+start processes, but a real `sleep-for' or `sit-for' is a wait on time.")
+(defconst drgnx-run-ert--audit-cond-prims '(sleep-for sit-for)
+  "What the audit holds a `cond' test to (the primitives of a real wait on time).")
 (defvar drgnx-test--active)
 
 (defconst drgnx-run-ert--audit-waits '(sleep-for sit-for accept-process-output)
   "The watched waits: under the clock fixture they move virtual time, so they are not recorded there.")
 
+;; Emacs's own libraries poll a child with `sleep-for' (epg waits for gpg that way): a wait for an event, not for time.
+(defconst drgnx-run-ert--audit-event-polls
+  '(epg-wait-for-completion drgnx-ui--poll-pause drgnx-file--sleep drgnx-perf--await-present)
+  "Functions whose `sleep-for' or `sit-for' is a poll for an event (a child process, a lock, a file, a paint): a `cond'
+test that goes through one is not sleeping on time.")
+
+(defun drgnx-run-ert--audit-in-event-poll-p ()
+  "Whether the call that is being recorded runs inside one of `drgnx-run-ert--audit-event-polls'."
+  (let ((i 0) hit)
+    (while (and (not hit) (< i 40))
+      (let ((fr (backtrace-frame i 'drgnx-run-ert--audit-in-event-poll-p)))
+        (if fr (setq hit (memq (nth 1 fr) drgnx-run-ert--audit-event-polls)) (setq i 40)))
+      (setq i (1+ i)))
+    hit))
+
 (defun drgnx-run-ert--audit-record (prim)
   "Record PRIM as used by the :det test that runs now, once per test and primitive.  A wait under the clock fixture
 is virtual and not recorded; a process or a socket is real work under the fixture too."
   (when (and drgnx-run-ert--audit-current
+             (or (null drgnx-run-ert--audit-only)
+                 (and (memq prim drgnx-run-ert--audit-only)
+                      (not (drgnx-run-ert--audit-in-event-poll-p))))
              (not (and (memq prim drgnx-run-ert--audit-waits)
                        (boundp 'drgnx-test--active) drgnx-test--active)))
     (let ((key (cons drgnx-run-ert--audit-current prim)))
@@ -406,8 +573,10 @@ is virtual and not recorded; a process or a socket is real work under the fixtur
 
 (defconst drgnx-run-ert--audit-primitives
   '(sleep-for sit-for accept-process-output make-process start-process make-network-process open-network-stream
-              make-pipe-process make-serial-process)
-  "The primitives the audit watches.")
+              make-serial-process)
+  "The primitives the audit watches.  Not `make-pipe-process': it starts no child, opens no socket and waits for
+nothing, so the stand-in connection that many deterministic tests hold is no real time (a wait on it is
+`accept-process-output', which is watched).")
 
 (defun drgnx-run-ert--audit-around (prim fn &rest args)
   (when (drgnx-run-ert--audit-wait-p prim args) (drgnx-run-ert--audit-record prim))
@@ -423,8 +592,9 @@ environment): `drgnx-test-run-isolated' passes them on, so the audit reaches the
   "Test files the audit leaves alone: they test the clock and wait fixtures, whose advice state they inspect.")
 
 (defun drgnx-run-ert--audit-advise ()
-  "Advise the watched primitives."
-  (dolist (p drgnx-run-ert--audit-primitives)
+  "Advise the watched primitives: all of them for a `det' test, only those `drgnx-run-ert--audit-only' names for a `cond'
+one (a test that stubs another primitive with `cl-letf' is not disturbed by advice on it)."
+  (dolist (p (or drgnx-run-ert--audit-only drgnx-run-ert--audit-primitives))
     (advice-add p :around (apply-partially #'drgnx-run-ert--audit-around p) `((name . drgnx-run-ert-audit)))))
 
 (defun drgnx-run-ert--audit-unadvise ()
@@ -491,7 +661,7 @@ never entered the gate and is listed as exempt.")
   (unless (member message drgnx-run-ert--audit-gate-held) (push message drgnx-run-ert--audit-gate-held)))
 
 (defun drgnx-run-ert--audit-filter-around (fn conn chunk)
-  "Around `drgnx-hub--client-filter': a line that arrives while the gate is not releasing is held for the record."
+  "Around `drgnx-hub--client-batch': a line that arrives while the gate is not releasing is held for the record."
   (unless (and (boundp 'drgnx-test-gate--releasing) drgnx-test-gate--releasing)
     (drgnx-run-ert--audit-gated-hold "gated test saw a hub line the gate did not release"))
   (funcall fn conn chunk))
@@ -516,7 +686,7 @@ never entered the gate and is listed as exempt.")
   "Advise what the pattern checks of TAGS (`:gated', `:handshake') watch."
   (when (memq :gated tags)
     (add-variable-watcher 'drgnx-test-gate--active #'drgnx-run-ert--audit-gate-watch)
-    (advice-add 'drgnx-hub--client-filter :around #'drgnx-run-ert--audit-filter-around '((name . drgnx-run-ert-audit)))
+    (advice-add 'drgnx-hub--client-batch :around #'drgnx-run-ert--audit-filter-around '((name . drgnx-run-ert-audit)))
     (advice-add 'drgnx-hub--open :around #'drgnx-run-ert--audit-open-around '((name . drgnx-run-ert-audit))))
   (when (memq :handshake tags)
     (dolist (s drgnx-run-ert--audit-signals)
@@ -525,8 +695,16 @@ never entered the gate and is listed as exempt.")
 (defun drgnx-run-ert--audit-pattern-unadvise ()
   "Remove the pattern checks' advice."
   (remove-variable-watcher 'drgnx-test-gate--active #'drgnx-run-ert--audit-gate-watch)
-  (dolist (s (append '(drgnx-hub--client-filter drgnx-hub--open) drgnx-run-ert--audit-signals))
+  (dolist (s (append '(drgnx-hub--client-batch drgnx-hub--open) drgnx-run-ert--audit-signals))
     (advice-remove s 'drgnx-run-ert-audit)))
+
+(defun drgnx-run-ert--audit-cond-allowed-p (name)
+  "Whether the `cond' test NAME (a symbol) is in test/audit-cond-allowed.eld: let through the sleep audit."
+  (let ((file (expand-file-name "../test/audit-cond-allowed.eld" (file-name-directory drgnx-run-ert--self))))
+    (and (file-readable-p file)
+         (with-temp-buffer
+           (insert-file-contents file)
+           (seq-some (lambda (row) (eq (car row) name)) (ignore-errors (read (current-buffer))))))))
 
 (defun drgnx-run-ert--audit-test (fn test &rest args)
   "Around `ert-run-test': a :det test (every test with DRGNX_TEST_AUDIT_ALL=1) runs with the primitives advised, and a
@@ -534,7 +712,11 @@ never entered the gate and is listed as exempt.")
 fixtures' own tests (`drgnx-run-ert--audit-skip-files') are not audited."
   (let* ((file (ignore-errors (ert-test-file-name test)))
          (skip (and file (member (file-name-nondirectory file) drgnx-run-ert--audit-skip-files)))
-         (audited (and (or (memq :det (ert-test-tags test)) drgnx-run-ert--audit-all) (not skip)))
+         (det (or (memq :det (ert-test-tags test)) drgnx-run-ert--audit-all))
+         (cond-only (and (not det) (memq :cond (ert-test-tags test))
+                         (not (drgnx-run-ert--audit-cond-allowed-p (ert-test-name test)))))
+         (audited (and (or det cond-only) (not skip)))
+         (drgnx-run-ert--audit-only (and cond-only drgnx-run-ert--audit-cond-prims))
          (ptags (and (not skip) (seq-filter (lambda (tag) (memq tag (ert-test-tags test))) '(:gated :handshake))))
          (name (symbol-name (ert-test-name test)))
          (drgnx-run-ert--audit-current (and audited name))
@@ -716,14 +898,51 @@ names the run would run, in that order, to FILE and runs none."
   "Say SEED, the shuffle seed of this run, and how to run again with it."
   (message "drgnx: shuffle seed %s (the same order again: bin/drgnx test --shuffle=%s)" seed seed))
 
+;;;; The wait profile
+
+;; With DRGNX_TEST_WAIT_PROFILE set (the GUI tier's DRGNX_UI_PROFILE=1), the time a test spends inside `accept-process-output',
+;; `sleep-for' and `sit-for' (its settle waits and polls; nested calls once) is written beside its :seconds as :wait, so a
+;; tier's time reads as waiting against work.
+
+(defvar drgnx-run-ert--wait-total 0.0 "Seconds spent in the waiting primitives so far.")
+(defvar drgnx-run-ert--wait-depth 0 "How many waiting primitives are running: only the outermost counts.")
+(defvar drgnx-run-ert--wait-by-test nil "The (TEST . WAIT-SECONDS) pairs of the tests that ended, newest first.")
+
+(defun drgnx-run-ert--wait-around (fn &rest args)
+  (if (> drgnx-run-ert--wait-depth 0)
+      (apply fn args)
+    (let ((t0 (float-time)) (drgnx-run-ert--wait-depth (1+ drgnx-run-ert--wait-depth)))
+      (unwind-protect (apply fn args)
+        (cl-incf drgnx-run-ert--wait-total (- (float-time) t0))))))
+
+(defun drgnx-run-ert--wait-test-around (run test &rest args)
+  (let ((before drgnx-run-ert--wait-total))
+    (prog1 (apply run test args)
+      (push (cons (symbol-name (ert-test-name test)) (- drgnx-run-ert--wait-total before)) drgnx-run-ert--wait-by-test))))
+
+(defun drgnx-run-ert--wait-profile-on ()
+  "Advise the waiting primitives and `ert-run-test' when DRGNX_TEST_WAIT_PROFILE asks for the profile."
+  (when (drgnx-run-ert--env "DRGNX_TEST_WAIT_PROFILE")
+    (dolist (f '(accept-process-output sleep-for sit-for))
+      (advice-add f :around #'drgnx-run-ert--wait-around '((name . drgnx-run-ert-wait))))
+    (advice-add 'ert-run-test :around #'drgnx-run-ert--wait-test-around '((name . drgnx-run-ert-wait-test)))))
+
 (defun drgnx-run-ert (dir &optional results-file)
   "Load every *-test.el under DIR (or the files of the list DIR: a shard), run all tests, write a JSON
 summary to RESULTS-FILE.  Return t if every test passed."
   (advice-add 'ert-run-test :after (lambda (&rest _) (drgnx-run-ert-drain-events)) '((name . drgnx-run-ert-drain)))
+  (advice-add 'ert-run-tests :filter-args #'drgnx-run-ert--report-off-the-echo-area)
+  (setq drgnx-run-ert--progress (and results-file (concat results-file ".progress")))
+  (when drgnx-run-ert--progress
+    (ignore-errors (delete-file drgnx-run-ert--progress))
+    (advice-add 'ert-run-test :around #'drgnx-run-ert--progress-around))
   (drgnx-run-ert--trampolines-see-real-primitives)
+  (drgnx-run-ert--wait-profile-on)
+  (when (equal (getenv "DRGNX_TEST_STRICT_FACES") "1") (setq drgnx-test-strict-faces t))
   (when-let* ((a (drgnx-run-ert--env "DRGNX_TEST_AUDIT")))
     (drgnx-run-ert--audit-install (and (not (equal a "1")) a)))
-  (let* ((census (and (drgnx-run-ert--leaks-on-p) (progn (drgnx-run-ert--census-start) t)))
+  (let* ((census (and (or (drgnx-run-ert--leaks-on-p) (drgnx-run-ert--file-leaks-p))
+                      (progn (drgnx-run-ert--census-start) t)))
          ;; the RAW selector, for the file filter: `drgnx-run-ert--selector' needs the files loaded, and with a
          ;; shuffle it is a `(member …)', not a string (which would load every file)
          (selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)) (car (read-from-string s)))))
@@ -742,16 +961,20 @@ summary to RESULTS-FILE.  Return t if every test passed."
          (_ (when (and seed (not drgnx-run-ert--leaks-quiet)) (drgnx-run-ert--say-seed seed)))
          ;; ERT's own report prints the conditions: unibyte bytes and control characters as escapes, never raw
          (stats (let ((print-escape-nonascii t) (print-escape-control-characters t))
-                  (ert-run-tests-batch (drgnx-run-ert--selector))))
+                  (ert-run-tests-batch (if (drgnx-run-ert--unbound-name-p selector) '(member) (drgnx-run-ert--selector)))))
          ;; a test the prefilter could not see (a full run), a name selector that picked nothing (not in a file's own
          ;; Emacs: its parent counts)
          (load-failures
           (append load-failures
                   (and (null selector) (not drgnx-run-ert--order-in) (drgnx-run-ert--unindexed stats dir))
-                  (and (stringp selector) (not drgnx-run-ert--file-child) (not (drgnx-run-ert--empty-ok-p))
+                  (and (drgnx-run-ert--name-selector-p selector) (not drgnx-run-ert--file-child) (not (drgnx-run-ert--empty-ok-p))
                        (zerop (+ (ert-stats-total stats) (length load-failures)))
                        (list (drgnx-run-ert--matched-nothing selector)))))
          (leaks (and census (drgnx-run-ert--census-finish)))
+         (load-failures (append load-failures (and (drgnx-run-ert--file-leaks-p) (drgnx-run-ert--leak-failures leaks))))
+         (load-failures (append load-failures
+                                (drgnx-run-ert--unknown-face-failures
+                                 (cl-remove-if-not (lambda (f) (drgnx-run-ert--file-selected-p f selector)) (drgnx-run-ert--files dir)))))
          (tests nil) (known-red nil) (failures nil) (skipped nil))
     (cl-loop
      for test across (ert--stats-tests stats)
@@ -768,7 +991,9 @@ summary to RESULTS-FILE.  Return t if every test passed."
                  :expected (if expected t :false)
                  ;; where and how long: bin/drgnx check balances its shards with them
                  :file (or (ert-test-file-name test) :null)
-                 :seconds (or (ignore-errors (ert-test-result-duration result)) 0))
+                 :seconds (or (ignore-errors (ert-test-result-duration result)) 0)
+                 ;; with DRGNX_TEST_WAIT_PROFILE: the part of it spent waiting
+                 :wait (or (cdr (assoc name drgnx-run-ert--wait-by-test)) 0))
            tests)
      (when (ert-test-skipped-p result)
        (push (list :name name :reason (if (cdr-safe condition) (format "%s" (cadr condition)) "skipped")) skipped))
@@ -796,6 +1021,9 @@ summary to RESULTS-FILE.  Return t if every test passed."
     ;; a test the must-run list names that skipped: a full or a class run (a per-file Emacs leaves it to its parent)
     (when (and (drgnx-run-ert--must-run-p selector) (not drgnx-run-ert--order-in) (not drgnx-run-ert--file-child))
       (setq load-failures (append load-failures (drgnx-run-ert--no-skip-failures skipped))))
+    ;; a strict run's skip for Sjá in an Emacs with none (a per-file Emacs leaves it to its parent)
+    (unless drgnx-run-ert--file-child
+      (setq load-failures (append load-failures (drgnx-run-ert--strict-sja-failures skipped (drgnx-run-ert--sja-p)))))
     (setq skipped (append skipped (drgnx-run-ert--timing-skipped selector) (drgnx-run-ert--gate-skipped selector)))
     (unless drgnx-run-ert--file-child (drgnx-run-ert--say-skipped skipped))
     (setq failures (append load-failures (nreverse failures) (drgnx-run-ert--audit-failures)))
@@ -824,6 +1052,8 @@ summary to RESULTS-FILE.  Return t if every test passed."
                    (and seed (list :seed seed))))
           'utf-8)
          nil results-file nil 'silent)))
+    (advice-remove 'ert-run-test #'drgnx-run-ert--progress-around)
+    (setq drgnx-run-ert--progress nil)
     (null failures)))
 
 ;;;; One Emacs per test file
@@ -1024,6 +1254,10 @@ failed test is a failure named after the file."
 form whose head symbol's name ends in `deftest' (`ert-deftest', a file's own `…--deftest' macro), as strings.  OPEN: t
 when such a form's first argument is not a plain symbol (a computed name), or the file does not read: the file may
 hold any test."
+  ;; a "\N{NAME}" makes the reader load the Unicode name table, which cannot load under an obarray of our own: it
+  ;; loads first, in the real one (once a session)
+  (when (with-temp-buffer (ignore-errors (insert-file-contents file)) (search-forward "\\N{" nil t))
+    (ucs-names))
   (let ((names nil) (open nil) (obarray (obarray-make)))
     (condition-case nil
         (with-temp-buffer
@@ -1111,9 +1345,20 @@ sets it, for one of its two batches may hold none of the tests a narrow selector
   (equal (getenv "DRGNX_TEST_EMPTY_OK") "1"))
 
 (defun drgnx-run-ert--matched-nothing (selector)
-  "The failure (:name :condition) of a run whose string SELECTOR matched no test."
+  "The failure (:name :condition) of a run whose name SELECTOR (`drgnx-run-ert--name-selector-p') matched no test."
   (list :name "selector"
-        :condition (format "DRGNX_TEST_SELECTOR %S matched 0 tests (an Emacs regexp: \\| for alternation, not |)" selector)))
+        :condition (format "DRGNX_TEST_SELECTOR %S matched 0 tests (%s)" selector
+                           (if (stringp selector) "an Emacs regexp: \\| for alternation, not |"
+                             "a symbol names one test, and no file loaded defines it"))))
+
+(defun drgnx-run-ert--name-selector-p (selector)
+  "Whether SELECTOR picks tests by name: a string (a regexp) or a symbol other than t, nil and keywords (one test)."
+  (or (stringp selector) (and selector (symbolp selector) (not (eq selector t)) (not (keywordp selector)))))
+
+(defun drgnx-run-ert--unbound-name-p (selector)
+  "Whether SELECTOR is a symbol naming a test that is not defined: ERT signals `ert-test-unbound' for it, so the run
+selects nothing instead (`(member)': ERT reads a nil selector as t) and says so like a regexp that matched nothing."
+  (and (drgnx-run-ert--name-selector-p selector) (symbolp selector) (not (ert-test-boundp selector))))
 
 (defun drgnx-run-ert--awake (awake last now)
   "AWAKE seconds plus the time from LAST to NOW, at most 5 s of it: the loop ticks every 0.05 s, so a longer gap is the
@@ -1187,7 +1432,7 @@ file passed."
     (let ((summary (drgnx-run-ert--merge (sort done (lambda (a b) (< (cl-position (plist-get a :file) files :test #'equal)
                                                                      (cl-position (plist-get b :file) files :test #'equal))))
                                          timeout)))
-      (when (and (stringp selector) (not (drgnx-run-ert--empty-ok-p)) (zerop (plist-get summary :total)))
+      (when (and (drgnx-run-ert--name-selector-p selector) (not (drgnx-run-ert--empty-ok-p)) (zerop (plist-get summary :total)))
         (let ((f (drgnx-run-ert--matched-nothing selector)))
           (setq summary (plist-put (plist-put (plist-put (plist-put summary :total 1) :failed 1)
                                               :failures (vector f))
@@ -1199,8 +1444,14 @@ file passed."
           (setq summary (plist-put (plist-put (plist-put summary :total (+ (plist-get summary :total) (length more)))
                                               :failed (+ (plist-get summary :failed) (length more)))
                                    :failures (vconcat (plist-get summary :failures) more)))))
+      ;; a strict run's skip for Sjá in an Emacs with none (the files' own Emacsen leave it to this one)
+      (when-let* ((more (drgnx-run-ert--strict-sja-failures (append (plist-get summary :skipped) nil) (drgnx-run-ert--sja-p))))
+        (setq summary (plist-put (plist-put (plist-put summary :total (+ (plist-get summary :total) (length more)))
+                                            :failed (+ (plist-get summary :failed) (length more)))
+                                 :failures (vconcat (plist-get summary :failures) more))))
       (when seed (setq summary (append summary (list :seed seed))))
-      (message "\ndrgnx: %d test files, each in an Emacs of its own: %d tests, %d as expected, %d unexpected (%.0f s)"
+      ;; the time in hundredths: the timing lane (test/timing-lane.sh) reads it, and a row's run can take under a second
+      (message "\ndrgnx: %d test files, each in an Emacs of its own: %d tests, %d as expected, %d unexpected (%.2f s)"
                count (plist-get summary :total) (plist-get summary :passed) (plist-get summary :failed) (- (float-time) t0))
       (cl-loop for f across (plist-get summary :failures) do (message "   FAILED  %s" (plist-get f :name)))
       (drgnx-run-ert--say-skipped (append (plist-get summary :skipped) nil))

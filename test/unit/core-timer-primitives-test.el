@@ -338,6 +338,28 @@ less what reading the counters itself costs."
      (kill-buffer buf)
      (should-not (gethash key drgnx-timer--last-run)))))
 
+;; An entry fired before its time (a perf lab settling a view, a flush) leaves the table and takes its own Emacs
+;; timer with it: a one-shot, a soon or an idle debounce never stays pending once its entry has run (a wall
+;; debounce fired early waits its remainder, by design)
+(defun drgnx-timer-prim-test--ran (&rest args) (push (cons 0 args) drgnx-timer-prim-test--calls))
+
+(ert-deftest drgnx-timer-prim/an-entry-fired-early-cancels-its-own-timer ()
+  (let ((drgnx-timer-errors nil) (drgnx-timer-prim-test--calls nil))
+    (dolist (start '(drgnx-timer-start drgnx-timer-soon drgnx-timer-debounce))
+      (let* ((key (cons 'tp-early start)) (idle (eq start 'drgnx-timer-debounce)) tm)
+        (unwind-protect
+            (progn
+              (apply start key 60 #'drgnx-timer-prim-test--ran :args (list start) :owner :core
+                     (and idle '(:idle t)))
+              (setq tm (drgnx-timer--entry-timer (gethash key drgnx-timer--table)))
+              (should (memq tm (if idle timer-idle-list timer-list)))
+              (drgnx-timer--fire (gethash key drgnx-timer--table))
+              (should (equal (cdar drgnx-timer-prim-test--calls) (list start)))
+              (should-not (gethash key drgnx-timer--table))
+              (should-not (memq tm (if idle timer-idle-list timer-list))))
+          (drgnx-timer-cancel key)
+          (when (timerp tm) (cancel-timer tm)))))))
+
 ;;;; Poll
 
 (ert-deftest drgnx-timer-prim/poll-stops-when-fn-says-done ()

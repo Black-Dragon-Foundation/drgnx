@@ -15,7 +15,7 @@
   "The five chords, sent to client C as a terminal with CAPS sends them, reach their commands (VS Code keys)."
   (let ((frame (drgnx-tty-keys-test--frame c))
         (quit (lambda () (drgnx-tty-keys-test--quit s c caps))))
-    (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
+    (drgnx-tty-session-wait-tab c nil 20)
     (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
     ;; C-S-p: the palette's prompt
     (drgnx-tty-session-key c "C-S-p" caps)
@@ -35,8 +35,11 @@
                                  (derived-mode-p 'drgnx-explorer-mode)))
     ;; C-`: the panel, its tab row with the Terminal tab
     (should-not (drgnx-tty-session-eval s `(drgnx-wb-area-window 'panel ,frame)))
+    ;; a terminal tab with a buffer of its own: Toggle Terminal shows it and starts no shell, which would take the keys after
+    (drgnx-tty-session-eval s `(with-selected-frame ,frame (drgnx-wb-area-show 'panel 'terminal (get-buffer-create "*terminal*"))
+                                                    (drgnx-wb-area-hide 'panel)))
     (drgnx-tty-session-key c "C-`" caps)
-    (drgnx-tty-keys-test--ran s 'drgnx-wb-toggle-panel "C-`")
+    (drgnx-tty-keys-test--ran s 'drgnx-terminal-toggle "C-`")
     (drgnx-tty-session-wait s `(drgnx-wb-area-window 'panel ,frame))
     (drgnx-tty-session-wait-screen c "Problems +Output +Results +Terminal" 10)
     ;; C-.: the code actions (Quick Fix)
@@ -51,7 +54,7 @@
                 'missing-packages))
     ;; a client inside tmux, its TMUX naming the session's own server, whose extended-keys is on
     (let ((c (drgnx-tty-session-client s :env (list (format "TMUX=%s,1,0" (plist-get s :tmux))))))
-      (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
+      (drgnx-tty-session-wait-tab c nil 20)
       (should (eq (plist-get (drgnx-tty-keys-test--caps s c) :id) 'tmux))
       (should (eq (plist-get (drgnx-tty-keys-test--caps s c) :keys) 'mok))
       ;; tmux was asked for modifyOtherKeys (its pane is in extended-keys mode)
@@ -82,7 +85,7 @@ sets `kx-returned' when it ends (C-g ends it early)."
     (drgnx-tty-session-eval s (drgnx-tty-keys-test--kkp-yes "WezTerm 20240203-110809-5046fc22"))
     (drgnx-tty-session-eval s (drgnx-tty-keys-test--busy s (plist-get s :run)))
     (let ((c (drgnx-tty-session-client s :env '("TERM=xterm-256color"))))
-      (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
+      (drgnx-tty-session-wait-tab c nil 20)
       (let ((caps (drgnx-tty-keys-test--caps s c)))
         (should (eq (plist-get caps :id) 'wezterm))
         (should (eq (plist-get caps :keys) 'mok))
@@ -109,7 +112,7 @@ sets `kx-returned' when it ends (C-g ends it early)."
     (drgnx-tty-session-eval s (drgnx-tty-keys-test--kkp-yes drgnx-tty-keys-test--kitty))
     (drgnx-tty-session-eval s '(setq drgnx-tty-use-kkp nil))
     (let ((c (drgnx-tty-session-client s :env '("TERM=xterm-256color"))))
-      (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
+      (drgnx-tty-session-wait-tab c nil 20)
       (let ((caps (drgnx-tty-keys-test--caps s c)))
         (should (eq (plist-get caps :id) 'kitty))
         (should (eq (plist-get caps :keys) 'legacy)))
@@ -171,6 +174,7 @@ sets `kx-returned' when it ends (C-g ends it early)."
             t))
       (let ((c (drgnx-tty-session-client s :env '("TERM=xterm-256color"))))
         (drgnx-tty-keys-test--answer-kkp s c)
+        (drgnx-tty-session-wait-stages s)
         (drgnx-tty-session-key c "<f12>" 'kkp)
         (drgnx-test-wait (lambda () (file-exists-p started)) :secs 10 :what "the program to start")
         ;; a kkp terminal sends C-g as a raw byte only once the program set its flags to 0 (CSI = 0 ; 1 u);
@@ -197,7 +201,7 @@ sets `kx-returned' when it ends (C-g ends it early)."
                                  (insert-file-contents (expand-file-name "terminal-report.eld" (drgnx-state-dir)))
                                  (read (current-buffer)))
                                :terminals)))
-      (drgnx-tty-session-wait-screen b "\\*scratch\\*" 20)
+      (drgnx-tty-session-wait-tab b nil 20)
       (should (eq (plist-get (drgnx-tty-keys-test--caps s b) :id) 'vte))
       ;; client A: a kitty (kkp; its terminal says yes)
       (drgnx-tty-session-eval s (drgnx-tty-keys-test--kkp-yes drgnx-tty-keys-test--kitty))
@@ -215,7 +219,7 @@ sets `kx-returned' when it ends (C-g ends it early)."
           (should (eq (plist-get (plist-get (cdr (assoc tty-a entries)) :caps) :keys) 'kkp)))
         (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
         ;; A's C-S-p bytes open the palette in A
-        (drgnx-tty-session-wait-screen a "\\*scratch\\*")
+        (drgnx-tty-session-wait-tab a)
         (drgnx-tty-session-key a "C-S-p" 'kkp)
         (drgnx-tty-keys-test--ran s 'drgnx-palette "C-S-p")
         (drgnx-tty-session-wait-screen a "Command (# for a code question)")
@@ -226,7 +230,7 @@ sets `kx-returned' when it ends (C-g ends it early)."
         (drgnx-tty-session-wait-screen b "Command (# for a code question)")
         (drgnx-tty-keys-test--quit s b 'legacy)
         (drgnx-tty-session-key b "C-p" 'legacy)
-        (drgnx-tty-keys-test--ran s 'project-find-file "C-p")
+        (drgnx-tty-keys-test--ran s 'drgnx-quick-open "C-p")
         (drgnx-tty-session-wait s '(minibuffer-prompt))            ; it asks which project
         (drgnx-tty-keys-test--quit s b 'legacy)
         (let ((line `(with-selected-window (frame-selected-window ,(drgnx-tty-keys-test--frame b)) (line-number-at-pos))))
@@ -236,6 +240,51 @@ sets `kx-returned' when it ends (C-g ends it early)."
             (drgnx-tty-session-wait s `(= ,line ,(1- before)))))
         ;; nothing went wrong on the way (no errors from either terminal's setup)
         (should (equal (drgnx-tty-session-eval s 'drgnx-hooks-problems) problems))))))
+
+;; Nidhogg's define-key redirect sees C's `define-key' too: a tty frame's set-up (term.c) defines the terminal's function
+;; keys in its `input-decode-map' under a handler that drops errors.  drgnx's redirect must leave that map alone.
+(ert-deftest drgnx-tty-keys/a-tty-frame-keeps-its-function-keys-under-the-redirect ()
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28")
+    ;; the keys were applied: the redirect is on before the client's terminal is set up
+    (should (drgnx-tty-session-eval s '(and (boundp 'nidhogg-define-key-redirect-function)
+                                            (eq nidhogg-define-key-redirect-function #'drgnx-keys--redirect))))
+    (let ((c (drgnx-tty-session-client s)))
+      (drgnx-tty-session-wait-tab c nil 20)
+      ;; the terminal's arrow keys are in its input-decode-map: some sequence there decodes to <up> and <down>
+      (should (equal (drgnx-tty-session-eval
+                      s `(with-selected-frame ,(drgnx-tty-keys-test--frame c)
+                           (let (found)
+                             (cl-labels ((walk (m) (map-keymap (lambda (_e d)
+                                                                 (cond ((member d '([up] [down])) (push d found))
+                                                                       ((keymapp d) (walk d))))
+                                                               m)))
+                               (walk input-decode-map))
+                             (sort (mapcar (lambda (v) (symbol-name (aref v 0))) (delete-dups found)) #'string<))))
+                     '("down" "up")))
+      ;; and the redirect recorded no trouble
+      (should-not (seq-filter (lambda (p) (string-search "could not be placed" p))
+                              (drgnx-tty-session-eval s 'drgnx-keys-problems))))))
+
+;; The spike's open rows (keymap redesign, T12): keys that stay Emacs's own under the composed global map.
+
+(ert-deftest drgnx-tty-keys/m-x-after-the-ready-barrier ()
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28")
+    (let ((c (drgnx-tty-session-client s)))
+      (drgnx-tty-session-wait-tab c nil 20)
+      (drgnx-tty-session-wait-stages s)
+      (drgnx-tty-session-key c "M-x")
+      (should (equal (drgnx-tty-session-wait s '(minibuffer-prompt)) "M-x ")))))
+
+(ert-deftest drgnx-tty-keys/isearch-keeps-its-own-keys-under-the-composed-map ()
+  ;; the Emacs profile leaves C-s to isearch: it starts, and a typed character goes to the search string
+  (drgnx-tty-session-with (s :daemon t :keys 'emacs :size "120x28")
+    (let ((c (drgnx-tty-session-client s)))
+      (drgnx-tty-session-wait-tab c nil 20)
+      (drgnx-tty-session-wait-stages s)
+      (drgnx-tty-session-key c "C-s")
+      (drgnx-tty-session-wait-screen c "I-search:" 10)
+      (drgnx-tty-session-key c "s")
+      (drgnx-tty-session-wait-screen c "I-search: s" 10))))
 
 (provide 'keys-test)
 ;;; keys-test.el ends here

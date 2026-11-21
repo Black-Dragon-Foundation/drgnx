@@ -170,6 +170,15 @@ nil (a computed type, or an unknown variable) means the Lisp editor."
 
 ;;;; Checking
 
+(defvar drgnx-setting--widgets (make-hash-table :test 'eq :weakness 'key)
+  "Type object -> its converted widget.  Most settings share a few types (`integer', `boolean', `string'), so a start
+that checks hundreds of values converts each type once.  Weak on the type: a redefined `defcustom' has a new one.")
+
+(defun drgnx-setting--widget (type)
+  "TYPE (a widget type) converted, kept for the next check of the same type object."
+  (or (gethash type drgnx-setting--widgets)
+      (puthash type (widget-convert type) drgnx-setting--widgets)))
+
 (defun drgnx-setting-check (var value)
   "Check VALUE for VAR: nil, or `(PATH . MESSAGE)' for the first problem.
 A `:schema' goes to `drgnx-schema-check'; otherwise the `:type' of the `defcustom' must match."
@@ -177,7 +186,7 @@ A `:schema' goes to `drgnx-schema-check'; otherwise the `:type' of the `defcusto
       (drgnx-schema-check schema value)
     (when-let* ((type (drgnx-setting-type var)))
       (require 'wid-edit)
-      (unless (widget-apply (widget-convert type) :match value)
+      (unless (widget-apply (drgnx-setting--widget type) :match value)
         (cons nil (format "%S does not match the type %S" value type))))))
 
 (provide 'drgnx-setting)

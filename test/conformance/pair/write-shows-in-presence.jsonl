@@ -1,0 +1,22 @@
+{"scenario": "pair/write-shows-in-presence", "requires": ["v1", "test-hooks"], "doc": "Gated (B). A paired chat's edit_file shows in the presence feed: pending on the lines it will change while the editor holds the write, then an edit on them once the editor applied it, so the editor's ring rows and gutter mark it. Pattern B: pair-apply reaching the editor is the gate (the pending entry is in place before it is sent); agents/presence/get is read only after it, and polled after the editor's answer."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project && printf 'one\\ntwo\\nthree\\n' > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 90, "method": "pair/open", "params": {"file": "$ROOT/project/README", "kind": "normal"}}}
+{"do": "expect", "conn": "e", "json": {"id": 90, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:edit_file {\"path\": \"$ROOT/project/README\", \"old\": \"two\", \"new\": \"TWO\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w", "session": "$sid", "file": "$ROOT/project/README"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/presence/get", "params": {"file": "$ROOT/project/README"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"entries": [{"session": "$sid", "mode": "pending", "line": 2, "line_end": 2, "live": true}]}}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "pair/answer", "params": {"write": "$w", "result": "applied", "version": 2, "saved": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/presence/get", "params": {"file": "$ROOT/project/README"}}, "expect": {"id": 4, "result": {"entries": [{"session": "$sid", "mode": "edit", "line": 2, "line_end": 2, "live": "$absent"}]}}, "within_ms": 20000, "every_ms": 50}

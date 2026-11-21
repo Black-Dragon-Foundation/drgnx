@@ -85,6 +85,8 @@ async fn run(
     let opts = ConnOpts {
         deadline: wait,
         stderr_tail: STDERR_MAX,
+        tap: crate::recording::acp_tap(sid, None, &profile.name, &prep.spec, cwd),
+        v2: false,
     };
     let (conn, mut events) = match Conn::spawn(prep.spec, opts).await {
         Ok(c) => c,
@@ -99,7 +101,7 @@ async fn run(
     // the sandbox helper reports on a pipe; a launch whose status is not read hangs
     if let Some(fd) = prep.status {
         let stderr = conn.stderr();
-        let read = tokio::task::spawn_blocking(move || {
+        let read = crate::clock::blocking(move || {
             gleipnir::read_status(fd, &|| stderr.get(), Duration::from_secs(20))
         })
         .await;
@@ -191,5 +193,16 @@ mod tests {
         let key = format!("sk-{}", "q".repeat(40));
         let keyed = tail_of(&format!("boom\nOPENAI_API_KEY={key}")).unwrap();
         assert!(!keyed.contains(&key), "{keyed}");
+    }
+
+    #[test]
+    fn a_missing_agent_program_is_named_with_the_way_to_set_it_up() {
+        let e = hermod::Error::Spawn(
+            "claude-agent-acp".into(),
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        );
+        let text = e.to_string();
+        assert!(text.contains("claude-agent-acp"), "{text}");
+        assert!(text.contains("Onboarding: Agents"), "{text}");
     }
 }

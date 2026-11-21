@@ -5,9 +5,9 @@
 ;;; Commentary:
 ;; Part of module ui/face.  Every help pane, popup and side pane has a ✕ in its header (wb/drgnx-area.el,
 ;; wb/drgnx-popup.el, wb/drgnx-wb.el) and closes with Esc or q.  The two keys are bound by the key profiles in
-;; `drgnx-close-mode-map', which is on only while the selected window is a lane or an area (the panel, the right
-;; dock) and its buffer is not one you type into (`drgnx-close-input-modes': a shell, eshell, a terminal): so the
-;; minibuffer, the editors and a terminal tab keep their Esc and q.  `drgnx-close--here' is recomputed when the
+;; `drgnx-close-mode-map', which is on only while the selected window is a lane, an area (the panel, the right
+;; dock) or a tool tile of the grid and its buffer is not one you type into (`drgnx-close-input-modes': a shell,
+;; eshell, a terminal): so the minibuffer, the editors and a terminal tab keep their Esc and q.  `drgnx-close--here' is recomputed when the
 ;; selection or a window's buffer changes, never while typing.  The left dock's sections are not in it: Esc there
 ;; already goes back to the editor (Back to the Editor, invariant I1), and hiding the sidebar is its ✕ or Close Pane
 ;; from the palette.  In a writable buffer the keys do what they do without this map
@@ -22,7 +22,7 @@
 (require 'drgnx-state)
 (require 'drgnx-popup)
 
-(defcustom drgnx-close-input-modes '(comint-mode eshell-mode term-mode vterm-mode eat-mode)
+(defcustom drgnx-close-input-modes '(comint-mode eshell-mode term-mode vterm-mode drgnx-term-mode)
   "Modes (and the modes derived from them) whose buffers you type into: Esc and q are theirs, never close the pane."
   :type '(repeat symbol) :group 'drgnx-face)
 
@@ -34,7 +34,11 @@ not Close Pane there.  A mode that takes the keyboard for itself adds its predic
   "Esc and q (the key profiles bind them to Close Pane), active while `drgnx-close--here'.")
 
 (defvar drgnx-close--here nil
-  "Non-nil while the selected window is a lane or an area showing a buffer you do not type into.")
+  "Non-nil while the selected window is a lane, an area or a tool tile showing a buffer you do not type into.")
+
+(defvar drgnx-close--closed nil
+  "Non-nil when the last Close Pane closed something; nil when it had nothing to close (an Esc that then counts as a
+cancel for the Esc double tap, wb/drgnx-esc.el).")
 
 (defvar drgnx-close--emulation (list (cons 'drgnx-close--here drgnx-close-mode-map))
   "The `emulation-mode-map-alists' entry: the map is on only where `drgnx-close--here' is.")
@@ -53,7 +57,7 @@ not Close Pane there.  A mode that takes the keyboard for itself adds its predic
 state store's `windows-changed'; reads two window parameters and a mode)."
   (let ((w (selected-window)))
     (setq drgnx-close--here
-          (and (memq (drgnx-chrome--role w) '(lane area))
+          (and (memq (drgnx-chrome--role w) '(lane area tile))
                (buffer-local-value 'buffer-read-only (window-buffer w))
                (not (drgnx-close--input-buffer-p (window-buffer w)))
                t))))
@@ -67,10 +71,11 @@ elsewhere, the Meta prefix: an ESC goes back to the reader.  Anything else unbou
           (t (ding)))))
 
 (defun drgnx-close-pane ()
-  "Close the pane you are in: end a popup, hide the panel or the right dock, hide the sidebar; focus goes to the
-editor.  Typed as Esc or q in a buffer you can edit, it is the key's own command instead (q types a q); so is Esc in
-the modal engine's visual state (it leaves the selection)."
+  "Close the pane you are in: end a popup, hide the panel, the right dock or a tool tile of the grid, hide the
+sidebar; focus goes to the editor.  Typed as Esc or q in a buffer you can edit, it is the key's own command instead
+\(q types a q); so is Esc in the modal engine's visual state (it leaves the selection)."
   (interactive)
+  (setq drgnx-close--closed nil)
   (if (and (memq last-command-event '(escape ?q))
            (or (not buffer-read-only) (drgnx-close--input-buffer-p (current-buffer))
                (and (eq last-command-event 'escape) (eq drgnx-modal-state 'visual))))
@@ -80,7 +85,9 @@ the modal engine's visual state (it leaves the selection)."
         ('lane (drgnx-wb-focus-editor) (drgnx-popup--end w))
         ('area (drgnx-wb-area-hide (window-parameter w 'drgnx-role)))
         ('dock (drgnx-wb-hide-sidebar))
-        (_ (user-error "No pane to close here"))))))
+        ('tile (delete-window w))                   ; a tool tile hides (the grid's `delete-window'), a temporary one goes
+        (_ (user-error "No pane to close here")))
+      (setq drgnx-close--closed t))))
 
 (define-minor-mode drgnx-close-mode
   "Esc and q close help panes, popups and side panes (the keys come from the key profiles)."

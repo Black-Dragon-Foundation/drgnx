@@ -12,14 +12,20 @@ drgnx sync --offline        only the lock and the cache — no network
 drgnx sync --seed DIR       first copy the packages of another Emacs (e.g. ~/.config/emacs/elpa), then sync
 drgnx sync --prune          also remove the packages the manifest no longer needs (listed; rollback restores them)
 drgnx sync --prune --dry-run  only list what --prune would remove
+drgnx sync --add NAME[@V]…  install packages you ask for (marked as yours in the lock); all of them or nothing
+drgnx sync --remove NAME…   remove packages and what only they needed; refused while something else asks for them
+drgnx sync --pending        run the queue of the Extensions view's clicks as one sync (add --wait to queue behind a running one)
 drgnx upgrade               the newest versions; if they break, the previous generation comes back
+drgnx upgrade --only NAME…  update those packages (and a dependency too old for them); the rest stays as locked
+drgnx upgrade --stage       fetch and check the update into the cache for review, changing nothing (with --only too)
+drgnx upgrade --staged [--expect NAME=SHA256…]  install exactly the files --stage fetched (--expect: only if they are these)
 drgnx rollback [N]          the packages of generation N (default: the one before the current one)
 drgnx generations           the generations kept (five)
 drgnx lock                  what the lock pins (version, and the archive or, for Git, the commit)
 drgnx lock --ship           (maintainers) write the known-good lock drgnx ships from yours
 drgnx safe                  Emacs with drgnx's core only: no modules, no packages
 drgnx bisect [-- CMD…]      find the module or Lisp file that breaks something
-drgnx service-unit [DIR | --refresh]    the systemd user unit for a drgnx daemon (printed, or written to DIR; `--refresh` updates the installed one)
+drgnx service-unit [DIR | --refresh | --install]    the systemd user unit (macOS: the launch agent) for a drgnx daemon (printed, or written to DIR; `--refresh` updates the installed one; `--install` installs and loads the macOS agent)
 ```
 
 ## What gets installed
@@ -71,6 +77,15 @@ partial file; what a killed sync left (`*.part` in the cache, `.drgnx.lock.eld.t
 installed, runs that file less compiled, and the sync prints a `WARNING` line naming the package and the file (compat's per-version files for versions your Emacs already has, such as `compat-29.el` on Emacs 30, are never
 loaded and are not compiled to native code, so they never warn).
 
+The installed packages remember which Emacs build compiled them (`drgnx-built-by.eld` in the packages folder: the
+version, the system, the native-code ABI and the build time). When you move to another Emacs build (a new Nidhogg,
+or from GNU Emacs 30), the next `drgnx sync` deletes every package's `.elc` and compiles them all again for this
+build, dependencies first: byte code an older Emacs compiled can expand an older version of a macro (diff-hl's
+global mode, for one, then reads a variable the old code never defines, and every buffer's mode hook fails).
+Until that sync has run, a session keeps this Emacs's background native compiler away from those packages: it would
+compile their source with this build's macros and swap the functions in a minute or so after the old byte code loaded
+(`corfu-mode--set-explicitly` void again), so the packages run byte-compiled and the doctor says to run `drgnx sync`.
+
 A plain sync never removes a package: one that left the manifest (a module turned off) or was installed by hand
 stays and is locked too. `drgnx sync --prune` removes them: every installed package the manifest does not name and
 no package of the manifest requires — hand-installed ones included. Packages that `use-package … :ensure` or an
@@ -78,6 +93,70 @@ external module asked for count as named. It is never automatic, it lists what i
 nothing while a package is missing, and it first keeps a generation of the state before, so `drgnx rollback`
 brings them back. `drgnx sync --prune --dry-run` only prints `would prune: …` (from the packages installed now and
 the current manifest) and changes nothing.
+
+### What you asked for
+
+The [Extensions view](extensions.md) is the screen for all of this: Install, Update and Uninstall there queue the
+commands below, and its pages show the lock's marks as *Why* a package is here.
+
+A package you install yourself — `drgnx sync --add magit`, or Install in the Extensions view, which runs it — is
+recorded as yours on its lock entry, `:wanted user`, in the same lock write as the install. Those entries are the
+manifest's fourth source, so the next sync keeps them, `--prune` never removes them, and a rollback brings the wish
+back together with the package (generations hold the lock). The mark survives every rewrite of the entry (an upgrade,
+a reinstall from the cache); `drgnx lock --ship` never copies it, so a new user starts with none of the maintainer's.
+`drgnx sync --add NAME@VERSION` installs that version when an archive or the cache still has it.
+
+`--add`, `--remove` and `--pending` runs are **all or nothing**: when anything the run asked for cannot be had — a
+name no archive has, a package it needs, a refused removal — the run stops before the swap and prints sync's own
+`MISSING …` lines and "nothing was changed": not the packages, not the lock, not its marks, and no generation. A package
+missing outside the request (a module's package an archive dropped) does not stop it: it is reported as `MISSING`,
+and the lock and the generation are written as usual (the missing package keeps its lock entry, if it had one).
+
+`drgnx sync --remove NAME` removes NAME and the packages only it needed (not those another installed package still
+needs), after a generation of the state before (`before remove NAME`), so `drgnx rollback` undoes it. It is refused,
+changing nothing, while something else asks for the package: "module extra/magit needs it" (turn the module off
+instead), "packages.eld lists it", "config.el asks for it (:ensure)" (it would come back while that line stays), or
+"needed by forge". A package installed by hand or seeded (its lock entry has no hash) stays unless you name it. The
+generation notes say what changed: `install magit`, `install magit, corfu`, `remove eat`, `before remove eat`.
+
+An older drgnx (after `drgnx update --back`) rewrites the lock without the marks; sync again with this one, or add
+`:wanted user` back by hand.
+
+### The queue
+
+The Extensions view never installs by itself: a click writes an entry to `~/.local/state/drgnx/extensions/pending.eld`
+(`(:next N :entries ((:ticket N :add NAME [:version V]) (:ticket N :remove NAME) …))`) and starts a job running `drgnx
+sync --pending --wait`. That run takes the sync lock — `--wait` waits while another sync, upgrade or rollback holds it,
+trying again every half second, instead of refusing — then takes the whole queue under it, prints `start tickets: 3 4`,
+and runs every entry as one sync (one generation). So clicks made while a sync runs batch into the next round, and the
+queue survives the editor closing. A ticket is never given twice; Cancel takes an entry out while it is still queued.
+`drgnx sync --pending` with an empty queue prints `nothing queued` and changes nothing.
+
+### Signatures
+
+GNU and NonGNU ELPA sign their archive contents and every package file; a sync, an upgrade and `--stage` check
+those signatures with gpg, against drgnx's keyring (`~/.local/share/drgnx/gnupg`, which starts with the GNU ELPA
+key Emacs ships), and a file that does not pass is never used: a missing or bad signature on a package stops the
+run (`fa-1.0.el: download failed (…) — nothing was changed`), and on an archive's contents names the archive. MELPA
+and stable MELPA do not sign, nor do archives that are directories: their files are checked by hash only. Another
+archive that does not sign goes in `packages.eld`:
+
+```elisp
+(:archives (("gnu" . "https://elpa.gnu.org/packages/") ("mine" . "https://elpa.example.org/"))
+ :unsigned-archives ("mine"))
+```
+
+A lock entry carries `:verified t` when its file passed the check — downloaded now from an archive that signs, or
+taken from the cache with the hash of an entry that was verified (a `--staged` file keeps what `--stage` found). A
+file of an archive that signs found in the cache without such an entry is checked against its signature before it
+is used; one that does not pass stops the run and leaves the cache (`fa-1.0.el: the cached copy does not pass its
+signature check (…) — nothing was changed`). No sandboxed job can write the cache.
+Without gpg, a sync that uses an archive that signs stops before it changes anything ("gpg is needed to check GNU
+ELPA's signatures"); `drgnx doctor` says the same (`packages-gpg`). Install gnupg2 (macOS: `brew install gnupg`).
+
+A package you install yourself with `M-x package-install` (or list-packages) takes the same sync lock: while a sync
+runs it is refused at once ("a sync is running; try again when it ends") instead of writing the packages directory
+under it.
 
 ### Packages from Git
 
@@ -203,8 +282,14 @@ beyond the lock).
 Packages live at one fixed path, `~/.local/share/drgnx/elpa` (`$DRGNX_DATA_DIR`). A sync installs into a copy and
 swaps it in with two renames only when everything arrived, so an interrupted sync leaves the old directory as it
 was (a crash between the two renames is repaired by the next sync). Each successful sync snapshots the directory
-and the lock as a generation (`~/.local/share/drgnx/generations/N`, reflink copies where the file system has them —
-on a file system without them, every sync copies the packages twice; five kept).
+and the lock as a generation (`~/.local/share/drgnx/generations/N`, reflink copies where the file system has them,
+APFS clones (`cp -c`) on macOS — on a file system without them, every sync copies the packages twice; five kept).
+Each generation's note says what made it: `install magit`, `update magit`, `remove eat`, `before remove eat`,
+`before upgrade`, `upgrade`, `sync`.
+
+A run swaps the new directory in, writes its activation file, the lock and the generation, and only then compiles
+to native code: a run stopped during native compilation (Cancel, the job's time box) leaves a consistent generation
+whose files load byte-compiled, and the next sync compiles what is missing.
 
 `drgnx rollback` copies a generation back into the same path, so natively compiled files stay valid — nothing
 is recompiled. `drgnx upgrade` snapshots the packages first, takes every package to the archive's newest version,
@@ -214,9 +299,41 @@ says why. With the default archive priorities ([above](#what-gets-installed)) an
 NonGNU ELPA releases (magit, …) on their newest release rather than moving them to MELPA's latest builds; set your own
 priorities, or `:archive-priorities ()`, to take the newest version wherever it is.
 
-A running drgnx keeps the packages it loaded: **restart it** after a sync, upgrade or rollback (the command says
-so). One writer at a time: a sync, upgrade or rollback refuses while another runs; a lock left by one that died is
-taken over. The lock (`~/.local/share/drgnx/sync.lock`) names its process by pid and start time, so a pid reused
+`drgnx upgrade --only magit` updates magit alone, through the same snapshot and smoke test: every other package keeps
+its locked version, except a dependency the new magit needs a newer version of, which is updated with it.
+`--stage` (alone or with `--only`) downloads and checks the update into the package cache and lists it in
+`~/.local/state/drgnx/extensions/staged.eld` (name, version, file, sha256, whether its signature was checked), and
+changes nothing else: no swap, no lock, no generation — the files can be reviewed. `drgnx upgrade --staged` then
+installs exactly those files: a cached file whose hash is no longer the staged one is refused and nothing changes.
+`--staged --expect NAME=SHA256…` (what the Extensions view passes: the hashes its review showed) also refuses a staged
+list that is not exactly those packages at those hashes, as when a second review replaced the file in between.
+
+After a sync, upgrade or rollback that worked, the settings index of the installed packages is written again
+([below](#settings-of-installed-packages)), then `drgnx-pkg-after-change-functions` run.
+
+### Progress
+
+`drgnx sync`, `upgrade` and `rollback` take `--progress FILE`: FILE is replaced, by rename, with one JSON object (at
+most 1 KiB) at each step, so a reader always finds a whole one — `start` (with the queue's `tickets` for
+`--pending`), `plan`, `download` (for an archive package; for a Git package when its clone is made or fetched, with `pkg` and `cached` only), `unpack` and `byte` per package (`pkg`, `i` of `n`), `swap`, `lock`, `native` per
+file (`pkg`, `i` of `n`), and `done` (`ok`, `generation`, `warnings`, `error`). The `plan` comes before anything is
+downloaded and before every swap: `{"step":"plan","seq":1,"generation":7,"replaces":["magit-4.1"],"removes":["eat-0.9"],"adds":["forge-0.5"]}`
+— the package directories the swap takes away (generation N holds their copies) and the ones it brings. It also goes
+to `FILE.plan.json`, written once before its swap and never by a later step, so a reader that missed the step still
+finds it; `seq` counts the swaps of the run (an upgrade whose smoke test fails swaps twice: its restore has a plan of
+its own). Writing the progress never fails the run.
+
+### Generations a running drgnx uses
+
+A running drgnx can load files from a generation (after a swap took its packages away). Each such session lists
+the generations it uses in `~/.local/state/drgnx/elpa-in-use/PID.eld` (`(:pid P :start S :generations (N…))`), and
+the rotation of generations keeps every one a live session names, beyond the five; the file of a session that is
+gone (its pid not running since that start time) is deleted at the next rotation.
+
+A running drgnx keeps the packages it loaded: **restart it** after a sync, upgrade or rollback from the command line
+(the command says so). A change the Extensions view makes works at once where it can ([When a restart is
+needed](extensions.md#when-a-restart-is-needed)). One writer at a time: a sync, upgrade or rollback refuses while another runs (`drgnx sync --wait` waits for it
+instead); a lock left by one that died is taken over. The lock (`~/.local/share/drgnx/sync.lock`) names its process by pid and start time, so a pid reused
 after a reboot does not hold it, and of two commands taking over the same stale lock only one gets it.
 
 ## When something breaks
@@ -231,7 +348,8 @@ after a reboot does not hold it, and of two commands taking over the same stale 
   with `settings.el`'s values for packages and Emacs off (`DRGNX_PACKAGE_SETTINGS=off`; drgnx's own settings
   stay) and says when they are the cause (docs/guide/settings.md, "Safe mode and Turn Off Package Settings").
 - `drgnx doctor` reports packages the manifest needs that are not installed (not those your Emacs ships, such as
-  `eglot`), a missing or unreadable lock, and the generations kept.
+  `eglot`), a missing or unreadable lock, and the generations kept. It warns when another Emacs build compiled the installed
+  packages; `drgnx sync` compiles them again, then restart drgnx.
 
 ## Running drgnx as a daemon
 
@@ -250,8 +368,8 @@ systemctl --user daemon-reload
 systemctl --user start drgnx                     # emacsclient -s drgnx -c
 ```
 
-**The desktop entry follows Nidhogg's windows.** Nidhogg names its windows `nidhogg`, and the logo it installs stays
-under its own prefix, so `drgnx service-unit --refresh` also copies those icons to
+**The desktop entry follows Nidhogg's windows.** Nidhogg names its windows `nidhogg`, so `drgnx service-unit --refresh` also copies drgnx's own app icon
+(`etc/images/icon/`, 16 to 1024 px) to
 `$XDG_DATA_HOME/icons/hicolor/` (default `~/.local/share/icons/hicolor/`) as `drgnx`, and updates an installed
 `drgnx.desktop`: `Icon=emacs` becomes `Icon=drgnx`, and a `StartupWMClass=nidhogg` line is added when it has none, so
 the app switcher shows drgnx and its icon. Every other line stays, and so does an icon of your own. With no entry
@@ -264,9 +382,21 @@ rewrites only the `ExecStart=` line of `$XDG_CONFIG_HOME/systemd/user/drgnx.serv
 shows the old and the new `ExecStart=` line (`- OLD` / `+ NEW`) before it writes, runs `systemctl --user daemon-reload`, and
 prints the change (`drgnx.service ran OLD; now NEW …`). It never restarts the
 service: restart drgnx when it suits you (`systemctl --user restart drgnx`). A unit that is not drgnx's daemon line, or
-none at all, is left alone and said so. `drgnx update` does this after every run (also when already up to date; not on
-macOS); a failure there is reported and does not fail the update. `drgnx doctor` warns when the unit starts another
+none at all, is left alone and said so. `drgnx update` does this after every run (also when already up to date); a
+failure there is reported and does not fail the update. `drgnx doctor` warns when the unit starts another
 Emacs than drgnx uses (`service-unit`).
+
+### On macOS: the launch agent
+
+On macOS the daemon runs from a per-user launch agent, `~/Library/LaunchAgents/org.blackdragonfoundation.drgnx.plist`:
+`emacs --fg-daemon=drgnx --init-directory=<checkout>/init`, started at login (`RunAtLoad`). `drgnx service-unit` prints
+it and `drgnx service-unit DIR` writes it; `drgnx service-unit --install` writes it to `~/Library/LaunchAgents` and loads
+it (`launchctl bootstrap gui/UID`), which starts the daemon now and at every login. It is not kept alive: launchd has
+no limit on restarts, so a second drgnx holding the server name would loop. `--refresh` rewrites only its
+`ProgramArguments` to the Emacs running the command, keeping every other key; launchd reads the file when the agent is
+loaded again, which `drgnx update --restart` does ([install.md](install.md)). Restart from the editor
+(**Restart drgnx**) asks launchd to restart it (`launchctl kickstart -k`). To remove it:
+`launchctl bootout gui/$(id -u)/org.blackdragonfoundation.drgnx` and delete the file.
 
 Once the unit is enabled, `drgnx open` and `drgnx PATH` start it when drgnx is not running ([opening.md](opening.md)).
 Give the unit the same `Environment=`/`PATH` as your current daemon's unit if it has some. Switching for good is
@@ -292,7 +422,20 @@ satisfies left out (each test has its own shipped lock in a temp dir, never the 
 Emacs itself (a 200 is saved byte for byte; a 404 saves nothing). `test/unit/pkg-melpa-pin-test.el`: the lock recording an archive's commit and URL, and a version gone from the archive rebuilt from its commit in a local Git repository (also from an empty directory, and before a package that needs it), reported missing and kept when the lock has no commit, the commit cannot be had or the URL is no repository, left alone while the archive serves it, soft for the shipped lock, not attempted offline. `test/unit/pkg-shipped-lock-test.el`: the shipped lock as soft pins for a module turned on later (its version, its dependencies, the user's lock winning, an unserved pin falling back, a package installed by hand left alone, no effect on upgrade, `--offline` or `--seed`, a Git package at the shipped commit) and the coverage test (every package a module names is in `etc/drgnx.lock.eld`). `test/unit/pkg-priorities-test.el`: the default archive priorities (an upgrade keeps a NonGNU release over a newer MELPA snapshot, still takes a newer release, a MELPA-only dependency still resolves, a priority of the user's own wins). `test/unit/pkg-git-test.el`: packages from local Git
 repositories — the commit and dependencies, the lock holding the commit until upgrade, offline from the cached clone,
 a missing `:rev`, no version header, a module's package with drgnx's Git source, an offline first sync naming the Git
-package it could not get and installing the rest.
+package it could not get and installing the rest. `test/unit/pkg-wants-test.el` runs the CLI itself as batch children
+(`test/fixtures/pkg-child-fixture.el` gives each its sandbox, HOME included, and parks it at a state the test waits
+for): `--add` marking only on success, a partly missing request changing nothing, removals refused or taking only what
+they alone needed, two `--pending --wait` runs never taking the same ticket, the shipped lock without wants, a rollback
+bringing its wants back, and a run killed during native compilation leaving a consistent generation.
+`test/unit/pkg-progress-test.el` (children the same way, each logging every step it writes): the progress file always
+a whole object, the plan file before every swap and kept after, the order of the steps, what a plan names,
+`upgrade --only`, `--stage` and `--staged` (a changed cached file refused), the rotation keeping a live session's
+generation and dropping a dead one's, the settings index after upgrade and rollback, and the generations' notes.
+`test/unit/pkg-signed-test.el` signs a fixture archive with a test key made in a temp GNUPGHOME: `:verified` in the
+lock (also through a cache hit with the same hash and through `--stage`/`--staged`, never for MELPA or a file cached
+unchecked), a stripped `.sig` failing the sync with nothing changed, an archive that does not sign naming
+`:unsigned-archives`, no gpg failing the sync and the doctor check, and a stock install refused while a child sync
+holds the lock.
 
 ## Settings of installed packages
 

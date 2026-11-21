@@ -243,17 +243,25 @@ hold: non-nil when drgnx had a value.  A variable modules claim goes through the
                       collect (cons var (make-drgnx-settings-entry :var var :value value :merge merge)))))
     (error nil)))
 
-(defun drgnx-settings-apply--save-applied (pushed)
-  "Remember the entries PUSHED (VAR . ENTRY) over those remembered; a failure is silent (it is only a fallback)."
+(defun drgnx-settings-apply--save-applied (pushed &optional disk)
+  "Remember the entries PUSHED (VAR . ENTRY) over those remembered; a failure is silent (it is only a fallback).
+DISK is what `drgnx-settings-apply--load-applied' gave a moment ago, when the caller has it.  A start that applies
+what the last one did writes nothing (no fsync, no new file), and does not print the entries to find out."
   (when pushed
     (condition-case nil
-        (let ((all (drgnx-settings-apply--load-applied)))
-          (dolist (cell pushed) (setf (alist-get (car cell) all) (cdr cell)))
-          (drgnx-file-write-text
-           (drgnx-settings-apply--applied-file)
-           (drgnx-settings-file--prin1
-            (mapcar (lambda (c) (list (car c) (drgnx-settings-entry-value (cdr c)) (drgnx-settings-entry-merge (cdr c))))
-                    all))))
+        (let ((all (if disk (copy-alist disk) (drgnx-settings-apply--load-applied))) (changed nil))
+          (dolist (cell pushed)
+            (let ((old (cdr (assq (car cell) all))) (new (cdr cell)))
+              (unless (and old (equal (drgnx-settings-entry-value old) (drgnx-settings-entry-value new))
+                           (equal (drgnx-settings-entry-merge old) (drgnx-settings-entry-merge new)))
+                (setq changed t)))
+            (setf (alist-get (car cell) all) (cdr cell)))
+          (when changed
+            (drgnx-file-write-text
+             (drgnx-settings-apply--applied-file)
+             (drgnx-settings-file--prin1
+              (mapcar (lambda (c) (list (car c) (drgnx-settings-entry-value (cdr c)) (drgnx-settings-entry-merge (cdr c))))
+                      all)))))
       (error nil))))
 
 (defun drgnx-settings-apply--run (owned-only)
@@ -269,7 +277,8 @@ applied; one problem says why) or `failed' (its push signalled)."
          (good-entries (and good (drgnx-settings-apply--global-entries good)))
          (problems (unless failed
                      (mapcar (lambda (p) (append (list :file file) p)) (drgnx-settings-doc-problems doc))))
-         (prev (or drgnx-settings-apply--entries (drgnx-settings-apply--load-applied)))
+         (disk (and (null drgnx-settings-apply--entries) (drgnx-settings-apply--load-applied)))   ; a start: read once
+         (prev (or drgnx-settings-apply--entries disk))
          (results nil) (pushed nil))
     (setq drgnx-settings-apply-durations nil)
     (cl-labels ((problem (entry text)
@@ -316,7 +325,7 @@ applied; one problem says why) or `failed' (its push signalled)."
                               (t (let ((why (drgnx-settings-apply--check entry)))
                                    (if why (fall-back entry why) (push-entry entry))))))
                   results)))))
-    (drgnx-settings-apply--save-applied pushed)
+    (drgnx-settings-apply--save-applied pushed disk)
     (setq drgnx-settings-apply--entries (nreverse pushed)
           drgnx-settings-apply-durations (nreverse drgnx-settings-apply-durations)
           drgnx-settings-apply-problems (sort problems (lambda (a b) (< (or (plist-get a :line) 0)

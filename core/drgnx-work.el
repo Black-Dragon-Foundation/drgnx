@@ -13,7 +13,10 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
-(require 'drgnx-work-scan)
+(require 'drgnx-work-db)
+(require 'drgnx-projects)                 ; the board's projects
+(require 'drgnx-deny)                     ; the personal-notes deny-list
+(require 'drgnx-hub-client)               ; `drgnx-hub-call-sync'
 
 (defvar drgnx-work-git-notes nil
   "Non-nil: every recorded link is also written as a git note (refs/notes/drgnx) on its commit,
@@ -35,6 +38,104 @@ the session's own folder is not the place to look (a sandboxed task's `.git' is 
 there): `turn-end' collects nothing, and the job collects when it wants, with `drgnx-work-collect-now', from REPO
 at REF (the user's main repository, trusted).  At the start REF is the commit the task forks from; at collect time,
 the ref that holds the task's result.")
+
+;;;; Git, the hub and the counts
+
+(defun drgnx-work--org-p (dir)
+  "Non-nil when DIR is inside ~/org with the user's opt-ins ignored (the hard tier, as the code indexer reads it):
+no scan root there is read, and no git runs there."
+  (drgnx-deny-path-p (directory-file-name (expand-file-name dir)) t))
+
+(defun drgnx-work--git (dir &rest args)
+  "git ARGS in DIR: its output (trimmed) or nil.  Nil too in a job's snapshot folder, where the VC guard refuses git
+(`drgnx-sandbox-vc'): the tracker reads the main repository (`drgnx-work-source-functions'); and inside ~/org
+\(`drgnx-work--org-p'), where git never runs."
+  (when (and (not (drgnx-work--org-p dir)) (file-directory-p dir))
+    (with-temp-buffer
+      (let ((default-directory (file-name-as-directory dir)))
+        (condition-case nil
+            (when (eql 0 (apply #'call-process "git" nil t nil args)) (string-trim (buffer-string)))
+          (drgnx-sandbox-guarded nil))))))
+
+(defun drgnx-work--main-repo (dir)
+  "The repository DIR belongs to — its main checkout, never a linked worktree (which may go) — or nil."
+  (when-let* ((common (drgnx-work--git dir "rev-parse" "--path-format=absolute" "--git-common-dir")))
+    (file-name-as-directory (if (equal (file-name-nondirectory (directory-file-name common)) ".git")
+                                (file-name-directory (directory-file-name common))
+                              common))))
+
+(defun drgnx-work--log (repo &rest args)
+  "The commits `git log ARGS' lists in REPO, newest first: ((SHA DATE SUBJECT)…)."
+  (mapcar (lambda (l) (let ((p (split-string l "\t"))) (list (car p) (string-to-number (nth 1 p)) (or (nth 2 p) ""))))
+          (split-string (or (apply #'drgnx-work--git repo "log" "--format=%H%x09%ct%x09%s" args) "") "\n" t)))
+
+(defun drgnx-work--commit-seqs (repo infos)
+  "The place of each of the commits INFOS (`drgnx-work--log', newest first) of REPO among its commits: older commits
+have fewer ancestors (dates tie within a second) — one count for them all.  A list, as INFOS."
+  (let ((depth (and infos (string-to-number (or (drgnx-work--git repo "rev-list" "--count" (caar infos)) "0")))))
+    (seq-map-indexed (lambda (_c i) (- i depth)) infos)))
+
+;;;; Counts and recorded links
+
+(defun drgnx-work-counts (plan)
+  "(:tasks (DONE . ALL) :steps (DONE . ALL) :todos (DONE . ALL) :commits N) of PLAN."
+  (let* ((kids (drgnx-work-children plan))
+         (tasks (seq-filter (lambda (n) (eq (plist-get n :kind) 'task)) kids))
+         (todos (seq-filter (lambda (n) (eq (plist-get n :kind) 'todo)) kids))
+         (task-kids (seq-mapcat (lambda (tk) (drgnx-work-children (plist-get tk :id))) tasks))
+         (done-tasks (mapcar (lambda (tk) (plist-get tk :id)) (seq-filter (lambda (n) (equal (plist-get n :status) "done")) tasks)))
+         ;; a step is done when ticked, or when its task is complete (ledgers rarely tick the plan)
+         (steps (mapcar (lambda (n) (if (member (plist-get n :parent) done-tasks) (plist-put (copy-sequence n) :status "done") n))
+                        (seq-filter (lambda (n) (eq (plist-get n :kind) 'step)) task-kids)))
+         ;; the commits of its tasks, its TODOs and the plan itself
+         (commits (delete-dups (mapcar (lambda (n) (plist-get n :id))
+                                       (seq-filter (lambda (n) (eq (plist-get n :kind) 'commit))
+                                                   (append kids task-kids (seq-mapcat (lambda (td) (drgnx-work-children (plist-get td :id))) todos))))))
+         (done (lambda (l) (cons (seq-count (lambda (n) (equal (plist-get n :status) "done")) l) (length l)))))
+    (list :tasks (funcall done tasks) :steps (funcall done steps) :todos (funcall done todos) :commits (length commits))))
+
+(defvar drgnx-work--sync nil
+  "Non-nil in the batch commands (`drgnx work record|scan'): a hub call waits for its answer (`drgnx-hub-call-sync'),
+which a `--batch' Emacs needs.  Nil everywhere else, the editor's daemon paths above all: the call is asynchronous.")
+
+(declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
+
+(defun drgnx-work--hub-failed (text)
+  "Tell the user once that a call to the hub failed (the notice replaces its predecessor: one at a time)."
+  (require 'drgnx-notice)
+  (drgnx-notify 'hub 'warn (format "drgnx hub: %s" text) :id 'work-record))
+
+(defun drgnx-work--hub (method params &optional on-result)
+  "Call the hub's METHOD with PARAMS (a plist).  In a batch command (`drgnx-work--sync') it waits and returns the
+result (ON-RESULT, if given, turns it into the value); anywhere else it only asks, never waits and returns nil: an
+error shows once as \"drgnx hub: TEXT\"."
+  (if drgnx-work--sync
+      (let ((r (drgnx-hub-call-sync method params 30))) (if on-result (funcall on-result r) r))
+    (condition-case err
+        (drgnx-hub-call method params
+                        (lambda (r e)
+                          (cond (e (drgnx-work--hub-failed e))
+                                (on-result (funcall on-result r)))))
+      (error (drgnx-work--hub-failed (error-message-string err))))
+    nil))
+
+(defun drgnx-work-record-commits (task repo infos &optional collected)
+  "Record that the commits INFOS (`drgnx-work--log', newest first) of REPO did TASK (a node id) — kept across every
+rescan — through the hub (`graph/record'; COLLECTED is the job collector's key, `job ID').  In a batch command their
+ids; elsewhere nil (the call is asynchronous)."
+  (let* ((repo (or (drgnx-work--main-repo repo) repo))
+         (seqs (drgnx-work--commit-seqs repo infos))
+         (params (append (list :task task :repo (directory-file-name repo)
+                               :commits (vconcat (cl-mapcar (lambda (c sq) (list :sha (nth 0 c) :date (nth 1 c) :subject (nth 2 c) :seq sq))
+                                                            infos seqs)))
+                         (and collected (list :collected collected)))))
+    (drgnx-work--hub "graph/record" params (lambda (r) (append (plist-get r :ids) nil)))))
+
+(defun drgnx-work-record (task repo sha)
+  "Record that commit SHA of REPO did TASK (a node id); in a batch command its node id, or nil when REPO has no SHA
+\(elsewhere nil: the call is asynchronous)."
+  (when-let* ((infos (drgnx-work--log repo "-1" sha)))
+    (car (drgnx-work-record-commits task repo infos))))
 
 ;;;; Recording
 
@@ -232,11 +333,28 @@ nothing to record."
                                    (append drgnx-work-roots
                                            (delq nil (mapcar (lambda (p) (plist-get p :root)) (plist-get (drgnx-projects-read) :projects))))))))
 
-(defun drgnx-work-refresh (&optional roots board)
-  "Scan ROOTS (default: `drgnx-work-default-roots') and BOARD (default: the board), and collect ended jobs."
-  (require 'drgnx-projects)
-  (prog1 (drgnx-work-scan (or roots (drgnx-work-default-roots)) :board (or board (drgnx-projects-board-file)))
-    (drgnx-work-collect-jobs)))
+(defun drgnx-work-refresh (&optional roots)
+  "Have the hub read the records of ROOTS (default: `drgnx-work-default-roots') and of the board
+\(`drgnx-projects-board-file', the one file of ~/org the product reads: `records/import' with only=board) — the importer
+that adopts specs, plans, ledgers and the board's plan links — and collect ended jobs.  In a batch command
+\(`drgnx-work--sync') it waits and answers (:files N :refused LIST): N the files the hub's imports list, LIST the roots
+it refused (a project inside ~/org: the user's personal notes are never read), each (:source (:path ROOT) :why TEXT),
+TEXT the hub's own words; elsewhere the calls are asynchronous and it answers nil."
+  (let ((files 0) (refused nil)
+        (board (drgnx-projects-board-file)))
+    (dolist (call (append (mapcar (lambda (r) (list :root (directory-file-name r))) (or roots (drgnx-work-default-roots)))
+                          ;; the board last: its items link to the plans just read
+                          (and (file-exists-p board)
+                               (list (list :root (directory-file-name (file-name-directory board)) :only "board")))))
+      (if drgnx-work--sync
+          (condition-case err
+              (cl-incf files (length (plist-get (drgnx-hub-call-sync "records/import" call 60) :files)))
+            (error (push (list :source (list :path (plist-get call :root))
+                               :why (string-remove-prefix "drgnx hub: " (error-message-string err)))
+                         refused)))
+        (drgnx-work--hub "records/import" call)))
+    (drgnx-work-collect-jobs)
+    (and drgnx-work--sync (list :files files :refused (nreverse refused)))))
 
 ;;;; Command line
 
@@ -293,8 +411,7 @@ wait for it (`drgnx-work--sync'); with no hub they say so, write nothing and fai
                    bad))))))
           (`("scan" . ,rest)
            (if (not (drgnx-work--ensure-hub)) 1
-             (let* ((board (when (equal (car rest) "--board") (pop rest) (expand-file-name (pop rest))))
-                    (t0 (float-time)) (r (drgnx-work-refresh (mapcar #'expand-file-name rest) board)))
+             (let* ((t0 (float-time)) (r (drgnx-work-refresh (mapcar #'expand-file-name rest))))
                (dolist (x (plist-get r :refused))
                  (drgnx-work--print "refused: %s (%s)" (or (plist-get (plist-get x :source) :path) (plist-get x :id) "?") (plist-get x :why)))
                (drgnx-work--print "%d files read in %.2f s; %d plans, %d specs (%s)" (plist-get r :files) (- (float-time) t0)
@@ -315,7 +432,7 @@ wait for it (`drgnx-work--sync'); with no hub they say so, write nothing and fai
                                         (funcall c :tasks) (funcall c :steps) (funcall c :todos) (plist-get r :commits)
                                         (plist-get r :title) (if (plist-get r :branch) (format "  [%s]" (plist-get r :branch)) ""))))))
              0))
-          (_ (drgnx-work--print "usage: drgnx work record [--task ID] [SHA…] | scan [--board FILE] [DIR…] | status [--json]") 2)))
+          (_ (drgnx-work--print "usage: drgnx work record [--task ID] [SHA…] | scan [DIR…] | status [--json]") 2)))
     (error (drgnx-work--print "drgnx work: %s" (error-message-string err)) 1)))
 
 (defun drgnx-work-cli ()

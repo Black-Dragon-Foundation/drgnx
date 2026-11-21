@@ -49,7 +49,7 @@
 
 (defun drgnx-wm-move--start (monitors saved)
   "Start a daemon session with MONITORS outputs, its layout file SAVED; return the session."
-  (let ((s (drgnx-ui-start "drgnx" "1280x800" 60 t monitors (drgnx-ui-default-compositor))))
+  (let ((s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1280x800") 60 t monitors (drgnx-ui-default-compositor))))
     ;; the callers' `unwind-protect' starts after this returns: a failure here stops the session itself
     (condition-case err
         (let ((sess (drgnx-ui-own-session (plist-get s :name))))
@@ -72,7 +72,7 @@
 (defun drgnx-wm-move--aux (sess)
   "Move the shown file of SESS's main window into a new window; it is `drgnx-wmt-aux'.  Waits until it is mapped."
   (drgnx-wm-move--eval
-   sess "(progn (with-selected-frame drgnx-wmt-main (drgnx-frames-move-editor) (setq drgnx-wmt-aux (selected-frame))) t)")
+   sess "(progn (with-selected-frame drgnx-wmt-main (drgnx-grid-move-tab-to-new-frame) (setq drgnx-wmt-aux (selected-frame))) t)")
   (should (drgnx-wm-move--until
            (lambda () (eql 2 (drgnx-wm-move--eval sess "(length (drgnx-wmt-gui-frames))")))))
   ;; the window manager has put it somewhere
@@ -320,7 +320,7 @@ Under X the window manager (or the pointer) gives Emacs the real event."
               (let ((r (drgnx-wm-move--move sess 2)))
                 (should (eq :error (car-safe r)))
                 (should (string-match-p "its own key" (cadr r))))
-              (drgnx-test-pause 1 "the window may not move")
+              ;; the move was refused (the error above): no request was sent, so none can move the window
               (should (equal (drgnx-wm-move--eval sess where) before))))
         (drgnx-ui-stop (plist-get sess :name))))))
 

@@ -71,14 +71,24 @@
                   nil script nil 'silent)
     (set-file-modes script #o755)))
 
+(defun drgnx-agent-check-test--scope-kills-ended ()
+  "Wait until every `systemctl' a check started to clear its scope has ended.  A check does not wait for it, and the
+fake one logs into the fixture's temp dir: the teardown deletes that dir only once nothing writes there."
+  (when-let* ((kills (cl-remove-if-not (lambda (p) (and (string-prefix-p "drgnx-check-kill" (process-name p))
+                                                        (process-live-p p)))
+                                       (process-list))))
+    (drgnx-test-wait-ended kills :what "the systemctl calls of the checks ended")))
+
 (defmacro drgnx-agent-check-test-env (&rest body)
   "BODY in the agent settings fixture (temp state dir), no systemd scope (the user's manager is not touched),
-with the HTTP mock stopped afterwards."
+with the HTTP mock stopped and the checks' `systemctl' calls ended afterwards."
   (declare (indent 0))
   `(let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=detached" process-environment)))
      (drgnx-agent-config-test-env
        (drgnx-agent-check-test--fake-systemctl "exit 1")
-       (unwind-protect (progn ,@body) (drgnx-mock-mcp-http-stop)))))
+       (unwind-protect (progn ,@body)
+         (drgnx-mock-mcp-http-stop)
+         (drgnx-agent-check-test--scope-kills-ended)))))
 
 (ert-deftest drgnx-agent-check/mcp-ok-lists-tools ()
   (drgnx-agent-check-test-env
@@ -805,6 +815,13 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
   "Start a check of a hanging server (the child's own timeout is 3 s, this Emacs ends it after 1)."
   (drgnx-agent-check-mcp (drgnx-agent-check-test--stdio-item "fork-child" marker) default-directory callback))
 
+(defun drgnx-agent-check-test--no-timer-left ()
+  "Wait until no timer of a check is pending.  A second result could only come from one (the limit, the backstop, the
+kill, the tree or the finish timer), so once none is left and the check has answered, no other answer can follow."
+  (drgnx-test-wait (lambda () (not (seq-find (lambda (k) (string-prefix-p "agent-check" (symbol-name (car-safe k))))
+                                             (mapcar #'car (drgnx-timer-pending)))))
+                   :secs 10 :what "no check timer pending"))
+
 (ert-deftest drgnx-agent-check/a-systemctl-that-hangs-does-not-hang-the-check ()
   :tags '(:timing)                                      ; wall-clock budget: the :timing group runs alone
   (drgnx-agent-check-test-env
@@ -820,7 +837,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
         (should (drgnx-agent-check-test--gone-p marker))
         ;; the hanging systemctl was deleted
         (should (drgnx-agent-check-test--gone-p "sleep 3176"))
-        (drgnx-test-pause 0.5 "no second result")
+        (drgnx-agent-check-test--no-timer-left)
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-systemctl-that-cannot-be-started-falls-back-to-the-tree ()
@@ -841,7 +858,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
         ;; at the timer's 1 s plus the child's start, long before the 3 s backstop
         (should (< (plist-get result :time) 2.8))
         (should (drgnx-agent-check-test--gone-p marker))
-        (drgnx-test-pause 0.5 "no second result")
+        (drgnx-agent-check-test--no-timer-left)
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-timer-in-a-buffer-with-no-directory-still-ends-the-check ()
@@ -863,7 +880,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
         (should (< (plist-get result :time) 2.8))
         (should (drgnx-agent-check-test--gone-p marker))
         (should (member "--user kill --signal=KILL drgnx-check-fake.scope" (drgnx-agent-check-test--systemctl-log)))
-        (drgnx-test-pause 0.5 "no second result")
+        (drgnx-agent-check-test--no-timer-left)
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-finished-check-asks-systemd-to-clear-its-scope ()
@@ -893,6 +910,20 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
       (let ((r (drgnx-agent-check-test--mcp (drgnx-agent-check-test--stdio-item "oom" (drgnx-agent-check-test--marker)) root)))
         (should (string-search "signal 9" (plist-get r :error)))
         (should (string-search "512M" (plist-get r :error)))))))
+
+(ert-deftest drgnx-agent-check/the-test-env-ends-after-the-systemctl-a-check-started ()
+  ;; Pattern C (handshake): a check that ends asks systemd to clear its scope and does not wait for the answer; the fake
+  ;; `systemctl' logs into the test's temp dir and then parks on its stdin, so it still runs when the body returns.
+  ;; The teardown deletes the temp dir only once it has ended (here through the check's own 3 s deletion).
+  (let (kill)
+    (drgnx-agent-check-test-env
+      (drgnx-agent-check-test-with-fake-scope "read go"
+        (let ((r (drgnx-agent-check-test--mcp (drgnx-agent-check-test--stdio-item "oom" (drgnx-agent-check-test--marker)) root)))
+          (should (string-search "512M" (plist-get r :error)))
+          (setq kill (cl-find-if (lambda (p) (and (string-prefix-p "drgnx-check-kill" (process-name p)) (process-live-p p)))
+                                 (process-list)))
+          (should kill))))
+    (should-not (process-live-p kill))))
 
 (ert-deftest drgnx-agent-check/names-from-this-emacs-that-are-not-secrets ()
   (let* ((process-environment

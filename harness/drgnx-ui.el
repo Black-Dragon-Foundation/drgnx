@@ -25,7 +25,9 @@
 (declare-function drgnx-perf-run "drgnx-perf-run")
 (declare-function drgnx-perf-ab-env "drgnx-perf-run")
 (declare-function drgnx-perf-ab "drgnx-perf-run")
+(declare-function drgnx-perf-check-island "drgnx-perf" (&optional island allowed)) ; loaded by drgnx-perf-run
 (declare-function drgnx-bench-run "drgnx-bench")
+(declare-function drgnx-look-scenes-run "drgnx-look-scenes")
 
 (defconst drgnx-ui-harness-dir (file-name-directory (or load-file-name buffer-file-name)))
 (defconst drgnx-ui-repo-dir (file-name-directory (directory-file-name drgnx-ui-harness-dir)))
@@ -48,8 +50,9 @@ this at an exported REF.")
   "The MCP client's token (`drgnx-ui-mcp--token') while it starts a session: session.json's :owner :client.")
 (defconst drgnx-ui-keep-env
   '("USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE"
-    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_MODAL_ELPA" "DRGNX_CHILDFRAME_ELPA" "DRGNX_CHILDFRAME_REQUIRED" "DRGNX_LEASE_HELD" "DRGNX_PERF_GLITNIR"
-    "DRGNX_PERF_WATCHDOG")
+    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_UITEST_TICK" "DRGNX_MODAL_ELPA" "DRGNX_CHILDFRAME_ELPA" "DRGNX_CHILDFRAME_REQUIRED" "DRGNX_LEASE_HELD" "DRGNX_PERF_GLITNIR"
+    "DRGNX_TEST_ALLOW_NO_MAGIT" "DRGNX_USER_ELPA"
+    "DRGNX_PERF_WATCHDOG" "DRGNX_PERF_WORKERS")
   "The only variables a session inherits; everything else (keys, tokens) stays out.  Not HOME: a session's is
 RUN/home (`drgnx-ui-session-env').")
 (defvar drgnx-ui-session-tier 'ui
@@ -104,20 +107,135 @@ bind around their `drgnx-ui-start'.")
                 (file-missing (insert (error-message-string err)) 127))))
       (cons rc (buffer-string)))))
 
+;;;; Waits that count progress, not wall time
+
+(defconst drgnx-ui-progress-cap-factor 10
+  "A progress clock's cap (`drgnx-ui-progress'): this many times its limit, at least `drgnx-ui-progress-cap-min' s.")
+
+(defconst drgnx-ui-progress-cap-min 60
+  "The least cap of a progress clock, in seconds.")
+
+(defun drgnx-ui--run-of (pid)
+  "The run directory process PID belongs to (its DRGNX_UI_RUN), or nil where /proc cannot tell."
+  (let ((file (format "/proc/%d/environ" pid)))
+    (when (file-readable-p file)
+      (with-temp-buffer
+        (set-buffer-multibyte nil)
+        (ignore-errors (insert-file-contents-literally file))
+        (seq-some (lambda (kv) (and (string-prefix-p "DRGNX_UI_RUN=" kv) (substring kv 13)))
+                  (split-string (buffer-string) "\0" t))))))
+
+(defun drgnx-ui--run-pids (run)
+  "This user's processes of the session in RUN (their DRGNX_UI_RUN is RUN), never this one: the session's Emacs and
+what it started, a hub (`ratatoskr ensure' detaches it) or any other child whose command line names no part of RUN."
+  (seq-filter (lambda (pid) (and (/= pid (emacs-pid)) (equal (drgnx-ui--run-of pid) run)))
+              (mapcar #'string-to-number (directory-files "/proc" nil "\\`[0-9]+\\'"))))
+
+(defvar drgnx-ui--pids-cache nil "(RUN TIME . PIDS): the last `drgnx-ui--session-pids'.")
+
+(defun drgnx-ui--session-pids (run)
+  "`drgnx-ui--run-pids' of RUN, at most a second old: a wait looks at them every 50 ms, and a scan reads every
+process's environment."
+  (let ((c drgnx-ui--pids-cache))
+    (if (and c (equal (car c) run) (< (- (float-time) (cadr c)) 1))
+        (cddr c)
+      (cddr (setq drgnx-ui--pids-cache (cons run (cons (float-time) (drgnx-ui--run-pids run))))))))
+
+(defun drgnx-ui-session-pids-fn (sess)
+  "A function of no arguments giving SESS's processes (`drgnx-ui--session-pids' of its run), or nil when SESS has
+no run directory."
+  (let ((run (plist-get sess :run)))
+    (and run (lambda () (drgnx-ui--session-pids run)))))
+
+(defvar drgnx-ui--progress-pids nil
+  "A function giving the processes, beside its own, whose progress a `drgnx-ui--run-with-timeout' counts, or nil.")
+
+(defun drgnx-ui--schedstat (pid)
+  "The seconds PID has run plus waited to run (/proc/PID/schedstat: on a CPU, on a run queue), or nil once it is
+gone."
+  (let ((s (ignore-errors (with-temp-buffer (insert-file-contents (format "/proc/%d/schedstat" pid))
+                                            (split-string (buffer-string))))))
+    (and s (/ (+ (string-to-number (nth 0 s)) (string-to-number (nth 1 s))) 1e9))))
+
+(defun drgnx-ui--proc-stat (pid)
+  "(COMM . STATE) of PID from /proc/PID/stat (STATE one letter as a string: R, S, D …), or nil once it is gone."
+  (let ((stat (ignore-errors (with-temp-buffer (insert-file-contents (format "/proc/%d/stat" pid)) (buffer-string)))))
+    (and stat (string-match "(\\(.*\\)) \\([A-Za-z]\\)" stat)
+         (cons (match-string 1 stat) (match-string 2 stat)))))
+
+(defun drgnx-ui--proc-state (pid)
+  "PID's state letter (`drgnx-ui--proc-stat'), or nil once it is gone."
+  (cdr (drgnx-ui--proc-stat pid)))
+
+(defun drgnx-ui--proc-states (pids)
+  "PIDS as \"COMM STATE WCHAN\" each (/proc/PID/stat and wchan), comma-separated: what a stuck wait was waiting on."
+  (mapconcat (lambda (pid)
+               (let ((stat (drgnx-ui--proc-stat pid))
+                     (wchan (ignore-errors (with-temp-buffer (insert-file-contents (format "/proc/%d/wchan" pid))
+                                                             (buffer-string)))))
+                 (if stat (format "%s %s %s" (car stat) (cdr stat) (or wchan "?")) (format "%d gone" pid))))
+             pids ", "))
+
+(cl-defstruct (drgnx-ui-progress (:constructor drgnx-ui--progress-new) (:copier nil))
+  limit cap start last pids-fn samples (slept 0.0))
+
+(defun drgnx-ui--progress-sample (clock)
+  "((PID . SECONDS)…) of CLOCK's processes now (`drgnx-ui--schedstat')."
+  (delq nil (mapcar (lambda (pid) (let ((s (drgnx-ui--schedstat pid))) (and s (cons pid s))))
+                    (delete-dups (funcall (drgnx-ui-progress-pids-fn clock))))))
+
+(defun drgnx-ui-progress (limit pids-fn)
+  "A clock for a wait of LIMIT s on the processes PIDS-FN gives (a function of no arguments, asked at each look).
+The wait is over once those processes together slept LIMIT s: time in which none of them ran or waited to run
+\(their schedstat).  A process that runs, or that a loaded machine keeps waiting for a CPU or the disk (state D),
+is making progress, so starvation never ends a wait; a process blocked on something that never comes (a prompt, a
+key, a lost message) ends it at LIMIT as before.  The cap, `drgnx-ui-progress-cap-factor' times LIMIT (at least
+`drgnx-ui-progress-cap-min' s) of wall time, ends a wait whose processes never stop running or stay on the disk.
+`drgnx-ui-progress-over' says when it is over."
+  (let* ((now (float-time))
+         (clock (drgnx-ui--progress-new :limit limit :start now :last now :pids-fn pids-fn
+                                        :cap (max drgnx-ui-progress-cap-min (* drgnx-ui-progress-cap-factor limit)))))
+    (setf (drgnx-ui-progress-samples clock) (drgnx-ui--progress-sample clock))
+    clock))
+
+(defun drgnx-ui-progress-over (clock)
+  "Nil while CLOCK's wait goes on; else why it is over, as text: its processes slept its limit, or the cap passed."
+  (let* ((now (float-time))
+         (old (drgnx-ui-progress-samples clock))
+         (new (drgnx-ui--progress-sample clock))
+         (active 0.0))
+    (dolist (s new)
+      (let ((o (assq (car s) old))) (when o (setq active (+ active (- (cdr s) (cdr o)))))))
+    ;; a process in uninterruptible sleep waits on the disk (a filesystem commit on a loaded machine): progress,
+    ;; slowly, so the time is not charged; one stuck there for good ends the wait at the cap
+    (let ((idle (- now (drgnx-ui-progress-last clock) active)))
+      (when (and (> idle 0) (not (seq-some (lambda (s) (equal (drgnx-ui--proc-state (car s)) "D")) new)))
+        (cl-incf (drgnx-ui-progress-slept clock) idle)))
+    (setf (drgnx-ui-progress-last clock) now (drgnx-ui-progress-samples clock) new)
+    (cond ((>= (drgnx-ui-progress-slept clock) (drgnx-ui-progress-limit clock))
+           (format "its processes made no progress for %ss (%d watched: %s)" (drgnx-ui-progress-limit clock) (length new)
+                   (drgnx-ui--proc-states (mapcar #'car new))))
+          ((>= (- now (drgnx-ui-progress-start clock)) (drgnx-ui-progress-cap clock))
+           (format "its processes still ran at the %ss cap (%d watched)" (drgnx-ui-progress-cap clock)
+                   (length new))))))
+
 (defun drgnx-ui--run-with-timeout (timeout program &rest args)
-  "Run PROGRAM with ARGS for at most TIMEOUT seconds; return (EXIT OUTPUT).
-EXIT is the symbol `timeout' when the process had to be killed."
+  "Run PROGRAM with ARGS until it ends or TIMEOUT s run out on a progress clock (`drgnx-ui-progress') over PROGRAM's
+process and `drgnx-ui--progress-pids'' ones: a program starved of CPU is never out of time.  Return (EXIT OUTPUT).
+EXIT is the symbol `timeout' when the process had to be killed, and OUTPUT then says why (`drgnx-ui-progress-over')."
   (let* ((buf (generate-new-buffer " *drgnx-ui*"))
          (proc (make-process :name "drgnx-ui" :buffer buf :command (cons program args)
                              :connection-type 'pipe :noquery t :coding 'utf-8-unix
                              :sentinel #'ignore))
-         (deadline (+ (float-time) timeout)))
+         (more drgnx-ui--progress-pids)
+         (clock (drgnx-ui-progress timeout (lambda () (cons (process-id proc) (and more (funcall more))))))
+         over)
     (unwind-protect
         (progn
-          (while (and (process-live-p proc) (< (float-time) deadline))
+          (while (and (process-live-p proc) (not (setq over (drgnx-ui-progress-over clock))))
             (accept-process-output proc 0.05))
           (if (process-live-p proc)
-              (progn (delete-process proc) (list 'timeout ""))
+              (progn (delete-process proc) (list 'timeout (or over "")))
             (while (accept-process-output proc 0))
             (list (process-exit-status proc) (with-current-buffer buf (buffer-string)))))
       (kill-buffer buf))))
@@ -159,6 +277,9 @@ EXIT is the symbol `timeout' when the process had to be killed."
 (declare-function drgnx-paths-recorded-emacs "drgnx-paths")
 (declare-function drgnx-emacs-program "drgnx-paths")
 (declare-function drgnx-run-ert--printable "run-ert")
+(declare-function drgnx-run-ert--end-process "run-ert")
+(declare-function drgnx-run-ert--files "run-ert")
+(declare-function drgnx-run-ert--file-selected-p "run-ert")
 (declare-function drgnx-run-ert-trampolines "run-ert")
 (declare-function drgnx-run-ert-trampolines-stayed-p "run-ert")
 
@@ -312,12 +433,12 @@ does not hold it and tries again.  It removes the lock afterwards only while the
             (ignore-errors (drgnx-ui--write (expand-file-name "owner" lock) token))
             (if (equal (drgnx-ui--lock-token lock) token)
                 (setq held t)
-              (sleep-for 0.02)))
+              (drgnx-ui--poll-pause 0.02)))
         ;; the age is read again right before the removal, so a lock another taker just made is left alone
         (when (and (drgnx-ui--lock-stale-p lock) (drgnx-ui--lock-stale-p lock))
           (ignore-errors (delete-directory lock t)))
         ;; still there (held, or an old one that cannot be removed): wait, never spin
-        (when (file-exists-p lock) (sleep-for 0.02))))
+        (when (file-exists-p lock) (drgnx-ui--poll-pause 0.02))))
     (when held
       (unwind-protect (funcall fn)
         (when (equal (drgnx-ui--lock-token lock) token)
@@ -610,6 +731,16 @@ without its \"drgnx-ui-\" (the socket inside it has the whole NAME)."
 (defun drgnx-ui--save (sess)
   (drgnx-ui--write (expand-file-name "session.json" (plist-get sess :run)) (drgnx-ui--json sess)))
 
+(defun drgnx-ui-size-at-scale (size)
+  "SIZE (\"WxH\"), the monitor a row names at scale 1, in device pixels at the tier's scale: the same logical
+monitor at every scale.  The tier's scale is the largest of $DRGNX_UI_SCALES, else $DRGNX_UI_SCALE, else 1.
+Mutter has no scale 2 for a monitor that small in device pixels: 1400x800 at 2 is 700x400 logical, below its
+minimum (\"Scale 2.0 not supported by mode\"), and the session never starts."
+  (let* ((env (let ((l (getenv "DRGNX_UI_SCALES"))) (if (member l '(nil "")) (getenv "DRGNX_UI_SCALE") l)))
+         (s (apply #'max 1 (mapcar #'string-to-number (split-string (or env "") " " t))))
+         (wh (mapcar #'string-to-number (split-string size "x"))))
+    (format "%dx%d" (round (* s (car wh))) (round (* s (cadr wh))))))
+
 (defun drgnx-ui-prepare-run (name &optional config size root daemon monitors compositor scales)
   "Create the run directory for session NAME under ROOT; return the session plist.
 DAEMON non-nil: Emacs runs as a daemon (no frame until `drgnx-ui-new-frame').
@@ -694,7 +825,7 @@ variables (a later entry wins): a test puts a package's directory on the daemon'
 \(`drgnx-tty-session-kitty-start').  Nil for every session the CLI and the MCP server start.  Only names in
 `drgnx-ui-session-extra-env-names' are taken; anything else signals.")
 
-(defconst drgnx-ui-session-extra-env-names '("EMACSLOADPATH" "DRGNX_PERF_GLITNIR" "DRGNX_PERF_WATCHDOG")
+(defconst drgnx-ui-session-extra-env-names '("EMACSLOADPATH" "DRGNX_PERF_GLITNIR" "DRGNX_PERF_WATCHDOG" "DRGNX_PERF_WORKERS")
   "The variables `drgnx-ui-session-extra-env' may set.  Not HOME, DISPLAY, the bus, XDG_RUNTIME_DIR or TMPDIR:
 a later entry wins, so one of those would move a session out of its run directory or onto the user's desktop.")
 
@@ -815,7 +946,10 @@ its log (UI-SCALE-1: an image without gdctl's python3-gobject started every sess
     ;; the virtual backend: no GPU, one output per monitor; no XWayland (no X display in the shared /tmp)
     ("kwin" (let ((size (split-string (plist-get sess :size) "x")))
               (append
-               (list "dbus-run-session" "--" "kwin_wayland" "--virtual" "--width" (car size) "--height" (cadr size)
+               ;; KWin offers its fake input (the harness's pointer and keyboard, `drgnx-uitest--kwin-fake-input') only
+               ;; to clients it trusts; the test session's KWin trusts every client
+               (list "dbus-run-session" "--" "env" "KWIN_WAYLAND_NO_PERMISSION_CHECKS=1"
+                     "kwin_wayland" "--virtual" "--width" (car size) "--height" (cadr size)
                      "--output-count" (number-to-string (or (plist-get sess :monitors) 1)))
                ;; the scales are set by RUN/kwin-session.sh (kscreen-doctor)
                (list "--socket" "wayland-1" "--no-lockscreen" "--no-global-shortcuts"
@@ -951,8 +1085,15 @@ so `drgnx-ui-prepare-run' refuses it — moves on to the next one."
   "Sessions this process started and has not stopped: (NAME . STATE-ROOT), or (:group . RUN) for a test-suite
 session.")
 
-(defun drgnx-ui--own-add (name root) (push (cons name root) drgnx-ui--own))
-(defun drgnx-ui--own-remove (name) (setq drgnx-ui--own (seq-remove (lambda (e) (equal (car e) name)) drgnx-ui--own)))
+(defun drgnx-ui--own-set (own)
+  "Set `drgnx-ui--own' to OWN.  `drgnx-ui--stop-own-on-exit' is on `kill-emacs-hook' exactly while OWN holds an
+entry, so a process that only loads this file (a GUI test's fixture, for the progress clock) leaves no hook behind."
+  (setq drgnx-ui--own own)
+  (if own (add-hook 'kill-emacs-hook #'drgnx-ui--stop-own-on-exit)
+    (remove-hook 'kill-emacs-hook #'drgnx-ui--stop-own-on-exit)))
+
+(defun drgnx-ui--own-add (name root) (drgnx-ui--own-set (cons (cons name root) drgnx-ui--own)))
+(defun drgnx-ui--own-remove (name) (drgnx-ui--own-set (seq-remove (lambda (e) (equal (car e) name)) drgnx-ui--own)))
 
 (defun drgnx-ui--stop-no-block (name root)
   "Tell session NAME's systemd unit (of state ROOT) to stop, without waiting; nothing if it is not this root's unit."
@@ -972,9 +1113,7 @@ Without it nothing is stopped: `drgnx ui start' sessions are meant to outlive th
         (if (eq (car e) :group) (drgnx-ui--kill-group (cdr e))
           (let ((process-environment (cons (concat "DRGNX_UI_STATE=" (cdr e)) process-environment)))
             (drgnx-ui-stop (car e))))))
-    (setq drgnx-ui--own nil)))
-
-(add-hook 'kill-emacs-hook #'drgnx-ui--stop-own-on-exit)
+    (drgnx-ui--own-set nil)))
 
 (defun drgnx-ui--claim-and-launch (config size root &optional daemon monitors compositor scales)
   "Claim a name in ROOT and launch the session's processes; the session plist.  Unit names are the
@@ -1022,6 +1161,11 @@ OVERRIDE (from $DRGNX_UI_LAUNCHER) wins."
   (drgnx-ui--choose-launcher (drgnx-env-container) (drgnx-env-systemd-user-p)
                              (getenv "DRGNX_UI_LAUNCHER")))
 
+(defun drgnx-ui--poll-pause (seconds)
+  "The pause between two looks of a poll for an event (a file, a lock, a process group's end): `sleep-for' SECONDS.
+The runtime audit knows it as an event wait, not a wait on time (`drgnx-run-ert--audit-event-polls')."
+  (sleep-for seconds))
+
 (defun drgnx-ui--read-pgid (run)
   (let ((file (expand-file-name "pgid" run)))
     (and (file-exists-p file)
@@ -1038,6 +1182,7 @@ OVERRIDE (from $DRGNX_UI_LAUNCHER) wins."
          (deadline (+ (float-time) 5)))
     ;; The caps of the systemd launcher: RuntimeMaxSec (timeout TERMs the group, KILLs it 10 s later) and a
     ;; virtual-memory ulimit (generous, since a GL stack maps a lot; MemoryMax=3G is the systemd one).
+    ;; timeout is exec'd: as the session's leader it cannot leave the group (it makes a group of its own when it can).
     (call-process "setsid" nil 0 nil "-f" "sh" "-c"
                   (format "echo $$ > %s; ulimit -v %d 2>/dev/null; exec timeout -k 10 %s %s > %s 2>&1"
                           (shell-quote-argument (expand-file-name "pgid" run))
@@ -1045,16 +1190,33 @@ OVERRIDE (from $DRGNX_UI_LAUNCHER) wins."
                           (shell-quote-argument (or (getenv "DRGNX_UI_MAX_RUNTIME") "1800")) cmd
                           (shell-quote-argument (expand-file-name "session.log" run))))
     (while (and (not (drgnx-ui--read-pgid run)) (< (float-time) deadline))
-      (sleep-for 0.02))
-    (or (drgnx-ui--read-pgid run) (drgnx-ui--fail "setsid did not start %s" (plist-get sess :name)))))
+      (drgnx-ui--poll-pause 0.02))
+    (let ((pgid (or (drgnx-ui--read-pgid run) (drgnx-ui--fail "setsid did not start %s" (plist-get sess :name)))))
+      ;; the leader's start time names the group as this session's even while the leader execs (`drgnx-ui--group-ours-p')
+      (when-let* ((start (drgnx-ui--proc-start (string-to-number pgid))))
+        (write-region start nil (expand-file-name "pgid-start" run) nil 'silent))
+      pgid)))
+
+(defun drgnx-ui--proc-start (pid)
+  "PID's start time (field 22 of /proc/PID/stat, in clock ticks since boot) as a string, or nil once it is gone.
+It stays the same across an exec, unlike the command line."
+  (let ((stat (ignore-errors (with-temp-buffer (insert-file-contents (format "/proc/%d/stat" pid)) (buffer-string)))))
+    (and stat (string-match "\\`[^z-a]*) \\(.*\\)" stat)  ; after the last ") ": a command name may hold one
+         (nth 19 (split-string (match-string 1 stat) " " t)))))
 
 (defun drgnx-ui--group-ours-p (pgid run)
   "Non-nil while process group PGID has a member that belongs to the session started in RUN.
 Checks the whole group, not just its leader (which may exit first on TERM), and requires
 a member's command line to name RUN — the pgid file may be stale and the id reused by an
-unrelated group.  Ids 0 and 1 are never ours."
+unrelated group — or the leader to be the process the launcher started (its start time, RUN/pgid-start): an
+exec'ing process's command line reads empty for an instant, and the leader execs `timeout' as the session starts
+(once \"its processes are gone\" 0.05 s into a start).  Ids 0 and 1 are never ours."
   (and (stringp pgid) (string-match-p "\\`[0-9]+\\'" pgid) (> (string-to-number pgid) 1)
-       (eq 0 (car (drgnx-ui--run "pgrep" "-g" pgid "-f" "--" (concat (drgnx-ui--ere-quote run) "/"))))))
+       (or (eq 0 (car (drgnx-ui--run "pgrep" "-g" pgid "-f" "--" (concat (drgnx-ui--ere-quote run) "/"))))
+           (let ((want (ignore-errors (with-temp-buffer
+                                        (insert-file-contents (expand-file-name "pgid-start" run))
+                                        (string-trim (buffer-string))))))
+             (and want (equal want (drgnx-ui--proc-start (string-to-number pgid))))))))
 
 (defun drgnx-ui--unit-owned-p (name run)
   "Non-nil if systemd unit NAME is running the session whose run directory is RUN.
@@ -1087,7 +1249,8 @@ many virtual monitors (default 1).  COMPOSITOR: mutter, sway, x11, i3, kwin or n
 `drgnx-ui-default-compositor').  SIZE: WxH in device pixels (nil: $DRGNX_UI_SIZE, else 1600x900).  SCALES: a
 monitor scale for all monitors, or a list, one per monitor (nil: $DRGNX_UI_SCALES \"1 2\", else $DRGNX_UI_SCALE,
 else 1); the session is ready only when its root frame shows the first monitor's scale (10 s, else this
-stops it and fails with \"scale S not applied\"; `drgnx-uitest-scale-ready-p')."
+stops it and fails with \"scale S not applied\"; `drgnx-uitest-scale-ready-p').  TIMEOUT (default 60 s) counts the
+time the session's processes slept (`drgnx-ui-progress'): a session a loaded machine starves of CPU is still booting."
   (let* ((root (drgnx-ui-state-root))
          (_ (make-directory root t))
          (_ (drgnx-ui--prune-eln-cache root))
@@ -1097,18 +1260,20 @@ stops it and fails with \"scale S not applied\"; `drgnx-uitest-scale-ready-p')."
          (run (plist-get sess :run)))
     (drgnx-ui--own-add name root)
     (drgnx-ui--save sess)                 ; stop needs :launcher/:pgid from here on
-    (let ((ready (expand-file-name "ready.json" run))
-          (t0 (float-time))
-          ;; a session waiting for its lease slot (up to 120 s) is not slow to boot
-          (deadline (+ (float-time) (or timeout 60) (if (drgnx-ui--lease-dir) 120 0)))
-          (next-probe 0) prompt)
+    (let* ((ready (expand-file-name "ready.json" run))
+           (t0 (float-time))
+           ;; the session's processes slept TIMEOUT: a session a loaded machine keeps waiting for a CPU is still
+           ;; booting; a session waiting for its lease slot (up to 120 s) is not slow to boot
+           (clock (drgnx-ui-progress (+ (or timeout 60) (if (drgnx-ui--lease-dir) 120 0))
+                                     (or (drgnx-ui-session-pids-fn sess) #'ignore)))
+           (next-probe 0) prompt over)
       (while (and (not (file-exists-p ready)) (not prompt))
-        (when (or (> (float-time) deadline) (not (drgnx-ui-alive-p sess)))
+        (when (or (setq over (drgnx-ui-progress-over clock)) (not (drgnx-ui-alive-p sess)))
           (let ((log (drgnx-ui--log-tail sess)))
             (drgnx-ui-stop name)
             (if-let* ((refusal (drgnx-ui--lease-refusal log)))
                 (drgnx-ui--fail "%s: %s" name refusal)
-              (drgnx-ui--fail "%s did not become ready:\n%s" name log))))
+              (drgnx-ui--fail "%s did not become ready (%s):\n%s" name (or over "its processes are gone") log))))
         ;; Still booting after 2 s: is the configuration asking something?  (The server
         ;; and harness agent start before the configuration's init.el.)
         (when (and (> (float-time) (+ t0 2)) (> (float-time) next-probe))
@@ -1116,7 +1281,7 @@ stops it and fails with \"scale S not applied\"; `drgnx-uitest-scale-ready-p')."
           (let ((p (ignore-errors
                      (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-boot-status)" 5) :prompt))))
             (when (stringp p) (setq prompt p))))
-        (unless prompt (sleep-for 0.1)))
+        (unless prompt (drgnx-ui--poll-pause 0.1)))
       (if prompt
           (setq sess (plist-put sess :ready (list :init_running t :prompt prompt
                                                   :init_error :false :server_error :false)))
@@ -1147,15 +1312,24 @@ refusing a session the harness cannot own"
          (or legacy-ok (drgnx-ui--refuse "%s" drgnx-ui-legacy-message)))
         (t (drgnx-ui--refuse "%S is not a drgnx harness session (drgnx-ui-N-HEX)" name))))
 
+(defun drgnx-ui--group-live-p (pgid)
+  "Non-nil while process group PGID has a member."
+  (eq 0 (car (drgnx-ui--run "pgrep" "-g" pgid))))
+
 (defun drgnx-ui--stop-group (pgid run)
-  "TERM process group PGID if it is RUN's session, KILL it if it is still there after 2 s."
+  "TERM process group PGID if it is RUN's session, KILL it if it is still there after 2 s; return once it is gone
+\(at most 2 s more).  Every member is waited for, not only those whose command lines name RUN: Emacs under the
+compositor saves its state into RUN on TERM, and the caller deletes RUN next."
   (when (drgnx-ui--group-ours-p pgid run)
     (drgnx-ui--run "kill" "-TERM" "--" (concat "-" pgid))
     (let ((deadline (+ (float-time) 2)))
-      (while (and (drgnx-ui--group-ours-p pgid run) (< (float-time) deadline))
-        (sleep-for 0.05)))
-    (when (drgnx-ui--group-ours-p pgid run)
-      (drgnx-ui--run "kill" "-KILL" "--" (concat "-" pgid)))))
+      (while (and (drgnx-ui--group-live-p pgid) (< (float-time) deadline))
+        (drgnx-ui--poll-pause 0.05)))
+    (when (drgnx-ui--group-live-p pgid)
+      (drgnx-ui--run "kill" "-KILL" "--" (concat "-" pgid))
+      (let ((deadline (+ (float-time) 2)))
+        (while (and (drgnx-ui--group-live-p pgid) (< (float-time) deadline))
+          (drgnx-ui--poll-pause 0.05))))))
 
 (defun drgnx-ui--display-in-use-p (name)
   "Non-nil while some process serves Wayland display NAME."
@@ -1205,7 +1379,7 @@ up to WAIT seconds (default 5) for its socket to go.  Never blocks longer; error
   (when-let* ((client (executable-find "emacsclient")))
     (ignore-errors (call-process "timeout" nil nil nil "3" client "-s" socket "--eval" "(kill-emacs)"))
     (let ((deadline (+ (float-time) (or wait 5))))
-      (while (and (file-exists-p socket) (< (float-time) deadline)) (sleep-for 0.05)))))
+      (while (and (file-exists-p socket) (< (float-time) deadline)) (drgnx-ui--poll-pause 0.05)))))
 
 (defun drgnx-ui-stop (name &optional legacy-ok)
   "Stop session NAME — Emacs asked to exit first, then the session's processes — and remove its run
@@ -1234,8 +1408,9 @@ with LEGACY-OK, which reap passes to also take a legacy drgnx-ui-N."
     (drgnx-ui--remove-wayland-display name)
     (drgnx-ui--remove-compositor-files name run (plist-get sess :display))
     (when (file-directory-p run) (delete-directory run t))
-    (when (file-directory-p sock) (delete-directory sock t))
-    (ignore-errors (delete-directory (file-name-directory sock))))   ; the per-root dir, once empty
+    ;; the shared per-root dir above it stays: a session starting in another process may be about to make its own
+    ;; dir in it (an empty 0700 dir under the runtime dir, which goes with it)
+    (when (file-directory-p sock) (delete-directory sock t)))
   (list :stopped name))
 
 (defun drgnx-ui--yours-p (owner client)
@@ -1388,15 +1563,18 @@ says it ended; session.json is its own (:id, :name, :run, compositor); it was no
 (defun drgnx-ui-call (sess form &optional timeout)
   "Evaluate FORM (a string) in SESS through its socket; parse the JSON reply.  The form goes as
 \(drgnx-uitest-api-as ID FORM): the session answers only if its own id is ID, so no socket path reaches another
-session (HARNESS-SESS-1).  A session that does not know `drgnx-uitest-api-as' was started before that."
+session (HARNESS-SESS-1).  A session that does not know `drgnx-uitest-api-as' was started before that.
+TIMEOUT (default 20) counts the time the emacsclient and SESS's processes slept, not wall time (`drgnx-ui-progress'):
+a session a loaded machine starves still answers."
   (let* ((timeout (or timeout 20))
+         (drgnx-ui--progress-pids (drgnx-ui-session-pids-fn sess))
          (r (drgnx-ui--run-with-timeout timeout (drgnx-ui--emacsclient) "-a" "false"
                                         "-s" (plist-get sess :socket) "-e"
                                         (format "(drgnx-uitest-api-as %s %s)" (drgnx-ui-el (plist-get sess :name)) form))))
     (pcase r
-      (`(timeout ,_)
-       (drgnx-ui--fail "%s: no answer in %ss (stuck on a prompt? take a ui_screenshot) [%s]"
-                       (plist-get sess :name) timeout (truncate-string-to-width form 90 nil nil t)))
+      (`(timeout ,why)
+       (drgnx-ui--fail "%s: no answer in %ss (%s; stuck on a prompt? take a ui_screenshot) [%s]"
+                       (plist-get sess :name) timeout why (truncate-string-to-width form 90 nil nil t)))
       (`(0 ,out) (drgnx-ui-parse-reply out))
       (`(,_ ,out)
        (if (string-match-p "void.*drgnx-uitest-api-as" out)
@@ -1435,9 +1613,9 @@ never a drag from 0,0."
     (list (car from) (cdr from) (car to) (cdr to) button steps)))
 
 (defun drgnx-ui-act (sess action)
-  "Queue ACTION in SESS: (:keys K), (:type T), (:buffer B :text T), (:x X :y Y) or
+  "Queue ACTION in SESS: (:keys K), (:type T), (:pause SECS), (:buffer B :text T), (:x X :y Y) or
 (:drag (:from (X . Y) :to (X . Y) :steps N :button B)), with optional :button, :count,
-:hold_ms (not for :drag).  Returns the API's reply."
+:hold_ms (not for :drag).  :pause is SECS of no input before the next action.  Returns the API's reply."
   (let ((opts (mapconcat (lambda (k) (drgnx-ui-el (plist-get action k)))
                          '(:button :count :hold_ms) " ")))
     (cond
@@ -1445,6 +1623,10 @@ never a drag from 0,0."
       (drgnx-ui-call sess (format "(drgnx-uitest-api-keys %s)" (drgnx-ui-el (plist-get action :keys)))))
      ((plist-member action :type)
       (drgnx-ui-call sess (format "(drgnx-uitest-api-type %s)" (drgnx-ui-el (plist-get action :type)))))
+     ((plist-member action :pause)
+      (let ((secs (plist-get action :pause)))
+        (unless (and (numberp secs) (>= secs 0)) (drgnx-ui--fail "a pause is seconds, not %S" secs))
+        (drgnx-ui-call sess (format "(drgnx-uitest-api-pause %s)" secs))))
      ((plist-member action :drag)
       (pcase-let ((`(,fx ,fy ,tx ,ty ,button ,steps) (drgnx-ui--drag-spec (plist-get action :drag))))
         (drgnx-ui-call sess (format "(drgnx-uitest-api-drag %d %d %d %d %d %s)" fx fy tx ty button
@@ -1456,7 +1638,7 @@ never a drag from 0,0."
      ((and (plist-member action :x) (plist-member action :y))
       (drgnx-ui-call sess (format "(drgnx-uitest-api-click %d %d %s)"
                                   (truncate (plist-get action :x)) (truncate (plist-get action :y)) opts)))
-     (t (drgnx-ui--fail "unknown action %S: use keys, type, buffer+text, x+y or drag" action)))))
+     (t (drgnx-ui--fail "unknown action %S: use keys, type, pause, buffer+text, x+y or drag" action)))))
 
 (defun drgnx-ui-wait (sess &optional quiet-ms timeout-s)
   "Poll SESS until settled (QUIET-MS without change); t, or nil after TIMEOUT-S."
@@ -1466,7 +1648,7 @@ never a drag from 0,0."
                          :settled)
               t)
           (setq settled t)
-        (sleep-for 0.05)))
+        (drgnx-ui--poll-pause 0.05)))
     settled))
 
 (defun drgnx-ui-wait-start-page (sess &optional timeout-s)
@@ -1478,7 +1660,7 @@ The page comes from a 1 s idle timer after the session is ready, so a picture of
       (if (eq t (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :shown (if (get-buffer-window drgnx-start-buffer-name) t :false)))")
                            :shown))
           (setq shown t)
-        (sleep-for 0.05)))
+        (drgnx-ui--poll-pause 0.05)))
     (or shown (drgnx-ui--fail "the start page never showed in %s" (plist-get sess :name)))))
 
 (defun drgnx-ui--wait-delivered (sess &optional timeout-s)
@@ -1486,7 +1668,7 @@ The page comes from a 1 s idle timer after the session is ready, so a picture of
   (let ((deadline (+ (float-time) (or timeout-s 10))))
     (while (and (< (float-time) deadline)
                 (eq (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-status)") :busy) t))
-      (sleep-for 0.04))))
+      (drgnx-ui--poll-pause 0.04))))
 
 (defun drgnx-ui-measure (sess actions &optional quiet-ms timeout-s)
   "Run ACTIONS (a list of action plists) as one measurement; return the jank report.
@@ -1672,7 +1854,7 @@ functions and hook totals measured in the session."
       (if (> (or (ignore-errors (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-gui-frames)" 5) :visible)) 0)
              before)
           (setq visible-ms (round (* 1000 (- (float-time) t0))))
-        (sleep-for 0.02)))
+        (drgnx-ui--poll-pause 0.02)))
     (list :exit (if (eq (car r) 'timeout) :null (car r)) :output (string-trim (cadr r))
           :client_ms client-ms :visible_ms (or visible-ms :null)
           :hooks (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-frame-hook-times)") :hooks))))
@@ -1702,6 +1884,50 @@ functions and hook totals measured in the session."
           :children (length (plist-get cap :children)) :windows (plist-get cap :windows))))
 
 ;;;; GUI test runs
+
+(defun drgnx-ui--hang-report (sess run)
+  "Append to RUN's session.log where the timed-out session SESS hung, before its group is killed: each process of
+the group (PID COMM STATE WCHAN and the syscall it waits in) and the session Emacs's Lisp backtrace, asked over
+its server for 5 s (no answer: it is blocked outside Lisp)."
+  (let* ((pgid (drgnx-ui--read-pgid run))
+         (slurp (lambda (f) (ignore-errors (with-temp-buffer (insert-file-contents f) (string-trim (buffer-string))))))
+         (procs (and pgid
+                     (delq nil (mapcar (lambda (pid)
+                                         (let* ((stat (funcall slurp (format "/proc/%s/stat" pid)))
+                                                (rest (and stat (string-match ") \\(.\\) [0-9]+ \\([0-9]+\\)" stat)
+                                                           (list (match-string 1 stat) (match-string 2 stat)))))
+                                           (and rest (equal (nth 1 rest) pgid)
+                                                (format "  %s %s %s %s syscall %s" pid
+                                                        (funcall slurp (format "/proc/%s/comm" pid)) (car rest)
+                                                        (funcall slurp (format "/proc/%s/wchan" pid))
+                                                        (car (split-string (or (funcall slurp (format "/proc/%s/syscall" pid)) "?")))))))
+                                       (directory-files "/proc" nil "\\`[0-9]+\\'")))))
+         ;; SIGUSR2 (`debug-on-event'): a Lisp loop enters the debugger, whose *Backtrace* the server then reads; a
+         ;; loop in C that never checks for quit stays as it was (no answer)
+         (_ (dolist (l procs)
+              (when (string-match "\\`  \\([0-9]+\\) emacs " l)
+                (ignore-errors (signal-process (string-to-number (match-string 1 l)) 'USR2)))))
+         (_ (let ((deadline (+ (float-time) 2))) (while (< (float-time) deadline) (drgnx-ui--poll-pause 0.1))))
+         (bt (drgnx-ui--run-with-timeout
+              5 (drgnx-ui--emacsclient) "-s" (plist-get sess :socket)
+              "-e" "(if (get-buffer \"*Backtrace*\") (with-current-buffer \"*Backtrace*\" (buffer-substring-no-properties (point-min) (min (point-max) 8000))) (with-output-to-string (backtrace)))")))
+    (ignore-errors
+      (write-region (concat "\ndrgnx-ui: the session timed out; its processes (PID COMM STATE WCHAN):\n"
+                            (mapconcat #'identity procs "\n")
+                            "\ndrgnx-ui: its Emacs's backtrace:\n"
+                            (if (eql (car bt) 0) (cadr bt) (format "no answer (%s)" (car bt)))
+                            ;; no answer: where it is in C, where the image has gdb (the wm image)
+                            (if (or (eql (car bt) 0) (not (executable-find "gdb"))) ""
+                              (mapconcat
+                               (lambda (l)
+                                 (if (string-match "\\`  \\([0-9]+\\) emacs " l)
+                                     (concat "\ndrgnx-ui: its Emacs in C (gdb):\n"
+                                             (cadr (drgnx-ui--run-with-timeout
+                                                    30 "gdb" "-p" (match-string 1 l) "-batch" "-ex" "bt 60")))
+                                   ""))
+                               procs ""))
+                            "\n")
+                    nil (expand-file-name "session.log" run) t 'silent))))
 
 (defun drgnx-ui--kill-group (run)
   "KILL the process group of the session started in RUN (only if it is that session)."
@@ -1745,15 +1971,17 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
                                                  extra-env)))
          (cmd (mapconcat #'shell-quote-argument
                          (append (drgnx-ui-env-argv env) (drgnx-ui-compositor-argv sess)) " "))
-         (_ (push (cons :group run) drgnx-ui--own))     ; this process ended meanwhile: its group goes too
+         (_ (drgnx-ui--own-set (cons (cons :group run) drgnx-ui--own)))     ; this process ended meanwhile: its group goes too
          (scope (equal (drgnx-ui-launcher) "systemd"))
          (r (apply #'drgnx-ui--run-with-timeout (or timeout 110)
                    (drgnx-ui--test-run-argv
                     name (or timeout 110) scope
                     (format "echo $$ > %s; exec %s > %s 2>&1" (shell-quote-argument pgid-file) cmd
                             (shell-quote-argument (expand-file-name "session.log" run)))))))
-    (setq drgnx-ui--own (delete (cons :group run) drgnx-ui--own))
-    (when (eq (car r) 'timeout) (drgnx-ui--kill-group run))
+    (drgnx-ui--own-set (delete (cons :group run) drgnx-ui--own))
+    (when (eq (car r) 'timeout)
+      (drgnx-ui--hang-report sess run)
+      (drgnx-ui--kill-group run))
     ;; whatever is left in the scope (a server whose shell was killed) goes with it
     (when scope (drgnx-ui--run "systemctl" "--user" "stop" (concat name ".scope")))
     (drgnx-ui--run "pkill" "-KILL" "-f" "--" (drgnx-ui--name-pattern name))   ; belt and braces
@@ -1761,11 +1989,10 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
     (let ((deadline (+ (float-time) 2)))
       (while (and (or (drgnx-ui--display-in-use-p name) (drgnx-ui--serving-p (drgnx-ui--name-pattern name)))
                   (< (float-time) deadline))
-        (sleep-for 0.05)))
+        (drgnx-ui--poll-pause 0.05)))
     (drgnx-ui--remove-wayland-display name)
     (drgnx-ui--remove-compositor-files name run (plist-get sess :display))
-    (delete-directory (drgnx-ui-socket-dir name) t)
-    (ignore-errors (delete-directory (drgnx-ui-socket-dir "")))
+    (delete-directory (drgnx-ui-socket-dir name) t)   ; the shared per-root dir stays (drgnx-ui-stop)
     (list (if (eq (car r) 'timeout) 124 (car r))
           (and (file-exists-p results) (drgnx-ui--read-json results))
           run)))
@@ -1827,9 +2054,226 @@ With a selector a half may select no test (the selector names tests of the other
          (insert-file-contents log)
          (seq-filter (lambda (l) (string-prefix-p "drgnx harness: " l)) (split-string (buffer-string) "\n" t)))))
 
+(defun drgnx-ui--hub-env ()
+  "The GUI suite's hub, as \"K=V\" strings: DRGNX_TEST_HUB_REQUIRED=1, so a hub row that finds no Ratatoskr fails
+instead of skipping (`drgnx-test-no-hub'), and DRGNX_RATATOSKR_BIN, which a session does not inherit: the caller's,
+else the checkout's debug build when there is one."
+  (let ((bin (or (getenv "DRGNX_RATATOSKR_BIN")
+                 (let ((b (expand-file-name "runtime/target/debug/ratatoskr" drgnx-ui-repo-dir)))
+                   (and (file-executable-p b) b)))))
+    (cons "DRGNX_TEST_HUB_REQUIRED=1" (and bin (list (concat "DRGNX_RATATOSKR_BIN=" bin))))))
+
+(defun drgnx-ui--timeout-report (progress timeout)
+  "What a session killed at its TIMEOUT s ran, from its PROGRESS file (`drgnx-run-ert--progress'): the cause, the
+tests that ended and how, and the one running when it was killed.  Never empty: a run that never reached a test says
+that too."
+  (let ((lines (and (file-readable-p progress)
+                    (with-temp-buffer (insert-file-contents progress) (split-string (buffer-string) "\n" t))))
+        (ended nil) (running nil))
+    (dolist (l lines)
+      (cond ((string-match "\\`start \\(.*\\)\\'" l) (setq running (match-string 1 l)))
+            ((string-match "\\`end \\(.*\\) \\([a-z]+\\)\\'" l)
+             (push (cons (match-string 1 l) (match-string 2 l)) ended)
+             (setq running nil))))
+    (setq ended (nreverse ended))
+    (concat
+     (format "  TIMEOUT: the session was killed at %s s (DRGNX_UI_TEST_TIMEOUT): %d test%s ended%s; select fewer rows or \
+raise DRGNX_UI_TEST_TIMEOUT\n"
+             timeout (length ended) (if (= (length ended) 1) "" "s")
+             (cond (running (format ", %s was running" running))
+                   (lines "")
+                   (t ", none started (the session did not reach its tests)")))
+     (mapconcat (lambda (e) (format "  %s %s\n" (upcase (cdr e)) (car e)))
+                (seq-remove (lambda (e) (equal (cdr e) "passed")) ended) "")
+     (format "  passed before the timeout: %d\n" (seq-count (lambda (e) (equal (cdr e) "passed")) ended)))))
+
+(defvar drgnx-ui-test-session-function #'drgnx-ui-run-ert-session
+  "The one function that starts a GUI test session and waits for it: (TESTS-DIR TIMEOUT CONFIG EXTRA-ENV) -> (RC RESULTS
+RUN), as `drgnx-ui-run-ert-session'.  Every per-file session starts through it, with the environment it is given
+\(EXTRA-ENV), so another launcher (a jail instead of the container's own compositor and Emacs) replaces this one value.")
+
+(defun drgnx-ui--test-jobs ()
+  "The number of per-file GUI sessions at once: DRGNX_TEST_JOBS (a whole number above 0), else 1."
+  (let ((n (string-to-number (or (getenv "DRGNX_TEST_JOBS") ""))))
+    (if (> n 0) n 1)))
+
+(defun drgnx-ui--session-test-files (dir selector)
+  "The test files of DIR (sorted) the run needs a session for: those that can hold a test SELECTOR (a string, read)
+picks, as `drgnx-run-ert' loads them."
+  (let ((sel (and selector (car (read-from-string selector)))))
+    (cl-remove-if-not (lambda (f) (drgnx-run-ert--file-selected-p f sel))
+                      (sort (drgnx-run-ert--files dir) #'string<))))
+
+(defun drgnx-ui-run-ui-file-session (file out)
+  "One test FILE of the GUI tier in a session of its own (`drgnx-ui-run-ert-session', the file named to the session
+as DRGNX_UI_TEST_FILE).  The session's results.json is copied to OUT, and OUT.meta says what the controller needs
+to know (a Lisp plist: :rc :run :report :lines).  Return 0: whether the file passed is in the results."
+  ;; another launcher (a jail): a Lisp file that sets `drgnx-ui-test-session-function'
+  (when-let* ((l (getenv "DRGNX_UI_LAUNCHER")) ((not (string-empty-p l)))) (load (expand-file-name l) nil t))
+  (let* ((timeout (string-to-number (or (getenv "DRGNX_UI_TEST_TIMEOUT") "110")))
+         (selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)) s)))
+         (leaks (not (equal (getenv "DRGNX_UI_LEAKS") "0")))   ; the leak check is hard: a file that leaves state behind fails
+         (res (funcall drgnx-ui-test-session-function
+                       (expand-file-name "test/ui" drgnx-ui-repo-dir) timeout nil
+                       (append (drgnx-ui--hub-env)
+                               (list (concat "DRGNX_UI_TEST_FILE=" (expand-file-name file)))
+                               (and leaks (list "DRGNX_TEST_FILE_LEAKS=1"))
+                               (and (equal (getenv "DRGNX_UI_PROFILE") "1") (list "DRGNX_TEST_WAIT_PROFILE=1"))
+                               (and selector (list (concat "DRGNX_TEST_SELECTOR=" selector)))
+                               (and (equal (getenv "DRGNX_TEST_EMPTY_OK") "1") (list "DRGNX_TEST_EMPTY_OK=1")))))
+         (rc (nth 0 res)) (results (nth 1 res)) (run (nth 2 res))
+         (ok (and (eq rc 0) results (eq (plist-get results :failed) 0)))
+         (base (file-name-sans-extension (file-name-nondirectory file))))
+    (when results (copy-file (expand-file-name "results.json" run) out t))
+    (drgnx-ui--write (concat out ".meta")
+                     (prin1-to-string
+                      (list :rc rc :run run
+                            :report (and (not results) (eq rc 124)
+                                         (drgnx-ui--timeout-report (expand-file-name "results.json.progress" run) timeout))
+                            :lines (and (not results)
+                                        (drgnx-ui--harness-lines (expand-file-name "session.log" run))))))
+    (when ok (delete-directory run t))
+    ;; a container run's session log goes with the screenshots: the run's own directory dies with the container
+    (when-let* (((not ok)) (evid (getenv "DRGNX_UI_EVIDENCE")) ((file-directory-p evid))
+                (log (expand-file-name "session.log" run)) ((file-exists-p log)))
+      (ignore-errors (copy-file log (expand-file-name (format "session-%s.log" base) evid) t)))
+    0))
+
+(defun drgnx-ui--start-file-session (file out)
+  "Start the Emacs that runs FILE in a session of its own (`drgnx-ui-run-ui-file-session'); return its process."
+  (make-process
+   :name (format "drgnx-ui-file-%s" (file-name-nondirectory file))
+   :buffer (generate-new-buffer " *drgnx-ui-file*") :noquery t :connection-type 'pipe :coding 'utf-8-unix
+   :command (list (or (getenv "DRGNX_EMACS") (expand-file-name invocation-name invocation-directory))
+                  "--batch" "-Q" "--eval" "(setq load-prefer-newer t)"
+                  "-L" (directory-file-name drgnx-ui-harness-dir)
+                  "-L" (expand-file-name "core" drgnx-ui-repo-dir) "-L" (expand-file-name "wb" drgnx-ui-repo-dir)
+                  "-l" "drgnx-ui" "-f" "drgnx-ui-cli" "--" "test-ui-file" file out)
+   :sentinel (lambda (p _e) (unless (process-live-p p) (process-put p :done (float-time))))))
+
+(defun drgnx-ui--run-file-sessions (files jobs out-dir &optional on-start on-end)
+  "Run each of FILES in a session of its own, JOBS at once, the results of file N in OUT-DIR/N.json.  Return the
+list of (FILE OUT EXIT SECONDS CHILD-OUTPUT), in the order of FILES.  ON-START is called with a file as its session
+starts, ON-END with its entry as it ends (so a run killed meanwhile has told which files ran).  A tier stopped
+meanwhile ends the sessions' Emacsen."
+  (let ((pending (let ((i 0)) (mapcar (lambda (f) (list f (expand-file-name (format "%d.json" (cl-incf i)) out-dir))) files)))
+        (running nil) (done nil))
+    (unwind-protect
+        (while (or pending running)
+          (while (and pending (< (length running) jobs))
+            (pcase-let ((`(,f ,out) (pop pending)))
+              (when on-start (funcall on-start f))
+              (push (list (drgnx-ui--start-file-session f out) f out (float-time)) running)))
+          (accept-process-output nil 0.2)
+          (dolist (r running)
+            (pcase-let ((`(,p ,f ,out ,t0) r))
+              (when (process-get p :done)
+                (while (accept-process-output p 0))
+                (push (list f out (process-exit-status p) (- (float-time) t0)
+                            (when-let* ((b (process-buffer p))) (and (buffer-live-p b) (with-current-buffer b (buffer-string)))))
+                      done)
+                (when on-end (funcall on-end (car done)))
+                (when-let* ((b (process-buffer p))) (when (buffer-live-p b) (kill-buffer b)))
+                (setq running (delq r running))))))
+      (dolist (r running) (drgnx-run-ert--end-process (car r) 10)))
+    (mapcar (lambda (f) (assoc f done)) files)))
+
+(defun drgnx-ui--print-profile (profile)
+  "The per-row time profile (DRGNX_UI_PROFILE=1): the rows' total seconds, how much of it was waiting (`drgnx-run-ert' with
+DRGNX_TEST_WAIT_PROFILE), and the slowest rows."
+  (let* ((rows (sort (copy-sequence (car profile)) (lambda (a b) (> (plist-get a :seconds) (plist-get b :seconds)))))
+         (total (apply #'+ 0.0 (mapcar (lambda (r) (plist-get r :seconds)) rows)))
+         (wait (apply #'+ 0.0 (mapcar (lambda (r) (or (plist-get r :wait) 0)) rows))))
+    (princ (format "ui profile: %d rows, %.1fs in rows, %.1fs of it waiting (%.0f%%), %.1fs working\n" (length rows) total wait
+                   (if (> total 0) (* 100 (/ wait total)) 0) (- total wait)))
+    (dolist (r (seq-take rows 20))
+      (princ (format "ui profile row: %.2fs (waiting %.2fs) %s\n" (plist-get r :seconds) (or (plist-get r :wait) 0)
+                     (plist-get r :name))))))
+
+(defconst drgnx-ui--fail-condition-max 2000
+  "The characters of a failure's condition a FAIL line keeps: a condition can hold a whole screen or buffer (megabytes),
+and builder-run does not bring back a log over 5 MB.")
+
+(defun drgnx-ui--fail-line (name condition)
+  "The report's FAIL line for test NAME and the text of its CONDITION, cut to `drgnx-ui--fail-condition-max'
+characters (saying how many were left out) and made printable (`drgnx-run-ert--printable')."
+  (let ((over (- (length condition) drgnx-ui--fail-condition-max)))
+    (format "  FAIL %s: %s\n" name
+            (drgnx-run-ert--printable
+             (if (> over 0)
+                 (format "%s… (%d more characters)" (substring condition 0 drgnx-ui--fail-condition-max) over)
+               condition)))))
+
+(defun drgnx-ui--run-ui-per-file (files selector)
+  "Each of FILES in a session of its own, `drgnx-ui--test-jobs' at once; one merged report in the format of a single
+session's (\"ui ERT: P/T passed\", a FAIL line each, SKIP lines).  Return an exit code."
+  (let* ((out-dir (make-temp-file "drgnx-ui-files" t)) (t-start (float-time))
+         (profile (and (equal (getenv "DRGNX_UI_PROFILE") "1") (list nil)))
+         (meta-of (lambda (out) (ignore-errors (car (read-from-string (with-temp-buffer (insert-file-contents (concat out ".meta"))
+                                                                                        (buffer-string)))))))
+         ;; each file's line as it starts and ends, not at the end: a run killed meanwhile (the slot guard) names the
+         ;; file that hung
+         (runs (drgnx-ui--run-file-sessions
+                files (min (drgnx-ui--test-jobs) (length files)) out-dir
+                (lambda (f) (princ (format "ui file %s: started\n" (file-name-nondirectory f))))
+                (pcase-lambda (`(,f ,out ,exit ,secs ,_))
+                  (let ((results (and (file-readable-p out) (drgnx-ui--read-json out))))
+                    (princ (format "ui file %s: %s in %.1fs\n" (file-name-nondirectory f)
+                                   (if results (format "%s/%s passed" (plist-get results :passed) (plist-get results :total))
+                                     (format "no results (exit %s)" (or (plist-get (funcall meta-of out) :rc) exit)))
+                                   secs))))))
+         (total 0) (passed 0) (ok t) fails skips)
+    (unwind-protect
+        (dolist (r runs)
+          (pcase-let* ((`(,f ,out ,exit ,_secs ,child-out) (or r (list nil nil nil 0 nil)))
+                       (base (and f (file-name-nondirectory f)))
+                       (meta (and f (funcall meta-of out)))
+                       (results (and f (file-readable-p out) (drgnx-ui--read-json out))))
+            (when f
+              (if results
+                  (progn
+                    (cl-incf total (plist-get results :total)) (cl-incf passed (plist-get results :passed))
+                    (when profile (seq-doseq (x (plist-get results :tests)) (push x (car profile))))
+                    (unless (eq (plist-get results :failed) 0) (setq ok nil))
+                    (seq-doseq (x (plist-get results :failures))
+                      (push (drgnx-ui--fail-line (plist-get x :name) (plist-get x :condition)) fails))
+                    (seq-doseq (x (plist-get results :skipped)) (push (format "  SKIP %s\n" (plist-get x :name)) skips)))
+                (setq ok nil) (cl-incf total)
+                (push (concat (format "  FAIL file %s: no results (exit %s); log kept in %s\n" base (or (plist-get meta :rc) exit)
+                                      (plist-get meta :run))
+                              (plist-get meta :report)
+                              (if (and child-out (not (string-empty-p (string-trim child-out))))
+                                  (concat "  the session's Emacs said:\n"
+                                          (mapconcat (lambda (l) (concat "    " l "\n")) (seq-take (split-string (string-trim child-out) "\n") 10) ""))
+                                "")
+                              (mapconcat (lambda (l) (concat "  " l "\n")) (plist-get meta :lines) ""))
+                      fails))
+              (unless (eq (plist-get meta :rc) 0) (setq ok nil)))))
+      (ignore-errors (delete-directory out-dir t)))
+    (when (consp drgnx-ui--batch-totals) (setcar drgnx-ui--batch-totals total))
+    (princ (format "ui sessions: %d files, %d at once, %.1fs wall\n" (length files) (min (drgnx-ui--test-jobs) (length files))
+                   (- (float-time) t-start)))
+    (when profile (drgnx-ui--print-profile profile))
+    (princ (format "ui ERT: %s/%s passed%s\n" passed total (if selector (format " (selector %s)" selector) "")))
+    (mapc #'princ (nreverse fails)) (mapc #'princ (nreverse skips))
+    (if ok 0 1)))
+
 (defun drgnx-ui-run-ui-session-tests ()
-  "The GUI suite (test/ui) in a session — the first half of `drgnx test --ui', alone for bin/drgnx check (which
-runs the live suite in shards).  Return an exit code."
+  "The GUI suite (test/ui) — the first half of `drgnx test --ui', alone for bin/drgnx check (which runs the live suite in
+shards): one session per test file (`drgnx-ui-run-ui-file-session'), `drgnx-ui--test-jobs' at once, the reports merged.
+DRGNX_UI_ONE_SESSION=1 runs them all in one session as before.  Return an exit code."
+  (require 'drgnx-run-ert (expand-file-name "run-ert.el" drgnx-ui-harness-dir))
+  (let* ((selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)) s)))
+         (_ (when selector
+              (condition-case err (read-from-string selector)
+                (error (drgnx-ui--fail "DRGNX_TEST_SELECTOR %S is not an ERT selector: %s" selector (error-message-string err))))))
+         (files (and (not (equal (getenv "DRGNX_UI_ONE_SESSION") "1"))
+                     (drgnx-ui--session-test-files (expand-file-name "test/ui" drgnx-ui-repo-dir) selector))))
+    (if files (drgnx-ui--run-ui-per-file files selector) (drgnx-ui--run-ui-one-session))))
+
+(defun drgnx-ui--run-ui-one-session ()
+  "The GUI suite (test/ui) in one session, every file in it (a selector that picks no file, DRGNX_UI_ONE_SESSION=1).
+Return an exit code."
   (require 'drgnx-run-ert (expand-file-name "run-ert.el" drgnx-ui-harness-dir))
   (let* ((timeout (string-to-number (or (getenv "DRGNX_UI_TEST_TIMEOUT") "110")))
          (selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)) s)))
@@ -1840,7 +2284,10 @@ runs the live suite in shards).  Return an exit code."
                                        selector (error-message-string err))))))
          ;; a narrowed run stays narrow in the session too
          (res (drgnx-ui-run-ert-session (expand-file-name "test/ui" drgnx-ui-repo-dir) timeout nil
-                                        (append (and selector (list (concat "DRGNX_TEST_SELECTOR=" selector)))
+                                        (append (drgnx-ui--hub-env)
+                                                ;; each test file must leave the session as it found it (run-ert.el's per-file leak check)
+                                                (unless (equal (getenv "DRGNX_UI_LEAKS") "0") (list "DRGNX_TEST_FILE_LEAKS=1"))
+                                                (and selector (list (concat "DRGNX_TEST_SELECTOR=" selector)))
                                                 (and (equal (getenv "DRGNX_TEST_EMPTY_OK") "1") (list "DRGNX_TEST_EMPTY_OK=1")))))
          (rc (nth 0 res)) (results (nth 1 res)) (run (nth 2 res))
          (ok (and (eq rc 0) results (eq (plist-get results :failed) 0))))
@@ -1850,10 +2297,11 @@ runs the live suite in shards).  Return an exit code."
           (princ (format "ui ERT: %s/%s passed%s\n" (plist-get results :passed) (plist-get results :total)
                          (if selector (format " (selector %s)" selector) "")))
           (seq-doseq (f (plist-get results :failures))
-            (princ (format "  FAIL %s: %s\n" (plist-get f :name) (drgnx-run-ert--printable (plist-get f :condition)))))
+            (princ (drgnx-ui--fail-line (plist-get f :name) (plist-get f :condition))))
           (seq-doseq (s (plist-get results :skipped))
             (princ (format "  SKIP %s\n" (plist-get s :name)))))
       (princ (format "ui ERT: no results (exit %s); log kept in %s\n" rc run))
+      (when (eq rc 124) (princ (drgnx-ui--timeout-report (expand-file-name "results.json.progress" run) timeout)))
       ;; what the harness wrote to the session's log (a scale gdctl could not set): in a container, the log goes with it
       (dolist (l (drgnx-ui--harness-lines (expand-file-name "session.log" run))) (princ (concat "  " l "\n"))))
     (when ok (delete-directory run t))
@@ -1938,6 +2386,8 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
                    (drgnx-ui-run-ert-session
                     dir (string-to-number (or (getenv "DRGNX_SCENARIO_TIMEOUT") "300")) config
                     (append (list (concat "DRGNX_SCENARIO_CONFIG=" (drgnx-ui--config-name config)))
+                            ;; the hub: on a Nidhogg with Sjá the Explorer's rows are the hub's listing
+                            (drgnx-ui--hub-env)
                             ;; a narrowed run stays narrow in the session too (M12f-A3-1)
                             (let ((s (getenv "DRGNX_TEST_SELECTOR")))
                               (and s (not (string-empty-p s)) (list (concat "DRGNX_TEST_SELECTOR=" s))))))))
@@ -1986,9 +2436,11 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
   click NAME X Y | click NAME --buffer B --text T     [--button N] [--count N] [--hold-ms N]
   keys NAME KEYS | type NAME TEXT                     kbd syntax / literal text
   measure NAME ACTIONS-JSON                           several actions, one jank report
+  look-scenes OUT                                     the look's scenes as PNGs in OUT, for the mockups' side-by-side
   mcp                                                 serve the drgnx-ui MCP tools on stdio
   test-ui                                             the --ui test tier
   test-ui-session                                     its test/ui half alone (bin/drgnx check)
+  test-ui-file FILE OUT                               one test file in a session of its own (the tier starts these)
 See docs/develop/harness.md.")
 
 (defconst drgnx-ui--boolean-flags '("--daemon") "CLI options that take no value.")
@@ -2049,17 +2501,23 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
       ("type" (drgnx-ui-measure (drgnx-ui-own-session name) (list (list :type (nth 1 pos)))))
       ("measure" (drgnx-ui-measure (drgnx-ui-own-session name)
                                    (append (drgnx-ui--parse-json (or (nth 1 pos) "[]")) nil)))
+      ("look-scenes" (require 'drgnx-look-scenes (expand-file-name "drgnx-look-scenes" drgnx-ui-harness-dir))
+       (drgnx-look-scenes-run (or name (drgnx-ui--fail "look-scenes needs OUT, a directory for the PNGs"))))
       ("test-ui" (drgnx-ui-run-ui-tests))
       ("test-ui-session" (drgnx-ui-run-ui-session-tests))
+      ("test-ui-file" (drgnx-ui-run-ui-file-session name (nth 1 pos)))
       ("test-scenario" (drgnx-ui-run-scenarios (plist-get opts :config) (plist-get opts :dir)))
       ("test-bench" (require 'drgnx-bench) (let ((drgnx-ui-session-tier 'bench)) (drgnx-bench-run)))
       ("test-perf" (require 'drgnx-perf-run)
+       ;; a timing job off its island measures nothing (runners design §5.6)
+       (drgnx-perf-check-island)
        (let ((drgnx-ui-session-tier 'perf))
          (cond
           ((getenv "DRGNX_PERF_AB")
            (drgnx-perf-ab (getenv "DRGNX_PERF_AB") :n (string-to-number (or (getenv "DRGNX_PERF_AB_N") "100"))))
           ((getenv "DRGNX_PERF_AB_ENV")
-           (drgnx-perf-ab-env (getenv "DRGNX_PERF_AB_ENV") :n (string-to-number (or (getenv "DRGNX_PERF_AB_N") "100"))))
+           (drgnx-perf-ab-env (getenv "DRGNX_PERF_AB_ENV") :n (string-to-number (or (getenv "DRGNX_PERF_AB_N") "100"))
+                              :aa (not (getenv "DRGNX_PERF_NO_AA"))))
           (t (drgnx-perf-run (getenv "DRGNX_PERF_AUDIT"))))))
       ("test-soak" (require 'drgnx-perf-run)
        (let ((drgnx-ui-session-tier 'perf)) (drgnx-perf-soak (and (car pos) (string-to-number (car pos))))))

@@ -1,0 +1,15 @@
+{"scenario": "pair/native-edit-blocked-gemini", "requires": ["v1", "linux", "real-sandbox"], "doc": "Gated (B), a release hub. A Gemini chat in your project tries a native write of the checkout (its own process writing README, as Gemini's shell tool or a parent-folder mkdir would): the read-only bind refuses it with EROFS, and README is unchanged. Its write tools inside the root go to the hub as fs/write_text_file instead (the door)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; mkdir -p $ROOT/project $HOME/.local/bin $HOME/.local/lib/node_modules/gemini-cli; cp $MOCK $HOME/.local/lib/node_modules/gemini-cli/ratatoskr-mock; ln -s $HOME/.local/lib/node_modules/gemini-cli/ratatoskr-mock $HOME/.local/bin/ratatoskr-mock; echo readme > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-gemini\" :provider gemini :command (\"ratatoskr-mock\" \"acp\" \"--as\" \"gemini\")))))\n"}
+{"do": "start", "hub": "h", "env": {"PATH": "$HOME/.local/bin:/usr/bin:/bin"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-gemini", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "tool:edit README"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 3, "result": {"session": {"id": "$sid", "status": "idle", "enforced": true, "role": "chat"}, "entries": {"$contains": [{"type": "tool", "status": "completed", "content": [{"type": "content", "content": {"type": "text", "text": "cannot edit: Read-only file system (os error 30)"}}]}]}}}, "within_ms": 20000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cat $ROOT/project/README"], "expect_code": 0, "expect_stdout": "readme\n"}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/stop", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": "$any"}, "within_ms": 10000}

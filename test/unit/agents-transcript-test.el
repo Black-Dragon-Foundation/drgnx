@@ -49,110 +49,84 @@
     (should (= small big))
     (should (< big 100))))
 
-;;;; What waits on you: the `agents' set of the one "needs you" count
+;;;; What waits on you: the `agents' set of the one "needs you" count, as the hub derives it
 
 (defmacro drgnx-agents-transcript-test--with-attention (&rest body)
   "BODY with no sessions, nothing noted yet, a fresh notice model, and nothing else following the sessions."
   (declare (indent 0) (debug t))
   `(drgnx-notice-test-with-model
-     (let ((drgnx-agents--sessions nil) (drgnx-agents--attention-seen nil) (drgnx-agents-changed-functions nil))
+     (let ((drgnx-agents--sessions nil) (drgnx-agents--attention nil) (drgnx-agents--at-work 0)
+           (drgnx-agents-changed-functions nil) (drgnx-agents-mirror--paused nil))
        ,@body)))
 
 (defun drgnx-agents-transcript-test--item (id)
   "The \"needs you\" item with ID, or nil."
   (seq-find (lambda (i) (equal (plist-get i :id) id)) (drgnx-needs-you-items)))
 
-(defun drgnx-agents-transcript-test--waiting (&rest slots)
-  "A busy session made of SLOTS, in the session list."
-  (let ((s (apply #'drgnx-agents--make :status 'busy slots)))
-    (push s drgnx-agents--sessions)
-    s))
+(defun drgnx-agents-transcript-test--hub-says (at-work &rest items)
+  "The hub's `agents-attention' event: AT-WORK sessions work, ITEMS (each a plist as the hub sends it) wait."
+  (drgnx-agents-mirror--event "agents-attention" (list :at_work at-work :items (vconcat items))))
 
-(ert-deftest drgnx-agents-transcript/permissions-and-reviews-are-the-agents-set ()
+(ert-deftest drgnx-agents-transcript/the-hubs-attention-list-is-the-agents-set ()
   (drgnx-agents-transcript-test--with-attention
-    (let* ((file (expand-file-name "proj/a.txt" "~"))
-           (s (drgnx-agents-transcript-test--waiting :name "mock · proj" :id "s-a" :job "j1"
-                                                     :permissions (list (list :id 4 :title "Run\nmake"))
-                                                     :reviews (list (list :id 7 :path file :content "y")))))
-      (drgnx-agents--changed s)
-      (should (= (drgnx-needs-you-count) 2))
-      (let ((p (drgnx-agents-transcript-test--item '(permission "s-a" . 4)))
-            (r (drgnx-agents-transcript-test--item '(review "s-a" . 7))))
-        (should (equal (plist-get p :text) "mock · proj asks: Run make"))
-        (should (eq (plist-get p :command) 'agents-answer))
-        (should (eq (plist-get p :source) 'agents))
-        (should (equal (plist-get r :text) "mock · proj wants to write ~/proj/a.txt"))
-        (should (eq (plist-get r :command) 'agents-view))))))
+    (drgnx-agents-transcript-test--hub-says
+     1 (list :kind "permission" :session "s-a" :id 4 :text "mock · proj asks: Run\nmake" :job "j1"))
+    (should (= (drgnx-needs-you-count) 1))
+    (should (= 1 (drgnx-agents-at-work)))
+    (let ((p (drgnx-agents-transcript-test--item '(permission "s-a" . 4))))
+      (should (equal (plist-get p :text) "mock · proj asks: Run make"))
+      (should (eq (plist-get p :command) 'agents-answer))
+      (should (eq (plist-get p :source) 'agents))
+      (should (equal (plist-get p :scope) "j1")))))
 
-(ert-deftest drgnx-agents-transcript/an-unchanged-session-allocates-nothing ()
-  ;; `drgnx-agents--changed' runs on every streamed chunk: when no list changed, noting costs no cons and no tick
+(ert-deftest drgnx-agents-transcript/a-new-list-replaces-the-set ()
   (drgnx-agents-transcript-test--with-attention
-    (let ((s (drgnx-agents-transcript-test--waiting :name "a" :id "s-q" :permissions (list (list :id 1 :title "x"))
-                                                    :reviews (list (list :id 2 :path "/tmp/x" :content "y")))))
-      (drgnx-agents-transcript-test--waiting :name "b" :id "s-r" :status 'idle)
-      (drgnx-agents--changed s)
-      (dolist (f '(drgnx-agents--note-attention drgnx-agents--attention-same-p drgnx-agents--same-items-p))
-        (unless (compiled-function-p (indirect-function f)) (let ((byte-compile-warnings nil)) (byte-compile f))))
-      (let ((tick (drgnx-notice-tick)))
-        (should (= 0 (drgnx-notice-test--alloc (drgnx-agents--note-attention))))
-        (should (= tick (drgnx-notice-tick)))
-        (should (= 2 (drgnx-needs-you-count)))))))
+    (drgnx-agents-transcript-test--hub-says 2 (list :kind "permission" :session "s-a" :id 1 :text "a asks: x")
+                                            (list :kind "permission" :session "s-b" :id 2 :text "b asks: y"))
+    (should (= (drgnx-needs-you-count) 2))
+    (drgnx-agents-transcript-test--hub-says 1 (list :kind "permission" :session "s-b" :id 2 :text "b asks: y"))
+    (should (= (drgnx-needs-you-count) 1))
+    (should-not (drgnx-agents-transcript-test--item '(permission "s-a" . 1)))
+    (drgnx-agents-transcript-test--hub-says 0)
+    (should (= (drgnx-needs-you-count) 0))
+    (should (= 0 (drgnx-agents-at-work)))))
 
-(ert-deftest drgnx-agents-transcript/answering-removes-the-item ()
-  ;; the answer goes to the hub; the item leaves the count at once
+(ert-deftest drgnx-agents-transcript/an-event-makes-no-walk-over-the-sessions ()
+  ;; `agent' and `agent-entries' events no longer make the set: a session with a permission in its own list and no
+  ;; `agents-attention' event noted adds nothing to the count
   (drgnx-agents-transcript-test--with-attention
-    (let ((s (drgnx-agents-transcript-test--waiting :name "a" :id "s-b" :remote "s-b"
-                                                    :permissions (list (list :id 1 :title "x") (list :id 3 :title "z"))
-                                                    :reviews (list (list :id 2 :path "/tmp/x" :content "y"))))
-          (calls nil))
-      (drgnx-agents--changed s)
-      (should (= (drgnx-needs-you-count) 3))
-      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method params &rest _) (push (cons method params) calls))))
-        ;; the last of two: `delq' keeps the list's head, the item still goes
-        (drgnx-agents-answer-permission s (cadr (drgnx-agent-session-permissions s)) "allow")
-        (drgnx-agents--changed s)
-        (should (= (drgnx-needs-you-count) 2))
-        (should-not (drgnx-agents-transcript-test--item '(permission "s-b" . 3)))
-        (drgnx-agents-answer-permission s (car (drgnx-agent-session-permissions s)) "allow")
-        (drgnx-agents-finish-review s (car (drgnx-agent-session-reviews s)))
-        (drgnx-agents--changed s)
-        (should (= (drgnx-needs-you-count) 0)))
-      (should (equal (mapcar #'car (reverse calls)) '("agents/permission" "agents/permission" "agents/do"))))))
-
-(ert-deftest drgnx-agents-transcript/a-mirror-update-is-seen ()
-  ;; a hub session's permission reaches this Emacs's count through the mirror's snapshot
-  (drgnx-agents-transcript-test--with-attention
-    (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
-          (push (drgnx-agents--make :remote "s-m" :id "s-m") drgnx-agents--sessions)
-          ;; the snapshot as the hub sends it (records 2): JSON, decoded by the session schema
-          (drgnx-agents-mirror--event "agent" (list :id "s-m" :seq 1 :session '(:id "s-m" :name "m" :status "busy" :permissions ((:id 3 :title "Edit")))))
-          (should (equal (plist-get (drgnx-agents-transcript-test--item '(permission "s-m" . 3)) :text) "m asks: Edit"))
-          (drgnx-agents-mirror--event "agent" (list :id "s-m" :seq 2 :session '(:id "s-m" :name "m" :status "idle")))
-          (should (= (drgnx-needs-you-count) 0)))
-      (drgnx-agents-mirror-stop))))
-
-(ert-deftest drgnx-agents-transcript/scope-is-the-sessions-job ()
-  (drgnx-agents-transcript-test--with-attention
-    (drgnx-agents-transcript-test--waiting :name "a" :id "s-j" :job "j1" :permissions (list (list :id 1 :title "x")))
-    (let ((s (drgnx-agents-transcript-test--waiting :name "b" :id "s-n" :reviews (list (list :id 2 :path "/tmp/x" :content "y")))))
-      (drgnx-agents--changed s)
-      (should (= (drgnx-needs-you-count) 2))
-      (should (= (drgnx-needs-you-count "j1") 1))
-      (should (equal (plist-get (drgnx-agents-transcript-test--item '(permission "s-j" . 1)) :scope) "j1"))
-      (should-not (plist-get (drgnx-agents-transcript-test--item '(review "s-n" . 2)) :scope)))))
-
-(ert-deftest drgnx-agents-transcript/an-exited-session-leaves-nothing ()
-  ;; whatever its lists still hold, nobody can answer an ended session
-  (drgnx-agents-transcript-test--with-attention
-    (let ((s (drgnx-agents-transcript-test--waiting :name "a" :id "s-x" :permissions (list (list :id 1 :title "x"))
-                                                    :reviews (list (list :id 2 :path "/tmp/x" :content "y")))))
-      (drgnx-agents--changed s)
-      (should (= (drgnx-needs-you-count) 2))
-      (setf (drgnx-agent-session-status s) 'exited)
+    (let ((s (drgnx-agents--make :name "a" :id "s-q" :remote "s-q" :status 'busy
+                                 :permissions (list (list :id 1 :title "x")))))
+      (push s drgnx-agents--sessions)
       (drgnx-agents--changed s)
       (should (= (drgnx-needs-you-count) 0))
-      (should-not (drgnx-needs-you-items)))))
+      (should (= 0 (drgnx-agents-at-work))))))
+
+(ert-deftest drgnx-agents-transcript/answering-removes-the-item ()
+  ;; the answer goes to the hub; the item leaves the count at once, and the hub's next list agrees
+  (drgnx-agents-transcript-test--with-attention
+    (let ((s (drgnx-agents--make :name "a" :id "s-b" :remote "s-b" :status 'busy
+                                 :permissions (list (list :id 1 :title "x") (list :id 3 :title "z"))))
+          (calls nil))
+      (push s drgnx-agents--sessions)
+      (drgnx-agents-transcript-test--hub-says 1 (list :kind "permission" :session "s-b" :id 1 :text "a asks: x")
+                                              (list :kind "permission" :session "s-b" :id 3 :text "a asks: z"))
+      (should (= (drgnx-needs-you-count) 2))
+      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method params &rest _) (push (cons method params) calls))))
+        (drgnx-agents-answer-permission s (cadr (drgnx-agent-session-permissions s)) "allow")
+        (should (= (drgnx-needs-you-count) 1))
+        (should-not (drgnx-agents-transcript-test--item '(permission "s-b" . 3)))
+        (drgnx-agents-answer-permission s (car (drgnx-agent-session-permissions s)) "allow")
+        (should (= (drgnx-needs-you-count) 0)))
+      (should (equal (mapcar #'car (reverse calls)) '("agents/permission" "agents/permission"))))))
+
+(ert-deftest drgnx-agents-transcript/the-hub-going-clears-the-set ()
+  (drgnx-agents-transcript-test--with-attention
+    (drgnx-agents-transcript-test--hub-says 1 (list :kind "permission" :session "s-a" :id 1 :text "a asks: x"))
+    (should (= (drgnx-needs-you-count) 1))
+    (drgnx-agents-mirror--hub-gone)
+    (should (= (drgnx-needs-you-count) 0))
+    (should (= 0 (drgnx-agents-at-work)))))
 
 (ert-deftest drgnx-agents-transcript/tracker-tools-is-in-the-schema ()
   (should (string-search ":tracker-tools (enum on off)" (format "%S" drgnx-agents-config-schema)))

@@ -21,6 +21,8 @@
 {"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}, "within_ms": 60000}
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/list"}}
 {"do": "expect", "conn": "c", "json": {"id": 4, "result": {"sessions": {"$contains": [{"id": "$capture:old", "parent": "$sid", "role": "worker"}]}}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$old"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
 {"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/send", "params": {"id": "$old", "text": "ask:permission edit"}}}
 {"do": "expect", "conn": "c", "json": {"id": 5, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$old", "entries": {"$contains": [[ "$any", {"type": "agent", "text": "permission: allow_once"}]]}}}, "within_ms": 30000}

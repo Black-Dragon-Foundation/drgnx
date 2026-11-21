@@ -5,6 +5,8 @@
 #   DRGNX_FAKE_WM_DIR    directory of the replies
 #   DRGNX_FAKE_WM_MAP    lines "ARGS-REGEXP FILE": the first regexp (grep -E) matching the arguments
 #                        joined with spaces picks FILE (relative to DIR; ".json" is added if missing)
+#                        when FILE.next exists beside the reply served, it replaces it after this answer: the
+#                        next call gets it (a reply that changes after the first poll, whatever the clock says)
 #   DRGNX_FAKE_WM_DELAY  seconds to sleep before answering
 #   DRGNX_FAKE_WM_DONE   file created when the delay is over (a test asserts a caller returned before it exists)
 #   DRGNX_FAKE_WM_OUT    text printed to standard output (before any mapped reply)
@@ -29,7 +31,7 @@ printf '%s\n' "$DRGNX_FAKE_WM_MAP" | while IFS= read -r line; do
   pat=${line% *}
   if printf '%s' "$args" | grep -Eq -- "$pat"; then
     for f in "$DRGNX_FAKE_WM_DIR/$file" "$DRGNX_FAKE_WM_DIR/$file.json"; do
-      [ -f "$f" ] && { cat "$f"; break; }
+      [ -f "$f" ] && { cat "$f"; [ -f "$f.next" ] && mv -f "$f.next" "$f"; break; }
     done
     break
   fi

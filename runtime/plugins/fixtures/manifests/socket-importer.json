@@ -1,0 +1,6 @@
+{
+  "name": "socket-importer",
+  "version": "0.1.0",
+  "abilities": [{"name": "probe", "description": "Imports wasi:sockets, which the host does not provide.",
+                 "input_schema": {"type": "object"}}]
+}

@@ -1,0 +1,28 @@
+{"scenario": "work/snapshot-counts-turns", "requires": ["v1", "test-hooks"], "doc": "A turn shorter than the update throttle is over before any snapshot says busy; the snapshot says how many turns the session has started (turns), so an editor that shows no transcript of it still learns of the turn, once. Two such turns on the hub clock: idle with turns 1, then idle with turns 2, never busy between."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "connect", "conn": "q", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "__test_advance", "params": {"ms": 100}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle", "turns": 0}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 21, "method": "agents/send", "params": {"id": "$sid", "text": "hello"}}}
+{"do": "expect", "conn": "c", "json": {"id": 21, "result": true}}
+{"do": "expect_silent", "conn": "q", "for_ms": 1500}
+{"do": "send", "conn": "c", "json": {"id": 31, "method": "__test_advance", "params": {"ms": 100}}}
+{"do": "expect", "conn": "c", "json": {"id": 31, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle", "turns": 1}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 22, "method": "agents/send", "params": {"id": "$sid", "text": "hello"}}}
+{"do": "expect", "conn": "c", "json": {"id": 22, "result": true}}
+{"do": "expect_silent", "conn": "q", "for_ms": 1500}
+{"do": "send", "conn": "c", "json": {"id": 32, "method": "__test_advance", "params": {"ms": 100}}}
+{"do": "expect", "conn": "c", "json": {"id": 32, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle", "turns": 2}}}, "within_ms": 10000}

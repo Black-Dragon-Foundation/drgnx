@@ -97,7 +97,8 @@ until kkp is on there and drgnx marked it."
 
 (defun drgnx-tty-keys-test--quit (s c caps)
   "C-g in client C (CAPS) until the minibuffer is gone: a C-g that lands while the palette still fills its list
-quits only that (\"[Quit]\"), as it would for a person, who presses it again."
+quits only that (\"[Quit]\"), as it would for a person, who presses it again.  The module stages are over first."
+  (drgnx-tty-session-wait-stages s)
   (let ((tries 0))
     (while (and (drgnx-tty-session-eval s '(and (active-minibuffer-window) t)) (< tries 5))
       (drgnx-tty-session-key c "C-g" caps)

@@ -1,0 +1,15 @@
+Ghostty's shell integration and terminfo, as drgnx's terminal uses them (docs/guide/shell.md, "Ghostty's shell integration and ssh").
+
+Source: Ghostty, the libghostty-vt 1.0.0 source tarball (the library drgnx's terminal is built on), unchanged:
+  shell-integration/bash/ghostty.bash                                 src/shell-integration/bash/ghostty.bash
+  shell-integration/bash/bash-preexec.sh                              src/shell-integration/bash/bash-preexec.sh
+  shell-integration/zsh/ghostty-integration                           src/shell-integration/zsh/ghostty-integration
+  shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish src/shell-integration/fish/vendor_conf.d/…
+  shell-integration/elvish/lib/ghostty-integration.elv                src/shell-integration/elvish/lib/…
+  terminfo/xterm-ghostty.terminfo     written by src/terminfo/ghostty.zig (Source.encode), compiled at install with tic
+
+Licences: Ghostty is MIT (LICENSE, here).  ghostty.bash and ghostty-integration (zsh) started from Kitty's integration
+and are GPLv3, as their headers say; bash-preexec.sh is MIT (its header).  drgnx is GPLv3.
+
+drgnx's own files (../drgnx.bash, ../drgnx.zsh, ../drgnx.fish) source these inside drgnx's terminal; nothing here is
+changed for drgnx.  To update: replace the files from the new tarball and regenerate the terminfo.

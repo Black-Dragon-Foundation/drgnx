@@ -20,8 +20,6 @@
 (require 'timer)
 (require 'loadhist)
 
-(defvar drgnx-keys--applied)            ; drgnx-keys, when loaded
-
 (defvar drgnx-modules-fingerprint-hooks
   '(kill-buffer-hook kill-emacs-hook after-change-functions window-buffer-change-functions
                      window-size-change-functions window-selection-change-functions window-state-change-functions
@@ -53,10 +51,10 @@ symbol with one line; the FULL scan finds the rest.")
 (defvar drgnx-modules-fingerprint-registries
   '(drgnx-commands--table drgnx-wb--sections drgnx-wb--areas drgnx-rules--table drgnx-rules--places
                           (drgnx-signal--subscribers . :functions) drgnx-surfaces-contexts drgnx-layouts-shapes
-                          drgnx-layouts-pane-fillers drgnx-config--defs drgnx-memo--watched
+                          drgnx-config--defs drgnx-memo--watched
                           drgnx-view--types (drgnx-state--now . :functions) (drgnx-state--idle . :functions)
                           drgnx-state--roles drgnx-pane--kinds drgnx-modal-engines
-                          drgnx-notice--sources drgnx-statusbar--segments)
+                          drgnx-notice--sources drgnx-statusbar--segments drgnx-ui-kit--actions)
   "drgnx's registries whose keys the fingerprint reads: a variable that holds a hash table, an alist or a
 list of conses (the key is the car).  `(VAR . :functions)' is an alist KEY → list of functions: each
 function is read too.  Unbound variables are skipped.  Branches that add a registry add one line.")
@@ -140,7 +138,8 @@ would report one leak as two lines."
     items))
 
 (defvar drgnx-modules-fingerprint--own nil
-  "(HOOKS . FUNCTION-VARIABLES): the bound `drgnx-*' symbols ending in -hook, -hooks, -functions / -function.
+  "(HOOKS . FUNCTION-VARIABLES): the bound `drgnx-*' symbols ending in -hook, -functions / -function (a -hooks name
+holds hook names: `drgnx-modules-fingerprint--hook-name-p').
 Read once per Emacs (`apropos-internal', in C) and again by every FULL scan; nil until then.  A library loaded
 after that, and not scanned since, is not in it (the next FULL scan adds it).")
 
@@ -151,7 +150,7 @@ after that, and not scanned since, is not in it (the next FULL scan adds it).")
   "`drgnx-modules-fingerprint--own', read from the obarray on first use."
   (or drgnx-modules-fingerprint--own
       (let (hooks fvars)
-        (dolist (s (apropos-internal "\\`drgnx-.*\\(?:-hooks?\\|-functions?\\)\\'" #'default-boundp))
+        (dolist (s (apropos-internal "\\`drgnx-.*\\(?:-hook\\|-functions?\\)\\'" #'default-boundp))
           (when (eq (indirect-variable s) s)
             (if (string-suffix-p "-function" (symbol-name s)) (push s fvars) (push s hooks))))
         (setq drgnx-modules-fingerprint--own (cons hooks fvars)))))
@@ -175,8 +174,11 @@ Rebuilt only when one of its inputs is a different list."
 (defun drgnx-modules-fingerprint--function-variable-names () (cadr (drgnx-modules-fingerprint--names)))
 
 (defun drgnx-modules-fingerprint--hook-name-p (name)
+  "Whether NAME is a hook variable's by Emacs's convention: -hook (normal) or -functions (abnormal).  A -hooks
+name holds hook names (`unload-feature-special-hooks', `drgnx-pixels--quiet-hooks'): read as a hook, each name was an
+entry."
   (and (> (length name) 6)
-       (or (string-suffix-p "-hook" name) (string-suffix-p "-hooks" name) (string-suffix-p "-functions" name))))
+       (or (string-suffix-p "-hook" name) (string-suffix-p "-functions" name))))
 
 (defun drgnx-modules-fingerprint--scan ()
   "(:all-hooks ITEMS :advice ITEMS): every bound hook variable's default value, every `-function' variable's
@@ -187,7 +189,8 @@ whose value is not what its name says is skipped.  About 12 ms compiled."
      (lambda (s)
        (when (fboundp s)
          (advice-mapc (lambda (f _props) (push (cons (list 'advice s) f) advice)) s))
-       (when (and (default-boundp s) (eq (indirect-variable s) s))
+       ;; a keyword is bound to itself: `:after-hook' is no hook
+       (when (and (default-boundp s) (not (keywordp s)) (eq (indirect-variable s) s))
          (let* ((name (symbol-name s)) (own (string-prefix-p "drgnx-" name)))
            (cond
             ((drgnx-modules-fingerprint--hook-name-p name)
@@ -213,6 +216,98 @@ bytecomp, so a FULL fingerprint calls it before it reads anything (the load is n
       (let ((byte-compile-warnings nil) (inhibit-message t))
         (byte-compile 'drgnx-modules-fingerprint--scan)))))
 
+(defvar drgnx-modules-fingerprint-frame-parameters-ignored
+  '(buffer-list buried-buffer-list name title window-id outer-window-id parent-id minibuffer icon-name explicit-name
+                last-focus-update)
+  "Frame parameters the session fingerprint leaves out: they change with what is shown, not with what a test leaves.")
+
+(defun drgnx-modules-fingerprint--line-format-items ()
+  "Items for the default `mode-line-format', `header-line-format' and `tab-line-format': each element of a list value
+\(the whole value otherwise), so an entry a mode put in the default and did not take out shows as one line."
+  (let (items)
+    (dolist (var '(mode-line-format header-line-format tab-line-format))
+      (when (default-boundp var)
+        (let ((v (default-value var)) (key (list 'line-format var)))
+          (if (and (consp v) (proper-list-p v))
+              (dolist (e v) (push (cons key e) items))
+            (push (cons key v) items)))))
+    items))
+
+(defun drgnx-modules-fingerprint--keymap-items (kind map)
+  "Items for every binding in the keymap MAP, a prefix map's too: key (KIND \"C-x f\"), the binding as the object.
+A prefix bound to an autoloaded keymap (`kmacro-keymap', `2C-command') is one binding, its symbol: walking it would
+load its library, and the scan loads nothing."
+  (let (items (seen nil))
+    (cl-labels ((walk (m prefix depth)
+                  (unless (or (memq m seen) (> depth 6))
+                    (push m seen)
+                    (map-keymap
+                     (lambda (ev b)
+                       (let ((keys (vconcat prefix (vector ev))))
+                         (if (and (keymapp b) (not (eq ev 'menu-bar))
+                                  (not (and (symbolp b) (autoloadp (symbol-function b)))))
+                             (walk b keys (1+ depth))
+                           (push (drgnx-modules-fingerprint--item
+                                  (list kind) (ignore-errors (key-description keys)) b)
+                                 items))))
+                     m))))
+      (walk map [] 0))
+    items))
+
+(defun drgnx-modules-fingerprint--frame-items ()
+  "Items for the selected frame's parameters (a changed value shows as the old one gone and the new one there, by
+its printed text), and the number of root frames (a child frame left shows by its own line, its name: counted here
+too, a pooled child frame the allowlist names would still read as a leak)."
+  (let ((items (list (cons (list 'frame-count) (cl-count-if-not #'frame-parent (frame-list))))))
+    (dolist (p (frame-parameters (selected-frame)))
+      (unless (or (memq (car p) drgnx-modules-fingerprint-frame-parameters-ignored)
+                  ;; a terminal frame's size is the terminal's (it changes with the first message): only a graphic frame's is read
+                  (and (memq (car p) '(height width left top)) (not (display-graphic-p))))
+        (push (drgnx-modules-fingerprint--item (list 'frame-param) (car p) (intern (format "%S" (cdr p)))) items)))
+    items))
+
+(defun drgnx-modules-fingerprint--window-items ()
+  "Items for the selected window's parameters, the frame's focus state and how many windows the frame has.  A test
+that leaves a clone of the window selected, or a window with a `quit-restore' parameter, moves where the next file's
+first window is."
+  (let ((w (selected-window)) (items nil))
+    ;; not the window object: the workbench rebuilds its windows, and a clone selected where the original was draws the same
+    (push (cons (list 'selected-frame-focus) (intern (format "%S" (frame-focus-state)))) items)
+    (push (cons (list 'window-count) (length (window-list nil 'nomini))) items)
+    (dolist (p (window-parameters w))
+      (push (drgnx-modules-fingerprint--item (list 'window-param) (car p) (intern (format "%S" (cdr p)))) items))
+    items))
+
+(defun drgnx-modules-fingerprint--face-items ()
+  "Items for drgnx's faces as the selected frame shows them (foreground, background): a colour a test set on the frame
+with `set-face-background' and did not give back (`face-spec-recalc') shows as the old pair gone and the new one there."
+  (let ((f (selected-frame)) items)
+    (dolist (face (face-list))
+      (when (string-prefix-p "drgnx-" (symbol-name face))
+        (push (drgnx-modules-fingerprint--item
+               (list 'face) face
+               (intern (format "%S" (cons (face-attribute face :foreground f) (face-attribute face :background f)))))
+              items)))
+    items))
+
+(defun drgnx-modules-fingerprint--frame-list-items ()
+  "Items for the frames themselves (by object): a root frame swapped for another, or a child frame left, shows by name."
+  (mapcar (lambda (fr) (cons (list 'frame (frame-parameter fr 'name)) fr)) (frame-list)))
+
+(defun drgnx-modules-fingerprint--session-items ()
+  "What a GUI test file can change in the session besides hooks and timers: the default line formats, the global
+keymap (and the one in use), the minor mode maps, the selected frame's parameters."
+  (list :line-formats (drgnx-modules-fingerprint--line-format-items)
+        :global-map (append (list (cons (list 'current-global-map) (current-global-map)))
+                            (drgnx-modules-fingerprint--keymap-items 'global-map (current-global-map))
+                            (unless (eq (current-global-map) global-map)
+                              (drgnx-modules-fingerprint--keymap-items 'global-map global-map)))
+        :minor-mode-maps (drgnx-modules-fingerprint--alist-items 'minor-mode-map 'minor-mode-map-alist)
+        :frame (append (drgnx-modules-fingerprint--frame-items) (drgnx-modules-fingerprint--frame-list-items))
+        :faces (drgnx-modules-fingerprint--face-items)
+        :themes (mapcar (lambda (th) (cons (list 'theme th) th)) custom-enabled-themes)
+        :window (drgnx-modules-fingerprint--window-items)))
+
 (defun drgnx-modules-fingerprint--full-items ()
   "The `mapatoms' scan (`drgnx-modules-fingerprint--compile-scan' compiled it) and the hand-listed hooks it misses."
   (let* ((scan (drgnx-modules-fingerprint--scan)) (extra nil))
@@ -222,6 +317,41 @@ bytecomp, so a FULL fingerprint calls it before it reads anything (the load is n
         (setq extra (nconc (ignore-errors (drgnx-modules-fingerprint--hook-items h)) extra))))
     (when extra (setq scan (plist-put scan :all-hooks (nconc extra (plist-get scan :all-hooks)))))
     scan))
+
+(defvar drgnx-keys--yours)
+(defvar drgnx-keys--yours-in-maps)
+(defvar drgnx-keys--yours-everywhere)
+(defvar drgnx-keys-user-map)
+(defvar drgnx-keys--attached)
+(defvar drgnx-keys--foreign-on)
+(defvar drgnx-keys-last)
+
+(defun drgnx-modules-fingerprint--map-size (map)
+  "The bindings of keymap MAP, a nil one too, its sub-keymaps walked (an evil auxiliary keymap) and its parent left
+out."
+  (let ((n 0))
+    (map-keymap-internal
+     (lambda (_ev def) (setq n (+ n (if (and (consp def) (keymapp def)) (drgnx-modules-fingerprint--map-size def) 1))))
+     map)
+    n))
+
+(defun drgnx-modules-fingerprint--keys-items ()
+  "What drgnx-keys holds that a test can leave behind, once that library is loaded: ((keys NAME) . VALUE) for each
+that is not at rest.  The counts of your keys (global, in named maps, of `:everywhere' keys), the bindings of your
+map (its auxiliary keymaps too), the layers attached above drgnx's maps, the foreign layer when on, and a global map
+other than `global-map' while no profile is applied."
+  (when (featurep 'drgnx-keys)
+    (let (items)
+      (dolist (it (list (cons '(keys yours) (hash-table-count drgnx-keys--yours))
+                        (cons '(keys yours-in-maps) (hash-table-count drgnx-keys--yours-in-maps))
+                        (cons '(keys yours-everywhere) (length drgnx-keys--yours-everywhere))
+                        (cons '(keys user-map) (drgnx-modules-fingerprint--map-size drgnx-keys-user-map))
+                        (cons '(keys attached) (length drgnx-keys--attached))))
+        (unless (eql (cdr it) 0) (push it items)))
+      (when drgnx-keys--foreign-on (push (cons '(keys foreign-layer) 'on) items))
+      (unless (or drgnx-keys-last (eq (current-global-map) global-map))
+        (push (cons '(keys global-map) 'not-global-map) items))
+      items)))
 
 (defun drgnx-modules-fingerprint (&optional full)
   "A plist of the global state a module or a test can leave behind (see this file's commentary).
@@ -254,9 +384,11 @@ function (about 12 ms): once per test file.  The diff of two full ones reads `:a
                  (drgnx-modules-fingerprint--alist-items 'frame-parameter 'default-frame-alist)
                  :global-minor-modes
                  (drgnx-modules-fingerprint--list-items 'minor-mode 'global-minor-modes)
-                 :keys-applied (and (boundp 'drgnx-keys--applied) (length drgnx-keys--applied))
+                 :keys (drgnx-modules-fingerprint--keys-items)
                  :registries regs)))
-      (if full (append cheap (drgnx-modules-fingerprint--full-items)) cheap))))
+      (if full
+          (append cheap (drgnx-modules-fingerprint--full-items) (drgnx-modules-fingerprint--session-items))
+        cheap))))
 
 ;;;; The diff
 
@@ -276,7 +408,7 @@ function (about 12 ms): once per test file.  The diff of two full ones reads `:a
          (fn (pcase kind
                ('timer (and (timerp obj) (let ((d (and (fboundp 'drgnx-timer-describe) (drgnx-timer-describe obj))))
                                            (if d (plist-get d :fn) (timer--function obj)))))
-               ((or 'hook 'advice 'function-variable 'registry) obj)
+               ((or 'hook 'advice 'function-variable 'registry 'global-map) obj)
                (_ nil))))
     (drgnx-modules-fingerprint--normalize-file
      (cond
@@ -354,10 +486,6 @@ of the two fingerprints has (FULL against cheap) are skipped."
                          out
                          (pcase field
                            (:features (drgnx-modules-fingerprint--diff-features b a))
-                           (:keys-applied
-                            (unless (equal a b)
-                              (list (list :what (format "drgnx-keys--applied length %s -> %s" b a)
-                                          :source nil))))
                            (_ (drgnx-modules-fingerprint--diff-items b a)))))))
     out))
 

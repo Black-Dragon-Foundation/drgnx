@@ -1,0 +1,987 @@
+//! The agent panel's rows (docs/develop/hub.md, "The agent panel's rows"): an editor that shows session SID's panel
+//! sends `view/env` for the view `agent-panel/SID`, and the hub sends it the transcript's rows as patches
+//! (`view-patch`); the rows themselves are [`crate::agents::session::rows`]'.  Per (connection, view, class) a cache
+//! keeps each group's rows, so an update builds only the groups whose entries changed, and the store's diff sends only
+//! their rows.  What the user chose (the step types open, rows opened by hand, how far back the rows go) is per
+//! (connection, view): `agents/panel/look`.  The steps' facts (time, cost, checkpoint, undone, subagent, hooks) come
+//! from the step bus as steps close, and from the `step` table when a panel first shows a session and after a revert.
+//! Before its rows each (connection, view) gets the panel's model ([`panel_doc`], `view-model`): its steps, each with
+//! its kind and whether it has a diff, so the editor's keys find the next of a kind without asking; an appended entry
+//! sends its new steps alone. Every row names its step (`drgnx-work-id`).
+
+use super::bgwork;
+use super::model::Doc;
+use super::panel_cards::{self, FileEdit};
+use super::panel_review;
+use super::panel_top;
+use super::{Key, lock};
+use crate::agents::session::Session;
+use crate::agents::session::rows::{self, Cx, Facts, Look};
+use crate::dispatch::Caller;
+use crate::front::Front;
+use drgnx_rows::faces::FaceId;
+use drgnx_rows::fit::{self, FontSet};
+use drgnx_rows::{Row, RowBuilder};
+use runstav::methods::agents::{Entry, EntryType, PanelLook, Snapshot};
+use runstav::methods::timeline::Step;
+use runstav::methods::view::{Display, ViewEnv};
+use runstav::wire::Error;
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+
+/// The view name of session SID's panel: what its transcript window shows (the cards, the transcript, the review
+/// cards).
+pub fn view_of(sid: &str) -> String {
+    format!("{PREFIX}{sid}")
+}
+
+/// The view name of session SID's panel top: what its header window shows (the header, the chips, the strip).
+pub fn view_of_top(sid: &str) -> String {
+    format!("{PREFIX_TOP}{sid}")
+}
+
+const PREFIX: &str = "agent-panel/";
+const PREFIX_TOP: &str = "agent-panel-top/";
+
+/// Whether VIEW is a panel's top view.
+pub fn is_top(view: &str) -> bool {
+    view.starts_with(PREFIX_TOP)
+}
+
+/// The view whose look (`agents/panel/look`) VIEW's rows read: a panel's top view reads its transcript view's, the one
+/// the editor sends.
+pub fn look_view(view: &str) -> String {
+    view.strip_prefix(PREFIX_TOP)
+        .map_or_else(|| view.to_owned(), view_of)
+}
+
+/// The entries a panel's rows start with: the last this many, and as many again each time the editor asks for older.
+pub const WINDOW: usize = 200;
+
+/// The most steps a panel's model holds (Sjá's cap on a list sent whole): the newest.
+const MODEL_MAX: usize = 20_000;
+
+/// One step of a panel's model: its group's head index, its entry's type, and whether it is a tool call with a diff.
+pub type Head = (usize, EntryType, bool);
+
+/// Whether tool entry E has an edit ([`rows::diffs_of`] not empty), without copying its texts.
+fn has_diff(e: &Entry) -> bool {
+    let item = |i: &Value| i.get("type").and_then(Value::as_str) == Some("diff");
+    e.rest
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|a| a.iter().any(item))
+        || e.rest.get("rawInput").is_some_and(|r| {
+            r.get("old").is_some_and(Value::is_string) && r.get("new").is_some_and(Value::is_string)
+        })
+}
+
+/// The steps of ENTRIES (index, entry, in order, contiguous) that draw rows: each group's head ([`rows::groups`]; a
+/// plan and a usage draw none).
+pub fn heads_of(entries: &[(usize, &Entry)]) -> Vec<Head> {
+    let first = entries.first().map_or(0, |e| e.0);
+    rows::groups(entries)
+        .into_iter()
+        .filter_map(|(h, _)| {
+            let e = entries.get(h - first)?.1;
+            let diff = e.kind == EntryType::Tool && has_diff(e);
+            (!matches!(e.kind, EntryType::Plan | EntryType::Usage)).then_some((h, e.kind, diff))
+        })
+        .collect()
+}
+
+/// A panel's model of HEADS: a `list` scheme of the steps alone (`e:I`, kind the entry's type, fields `entry` and
+/// `diff`, 1 for a tool call with an edit).  No step links to another and no list is kept: Sjá sends a list whole
+/// when it changes, so a list of the tool calls would go whole with each one.  A new step adds its node and nothing
+/// else changes; the editor finds the next step of a kind among the rows it draws.
+pub fn panel_doc(heads: &[Head]) -> Doc {
+    let heads = &heads[heads.len().saturating_sub(MODEL_MAX)..];
+    let mut d = Doc {
+        descriptor: json!({
+            "scheme": "list",
+            "chain_kinds": [],
+            "match_fields": [],
+            "lists": [],
+            "classes": ["selected"],
+            "flags": [],
+            "forms": [],
+            "start": null,
+        }),
+        ..Doc::default()
+    };
+    for h in heads {
+        d.nodes.insert(format!("e:{}", h.0), node_of(h));
+    }
+    d
+}
+
+/// Step H's node in a panel's model.
+fn node_of(h: &Head) -> Value {
+    json!({"id": format!("e:{}", h.0), "kind": h.1, "flags": 0, "fields": [["entry", h.0], ["diff", u8::from(h.2)]]})
+}
+
+/// A panel's model to send: the whole of these steps, or these steps added to (or changed in) the one last sent.
+#[derive(Debug, PartialEq)]
+enum Made {
+    Whole(Vec<Head>),
+    Steps(Vec<Head>),
+}
+
+/// A session's groups from an index on, only those holding one of a set of indexes when given.
+type GroupsFn<'a> = dyn Fn(usize, Option<&BTreeSet<usize>>) -> Vec<rows::GroupIn> + 'a;
+
+/// A session's facts: a number that changes with them, and step seq → facts.
+type SessionFacts = (u64, BTreeMap<u64, Facts>);
+
+/// A session's transcript as the rows read it: its id, how many entries it has, its groups from an index on (only
+/// those holding one of a set of indexes, when given), and whether an Always grant covers a tool entry.
+struct Source<'a> {
+    sid: &'a str,
+    n: usize,
+    groups: &'a GroupsFn<'a>,
+    always: &'a dyn Fn(&runstav::methods::agents::Entry) -> bool,
+    /// How the hub cached that a tool entry was allowed.
+    prov: &'a dyn Fn(&runstav::methods::agents::Entry) -> Option<String>,
+    /// The blocks' roles of the entries from an index on ([`rows::panel_roles`]).
+    roles: &'a dyn Fn(usize) -> BTreeMap<usize, rows::Role>,
+    /// The background items still running, by the id that names their tool call ([`rows::Cx::bg`]).
+    bg: &'a BTreeMap<String, (u64, u64)>,
+    /// Rows the panel adds between the groups: (the entry index they come before, the rows), by index.
+    extra: &'a [(usize, Vec<Row>)],
+}
+
+/// What one (connection, view, class) was built from, and each group's rows.
+#[derive(Default)]
+struct Cache {
+    /// The env epoch, width, look and facts it was built for: any change builds every group again.
+    sig: Option<(u64, u32, u64, u64)>,
+    groups: BTreeMap<usize, Vec<Row>>,
+}
+
+/// One (connection, view)'s choices, and a number that changes with them.
+#[derive(Default)]
+struct Chosen {
+    look: Look,
+    lens: panel_top::Lens,
+    cards: CardState,
+    from: Option<usize>,
+    version: u64,
+    /// The (first entry, entry count) the last model sent was made of.
+    modeled: Option<(usize, usize)>,
+    /// The steps of the last model sent; none when the next one goes whole.
+    heads: Option<Vec<Head>>,
+}
+
+/// What the user chose of the cards: the pinned cards' texts, whether the ledger lists its files, and the entry index
+/// when it was last opened.
+#[derive(Clone, Default)]
+struct CardState {
+    pins: Vec<String>,
+    ledger_open: bool,
+    ledger_mark: Option<i64>,
+}
+
+/// A session's edits as the ledger shows them: the files (a worktree chat) or the hunks (a paired chat), read when
+/// the number of finished edits changed.
+#[derive(Default)]
+struct Edited {
+    /// How many finished edits it was read for.
+    count: Option<usize>,
+    files: Vec<FileEdit>,
+    paired: Vec<runstav::methods::history::OpHunk>,
+    /// Each edited file's path and its unified diff against the base (a worktree chat), for the diff cards.
+    diffs: Vec<(String, String)>,
+}
+
+/// Background item id → (the second the panel first saw it end, the transcript's entry count then).
+type Seen = BTreeMap<String, (f64, usize)>;
+
+/// The panels' state: the looks, the caches and the steps' facts.
+#[derive(Default)]
+pub struct Panels {
+    chosen: Mutex<BTreeMap<(u64, String), Chosen>>,
+    caches: Mutex<BTreeMap<Key, Cache>>,
+    /// Session → (a number that changes with its facts, step seq → facts).
+    facts: Mutex<BTreeMap<String, SessionFacts>>,
+    /// Session → when it began running (seconds since the epoch), while it runs: the header's "running N min".
+    busy: Mutex<BTreeMap<String, f64>>,
+    /// Session → its edits for the ledger.
+    edited: Mutex<BTreeMap<String, Edited>>,
+    /// Session → background item id → (the second the panel first saw it end, how many entries the transcript had
+    /// then).  What was already ended when the panel first looked has second 0 (history: no line, no fading).
+    bg_seen: Mutex<BTreeMap<String, Seen>>,
+    /// Held while the panels are built.
+    building: Mutex<()>,
+    front: OnceLock<Weak<Front>>,
+}
+
+/// The facts of step S.
+pub fn facts_of(s: &Step) -> Facts {
+    Facts {
+        start: Some(s.start),
+        end: s.end,
+        cost: s.cost,
+        revertible: s.revertible,
+        undone: s.undone_by.is_some(),
+        parent_tool: s.detail.as_ref().and_then(|d| d.parent_tool.clone()),
+        hooks: s.hooks.clone(),
+    }
+}
+
+impl Panels {
+    /// Keep the front and follow the steps as they close.
+    pub fn bind(self: &Arc<Self>, front: &Arc<Front>) {
+        if self.front.set(Arc::downgrade(front)).is_err() {
+            return;
+        }
+        let mut bus = front.core.agents.subscribe_steps();
+        let me = Arc::downgrade(self);
+        crate::clock::spawn("view:panel-steps", async move {
+            loop {
+                match bus.recv().await {
+                    Ok(ev) => {
+                        let Some(me) = me.upgrade() else { return };
+                        me.step(&ev.session, &ev.step);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => return,
+                }
+            }
+        });
+    }
+
+    fn front(&self) -> Option<Arc<Front>> {
+        self.front.get().and_then(Weak::upgrade)
+    }
+
+    /// Step STEP of session SID closed: its facts, and the panels that show the session built again.
+    fn step(&self, sid: &str, step: &Step) {
+        {
+            let mut facts = lock(&self.facts);
+            let Some((v, map)) = facts.get_mut(sid) else {
+                return; // no panel shows it: its facts are read when one does
+            };
+            map.insert(step.seq, facts_of(step));
+            *v += 1;
+        }
+        if let Some(f) = self.front() {
+            self.build_session(&f, sid, None);
+        }
+    }
+
+    /// The facts of session SID read again from the `step` table (a panel first shows it, or a revert changed which
+    /// steps are undone), then its panels built again.
+    pub fn load_facts(self: &Arc<Self>, sid: &str) {
+        let Some(f) = self.front() else { return };
+        lock(&self.facts)
+            .entry(sid.to_owned())
+            .or_insert((0, BTreeMap::new()));
+        let (me, sid) = (self.clone(), sid.to_owned());
+        crate::clock::spawn("view:panel-facts", async move {
+            let hub = Caller {
+                class: runstav::registry::Class::Service,
+                sid: None,
+                job: None,
+                conn_id: 0,
+            };
+            let Ok(p) =
+                serde_json::from_value(json!({"scope": "session", "id": sid, "limit": 500}))
+            else {
+                return;
+            };
+            let Ok(answer) = crate::timeline::get(&f, &hub, p).await else {
+                return;
+            };
+            {
+                let mut facts = lock(&me.facts);
+                let (v, map) = facts.entry(sid.clone()).or_insert((0, BTreeMap::new()));
+                for s in &answer.steps {
+                    map.insert(s.seq, facts_of(s));
+                }
+                *v += 1;
+            }
+            me.build_session(&f, &sid, None);
+        });
+    }
+
+    /// Session SID's edits for the ledger read again (its finished edits are COUNT now): a worktree chat's files, a paired
+    /// chat's hunks, then its panels built again.
+    fn load_edits(self: &Arc<Self>, sid: &str, count: usize) {
+        let Some(f) = self.front() else { return };
+        lock(&self.edited).entry(sid.to_owned()).or_default().count = Some(count);
+        let (me, sid) = (self.clone(), sid.to_owned());
+        crate::clock::spawn("view:panel-edits", async move {
+            let hub = Caller {
+                class: runstav::registry::Class::Service,
+                sid: None,
+                job: None,
+                conn_id: 0,
+            };
+            let snapshot = f.core.agents.find(&sid).map(|s| s.snapshot()).ok();
+            // a paired chat, or any session in a tree it shares with you (your checkout): its own records, hunk by hunk,
+            // each taken back through the edit history keeping your lines; never your uncommitted or untracked files
+            let paired = snapshot.as_ref().is_some_and(|s| s.paired == Some(true))
+                || crate::work::edits::shared(&f, &sid).await.unwrap_or(false);
+            let mut edited = Edited {
+                count: Some(count),
+                ..Edited::default()
+            };
+            if paired {
+                if let Some(cwd) = snapshot.as_ref().and_then(|s| s.cwd.clone())
+                    && let Ok(p) = serde_json::from_value(json!({"worktree": cwd, "session": sid}))
+                    && let Ok(a) = crate::history::hunk::op_hunks(&f, &hub, p).await
+                {
+                    edited.paired = a.hunks;
+                }
+            } else if let Ok(p) = serde_json::from_value(json!({"session": sid}))
+                && let Ok(a) = crate::work::edits::files(&f, &hub, p).await
+            {
+                edited.files = a
+                    .files
+                    .into_iter()
+                    .map(|e| FileEdit {
+                        path: e.path,
+                        plus: e.plus,
+                        minus: e.minus,
+                    })
+                    .collect();
+                for file in edited.files.iter().take(panel_review::MAX_FILES) {
+                    if let Ok(p) =
+                        serde_json::from_value(json!({"session": sid, "path": file.path}))
+                        && let Ok(h) = crate::work::edits::hunks(&f, &hub, p).await
+                    {
+                        edited.diffs.push((file.path.clone(), h.diff));
+                    }
+                }
+            }
+            lock(&me.edited).insert(sid.clone(), edited);
+            // the rows alone: no entry changed, so no model is made again; none while a connection's first build of
+            // the view is under way (it would start the model twice: its next build has these edits)
+            let built = lock(&me.caches).keys().any(|k| k.1 == view_of(&sid));
+            if built {
+                me.changed_in(&f, &sid, None, Some(&BTreeSet::new()));
+            }
+        });
+    }
+
+    /// A revert or a fork was applied: the sessions shown read their facts again (which steps are undone).
+    pub fn history_applied(self: &Arc<Self>) {
+        // the ledger's hunks too (a reverted hunk is undone): read again at the next build
+        for e in lock(&self.edited).values_mut() {
+            e.count = None;
+        }
+        let shown: Vec<String> = lock(&self.facts).keys().cloned().collect();
+        for sid in shown {
+            self.load_facts(&sid);
+        }
+    }
+
+    /// Session SID's ended background items as the panel has seen them end (see `bg_seen`), those of SNAP noted now.
+    fn note_ended(&self, sid: &str, snap: &Snapshot, now: f64, entries: usize) -> Seen {
+        let mut all = lock(&self.bg_seen);
+        let first = !all.contains_key(sid);
+        let seen = all.entry(sid.to_owned()).or_default();
+        seen.retain(|id, _| snap.background_ended.iter().any(|i| &i.id == id));
+        for i in &snap.background_ended {
+            seen.entry(i.id.clone()).or_insert(if first {
+                (0.0, entries)
+            } else {
+                (now, entries)
+            });
+        }
+        seen.clone()
+    }
+
+    /// `agents/panel/look`: CONN's choices for VIEW (a top view's are its transcript view's), and its panel's rows
+    /// built again.
+    pub fn look(&self, f: &Front, conn: u64, p: PanelLook) -> bool {
+        let view = look_view(&p.view);
+        let Some(sid) = view.strip_prefix(PREFIX) else {
+            return false;
+        };
+        {
+            let mut chosen = lock(&self.chosen);
+            let c = chosen.entry((conn, view.clone())).or_default();
+            take_thresholds(&mut c.look, &p);
+            if let Some(open) = p.open {
+                c.look.open = open.into_iter().map(|t| t.into_inner()).collect();
+            }
+            if let Some(rows) = p.rows {
+                c.look.rows = rows.into_iter().collect();
+            }
+            if let Some(pins) = p.pins {
+                c.cards.pins = pins.into_iter().map(|t| t.into_inner()).collect();
+            }
+            if let Some(open) = p.ledger_open {
+                if open && !c.cards.ledger_open {
+                    // looking at the ledger sets the mark: what comes after it is new
+                    let n = f.core.agents.find(sid).map_or(0, |s| s.entry_count());
+                    c.cards.ledger_mark = Some(n as i64 - 1);
+                }
+                c.cards.ledger_open = open;
+            }
+            if let Some(names) = p.lens {
+                c.lens.names = names.into_iter().map(|n| n.into_inner()).collect();
+            }
+            if let Some(on) = p.lens_on {
+                c.lens.on = on;
+            }
+            if let Some(sel) = p.bg_selected {
+                let sel = sel.into_inner();
+                c.look.bg_selected = (!sel.is_empty()).then_some(sel);
+            }
+            if p.older == Some(true) {
+                c.from = c.from.map(|from| from.saturating_sub(WINDOW));
+            }
+            c.version += 1;
+        }
+        self.build_session(f, sid, Some(conn));
+        true
+    }
+
+    /// Build every panel of session SID (only CONN's, when given) and send what changed.  DIRTY: the entry indexes that
+    /// changed (none: every group is built again).
+    pub fn build_session(&self, f: &Front, sid: &str, conn: Option<u64>) {
+        self.changed_in(f, sid, conn, None);
+    }
+
+    /// Session S's entries DIRTY changed (its `emit`): its panels build those groups again, and their tops (the
+    /// snapshot they draw may have changed with them).
+    pub fn changed(&self, s: &Session, dirty: &BTreeSet<usize>) {
+        let Some(f) = self.front() else { return };
+        let view = view_of(&s.id);
+        if !f.core.views.keys_of(&view).is_empty() {
+            self.build_keys(&f, s, &view, None, Some(dirty));
+        }
+        self.build_top(&f, s, None);
+    }
+
+    fn changed_in(&self, f: &Front, sid: &str, conn: Option<u64>, dirty: Option<&BTreeSet<usize>>) {
+        let Ok(s) = f.core.agents.find(sid) else {
+            return;
+        };
+        let view = view_of(sid);
+        self.build_keys(f, &s, &view, conn, dirty);
+        self.build_top(f, &s, conn);
+    }
+
+    /// Session S's top views (only CONN's, when given): the header, chips and strip, built whole each time (a few rows;
+    /// the store sends what changed).  They have no model.
+    fn build_top(&self, f: &Front, s: &Session, conn: Option<u64>) {
+        let _building = lock(&self.building);
+        let view = view_of_top(&s.id);
+        for key in f.core.views.keys_of(&view) {
+            if conn.is_none_or(|c| c == key.0) {
+                f.core.views.publish_built(f, &key, |env, fonts| {
+                    self.rows_for(s, &key, env, fonts, None)
+                });
+            }
+        }
+    }
+
+    fn build_keys(
+        &self,
+        f: &Front,
+        s: &Session,
+        view: &str,
+        conn: Option<u64>,
+        dirty: Option<&BTreeSet<usize>>,
+    ) {
+        // one build of the panels at a time: a build made while another is between its model and its rows would start the
+        // model again or send rows that name no model
+        let _building = lock(&self.building);
+        let keys: Vec<Key> = f
+            .core
+            .views
+            .keys_of(view)
+            .into_iter()
+            .filter(|k| conn.is_none_or(|c| c == k.0))
+            .collect();
+        if keys.is_empty() {
+            return;
+        }
+        let sid = s.id.clone();
+        let first = !lock(&self.facts).contains_key(&sid);
+        if first {
+            f.core.views.panels.load_facts(&sid);
+        }
+        // the ledger's files and hunks, read again when the finished edits are not the ones they were read for
+        let edits = s.finished_edits().len();
+        if lock(&self.edited)
+            .get(&sid)
+            .is_none_or(|e| e.count != Some(edits))
+        {
+            f.core.views.panels.load_edits(&sid, edits);
+        }
+        // the model before the rows, which name its version; a connection's first rows of the view start it again
+        let conns: BTreeSet<u64> = keys.iter().map(|k| k.0).collect();
+        for c in conns {
+            let restart = !lock(&self.caches).keys().any(|k| k.0 == c && k.1 == view);
+            if restart {
+                f.core.views.model_restart(c, view);
+            }
+            // a streamed chunk of a message changes no step: the model is made again only when the entries or the window
+            // changed, on a full build, or when a tool call changed (its diff); new entries make their steps alone
+            let force = restart || dirty.is_none();
+            let tool = dirty.and_then(|d| s.first_tool(d));
+            if let Some(start) = self.model_due(c, view, s.entry_count(), force, tool) {
+                let heads = match self.model_made(c, view, start, s.panel_heads(start)) {
+                    Made::Steps(steps) => {
+                        let nodes = steps.iter().map(node_of).collect();
+                        if f.core.views.extend_model(f, c, view, nodes) {
+                            continue;
+                        }
+                        self.model_heads(c, view)
+                    }
+                    Made::Whole(heads) => heads,
+                };
+                f.core.views.publish_model(f, c, view, panel_doc(&heads));
+            }
+        }
+        for key in keys {
+            f.core.views.publish_built(f, &key, |env, fonts| {
+                self.rows_for(s, &key, env, fonts, dirty)
+            });
+        }
+    }
+
+    /// The entry CONN's VIEW's model is made again from, of N entries, when it is due: FORCE, the window or N changed
+    /// since the last, or the tool call at TOOL changed.  The first entry it shows (the newest [`WINDOW`] until it asks
+    /// for older) when it goes whole (FORCE, the window changed, none sent); else the earlier of the last step and TOOL.
+    fn model_due(
+        &self,
+        conn: u64,
+        view: &str,
+        n: usize,
+        force: bool,
+        tool: Option<usize>,
+    ) -> Option<usize> {
+        let mut chosen = lock(&self.chosen);
+        let c = chosen.entry((conn, view.to_owned())).or_default();
+        let from = *c.from.get_or_insert(n.saturating_sub(WINDOW));
+        let same = c.modeled.is_some_and(|(f, m)| f == from && m <= n);
+        let due = force || !same || c.modeled != Some((from, n)) || tool.is_some();
+        c.modeled = Some((from, n));
+        if force || !same {
+            c.heads = None;
+        }
+        if !due {
+            return None;
+        }
+        let last = c.heads.as_ref().map(|h| h.last().map_or(from, |h| h.0));
+        Some(last.map_or(from, |l| tool.map_or(l, |t| l.min(t.max(from)))))
+    }
+
+    /// CONN's VIEW's steps from START on are now TAIL: the model to send, its steps alone when a model went whole
+    /// before, none went since, and the cap ([`MODEL_MAX`]) holds.
+    fn model_made(&self, conn: u64, view: &str, start: usize, tail: Vec<Head>) -> Made {
+        let mut chosen = lock(&self.chosen);
+        let c = chosen.entry((conn, view.to_owned())).or_default();
+        let Some(heads) = c.heads.as_mut() else {
+            c.heads = Some(tail.clone());
+            return Made::Whole(tail);
+        };
+        let keep = heads.partition_point(|h| h.0 < start);
+        let old = heads.split_off(keep);
+        let kept = old.iter().all(|o| tail.iter().any(|t| t.0 == o.0));
+        let steps: Vec<Head> = tail.iter().filter(|t| !old.contains(t)).copied().collect();
+        heads.extend(tail);
+        if kept && heads.len() <= MODEL_MAX {
+            Made::Steps(steps)
+        } else {
+            Made::Whole(heads.clone())
+        }
+    }
+
+    /// The steps of CONN's VIEW's last model.
+    fn model_heads(&self, conn: u64, view: &str) -> Vec<Head> {
+        let chosen = lock(&self.chosen);
+        chosen
+            .get(&(conn, view.to_owned()))
+            .and_then(|c| c.heads.clone())
+            .unwrap_or_default()
+    }
+
+    fn rows_for(
+        &self,
+        s: &Session,
+        key: &Key,
+        env: &ViewEnv,
+        fonts: &FontSet,
+        dirty: Option<&BTreeSet<usize>>,
+    ) -> (Vec<Row>, Vec<(drgnx_rows::ImageId, String)>) {
+        // the header and the chips: built from the snapshot each time (two rows; the store sends what changed)
+        let snapshot = s.snapshot();
+        let now = crate::clock::wall_secs();
+        // the background work: the items still running name the tool calls that draw live; those that ended, the
+        // lines the transcript gets (and the list fades them for a while)
+        let seen = self.note_ended(&s.id, &snapshot, now, s.entry_count());
+        let ended_at: BTreeMap<String, f64> = seen.iter().map(|(k, v)| (k.clone(), v.0)).collect();
+        let now_ms = (now * 1000.0) as u64;
+        let bg_live: BTreeMap<String, (u64, u64)> = bgwork::list(&snapshot)
+            .iter()
+            .filter(|i| bgwork::is_running(i))
+            .map(|i| (i.id.clone(), (i.started_ms, now_ms)))
+            .collect();
+        let mut extra: Vec<(usize, Vec<Row>)> = Vec::new();
+        let mut extra_images = Vec::new();
+        for i in &snapshot.background_ended {
+            if let Some((at, pos)) = seen.get(&i.id).filter(|(at, _)| *at > 0.0) {
+                let secs = (*at - i.started_ms as f64 / 1000.0).max(0.0);
+                let (rows, images) = bgwork::end_rows(
+                    &bgwork::Ended {
+                        item: i,
+                        secs: Some(secs),
+                    },
+                    Some(bgwork::EndFit { env, fonts }),
+                );
+                extra.push((*pos, rows));
+                extra_images.extend(images);
+            }
+        }
+        for c in &snapshot.caused {
+            extra.push((c.entry as usize, bgwork::after_rows(c)));
+        }
+        extra.sort_by_key(|e| e.0);
+        let src = Source {
+            sid: &s.id,
+            n: s.entry_count(),
+            groups: &|from: usize, only: Option<&BTreeSet<usize>>| s.panel_groups(from, only),
+            always: &|e: &runstav::methods::agents::Entry| s.always_covers(e),
+            prov: &|e: &runstav::methods::agents::Entry| s.allowed_how(e),
+            roles: &|from: usize| s.panel_roles(from),
+            bg: &bg_live,
+            extra: &extra,
+        };
+        let busy_since = {
+            let mut busy = lock(&self.busy);
+            if snapshot.status == Some(runstav::methods::agents::SessionStatus::Busy) {
+                Some(*busy.entry(s.id.clone()).or_insert(now))
+            } else {
+                busy.remove(&s.id);
+                None
+            }
+        };
+        // a top view reads the look its transcript view was sent
+        let look_key = (key.0, look_view(&key.1));
+        let (lens, open, bg_selected) = lock(&self.chosen)
+            .get(&look_key)
+            .map(|c| {
+                (
+                    c.lens.clone(),
+                    c.look.open.clone(),
+                    c.look.bg_selected.clone(),
+                )
+            })
+            .unwrap_or_default();
+        // the chips the snapshot does not carry: the files edited (the ledger's) and the steps holding a checkpoint
+        let files_edited = lock(&self.edited).get(&s.id).map(|e| {
+            if e.files.is_empty() {
+                e.paired
+                    .iter()
+                    .map(|h| h.path.as_str())
+                    .collect::<BTreeSet<_>>()
+                    .len()
+            } else {
+                e.files.len()
+            }
+        });
+        let checkpoints = lock(&self.facts)
+            .get(&s.id)
+            .map(|(_, map)| map.values().filter(|f| f.revertible && !f.undone).count());
+        // the top view (the header window) is the header, the chips and the strip; the transcript view is the rest
+        if is_top(&key.1) {
+            // the chain the agent works under: its task's spec, plan and the task, as the Work model holds them; the
+            // task alone (named by the session) when no workspace's model holds it
+            let crumbs = match (snapshot.task.as_deref(), self.front()) {
+                (Some(t), Some(f)) => f.core.map.breadcrumb(t),
+                _ => Vec::new(),
+            };
+            let chain: Vec<panel_top::ChainLink> = if crumbs.is_empty() {
+                snapshot
+                    .task
+                    .as_deref()
+                    .map(|t| panel_top::ChainLink {
+                        kind: "task".into(),
+                        id: t.to_owned(),
+                        label: snapshot.name.clone().unwrap_or_else(|| t.to_owned()),
+                    })
+                    .into_iter()
+                    .collect()
+            } else {
+                crumbs
+                    .into_iter()
+                    .map(|(kind, id, label)| panel_top::ChainLink { kind, id, label })
+                    .collect()
+            };
+            let plan = s.plan_items().unwrap_or_default();
+            // the dollar limit that holds the agent (its own or a scope's above it), for the cost chip
+            let budget = self.front().and_then(|f| {
+                let b = &f.core.budgets;
+                let scope = b.holder_of_session(&s.id)?;
+                match b.binding(&scope)? {
+                    (
+                        runstav::methods::matrix::Unit::Usd
+                        | runstav::methods::matrix::Unit::UsdEst,
+                        spent,
+                        limit,
+                    ) => Some((spent, limit)),
+                    _ => None,
+                }
+            });
+            let (mut rows, images) = panel_top::rows(
+                &snapshot,
+                &panel_top::Cx {
+                    env,
+                    fonts,
+                    lens: &lens,
+                    open: &open,
+                    busy_since,
+                    now,
+                    files_edited,
+                    checkpoints,
+                    chain: &chain,
+                    plan: &plan,
+                    budget,
+                    ended_at: &ended_at,
+                    bg_selected: bg_selected.as_deref(),
+                },
+            );
+            hover(&mut rows);
+            return (rows, images);
+        }
+        let (mut rows, mut images) = (Vec::new(), Vec::new());
+        let (cards, plan, finished) = {
+            let chosen = lock(&self.chosen);
+            let c = chosen.get(&(key.0, key.1.clone())).map(|c| c.cards.clone());
+            (c.unwrap_or_default(), s.plan_items(), s.finished_edits())
+        };
+        {
+            let edited = lock(&self.edited);
+            let none = Edited::default();
+            let e = edited.get(&s.id).unwrap_or(&none);
+            rows.extend(panel_cards::rows(&panel_cards::In {
+                env,
+                pins: &cards.pins,
+                plan: plan.as_deref(),
+                files: &e.files,
+                paired: &e.paired,
+                edits: &finished,
+                ledger_open: cards.ledger_open,
+                ledger_mark: cards.ledger_mark,
+            }));
+        }
+        rows.extend(self.rows_of(&src, key, env, fonts, dirty));
+        // the cards under the transcript: each edited file's hunks, then the requests the agent waits on
+        let (cards, card_images) = {
+            let edited = lock(&self.edited);
+            let none = Edited::default();
+            let e = edited.get(&s.id).unwrap_or(&none);
+            panel_review::rows(&panel_review::In {
+                env,
+                fonts,
+                diffs: &e.diffs,
+                permissions: &snapshot.permissions,
+                queue: &snapshot.queue,
+            })
+        };
+        rows.extend(cards);
+        images.extend(card_images);
+        images.extend(extra_images);
+        hover(&mut rows);
+        (rows, images)
+    }
+
+    /// KEY's rows now: the groups DIRTY touches built again (all of them when the env, the look or the facts changed),
+    /// the others from the cache.
+    fn rows_of(
+        &self,
+        src: &Source,
+        key: &Key,
+        env: &ViewEnv,
+        fonts: &FontSet,
+        dirty: Option<&BTreeSet<usize>>,
+    ) -> Vec<Row> {
+        let (sid, n) = (src.sid, src.n);
+        let (look, from, look_v) = {
+            let mut chosen = lock(&self.chosen);
+            let c = chosen.entry((key.0, key.1.clone())).or_default();
+            let from = *c.from.get_or_insert(n.saturating_sub(WINDOW));
+            (c.look.clone(), from, c.version)
+        };
+        let all = lock(&self.facts);
+        let empty = BTreeMap::new();
+        let (facts_v, facts) = all.get(sid).map_or((0, &empty), |(v, m)| (*v, m));
+        // the running background items change which tool calls draw live
+        let bg_v = src.bg.keys().fold(src.bg.len() as u64, |h, k| {
+            k.bytes()
+                .fold(h, |h, b| h.wrapping_mul(31).wrapping_add(u64::from(b)))
+        });
+        let sig = Some((
+            env.epoch,
+            env.width_px,
+            look_v ^ bg_v.rotate_left(17),
+            facts_v,
+        ));
+        let mut caches = lock(&self.caches);
+        let cache = caches.entry(key.clone()).or_default();
+        let whole = cache.sig != sig
+            || dirty.is_none()
+            || cache.groups.keys().next().is_some_and(|h| *h < from)
+            || cache.groups.keys().next_back().is_some_and(|h| *h >= n);
+        // the conversation's blocks: a step that joins an Explored run changes its head's row too
+        let roles = (src.roles)(from);
+        let widened: Option<BTreeSet<usize>> = dirty.map(|d| {
+            d.iter()
+                .flat_map(|i| match roles.get(i) {
+                    Some(rows::Role::In(h)) => vec![*i, *h],
+                    _ => vec![*i],
+                })
+                .collect()
+        });
+        let only = if whole { None } else { widened.as_ref() };
+        if whole {
+            cache.groups.clear();
+        }
+        cache.sig = sig;
+        let right = |parts: &[(&str, &str)]| -> u32 {
+            let w = match env.display {
+                Display::Gui => parts
+                    .iter()
+                    .map(|(text, face)| fit::width_in(fonts, Some(face), text))
+                    .sum::<f32>()
+                    .ceil() as u32,
+                Display::Tty => {
+                    parts
+                        .iter()
+                        .map(|(text, _)| text.chars().count() as u32)
+                        .sum::<u32>()
+                        * env.cell.0.max(1)
+                }
+            };
+            env.width_px.saturating_sub(w + env.cell.0.max(1))
+        };
+        let cx = Cx {
+            look: &look,
+            facts,
+            always: src.always,
+            prov: src.prov,
+            right: &right,
+            bg: src.bg,
+        };
+        for g in (src.groups)(from, only) {
+            let thoughts: Vec<&runstav::methods::agents::Entry> = g.thoughts.iter().collect();
+            let run_open = |h: usize| {
+                look.rows
+                    .get(&(h as u64))
+                    .copied()
+                    .unwrap_or_else(|| look.open.contains("read") || look.open.contains("search"))
+            };
+            let mut built = match roles.get(&g.head) {
+                Some(rows::Role::Head(b)) => {
+                    rows::panel_block_rows(g.head, b, run_open(g.head), &super::kit_env(env))
+                }
+                Some(rows::Role::In(h)) if !run_open(*h) => Vec::new(),
+                _ => rows::group_rows(g.head, &g.entry, &thoughts, g.blocks.as_deref(), &cx),
+            };
+            // each row names its step, the model's node, for the editor's selection
+            for r in &mut built {
+                let end = r.text.chars().count() as u32;
+                r.props.push((
+                    0,
+                    end,
+                    "drgnx-work-id".into(),
+                    json!(format!("e:{}", g.head)),
+                ));
+            }
+            cache.groups.insert(g.head, built);
+        }
+        let mut out = Vec::new();
+        if from > 0 {
+            let mut b = RowBuilder::new("more");
+            b.push(
+                "  ↑ earlier steps load when you scroll up",
+                Some(FaceId::AgentPanelSubtle.name()),
+            );
+            out.push(b.finish());
+        }
+        let mut extra = src.extra.iter().peekable();
+        for (head, rows) in &cache.groups {
+            while let Some((_, r)) = extra.next_if(|(pos, _)| pos <= head) {
+                out.extend(r.iter().cloned());
+            }
+            out.extend(rows.iter().cloned());
+        }
+        for (_, r) in extra {
+            out.extend(r.iter().cloned());
+        }
+        out
+    }
+
+    /// Session SID's Always grants changed: its panels built again (the tool rows' Always lines).
+    pub fn refresh(&self, sid: &str) {
+        if let Some(f) = self.front() {
+            self.build_session(&f, sid, None);
+        }
+    }
+
+    /// Connection CONN is gone, or closed VIEW (none: all its views).
+    pub fn gone(&self, conn: u64, view: Option<&str>) {
+        let mine = |c: &u64, v: &String| *c == conn && view.is_none_or(|w| w == v);
+        lock(&self.chosen).retain(|(c, v), _| !mine(c, v));
+        lock(&self.caches).retain(|(c, v, _), _| !mine(c, v));
+    }
+
+    /// The facts of sessions no panel shows any more are dropped.
+    pub fn prune(&self, shown: &BTreeSet<String>) {
+        lock(&self.facts).retain(|sid, _| shown.contains(sid));
+        lock(&self.busy).retain(|sid, _| shown.contains(sid));
+        lock(&self.edited).retain(|sid, _| shown.contains(sid));
+    }
+}
+
+/// Whether VIEW is an agent panel's (its transcript view or its top view), and then its session.
+pub fn session_of(view: &str) -> Option<&str> {
+    view.strip_prefix(PREFIX)
+        .or_else(|| view.strip_prefix(PREFIX_TOP))
+}
+
+/// The look P's thresholds for a slow step and an expensive one, into LOOK; one not given (or not a finite number) keeps
+/// the one before.
+fn take_thresholds(look: &mut Look, p: &PanelLook) {
+    if let Some(s) = p.slow_secs.filter(|s| s.is_finite()) {
+        look.slow_secs = s;
+    }
+    if let Some(c) = p.dear_cost.filter(|c| c.is_finite()) {
+        look.dear_cost = c;
+    }
+}
+
+/// `agents/panel/look`.
+pub fn look(f: &Front, c: &Caller, p: PanelLook) -> Result<bool, Error> {
+    Ok(f.core.views.panels.look(f, c.conn_id, p))
+}
+
+#[cfg(test)]
+#[path = "panel/tests.rs"]
+mod tests;
+
+/// Every clickable part of the panel's rows (an action or a chip) gets the hover face: `mouse-face` takes a symbol, and a
+/// row carries the face's name, which the editor maps to the face.
+fn hover(rows: &mut [Row]) {
+    for r in rows {
+        let spans: Vec<(u32, u32)> = r
+            .props
+            .iter()
+            .filter(|(_, _, n, _)| {
+                n == "drgnx-agent-panel-action" || n == FaceId::AgentPanelChip.name()
+            })
+            .map(|(a, b, _, _)| (*a, *b))
+            .collect();
+        for (a, b) in spans {
+            r.props
+                .push((a, b, "mouse-face".to_owned(), json!(FaceId::Hover.name())));
+        }
+    }
+}

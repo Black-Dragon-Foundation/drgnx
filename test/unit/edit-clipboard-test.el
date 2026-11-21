@@ -15,7 +15,7 @@ on a Mac the VS Code profile's copy, cut and paste are Cmd keys (`drgnx-editing/
             (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
                                          process-environment))
             (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-            (drgnx-keys--applied nil) (drgnx-keys--session-layers ,layers) (drgnx-keys-profiles nil)
+            (drgnx-keys--session-layers ,layers) (drgnx-keys-profiles nil)
             (drgnx-keys-problems nil) (drgnx-keys-last nil)
             (emulation-mode-map-alists emulation-mode-map-alists) (drgnx-editing-prefix-delay 0.05)
             (kill-ring nil) (kill-ring-yank-pointer nil) (interprogram-cut-function nil) (interprogram-paste-function nil))
@@ -261,6 +261,16 @@ on a Mac the VS Code profile's copy, cut and paste are Cmd keys (`drgnx-editing/
       (drgnx-edit-clip-test--press "C-x")
       (should (equal (car kill-ring) "hello"))
       (should (equal (buffer-string) " drgnx")))))
+
+(ert-deftest drgnx-editing/a-mouse-click-within-the-delay-is-no-prefix-key ()
+  ;; C-x then a click inside the delay: the cut happens, the click is its own event (it was replayed as C-x <mouse-1>)
+  (drgnx-edit-clip-test--keys '((vscode app editing window))
+    (drgnx-edit-clip-test--buffer "hello drgnx"
+      (drgnx-edit-clip-test--select 1 6)
+      (let ((click (list 'mouse-1 (posn-at-point 9))))
+        (cl-letf (((symbol-function 'mouse-set-point) (lambda (&rest _) (interactive "e") nil)))
+          (execute-kbd-macro (vconcat (kbd "C-x") (vector click)))))
+      (should (equal (car kill-ring) "hello")))))
 
 (ert-deftest drgnx-editing/a-nil-delay-acts-at-once ()
   (drgnx-edit-clip-test--keys '((vscode app editing window))

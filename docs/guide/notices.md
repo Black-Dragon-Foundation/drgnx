@@ -33,6 +33,21 @@ The echo is polite:
 
 Every line also lands in `*Messages*`. Turn the echo off with `drgnx-notice-echo-mode`.
 
+### Toasts
+
+Where Glitnir draws the frames, the same notices (the failures and the new things waiting on you, by the same rule)
+appear as toasts instead of echo lines: a small card at the bottom right of the window, above the status bar. A toast
+has an icon in the severity's colour, the text in bold, the detail below it, and up to three buttons: the notice's own
+command first (with its key), then Show Notices, then Dismiss. At most three show at once, newest on top; more wait
+and the status bar counts them (`+2`, the `toasts` segment, after drgnx's own problems; a click opens the Notices
+list). A toast never takes focus or asks anything, and goes by itself
+about eight seconds after it showed (each toast has its own timer; a toast that shows later does not move an earlier one's). It fades in over 160 ms and out over 100 ms; with `drgnx-look-motion` `reduced` (or the
+desktop's reduced-motion preference) it just appears.
+
+`drgnx-notice-style` chooses: `auto` (the default) floats while Glitnir draws the frames, `float` always floats on a
+graphical frame, `echo` never. In a terminal, on macOS before its port, after a renderer panic and in batch the echo
+area says it as described above. The startup line is always an echo line.
+
 ## The two counts
 
 The mode line shows up to two counts. `◐ N waiting on you` is the number of different things that wait for you (an
@@ -47,8 +62,10 @@ second to open the list.
 
 - **Needs you (N):** what waits on you. Each row has the button that takes you there. It goes when its source stops
   holding it, so it has no Dismiss.
-- **Problems (✕ F ⚠ W):** what is wrong now, newest first, with what to do about it. **Dismiss** hides a problem
-  until it comes back with other text.
+- **Issues (✕ F ⚠ W):** what is wrong with drgnx itself now (a module that did not start), newest first, with what
+  to do about it, and what to know (a module waiting for packages, an info line not counted in the status bar).
+  **Dismiss** hides an issue until it comes back with other text. Errors and warnings in your code are in the
+  **Problems** view (`lang/eglot`, [modules](modules.md)), not here.
 - **Recent:** what happened lately, newest first (a repeat shows as `×N`). **Dismiss** hides an event.
 
 An empty section says "Nothing here." The list follows changes by itself; `g` draws it again. The command
@@ -69,8 +86,11 @@ restarting) does not announce again what it held.
   fixed script as arguments, so nothing in it can run as a script. If it fails, the echo area says so.
 - **Elsewhere,** or with no backend, the echo area tells you instead.
 
+A notice may carry its own title (`:desktop-title`; a background item that failed says "cargo test failed" instead of
+"drgnx: Agents").
+
 Something its producer marks as not interrupting (a job's `overlap` card, for example) is counted but never sent.
 Nothing here ever asks you anything.
 
 **Turning it off:** set `drgnx-notice-desktop` to nil (Customize, group `drgnx`), or turn off
-`drgnx-notice-desktop-mode`. `drgnx-job-ui-notify` is the obsolete name of `drgnx-notice-desktop`; job cards are the Jobs source of the model.
+`drgnx-notice-desktop-mode`. Job cards are the Jobs source of the model (module `tools/jobs`).

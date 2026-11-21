@@ -1,0 +1,16 @@
+{"scenario": "pair/a-before-tool-edit-rule-sees-the-pair-tools", "requires": ["v1", "test-hooks"], "doc": "[C] LINE-P3-P9-INTERPLAY-1: the pair tools are hooked at the hub's server by what they do, not as `drgnx`: write_file and edit_file are kind `edit`, read_file `read`. A before-tool rule on `edit` under `secret/**` refuses the chat's write_file there, and a rule on `drgnx` no longer sees the pair tools: README is read and written."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project/secret && cd $ROOT/project && git init -q && printf 'one\\n' > README && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "no-secrets", "point": "before-tool", "tool-kinds": ["edit"], "paths": ["secret/**"], "verdict": "deny", "reason": "secrets stay"}, {"id": "hub-tools", "point": "before-tool", "tool-kinds": ["drgnx"], "verdict": "deny", "reason": "no hub tools"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "call:write_file {\"path\": \"$ROOT/project/secret/key\", \"content\": \"k\\n\"}\ncall:read_file {\"path\": \"$ROOT/project/README\"}\ncall:write_file {\"path\": \"$ROOT/project/README\", \"content\": \"one\\ntwo\\n\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 4, "result": {"session": {"id": "$sid", "status": "idle"}, "entries": {"$contains": [{"type": "agent", "text": "call: drgnx refused mcp__drgnx__write_file; the rule no-secrets said: «secrets stay»call: one\ncall: written to the file on disk (no editor has it open)"}]}}}, "within_ms": 20000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test ! -e $ROOT/project/secret/key && cat $ROOT/project/README"], "expect_code": 0, "expect_stdout": "one\ntwo\n"}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select json_extract(e.data, '$.outcome'), json_extract(e.data, '$.at'), json_extract(e.data, '$.tool') from event e join tx t on t.id = e.tx where t.actor = 'hub:hooks'", "rows": [["deny", "hub-server", "mcp__drgnx__write_file"]]}

@@ -326,8 +326,10 @@ opens that row, and the view does not scroll under the pointer."
             (drgnx-scenario-require row "a partly visible bottom row in the Explorer")
             (let* ((v (cdr row))
                    (origin (drgnx-uitest--text-origin w))
-                   (top (posn-x-y (posn-at-point (car row) w)))      ; text-area pixels of the row's top left
-                   (x (+ (car origin) (car top) 6))
+                   (first (posn-at-point (car row) w))
+                   (top (posn-x-y first))                           ; text-area pixels of the row's top left
+                   ;; the middle of the row's first glyph, however wide: in the UI font it is a few pixels
+                   (x (+ (car origin) (car top) (/ (car (posn-object-width-height first)) 2)))
                    (y (+ (cdr origin) (cdr top) (/ (nth 4 v) 2)))    ; ROWH: the part of the row that shows
                    (name (with-current-buffer (window-buffer w)
                            (string-trim (buffer-substring-no-properties (car row) (save-excursion (goto-char (car row)) (pos-eol))))))

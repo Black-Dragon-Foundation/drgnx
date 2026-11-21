@@ -1,0 +1,38 @@
+package drgnx:agent-tools@0.1.0;
+
+interface types {
+  enum point { before-tool, after-edit, before-commit, at-review }
+  /// deny and annotate carry the reason; change carries the replacement object as JSON
+  variant verdict { allow, deny(string), change(string), annotate(string) }
+  enum level { debug, info, warn, error }
+  record header { name: string, value: string }
+  record response { status: u16, headers: list<header>, body: list<u8> }
+}
+
+interface host {
+  use types.{level, header, response};
+  /// https only, to a host the manifest names; no redirects followed (a 3xx comes back as it is)
+  http-get: func(url: string, headers: list<header>) -> result<response, string>;
+  http-post: func(url: string, headers: list<header>, body: list<u8>) -> result<response, string>;
+  kv-get: func(key: string) -> option<list<u8>>;
+  kv-put: func(key: string, value: list<u8>) -> result<_, string>;
+  kv-delete: func(key: string) -> result<_, string>;
+  log: func(level: level, text: string);
+}
+
+interface ability {
+  /// args-json is the validated arguments object; the result is the tool's JSON result
+  call: func(tool: string, args-json: string) -> result<string, string>;
+}
+
+interface hook {
+  use types.{point, verdict};
+  /// input-json is the hook's event object
+  run: func(point: point, input-json: string) -> result<verdict, string>;
+}
+
+world plugin {
+  import host;
+  export ability;
+  export hook;
+}

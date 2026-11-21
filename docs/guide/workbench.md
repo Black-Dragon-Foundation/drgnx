@@ -7,6 +7,34 @@ click lands where you clicked, a row you selected stays selected, docks and pane
 trace. Editor groups split the editor, several windows each keep their own workbench, and the layout survives a
 restart.
 
+**How the dock looks.** The sidebar is one island on the panel surface (`drgnx-surface-panel`). Its top row is the
+island header: the Explorer's first folder's name, then **+** (New File), a magnifier (Find in Explorer) and **⋯**, a
+menu with Close Sidebar, Save All, Close Saved Editors and Close All Editors (`drgnx-wb-island-menu`). The three sections
+below it are headed **Open** (the Buffers panel, folded to its header at first as VS Code's Open Editors, so a file you
+open moves nothing under the pointer), **Files** (the Explorer) and **Outline** (folded to its header at first; a click on a section's header folds or unfolds it, and focusing the Outline opens it; a second window's sidebar folds it there too, leaving the first window's as it was): a chevron and the title in
+`drgnx-wb-section` (small, semibold, muted), in sentence case, with nothing else on the row. **Open** is as tall as
+its rows (no empty rows under the last open buffer; with none open, the title and one blank line), at most 30% of the window, past
+which it scrolls; Files takes the rest, so its title stays put when the window is resized. Their rows are drawn in the UI font at the density's
+row height (26 px comfortable; `drgnx-look-density`), with a line icon for each folder and file kind and the density's
+indent for each level; on a terminal the plain `▾ ▸` stay. A git mark sits at the right edge, in a position that
+is the same on every row (worked out in pixels, kept in columns, so a terminal showing the same Explorer keeps it and the
+`⋯` off its last two columns, whichever frame drew the rows): `M` and `R` in the warning colour, `U` and `A` in the success colour, `D` and conflicts in the
+failure colour, and `●` on a folder with changes. A `⋯` follows it in the Explorer, a `×` (close) in the Buffers panel,
+where a file with unsaved changes shows `●` there instead; on Nidhogg the `●` becomes the `×` while the pointer is on
+its row, as VS Code's does (Nidhogg's mouse sensors; elsewhere the `●` stays, and a click on it closes the file too).
+The `⋯` and the `×`
+are drawn in the row's own colour, so it is invisible, until the pointer is on the row, the row at point's too;
+every row on a terminal shows it. The row at point is the selection: in the selection colour while the panel
+has the focus, inside a 1-pixel ring of the focus colour where Glitnir draws (Nidhogg), and the inactive selection (`drgnx-selected-inactive`, a clearly visible grey) while another window
+has it, as VS Code does. Without the focus only the Explorer keeps its selected row, the current buffer's file: the
+sidebar shows one selection (window-dark.html), and the Buffers panel shows its row again when you focus it. The Outline's current definition is a marker, not a selection: its text in the accent colour, with no fill.
+No selected or current row is bold. A row's selection and
+its hover are one fill from the row's start to its right edge, the git mark and the control included, 6 pixels in
+from the island's sides (the sections' fringes, in the island's colour), with rounded corners where Glitnir draws
+them. Neither changes a row's width or moves its text. The current line's highlight (`hl-line`) is not used in
+the sections. A section with another below it ends at a whole row (the one below takes the pixels left over), so
+no part of a row shows at its foot.
+
 Everything here is built on plain Emacs — no treemacs, no ibuffer — does what people use those for (and VS
 Code's Explorer and Open Editors; see [Compared](#compared-with-treemacs-ibuffer-and-vs-code)), and does every
 heavy operation 2–150× faster than they do; key presses are under a millisecond (as fast as ibuffer, faster than
@@ -30,7 +58,8 @@ file tree, the Search view with the cursor in its Find field), like VS Code's `C
 Focus Explorer, Focus Outline and the like also switch the sidebar to their view first. The Search view is there from
 the start (its module sets up in the startup stage), so its key works in the first second too. Swapping the view another way
 (`drgnx-wb-show-view`, as a layout does; there are no clickable view tabs yet) swaps the sections in place, at the same width, and leaves focus where it was (a focus inside the
-sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had.
+sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had, and gives each editor
+group back the width it had: the sidebar's width goes to the groups and comes back from them in proportion.
 
 **Turning a module off** hides its panes (a panel tab, a right-dock tab) and removes its sections and tabs; nothing
 else in the workbench moves. The size you gave a pane and its place in front are remembered: turn the module on again
@@ -41,7 +70,12 @@ focused (so you can keep browsing; a row cut off at the bottom of the list is br
 Emacs profile, `j`/`k` in Vim), right expands or enters a folder, left collapses or goes to the parent, `RET`
 opens (and focuses), `SPC` opens and stays (`g o` in Vim), `TAB` toggles a folder (Emacs), `g` / `R` refreshes.
 Folders come first, names sort naturally (`file2` before `file10`) and case-insensitively; `.git` and other
-clutter is hidden (`drgnx-explorer-exclude`). Dragging does nothing — the Explorer never moves files by drag.
+clutter is hidden (`drgnx-explorer-exclude-names`: exact names or globs with `*` and `?`, by default `.git`, `.hg`,
+`.svn`, `.DS_Store`, `__pycache__` and `.#*` lock files). Dragging does nothing — the Explorer never moves files by drag.
+The hub (Ratatoskr, which starts with drgnx) lists and watches the folders: a file made, removed or changed by git
+outside Emacs shows within a moment. While the hub is starting, the Explorer says it waits for it and fills when it
+is up. An Explorer on a second monitor at another scale draws the same folders at that monitor's size and fills in as
+you scroll it. The selected row stays on its file when the theme changes.
 
 **Compact folders:** an open folder whose only entry is a folder shares its row (`src/app`), as in VS Code; the row
 is the last folder (opening, renaming, deleting act on it) and the chain ends at the first closed folder. Only
@@ -57,19 +91,22 @@ file you are editing.
 
 The **Buffers** panel lists open files in the order you opened them — switching never re-sorts it, so a row never
 moves under the pointer. Each row: `×` closes, `●` marks unsaved changes, then the name and its folder; the file
-in the active editor is in bold. When rows come or go, every window on the panel (and the Explorer likewise) keeps
+in the active editor has no mark of its own (the Explorer's selected row is the current file; `drgnx-buffers-active`
+can give it one). When rows come or go, every window on the panel (and the Explorer likewise) keeps
 its first row and its cursor on the same buffer (file), at the same place in the row; a window whose row closed
 stays at the same height, on the row that took its place, instead of jumping to the top. Click a row to show it; `RET` too; `Delete` (`d`/`k` in Emacs, `x` in Vim) closes.
 
 ### Outline
 
-Below the Explorer, the **Outline** lists the definitions of the file in the editor (as imenu finds them, nested the
-same way). A click shows the definition in the editor and keeps you in the Outline; `RET` goes there. It follows the
+Below the Explorer, the **Outline** lists the definitions of the file in the editor, nested in the definitions around
+them (the hub parses the file, your unsaved text included). A click shows the definition in the editor and keeps you in the Outline; `RET` goes there. It follows the
 editor, and half a second after you stop typing, your edits — only while it is shown (hidden, it lets go of the file
-at the next pause or editor change), and a key you press while it works wins (it tries again at the next pause). Files without an index, remote files and buffers over 1 MB get a
-one-line notice instead. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
+at the next editor change); nothing of it runs while you type. Files with nothing to outline and remote files get a one-line notice
+instead: an info icon and the reason in the muted text ("No outline for this file"; a file over 1 MiB: "This file is
+too large for an outline"), an empty state that is never selected. Without the hub the section says it waits for it. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
 after the cursor stops — the Outline's own cursor is yours and never moves while you work in a file). Another file
-starts the Outline at its top, its cursor on the definition your cursor is in (scrolled into view). An edit that only
+starts the Outline at its top, its cursor on the definition your cursor is in (scrolled into view, a third of the
+Outline above it, but never past the list's last row). An edit that only
 moves definitions redraws nothing, and the Outline keeps your place in it when definitions are added above. Its rows
 and notices start in the column of the section's title. Focus Outline: palette · `SPC o`.
 
@@ -107,29 +144,67 @@ but never watched for changes (a remote watch starts a process that blocks); ref
 **Typing** in the Explorer jumps to the next row starting with what you typed (letters a profile does not use).
 **Find** filters the tree live to the files whose names contain the text — also inside collapsed folders — and the
 title shows it; an empty text (or `C-g`) brings back the tree, its open folders, the view and the selection.
+**Quick Open** (`C-p` in the VS Code profile) opens a file by name. With the hub running, both ask it: it ranks the
+project's file names as you type (a name that starts with what you typed first, then one that holds it, then a path
+that does; several words must all be there) and a key never waits for the answer — the list you see stays until the
+new one arrives. The files are the ones the project's rules admit: in a repository what git lists (`.gitignore` is
+followed), elsewhere every file under the folder except what `.gitignore` files and your search globs leave out; links
+are listed but never followed. The setting `drgnx-search-ignore-rules` decides about dot paths (`.github/…`) and
+names that look like secrets (`.env`, `*.pem`): `"index"` (the default) leaves them out, as the search index does;
+`"real"` lists them. Without the hub, in a big project the files are listed in the background and the list fills in
+while they arrive (with Nidhogg's framing on, `nidhogg-workers-framing`; a remote folder, or no framing, lists them
+first as before), and the file you have highlighted in Quick Open stays highlighted wherever the new ones sort. On a
+remote folder Quick Open is Emacs's `project-find-file`. As in VS Code, `>` typed first turns Quick Open into the
+command palette, with what you type after it (the title row's search box opens Quick Open).
 
 **Live**: files created, deleted or renamed outside Emacs appear within ~150 ms (only the changed folder is read
 again; the view and selection stay; nothing changes while a mouse button is held — a press whose release never
 reaches the Explorer, because Emacs lost focus or the release came with a modifier or in another window, ends
-there).
+there). With Nidhogg's workers on (`nidhogg-workers-framing`), a local folder you open, or one that changed, is read off the
+main thread: it keeps showing the rows it had (a folder never listed shows one row, "…") and its rows change when the
+last part of the listing is in. A folder you close before that shows nothing, and a listing that a newer change or a
+Refresh overtook is not shown. A remote folder is listed as before.
 
-**Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, in the colours of your
-theme's version-control faces; a folder with changes inside shows `●` (also one whose only change is a new file;
-a new folder itself shows `U`), and so does a root; ignored files are dimmed. One background `git status` per
+**Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, at the row's right edge in
+the colours of your theme's version-control faces; the name itself stays in the text colour. A folder with changes
+inside shows `●` (also one whose only change is a new file; a new folder itself shows `U`), and so does a root;
+ignored files are dimmed. A folder holding its own repository (its own `.git`) shows that repository's status, as VS
+Code does: a repository around it that ignores it doesn't dim it.
+
+**Rows**: an icon, 6 px of room, then the name. With one root the tree starts at the root's entries (the sidebar's
+header names the project); with several, each root has a row with its name as it is. One background `git status` per
 repository on screen (never holding your git lock), repositories nested inside the tree included; a repository made
 after the tree was shown (`git init`) is picked up at the next refresh (a save, or Emacs getting the focus back).
 The status of at most 16 repositories is kept, so the Explorer reads at most the top 16 it shows; a repository
-scrolled into view, or one that was pushed out, is read when its rows are drawn. `drgnx-explorer-git` turns it off. What git complains
+scrolled into view, or one that was pushed out, is read when its rows are drawn. A repository whose index holds more
+than 50,000 entries gets one notice per session offering `core.untrackedCache` and, where your git has its built-in
+file system monitor (`git fsmonitor--daemon status` answers), `core.fsmonitor`; the button sets them in that
+repository, and drgnx never remembers that you declined. `drgnx-explorer-git` turns it off. What git complains
 about is kept in the hidden buffer ` *drgnx git errors*` (its last `drgnx-git-errors-max` characters).
 
+With the hub up, the hub reads the status instead (`git/letters`, [hub.md](../develop/hub.md)) and sends the letters as rows
+of a view of its own per repository, which no window shows; the Explorer and the Buffers list read their marks from those
+rows, and the folders that get a `●` are the roots and the open folders (opening one asks the hub again).  Without the hub
+or when a repository has no letters yet, the status is read by Emacs as above.  The same 16
+repositories are kept.  `test/unit/git-letters-test.el` covers the rows with no hub.
+
 ### Buffers panel
+
+**Save with focus in a view.** Save (`Ctrl+S`) with the cursor in the Explorer, Outline, Search or a panel page saves the editor you work in, as VS Code does; it never asks a name for a view, and a view cannot be saved to a file (`set-visited-file-name` refuses). With no editor open it says "Nothing to save: no editor is open".
 
 Save All (`C-k s` · palette — `C-x s` stays Emacs' asking save · `SPC f S`), Close Saved (`C-k u` · palette · `SPC b u`), Close All (`C-k C-w` · palette ·
 `SPC b A`), Close Others (right-click · `o` · `O`) — the three close only rows shown, never buffers the filter
 hides —, a live name filter (`C-M-f` · `/` · `/`), middle-click closes a
-row, and "save all · close saved" buttons in the title. Git letters show after the names. The right-click menu has
+row, and so does a click on the `×` (or `●`) at its right edge. A row is the file's icon and its name, no folder (two
+files of one name are told apart by their buffer names). Git letters sit at the right edge. Save All and Close Saved
+are also on the island header's ⋯. The hub builds the rows (Nidhogg draws them): until it is up the panel says it
+waits for it, and its commands work meanwhile. The right-click menu has
 Open, Close, Close Others, Save All, and for the row's buffer Save, Copy Path, Diff with File and Reveal in Explorer.
 The Explorer's right-click menu also has Reveal in Buffers, Open Folder in Dired and Open in Other Window.
+On a folder's top row it has **Remove Folder from Workspace** (also in the palette): the folder leaves the Explorer,
+nothing on disk changes. **Add Folder to Workspace…** (palette) asks for a folder and shows it after the ones the
+Explorer shows; `drgnx DIR` shows DIR alone. Folders may overlap: a folder inside another one shows as its own top
+row only, not again inside the one that holds it, and a folder added twice shows once.
 
 Next Panel Tab (``M-` `` · palette) cycles the panel's tabs; Mode Menu (`C-'` · palette) opens the current major
 mode's menu at the cursor, the menu-bar entry without the menu bar.
@@ -164,7 +239,8 @@ its own (`split-height-threshold` and `split-width-threshold` nil, `even-window-
 
 The table is one entry at the **end** of `display-buffer-alist`, so your own entries and
 `display-buffer-overriding-action` still win, and so does a caller that asks for a frame or for no window (`C-x 5 b`,
-`display-buffer-no-window`). `C-x 4 b` shows the buffer in another editor when there is one; a window you locked with
+`display-buffer-no-window`), or that marks its own action with `(drgnx-explicit . t)` in the action's alist (the floating
+palette does). `C-x 4 b` shows the buffer in another editor when there is one; a window you locked with
 `C-x w d` is left alone. If your configuration replaces the variable after drgnx started (`(setq display-buffer-alist …)`
 instead of `add-to-list`), drgnx's entry is gone and buffers go wherever Emacs puts them: once init is done,
 every start checks the entry and posts a warning notice (source `wb`) when it is missing, and `drgnx doctor`
@@ -186,37 +262,77 @@ the entry is back.
 |---|---|
 | `editor` | files, dired, unmatched buffers (logged) |
 | `current` | the selected window, unless it is a dock (then the editor) |
-| `panel` Problems | flymake / flycheck lists |
+| `panel` Problems | the Problems view (`drgnx-problems-mode`), flymake / flycheck lists |
 | `panel` Output | `*Messages*`, `*Warnings*`, `*Backtrace*`, ert results |
 | `panel` Results | compilation, grep, occur, xref |
-| `panel` Terminal | New Terminal (your shell in eat; eshell for a remote folder, on Windows, and until eat is synced), New Eshell, shell, eshell, term, vterm, ielm, other comint buffers |
+| `panel` Terminal | New Terminal (your shell in drgnx's own terminal; eshell for a remote folder and on Windows), New Eshell, shell, eshell, term, vterm, ielm, other comint buffers |
 | `panel` Help | help, apropos, Info, man, eldoc documentation |
 | `right` | agents, chat, viewers — tabs come with their modules (M7) |
 | `popup` | transient, which-key, `*Completions*`, `*Calendar*` |
 | `other-group` | diffs and logs: another editor group (the one used last), else this one |
 
+**Empty tabs say why.** A panel tab with nothing in it shows one muted line saying what appears there (no blank page
+with a cursor box). **Contextual tabs** (Heap Graph, Branch Review, Research Trail, Rules) are in the tab row only
+while shown or holding something, so the row is the same on a fresh start and after a reopen: Problems, Output,
+Results, Terminal, Help and Debug Console. The Output tab shows its channel (Messages, Warnings, Backtrace, …) as a
+chip at the right of the row; click it, or run **Output: Select Channel…**, to pick another.
+
+A warning never opens the panel by itself, as VS Code's Output does not: it is logged in `*Warnings*` and counted on the
+status bar as a notice, whose button opens `*Warnings*` (an emergency still shows at once).
+
 ### Chrome
 
-Every window's chrome is decided by its **role**, never by its buffer: an **editor** window has a tab line, a
-breadcrumb header and a mode line; a **dock** section has its title only; the **panel** and the **right dock** have
-their tab row only; a popup has none. The chrome lives in window parameters, so a mode that sets its own header or
+Every window's chrome is decided by its **role**, never by its buffer: an **editor** window has a tab line and a
+breadcrumb header (and a mode line only when `drgnx-statusbar-place` is `editors`; by default the status bar is one
+window across the frame's foot, which stays there when a dock or the panel opens); a **dock** section has its title
+only; the **panel** and the **right dock** have their tab row only, from the moment they are made; a popup has none.
+While a prompt is in the echo box, the workbench is still the frame the box belongs to: a buffer shown from the
+prompt (help on a command) goes to that frame's editor or panel. The chrome lives in window parameters, so a mode that sets its own header or
 mode line (ibuffer, Info) cannot change a window's height — text never jumps (invariant I3). A terminal window
 needs at least 30 frame lines for the breadcrumb row, which is 31 terminal rows with the menu bar on (the menu bar
 is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` is `off` (set by the terminal layout)
 and the row is gone, sticky scroll's scopes with it. It comes back with room, and a buffer's own header line (column
-headings) stays.
+headings) stays. A buffer that sets `drgnx-chrome-own-tab-line` (the Work space's views) shows its own tab line in
+place of the editor's tabs; the row stays, so the text does not move. That tab line is the window's heading, so it
+has no breadcrumb row under it.
 
-Hovering a file tab (or its ×) lights that one only. Tabs are dimmed, the shown tab of the active editor group is bold
-in the theme's link colour with an overline, and every row of chrome (tab line, breadcrumb, dock titles, panel tabs,
-the top line) is the theme's tab-line background; customize `drgnx-chrome-tab*` and `drgnx-wb-bar` to change them.
+Hovering a file tab lights that one only, the whole tab. Tabs are dimmed; the shown tab joins the editor (its colour,
+in the body text's colour in the active editor group and muted in another group). The breadcrumb row is the header
+line, on the editor's colour, so the shown tab, the breadcrumb and the code are one surface. The other rows of chrome
+(tab line, dock titles, panel tabs, the top line) are the theme's tab-line background. All of them are in the UI font.
+Customize the kit's tab faces (`drgnx-kit-tab*`, the preview tab's italic included), `header-line` and
+`drgnx-wb-bar` to change them.
+
+**On a graphical frame** the tab row is `tab-row` high (34 logical pixels at the comfortable density) on the `panel`
+surface, six pixels in from the card's edge, with a hairline (the `drgnx-border-subtle` face) along its bottom; tabs
+are two pixels apart (a terminal separates them with a space). The shown tab is lifted four pixels off the row's top
+and is on the `editor` colour with no hairline under it, so it joins the text below; it has its file's icon before
+the name. A file's tab is its file's name; a special page's is its name in words, never an Emacs buffer name:
+**Welcome** (the start page), **Settings**, **Keyboard Shortcuts**, **Extensions** (a buffer `*drgnx NAME*` reads
+as `Name`; a buffer may set its own in `drgnx-chrome-tab-title`). A tab that is not shown has no close mark you can see until the pointer is on the tab: the × (a 14-pixel
+icon in an 18-pixel slot) is drawn in the row's own colour and the tab's hover colour brings it out (no Lisp runs
+while the pointer moves). The × of the shown tab is always there, and so is every × on a terminal. A modified file
+shows a dimmed dot in the ×'s place (after its name on a terminal). A tab that is only there while it is shown is in
+italics: the scratch buffer, the start page, and a **preview**, as in VS Code: a file the Explorer opened with one
+click is a preview until you edit it or open it to work in (a double click, Open), and the next preview takes its
+place. At the right end of the row, a split button (**Split Editor Right**) and an overflow button (**Go to Tab…**, in
+the palette: choose one of the group's tabs by name). Under Glitnir the shown tab's top corners are rounded (7
+pixels). With two editor groups or more, the selected group's card is ringed in the accent; with one, no card is. The Work space's card (a Work lens) is ringed while it is selected, though it is the only one.
 
 - **Tabs**: the buffers an editor window has shown, in the order they were opened; switching never reorders them.
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).
+  Closing the last tab of a file with unsaved changes asks first, as VS Code does: Save (`s`), Don't Save (`d`: the
+  buffer closes too and the changes go, kept for a while in `drgnx-close-discarded`) or Cancel (`c`, `Escape`,
+  `C-g`); a file another group still has a tab of closes without asking.
   Close Tab `C-<f4>` · palette · `SPC b d`; Next / Previous Tab `C-<next>` / `C-<prior>` · Emacs' `C-x <right>` /
   `C-x <left>` · `SPC b n` / `SPC b p`. `*scratch*` is a tab only while it is shown. Killing a buffer takes its tab
   out of every window at once; closing the shown tab (or killing its buffer) shows the tab you used before it, as in VS Code; with no such tab, the one to its right, else its left. Each window keeps its own history.
-- **Breadcrumb**: project › folders › file, `●` while unsaved. A buffer with a header line of its own (the column
-  headings of a list, clicked to sort) keeps it.
+- **Breadcrumb**: the folders from the project's root › file › the definition the cursor is in (the innermost of the
+  definitions the Outline lists around its line; none without the hub or in a remote file), `●` while unsaved, in the caption type face (the project is named by
+  the Explorer and the title row): a row 26 logical pixels high on a graphical frame, the folders subtle and the last
+  part muted. The definition is looked up once Emacs has been idle for `drgnx-chrome-symbol-delay` (0.3 s), never while
+  the screen is drawn. A buffer with a header line of its own (the
+  column headings of a list, clicked to sort) keeps it.
 - **At once**: chrome follows the workbench state store, so it is in place before a frame is drawn. A window made by
   anything — a split, a popup, a timer — has its tab line and header at the first redraw; `C-x o` between two windows
   showing one buffer moves the tabs and the breadcrumb on the spot. Saving or reverting a buffer updates its `●` a
@@ -227,8 +343,35 @@ the top line) is the theme's tab-line background; customize `drgnx-chrome-tab*` 
 ### Editor groups
 
 Split the editor into **groups** — each an editor window with its own tabs — only by command: Split Editor Right /
-Down (``C-\`` / ``C-k C-\`` · Emacs' own `C-x 3` / `C-x 2` · `SPC w v` / `SPC w s`; the new group shows the same file),
-Close Editor Group (palette · `C-x 0` · `SPC w c`; the last group stays), Close All Editors in Group (`C-k w`; the
+Down (``C-\`` / ``C-k C-\`` · Emacs' own `C-x 3` / `C-x 2` · `SPC w v` / `SPC w s`; the new group shows the same file;
+in a tool tile — a dock, the panel, the right side — a new tile beside the whole tile asks what it shows: Editor or
+any pane, which moves there from its dock), Close Tile (palette · `C-x 0` · `SPC w c`; an editor group closes and the
+last one stays, a tool tile hides), Full-Size Tile (`C-k C-m` · `C-x w m`, also `C-x 1` · `C-w o`, `C-w _`, `C-w |`:
+this tile alone, a chip in its tab row saying "Full size · 1 of N · KEY back" and the status bar "full size · N
+tiles"; again, or any other tile command, puts every tile
+back exactly where it was; Zen is the same plus centred text), **Moving tiles** (the table in the key guide):
+Focus Tile, Move Tile, Swap Tile and Stack Tile, each Left/Right/Up/Down by the tiles' edges (across the docks); a
+moved tile takes half of the one it lands beside and gives its space to the one it leaves, a swap keeps the sizes where
+they are, a stack puts one tile's tabs onto another's (editors onto editors, panes onto a tile of panes); Unstack the
+Shown Tab puts it into a new tile beside, on the side with more room; Resize Tiles (`C-k r` · `C-x w z` · `SPC w z`)
+lets the arrows move the tile's edges one step each (a "Resize · Esc" chip in the tile's tab row while it is on, and a 2 px accent line on the gap the next step moves) (Resize Tile Left/Right/Up/Down, in Resize Tiles' own map, so a profile or your keys.eld can rebind them) until any other key, which then does what it does. With no room
+for a move or a split nothing changes and the echo area says "No room there". A docked tile moved is no dock's any
+more. **Dragging a tile:** press its grip, the ⠿ (`::` on a terminal that is not UTF-8) at the start of its tab row (an editor's tab row, a tool tile's, a
+docked panel's or side's header row), and drag: the tile under the pointer says on its own tab row what a drop does
+there ("⤓ drop: split right" near its right edge, left, up or down near the others, "stack" in the middle); let go
+to do it, or press Esc or `C-g` to stop. A tab dragged off its row moves only that file or pane (a click on it
+still shows it): onto another group's middle it joins that group's tabs, onto an edge it is a group of its own there;
+a group's only tab moves the whole group. A drop on the tile itself, on no tile or
+where there is no room changes nothing and says "Nothing moved"; panes stack only onto a tile that is no dock (move
+the docked one off its dock first). The dividers between tiles still drag to resize. The side bar, the panel and the
+right side keep the size you gave them when the window is resized, moved to a monitor of another scale or given another
+UI scale: the editors take the difference, and a dock gives way only to leave the editors their least width (it comes
+back to its size once there is room). `drgnx-grid-drag` set to nil
+draws no grip and turns dragging off. **Restore Previous Layout** (`C-k C-z` · `C-x w u` · `SPC l u`) puts back the
+layout before the last change to it — a move, a stack, a drop, or a package that collapsed the tiles behind the
+workbench's back — across every window: a window it had that you closed opens again, one it lacked closes, its files
+becoming tabs of the main window's editor (nothing is closed or saved). Again goes one more back, up to 20; with none
+left the echo area says "No earlier layout". The other group commands: Close All Editors in Group (`C-k w`; the
 palette in the Emacs and Vim profiles; its tabs go, the files stay open; the group closes, or, the last one, shows
 `*scratch*`), Focus Group 1–3 (`C-1`–`C-3` · `C-x o` · `SPC 1`–`SPC 3`; one past the last makes a group to the right),
 Move Editor into Next Group (`C-M-<right>` · palette · `SPC w m`; a group left without tabs closes, as in VS Code),
@@ -237,17 +380,49 @@ in that direction, docks included; at an edge nothing happens).
 Groups are numbered left to right, top to bottom. Diffs and logs (`diff-mode`, `log-view-mode`, magit's diff and log)
 open in the **other group** — the one you used last besides this one — never in a new split.
 
+### Switching tiles
+
+**Switch Tile** (`C-x w w` · `SPC w f`, and the palette) puts a letter on every tile of every window, on every
+monitor: the window you are in first, then the others left to right, and inside each, from the top left. The same
+layout always gets the same letters. The 12 largest tiles show a card in their middle — the letter, large, and what the
+tile holds under it ("init.el · editor (current)", "Terminal · a stack of 2", and the monitor's name when your windows
+are on more than one); the others, and the tiles of a
+terminal window, show the letter at their start. Type a letter to go to that tile (its window comes to the front; no
+window moves), **Shift** and a letter to swap your tile with that one (inside one window), or move with the arrows,
+across windows too, and press RET. Esc closes it; any other key closes it and then does what it does. Letters count once
+the cards are up (a blink, 120 ms, or one frame with reduced motion): one typed sooner goes to the tile you are in. The
+card of the tile the arrows are on has the focus ring, and the echo area lists the letters and the keys while it is
+open. Resize Tiles says its keys there too, and a tile with nothing to show says what waits there and its keys
+(RET, x) on one highlighted row.
+
+**Esc Esc** opens it too, in every profile: press Esc where it cancels something (leaves Vim's insert state, quits, clears
+a Work view's search, or closes nothing), then Esc again within 0.3 s (`drgnx-esc-double-tap`; nil turns this off). A
+single Esc still does what it did, at once. Where Esc is only Emacs's Meta prefix (the Emacs profile, and the VS Code
+profile in a terminal window) any two quick Escs open it, `Esc x` is still `M-x` and a slow Esc Esc Esc is still quit.
+A third quick Esc closes the switcher and quits. In a terminal tile Esc always goes to the program (Claude Code's
+rewind, vim in a shell): use **`C-<escape>`** there (every profile; in a terminal window that cannot send it, `F6` then
+Esc). In a terminal window, Alt+Esc counts as Esc Esc; in a graphical one GNOME keeps Alt+Esc for switching windows.
+A fast `Esc Esc :` opens the switcher and the `:` closes it again and runs: type `M-:` for eval-expression.
+
 ### The layout survives a restart
 
 When Emacs exits, the workbench of every window is saved to `$XDG_STATE_HOME/drgnx/workbench.eld`
 (`~/.local/state/…`) — with a daemon, when you close its last client (`C-x C-c`), every window of that client — and
 the other windows are opened again at start (your window manager places them; the one saved as the main window goes
-into the frame you start in, the others follow in order): the left dock (and the sidebar view it shows, Explorer or
-Search), the panel and its tab, the right dock — each with its pixel size — the layout you were in
-([layouts.md](layouts.md#after-a-restart)), the editor groups with their sizes, tabs and shown files, and the
-Explorer's folders. A window that rebuilds itself comes back where and how big it was (only where a monitor still is; never bigger than its screen).
-A job window saved before M12f comes back as the Work cockpit's filter on that job: no frame of its own, and the
-restored panes, sizes and focus stay as they were ([jobs.md](jobs.md#a-job-in-the-work-cockpit)).
+into the frame you start in, the others follow in order): each window's grid of tiles — the side bar (and the view
+it shows, Explorer or Search), the panel and its tab, the right side, every tool tile where you moved it with its
+stack, the editor tiles with their tabs and shown files, each tile at its size — the sizes you chose for the docks,
+where hidden tiles go back to, the layout you were in ([layouts.md](layouts.md#after-a-restart)) and the Explorer's
+folders (the status bar across the frame's foot is not a tile: it never comes back as one). The tiles keep their
+saved sizes when the window manager gives the new window its size only after the restore, in one step or several (a
+client's window at scale 2 does), until your first command. A tile whose kind is not there yet (its module is off)
+waits in its place: one line names it, `RET` chooses what the tile shows and `x` closes it; when the module is on
+again, the tile fills in place. The same happens to a tile in the live layout when you turn its module off. A file
+saved by a drgnx from before the grid is read once as a grid (its docks, panel and editor groups at their sizes). The main window and a window that rebuilds itself come back where and how big they were (only where a monitor still is; never bigger than its screen), and maximized or
+full screen only if they were: one nearly as big as the screen, which GNOME maximizes when it appears, is given its own
+size back.
+A job window saved before M12f comes back as the Work space: no frame of its own, and the
+restored panes, sizes and focus stay as they were ([jobs.md](jobs.md#a-job-in-the-work-space)).
 
 At the first graphical frame it comes back as it was (`drgnx-persist-restore-on-start`) — with a daemon, in the first
 `emacsclient -c` frame, once the server has shown its `*scratch*` there (the restored files replace it); closing the
@@ -266,8 +441,8 @@ keys or the save.
 Each group's shown file opens at once and its other tabs open while you are idle, all within the first pause (typing
 stops them until your next pause, which carries on with the rest); nothing asks anything at start (no
 remote files are touched, only safe local variables, no large-file question). Files that no longer exist are skipped,
-sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves none), and a state in another
-format is ignored. The file is written whole and atomically (a crash or a full disk leaves the last saved layout), and
+sizes are clamped to the frame, a saved grid that is not valid (junk, too deep, too many tiles) is ignored with one
+notice and nothing in the file sets a window parameter, and a state in another format is ignored. The file is written whole and atomically (a crash or a full disk leaves the last saved layout), and
 read with limits (4 MiB, no deep nesting, plain data only). A file written by a **newer drgnx** is never overwritten:
 the save says "workbench.eld was written by a newer drgnx: not saved" and stops, and the restore ignores it. A file
 that cannot be read (a typing mistake, a crafted file) is not restored, one message says so, and the next save keeps a
@@ -299,19 +474,26 @@ was full screen or maximized), and the other windows go back to it after a resta
 drgnx move a window (see [Several monitors](#several-windows)). Where Emacs itself knows only a window's place (on
 Wayland), drgnx asks the window manager which of its monitors is there, so the serial and name are what is
 remembered; after a move it keeps the monitor it moved the window to. The monitor is found by its serial, else its
-name, else its place, never by the number it had; if it is not connected any more, the window stays where your window
-manager opened it and drgnx says so in one message ("1 window's monitor is not connected (DELL U2720Q); the window
-manager placed it"). The main window, windows opened for `$EDITOR` (terminal and EDITOR frames) and job windows are never moved. This happens after the
+name, else its place, never by the number it had; if it is not connected any more, the window folds into the main window
+until it is (see **A monitor goes away** below) and drgnx says so in one message ("1 window's monitor is not
+connected (DELL U2720Q); its tabs are in the main window until it is"). The main window, windows opened for `$EDITOR` (terminal and EDITOR frames) and job windows are never moved. This happens after the
 layout is back, in the background, with a few seconds' limit: a window manager that does not answer costs nothing but
 one message. Where drgnx cannot tell which monitor a window is on (GNOME, other Wayland compositors, a terminal) nothing is
 saved and nothing is moved.
 
 ### Several windows
 
-Every frame (OS window) is its own workbench. The first one is the **main** window; windows opened later are
-**editor-only** (no sidebar until you toggle one there). Move Editor into New Window, Open Editor in New Window
-(``C-k o`` · palette · `SPC w o`; the file shows in both) and Move Editor Group into New Window (its tabs too) are in
-the palette (Vim `SPC w n` / `SPC w g`). Each window has its **own buffers** — the tabs of its groups; the main window
+Every frame (OS window) is its own workbench. The first one is the **main** window (when a terminal window held that
+role and every graphical window has closed, the next graphical window takes it back); windows opened later are
+**editor-only** (no sidebar until you toggle one there). **Move to New Window** (palette · `SPC w n`, or a right
+click on a tab: its menu) takes the shown tab to a new window: a file leaves its group's tabs, a pane leaves its
+tile's stack, and a tile's only tab takes the tile whole — a conversation with its composer, a terminal with its
+running process, an editor group with its tabs; a docked tile is no dock's there. Restore Previous Layout brings it
+back. (Dragging a tab out of every window does not open one: Emacs gets no release outside its windows, so the menu and
+the command are the ways.) Open Editor in New Window (``C-k o`` · palette · `SPC w o`; the file shows in both) and
+Move Editor Group into New Window (its tabs too; Vim `SPC w g`) are in the palette. **Each window has its own shell**:
+Toggle Rail, Toggle Title Bar and Toggle Right Side in This Window (palette) change only the window you are in; a
+window that shows only Work and its Detail, or one conversation, opens without the rail. Each window has its **own buffers** — the tabs of its groups; the main window
 also has the open files that are a tab nowhere — and the Buffers panel lists those of the window you work in;
 Buffers: Show All Windows (palette · `SPC b a`) lists all. `C-x b` lists the buffers of the window you work in
 first and every other buffer after them: it sorts, it never hides one (the order is set on the `buffer` completion
@@ -328,6 +510,14 @@ commands exist only in graphical windows and work on sway, i3, Hyprland, niri, K
 (on GNOME, Super+Shift+→ or ←). A window manager moves only the window that has focus, so a move is refused with a
 plain message while another app has it. None of the three has a key by default (`:none` in every profile): bind them
 in your key profile or use the palette.
+
+**A monitor goes away.** Unplug a monitor (or undock a laptop) and each window that was on it folds into the main
+window a second later: its files and buffers become tabs of the editor you used last there, its panes (an agent's
+conversation, a terminal…) join the main window's docks, and the window closes. Nothing is closed, saved or asked:
+a file with unsaved changes stays unsaved. Plug the monitor back in and the window comes back where it was, with its
+tiles as they were and its buffers as they are now; the main window gives back the tabs and panes it took. A dock
+unplugged and plugged back within the second folds nothing. The fold is one step of Restore Previous Layout, and the
+folded windows survive a restart: a window whose monitor is not there when drgnx starts folds the same way.
 
 **What each window manager allows.** drgnx finds the window manager from the window's own environment (one drgnx
 can serve windows on several desktops). `drgnx doctor` shows the row for yours ([install.md](install.md#drgnx-doctor)).
@@ -387,15 +577,64 @@ The lane always has a one-line header: the popup's name (`Calendar`, `which-key`
 click it, or press `Esc` or `q` while the lane has focus (**Close Pane**), to end the popup. Because the header is
 there whether the popup borrows the panel or has a window of its own, borrowing never changes the header's height.
 
+**Floating lane.** `drgnx-popup-style` is `auto` (the default), `window` or `float`. Under Glitnir (Nidhogg's
+compositor) `auto` is `float`: the popup shows in one child frame of the window, bottom-centre above the echo area,
+as wide as its text (at most 0.9 of the frame; lines below the visible part count too, so scrolling never scrolls
+sideways) and at most a third of the frame high, or the rule's `:height`. A rule's `:modal t` makes the popup a box in
+the middle of the window, as the palette is, with the palette's padding, ring, shadow and corners and no lane header
+(`(drgnx-wb-place 'MODE 'popup :height 0.8 :modal t)`: the Replace All sheet). A buffer with `drgnx-popup-width` (logical
+pixels) is that wide, its long lines wrapped there (Ask an Agent's card). A popup whose text comes later (a hub's
+answer) calls `(drgnx-popup-refit BUFFER)` to fit the lane again. The frame is made once per
+window and reused; ending the popup (`delete-window`, `quit-window`, `bury-buffer`, killing the buffer) hides it, and
+it is never deleted while the window lives. A popup that came up while you were in the minibuffer (`*Completions*`)
+ends when you leave it, with `RET` or `C-g`, as the window lane's does. It never takes focus: transient and which-key keep their keys in the
+editor, and a click on a candidate in `*Completions*` chooses it. Without Glitnir, or with `window`, the lane is the
+window described above.
+
 In a terminal window the lane works the same, and the line you are on stays visible. Completion as you type
 (corfu) shows as a child frame there. See
 [terminal.md](terminal.md#popups).
 
+### Docked panes as cards
+
+While `ui/look` runs under Glitnir, the Explorer, the panel, the right dock and every editor group are **cards**: corner radius 10, a
+1 px ring just outside in the `drgnx-border` colour and a soft shadow, on a gap that comes from the density
+([The look](look.md#density): 4, 6 or 8 logical pixels). The ring is 60 % opaque in the dark theme, 80 % in the light one
+and solid in High Contrast; the shadow is 45 % in the dark theme, 8 % in the light one and absent in High Contrast.
+The sidebar's sections (Open, Files, Outline) are **one** card: every left-dock window has the window parameter
+`card-group` `(drgnx-sidebar . drgnx-surface-panel)`, and Glitnir draws one card around the windows of a group while
+they tile a rectangle, with the gaps between them in the panel surface. Opening or closing a section, or dragging the
+line between two, re-forms the card at once; windows of a group that tile no rectangle are separate cards.
+`drgnx-look-card` holds the radius and the shape (logical pixels; the ring is a face and an opacity, never a colour).The gap is the frame's `right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is the same
+number of logical pixels at any display scale, and set again when the scale or the density changes, at once); the
+frame's edge gets the same gap (`internal-border-width`), so the outer cards have their corners, ring and shadow
+against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text.
+Dragging the gap between two cards resizes them, and so does dragging either card's side edge beside it (the fringe
+there; `drgnx-look-edge-drag`), as VS Code's sash takes a few pixels on each side. The inner half of a fringe whose
+click a mode uses (a breakpoint) keeps that click. A drag released over a fringe ends there: Nidhogg's
+`mouse-drag-line` takes the fringes' releases (stock Emacs 31 does not, and such a drag stays on there).
+A window made while the module runs is born with the edge (`default-frame-alist`), so it never grows by it once it is
+shown: a shown window that asked the window manager for a bigger size could get the size it was made with back a
+moment later, after a restored workbench was laid out in it, and lose the difference from its split. A density change
+gives the windows made after it the new edge too. (On a display scaled above 1 the edge is set again in device
+pixels, so the window grows there once, as the windows shown at a density change do.)
+The gap and the frame's edge are painted in the gap colour (`drgnx-surface-gap`) on the frame, whatever the theme
+says: a theme with a grey divider (modus's) does not stripe the gap. The **focused tile**, the selected editor group
+when the frame has two or more, has its ring in the accent colour, solid; it moves with the selection (one editor
+group and the docked panes show no focus ring: their rows tell where you are). Turning the module off takes the cards away and
+gives the frame its divider widths and the theme's divider faces back. An editor card keeps its corners while it
+scrolls. Without Glitnir nothing changes.
+
 ### The panel and the right dock
 
-The **panel** (Toggle Panel: ``C-` `` · palette · `SPC j`) sits under the editors; the **right dock** (Toggle
+The **panel** (Toggle Panel: `M-j` · palette · `SPC j`) sits under the editors; Toggle Terminal (``C-` `` in the VS Code
+profile, as in VS Code) shows its Terminal tab, starting a terminal when the tab has none, and hides the panel when that
+tab already shows; a click on the Terminal tab with no terminal starts one too, in the editor's folder; the **right dock** (Toggle
 Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like the left one. Each is one window with a
-**tab row** at the top (click a tab to show it). Showing a buffer there never takes focus (Focus Panel does), and
+**tab row** at the top (click a tab to show it; the shown tab is a pill on the quiet selection, face
+`drgnx-kit-tab-panel-current`, the others muted text, `drgnx-kit-tab`). The right dock shows its tab row only while two of its tabs have
+something to show: with one (an agent panel, say) that pane's own header is the top row, and `q` or `C-w l` then
+`C-x 0` hides the dock. Showing a buffer there never takes focus (Focus Panel does), and
 switching tabs swaps the buffer *in place*: the window stays, nothing around it moves, and each tab comes back
 scrolled where you left it. Both keep their pixel size across hiding and showing. **The size you chose stays:**
 a size you set for the left dock, the panel or the right dock is the one it comes back at the next time it shows.
@@ -408,16 +647,15 @@ area stays one line (`resize-mini-windows` is off), so a tall message never take
 type in the minibuffer it may grow (icomplete-vertical, fido-vertical).
 
 **Closing.** Every help pane, popup and side pane has a **×** in its header: at the right end of the panel's and the
-right dock's tab row and of the popup lane's header, at the start of each left-dock section's title (a long title
-cannot push it out of the dock); `x` where the terminal is not UTF-8,
+right dock's tab row and of the popup lane's header; the left dock has Close Sidebar on its island header's ⋯; `x` where the terminal is not UTF-8,
 and the panel, the right dock and the popup lane close with `Esc` or `q` (**Close Pane**, bound in all three key
-profiles): the panel and the right dock hide (size and tabs kept), a popup ends, and focus goes to the editor you
-used last. The keys only act where you read, not where you type: in a buffer you can edit `q` types a `q`, `Esc` is the Meta
+profiles): the panel and the right dock hide (size and tabs kept), a popup ends, a tile of the grid hides, and focus
+goes to the editor you used last. The keys only act where you read, not where you type: in a buffer you can edit `q` types a `q`, `Esc` is the Meta
 prefix (`Esc x` is `M-x`) and, in the Vim profile, still leaves insert state, and a terminal tab (`comint`,
-`eshell`, `term`, `vterm`, `eat`; `drgnx-close-input-modes`), a live page you are driving and the minibuffer keep
+`eshell`, `term`, `vterm`; `drgnx-close-input-modes`), a live page you are driving and the minibuffer keep
 both keys. A mode that takes the keyboard for itself joins by adding a predicate to `drgnx-close-input-functions`. In a terminal frame `Esc` stays the Meta prefix, so use
-`q` or the × there. The left dock's sections keep `Esc` as Back to the Editor (the sidebar stays); its ×, or Close
-Pane in the palette, hides the sidebar. In the Vim profile the two keys close a read-only pane in normal and motion
+`q` or the × there. The left dock's sections keep `Esc` as Back to the Editor (the sidebar stays); Close Sidebar on its
+⋯, or Close Pane in the palette, hides it. In the Vim profile the two keys close a read-only pane in normal and motion
 state too (Close Pane's keys come before evil's, `drgnx-modal-front-alists`); in visual state `Esc` stays evil's and
 leaves the selection.
 
@@ -455,15 +693,18 @@ Not yet: file nesting, icons (an icon theme is a module, M4), problems decoratio
   has its own, so a file chosen in one frame's dock opens in that frame's editor. Moving between two windows on one
   file changes the editor but not the file, so the Explorer and the Outline stay as they are.
 - **Roles** (`wb/drgnx-wb.el`): each window is an `editor` or a `dock` window (window parameter `drgnx-role`). The
-  dock is side windows with a pixel width kept across hide/show, no scroll bars, and titles in the
+  dock is one tile of the grid (its sections move, hide and show as one; side windows when `drgnx-grid-mode` is
+  off) with a pixel width kept across hide/show, no scroll bars, and titles in the
   `header-line-format` *window parameter*, where no mode can erase them. Showing the dock never takes focus; files
   chosen in it go to the most recently used editor window, never splitting it. Sections are registered with
   `drgnx-wb-define-section` (slot, title, height, buffer, `:on-show`); a title may be a function, asked each time
   the dock shows, so a panel's Find or filter stays in its title across hide/show. The dock's buffers are internal
   (` *drgnx explorer*`, ` *drgnx buffers*`, ` *drgnx outline*` — a leading space), so `C-x b` and ibuffer never
-  list them. While `drgnx-rules-mode` is on, `drgnx-role` and `drgnx-section` are in
-  `window-persistent-parameters`: a saved window state (`window-toggle-side-windows`, `window-state-put`) brings
-  windows back with their roles.
+  list them. While `drgnx-rules-mode` is on, drgnx's roles (`drgnx-role`, `drgnx-section`, `drgnx-area-part`, a
+  section's fold) and the parameters it gives the docks and areas (`no-other-window`, `no-delete-other-windows`, the
+  header and mode lines, `delete-window`) are in `window-persistent-parameters` (those it added, not ones you set
+  before): a saved window state (`window-toggle-side-windows`, `window-state-put`) brings windows back as they were,
+  titled and skipped by `C-x o` and `C-x 1`.
 - **Owned windows.** Code running from a timer or a follower may move only windows that show its own buffer, and
   says so with `drgnx-wb-with-owned-windows`; the harness's jank guard records any other window move made from a
   timer or a window change hook (invariant I9). Two lints (`test/unit/lint-buffers-timers-test.el`) keep the habits behind it: the
@@ -525,7 +766,8 @@ What "nothing moves on its own" means, each pinned by a test in a GUI session wi
 | I8 | 50 commands that display buffers: no split, no resize, no frame, nothing unrouted | `drgnx-inv/i8-fuzz-of-fifty-commands` (`test/fixtures/fuzz-commands.eld`) |
 | I9 | No window moved from a timer or a window change hook except the caller's own | every report's `guard_violations` = 0 |
 | I10 | Each step settles within 250 ms, without oscillation | `drgnx-inv/i1-i9-i10-explorer-and-buffers-flows` |
-| I11 | Under a tiling window manager, a resize the WM makes goes to the editors: docks and panel keep their pixel size | `drgnx-wm/i11-docks-keep-their-size-when-the-wm-resizes`, `drgnx-wm/popups-under-tiling-leave-no-trace` (`test/live/drgnx-tiling-test.el`, sway tier: `bin/drgnx test --container --ui --compositor sway`) |
+| I11 | Under a tiling window manager, a resize the WM makes goes to the editors: docks and panel keep their pixel size | `drgnx-wm/i11-docks-keep-their-size-when-the-wm-resizes` (`test/live/drgnx-tiling-test.el`, sway tier: `bin/drgnx test --container --ui --compositor sway`); popups leave no trace on every compositor: `drgnx-ui-grid-popups/popups-over-tiles-leave-no-trace` (`test/ui/grid-popups-gui-test.el`, tagged `:compositor`) |
+| I11 (moves) | A tile move, swap or stack by keys changes at most three tiles: the one moved, the one it leaves its space to and the one it lands on | `drgnx-inv/i11-moves-touch-three-tiles-at-most` |
 | I12 | Across monitors, drgnx moves a window only when asked (Move to Monitor, Next, Previous) and in the restore of auxiliary windows; a restore moves no other window and no other app | `drgnx-wm/move-to-monitor-2-and-back`, `drgnx-wm/a-fullscreen-window-stays-fullscreen-on-its-new-monitor`, `drgnx-wm/restore-puts-the-aux-window-back-on-its-monitor`, `drgnx-wm/a-missing-monitor-on-restore-is-skipped`, `drgnx-wm/a-restore-under-sway-moves-nothing-else`, `drgnx-wm/mutter-explains-and-moves-nothing` (`test/live/drgnx-wm-test.el`; see Tests) |
 
 Two Emacs behaviours the workbench corrects so that these hold: `balance-windows` on a whole frame (finder calls
@@ -566,12 +808,14 @@ tree, is the real one).
 
 ## Remote folders in the Explorer
 
-A remote folder (a TRAMP name) is listed only by a command of yours: opening it (Open Remote…), Refresh, expanding or
+The hub lists local folders only: while a remote folder is among the Explorer's folders, the Explorer lists every
+folder itself, as it did before the hub listed them, without who-is-here badges; it goes back to the hub's listing
+when the remote folder is removed. A remote folder (a TRAMP name) is listed only by a command of yours: opening it (Open Remote…), Refresh, expanding or
 opening a folder row, New File, Rename, Delete and Paste, and leaving Find. A redraw that nothing of yours started, such as the one after a git status or a window change,
 shows the listing it already has and asks the host nothing; a remote folder that was never listed shows one row,
 `(not listed — Refresh)`, and Enter or a click on that row refreshes. A checkout in a local folder forgets only the
 local listings. Git decorations, inline blame, the Outline and the change gutter skip remote files, and sticky scroll
-works from the buffer's text alone; see [remote.md](remote.md).
+shows scopes only from tree-sitter there; see [remote.md](remote.md).
 
 ## Known limits of the restore
 

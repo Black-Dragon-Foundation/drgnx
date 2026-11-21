@@ -1,0 +1,18 @@
+{"scenario": "search/a-git-that-hangs-is-the-searchs-error", "requires": ["v1", "test-hooks"], "doc": "[C] A project whose git gives no answer (a stand-in git, `DRGNX_TEST_GIT`, that hangs) is the search's error, which the Search view shows on its state line: never a search with the global settings or with search off. Nothing is kept: once git answers, the same search runs."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/proj && cd $ROOT/proj && git init -q && printf 'fn needle() {}\\n' > a.rs && git add a.rs && git -c user.name=t -c user.email=t@t commit -qm one"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/git", "mode": "755", "text": "#!/bin/sh\nif [ -e $ROOT/hang ]; then exec sleep 10; fi\nexec /usr/bin/git \"$@\"\n"}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_GIT": "$ROOT/git"}}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "s", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "write_file", "path": "$ROOT/hang", "text": ""}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "symbol", "name": "needle"}, "scope": {"kind": "project"}}}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"run": 1}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": 1, "files": 0, "error": "$string"}}, "within_ms": 30000}
+{"do": "remove", "path": "$ROOT/hang"}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "symbol", "name": "needle"}, "scope": {"kind": "project"}}}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"run": 2}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": 2, "error": "$absent"}}, "within_ms": 30000}

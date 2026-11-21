@@ -66,10 +66,10 @@ Emacs has to shrink them."
 (ert-deftest drgnx-wm/i11-docks-keep-their-size-when-the-wm-resizes ()
   (skip-unless (equal (drgnx-ui-default-compositor) "sway"))
   (drgnx-tiling--with sess
-    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`") (list :keys "C-M-b")))
+    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j") (list :keys "C-M-b")))
     ;; Tab switches first: Emacs preserves a size only for the buffer it was set with.
     (drgnx-ui-measure sess (list (list :keys "M-x") (list :type "describe-function") (list :keys "RET") (list :type "car") (list :keys "RET")))   ; the panel's Help tab
-    (drgnx-ui-call sess "(progn (drgnx-wb-define-tab 'right 'notes :title \"Notes\")
+    (drgnx-ui-call sess "(progn (drgnx-pane-define-kind 'notes :home 'right :title \"Notes\")
                                 (drgnx-wb-area-show 'right 'notes (get-buffer-create \"*notes*\"))
                                 (set-frame-parameter drgnx-tiling--f1 'name \"drgnx-i11-first\")
                                 (drgnx-uitest--json (list :ok t)))")
@@ -104,59 +104,6 @@ Emacs has to shrink them."
             (push (list (car step) :before before :after after :wm_resizes (plist-get r :wm_resizes)
                         :collateral (plist-get r :collateral) :causes (plist-get r :causes) :guard (plist-get r :guard))
                   bad))))
-      (should-not bad))))
-
-(defconst drgnx-tiling--geometry
-  "(drgnx-uitest--json
-     (list :geometry (format \"%S\" (cons (list (frame-pixel-width drgnx-tiling--f1) (frame-pixel-height drgnx-tiling--f1))
-                                           (mapcar #'window-pixel-edges (window-list drgnx-tiling--f1 'nomini))))))"
-  "The first frame's pixel size and every window's pixel edges.")
-
-(ert-deftest drgnx-wm/popups-under-tiling-leave-no-trace ()
-  ;; A completion popup in a child frame (made as corfu makes its own: corfu is not installed in the
-  ;; harness image, and a session cannot install it), a transient, which-key: sway gets no new window to
-  ;; tile, and the frame's windows are where they were.
-  (skip-unless (equal (drgnx-ui-default-compositor) "sway"))
-  (drgnx-tiling--with sess
-    (drgnx-ui-measure sess (list (list :keys "C-`")))
-    (drgnx-ui-call sess "(progn (require 'transient)
-                                (transient-define-prefix drgnx-tiling-tr () [(\"a\" \"Do A\" ignore)])
-                                (keymap-global-set \"<f19>\" #'drgnx-tiling-tr)
-                                (setq which-key-idle-delay 0.1) (which-key-mode 1)
-                                (drgnx-uitest--json (list :ok t)))")
-    (let ((cons (length (drgnx-tiling--emacs-cons sess))) (bad nil))
-      (should (= cons 1))
-      (dolist (popup (list (list "child frame"
-                                 "(progn (setq drgnx-tiling--child
-                                                (make-frame `((parent-frame . ,drgnx-tiling--f1)
-                                                              (minibuffer . ,(minibuffer-window drgnx-tiling--f1))
-                                                              (visibility . nil) (left . 120) (top . 80) (width . 30) (height . 6)
-                                                              (no-accept-focus . t) (no-focus-on-map . t) (undecorated . t)
-                                                              (no-other-frame . t) (unsplittable . t) (border-width . 0)
-                                                              (child-frame-border-width . 1) (menu-bar-lines . 0)
-                                                              (tool-bar-lines . 0) (tab-bar-lines . 0)
-                                                              (vertical-scroll-bars . nil) (desktop-dont-save . t))))
-                                         (make-frame-visible drgnx-tiling--child)
-                                         (drgnx-uitest--json (list :ok t)))"
-                                 "(frame-visible-p drgnx-tiling--child)"
-                                 "(progn (delete-frame drgnx-tiling--child) (drgnx-uitest--json (list :ok t)))")
-                           (list "transient" '(:keys "<f19>") "(get-buffer-window \" *transient*\" t)" '(:keys "C-g"))
-                           (list "which-key" '(:keys "C-x") "(get-buffer-window \" *which-key*\" t)" '(:keys "C-g"))))
-        (let ((before (drgnx-ui-call sess drgnx-tiling--geometry)) shown open-cons)
-          (pcase-let ((`(,name ,open ,shown-p ,close) popup))
-            (if (stringp open)
-                (progn (drgnx-ui-call sess open) (drgnx-ui-measure sess nil 400))
-              (drgnx-ui-measure sess (list open) 400))
-            (setq shown (plist-get (drgnx-ui-call sess (format "(drgnx-uitest--json (list :shown (if %s t :false)))" shown-p))
-                                   :shown)
-                  open-cons (length (drgnx-tiling--emacs-cons sess)))
-            (if (stringp close)
-                (progn (drgnx-ui-call sess close) (drgnx-ui-measure sess nil))
-              (drgnx-ui-measure sess (list close)))
-            (let ((after (drgnx-ui-call sess drgnx-tiling--geometry)) (after-cons (length (drgnx-tiling--emacs-cons sess))))
-              (unless (and (eq shown t) (= open-cons cons) (= after-cons cons) (equal after before))
-                (push (list name :shown shown :cons-open open-cons :cons-after after-cons :before before :after after)
-                      bad))))))
       (should-not bad))))
 
 ;;; drgnx-tiling-test.el ends here

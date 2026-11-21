@@ -19,7 +19,7 @@
 
 (defun drgnx-tty-tmux-test--ready (sess)
   "Wait until SESS's Emacs shows the workbench; log its commands."
-  (drgnx-tty-session-wait-screen sess "\\*scratch\\* ×" 20)
+  (drgnx-tty-session-wait-tab sess "×" 20)
   (drgnx-tty-session-eval sess drgnx-tty-tmux-test--log))
 
 (defun drgnx-tty-tmux-test--copy (sess text)
@@ -65,6 +65,7 @@ the loop and sets `kx-returned' when it ends."
   :tags '(:timing)
   (drgnx-tty-session-with (s :keys "vscode" :nested '("set -s extended-keys on"))
     (drgnx-tty-tmux-test--ready s)
+    (drgnx-tty-session-wait-stages s)
     (let ((caps (drgnx-tty-tmux-test--caps s)))
       (should (eq (plist-get caps :keys) 'mok))
       (should (eq (plist-get caps :c-g) 'always))
@@ -75,7 +76,7 @@ the loop and sets `kx-returned' when it ends."
     (drgnx-tty-session-wait s '(memq 'drgnx-lang-quick-fix kx-commands))
     ;; what tmux folds: C-S-p reaches Emacs as C-p
     (drgnx-tty-session-key s "C-S-p" 'mok)
-    (drgnx-tty-session-wait s '(memq 'project-find-file kx-commands))
+    (drgnx-tty-session-wait s '(memq 'drgnx-quick-open kx-commands))
     (should-not (drgnx-tty-session-eval s '(memq 'drgnx-palette kx-commands)))
     (drgnx-tty-session-key s "C-g")
     (drgnx-tty-session-wait s '(null (active-minibuffer-window)))
@@ -96,13 +97,16 @@ the loop and sets `kx-returned' when it ends."
   ;; `drgnx-tty-tmux-mok-level' 2: C-S-p arrives and is sendable, C-g waits (caps say so)
   (drgnx-tty-session-with (s :keys "vscode" :nested '("set -s extended-keys on"))
     (drgnx-tty-tmux-test--ready s)
+    (drgnx-tty-session-wait-stages s)
     (drgnx-tty-session-eval s '(progn (setq drgnx-tty-tmux-mok-level 2) (drgnx-tty-frames--tmux-setup (selected-frame)) t))
     (let ((caps (drgnx-tty-tmux-test--caps s)))
       (should (eq (plist-get caps :keys) 'mok))
       (should (eq (plist-get caps :c-g) 'waits))
       (should-not (plist-get caps :folded)))
-    (should-not (member "C-S-p" (plist-get (cdr (car (plist-get (drgnx-tty-session-eval s '(drgnx-tty--read-report)) :terminals)))
-                                           :unsendable)))
+    ;; this terminal's entry, by its name: the report keeps every terminal's
+    (let ((entry (drgnx-tty-session-eval s '(cdr (assoc (terminal-name) (plist-get (drgnx-tty--read-report) :terminals))))))
+      (should (eq (plist-get (plist-get entry :caps) :c-g) 'waits))
+      (should-not (member "C-S-p" (plist-get entry :unsendable))))
     (drgnx-tty-session-key s "C-S-p" 'mok)
     (drgnx-tty-session-wait s '(memq 'drgnx-palette kx-commands))
     ;; C-g still closes a prompt (it reaches Emacs as an escape sequence, decoded)
@@ -142,7 +146,7 @@ the loop and sets `kx-returned' when it ends."
     (should-not (drgnx-tty-session-eval s '(plist-get (terminal-parameter nil 'drgnx-tty-caps) :osc52)))
     (drgnx-tty-tmux-test--copy s "stays here")
     (should (equal (drgnx-tty-session-eval s '(car kill-ring)) "stays here"))
-    (drgnx-test-pause 0.5 "no copy may reach the clipboard")
+    (drgnx-tty-session-pty-barrier s)               ; tmux has read all the terminal output: no copy reached its buffer
     (should-not (drgnx-tty-session-clipboard s))))
 
 (ert-deftest drgnx-tty-tmux/focus-events-reach-drgnx ()
@@ -174,8 +178,11 @@ the loop and sets `kx-returned' when it ends."
     (drgnx-tty-tmux-test--ready s)
     (let* ((conf (expand-file-name "inner.conf" (plist-get s :run)))
            (before (with-temp-buffer (insert-file-contents-literally conf) (buffer-string)))
-           (lines (drgnx-tty-session-eval
-                   s '(plist-get (cdr (car (plist-get (drgnx-tty--read-report) :terminals))) :tmux-conf))))
+           ;; this terminal's entry, by its name; a tmux that did not answer at the setup (a loaded machine) is asked
+           ;; again (`drgnx-tty-frames--tmux-retry'), and its lines come then
+           (lines (drgnx-tty-session-wait
+                   s '(plist-get (cdr (assoc (terminal-name) (plist-get (drgnx-tty--read-report) :terminals))) :tmux-conf)
+                   30)))
       (should (member "set -s set-clipboard on" lines))
       (should (member "set -s extended-keys on" lines))
       (should (member "set -g focus-events on" lines))

@@ -72,6 +72,7 @@
                    ((symbol-function 'drgnx-ui-own-session) (lambda (_) 'sess))
                    ((symbol-function 'drgnx-ui-stop) #'ignore)
                    ((symbol-function 'drgnx-perf-run--make-fixture) (lambda () (make-temp-file "drgnx-perf-fixture")))
+                   ((symbol-function 'drgnx-perf-run--compiled) #'ignore)   ; no tree to build: the session is fake
                    ((symbol-function 'drgnx-perf-run--workloads) (lambda () ,workloads))
                    ((symbol-function 'drgnx-perf-run--call)
                     (lambda (_s form &rest _) (if (string-match-p "gc-cons-threshold" form) '(:now 1 :want 1) '(:frame (:p50 1 :p95 1 :max 1)))))

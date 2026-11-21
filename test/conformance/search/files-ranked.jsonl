@@ -1,0 +1,16 @@
+{"scenario": "search/files-ranked", "requires": ["v1", "test-hooks"], "doc": "search/files sends a view the best file names of a repository for a query as rows (git's list, no dot path under the default rule), a basename that starts with the query first, the words marked; a later query of the view patches the rows, and the call's rule real lists the dot paths."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "q", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo/src $ROOT/repo/map $ROOT/repo/.github && cd $ROOT/repo && git init -q && echo x > src/map.rs && echo x > src/xmap.rs && echo x > map/a.rs && echo x > .github/map.yml && echo x > notes.txt"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/files", "params": {"view": "q", "root": "$ROOT/repo", "query": "map"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"query": "$number"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "q", "class": "gui-1", "hub": "$capture:hub", "base": 0, "version": 1, "env_epoch": 1, "ops": [{"reset": [{"key": "src/map.rs", "text": "src/map.rs", "runs": [[4, 7, "drgnx-quick-open-match"]]}, {"key": "src/xmap.rs", "text": "src/xmap.rs", "runs": [[5, 8, "drgnx-quick-open-match"]]}, {"key": "map/a.rs", "text": "map/a.rs", "runs": [[0, 3, "drgnx-quick-open-match"]]}]}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/files", "params": {"view": "q", "root": "$ROOT/repo", "query": "map yml", "ignore": "real"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"query": "$number"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"hub": "$hub", "base": 1, "version": 2, "ops": "$any"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "view/close", "params": {"view": "q"}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}}

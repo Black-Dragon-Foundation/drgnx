@@ -1,0 +1,19 @@
+{"scenario": "debug/console-completions", "requires": ["v1", "test-hooks"], "doc": "Debug Console completion: `debug/completions` sends the point's column in the adapter's UTF-16 units (1-based; a non-BMP character counts two) and answers each target's replaced span in 0-based characters. The editor offers it once the session's capabilities are in `debug-state`; asked before, it is refused as still starting."}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/proj/.vscode/launch.json", "json": {"version": "0.2.0", "configurations": [{"type": "mocka", "request": "launch", "name": "App", "program": "p"}]}}
+{"do": "write_file", "path": "$ROOT/a.json", "json": [{"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true, "supportsCompletionsRequest": true}}, {"expect": "launch", "ok": {}}, {"event": "initialized"}, {"expect": "configurationDone"}, {"expect": "completions", "args": {"text": "\ud835\udc65.ap", "column": 6}, "ok": {"targets": [{"label": "append", "type": "method", "start": 4, "length": 2}, {"label": "apply", "text": "apply()"}]}}, {"expect": "disconnect", "ok": {}}, {"die": true}]}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "debug/trust", "params": {"root": "$ROOT/proj", "trusted": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "launch:0", "adapters": [{"id": "mocka", "name": "Mock A", "types": ["mocka"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/a.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"session": "$capture:s"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-state", "data": {"sessions": [{"id": "$s", "caps": {"supportsCompletionsRequest": true}}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "debug/completions", "params": {"session": "$s", "text": "\ud835\udc65.ap", "column": 4}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"targets": [{"label": "append", "type": "method", "start": 2, "length": 2}, {"label": "apply", "text": "apply()"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "debug/completions", "params": {"session": "$s", "text": "\ud835\udc65.ap", "column": 5}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "error": {"code": "invalid-params"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "debug/control", "params": {"session": "$s", "op": "stop"}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-ended", "data": {"session": "$s"}}, "within_ms": 10000}

@@ -1,0 +1,35 @@
+{"scenario": "recording/acp-miss-fails-loudly", "requires": ["v1", "test-hooks"], "doc": "Pattern B (gates on the session's events). A mock Claude turn \"say one\" is recorded; the replay sends another prompt text: the ACP replayer never improvises, it answers the prompt with JSON-RPC error -32099 (replay miss), writes the expected and received lines with their first differing path to misses.jsonl and exits 3, which the hub shows as the agent ending."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "live", "env": {"DRGNX_RECORD": "$ROOT/rec", "DRGNX_RECORD_PROVENANCE": "mock"}}
+{"do": "connect", "conn": "c", "hub": "live"}
+{"do": "connect", "conn": "e", "hub": "live"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "say one"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "\"stopReason\"", "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/kill", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": "$any"}, "within_ms": 10000}
+{"do": "kill", "hub": "live", "signal": "TERM"}
+{"do": "expect_exit", "hub": "live", "code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mv $DATA/work.db $ROOT/live.db && rm -f $DATA/work.db-wal $DATA/work.db-shm"], "expect_code": 0}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "replay", "env": {"DRGNX_REPLAY": "$ROOT/rec"}}
+{"do": "connect", "conn": "r", "hub": "replay"}
+{"do": "connect", "conn": "f", "hub": "replay"}
+{"do": "send", "conn": "f", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "f", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "r", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "r", "json": {"id": 1, "result": {"id": "$capture:sid2", "name": "$string"}}}
+{"do": "send", "conn": "r", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid2", "text": "say two"}}}
+{"do": "expect", "conn": "r", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "f", "json": {"event": "agent", "data": {"id": "$sid2", "session": {"exit": 3}}}, "within_ms": 15000}
+{"do": "file", "path": "$ROOT/tmp/replay/misses.jsonl", "contains": "\"path\":\"params.prompt[0].text\"", "count": 1, "at_most": 1}
+{"do": "file", "path": "$ROOT/tmp/replay/misses.jsonl", "contains": "say one"}
+{"do": "file", "path": "$ROOT/tmp/replay/misses.jsonl", "contains": "say two"}
+{"do": "file", "path": "$ROOT/tmp/replay/misses.jsonl", "contains": "-32099"}

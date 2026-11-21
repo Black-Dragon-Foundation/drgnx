@@ -1,0 +1,60 @@
+# One shell step per line: the shapes agents run (the mock personalities', the transcripts'). No personal paths.
+cat README.md
+cat -n src/main.rs | head -n 40
+head -n 50 docs/develop/hub.md
+tail -n +20 runtime/Cargo.toml
+tail -f log/hub.log
+sed -n '120,180p' src/agents/session.rs
+sed -n 1,40p a.rs b.rs
+sed -i 's/old/new/g' src/lib.rs
+awk '{print $1}' data/table.csv
+awk -F, '$3 > 10 {print $2}' data/table.csv | sort | uniq -c
+rg -n "fn parse" src
+rg -n "TODO|FIXME" --type rust
+rg --files crates | head -n 20
+rg -l "record_decision" runtime/crates/norn/src
+grep -rn "agents/send" runtime/crates --include=*.rs
+grep -n -C 3 "fn main" src/main.rs
+grep -c foo a.txt b.txt c.txt
+grep -e one -e two notes.txt
+git diff --stat | head
+ls -la
+ls docs/guide
+ls crates/*/src
+find . -name "*.rs" -not -path "./target/*"
+find src tests -type f -name "*_test.rs"
+fd -e rs parser src
+tree -L 2 docs
+wc -l src/*.rs
+diff -u old/config.toml new/config.toml
+jq '.packages[] | .name' Cargo.lock.json
+jq -r '.version' package.json
+cut -d: -f1 /etc/passwd
+sort -u names.txt > sorted.txt
+cd runtime && cargo test -p norn 2>&1 | tail -n 30
+cd docs/develop && cat hub.md store.md
+cd src && rg -n "Workspace" . && cat lib.rs
+./scripts/check.sh --fast
+bash scripts/build.sh
+bash -c 'cat a.txt | head -n 3'
+bash -lc "cd runtime && rg -n foo crates"
+python3 tools/report.py out.json
+node scripts/gen.js < in.json > out.json
+source .env.example
+echo done > status.txt
+printf '%s\n' ok >> log.txt
+cat file.txt 2>/dev/null
+cat $(git ls-files | head -n 1)
+cat "$HOME/notes.txt"
+ls | xargs wc -l
+find . -name '*.md' -exec cat {} +
+for f in docs/*.md; do head -n 1 $f; done
+cat <<EOF > note.txt
+body
+EOF
+(cd subdir && cat file)
+env FOO=1 cat config.toml
+timeout 10 cat slow.txt
+time rg -n x src
+sleep 5
+git log --oneline -n 5

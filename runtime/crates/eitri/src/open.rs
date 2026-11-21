@@ -2,7 +2,7 @@
 //! (`any(target_os = "linux", target_os = "android")`: a kernel fact); macOS: `O_NOFOLLOW_ANY`.
 
 use std::io;
-use std::os::fd::{BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path};
 
@@ -90,6 +90,63 @@ fn pin(fd: OwnedFd, kind: Kind) -> Result<Pinned, FsError> {
             is_dir,
         }),
     }
+}
+
+/// What [`stat_beneath`] tells of a file: enough to see that it changed (its identity, size and both times).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Meta {
+    pub dev: u64,
+    pub ino: u64,
+    pub size: u64,
+    /// Modification and status-change times, nanoseconds since the epoch.
+    pub mtime_ns: i128,
+    pub ctime_ns: i128,
+    pub regular: bool,
+}
+
+/// The status of `rel` beneath `dir`, resolved as `open_beneath` resolves it (no link in any component, never outside
+/// `dir`): its directory pinned, then [`stat_in`] there, so the file is never opened.
+pub fn stat_beneath(dir: BorrowedFd<'_>, rel: &Path) -> Result<Meta, FsError> {
+    checked_rel(rel)?;
+    let name = rel
+        .file_name()
+        .ok_or_else(|| invalid("a path with no file name"))?;
+    match rel.parent().filter(|p| !p.as_os_str().is_empty()) {
+        Some(parent) => stat_in(
+            open_beneath(dir, parent, Kind::Dir)?.fd.as_fd(),
+            Path::new(name),
+        ),
+        None => stat_in(dir, Path::new(name)),
+    }
+}
+
+/// The status of NAME, one component, in the directory `dir` (one `fstatat`, the link itself never followed): a link
+/// is `Link`. With `dir` pinned by `open_beneath` this resolves as `stat_beneath` does, for a syscall a file.
+pub fn stat_in(dir: BorrowedFd<'_>, name: &Path) -> Result<Meta, FsError> {
+    let mut comps = name.components();
+    if !matches!(
+        (comps.next(), comps.next()),
+        (Some(Component::Normal(_)), None)
+    ) {
+        return Err(invalid("stat_in takes one path component"));
+    }
+    no_nul(name)?;
+    let st = rustix::fs::statat(dir, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
+    let ft = FileType::from_raw_mode(st.st_mode);
+    if ft == FileType::Symlink {
+        return Err(FsError::Link {
+            path: name.to_path_buf(),
+        });
+    }
+    #[allow(clippy::unnecessary_cast)] // the fields' types differ between Linux, Android and macOS
+    Ok(Meta {
+        dev: st.st_dev as u64,
+        ino: st.st_ino as u64,
+        size: st.st_size as u64,
+        mtime_ns: st.st_mtime as i128 * 1_000_000_000 + st.st_mtime_nsec as i128,
+        ctime_ns: st.st_ctime as i128 * 1_000_000_000 + st.st_ctime_nsec as i128,
+        regular: ft == FileType::RegularFile,
+    })
 }
 
 /// How `raw_open` opens: an fd that pins the file (`O_PATH` where there is one), or one to read a regular file.
@@ -259,6 +316,40 @@ mod tests {
                 other => panic!("{rel} (absolute): {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn stat_beneath_sees_the_file_and_refuses_a_link() {
+        let (root, fd) = tree();
+        let m = fs::metadata(root.path().join("b/f")).unwrap();
+        let s = stat_beneath(fd.as_fd(), Path::new("b/f")).unwrap();
+        assert_eq!(
+            (s.dev, s.ino, s.size, s.regular),
+            (m.dev(), m.ino(), 1, true)
+        );
+        assert_eq!(
+            s.mtime_ns,
+            m.mtime() as i128 * 1_000_000_000 + m.mtime_nsec() as i128
+        );
+        assert!(!stat_beneath(fd.as_fd(), Path::new("b")).unwrap().regular);
+        for rel in ["a/l/f", "a/lf"] {
+            assert!(
+                matches!(
+                    stat_beneath(fd.as_fd(), Path::new(rel)),
+                    Err(FsError::Link { .. })
+                ),
+                "{rel}"
+            );
+        }
+        assert!(matches!(
+            stat_beneath(fd.as_fd(), Path::new("../b/f")),
+            Err(FsError::Escapes)
+        ));
+        assert!(
+            stat_in(fd.as_fd(), Path::new("b/f")).is_err(),
+            "one component only"
+        );
+        assert!(stat_in(fd.as_fd(), Path::new("..")).is_err());
     }
 
     #[test]

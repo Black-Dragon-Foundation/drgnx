@@ -1,0 +1,16 @@
+[Unit]
+Description=drgnx first boot: SSH certificate login and the watchdog's limits from the instance user-data
+After=cloud-init.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/local/libexec/drgnx-first-boot
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/drgnx-first-boot
+# nothing is a secret here, but the script has no business anywhere else
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

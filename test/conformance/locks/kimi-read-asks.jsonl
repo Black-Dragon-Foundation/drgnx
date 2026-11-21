@@ -1,0 +1,18 @@
+{"scenario": "locks/kimi-read-asks", "requires": ["v1", "test-hooks"], "doc": "[C] Kimi Code approves reads by default; its lock (a manual-mode `config.toml` in a hub-owned `KIMI_CODE_HOME`, with an ask rule for the subscribed kinds' tools) makes its `Read` ask. The `kimi` personality obeys its config as Kimi Code does: it asks with no `kind`, the seam takes `read` from the folded tool call, and a rule on `read` refuses the step. A default-approved step of a kind no hook subscribes to (`Grep`) still runs without asking."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-kimi\" :provider kimi :command (\"$MOCK\" \"acp\" \"--as\" \"kimi\" \"--log\" \"$ROOT/acp.log\" \"--yolo\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict allow) (:action code.read :column (:role worker) :verdict allow)))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "no-reads", "point": "before-tool", "tool-kinds": ["read"], "verdict": "deny", "reason": "no reads"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-kimi", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"yolo\":false", "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "provider:read a.txt\nprovider:grep TODO"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"permission\":{\"kind\":\"read\",\"answer\":\"reject_once\"}}", "within_ms": 15000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"ran\":\"Grep\"}", "within_ms": 15000}
+{"do": "file_grep", "paths": ["$ROOT/acp.log"], "absent": "{\"ran\":\"Read\"}"}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select json_extract(e.data, '$.records[0].source') from event e join tx t on t.id = e.tx where t.actor = 'hub:hooks' order by e.id", "rows": [["rule:no-reads"]]}

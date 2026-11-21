@@ -112,19 +112,31 @@ A child frame (31.1) stands for the top-level frame of its terminal."
         (setq drgnx-tty-fallback--prefix-bound (cons key (and (not (numberp prev)) prev)))
         (define-key key-translation-map key #'drgnx-tty-fallback--prefix)))))
 
+(defvar drgnx-esc--on)
+
 (defun drgnx-tty-fallback--decoded (seq)
-  "What this terminal decodes SEQ (raw events) to: a key vector, a keymap while SEQ is the start of one, or nil."
-  (let ((d (lookup-key input-decode-map seq)))
+  "What this terminal decodes SEQ (raw events) to: a key vector, a keymap while SEQ is the start of one, or nil.
+The terminal's own decoding: the Esc double tap's filter on ESC (wb/drgnx-esc.el) is off for the lookup."
+  (let ((d (let ((drgnx-esc--on nil)) (lookup-key input-decode-map seq))))
     (if (or (vectorp d) (keymapp d)) d
       (let ((f (lookup-key local-function-key-map seq)))
         (and (or (vectorp f) (keymapp f)) f)))))
 
+(defvar drgnx-tty-fallback--reading nil "Non-nil while the prefix key waits for its key (`drgnx-tty-fallback--read').")
+(defvar drgnx-tty-fallback--held-hints nil
+  "Hints that came due while the prefix key waited, as (FRAME ID): said once the key is in
+\(`drgnx-tty-fallback--release-hints').")
+
 (defun drgnx-tty-fallback--read (prompt)
   "The next key, read with PROMPT in the echo area, decoded as the terminal sent it: an escape sequence (F6,
 Shift+Tab) through `input-decode-map' and `local-function-key-map', ESC and a key as Alt with it.  `quit' for C-g;
-nil for ESC alone, and for anything that is not one key — a mouse report, a paste, a focus report: what was read
-of it goes back to the input, in order, for Emacs to decode whole with the rest."
-  (let* ((ev (let ((inhibit-quit t)) (prog1 (read-event prompt) (setq quit-flag nil)))))
+`escape' for ESC alone (F6 Esc is C-<escape>, Switch Tile); nil for anything that is not one key — a mouse report,
+a paste, a focus report: what was read of it goes back to the input, in order, for Emacs to decode whole with the
+rest."
+  (let* ((ev (unwind-protect
+                 (let ((inhibit-quit t) (drgnx-tty-fallback--reading t))
+                   (prog1 (read-event prompt) (setq quit-flag nil)))
+               (drgnx-tty-fallback--release-hints))))
     (cond ((eq ev ?\C-g) 'quit)
           ((eq ev ?\e)
            (let ((seq (vector ev)) next)
@@ -132,6 +144,7 @@ of it goes back to the input, in order, for Emacs to decode whole with the rest.
                (setq seq (vconcat seq (vector next))))
              (let ((d (drgnx-tty-fallback--decoded seq)))
                (cond ((and (vectorp d) (= (length d) 1)) (aref d 0))
+                     ((= (length seq) 1) 'escape)
                      ((and (= (length seq) 2) (integerp (aref seq 1))) (event-convert-list (list 'meta (aref seq 1))))
                      ((> (length seq) 1)
                       (setq unread-command-events (append seq unread-command-events))
@@ -162,8 +175,8 @@ Shift+Tab is Ctrl+Shift+Tab)."
 
 (defun drgnx-tty-fallback--prefix (_prompt)
   "`key-translation-map' for the prefix key: on a terminal with the layer, read the next key and return its chord
-\(F6 p → C-S-p, F6 . → C-., F6 RET → C-<return>; the prefix twice → the prefix; C-g → C-g, which quits a pending
-prefix too; ESC, or no key → nothing); elsewhere the prefix key unchanged."
+\(F6 p → C-S-p, F6 . → C-., F6 RET → C-<return>, F6 Esc → C-<escape>; the prefix twice → the prefix; C-g → C-g,
+which quits a pending prefix too; no key → nothing); elsewhere the prefix key unchanged."
   (let ((term (frame-terminal (selected-frame)))
         (key (key-parse drgnx-tty-chord-prefix)))
     (if (not (and drgnx-tty-fallback (terminal-parameter term 'drgnx-tty-fallback)))
@@ -180,8 +193,14 @@ prefix too; ESC, or no key → nothing); elsewhere the prefix key unchanged."
 (defun drgnx-tty-fallback--show-hint (frame id)
   "The hint for FRAME, a terminal of kind ID, when it is due: said and remembered in terminal-report.eld
 \(:hinted) unless a terminal of that kind was told before, or FRAME's terminal lost the layer meanwhile — kkp's
-answer comes after the frame is set up, so a kitty is legacy for that moment."
-  (when (and (frame-live-p frame) (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback))
+answer comes after the frame is set up, so a kitty is legacy for that moment.  While the prefix key waits, the
+hint is held until its key is in: a message would replace the prompt."
+  (cond
+   ((not (and (frame-live-p frame) (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback))))
+   (drgnx-tty-fallback--reading   ; a message would replace F6's prompt, which `read-event' never shows again
+    (unless (member (list frame id) drgnx-tty-fallback--held-hints)
+      (push (list frame id) drgnx-tty-fallback--held-hints)))
+   (t
     (let (fresh)
       (condition-case err   ; a report that cannot be written costs the hint, never the layer
           (drgnx-tty-frames--update-report
@@ -193,7 +212,17 @@ answer comes after the frame is set up, so a kitty is legacy for that moment."
         (error (setq fresh nil)
                (push (format "ui/terminal: fallback hint: %s" (error-message-string err)) drgnx-hooks-problems)))
       (when fresh
-        (with-selected-frame frame (message "%s" (drgnx-tty-fallback-hint-text)))))))
+        (with-selected-frame frame (message "%s" (drgnx-tty-fallback-hint-text))))))))
+
+(defun drgnx-tty-fallback--release-hints ()
+  "The hints held while the prefix key waited (`drgnx-tty-fallback--show-hint'): each comes a moment after the key
+is in, as a hint does after its frame appears."
+  (let ((held (reverse drgnx-tty-fallback--held-hints)))
+    (setq drgnx-tty-fallback--held-hints nil)
+    (pcase-dolist (`(,frame ,id) held)
+      (when (frame-live-p frame)
+        (drgnx-timer-start (cons 'tty-fallback-hint frame) 0.5 #'drgnx-tty-fallback--show-hint
+                           :args (list frame id) :owner 'ui/terminal)))))
 
 (defun drgnx-tty-fallback--hint (frame caps)
   "Once per kind of terminal (CAPS's :id), ever: say how to type the keys it cannot send.  Remembered in

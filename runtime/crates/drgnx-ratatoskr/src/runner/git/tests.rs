@@ -170,6 +170,61 @@ async fn ci_workflow_change_is_a_card() {
     assert_eq!(n, 1);
 }
 
+/// A tip that edits the gates' policy (`test/affected.eld`, `test/frozen.eld`, `test/flaky.eld`) can't certify itself:
+/// its merge asks the user (`code.ci-config`), and the policy the gates read is the base's, whatever the tip says.
+#[tokio::test]
+async fn a_tip_editing_the_gates_policy_asks_and_is_read_from_the_base() {
+    let e = env();
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = CoordDb::spawn(dbdir.path().join("work.db"));
+    let (h, p) = shared(
+        &e,
+        TreeMode::Worktree,
+        Policy {
+            ci: Some((db.clone(), MatrixGate::default())),
+            ..Policy::default()
+        },
+        None,
+    );
+    let b = base(&e);
+    for (i, file) in ["test/affected.eld", "test/frozen.eld", "test/flaky.eld"]
+        .iter()
+        .enumerate()
+    {
+        let t = h
+            .task_worktree(&e.repo, "r1", &format!("p{i}"), &b)
+            .await
+            .unwrap();
+        commit(&e, &t, file, "()\n");
+        accept_all(&h, &e, &t, &p.marks).await;
+        let g = h.merge_gate(&e.repo, &t).await.unwrap();
+        assert!(matches!(g, Gate::Ask(_)), "{file}: {g:?}");
+    }
+    // the base's frozen rows, not the tip's
+    let t = h.task_worktree(&e.repo, "r1", "q", &b).await.unwrap();
+    commit(
+        &e,
+        &t,
+        "test/frozen.eld",
+        "((\"test/unit/x-test.el\" :tests (x/one x/two)))\n",
+    );
+    let tip = crate::orch::policy::Policy::at(&e.repo, &t.branch, &vordr::pack::Pack::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        tip.frozen,
+        vec![crate::orch::policy::Frozen {
+            file: "test/unit/x-test.el".into(),
+            tests: vec!["x/one".into(), "x/two".into()],
+        }],
+        "the tip's own row read at the tip"
+    );
+    let base_side = crate::orch::policy::Policy::at(&e.repo, &b, &vordr::pack::Pack::default())
+        .await
+        .unwrap();
+    assert!(base_side.frozen.is_empty(), "{:?}", base_side.frozen);
+}
+
 #[tokio::test]
 async fn protected_config_change_refused() {
     let e = env();
@@ -203,6 +258,49 @@ async fn a_protected_file_stub_in_the_branch_is_refused() {
         Gate::Never(why) => assert!(why.contains(".envrc") && !why.contains("a.rs"), "{why}"),
         g => panic!("{g:?}"),
     }
+}
+
+/// Make a FIFO at P.
+fn mkfifo(p: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+    // SAFETY: a valid NUL-terminated path.
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+}
+
+/// Pattern D with a hang guard (a pass never waits; only a reader that blocks meets it).  A snapshot tree's `.git` is
+/// the agent's: a FIFO it leaves where a ref file belongs (the branch's loose ref, `packed-refs`) is refused at once,
+/// never read, so neither the tip's read nor a task asked for again blocks the hub.
+#[test]
+fn a_fifo_at_a_ref_file_never_blocks_the_hub() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let e = env();
+        let (h, _) = shared(&e, TreeMode::Snapshot, Policy::default(), None);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let a = rt
+            .block_on(h.task_worktree(&e.repo, "r1", "a", &base(&e)))
+            .unwrap();
+        let dot = a.path.join(".git");
+        let loose = dot.join("refs/heads").join(&a.branch);
+        let _ = std::fs::remove_file(&loose);
+        mkfifo(&loose);
+        let tip = snapshot_tip(&a.path, &a.branch);
+        std::fs::remove_file(&loose).unwrap();
+        let _ = std::fs::remove_file(dot.join("packed-refs"));
+        mkfifo(&dot.join("packed-refs"));
+        let packed = snapshot_tip(&a.path, &a.branch);
+        // whatever it answers (the branch is gone, so the tree is made again), it answers
+        let _ = rt.block_on(h.task_worktree(&e.repo, "r1", "a", &base(&e)));
+        tx.send((tip, packed)).unwrap();
+    });
+    let got = rx
+        .recv_timeout(Duration::from_secs(60))
+        .expect("a FIFO at a ref file blocked the hub's read");
+    assert_eq!(got, (None, None));
 }
 
 /// A snapshot task asked for again (a review begins, a mark is made) is the same tree: the agent's commits survive,
@@ -320,6 +418,34 @@ async fn tip_moved_after_check_refused() {
     assert_eq!(h.merge_gate(&e.repo, &t).await.unwrap(), Gate::Allow);
     assert_eq!(h.merge(&e.repo, &t).await.unwrap(), MergeOutcome::Merged);
     assert!(e.repo.join("src/b.rs").exists());
+}
+
+/// The gates judge the tip the merge gate checked (`checked_tip`), and the merge takes it only when it is the one they
+/// judged: a tip the gates read in between (commit T2, reset to T1) never merges as T1's verdict.
+#[tokio::test]
+async fn the_merge_takes_only_the_tip_the_gates_judged() {
+    let e = env();
+    let (h, p) = shared(&e, TreeMode::Worktree, Policy::default(), None);
+    let t = h
+        .task_worktree(&e.repo, "r1", "t1", &base(&e))
+        .await
+        .unwrap();
+    commit(&e, &t, "src/a.rs", "fn a() {}\n");
+    accept_all(&h, &e, &t, &p.marks).await;
+    assert_eq!(h.merge_gate(&e.repo, &t).await.unwrap(), Gate::Allow);
+    let t1 = sh(&e.home, &t.path, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    assert_eq!(h.checked_tip(&t.branch), Some(t1.clone()));
+    let r = h
+        .merge_with(&e.repo, &t, None, Some(&base(&e)))
+        .await
+        .unwrap_err();
+    assert!(r.stderr.contains("judged"), "{r:?}");
+    assert_eq!(
+        h.merge_with(&e.repo, &t, None, Some(&t1)).await.unwrap(),
+        MergeOutcome::Merged
+    );
 }
 
 #[tokio::test]
@@ -457,6 +583,7 @@ async fn two_tasks_in_review_on_one_file_clash_with_their_lines() {
         carded: Default::default(),
         settled_subjects: Default::default(),
         open_clash_tasks: Default::default(),
+        predictions: vec![],
     };
     let mut index = clash::DiffIndex::new();
     index.insert("t1".into(), d1);
@@ -493,13 +620,17 @@ async fn a_ci_card_answered_yes_clears_and_merges_and_unanswered_does_not() {
         Gate::Ask(_)
     ));
     // the card is still open: nothing merges
-    let r = RunGit::merge_into(&h, &e.repo, &yes).await.unwrap_err();
+    let r = RunGit::merge_into(&h, &e.repo, &yes, None, None)
+        .await
+        .unwrap_err();
     assert!(r.stderr.contains("not cleared"), "{r:?}");
     assert!(!e.repo.join(".github/workflows/ci.yml").exists());
     // answered yes: the branch is cleared and exactly that tip merges
     RunGit::clear_gate(&h, &yes.branch);
     assert_eq!(
-        RunGit::merge_into(&h, &e.repo, &yes).await.unwrap(),
+        RunGit::merge_into(&h, &e.repo, &yes, None, None)
+            .await
+            .unwrap(),
         MergeOutcome::Merged
     );
     assert!(e.repo.join(".github/workflows/ci.yml").exists());
@@ -512,7 +643,11 @@ async fn a_ci_card_answered_yes_clears_and_merges_and_unanswered_does_not() {
         Gate::Ask(_)
     ));
     for _ in 0..2 {
-        assert!(RunGit::merge_into(&h, &e.repo, &no).await.is_err());
+        assert!(
+            RunGit::merge_into(&h, &e.repo, &no, None, None)
+                .await
+                .is_err()
+        );
     }
     assert!(!e.repo.join("Makefile").exists());
 }

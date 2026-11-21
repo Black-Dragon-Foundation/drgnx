@@ -22,6 +22,16 @@ SPEC: (NAME &rest ARGS), all evaluated."
   `(progn (drgnx-view-define ,@spec)
           (unwind-protect (progn ,@body) (drgnx-view--undefine ,(car spec)))))
 
+(defmacro drgnx-view-test-with-buffer (&rest body)
+  "BODY in a fresh buffer, killed after with its `kill-buffer-hook' run.  Not `with-temp-buffer', whose buffer runs
+no buffer hooks: the draw timers a view arms for it would outlive it (the timer layer drops them only at their next
+firing)."
+  (declare (indent 0) (debug t))
+  (let ((b (make-symbol "buffer")))
+    `(let ((,b (generate-new-buffer " *drgnx-view-test*")))
+       (unwind-protect (with-current-buffer ,b ,@body)
+         (when (buffer-live-p ,b) (let ((kill-buffer-query-functions nil)) (kill-buffer ,b)))))))
+
 (defun drgnx-view-test--text (view)
   "VIEW's region, START to the end of its buffer, as a string without properties."
   (with-current-buffer (drgnx-view--buffer view)

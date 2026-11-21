@@ -13,5 +13,5 @@
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "tool:read note.txt"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"id": "$number", "seq": 1, "class": "think", "end": "$number"}}}, "within_ms": 10000}
-{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": 2, "class": "tool", "tool": "Read note.txt", "tool_kind": "read", "end": "$number"}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": 2, "class": "tool", "tool": "Read note.txt", "tool_kind": "read", "call": "$string", "end": "$number"}}}, "within_ms": 10000}
 {"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": 3, "class": "think", "turn_id": "t1", "tokens_out": 5}}}, "within_ms": 10000}

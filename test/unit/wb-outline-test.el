@@ -1,42 +1,39 @@
-;;; wb-outline-test.el --- batch tests: the Outline section -*- lexical-binding: t -*-
-;; test-class: det
+;;; wb-outline-test.el --- batch tests: the Outline section, its rows from a real hub -*- lexical-binding: t -*-
+;; test-class: cond
+;; test-pattern: gated
+;; A real hub as its own process outlines the file (`outline/set', view/outline.rs) and Sjá draws the rows; this
+;; Emacs plays the editor inside the delivery gate (`drgnx-test-gated').  Needs Sjá (a Nidhogg with
+;; `nidhogg-view-push') and the hub's binary; skipped without either.  Nothing of the hub's side is stubbed: each look
+;; waits for the section to show what the test did (a condition, never a deadline).  The files are on disk (the hub
+;; reads them there; the edit history's mirror of unsaved text: test/conformance/view/outline-follows-edits.jsonl).
+;; The section with the hub down: wb-outline-edge-test.el.
 (require 'ert)
 (require 'cl-lib)
-(require 'drgnx-paths)
+(require 'drgnx)
+(require 'drgnx-hub-client)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/gated-hub-fixture" drgnx-dir) nil t)
 (require 'drgnx-outline)
-(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
-(defmacro drgnx-outline-test--with (src &rest body)
-  "BODY with SRC an elisp buffer in the editor and the Outline shown in the dock."
-  (declare (indent 1))
-  `(drgnx-test-with-state
-     (drgnx-test-with-clock (:allow-pending t)
-       (let ((drgnx-wb--sections nil)
-             (,src (generate-new-buffer "outline-src.el")))
-         (delete-other-windows)
-         (with-current-buffer ,src
-           (insert "(defun alpha () 1)\n(defvar beta 2)\n\n\n(defun gamma () 3)\n")
-           (emacs-lisp-mode))
-         (switch-to-buffer ,src)
-         (drgnx-test-use-editor (selected-window))
-         (drgnx-outline-setup)
-         (drgnx-wb-show-sidebar)
-         (unwind-protect (progn (drgnx-outline-refresh) (drgnx-outline-test--draw) ,@body)
-           (drgnx-wb-hide-sidebar)
-           (delete-other-windows)
-           (kill-buffer ,src)
-           (when (get-buffer drgnx-outline-buffer-name) (kill-buffer drgnx-outline-buffer-name)))))))
+(defun drgnx-outline-test--visit (dir name text)
+  "NAME under DIR, written with TEXT, visited: its buffer."
+  (let ((f (expand-file-name name dir)))
+    (write-region text nil f nil 'silent)
+    (find-file-noselect f)))
 
-(defun drgnx-outline-test--draw ()
-  "Draw the Outline's view now (the view draws from its timer, which the tests do not run)."
-  (with-current-buffer drgnx-outline-buffer-name (drgnx-view-draw-now drgnx-view)))
+(defun drgnx-outline-test--settle (pred what)
+  "Flush the bus, then wait until PRED holds in the Outline's buffer: before each look the hub's lines are released
+and what came is drawn.  PRED's value."
+  (drgnx-signal--flush)
+  (drgnx-test-hub-settle
+   (lambda () (when-let* ((b (get-buffer drgnx-outline-buffer-name)))
+                (with-current-buffer b (drgnx-view-draw-now nil) (funcall pred))))
+   what))
 
-(defun drgnx-outline-test--rows-drawn ()
-  (plist-get (drgnx-view-stats (buffer-local-value 'drgnx-view (get-buffer drgnx-outline-buffer-name))) :rows-drawn))
-
-(defun drgnx-outline-test--text ()
-  (with-current-buffer drgnx-outline-buffer-name (buffer-substring-no-properties (point-min) (point-max))))
+(defun drgnx-outline-test--names ()
+  "The Outline's rows, as their text trimmed."
+  (with-current-buffer drgnx-outline-buffer-name
+    (mapcar #'string-trim (split-string (buffer-substring-no-properties (point-min) (point-max)) "\n" t))))
 
 (defun drgnx-outline-test--marked ()
   "The text of the Outline's marked row, or nil."
@@ -44,246 +41,146 @@
     (when-let* ((o (seq-find (lambda (o) (overlay-get o 'drgnx-outline-current)) (overlays-in (point-min) (point-max)))))
       (buffer-substring-no-properties (overlay-start o) (overlay-end o)))))
 
-(defun drgnx-outline-test--names ()
+(defun drgnx-outline-test--row (name)
+  "Where the Outline's row of NAME starts."
   (with-current-buffer drgnx-outline-buffer-name
-    (mapcar (lambda (r) (aref r 0)) drgnx-outline--rows)))
+    (save-excursion (goto-char (point-min)) (re-search-forward (concat "^ *" (regexp-quote name) "$")) (pos-bol))))
+
+(defun drgnx-outline-test--show (src)
+  "Show SRC in the editor; the Outline follows (the bus's `editor-changed' edge)."
+  (set-window-buffer (drgnx-wb-editor-window) src)
+  (drgnx-outline-refresh))
+
+(defmacro drgnx-outline-test--with (dir src &rest body)
+  "BODY with a gated hub this Emacs is connected to, a fresh bus, SRC an Emacs Lisp file (alpha, beta, gamma on lines
+1, 2 and 5) under the temp DIR in the editor, and the Outline shown in the dock, its first rows drawn."
+  (declare (indent 2))
+  `(drgnx-test-with-gated-hub
+     (drgnx-test-with-state
+       (let* ((,dir (file-name-as-directory (make-temp-file "drgnx-outline" t)))
+              (drgnx-wb--sections nil) (drgnx-wb--collapsed (list (cons 'outline nil)))   ; open: not its fold
+              (drgnx-outline--source nil) (drgnx-outline--sent :none) (drgnx-outline--reveal nil)
+              (drgnx-outline--mark nil) (drgnx-outline--waiting nil)
+              (,src (drgnx-outline-test--visit ,dir "a.el" "(defun alpha () 1)\n(defvar beta 2)\n\n\n(defun gamma () 3)\n")))
+         (unwind-protect
+             (progn
+               (delete-other-windows)
+               (switch-to-buffer ,src)
+               (drgnx-test-use-editor (selected-window))
+               (drgnx-outline-setup)
+               (drgnx-wb-show-sidebar)
+               ;; a batch Emacs never redisplays, so `window-buffer-change-functions' do not run: the env of the
+               ;; class the dock shows the section in goes as a shown window would send it
+               (drgnx-view-env-update drgnx-outline-hub-view)
+               (drgnx-outline-refresh)
+               (drgnx-outline-test--settle (lambda () (member "gamma" (drgnx-outline-test--names))) "the first rows")
+               ,@body)
+           (drgnx-outline--watch nil)
+           (drgnx-wb-hide-sidebar)
+           (delete-other-windows)
+           (dolist (b (buffer-list))
+             (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b)))
+               (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
+           (when (get-buffer drgnx-outline-buffer-name) (kill-buffer drgnx-outline-buffer-name))
+           (delete-directory ,dir t))))))
 
 (ert-deftest drgnx-outline/lists-the-definitions-in-order ()
-  (drgnx-outline-test--with src
-    (let ((names (drgnx-outline-test--names)))
-      (should (member "beta" names))
-      (should (< (seq-position names "alpha") (seq-position names "gamma"))))))
+  (drgnx-outline-test--with dir src
+    (should (equal (drgnx-outline-test--names) '("alpha" "beta" "gamma")))))
 
 (ert-deftest drgnx-outline/a-row-jumps-in-the-editor ()
-  (drgnx-outline-test--with src
-    (let ((editor (selected-window)))
+  ;; The row's line is the hub's (the model's `line' field): the editor goes there, the Outline keeps its point.
+  (drgnx-outline-test--with dir src
+    (let ((at (drgnx-outline-test--row "gamma")))
       (with-current-buffer drgnx-outline-buffer-name
-        (drgnx-outline-jump (seq-position (drgnx-outline-test--names) "gamma")))
-      (should (eq (selected-window) editor))
-      (should (equal (with-current-buffer src (save-excursion (goto-char (window-point editor)) (thing-at-point 'line t)))
-                     "(defun gamma () 3)\n")))))
+        (should (= 5 (drgnx-outline-line-at at)))
+        (drgnx-outline-jump (drgnx-outline-line-at at)))
+      (should (= 5 (with-current-buffer src (line-number-at-pos (window-point (drgnx-wb-editor-window)))))))))
 
-(ert-deftest drgnx-outline/no-index-shows-a-notice ()
-  (drgnx-outline-test--with src
-    (with-current-buffer src (fundamental-mode))
-    (drgnx-outline-refresh)
-    (drgnx-outline-test--draw)
-    (should (null (drgnx-outline-test--names)))
-    (should (string-match-p "No outline" (with-current-buffer drgnx-outline-buffer-name (buffer-string))))
-    (let ((drgnx-outline-max-size 10))
-      (with-current-buffer src (emacs-lisp-mode))
-      (drgnx-outline-refresh)
-      (drgnx-outline-test--draw)
-      (should (string-match-p "too large" (with-current-buffer drgnx-outline-buffer-name (buffer-string)))))))
+(ert-deftest drgnx-outline/a-file-with-nothing-to-outline-shows-a-notice ()
+  (drgnx-outline-test--with dir src
+    (drgnx-outline-test--show (drgnx-outline-test--visit dir "notes.txt" "nothing to outline here\n"))
+    (drgnx-outline-test--settle (lambda () (string-match-p "No outline for this file" (buffer-string))) "the notice")
+    (should-not (drgnx-outline-test--marked))))
 
-(ert-deftest drgnx-outline/quiet-in-a-large-file-buffer ()
-  ;; a chunk of a large file is small (under `drgnx-outline-max-size'); the flag editor/large-files sets (by hand here)
-  ;; says what it is: no index is built
-  (require 'drgnx-large-file)
-  (with-temp-buffer
-    (insert "(defun alpha () 1)\n")
-    (emacs-lisp-mode)
-    (setq-local drgnx-large-file 'chunks)
-    (cl-letf (((symbol-function 'imenu--make-index-alist) (lambda (&rest _) (ert-fail "an index of a large file"))))
-      (should (equal (drgnx-outline--index (current-buffer)) "This file is too large for an outline")))))
+(ert-deftest drgnx-outline/a-file-past-a-megabyte-shows-a-notice ()
+  ;; The hub's one size check (`too_large', view/outline.rs) at the Lisp Outline's limit: the definitions in a file
+  ;; past it are not parsed, the section says why, whole: the notice is wider than the sidebar, so it wraps onto rows
+  ;; of its own instead of being cut (`rows_in').
+  (drgnx-outline-test--with dir src
+    (let ((large-file-warning-threshold nil))
+      (drgnx-outline-test--show
+       (drgnx-outline-test--visit dir "big.el" (concat "(defun kept () 1)\n;; " (make-string (* 1024 1024) ?x) "\n"))))
+    (drgnx-outline-test--settle (lambda () (string-match-p "This file is too large for an outline"
+                                                           (replace-regexp-in-string "\n +" " " (buffer-string))))
+                                "the notice")
+    (should-not (string-search "…" (buffer-string)))
+    (should-not (member "kept" (drgnx-outline-test--names)))))
 
-(ert-deftest drgnx-outline/an-edit-updates-it-after-a-pause ()
-  (drgnx-outline-test--with src
-    (with-current-buffer src (goto-char (point-max)) (insert "(defun delta () 4)\n"))
-    (should (drgnx-timer-active-p 'outline-refresh))
-    (drgnx-outline--idle)                         ; the pause
-    (drgnx-outline-test--draw)
-    (should (member "delta" (drgnx-outline-test--names)))))
+(ert-deftest drgnx-outline/a-remote-file-is-not-sent ()
+  ;; The hub reads only local files: a remote one goes as no file, and the section says it has no outline.
+  (drgnx-outline-test--with dir src
+    (let ((other (drgnx-outline-test--visit dir "b.el" "(defun delta () 4)\n")))
+      (cl-letf (((symbol-function 'file-remote-p) (lambda (f &rest _) (and (stringp f) (string-prefix-p "/ssh:" f)))))
+        (with-current-buffer other (setq buffer-file-name "/ssh:nobody@example.invalid:/b.el"))
+        (unwind-protect
+            (progn
+              (drgnx-outline-test--show other)
+              (should-not drgnx-outline--sent)
+              (drgnx-outline-test--settle (lambda () (string-match-p "No outline for this file" (buffer-string)))
+                                          "the notice"))
+          (with-current-buffer other (setq buffer-file-name nil)))))))
 
-(ert-deftest drgnx-outline/an-empty-index-is-a-notice ()
-  ;; imenu answers (nil) for an elisp buffer without definitions (*scratch*).
-  (drgnx-outline-test--with src
-    (with-current-buffer src (erase-buffer) (insert ";; nothing\n"))
-    (drgnx-outline-refresh)
-    (drgnx-outline-test--draw)
-    (should (null (drgnx-outline-test--names)))
-    (should (string-match-p "No outline" (with-current-buffer drgnx-outline-buffer-name (buffer-string))))))
-
-(ert-deftest drgnx-outline/no-rescan-row ()
-  (drgnx-outline-test--with src
-    (let ((imenu-auto-rescan nil))
-      (should-not (member "*Rescan*" (drgnx-outline-test--names))))))
-
-(ert-deftest drgnx-outline/a-hidden-outline-computes-nothing ()
-  ;; I6: building an index can take most of a second (python-mode, 114 KB); hidden, it is not built.
-  (drgnx-outline-test--with src
-    (drgnx-wb-hide-sidebar)
-    (let ((n 0))
-      (cl-letf* ((orig (symbol-function 'imenu--make-index-alist))
-                 ((symbol-function 'imenu--make-index-alist) (lambda (&rest a) (setq n (1+ n)) (apply orig a))))
-        (drgnx-outline-refresh)
-        (should (= n 0))
-        (drgnx-wb-show-sidebar)                    ; :on-show builds it
-        (should (= n 1))))))
-
-(ert-deftest drgnx-outline/ret-is-a-registry-command ()
-  ;; I10: keys come from the profiles, never a direct `define-key'.
-  (should-not (lookup-key (let ((m (copy-keymap drgnx-outline-mode-map))) (set-keymap-parent m nil) m) (kbd "RET"))))
+(ert-deftest drgnx-outline/a-save-outlines-the-file-again ()
+  ;; Nothing goes to the hub per keystroke; a save sends the file again and its new definition comes.
+  (drgnx-outline-test--with dir src
+    (with-current-buffer src
+      (goto-char (point-max))
+      (insert "(defun delta () 4)\n")
+      (save-buffer))
+    (drgnx-outline-test--settle (lambda () (equal (drgnx-outline-test--names) '("alpha" "beta" "gamma" "delta")))
+                                "the saved definition")))
 
 (ert-deftest drgnx-outline/follows-current-symbol ()
-  ;; DEFERRED M3d-6: the definition the editor's point is in is marked in the Outline with an overlay; the
-  ;; Outline's own point (the user's selection in it) never moves.
-  (drgnx-outline-test--with src
-    (let* ((editor (selected-window)) (outline (get-buffer drgnx-outline-buffer-name))
-           (marked #'drgnx-outline-test--marked)
-           (here (with-current-buffer outline (point))))
-      (drgnx-signal--flush)                          ; the starting state
-      (set-window-point editor (with-current-buffer src (goto-char (point-min)) (search-forward "gamma") (point)))
-      (drgnx-signal--flush)
-      (should (string-match-p "gamma" (funcall marked)))
-      (set-window-point editor (with-current-buffer src (goto-char (point-min)) (search-forward "beta") (point)))
-      (drgnx-signal--flush)
-      (should (string-match-p "beta" (funcall marked)))
-      (should (= here (with-current-buffer outline (point))))
-      ;; before the first definition: nothing is marked
-      (with-current-buffer src (goto-char (point-min)) (insert ";; header\n"))
-      (drgnx-outline--idle)
-      (drgnx-outline-test--draw)
-      (set-window-point editor 1)
-      (drgnx-signal--flush)
-      (should-not (funcall marked)))))
+  ;; The definition the editor's point is in is marked (Sjá's `at-line' over the hub's lines); the Outline's own
+  ;; point (the user's selection in it) never moves.
+  (drgnx-outline-test--with dir src
+    (let ((editor (drgnx-wb-editor-window))
+          (pt (with-current-buffer drgnx-outline-buffer-name (point))))
+      (dolist (c '((5 . "gamma") (3 . "beta") (1 . "alpha")))
+        (set-window-point editor (with-current-buffer src (save-excursion (goto-char (point-min))
+                                                                          (forward-line (1- (car c))) (point))))
+        (drgnx-outline--mark-current)
+        (should (equal (string-trim (drgnx-outline-test--marked)) (cdr c))))
+      (should (= pt (with-current-buffer drgnx-outline-buffer-name (point)))))))
 
-;;;; The Outline on the view (PERF-M1)
+(ert-deftest drgnx-outline/another-file-shows-the-current-definition ()
+  ;; A new file's first rows show the definition the editor is in, with a third of the window above it.
+  (drgnx-outline-test--with dir src
+    (let ((big (drgnx-outline-test--visit
+                dir "big.el" (mapconcat (lambda (i) (format "(defun fn-%d () %d)\n" i i)) (number-sequence 0 199) ""))))
+      (with-current-buffer big (goto-char (point-min)) (forward-line 150))
+      (drgnx-outline-test--show big)
+      (set-window-point (drgnx-wb-editor-window) (with-current-buffer big (point)))
+      (drgnx-outline-test--settle (lambda () (equal (string-trim (or (drgnx-outline-test--marked) "")) "fn-150")) "the current definition")
+      (let ((w (get-buffer-window drgnx-outline-buffer-name t)))
+        (should (= (window-point w) (drgnx-outline-test--row "fn-150")))
+        (should (> (window-start w) (point-min)))))))
 
-(defun drgnx-outline-test--big-source (src n)
-  "Fill SRC with N definitions."
-  (with-current-buffer src
-    (erase-buffer)
-    (dotimes (i n) (insert (format "(defun fn-%d () %d)\n" i i)))))
+(ert-deftest drgnx-outline/a-definition-near-the-end-leaves-no-blank-room-below ()
+  ;; The last definitions: the window ends on the list's last row (a third of the window above the row would start it
+  ;; so late that blank room showed under the list), and the row is in sight.
+  (drgnx-outline-test--with dir src
+    (let ((big (drgnx-outline-test--visit
+                dir "big.el" (mapconcat (lambda (i) (format "(defun fn-%d () %d)\n" i i)) (number-sequence 0 199) ""))))
+      (with-current-buffer big (goto-char (point-min)) (forward-line 198))
+      (drgnx-outline-test--show big)
+      (set-window-point (drgnx-wb-editor-window) (with-current-buffer big (point)))
+      (drgnx-outline-test--settle (lambda () (equal (string-trim (or (drgnx-outline-test--marked) "")) "fn-198")) "the current definition")
+      (let ((w (get-buffer-window drgnx-outline-buffer-name t)))
+        (with-current-buffer drgnx-outline-buffer-name
+          (should (> (window-start w) (point-min)))
+          (should (>= (count-lines (window-start w) (point-max)) (window-body-height w)))
+          (should (<= (window-start w) (window-point w))))))))
 
-(ert-deftest drgnx-outline/no-imenu-marker-is-left ()
-  ;; Every marker imenu makes is unchained before the refresh returns: 50 refreshes of 2,000 definitions leave none
-  ;; in the source buffer (a marker slows every edit of the buffer until a garbage collection frees it).
-  (drgnx-outline-test--with src
-    (drgnx-outline-test--big-source src 2000)
-    (let ((indexes nil) (seen 0) (live 0))
-      (cl-letf* ((orig (symbol-function 'imenu--make-index-alist))
-                 ((symbol-function 'imenu--make-index-alist)
-                  (lambda (&rest a) (let ((r (apply orig a))) (push r indexes) r))))
-        (dotimes (_ 50) (drgnx-outline--refresh-1)))
-      (cl-labels ((walk (x) (cond ((markerp x) (cl-incf seen) (when (marker-buffer x) (cl-incf live)))
-                                  ((consp x) (while (consp x) (walk (car x)) (setq x (cdr x))) (walk x)))))
-        (mapc #'walk indexes))
-      (should (>= seen (* 50 2000)))                ; the spy saw the markers imenu made
-      (should (= live 0))
-      (should (= (length drgnx-outline--rows) 2000))
-      (should (integerp (aref (aref drgnx-outline--rows 0) 2))))))
-
-(ert-deftest drgnx-outline/an-edit-that-moves-positions-redraws-nothing ()
-  (drgnx-outline-test--with src
-    (let* ((drawn (drgnx-outline-test--rows-drawn))
-           (pos (lambda () (aref (seq-find (lambda (r) (equal (aref r 0) "alpha")) drgnx-outline--rows) 2)))
-           (old (funcall pos)))
-      (should (> drawn 0))
-      (with-current-buffer src (goto-char (point-min)) (insert ";; a header comment\n;; and another\n"))
-      (drgnx-outline--refresh-1)
-      (drgnx-outline-test--draw)
-      (should (= (drgnx-outline-test--rows-drawn) drawn))
-      (should (> (funcall pos) old))   ; the positions did move
-      (should-not (drgnx-view--check (buffer-local-value 'drgnx-view (get-buffer drgnx-outline-buffer-name)))))))
-
-(ert-deftest drgnx-outline/a-new-definition-inserts-one-row ()
-  (drgnx-outline-test--with src
-    (let ((drawn (drgnx-outline-test--rows-drawn)))
-      (with-current-buffer src (goto-char (point-max)) (insert "(defun delta () 4)\n"))
-      (drgnx-outline--refresh-1)
-      (drgnx-outline-test--draw)
-      (should (= (drgnx-outline-test--rows-drawn) (1+ drawn)))
-      (should (string-match-p "gamma.*\n.*delta" (drgnx-outline-test--text)))
-      (should-not (drgnx-view--check (buffer-local-value 'drgnx-view (get-buffer drgnx-outline-buffer-name)))))))
-
-(ert-deftest drgnx-outline/rows-are-keyed-by-name-depth-and-ordinal ()
-  (drgnx-outline-test--with src
-    (with-current-buffer src (goto-char (point-max)) (insert "(defun alpha () 9)\n"))   ; a second "alpha"
-    (drgnx-outline--refresh-1)
-    (drgnx-outline-test--draw)
-    (let ((view (buffer-local-value 'drgnx-view (get-buffer drgnx-outline-buffer-name))))
-      (should (drgnx-view-row-start view '("alpha" 0 0)))
-      (should (drgnx-view-row-start view '("alpha" 0 1)))
-      (should-not (drgnx-view-row-start view '("alpha" 0 2))))))
-
-(ert-deftest drgnx-outline/the-outline-keeps-its-place ()
-  ;; A definition added above does not move the Outline's point off its row.
-  (drgnx-outline-test--with src
-    (let* ((outline (get-buffer drgnx-outline-buffer-name)) (window (get-buffer-window outline t))
-           (row-at (lambda () (with-current-buffer outline (buffer-substring-no-properties (pos-bol) (pos-eol))))))
-      (with-current-buffer outline
-        (goto-char (point-min)) (search-forward "gamma")
-        (set-window-point window (point)))
-      (should (string-match-p "gamma" (funcall row-at)))
-      (with-current-buffer src (goto-char (point-min)) (insert "(defun aardvark () 0)\n"))
-      (drgnx-outline--refresh-1)
-      (drgnx-outline-test--draw)
-      (should (string-match-p "aardvark" (drgnx-outline-test--text)))
-      (should (string-match-p "gamma" (funcall row-at)))
-      (should (string-match-p "gamma" (with-current-buffer outline
-                                        (save-excursion (goto-char (window-point window))
-                                                        (buffer-substring-no-properties (pos-bol) (pos-eol)))))))))
-
-(ert-deftest drgnx-outline/another-file-starts-at-the-top-or-the-current-definition ()
-  ;; UI audit #3: after a file switch the Outline's window sat on its last row.  Another file starts at the top, with
-  ;; the Outline's point on the definition the editor's point is in.
-  (drgnx-outline-test--with src
-    (let* ((outline (get-buffer drgnx-outline-buffer-name)) (window (get-buffer-window outline t))
-           (editor (selected-window)) (other (generate-new-buffer "outline-other.el"))
-           (row-at (lambda (pos) (with-current-buffer outline
-                                   (save-excursion (goto-char pos) (buffer-substring-no-properties (pos-bol) (pos-eol)))))))
-      (unwind-protect
-          (progn
-            (drgnx-outline-test--big-source other 200)
-            (with-current-buffer other (emacs-lisp-mode) (goto-char (point-min)))
-            (with-current-buffer outline (set-window-point window (point-max)) (goto-char (point-max)))
-            (set-window-buffer editor other)
-            (set-window-point editor 1)
-            (drgnx-outline--refresh-1)
-            (drgnx-outline-test--draw)
-            (should (= (window-start window) (with-current-buffer outline (point-min))))
-            (should (string-match-p "fn-0$" (funcall row-at (window-point window))))
-            ;; back and forth: the current definition, far down, is shown
-            (set-window-buffer editor src)
-            (drgnx-outline--refresh-1)
-            (drgnx-outline-test--draw)
-            (set-window-buffer editor other)
-            (set-window-point editor (with-current-buffer other (goto-char (point-min)) (search-forward "fn-150 ") (point)))
-            (drgnx-outline--refresh-1)
-            (drgnx-outline-test--draw)
-            (should (string-match-p "fn-150$" (funcall row-at (window-point window))))
-            (should (< (window-start window) (window-point window)))
-            ;; the same file again: the Outline's own point stays
-            (with-current-buffer outline (set-window-point window (point-min)))
-            (with-current-buffer other (goto-char (point-max)) (insert "(defun fn-200 () 0)\n"))
-            (drgnx-outline--refresh-1)
-            (drgnx-outline-test--draw)
-            (should (= (window-point window) (with-current-buffer outline (point-min)))))
-        (set-window-buffer editor src)
-        (kill-buffer other)))))
-
-(ert-deftest drgnx-outline/the-current-mark-follows-the-patch ()
-  ;; The mark is an overlay on a row; drawing the row again (or a row above it) puts the mark back (PATCHED).
-  (drgnx-outline-test--with src
-    (let* ((editor (selected-window))
-           (view(buffer-local-value 'drgnx-view (get-buffer drgnx-outline-buffer-name))))
-      (drgnx-signal--flush)
-      (set-window-point editor (with-current-buffer src (goto-char (point-min)) (search-forward "gamma") (point)))
-      (drgnx-signal--flush)
-      (should (string-match-p "gamma" (drgnx-outline-test--marked)))
-      (drgnx-view-dirty view (list '("gamma" 0 0)))          ; the marked row is drawn again
-      (drgnx-outline-test--draw)
-      (should (string-match-p "gamma" (drgnx-outline-test--marked)))
-      (with-current-buffer src (goto-char (point-min)) (insert "(defun aardvark () 0)\n"))   ; and a row above it
-      (set-window-point editor (with-current-buffer src (goto-char (point-min)) (search-forward "gamma") (point)))
-      (drgnx-outline--refresh-1)
-      (drgnx-outline-test--draw)
-      (should (string-match-p "gamma" (drgnx-outline-test--marked))))))
-
-(ert-deftest drgnx-outline/the-edit-timer-is-the-layers ()
-  (drgnx-outline-test--with src
-    (should-not (drgnx-timer-active-p 'outline-refresh))
-    (with-current-buffer src (goto-char (point-max)) (insert "(defun delta () 4)\n"))
-    (should (drgnx-timer-active-p 'outline-refresh))
-    (should (assoc 'outline-refresh (mapcar (lambda (e) (cons (car e) (nth 2 e))) (drgnx-timer-pending))))))
+;;; wb-outline-test.el ends here

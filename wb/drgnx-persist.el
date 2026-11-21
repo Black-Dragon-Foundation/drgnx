@@ -3,13 +3,15 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; The layout you leave is the layout you find: the left dock, the panel (and its tab), the right
-;; dock — each with its pixel size — the sidebar view, the editor groups with their sizes, tabs and shown files, and
-;; the Explorer's folders.  Saved when Emacs exits (only from a graphical session: a batch run
+;; The layout you leave is the layout you find: each window's grid of tiles (`drgnx-grid-tree': the docks, the tool
+;; tiles and their stacks, the editor tiles with their tabs and shown files, every size), what the grid remembers of
+;; hidden tiles, the sizes you chose, the sidebar view and the Explorer's folders.  Saved when Emacs exits (only from a graphical session: a batch run
 ;; never writes your state) to $XDG_STATE_HOME/drgnx/workbench.eld; restored at the first
 ;; graphical frame, and again whenever a window opens after none (a daemon that keeps running after
 ;; its last window closed: the next `emacsclient -c' gets the layout back).  Files that no longer
-;; exist are skipped; sizes are clamped to the frame; a state written by another format version is ignored.  See docs/guide/workbench.md.
+;; exist are skipped; sizes are clamped to the frame; a tile whose kind is not defined waits as a placeholder until its
+;; module is on (`drgnx-grid-tile-placeholder').  A format-2 file (the docks and groups of before the grid) is migrated
+;; on read (`drgnx-persist--from-v2'); another format is ignored.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -18,9 +20,13 @@
 (require 'drgnx-file)
 (require 'drgnx-state-intent)           ; the store: which frames, and the sizes you chose
 (require 'drgnx-groups)
+(require 'drgnx-grid)
 (require 'drgnx-timer)
 (require 'drgnx-notice)
 (defvar drgnx-large-file-open)          ; core/drgnx-large-file.el: bound around the visits, read by editor/large-files
+(defvar drgnx-persist--refit (make-hash-table :test #'eq :weakness 'key)
+  "Frame → (WIDTH HEIGHT . TREE): its pixel size when last seen and the grid it was restored with, until the first
+command after the restore.")
 
 (defcustom drgnx-persist-restore-on-start t
   "Restore the last workbench layout at the first graphical frame."
@@ -45,13 +51,15 @@ After the restore the keys are in the frame parameter `drgnx-persist-extra', rea
   :type 'hook :group 'drgnx)
 
 (defvar drgnx-persist-file nil "The state file; nil means $XDG_STATE_HOME/drgnx/workbench.eld.")
-(defconst drgnx-persist-version 2 "Format of the state file (1: one window; 2: :frames, one per window).")
+(defconst drgnx-persist-version 3
+  "Format of the state file: 3, :frames, one per window, each with its grid (`:tree').  A format-2 file (each window's
+docks and editor groups) is migrated when read.")
 (defconst drgnx-persist--max-bytes 4194304
   "The largest state file drgnx writes or reads, in bytes (4 MiB: a layout with many tabs and windows is far less).")
 (define-error 'drgnx-persist-newer "workbench.eld was written by a newer drgnx" 'file-error)
 (declare-function drgnx-frame-role "drgnx-frames")
 (defvar drgnx-persist--pending)
-(defvar drgnx-explorer--roots)
+(declare-function drgnx-explorer-chosen-roots "drgnx-explorer")
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
 
 (defun drgnx-persist--file ()
@@ -81,29 +89,25 @@ selected frame's workbench) and the selected frame is a terminal window.  Explic
   (message "Layouts are saved and restored from graphical windows")
   nil)
 
-(defun drgnx-persist--size (home window)
-  "The size to save for HOME (`left', `panel' or `right') in the selected frame: the size the store's intent holds
-\(the one you chose, not the one a popup, a layout or the window manager squeezed WINDOW to), else WINDOW's own
-size in pixels (width for the docks, height for the panel); nil when there is neither."
-  (or (plist-get (drgnx-state-intent nil :sizes home) :px)
-      (and window (if (eq home 'panel) (window-pixel-height window) (window-pixel-width window)))))
-
-(defun drgnx-persist--area (area)
-  (let ((w (drgnx-wb-area-window area)))
-    (list :shown (and w t) :tab (drgnx-wb-area-tab area) :px (drgnx-persist--size area w))))
-
 (defun drgnx-persist-state (&optional frame)
   "FRAME's workbench as a plist (see the commentary).  A frame that rebuilds itself — its parameter
-`drgnx-persist-restore' is (FUNCTION . ARGS), e.g. a job window — is saved as (:role custom :restore …),
-with `:geometry' (pixel left top, then the text area's width and height — what `set-frame-size' sets, so the
-size does not grow at every restart) when it is graphical."
+`drgnx-persist-restore' is (FUNCTION . ARGS), e.g. a job window — is saved as (:role custom :restore …).
+It and the main window are saved with `drgnx-persist--frame-geometry' when graphical."
   (if-let* ((restore (frame-parameter frame 'drgnx-persist-restore)))
-      (append (list :role 'custom :restore restore)
-              (and (display-graphic-p frame)
-                   (let ((edges (frame-edges frame 'outer-edges)))
-                     (list :geometry (list (nth 0 edges) (nth 1 edges)
-                                           (frame-text-width frame) (frame-text-height frame))))))
-    (drgnx-persist--workbench-state frame)))
+      (append (list :role 'custom :restore restore) (drgnx-persist--frame-geometry frame))
+    (let ((state (drgnx-persist--workbench-state frame)))
+      (if (eq (plist-get state :role) 'main) (append state (drgnx-persist--frame-geometry frame)) state))))
+
+(defun drgnx-persist--frame-geometry (frame)
+  "FRAME's `:geometry' (pixel left top, then the text area's width and height — what `set-frame-size' sets, so the
+size does not grow at every restart) and, when it has one, `:fullscreen' (its `fullscreen' parameter: `maximized', …);
+nil when FRAME is not graphical."
+  (and (display-graphic-p frame)
+       (let ((edges (frame-edges frame 'outer-edges)))
+         (append (list :geometry (list (nth 0 edges) (nth 1 edges)
+                                       (frame-text-width frame) (frame-text-height frame)))
+                 (and (frame-parameter frame 'fullscreen)
+                      (list :fullscreen (frame-parameter frame 'fullscreen)))))))
 
 (defun drgnx-persist--place-frame (frame geometry)
   "Put FRAME at GEOMETRY (pixel left top width height, as `drgnx-persist--geometry' checked it).  The position
@@ -126,21 +130,51 @@ window manager places the window then); the size is cut to the work area, from t
     (and (proper-list-p g) (= (length g) 4) (seq-every-p #'integerp g)
          (seq-every-p (lambda (n) (<= (abs n) 20000)) g) (> (nth 2 g) 0) (> (nth 3 g) 0) g)))
 
+(defun drgnx-persist--shown-file (g)
+  "The file editor group G shows, else the last file it showed (a start page or a Work map in front does not lose
+the file you were in), else nil."
+  (or (buffer-file-name (window-buffer g))
+      (seq-some (lambda (e) (and (buffer-live-p (car e)) (buffer-file-name (car e)))) (window-prev-buffers g))))
+
+(defconst drgnx-persist--size-keys '(left panel right)
+  "The `:sizes' intents a state keeps, one per home: the docks' and the panel's (the home `bottom', a size you chose,
+not the one a popup squeezed).")
+
+(defun drgnx-persist--sizes (frame)
+  "FRAME's chosen sizes, an alist KEY → pixels of the `:sizes' intents in `drgnx-persist--size-keys' that hold one."
+  (delq nil (mapcar (lambda (k) (let ((px (plist-get (drgnx-state-intent frame :sizes k) :px)))
+                                  (and (integerp px) (cons k px))))
+                    drgnx-persist--size-keys)))
+
+(defun drgnx-persist--tree (frame)
+  "FRAME's grid to save (`drgnx-grid-tree'; while a tile shows full size, the tree it goes back to).  An editor tile
+keeps its tabs as files, with those not visited yet after a restore, and the file it showed last when a page that is
+no file (the start page, a Work map) is in front."
+  (let ((tree (copy-tree (drgnx-grid--frame-snapshot-tree frame))))
+    (dolist (leaf (drgnx-grid-tree-leaves tree))
+      (when (eq (car leaf) 'editor)
+        (let* ((p (cdr leaf)) (w (drgnx-grid--tile-by-id (plist-get p :id) frame))
+               (pending (and w (nth 2 (assq w drgnx-persist--pending))))
+               (file (and w (drgnx-persist--shown-file w))))
+          (setf (plist-get p :tabs) (or pending (seq-filter #'file-name-absolute-p (plist-get p :tabs))))
+          (unless (equal file (plist-get p :shown))
+            (setf (plist-get p :shown) file (plist-get p :point) nil (plist-get p :start) nil))
+          (setcdr leaf p))))
+    tree))
+
 (defun drgnx-persist--workbench-state (frame)
-  (with-selected-frame (or frame (selected-frame))
-    (let ((dock (car (drgnx-wb--dock-windows))))
-      (list :role (if (fboundp 'drgnx-frame-role) (drgnx-frame-role) 'main)
-            :left (list :shown (and dock t) :view (drgnx-wb-sidebar-view) :px (drgnx-persist--size 'left dock))
-            :panel (drgnx-persist--area 'panel)
-            :right (drgnx-persist--area 'right)
-            :roots (and (boundp 'drgnx-explorer--roots) drgnx-explorer--roots)
-            :main (window-state-get (window-main-window) t)
-            :groups (mapcar (lambda (g) (list :tabs (or (nth 2 (assq g drgnx-persist--pending))   ; still loading
-                                                        (delq nil (mapcar #'buffer-file-name (drgnx-chrome-tabs g))))
-                                              :shown (buffer-file-name (window-buffer g))
-                                              :px (window-pixel-width g)))
-                            (drgnx-groups-list))
-            :extra (drgnx-persist--extra)))))
+  (let ((frame (or frame (selected-frame))))
+    (with-selected-frame frame
+      (let ((mon (frame-parameter frame 'drgnx-monitor)))
+        (list :role (if (fboundp 'drgnx-frame-role) (drgnx-frame-role) 'main)
+              :monitor (and (consp mon) (drgnx-monitors--identity mon))
+              :shell (copy-tree (frame-parameter frame 'drgnx-grid-shell))
+              :tree (drgnx-persist--tree frame)
+              :memory (list :docks (copy-tree (frame-parameter frame 'drgnx-grid-memory))
+                            :sizes (drgnx-persist--sizes frame)
+                            :view (drgnx-wb-sidebar-view frame))
+              :roots (and (fboundp 'drgnx-explorer-chosen-roots) (drgnx-explorer-chosen-roots))
+              :extra (drgnx-persist--extra))))))
 
 (defvar drgnx-persist--extra-reported nil
   "The state functions already reported as failing or returning something unusable (said once each).")
@@ -244,23 +278,6 @@ not restored: one message, and the next save keeps a backup of it."
                nil)
       (plist-get r :data))))
 
-(defun drgnx-persist--strip (tree)
-  "The window state TREE without its window parameters: a state file must not set any (drgnx saves
-none — they would come from a crafted file).  A list is walked along its cdr in a loop (a long one cannot
-exhaust the stack; a circular or dotted one ends at 100000 elements); only nesting recurses, and ends at 64 levels."
-  (drgnx-persist--strip-1 tree 0))
-
-(defun drgnx-persist--strip-1 (tree depth)
-  "`drgnx-persist--strip' of TREE, DEPTH levels down."
-  (if (and (consp tree) (< depth 64))
-      (let ((acc nil) (n 0) (cap (if (proper-list-p tree) most-positive-fixnum 100000)))
-        (while (and (consp tree) (< (setq n (1+ n)) cap))
-          (unless (eq (car-safe (car tree)) 'parameters)
-            (push (drgnx-persist--strip-1 (car tree) (1+ depth)) acc))
-          (setq tree (cdr tree)))
-        (nconc (nreverse acc) (and (not (consp tree)) tree)))   ; the dotted tail stays
-    (and (not (consp tree)) tree)))
-
 (defun drgnx-persist--clamp (px limit) (and (integerp px) (max 1 (min px (floor limit)))))
 
 (defun drgnx-persist--visit (file)
@@ -303,8 +320,7 @@ is a workbench (not a window that rebuilds itself); nil when there are only such
 
 (defvar drgnx-persist-restoring nil
   "Non-nil while `drgnx-persist-restore' runs.  A window's function that rebuilds it (`:restore') then takes back
-only its state and arranges nothing: the restored workbench keeps its panes, sizes and focus (a job window saved
-before M12f only filters the Work cockpit to its job).")
+only its state and arranges nothing: the restored workbench keeps its panes, sizes and focus.")
 
 (defun drgnx-persist-restore (&optional file)
   "Bring back the workbench saved in FILE — the selected frame gets the main window's layout (the state
@@ -329,9 +345,7 @@ says so); with none, nothing is restored (a terminal window keeps the default la
 input focus back after the other windows are made, unless KEEP-FOCUS (a restore asked for from a terminal)."
   (let* ((drgnx-persist-restoring t)
          (file (or file (drgnx-persist--file))) (state (drgnx-persist--read file))
-         (frames (pcase (plist-get state :version)
-                   (1 (list state))
-                   (2 (plist-get state :frames)))))
+         (frames (drgnx-persist--frames-of state)))
     (cond
      ((null state) nil)
      ((null frames)
@@ -350,6 +364,10 @@ input focus back after the other windows are made, unless KEEP-FOCUS (a restore 
             (drgnx-state-sync f)))
         (set-frame-parameter nil 'drgnx-frame-role 'main)
         (drgnx-state-sync)
+        ;; its size first: the docks are clamped to it
+        (when-let* (((display-graphic-p)) (g (drgnx-persist--geometry main)))
+          (drgnx-persist--place-frame (selected-frame) g)
+          (drgnx-persist--keep-state (selected-frame) g (plist-get main :fullscreen)))
         (drgnx-persist--restore-frame main)
         (setq frames (remq main frames)))
       (let ((home (selected-frame)))
@@ -364,7 +382,8 @@ input focus back after the other windows are made, unless KEEP-FOCUS (a restore 
                               (let ((frame (with-selected-frame host (apply (car restore) (cdr restore))))
                                     (g (drgnx-persist--geometry st)))
                                 (when (and g (frame-live-p frame) (display-graphic-p frame))
-                                  (drgnx-persist--place-frame frame g)))
+                                  (drgnx-persist--place-frame frame g)
+                                  (drgnx-persist--keep-state frame g (plist-get st :fullscreen))))
                             (error (drgnx-notify 'wb 'warn (format "a window was not restored: %s" (error-message-string err))
                                                  :id 'window-restore)))
                         (drgnx-notify 'wb 'warn "a window was not restored: no graphical display" :id 'window-restore)))
@@ -377,68 +396,205 @@ input focus back after the other windows are made, unless KEEP-FOCUS (a restore 
           (when (and (not keep-focus) (frame-live-p home)) (select-frame-set-input-focus home))))
       t))))
 
+(defun drgnx-persist--frames-of (state)
+  "The window states of the state file STATE, in format 3 (a format-2 file migrated: `drgnx-persist--from-v2'), or
+nil when STATE has another format."
+  (let ((frames (plist-get state :frames)))
+    (when (and (proper-list-p frames) (seq-every-p #'drgnx-grid-tree--plist-p frames))
+      (pcase (plist-get state :version)
+        (2 (mapcar #'drgnx-persist--from-v2 frames))
+        (3 frames)))))
+
+;;;; Format 2: the docks and editor groups of before the grid, migrated on read
+
+(defun drgnx-persist--from-v2 (state)
+  "A format-2 window STATE as format 3: its docks, panel and groups become a grid (`drgnx-persist--grid-from-v2'),
+their chosen sizes and the sidebar view its `:memory'.  A window that rebuilds itself (`:role custom') is as it was."
+  (if (eq (plist-get state :role) 'custom) state
+    (let ((px (lambda (k) (let ((v (plist-get (plist-get state k) :px))) (and (integerp v) v)))))
+      (append (list :role (plist-get state :role))
+              (and (plist-get state :geometry) (list :geometry (plist-get state :geometry)))
+              (and (plist-get state :fullscreen) (list :fullscreen (plist-get state :fullscreen)))
+              (list :tree (drgnx-persist--grid-from-v2 state)
+                    :memory (list :sizes (delq nil (list (and (funcall px :left) (cons 'left (funcall px :left)))
+                                                         (and (funcall px :panel) (cons 'panel (funcall px :panel)))
+                                                         (and (funcall px :right) (cons 'right (funcall px :right)))))
+                                  :view (plist-get (plist-get state :left) :view))
+                    :roots (plist-get state :roots)
+                    :extra (plist-get state :extra))))))
+
+(defun drgnx-persist--v2-stacked-p (main)
+  "Non-nil when the format-2 groups' window state MAIN splits them top and bottom (its first split is vertical)."
+  (let ((n 0) found)
+    (while (and (consp main) (not found) (< (setq n (1+ n)) 10000))
+      (when (memq (car main) '(vc hc)) (setq found (car main)))
+      (setq main (cdr main)))
+    (eq found 'vc)))
+
+(defun drgnx-persist--grid-from-v2 (state)
+  "The grid (a TREE, `drgnx-grid-tree') of format-2 window STATE, at the selected frame's size: the left dock (the side
+bar with its view), the editor groups (side by side, or stacked as its window state had them) over the panel, and the
+right dock, those shown in STATE at their saved pixel sizes, clamped as a restore clamps them (a dock to half the
+frame's width, the panel to seven tenths of its height)."
+  (let* ((fw (frame-pixel-width)) (fh (frame-pixel-height)) (scale (drgnx-pixels-scale)) (id 0)
+         (next (lambda () (setq id (1+ id))))
+         (dock (lambda (k limit) (let ((spec (plist-get state k)))
+                                   (and (drgnx-grid-tree--plist-p spec) (plist-get spec :shown)
+                                        (or (drgnx-persist--clamp (plist-get spec :px) limit) (floor limit 2))))))
+         (tab (lambda (k) (let ((tab (plist-get (plist-get state k) :tab))) (and tab (symbolp tab) tab))))
+         (left (funcall dock :left (* 0.5 fw))) (panel (funcall dock :panel (* 0.7 fh)))
+         (right (funcall dock :right (* 0.5 fw)))
+         (view (plist-get (plist-get state :left) :view))
+         (specs (seq-filter #'drgnx-grid-tree--plist-p
+                            (let ((g (plist-get state :groups))) (and (proper-list-p g) g))))
+         (stacked (drgnx-persist--v2-stacked-p (plist-get state :main)))
+         (editors (mapcar (lambda (g)
+                            (list 'editor :px nil :share nil :id (funcall next)
+                                  :tabs (let ((tabs (plist-get g :tabs)))
+                                          (and (proper-list-p tabs) (seq-filter #'stringp tabs)))
+                                  :shown (and (stringp (plist-get g :shown)) (plist-get g :shown))))
+                          (or specs (list nil))))
+         (side (- fw (or left 0) (or right 0)))
+         (area (drgnx-grid-tree-join (if stacked 'col 'row) editors
+                                     (mapcar (lambda (g) (and (not stacked) (integerp (plist-get g :px))
+                                                              (plist-get g :px)))
+                                             (or specs (list nil)))
+                                     (if stacked (- fh (or panel 0)) side) scale))
+         (area-tile (lambda (k dock px)
+                      (and px (list 'tile :px nil :share nil :id (funcall next) :kinds (and (funcall tab k) (list (funcall tab k)))
+                                    :shown (funcall tab k) :dock dock
+                                    :state (list :area (pcase k (:panel 'panel) (:right 'right)))))))
+         (center (if panel
+                     (drgnx-grid-tree-join 'col (list area (funcall area-tile :panel 'bottom panel)) (list nil panel) fh scale)
+                   area))
+         ;; (NODE . PX) side by side: the left dock, the rest, the right dock
+         (row (delq nil (list (and left (cons (list 'tile :px nil :share nil :id (funcall next) :kinds '(side-bar)
+                                                    :shown 'side-bar :dock 'left
+                                                    :state (and view (symbolp view) (list :view view)))
+                                              left))
+                              (cons center nil)
+                              (and right (cons (funcall area-tile :right 'right right) right)))))
+         (tree (drgnx-grid-tree-join 'row (mapcar #'car row) (mapcar #'cdr row) fw scale)))
+    (and (drgnx-grid-valid-tree-p tree) tree)))
+
+;;;; Restore a window
+
+(defun drgnx-persist--restore-memory (memory)
+  "Bring back MEMORY, a window state's `:memory': the sizes you chose and the sidebar view as intent `restore' (a size
+missing from it clears the one chosen before; each is clamped to the frame), and what the grid remembers of hidden
+tiles, when it is plain data."
+  (let ((memory (and (drgnx-grid-tree--plist-p memory) memory)))
+    (let ((view (plist-get memory :view)))
+      (when (and view (symbolp view)) (drgnx-state-note-intent nil :view nil view :by 'restore)))
+    (let ((sizes (let ((s (plist-get memory :sizes))) (and (proper-list-p s) s))))
+      (dolist (k drgnx-persist--size-keys)
+        (let ((px (cdr-safe (assq k (seq-filter #'consp sizes))))
+              (limit (if (memq k '(left right)) (* 0.5 (frame-pixel-width)) (* 0.7 (frame-pixel-height)))))
+          (drgnx-state-note-intent nil :sizes k (drgnx-persist--clamp px limit) :by 'restore))))
+    (let ((docks (plist-get memory :docks)))
+      (when (and (proper-list-p docks)
+                 (seq-every-p (lambda (e) (and (consp e) (drgnx-grid-tree-entry-p (car e))
+                                               (drgnx-grid-tree--plist-p (cdr e)) (drgnx-grid-tree--plain-p (cdr e) 4)))
+                              docks))
+        (set-frame-parameter nil 'drgnx-grid-memory (copy-tree docks))))))
+
 (defun drgnx-persist--restore-frame (state)
-  "Bring back one window's workbench STATE in the selected frame."
-  (drgnx-wb-area-hide 'panel)
-  (drgnx-wb-area-hide 'right)
-  (drgnx-wb-hide-sidebar)
-  (unwind-protect
-      (progn
-        (when-let* ((roots (seq-filter (lambda (d) (and (not (file-remote-p d)) (file-directory-p d)))
-                                       (plist-get state :roots)))
-                    ((fboundp 'drgnx-explorer-set-roots)))
-          (drgnx-explorer-set-roots roots))
-        ;; Editor groups: their tree and sizes (windows whose buffer is gone are kept — no file
-        ;; is visited yet after a restart), then each one's shown file and tabs.
-        (let ((groups (plist-get state :groups)))
-          (when-let* ((main (plist-get state :main)))
-            (let ((window-restore-killed-buffer-windows #'ignore))
-              (ignore-errors (window-state-put (drgnx-persist--strip main) (window-main-window) 'safe))))
-          (catch 'full                                    ; the tree did not fit: side by side, while it fits
-            (while (< (length (drgnx-groups-list)) (length groups))
-              (unless (ignore-errors (split-window (car (last (drgnx-groups-list))) nil 'right))
-                (throw 'full nil))))
-          (setq drgnx-persist--pending                    ; after earlier windows' entries, groups in order
-                (append drgnx-persist--pending
-                        (cl-loop for g in (drgnx-groups-list) for spec in groups
-                                 collect (let* ((files (plist-get spec :tabs))
-                                                (shown (drgnx-persist--visit (plist-get spec :shown))))
-                                           (set-window-buffer g (or shown (get-scratch-buffer-create)))
-                                           (set-window-prev-buffers g nil)
-                                           (drgnx-persist--set-tabs g files)
-                                           (list g (seq-remove (lambda (f) (equal f (plist-get spec :shown))) files) files)))))
-          (when (and drgnx-persist--pending (not (drgnx-timer-active-p 'persist-visit)))
-            ;; not :interruptible: a file visit aborted half-way is not safe to repeat
-            (drgnx-timer-idle-steps 'persist-visit 0.2 #'drgnx-persist--visit-pending :owner :core))))
-    ;; Docks and panel come back whatever happened above: sizes first (clamped), then shown.
-    (let ((left (plist-get state :left)) (panel (plist-get state :panel)) (right (plist-get state :right)))
-      (set-frame-parameter nil 'drgnx-persist-extra (plist-get state :extra))
-      ;; sizes and the view are intent `restore': they replace what was chosen before, and count as chosen after
-      (when (symbolp (plist-get left :view))          ; an unknown view falls back to the Explorer when shown
-        (drgnx-state-note-intent nil :view nil (plist-get left :view) :by 'restore))
-      (drgnx-state-note-intent nil :sizes 'left (drgnx-persist--clamp (plist-get left :px) (* 0.5 (frame-pixel-width))) :by 'restore)
-      (drgnx-state-note-intent nil :sizes 'panel (drgnx-persist--clamp (plist-get panel :px) (* 0.7 (frame-pixel-height))) :by 'restore)
-      (drgnx-state-note-intent nil :sizes 'right (drgnx-persist--clamp (plist-get right :px) (* 0.5 (frame-pixel-width))) :by 'restore)
-      (when (plist-get left :shown) (drgnx-wb-show-sidebar))
-      (when (plist-get panel :shown) (drgnx-wb-area-show 'panel (plist-get panel :tab)))
-      (when (plist-get right :shown) (drgnx-wb-area-show 'right (plist-get right :tab))))
-    (drgnx-persist--fit-groups (plist-get state :groups))
+  "Bring back one window's workbench STATE in the selected frame: its folders, its grid, then its memory.  A tree that
+is not valid (`drgnx-grid-valid-tree-p') changes nothing in the grid and gives one notice.  Each editor tile's shown
+file is visited now (missing files are skipped), its other tabs at idle."
+  (let ((frame (selected-frame)) (tree (plist-get state :tree)))
+    (when-let* ((roots (let ((r (plist-get state :roots)))
+                         (and (proper-list-p r)
+                              (seq-filter (lambda (d) (and (stringp d) (not (file-remote-p d)) (file-directory-p d))) r))))
+                ((fboundp 'drgnx-explorer-set-roots)))
+      (drgnx-explorer-set-roots roots))
+    (set-frame-parameter nil 'drgnx-persist-extra (plist-get state :extra))
+    (cond
+     ((null tree))
+     ((not (drgnx-grid-valid-tree-p tree))
+      (drgnx-notify 'wb 'warn "A window's saved layout was not valid; it keeps the layout it has" :id 'workbench-tree))
+     (t
+      (let ((tree (copy-tree tree)) (editors nil))
+        (dolist (leaf (drgnx-grid-tree-leaves tree))
+          (when (eq (car leaf) 'editor)
+            (let ((p (cdr leaf)))
+              (drgnx-persist--visit (plist-get p :shown))
+              (push (list (plist-get p :id) (seq-filter #'stringp (plist-get p :tabs)) (plist-get p :shown)) editors))))
+        ;; every tile is made from TREE: no live tile keeps an id TREE holds
+        (drgnx-grid-forget-full-size frame)
+        (dolist (w (window-list frame 'nomini)) (set-window-parameter w 'drgnx-tile-id nil))
+        (set-frame-parameter frame 'drgnx-grid-next-id
+                             (apply #'max (or (frame-parameter frame 'drgnx-grid-next-id) 0)
+                                    (drgnx-grid--tree-ids tree)))
+        (drgnx-grid-apply-tree tree frame)
+        (dolist (e (nreverse editors))
+          (pcase-let ((`(,id ,files ,shown) e))
+            (when-let* ((w (drgnx-grid--tile-by-id id frame)))
+              (set-window-prev-buffers w nil)
+              (drgnx-persist--set-tabs w files)
+              (setq drgnx-persist--pending
+                    (append drgnx-persist--pending (list (list w (remove shown files) files)))))))
+        (when (and drgnx-persist--pending (not (drgnx-timer-active-p 'persist-visit)))
+          ;; not :interruptible: a file visit aborted half-way is not safe to repeat
+          (drgnx-timer-idle-steps 'persist-visit 0.2 #'drgnx-persist--visit-pending :owner :core))
+        ;; and the sizes once more at the frame's next size change (below)
+        (puthash frame (cons (frame-pixel-width) (cons (frame-pixel-height) tree)) drgnx-persist--refit)
+        (add-hook 'window-size-change-functions #'drgnx-persist--refit)
+        (add-hook 'pre-command-hook #'drgnx-persist--refit-done))))
+    ;; after the grid: what its tiles noted while they were made is replaced by what was chosen
+    (drgnx-persist--restore-memory (plist-get state :memory))
     (drgnx-chrome-apply))
   t)
 
-(defun drgnx-persist--fit-groups (specs)
-  "Put the editor groups back to the pixel widths SPECS (the groups' states) hold.  `window-state-put' works in
-columns, so two halves of a split can come back 4 px apart or swapped (230/234 -> 234/230); the docks are in place
-by now, so what is left is exact.  Every group but the last (it takes the rest).  Only a correction of rounding:
-in a frame of another size the saved widths are wrong (two 20-column halves would come back 20 and 60), so a
-group more than two characters away from its saved width, a width that cannot be had, or a state that holds
-none, leaves that group as it is."
-  (cl-loop for (g . more) on (drgnx-groups-list) for spec in specs
-           for px = (plist-get spec :px)
-           when (and more (integerp px) (window-live-p g) (/= px (window-pixel-width g))
-                     (<= (abs (- px (window-pixel-width g))) (* 2 (frame-char-width (window-frame g)))))
-           do (let ((window-resize-pixelwise t))     ; else a 4 px change is rounded to whole columns and lost
-                (ignore-errors (window-resize g (- px (window-pixel-width g)) t nil t)))))
+(defun drgnx-persist--refit (frame)
+  "A restored FRAME changed size: a new window is restored at the size it was made with, and the window manager's
+answers (the sizes it gives the window, one or more) can come after, as they do for a client's window at scale 2.
+Emacs shares each change out among the tiles by their sizes at the time, so the grid it was restored with is applied
+again (`drgnx-grid-apply-tree': only the sizes change), while its tiles are still the ones it holds.  At every change
+of the frame's size until the first command (`drgnx-persist--refit-done'): a change of its windows alone is passed
+over."
+  (when-let* ((at (gethash frame drgnx-persist--refit))
+              ((not (and (= (car at) (frame-pixel-width frame)) (= (cadr at) (frame-pixel-height frame))))))
+    (puthash frame (cons (frame-pixel-width frame) (cons (frame-pixel-height frame) (cddr at))) drgnx-persist--refit)
+    (let ((tree (cddr at)))
+      (when (equal (sort (copy-sequence (drgnx-grid--tree-ids tree)) #'<)
+                   (sort (delq nil (mapcar (lambda (w) (window-parameter w 'drgnx-tile-id)) (drgnx-grid-tiles frame)))
+                         #'<))
+        (drgnx-grid-apply-tree tree frame)))))
+
+(defvar drgnx-persist--unmaximize (make-hash-table :test #'eq :weakness 'key)
+  "Restored window → (GEOMETRY . TRIES): its saved geometry, while the window manager may still maximize it unasked.")
+
+(defun drgnx-persist--keep-state (frame geometry fullscreen)
+  "A window restored at GEOMETRY with the saved `fullscreen' FULLSCREEN: a maximized or full-screen one is made so
+again; one saved as neither is watched (`drgnx-persist--unmaximize'): mutter maximizes a new window whose size comes
+close to the work area's, so a window you sized that big came back maximized, its size lost."
+  (if (memq fullscreen '(maximized fullboth fullwidth fullheight))
+      (set-frame-parameter frame 'fullscreen fullscreen)
+    (puthash frame (cons geometry 0) drgnx-persist--unmaximize)
+    (add-hook 'window-size-change-functions #'drgnx-persist--unmaximize)
+    (add-hook 'pre-command-hook #'drgnx-persist--refit-done)))
+
+(defun drgnx-persist--unmaximize (frame)
+  "FRAME, restored as neither maximized nor full screen, was maximized by the window manager: it is given back its
+`fullscreen' nil, then, once the window manager has unmaximized it (to a size of its own choosing, which can come
+after ours), its saved geometry (`drgnx-persist--place-frame'), again whenever a later answer takes it away.  Until the
+first command; three tries at most."
+  (when-let* ((at (gethash frame drgnx-persist--unmaximize)))
+    (let ((g (car at)) (tries (cdr at)))
+      (cond ((frame-parameter frame 'fullscreen) (set-frame-parameter frame 'fullscreen nil))
+            ((and (= (frame-text-width frame) (nth 2 g)) (= (frame-text-height frame) (nth 3 g))))
+            ((>= tries 3) (remhash frame drgnx-persist--unmaximize))
+            (t (puthash frame (cons g (1+ tries)) drgnx-persist--unmaximize)
+               (drgnx-persist--place-frame frame g))))))
+
+(defun drgnx-persist--refit-done ()
+  "The first command after a restore: the window's sizes are yours from now on, nothing is put back any more."
+  (clrhash drgnx-persist--refit)
+  (clrhash drgnx-persist--unmaximize)
+  (remove-hook 'window-size-change-functions #'drgnx-persist--unmaximize)
+  (remove-hook 'window-size-change-functions #'drgnx-persist--refit)
+  (remove-hook 'pre-command-hook #'drgnx-persist--refit-done))
 
 (defun drgnx-persist--gui-frame ()
   "The graphical frame to restore into or save from (a daemon's F1 is not one, nor is a child frame)."
@@ -455,8 +611,11 @@ none, leaves that group as it is."
 
 (defun drgnx-persist--before-client-delete (proc &optional noframe)
   "Before `server-delete-client' deletes PROC's frames one by one: if they are all the graphical
-windows left (\[save-buffers-kill-terminal] in the last client), save every one of them now."
-  (unless noframe
+windows left (\[save-buffers-kill-terminal] in the last client), save every one of them now.
+A client that made no frame (`emacsclient -e', a file shown in a window already there; server.el records
+a client's frame as its `frame' property) closes none: it is passed over at once, consing nothing, as every
+request ends here and `frame-parameter' of `client' copies each frame's whole parameter list."
+  (unless (or noframe (not (process-get proc 'frame)))
     (let ((gui (seq-filter #'drgnx-persist--gui-p (frame-list))))
       (when (and gui (seq-every-p (lambda (f) (eq (frame-parameter f 'client) proc)) gui))
         (drgnx-persist--save-quietly #'drgnx-persist--frames)   ; a terminal window may be the selected one
@@ -525,6 +684,7 @@ graphical frame, and at each emacsclient window that opens when no other one is 
     (remove-hook 'kill-emacs-hook #'drgnx-persist--on-exit)
     (remove-hook 'delete-frame-functions #'drgnx-persist--on-delete-frame)
     (advice-remove 'server-delete-client #'drgnx-persist--before-client-delete)
+    (drgnx-persist--refit-done)
     (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start)
     (drgnx-timer-cancel 'persist-visit)))
 

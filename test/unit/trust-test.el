@@ -401,6 +401,35 @@ together; wait for all under a 30 s bound.  Fails the test unless every child ex
         (inhibit-file-name-operation op))
     (apply op args)))
 
+(ert-deftest drgnx-trust/the-shield-explains-and-offers-the-project ()
+  "A click on Restricted Mode's shield says what it is and offers to trust the project's folder (Trust This
+Folder, which shows the folder's code first); a no trusts nothing.  Home as a whole (or a shared folder) is never
+offered: it says so and asks nothing."
+  (drgnx-trust-test--with (dir)
+    (let* ((asked nil) (trusted nil) (answer nil)
+           (b (find-file-noselect (drgnx-trust-test--file dir "a.txt" "text\n"))))
+      (let ((drgnx-commands--table (make-hash-table :test #'eq)))   ; the command the shield's click is
+        (cl-letf (((symbol-function 'drgnx-trust-mode) #'ignore)
+                  ((symbol-function 'drgnx-settings-review-setup) #'ignore))
+          (drgnx-trust-setup))
+        (should (eq 'drgnx-trust-explain (drgnx-cmd-command (drgnx-commands-get 'restricted-mode)))))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt asked) answer))
+                ((symbol-function 'drgnx-settings-trust-this-folder)
+                 (lambda (&optional root _shown) (interactive) (push (or root 'this) trusted))))
+        (with-current-buffer b
+          (drgnx-trust-explain)
+          (should (string-match-p "Restricted Mode" (car asked)))
+          (should (string-match-p (regexp-quote (abbreviate-file-name (directory-file-name dir))) (car asked)))
+          (should-not trusted)                                     ; no: nothing trusted
+          (setq answer t)
+          (drgnx-trust-explain)
+          (should (equal trusted '(this)))
+          (setq asked nil trusted nil)
+          (cl-letf (((symbol-function 'drgnx-trust--folder) (lambda () (expand-file-name "~/"))))
+            (let ((said (drgnx-trust-explain)))
+              (should-not asked) (should-not trusted)
+              (should (string-match-p "never trusted" said)))))))))
+
 (ert-deftest drgnx-trust/restricted-mark-only-for-untrusted-local-files ()
   (drgnx-trust-test--with (dir)
     (should (member drgnx-trust--mark-segment global-mode-string))
@@ -544,5 +573,18 @@ connects) goes on, anything else returns its first argument."
         (advice-remove 'tramp-file-name-handler #'drgnx-trust-test--tramp-stub))
       ;; TRAMP was only asked whether the name is remote, which never connects
       (should (seq-every-p (lambda (op) (eq op 'file-remote-p)) drgnx-trust-test--tramp-ops)))))
+
+;; The hub reads this file too (`agents::trust' in runtime/crates/drgnx-ratatoskr): its Rust test parses the same
+;; fixture.  A change of the writer's form breaks this test, so the hub's reader is changed with it and never
+;; quietly trusts more (or less) than the editor wrote.
+(ert-deftest drgnx-trust/the-file-the-hub-reads ()
+  (drgnx-trust-test--with (dir)
+    (drgnx-trust--write (lambda (_) '("/srv/a/" "/srv/b/")))
+    (should (equal (with-temp-buffer
+                     (insert-file-contents (drgnx-trust-folders-file))
+                     (buffer-string))
+                   (with-temp-buffer
+                     (insert-file-contents (expand-file-name "test/fixtures/trusted-folders.eld" drgnx-dir))
+                     (buffer-string))))))
 
 ;;; trust-test.el ends here

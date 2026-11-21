@@ -1,0 +1,24 @@
+{"scenario": "debug/partner-agent-reads-heap", "requires": ["v1", "test-hooks"], "doc": "The agent reads the heap graph of an expression in the user's stopped session (debug_read what=heap, gated by debug.read): the objects reached from it, each once, with the stop's epoch; nothing is recorded and the session stays stopped."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:preset autonomous)))\n"}
+{"do": "write_file", "path": "$ROOT/proj/.vscode/launch.json", "json": {"version": "0.2.0", "configurations": [{"type": "mock", "request": "launch", "name": "Mock", "program": "app"}]}}
+{"do": "write_file", "path": "$ROOT/script.json", "json": [{"expect": "initialize", "args": {"adapterID": "mock"}, "ok": {"supportsConfigurationDoneRequest": true}}, {"expect": "launch", "args": {"program": "app"}, "ok": {}}, {"event": "initialized"}, {"expect": "configurationDone"}, {"event": "stopped", "body": {"reason": "breakpoint", "threadId": 1, "allThreadsStopped": true}}, {"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}, {"expect": "stackTrace", "args": {"threadId": 1}, "ok": {"stackFrames": [{"id": 1000, "name": "main", "line": 9, "column": 1, "source": {"path": "/p/a.py"}}], "totalFrames": 1}}, {"expect": "scopes", "args": {"frameId": 1000}, "ok": {"scopes": [{"name": "Locals", "variablesReference": 7, "expensive": false}]}}, {"expect": "variables", "args": {"variablesReference": 7}, "ok": {"variables": [{"name": "ring", "value": "Ring", "variablesReference": 20}]}}, {"expect": "evaluate", "args": {"expression": "ring", "frameId": 1000, "context": "watch"}, "ok": {"result": "Ring", "type": "Ring", "variablesReference": 20}}, {"expect": "variables", "args": {"variablesReference": 20}, "ok": {"variables": [{"name": "v", "value": "1", "variablesReference": 0}, {"name": "next", "value": "Ring", "type": "Ring", "evaluateName": "ring.next", "variablesReference": 21}]}}, {"expect": "variables", "args": {"variablesReference": 21}, "ok": {"variables": [{"name": "v", "value": "2", "variablesReference": 0}]}}, {"expect": "disconnect", "ok": {}}, {"die": true}]}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "debug/trust", "params": {"root": "$ROOT/proj", "trusted": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "launch:0", "adapters": [{"id": "mock", "name": "Mock", "types": ["mock"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/script.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"session": "$capture:s"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-frame", "data": {"session": "$s", "line": 9, "top": true}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/proj"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 102, "method": "agents/send", "params": {"id": "$a", "text": "call:debug_read {\"what\": \"heap\", \"debug_session\": \"$s\", \"expr\": \"ring\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 102, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in $(seq 300); do grep -q 'call: {.*ring.next' $STATE/hub/transcripts/$a.jsonl && grep -q 'call: {.*epoch' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; grep -o 'call:[^\"]*' $STATE/hub/transcripts/$a.jsonl >&2; exit 1"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "debug/control", "params": {"session": "$s", "op": "stop"}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-ended", "data": {"session": "$s"}}, "within_ms": 10000}

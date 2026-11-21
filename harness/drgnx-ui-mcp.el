@@ -114,7 +114,7 @@ wm:resize: layout, never collateral or oscillation).")
          :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session '(:action (:type "string" :enum ["start" "stop"])))
                                             '("session" "action")))
    (list :name "ui_measure"
-         :description (concat "Run several actions as one measurement. Each action is one of {keys}, {type}, {x,y}, {buffer,text} or {drag: {from: [x,y], to: [x,y], steps?, button?}}, with optional button/count/hold_ms (not for drag). "
+         :description (concat "Run several actions as one measurement. Each action is one of {keys}, {type}, {pause: seconds}, {x,y}, {buffer,text} or {drag: {from: [x,y], to: [x,y], steps?, button?}}, with optional button/count/hold_ms (not for drag). "
                               drgnx-ui-mcp--report)
          :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session
                                                     '(:actions (:type "array" :items (:type "object"))))

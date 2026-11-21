@@ -1,0 +1,26 @@
+{
+  "name": "my-plugin",
+  "version": "0.1.0",
+  "abilities": [
+    {
+      "name": "shout",
+      "description": "Returns the text it is given, in capitals.",
+      "input_schema": {
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "hooks": [
+    {
+      "point": "before-tool",
+      "verdicts": ["deny", "annotate"],
+      "filter": {"tool_kinds": ["execute"]},
+      "deadline_ms": 500
+    }
+  ],
+  "hosts": [],
+  "kv_bytes": 65536
+}

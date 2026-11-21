@@ -12,15 +12,25 @@
   "A file's temp dir in the runner's short root (`drgnx-run-ert--short-root': in /tmp, else in TMPDIR).")
 
 (defun drgnx-run-ert-test--batch (dir results &rest env)
-  "Run the suite in DIR in a fresh batch Emacs (harness on the load path); return its exit code."
+  "Run the suite in DIR in a fresh batch Emacs (harness on the load path); return its exit code.  Its output goes to
+RESULTS.log (`drgnx-run-ert-test--log')."
   (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env)
                                      (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_LEAKS" "DRGNX_TEST_LEAKS_ALLOWED" "DRGNX_TEST_SHUFFLE" "DRGNX_WORK_DB_GATE") ; not this run's selector, census, order or gate
                                      process-environment))
         ;; never a buffer's deleted directory, which call-process refuses
         (default-directory (if (file-directory-p default-directory) default-directory temporary-file-directory)))
-    (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+    (call-process (expand-file-name invocation-name invocation-directory) nil (list :file (concat results ".log")) nil
                   "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
                   "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" dir)))
+
+(defun drgnx-run-ert-test--log (results)
+  "The last 80 lines of what the run of `drgnx-run-ert-test--batch' writing RESULTS printed, each cut at 240
+characters: a backtrace's frames print whole forms, which would push its error line out of a character count."
+  (let ((f (concat results ".log")))
+    (if (file-exists-p f)
+        (let ((lines (with-temp-buffer (insert-file-contents f) (split-string (buffer-string) "\n"))))
+          (mapconcat (lambda (l) (truncate-string-to-width l 240)) (last lines 80) "\n"))
+      "no output")))
 
 (defun drgnx-run-ert-test--json (file)
   (json-parse-string (with-temp-buffer (insert-file-contents file) (buffer-string)) :object-type 'plist))
@@ -34,6 +44,49 @@
           (let ((r (drgnx-run-ert-test--json results)))
             (should (equal (list (plist-get r :total) (plist-get r :passed) (plist-get r :failed)) '(2 1 1)))
             (should (equal (plist-get (aref (plist-get r :failures) 0) :name) "drgnx-fixture/fails"))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-graphical-sessions-report-stays-off-the-echo-area ()
+  ;; ERT's report `message's a failure's condition, megabytes for a row's pixels; in a graphical session the echo
+  ;; area resized to it in a bidi scan with no quit check, and the session hung between rows (2026-11-17, kwin)
+  (should (advice-member-p #'drgnx-run-ert--report-off-the-echo-area 'ert-run-tests))   ; this run has it
+  (let* ((got 'not-called) (seen nil)
+         (listener (lambda (&rest event)
+                     (setq got inhibit-message)
+                     (when (nth 3 event) (setq seen (ert-test-result-with-condition-condition (nth 3 event))))))
+         (gui (let ((noninteractive nil)) (drgnx-run-ert--report-off-the-echo-area (list 'sel listener 'more))))
+         (batch (drgnx-run-ert--report-off-the-echo-area (list 'sel listener))))
+    (should (equal (list (car gui) (nth 2 gui)) '(sel more)))
+    (let ((inhibit-message nil)) (funcall (nth 1 gui) 'test-started))
+    (should (eq got t))
+    ;; a batch Emacs prints it to stderr, as before
+    (let ((inhibit-message nil)) (funcall (nth 1 batch) 'test-started))
+    (should (eq got nil))
+    ;; the report prints a megabyte string in a failure's condition cut; the result keeps it whole
+    (let* ((big (make-string 1000000 ?x))
+           (condition (list 'ert-test-failed (list (list 'should '(f)) :value (vector 1 big))))
+           (result (make-ert-test-failed :condition condition :backtrace nil :infos nil)))
+      (funcall (nth 1 batch) 'test-ended nil nil result)
+      (should (< (length (prin1-to-string seen)) 3000))
+      (should (string-match-p "(998000 more characters)" (prin1-to-string seen)))
+      (should (eq (ert-test-result-with-condition-condition result) condition)))))
+
+(ert-deftest drgnx-run-ert/a-run-notes-each-tests-start-and-end-beside-its-results ()
+  "One Emacs's run (a GUI session's) writes RESULTS.progress as it goes: each test's start, then its end and result,
+so a run killed at its deadline, which writes no results, still says how far it got and which test was running."
+  (let* ((tmp (make-temp-file "drgnx-ert" t)) (results (expand-file-name "results.json" tmp))
+         (fixture (expand-file-name "ert-mixed" drgnx-run-ert-test--fixtures)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--batch fixture results "DRGNX_TEST_ONE_PROCESS=1")
+          (let ((lines (and (file-exists-p (concat results ".progress"))
+                            (with-temp-buffer (insert-file-contents (concat results ".progress"))
+                                              (split-string (buffer-string) "\n" t)))))
+            ;; each test's end straight after its start, in whatever order the run took them
+            (should (member lines '(("start drgnx-fixture/fails" "end drgnx-fixture/fails failed"
+                                     "start drgnx-fixture/passes" "end drgnx-fixture/passes passed")
+                                    ("start drgnx-fixture/passes" "end drgnx-fixture/passes passed"
+                                     "start drgnx-fixture/fails" "end drgnx-fixture/fails failed"))))))
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-run-ert/suite-that-fails-to-load-is-a-failure ()
@@ -773,6 +826,20 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
                          '("computed-test.el"))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-run-ert/a-named-character-escape-keeps-the-file-indexed ()
+  ;; A "\N{NAME}" in a test file makes the reader load the Unicode name table; under the index's own obarray that
+  ;; load failed, the file counted as open, and every name-selected run started it too.  Checked in a fresh Emacs: a
+  ;; warm one has the table already.
+  (let ((f (make-temp-file "named-char-test" nil ".el"
+                           "(ert-deftest nc/one () (should (equal \"\\N{WARNING SIGN}\" \"\u26A0\")))\n")))
+    (unwind-protect
+        (with-temp-buffer
+          (should (eql 0 (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                                       "--batch" "-Q" "-l" (locate-library "run-ert.el")
+                                       "--eval" (format "(prin1 (drgnx-run-ert--index %S))" f))))
+          (should (string-match-p "((\"nc/one\") \\. nil)\\|((\"nc/one\"))" (buffer-string))))
+      (delete-file f))))
+
 (ert-deftest drgnx-run-ert/an-unindexed-test-fails-a-full-run ()
   ;; a test made inside a form the prefilter does not read fails the full run, and names the test and file
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
@@ -802,6 +869,32 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (should (equal (drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=\"^nothing/\"" "DRGNX_TEST_ONE_PROCESS=1") 1)))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-run-ert/a-test-name-selector-naming-no-test-fails-with-a-summary ()
+  ;; UI-RUN-NO-DEADLINE-1: a bare symbol is ERT's selector for one test; one no file defines signalled
+  ;; `ert-test-unbound' in every Emacs that ran it, so no summary was written (a GUI session then waited out its limit)
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite suite '(("one-test.el" . "(ert-deftest iso-one/a () (should t))")))
+          ;; CI's runs list the :timing and one-writer tests the selector picks as skipped: that listing selects too
+          (dolist (extra '(nil ("DRGNX_TEST_ONE_PROCESS=1") ("DRGNX_TEST_NO_TIMING=1" "DRGNX_WORK_DB_GATE=1")))
+            (ignore-errors (delete-file results))
+            (should (equal (apply #'drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=iso-none/a" extra) 1))
+            (ert-info ((drgnx-run-ert-test--log results) :prefix "its output: ")   ; macOS: a file's Emacs exited 255
+              (should (string-match-p "DRGNX_TEST_SELECTOR iso-none/a matched 0 tests"
+                                      (plist-get (aref (plist-get (drgnx-run-ert-test--json results) :failures) 0)
+                                                 :condition))))
+            ;; the ui tier's halves: nothing run, no failure (the tier checks both halves)
+            (should (equal (apply #'drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=iso-none/a"
+                                  "DRGNX_TEST_EMPTY_OK=1" extra)
+                           0))
+            (should (equal (plist-get (drgnx-run-ert-test--json results) :total) 0)))
+          ;; the test it names still runs
+          (should (equal (drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=iso-one/a") 0))
+          (should (equal (plist-get (drgnx-run-ert-test--json results) :total) 1)))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-run-ert/an-empty-batch-is-not-a-failure-when-the-ui-tier-says-so ()
   ;; DX-UI-TIER-EMPTY-BATCH-1: a narrow `test --ui' selector names tests of one half only
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
@@ -827,6 +920,160 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (should (string-match-p "\\\\| for alternation, not |"
                                   (plist-get (aref (plist-get (drgnx-run-ert-test--json results) :failures) 0) :condition))))
       (delete-directory tmp t))))
+
+;;;; The per-file leak check (DRGNX_TEST_FILE_LEAKS: the GUI tier's per-file sessions set it)
+
+(defun drgnx-run-ert-test--file-leak-run (fixtures)
+  "Run the fixture files FIXTURES (names under test/fixtures/file-leaks/, without .el), each as NAME-test.el of a
+suite, with the per-file leak check on.  Return (EXIT RESULTS-PLIST OUTPUT)."
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-fleak" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (make-directory suite t)
+          (dolist (f fixtures)
+            (with-temp-file (expand-file-name (concat f "-test.el") suite)
+              (insert "(require 'ert)\n")
+              (insert-file-contents (expand-file-name (concat "file-leaks/" f ".el") drgnx-run-ert-test--fixtures))
+              (goto-char (point-max))))
+          (let ((exit (drgnx-run-ert-test--batch suite results "DRGNX_TEST_FILE_LEAKS=1")))
+            (list exit (and (file-exists-p results) (drgnx-run-ert-test--json results))
+                  (drgnx-run-ert-test--log results))))
+      (delete-directory tmp t))))
+
+(defun drgnx-run-ert-test--failure (results name)
+  "The condition text of the failure of RESULTS (a plist) named NAME, or nil."
+  (let ((f (seq-find (lambda (f) (equal (plist-get f :name) name)) (plist-get results :failures))))
+    (and f (plist-get f :condition))))
+
+(ert-deftest drgnx-run-ert/a-file-that-leaves-a-mode-line-entry-fails-and-names-it ()
+  (pcase-let ((`(,exit ,r ,log) (drgnx-run-ert-test--file-leak-run '("leaky-mode-line"))))
+    (should (eql 1 exit))
+    ;; the test itself passed; the file fails, as one failure named after it
+    (let ((why (drgnx-run-ert-test--failure r "leak leaky-mode-line-test.el")))
+      (should why)
+      (should (string-match-p "line-format mode-line-format \\+\" LEAKED-ENTRY" why)))
+    (should (string-match-p "LEAKED-ENTRY" log))))
+
+(ert-deftest drgnx-run-ert/a-file-that-leaves-a-key-a-header-line-and-a-frame-parameter-fails-and-names-them ()
+  (pcase-let ((`(,exit ,r ,_log) (drgnx-run-ert-test--file-leak-run '("leaky-key"))))
+    (should (eql 1 exit))
+    (let ((why (drgnx-run-ert-test--failure r "leak leaky-key-test.el")))
+      (should why)
+      (should (string-match-p "global-map C-c C-x C-l" why))
+      (should (string-match-p "header-line-format" why))
+      (should (string-match-p "frame-param file-leak-fixture-parameter" why)))))
+
+(ert-deftest drgnx-run-ert/a-file-that-puts-its-state-back-passes-the-leak-check ()
+  (pcase-let ((`(,exit ,r ,log) (drgnx-run-ert-test--file-leak-run '("clean"))))
+    (should (equal (list (plist-get r :failures) log) (list [] log)))
+    (should (eql 0 (or exit -1)))
+    (should-not (string-match-p "left global state behind" log))))
+
+(ert-deftest drgnx-run-ert/a-file-that-leaves-a-face-colour-on-the-frame-fails-and-names-it ()
+  (pcase-let ((`(,exit ,r ,_log) (drgnx-run-ert-test--file-leak-run '("leaky-face"))))
+    (should (eql 1 exit))
+    (should (string-match-p "face drgnx-file-leak-fixture-face"
+                            (or (drgnx-run-ert-test--failure r "leak leaky-face-test.el") "")))))
+
+(ert-deftest drgnx-run-ert/a-file-that-changes-the-enabled-themes-fails-and-names-them ()
+  (pcase-let ((`(,exit ,r ,_log) (drgnx-run-ert-test--file-leak-run '("leaky-theme"))))
+    (should (eql 1 exit))
+    (should (string-match-p "theme file-leak-fixture-theme"
+                            (or (drgnx-run-ert-test--failure r "leak leaky-theme-test.el") "")))))
+
+(ert-deftest drgnx-run-ert/the-leak-check-is-per-file-not-per-run ()
+  ;; a clean file beside a leaky one still passes: each file's own Emacs, one failure for the one that leaks
+  (pcase-let ((`(,_exit ,r ,_log) (drgnx-run-ert-test--file-leak-run '("leaky-mode-line" "clean"))))
+    (should (drgnx-run-ert-test--failure r "leak leaky-mode-line-test.el"))
+    (should-not (drgnx-run-ert-test--failure r "leak clean-test.el"))))
+
+(ert-deftest drgnx-run-ert/no-leak-check-without-the-variable ()
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-fleak" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (make-directory suite t)
+          (with-temp-file (expand-file-name "leaky-mode-line-test.el" suite)
+            (insert "(require 'ert)\n")
+            (insert-file-contents (expand-file-name "file-leaks/leaky-mode-line.el" drgnx-run-ert-test--fixtures)))
+          (should (eql 0 (drgnx-run-ert-test--batch suite results "DRGNX_TEST_FILE_LEAKS"))))
+      (delete-directory tmp t))))
+
+;;;; The wait profile (DRGNX_TEST_WAIT_PROFILE)
+
+(ert-deftest drgnx-run-ert/the-wait-profile-says-how-much-of-a-test-was-waiting ()
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-wait" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite '(("wait-test.el" . "(ert-deftest wp/waits () (sleep-for 0.4) (accept-process-output nil 0.1))
+(ert-deftest wp/works () (let ((x 0)) (dotimes (i 3000000) (setq x (+ x i))) (should (> x 0))))")))
+          (should (eql 0 (drgnx-run-ert-test--batch suite results "DRGNX_TEST_WAIT_PROFILE=1")))
+          (let* ((tests (append (plist-get (drgnx-run-ert-test--json results) :tests) nil))
+                 (get (lambda (n) (seq-find (lambda (x) (equal (plist-get x :name) n)) tests))))
+            (should (>= (plist-get (funcall get "wp/waits") :wait) 0.45))
+            (should (< (plist-get (funcall get "wp/waits") :wait) (+ 0.1 (plist-get (funcall get "wp/waits") :seconds))))
+            (should (< (plist-get (funcall get "wp/works") :wait) 0.05)))
+          ;; without the variable no wait is counted
+          (should (eql 0 (drgnx-run-ert-test--batch suite results "DRGNX_TEST_WAIT_PROFILE")))
+          (should (= 0 (plist-get (seq-find (lambda (x) (equal (plist-get x :name) "wp/waits"))
+                                            (append (plist-get (drgnx-run-ert-test--json results) :tests) nil))
+                                  :wait))))
+      (delete-directory tmp t))))
+
+;;;; The GUI tier's per-file sessions (harness/drgnx-ui.el), through a stand-in launcher
+
+(defconst drgnx-run-ert-test--ui-selector "^drgnx-ui-look-fonts/\\\\|^drgnx-ui-look-tabs/"
+  "Picks two files of test/ui (their names are in the files' index).
+Only those two: a file the index cannot read counts as open and would be started too (a \"\\N{…}\" did that).")
+
+(defun drgnx-run-ert-test--ui-tier (jobs &rest env)
+  "Run the GUI tier's runner (test-ui-session) with the stub launcher, JOBS at once, ENV more.  Return (EXIT OUTPUT STUB-LOG)."
+  (let* ((harness (file-name-directory (locate-library "run-ert.el")))
+         (root (file-name-directory (directory-file-name harness)))
+         (log (make-temp-file "stub-log"))
+         (process-environment
+          (append env (list (concat "DRGNX_UI_LAUNCHER=" (expand-file-name "test/fixtures/ui-launcher-stub.el" root))
+                            (concat "STUB_LOG=" log) (format "DRGNX_TEST_JOBS=%d" jobs)
+                            (concat "DRGNX_TEST_SELECTOR=\"" drgnx-run-ert-test--ui-selector "\"")
+                            "DRGNX_UI_ONE_SESSION" "STUB_FAIL")
+                  process-environment))
+         (default-directory temporary-file-directory))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((exit (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                                    "--batch" "-Q" "-L" harness "-L" (expand-file-name "core" root) "-L" (expand-file-name "wb" root)
+                                    "-l" "drgnx-ui" "-f" "drgnx-ui-cli" "--" "test-ui-session")))
+            (list exit (buffer-string) (with-temp-buffer (insert-file-contents log) (buffer-string)))))
+      (delete-file log))))
+
+(ert-deftest drgnx-run-ert/the-gui-tier-starts-one-session-per-file-and-merges ()
+  (pcase-let ((`(,exit ,out ,log) (drgnx-run-ert-test--ui-tier 1)))
+    (should (equal (list exit (and (string-match-p "^ui ERT: 4/4 passed" out) t)) '(0 t)))
+    (should (= 2 (length (split-string log "\n" t))))              ; two files, two sessions
+    (should (string-match-p "ui file look-fonts-gui-test.el: 2/2 passed" out))))
+
+(ert-deftest drgnx-run-ert/the-gui-tier-runs-its-sessions-at-once-with-jobs ()
+  (pcase-let ((`(,_exit ,_out ,log) (drgnx-run-ert-test--ui-tier 2)))
+    (let* ((rows (mapcar (lambda (l) (mapcar #'string-to-number (cdr (split-string l)))) (split-string log "\n" t)))
+           (by-start (sort rows (lambda (x y) (< (car x) (car y)))))
+           (a (car by-start)) (b (cadr by-start)))
+      (should (= 2 (length rows)))
+      (should (< (car b) (cadr a))))))     ; the second started before the first ended
+
+(ert-deftest drgnx-run-ert/a-failing-file-fails-the-tier-and-is-named ()
+  (pcase-let ((`(,exit ,out ,_log) (drgnx-run-ert-test--ui-tier 2 "STUB_FAIL=look-tabs")))
+    (should (eql 1 exit))
+    (should (string-match-p "^ui ERT: 3/4 passed" out))
+    (should (string-match-p "^  FAIL stub/row: stub failure" out))))
+
+(ert-deftest drgnx-run-ert/the-gui-tier-asks-every-session-for-the-leak-check ()
+  ;; the stub fails a file whose session was not given DRGNX_TEST_FILE_LEAKS=1; DRGNX_UI_LEAKS=0 is the one way off
+  (pcase-let ((`(,exit ,out ,_log) (drgnx-run-ert-test--ui-tier 1 "DRGNX_UI_LEAKS=0")))
+    (should (eql 1 exit))
+    (should (string-match-p "no leak check asked" out))))
 
 ;;;; The leak census
 
@@ -861,6 +1108,17 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
 (defun drgnx-run-ert-test--allow-file (dir &optional text)
   "A leaks-allowed file in DIR holding TEXT (default: nothing allowed)."
   (let ((f (expand-file-name "allowed.eld" dir))) (with-temp-file f (insert (or text "()"))) f))
+
+(ert-deftest drgnx-run-ert/a-native-compilation-job-is-no-leak-another-process-is ()
+  ;; the checked-in allowlist: native compilation's async jobs come and go with a library's load; any other
+  ;; process a file leaves is still named
+  (let ((drgnx-run-ert--leaks-allowed
+         (drgnx-run-ert--read-allowed (expand-file-name "../leaks-allowed.eld" drgnx-run-ert-test--fixtures))))
+    (should drgnx-run-ert--leaks-allowed)
+    (should (drgnx-run-ert--leak-allowed-p "process +Compiling: /src/core/drgnx-faces.el" nil))
+    (should (drgnx-run-ert--leak-allowed-p "process -Compiling: /src/harness/drgnx-uitest.el" nil))
+    (should-not (drgnx-run-ert--leak-allowed-p "process +ratatoskr" nil))
+    (should-not (drgnx-run-ert--leak-allowed-p "process +Compiling-something" nil))))
 
 (ert-deftest drgnx-run-ert/leaks-name-the-test-and-the-source ()
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-leak" t)))
@@ -903,7 +1161,7 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (let ((r (drgnx-run-ert-test--census suite results)))
             (should (eql 0 (car r)))
             ;; the report's heading, case and all: the run's own dir is drgnx-leakXXXXXX (macOS CI: drgnx-leakSrSTb2)
-            (should-not (let ((case-fold-search nil)) (string-match-p "^Leaks (" (cdr r))))
+            (should (equal "" (let ((case-fold-search nil)) (or (and (string-match "^Leaks (.*\\(\n.*\\)\\{0,12\\}" (cdr r)) (match-string 0 (cdr r))) ""))))
             (should (equal (plist-get (drgnx-run-ert-test--json results) :leaks) []))))
       (delete-directory tmp t))))
 
@@ -1335,3 +1593,28 @@ this test are not passed on."
           (let ((drgnx-run-ert--audit-child-env '("DRGNX_TEST_AUDIT=1" "DRGNX_TEST_AUDIT_FAIL=1")))
             (should (stringp (drgnx-test-run-isolated file "iso/")))))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-missing-nidhogg-primitive-fails-a-strict-run ()
+  ;; a test that needs a Nidhogg primitive skips without it, and fails instead under DRGNX_NIDHOGG_STRICT=1 (a run on
+  ;; Nidhogg's integration line, where a skip would hide a stale or missing build); present, it runs either way
+  (let ((process-environment (cons "DRGNX_NIDHOGG_STRICT" process-environment)))
+    (should (eq (car (should-error (drgnx-test-require-nidhogg nil "nidhogg-no-such-primitive"))) 'ert-test-skipped))
+    (should-not (drgnx-test-require-nidhogg t "nidhogg-no-such-primitive")))
+  (let ((process-environment (cons "DRGNX_NIDHOGG_STRICT=1" process-environment)))
+    (let ((err (should-error (drgnx-test-require-nidhogg nil "nidhogg-no-such-primitive"))))
+      (should (eq (car err) 'ert-test-failed))
+      (should (string-search "nidhogg-no-such-primitive" (format "%S" (cdr err)))))
+    (should-not (drgnx-test-require-nidhogg t "nidhogg-no-such-primitive"))))
+
+(ert-deftest drgnx-run-ert/a-skip-for-sja-fails-a-strict-run-without-sja ()
+  ;; a test that skips for a Sjá primitive (`nidhogg-view-…') is a failure in a strict run whose Emacs has no Sjá; with
+  ;; Sjá the skip had another reason (no display) and stays a skip, as does every skip of a run that is not strict
+  (let ((skipped '((:name "a" :reason "(skip-unless (and (display-graphic-p) (fboundp 'nidhogg-view-rows)))")
+                   (:name "b" :reason "(skip-unless (executable-find \"mutter\"))"))))
+    (let ((process-environment (cons "DRGNX_NIDHOGG_STRICT=1" process-environment)))
+      (let ((f (drgnx-run-ert--strict-sja-failures skipped nil)))
+        (should (equal (mapcar (lambda (x) (plist-get x :name)) f) '("a")))
+        (should (string-search "nidhogg-view-rows" (plist-get (car f) :condition))))
+      (should-not (drgnx-run-ert--strict-sja-failures skipped t)))
+    (let ((process-environment (cons "DRGNX_NIDHOGG_STRICT" process-environment)))
+      (should-not (drgnx-run-ert--strict-sja-failures skipped nil)))))

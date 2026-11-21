@@ -1,0 +1,13 @@
+{"scenario": "extensions/an-agent-may-search-but-not-send-modules", "requires": ["v1", "test-hooks"], "doc": "A session (agent class) may search and read details of the catalog; extensions/modules and extensions/rows are the editor's and are not-allowed for it."}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "hello", "conn": "a", "proof": "valid", "expect_class": "agent"}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "extensions/search", "params": {"query": "x"}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "result": {"total": 0, "rows": []}}}
+{"do": "send", "conn": "a", "json": {"id": 2, "method": "extensions/modules", "params": {"modules": []}}}
+{"do": "expect", "conn": "a", "json": {"id": 2, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 3, "method": "extensions/rows", "params": {"ids": []}}}
+{"do": "expect", "conn": "a", "json": {"id": 3, "error": {"code": "not-allowed"}}}
+{"do": "connect", "conn": "u", "hub": "h"}
+{"do": "send", "conn": "u", "json": {"id": 4, "method": "extensions/modules", "params": {"modules": []}}}
+{"do": "expect", "conn": "u", "json": {"id": 4, "result": {}}}

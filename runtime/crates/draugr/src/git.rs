@@ -69,6 +69,20 @@ pub fn git_program() -> Result<TrustedProgram, FsError> {
     platform_git()
 }
 
+/// macOS: the active developer dir, the target of xcode-select's root-owned link (checked as for [`git_program`]),
+/// whether or not its git is trusted: an Xcode under `/Applications` is selected even though its git is refused. What
+/// a Seatbelt profile reads. Elsewhere none.
+pub fn developer_dir() -> Result<PathBuf, FsError> {
+    #[cfg(target_os = "macos")]
+    {
+        developer_dir_from_link(Path::new("/private/var/db/xcode_select_link"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(FsError::Unsupported("no developer dir on this OS"))
+    }
+}
+
 // Linux: the distribution's git. Android: no git at a root-owned path, so the refusal at the end of the chain.
 #[cfg(target_os = "linux")]
 fn platform_git() -> Result<TrustedProgram, FsError> {
@@ -96,12 +110,20 @@ const WHY_NOT_A_LINK: &str = "not a link";
 #[cfg(any(test, target_os = "macos"))]
 const WHY_LINK_OWNER: &str = "the link is not owned by root";
 
-/// The git under the developer dir that `link` (xcode-select's link) names. Every directory from the link's own up
-/// to `/` is opened without links and must be root's and not group- or world-writable; the link must be root's;
-/// `<target>/usr/bin/git` must pass `trusted_program` (so a relative or `..` target is refused). Compiled for tests
-/// on every OS, so the resolver runs against a fixture on Linux.
+/// The git under the developer dir that `link` (xcode-select's link) names ([`developer_dir_from_link`]):
+/// `<target>/usr/bin/git` must pass `trusted_program`. Compiled for tests on every OS, so the resolver runs against a
+/// fixture on Linux.
 #[cfg(any(test, target_os = "macos"))]
 fn git_from_xcode_link(link: &Path) -> Result<TrustedProgram, FsError> {
+    let dev = developer_dir_from_link(link)?;
+    eitri::trusted_program(&[&dev.join("usr/bin/git")])
+}
+
+/// The developer dir `link` (xcode-select's link) names. Every directory from the link's own up to `/` is opened
+/// without links and must be root's and not group- or world-writable; the link must be root's; the target must be
+/// absolute with no `..`.
+#[cfg(any(test, target_os = "macos"))]
+fn developer_dir_from_link(link: &Path) -> Result<PathBuf, FsError> {
     use std::ffi::CString;
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStringExt;
@@ -147,7 +169,14 @@ fn git_from_xcode_link(link: &Path) -> Result<TrustedProgram, FsError> {
     }
     buf.truncate(n);
     let dev = PathBuf::from(OsString::from_vec(buf));
-    eitri::trusted_program(&[&dev.join("usr/bin/git")])
+    if !dev.is_absolute()
+        || dev
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+    {
+        return Err(untrusted(WHY_NOT_A_LINK));
+    }
+    Ok(dev)
 }
 
 /// `fstat` of `fd`, or with `name`, `fstatat(fd, name, AT_SYMLINK_NOFOLLOW)`.
@@ -185,6 +214,8 @@ const OVERRIDES: [&str; 10] = [
 const WHY_CONFIG: &str = "sets config";
 const WHY_PROGRAM: &str = "runs a program";
 const WHY_FILE: &str = "writes a file or a template";
+const WHY_SUBCOMMAND: &str =
+    "not a listed git subcommand (an unknown name runs an alias or a git-NAME program)";
 const WHY_REPO: &str = "moves the repository (it would bypass check_trusted_repo)";
 
 /// Long options refused anywhere, also as `--NAME=VALUE` and as any abbreviation git would accept (a prefix).
@@ -219,6 +250,73 @@ const REFUSED_AFTER: [(&str, u8); 7] = [
     ("difftool", b'x'),
 ];
 
+/// The subcommands a call may run, each a git builtin that starts no program the repository's config names. Not here:
+/// aliases and `git-NAME` programs (any unknown name), `submodule`, `bisect`, `hook`, `filter-branch`, `maintenance`,
+/// `difftool`, `mergetool`, `config` (writes the config the overrides rely on), `help` and `daemon`.
+const SUBCOMMANDS: &[&str] = &[
+    "add",
+    "am",
+    "apply",
+    "archive",
+    "blame",
+    "branch",
+    "cat-file",
+    "check-attr",
+    "check-ignore",
+    "check-ref-format",
+    "checkout",
+    "checkout-index",
+    "cherry-pick",
+    "clean",
+    "clone",
+    "commit",
+    "commit-tree",
+    "count-objects",
+    "describe",
+    "diff",
+    "diff-files",
+    "diff-index",
+    "diff-tree",
+    "fetch",
+    "for-each-ref",
+    "format-patch",
+    "fsck",
+    "grep",
+    "hash-object",
+    "init",
+    "log",
+    "ls-files",
+    "ls-remote",
+    "ls-tree",
+    "merge",
+    "merge-base",
+    "mv",
+    "name-rev",
+    "notes",
+    "pull",
+    "push",
+    "range-diff",
+    "read-tree",
+    "rebase",
+    "reflog",
+    "remote",
+    "reset",
+    "restore",
+    "rev-list",
+    "rev-parse",
+    "revert",
+    "rm",
+    "shortlog",
+    "show",
+    "show-ref",
+    "sparse-checkout",
+    "stash",
+    "status",
+    "switch",
+    "symbolic-ref",
+    "tag",
+];
+
 /// Environment pairs, in order.
 pub type Env = Vec<(OsString, OsString)>;
 
@@ -235,6 +333,7 @@ pub fn command(call: &GitCall) -> Result<(Vec<OsString>, Env), GitRefusal> {
         }
     }
     let mut after: Vec<u8> = Vec::new();
+    let mut subcommand = false;
     for arg in &call.args {
         let bytes = arg.as_bytes();
         if let Some(why) = refused(bytes, &after) {
@@ -243,9 +342,24 @@ pub fn command(call: &GitCall) -> Result<(Vec<OsString>, Env), GitRefusal> {
                 why,
             });
         }
+        if !subcommand && !bytes.starts_with(b"-") {
+            if !SUBCOMMANDS.iter().any(|s| s.as_bytes() == bytes) {
+                return Err(GitRefusal::Arg {
+                    arg: arg.clone(),
+                    why: WHY_SUBCOMMAND,
+                });
+            }
+            subcommand = true;
+        }
         if let Some(&(_, letter)) = REFUSED_AFTER.iter().find(|(s, _)| s.as_bytes() == bytes) {
             after.push(letter);
         }
+    }
+    if !subcommand {
+        return Err(GitRefusal::Arg {
+            arg: OsString::new(),
+            why: WHY_SUBCOMMAND,
+        });
     }
     let mut argv: Vec<OsString> = OVERRIDES.iter().map(OsString::from).collect();
     if call.place == (Place::Trusted { read_only: true }) {
@@ -591,6 +705,39 @@ mod tests {
     }
 
     #[test]
+    fn only_a_listed_subcommand_runs() {
+        // GL-T6-5: git runs a `git-NAME` program from its exec path or PATH, or an alias from the repository's config,
+        // for a name it does not know; a subcommand that runs programs from config (submodule, bisect run, hook run,
+        // filter-branch, maintenance) is not listed either.
+        let refused: &[&[&str]] = &[
+            &["foo"],
+            &["lfs", "ls-files"],
+            &["--no-pager", "pwn"],
+            &["--namespace", "x", "log"],
+            &["submodule", "update"],
+            &["bisect", "run", "sh"],
+            &["hook", "run", "pre-commit"],
+            &["filter-branch"],
+            &["maintenance", "run"],
+            &["config", "core.fsmonitor", "x"],
+            &["--no-pager"],
+            &[],
+        ];
+        for args in refused {
+            for place in [Place::Trusted { read_only: true }, Place::InSandbox] {
+                match command(&call(place, args)) {
+                    Err(GitRefusal::Arg { why, .. }) => assert_eq!(why, WHY_SUBCOMMAND, "{args:?}"),
+                    other => panic!("{args:?}: {other:?}"),
+                }
+            }
+        }
+        for sub in SUBCOMMANDS {
+            command(&call(Place::InSandbox, &["--no-pager", sub, "x"]))
+                .unwrap_or_else(|e| panic!("{sub}: {e}"));
+        }
+    }
+
+    #[test]
     fn the_ext_protocol_is_never_allowed() {
         for bad in ["ext", "ssh:ext", ""] {
             let mut c = call(Place::InSandbox, &["fetch"]);
@@ -677,6 +824,32 @@ mod tests {
             );
         }
         assert_eq!(git_from_xcode_link(&link).unwrap().path, git);
+    }
+
+    #[test]
+    fn the_active_developer_dir_is_the_links_even_where_its_git_is_refused() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        if !is_root() {
+            eprintln!(
+                "the_active_developer_dir_is_the_links_even_where_its_git_is_refused: needs uid 0; skipped"
+            );
+            return;
+        }
+        let (top, link, _) = devdir_fixture();
+        let dev = top.path().join("dev");
+        assert_eq!(developer_dir_from_link(&link).unwrap(), dev);
+        // Xcode under an admin-writable /Applications: its git is refused, but it is still the selected developer dir
+        // (what a sandbox profile reads)
+        std::fs::set_permissions(&dev, std::fs::Permissions::from_mode(0o775)).unwrap();
+        assert!(git_from_xcode_link(&link).is_err());
+        assert_eq!(developer_dir_from_link(&link).unwrap(), dev);
+        // a relative target is no developer dir
+        let l = link.parent().unwrap().join("rel");
+        symlink("dev", &l).unwrap();
+        assert!(matches!(
+            developer_dir_from_link(&l),
+            Err(FsError::Untrusted { .. })
+        ));
     }
 
     fn is_root() -> bool {

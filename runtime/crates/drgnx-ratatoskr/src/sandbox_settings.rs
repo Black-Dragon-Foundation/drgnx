@@ -29,7 +29,8 @@ const MAX_LINKS: u32 = 40;
 /// What the check and the doctor say where pins cannot hold.
 pub const REDUCED_CANNOT_PIN: &str = "the reduced tier cannot pin .dir-locals.el, .dir-locals-2.el or .drgnx/ \
      read-only in a job's write roots (it has no mount namespace): the review gate guards them, so their code runs \
-     only after you review it";
+     only after you review it; its network is narrowed to the relay's ports, not isolated, and the command lines of \
+     your other processes are readable (it has no pid namespace)";
 
 /// The true paths of `settings.el`, `config.el`, `custom.el`, `described.el` and `workspaces/` in `config_dir`, and of
 /// each of `user_lisp_files` (a relative one is in `config_dir`), for `Context.closed`: a write root that holds one

@@ -7,7 +7,7 @@ Keyboard Shortcuts, `C-k C-r` / `C-h C-k` / `SPC ?`) is the read-only overview.
 
 ## The page
 
-One line per command:
+One line per command, the commands that have a key first (in the registry's order), then those without. The columns fit the window; in the VS Code profile keys are written as VS Code writes them (`Ctrl+K Ctrl+O`):
 
 | Column | What it shows |
 |---|---|
@@ -77,7 +77,13 @@ If the key is taken in the same place, drgnx says by what, and asks:
 
 A **prefix clash** is flagged the same way: the key is the start of another command's key (recording `C-c e` when
 `C-c e C-x` is bound there), another key is the start of it, or it would replace one of Emacs' own prefixes
-(`M-g`). A key bound by Emacs or a package in that place is named too.
+(`M-g`). A key bound by Emacs or a package in that place is named too. Emacs' keys are read as the profile left
+them: recording `C-k C-9` in VS Code keys asks nothing, since the profile already made `C-k` a prefix.
+
+**Your own keys** (bound in `config.el`, or from the keyboard) show on their command's line as `yours (config.el)` or
+`yours (this session)` and are read-only here: **Change** refuses them, a key of yours cannot be taken by another
+command (there is no Replace; the page names the key and the file), and **Reset** leaves them and says so. Change them
+in `config.el`.
 
 ## Terminal mark
 

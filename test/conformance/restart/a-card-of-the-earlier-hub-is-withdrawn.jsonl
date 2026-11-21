@@ -1,0 +1,25 @@
+{"scenario": "restart/a-card-of-the-earlier-hub-is-withdrawn", "requires": ["v1", "test-hooks"], "doc": "M12f-C3-2: a permission request waits on its matrix card when the hub is killed (SIGKILL: a graceful end withdraws it itself); at the next start, before sessions resume, that card is withdrawn (nobody waits on it any more), so it no longer sits among the open cards for ever."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict ask)))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "ask:permission edit"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$capture:req", "kind": "matrix", "title": "code.edit: edit request"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy", "permissions": {"$contains": [{"id": "$req", "options": "$any"}]}}}}, "within_ms": 10000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from card where kind = 'matrix' and state = 'open' and id = $req and json_extract(data, '$.session') = '$sid'", "rows": [[1]]}
+{"do": "kill", "hub": "h", "signal": "KILL"}
+{"do": "expect_exit", "hub": "h", "signal": "KILL", "within_ms": 15000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select state from card where id = $req", "rows": [["open"]]}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "q", "hub": "h2"}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select state from card where id = $req", "rows": [["withdrawn"]]}

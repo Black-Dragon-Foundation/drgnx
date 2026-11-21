@@ -54,7 +54,7 @@ again.  Runs without a hub: no process of the user's, no `~'."
       (should (file-exists-p canary))
       (delete-file canary)
       (drgnx-sandbox-vc-register folder)
-      (let ((file (concat folder "a")) (vc-handled-backends '(Git)) (buf nil))
+      (let ((file (concat folder "a")) (vc-handled-backends '(Git)) (buf nil) (before (process-list)))
         (unwind-protect
             (progn
               (ignore-errors (setq buf (find-file-noselect file)))
@@ -63,7 +63,9 @@ again.  Runs without a hub: no process of the user's, no `~'."
               (ignore-errors (let ((default-directory folder)) (vc-refresh-state)))
               (when (locate-library "magit")
                 (ignore-errors (require 'magit) (let ((default-directory folder)) (magit-status-setup-buffer folder))))
-              (drgnx-test-pause 0.3 "nothing may run git")
+              ;; every git the visit started has ended and every timer due has run: only then is "no git ran the hook" said
+              (drgnx-test-wait-ended (cl-set-difference (process-list) before) :what "the visit's git processes")
+              (drgnx-test-wait (lambda () (not (drgnx-test-wait--due-p))) :what "the visit's timers")
               (should-not (file-exists-p canary)))
           (when (buffer-live-p buf) (kill-buffer buf))
           (when-let* ((b (get-buffer "*vc-dir*"))) (kill-buffer b)))))))
@@ -201,10 +203,29 @@ again.  Runs without a hub: no process of the user's, no `~'."
       (delete-file file)
       (should-not (drgnx-sandbox-vc-folders)))))
 
-(ert-deftest drgnx-sandbox-vc/guard-cost ()
-  :tags '(:timing)                                      ; a quiet machine: bin/drgnx check runs it alone
-  ;; The advice on a non-git program, measured twice: the advice function alone against a no-op (stable), and the
-  ;; whole `call-process' of `true' with and without the mode (10,000 each, blocks interleaved; fork noise dominates).
+(ert-deftest drgnx-sandbox-vc/a-non-git-program-costs-the-guard-one-test-of-its-name ()
+  ;; The structure the cost rests on, counted (the clock is the timing lane's, `guard-cost-timing-run'): for a program
+  ;; that is not git the guard reads no folder list, walks no arguments and hands ORIG its arguments unchanged.
+  (drgnx-sandbox-vc-test--with
+    (let ((folder (concat root "tasks/7-1/")) (reads 0) (walks 0) (seen nil))
+      (make-directory folder t)
+      (drgnx-sandbox-vc-register folder)
+      (cl-letf (((symbol-function 'drgnx-sandbox-vc-folders) (lambda () (cl-incf reads) (list folder)))
+                ((symbol-function 'drgnx-sandbox-vc--guarded-dir) (lambda (&rest _) (cl-incf walks) nil)))
+        (drgnx-sandbox-vc--refuse-git (lambda (&rest args) (push args seen)) "true" nil nil nil "-C" "/")
+        (drgnx-sandbox-vc--refuse-git-region (lambda (&rest args) (push args seen)) 1 1 "true" nil nil nil)
+        (should (= reads 0))
+        (should (= walks 0))
+        (should (equal (reverse seen) '(("true" nil nil nil "-C" "/") (1 1 "true" nil nil nil))))
+        ;; and for git it does both, once
+        (ignore-errors (drgnx-sandbox-vc--refuse-git #'ignore "git" nil nil nil "status"))
+        (should (= reads 1))
+        (should (= walks 1))))))
+
+(ert-deftest drgnx-sandbox-vc/guard-cost-timing-run ()
+  :tags '(:timing)                                      ; a quiet machine: the timing lane (row `drgnx-sandbox') judges it
+  ;; The advice on a non-git program, measured twice and printed, asserted nowhere: the advice function alone against a
+  ;; no-op, and the whole `call-process' of `true' with and without the mode (10,000 each, blocks interleaved).
   (drgnx-sandbox-vc-test--with
     (let ((folder (concat root "tasks/7-1/")))
       (make-directory folder t)
@@ -215,7 +236,7 @@ again.  Runs without a hub: no process of the user's, no `~'."
              (t0 (float-time)) (_ (funcall bare)) (t1 (float-time)) (_ (funcall advised)) (t2 (float-time))
              (micro (/ (- (- t2 t1) (- t1 t0)) n)))
         (message "guard-cost: advice function %.3f us per non-git call" (* 1e6 micro))
-        (should (< (* 1e6 (max micro 0)) 2.0)))
+        (should (numberp micro)))
       (let ((default-directory root) (blocks 10) (per 1000) (with 0.0) (without 0.0)
             (run (byte-compile '(lambda (k) (dotimes (_ k) (call-process "true"))))))
         (dotimes (_ blocks)
@@ -227,7 +248,7 @@ again.  Runs without a hub: no process of the user's, no `~'."
         (message "guard-cost: call-process of true, %d calls each: %.1f us with, %.1f us without, difference %.2f us"
                  (* blocks per) (/ (* 1e6 with) (* blocks per)) (/ (* 1e6 without) (* blocks per))
                  (/ (* 1e6 (- with without)) (* blocks per)))
-        (should (< (/ (* 1e6 (- with without)) (* blocks per)) 100.0))))))   ; fork noise is tens of us: a gross check
+        (should (> with 0.0))))))
 
 (ert-deftest drgnx-sandbox-vc/trusted-binding-allows-the-hubs-own-step ()
   (drgnx-sandbox-vc-test--with

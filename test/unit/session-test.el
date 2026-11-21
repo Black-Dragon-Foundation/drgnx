@@ -8,21 +8,26 @@
 (require 'drgnx)
 (require 'drgnx-session)
 (require 'drgnx-explorer)
+(setq drgnx-explorer--lisp-listing t)       ; the Lisp listing (a remote root's, plan sja-complete Q3): on local folders here
+(require 'drgnx-persist)
 (require 'project)
 (defvar server-client-instructions)
 
 (defmacro drgnx-session-test--with (spec &rest body)
   "BODY with the stubs SPEC asks for, in a temp config dir.
-SPEC: (:keep-running BOOL :daemon BOOL :windows LIST :save FN :unsaved LIST :confirm BOOL :processes LIST)
-— :windows the frames that count as windows, :unsaved the file buffers still changed after the save, :processes
-what `process-list' returns.  Binds KILLED (non-nil once `kill-emacs' ran), DELETED (frames deleted), SAVED (calls
-of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save', then each question's text)."
+SPEC: (:keep-running BOOL :daemon BOOL :windows LIST :save FN :unsaved LIST :still LIST :answer SYM :confirm BOOL
+:processes LIST) — :windows the frames that count as windows, :unsaved the buffers changed when the quit asks (the
+Save / Don't Save / Cancel dialog, answered :answer, default `save', and asked with their names), :still the ones
+still changed after Save (default none), :processes what `process-list' returns.  Binds KILLED (non-nil once
+`kill-emacs' ran), DELETED (frames deleted), SAVED (calls of `save-some-buffers', the unasked save of Save),
+DIALOGS (the names each dialog was asked with, newest first), ASKED (confirmations) and EVENTS (newest first:
+`dialog' for the dialog, `save', then each question's text)."
   (declare (indent 1))
   `(let* ((dir (make-temp-file "drgnx-session-test" t))
           (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
           (drgnx-keep-running ,(plist-get spec :keep-running))
           (drgnx-settings-apply--entries nil)
-          (killed nil) (deleted nil) (saved 0) (asked 0) (events nil))
+          (killed nil) (deleted nil) (saved 0) (asked 0) (events nil) (dialogs nil))
      (unwind-protect
          (cl-letf (((symbol-function 'daemonp) (lambda () ,(plist-get spec :daemon)))
                    ((symbol-function 'drgnx-session--windows) (lambda () ,(plist-get spec :windows)))
@@ -31,19 +36,22 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
                    ((symbol-function 'delete-frame) (lambda (&optional f _force) (push f deleted)))
                    ((symbol-function 'save-some-buffers)
                     (lambda (&rest _) (cl-incf saved) (push 'save events) (funcall (or ,(plist-get spec :save) #'ignore))))
-                   ((symbol-function 'drgnx-session--unsaved-buffers) (lambda () ,(plist-get spec :unsaved)))
+                   ((symbol-function 'drgnx-session--unsaved-buffers)
+                    (lambda () (if (> saved 0) ,(plist-get spec :still) ,(plist-get spec :unsaved))))
+                   ((symbol-function 'drgnx-save-ask)
+                    (lambda (names) (push 'dialog events) (push names dialogs) (or ,(plist-get spec :answer) 'save)))
                    ((symbol-function 'process-list) (lambda () ,(plist-get spec :processes)))
                    ((symbol-function 'yes-or-no-p)
                     (lambda (prompt) (cl-incf asked) (push prompt events) ,(plist-get spec :confirm))))
-           (ignore killed deleted saved asked events)
+           (ignore killed deleted saved asked events dialogs)
            ,@body)
        (drgnx-settings-teardown 'drgnx-session-keep-running)     ; the choice a test saved is not drgnx's value any more
        (delete-directory dir t))))
 
 (ert-deftest drgnx-session/quit-mode-closing-the-last-window-quits ()
-  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list (selected-frame)) :save (lambda () t))
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list (selected-frame)))
     (drgnx-session-close-frame)
-    (should (= saved 1))
+    (should (= saved 0))
     (should killed)
     (should-not deleted)))
 
@@ -78,29 +86,57 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
     (should (eq (lookup-key special-event-map [delete-frame]) #'drgnx-session-close-frame))))
 
 (ert-deftest drgnx-session/unsaved-work-is-never-lost ()
-  ;; C-g in the save question: drgnx stays, the window stays.
-  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list (selected-frame)) :save (lambda () (signal 'quit nil)))
+  ;; C-g while saving: drgnx stays, the window stays.
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list (selected-frame)) :unsaved (list (current-buffer))
+                                           :save (lambda () (signal 'quit nil)))
     (should (eq 'quit (condition-case nil (progn (drgnx-session-close-frame) 'ran) (quit 'quit))))
     (should-not killed)
     (should-not deleted))
   ;; An error while saving (a read-only directory): the same.
-  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :save (lambda () (error "Disk full")))
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer))
+                                           :save (lambda () (error "Disk full")))
     (should-error (drgnx-session-quit))
     (should-not killed))
-  ;; A file kept unsaved, then "no" to quitting without it: drgnx stays.
-  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list 'buf) :confirm nil)
+  ;; Cancel in the dialog: drgnx stays, nothing is saved, no second question.
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer)) :answer 'cancel)
     (drgnx-session-quit)
-    (should (= asked 1))
+    (should (= (length dialogs) 1))
+    (should (= saved 0))
+    (should (= asked 0))
     (should-not killed))
-  ;; …"yes": quits.
-  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list 'buf) :confirm t)
+  ;; Don't Save: quits, nothing saved, no second question.
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer)) :answer 'discard)
     (drgnx-session-quit)
+    (should (= saved 0))
+    (should (= asked 0))
     (should killed))
-  ;; Everything saved: no extra question.
+  ;; Save, a file still unsaved after it (a New Untitled buffer left unnamed): drgnx stays.
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer))
+                                           :still (list (current-buffer)))
+    (drgnx-session-quit)
+    (should (= saved 1))
+    (should-not killed))
+  ;; Save, all written: quits.
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer)))
+    (drgnx-session-quit)
+    (should (= saved 1))
+    (should killed))
+  ;; Nothing changed: no dialog at all.
   (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1))
     (drgnx-session-quit)
+    (should-not dialogs)
     (should (= asked 0))
     (should killed)))
+
+(ert-deftest drgnx-session/quit-asks-one-question-for-all-the-changed-files ()
+  "Several changed files: one dialog naming all of them, not one question per file."
+  (let ((a (generate-new-buffer "quit-a.txt")) (b (generate-new-buffer "quit-b.txt")))
+    (unwind-protect
+        (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list a b) :answer 'discard)
+          (drgnx-session-quit)
+          (should (equal dialogs '(("quit-a.txt" "quit-b.txt"))))
+          (should killed))
+      (kill-buffer a) (kill-buffer b))))
 
 ;; M12a-28: the programs a quit would stop are asked about, once.
 (ert-deftest drgnx-session/quit-asks-once-for-running-processes ()
@@ -113,39 +149,35 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
           ;; "no": asked once, and drgnx stays
           (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes (list p q) :confirm nil)
             (drgnx-session-quit)
-            (should (= saved 1))
             (should (= asked 1))
             (should (string-match-p "\\`1 program is still running (drgnx-session-test-sleep)" (car events)))
             (should-not killed))
           ;; "yes": asked once, quits
           (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes (list p q) :confirm t)
             (drgnx-session-quit)
-            (should (= saved 1))
             (should (= asked 1))
             (should killed))
           ;; a process that does not ask on exit does not count
           (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes (list q) :confirm nil)
             (drgnx-session-quit)
-            (should (= saved 1))
             (should (= asked 0))
             (should killed))
-          ;; unsaved changes and a running program, the first "no": that ends it, the programs are not asked about
-          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list 'buf)
-                                                   :processes (list p) :confirm nil)
+          ;; unsaved changes and a running program, Cancel: that ends it, the programs are not asked about
+          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer))
+                                                   :answer 'cancel :processes (list p) :confirm nil)
             (should-not (drgnx-session-quit-confirm))
-            (should (= saved 1))
-            (should (= asked 1))
-            (should (string-match-p "not saved" (car events))))
-          ;; both "yes": save, then the changes question, then the programs question; then it quits
-          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list 'buf)
+            (should (= asked 0))
+            (should (equal events '(dialog))))
+          ;; Save, then the programs question; then it quits: two questions in all, the dialog first
+          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list (current-buffer))
                                                    :processes (list p q r) :confirm t)
             (drgnx-session-quit)
             (should (= saved 1))
-            (should (= asked 2))
+            (should (= asked 1))
             (should killed)
             (let ((order (reverse events)))
-              (should (eq (nth 0 order) 'save))
-              (should (string-match-p "not saved; quit and lose" (nth 1 order)))
+              (should (eq (nth 0 order) 'dialog))
+              (should (eq (nth 1 order) 'save))
               (should (string-match-p "\\`2 programs are still running" (nth 2 order))))))
       (delete-process p)
       (delete-process q)
@@ -198,9 +230,10 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
         (drgnx-explorer-buffer-name " *drgnx-session-test-explorer*")
         (dir (file-name-as-directory (make-temp-file "drgnx-session-open" t)))
+        (drgnx-session-recent-folders-file (make-temp-file "drgnx-session-recent" nil ".eld"))
         roots asked)
     (unwind-protect
-        (cl-letf (((symbol-function 'read-directory-name) (lambda (&rest _) (setq asked t) dir))
+        (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (setq asked t) dir))   ; a typed path
                   ((symbol-function 'drgnx-session-raise) #'ignore)
                   ((symbol-function 'drgnx-explorer-roots) (lambda () nil))
                   ((symbol-function 'drgnx-explorer-set-roots) (lambda (r) (setq roots r)))
@@ -215,6 +248,71 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
           (drgnx-session-open-folder dir)
           (should-not asked))
       (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+      (delete-file drgnx-session-recent-folders-file)
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-session/open-folder-offers-browse-and-the-recent-folders ()
+  ;; Audit L3: Open Folder… is the palette's box (category drgnx-folder) with Browse… first, then the folders opened
+  ;; last, newest first, without repeats, at most ten; a folder that is gone drops off; a typed folder is taken.
+  (let* ((drgnx-session-recent-folders-file (make-temp-file "drgnx-session-recent" nil ".eld"))
+         (top (file-name-as-directory (make-temp-file "drgnx-session-recent" t)))
+         (dirs (mapcar (lambda (i) (let ((d (file-name-as-directory (expand-file-name (format "d%d" i) top))))
+                                     (make-directory d) d))
+                       (number-sequence 1 12)))
+         seen)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-explorer-open-root) #'ignore)
+                  ((symbol-function 'drgnx-explorer-focus) #'ignore)
+                  ((symbol-function 'drgnx-session-raise) #'ignore)
+                  ((symbol-function 'completing-read)
+                   (lambda (_prompt table &rest _)
+                     (setq seen (list (completion-metadata-get (funcall table "" nil 'metadata) 'category)
+                                      (all-completions "" table)
+                                      (funcall (completion-metadata-get (funcall table "" nil 'metadata)
+                                                                        'affixation-function)
+                                               (all-completions "" table))))
+                     (nth 2 (all-completions "" table)))))
+          (let ((drgnx-explorer-buffer-name " *drgnx-session-test-explorer*"))
+            (get-buffer-create drgnx-explorer-buffer-name)
+            (dolist (d dirs) (drgnx-session-open-folder d))
+            (drgnx-session-open-folder (nth 3 dirs))          ; opened again: first, and listed once
+            (kill-buffer drgnx-explorer-buffer-name))
+          (delete-directory (nth 11 dirs))                     ; gone: dropped
+          (let ((recent (drgnx-session-recent-folders)))
+            (should (equal (car recent) (abbreviate-file-name (nth 3 dirs))))
+            (should (= (length recent) 9))
+            (should-not (member (abbreviate-file-name (nth 11 dirs)) recent))
+            (should (equal (seq-uniq recent) recent))
+            ;; the box: Browse… then the recent folders, in that order
+            (should (equal (drgnx-session-read-folder) (nth 1 recent)))
+            (should (eq (nth 0 seen) 'drgnx-folder))
+            (should (equal (nth 1 seen) (cons "Browse…" recent)))
+            ;; a row shows the folder's name, its parent beside it
+            (let ((row (nth 1 (nth 2 seen))))
+              (should (string-suffix-p " d4" (substring-no-properties (nth 0 row))))
+              (should (string-match-p (regexp-quote (abbreviate-file-name top)) (substring-no-properties (nth 2 row)))))))
+      (delete-file drgnx-session-recent-folders-file)
+      (delete-directory top t))))
+
+(ert-deftest drgnx-session/open-folder-browse-uses-the-folder-dialog ()
+  ;; Audit L3: Browse… opens the desktop's folder dialog in a graphical frame (folders only); a typed path to a folder
+  ;; is taken as it is, and one that is not a folder is refused.
+  (let ((drgnx-session-recent-folders-file (make-temp-file "drgnx-session-recent" nil ".eld"))
+        (dir (file-name-as-directory (make-temp-file "drgnx-session-browse" t)))
+        (answer "Browse…") dialog)
+    (unwind-protect
+        (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) answer))
+                  ((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+                  ((symbol-function 'x-file-dialog)
+                   (lambda (_prompt _dir &optional _default mustmatch only-dir) (setq dialog (list mustmatch only-dir)) dir)))
+          (should (equal (drgnx-session-read-folder) dir))
+          (should (equal dialog '(t t)))
+          (setq answer (directory-file-name dir) dialog nil)
+          (should (equal (drgnx-session-read-folder) (directory-file-name dir)))
+          (should-not dialog)
+          (setq answer (expand-file-name "no-such-folder" dir))
+          (should-error (drgnx-session-read-folder) :type 'user-error))
+      (delete-file drgnx-session-recent-folders-file)
       (delete-directory dir t))))
 
 (ert-deftest drgnx-session/a-folder-opened-in-a-terminal-frame-opens-there ()
@@ -285,9 +383,9 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
                 (should (equal (expand-file-name (project-root p)) b))
                 (should (member (expand-file-name "café.py" b) (project-files p)))))
             (should (drgnx-wb-sidebar-showing-p))
-            ;; the other folder: first now, the first one stays
+            ;; the other folder: the only one now, as `code DIR'
             (drgnx-session-open-folder a)
-            (should (equal (drgnx-explorer-roots) (list a b)))
+            (should (equal (drgnx-explorer-roots) (list a)))
             (with-current-buffer (window-buffer (selected-window))
               (should (equal (expand-file-name (project-root (project-current nil))) a))))
         (when (buffer-live-p buf) (kill-buffer buf))
@@ -297,23 +395,82 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
         (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
         (delete-directory root t)))))
 
+(ert-deftest drgnx-session/an-opened-folder-replaces-the-folder-drgnx-chose ()
+  :tags '(:cond)
+  ;; `drgnx DIR' as `code DIR': the folder the Explorer took by itself at the start (the editor's folder, here the
+  ;; home-like H) goes, and the restart does not bring it back; so does a folder opened before: DIR is the only one.
+  ;; Add Folder to Workspace adds one; Remove Folder from Workspace takes one out.  Every window showing the Explorer then shows DIR's root row at its top.
+  (drgnx-test-with-state
+    (let* ((root (file-name-as-directory (make-temp-file "drgnx-session-only" t)))
+           (home (file-name-as-directory (expand-file-name "home" root)))
+           (a (drgnx-session-test--repo root "projA" "a.py"))
+           (b (drgnx-session-test--repo root "projB" "b.py"))
+           (project-list-file (expand-file-name "projects" root))
+           (drgnx-wb--sections nil) (drgnx-explorer--roots nil) (drgnx-explorer--default-roots nil)
+           buf)
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-session-raise) #'ignore))
+            (dotimes (i 300) (make-directory (expand-file-name (format "d%03d" i) home) t))
+            (delete-other-windows)
+            (drgnx-explorer-setup)
+            (setq buf (find-file-noselect (expand-file-name "notes.txt" home)))
+            (switch-to-buffer buf)
+            (drgnx-wb-show-sidebar)
+            (should (equal (drgnx-explorer-roots) (list home)))           ; the start: the editor's folder
+            (let ((w (drgnx-wb-section-window 'explorer)))
+              (should w)
+              ;; the user scrolled far down home's rows
+              (with-current-buffer drgnx-explorer-buffer-name
+                (let ((deep (save-excursion (goto-char (point-min)) (forward-line 250) (point))))
+                  (set-window-start w deep) (set-window-point w deep)))
+              (drgnx-session-open-folder (directory-file-name b))
+              (should (equal (drgnx-explorer-roots) (list b)))            ; DIR is the only folder: home went
+              (should (= (window-start w) (with-current-buffer drgnx-explorer-buffer-name (point-min))))
+              (should (equal (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer-node-at (window-point w)))
+                             (directory-file-name b))))
+            (drgnx-session-open-folder a)                                 ; the opened folder goes too: one root
+            (should (equal (drgnx-explorer-roots) (list a)))
+            (drgnx-explorer-add-folder b)                                 ; Add Folder to Workspace: a second root
+            (should (equal (drgnx-explorer-roots) (list a b)))
+            (should (equal (plist-get (drgnx-persist--workbench-state nil) :roots) (list a b)))
+            ;; Remove Folder from Workspace on b's root row
+            (with-current-buffer drgnx-explorer-buffer-name
+              (goto-char (point-min))
+              (while (not (equal (drgnx-explorer-node-at (point)) (directory-file-name b))) (forward-line 1))
+              (drgnx-explorer-remove-folder))
+            (should (equal (drgnx-explorer-roots) (list a))))
+        (when (buffer-live-p buf) (kill-buffer buf))
+        (drgnx-wb-hide-sidebar)
+        (delete-other-windows)
+        (drgnx-explorer-set-roots nil)
+        (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+        (delete-directory root t)))))
+
+(ert-deftest drgnx-session/the-folder-drgnx-chose-is-not-saved ()
+  ;; The layout file keeps only the folders the user opened: the one the Explorer took at the start is worked out
+  ;; again at the next start.
+  (let ((drgnx-explorer--roots '("/w/a/" "/start/")) (drgnx-explorer--default-roots '("/start/")))
+    (should (equal (drgnx-explorer-chosen-roots) '("/w/a/")))
+    (should (equal (plist-get (drgnx-persist--workbench-state nil) :roots) '("/w/a/")))))
+
 (ert-deftest drgnx-session/an-unsaved-untitled-buffer-is-offered-and-never-lost ()
-  ;; Nothing of drgnx-session stubbed: the real `save-some-buffers' offers New Untitled's buffer (its question,
-  ;; `map-y-or-n-p', records the buffers and declines), the buffer still counts as unsaved, "no" keeps drgnx.
+  ;; Nothing of drgnx-session stubbed but the dialog and `kill-emacs': New Untitled's buffer is named in the one
+  ;; question, Cancel keeps drgnx, and where nobody can answer (batch) the answer is Cancel unasked.
   (load (expand-file-name "modules/core/drgnx-basics" drgnx-dir) nil t)
-  (let ((u (drgnx-basics-new-untitled)) offered killed (asked 0))
+  (let ((u (drgnx-basics-new-untitled)) offered killed)
     (unwind-protect
         (progn
           (with-current-buffer u (insert "typed, never saved"))
-          (cl-letf (((symbol-function 'map-y-or-n-p) (lambda (_prompter _actor list &rest _) (setq offered list) 0))
-                    ((symbol-function 'yes-or-no-p) (lambda (&rest _) (cl-incf asked) nil))
+          (cl-letf (((symbol-function 'drgnx-save-ask) (lambda (names) (setq offered names) 'cancel))
                     ((symbol-function 'kill-emacs) (lambda (&rest _) (setq killed t))))
             (drgnx-session-quit))
-          (should (memq u offered))
+          (should (member (buffer-name u) offered))
           (should (memq u (drgnx-session--unsaved-buffers)))
-          (should (= asked 1))
           (should-not killed)
-          (should (buffer-live-p u)))
+          (should (buffer-live-p u))
+          (cl-letf (((symbol-function 'kill-emacs) (lambda (&rest _) (setq killed t))))
+            (drgnx-session-quit))                          ; batch: nobody can answer
+          (should-not killed))
       (with-current-buffer u (set-buffer-modified-p nil))
       (kill-buffer u))))
 
@@ -341,24 +498,35 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
 
 (ert-deftest drgnx-session/running-programs-refreshes-terminal-query-flags-first ()
   :tags '(:cond)
-  ;; A terminal's flag is set by its module (a shell asks, an idle prompt does not); the quit question asks the module
-  ;; to bring the flags up to date first — when the module is there.
+  ;; A terminal's flag is set by its module (a shell asks, an idle prompt does not); the quit question runs the
+  ;; modules' functions first, so a flag they set counts, and the names they return are listed too.
   (let ((p (make-process :name "drgnx-session-test-term" :command '("sleep" "30") :noquery t)))
     (unwind-protect
         (progn
-          (should-not (memq p (drgnx-session--running-programs)))                  ; no terminal module: as it was
-          (cl-letf (((symbol-function 'drgnx-terminal-eat-refresh-query-flags)
-                     (lambda () (set-process-query-on-exit-flag p t))))
-            (should (memq p (drgnx-session--running-programs)))))
+          (let ((drgnx-session-running-functions nil))
+            (should-not (member "drgnx-session-test-term" (drgnx-session--running-names))))   ; no module: as it was
+          (let ((drgnx-session-running-functions
+                 (list (lambda () (set-process-query-on-exit-flag p t) nil) (lambda () '("*terminal*")))))
+            (let ((names (drgnx-session--running-names)))
+              (should (member "drgnx-session-test-term" names))
+              (should (member "*terminal*" names)))))
       (delete-process p))))
 
 (ert-deftest drgnx-session/a-failing-terminal-refresh-does-not-stop-the-quit-question ()
   :tags '(:cond)
   (let ((p (make-process :name "drgnx-session-test-term2" :command '("sleep" "30") :noquery nil)))
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-terminal-eat-refresh-query-flags) (lambda () (error "eat is gone"))))
-          (should (memq p (drgnx-session--running-programs))))
+        (let ((drgnx-session-running-functions (list (lambda () (error "the terminal is gone")))))
+          (should (member "drgnx-session-test-term2" (drgnx-session--running-names))))
       (delete-process p))))
+
+(ert-deftest drgnx-session/quit-question-names-terminal-programs ()
+  ;; a program in drgnx's terminal is no Emacs process: the question names it from the terminal's function
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes nil :confirm nil)
+    (let ((drgnx-session-running-functions (list (lambda () '("*terminal*")))))
+      (should-not (drgnx-session-quit-confirm))
+      (should (= asked 1))
+      (should (string-match-p "1 program is still running (\\*terminal\\*)" (car events))))))
 
 
 (ert-deftest drgnx-session/windows-ask-the-classifier ()

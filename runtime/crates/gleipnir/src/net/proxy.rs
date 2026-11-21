@@ -1,30 +1,144 @@
-//! The CONNECT-only allowlist proxy: exact `host:port` entries, one resolution, no TLS termination (Task 10).
+//! The proxy outside the sandbox: one resolution per request, no TLS termination, and a policy per instance (Task 10).
 //!
-//! One proxy per job, listening on every session socket of that job ([`ProxyHandle::listen`], each with a tag), with
-//! one allowlist they share. It answers `CONNECT host:port` only; a listed target gets `200` and the bytes are spliced
-//! both ways as they are. Everything else is refused, and the caller hears of it through [`ProxyEvent`]: `Denied`
-//! for a target that could be offered on a card, `Refused` for one that never may (a private address, a wildcard, a
-//! malformed request). See docs/develop/gleipnir.md, "The proxy".
+//! One proxy per job, listening on every session socket of that job ([`ProxyHandle::listen`], each with a tag), or on
+//! the streams a container's relay channel hands over ([`Listener::Streams`]), with one policy they share. Under [`Policy::Allowlist`] (the provider proxy) it answers `CONNECT host:port` only, to exact
+//! listed targets. Under [`Policy::Web`] (a browser session's web proxy) it judges by `net::policy` and also forwards
+//! plain-HTTP absolute-form requests in origin-form. Under [`Policy::Job`] (a container job's) only
+//! `host.drgnx.internal:PORT` goes to the web rules; everything else is the allow-list's. An allowed target's bytes are spliced both ways as they are.
+//! Everything else is refused, and the caller hears of it through [`ProxyEvent`]. See docs/develop/gleipnir.md, "The
+//! proxy".
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UnixListener};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinSet};
 
 use super::host::{Host, Target, TargetError, is_public, parse_target};
+use super::policy::{
+    Class, HostAddrs, Judgement, NeverSet, Pre, PrivateGrant, WebCtx, judge, pre_resolve,
+};
+
+/// Which rules a proxy runs.
+#[derive(Debug, Clone, Default)]
+pub enum Policy {
+    /// Exact `host:port` entries ([`ProxyConfig::allow`], [`ProxyConfig::pinned`]), CONNECT only: the provider
+    /// proxy, as it always was.
+    #[default]
+    Allowlist,
+    /// The web policy (`net::policy`) on the state the caller keeps changing; CONNECT and plain-HTTP absolute-form.
+    /// `allow` and `pinned` are not read.
+    Web(Arc<WebState>),
+    /// A container job's proxy: [`Policy::Allowlist`] for every target but `host.drgnx.internal:PORT`, which the web
+    /// rules judge on the state (its `browser.private` grants of that name, the never-set; `browser.web` stays off and
+    /// no web hosts or deny list are set). Absolute-form only for that name; every listed target stays CONNECT only.
+    Job(Arc<WebState>),
+}
+
+/// Whether TARGET goes to the web rules under POLICY (else to the allow-list).
+pub(crate) fn by_web_rules(policy: &Policy, target: &Target) -> bool {
+    match policy {
+        Policy::Allowlist => false,
+        Policy::Web(_) => true,
+        Policy::Job(_) => {
+            matches!(&target.host, Host::Name(n) if n == crate::net::policy::RESERVED_HOST)
+        }
+    }
+}
+
+/// What the web policy is judged on, read afresh at each request; the setters take effect on the next one.
+#[derive(Debug, Default)]
+pub struct WebState {
+    web: AtomicBool,
+    /// Public `host:port`s open while `web` is off (a `browser.web` once grant names one), each until it expires.
+    web_hosts: RwLock<Vec<(Target, Option<f64>)>>,
+    grants: RwLock<Vec<PrivateGrant>>,
+    deny_hosts: RwLock<Vec<String>>,
+    host_addrs: Arc<RwLock<HostAddrs>>,
+    never: Arc<RwLock<NeverSet>>,
+}
+
+impl WebState {
+    /// `browser.web` off, no grants, no deny list; the host's addresses and the hub's endpoints are the caller's,
+    /// shared with every session's state and kept live there.
+    pub fn new(host_addrs: Arc<RwLock<HostAddrs>>, never: Arc<RwLock<NeverSet>>) -> Self {
+        WebState {
+            host_addrs,
+            never,
+            ..WebState::default()
+        }
+    }
+
+    /// Whether `browser.web` is granted.
+    pub fn set_web(&self, on: bool) {
+        self.web.store(on, Ordering::SeqCst);
+    }
+
+    /// Public targets judged as if `browser.web` were granted while it is not, each exactly (`host:port`) until its
+    /// expiry (Unix seconds; `None`: until replaced), replacing the last list. Everything else the web policy says
+    /// still holds for them (ports 80 and 443, the hard nevers, the deny list).
+    pub fn set_web_hosts(&self, hosts: Vec<(Target, Option<f64>)>) {
+        *write(&self.web_hosts) = hosts;
+    }
+
+    /// The live `browser.private` grants, replacing the last list.
+    pub fn set_grants(&self, grants: Vec<PrivateGrant>) {
+        *write(&self.grants) = grants;
+    }
+
+    /// The user's deny list (`agents-browser-deny-hosts`), replacing the last one.
+    pub fn set_deny_hosts(&self, hosts: Vec<String>) {
+        *write(&self.deny_hosts) = hosts;
+    }
+
+    /// Whether public targets are open now: `browser.web`, else `target` alone through a live web host.
+    fn web_for(&self, target: &Target, now: f64) -> bool {
+        self.web.load(Ordering::SeqCst)
+            || read(&self.web_hosts)
+                .iter()
+                .any(|(t, e)| t == target && e.is_none_or(|e| now < e))
+    }
+
+    /// `f` on a context of the state as it is now for `target` (Unix seconds for `now`). No lock is held past `f`.
+    fn with_ctx<R>(&self, target: &Target, f: impl FnOnce(&WebCtx) -> R) -> R {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64());
+        let web = self.web_for(target, now);
+        let (grants, deny) = (read(&self.grants), read(&self.deny_hosts));
+        let (host_addrs, never) = (read(&self.host_addrs), read(&self.never));
+        f(&WebCtx {
+            web,
+            deny_hosts: &deny,
+            grants: &grants,
+            now,
+            host_addrs: &host_addrs,
+            never: &never,
+        })
+    }
+}
+
+/// A poisoned lock still holds a whole value here (each is replaced in one assignment), so it is used as it is.
+fn read<T>(l: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    l.read().unwrap_or_else(|e| e.into_inner())
+}
+fn write<T>(l: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    l.write().unwrap_or_else(|e| e.into_inner())
+}
 
 /// What a proxy allows and how much it takes.
 #[derive(Debug, Clone)]
 pub struct ProxyConfig {
+    /// The rules; [`Policy::Allowlist`] by default.
+    pub policy: Policy,
     /// The allowlist at the start: exact targets, no wildcards.
     pub allow: Vec<Target>,
     /// Names resolved to a fixed address instead of asking DNS. Only a pinned name reaches an address that is not
@@ -36,32 +150,64 @@ pub struct ProxyConfig {
     pub head_timeout: Duration,
     /// The most client connections at once, over every listener.
     pub max_conns: usize,
+    /// How long one upstream connect attempt may take; one that takes longer counts as that address failing.
+    pub connect_timeout: Duration,
+    /// How long a spliced tunnel may carry no byte in either direction before it is ended and its place freed.
+    pub idle_timeout: Duration,
 }
 
 impl Default for ProxyConfig {
     fn default() -> Self {
         ProxyConfig {
+            policy: Policy::Allowlist,
             allow: Vec::new(),
             pinned: Vec::new(),
             max_head: 8192,
             head_timeout: Duration::from_secs(10),
             max_conns: 64,
+            connect_timeout: Duration::from_secs(10),
+            idle_timeout: Duration::from_secs(15 * 60),
         }
     }
 }
 
-/// What the proxy refused, each said at most once per target per tag. The tag names the listener, so the session.
+/// What the proxy refused or reached, each said at most once per target (or host) per tag. The tag names the
+/// listener, so the session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProxyEvent {
-    /// A well-formed public target that is not on the allowlist: the caller may ask the user.
+    /// [`Policy::Allowlist`]: a well-formed public target that is not on the allowlist: the caller may ask the user.
     Denied { tag: u64, target: Target },
-    /// A request that is never offered: `target` is the normal form for `Private`, else the request's target with
-    /// every byte outside printable ASCII escaped (at most 256 bytes of it; empty when there was none).
+    /// A request that is never offered: `target` is the normal form for a well-formed target, else the request's
+    /// target with every byte outside printable ASCII escaped (at most 256 bytes of it; empty when there was none).
     Refused {
         tag: u64,
         target: String,
         why: RefuseWhy,
     },
+    /// [`Policy::Web`]: a public target while `browser.web` is not granted (the card's question).
+    WebOff { tag: u64, target: Target },
+    /// [`Policy::Web`]: a private target no grant opens (the card's question): what was asked, and where it leads.
+    Private {
+        tag: u64,
+        asked: Target,
+        addr: SocketAddr,
+        class: Class,
+    },
+    /// [`Policy::Web`]: a host connected to, once per host: its name or its address, without the port.
+    Reached { tag: u64, host: String },
+}
+
+impl ProxyEvent {
+    /// The listener's tag.
+    pub fn tag(&self) -> u64 {
+        match self {
+            ProxyEvent::Denied { tag, .. }
+            | ProxyEvent::Refused { tag, .. }
+            | ProxyEvent::WebOff { tag, .. }
+            | ProxyEvent::Private { tag, .. }
+            | ProxyEvent::Reached { tag, .. } => *tag,
+        }
+    }
 }
 
 /// Why a request was refused without a card.
@@ -75,13 +221,39 @@ pub enum RefuseWhy {
     BadRequest,
     /// A target with a byte outside printable ASCII (a NUL, a U-label).
     NotAscii,
+    /// The web policy: a hard never (a metadata address or name, `0/8`, `::`, multicast, broadcast, `240/4`, another
+    /// reserved range, a hub endpoint), under any grant.
+    Never,
+    /// The web policy: a public target on a port other than 80 and 443.
+    Port,
+    /// The web policy: an IPv6 address that carries a private IPv4 one (mapped, NAT64, 6to4, …).
+    Embedded,
+    /// The web policy: a loopback spelling or one of the host's own addresses, which only `host.drgnx.internal`
+    /// reaches.
+    Loopback,
+    /// The web policy: on the user's deny list.
+    DenyListed,
+    /// The web policy: a name whose private answer a grant covers, but no grant names the name (DNS rebinding).
+    Rebound,
 }
 
-/// A socket the proxy accepts clients on: a Unix socket on Linux, `127.0.0.1:0` on macOS.
+/// A socket the proxy accepts clients on: a Unix socket on Linux, `127.0.0.1:0` on macOS, or the streams a
+/// container's relay channel hands over.
 #[derive(Debug)]
 pub enum Listener {
     Unix(UnixListener),
     Tcp(TcpListener),
+    /// Streams relayed from a container's sidecar. A closed channel ends the listener, and its connections with it,
+    /// as [`ProxyHandle::close`] does.
+    Streams(mpsc::Receiver<Relayed>),
+}
+
+/// One relayed stream: its bytes, and `gone`, which resolves when the owner drops its sender (the stream closed or
+/// the channel ended). The proxy then drops the connection at once, whatever it was doing, and frees its place.
+#[derive(Debug)]
+pub struct Relayed {
+    pub io: tokio::io::DuplexStream,
+    pub gone: oneshot::Receiver<()>,
 }
 
 /// Resolves a name to addresses. The proxy asks once per request and connects only to what it got.
@@ -113,8 +285,9 @@ impl Resolver for SystemResolver {
 }
 
 /// How the proxy opens an upstream connection; tests substitute one that records and redirects.
-type Connect = Arc<dyn Fn(SocketAddr) -> Connecting + Send + Sync>;
-type Connecting = Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send>>;
+pub type Connect = Arc<dyn Fn(SocketAddr) -> Connecting + Send + Sync>;
+/// An upstream connection being opened.
+pub type Connecting = Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send>>;
 
 fn tcp_connect(a: SocketAddr) -> Connecting {
     Box::pin(TcpStream::connect(a))
@@ -122,16 +295,21 @@ fn tcp_connect(a: SocketAddr) -> Connecting {
 
 /// What every listener of one proxy shares.
 struct Shared {
+    policy: Policy,
     allow: Mutex<HashSet<Target>>,
     /// Names in normal form (lower case, no trailing dot).
     pinned: Vec<(String, IpAddr)>,
     max_head: usize,
     head_timeout: Duration,
     max_conns: usize,
+    connect_timeout: Duration,
+    idle_timeout: Duration,
     conns: AtomicUsize,
     resolver: Arc<dyn Resolver>,
     connect: Connect,
     events: mpsc::Sender<ProxyEvent>,
+    /// Events dropped because the owner's channel was full (a reader that stopped draining).
+    dropped_events: AtomicUsize,
     /// The events sent already, so each is sent once.
     said: Mutex<HashSet<ProxyEvent>>,
     /// Each tag's accept loops; aborting one drops its listener and its connections with it.
@@ -152,6 +330,17 @@ pub fn start(
     start_with(cfg, resolver, events, Arc::new(tcp_connect))
 }
 
+/// [`start`] with the upstream connections opened by `connect` (the escape fixture redirects "public" addresses).
+#[cfg(any(feature = "test-hooks", feature = "escape-fixture"))]
+pub fn start_for_tests(
+    cfg: ProxyConfig,
+    resolver: Arc<dyn Resolver>,
+    events: mpsc::Sender<ProxyEvent>,
+    connect: Connect,
+) -> ProxyHandle {
+    start_with(cfg, resolver, events, connect)
+}
+
 fn start_with(
     cfg: ProxyConfig,
     resolver: Arc<dyn Resolver>,
@@ -165,12 +354,16 @@ fn start_with(
         .collect();
     ProxyHandle {
         shared: Arc::new(Shared {
+            policy: cfg.policy,
             allow: Mutex::new(cfg.allow.into_iter().collect()),
             pinned,
             max_head: cfg.max_head,
             head_timeout: cfg.head_timeout,
             max_conns: cfg.max_conns,
+            connect_timeout: cfg.connect_timeout,
+            idle_timeout: cfg.idle_timeout,
             conns: AtomicUsize::new(0),
+            dropped_events: AtomicUsize::new(0),
             resolver,
             connect,
             events,
@@ -181,6 +374,11 @@ fn start_with(
 }
 
 impl ProxyHandle {
+    /// How many events were dropped because the events channel was full. A refused client never waits for a reader.
+    pub fn dropped_events(&self) -> usize {
+        self.shared.dropped_events.load(Ordering::SeqCst)
+    }
+
     /// Accepts clients on `listener`; their events carry `tag`.
     pub fn listen(&self, listener: Listener, tag: u64) {
         let task = tokio::spawn(serve(self.shared.clone(), listener, tag));
@@ -198,8 +396,14 @@ impl ProxyHandle {
         {
             task.abort();
         }
-        lock(&self.shared.said).retain(|e| match e {
-            ProxyEvent::Denied { tag: t, .. } | ProxyEvent::Refused { tag: t, .. } => *t != tag,
+        lock(&self.shared.said).retain(|e| e.tag() != tag);
+    }
+
+    /// Lets the questions of `tag` (its `WebOff` and `Private` events) be said again: the caller's answer changed
+    /// (a card settled, a grant ended), so the next refusal of a target asks anew. The other events stay said once.
+    pub fn forget_questions(&self, tag: u64) {
+        lock(&self.shared.said).retain(|e| {
+            e.tag() != tag || !matches!(e, ProxyEvent::WebOff { .. } | ProxyEvent::Private { .. })
         });
     }
 
@@ -240,13 +444,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Client for T {}
 struct Slot(Arc<Shared>);
 
 impl Slot {
-    #[allow(
-        deprecated,
-        reason = "fetch_update is deprecated since 1.99 as an alias of try_update, which needs 1.95 (MSRV 1.88)"
-    )]
     fn take(sh: &Arc<Shared>) -> Option<Slot> {
         sh.conns
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                 (n < sh.max_conns).then_some(n + 1)
             })
             .ok()
@@ -261,22 +461,32 @@ impl Drop for Slot {
 }
 
 /// The accept loop of one listener. Its connections live in its `JoinSet`, so aborting it ends them too.
-async fn serve(sh: Arc<Shared>, listener: Listener, tag: u64) {
+async fn serve(sh: Arc<Shared>, mut listener: Listener, tag: u64) {
     let mut conns = JoinSet::new();
     loop {
         tokio::select! {
-            accepted = accept(&listener) => match accepted {
-                Ok(client) => {
+            accepted = accept(&mut listener) => match accepted {
+                Ok(Some((client, gone))) => {
                     // the place is taken here, in accept order, so the cap holds however the tasks run
                     let slot = Slot::take(&sh);
                     let sh = sh.clone();
-                    conns.spawn(async move {
+                    let work = async move {
                         match slot {
                             Some(slot) => handle(sh, client, tag, slot).await,
                             None => answer(client, FORBIDDEN).await,
                         }
+                    };
+                    // a relayed client that is gone ends its work wherever it is (the head, the resolve, the
+                    // connects, the copy), dropping the upstream and the place with it
+                    conns.spawn(async move {
+                        tokio::select! {
+                            () = work => {}
+                            () = gone => {}
+                        }
                     });
                 }
+                // a relay channel that ended: its connections end with the loop
+                Ok(None) => return,
                 // out of fds and the like: wait a little rather than spin
                 Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
             },
@@ -285,11 +495,26 @@ async fn serve(sh: Arc<Shared>, listener: Listener, tag: u64) {
     }
 }
 
-async fn accept(listener: &Listener) -> io::Result<Box<dyn Client>> {
-    Ok(match listener {
-        Listener::Unix(l) => Box::new(l.accept().await?.0),
-        Listener::Tcp(l) => Box::new(l.accept().await?.0),
-    })
+/// Resolves when a client is gone: a relayed stream's `gone`; never for a socket client.
+type Gone = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+/// The next client and when it is gone; `None` when a relay channel has ended.
+async fn accept(listener: &mut Listener) -> io::Result<Option<(Box<dyn Client>, Gone)>> {
+    let never = || -> Gone { Box::pin(std::future::pending()) };
+    let client: (Box<dyn Client>, Gone) = match listener {
+        Listener::Unix(l) => (Box::new(l.accept().await?.0), never()),
+        Listener::Tcp(l) => (Box::new(l.accept().await?.0), never()),
+        Listener::Streams(rx) => {
+            let Some(Relayed { io, gone }) = rx.recv().await else {
+                return Ok(None);
+            };
+            let gone: Gone = Box::pin(async move {
+                let _ = gone.await;
+            });
+            (Box::new(io), gone)
+        }
+    };
+    Ok(Some(client))
 }
 
 const FORBIDDEN: &str = "403 Forbidden";
@@ -305,10 +530,15 @@ async fn answer(mut client: Box<dyn Client>, status: &str) {
 }
 
 /// Sends `event` unless it was sent before. It goes before the client's answer, so a refused client implies a queued
-/// event.
+/// event, unless the channel was full (then it is dropped and counted).
 async fn say(sh: &Shared, event: ProxyEvent) {
     if lock(&sh.said).insert(event.clone()) {
-        let _ = sh.events.send(event).await;
+        // never waits: a reader that stopped draining must not hold refused clients (and their places). A dropped
+        // event is counted, and forgotten as said so that a repeat can say it again.
+        if let Err(mpsc::error::TrySendError::Full(e)) = sh.events.try_send(event) {
+            lock(&sh.said).remove(&e);
+            sh.dropped_events.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -380,11 +610,169 @@ pub fn fuzz_connect_head(buf: &[u8]) -> Option<&[u8]> {
     connect_request(&buf[..end])
 }
 
+/// A plain-HTTP request in absolute-form, as the web policy forwards it.
+pub(crate) struct Absolute<'a> {
+    method: &'a [u8],
+    /// The target's text: the URI's `host[:port]`, with `:80` added when it names no port.
+    target: Vec<u8>,
+    /// The origin-form request target: the URI's path and query, `/` when it has no path.
+    path: Vec<u8>,
+    version: &'a [u8],
+    /// The header lines that go upstream, each without its CRLF.
+    kept: Vec<&'a [u8]>,
+}
+
+/// An HTTP token character (RFC 9110 §5.6.2).
+fn tchar(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&c)
+}
+
+/// `b` split at each CRLF.
+fn crlf_lines(mut b: &[u8]) -> Vec<&[u8]> {
+    let mut lines = Vec::new();
+    while let Some(i) = b.windows(2).position(|w| w == b"\r\n") {
+        lines.push(&b[..i]);
+        b = &b[i + 2..];
+    }
+    lines.push(b);
+    lines
+}
+
+/// `head` (the bytes before the blank line) as `METHOD http://HOST[:PORT][/PATH] HTTP/1.x`, one space each, and its
+/// header lines. `None` for anything else: another scheme (`https://` among them), userinfo, a fragment, an obsolete
+/// line folding, a bare CR or LF, a NUL, a byte outside printable ASCII in the request target, a header line that is
+/// not `name: value`. The received `Host`, `Connection` and every name it lists, `Keep-Alive`, `TE`, `Upgrade` and
+/// `Proxy-*` are not kept.
+pub(crate) fn absolute_request(head: &[u8]) -> Option<Absolute<'_>> {
+    let lines = crlf_lines(head);
+    if lines
+        .iter()
+        .any(|l| l.iter().any(|&c| matches!(c, b'\r' | b'\n' | 0)))
+    {
+        return None;
+    }
+    let parts: Vec<&[u8]> = lines[0].split(|&c| c == b' ').collect();
+    let &[method, uri, version] = parts.as_slice() else {
+        return None;
+    };
+    if method.is_empty()
+        || !method.iter().all(|&c| tchar(c))
+        || !matches!(version, b"HTTP/1.1" | b"HTTP/1.0")
+    {
+        return None;
+    }
+    let rest = uri
+        .get(..7)
+        .filter(|s| s.eq_ignore_ascii_case(b"http://"))
+        .map(|_| &uri[7..])?;
+    if rest.contains(&b'#') || !rest.iter().all(|c| (0x21..=0x7e).contains(c)) {
+        return None;
+    }
+    let cut = rest
+        .iter()
+        .position(|&c| c == b'/' || c == b'?')
+        .unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(cut);
+    if authority.is_empty() || authority.contains(&b'@') {
+        return None;
+    }
+    let after_v6 = authority
+        .iter()
+        .rposition(|&c| c == b']')
+        .map_or(authority, |i| &authority[i + 1..]);
+    let mut target = authority.to_vec();
+    if !after_v6.contains(&b':') {
+        target.extend_from_slice(b":80");
+    }
+    let path = match path.first() {
+        None => b"/".to_vec(),
+        Some(b'?') => [&b"/"[..], path].concat(),
+        Some(_) => path.to_vec(),
+    };
+
+    let mut named: Vec<(Vec<u8>, &[u8])> = Vec::new();
+    for line in &lines[1..] {
+        let colon = line.iter().position(|&c| c == b':')?;
+        let name = &line[..colon];
+        if name.is_empty() || !name.iter().all(|&c| tchar(c)) {
+            return None;
+        }
+        named.push((name.to_ascii_lowercase(), line));
+    }
+    let listed: HashSet<Vec<u8>> = named
+        .iter()
+        .filter(|(n, _)| n == b"connection")
+        .flat_map(|(_, line)| line[b"connection:".len()..].split(|&c| c == b','))
+        .map(|t| t.trim_ascii().to_ascii_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let kept = named
+        .into_iter()
+        .filter(|(n, _)| {
+            !(n.starts_with(b"proxy-")
+                || matches!(
+                    n.as_slice(),
+                    b"host" | b"connection" | b"keep-alive" | b"te" | b"upgrade"
+                )
+                || listed.contains(n))
+        })
+        .map(|(_, line)| line)
+        .collect();
+    Some(Absolute {
+        method,
+        target,
+        path,
+        version,
+        kept,
+    })
+}
+
+/// The head that goes upstream: origin-form, `Host` from the target (without the port when it is 80), the kept
+/// headers in their order, `Connection: close`, the blank line.
+fn rewrite(a: &Absolute, target: &Target) -> Vec<u8> {
+    let host = match (&target.host, target.port) {
+        (Host::Name(n), 80) => n.clone(),
+        (Host::V4(v4), 80) => v4.to_string(),
+        (Host::V6(v6), 80) => format!("[{v6}]"),
+        _ => target.to_string(),
+    };
+    let mut out = Vec::with_capacity(256);
+    let line: [&[u8]; 8] = [
+        a.method,
+        b" ",
+        &a.path,
+        b" ",
+        a.version,
+        b"\r\nHost: ",
+        host.as_bytes(),
+        b"\r\n",
+    ];
+    for part in line {
+        out.extend_from_slice(part);
+    }
+    for line in &a.kept {
+        out.extend_from_slice(line);
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(b"Connection: close\r\n\r\n");
+    out
+}
+
+/// For the `absolute_head` fuzz target: the head's end as [`read_head`] finds it, [`absolute_request`], the target
+/// through `parse_target`, then the rewritten head.
+#[cfg(feature = "fuzzing")]
+pub fn fuzz_absolute_head(buf: &[u8]) -> Option<Vec<u8>> {
+    let end = buf.windows(4).position(|w| w == b"\r\n\r\n")?;
+    let a = absolute_request(&buf[..end])?;
+    let target = parse_target(std::str::from_utf8(&a.target).ok()?).ok()?;
+    Some(rewrite(&a, &target))
+}
+
 /// One client: its head, the checks, the upstream, the splice.
 async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: Slot) {
     let mut buf = vec![0u8; sh.max_head];
     let (head, len) =
-        match tokio::time::timeout(sh.head_timeout, read_head(&mut client, &mut buf)).await {
+        match drgnx_clock::timeout(sh.head_timeout, read_head(&mut client, &mut buf)).await {
             Ok(r) => r,
             // too slow is refused like too large
             Err(_) => (Head::TooLarge, 0),
@@ -405,17 +793,34 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
         }
     };
     let early = &buf[end + 4..len];
-    let request = connect_request(&buf[..end]);
-    let Some(raw) = request.filter(|r| !r.is_empty()) else {
-        return refuse(
-            &sh,
-            client,
-            tag,
-            String::new(),
-            RefuseWhy::BadRequest,
-            BAD_REQUEST,
-        )
-        .await;
+    let head = &buf[..end];
+    // `CONNECT target`, or under the web policy a plain-HTTP absolute-form request
+    let connect = connect_request(head);
+    let absolute = match (connect, &sh.policy) {
+        (None, Policy::Web(_)) => absolute_request(head),
+        // a job's absolute-form only to the reserved name: a listed target stays CONNECT only (400 below)
+        (None, p @ Policy::Job(_)) => absolute_request(head).filter(|a| {
+            std::str::from_utf8(&a.target)
+                .ok()
+                .and_then(|t| parse_target(t).ok())
+                .is_some_and(|t| by_web_rules(p, &t))
+        }),
+        _ => None,
+    };
+    let raw: &[u8] = match (&absolute, connect) {
+        (Some(a), _) => &a.target,
+        (None, Some(r)) if !r.is_empty() => r,
+        _ => {
+            return refuse(
+                &sh,
+                client,
+                tag,
+                String::new(),
+                RefuseWhy::BadRequest,
+                BAD_REQUEST,
+            )
+            .await;
+        }
     };
     let text = match std::str::from_utf8(raw) {
         Ok(t) if t.bytes().all(|c| (0x21..=0x7e).contains(&c)) => t,
@@ -460,53 +865,21 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
         }
     };
 
-    // An address that is not public is never reached as a literal, listed or not, and never offered on a card.
-    let literal = match target.host {
-        Host::V4(a) => Some(IpAddr::V4(a)),
-        Host::V6(a) => Some(IpAddr::V6(a)),
-        Host::Name(_) => None,
-    };
-    if literal.is_some_and(|ip| !is_public(ip)) {
-        let shown = target.to_string();
-        return refuse(&sh, client, tag, shown, RefuseWhy::Private, FORBIDDEN).await;
-    }
-    if !lock(&sh.allow).contains(&target) {
-        say(&sh, ProxyEvent::Denied { tag, target }).await;
-        return answer(client, FORBIDDEN).await;
-    }
-
-    // Where to connect, decided once: the literal, the pin, or the public part of one DNS answer, always on the
-    // target's port. Nothing is resolved again.
-    let addrs: Vec<SocketAddr> = match (&target.host, literal) {
-        (Host::Name(name), _) => {
-            if let Some((_, ip)) = sh.pinned.iter().find(|(n, _)| n == name) {
-                vec![SocketAddr::new(*ip, target.port)]
-            } else {
-                let all = match sh.resolver.resolve(name, target.port).await {
-                    Ok(all) if !all.is_empty() => all,
-                    _ => return answer(client, BAD_GATEWAY).await,
-                };
-                let public: Vec<SocketAddr> = all
-                    .iter()
-                    .filter(|a| is_public(a.ip()))
-                    .map(|a| SocketAddr::new(a.ip(), target.port))
-                    .collect();
-                if public.is_empty() {
-                    let shown = target.to_string();
-                    return refuse(&sh, client, tag, shown, RefuseWhy::Private, FORBIDDEN).await;
-                }
-                public
-            }
+    let addrs = match &sh.policy {
+        Policy::Web(w) | Policy::Job(w) if by_web_rules(&sh.policy, &target) => {
+            web(&sh, w, tag, &target).await
         }
-        (_, ip) => ip
-            .map(|ip| SocketAddr::new(ip, target.port))
-            .into_iter()
-            .collect(),
+        _ => allowlisted(&sh, tag, &target).await,
+    };
+    let addrs = match addrs {
+        Ok(a) => a,
+        Err(s) => return stop(&sh, client, s).await,
     };
 
     let mut upstream = None;
     for a in addrs {
-        if let Ok(s) = (sh.connect)(a).await {
+        // a connect that never completes (a blackhole) is that address failing
+        if let Ok(Ok(s)) = tokio::time::timeout(sh.connect_timeout, (sh.connect)(a)).await {
             upstream = Some(s);
             break;
         }
@@ -514,16 +887,215 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
     let Some(mut upstream) = upstream else {
         return answer(client, BAD_GATEWAY).await;
     };
-    if client
-        .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
-        .await
-        .is_err()
-        || upstream.write_all(early).await.is_err()
-    {
+    if let Policy::Web(_) = sh.policy {
+        let host = match &target.host {
+            Host::Name(n) => n.clone(),
+            Host::V4(a) => a.to_string(),
+            Host::V6(a) => a.to_string(),
+        };
+        say(&sh, ProxyEvent::Reached { tag, host }).await;
+    }
+    // CONNECT: the 200 to the client; absolute-form: the rewritten head to the upstream. Then the early bytes.
+    let started = match &absolute {
+        None => client
+            .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            .await
+            .is_ok(),
+        Some(a) => upstream.write_all(&rewrite(a, &target)).await.is_ok(),
+    };
+    if !started || upstream.write_all(early).await.is_err() {
         return;
     }
     // both ways as they are; each side's EOF is passed on as a half-close
-    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+    let last = Arc::new(AtomicU64::new(0));
+    let began = drgnx_clock::now();
+    let mut client = Active::new(client, last.clone(), began);
+    let mut upstream = Active::new(upstream, last.clone(), began);
+    let copy = tokio::io::copy_bidirectional(&mut client, &mut upstream);
+    tokio::pin!(copy);
+    loop {
+        let idle_at = began + Duration::from_millis(last.load(Ordering::Relaxed)) + sh.idle_timeout;
+        tokio::select! {
+            _ = &mut copy => return,
+            () = drgnx_clock::sleep(idle_at.saturating_sub(drgnx_clock::now())) => {
+                // no byte since `idle_at - idle_timeout`: end it (the place goes back when this returns)
+                if drgnx_clock::now() >= began + Duration::from_millis(last.load(Ordering::Relaxed)) + sh.idle_timeout {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// A stream that notes, in `last` (milliseconds since `began`, on `drgnx_clock`'s reading), when a byte last moved through it.
+struct Active<T> {
+    inner: T,
+    last: Arc<AtomicU64>,
+    began: Duration,
+}
+
+impl<T> Active<T> {
+    fn new(inner: T, last: Arc<AtomicU64>, began: Duration) -> Self {
+        Active { inner, last, began }
+    }
+
+    fn touch(&self) {
+        let ms = u64::try_from(drgnx_clock::now().saturating_sub(self.began).as_millis())
+            .unwrap_or(u64::MAX);
+        self.last.fetch_max(ms, Ordering::Relaxed);
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for Active<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        let before = buf.filled().len();
+        let r = Pin::new(&mut self.inner).poll_read(cx, buf);
+        if matches!(r, std::task::Poll::Ready(Ok(()))) && buf.filled().len() > before {
+            self.touch();
+        }
+        r
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for Active<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        let r = Pin::new(&mut self.inner).poll_write(cx, buf);
+        if matches!(r, std::task::Poll::Ready(Ok(n)) if n > 0) {
+            self.touch();
+        }
+        r
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// How a request ends without an upstream.
+enum Stop {
+    /// Say the event (once), then answer the status.
+    Say(ProxyEvent, &'static str),
+    /// Answer the status only.
+    Answer(&'static str),
+}
+
+async fn stop(sh: &Shared, client: Box<dyn Client>, s: Stop) {
+    match s {
+        Stop::Say(event, status) => {
+            say(sh, event).await;
+            answer(client, status).await;
+        }
+        Stop::Answer(status) => answer(client, status).await,
+    }
+}
+
+/// [`Policy::Allowlist`]: where to connect, decided once: the literal, the pin, or the public part of one DNS answer,
+/// always on the target's port. Nothing is resolved again.
+async fn allowlisted(sh: &Shared, tag: u64, target: &Target) -> Result<Vec<SocketAddr>, Stop> {
+    let private = || {
+        let target = target.to_string();
+        let why = RefuseWhy::Private;
+        Stop::Say(ProxyEvent::Refused { tag, target, why }, FORBIDDEN)
+    };
+    // An address that is not public is never reached as a literal, listed or not, and never offered on a card.
+    let literal = match target.host {
+        Host::V4(a) => Some(IpAddr::V4(a)),
+        Host::V6(a) => Some(IpAddr::V6(a)),
+        Host::Name(_) => None,
+    };
+    if literal.is_some_and(|ip| !is_public(ip)) {
+        return Err(private());
+    }
+    if !lock(&sh.allow).contains(target) {
+        let target = target.clone();
+        return Err(Stop::Say(ProxyEvent::Denied { tag, target }, FORBIDDEN));
+    }
+    let Host::Name(name) = &target.host else {
+        return Ok(literal
+            .map(|ip| SocketAddr::new(ip, target.port))
+            .into_iter()
+            .collect());
+    };
+    if let Some((_, ip)) = sh.pinned.iter().find(|(n, _)| n == name) {
+        return Ok(vec![SocketAddr::new(*ip, target.port)]);
+    }
+    let all = match sh.resolver.resolve(name, target.port).await {
+        Ok(all) if !all.is_empty() => all,
+        _ => return Err(Stop::Answer(BAD_GATEWAY)),
+    };
+    let public: Vec<SocketAddr> = all
+        .iter()
+        .filter(|a| is_public(a.ip()))
+        .map(|a| SocketAddr::new(a.ip(), target.port))
+        .collect();
+    if public.is_empty() {
+        return Err(private());
+    }
+    Ok(public)
+}
+
+/// [`Policy::Web`]: `pre_resolve`, one DNS question for a name, then `judge` on the state as it is now. The answer
+/// judged is the one connected to.
+async fn web(
+    sh: &Shared,
+    w: &WebState,
+    tag: u64,
+    target: &Target,
+) -> Result<Vec<SocketAddr>, Stop> {
+    let refused = |why| {
+        let target = target.to_string();
+        Stop::Say(ProxyEvent::Refused { tag, target, why }, FORBIDDEN)
+    };
+    let answer = match w.with_ctx(target, |ctx| pre_resolve(target, ctx)) {
+        Pre::Refuse(why) => return Err(refused(why)),
+        Pre::Fixed(addrs) => addrs,
+        Pre::Resolve => {
+            let Host::Name(name) = &target.host else {
+                return Err(Stop::Answer(BAD_GATEWAY));
+            };
+            match sh.resolver.resolve(name, target.port).await {
+                Ok(all) if !all.is_empty() => all,
+                _ => return Err(Stop::Answer(BAD_GATEWAY)),
+            }
+        }
+    };
+    match w.with_ctx(target, |ctx| judge(target, &answer, ctx)) {
+        Judgement::Connect(addrs) if !addrs.is_empty() => Ok(addrs),
+        Judgement::Connect(_) => Err(Stop::Answer(BAD_GATEWAY)),
+        Judgement::WebOff => {
+            let target = target.clone();
+            Err(Stop::Say(ProxyEvent::WebOff { tag, target }, FORBIDDEN))
+        }
+        Judgement::Private { addr, class } => {
+            let asked = target.clone();
+            let event = ProxyEvent::Private {
+                tag,
+                asked,
+                addr,
+                class,
+            };
+            Err(Stop::Say(event, FORBIDDEN))
+        }
+        Judgement::Refuse(why) => Err(refused(why)),
+    }
 }
 
 #[cfg(test)]
@@ -580,6 +1152,18 @@ mod tests {
         names: &[(&str, Vec<Vec<SocketAddr>>)],
         redirect: &[(SocketAddr, SocketAddr)],
     ) -> Rig {
+        let redirect: HashMap<SocketAddr, SocketAddr> = redirect.iter().copied().collect();
+        rig_with(cfg, names, move |a| {
+            tcp_connect(redirect.get(&a).copied().unwrap_or(a))
+        })
+    }
+
+    /// As [`rig`], with CONNECT making each connection the proxy asks for (after it is recorded).
+    fn rig_with(
+        cfg: ProxyConfig,
+        names: &[(&str, Vec<Vec<SocketAddr>>)],
+        connect: impl Fn(SocketAddr) -> Connecting + Send + Sync + 'static,
+    ) -> Rig {
         let resolver = Arc::new(Table {
             map: names
                 .iter()
@@ -588,11 +1172,10 @@ mod tests {
             calls: AtomicUsize::new(0),
         });
         let attempts = Arc::new(Mutex::new(Vec::new()));
-        let redirect: HashMap<SocketAddr, SocketAddr> = redirect.iter().copied().collect();
         let seen = attempts.clone();
         let connect: Connect = Arc::new(move |a: SocketAddr| -> Connecting {
             seen.lock().unwrap().push(a);
-            tcp_connect(redirect.get(&a).copied().unwrap_or(a))
+            connect(a)
         });
         let (tx, events) = mpsc::channel(64);
         let handle = start_with(cfg, resolver.clone(), tx, connect);
@@ -625,10 +1208,75 @@ mod tests {
         fn attempts(&self) -> Vec<SocketAddr> {
             self.attempts.lock().unwrap().clone()
         }
+
+        /// A relay channel's listener on `tag`; the sender is what the owner's end holds.
+        fn relay(&self, tag: u64) -> mpsc::Sender<Relayed> {
+            let (tx, rx) = mpsc::channel(256);
+            self.handle.listen(Listener::Streams(rx), tag);
+            tx
+        }
+
+        /// The places taken now.
+        fn conns(&self) -> usize {
+            self.handle.shared.conns.load(Ordering::SeqCst)
+        }
+
+        /// Waits until every place is free again.
+        async fn all_free(&self) {
+            skuld::wait_until_async("every place is free", WAIT.as_secs(), || async move {
+                (self.conns() == 0).then_some(())
+            })
+            .await;
+        }
+    }
+
+    /// A new relayed stream on `tx`: the job's end, and the sender whose drop says the stream is gone.
+    async fn relayed(tx: &mpsc::Sender<Relayed>) -> (tokio::io::DuplexStream, oneshot::Sender<()>) {
+        let (job, io) = tokio::io::duplex(16384);
+        let (alive, gone) = oneshot::channel();
+        tx.send(Relayed { io, gone }).await.unwrap();
+        (job, alive)
+    }
+
+    /// Sends a CONNECT to `target` on `s` and reads the answer's status.
+    async fn connect_on(s: &mut (impl AsyncRead + AsyncWrite + Unpin), target: &str) -> u16 {
+        let head = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n");
+        s.write_all(head.as_bytes()).await.unwrap();
+        status(&read_head(s).await)
+    }
+
+    /// A connector under which `hole` never answers: each attempt there is reported on the receiver, then hangs. Any
+    /// other address is connected as it is.
+    fn blackhole(hole: SocketAddr) -> (Connect, mpsc::UnboundedReceiver<SocketAddr>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let connect: Connect = Arc::new(move |a: SocketAddr| -> Connecting {
+            if a == hole {
+                let _ = tx.send(a);
+                Box::pin(std::future::pending())
+            } else {
+                tcp_connect(a)
+            }
+        });
+        (connect, rx)
+    }
+
+    /// `up.test` (an upstream on loopback port `up`) and `hole.test` (the blackhole's address), listed and pinned.
+    fn up_and_hole(up: u16, hole: SocketAddr) -> ProxyConfig {
+        ProxyConfig {
+            allow: vec![
+                t(&format!("up.test:{up}")),
+                t(&format!("hole.test:{}", hole.port())),
+            ],
+            pinned: vec![
+                ("up.test".into(), IpAddr::V4(LOOP)),
+                ("hole.test".into(), hole.ip()),
+            ],
+            ..ProxyConfig::default()
+        }
     }
 
     /// Reads a response head byte by byte (so no tunnelled byte is taken), or what came before EOF.
-    async fn read_head(s: &mut UnixStream) -> String {
+    async fn read_head(s: &mut (impl AsyncRead + Unpin)) -> String {
         let mut head = Vec::new();
         let mut b = [0u8; 1];
         while !head.ends_with(b"\r\n\r\n") {
@@ -693,7 +1341,7 @@ mod tests {
         (a, rx)
     }
 
-    async fn echoes(s: &mut UnixStream, text: &[u8]) -> bool {
+    async fn echoes(s: &mut (impl AsyncRead + AsyncWrite + Unpin), text: &[u8]) -> bool {
         if s.write_all(text).await.is_err() {
             return false;
         }
@@ -701,7 +1349,7 @@ mod tests {
         matches!(timeout(WAIT, s.read_exact(&mut got)).await, Ok(Ok(_))) && got == text
     }
 
-    async fn closed(s: &mut UnixStream) -> bool {
+    async fn closed(s: &mut (impl AsyncRead + Unpin)) -> bool {
         let mut b = [0u8; 64];
         matches!(timeout(WAIT, s.read(&mut b)).await, Ok(Ok(0) | Err(_)))
     }
@@ -1086,11 +1734,9 @@ mod tests {
     #[tokio::test]
     async fn listed_but_unreachable_is_502() {
         // a listed public name whose addresses refuse, one that does not resolve, and one whose answer is empty
-        // (no address at all is unreachable, not private)
-        let closed_port = {
-            let l = std::net::TcpListener::bind((LOOP, 0)).unwrap();
-            l.local_addr().unwrap()
-        };
+        // (no address at all is unreachable, not private). The refusal is the connector's own, on every system: a
+        // dropped listener's port went back to the kernel, which could hand it to another test's listener (200), and
+        // a port bound but never listening refuses on Linux but drops the SYN on macOS (the connect hangs)
         let cfg = ProxyConfig {
             allow: vec![
                 t("gone.test:443"),
@@ -1100,13 +1746,13 @@ mod tests {
             ..ProxyConfig::default()
         };
         let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
-        let mut r = rig(
+        let mut r = rig_with(
             cfg,
             &[
                 ("gone.test", vec![vec![public]]),
                 ("empty.test", vec![vec![]]),
             ],
-            &[(public, closed_port)],
+            |_| Box::pin(async { Err(io::Error::from(io::ErrorKind::ConnectionRefused)) }),
         );
         let p = r.listen(1);
         for target in ["gone.test:443", "nowhere.test:443", "empty.test:443"] {
@@ -1114,6 +1760,7 @@ mod tests {
             assert_eq!(code, 502, "{target}");
             assert!(closed(&mut s).await);
         }
+        assert_eq!(r.attempts(), vec![public], "only gone.test has an address");
         assert!(r.said().is_empty());
     }
 
@@ -1219,20 +1866,35 @@ mod tests {
         );
     }
 
-    /// The refusal waits out the head timeout: a timing test (the elapsed time is the assertion).
+    /// The refusal waits out the head timeout: on a virtual clock the head is still being waited for the instant before
+    /// the timeout, and refused at it.
     #[tokio::test]
-    #[ignore = "timing: a slow head is refused only after the head timeout"]
     async fn slow_head_is_refused_only_after_the_head_timeout() {
+        let clock = drgnx_clock::Manual::default();
+        let _on = clock.on_this_thread();
         let cfg = ProxyConfig {
             head_timeout: Duration::from_millis(300),
             ..ProxyConfig::default()
         };
         let r = rig(cfg, &[], &[]);
         let p = r.listen(1);
-        let started = std::time::Instant::now();
-        let (_s, code) = ask(&p, b"CONNECT up.test:443 HTTP/1.1\r\nHost: up").await;
+        let asking =
+            tokio::spawn(async move { ask(&p, b"CONNECT up.test:443 HTTP/1.1\r\nHost: up").await });
+        skuld::wait_until_async(
+            "the proxy waits for the rest of the head",
+            WAIT.as_secs(),
+            || async { (clock.sleepers() == 1).then_some(()) },
+        )
+        .await;
+        clock.advance(Duration::from_millis(299));
+        tokio::task::yield_now().await;
+        assert!(
+            !asking.is_finished(),
+            "refused 1 ms before the head timeout"
+        );
+        clock.advance(Duration::from_millis(1));
+        let (_s, code) = asking.await.unwrap();
         assert_eq!(code, 400);
-        assert!(started.elapsed() >= Duration::from_millis(300));
     }
 
     #[tokio::test]
@@ -1266,6 +1928,65 @@ mod tests {
             }
         })
         .await;
+    }
+
+    /// The tunnel is ended only after the idle limit, and an active one outlives it: on a virtual clock the idle one
+    /// is open at 499 ms and ended at 500, and the busy one's bytes move its limit.
+    #[tokio::test]
+    async fn an_idle_tunnel_is_ended_and_an_active_one_is_not() {
+        let clock = drgnx_clock::Manual::default();
+        let _on = clock.on_this_thread();
+        let up = echo().await;
+        let cfg = ProxyConfig {
+            idle_timeout: Duration::from_millis(500),
+            ..pinned_up(up.port())
+        };
+        let r = rig(cfg, &[], &[]);
+        let p = r.listen(1);
+        let target = format!("up.test:{}", up.port());
+        let (mut idle, code) = connect_to(&p, &target).await;
+        assert_eq!(code, 200);
+        let (mut busy, code) = connect_to(&p, &target).await;
+        assert_eq!(code, 200);
+        // 2 x 200 ms with the busy one echoing: nothing is idle for its limit yet
+        for _ in 0..2 {
+            assert!(
+                echoes(&mut busy, b"ping").await,
+                "an active tunnel lives on"
+            );
+            clock.advance(Duration::from_millis(200));
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            echoes(&mut busy, b"ping").await,
+            "an active tunnel lives on"
+        );
+        assert_eq!(r.conns(), 2, "the idle one is open at 400 ms");
+        // the idle one's last byte was at 0: it is ended at 500 ms
+        clock.advance(Duration::from_millis(100));
+        assert!(closed(&mut idle).await, "the idle tunnel was ended");
+        skuld::wait_until_async("its place is free again", WAIT.as_secs(), || async {
+            (r.conns() == 1).then_some(())
+        })
+        .await;
+        drop(busy);
+        r.all_free().await;
+    }
+
+    #[tokio::test]
+    async fn a_stalled_event_reader_never_holds_a_place() {
+        let r = rig(ProxyConfig::default(), &[], &[]);
+        let p = r.listen(1);
+        // the events channel holds 64 and nobody reads it: the 65th and later refusals are still answered
+        for i in 0..70 {
+            let (mut s, code) = timeout(WAIT, connect_to(&p, &format!("denied{i}.test:443")))
+                .await
+                .unwrap_or_else(|_| panic!("refusal {i} waited on the events channel"));
+            assert_eq!(code, 403, "{i}");
+            assert!(closed(&mut s).await);
+        }
+        r.all_free().await;
+        assert_eq!(r.handle.dropped_events(), 6);
     }
 
     #[tokio::test]
@@ -1395,5 +2116,782 @@ mod tests {
         assert_eq!(code, 200);
         r.handle.shutdown();
         assert!(closed(&mut a).await);
+    }
+
+    #[tokio::test]
+    async fn a_relayed_stream_is_judged_like_a_socket_client() {
+        let up = echo().await;
+        let mut r = rig(pinned_up(up.port()), &[], &[]);
+        let tx = r.relay(7);
+        let (mut s, _alive) = relayed(&tx).await;
+        assert_eq!(
+            connect_on(&mut s, &format!("up.test:{}", up.port())).await,
+            200
+        );
+        assert!(echoes(&mut s, b"hello").await);
+
+        let (mut s, _alive) = relayed(&tx).await;
+        assert_eq!(connect_on(&mut s, "x.test:443").await, 403);
+        assert!(closed(&mut s).await);
+        assert_eq!(
+            r.said(),
+            vec![ProxyEvent::Denied {
+                tag: 7,
+                target: t("x.test:443")
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_cap_counts_relayed_streams() {
+        let up = echo().await;
+        let target = format!("up.test:{}", up.port());
+        let cfg = ProxyConfig {
+            max_conns: 2,
+            ..pinned_up(up.port())
+        };
+        let r = rig(cfg, &[], &[]);
+        let tx = r.relay(1);
+        let held = [relayed(&tx).await, relayed(&tx).await];
+        let (mut s, _alive) = relayed(&tx).await;
+        assert_eq!(connect_on(&mut s, &target).await, 403, "the third");
+        assert!(closed(&mut s).await);
+
+        // the places come back when the streams are gone
+        drop(held);
+        r.all_free().await;
+        let (mut s, _alive) = relayed(&tx).await;
+        assert_eq!(connect_on(&mut s, &target).await, 200);
+    }
+
+    #[tokio::test]
+    async fn close_tag_ends_relayed_streams() {
+        let up = echo().await;
+        let target = format!("up.test:{}", up.port());
+        let r = rig(pinned_up(up.port()), &[], &[]);
+        let (tx1, tx2) = (r.relay(1), r.relay(2));
+        let (mut a, _alive_a) = relayed(&tx1).await;
+        let (mut b, _alive_b) = relayed(&tx2).await;
+        assert_eq!(connect_on(&mut a, &target).await, 200);
+        assert_eq!(connect_on(&mut b, &target).await, 200);
+        // one still in its head, on tag 1
+        let (mut c, _alive_c) = relayed(&tx1).await;
+        c.write_all(b"CONNECT up").await.unwrap();
+
+        r.handle.close(1);
+        assert!(closed(&mut a).await, "tag 1's tunnel ends");
+        assert!(closed(&mut c).await, "tag 1's half-read stream ends");
+        timeout(WAIT, tx1.closed())
+            .await
+            .expect("tag 1's channel is let go");
+        assert!(echoes(&mut b, b"after").await, "tag 2's tunnel stays");
+
+        // a channel that ends ends its listener's streams too
+        drop(tx2);
+        assert!(closed(&mut b).await, "tag 2's tunnel ends with its channel");
+    }
+
+    #[tokio::test]
+    async fn abandoned_connects_to_a_blackhole_never_cost_a_403() {
+        let up = echo().await;
+        let hole = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+        let (connect, mut attempts) = blackhole(hole);
+        let cfg = ProxyConfig {
+            max_conns: 128,
+            ..up_and_hole(up.port(), hole)
+        };
+        let r = rig_with(cfg, &[], move |a| connect(a));
+        let tx = r.relay(1);
+        // the job's ends stay open throughout: only the owner's word that a stream is gone frees its place
+        let mut jobs = Vec::new();
+        for wave in [64, 64, 64, 8] {
+            let mut alive = Vec::new();
+            for _ in 0..wave {
+                let (mut s, a) = relayed(&tx).await;
+                s.write_all(b"CONNECT hole.test:443 HTTP/1.1\r\n\r\n")
+                    .await
+                    .unwrap();
+                jobs.push(s);
+                alive.push(a);
+            }
+            for _ in 0..wave {
+                timeout(WAIT, attempts.recv())
+                    .await
+                    .expect("each stream reaches its connect");
+            }
+            drop(alive);
+            r.all_free().await;
+        }
+        let (mut s, _alive) = relayed(&tx).await;
+        assert_eq!(
+            connect_on(&mut s, &format!("up.test:{}", up.port())).await,
+            200
+        );
+        assert!(echoes(&mut s, b"room").await);
+    }
+
+    #[tokio::test]
+    async fn an_upstream_connect_times_out() {
+        let hole = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+        let (connect, mut attempts) = blackhole(hole);
+        let cfg = ProxyConfig {
+            connect_timeout: Duration::from_millis(300),
+            ..up_and_hole(1, hole)
+        };
+        let r = rig_with(cfg, &[], move |a| connect(a));
+        let p = r.listen(1);
+        let (mut s, code) = connect_to(&p, "hole.test:443").await;
+        assert_eq!(code, 502);
+        assert!(closed(&mut s).await);
+        assert_eq!(attempts.try_recv(), Ok(hole));
+        r.all_free().await;
+    }
+
+    use crate::net::policy::PrivateTarget;
+
+    fn web_on() -> Arc<WebState> {
+        let w = Arc::new(WebState::default());
+        w.set_web(true);
+        w
+    }
+
+    fn web_cfg(w: &Arc<WebState>) -> ProxyConfig {
+        ProxyConfig {
+            policy: Policy::Web(w.clone()),
+            ..ProxyConfig::default()
+        }
+    }
+
+    fn reached(tag: u64, host: &str) -> ProxyEvent {
+        ProxyEvent::Reached {
+            tag,
+            host: host.into(),
+        }
+    }
+
+    /// Sends `bytes` in one write, half-closes, and reads everything back.
+    async fn send_all(path: &Path, bytes: &[u8]) -> Vec<u8> {
+        let mut s = UnixStream::connect(path).await.unwrap();
+        s.write_all(bytes).await.unwrap();
+        s.shutdown().await.unwrap();
+        let mut back = Vec::new();
+        timeout(WAIT, s.read_to_end(&mut back))
+            .await
+            .unwrap()
+            .unwrap();
+        back
+    }
+
+    #[tokio::test]
+    async fn absolute_form_is_rewritten() {
+        let answer =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok".to_vec();
+        let (up1, got1) = recorder(answer.clone()).await;
+        let (up2, got2) = recorder(answer.clone()).await;
+        let pub1 = SocketAddr::new(IpAddr::V4(PUBLIC), 80);
+        let pub2 = SocketAddr::new("2606:4700::1".parse().unwrap(), 80);
+        let w = web_on();
+        let mut r = rig(
+            web_cfg(&w),
+            &[(
+                "web.test",
+                vec![vec![SocketAddr::new(IpAddr::V4(PUBLIC), 0)]],
+            )],
+            &[(pub1, up1), (pub2, up2)],
+        );
+        let p = r.listen(4);
+
+        let req = "GET http://WEB.test/a/b?c=1 HTTP/1.1\r\nHost: evil.test\r\n\
+                   Proxy-Authorization: Basic eA==\r\nProxy-Connection: keep-alive\r\n\
+                   Connection: keep-alive, X-Secret\r\nX-Secret: 1\r\nKeep-Alive: 300\r\nTE: trailers\r\n\
+                   Upgrade: h2c\r\nAccept: */*\r\nuser-agent: t\r\n\r\n";
+        assert_eq!(
+            send_all(&p, req.as_bytes()).await,
+            answer,
+            "the response head is not rewritten"
+        );
+        assert_eq!(
+            String::from_utf8(got1.await.unwrap()).unwrap(),
+            "GET /a/b?c=1 HTTP/1.1\r\nHost: web.test\r\nAccept: */*\r\nuser-agent: t\r\nConnection: close\r\n\r\n"
+        );
+
+        // a literal with no path, a query only, HTTP/1.0
+        let req = "HEAD http://[2606:4700::1]?q HTTP/1.0\r\n\r\n";
+        assert_eq!(send_all(&p, req.as_bytes()).await, answer);
+        assert_eq!(
+            String::from_utf8(got2.await.unwrap()).unwrap(),
+            "HEAD /?q HTTP/1.0\r\nHost: [2606:4700::1]\r\nConnection: close\r\n\r\n"
+        );
+        assert_eq!(
+            r.said(),
+            vec![reached(4, "web.test"), reached(4, "2606:4700::1")]
+        );
+        assert_eq!(r.attempts(), vec![pub1, pub2]);
+    }
+
+    #[tokio::test]
+    async fn absolute_form_early_body_reaches_upstream_once() {
+        let (up, got) = recorder(b"HTTP/1.1 204 No Content\r\n\r\n".to_vec()).await;
+        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 80);
+        let w = web_on();
+        let r = rig(
+            web_cfg(&w),
+            &[("post.test", vec![vec![public]])],
+            &[(public, up)],
+        );
+        let p = r.listen(1);
+        // 3 KiB of body that looks like nothing in particular, then a second request hidden in it
+        let mut body: Vec<u8> = (0u8..=255).cycle().take(3072).collect();
+        body.extend_from_slice(
+            b"\r\n\r\nGET http://other.test/ HTTP/1.1\r\nHost: other.test\r\n\r\n",
+        );
+        let later: Vec<u8> = (0u8..=255).rev().cycle().take(5000).collect();
+        let length = body.len() + later.len();
+        let mut first =
+            format!("POST http://post.test/form HTTP/1.1\r\nContent-Length: {length}\r\n\r\n")
+                .into_bytes();
+        first.extend_from_slice(&body);
+
+        let mut s = UnixStream::connect(&p).await.unwrap();
+        // one write, so the body comes in the same read as the head
+        s.write_all(&first).await.unwrap();
+        s.write_all(&later).await.unwrap();
+        s.shutdown().await.unwrap();
+        let mut back = Vec::new();
+        timeout(WAIT, s.read_to_end(&mut back))
+            .await
+            .unwrap()
+            .unwrap();
+
+        let mut want = format!(
+            "POST /form HTTP/1.1\r\nHost: post.test\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
+        )
+        .into_bytes();
+        want.extend_from_slice(&body);
+        want.extend_from_slice(&later);
+        assert!(
+            got.await.unwrap() == want,
+            "the upstream gets the head, then the body once, in order"
+        );
+        assert_eq!(back, b"HTTP/1.1 204 No Content\r\n\r\n");
+        assert_eq!(r.attempts(), vec![public]);
+    }
+
+    #[tokio::test]
+    async fn https_absolute_and_userinfo_are_400() {
+        let up = echo().await;
+        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 80);
+        let w = web_on();
+        let mut r = rig(
+            web_cfg(&w),
+            &[("web.test", vec![vec![public]])],
+            &[(public, up)],
+        );
+        let p = r.listen(9);
+        let rows: &[&[u8]] = &[
+            b"GET https://web.test/ HTTP/1.1\r\n\r\n",
+            b"GET HTTPS://web.test/ HTTP/1.1\r\n\r\n",
+            b"GET http://user:pw@web.test/ HTTP/1.1\r\n\r\n",
+            b"GET http://user@web.test/ HTTP/1.1\r\n\r\n",
+            b"GET ftp://web.test/ HTTP/1.1\r\n\r\n",
+            b"GET http://web.test/#top HTTP/1.1\r\n\r\n",
+            b"GET http:///x HTTP/1.1\r\n\r\n",
+            b"GET http://web.test/ HTTP/2.0\r\n\r\n",
+            b"GET  http://web.test/ HTTP/1.1\r\n\r\n",
+            b"G(T http://web.test/ HTTP/1.1\r\n\r\n",
+            b"GET http://web.test/\x01 HTTP/1.1\r\n\r\n",
+            b"GET /origin-form HTTP/1.1\r\nHost: web.test\r\n\r\n",
+            b"GET http://web.test/ HTTP/1.1\r\nX-A: 1\r\n folded\r\n\r\n",
+            b"GET http://web.test/ HTTP/1.1\r\nNo-Colon\r\n\r\n",
+            b"GET http://web.test/ HTTP/1.1\r\nBad Name: x\r\n\r\n",
+            b"GET http://web.test/ HTTP/1.1\r\nX-A: 1\nHost: evil.test\r\n\r\n",
+            b"GET http://web.test/ HTTP/1.1\r\nX-A: \0\r\n\r\n",
+        ];
+        for req in rows {
+            let (mut s, code) = ask(&p, req).await;
+            assert_eq!(code, 400, "{:?}", String::from_utf8_lossy(req));
+            assert!(closed(&mut s).await);
+        }
+        // a malformed authority is the target's error, said with its text
+        let (_s, code) = ask(&p, b"GET http://web.test:/ HTTP/1.1\r\n\r\n").await;
+        assert_eq!(code, 400);
+        assert_eq!(
+            r.said(),
+            vec![
+                ProxyEvent::Refused {
+                    tag: 9,
+                    target: String::new(),
+                    why: RefuseWhy::BadRequest
+                },
+                ProxyEvent::Refused {
+                    tag: 9,
+                    target: "web.test:".into(),
+                    why: RefuseWhy::BadRequest
+                },
+            ]
+        );
+        assert!(r.attempts().is_empty());
+        assert_eq!(r.resolver.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn allowlist_policy_is_unchanged() {
+        assert!(matches!(ProxyConfig::default().policy, Policy::Allowlist));
+        let up = echo().await;
+        let cfg = ProxyConfig {
+            policy: Policy::Allowlist,
+            ..pinned_up(up.port())
+        };
+        let mut r = rig(cfg, &[], &[]);
+        let p = r.listen(1);
+        let (mut s, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
+        assert_eq!(code, 200);
+        assert!(echoes(&mut s, b"listed").await);
+        for (target, want) in [
+            ("x.test:443", 403),
+            ("192.168.1.20:80", 403),
+            ("169.254.169.254:80", 403),
+        ] {
+            let (_s, code) = connect_to(&p, target).await;
+            assert_eq!(code, want, "{target}");
+        }
+        let (mut s, code) = ask(
+            &p,
+            format!("GET http://up.test:{}/ HTTP/1.1\r\n\r\n", up.port()).as_bytes(),
+        )
+        .await;
+        assert_eq!(code, 400, "absolute-form stays refused");
+        assert!(closed(&mut s).await);
+        assert_eq!(
+            r.said(),
+            vec![
+                ProxyEvent::Denied {
+                    tag: 1,
+                    target: t("x.test:443")
+                },
+                ProxyEvent::Refused {
+                    tag: 1,
+                    target: "192.168.1.20:80".into(),
+                    why: RefuseWhy::Private
+                },
+                ProxyEvent::Refused {
+                    tag: 1,
+                    target: "169.254.169.254:80".into(),
+                    why: RefuseWhy::Private
+                },
+                ProxyEvent::Refused {
+                    tag: 1,
+                    target: String::new(),
+                    why: RefuseWhy::BadRequest
+                },
+            ],
+            "no Reached, no WebOff: the allowlist's own events"
+        );
+        assert_eq!(r.attempts(), vec![up]);
+    }
+
+    #[tokio::test]
+    async fn web_off_says_weboff_once_per_target() {
+        let up = echo().await;
+        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+        let any_port = SocketAddr::new(IpAddr::V4(PUBLIC), 0);
+        let w = Arc::new(WebState::default());
+        let mut r = rig(
+            web_cfg(&w),
+            &[
+                ("web.test", vec![vec![any_port]]),
+                ("other.test", vec![vec![any_port]]),
+            ],
+            &[(public, up)],
+        );
+        let p = r.listen(2);
+        for target in [
+            "web.test:443",
+            "web.test:443",
+            "other.test:443",
+            "WEB.test.:443",
+        ] {
+            let (mut s, code) = connect_to(&p, target).await;
+            assert_eq!(code, 403, "{target}");
+            assert!(closed(&mut s).await);
+        }
+        let (_s, code) = ask(&p, b"GET http://web.test/ HTTP/1.1\r\n\r\n").await;
+        assert_eq!(code, 403);
+        let weboff = |target: &str| ProxyEvent::WebOff {
+            tag: 2,
+            target: t(target),
+        };
+        assert_eq!(
+            r.said(),
+            vec![
+                weboff("web.test:443"),
+                weboff("other.test:443"),
+                weboff("web.test:80")
+            ]
+        );
+        assert!(r.attempts().is_empty());
+
+        w.set_web(true);
+        let (mut s, code) = connect_to(&p, "web.test:443").await;
+        assert_eq!(code, 200);
+        assert!(echoes(&mut s, b"now").await);
+        assert_eq!(r.said(), vec![reached(2, "web.test")]);
+        assert_eq!(r.attempts(), vec![public]);
+    }
+
+    #[tokio::test]
+    async fn a_web_host_opens_only_itself_and_forgotten_questions_are_asked_again() {
+        let up = echo().await;
+        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+        let any_port = SocketAddr::new(IpAddr::V4(PUBLIC), 0);
+        let w = Arc::new(WebState::default());
+        let mut r = rig(
+            web_cfg(&w),
+            &[
+                ("web.test", vec![vec![any_port]]),
+                ("other.test", vec![vec![any_port]]),
+                ("old.test", vec![vec![any_port]]),
+            ],
+            &[(public, up)],
+        );
+        let p = r.listen(2);
+        // a once grant opens its host:port alone, until it expires
+        w.set_web_hosts(vec![
+            (t("web.test:443"), None),
+            (t("old.test:443"), Some(1.0)),
+        ]);
+        let (mut s, code) = connect_to(&p, "web.test:443").await;
+        assert_eq!(code, 200);
+        assert!(echoes(&mut s, b"one").await);
+        for target in ["web.test:80", "other.test:443", "old.test:443"] {
+            let (_s, code) = connect_to(&p, target).await;
+            assert_eq!(code, 403, "{target}");
+        }
+        let weboff = |target: &str| ProxyEvent::WebOff {
+            tag: 2,
+            target: t(target),
+        };
+        assert_eq!(
+            r.said(),
+            vec![
+                reached(2, "web.test"),
+                weboff("web.test:80"),
+                weboff("other.test:443"),
+                weboff("old.test:443")
+            ]
+        );
+        // said once, until the caller forgets the questions; what was reached stays said
+        let (_s, code) = connect_to(&p, "other.test:443").await;
+        assert_eq!(code, 403);
+        assert!(r.said().is_empty());
+        r.handle.forget_questions(2);
+        r.handle.forget_questions(7);
+        for target in ["other.test:443", "web.test:443"] {
+            let _ = connect_to(&p, target).await;
+        }
+        assert_eq!(r.said(), vec![weboff("other.test:443")]);
+    }
+
+    #[tokio::test]
+    async fn grant_set_at_runtime_takes_effect_on_next_request() {
+        let up = echo().await;
+        let lan: SocketAddr = "192.168.1.20:8080".parse().unwrap();
+        let host_addrs = Arc::new(RwLock::new(HostAddrs::default()));
+        let w = Arc::new(WebState::new(
+            host_addrs.clone(),
+            Arc::new(RwLock::new(NeverSet::default())),
+        ));
+        let mut r = rig(web_cfg(&w), &[("evil.test", vec![vec![lan]])], &[(lan, up)]);
+        let p = r.listen(3);
+        let refused = |target: &str, why| ProxyEvent::Refused {
+            tag: 3,
+            target: target.into(),
+            why,
+        };
+        let grant = |expires| PrivateGrant {
+            target: PrivateTarget::HostPort(t("192.168.1.20:8080")),
+            expires,
+        };
+
+        // no grant: the card's question, with the address
+        let (_s, code) = connect_to(&p, "192.168.1.20:8080").await;
+        assert_eq!(code, 403);
+        assert_eq!(
+            r.said(),
+            vec![ProxyEvent::Private {
+                tag: 3,
+                asked: t("192.168.1.20:8080"),
+                addr: lan,
+                class: Class::Lan
+            }]
+        );
+
+        // granted: the next request goes through
+        w.set_grants(vec![grant(None)]);
+        let (mut a, code) = connect_to(&p, "192.168.1.20:8080").await;
+        assert_eq!(code, 200);
+        assert!(echoes(&mut a, b"granted").await);
+        assert_eq!(r.said(), vec![reached(3, "192.168.1.20")]);
+
+        // a name rebound onto the grant is refused
+        let (_s, code) = connect_to(&p, "evil.test:8080").await;
+        assert_eq!(code, 403);
+        assert_eq!(
+            r.said(),
+            vec![refused("evil.test:8080", RefuseWhy::Rebound)]
+        );
+
+        // the host's addresses and the deny list are read at each request
+        host_addrs.write().unwrap().0.insert(lan.ip());
+        let (_s, code) = connect_to(&p, "192.168.1.20:8080").await;
+        assert_eq!(code, 403);
+        assert_eq!(
+            r.said(),
+            vec![refused("192.168.1.20:8080", RefuseWhy::Loopback)]
+        );
+        host_addrs.write().unwrap().0.clear();
+        w.set_deny_hosts(vec!["192.168.1.20".into()]);
+        let (_s, code) = connect_to(&p, "192.168.1.20:8080").await;
+        assert_eq!(code, 403);
+        assert_eq!(
+            r.said(),
+            vec![refused("192.168.1.20:8080", RefuseWhy::DenyListed)]
+        );
+        w.set_deny_hosts(Vec::new());
+
+        // expired: refused again (the question was said already); the tunnel spliced before stays
+        w.set_grants(vec![grant(Some(1.0))]);
+        let (_s, code) = connect_to(&p, "192.168.1.20:8080").await;
+        assert_eq!(code, 403);
+        assert!(r.said().is_empty());
+        assert!(echoes(&mut a, b"stays").await);
+        assert_eq!(r.attempts(), vec![lan]);
+    }
+
+    #[tokio::test]
+    async fn connect_to_80_for_websockets() {
+        let up = echo().await;
+        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 80);
+        let w = web_on();
+        let mut r = rig(
+            web_cfg(&w),
+            &[("ws.test", vec![vec![public]])],
+            &[(public, up)],
+        );
+        let p = r.listen(1);
+        let (mut s, code) = ask(
+            &p,
+            b"CONNECT ws.test:80 HTTP/1.1\r\nHost: ws.test:80\r\n\r\n",
+        )
+        .await;
+        assert_eq!(code, 200);
+        assert!(
+            echoes(
+                &mut s,
+                b"GET /socket HTTP/1.1\r\nHost: ws.test\r\nUpgrade: websocket\r\n\r\n"
+            )
+            .await,
+            "the tunnel carries the upgrade as it is"
+        );
+        let (_s, code) = connect_to(&p, "ws.test:8080").await;
+        assert_eq!(code, 403);
+        assert_eq!(
+            r.said(),
+            vec![
+                reached(1, "ws.test"),
+                ProxyEvent::Refused {
+                    tag: 1,
+                    target: "ws.test:8080".into(),
+                    why: RefuseWhy::Port
+                }
+            ]
+        );
+        assert_eq!(r.attempts(), vec![public]);
+    }
+
+    // ---- Policy::Job: a container job's proxy (container-net Task 11) ----
+
+    fn job_state(never: &[u16]) -> (Arc<WebState>, Arc<RwLock<NeverSet>>) {
+        let set = Arc::new(RwLock::new(NeverSet {
+            loopback_ports: never.iter().copied().collect(),
+        }));
+        let w = Arc::new(WebState::new(
+            Arc::new(RwLock::new(HostAddrs::default())),
+            set.clone(),
+        ));
+        (w, set)
+    }
+
+    fn job_cfg(w: &Arc<WebState>, allow: &[&str]) -> ProxyConfig {
+        ProxyConfig {
+            policy: Policy::Job(w.clone()),
+            allow: allow.iter().map(|a| t(a)).collect(),
+            ..ProxyConfig::default()
+        }
+    }
+
+    fn host_grant(port: u16) -> PrivateGrant {
+        PrivateGrant {
+            target: PrivateTarget::HostPort(t(&format!(
+                "{}:{port}",
+                crate::net::policy::RESERVED_HOST
+            ))),
+            expires: None,
+        }
+    }
+
+    #[test]
+    fn job_policy_sends_only_the_reserved_name_to_the_web_rules() {
+        let (w, _) = job_state(&[]);
+        let job = Policy::Job(w.clone());
+        assert!(by_web_rules(&job, &t("host.drgnx.internal:8080")));
+        for other in [
+            "localhost:8080",
+            "127.0.0.1:8080",
+            "crates.io:443",
+            "192.168.1.20:8080",
+        ] {
+            assert!(!by_web_rules(&job, &t(other)), "{other}");
+        }
+        assert!(by_web_rules(&Policy::Web(w), &t("crates.io:443")));
+        assert!(!by_web_rules(
+            &Policy::Allowlist,
+            &t("host.drgnx.internal:8080")
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_granted_host_port_connects_to_loopback() {
+        let up = echo().await;
+        let (w, _) = job_state(&[]);
+        w.set_grants(vec![host_grant(up.port())]);
+        let r = rig(job_cfg(&w, &[]), &[], &[]);
+        let p = r.listen(5);
+        let (mut s, code) = connect_to(&p, &format!("host.drgnx.internal:{}", up.port())).await;
+        assert_eq!(code, 200);
+        assert!(echoes(&mut s, b"to the host").await);
+        assert!(
+            r.attempts()
+                .iter()
+                .all(|a| a.ip().is_loopback() && a.port() == up.port())
+        );
+        // absolute-form to the reserved name is forwarded in origin-form
+        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec();
+        let (rec, got) = recorder(answer).await;
+        w.set_grants(vec![host_grant(rec.port())]);
+        let back = send_all(
+            &p,
+            format!(
+                "GET http://host.drgnx.internal:{0}/x HTTP/1.1\r\nHost: host.drgnx.internal:{0}\r\n\r\n",
+                rec.port()
+            )
+            .as_bytes(),
+        )
+        .await;
+        assert!(
+            back.starts_with(b"HTTP/1.1 200"),
+            "{}",
+            String::from_utf8_lossy(&back)
+        );
+        let sent = timeout(WAIT, got).await.unwrap().unwrap();
+        assert!(
+            sent.starts_with(b"GET /x HTTP/1.1"),
+            "{}",
+            String::from_utf8_lossy(&sent)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ungranted_port_is_a_private_event() {
+        let (w, _) = job_state(&[]);
+        let mut r = rig(job_cfg(&w, &[]), &[], &[]);
+        let p = r.listen(6);
+        let (_s, code) = connect_to(&p, "host.drgnx.internal:8080").await;
+        assert_eq!(code, 403);
+        let said = r.said();
+        assert!(
+            matches!(said.as_slice(), [ProxyEvent::Private { tag: 6, asked, .. }] if *asked == t("host.drgnx.internal:8080")),
+            "{said:?}"
+        );
+        assert!(r.attempts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn localhost_and_127_are_refused_under_a_grant() {
+        let up = echo().await;
+        let (w, _) = job_state(&[]);
+        w.set_grants(vec![host_grant(up.port())]);
+        let r = rig(job_cfg(&w, &[]), &[("localhost", vec![vec![up]])], &[]);
+        let p = r.listen(7);
+        for target in [
+            format!("localhost:{}", up.port()),
+            format!("127.0.0.1:{}", up.port()),
+            format!("[::1]:{}", up.port()),
+        ] {
+            let (_s, code) = connect_to(&p, &target).await;
+            assert_eq!(code, 403, "{target}");
+        }
+        assert!(r.attempts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_never_port_is_refused_under_any_grant() {
+        let up = echo().await;
+        let (w, _) = job_state(&[up.port()]);
+        w.set_grants(vec![host_grant(up.port())]);
+        let r = rig(job_cfg(&w, &[]), &[], &[]);
+        let p = r.listen(8);
+        let (_s, code) = connect_to(&p, &format!("host.drgnx.internal:{}", up.port())).await;
+        assert_eq!(code, 403);
+        assert!(r.attempts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_port_added_to_the_never_set_after_the_grant_is_refused_at_the_next_dial() {
+        let up = echo().await;
+        let (w, never) = job_state(&[]);
+        w.set_grants(vec![host_grant(up.port())]);
+        let r = rig(job_cfg(&w, &[]), &[], &[]);
+        let p = r.listen(9);
+        let target = format!("host.drgnx.internal:{}", up.port());
+        let (_s, code) = connect_to(&p, &target).await;
+        assert_eq!(code, 200);
+        never.write().unwrap().loopback_ports.insert(up.port());
+        let (_s, code) = connect_to(&p, &target).await;
+        assert_eq!(code, 403);
+    }
+
+    #[tokio::test]
+    async fn allowed_targets_stay_connect_only() {
+        let (w, _) = job_state(&[]);
+        let r = rig(job_cfg(&w, &["listed.test:80"]), &[], &[]);
+        let p = r.listen(10);
+        let back = send_all(
+            &p,
+            b"GET http://listed.test:80/ HTTP/1.1\r\nHost: listed.test\r\n\r\n",
+        )
+        .await;
+        assert!(
+            back.starts_with(b"HTTP/1.1 400"),
+            "{}",
+            String::from_utf8_lossy(&back)
+        );
+        assert!(r.attempts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn web_stays_off_under_the_job_policy() {
+        let (w, _) = job_state(&[]);
+        let mut r = rig(job_cfg(&w, &["crates.io:443"]), &[], &[]);
+        let p = r.listen(11);
+        let (_s, code) = connect_to(&p, "pub.test:443").await;
+        assert_eq!(code, 403);
+        assert_eq!(
+            r.said(),
+            vec![ProxyEvent::Denied {
+                tag: 11,
+                target: t("pub.test:443")
+            }]
+        );
     }
 }

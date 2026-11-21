@@ -313,12 +313,17 @@ buffer) and no check asked for meanwhile is still to follow it."
   ;; The hooks that confine a reviewer go with the module, so its running sessions go too.
   (let* ((killed nil) (running (drgnx-agents--make :id "rev-run" :name "r1" :status 'idle :conn 'fake))
          (answered (drgnx-agents--make :id "rev-done" :name "r2" :status 'idle :conn 'fake))
-         (drgnx-agents--sessions (list running answered)))
+         (sessions drgnx-agents--sessions))
     (cl-letf (((symbol-function 'drgnx-agents-kill) (lambda (x) (push x killed))))
-      (drgnx-test-with-modules '(tools/review) :strict t
-                               (puthash "rev-run" (list :root "/x/" :state 'reviewing) drgnx-review--runs)
-                               (puthash "rev-done" (list :root "/x/" :state 'done) drgnx-review--runs)
-                               (setq drgnx-review--current "rev-run")))
+      ;; the sessions are put in inside the body, where the modules are loaded, and stay for the teardown, which
+      ;; kills the running reviewer; the list is given back after
+      (unwind-protect
+          (drgnx-test-with-modules '(tools/review) :strict t
+                                   (setq drgnx-agents--sessions (list running answered))
+                                   (puthash "rev-run" (list :root "/x/" :state 'reviewing) drgnx-review--runs)
+                                   (puthash "rev-done" (list :root "/x/" :state 'done) drgnx-review--runs)
+                                   (setq drgnx-review--current "rev-run"))
+        (setq drgnx-agents--sessions sessions)))
     (should (equal killed (list running)))
     (should (zerop (hash-table-count drgnx-review--runs)))
     (should-not drgnx-review--current)))

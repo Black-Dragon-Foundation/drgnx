@@ -1,0 +1,18 @@
+{"scenario": "work/bases-survive-a-hub-restart", "requires": ["v1", "test-hooks"], "doc": "Pattern B. A plan run's task tree records the branch it was cut from (the run's integration branch) and a base snapshot when the hub makes it; the row is in work.db after the hub is restarted. An agent never writes it (work/an-agent-cannot-write-hub-records)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")))) (drgnx-agents-routes ((implement \"mock-claude\") (review \"mock-claude\"))))\n"}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "silent 600\n"}
+{"do": "start", "hub": "h"}
+{"do": "run", "args": ["job", "propose", "$SCENARIOS/../fixtures/plans/job-cli.md", "--repo", "$ROOT/repo", "--json"], "expect_code": 0, "expect_stdout": {"id": "$capture:job", "status": "proposed"}}
+{"do": "run", "args": ["job", "approve", "$job", "--budget", "5"], "expect_code": 0}
+{"do": "file", "path": "$ROOT/w.log", "contains": "\"prompt\"", "within_ms": 90000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*), count(base_commit), count(base_tree), min(base_branch like 'job/%') from worktree_base", "rows": [[1, 1, 1, 1]]}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "send", "conn": "c2", "json": {"id": 1, "method": "job/stop", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c2", "json": {"id": 1, "result": {"id": "$job"}}, "within_ms": 30000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*), count(base_tree) from worktree_base", "rows": [[1, 1]]}

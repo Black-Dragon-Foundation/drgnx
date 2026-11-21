@@ -1,0 +1,25 @@
+{"scenario": "pair/a-before-tool-edit-rule-sees-edit-file-in-a-chat", "requires": ["v1", "test-hooks"], "doc": "[C] A before-tool rule on `edit` under `secret/**` fires on an edit that arrives through the hub's door, in a project chat of two agents: a Kimi chat (its native Write is denied by the lock, so the door is its only way to edit) and a Claude chat (whose native edits reach the seam). Each one's drgnx edit_file on secret/key is refused with the rule's reason and the file is not created, each one's edit_file on README goes through, and the timeline shows the edit rule's deny on edit_file at the hub's server (`hub-server`), not at the seam."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project/secret && cd $ROOT/project && git init -q && printf 'one\\n' > README && printf 'two\\n' > README2 && printf 'old\\n' > secret/key && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-kimi\" :provider kimi :command (\"$MOCK\" \"acp\" \"--as\" \"kimi\")) (\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "no-secrets", "point": "before-tool", "tool-kinds": ["edit"], "paths": ["secret/**"], "verdict": "deny", "reason": "secrets stay"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-kimi", "cwd": "$ROOT/project", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:kimi"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$kimi", "text": "call:edit_file {\"path\": \"$ROOT/project/secret/key\", \"old\": \"old\", \"new\": \"new\"}\ncall:read_file {\"path\": \"$ROOT/project/README\"}\ncall:edit_file {\"path\": \"$ROOT/project/README\", \"old\": \"one\", \"new\": \"ONE\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/get", "params": {"id": "$kimi"}}, "expect": {"id": 4, "result": {"session": {"id": "$kimi", "status": "idle"}, "entries": {"$contains": [{"type": "agent", "text": "call: drgnx refused mcp__drgnx__edit_file; the rule no-secrets said: «secrets stay»call: one\ncall: written to the file on disk (no editor has it open)"}]}}}, "within_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$capture:claude"}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/send", "params": {"id": "$claude", "text": "call:edit_file {\"path\": \"$ROOT/project/secret/key\", \"old\": \"old\", \"new\": \"new\"}\ncall:read_file {\"path\": \"$ROOT/project/README2\"}\ncall:edit_file {\"path\": \"$ROOT/project/README2\", \"old\": \"two\", \"new\": \"TWO\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 7, "method": "agents/get", "params": {"id": "$claude"}}, "expect": {"id": 7, "result": {"session": {"id": "$claude", "status": "idle"}, "entries": {"$contains": [{"type": "agent", "text": "call: drgnx refused mcp__drgnx__edit_file; the rule no-secrets said: «secrets stay»call: two\ncall: written to the file on disk (no editor has it open)"}]}}}, "within_ms": 20000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cat $ROOT/project/secret/key $ROOT/project/README $ROOT/project/README2"], "expect_code": 0, "expect_stdout": "old\nONE\nTWO\n"}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "timeline/get", "params": {"scope": "session", "id": "$kimi"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": {"steps": {"$contains": [{"hooks": [{"tool": "mcp__drgnx__edit_file", "at": "hub-server", "outcome": "deny"}]}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "timeline/get", "params": {"scope": "session", "id": "$claude"}}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": {"steps": {"$contains": [{"hooks": [{"tool": "mcp__drgnx__edit_file", "at": "hub-server", "outcome": "deny"}]}]}}}, "within_ms": 10000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select json_extract(e.data, '$.outcome'), json_extract(e.data, '$.at'), json_extract(e.data, '$.tool') from event e join tx t on t.id = e.tx where t.actor = 'hub:hooks'", "rows": [["deny", "hub-server", "mcp__drgnx__edit_file"], ["deny", "hub-server", "mcp__drgnx__edit_file"]]}

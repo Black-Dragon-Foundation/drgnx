@@ -53,7 +53,7 @@ and a way to call an asynchronous function whose answer lands in `drgnx-wmt-resu
 
 (defun drgnx-wm-other--start (compositor monitors saved)
   "Start a daemon session under COMPOSITOR with MONITORS outputs, its layout file SAVED; return the session."
-  (let* ((s (drgnx-ui-start "drgnx" "1280x800" 60 t monitors compositor))
+  (let* ((s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1280x800") 60 t monitors compositor))
          (sess (drgnx-ui-own-session (plist-get s :name))))
     (drgnx-wm-other--eval sess (format "(progn (setq drgnx-persist-file %S) %s)" saved drgnx-wm-other--session-lisp))
     sess))
@@ -73,7 +73,7 @@ and a way to call an asynchronous function whose answer lands in `drgnx-wmt-resu
   "Move the shown file of SESS's main window into a new window, `drgnx-wmt-aux'; wait until the WM has put it on
 a monitor."
   (drgnx-wm-other--eval
-   sess "(progn (with-selected-frame drgnx-wmt-main (drgnx-frames-move-editor) (setq drgnx-wmt-aux (selected-frame))) t)")
+   sess "(progn (with-selected-frame drgnx-wmt-main (drgnx-grid-move-tab-to-new-frame) (setq drgnx-wmt-aux (selected-frame))) t)")
   (should (drgnx-wm-other--until (lambda () (eql 2 (drgnx-wm-other--eval sess "(length (drgnx-wmt-gui-frames))")))))
   (should (drgnx-wm-other--until
            (lambda () (drgnx-wm-other--eval sess "(and (frame-visible-p drgnx-wmt-aux) (drgnx-wmt-monitor drgnx-wmt-aux))")))))

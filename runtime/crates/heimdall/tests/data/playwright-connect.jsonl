@@ -1,0 +1,35 @@
+{"note":"Playwright's connectOverCDP start, written from the protocol JSON. The hub attaches to the browser target first, and the agent gets that session."}
+{"to_browser":{"id":1073741824,"method":"Target.attachToBrowserTarget"}}
+{"browser":{"method":"Target.attachedToTarget","params":{"sessionId":"S-browser","targetInfo":{"targetId":"T-browser","type":"browser","title":"","url":"","attached":true,"canAccessOpener":false},"waitingForDebugger":false}}}
+{"drop":true}
+{"browser":{"id":1073741824,"result":{"sessionId":"S-browser"}}}
+{"drop":true}
+{"note":"the agent talks as on a root connection: its messages get the browser session, and replies lose it"}
+{"agent":{"id":1,"method":"Browser.getVersion"}}
+{"to_browser":{"id":1,"method":"Browser.getVersion","sessionId":"S-browser"}}
+{"browser":{"id":1,"result":{"protocolVersion":"1.3","product":"HeadlessChrome/142.0.7444.59","revision":"@0","userAgent":"Mozilla/5.0 HeadlessChrome/142.0.7444.59","jsVersion":"14.2"},"sessionId":"S-browser"}}
+{"to_agent":{"id":1,"result":{"protocolVersion":"1.3","product":"HeadlessChrome/142.0.7444.59","revision":"@0","userAgent":"Mozilla/5.0 HeadlessChrome/142.0.7444.59","jsVersion":"14.2"}}}
+{"agent":{"id":2,"method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true}}}
+{"to_browser":{"id":2,"method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true},"sessionId":"S-browser"}}
+{"note":"a page attaches under the agent's session, paused: the event loses the session id, the child is the agent's"}
+{"browser":{"method":"Target.attachedToTarget","params":{"sessionId":"S-page","targetInfo":{"targetId":"T-page","type":"page","title":"about:blank","url":"about:blank","attached":true,"canAccessOpener":false,"browserContextId":"C-default"},"waitingForDebugger":true},"sessionId":"S-browser"}}
+{"to_agent":{"method":"Target.attachedToTarget","params":{"sessionId":"S-page","targetInfo":{"targetId":"T-page","type":"page","title":"about:blank","url":"about:blank","attached":true,"canAccessOpener":false,"browserContextId":"C-default"},"waitingForDebugger":true}}}
+{"browser":{"id":2,"result":{},"sessionId":"S-browser"}}
+{"to_agent":{"id":2,"result":{}}}
+{"note":"the page's own session keeps its id both ways; a key CDP does not have is not passed on"}
+{"agent":{"id":3,"method":"Page.enable","sessionId":"S-page","extra":"dropped"}}
+{"to_browser":{"id":3,"method":"Page.enable","sessionId":"S-page"}}
+{"agent":{"id":4,"method":"Runtime.runIfWaitingForDebugger","sessionId":"S-page"}}
+{"to_browser":"same"}
+{"browser":{"id":3,"result":{},"sessionId":"S-page"}}
+{"to_agent":"same"}
+{"browser":{"method":"Page.loadEventFired","params":{"timestamp":1.5},"sessionId":"S-page"}}
+{"to_agent":"same"}
+{"note":"a worker attaches under the page: it is the agent's too"}
+{"browser":{"method":"Target.attachedToTarget","params":{"sessionId":"S-worker","targetInfo":{"targetId":"T-worker","type":"worker","title":"w.js","url":"http://127.0.0.1:5173/w.js","attached":true,"canAccessOpener":false},"waitingForDebugger":true},"sessionId":"S-page"}}
+{"to_agent":"same"}
+{"agent":{"id":5,"method":"Runtime.enable","sessionId":"S-worker"}}
+{"to_browser":"same"}
+{"note":"the hub's root events never reach the agent"}
+{"browser":{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"T-page","type":"page","title":"","url":"about:blank","attached":false,"canAccessOpener":false}}}}
+{"drop":true}

@@ -231,8 +231,13 @@ folder it belongs to; it never goes into the repository:
 - **No question asked.** It is your file, so every value applies without the "unsafe local variables" prompt, and
   its `(:eval …)` code runs after its values. Nothing is ever added to `safe-local-variable-values`.
 - **Refused, with the line:** a setting that has one value for all of Emacs (a global minor mode, `drgnx-agents-default`
-  …: "set it in Settings → User"), and drgnx's security settings, which no workspace may set. The rest of the file
+  …: "set it in Settings → User"), and drgnx's security settings, which no repository may set. The rest of the file
   applies; the problem names the file and the line.
+- **Your own per-project security choices** are the one exception, and only in your private file: a project-scoped
+  security setting such as `drgnx-agents-plugins` (which plugins run in this project) or `drgnx-agents-hook-rules`
+  holds a project's value there, on the Workspace tab of Settings. A repository's shared `.drgnx/settings.el`, a
+  `.dir-locals.el` and an agent cannot set them, and a security setting that is not project-scoped is refused here
+  too.
 - **`enable-local-variables`** is respected: when it is nil no workspace layer applies; when it is `:safe` only safe
   values apply.
 - **Project settings** such as search's include and exclude globs are read with the project's folder rather than set
@@ -286,7 +291,7 @@ yours and always applies (only drgnx's security settings and global-only setting
   Such a folder also counts as trusted content: Flymake checkers and symbol shorthands work there.
 - **Never trusted:** your home folder, `/`, the temp folders and anything above them, and remote folders, also as
   `drgnx-trust-parents` entries.
-- **Trust This Folder** (File menu, palette, or a click on "Restricted Mode") shows the code in the folder's
+- **Trust This Folder** (File menu, palette, or the offer a click on the Restricted Mode shield makes) shows the code in the folder's
   `.dir-locals.el`, `.dir-locals-2.el` and `.drgnx/settings.el` and asks once; trusting allows exactly that code. Code
   added or changed afterwards waits.
 - **Untrust This Folder** takes everything back at once: the values trust gave leave the folder's open buffers, and the
@@ -540,6 +545,11 @@ never run; yours wins over a shipped one. It also refines options the package de
 that holds a program (a workspace file cannot set it), `:merge alist` one that modules and you extend.
 A described variable behaves like any other setting; drgnx sets it with `set-default` after recording it, and taking
 the value away puts back what it was.
+
+**Extensions** (a page of its own under drgnx): the packages you asked for, read-only, taken from the lock's `:wanted
+user` marks. To add or remove one use the [Extensions view](extensions.md); a hand edit of `packages.eld` or the lock is
+not needed. The settings of the view itself (`drgnx-extensions-check-updates`, `-review`, `-recommended`,
+`drgnx-packages-off`) are listed in [Extensions](extensions.md#settings).
 
 **Other tools** (Workspace group): the files other tools keep in the folder (`.editorconfig`, `.prettierrc*`,
 `pyproject.toml`, `.clang-format`, `.clangd`, `rust-analyzer.toml`, `tsconfig.json`, `.eslintrc*`, `biome.json`,

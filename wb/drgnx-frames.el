@@ -54,9 +54,13 @@ client frame; never a child frame, never an EDITOR frame) — the main window un
 (defun drgnx-frames--made (frame)
   "`after-make-frame-functions': a new terminal frame (a client's) is the main window when none is — not a child
 frame, not one on the daemon's initial terminal.  A graphical frame waits for `drgnx-first-gui-frame-hook' (it
-may not be mapped yet)."
-  (when (and (eq (drgnx-state-frame-kind frame) 'tty) (drgnx-frames--candidate-p frame))
-    (drgnx-frames-mark-main frame)))
+may not be mapped yet), but any later one takes the role from a terminal window (all graphical windows closed, a
+terminal one became main): `drgnx-frames--first-gui'."
+  (pcase (drgnx-state-frame-kind frame)
+    ('tty (when (drgnx-frames--candidate-p frame) (drgnx-frames-mark-main frame)))
+    ('gui (when-let* ((main (drgnx-frames--main))
+                      ((not (eq (drgnx-state-frame-kind main) 'gui))))
+            (drgnx-frames--first-gui)))))
 
 (defun drgnx-frames--first-gui ()
   "`drgnx-first-gui-frame-hook': the first graphical window is the main one — also when the daemon's first client
@@ -128,10 +132,16 @@ Sorts, never filters: every buffer stays a candidate."
 
 ;;;; New windows
 
+(defun drgnx-frames-first-window (frame)
+  "FRAME's first window that is not its rail: the rail (a dedicated window beside the grid) is `frame-first-window'
+since layout A, and a new window's buffer goes in the window after it."
+  (or (seq-find (lambda (w) (not (eq (window-parameter w 'drgnx-role) 'rail))) (window-list frame 'nomini))
+      (frame-first-window frame)))
+
 (defun drgnx-frames--new (buffer tabs)
   "A new auxiliary window showing BUFFER with TABS; selected."
   (let ((f (make-frame '((drgnx-frame-role . aux)))))
-    (let ((w (frame-first-window f)))
+    (let ((w (drgnx-frames-first-window f)))
       (set-window-buffer w buffer)
       (set-window-prev-buffers w nil)
       (set-window-parameter w 'drgnx-tabs tabs))
@@ -139,13 +149,6 @@ Sorts, never filters: every buffer stays a candidate."
     (drgnx-chrome-apply f t)
     (drgnx-signal-post 'tabs-changed)
     f))
-
-(defun drgnx-frames-move-editor ()
-  "Move the shown file to a new window (it leaves this group's tabs)."
-  (interactive)
-  (let* ((g (drgnx-groups--current)) (b (window-buffer g)))
-    (drgnx-chrome--close g b)
-    (drgnx-frames--new b (list b))))
 
 (defun drgnx-frames-open-editor ()
   "Open the shown file in a new window too (both show it)."

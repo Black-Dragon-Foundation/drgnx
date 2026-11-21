@@ -42,9 +42,11 @@
 
 (defun drgnx-tty-popups--borders (ascii)
   "Set the box slots of `standard-display-table': ASCII marks when ASCII is non-nil, else box drawing.
-Only these slots: the window dividers and everything else keep what they have."
+Also the `vertical-border' slot, which draws the border between side-by-side windows (│ or |).  Only these slots:
+everything else keeps what it has."
   (unless standard-display-table (setq standard-display-table (make-display-table)))
   (let ((glyphs (if ascii drgnx-tty-popups--box-ascii drgnx-tty-popups--box-unicode)))
+    (set-display-table-slot standard-display-table 'vertical-border (make-glyph-code (aref glyphs 0)))
     (seq-do-indexed (lambda (slot i)
                       (set-display-table-slot standard-display-table slot (make-glyph-code (aref glyphs i))))
                     drgnx-tty-popups-box-slots)))
@@ -193,6 +195,10 @@ A killed terminal's frames are dead when this runs (the classifier says nil for 
   "Empty the box slots of `standard-display-table' that still hold drgnx's glyphs (Emacs's own borders again); a
 slot someone else set since stays."
   (when standard-display-table
+    (when (memql (display-table-slot standard-display-table 'vertical-border)
+                 (list (make-glyph-code (aref drgnx-tty-popups--box-unicode 0))
+                       (make-glyph-code (aref drgnx-tty-popups--box-ascii 0))))
+      (set-display-table-slot standard-display-table 'vertical-border nil))
     (seq-do-indexed (lambda (slot i)
                       (when (memql (display-table-slot standard-display-table slot)
                                    (list (make-glyph-code (aref drgnx-tty-popups--box-unicode i))

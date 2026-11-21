@@ -48,7 +48,30 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
                       (drgnx-ui-session-env s)))
       (drgnx-ui-stop "drgnx-ui-1-00000a")
       (should-not (file-exists-p (file-name-directory (plist-get s :socket))))
-      (should-not (file-exists-p (drgnx-ui-socket-dir "" deep))))))   ; the per-root dir, once empty
+      ;; the shared per-root dir stays: another process may be starting a session in it
+      (should (file-directory-p (drgnx-ui-socket-dir "" deep))))))
+
+(ert-deftest drgnx-ui/a-session-starts-while-another-removes-the-shared-dir ()
+  ;; sessions start and stop from several processes at once: a stop that removed the per-root socket dir once it was
+  ;; empty could fall between another start's making of that dir and the making of its own in it (2026-11-17, kwin:
+  ;; "Creating directory: No such file or directory", exit 255).  A stop leaves the shared dir in place.
+  (drgnx-ui-test--with-state
+    (let* ((shared (drgnx-ui-socket-dir "" root))
+           (real (symbol-function 'make-directory))
+           (stopped nil))
+      (drgnx-ui-prepare-run "drgnx-ui-1-00000c" nil nil root)   ; the session that stops
+      (cl-letf (((symbol-function 'make-directory)
+                 (lambda (dir &optional parents)
+                   (when (and (not stopped) (equal (file-name-directory (directory-file-name dir))
+                                                   (file-name-as-directory shared)))
+                     (setq stopped t)
+                     (drgnx-ui-stop "drgnx-ui-1-00000c"))   ; the other process's stop, at that moment
+                   (funcall real dir parents))))
+        (let ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000b" nil nil root)))
+          (should stopped)
+          (should (file-directory-p (file-name-directory (plist-get s :socket))))
+          (should (= (file-modes shared) #o700))
+          (delete-directory (file-name-directory (plist-get s :socket)) t))))))
 
 (ert-deftest drgnx-ui/socket-dirs-differ-between-state-roots ()
   (drgnx-ui-test--with-state
@@ -364,6 +387,15 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 (ert-deftest drgnx-ui/act-rejects-unknown-actions ()
   (should-error (drgnx-ui-act '(:socket "/nonexistent") '(:fly 1)) :type 'drgnx-ui-error))
 
+(ert-deftest drgnx-ui/a-pause-action-queues-a-wait ()
+  ;; (:pause S): S seconds of no input before the next action, queued in the session like a click's hold
+  (let (sent)
+    (cl-letf (((symbol-function 'drgnx-ui-call) (lambda (_sess form &rest _) (push form sent) nil)))
+      (drgnx-ui-act '(:socket "/nonexistent") '(:pause 0.5)))
+    (should (equal sent '("(drgnx-uitest-api-pause 0.5)"))))
+  (dolist (bad '(-1 "1" nil))
+    (should-error (drgnx-ui-act '(:socket "/nonexistent") (list :pause bad)) :type 'drgnx-ui-error)))
+
 (ert-deftest drgnx-ui/drag-actions-take-pixels-in-any-shape ()
   ;; (:drag (:from (X . Y) :to (X . Y) :steps N)), and the same from JSON: arrays and objects
   (should (equal (drgnx-ui--drag-spec '(:from (10 . 20) :to (110 . 20))) '(10 20 110 20 1 nil)))
@@ -487,6 +519,14 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (drgnx-ui-stop name)
       (should-not (file-exists-p (expand-file-name name runtime)))
       (should-not (file-exists-p (expand-file-name (concat name ".lock") runtime))))))
+
+(ert-deftest drgnx-ui/the-ui-kit-leaves-the-harness-its-functions ()
+  "The UI kit (core/drgnx-ui-kit.el) once defined its own `drgnx-ui--run', a button's action: loaded after the
+harness, it replaced the harness's (PROGRAM &rest ARGS), and every later stop, reap and pgrep failed with
+wrong-number-of-arguments (19 rows of this file, once a row loaded the kit)."
+  (require 'drgnx-ui-kit)
+  (should (equal (func-arity 'drgnx-ui--run) '(1 . many)))
+  (should (equal (car (drgnx-ui--run "true")) 0)))
 
 (ert-deftest drgnx-ui/process-groups-are-verified-before-signalling ()
   (should-not (drgnx-ui--group-ours-p "1" "/any/run"))
@@ -650,7 +690,7 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 (ert-deftest drgnx-ui/a-test-process-ending-stops-the-sessions-it-started ()
   ;; bin/drgnx check (and the test-* tiers) set DRGNX_UI_STOP_ON_EXIT: a test process that is ended — a
   ;; timeout, C-c — stops its own sessions on the way out; `drgnx ui start' sessions are meant to outlive it
-  (let ((drgnx-ui--own nil) (stopped nil))
+  (let ((drgnx-ui--own nil) (stopped nil) (kill-emacs-hook nil))
     (cl-letf (((symbol-function 'drgnx-ui-stop) (lambda (n) (push (cons n (getenv "DRGNX_UI_STATE")) stopped))))
       (drgnx-ui--own-add "drgnx-ui-7-00000a" "/tmp/root-a")
       (let ((process-environment (cons "DRGNX_UI_STOP_ON_EXIT" process-environment)))   ; unset
@@ -659,14 +699,16 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (let ((process-environment (cons "DRGNX_UI_STOP_ON_EXIT=1" process-environment)))
         (drgnx-ui--stop-own-on-exit)
         (should (equal stopped '(("drgnx-ui-7-00000a" . "/tmp/root-a")))))))     ; in the root it was started in
-  (let ((drgnx-ui--own nil))
+  (let ((drgnx-ui--own nil) (kill-emacs-hook nil))
     (drgnx-ui--own-add "drgnx-ui-8-00000a" "/tmp/r")
+    (should (memq #'drgnx-ui--stop-own-on-exit kill-emacs-hook))                 ; the exit hook only while one is owned
     (drgnx-ui--own-remove "drgnx-ui-8-00000a")                                   ; a session stopped normally is forgotten
-    (should-not drgnx-ui--own)))
+    (should-not drgnx-ui--own)
+    (should-not (memq #'drgnx-ui--stop-own-on-exit kill-emacs-hook))))
 
 (ert-deftest drgnx-ui/ending-stops-all-own-units-without-blocking-before-it-waits ()
   ;; CHK-2: the stops run side by side — one slow session cannot use up the grace the others need
-  (let ((drgnx-ui--own nil) (events nil))
+  (let ((drgnx-ui--own nil) (events nil) (kill-emacs-hook nil))
     (cl-letf (((symbol-function 'drgnx-ui-stop) (lambda (n) (push (list 'stop n) events)))
               ((symbol-function 'drgnx-ui--unit-owned-p) (lambda (n run) (and (string-suffix-p n run) t)))
               ((symbol-function 'drgnx-ui--run) (lambda (&rest args) (push (cons 'run args) events) (cons 0 ""))))
@@ -907,6 +949,111 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (member "DRGNX_TEST_SELECTOR=\"^drgnx-scn/\"" env))
       (should (member "DRGNX_SCENARIO_CONFIG=minimal" env)))))
 
+(defun drgnx-ui-test--file-sessions-here (files _jobs out-dir &optional on-start on-end)
+  "`drgnx-ui--run-file-sessions' in this Emacs, no child Emacs: each of FILES through `drgnx-ui-run-ui-file-session',
+so through `drgnx-ui-test-session-function', which a row binds to a stand-in."
+  (let ((i 0))
+    (mapcar (lambda (f)
+              (let ((out (expand-file-name (format "%d.json" (cl-incf i)) out-dir)))
+                (when on-start (funcall on-start f))
+                (drgnx-ui-run-ui-file-session f out)
+                (let ((r (list f out 0 0.0 nil))) (when on-end (funcall on-end r)) r)))
+            files)))
+
+(ert-deftest drgnx-ui/a-timed-out-session-says-where-it-hung ()
+  :tags '(:cond)                        ; a real process group stands in for the session's
+  ;; a session killed at its timeout left only "no results" (2026-11-17, kwin: 21 min, then 150 s, in a busy Emacs):
+  ;; before the kill its session.log gets each process of the group with its state and wait, and the Emacs's backtrace
+  ;; or that its server did not answer
+  (let* ((run (make-temp-file "duih" t))
+         (p (make-process :name "duih" :command '("sleep" "30") :noquery t :connection-type 'pipe)))
+    (unwind-protect
+        (progn
+          (write-region (number-to-string (process-id p)) nil (expand-file-name "pgid" run) nil 'silent)
+          (drgnx-ui--hang-report (list :socket (expand-file-name "no-server" run)) run)
+          (let ((log (with-temp-buffer (insert-file-contents (expand-file-name "session.log" run)) (buffer-string))))
+            (should (string-match-p (format "^  %d sleep S " (process-id p)) log))
+            (should (string-match-p "its Emacs's backtrace:\nno answer" log))))
+      (delete-process p)
+      (delete-directory run t))))
+
+(ert-deftest drgnx-ui/each-file-is-told-as-it-starts-and-ends ()
+  :tags '(:cond)                        ; real processes stand in for the files' sessions
+  ;; a run the slot guard kills prints nothing that comes at the end: the per-file runner tells each file's start and
+  ;; end as they happen, so a hung file is named (2026-11-17, a kwin lane killed after 21 min said nothing)
+  (let ((out-dir (make-temp-file "duis" t)) (told nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-ui--start-file-session)
+                   (lambda (file _out)
+                     (make-process :name file :command (list "sh" "-c" (if (equal file "slow") "sleep 2" "true"))
+                                   :noquery t :connection-type 'pipe
+                                   :sentinel (lambda (p _e) (unless (process-live-p p) (process-put p :done (float-time))))))))
+          (drgnx-ui--run-file-sessions
+           '("fast" "slow") 2 out-dir
+           (lambda (f) (push (list 'start f) told))
+           (lambda (r) (push (list 'end (car r) (and (process-live-p (get-process "slow")) t)) told)))
+          (setq told (nreverse told))
+          (should (equal (seq-take told 2) '((start "fast") (start "slow"))))
+          (should (equal (nth 2 told) '(end "fast" t)))      ; told while the slow one still runs
+          (should (equal (car (nth 3 told)) 'end)))
+      (delete-directory out-dir t))))
+
+(defmacro drgnx-ui-test--with-ui-repo (repo &rest body)
+  "Run BODY with REPO bound to a fresh checkout holding one GUI test file (test/ui/a-test.el) and `drgnx-ui-repo-dir'
+bound to it; the per-file runner's sessions run in this Emacs (`drgnx-ui-test--file-sessions-here')."
+  (declare (indent 1))
+  `(let ((,repo (make-temp-file "duir" t)))
+     (unwind-protect
+         (progn
+           (make-directory (expand-file-name "test/ui" ,repo) t)
+           (write-region "" nil (expand-file-name "test/ui/a-test.el" ,repo) nil 'silent)
+           (cl-letf (((symbol-function 'drgnx-ui--run-file-sessions) #'drgnx-ui-test--file-sessions-here))
+             (let ((drgnx-ui-repo-dir ,repo)
+                   (process-environment (append '("DRGNX_UI_LAUNCHER" "DRGNX_UI_ONE_SESSION" "DRGNX_TEST_SELECTOR")
+                                                process-environment)))
+               ,@body)))
+       (delete-directory ,repo t))))
+
+(ert-deftest drgnx-ui/the-gui-suite-gets-the-hub-and-requires-it ()
+  ;; a hub row in the session never skips: it gets the hub (the inherited one, else the checkout's build) and
+  ;; DRGNX_TEST_HUB_REQUIRED=1, under which a hub fixture that finds none fails; in a session per file (the default,
+  ;; through `drgnx-ui-test-session-function') and in one session (DRGNX_UI_ONE_SESSION=1)
+  (drgnx-ui-test--with-state
+    (drgnx-ui-test--with-ui-repo repo
+      (let* ((bin (expand-file-name "runtime/target/debug/ratatoskr" repo)) (env nil) (envs nil)
+             (stand-in (lambda (_dir &optional _timeout _config extra-env) (setq env extra-env) (list 1 nil root)))
+             (drgnx-ui-test-session-function stand-in)
+             (run (lambda ()
+                    (setq envs nil)
+                    (dolist (one '(nil "DRGNX_UI_ONE_SESSION=1") envs)
+                      (setq env 'not-started)
+                      (let ((process-environment (if one (cons one process-environment) process-environment)))
+                        (drgnx-ui-run-ui-session-tests))
+                      (push env envs)))))
+        (cl-letf (((symbol-function 'drgnx-ui-run-ert-session) stand-in))
+          (let ((standard-output #'ignore) (process-environment (cons "DRGNX_RATATOSKR_BIN" process-environment)))
+            (funcall run)
+            (dolist (e envs)
+              (should (member "DRGNX_TEST_HUB_REQUIRED=1" e))
+              (should-not (drgnx-ui-test--env-value e "DRGNX_RATATOSKR_BIN")))
+            (make-directory (file-name-directory bin) t)
+            (write-region "" nil bin nil 'silent)
+            (set-file-modes bin #o755)
+            (funcall run)
+            (dolist (e envs) (should (equal (drgnx-ui-test--env-value e "DRGNX_RATATOSKR_BIN") bin)))
+            (let ((process-environment (cons "DRGNX_RATATOSKR_BIN=/opt/hub/ratatoskr" process-environment)))
+              (funcall run)
+              (dolist (e envs) (should (equal (drgnx-ui-test--env-value e "DRGNX_RATATOSKR_BIN") "/opt/hub/ratatoskr"))))))))))
+
+(ert-deftest drgnx-ui/a-hub-row-with-no-hub-fails-when-the-hub-is-required ()
+  (load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
+  (load (expand-file-name "test/fixtures/hub-client-fixture" drgnx-dir) nil t)
+  (let ((process-environment (append '("DRGNX_RATATOSKR_BIN" "DRGNX_TEST_HUB_REQUIRED=1") process-environment)))
+    (should-error (eval '(drgnx-test-with-ratatoskr (make-temp-file "duih" t) t) t) :type 'ert-test-failed)
+    (should-error (eval '(drgnx-hub-client-test--with-ratatoskr t) t) :type 'ert-test-failed))
+  (let ((process-environment (append '("DRGNX_RATATOSKR_BIN" "DRGNX_TEST_HUB_REQUIRED") process-environment)))
+    (should-error (eval '(drgnx-test-with-ratatoskr (make-temp-file "duih" t) t) t) :type 'ert-test-skipped)))
+
 (defun drgnx-ui-test--env-value (env name)
   "The value of NAME in ENV (\"K=V\" strings) as `env -i' sees it: the last entry wins."
   (let (v) (dolist (kv env v) (when (string-prefix-p (concat name "=") kv) (setq v (substring kv (1+ (length name))))))))
@@ -1086,3 +1233,36 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
   ;; the native shell: the exact scale, and the monitor's mode
   (should (drgnx-uitest-scale-ready-p 1.25 "2880x1800" 1.25 '(0 0 2880 1800)))
   (should-not (drgnx-uitest-scale-ready-p 1.25 "2880x1800" 1.25 '(0 0 2304 1440))))
+
+(ert-deftest drgnx-ui/a-session-killed-at-its-deadline-says-why-and-how-far-it-got ()
+  "A GUI session killed at DRGNX_UI_TEST_TIMEOUT (exit 124) writes no results; the tier says the cause, the tests
+that ended (a failure by name) and the one running, from the session's progress file, never a bare \"no results\".
+In a session per file (the default, through `drgnx-ui-test-session-function') and in one (DRGNX_UI_ONE_SESSION=1)."
+  (drgnx-ui-test--with-ui-repo _repo
+    (let* ((run (make-temp-file "drgnx-ui-run" t)) (process-environment (cons "DRGNX_UI_EVIDENCE" process-environment))
+           (killed (lambda (&rest _) (list 124 nil run)))
+           (drgnx-ui-test-session-function killed))
+      (unwind-protect
+          (progn
+            (write-region "start a/one\nend a/one passed\nstart a/two\nend a/two failed\nstart a/three\n" nil
+                          (expand-file-name "results.json.progress" run))
+            (dolist (one '(nil "DRGNX_UI_ONE_SESSION=1"))
+              (let ((out (with-output-to-string
+                           (cl-letf (((symbol-function 'drgnx-ui-run-ert-session) killed))
+                             (let ((process-environment (if one (cons one process-environment) process-environment)))
+                               (drgnx-ui-run-ui-session-tests))))))
+                (should (equal (list one t t t t)
+                               (cons one (mapcar (lambda (re) (and (string-match-p re out) t))
+                                                 (list "TIMEOUT.*DRGNX_UI_TEST_TIMEOUT" "a/three was running"
+                                                       "FAILED a/two" "passed before the timeout: 1"))))))))
+        (delete-directory run t)))))
+
+(ert-deftest drgnx-ui/a-fail-line-keeps-the-condition-short ()
+  ;; a condition of megabytes (a screen dump, a whole buffer) is cut to its first 2,000 characters, saying how much
+  ;; was left out: the batch's log stays small enough for builder-run to bring back
+  (let ((line (drgnx-ui--fail-line "a/big" (concat "(error \"" (make-string 20000 ?x) "\")"))))
+    (should (string-prefix-p "  FAIL a/big: (error \"xxx" line))
+    (should (< (length line) 2200))
+    (should (string-match-p "18010 more characters" line))
+    (should (string-suffix-p "\n" line)))
+  (should (equal (drgnx-ui--fail-line "a/small" "(error \"b\x01\")") "  FAIL a/small: (error \"b\\x01\")\n")))

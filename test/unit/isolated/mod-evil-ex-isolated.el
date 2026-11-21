@@ -38,7 +38,7 @@ Window, tab and group commands are recorded in `drgnx-evil-ex-test--calls' (as (
             (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
             (drgnx-modules--table nil) (drgnx-modules--report nil)
             (drgnx-modules--state nil) (drgnx-modal-engines nil) (drgnx-modal-running nil)
-            (drgnx-keys--applied nil) (drgnx-keys-profiles nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
+            (drgnx-keys-profiles nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
             (drgnx-keys--session-layers nil)
             (emulation-mode-map-alists emulation-mode-map-alists)
             (mode-line-saved (default-value 'mode-line-format))
@@ -172,7 +172,7 @@ Window, tab and group commands are recorded in `drgnx-evil-ex-test--calls' (as (
                        ("[ d" . code-previous-problem) ("C-w h" . focus-left) ("C-w j" . focus-down)
                        ("C-w k" . focus-up) ("C-w l" . focus-right)))
           (should (eq (key-binding (kbd (car row))) (fn (cdr row)))))
-        (should (eq (fn 'code-next-problem) #'flymake-goto-next-error)))
+        (should (eq (fn 'code-next-problem) #'drgnx-marks-next-problem)))
       ;; the conflict report stays clean: none of these keys is reported, and nothing is a problem
       (should-not (plist-get drgnx-keys-last :problems))
       (dolist (c (plist-get drgnx-keys-last :conflicts))
@@ -192,7 +192,7 @@ Window, tab and group commands are recorded in `drgnx-evil-ex-test--calls' (as (
       (drgnx-evil-stop)
       (dolist (cell drgnx-evil--advice-pairs)
         (should-not (advice-member-p (cdr cell) (car cell))))
-      (should (= (length drgnx-evil--advice-pairs) 12))
+      (should (= (length drgnx-evil--advice-pairs) 11))   ; Vim's only (C-w o) is the workbench's remap now
       (dolist (cell '(evil-save-and-quit evil-quit-all-with-error-code))
         (should (assq cell drgnx-evil--advice-pairs)))
       (should-not (advice-member-p #'drgnx-evil-ex-quit 'evil-quit))
@@ -294,19 +294,16 @@ Window, tab and group commands are recorded in `drgnx-evil-ex-test--calls' (as (
         (evil-ex-execute "bd!")
         (should-not (buffer-live-p b))))))
 
-(ert-deftest drgnx-evil-ex/c-w-o-closes-the-other-groups-only ()
+(ert-deftest drgnx-evil-ex/c-w-o-is-full-size ()
+  ;; Vim's only (C-w o, C-w C-o) and C-w _, C-w | run Full-Size Tile with the workbench (its remaps): the other tiles
+  ;; come back, where closing them would lose the layout
   (drgnx-evil-ex-test--with
     (drgnx-evil-ex-test--buffer b #'text-mode
-      (let ((deleted nil) (keep (selected-window)))
-        (drgnx-evil-ex-test--layout (list b) (list 'g1 keep 'g3)
-          (cl-letf (((symbol-function 'delete-window) (lambda (w) (push w deleted))))
-            (execute-kbd-macro (kbd "C-w o"))
-            (should (equal (sort (mapcar #'symbol-name deleted) #'string<) '("g1" "g3")))
-            (setq deleted nil)
-            (execute-kbd-macro (kbd "C-w C-o"))
-            (should (= (length deleted) 2))))
-        (drgnx-evil-stop)
-        (should-not (advice-member-p #'drgnx-evil-ex-only 'delete-other-windows))))))
+      (let ((calls 0))
+        (cl-letf (((symbol-function 'drgnx-grid-full-size-toggle) (lambda (&rest _) (interactive) (cl-incf calls))))
+          (dolist (key '("C-w o" "C-w C-o" "C-w _" "C-w |"))
+            (execute-kbd-macro (kbd key)))
+          (should (= calls 4)))))))
 
 (ert-deftest drgnx-evil-ex/without-the-workbench-evils-own-commands-run ()
   (let ((drgnx-evil-ex-test--modules "(:version 1 :enabled (editor/evil) :disabled (core/workbench))\n"))

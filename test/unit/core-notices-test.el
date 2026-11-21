@@ -20,6 +20,11 @@
   (interactive)
   (push (cons 'open args) drgnx-notices-test--ran))
 
+(defun drgnx-notices-test--plain (&rest args)
+  "A command no registry entry names."
+  (interactive)
+  (push (cons 'plain args) drgnx-notices-test--ran))
+
 (defmacro drgnx-notices-test--with (&rest body)
   "BODY on a fresh notice model and virtual time, a registry holding one command (`thing', titled \"Open Thing\"),
 and no list buffer; the list's buffer, view type and hook are gone after."
@@ -68,8 +73,8 @@ and no list buffer; the list's buffer, view type and hook are gone after."
     (let ((text (drgnx-notices-test--text)))
       (should (eq (buffer-local-value 'major-mode (get-buffer drgnx-notices-buffer-name)) 'drgnx-notices-mode))
       (should (string-match "Needs you (1)\n.* agents  s1 asks: run make\\?\n" text))
-      (should (string-match (format "Problems (%s 1 %s 1)" (drgnx-face-glyph 'fail) (drgnx-face-glyph 'warn)) text))
-      (should (< (string-search "Needs you" text) (string-search "Problems" text) (string-search "Recent" text)))
+      (should (string-match (format "Issues (%s 1 %s 1)" (drgnx-face-glyph 'fail) (drgnx-face-glyph 'warn)) text))
+      (should (< (string-search "Needs you" text) (string-search "Issues" text) (string-search "Recent" text)))
       (should (< (string-search "Recent" text) (string-search "did a thing" text)))
       (should-not (string-search "Nothing here." text)))))
 
@@ -79,7 +84,7 @@ and no list buffer; the list's buffer, view type and hook are gone after."
     (drgnx-notices-test--show)
     (let ((text (drgnx-notices-test--text)))
       (should (string-match "Needs you (0)\n+[ ]*Nothing here\\." text))
-      (should (string-match "Problems (.*)\n+[ ]*Nothing here\\." text))
+      (should (string-match "Issues (.*)\n+[ ]*Nothing here\\." text))
       (should (= 3 (length (split-string text "Nothing here\\.")))))))
 
 (ert-deftest drgnx-notices/rows-have-status-source-text-fix-command-dismiss ()
@@ -89,7 +94,7 @@ and no list buffer; the list's buffer, view type and hook are gone after."
     (drgnx-notices-test--show)
     (with-current-buffer drgnx-notices-buffer-name
       (goto-char (point-min))
-      (search-forward "Problems")
+      (search-forward "Issues")
       (search-forward (drgnx-face-glyph 'fail) nil nil 2)          ; the heading's, then the row's
       (should (eq (get-text-property (match-beginning 0) 'face) 'drgnx-status-fail))
       (search-forward "config")
@@ -105,6 +110,14 @@ and no list buffer; the list's buffer, view type and hook are gone after."
         (should (get-text-property open 'keymap)))
       (let ((dismiss (progn (search-forward "Dismiss") (match-beginning 0))))
         (should (get-text-property dismiss 'keymap))))))
+
+(ert-deftest drgnx-notices/a-button-says-the-title-of-the-command-whose-function-it-runs ()
+  (drgnx-notices-test--with
+    ;; a notice names the function (`drgnx-notices-test--open'), the registry knows it as `thing', "Open Thing"
+    (should (equal "Open Thing" (drgnx-notices--command-title '(drgnx-notices-test--open "x"))))
+    (should (equal "Open Thing" (drgnx-notices--command-title 'drgnx-notices-test--open)))
+    (should (equal "Open Thing" (drgnx-notices--command-title 'thing)))
+    (should (equal "no-such-fn" (drgnx-notices--command-title 'no-such-fn)))))
 
 (ert-deftest drgnx-notices/attention-rows-have-no-dismiss ()
   (drgnx-notices-test--with
@@ -140,16 +153,16 @@ and no list buffer; the list's buffer, view type and hook are gone after."
 
 (ert-deftest drgnx-notices/the-command-button-runs-its-action ()
   (drgnx-notices-test--with
-    (drgnx-notify 'config 'warn "odd" :id 'a :life 'condition :command '(drgnx-notices-test--open "arg" 2))
+    (drgnx-notify 'config 'warn "odd" :id 'a :life 'condition :command '(drgnx-notices-test--plain "arg" 2))
     (drgnx-notify 'config 'fail "bad" :id 'b :life 'condition :command 'thing)
     (drgnx-notices-test--show)
     (let ((text (drgnx-notices-test--text)))
-      (should (string-search "drgnx-notices-test--open" text))           ; no registry title: the command's name
+      (should (string-search "drgnx-notices-test--plain" text))           ; no registry title: the command's name
       (should (string-search "Open Thing" text)))
-    (drgnx-notices-test--press "drgnx-notices-test--open")
-    (should (equal drgnx-notices-test--ran '((open "arg" 2))))
+    (drgnx-notices-test--press "drgnx-notices-test--plain")
+    (should (equal drgnx-notices-test--ran '((plain "arg" 2))))
     (drgnx-notices-test--press "Open Thing")
-    (should (equal drgnx-notices-test--ran '((open) (open "arg" 2))))
+    (should (equal drgnx-notices-test--ran '((open) (plain "arg" 2))))
     (drgnx-timer-cancel 'surfaces-usage)))              ; the registry button's use count is saved by a timer
 
 (ert-deftest drgnx-notices/redraws-after-a-change-while-live ()
@@ -195,6 +208,23 @@ and no list buffer; the list's buffer, view type and hook are gone after."
 (ert-deftest drgnx-notices/opens-in-the-panel ()
   (drgnx-test-with-modules '(core/workbench)
     (should (eq (car (drgnx-wb-rule-for drgnx-notices-buffer-name)) 'panel))))
+
+;; audit D3 (2026-11-16): a *Warnings* buffer jumped into the panel's Output tab by itself
+(ert-deftest drgnx-notices/a-warning-is-a-notice-not-a-window ()
+  ;; a warning is logged in *Warnings* and counted on the status bar (a notice), and takes no window, as VS Code's
+  ;; Output never opens by itself; an emergency still shows
+  (drgnx-test-with-modules '(core/workbench)
+    (let ((noninteractive nil) (warning-minimum-level :warning) (warning-minimum-log-level :warning)
+          (key '(wb warning . drgnx-notices-test)))
+      (unwind-protect
+          (progn
+            (display-warning 'drgnx-notices-test "boom")
+            (should (with-current-buffer "*Warnings*" (save-excursion (goto-char (point-min)) (search-forward "boom" nil t))))
+            (should-not (get-buffer-window "*Warnings*" t))
+            (should (gethash key drgnx-notice--table))
+            (should (eq 'warn (plist-get (gethash key drgnx-notice--table) :severity))))
+        (drgnx-notice-clear 'wb '(warning . drgnx-notices-test))
+        (when (get-buffer "*Warnings*") (kill-buffer "*Warnings*"))))))
 
 ;;;; The mode-line pair
 

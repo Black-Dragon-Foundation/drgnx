@@ -1,0 +1,28 @@
+#+title: Projects
+
+* Ledger
+** Goals
+   - Keep the totals exact.
+   - A report anyone can read.
+** Tasks
+*** TODO Import the bank file
+    :PROPERTIES:
+    :EFFORT: 2h
+    :END:
+*** TODO Split entries by id
+*** DONE Parse a report back
+** Notes
+   The parsing is in =util.el=; the ledger itself is in =main.el=.
+* Garden
+** Spring
+*** TODO Order seeds
+*** TODO Prepare the beds
+** Summer
+*** TODO Water on dry days
+* Reading
+** Books
+   1. A book about compilers
+   2. A book about gardens
+** Papers
+   - A paper on incremental garbage collection
+   - A paper on language servers

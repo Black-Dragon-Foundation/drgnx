@@ -8,7 +8,7 @@
 
 (ert-deftest drgnx-tty-persist/a-terminal-session-never-writes-the-layout ()
   (drgnx-tty-session-with (s :size "120x40" :keys 'emacs)
-    (drgnx-tty-session-wait-screen s "\\*scratch\\* ×" 20)
+    (drgnx-tty-session-wait-tab s "×" 20)
     (should (drgnx-tty-session-eval s '(bound-and-true-p drgnx-persist-mode)))       ; else nothing is tested
     (should (memq 'drgnx-persist--on-exit (drgnx-tty-session-eval s 'kill-emacs-hook)))
     (let* ((file (drgnx-tty-session-eval s '(drgnx-persist--file)))
@@ -26,7 +26,7 @@
                                           (find-file (expand-file-name "b.txt" temporary-file-directory))
                                           t))
         (drgnx-tty-session-eval s '(progn (drgnx-wb-show-sidebar) t))
-        (drgnx-tty-session-wait-screen s "EXPLORER")
+        (drgnx-tty-session-wait-screen s drgnx-tty-session-explorer-heading)
         ;; the commands answer, and write nothing
         (drgnx-tty-session-eval s '(progn (drgnx-persist-save) t))
         (should (equal (drgnx-tty-session-eval s '(current-message))
@@ -36,7 +36,10 @@
         (drgnx-tty-session-key s "C-c")
         (drgnx-test-wait (lambda ()
                            (or (not (drgnx-tty-session--pane-alive-p s))
-                               (progn (when (drgnx-tty-session-find s "\\((yes or no)\\|(y or n)\\)")        ; whatever Emacs asks before it exits
+                               ;; whatever Emacs asks before it exits; the pane can go between the look above and
+                               ;; this one (Emacs exited): the capture's error is that, and the next look sees it
+                               (progn (when (condition-case nil (drgnx-tty-session-find s "\\((yes or no)\\|(y or n)\\)")
+                                              (drgnx-ui-error nil))
                                         (drgnx-tty-session-send s "yes\r"))
                                       nil)))
                          :secs 20 :what "Emacs to exit")

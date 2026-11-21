@@ -27,7 +27,7 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
              (setq ,(car spec) (drgnx-tty-session-kitty-start
                                 :size ,(plist-get (cdr spec) :size)
                                 :env (and (drgnx-tty-keys-test--kkp-dir) (drgnx-tty-keys-test--env))))
-             (drgnx-tty-session-wait-screen ,(car spec) "\\*\\(?:scratch\\|drgnx start\\)\\*" 30)
+             (drgnx-tty-session-wait-tab ,(car spec) nil 30 '("*scratch*" "*drgnx start*"))
              ,@body)
          (when ,(car spec) (drgnx-tty-session-kitty-stop ,(car spec)))
          (delete-directory root t)))))
@@ -50,7 +50,9 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
                           10))
 
 (defun drgnx-tty-kitty-test--quit (s)
-  "ctrl+g through kitty until the minibuffer is gone (a C-g while the palette fills its list quits only that)."
+  "ctrl+g through kitty until the minibuffer is gone (a C-g while the palette fills its list quits only that).  The
+module stages are over first."
+  (drgnx-tty-session-wait-stages s)
   (let ((tries 0))
     (while (and (drgnx-tty-session-eval s '(and (active-minibuffer-window) t)) (< tries 5))
       (drgnx-tty-session-kitty-key s "ctrl+g")
@@ -102,7 +104,7 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
     (drgnx-tty-keys-test--ran s 'kx-f6 "<f6>")
     ;; no hint: none was recorded for kitty, none was said — after the moment it would have come (0.5 s), so the
     ;; check cannot pass early
-    (drgnx-test-pause 1 "no hint may come for kitty")
+    (drgnx-tty-session-wait s '(cl-notany (lambda (f) (drgnx-timer-active-p (cons 'tty-fallback-hint f))) (frame-list)))
     (let ((hint (drgnx-tty-session-eval s '(drgnx-tty-fallback-hint-text))))
       (should-not (memq 'kitty (plist-get (drgnx-tty-session-eval s '(drgnx-tty--read-report)) :hinted)))
       (should-not (drgnx-tty-session-eval s `(with-current-buffer "*Messages*" (string-search ,hint (buffer-string)))))
@@ -131,19 +133,27 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
                                  (derived-mode-p 'drgnx-explorer-mode)))
     ;; ctrl+`: the panel, its tab row with the Terminal tab
     (should-not (drgnx-tty-session-eval s `(drgnx-wb-area-window 'panel ,drgnx-tty-kitty-test--frame)))
+    ;; a terminal tab with a buffer of its own: Toggle Terminal shows it and starts no shell, which would take the keys after
+    (drgnx-tty-session-eval s `(with-selected-frame ,drgnx-tty-kitty-test--frame (drgnx-wb-area-show 'panel 'terminal (get-buffer-create "*terminal*"))
+                                                    (drgnx-wb-area-hide 'panel)))
     (drgnx-tty-session-kitty-key s "ctrl+`")
-    (drgnx-tty-keys-test--ran s 'drgnx-wb-toggle-panel "C-`")
+    (drgnx-tty-keys-test--ran s 'drgnx-terminal-toggle "C-`")
     (drgnx-tty-session-wait s `(drgnx-wb-area-window 'panel ,drgnx-tty-kitty-test--frame))
     (drgnx-tty-session-wait-screen s "Problems +Output +Results +Terminal" 10)
     ;; ctrl+.: the code actions (Quick Fix)
     (drgnx-tty-session-kitty-key s "ctrl+.")
-    (drgnx-tty-keys-test--ran s 'drgnx-lang-quick-fix "C-.")))
+    (drgnx-tty-keys-test--ran s 'drgnx-lang-quick-fix "C-.")
+    (drgnx-tty-kitty-test--quit s)
+    ;; ctrl+shift+tab arrives as itself (a legacy terminal sends Shift+Tab's bytes for it)
+    (drgnx-tty-session-kitty-key s "ctrl+shift+tab")
+    (drgnx-tty-keys-test--ran s 'drgnx-chrome-recent-editor-up "C-S-<tab>")))
 
 (ert-deftest drgnx-kitty/c-g-interrupts-a-blocking-call ()
   ;; under kkp C-g is an escape sequence; around a program Emacs waits for, kitty sends the plain byte again
   :tags '(:timing)
   (drgnx-tty-kitty-test--with (s :kkp t)
     (drgnx-tty-kitty-test--kkp-on s)
+    (drgnx-tty-session-wait-stages s)
     (let ((started (expand-file-name "block-started" (plist-get s :run))))
       (drgnx-tty-session-eval
        s `(progn
@@ -178,11 +188,12 @@ screen.  Returns its directory."
     (make-directory dir t)
     (with-temp-file (expand-file-name "a.txt" dir) (insert "alpha beta gamma\n"))
     (with-temp-file (expand-file-name "b.txt" dir) (dotimes (i 300) (insert (format "line %d\n" (1+ i)))))
+    (drgnx-tty-session-hub s)                     ; the Explorer's rows are the hub's listing
     (drgnx-tty-kitty-test--in s `(progn (drgnx-explorer-set-roots (list ,dir))
                                         (drgnx-wb-show-sidebar)
                                         (drgnx-wb-show-in-editor (find-file-noselect ,(expand-file-name "a.txt" dir)) t)
                                         t))
-    (drgnx-tty-session-wait-screen s "EXPLORER")
+    (drgnx-tty-session-wait-screen s drgnx-tty-session-explorer-heading)
     (drgnx-tty-session-wait-screen s "alpha beta gamma")
     (drgnx-tty-session-wait-screen s "b\\.txt")
     dir))
@@ -195,7 +206,7 @@ screen.  Returns its directory."
   (drgnx-tty-kitty-test--with (s)
     (drgnx-tty-kitty-test--project s)
     ;; a click on the Explorer's b.txt row opens it
-    (let ((row (drgnx-tty-session-wait-screen s "^  b\\.txt")))
+    (let ((row (drgnx-tty-session-wait-screen s (concat "^" drgnx-tty-session-rail "\\(  b\\.txt\\)"))))
       (drgnx-tty-session-kitty-text s (drgnx-tty-session--click-bytes (car row) (cdr row))))
     (drgnx-tty-session-wait s `(equal ,drgnx-tty-kitty-test--editor-buffer "b.txt"))
     (drgnx-tty-session-wait-screen s "line 3\\b")

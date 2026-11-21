@@ -148,14 +148,16 @@ first; the store calls it `initial'), so no terminal guard applies."
 (ert-deftest drgnx-persist/the-last-graphical-window-closing-still-saves-from-a-terminal-selection ()
   ;; a client closing its last graphical windows saves them all, though a terminal window is the selected frame
   (tty-persist-test--with dir
-    (let (saved (drgnx-persist--saved-at-exit nil))
+    (let (saved (drgnx-persist--saved-at-exit nil) (proc (make-pipe-process :name "drgnx-test-client" :noquery t)))
+      (process-put proc 'frame 'gui-frame)               ; the client made a frame, as server.el records it
       (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (f) (and (eq f 'gui-frame) 'gui)))
                 ((symbol-function 'frame-live-p) (lambda (f) (and f t)))
                 ((symbol-function 'frame-list) (lambda () '(gui-frame)))
-                ((symbol-function 'frame-parameter) (lambda (_f p) (and (eq p 'client) 'proc)))
+                ((symbol-function 'frame-parameter) (lambda (_f p) (and (eq p 'client) proc)))
                 ((symbol-function 'drgnx-persist--frames) (lambda () '(gui-frame)))
                 ((symbol-function 'drgnx-persist-state) (lambda (f) (push f saved) (list :role 'main))))
-        (drgnx-persist--before-client-delete 'proc)
+        (unwind-protect (drgnx-persist--before-client-delete proc)
+          (delete-process proc))
         (should (equal saved '(gui-frame)))
         (should (file-exists-p drgnx-persist-file))
         (should-not messages)))))

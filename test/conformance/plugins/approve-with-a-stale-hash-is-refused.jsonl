@@ -1,0 +1,18 @@
+{"scenario": "plugins/approve-with-a-stale-hash-is-refused", "requires": ["v1"], "doc": "[B] The editor sends the hash it displayed. If the files changed since, the approval is refused at `hash` and the plugin stays unapproved; a name that is not installed is refused at `name`."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "write_file", "path": "$ROOT/src/plugin.json", "json": {"name": "alpha", "version": "1.0.0"}}
+{"do": "write_file", "path": "$ROOT/src/plugin.wasm", "text": "wasm-one"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "run", "args": ["plugins", "install", "$ROOT/src"], "expect_code": 0, "expect_stdout": "installed alpha 1.0.0"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"plugins": [{"name": "alpha", "hash": "$capture:h"}]}}, "within_ms": 10000}
+{"do": "write_file", "path": "$DATA/plugins/alpha/plugin.wasm", "text": "wasm-swapped"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "plugins/approve", "params": {"name": "alpha", "hash": "$h"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "invalid-params", "path": "hash"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "plugins/approve", "params": {"name": "nope", "hash": "$h"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params", "path": "name"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"plugins": [{"name": "alpha", "state": "unapproved"}]}}, "within_ms": 10000}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*) from plugin where approved_hash is not null", "rows": [[0]]}

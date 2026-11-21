@@ -1,0 +1,17 @@
+{"scenario": "runners/user-servers-never-queue", "requires": ["v1", "test-hooks"], "doc": "[B] A job the user starts with no_timebox (the editor's servers) starts at once and never queues, even with no room at all (DRGNX_TEST_JOB_SLOTS=0); any other job of the user's enters the queue (priority 1) and waits, saying why."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkfifo $ROOT/gate"], "expect_code": 0}
+{"do": "start", "hub": "h", "env": {"DRGNX_TEST_JOB_SLOTS": "0"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "exec/start", "params": {"argv": ["sh", "-c", "cat $ROOT/gate"], "cwd": "$ROOT", "name": "server", "no_timebox": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:server", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/get", "params": {"id": "$server"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$server", "status": "running", "machine": "local", "waiting": "$absent"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "exec/get", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$job", "status": "queued", "priority": 1, "waiting": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "exec/stop", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$job", "status": "stopped"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "exec/stop", "params": {"id": "$server"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"id": "$server", "status": "stopped"}}, "within_ms": 10000}

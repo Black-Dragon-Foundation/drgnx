@@ -1,0 +1,4 @@
+# Nidhogg's integration branch: drgnx's CI tests on its head's build while drgnx's next release is unreleased (a release
+# branch names its partner: rel/6-final here, rel7-next on rel7-next)
+# (drgnx-tiers.yml, `nidhogg: line`; .github/ci/nidhogg-line.sh). One branch name on the first other line.
+rel/6-final

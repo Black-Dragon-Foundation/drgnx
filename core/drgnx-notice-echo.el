@@ -17,6 +17,7 @@
 (require 'cl-lib)
 (require 'drgnx-notice)
 (require 'drgnx-notice-desktop)
+(require 'drgnx-notice-toast)
 (require 'drgnx-registry)
 (require 'drgnx-surfaces)
 (require 'drgnx-frame-kind)
@@ -136,7 +137,13 @@ that is not our own last line."
     (let ((this-command nil)) (drgnx-notice--echo-try))))
 
 (defun drgnx-notice--echo-enqueue (kind data)
-  "Add a line of KIND for DATA; keep at most `drgnx-notice--echo-max'; try to show."
+  "Add a line of KIND for DATA; keep at most `drgnx-notice--echo-max'; try to show.  Where notices float
+\(`drgnx-notice-style'), a notice is a toast instead and no line is queued."
+  (unless (drgnx-notice-toast-offer kind data)
+    (drgnx-notice--echo-enqueue-line kind data)))
+
+(defun drgnx-notice--echo-enqueue-line (kind data)
+  "Queue the echo line of KIND for DATA and try to show."
   (setq drgnx-notice--echo-pending (nconc drgnx-notice--echo-pending (list (cons kind data))))
   (let ((over (- (length drgnx-notice--echo-pending) drgnx-notice--echo-max)))
     (when (> over 0) (setq drgnx-notice--echo-pending (nthcdr over drgnx-notice--echo-pending))))
@@ -226,6 +233,7 @@ once."
     (remove-hook 'emacs-startup-hook #'drgnx-notice--startup-hook)
     (remove-hook 'server-after-make-frame-hook #'drgnx-notice--server-frame)
     (drgnx-timer-cancel 'notice-echo)
+    (drgnx-notice-toast-delete-all)
     (setq drgnx-notice--echo-pending nil drgnx-notice--echo-waiting nil drgnx-notice--echo-text nil
           drgnx-notice--started nil)))
 

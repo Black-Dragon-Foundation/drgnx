@@ -78,6 +78,48 @@ pub const NET_SERVICES: &[&str] = &[
     "com.apple.SystemConfiguration.configd",
 ];
 
+/// The build addition's devices beyond [`DEVICES`]: read by name (the automounter's no-wait node, which `realpath`
+/// of `/net` paths opens).
+pub const BUILD_DEVICES: &[&str] = &["/dev/autofs_nowait"];
+
+/// The devices a build writes data to (never creates or unlinks): DTrace's helper, which every binary linked with
+/// probes opens at start, and the controlling terminal.
+pub const BUILD_DEVICE_WRITES: &[&str] = &["/dev/dtracehelper", "/dev/tty"];
+
+/// The metadata a build's tools stat beyond [`LINKS`]: the true names of the temporary folders.
+pub const BUILD_METADATA: &[&str] = &["/private/tmp", "/private/var/tmp"];
+
+/// A build's `/bin/sh` here-documents, as regexes: bash 3.2 ignores TMPDIR for them and makes `sh-thd*` directly in
+/// `/private/var/tmp` or `/private/tmp` (by true name), reads it back and unlinks it. A build may read and write those
+/// names there and nothing else of either folder (the user's ruling, 2026-11-11); the files are bash's own (`O_EXCL`,
+/// mode 0600).
+pub const BUILD_HEREDOCS: &[&str] = &[
+    "^/private/tmp/sh-thd[^/]*$",
+    "^/private/var/tmp/sh-thd[^/]*$",
+];
+
+/// The folders [`BUILD_HEREDOCS`] are in, `file-write-data` on the folder itself only: bash takes a folder for its
+/// here-documents only if `access(W_OK)` says it is writable (macOS CI round 21: without it bash fell back to the
+/// read-only working directory). No data is written to a folder; making, removing or renaming in it stays denied.
+pub const BUILD_HEREDOC_DIRS: &[&str] = &["/private/tmp", "/private/var/tmp"];
+
+/// The mach services a build asks: the group membership the xcrun shims check, and the per-user folder's helper.
+pub const BUILD_SERVICES: &[&str] = &[
+    "com.apple.system.opendirectoryd.membership",
+    "com.apple.bsd.dirhelper",
+];
+
+/// What a Mac runner's build job may use beyond a session's profile (spike S2; docs/develop/gleipnir.md, "The build
+/// addition"): every sysctl read, the whole Xcode app read-only when the developer dir is in one (xcodebuild, which
+/// make's shim runs, loads its SharedFrameworks), the account's per-user folder read and written (clang's module
+/// cache, the compilers' temporary files), [`BUILD_DEVICES`], [`BUILD_DEVICE_WRITES`], [`BUILD_METADATA`],
+/// [`BUILD_SERVICES`] and [`BUILD_HEREDOCS`]. Never part of a session's profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacBuild {
+    /// The account's per-user folder by true name (`getconf DARWIN_USER_DIR`'s parent, under `/private/var/folders`).
+    pub user_dir: PathBuf,
+}
+
 /// The caller's macOS facts. Gleipnir reads neither itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MacContext {
@@ -87,6 +129,8 @@ pub struct MacContext {
     pub developer_dir: Option<PathBuf>,
     /// Where the users' homes are ([`USERS_DIR`]): denied before every allow.
     pub users_dir: PathBuf,
+    /// A Mac runner's build job: the build addition ([`MacBuild`]); none for a session.
+    pub build: Option<MacBuild>,
 }
 
 impl Default for MacContext {
@@ -94,6 +138,7 @@ impl Default for MacContext {
         MacContext {
             developer_dir: None,
             users_dir: PathBuf::from(USERS_DIR),
+            build: None,
         }
     }
 }
@@ -104,8 +149,11 @@ impl Default for MacContext {
 /// 2. AF_UNIX sockets may be made (pipes to children); connecting to one is decided at step 13;
 /// 3. `(deny file-read* (subpath "/Users") …)`, before every allow;
 /// 4. `/` itself, and the metadata of [`LINKS`] and of every directory above an allowed path (stat, never list);
-/// 5. reads: [`SYSTEM_READ`], the developer dir, (shared) [`DNS_FILES`], `read`, `write`, `home`, `run`, `tmp`;
-/// 6. [`DEVICES`], each by name;
+/// 5. reads: [`SYSTEM_READ`], the developer dir (with `loopback`, an Xcode one's `../SharedFrameworks` too),
+///    (shared) [`DNS_FILES`], `read`, `write`, `home`, `run`, `tmp`;
+/// 6. [`DEVICES`], each by name; for a build ([`MacBuild`]), its addition: every sysctl, [`BUILD_DEVICES`],
+///    [`BUILD_DEVICE_WRITES`], [`BUILD_SERVICES`] and [`BUILD_HEREDOCS`] (its per-user folder and Xcode app are in steps 5 and 8, its
+///    [`BUILD_METADATA`] in step 4);
 /// 7. [`SYSTEM_HIDDEN`] denied;
 /// 8. writes: `write`, `home` when `rw`, `tmp`;
 /// 9. `binds`, in order: readable, and writable for `rw` or denied writes for `ro` (the pins);
@@ -114,7 +162,8 @@ impl Default for MacContext {
 ///     clone of a directory above a hidden path (`hide`, [`SYSTEM_HIDDEN`]): `clonefile` copies a whole tree, hidden
 ///     files too, and Seatbelt checks only the directory named;
 /// 12. the network: shared allows outbound IP anywhere, AF_SYSTEM and [`NET_SERVICES`]; isolated is
-///     `(deny network*)` and outbound to `localhost` on `mac_tcp_ports` only;
+///     `(deny network*)` and outbound to `localhost` on `mac_tcp_ports` only; with `loopback`, `localhost` on
+///     `mac_loopback_ports` bound, accepted and connected to, and Unix sockets under `tmp` bound and accepted;
 /// 13. every Unix socket denied, then each of `sockets` (and, shared, [`DNS_SOCKET`]) allowed by `path-literal`.
 ///
 /// Every deny also holds for every case of its path (a `regex` of character classes: APFS ignores case, and whether
@@ -148,6 +197,22 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
             Some(d)
         }
     };
+    let build = match &mac.build {
+        None => None,
+        Some(b) => {
+            let u = context_path("build.user_dir", &b.user_dir)?;
+            if u == "/" || within(u, users) || within(users, u) {
+                let msg = format!("sbpl: build.user_dir {u} is / or meets {users}");
+                return Err(malformed(msg, Some(&b.user_dir)));
+            }
+            Some(u)
+        }
+    };
+    // the Xcode app around an Xcode developer dir (`…/Xcode.app/Contents/Developer`), for a build
+    let xcode = build.and(dev).and_then(|d| {
+        let app = d.strip_suffix("/Contents/Developer")?;
+        app.ends_with(".app").then_some(app)
+    });
     let shared = s.net == Net::Shared;
     let home = s.home.as_ref();
     let run = s.run.as_ref().map(|b| text(&b.source)).transpose()?;
@@ -163,8 +228,16 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
         .map(|b| Ok((b.mode, text(&b.source)?)))
         .collect::<Result<Vec<_>, Refusal>>()?;
 
+    let loopback = matches!(s.net, Net::Isolated { loopback: true, .. });
+    // A debug session's LLDB.framework: Xcode keeps it beside its developer dir, not in it.
+    let frameworks = dev
+        .filter(|_| loopback)
+        .and_then(|d| d.strip_suffix("/Contents/Developer"))
+        .map(|app| format!("{app}/Contents/SharedFrameworks"));
     let mut reads: Vec<&str> = SYSTEM_READ.to_vec();
     reads.extend(dev);
+    reads.extend(frameworks.as_deref());
+    reads.extend(xcode.into_iter().chain(build));
     if shared {
         reads.extend(DNS_FILES);
     }
@@ -176,6 +249,7 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
         .copied()
         .chain(home.filter(|h| h.mode == Mode::Rw).and(home_src))
         .chain(tmp)
+        .chain(build)
         .collect();
     let rw_binds = binds.iter().filter(|b| b.0 == Mode::Rw).map(|b| b.1);
     let ro_binds = binds.iter().filter(|b| b.0 == Mode::Ro).map(|b| b.1);
@@ -191,7 +265,15 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
         .chain(binds.iter().map(|b| b.1))
         .chain(sockets.iter().copied())
         .collect();
-    let meta = dedup(LINKS.iter().copied().chain(ancestors(&meta_of)).collect());
+    let build_meta: &[&str] = if build.is_some() { BUILD_METADATA } else { &[] };
+    let meta = dedup(
+        LINKS
+            .iter()
+            .chain(build_meta)
+            .copied()
+            .chain(ancestors(&meta_of))
+            .collect(),
+    );
     let mut unix: Vec<&str> = sockets.clone();
     if shared {
         unix.push(DNS_SOCKET);
@@ -207,6 +289,9 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
     push(rule("allow", "file-read-metadata", "literal", &meta)?);
     push(rule("allow", "file-read*", "subpath", &reads)?);
     push(rule("allow", "file-read*", "literal", DEVICES)?);
+    if build.is_some() {
+        out_build(&mut push)?;
+    }
     push(deny_any_case("file-read*", "subpath", SYSTEM_HIDDEN)?);
     push(rule("allow", "file-write*", "subpath", &writes)?);
     for (mode, p) in &binds {
@@ -228,16 +313,48 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
             ));
             push(rule("allow", "mach-lookup", "global-name", NET_SERVICES)?);
         }
-        Net::Isolated { mac_tcp_ports, .. } => {
+        Net::None => push(Some("(deny network*)".into())),
+        Net::Isolated {
+            mac_tcp_ports,
+            loopback,
+            mac_loopback_ports,
+            ..
+        } => {
             push(Some("(deny network*)".into()));
             for port in mac_tcp_ports {
                 push(Some(format!(
                     "(allow network-outbound (remote ip \"localhost:{port}\"))"
                 )));
             }
+            if *loopback {
+                for port in mac_loopback_ports {
+                    let ip = format!("\"localhost:{port}\"");
+                    push(Some(format!("(allow network-bind (local ip {ip}))")));
+                    push(Some(format!("(allow network-inbound (local ip {ip}))")));
+                    push(Some(format!("(allow network-outbound (remote ip {ip}))")));
+                }
+                if let Some(t) = tmp {
+                    let t = quote(t)?;
+                    push(Some(format!(
+                        "(allow network-bind (local unix-socket (subpath {t})))"
+                    )));
+                    push(Some(format!(
+                        "(allow network-inbound (local unix-socket (subpath {t})))"
+                    )));
+                }
+            }
         }
     }
     push(Some("(deny network-outbound (remote unix-socket))".into()));
+    // the loopback flag: connect to the session's own sockets under tmp (after the deny, which would undo it)
+    if let Net::Isolated { loopback: true, .. } = &s.net
+        && let Some(t) = tmp
+    {
+        push(Some(format!(
+            "(allow network-outbound (remote unix-socket (subpath {})))",
+            quote(t)?
+        )));
+    }
     for sock in unix {
         push(Some(format!(
             "(allow network-outbound (remote unix-socket (path-literal {})))",
@@ -245,6 +362,33 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
         )));
     }
     Ok(format!("{BASE}\n{}\n", out.join("\n")))
+}
+
+/// The build addition's own rules (the paths are in the reads, writes and metadata): every sysctl, the build's devices
+/// and services, and its here-documents ([`BUILD_HEREDOCS`]).
+fn out_build(push: &mut impl FnMut(Option<String>)) -> Result<(), Refusal> {
+    push(Some("(allow sysctl-read)".into()));
+    push(rule("allow", "file-read*", "literal", BUILD_DEVICES)?);
+    push(rule(
+        "allow",
+        "file-write-data",
+        "literal",
+        BUILD_DEVICE_WRITES,
+    )?);
+    push(rule("allow", "mach-lookup", "global-name", BUILD_SERVICES)?);
+    push(rule(
+        "allow",
+        "file-read* file-write*",
+        "regex",
+        BUILD_HEREDOCS,
+    )?);
+    push(rule(
+        "allow",
+        "file-write-data",
+        "literal",
+        BUILD_HEREDOC_DIRS,
+    )?);
+    Ok(())
 }
 
 /// `s` as an SBPL string: in double quotes, with `"` and `\` escaped by a backslash. Refused: a control character
@@ -418,11 +562,17 @@ fn deny_any_case(ops: &str, filter: &str, paths: &[&str]) -> Result<Option<Strin
     let mut r = format!("(deny {ops}");
     for p in paths {
         let re = case_regex(p, filter == "subpath");
-        r.push_str(&format!(
-            "\n  ({filter} {})\n  (regex {})",
-            quote(p)?,
-            quote(&re)?
-        ));
+        // a path whose every-case form does not fit one Seatbelt string is refused by name, never left open
+        let re = quote(&re).map_err(|_| {
+            let short: String = p.chars().take(40).collect();
+            malformed(
+                format!(
+                    "sbpl: the any-case form of {short:?}… is longer than a Seatbelt string may be ({MAX_LITERAL} bytes)"
+                ),
+                None,
+            )
+        })?;
+        r.push_str(&format!("\n  ({filter} {})\n  (regex {re})", quote(p)?));
     }
     r.push(')');
     Ok(Some(r))
@@ -433,49 +583,174 @@ fn deny_any_case(ops: &str, filter: &str, paths: &[&str]) -> Result<Option<Strin
 /// `.secrets` must also hold for `.ſecrets` (gate review S8), whichever spelling Seatbelt compares.
 const FOLDS_TO: &[(char, char)] = &[('k', '\u{212A}'), ('s', '\u{17F}'), ('å', '\u{212B}')];
 
+/// The letters that case-insensitive APFS folds to several: Unicode's full case folding (CaseFolding.txt, status F,
+/// Unicode 16.0; © Unicode, Inc., under the Unicode License v3), the entries whose result is ASCII letters: `ß` and `ẞ`
+/// (`ss`) and the Latin ligatures U+FB00 to U+FB06. The macOS 27 runner's controls reached a hidden `straße` as
+/// `STRASSE`, `config` as `conﬁg` and `flags` as `ﬂags`, and not a hidden `id` as `İd` (`İ` folds to `i` and a
+/// combining dot, which is no ASCII letters, so it is no entry here), the pattern of full folding: so every entry is
+/// taken, each folded text with its spellings. The other F entries end in a combining mark or a non-ASCII letter
+/// (`ŉ`, `ǰ`, `ẖ`, Greek, Armenian), which no ASCII path holds.
+const FULL_FOLDS: &[(&str, &[char])] = &[
+    ("ss", &['\u{DF}', '\u{1E9E}']),
+    ("ff", &['\u{FB00}']),
+    ("fi", &['\u{FB01}']),
+    ("fl", &['\u{FB02}']),
+    ("ffi", &['\u{FB03}']),
+    ("ffl", &['\u{FB04}']),
+    ("st", &['\u{FB05}', '\u{FB06}']),
+];
+
+/// More than this many bytes of regex while building one: the path is refused (see [`case_regex`]).
+const REGEX_BUDGET: usize = 16 * 1024;
+
+/// `c` as the letters it stands for, lowercase ASCII: a [`FULL_FOLDS`] letter as its folded text, `ſ` as `s`, an ASCII
+/// letter lowercased; any other character as itself.
+fn fold_letters(c: char) -> Vec<char> {
+    if let Some((text, _)) = FULL_FOLDS
+        .iter()
+        .find(|(_, spellings)| spellings.contains(&c))
+    {
+        text.chars().collect()
+    } else if c == '\u{17F}' {
+        vec!['s']
+    } else {
+        vec![c.to_ascii_lowercase()]
+    }
+}
+
 /// `path` as a regex that matches it in any case: an ASCII letter as a class of both cases (`[Gg]`), a letter with
 /// more spellings ([`FOLDS_TO`]: `(k|K|K)`) or a non-ASCII letter with case variants as a group of them (`(é|É)`), a
-/// regex metacharacter escaped. No `(?i)`, which SBPL is not known to support. `whole`: the path and everything under
-/// it (as `subpath`); else the path alone (as `literal`).
+/// regex metacharacter escaped. Letters that [`FULL_FOLDS`] folds to several are matched by their folded text: each
+/// stretch of the path where a folded text can start (`ss`, `ff`, `fi`, `fl`, `ffi`, `ffl`, `st`, overlapping ones
+/// together) is a group of every way to spell it ([`fold_zone`]: `ß` and `ss` both give
+/// `((s|S|ſ)(s|S|ſ)|(ß|ẞ))`), so a hidden `straße` is closed as `STRASSE`, a hidden `.ssh` as `.ßh`, `config` as
+/// `conﬁg` and `office` as `oﬃce`. No `(?i)`, which SBPL is not known to support. `whole`: the path and everything under
+/// it (as `subpath`); else the path alone (as `literal`). A path whose regex outgrows [`REGEX_BUDGET`] gets one longer
+/// than [`MAX_LITERAL`], which [`quote`] refuses: it is never cut short.
 fn case_regex(path: &str, whole: bool) -> String {
-    let mut re = String::from("^");
-    for c in path.chars() {
-        let lower = single(c.to_lowercase());
-        // c, its lowercase and uppercase, the uppercase of its lowercase (a Kelvin sign's lowercase is `k`, whose
-        // uppercase is `K`), and the other spellings of that lowercase.
-        let mut vars: Vec<char> = vec![c];
-        let more = [
-            lower,
-            single(c.to_uppercase()),
-            lower.and_then(|l| single(l.to_uppercase())),
-        ];
-        let folds = FOLDS_TO
-            .iter()
-            .filter(|(base, _)| Some(*base) == lower)
-            .map(|&(_, extra)| extra);
-        for v in more.into_iter().flatten().chain(folds) {
-            if !vars.contains(&v) {
-                vars.push(v);
+    let cs: Vec<char> = path.chars().flat_map(fold_letters).collect();
+    // where a folded text starts, and where it ends
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    for i in 0..cs.len() {
+        for (text, _) in FULL_FOLDS {
+            let n = text.chars().count();
+            if cs.len() - i >= n && text.chars().zip(&cs[i..]).all(|(a, &b)| a == b) {
+                spans.push((i, i + n));
             }
         }
-        if c.is_ascii_alphabetic() && vars.len() == 2 {
-            re.push_str(&format!(
-                "[{}{}]",
-                c.to_ascii_uppercase(),
-                c.to_ascii_lowercase()
-            ));
-        } else if vars.len() > 1 {
-            let alts: Vec<String> = vars.iter().map(char::to_string).collect();
-            re.push_str(&format!("({})", alts.join("|")));
-        } else {
-            if ".^$*+?()[]{}|\\".contains(c) {
-                re.push('\\');
+    }
+    let mut re = String::from("^");
+    let mut i = 0;
+    while i < cs.len() {
+        // the zone starting here: the spans that overlap, joined
+        let mut end = spans
+            .iter()
+            .filter(|&&(a, _)| a == i)
+            .map(|&(_, b)| b)
+            .max()
+            .unwrap_or(i);
+        if end == i {
+            re.push_str(&letter_regex(cs[i]));
+            i += 1;
+            continue;
+        }
+        let mut grown = true;
+        while grown {
+            grown = false;
+            for &(a, b) in &spans {
+                if a < end && b > end {
+                    end = b;
+                    grown = true;
+                }
             }
-            re.push(c);
+        }
+        match fold_zone(&cs, &spans, i, end) {
+            Some(z) => re.push_str(&z),
+            None => return format!("^{}", "x".repeat(MAX_LITERAL + 1)),
+        }
+        i = end;
+        if re.len() > REGEX_BUDGET {
+            return format!("^{}", "x".repeat(MAX_LITERAL + 1));
         }
     }
     re.push_str(if whole { "(/.*)?$" } else { "$" });
     re
+}
+
+/// Every spelling of the folded letters `cs[lo..hi]` as one regex: the letters one by one, or a [`FULL_FOLDS`] character
+/// for the letters of a span. Split at the middle: a spelling either has a boundary there (the first half's spellings,
+/// then the second's) or a span across it (the letters either side, and the span's characters in between). Exact, and
+/// its size grows as a power of the length (15 s's: 919 bytes), where listing every spelling grows as their number does.
+/// `None` once it outgrows [`REGEX_BUDGET`].
+fn fold_zone(cs: &[char], spans: &[(usize, usize)], lo: usize, hi: usize) -> Option<String> {
+    match hi - lo {
+        0 => return Some(String::new()),
+        1 => return Some(letter_regex(cs[lo])),
+        _ => {}
+    }
+    let m = lo + (hi - lo) / 2;
+    let mut alts = vec![format!(
+        "{}{}",
+        fold_zone(cs, spans, lo, m)?,
+        fold_zone(cs, spans, m, hi)?
+    )];
+    for &(a, b) in spans {
+        if lo <= a && a < m && m < b && b <= hi {
+            let text: String = cs[a..b].iter().collect();
+            let spellings = FULL_FOLDS.iter().find(|(t, _)| *t == text)?.1;
+            let own = if spellings.len() == 1 {
+                spellings[0].to_string()
+            } else {
+                format!(
+                    "({})",
+                    spellings
+                        .iter()
+                        .map(char::to_string)
+                        .collect::<Vec<_>>()
+                        .join("|")
+                )
+            };
+            alts.push(format!(
+                "{}{own}{}",
+                fold_zone(cs, spans, lo, a)?,
+                fold_zone(cs, spans, b, hi)?
+            ));
+        }
+    }
+    let re = format!("({})", alts.join("|"));
+    (re.len() <= REGEX_BUDGET).then_some(re)
+}
+
+/// `c` in each of its cases, as a regex: `[Gg]`, `(k|K|K)`, `(é|É)`, or `c` itself, escaped if a metacharacter.
+fn letter_regex(c: char) -> String {
+    let lower = single(c.to_lowercase());
+    // c, its lowercase and uppercase, the uppercase of its lowercase (a Kelvin sign's lowercase is `k`, whose
+    // uppercase is `K`), and the other spellings of that lowercase.
+    let mut vars: Vec<char> = vec![c];
+    let more = [
+        lower,
+        single(c.to_uppercase()),
+        lower.and_then(|l| single(l.to_uppercase())),
+    ];
+    let folds = FOLDS_TO
+        .iter()
+        .filter(|(base, _)| Some(*base) == lower)
+        .map(|&(_, extra)| extra);
+    for v in more.into_iter().flatten().chain(folds) {
+        if !vars.contains(&v) {
+            vars.push(v);
+        }
+    }
+    if c.is_ascii_alphabetic() && vars.len() == 2 {
+        format!("[{}{}]", c.to_ascii_uppercase(), c.to_ascii_lowercase())
+    } else if vars.len() > 1 {
+        let alts: Vec<String> = vars.iter().map(char::to_string).collect();
+        format!("({})", alts.join("|"))
+    } else if ".^$*+?()[]{}|\\".contains(c) {
+        format!("\\{c}")
+    } else {
+        c.to_string()
+    }
 }
 
 /// The one character `it` yields, or `None` when it yields none or several (`ß` uppercases to `SS`).
@@ -587,6 +862,8 @@ mod tests {
         Net::Isolated {
             relay: vec![],
             mac_tcp_ports: vec![3128, 3129],
+            loopback: false,
+            mac_loopback_ports: vec![],
         }
     }
 
@@ -607,6 +884,9 @@ mod tests {
             tmp: Some(TMP.into()),
             layers: Layers::for_target(Target::Macos),
             extra_tcp_ports: vec![],
+            rlimits: None,
+            trace: Default::default(),
+            browser: None,
         }
     }
 
@@ -614,6 +894,18 @@ mod tests {
         MacContext {
             developer_dir: Some(DEV.into()),
             users_dir: USERS_DIR.into(),
+            build: None,
+        }
+    }
+
+    const USER_DIR: &str = "/private/var/folders/zz/abc123";
+
+    fn build() -> MacContext {
+        MacContext {
+            build: Some(MacBuild {
+                user_dir: USER_DIR.into(),
+            }),
+            ..mac()
         }
     }
 
@@ -697,37 +989,89 @@ mod tests {
         hits[0]
     }
 
-    /// Does `re`, a regex [`profile`] made (`^`, `\c`, `[Aa]`, `(é|É)`, then `(/.*)?$` or `$`), match `s`? Only that
-    /// shape is understood; anything else fails the test.
+    /// One piece of a [`re_match`] regex: a character out of a set, or a group of alternatives.
+    enum Re {
+        One(Vec<char>),
+        Alt(Vec<Vec<Re>>),
+    }
+
+    /// The alternatives of `cs` from `at` to the `)` that closes `depth` (or the end, at depth 0).
+    fn re_parse(cs: &[char], at: &mut usize, depth: usize, re: &str) -> Vec<Vec<Re>> {
+        let mut alts = vec![Vec::new()];
+        while let Some(&c) = cs.get(*at) {
+            *at += 1;
+            let piece = match c {
+                '\\' => {
+                    *at += 1;
+                    Re::One(vec![cs[*at - 1]])
+                }
+                '[' => {
+                    let end = *at
+                        + cs[*at..]
+                            .iter()
+                            .position(|&c| c == ']')
+                            .expect("a closed class");
+                    let set = cs[*at..end].to_vec();
+                    *at = end + 1;
+                    Re::One(set)
+                }
+                '(' => Re::Alt(re_parse(cs, at, depth + 1, re)),
+                ')' if depth > 0 => return alts,
+                '|' if depth > 0 => {
+                    alts.push(Vec::new());
+                    continue;
+                }
+                '.' | '^' | '$' | '*' | '+' | '?' | ')' | ']' | '{' | '}' | '|' => {
+                    panic!("unescaped {c} in {re}")
+                }
+                c => Re::One(vec![c]),
+            };
+            alts.last_mut().unwrap().push(piece);
+        }
+        assert_eq!(depth, 0, "an unclosed ( in {re}");
+        alts
+    }
+
+    /// Every position `seq` can end at in `s` when it starts at `from`.
+    fn re_ends(seq: &[Re], s: &[char], from: usize) -> Vec<usize> {
+        let mut at = vec![from];
+        for piece in seq {
+            let mut next = Vec::new();
+            for &p in &at {
+                match piece {
+                    Re::One(set) => {
+                        if s.get(p).is_some_and(|c| set.contains(c)) {
+                            next.push(p + 1);
+                        }
+                    }
+                    Re::Alt(alts) => alts.iter().for_each(|a| next.extend(re_ends(a, s, p))),
+                }
+            }
+            next.sort_unstable();
+            next.dedup();
+            at = next;
+        }
+        at
+    }
+
+    /// Does `re`, a regex [`profile`] made (`^`, `\c`, `[Aa]`, groups of alternatives such as `(é|É)` or `(ss|ß)`,
+    /// nested, then `(/.*)?$` or `$`), match `s`? Only that shape is understood; anything else fails the test.
     fn re_match(re: &str, s: &str) -> bool {
         let (body, whole) = if let Some(b) = re.strip_suffix("(/.*)?$") {
             (b, true)
         } else {
             (re.strip_suffix('$').expect("ends in $"), false)
         };
-        let mut cs = body.strip_prefix('^').expect("starts with ^").chars();
-        let mut toks: Vec<Vec<char>> = Vec::new();
-        while let Some(c) = cs.next() {
-            toks.push(match c {
-                '\\' => vec![cs.next().unwrap()],
-                '[' => cs.by_ref().take_while(|&c| c != ']').collect(),
-                '(' => cs
-                    .by_ref()
-                    .take_while(|&c| c != ')')
-                    .filter(|&c| c != '|')
-                    .collect(),
-                '.' | '^' | '$' | '*' | '+' | '?' | ')' | ']' | '{' | '}' | '|' => {
-                    panic!("unescaped {c} in {re}")
-                }
-                c => vec![c],
-            });
-        }
+        let cs: Vec<char> = body
+            .strip_prefix('^')
+            .expect("starts with ^")
+            .chars()
+            .collect();
+        let alts = re_parse(&cs, &mut 0, 0, re);
         let sc: Vec<char> = s.chars().collect();
-        if sc.len() < toks.len() || !toks.iter().zip(&sc).all(|(t, c)| t.contains(c)) {
-            return false;
-        }
-        let rest = &sc[toks.len()..];
-        rest.is_empty() || (whole && rest[0] == '/')
+        re_ends(&[Re::Alt(alts)], &sc, 0)
+            .into_iter()
+            .any(|e| e == sc.len() || (whole && sc[e] == '/'))
     }
 
     /// A deny's paths and regexes, in pairs: `(F "p") (regex "r")`.
@@ -744,6 +1088,147 @@ mod tests {
     fn golden_shared() {
         let p = prof(spec(Net::Shared));
         insta::assert_snapshot!("golden_shared", &p[BASE.len()..]);
+    }
+
+    #[test]
+    fn golden_build() {
+        let p = try_prof(spec(isolated()), &build()).unwrap();
+        insta::assert_snapshot!("golden_build", &p[BASE.len()..]);
+    }
+
+    /// [D] The build addition: every sysctl read, the whole Xcode app and the per-user folder read, the per-user folder
+    /// written, the build's devices, metadata and services; the reads before Homebrew's data is denied, everything
+    /// before the network is (the last matching rule decides). A session's profile has none of it.
+    #[test]
+    fn the_build_addition_only_for_a_build() {
+        let p = try_prof(spec(isolated()), &build()).unwrap();
+        let forms = own(&p);
+        let rs = rules(&forms);
+        let sysctl = one(&rs, "every sysctl", |r| {
+            is(r, "allow", &["sysctl-read"]) && r.filters.is_empty()
+        });
+        let read = one(&rs, "the reads", |r| {
+            is(r, "allow", &["file-read*"]) && args(r, "subpath").contains(&"/usr")
+        });
+        for want in ["/Applications/Xcode.app", USER_DIR] {
+            assert!(args(&rs[read], "subpath").contains(&want), "{want}");
+        }
+        let write = one(&rs, "the writes", |r| {
+            is(r, "allow", &["file-write*"]) && args(r, "subpath").contains(&"/w/task")
+        });
+        assert!(args(&rs[write], "subpath").contains(&USER_DIR));
+        let dev = one(&rs, "the build's devices", |r| {
+            is(r, "allow", &["file-read*"]) && args(r, "literal") == BUILD_DEVICES
+        });
+        let dw = one(&rs, "device writes", |r| {
+            is(r, "allow", &["file-write-data"]) && args(r, "literal") == BUILD_DEVICE_WRITES
+        });
+        assert_eq!(args(&rs[dw], "literal"), BUILD_DEVICE_WRITES);
+        let svc = one(&rs, "the build's services", |r| {
+            is(r, "allow", &["mach-lookup"])
+        });
+        assert_eq!(args(&rs[svc], "global-name"), BUILD_SERVICES);
+        let meta = one(&rs, "metadata", |r| is(r, "allow", &["file-read-metadata"]));
+        for m in BUILD_METADATA {
+            assert!(args(&rs[meta], "literal").contains(m), "{m}");
+        }
+        let hidden = one(&rs, "Homebrew's data denied", |r| {
+            is(r, "deny", &["file-read*"]) && args(r, "subpath") == SYSTEM_HIDDEN
+        });
+        let net = one(&rs, "no network", |r| is(r, "deny", &["network*"]));
+        // the reads before Homebrew's data is denied; the writes (step 8) after it, which denies only reads
+        for i in [sysctl, read, dev, dw, svc] {
+            assert!(i < hidden && i < net, "{i} before {hidden} and {net}");
+        }
+        assert!(hidden < write && write < net, "{hidden} < {write} < {net}");
+
+        let session = prof(spec(isolated()));
+        let srs_forms = own(&session);
+        let srs = rules(&srs_forms);
+        assert!(!srs.iter().any(|r| is(r, "allow", &["sysctl-read"])));
+        assert!(
+            !srs.iter()
+                .any(|r| is(r, "allow", &["file-write-data"]) || is(r, "allow", &["mach-lookup"]))
+        );
+        // the app's metadata is read (an ancestor of the developer dir), never the app itself
+        assert!(
+            !session.contains("(subpath \"/Applications/Xcode.app\")")
+                && !session.contains(USER_DIR)
+        );
+    }
+
+    /// [D] A build's /bin/sh here-documents: bash 3.2 ignores TMPDIR for them and makes `sh-thd*` in /private/tmp or
+    /// /private/var/tmp, so a build may read and write those names there, directly in those folders, and nothing else
+    /// of either; a session may not.
+    #[test]
+    fn a_build_makes_only_its_here_documents_in_tmp() {
+        let p = try_prof(spec(isolated()), &build()).unwrap();
+        let forms = own(&p);
+        let rs = rules(&forms);
+        let hd = one(&rs, "the here-documents", |r| {
+            is(r, "allow", &["file-read*", "file-write*"]) && !args(r, "regex").is_empty()
+        });
+        let res = args(&rs[hd], "regex");
+        assert_eq!(res, BUILD_HEREDOCS);
+        // each is `^<folder>/sh-thd[^/]*$`: a name directly in the folder
+        let matches = |re: &str, s: &str| {
+            let prefix = re
+                .strip_prefix('^')
+                .and_then(|r| r.strip_suffix("[^/]*$"))
+                .expect("^<prefix>[^/]*$");
+            s.strip_prefix(prefix)
+                .is_some_and(|rest| !rest.contains('/'))
+        };
+        let any = |s: &str| res.iter().any(|re| matches(re, s));
+        for ok in [
+            "/private/tmp/sh-thd.a1b2",
+            "/private/var/tmp/sh-thd-1794375920",
+        ] {
+            assert!(any(ok), "{ok}");
+        }
+        for no in [
+            "/private/tmp/other",
+            "/private/tmp/sh-thd.d/inside",
+            "/private/tmp/x/sh-thd1",
+            "/tmp/sh-thd1",
+            "/private/var/folders/sh-thd1",
+        ] {
+            assert!(!any(no), "{no}");
+        }
+        // the folders themselves only `file-write-data` (bash's access check), by name
+        let dirs = one(&rs, "the here-documents' folders", |r| {
+            is(r, "allow", &["file-write-data"]) && args(r, "literal") == BUILD_HEREDOC_DIRS
+        });
+        // the rest of /tmp stays out: no other rule names either folder for writing
+        for r in &rs {
+            if is(r, "allow", &["file-write*"]) {
+                let (sub, lit) = (args(r, "subpath"), args(r, "literal"));
+                for a in sub.iter().chain(&lit) {
+                    assert!(
+                        !a.starts_with("/private/tmp") && !a.starts_with("/private/var/tmp"),
+                        "{a}"
+                    );
+                }
+            }
+        }
+        let net = one(&rs, "no network", |r| is(r, "deny", &["network*"]));
+        assert!(hd < net && dirs < net);
+        assert!(!prof(spec(isolated())).contains("sh-thd"));
+    }
+
+    /// [D] A build's per-user folder must be absolute, canonical and outside the users' homes.
+    #[test]
+    fn a_build_user_dir_is_checked() {
+        let in_homes = format!("{USERS_DIR}/u/tmp");
+        for bad in ["var/folders/x", "/private/var/folders/../x", &in_homes, "/"] {
+            let m = MacContext {
+                build: Some(MacBuild {
+                    user_dir: bad.into(),
+                }),
+                ..mac()
+            };
+            assert!(try_prof(spec(isolated()), &m).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -991,10 +1476,121 @@ mod tests {
         let mut none = spec(Net::Isolated {
             relay: vec![],
             mac_tcp_ports: vec![],
+            loopback: false,
+            mac_loopback_ports: vec![],
         });
         none.sockets = vec![];
         let p = prof(none);
         assert!(!p.contains("remote ip"));
+    }
+
+    /// `Net::None`: every network operation denied and none allowed back, not even `localhost`.
+    #[test]
+    fn no_network_denies_all_of_it() {
+        let p = prof(spec(Net::None));
+        assert!(p.contains("(deny network*)"));
+        assert!(
+            !p.contains("remote ip") && !p.contains("network-bind"),
+            "{p}"
+        );
+    }
+
+    /// A debug session (`loopback`): its own localhost ports bound, accepted and connected to, nothing wider (no
+    /// `localhost:*`: the Mac's loopback is the host's); Unix sockets bound and accepted under its tmp only; Xcode's
+    /// SharedFrameworks read, never written. Without the flag none of it.
+    #[test]
+    fn loopback_only_its_own_ports_tmp_sockets_and_frameworks() {
+        let net = |loopback, ports: Vec<u16>| Net::Isolated {
+            relay: vec![],
+            mac_tcp_ports: vec![3128],
+            loopback,
+            mac_loopback_ports: ports,
+        };
+        let p = prof(spec(net(true, vec![47001, 47002])));
+        let forms = own(&p);
+        let rs = rules(&forms);
+        let deny = one(&rs, "(deny network*)", |r| is(r, "deny", &["network*"]));
+        let mut seen = Vec::new();
+        for (i, r) in rs.iter().enumerate() {
+            if r.action == "allow" && r.ops.iter().any(|o| o.starts_with("network")) {
+                assert!(i > deny);
+                let f = items(r.filters[0]);
+                let kind = atom(&f[1]).unwrap();
+                let what = match kind {
+                    "ip" => string(&f[2]).unwrap().to_string(),
+                    "unix-socket" => {
+                        let sub = items(&f[2]);
+                        format!("{} {}", atom(&sub[0]).unwrap(), string(&sub[1]).unwrap())
+                    }
+                    other => panic!("{other}"),
+                };
+                seen.push(format!("{} {} {what}", r.ops[0], atom(&f[0]).unwrap()));
+            }
+        }
+        let tmp = |op: &str, dir: &str| format!("{op} {dir} subpath {TMP}");
+        let mut want = vec!["network-outbound remote localhost:3128".to_string()];
+        for port in [47001, 47002] {
+            want.push(format!("network-bind local localhost:{port}"));
+            want.push(format!("network-inbound local localhost:{port}"));
+            want.push(format!("network-outbound remote localhost:{port}"));
+        }
+        want.push(tmp("network-bind", "local"));
+        want.push(tmp("network-inbound", "local"));
+        // connect under tmp (node's inspector, js-debug's watchdog): after the unix deny, so it is not undone
+        want.push(tmp("network-outbound", "remote"));
+        // the session dir's one socket (step 13), as without the flag
+        want.push("network-outbound remote path-literal /w/run/s/S1/gw.sock".into());
+        assert_eq!(seen, want);
+        let unix_deny = one(&rs, "the unix deny", |r| {
+            is(r, "deny", &["network-outbound"])
+                && r.filters
+                    .iter()
+                    .any(|f| items(f).iter().any(|x| atom(x) == Some("unix-socket")))
+        });
+        let tmp_connect = rs
+            .iter()
+            .position(|r| {
+                is(r, "allow", &["network-outbound"])
+                    && r.filters.iter().any(|f| {
+                        items(f)
+                            .iter()
+                            .filter(|x| matches!(x, Sexp::List(_)))
+                            .any(|x| items(x).iter().any(|y| atom(y) == Some("subpath")))
+                    })
+            })
+            .expect("connect under tmp");
+        assert!(tmp_connect > unix_deny);
+        assert!(!p.contains("localhost:*") && !p.contains("\"*:*\""));
+        let fw = "/Applications/Xcode.app/Contents/SharedFrameworks";
+        let names = |r: &R<'_>| -> Vec<String> {
+            r.filters
+                .iter()
+                .flat_map(|f| items(f).iter().filter_map(string).map(str::to_string))
+                .collect()
+        };
+        assert!(
+            rs.iter()
+                .any(|r| is(r, "allow", &["file-read*"]) && names(r).iter().any(|n| n == fw))
+        );
+        for r in rs
+            .iter()
+            .filter(|r| r.action == "allow" && r.ops.iter().any(|o| o.starts_with("file-write")))
+        {
+            assert!(!names(r).iter().any(|n| n.starts_with("/Applications")));
+        }
+        // Without the flag: no loopback port, no socket bind, no frameworks.
+        let off = prof(spec(net(false, vec![])));
+        for word in ["network-bind", "network-inbound", "SharedFrameworks"] {
+            assert!(!off.contains(word), "{word}");
+        }
+        // The Command Line Tools' developer dir has no SharedFrameworks beside it: nothing added.
+        let clt = MacContext {
+            developer_dir: Some("/Library/Developer/CommandLineTools".into()),
+            users_dir: USERS_DIR.into(),
+            build: None,
+        };
+        let p = try_prof(spec(net(true, vec![47001])), &clt).unwrap();
+        assert!(!p.contains("SharedFrameworks"));
     }
 
     #[test]
@@ -1036,9 +1632,9 @@ mod tests {
             assert!(re_match(re, hit), "{hit}");
         }
         assert!(h > pin);
-        // A non-ASCII letter: a group of its cases; a letter without cases and a metacharacter as themselves.
+        // A non-ASCII letter: a group of its cases; a metacharacter escaped.
         let re = case_regex("/w/café/ß+x", true);
-        assert!(re.contains("(é|É)") && re.contains("ß\\+"), "{re}");
+        assert!(re.contains("(é|É)") && re.contains("(ß|ẞ))\\+"), "{re}");
         for hit in ["/w/CAFÉ/ß+X", "/w/Café/ß+x/y"] {
             assert!(re_match(&re, hit), "{hit}");
         }
@@ -1060,6 +1656,174 @@ mod tests {
             assert!(re_match(&re, hit), "{hit}");
         }
         assert!(!re_match(&re, "/w/.cubes/å"));
+        // GL-T9-3: APFS folds ß (and ẞ) to "ss", one letter to two (the macOS 27 runner's control reached a hidden
+        // `straße` as `STRASSE`). Each spelling stands for the others, in both directions: a hidden `.ssh` read as
+        // `.ßh`, and a run of s's split into ß's anywhere.
+        let re = case_regex("/w/straße", false);
+        for hit in [
+            "/w/straße",
+            "/w/STRASSE",
+            "/w/strasse",
+            "/w/StraSse",
+            "/w/STRAẞE",
+            "/w/stra\u{17F}\u{17F}e",
+        ] {
+            assert!(re_match(&re, hit), "{hit} by {re}");
+        }
+        for miss in ["/w/strase", "/w/strasssE", "/w/straßse"] {
+            assert!(!re_match(&re, miss), "{miss} by {re}");
+        }
+        let re = case_regex("/w/.ssh", true);
+        for hit in ["/w/.ssh/id", "/w/.ßh", "/w/.ẞH/id", "/w/.SSH"] {
+            assert!(re_match(&re, hit), "{hit} by {re}");
+        }
+        let re = case_regex("/w/sss", false);
+        for hit in ["/w/sss", "/w/ßs", "/w/sß", "/w/Sẞ"] {
+            assert!(re_match(&re, hit), "{hit} by {re}");
+        }
+        assert!(!re_match(&re, "/w/ßß"), "{re}");
+        assert_eq!(
+            case_regex("/ß", false),
+            "^/((s|S|\u{17F})(s|S|\u{17F})|(ß|\u{1E9E}))$"
+        );
+        // Every run of up to 9 s's matches exactly its spellings: the s's and ß's whose s count is the run's.
+        for n in 0..=9 {
+            let re = case_regex(&format!("/{}", "s".repeat(n)), false);
+            for len in 0..=n {
+                for bits in 0..1u32 << len {
+                    let w: String = (0..len)
+                        .map(|i| if bits >> i & 1 == 1 { 'ß' } else { 's' })
+                        .collect();
+                    let count = len + bits.count_ones() as usize;
+                    assert_eq!(re_match(&re, &format!("/{w}")), count == n, "{w} by {re}");
+                }
+            }
+        }
+        // Review of GL-T9-3: a run's group grows with the square of its length, not with its number of spellings
+        // (Fibonacci): 15 s's fit in one SBPL string, and 40 build at once (and are refused by `quote`).
+        assert!(case_regex(&format!("/{}", "s".repeat(15)), false).len() <= MAX_LITERAL);
+        assert!(case_regex(&"s".repeat(40), false).len() < 8 * 1024);
+        // The macOS 27 runner's control reached a hidden `config` as `con\u{FB01}g` and `flags` as `\u{FB02}ags`: APFS
+        // folds the ligatures \u{FB01} and \u{FB02} to "fi" and "fl". Each spelling stands for the other, either way.
+        for (path, hits, misses) in [
+            (
+                "/w/config",
+                &["/w/con\u{FB01}g", "/w/CONFIG", "/w/conFIg"][..],
+                &["/w/con\u{FB02}g", "/w/cong"][..],
+            ),
+            (
+                "/w/con\u{FB01}g",
+                &["/w/config", "/w/CONFIG", "/w/con\u{FB01}g"][..],
+                &["/w/conflg"][..],
+            ),
+            (
+                "/w/flags",
+                &["/w/\u{FB02}ags", "/w/FLAGS"][..],
+                &["/w/\u{FB01}ags"][..],
+            ),
+            (
+                "/w/\u{FB02}ow",
+                &["/w/flow", "/w/FLOW"][..],
+                &["/w/fow"][..],
+            ),
+            (
+                "/w/ffi",
+                &["/w/f\u{FB01}", "/w/FFI"][..],
+                &["/w/\u{FB01}f"][..],
+            ),
+        ] {
+            let re = case_regex(path, false);
+            for hit in hits {
+                assert!(re_match(&re, hit), "{hit} by {re}");
+            }
+            for miss in misses {
+                assert!(!re_match(&re, miss), "{miss} by {re}");
+            }
+        }
+        // a pair's group stands for its two letters alone: the regex grows with the path
+        assert!(case_regex(&"fi".repeat(40), false).len() < 40 * 32);
+        // Unicode's full case folding (CaseFolding.txt, status F) maps every Latin ligature U+FB00..FB06 and ß to ASCII
+        // letters, and APFS takes ß, ﬁ and ﬂ (not İ, whose fold has a combining dot): so the others are taken too, each
+        // spelling standing for every other, whatever the letters round it and however they are split into ligatures.
+        for (path, hits, misses) in [
+            (
+                "/w/o\u{FB00}",
+                &["/w/off", "/w/OFF", "/w/o\u{FB00}", "/w/oFf"][..],
+                &["/w/of", "/w/o\u{FB01}"][..],
+            ),
+            (
+                "/w/office",
+                &[
+                    "/w/o\u{FB03}ce",
+                    "/w/o\u{FB00}ice",
+                    "/w/of\u{FB01}ce",
+                    "/w/OFFICE",
+                ][..],
+                &["/w/o\u{FB04}ce", "/w/ofce"][..],
+            ),
+            (
+                "/w/waffle",
+                &["/w/wa\u{FB04}e", "/w/wa\u{FB00}le", "/w/waf\u{FB02}e"][..],
+                &["/w/wa\u{FB03}e"][..],
+            ),
+            (
+                "/w/list",
+                &["/w/li\u{FB05}", "/w/li\u{FB06}", "/w/liST", "/w/li\u{17F}t"][..],
+                &["/w/lit", "/w/li\u{FB05}t"][..],
+            ),
+            (
+                "/w/last",
+                &["/w/la\u{FB06}", "/w/la\u{FB05}", "/w/LAST"][..],
+                &["/w/las"][..],
+            ),
+            // ß and the st ligatures share s's: "sst" is ßt, sﬅ and ßt alike
+            (
+                "/w/\u{DF}t",
+                &["/w/sst", "/w/s\u{FB05}", "/w/s\u{FB06}", "/w/\u{1E9E}T"][..],
+                &["/w/st", "/w/\u{FB05}"][..],
+            ),
+            (
+                "/w/s\u{FB05}",
+                &["/w/sst", "/w/\u{DF}t", "/w/\u{17F}\u{FB06}"][..],
+                &["/w/sts"][..],
+            ),
+            // f's run into ligatures: "fff" is ﬀf and fﬀ; "ffff" is ﬀﬀ
+            (
+                "/w/ffff",
+                &["/w/\u{FB00}\u{FB00}", "/w/f\u{FB00}f", "/w/FF\u{FB00}"][..],
+                &["/w/fff"][..],
+            ),
+            ("/w/\u{130}", &["/w/\u{130}"][..], &["/w/i", "/w/I"][..]),
+        ] {
+            let re = case_regex(path, false);
+            for hit in hits {
+                assert!(re_match(&re, hit), "{hit} by {re}");
+            }
+            for miss in misses {
+                assert!(!re_match(&re, miss), "{miss} by {re}");
+            }
+        }
+        // a ligature's group stands for the folded letters alone: the regex grows with the path, and a path near the
+        // limit still fits whole
+        assert!(case_regex(&"\u{FB03}".repeat(40), false).len() < 40 * 160);
+        let near = format!("/{}", "f".repeat(15));
+        assert!(
+            case_regex(&near, false).len() <= MAX_LITERAL,
+            "{}",
+            case_regex(&near, false).len()
+        );
+        // a path whose regex cannot fit is refused by name, quickly (never cut short, never a hidden name dropped)
+        for long in [
+            "f".repeat(400),
+            "s\u{FB05}".repeat(300),
+            "/w/".to_owned() + &"a".repeat(1100),
+        ] {
+            let e = deny_any_case("file-read*", "subpath", &[long.as_str()]).unwrap_err();
+            assert!(
+                format!("{e:?}").contains("longer than a Seatbelt string"),
+                "{e:?}"
+            );
+        }
         assert_eq!(case_regex("/\u{212A}", false), "^/(\u{212A}|k|K)$");
         assert_eq!(case_regex("/g", false), "^/[Gg]$");
         // Homebrew's data, in every case too.

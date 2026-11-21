@@ -105,20 +105,43 @@ long before counts as ended."
   "`drgnx-test--presenter-counts' at the end of the last `drgnx-test-wait-presented'.")
 
 (defun drgnx-test--presenter-counts (frame)
-  "(OWED . SENT) of FRAME's display on the native shell: the packets that need a commit of their own (published, less
-those merged into one still waiting) and the commits sent.  Nil where there is no presenter."
+  "(PUBLISHED . PRESENTED) of FRAME's display on the native shell, the presenter's own request numbers: the newest
+request (each packet, configure ack and piece of surface state takes the next one) and the newest that, with every
+older one, has gone out in a flushed commit.  Nil where there is no presenter."
   (when-let* (((fboundp 'nhwl-presenter-stats))
               (s (ignore-errors (nhwl-presenter-stats frame))))
-    (cons (- (plist-get s :packets) (plist-get s :superseded))
-          (+ (plist-get s :commits) (plist-get s :bare-commits)))))
+    (cons (plist-get s :published) (plist-get s :presented))))
 
 (defun drgnx-test--presented-p (frame)
-  "Non-nil when every packet of FRAME's display published since the last presented wait has gone out as a commit.
-A packet makes at least one commit, and a tree with child frames makes more.  With no presenter (macOS, a pgtk build)
-it is t: there `glitnir-snapshot' itself returns after a paint."
-  (let ((now (drgnx-test--presenter-counts frame)) (then drgnx-test--settled-counts))
-    (or (null now) (null then)
-        (>= (- (cdr now) (cdr then)) (- (car now) (car then))))))
+  "Non-nil when every request of FRAME's display has gone out in a commit: the presenter's :presented has reached its
+:published.  Not a count of commits since the last wait: a packet merged into one still waiting adds no commit owed,
+so that count settled while nothing went out (KWin with no render device answered no frame callback after its first).
+With no presenter (macOS, a pgtk build) it is t: there `glitnir-snapshot' itself returns after a paint."
+  (let ((now (drgnx-test--presenter-counts frame)))
+    (or (null now) (>= (cdr now) (car now)))))
+
+(defvar drgnx-test--deleted-frames nil
+  "((FRAME . CALLERS)…): the last 8 frames deleted in this Emacs, newest first, CALLERS the functions on the stack
+when it was (`drgnx-test--note-deleted'), so a wait on a dead frame can say who deleted it.")
+
+(defun drgnx-test--note-deleted (frame)
+  "On `delete-frame-functions': note FRAME and the functions that are deleting it."
+  (let ((callers (delq nil (mapcar (lambda (f) (and (symbolp (cadr f)) (cadr f))) (backtrace-frames)))))
+    ;; from the caller of `delete-frame' (a child frame dies with its parent from redisplay: no `delete-frame' call)
+    (push (cons frame (seq-take (cdr (or (memq 'delete-frame callers) (memq 'drgnx-test--note-deleted callers))) 12))
+          drgnx-test--deleted-frames)
+    (setq drgnx-test--deleted-frames (seq-take drgnx-test--deleted-frames 8))))
+
+(add-hook 'delete-frame-functions #'drgnx-test--note-deleted)
+
+(defun drgnx-test--frame-dead-p (frame)
+  "Non-nil when FRAME is a frame that was deleted."
+  (and (framep frame) (not (frame-live-p frame))))
+
+(defun drgnx-test--dead-frame-fail (frame)
+  "Fail the test: the wait's FRAME is dead, and these callers deleted it."
+  (signal 'ert-test-failed (list :waited-for "a presented frame" :dead-frame frame
+                                 :deleted-by (cdr (assq frame drgnx-test--deleted-frames)))))
 
 (cl-defun drgnx-test-wait-presented (&key frame value (frames 2) (secs 30))
   "Wait until FRAME's root frame (default the session's) shows what was changed; return the last sample.
@@ -128,10 +151,13 @@ FRAMES samples in a row are the same and no commit is owed.  A sample is the pic
 no arguments, called after the paint) for a state the picture does not show, such as a frame's size.  A size or a map
 is answered by the compositor in order with those paints, so what is still on its way shows up in a later sample.
 The deadline (SECS as in `drgnx-test-wait') only bounds a failure: a timeout fails the test.
-A test with a popup that has no parent passes FRAME: `drgnx-uitest-root-frame' can find that popup."
+A test with a popup that has no parent passes FRAME: `drgnx-uitest-root-frame' can find that popup.
+A frame deleted before or during the wait never presents: the wait fails at its next look with `:dead-frame' and
+`:deleted-by', the functions that deleted it (`drgnx-test--deleted-frames')."
   (let* ((root (or frame (drgnx-uitest-root-frame))) (last nil) (seen 0) (err (list nil)))
     (drgnx-test-wait
      (lambda ()
+       (when (drgnx-test--frame-dead-p root) (drgnx-test--dead-frame-fail root))
        (when-let* ((snap (condition-case e (drgnx-uitest-snapshot root) ; no paint in its 1 s: the next try
                            (error (setcar err e) nil))))
          (let ((v (if value (funcall value) snap)))
@@ -161,6 +187,87 @@ with Emacs's own call and virtual time keeps step with the real (`drgnx-test-wai
 (defconst drgnx-test-native-comp-buffer-names
   '("*Native-compile-Log*" "*Async-native-compile-log*" "*Warnings*" "*Compile-Log*")
   "Buffers Emacs's native compiler creates on its own.")
+
+(defun drgnx-test-frame-text-size (frame width height)
+  "Give FRAME's text WIDTH x HEIGHT px (`set-frame-size' pixelwise) and wait until the compositor did: its text size is
+that, within a character, and still is once it held over presented frames (`drgnx-test-wait-presented'): a configure
+that comes late (leaving fullscreen answered after the resize) would size the frame again under the row.  A size that
+does not take, or does not hold, fails the test (a fullscreen frame keeps its output's size: see
+`drgnx-test-frame-fullscreen'), so a row that resizes never passes on the size it had."
+  (let ((size (lambda () (list (frame-text-width frame) (frame-text-height frame))))
+        (near (lambda () (and (<= (abs (- (frame-text-width frame) width)) (frame-char-width frame))
+                              (<= (abs (- (frame-text-height frame) height)) (frame-char-height frame))))))
+    (set-frame-size frame width height t)
+    (drgnx-test-wait (lambda () (redisplay t) (funcall near))
+                     :secs 8
+                     :what (list "the frame's text size" (list width height) :has (funcall size)
+                                 :fullscreen (frame-parameter frame 'fullscreen)
+                                 ;; a height under the windows' minimum is one the frame cannot take
+                                 :windows-min-height (window-min-size (frame-root-window frame) nil nil t)))
+    (drgnx-test-wait-presented :frame frame :value size)
+    (unless (funcall near)
+      (ert-fail (list "the frame's text size did not hold" (list width height) :has (funcall size)
+                      :fullscreen (frame-parameter frame 'fullscreen))))))
+
+(declare-function nhwl--frame-states "nhwlterm.c" (&optional frame))
+
+(defvar drgnx-test-frame-fullscreen-request (lambda (frame state) (set-frame-parameter frame 'fullscreen state))
+  "How `drgnx-test-frame-fullscreen' asks for a state: a function of FRAME and STATE.  A row that checks the helper
+itself binds it to a request answered late.")
+
+(defvar drgnx-test--fullscreen-sizes (make-hash-table :test #'eq :weakness 'key)
+  "Frame → its pixel size in fullscreen, taken when `drgnx-test-frame-fullscreen' left it: going back waits for it.")
+
+(defun drgnx-test-frame-fullscreen (frame state)
+  "Make FRAME's `fullscreen' parameter STATE (nil, `fullboth') and wait until the compositor answered and the size
+settled; return the state it had.  The GUI sessions' root frame is fullscreen, which keeps its output's size: a row that
+resizes the frame leaves fullscreen first and puts the state back after.  The parameter changes at once, the size only
+when the compositor's configure arrives.  Leaving: the wait is for the size to hold over presented frames
+\(`drgnx-test-wait-presented'), not for it to change: a frame with no tool bar or menu bar (the card rows' bare
+frame) leaves fullscreen maximized at the output's size, the size it had; whether a resize after it took, and held, is
+`drgnx-test-frame-text-size''s check.  Going back: the wait is for the size the frame had in fullscreen when this
+helper left it (a configure answered after a paint would otherwise pass as the old size), then for it to hold."
+  (let ((was (frame-parameter frame 'fullscreen))
+        (size (lambda () (list (frame-pixel-width frame) (frame-pixel-height frame)))))
+    (unless (eq state was)
+      (when (and was (null state)) (puthash frame (funcall size) drgnx-test--fullscreen-sizes))
+      (funcall drgnx-test-frame-fullscreen-request frame state)
+      ;; the compositor's answer (Nidhogg's shell keeps its last configure's states): a resize asked before the leave is
+      ;; answered is dropped, and the size alone cannot tell (a leave can keep the size, two paints can come first)
+      (when (and (fboundp 'nhwl--frame-states) (condition-case nil (progn (nhwl--frame-states frame) t) (error nil)))
+        (drgnx-test-wait (lambda () (ignore-errors (drgnx-uitest-snapshot frame))
+                           (eq (and state t) (and (memq 'fullscreen (nhwl--frame-states frame)) t)))
+                         :secs 8 :what (list "the compositor's answer to fullscreen" state
+                                             :has (nhwl--frame-states frame))))
+      (when-let* ((full (and state (gethash frame drgnx-test--fullscreen-sizes))))
+        ;; each try a presented frame (a trip through the compositor), as `drgnx-test-wait-presented''s samples
+        (drgnx-test-wait (lambda () (ignore-errors (drgnx-uitest-snapshot frame)) (equal full (funcall size)))
+                         :secs 8 :what (list "the frame's size back in fullscreen" full :has (funcall size))))
+      (drgnx-test-wait-presented :frame frame :value size))
+    was))
+
+(declare-function drgnx-timer-pending "drgnx-timer" ())
+(declare-function drgnx-hooks--first-input "drgnx-hooks" ())
+(declare-function drgnx-hooks--first-file "drgnx-hooks" ())
+(declare-function drgnx-hooks--gui-frame "drgnx-hooks" (&optional frame))
+
+(defun drgnx-test-wait-stages ()
+  "Return once this Emacs has ended its last module stage, for a GUI row that binds a key or sends C-g: no idle-stage
+step is left (`drgnx-modules-start'; one left fails the test, since a row's waits never let an idle timer run), and
+the once-only stages still armed (first input, first file, first graphical frame) are reached now through their own
+triggers, each ending with `drgnx-keys-apply'.  The GUI suite's session starts no modules and arms none, so there
+this only proves none can end mid-row.
+The tty tier's `drgnx-tty-session-wait-stages' is the same in a session."
+  (drgnx-test-wait (lambda () (not (and (fboundp 'drgnx-timer-pending)
+                                        (seq-find (lambda (k) (eq (car-safe (car k)) 'modules-idle-step))
+                                                  (drgnx-timer-pending)))))
+                   :secs 1 :what "the modules' idle stage over (no `modules-idle-step' timer left)")
+  (when (memq 'drgnx-hooks--first-input (default-value 'pre-command-hook)) (drgnx-hooks--first-input))
+  (when (memq 'drgnx-hooks--first-file (default-value 'find-file-hook)) (drgnx-hooks--first-file))
+  (when-let* (((memq 'drgnx-hooks--gui-frame (default-value 'after-make-frame-functions)))
+              (f (seq-find #'display-graphic-p (frame-list))))
+    (drgnx-hooks--gui-frame f))
+  t)
 
 (defun drgnx-test-buffer-list ()
   "`buffer-list' without the buffers native compilation creates (`drgnx-test-native-comp-buffer-names')."

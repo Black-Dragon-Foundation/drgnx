@@ -85,7 +85,8 @@ for :code t.  Remote, broad (`drgnx-trust--broad-p') and malformed entries are l
   "trusted-folders.eld's plist, read again when its stamp changed; nil when there is none or it cannot be used (a
 mistake or a newer drgnx's: then nothing in it is trusted or allowed)."
   (let* ((file (drgnx-trust-folders-file)) (stamp (drgnx-file-stamp file)))
-    (if (and stamp drgnx-settings-trust--data (equal (car drgnx-settings-trust--data) stamp))
+    ;; a missing file has no stamp: that is a stamp too (it is read once, not at every open)
+    (if (and drgnx-settings-trust--data (equal (car drgnx-settings-trust--data) stamp))
         (cdr drgnx-settings-trust--data)
       (let* ((r (drgnx-file-read file)) (data (plist-get r :data))
              (ok (and (eq (plist-get r :status) 'ok) (listp (drgnx-trust--folders-of data)) data)))
@@ -130,11 +131,43 @@ plain data: an `eval' form may hold a backquote)."
   "Does DIR hold one of `drgnx-settings-trust-root-markers'?"
   (seq-some (lambda (m) (file-exists-p (expand-file-name m dir))) drgnx-settings-trust-root-markers))
 
+(defvar drgnx-settings-trust--memo (make-hash-table :test 'equal)
+  "(KIND . KEY) -> (TOKEN EXTRA RESULT): roots and states already worked out.  A result stands while the token
+\(`drgnx-settings-trust--token') and EXTRA are the same.  Emptied past 256 entries.")
+
+(defun drgnx-settings-trust--token ()
+  "What a root or a state depends on besides its folder: the stamp of trusted-folders.eld and the value of
+`drgnx-trust-parents' (an object, so a changed value is a different one)."
+  (drgnx-settings-trust--state-data)
+  (cons (car drgnx-settings-trust--data) (default-value 'drgnx-trust-parents)))
+
+(defun drgnx-settings-trust--memoized (kind key extra compute)
+  "COMPUTE's result for KIND and KEY, kept while the token and EXTRA stay the same.  EXTRA is a value, or a function
+giving it (looked at again after COMPUTE, which may change what it looks at)."
+  (let* ((token (drgnx-settings-trust--token)) (hit (gethash (cons kind key) drgnx-settings-trust--memo))
+         (now (if (functionp extra) (funcall extra) extra)))
+    (if (and hit (equal (car (nth 0 hit)) (car token)) (eq (cdr (nth 0 hit)) (cdr token)) (equal (nth 1 hit) now))
+        (nth 2 hit)
+      (when (> (hash-table-count drgnx-settings-trust--memo) 256) (clrhash drgnx-settings-trust--memo))
+      (let ((result (funcall compute)))
+        (puthash (cons kind key) (list token (if (functionp extra) (funcall extra) extra) result)
+                 drgnx-settings-trust--memo)
+        result))))
+
 (defun drgnx-settings-trust-root (dir)
   "The workspace DIR belongs to, normalized: the longest folder of Trust This Folder holding DIR, else the nearest
 folder at or above DIR holding one of `drgnx-settings-trust-root-markers' (unless that is broad: home, `/', a temp
-folder), else DIR.  Nil for a remote DIR.  Allowed pairs are kept per root."
+folder), else DIR.  Nil for a remote DIR.  Allowed pairs are kept per root.  Worked out once per folder: a file open
+asks for it, and what it depends on (the folders file, `drgnx-trust-parents', whether DIR itself holds a marker) is
+checked, not the folders above."
   (unless (or (null dir) (file-remote-p dir))
+    (let ((dir (expand-file-name dir)))
+      (drgnx-settings-trust--memoized 'root dir (drgnx-settings-trust--marked-p dir)
+                                      (lambda () (drgnx-settings-trust--root-1 dir))))))
+
+(defun drgnx-settings-trust--root-1 (dir)
+  "`drgnx-settings-trust-root' of the local DIR, worked out now."
+  (progn
     (let* ((dir (drgnx-settings-trust--norm dir))
            (folder (car (sort (seq-filter (lambda (f) (string-prefix-p f dir)) (drgnx-settings-trust--folders))
                               (lambda (a b) (> (length a) (length b)))))))
@@ -151,8 +184,15 @@ folder), else DIR.  Nil for a remote DIR.  Allowed pairs are kept per root."
 (defun drgnx-settings-trust-state (root)
   "The trust state of the workspace ROOT: `untrusted' (the default, a remote root, and a root you untrusted),
 `everything' (below a `drgnx-trust-parents' entry with :code t), `trusted' (below a folder of Trust This Folder) or
-`location' (below another `drgnx-trust-parents' entry), checked in that order."
+`location' (below another `drgnx-trust-parents' entry), checked in that order.  Worked out once per root, until
+trusted-folders.eld or `drgnx-trust-parents' changes."
   (if (or (null root) (file-remote-p root)) 'untrusted
+    (let ((root (expand-file-name root)))
+      (drgnx-settings-trust--memoized 'state root nil (lambda () (drgnx-settings-trust--state-1 root))))))
+
+(defun drgnx-settings-trust--state-1 (root)
+  "`drgnx-settings-trust-state' of the local ROOT, worked out now."
+  (progn
     (let* ((root (drgnx-settings-trust--norm root))
            (data (drgnx-settings-trust--state-data))
            (parents (drgnx-settings-trust--parents))
@@ -343,7 +383,21 @@ result (stock behaviour), with a config notice."
 (defun drgnx-settings-trust-filter (root file entries)
   "The `drgnx-settings-workspace-filter-function' of workspace trust: which ENTRIES of the shared FILE of ROOT apply.
 Untrusted: safe values only.  Trusted by location or Trust This Folder: safe values, data, and code (`:eval' sections,
-`:workspace code' settings) whose pair is allowed.  `everything': all.  What waits is remembered."
+`:workspace code' settings) whose pair is allowed.  `everything': all.  What waits is remembered.
+The answer for the same ENTRIES (the same objects: a file read once) is kept while what it rests on is the same:
+trusted-folders.eld, `drgnx-trust-parents', the settings declared, `ignored-local-variables',
+`safe-local-variable-values', and what waits in ROOT (so an emptied register asks again)."
+  (drgnx-settings-trust--memoized
+   'filter (cons root file)
+   (lambda ()
+     (list entries (default-value 'ignored-local-variables) safe-local-variable-values
+           (length drgnx-setting--names) drgnx-setting-meta-functions
+           (gethash (or (drgnx-settings-trust-root root) root) drgnx-settings-trust--waiting)
+           drgnx-settings-trust--announced))
+   (lambda () (drgnx-settings-trust--filter-1 root file entries))))
+
+(defun drgnx-settings-trust--filter-1 (root file entries)
+  "`drgnx-settings-trust-filter' worked out now."
   (let* ((root (or (drgnx-settings-trust-root root) root))
          (state (drgnx-settings-trust-state root))
          (rel (drgnx-settings-trust--rel file root))

@@ -335,6 +335,14 @@ fn tidy(mut tables: Value) -> Value {
             rows.sort_by_key(|r| r.to_string());
         }
     }
+    // schema 9's `decision.sources` is newer than the Lisp functions the fixtures were made from
+    if let Some(Value::Array(rows)) = map.get_mut("decision") {
+        for r in rows {
+            if let Some(o) = r.as_object_mut() {
+                o.remove("sources");
+            }
+        }
+    }
     tables
 }
 

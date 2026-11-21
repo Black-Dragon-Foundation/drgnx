@@ -37,7 +37,7 @@
 (defvar drgnx-large-file-mode)
 (defvar drgnx-large-files--header)
 (defvar drgnx-chrome-mode)
-(defvar drgnx-chrome-header-tail)
+(declare-function drgnx-large-files--tail "drgnx-large-files")
 (defvar revert-buffer-internal-hook)    ; files.el only declares it
 
 (defmacro drgnx-large-files-test--with (&rest body)
@@ -668,11 +668,11 @@ sent the client."
            (disk (with-temp-buffer (insert-file-contents-literally f) (buffer-string)))
            (buf (find-file-noselect f)))         ; automatic, without chunks: raw
       (should (eq (buffer-local-value 'drgnx-large-file buf) 'raw))
-      (pcase-let ((`(,n ,skipped ,undo)
-                   (drgnx-replace--apply-file f (list (list :file f :line 2 :col 0 :text "xxxx")) "yyyy")))
-        (should (= n 0))
-        (should-not undo)
-        (should (equal (mapcar (lambda (m) (plist-get m :reason)) skipped)
+      (let ((r (drgnx-replace-apply-edits
+                (list :change 1 :path f :edits (vector (list :id "m:1:0" :line 2 :col 0 :end_line 2 :end_col 4
+                                                             :old "xxxx" :new "yyyy"))))))
+        (should (equal (plist-get r :applied) []))
+        (should (equal (mapcar (lambda (m) (plist-get m :why)) (plist-get r :skipped))
                        '("open raw: Large File: Open Whole first"))))
       (should-not (buffer-modified-p buf))
       (should (equal (with-temp-buffer (insert-file-contents-literally f) (buffer-string)) disk)))))
@@ -913,8 +913,8 @@ sent the client."
   ;; 12 KB: longer than `so-long-threshold' (10000), under the test's :ask-above (16 KiB)
   (drgnx-large-files-test--door
     (should global-so-long-mode)
-    (dolist (m '(indent-bars-mode drgnx-blame-mode drgnx-sticky-mode diff-hl-margin-mode
-                                  display-line-numbers-mode diff-hl-mode))
+    (dolist (m '(indent-bars-mode drgnx-blame-mode drgnx-sticky-mode drgnx-hunks-mode
+                                  display-line-numbers-mode))
       (should (memq m so-long-minor-modes)))
     (let ((f (drgnx-large-files-test--file "long.js" 12000 t))
           ;; so-long acts when a buffer is first displayed; a buffer nobody shows acts at once
@@ -1014,7 +1014,9 @@ sent the client."
         ;; with the workbench's chrome, after the breadcrumb
         (let ((drgnx-chrome-mode t))
           (drgnx-large-files--header-refresh)
-          (should (eq drgnx-chrome-header-tail 'drgnx-large-files--header))
+          (save-window-excursion
+            (set-window-buffer (selected-window) (current-buffer))
+            (should (equal drgnx-large-files--header (drgnx-large-files--tail (selected-window)))))
           (should-not (local-variable-p 'header-line-format))))
       (drgnx-large-files-remember raw 'raw)
       (with-current-buffer (find-file-noselect raw)

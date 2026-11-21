@@ -7,6 +7,7 @@
 (require 'drgnx-panes)
 (require 'drgnx-persist)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/areas-backend" drgnx-dir) nil t)
 
 (defconst drgnx-state-intent-test--parameters
   '(drgnx-wb-dock-px drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-areas drgnx-wb-view drgnx-intent-by

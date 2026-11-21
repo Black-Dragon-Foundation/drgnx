@@ -1,0 +1,13 @@
+{"scenario": "locks/codex-worker-starts-under-balanced-once-enforced", "requires": ["v1", "test-hooks", "agent-locks"], "doc": "Task 9 (activated by Task 8b), flipped when Codex's lock was proven (2026-11-13: lock::plan answers Enforced::Yes): a Codex profile starts as a worker under the Balanced preset, and as a chat; both are listed (the scenario's launch is unsandboxed, so `enforced` stays false here; `codex_is_enforced_once_proven` holds the plan's `Enforced::Yes`, and `pair/native-edit-blocked-codex` the sandboxed run)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-codex\" :provider codex :command (\"$MOCK\" \"acp\" \"--as\" \"codex\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-codex", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:wsid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-codex", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"sessions": {"$contains": [{"id": "$sid", "role": "chat"}, {"id": "$wsid", "role": "worker"}]}}}}

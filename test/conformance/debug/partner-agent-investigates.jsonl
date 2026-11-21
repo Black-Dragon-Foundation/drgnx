@@ -1,0 +1,43 @@
+{"scenario": "debug/partner-agent-investigates", "requires": ["v1", "test-hooks"], "doc": "An investigation on the mock adapter under the Autonomous preset: the agent reads the user's stopped session (its epoch), may not remove the user's breakpoint, sets its own (the editors get it with its agent, which the gutter rings), and after the user steps its step read at the old stop is refused (the user's step wins); its step at the new stop goes through. Pattern B: each call's turn gates the transcript read."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:preset autonomous)))\n"}
+{"do": "write_file", "path": "$ROOT/proj/.vscode/launch.json", "json": {"version": "0.2.0", "configurations": [{"type": "mock", "request": "launch", "name": "Mock", "program": "app"}]}}
+{"do": "write_file", "path": "$ROOT/script.json", "json": [{"expect": "initialize", "args": {"adapterID": "mock"}, "ok": {"supportsConfigurationDoneRequest": true}}, {"expect": "launch", "args": {"program": "app"}, "ok": {}}, {"event": "initialized"}, {"expect": "configurationDone"}, {"event": "stopped", "body": {"reason": "breakpoint", "threadId": 1, "allThreadsStopped": true}}, {"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}, {"expect": "stackTrace", "args": {"threadId": 1}, "ok": {"stackFrames": [{"id": 1000, "name": "main", "line": 9, "column": 1, "source": {"path": "/p/a.py"}}], "totalFrames": 1}}, {"expect": "scopes", "args": {"frameId": 1000}, "ok": {"scopes": [{"name": "Locals", "variablesReference": 7, "expensive": false}]}}, {"expect": "variables", "args": {"variablesReference": 7}, "ok": {"variables": [{"name": "total", "value": "9", "variablesReference": 0}]}}, {"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true, "line": 12}]}}, {"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true, "line": 12}, {"verified": true, "line": 14}]}}, {"expect": "next", "args": {"threadId": 1}, "ok": {}}, {"event": "stopped", "body": {"reason": "step", "threadId": 1, "allThreadsStopped": true}}, {"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}, {"expect": "stackTrace", "args": {"threadId": 1}, "ok": {"stackFrames": [{"id": 1000, "name": "main", "line": 10, "column": 1, "source": {"path": "/p/a.py"}}], "totalFrames": 1}}, {"expect": "scopes", "args": {"frameId": 1000}, "ok": {"scopes": [{"name": "Locals", "variablesReference": 7, "expensive": false}]}}, {"expect": "variables", "args": {"variablesReference": 7}, "ok": {"variables": [{"name": "total", "value": "10", "variablesReference": 0}]}}, {"expect": "next", "args": {"threadId": 1}, "ok": {}}, {"event": "stopped", "body": {"reason": "step", "threadId": 1, "allThreadsStopped": true}}, {"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}, {"expect": "stackTrace", "args": {"threadId": 1}, "ok": {"stackFrames": [{"id": 1000, "name": "main", "line": 11, "column": 1, "source": {"path": "/p/a.py"}}], "totalFrames": 1}}, {"expect": "scopes", "args": {"frameId": 1000}, "ok": {"scopes": [{"name": "Locals", "variablesReference": 7, "expensive": false}]}}, {"expect": "variables", "args": {"variablesReference": 7}, "ok": {"variables": [{"name": "total", "value": "11", "variablesReference": 0}]}}, {"expect": "disconnect", "ok": {}}, {"die": true}]}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "debug/trust", "params": {"root": "$ROOT/proj", "trusted": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "launch:0", "adapters": [{"id": "mock", "name": "Mock", "types": ["mock"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/script.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"session": "$capture:s"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-frame", "data": {"session": "$s", "line": 9, "top": true}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/proj"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 102, "method": "agents/send", "params": {"id": "$a", "text": "call:debug_read {\"what\": \"sessions\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 102, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in $(seq 300); do grep -q 'call: {.*debug_session.*epoch.*1' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; grep -o 'call:[^\"]*' $STATE/hub/transcripts/$a.jsonl >&2; exit 1"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "debug/breakpoints", "params": {"root": "$ROOT/proj", "op": {"op": "add", "path": "$ROOT/proj/a.py", "line": 12}}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"added": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 104, "method": "agents/send", "params": {"id": "$a", "text": "call:debug_probe {\"root\": \"$ROOT/proj\", \"op\": \"remove\", \"id\": \"b1\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 104, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in $(seq 300); do grep -q 'call: breakpoint b1 is not yours' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; grep -o 'call:[^\"]*' $STATE/hub/transcripts/$a.jsonl >&2; exit 1"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 106, "method": "agents/send", "params": {"id": "$a", "text": "call:debug_probe {\"root\": \"$ROOT/proj\", \"op\": \"breakpoint\", \"path\": \"$ROOT/proj/a.py\", \"line\": 14}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 106, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in $(seq 300); do grep -q 'call: {.*b2' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; grep -o 'call:[^\"]*' $STATE/hub/transcripts/$a.jsonl >&2; exit 1"], "expect_code": 0}
+{"do": "expect", "conn": "e", "json": {"event": "debug-breakpoints", "data": {"root": "$ROOT/proj", "breakpoints": {"$contains": [{"line": 14, "agent": "$a"}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "debug/control", "params": {"session": "$s", "op": "next"}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-frame", "data": {"session": "$s", "line": 10, "top": true}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 108, "method": "agents/send", "params": {"id": "$a", "text": "call:debug_live {\"debug_session\": \"$s\", \"op\": \"next\", \"epoch\": 1}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 108, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in $(seq 300); do grep -q 'call: session .* moved on since stop 1' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; grep -o 'call:[^\"]*' $STATE/hub/transcripts/$a.jsonl >&2; exit 1"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 110, "method": "agents/send", "params": {"id": "$a", "text": "call:debug_live {\"debug_session\": \"$s\", \"op\": \"next\", \"epoch\": 2}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 110, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in $(seq 300); do grep -q 'call: {.*done' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; grep -o 'call:[^\"]*' $STATE/hub/transcripts/$a.jsonl >&2; exit 1"], "expect_code": 0}
+{"do": "expect", "conn": "e", "json": {"event": "debug-frame", "data": {"session": "$s", "line": 11, "top": true}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "debug/control", "params": {"session": "$s", "op": "stop"}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-ended", "data": {"session": "$s"}}, "within_ms": 10000}

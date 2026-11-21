@@ -1,0 +1,2 @@
+tree-sitter-json v0.24.8 (commit ee35a6ebefcef0c5c416c0d1ccec7370cfca5a24), src/ only, MIT (LICENSE). A small real
+grammar with no external scanner, vendored for the pack job's tests (tests/job.rs).

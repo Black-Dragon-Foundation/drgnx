@@ -307,7 +307,7 @@ A newer schema (the hub's 7) is read through its compatibility views when its `c
 ;;;; Nodes and edges
 
 ;; Nothing here writes: the tracker's entities and links are written by the hub (graph/put-parsed, graph/record;
-;; core/drgnx-work-scan.el sends them).  These are the readers, over the `node', `edge' and `file' tables of schema 6
+;; the records importer, `records/import', and the commit recording send them).  These are the readers, over the `node', `edge' and `file' tables of schema 6
 ;; and the views of schema 7.
 
 (defun drgnx-work--row-node (row)

@@ -1,0 +1,11 @@
+{"scenario": "matrix/private-card-offers-one-target-for-a-name-or-loopback", "requires": ["v1", "test-hooks"], "doc": "A browser.private card for a name (printer.local) or for the host's loopback through host.drgnx.internal offers that one target only: no CIDR and no all private, since a width admits literals and never a name, and the host's own services are granted one port at a time. The title names the target, the pinned address and its class. What makes it fail: a width offered for a name (a rebinding door) or for this computer."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "__test_matrix_ask", "params": {"action": "browser.private", "who": {"role": "worker"}, "session": "s1", "plan": "plan:aaaaaaaaaaaa", "facts": {"target": {"host_port": "printer.local:631"}, "addr": "192.168.1.20:631", "class": "lan"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"gate": "ask", "card": "$capture:c1"}}}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select title, (select group_concat(json_extract(value, '$.id'), ' ') from json_each(card.data, '$.choices')) from card where id = $c1", "rows": [["s1 wants to open printer.local:631 → 192.168.1.20:631 (your LAN)", "once session plan refuse"]]}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "__test_matrix_ask", "params": {"action": "browser.private", "who": {"role": "worker"}, "session": "s1", "facts": {"target": {"host_port": "host.drgnx.internal:5173"}, "addr": "127.0.0.1:5173", "class": "loopback"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"gate": "ask", "card": "$capture:c2"}}}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select title, (select group_concat(json_extract(value, '$.id'), ' ') from json_each(card.data, '$.choices')) from card where id = $c2", "rows": [["s1 wants to open host.drgnx.internal:5173 → 127.0.0.1:5173 (this computer)", "once session refuse"]]}

@@ -1,0 +1,11 @@
+[Unit]
+Description=The fleet's stand-in for cloud-init on a mock cloud machine
+# it acts only in a container ratatoskr-mock cloud started (PID 1's environment has its metadata URL)
+After=network-online.target sshd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/fleet-cloud-init
+
+[Install]
+WantedBy=multi-user.target

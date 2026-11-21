@@ -13,6 +13,7 @@
 (require 'drgnx-hooks)
 (require 'drgnx-guard)
 (require 'drgnx-ui-kit)
+(require 'drgnx-icons)
 (require 'drgnx-sandbox-vc)
 (require 'drgnx-registry)
 (require 'drgnx-surfaces)
@@ -38,6 +39,10 @@
 (require 'drgnx-gc)
 (require 'drgnx-gc-census)
 (require 'drgnx-records-review)
+(require 'drgnx-history-revert)
+(require 'drgnx-history-compare)
+(require 'drgnx-say)
+(require 'drgnx-agents-cards)
 (require 'drgnx-watchdog)
 (require 'drgnx-freezes)
 (require 'drgnx-session)
@@ -101,6 +106,10 @@ hears the time, the error and the parent (`drgnx-settings-lisp-page-note-load').
   (drgnx-modal-register-commands)
   (drgnx-gc-census-register-commands)
   (drgnx-records-review-register-commands)
+  (drgnx-history-revert-register-commands)
+  (drgnx-history-compare-register-commands)
+  (drgnx-say-register-commands)
+  (drgnx-agents-cards-register-commands)
   (drgnx-freezes-register-commands)
   (drgnx-config-register-commands)
   (drgnx-shell-env-register-commands)
@@ -174,6 +183,7 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-ai--on-first-window)        ; the local AI runner, started again
         (let ((safe (getenv "DRGNX_SAFE")))            ; drgnx safe: the core only
           (drgnx-settings-migrate-maybe)               ; the old settings files into settings.el, once (safe mode too)
+          (drgnx-settings-migrate-wrap)                ; the old wrap setting folded into the new one, once
           (if safe
               (drgnx-settings-apply-global :owned-only t)   ; safe mode: drgnx's own settings only
             (condition-case err (drgnx-pkg-activate)

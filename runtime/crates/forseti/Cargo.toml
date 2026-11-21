@@ -1,0 +1,18 @@
+[package]
+name = "forseti"
+description = "The scheduler core: the job model, priority, admission, the memory cap and ladder, kill classes, expected times, placement and fairness; pure (no I/O, clock or threads)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# Pure: serde only, so it builds for every target (Android's included) and jobq takes no runtime with it.
+[dependencies]
+serde.workspace = true
+sha2.workspace = true  # the result cache's key (cachekey): pure Rust, builds for Android
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+skuld = { path = "../skuld", version = "0.1.0" }

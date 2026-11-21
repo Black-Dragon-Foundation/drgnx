@@ -151,6 +151,15 @@ pub fn effective<'a>(
     all
 }
 
+/// ROLE's chain in effect: the user's, else the shipped one (empty when neither names the role).
+pub fn role_chain(user: &[RoleChain], shipped: &[RoleChain], role: &str) -> Vec<ChainStep> {
+    user.iter()
+        .chain(shipped)
+        .find(|r| r.role == role)
+        .map(|r| r.chain.clone())
+        .unwrap_or_default()
+}
+
 /// The provider table: each provider in effect as `config/providers` takes it, and the ones left out because the
 /// hub would refuse them (a URL that is not a provider's), each with why.  A provider with no URL or kind is left
 /// out silently, as the editor's encoder leaves it out.

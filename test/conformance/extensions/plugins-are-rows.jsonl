@@ -1,0 +1,22 @@
+{"scenario": "extensions/plugins-are-rows", "requires": ["v1"], "doc": "[B] An installed plugin is a row `plugin:NAME` of extensions/search and extensions/rows with the hub's own state: unapproved after the install, off once approved while the user's plugins setting does not name it, disabled after plugins/disable; the plugins filter keeps only plugin rows and a package search does not list it."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "write_file", "path": "$ROOT/src/plugin.json", "json": {"name": "alpha", "version": "1.0.0", "hosts": ["api.example.com"]}}
+{"do": "write_file", "path": "$ROOT/src/plugin.wasm", "text": "wasm-one"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "run", "args": ["plugins", "install", "$ROOT/src"], "expect_code": 0, "expect_stdout": "installed alpha 1.0.0"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"plugins": [{"name": "alpha", "state": "unapproved", "hash": "$capture:h"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "extensions/search", "params": {"filters": {"plugins": true}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"total": 1, "rows": [{"id": "plugin:alpha", "kind": "plugin", "name": "alpha", "state": "unapproved", "source": "plugin", "version": "1.0.0"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "plugins/approve", "params": {"name": "alpha", "hash": "$h"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"state": "approved"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "extensions/rows", "params": {"ids": ["plugin:alpha"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"rows": [{"id": "plugin:alpha", "state": "off", "signed": "hash-approved"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "plugins/disable", "params": {"name": "alpha"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"state": "disabled"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "extensions/rows", "params": {"ids": ["plugin:alpha"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"rows": [{"id": "plugin:alpha", "state": "disabled"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "extensions/search", "params": {"filters": {"kind": "package"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"total": 0, "rows": []}}, "within_ms": 10000}

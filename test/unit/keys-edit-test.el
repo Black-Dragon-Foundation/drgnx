@@ -309,6 +309,17 @@
      (should (equal (drgnx-keys-edit-test--text) text)))
    (should (= applied 0))))
 
+(ert-deftest drgnx-keys-edit/a-key-of-yours-is-taken-for-the-tty-fallback ()
+  "M-Z bound in your own global map (config.el) is not given to a chord as its Alt+Shift key."
+  (drgnx-keys-edit-test--with-dir
+   (drgnx-keys-edit-test--put drgnx-keys-edit-test--sample)
+   (setq drgnx-keys-last '(:bindings ((:id palette :key "C-S-p" :map nil))))
+   (let ((drgnx-keys-user-map (make-sparse-keymap)))
+     (should (drgnx-keys-edit-set-tty-fallback "C-S-p" "M-Z"))   ; free first
+     (define-key drgnx-keys-user-map (kbd "M-Y") #'ignore)
+     (let ((err (should-error (drgnx-keys-edit-set-tty-fallback "C-S-p" "M-Y") :type 'user-error)))
+       (should (string-search "M-Y" (cadr err)))))))
+
 (ert-deftest drgnx-keys-edit/sets-a-tty-fallback ()
   (drgnx-keys-edit-test--with-dir
    (drgnx-keys-edit-test--put drgnx-keys-edit-test--sample)

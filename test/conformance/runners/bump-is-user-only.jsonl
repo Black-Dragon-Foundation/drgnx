@@ -1,0 +1,22 @@
+{"scenario": "runners/bump-is-user-only", "requires": ["v1", "test-hooks"], "doc": "[B] exec/bump raises a queued job to priority 1 from the user's connection; an agent connection is not-allowed and the job keeps its priority. One job slot (DRGNX_TEST_JOB_SLOTS=1), held by a job parked on a FIFO, so the bumped job stays queued."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkfifo $ROOT/gate"], "expect_code": 0}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"], "env": {"DRGNX_TEST_JOB_SLOTS": "1"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "exec/start", "params": {"argv": ["sh", "-c", "cat $ROOT/gate"], "cwd": "$ROOT"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:first", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT", "priority": 4}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:second", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/get", "params": {"id": "$second"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$second", "status": "queued", "priority": 4}}, "within_ms": 10000}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "exec/bump", "params": {"id": "$second"}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "error": {"code": "not-allowed"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "exec/get", "params": {"id": "$second"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$second", "status": "queued", "priority": 4}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "exec/bump", "params": {"id": "$second"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$second", "status": "queued", "priority": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "exec/stop", "params": {"id": "$second"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"id": "$second", "status": "stopped"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "exec/stop", "params": {"id": "$first"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"id": "$first", "status": "stopped"}}, "within_ms": 10000}

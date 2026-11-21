@@ -1,5 +1,6 @@
 //! Schema 7's graph tables as data (Task 2; storage §5.2 exactly, plus `tx.answer` (call 3), `entity_vec.model`
-//! (Task 0's ruling: `search::vec_stale` lists entities without a vector of a model) and `entity_hist`'s lease,
+//! (Task 0's ruling: `search::vec_stale` lists entities without a vector of a model; the key is `(n, model)`, so
+//! each embedder keeps its own vectors and switching between a server and the built-in model embeds nothing again) and `entity_hist`'s lease,
 //! `origin` and `retired_tx` (URDR-HIST-RETIRED-1: an as-of read shows a version's retirement and lease as they were)).
 
 /// The graph tables and their indexes: `tx`, `entity`, `entity_hist`, `link`, `link_stat`, `entity_fts`
@@ -70,7 +71,9 @@ create table link_stat (
 create virtual table entity_fts using fts5(title, body, content='', contentless_delete=1);
 insert into entity_fts(entity_fts, rank) values('secure-delete', 1);
 
-create table entity_vec (n integer primary key, bits blob, vec blob, scale real, model text);
+create table entity_vec (
+  n integer not null, model text not null, bits blob, vec blob, scale real,
+  primary key (n, model)) without rowid;
 create table project_alias (slug text primary key, project integer not null, tx integer not null);
 create table excise_log (tx integer primary key, target text not null, fields text, reason text);
 ";

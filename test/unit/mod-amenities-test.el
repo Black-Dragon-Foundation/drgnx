@@ -8,7 +8,6 @@
 (defconst drgnx-amenities-test--modules
   '(("extra/drgnx-booster" extra/booster (eglot-booster) ())
     ("extra/drgnx-format" extra/format (apheleia) (format-on-save))
-    ("extra/drgnx-debug" extra/debug (dape) (debug-start debug-breakpoint debug-step-over debug-step-in debug-step-out debug-stop))
     ("extra/drgnx-guides" extra/guides (indent-bars) (toggle-indent-guides))
     ("lang/drgnx-markdown" lang/markdown (markdown-mode) (markdown-preview)))
   "FILE MODULE PACKAGES COMMANDS.")
@@ -39,7 +38,9 @@
     (drgnx-amenities-test--fresh
      (let ((pkgs (seq-mapcat (lambda (m) (nth 2 m)) drgnx-amenities-test--modules)) (orig (symbol-function 'featurep)))
        (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil))
-                 ((symbol-function 'featurep) (lambda (f &rest r) (and (not (memq f pkgs)) (apply orig f r)))))
+                 ((symbol-function 'featurep) (lambda (f &rest r) (and (not (memq f pkgs)) (apply orig f r))))
+                 ;; each one chosen on (extra/guides is off until chosen)
+                 ((symbol-function 'drgnx-module-disabled-p) #'ignore))
          (drgnx-modules-run 'startup) (drgnx-modules-run 'idle)
          (drgnx-modules-run 'first-frame)))
      (pcase-dolist (`(,_ ,mod ,_ ,cmds) drgnx-amenities-test--modules)
@@ -51,7 +52,8 @@
   (skip-unless (seq-some (lambda (m) (seq-every-p #'drgnx-amenities-test--installed-p (nth 2 m)))
                          drgnx-amenities-test--modules))
   (let ((load-path (append load-path (drgnx-amenities-test--elpa-path))) (ran 0))
-    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))   ; no booster binary, no formatters
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil))   ; no booster binary, no formatters
+              ((symbol-function 'drgnx-module-disabled-p) #'ignore))        ; each one chosen on (guides is off until chosen)
       (drgnx-test-with-modules (mapcar #'cadr drgnx-amenities-test--modules) :strict t
                                (pcase-dolist (`(,_ ,mod ,pkgs ,cmds) drgnx-amenities-test--modules)
                                  (when (seq-every-p #'drgnx-amenities-test--installed-p pkgs)
@@ -59,6 +61,25 @@
                                    (should (equal (list mod (plist-get (alist-get mod (drgnx-modules-report)) :status)) (list mod 'ok)))
                                    (dolist (c cmds) (should (drgnx-commands-get c)))))))
     (should (> ran 0))))
+
+(ert-deftest drgnx-guides/a-killed-buffer-leaves-no-indent-bars-timer ()
+  "indent-bars schedules its remap cleanup without keeping the timer; killing a buffer with the guides on (its
+`kill-buffer-hook') and the module's teardown cancel it, and only that buffer's."
+  (load (expand-file-name "modules/extra/drgnx-guides" drgnx-dir) nil t)
+  (let* ((a (generate-new-buffer " guides-a")) (b (generate-new-buffer " guides-b"))
+         (sched (lambda (buf) (run-with-idle-timer 1 nil (apply-partially 'indent-bars--cleanup-stipple-remaps buf))))
+         (ta (funcall sched a)) (tb (funcall sched b)) (other (run-with-idle-timer 1 nil #'ignore)))
+    (unwind-protect
+        (progn
+          (with-current-buffer a (add-hook 'kill-buffer-hook #'drgnx-guides--cancel-timers nil t))
+          (kill-buffer a)
+          (should-not (memq ta timer-idle-list))
+          (should (memq tb timer-idle-list))
+          (drgnx-guides--teardown)
+          (should-not (memq tb timer-idle-list))
+          (should (memq other timer-idle-list)))
+      (mapc #'cancel-timer (list ta tb other))
+      (when (buffer-live-p b) (kill-buffer b)))))
 
 (ert-deftest drgnx-booster/only-with-the-binary ()
   (skip-unless (drgnx-amenities-test--installed-p 'eglot-booster))
@@ -83,45 +104,20 @@
                                    (with-current-buffer (find-file-noselect file)
                                      (python-mode)
                                      (goto-char (point-max)) (insert "y  =  2\n")
-                                     (save-buffer)
-                                     (drgnx-test-pause 2 "no formatter may rewrite the saved file")
+                                     (let ((before (process-list)))
+                                       (save-buffer)
+                                       ;; no formatter is on exec-path: apheleia starts none (no new process) and what it
+                                       ;; scheduled has run once no timer is due
+                                       (drgnx-test-wait (lambda () (not (drgnx-test-wait--due-p))) :what "the timers due after the save have run")
+                                       (should-not (cl-set-difference (process-list) before)))
                                      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "x  =  1\ny  =  2\n"))
                                      (set-buffer-modified-p nil) (kill-buffer))))
       (delete-file file))))
 
-(ert-deftest drgnx-debug/start-or-continue ()
-  (load (expand-file-name "modules/extra/drgnx-debug" drgnx-dir) nil t)
-  (let ((called nil))
-    (cl-letf (((symbol-function 'call-interactively) (lambda (f &rest _) (push f called)))
-              ((symbol-function 'dape--live-connection) (lambda (&rest _) nil)))
-      (drgnx-debug-start-or-continue))
-    (cl-letf (((symbol-function 'call-interactively) (lambda (f &rest _) (push f called)))
-              ((symbol-function 'dape--live-connection) (lambda (&rest _) 'a-stopped-session)))
-      (drgnx-debug-start-or-continue))
-    (should (equal called '(dape-continue dape)))))
-
-(defvar dape-active-mode)                               ; dape's: special, as in the module
-
-(ert-deftest drgnx-debug/session-keys-only-while-debugging ()
-  ;; F11 is Zen Mode in the VS Code profile, Step Into while a session runs (as in VS Code)
-  (load (expand-file-name "modules/extra/drgnx-debug" drgnx-dir) nil t)
-  (unwind-protect
-      (let ((dape-active-mode t))
-        (drgnx-debug--follow-session)
-        (should drgnx-debug-session-mode)
-        (setq dape-active-mode nil)
-        (drgnx-debug--follow-session)
-        (should-not drgnx-debug-session-mode))
-    (drgnx-debug-session-mode -1)))
-
-(ert-deftest drgnx-debug/keys-in-every-profile ()
-  (dolist (profile '("vscode" "emacs" "vim"))
-    (let ((text (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir)) (buffer-string))))
-      (dolist (c '(debug-start debug-breakpoint debug-step-over debug-step-in debug-step-out debug-stop))
-        (should (string-search (format "(%s " c) text)))))
-  (let ((vs (with-temp-buffer (insert-file-contents (expand-file-name "keys/vscode.eld" drgnx-dir)) (buffer-string))))
-    (should (string-search "(debug-start \"<f5>\")" vs))
-    (should (string-search "(debug-step-in \"<f11>\" :map drgnx-debug-session-map)" vs))))
+(ert-deftest drgnx-guides/off-until-chosen ()
+  "The approved look's code has no indent guides (the mockups): the module is off until you choose it."
+  (load (expand-file-name "modules/extra/drgnx-guides" drgnx-dir) nil t)
+  (should (drgnx-module-default-off-p 'extra/guides)))
 
 (ert-deftest drgnx-guides/colour-comes-from-shadow-not-highlight ()
   (with-temp-buffer

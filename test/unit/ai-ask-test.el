@@ -1,4 +1,4 @@
-;;; ai-ask-test.el --- batch tests: Ask the Codebase, Choose Provider/Model, gptel from the registry -*- lexical-binding: t -*-
+;;; ai-ask-test.el --- batch tests: Ask the Codebase, Choose Provider/Model -*- lexical-binding: t -*-
 ;; test-class: cond
 (require 'ert)
 (require 'drgnx)
@@ -76,27 +76,31 @@ provider `o' served by a mock answering ANSWER, its LOG."
 (ert-deftest drgnx-ai-ask/stop-cancels-request ()
   (let ((drgnx-ai-ask-test--delay 1.5))
     (drgnx-ai-ask-test--with "frobnicate twists the widget (src/a.el:3)."
-      (let ((default-directory (concat root "proj/")) (said nil))
+      (let ((default-directory (concat root "proj/")) (said nil) curl)
         (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
           (drgnx-ai-ask "where do we frobnicate widgets?" default-directory)
           ;; the search runs first, then the model is asked
           (drgnx-test-wait #'drgnx-ai-ask-test--curls :secs 5 :what "the model's request")
           (should (= 1 (length (drgnx-ai-ask-test--curls))))
           (should (= 1 (length drgnx-ai--active)))
+          (setq curl (drgnx-ai-ask-test--curls))
           (drgnx-ai-stop)
           (should-not drgnx-ai--active)
           (should-not (drgnx-ai-ask-test--curls))                         ; the process is gone
-          (drgnx-test-pause 2.0 "past the mock's answer, nothing may come")
+          ;; a deleted process runs no filter and no sentinel: no late answer can reach the callback, whatever the server does
+          (should-not (process-live-p (car curl)))
           (should-not (get-buffer "*AI answer*"))                         ; the callback never ran
           (should (seq-find (lambda (m) (string-match-p "stopped" m)) said)))))))
 
 (ert-deftest drgnx-ai-ask/stop-during-the-search-asks-nothing ()
   (drgnx-ai-ask-test--with "never"
-    (let ((default-directory (concat root "proj/")) (said nil))
+    (let ((default-directory (concat root "proj/")) (said nil) before searching)
       (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+        (setq before (process-list))
         (drgnx-ai-ask "where do we frobnicate widgets?" default-directory)
+        (setq searching (cl-set-difference (process-list) before))
         (drgnx-ai-stop)                                                   ; the grep has not answered yet
-        (drgnx-test-pause 1.0 "nothing may be asked")
+        (should-not (seq-filter #'process-live-p searching))             ; a deleted search answers nothing: nothing is asked
         (should-not (drgnx-ai-ask-test--curls))
         (should-not (get-buffer "*AI answer*"))
         (should-not drgnx-ai--active)))))
@@ -184,7 +188,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
     (should (seq-find (lambda (p) (and (equal (process-name p) "drgnx-ai-grep") (process-live-p p))) (process-list)))
     (drgnx-ai-stop)
     (should-not (seq-find (lambda (p) (and (equal (process-name p) "drgnx-ai-grep") (process-live-p p))) (process-list)))
-    (drgnx-test-pause 0.3 "no answer may come")
+    ;; the search is deleted (asserted above): a deleted process runs no sentinel, so no answer can follow
     (should-not (get-buffer "*AI answer*"))))
 
 (ert-deftest drgnx-ai-ask/hidden-files-never-reach-the-model ()
@@ -246,37 +250,6 @@ provider `o' served by a mock answering ANSWER, its LOG."
                            :secs 5 :what "the message that the model did not answer"))
         (should (seq-find (lambda (m) (string-match-p "did not answer" m)) said))
         (should (equal (drgnx-ai-role 'chat) '((o . "m"))))))))                    ; unchanged
-
-(ert-deftest drgnx-ai-gptel/its-backend-comes-from-the-chat-role ()
-  :tags '(:frozen)
-  (drgnx-ai-ask-test--with "OK"
-    (let ((spec (drgnx-ai-gptel-spec 'o "m")))
-      (should (eq (car spec) 'gptel-make-ollama))
-      (should (equal (plist-get (cddr spec) :host) (format "127.0.0.1:%d" port)))
-      (should (equal (plist-get (cddr spec) :protocol) "http")))
-    ;; a provider with a key is the hub's gateway, never asked directly with the key in this Emacs's environment: no
-    ;; hub, no backend (ai-gateway-test.el has the gateway's)
-    (let ((process-environment (append '("OPENROUTER_API_KEY=sk-or-from-env" "DRGNX_NO_HUB_START=1") process-environment))
-          (drgnx-hub--editor nil) (drgnx-hub--events nil) (drgnx-hub--subscribing nil))
-      (should-error (drgnx-ai-gptel-spec 'openrouter "openrouter/auto") :type 'drgnx-ai-gateway-unavailable))))
-
-(ert-deftest drgnx-ai-gptel/configured-unless-the-user-chose-a-backend-of-their-own ()
-  :tags '(:frozen)
-  ;; gptel is not loaded here: its variables are set and unset by hand (never let-bound: they are special once
-  ;; gptel loads)
-  (drgnx-ai-ask-test--with "OK"
-    (let ((was-bound (boundp 'gptel-backend)) (old (and (boundp 'gptel-backend) gptel-backend))
-          (old-model (and (boundp 'gptel-model) gptel-model)) (drgnx-ai--gptel-ours nil))
-      (unwind-protect
-          (cl-letf (((symbol-function 'gptel-make-ollama) (lambda (name &rest _) (list 'backend name))))
-            (setq gptel-backend nil)
-            (should (equal (drgnx-ai-gptel-maybe-configure (lambda (_id) t)) '(o . "m")))
-            (should (equal gptel-backend '(backend "O")))
-            (should (eq gptel-model 'm))
-            (setq gptel-backend 'the-users-own)                                 ; chosen by the user: kept
-            (should-not (drgnx-ai-gptel-maybe-configure (lambda (_id) t)))
-            (should (eq gptel-backend 'the-users-own)))
-        (if was-bound (setq gptel-backend old gptel-model old-model) (makunbound 'gptel-backend) (makunbound 'gptel-model))))))
 
 (ert-deftest drgnx-ai/ask-and-choose-are-registered ()
   (drgnx-test-with-modules '(tools/ai) :strict t

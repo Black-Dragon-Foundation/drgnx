@@ -1,0 +1,30 @@
+Target: row container-escape/job-cannot-take-the-relay-port
+The sidecar listens with SO_REUSEPORT and runs as the job's user (keep-id, no --user 65534): the job's own bind of
+127.0.0.1:3128 with SO_REUSEPORT then succeeds, and row 10 goes red.
+
+diff --git a/runtime/crates/drgnx-px/src/sidecar.rs b/runtime/crates/drgnx-px/src/sidecar.rs
+index 667f496d..00473919 100644
+--- a/runtime/crates/drgnx-px/src/sidecar.rs
++++ b/runtime/crates/drgnx-px/src/sidecar.rs
+@@ -265,6 +265,7 @@ pub fn listen(addr: SocketAddr) -> io::Result<TcpListener> {
+     } else {
+         TcpSocket::new_v6()?
+     };
++    sock.set_reuseport(true)?;
+     sock.bind(addr)?;
+     sock.listen(BACKLOG)
+ }
+diff --git a/runtime/crates/sleipnir/src/linux/podman.rs b/runtime/crates/sleipnir/src/linux/podman.rs
+index fd6dd7b4..d93fc00b 100644
+--- a/runtime/crates/sleipnir/src/linux/podman.rs
++++ b/runtime/crates/sleipnir/src/linux/podman.rs
+@@ -297,8 +297,7 @@ pub fn sidecar_argv(n: &NetNames, ra: &RunnerArgs, image: &str) -> Result<Vec<Os
+         "--pull=never",
+         "--log-driver=none",
+         "--detach-keys=",
+-        "--user",
+-        SIDECAR_USER,
++        "--userns=keep-id",
+         "--cap-drop=all",
+         "--security-opt=no-new-privileges",
+         "--read-only",

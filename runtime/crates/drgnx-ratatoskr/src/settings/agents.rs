@@ -19,24 +19,47 @@ use crate::conn::Outbox;
 #[derive(Default)]
 pub struct Editors {
     subscribers: Mutex<BTreeMap<u64, Arc<Outbox>>>,
+    /// Session id → the connections that asked for its `agent-entries`.
+    entry_subs: Mutex<HashMap<String, std::collections::BTreeSet<u64>>>,
+    /// Connection → the pace of the snapshots it gets for sessions it does not show.
+    pacers: Mutex<HashMap<u64, crate::agents::wire::Pacer>>,
     confirms: Mutex<HashMap<i64, oneshot::Sender<EditorAnswer>>>,
     explains: Mutex<HashMap<u64, oneshot::Sender<Vec<Value>>>>,
+    /// The gives waiting for the editor's `agents/wheel/saved`, by request.
+    saves: Mutex<HashMap<u64, oneshot::Sender<Vec<String>>>>,
     next: AtomicU64,
+    /// What waits on the user across the sessions, derived from their snapshots (`agents-attention`).
+    attention: Mutex<crate::agents::attention::Attention>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// How many bytes may wait in a client's queue before [`Editors::send_to_lossy`] drops an event (a quarter of the queue's limit).
+pub const LOSSY_BACKLOG: usize = 4 << 20;
+
 impl Editors {
     /// Connection CONN gets the events from now on.
     pub fn subscribe(&self, conn: u64, out: Arc<Outbox>) {
+        // what waits on the user now, when anything does: the editor starts from it
+        if let Some(line) = lock(&self.attention)
+            .current()
+            .and_then(|d| crate::front::event_line("agents-attention", d))
+        {
+            out.push(line);
+        }
         lock(&self.subscribers).insert(conn, out);
     }
 
     /// Connection CONN is gone.
     pub fn gone(&self, conn: u64) {
         lock(&self.subscribers).remove(&conn);
+        lock(&self.pacers).remove(&conn);
+        lock(&self.entry_subs).retain(|_, set| {
+            set.remove(&conn);
+            !set.is_empty()
+        });
     }
 
     /// EVENT with DATA to every subscriber: queued for each before any is written (a queue never waits), so a newer
@@ -46,6 +69,155 @@ impl Editors {
             return;
         };
         lock(&self.subscribers).retain(|_, out| out.push(line.clone()));
+    }
+
+    /// [`Editors::broadcast`] to every subscriber but EXCEPT.
+    pub fn broadcast_except(&self, event: &str, data: Value, except: Option<u64>) {
+        let Some(line) = crate::front::event_line(event, data) else {
+            return;
+        };
+        lock(&self.subscribers).retain(|c, out| Some(*c) == except || out.push(line.clone()));
+    }
+
+    /// EVENT with DATA to connection CONN only, for a producer whose events can be dropped (a notebook's output): when the
+    /// client's queue already holds [`LOSSY_BACKLOG`] bytes the event is dropped and the connection kept, where a push over
+    /// the queue's own limit would close the connection and end every subscription it has.
+    pub fn send_to_lossy(&self, conn: u64, event: &str, data: Value) -> crate::debug::Delivery {
+        use crate::debug::Delivery;
+        let Some(line) = crate::front::event_line(event, data) else {
+            return Delivery::Dropped;
+        };
+        let mut subs = lock(&self.subscribers);
+        let Some(out) = subs.get(&conn) else {
+            return Delivery::Gone;
+        };
+        if out.queued_bytes() + line.len() > LOSSY_BACKLOG {
+            return Delivery::Dropped;
+        }
+        if out.push(line) {
+            return Delivery::Sent;
+        }
+        subs.remove(&conn);
+        Delivery::Gone
+    }
+
+    /// EVENT with DATA to connection CONN only; false when it is not subscribed or its connection is closed.
+    pub fn send_to(&self, conn: u64, event: &str, data: Value) -> bool {
+        let Some(line) = crate::front::event_line(event, data) else {
+            return false;
+        };
+        let mut subs = lock(&self.subscribers);
+        let Some(out) = subs.get(&conn) else {
+            return false;
+        };
+        if out.push(line) {
+            return true;
+        }
+        subs.remove(&conn);
+        false
+    }
+
+    /// Session SID's snapshot DATA (`agent`) to every subscriber.  A connection that shows the session (it asked for
+    /// its entries) gets it at once; any other gets at most [`SNAPSHOTS_PER_WINDOW`] a window of the sessions it does
+    /// not show, the latest state of each when the window opens (on the hub's clock).
+    pub fn broadcast_agent(self: &Arc<Self>, sid: &str, data: Value) {
+        // the derived list, told whenever it changes (not paced: it changes with a permission, not a chunk)
+        let changed = lock(&self.attention).note(sid, &data["session"]);
+        if let Some(d) = changed {
+            self.broadcast("agents-attention", d);
+        }
+        let Some(line) = crate::front::event_line("agent", data) else {
+            return;
+        };
+        let shown = lock(&self.entry_subs).get(sid).cloned().unwrap_or_default();
+        let conns: Vec<(u64, Arc<Outbox>)> = lock(&self.subscribers)
+            .iter()
+            .map(|(c, o)| (*c, o.clone()))
+            .collect();
+        let now = crate::clock::now();
+        let mut closed = Vec::new();
+        for (conn, out) in conns {
+            let (send, arm) = if shown.contains(&conn) {
+                if let Some(p) = lock(&self.pacers).get_mut(&conn) {
+                    p.forget(sid);
+                }
+                (Some(line.clone()), None)
+            } else {
+                let o = lock(&self.pacers)
+                    .entry(conn)
+                    .or_default()
+                    .offer(now, sid, line.clone());
+                (o.send, o.arm)
+            };
+            if send.is_some_and(|l| !out.push(l)) {
+                closed.push(conn);
+            }
+            if let Some(after) = arm {
+                self.arm_snapshots(conn, after);
+            }
+        }
+        if !closed.is_empty() {
+            lock(&self.subscribers).retain(|c, _| !closed.contains(c));
+        }
+    }
+
+    /// Call [`Editors::flush_snapshots`] for CONN after AFTER on the hub's clock.
+    fn arm_snapshots(self: &Arc<Self>, conn: u64, after: Duration) {
+        let me = self.clone();
+        crate::clock::spawn("editors:snapshots", async move {
+            crate::clock::sleep(after).await;
+            me.flush_snapshots(conn);
+        });
+    }
+
+    fn flush_snapshots(self: &Arc<Self>, conn: u64) {
+        let Some(out) = lock(&self.subscribers).get(&conn).cloned() else {
+            lock(&self.pacers).remove(&conn);
+            return;
+        };
+        let (lines, again) = match lock(&self.pacers).get_mut(&conn) {
+            Some(p) => p.flush(crate::clock::now()),
+            None => return,
+        };
+        for l in lines {
+            if !out.push(l) {
+                lock(&self.subscribers).remove(&conn);
+                return;
+            }
+        }
+        if let Some(after) = again {
+            self.arm_snapshots(conn, after);
+        }
+    }
+
+    /// Connection CONN gets session SID's `agent-entries` from now on.
+    pub fn subscribe_entries(&self, sid: &str, conn: u64) {
+        lock(&self.entry_subs)
+            .entry(sid.to_string())
+            .or_default()
+            .insert(conn);
+        if let Some(p) = lock(&self.pacers).get_mut(&conn) {
+            p.forget(sid);
+        }
+    }
+
+    /// Connection CONN no longer gets session SID's `agent-entries`.
+    pub fn unsubscribe_entries(&self, sid: &str, conn: u64) {
+        let mut subs = lock(&self.entry_subs);
+        if let Some(set) = subs.get_mut(sid) {
+            set.remove(&conn);
+            if set.is_empty() {
+                subs.remove(sid);
+            }
+        }
+    }
+
+    /// The connections that get session SID's `agent-entries`.
+    pub fn entry_subscribers(&self, sid: &str) -> Vec<u64> {
+        lock(&self.entry_subs)
+            .get(sid)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     /// EVENT with DATA to one subscriber, the first (the oldest connection): a change is written by one editor, not
@@ -62,6 +234,11 @@ impl Editors {
             subs.remove(&conn);
         }
         false
+    }
+
+    /// The oldest editor connection, if any.
+    pub fn first(&self) -> Option<u64> {
+        lock(&self.subscribers).keys().next().copied()
     }
 
     /// Whether an editor is connected.
@@ -133,6 +310,37 @@ impl Editors {
         got.ok()?.ok()
     }
 
+    /// `wheel-save` to the editors (the user gives back session SID's wheel; it works in WORKTREE), and the first
+    /// `agents/wheel/saved` waited for at most WAIT: the files left unsaved.  No editor, or none that answers in time
+    /// (an editor that does not know the event), has nothing unsaved to say: empty.
+    pub async fn wheel_save(&self, sid: &str, worktree: &str, wait: Duration) -> Vec<String> {
+        if !self.present() {
+            return Vec::new();
+        }
+        let req = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        let (s, rx) = oneshot::channel();
+        lock(&self.saves).insert(req, s);
+        self.broadcast(
+            "wheel-save",
+            json!(runstav::methods::agents::WheelSave {
+                req,
+                id: sid.to_string(),
+                worktree: worktree.to_string(),
+            }),
+        );
+        let got = crate::clock::timeout(wait, rx).await;
+        lock(&self.saves).remove(&req);
+        got.ok().and_then(Result::ok).unwrap_or_default()
+    }
+
+    /// The editor's `agents/wheel/saved` for REQ: true when a give was waiting for it.
+    pub fn wheel_saved(&self, req: u64, unsaved: Vec<String>) -> bool {
+        match lock(&self.saves).remove(&req) {
+            Some(s) => s.send(unsaved).is_ok(),
+            None => false,
+        }
+    }
+
     /// The editor's `settings/explained` for REQ: true when a tool was waiting for it.
     pub fn explained(&self, req: u64, rows: Vec<Value>) -> bool {
         match lock(&self.explains).remove(&req) {
@@ -163,6 +371,27 @@ mod tests {
             .iter()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect()
+    }
+
+    mod wire {
+        use super::*;
+
+        /// [D] A targeted send reaches the one connection, not the others; an unknown or gone one takes nothing.
+        #[test]
+        fn send_to_reaches_one_connection() {
+            let e = Editors::default();
+            let (a, b) = (Arc::new(Outbox::new(1)), Arc::new(Outbox::new(2)));
+            e.subscribe(1, a.clone());
+            e.subscribe(2, b.clone());
+            assert!(e.send_to(2, "agent-entries", json!({"id": "s1"})));
+            assert!(lines(&a).is_empty());
+            let got = lines(&b);
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0]["event"], "agent-entries");
+            assert!(!e.send_to(9, "agent-entries", json!({})));
+            e.gone(2);
+            assert!(!e.send_to(2, "agent-entries", json!({})));
+        }
     }
 
     #[tokio::test]

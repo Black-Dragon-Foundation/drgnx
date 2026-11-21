@@ -1,0 +1,246 @@
+{"id":"9efc29e28001","stratum":"tests","query":"fix pass-through typos","targets":[["test/app.router.js",""]],"age_days":26,"dir":"test","half":"dev"}
+{"id":"9a34acf03cb8","stratum":"tests","query":"preserve ETag generation with Transfer-Encoding","targets":[["test/res.send.js",""]],"age_days":48,"dir":"test","half":"dev"}
+{"id":"ae6dd37680e3","stratum":"tests","query":"allow conditional revalidation for QUERY requests","targets":[["test/req.fresh.js",""]],"age_days":113,"dir":"test","half":"dev"}
+{"id":"90ec6206d327","stratum":"symbol","query":"Improve error logging by logging full error object","targets":[["lib/application.js","logerror"]],"age_days":139,"dir":"lib","half":"dev"}
+{"id":"2f64f68c37c6","stratum":"cross-file","query":"security patch for CVE-2024-51999","targets":[["lib/utils.js","createETagGenerator"],["test/req.query.js",""],["test/req.query.js","createApp"]],"age_days":336,"dir":"lib","half":"dev"}
+{"id":"8f21493cc57d","stratum":"config","query":"add --fix flag to automatic fix linting issue","targets":[["package.json",""]],"age_days":446,"dir":"package.json","half":"dev"}
+{"id":"c5b8d55a6a94","stratum":"config","query":"add deprecation warnings for redirect arguments undefined","targets":[["package.json",""]],"age_days":475,"dir":"package.json","half":"dev"}
+{"id":"dfd1851245aa","stratum":"tests","query":"fix typos in test descriptions","targets":[["test/express.json.js",""],["test/express.raw.js",""],["test/express.text.js",""],["test/express.urlencoded.js",""],["test/res.download.js",""],["test/res.sendFile.js",""]],"age_days":524,"dir":"test","half":"dev"}
+{"id":"9f4dbe3a1332","stratum":"tests","query":"wider range for query test skip","targets":[["test/support/utils.js","shouldHaveBody"]],"age_days":536,"dir":"test","half":"dev"}
+{"id":"d2de128a32f1","stratum":"config","query":"fix (deps): update deps","targets":[["package.json",""]],"age_days":627,"dir":"package.json","half":"dev"}
+{"id":"af7cd90893f4","stratum":"config","query":"use carat notation for dependency versions","targets":[["package.json",""]],"age_days":635,"dir":"package.json","half":"dev"}
+{"id":"6a40af829378","stratum":"config","query":"update dev deps","targets":[["package.json",""]],"age_days":662,"dir":"package.json","half":"dev"}
+{"id":"b274047a5d38","stratum":"config","query":"update homepage link http to https","targets":[["package.json",""]],"age_days":743,"dir":"package.json","half":"dev"}
+{"id":"082d6d1253c5","stratum":"tests","query":"add discarded middleware test","targets":[["test/app.router.js",""]],"age_days":743,"dir":"test","half":"dev"}
+{"id":"6340d1509f83","stratum":"config","query":"remove --bail from test script","targets":[["package.json",""]],"age_days":762,"dir":"package.json","half":"dev"}
+{"id":"61421a8c0c2a","stratum":"tests","query":"skip QUERY tests for Node 21 only, still not supported","targets":[["test/app.router.js",""],["test/res.send.js",""],["test/support/utils.js","shouldHaveBody"]],"age_days":876,"dir":"test","half":"dev"}
+{"id":"689073d657b6","stratum":"tests","query":"✨ bring back query tests for node 21","targets":[["test/support/utils.js","shouldHaveBody"]],"age_days":879,"dir":"test","half":"dev"}
+{"id":"4b3b8cc23138","stratum":"config","query":"adopt Node@18 as the minimum supported version","targets":[["package.json",""]],"age_days":935,"dir":"package.json","half":"dev"}
+{"id":"2a89eb5c749a","stratum":"tests","query":"fix handling multiple callbacks","targets":[["test/Router.js",""],["test/app.router.js",""],["test/app.use.js",""]],"age_days":987,"dir":"test","half":"dev"}
+{"id":"2a00da2067b7","stratum":"tests","query":"use random port in listen test","targets":[["test/app.listen.js",""]],"age_days":1247,"dir":"test","half":"dev"}
+{"id":"3531987844e5","stratum":"tests","query":"remove unused function arguments in Route tests","targets":[["test/Route.js",""]],"age_days":1266,"dir":"test","half":"dev"}
+{"id":"74beeac0718c","stratum":"tests","query":"Fix routing requests without method","targets":[["test/Router.js",""]],"age_days":1347,"dir":"test","half":"dev"}
+{"id":"a1efd9d6cf96","stratum":"symbol","query":"remove unused parameter from internal function","targets":[["lib/utils.js","acceptParams"]],"age_days":1349,"dir":"lib","half":"dev"}
+{"id":"c6ee8d6e7f11","stratum":"tests","query":"remove unused function arguments in tests","targets":[["test/Router.js",""],["test/app.param.js",""],["test/app.router.js",""],["test/res.format.js",""]],"age_days":1350,"dir":"test","half":"dev"}
+{"id":"97f0a518d8d6","stratum":"tests","query":"verify all handlers called in stack tests","targets":[["test/Router.js",""]],"age_days":1627,"dir":"test","half":"dev"}
+{"id":"631ada0c645d","stratum":"tests","query":"Fix hanging on large stack of sync routes","targets":[["test/Router.js",""]],"age_days":1648,"dir":"test","half":"dev"}
+{"id":"f9063712e019","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":1720,"dir":"package.json","half":"dev"}
+{"id":"12310c52947e","stratum":"config","query":"use nyc for test coverage","targets":[["package.json",""]],"age_days":1728,"dir":"package.json","half":"dev"}
+{"id":"a0276c6c91b3","stratum":"config","query":"Use mime-types for file to content type mapping","targets":[["package.json",""]],"age_days":1730,"dir":"package.json","half":"dev"}
+{"id":"744564fcf806","stratum":"tests","query":"add test for multiple ips in \"trust proxy\"","targets":[["test/req.ip.js",""]],"age_days":1733,"dir":"test","half":"dev"}
+{"id":"141914e8172f","stratum":"tests","query":"fix tests that did not bubble errors","targets":[["test/app.all.js",""],["test/app.head.js",""],["test/app.router.js",""],["test/app.use.js",""]],"age_days":1734,"dir":"test","half":"dev"}
+{"id":"59d695c447f6","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":1787,"dir":"package.json","half":"dev"}
+{"id":"30afebf8dae8","stratum":"config","query":"fixed typo in ejs example css","targets":[["examples/ejs/public/stylesheets/style.css",""]],"age_days":1920,"dir":"examples","half":"dev"}
+{"id":"922e9a461585","stratum":"config","query":"add http keyword for npm search","targets":[["package.json",""]],"age_days":2412,"dir":"package.json","half":"dev"}
+{"id":"b8e50568af9c","stratum":"symbol","query":"ignore unreachable line","targets":[["lib/response.js","stringify"]],"age_days":2727,"dir":"lib","half":"dev"}
+{"id":"94e48a16f273","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":2727,"dir":"package.json","half":"dev"}
+{"id":"8a97346eaf3a","stratum":"tests","query":"assert calls order in middleware basic tests","targets":[["test/middleware.basic.js",""]],"age_days":2756,"dir":"test","half":"dev"}
+{"id":"c82fa194475e","stratum":"tests","query":"add router promise tests","targets":[["test/app.route.js",""],["test/app.router.js",""]],"age_days":2928,"dir":"test","half":"dev"}
+{"id":"62a59b6ace6c","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":2957,"dir":"package.json","half":"dev"}
+{"id":"d5b33cfad8ef","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":2972,"dir":"package.json","half":"dev"}
+{"id":"f8fba68ec0e6","stratum":"tests","query":"use supertest expect to test body","targets":[["test/acceptance/error-pages.js",""]],"age_days":3211,"dir":"test","half":"dev"}
+{"id":"53bee2506deb","stratum":"tests","query":"use https github url","targets":[["test/acceptance/web-service.js",""]],"age_days":3225,"dir":"test","half":"dev"}
+{"id":"de129c289dc1","stratum":"cross-file","query":"run mocha with --no-exit to detect hangs","targets":[["package.json",""],["test/middleware.basic.js",""],["test/res.format.js",""],["test/res.format.js","test"],["test/res.sendFile.js",""]],"age_days":3319,"dir":"package.json","half":"dev"}
+{"id":"628438d8d890","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":3322,"dir":"package.json","half":"dev"}
+{"id":"2df1ad26a58b","stratum":"tests","query":"Improve error messages when non-function provided as middleware","targets":[["test/Router.js",""],["test/app.use.js",""]],"age_days":3322,"dir":"test","half":"dev"}
+{"id":"12c371246893","stratum":"cross-file","query":"Use safe-buffer for improved Buffer API","targets":[["lib/utils.js","createETagGenerator"],["package.json",""],["test/res.attachment.js",""],["test/res.send.js",""],["test/utils.js",""]],"age_days":3322,"dir":"lib","half":"dev"}
+{"id":"19a2eeb47697","stratum":"tests","query":"check render error without engine-specific message","targets":[["test/app.render.js",""],["test/res.render.js",""],["test/support/tmpl.js",""]],"age_days":3328,"dir":"test","half":"dev"}
+{"id":"56e90e3c7267","stratum":"cross-file","query":"add eslint rules that cover editorconfig","targets":[["package.json",""],["test/acceptance/error-pages.js",""],["test/acceptance/error.js",""],["test/acceptance/route-map.js",""],["test/app.engine.js",""],["test/config.js",""]],"age_days":3375,"dir":"package.json","half":"dev"}
+{"id":"5e16f400f17c","stratum":"cross-file","query":"use 1-based visitor count in cookie-sessions","targets":[["examples/view-locals/index.js","ferrets"],["test/acceptance/cookie-sessions.js",""]],"age_days":3386,"dir":"examples","half":"dev"}
+{"id":"1adee79e6364","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":3411,"dir":"package.json","half":"dev"}
+{"id":"60f87f8074c2","stratum":"config","query":"fix posts link in route-separation example","targets":[["examples/route-separation/views/index.ejs",""]],"age_days":3455,"dir":"examples","half":"dev"}
+{"id":"1ba9a9ac23e4","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":3456,"dir":"package.json","half":"dev"}
+{"id":"3763d73a1f66","stratum":"config","query":"replace jade with hbs in mvc example","targets":[["package.json",""]],"age_days":3511,"dir":"package.json","half":"dev"}
+{"id":"05fd1e444198","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":3528,"dir":"package.json","half":"dev"}
+{"id":"dc8acc8676be","stratum":"tests","query":"use supertest expect for simple assertions","targets":[["test/app.param.js",""],["test/app.router.js",""],["test/req.signedCookies.js",""],["test/res.clearCookie.js",""],["test/res.cookie.js",""]],"age_days":3529,"dir":"test","half":"dev"}
+{"id":"1f71fae23be0","stratum":"tests","query":"add lone \"*\" route tests","targets":[["test/app.router.js",""]],"age_days":3536,"dir":"test","half":"dev"}
+{"id":"6022567c754a","stratum":"config","query":"Use setprototypeof module to replace __proto__ setting","targets":[["package.json",""]],"age_days":3539,"dir":"package.json","half":"dev"}
+{"id":"034165caeb55","stratum":"cross-file","query":"Use statuses instead of http module for status messages","targets":[["package.json",""],["test/res.redirect.js",""]],"age_days":3540,"dir":"package.json","half":"dev"}
+{"id":"f2bbd10ae7ab","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":3541,"dir":"package.json","half":"dev"}
+{"id":"fefd7290376c","stratum":"symbol","query":"Add debug message when loading view engine","targets":[["lib/view.js","View"]],"age_days":3541,"dir":"lib","half":"dev"}
+{"id":"fb3946f45493","stratum":"tests","query":"fix broken indentation in tests","targets":[["test/req.ip.js",""],["test/res.sendFile.js",""]],"age_days":3557,"dir":"test","half":"dev"}
+{"id":"94377f681d66","stratum":"symbol","query":"remove unnecessary semicolon","targets":[["lib/request.js","defineGetter"]],"age_days":3557,"dir":"lib","half":"dev"}
+{"id":"bd47aeb88d28","stratum":"tests","query":"fix typos in test descriptions","targets":[["test/app.options.js",""],["test/app.router.js",""],["test/req.acceptsEncodings.js",""],["test/req.acceptsLanguages.js",""]],"age_days":3636,"dir":"test","half":"dev"}
+{"id":"14cf9c563679","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":3791,"dir":"package.json","half":"dev"}
+{"id":"2e1284beb621","stratum":"tests","query":"Fix Windows absolute path check using forward slashes","targets":[["test/utils.js",""]],"age_days":3805,"dir":"test","half":"dev"}
+{"id":"05136550c7fa","stratum":"config","query":"fix some links messed up from repository move commit","targets":[["package.json",""]],"age_days":3917,"dir":"package.json","half":"dev"}
+{"id":"e7a02f6a256a","stratum":"cross-file","query":"move repository to expressjs","targets":[["package.json",""],["test/acceptance/web-service.js",""]],"age_days":3937,"dir":"package.json","half":"dev"}
+{"id":"2f8ac6726fa2","stratum":"tests","query":"fix redirect tests for change in 302 status message","targets":[["test/res.redirect.js",""]],"age_days":4109,"dir":"test","half":"dev"}
+{"id":"a4fcd91084ea","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4111,"dir":"package.json","half":"dev"}
+{"id":"694869d2aa7b","stratum":"config","query":"Use path-is-absolute module for absolute path detection","targets":[["package.json",""]],"age_days":4136,"dir":"package.json","half":"dev"}
+{"id":"10502480d0f2","stratum":"symbol","query":"remove argument reassignments in application","targets":[["lib/application.js","logerror"]],"age_days":4153,"dir":"lib","half":"dev"}
+{"id":"a8a856445968","stratum":"symbol","query":"remove argument reassignments in View","targets":[["lib/view.js","View"]],"age_days":4153,"dir":"lib","half":"dev"}
+{"id":"f7e94a30bce6","stratum":"config","query":"Use array-flatten module for flattening arrays","targets":[["package.json",""]],"age_days":4154,"dir":"package.json","half":"dev"}
+{"id":"18c30d46aa6f","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4186,"dir":"package.json","half":"dev"}
+{"id":"4597e118ae7c","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4248,"dir":"package.json","half":"dev"}
+{"id":"01e059ca742d","stratum":"config","query":"add missing cookie-session module","targets":[["package.json",""]],"age_days":4248,"dir":"package.json","half":"dev"}
+{"id":"1114ca1ab651","stratum":"tests","query":"fix assert usage mistake","targets":[["test/app.js",""]],"age_days":4248,"dir":"test","half":"dev"}
+{"id":"24fce9deb374","stratum":"config","query":"fixes to mvc example","targets":[["examples/mvc/controllers/pet/views/edit.ejs",""]],"age_days":4274,"dir":"examples","half":"dev"}
+{"id":"9a8cf77c91f6","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4274,"dir":"package.json","half":"dev"}
+{"id":"b40e74d6b6a3","stratum":"tests","query":"Fix \"trust proxy\" setting to inherit when app is mounted","targets":[["test/app.use.js",""],["test/config.js",""],["test/req.ip.js",""]],"age_days":4275,"dir":"test","half":"dev"}
+{"id":"96f47432a538","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4303,"dir":"package.json","half":"dev"}
+{"id":"ec8daf0e7b02","stratum":"tests","query":"Match routes iteratively to prevent stack overflows","targets":[["test/Router.js",""]],"age_days":4310,"dir":"test","half":"dev"}
+{"id":"935f05bc8431","stratum":"tests","query":"Fix OPTIONS responses to include the HEAD method properly","targets":[["test/app.options.js",""]],"age_days":4311,"dir":"test","half":"dev"}
+{"id":"55699bee8f69","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4311,"dir":"package.json","half":"dev"}
+{"id":"11529a2ea029","stratum":"tests","query":"Fix OPTIONS responses to include the HEAD method property","targets":[["test/app.options.js",""]],"age_days":4315,"dir":"test","half":"dev"}
+{"id":"91824514ced7","stratum":"tests","query":"run render tests with internal template engine","targets":[["test/app.render.js",""],["test/app.render.js","createApp"],["test/res.render.js",""],["test/res.render.js","createApp"]],"age_days":4357,"dir":"test","half":"dev"}
+{"id":"eabd4564aaa8","stratum":"tests","query":"Fix handling of URLs containing :// in the path","targets":[["test/Router.js",""]],"age_days":4387,"dir":"test","half":"dev"}
+{"id":"68290ee87af9","stratum":"tests","query":"Fix handling of invalid empty URLs","targets":[["test/Router.js",""]],"age_days":4392,"dir":"test","half":"dev"}
+{"id":"b1d0c19ca16c","stratum":"tests","query":"make main app file names consistent","targets":[["test/acceptance/auth.js",""],["test/acceptance/cookies.js",""],["test/acceptance/downloads.js",""],["test/acceptance/params.js",""],["test/acceptance/resource.js",""]],"age_days":4393,"dir":"test","half":"dev"}
+{"id":"6f31218ecc91","stratum":"cross-file","query":"Use content-disposition module","targets":[["package.json",""],["test/res.attachment.js",""]],"age_days":4398,"dir":"package.json","half":"dev"}
+{"id":"0e5613363f3b","stratum":"config","query":"Use content-disposition module","targets":[["package.json",""]],"age_days":4398,"dir":"package.json","half":"dev"}
+{"id":"7a7f18c20bb5","stratum":"config","query":"misc. updates to packaging","targets":[["package.json",""]],"age_days":4398,"dir":"package.json","half":"dev"}
+{"id":"94f10c26cb6f","stratum":"tests","query":"Fix using same param name in array of paths","targets":[["test/app.router.js",""]],"age_days":4405,"dir":"test","half":"dev"}
+{"id":"c5193536e5c1","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4429,"dir":"package.json","half":"dev"}
+{"id":"f6ac068ab040","stratum":"config","query":"Use crc instead of buffer-crc32 for speed","targets":[["package.json",""]],"age_days":4430,"dir":"package.json","half":"dev"}
+{"id":"276db8c49a4f","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4437,"dir":"package.json","half":"dev"}
+{"id":"a206b4e27399","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4449,"dir":"package.json","half":"dev"}
+{"id":"5c145b5490bc","stratum":"config","query":"add link to homepage","targets":[["package.json",""]],"age_days":4458,"dir":"package.json","half":"dev"}
+{"id":"e8f8ea7e05c2","stratum":"symbol","query":"update examples for deprecations","targets":[["examples/error/index.js","error"]],"age_days":4470,"dir":"examples","half":"dev"}
+{"id":"d046208ca240","stratum":"config","query":"add Young Jae Sim as contributor","targets":[["package.json",""]],"age_days":4492,"dir":"package.json","half":"dev"}
+{"id":"fa6a40526a36","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4496,"dir":"package.json","half":"dev"}
+{"id":"ec5b9f5c618d","stratum":"tests","query":"add test for error handler in route","targets":[["test/app.router.js",""]],"age_days":4497,"dir":"test","half":"dev"}
+{"id":"ef497fdae413","stratum":"tests","query":"add mounting to strict routing test","targets":[["test/app.router.js",""]],"age_days":4500,"dir":"test","half":"dev"}
+{"id":"99e839a27460","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4504,"dir":"package.json","half":"dev"}
+{"id":"b601d64203d5","stratum":"tests","query":"fix inconsistent test","targets":[["test/app.head.js",""]],"age_days":4504,"dir":"test","half":"dev"}
+{"id":"ca306eace1be","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4505,"dir":"package.json","half":"dev"}
+{"id":"bdfd288eec38","stratum":"tests","query":"fix behavior when handling request without routes","targets":[["test/app.js",""]],"age_days":4516,"dir":"test","half":"dev"}
+{"id":"7e01531e505c","stratum":"cross-file","query":"use finalhandler for final response handling","targets":[["lib/application.js","logerror"],["package.json",""]],"age_days":4516,"dir":"lib","half":"dev"}
+{"id":"e66667e465af","stratum":"config","query":"Use media-typer to alter content-type charset","targets":[["package.json",""]],"age_days":4516,"dir":"package.json","half":"dev"}
+{"id":"9c731f1883a8","stratum":"cross-file","query":"deprecate things with depd module","targets":[["package.json",""],["test/support/env.js",""]],"age_days":4518,"dir":"package.json","half":"dev"}
+{"id":"4d3e0d88a2aa","stratum":"tests","query":"Fix catching errors from top-level handlers","targets":[["test/Router.js",""]],"age_days":4529,"dir":"test","half":"dev"}
+{"id":"21393c244cbc","stratum":"tests","query":"add more route tests","targets":[["test/Route.js",""],["test/Router.js",""],["test/app.route.js",""]],"age_days":4532,"dir":"test","half":"dev"}
+{"id":"5019f38e29b4","stratum":"tests","query":"add more tests","targets":[["test/app.router.js",""],["test/app.use.js",""],["test/exports.js",""],["test/res.format.js",""]],"age_days":4532,"dir":"test","half":"dev"}
+{"id":"2e257d1cf744","stratum":"config","query":"use compressed formats in package","targets":[["package.json",""]],"age_days":4532,"dir":"package.json","half":"dev"}
+{"id":"9e5a758e7ce7","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4535,"dir":"package.json","half":"dev"}
+{"id":"8751d7ecf860","stratum":"tests","query":"add more tests","targets":[["test/app.router.js",""],["test/config.js",""],["test/utils.js",""]],"age_days":4538,"dir":"test","half":"dev"}
+{"id":"3e358458f436","stratum":"tests","query":"add more etag tests","targets":[["test/req.fresh.js",""],["test/req.stale.js",""],["test/res.send.js",""],["test/res.set.js",""],["test/utils.js",""]],"age_days":4538,"dir":"test","half":"dev"}
+{"id":"766b3aecf7aa","stratum":"cross-file","query":"update example dependencies","targets":[["package.json",""],["test/app.render.js",""],["test/res.render.js",""]],"age_days":4539,"dir":"package.json","half":"dev"}
+{"id":"3c0ec59432f7","stratum":"tests","query":"Include ETag in HEAD requests","targets":[["test/app.head.js",""]],"age_days":4540,"dir":"test","half":"dev"}
+{"id":"fb2d9180569a","stratum":"tests","query":"fix handling of errors from param callbacks","targets":[["test/app.param.js",""]],"age_days":4540,"dir":"test","half":"dev"}
+{"id":"dfefea5e9db4","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4541,"dir":"package.json","half":"dev"}
+{"id":"c3470c9c964c","stratum":"tests","query":"add route ordering test","targets":[["test/app.router.js",""]],"age_days":4545,"dir":"test","half":"dev"}
+{"id":"91e0c2725260","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4548,"dir":"package.json","half":"dev"}
+{"id":"cf5de082b5f8","stratum":"tests","query":"add more tests of cookies example","targets":[["test/acceptance/cookies.js",""]],"age_days":4548,"dir":"test","half":"dev"}
+{"id":"1944451082e8","stratum":"tests","query":"add more tests of negotiation example","targets":[["test/acceptance/content-negotiation.js",""]],"age_days":4548,"dir":"test","half":"dev"}
+{"id":"602e5a82004d","stratum":"tests","query":"add more tests of mvc example","targets":[["test/acceptance/mvc.js",""]],"age_days":4548,"dir":"test","half":"dev"}
+{"id":"83b8b7acb7d9","stratum":"tests","query":"add more various tests","targets":[["test/app.js",""],["test/app.param.js",""],["test/req.range.js",""]],"age_days":4548,"dir":"test","half":"dev"}
+{"id":"9354ab62ddd1","stratum":"config","query":"prevent failure from coveralls","targets":[["package.json",""]],"age_days":4550,"dir":"package.json","half":"dev"}
+{"id":"ababa6ae5b5e","stratum":"tests","query":"fix issue routing requests among sub routers","targets":[["test/Router.js",""]],"age_days":4551,"dir":"test","half":"dev"}
+{"id":"0f49d8062369","stratum":"config","query":"clean up package file","targets":[["package.json",""]],"age_days":4551,"dir":"package.json","half":"dev"}
+{"id":"1717516a7832","stratum":"config","query":"improve platform portability","targets":[["package.json",""]],"age_days":4551,"dir":"package.json","half":"dev"}
+{"id":"566720be1583","stratum":"cross-file","query":"improve proxy trust with ip address list","targets":[["package.json",""],["test/req.host.js",""],["test/req.ip.js",""],["test/req.ips.js",""],["test/req.protocol.js",""]],"age_days":4551,"dir":"package.json","half":"dev"}
+{"id":"b8d6d258b0b3","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4557,"dir":"package.json","half":"dev"}
+{"id":"a2553126ddef","stratum":"config","query":"support PURGE method","targets":[["package.json",""]],"age_days":4560,"dir":"package.json","half":"dev"}
+{"id":"3d6b4ba013b5","stratum":"config","query":"update example dependencies","targets":[["package.json",""]],"age_days":4560,"dir":"package.json","half":"dev"}
+{"id":"56b672e6570e","stratum":"tests","query":"support non-ascii filenames in content-disposition headers","targets":[["test/res.attachment.js",""]],"age_days":4579,"dir":"test","half":"dev"}
+{"id":"d72f27909fd8","stratum":"tests","query":"handle thrown errors inside Route","targets":[["test/Route.js",""]],"age_days":4591,"dir":"test","half":"dev"}
+{"id":"cb1fbce46b07","stratum":"tests","query":"don't call done twice for thrown errors inside parameterized routes","targets":[["test/Router.js",""]],"age_days":4607,"dir":"test","half":"dev"}
+{"id":"c7e84d804450","stratum":"tests","query":"Clean up code and syntax issues.","targets":[["test/Router.js",""]],"age_days":4620,"dir":"test","half":"dev"}
+{"id":"76147c78a159","stratum":"config","query":"change my contributor email to tag with expressjs","targets":[["package.json",""]],"age_days":4620,"dir":"package.json","half":"dev"}
+{"id":"6ec1904aaca3","stratum":"config","query":"use serve-static for static middleware","targets":[["package.json",""]],"age_days":4624,"dir":"package.json","half":"dev"}
+{"id":"f1315b9efa61","stratum":"config","query":"fix examples for express 4 (separate middleware)","targets":[["package.json",""]],"age_days":4625,"dir":"package.json","half":"dev"}
+{"id":"aac1d52c4fa1","stratum":"tests","query":"remove resolving relative urls","targets":[["test/acceptance/auth.js",""],["test/res.redirect.js",""]],"age_days":4650,"dir":"test","half":"dev"}
+{"id":"8aff64f89a10","stratum":"config","query":"backport dependency updates","targets":[["package.json",""]],"age_days":4659,"dir":"package.json","half":"dev"}
+{"id":"a3b5f6d07f88","stratum":"tests","query":"prevent incorrect automatic OPTIONS responses","targets":[["test/app.options.js",""]],"age_days":4675,"dir":"test","half":"dev"}
+{"id":"c9865b821dae","stratum":"tests","query":"Test location with leading ./ and containing ..","targets":[["test/res.location.js",""]],"age_days":4748,"dir":"test","half":"dev"}
+{"id":"9c0de2364560","stratum":"tests","query":"Update tests expectancy of location headers","targets":[["test/res.location.js",""],["test/res.redirect.js",""]],"age_days":4748,"dir":"test","half":"dev"}
+{"id":"a66d6bb0341b","stratum":"config","query":"pin dev deps to semver compatible versions","targets":[["package.json",""]],"age_days":4750,"dir":"package.json","half":"dev"}
+{"id":"2dfecfb661b8","stratum":"config","query":"update methods for SEARCH","targets":[["package.json",""]],"age_days":4753,"dir":"package.json","half":"dev"}
+{"id":"1ef05d4a2878","stratum":"config","query":"downgrade commander. closes","targets":[["package.json",""]],"age_days":4764,"dir":"package.json","half":"dev"}
+{"id":"e218377a3d9d","stratum":"tests","query":"check existence of jsonp callback","targets":[["test/res.jsonp.js",""]],"age_days":4766,"dir":"test","half":"dev"}
+{"id":"113ed0927d02","stratum":"tests","query":"fix test label typo","targets":[["test/req.accepts.js",""]],"age_days":4794,"dir":"test","half":"dev"}
+{"id":"09bede1a9269","stratum":"tests","query":"Fix the links test so it resets the header for each test.","targets":[["test/res.links.js",""]],"age_days":4804,"dir":"test","half":"dev"}
+{"id":"058d7ec2eaf6","stratum":"symbol","query":"Improved variable names and updated comments for better clarity of example","targets":[["examples/content-negotiation/index.js","format"]],"age_days":4818,"dir":"examples","half":"dev"}
+{"id":"ba5c48aa8642","stratum":"tests","query":"remove .version export","targets":[["test/exports.js",""]],"age_days":4876,"dir":"test","half":"dev"}
+{"id":"a3c9eacaf149","stratum":"symbol","query":"move .app to req's & res's prototypes","targets":[["lib/express.js","createApplication"]],"age_days":4892,"dir":"lib","half":"dev"}
+{"id":"138d74aefa75","stratum":"tests","query":"remove charset from json responses. Closes","targets":[["test/res.json.js",""],["test/res.send.js",""]],"age_days":4898,"dir":"test","half":"dev"}
+{"id":"30919be2a01e","stratum":"symbol","query":"Throw a meaningful error when there is no default engine","targets":[["lib/view.js","View"]],"age_days":4919,"dir":"lib","half":"dev"}
+{"id":"6d872e669390","stratum":"config","query":"remove qs dep","targets":[["package.json",""]],"age_days":4927,"dir":"package.json","half":"dev"}
+{"id":"a1d5676ecbb6","stratum":"config","query":"update connect / qs","targets":[["package.json",""]],"age_days":4927,"dir":"package.json","half":"dev"}
+{"id":"eb1bbb92c057","stratum":"config","query":"removing github-flavored-markdown as a dependency as it is no longer supported. switch to use marked instead","targets":[["package.json",""]],"age_days":4935,"dir":"package.json","half":"dev"}
+{"id":"d0e49f1a8afc","stratum":"config","query":"update qs and remove all ~ semver crap","targets":[["package.json",""]],"age_days":4938,"dir":"package.json","half":"dev"}
+{"id":"0b4e2df4805d","stratum":"tests","query":"add \"view\" constructor setting to override view behaviour","targets":[["test/app.render.js",""]],"age_days":4951,"dir":"test","half":"dev"}
+{"id":"99bc628ad1d4","stratum":"tests","query":"fix long list params test","targets":[["test/utils.js",""]],"age_days":4951,"dir":"test","half":"dev"}
+{"id":"eed0f598a03f","stratum":"tests","query":"Remove some superfluous trailing whitespace","targets":[["test/req.accepts.js",""]],"age_days":4994,"dir":"test","half":"dev"}
+{"id":"a7266392f9b6","stratum":"tests","query":"Although unrelated to this broken test case is causing headaches. (This is a reasonable fix in any case.)","targets":[["test/req.signedCookies.js",""]],"age_days":4998,"dir":"test","half":"dev"}
+{"id":"4d65bbf6127f","stratum":"tests","query":"Test cases for pull-request","targets":[["test/res.redirect.js",""]],"age_days":4998,"dir":"test","half":"dev"}
+{"id":"75e47f2883dc","stratum":"tests","query":"Add test for \"view engine\" setting with leading \".\".","targets":[["test/app.engine.js",""]],"age_days":5030,"dir":"test","half":"dev"}
+{"id":"ba00e236302e","stratum":"tests","query":"Add subdomain offset setting","targets":[["test/req.subdomains.js",""]],"age_days":5033,"dir":"test","half":"dev"}
+{"id":"ff0384e610b6","stratum":"config","query":"update cookie module","targets":[["package.json",""]],"age_days":5102,"dir":"package.json","half":"dev"}
+{"id":"464608025b90","stratum":"config","query":"refactor ejs example some more","targets":[["examples/ejs/views/header.html",""]],"age_days":5136,"dir":"examples","half":"dev"}
+{"id":"d653d2308b0f","stratum":"cross-file","query":"refactor ejs example","targets":[["examples/ejs/views/users.html",""],["test/acceptance/ejs.js",""]],"age_days":5136,"dir":"examples","half":"dev"}
+{"id":"a52b1f121c86","stratum":"config","query":"add EJS title example to auth","targets":[["examples/auth/views/login.ejs",""]],"age_days":5136,"dir":"examples","half":"dev"}
+{"id":"be7ec8b40e72","stratum":"config","query":"improved ejs Example","targets":[["examples/auth/views/login.ejs",""],["examples/ejs/views/users.html",""]],"age_days":5136,"dir":"examples","half":"dev"}
+{"id":"8e12dd9c1750","stratum":"config","query":"Checked all the examples","targets":[["examples/auth/views/login.ejs",""]],"age_days":5136,"dir":"examples","half":"dev"}
+{"id":"78d5b72081e3","stratum":"tests","query":"rename a test file","targets":[["test/app.routes.error.js",""]],"age_days":5136,"dir":"test","half":"dev"}
+{"id":"40be3ed05d75","stratum":"config","query":"update connect dep","targets":[["package.json",""]],"age_days":5172,"dir":"package.json","half":"dev"}
+{"id":"cdb3e9dc0ddb","stratum":"tests","query":"fix etag quoting. Closes","targets":[["test/res.send.js",""]],"age_days":5177,"dir":"test","half":"dev"}
+{"id":"89c5affc3ba2","stratum":"tests","query":"fix jsonp callback char restrictions","targets":[["test/res.json.js",""]],"age_days":5178,"dir":"test","half":"dev"}
+{"id":"f2d7bbe0e9b6","stratum":"tests","query":"change jsonp callback default to false. Closes","targets":[["test/res.json.js",""]],"age_days":5179,"dir":"test","half":"dev"}
+{"id":"0217e6ce968c","stratum":"tests","query":"Fix signed cookie prefix","targets":[["test/res.cookie.js",""]],"age_days":5193,"dir":"test","half":"dev"}
+{"id":"056c840a0679","stratum":"config","query":"update connect dep","targets":[["package.json",""]],"age_days":5200,"dir":"package.json","half":"dev"}
+{"id":"a50f02e87d57","stratum":"cross-file","query":"update cookie dep","targets":[["package.json",""],["test/res.cookie.js",""]],"age_days":5213,"dir":"package.json","half":"dev"}
+{"id":"08b68ec8cda9","stratum":"config","query":"udpate connect dep","targets":[["package.json",""]],"age_days":5222,"dir":"package.json","half":"dev"}
+{"id":"93f1cecc9211","stratum":"config","query":"update connect dep","targets":[["package.json",""]],"age_days":5233,"dir":"package.json","half":"dev"}
+{"id":"0a210cce7a4e","stratum":"tests","query":"fix to test","targets":[["test/Router.js",""]],"age_days":5234,"dir":"test","half":"dev"}
+{"id":"f11024846215","stratum":"tests","query":"Issue 944: Changing Router#match() signature from (req[, i]) to (method, url[, i]), and making it public","targets":[["test/Router.js",""]],"age_days":5234,"dir":"test","half":"dev"}
+{"id":"26fab2a27dc4","stratum":"symbol","query":"update auth example to utilize cores pbkdf2","targets":[["examples/auth/index.js","authenticate"]],"age_days":5240,"dir":"examples","half":"dev"}
+{"id":"1a10ee76b300","stratum":"config","query":"update range-parser dep","targets":[["package.json",""]],"age_days":5250,"dir":"package.json","half":"dev"}
+{"id":"895673141d88","stratum":"config","query":"expose connects mime module. Cloases","targets":[["package.json",""]],"age_days":5260,"dir":"package.json","half":"dev"}
+{"id":"6aaa7dc26dc1","stratum":"tests","query":"Added + support to the router","targets":[["test/app.router.js",""]],"age_days":5261,"dir":"test","half":"dev"}
+{"id":"8930cd563c8b","stratum":"config","query":"update connect dep","targets":[["package.json",""]],"age_days":5262,"dir":"package.json","half":"dev"}
+{"id":"9fda13bc2553","stratum":"tests","query":"Added url rewriting test","targets":[["test/app.router.js",""]],"age_days":5289,"dir":"test","half":"dev"}
+{"id":"df2584cc3bca","stratum":"tests","query":"allow [] in jsonp callback. Closes","targets":[["test/res.json.js",""]],"age_days":5290,"dir":"test","half":"dev"}
+{"id":"4d9ad210474b","stratum":"tests","query":"refactored * routing test","targets":[["test/app.router.js",""]],"age_days":5296,"dir":"test","half":"dev"}
+{"id":"30167356f20d","stratum":"symbol","query":"less verbose example apps when testing","targets":[["examples/auth/index.js","authenticate"]],"age_days":5303,"dir":"examples","half":"dev"}
+{"id":"b7b032f8e05c","stratum":"tests","query":"test for updating mvc user","targets":[["test/acceptance/mvc.js",""]],"age_days":5303,"dir":"test","half":"dev"}
+{"id":"089a83363fac","stratum":"tests","query":"enable \"jsonp callback\" as a default","targets":[["test/res.json.js",""]],"age_days":5314,"dir":"test","half":"dev"}
+{"id":"c28e6db428a8","stratum":"config","query":"update mkdirp dep","targets":[["package.json",""]],"age_days":5314,"dir":"package.json","half":"dev"}
+{"id":"600eaea2d175","stratum":"tests","query":"fixed acceptance tests","targets":[["test/acceptance/markdown.js",""]],"age_days":5318,"dir":"test","half":"dev"}
+{"id":"7048be2830d6","stratum":"symbol","query":"refactoring auth example","targets":[["examples/auth/index.js","authenticate"]],"age_days":5318,"dir":"examples","half":"dev"}
+{"id":"04d43d60b780","stratum":"tests","query":"added nicer error messages for failed view lookup. Closes","targets":[["test/app.render.js",""]],"age_days":5326,"dir":"test","half":"dev"}
+{"id":"082ba8808444","stratum":"tests","query":"tabs -> spaces","targets":[["test/app.router.js",""]],"age_days":5326,"dir":"test","half":"dev"}
+{"id":"298899d02c5d","stratum":"tests","query":"Added array support. Closes","targets":[["test/req.accepts.js",""],["test/res.format.js",""]],"age_days":5336,"dir":"test","half":"dev"}
+{"id":"43b35a4ae02d","stratum":"tests","query":"Added array support. Closes","targets":[["test/req.accepts.js",""],["test/res.format.js",""]],"age_days":5336,"dir":"test","half":"dev"}
+{"id":"ac3d002cb25b","stratum":"tests","query":"added \"view cache\" in production test","targets":[["test/app.js",""]],"age_days":5363,"dir":"test","half":"dev"}
+{"id":"ee290d82d1e3","stratum":"tests","query":"fixing acceptance tests","targets":[["test/acceptance/auth.js","getCookie"],["test/acceptance/auth.js",""]],"age_days":5370,"dir":"test","half":"dev"}
+{"id":"bb9bfa56188b","stratum":"tests","query":"Cleaned out comments from resource acceptance test.","targets":[["test/acceptance/resource.js",""]],"age_days":5370,"dir":"test","half":"dev"}
+{"id":"2e4cf0aa5c7c","stratum":"config","query":"update mime dep","targets":[["package.json",""]],"age_days":5370,"dir":"package.json","half":"dev"}
+{"id":"38b046d6ad86","stratum":"tests","query":"Added test for an array of paths","targets":[["test/app.router.js",""]],"age_days":5377,"dir":"test","half":"dev"}
+{"id":"ca0bd1a0b508","stratum":"config","query":"Added \"debug\" dependency","targets":[["package.json",""]],"age_days":5380,"dir":"package.json","half":"dev"}
+{"id":"34c0d2509a00","stratum":"tests","query":"test for route index state","targets":[["test/Router.js",""]],"age_days":5423,"dir":"test","half":"dev"}
+{"id":"1ea221aa4ee5","stratum":"tests","query":"fixed an acceptance test","targets":[["test/acceptance/ejs.js",""]],"age_days":5433,"dir":"test","half":"dev"}
+{"id":"b32fd0bee486","stratum":"config","query":"* dev deps","targets":[["package.json",""]],"age_days":5441,"dir":"package.json","half":"dev"}
+{"id":"88f154fecdc6","stratum":"tests","query":"Added support for .. in redirects as well","targets":[["test/res.redirect.js",""]],"age_days":5444,"dir":"test","half":"dev"}
+{"id":"43c876446568","stratum":"tests","query":"Added relative redirect support. Closes","targets":[["test/res.redirect.js",""]],"age_days":5444,"dir":"test","half":"dev"}
+{"id":"ad1424681b88","stratum":"tests","query":"comment some tests","targets":[["test/res.cookie.js",""]],"age_days":5456,"dir":"test","half":"dev"}
+{"id":"87b991c076e7","stratum":"tests","query":"removed \"root\" setting","targets":[["test/res.clearCookie.js",""]],"age_days":5456,"dir":"test","half":"dev"}
+{"id":"3c002d08c280","stratum":"tests","query":"fixed test due to HEAD change","targets":[["test/app.router.js",""]],"age_days":5469,"dir":"test","half":"dev"}
+{"id":"42953c7c4442","stratum":"tests","query":"Fixed default OPTIONS behavior","targets":[["test/app.router.js",""]],"age_days":5469,"dir":"test","half":"dev"}
+{"id":"61652f4ad980","stratum":"tests","query":"upper-case the name","targets":[["test/app.router.js",""]],"age_days":5469,"dir":"test","half":"dev"}
+{"id":"1322d5a2c154","stratum":"tests","query":"literal . test","targets":[["test/app.router.js",""]],"age_days":5469,"dir":"test","half":"dev"}
+{"id":"ff2242da310c","stratum":"tests","query":"tests for *","targets":[["test/app.router.js",""]],"age_days":5469,"dir":"test","half":"dev"}
+{"id":"77c9d9207d98","stratum":"tests","query":"Renamed \"case sensitive routes\" to \"case sensitive routing\"","targets":[["test/app.router.js",""]],"age_days":5470,"dir":"test","half":"dev"}
+{"id":"76f65456ab72","stratum":"tests","query":"Added \"case sensitive routes\" tests","targets":[["test/app.router.js",""]],"age_days":5470,"dir":"test","half":"dev"}
+{"id":"26e20e7ae50a","stratum":"tests","query":"more routing tests","targets":[["test/app.router.js",""]],"age_days":5470,"dir":"test","half":"dev"}
+{"id":"e9c96d8ccd24","stratum":"tests","query":"tests for optional capture groups","targets":[["test/app.router.js",""]],"age_days":5470,"dir":"test","half":"dev"}
+{"id":"7ae2b968bb2d","stratum":"tests","query":"more routing tests","targets":[["test/app.router.js",""]],"age_days":5470,"dir":"test","half":"dev"}
+{"id":"04389fd6ff4c","stratum":"tests","query":"test for invalid cookie signature","targets":[["test/req.signedCookies.js",""]],"age_days":5470,"dir":"test","half":"dev"}
+{"id":"7ac857acef7b","stratum":"tests","query":"Added JSON cookie support & tests. Closes","targets":[["test/res.cookie.js",""]],"age_days":5471,"dir":"test","half":"dev"}
+{"id":"4f087df2869d","stratum":"tests","query":"Added res proto mutation test","targets":[["test/app.response.js",""]],"age_days":5471,"dir":"test","half":"dev"}
+{"id":"c32023d8ed82","stratum":"tests","query":"Added \"charset\" option test","targets":[["test/res.render.js",""]],"age_days":5471,"dir":"test","half":"dev"}
+{"id":"d2f98940d85b","stratum":"tests","query":"Added status option test","targets":[["test/res.render.js",""]],"age_days":5471,"dir":"test","half":"dev"}
+{"id":"4d450ea25e18","stratum":"tests","query":"local precedence tests","targets":[["test/res.render.js",""]],"age_days":5471,"dir":"test","half":"dev"}
+{"id":"becf6d9413e1","stratum":"config","query":"Added mocha dev-dep","targets":[["package.json",""]],"age_days":5472,"dir":"package.json","half":"dev"}
+{"id":"041974ee0114","stratum":"symbol","query":"added index lookup support back","targets":[["lib/view.js","View"]],"age_days":5504,"dir":"lib","half":"dev"}
+{"id":"fb031d1ad5ec","stratum":"config","query":"Added mkdirp to express(1). Closes","targets":[["package.json",""]],"age_days":5521,"dir":"package.json","half":"dev"}
+{"id":"00affe187cc6","stratum":"config","query":"update jade dev dep","targets":[["package.json",""]],"age_days":5584,"dir":"package.json","half":"dev"}
+{"id":"ae1078944c11","stratum":"symbol","query":"Fixed view hints","targets":[["lib/view.js","View"]],"age_days":5668,"dir":"lib","half":"dev"}
+{"id":"36a7e87ae4f5","stratum":"config","query":"querystring -> qs","targets":[["package.json",""]],"age_days":5746,"dir":"package.json","half":"dev"}
+{"id":"42af4e40ae2d","stratum":"config","query":"Updated connect submodule","targets":[["package.json",""]],"age_days":5750,"dir":"package.json","half":"dev"}
+{"id":"9536f288e90d","stratum":"config","query":"Updated connect submodule","targets":[["package.json",""]],"age_days":5788,"dir":"package.json","half":"dev"}
+{"id":"5f077e56f017","stratum":"config","query":"Updated connect submodule","targets":[["package.json",""]],"age_days":5788,"dir":"package.json","half":"dev"}
+{"id":"f9d2432c6923","stratum":"symbol","query":"fixed route-separation example","targets":[["examples/route-middleware/index.js","loadUser"]],"age_days":5820,"dir":"examples","half":"dev"}
+{"id":"3876a566fff7","stratum":"cross-file","query":"Added authentication example","targets":[["examples/auth/index.js","authenticate"],["examples/auth/views/login.ejs",""]],"age_days":5885,"dir":"examples","half":"dev"}
+{"id":"7eca74ac05d2","stratum":"config","query":"Updated node --version in readme","targets":[["package.json",""]],"age_days":5920,"dir":"package.json","half":"dev"}

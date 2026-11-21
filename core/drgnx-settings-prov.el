@@ -49,6 +49,8 @@ symbol), `:value', and optionally `:file', `:line', `:source' (the text the UI s
 Keyed by `load-file-name', so a nested `load' never overwrites the outer file's entry.")
 
 (defvar drgnx-settings-prov--tick 0 "Counts the forms read while loading.")
+(defvar drgnx-settings-prov--user-file-cache nil
+  "While your Lisp loads: file name -> whether it is one of your Lisp files (worked out once per file, not per write).")
 (defvar drgnx-settings-prov--declaring nil "The variable `custom-declare-variable' initialises now.")
 (defvar drgnx-settings-prov--recalc nil "The variable `custom-theme-recalc-variable' sets now from its themes.")
 (defvar drgnx-settings-prov--deferred nil "Inside an after-load body: (FILE . LINE) of the form that loaded it.")
@@ -62,9 +64,29 @@ Keyed by `load-file-name', so a nested `load' never overwrites the outer file's 
 (defun drgnx-settings-prov--user-file-p (file)
   "Non-nil when FILE is one of your Lisp files: in your config dir, loaded by `drgnx-settings-prov-with-load', or
 listed (design §8.1)."
+  (if drgnx-settings-prov--user-file-cache
+      (let ((hit (gethash file drgnx-settings-prov--user-file-cache 'none)))
+        (if (eq hit 'none)
+            (puthash file (drgnx-settings-prov--user-file-p-1 file) drgnx-settings-prov--user-file-cache)
+          hit))
+    (drgnx-settings-prov--user-file-p-1 file)))
+
+(defun drgnx-settings-prov--user-file-p-1 (file)
+  "`drgnx-settings-prov--user-file-p', worked out now."
   (or (file-in-directory-p file (drgnx-user-dir))
       (cl-some (lambda (f) (drgnx-settings-prov--same-file-p file f))
                (append drgnx-settings-prov--user-files (ignore-errors (drgnx-lisp-index--default-files))))))
+
+(defun drgnx-settings-prov--line-at (beg last)
+  "The line number of BEG in the current buffer.  LAST is (LINE BEG …) of the form read before in this file: its line
+plus the newlines since it, so reading a file counts its lines once, not once per form."
+  (if (and last (integerp (nth 0 last)) (integerp (nth 1 last)) (<= (nth 1 last) beg))
+      (save-excursion
+        (goto-char (nth 1 last))
+        (let ((n (nth 0 last)))
+          (while (search-forward "\n" beg t) (setq n (1+ n)))
+          n))
+    (line-number-at-pos beg t)))
 
 (defun drgnx-settings-prov--read (stream)
   "`load-read-function' while your Lisp loads: read a form from STREAM, noting where it starts in `load-file-name'."
@@ -72,10 +94,10 @@ listed (design §8.1)."
     (prog1 (read stream)
       (when load-file-name
         (condition-case nil
-            (let ((entry (assoc load-file-name drgnx-settings-prov--forms))
-                  (data (list (and beg (with-current-buffer stream (line-number-at-pos beg t)))
-                              beg (and beg (with-current-buffer stream (point)))
-                              (cl-incf drgnx-settings-prov--tick))))
+            (let* ((entry (assoc load-file-name drgnx-settings-prov--forms))
+                   (data (list (and beg (with-current-buffer stream (drgnx-settings-prov--line-at beg (cdr entry))))
+                               beg (and beg (with-current-buffer stream (point)))
+                               (cl-incf drgnx-settings-prov--tick))))
               (if entry
                   (setcdr entry data)
                 (push (cons load-file-name data) drgnx-settings-prov--forms)))
@@ -209,6 +231,7 @@ line is recorded (Move into Settings needs it)."
       (error nil))
     (unwind-protect
         (let ((drgnx-settings-prov--loading t)
+              (drgnx-settings-prov--user-file-cache (make-hash-table :test 'equal))
               (drgnx-settings-prov--forms nil)
               (load-read-function #'drgnx-settings-prov--read))
           (funcall body))

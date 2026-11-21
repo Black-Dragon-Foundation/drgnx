@@ -4,7 +4,7 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -54,8 +54,7 @@ fn runner_git(home: &Path, cwd: &Path, args: &[&str]) {
 }
 
 fn script(path: &Path, body: &str) {
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    drgnx_exe::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
 }
 
 /// A repository with one commit, a branch `b`, a post-checkout hook and an fsmonitor hook, each appending to

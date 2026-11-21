@@ -1,12 +1,14 @@
 ;;; wb-explorer-test.el --- batch tests: the Explorer -*- lexical-binding: t -*-
 ;; test-class: det
 (require 'ert)
+(set-terminal-coding-system 'utf-8-unix)             ; the kit's dot is the glyph the frame can write: these rows read it as ●
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (require 'drgnx-explorer)
+(setq drgnx-explorer--lisp-listing t)       ; the Lisp listing (a remote root's, plan sja-complete Q3): on local folders here
 (require 'drgnx-timer)
 
 (defun drgnx-explorer-test--tree (root paths)
@@ -39,12 +41,18 @@
          (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
          (delete-directory ,root t)))))
 
-(defun drgnx-explorer-test--pause (secs)
-  "Let timers and queued file-notify events run for SECS (a window in which something must not happen)."
-  (let ((end (+ (drgnx-test-wait-now) secs)))
-    (while (< (drgnx-test-wait-now) end)
-      (drgnx-run-ert-drain-events)
-      (drgnx-test-pause 0.05 "a window: what may not happen in it, the caller asserts"))))
+(defun drgnx-explorer-test--barrier ()
+  "Wait until every file-notify event queued before this call has been delivered.  The kernel's events of one inotify
+instance come in order, so a watch of a directory of our own, a file written in it after the actions under test, and
+the wait for that watch's event settle every earlier one: what \"nothing may happen\" means is then decided, with no
+time passed."
+  (let* ((dir (make-temp-file "drgnx-explorer-barrier" t)) (seen nil)
+         (watch (file-notify-add-watch dir '(change) (lambda (_event) (setq seen t)))))
+    (unwind-protect
+        (progn (write-region "" nil (expand-file-name "b" dir) nil 'silent)
+               (drgnx-test-wait (lambda () (drgnx-run-ert-drain-events) seen) :what "the file-notify barrier's event"))
+      (file-notify-rm-watch watch)
+      (delete-directory dir t))))
 
 (defun drgnx-explorer-test--rows ()
   "The Explorer's rows as (DEPTH NAME) lists."
@@ -216,6 +224,7 @@
         (should (equal (drgnx-explorer-node-at (point)) (expand-file-name "d.txt" odd)))))))
 
 (ert-deftest drgnx-explorer/going-to-the-parent-is-cheap-in-cpu ()
+  :tags '(:timing)                ; a CPU budget (2 ms): the perf lane judges it against the runner's calibration
   ;; The parent is found by walking back over the folder's rows, which allocates nothing: CPU time, the median of 50
   ;; runs, 3 times the host's median (the wall-clock form, 15 ms, missed under load).
   (drgnx-test-compile "drgnx-explorer")
@@ -695,7 +704,7 @@
       (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "docs"))
       (delete-directory docs t)
       (make-directory docs)                            ; rm -rf docs && mkdir docs
-      (drgnx-explorer-test--pause 2)
+      (drgnx-explorer-test--barrier)
       (write-region "" nil (expand-file-name "fresh.txt" docs) nil 'silent)
       (drgnx-test-wait (lambda () (drgnx-run-ert-drain-events) (member '(2 "fresh.txt") (drgnx-explorer-test--rows))) :secs 3 :what "the new file in the tree"))))
 
@@ -748,7 +757,7 @@
     (let ((drgnx-explorer--relists 0) (drgnx-explorer--renders 0))
       (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "docs"))
       (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "docs"))
-      (drgnx-explorer-test--pause 0.5)
+      (drgnx-explorer-test--barrier)
       (should (= drgnx-explorer--relists 0))
       (should (= drgnx-explorer--renders 0)))))
 

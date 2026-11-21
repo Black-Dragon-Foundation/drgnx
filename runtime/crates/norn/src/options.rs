@@ -204,13 +204,14 @@ pub mod deny {
         "drgnx-agents-default",
         "drgnx-agents-mcp",
         "drgnx-agents-openrouter",
-        "drgnx-agents-own-env",
         "drgnx-agents-profiles",
         "drgnx-agents-routes",
-        "drgnx-agents-scrubbed-env",
         "drgnx-agents-start-env-names",
         "drgnx-ai-providers",
         "drgnx-ai-roles",
+        "drgnx-extensions-check-updates",
+        "drgnx-extensions-recommended",
+        "drgnx-extensions-review",
         "drgnx-keys-bind",
         "drgnx-keys-layers",
         "drgnx-keys-mac-option",
@@ -222,6 +223,7 @@ pub mod deny {
         "drgnx-modules-enabled",
         "drgnx-modules-external",
         "drgnx-modules-flags",
+        "drgnx-packages-off",
         "drgnx-sandbox-memory-max",
         "drgnx-sandbox-proxy-pinned-addresses",
         "drgnx-sandbox-secret-files",
@@ -468,7 +470,7 @@ pub fn may_read(
                     What::Project(p) => want == What::OptionsProject && caller.project == Some(p),
                     _ => false,
                 },
-                Access::EditUserTasks => false,
+                Access::EditUserTasks | Access::Matrix => false,
             }
     });
     Ok(if covered { Ok(()) } else { Err(NO_READ_GRANT) })

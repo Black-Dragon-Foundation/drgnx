@@ -21,7 +21,7 @@
 
 (declare-function eieio-oref "eieio-core")
 (declare-function drgnx-diff-show "drgnx-diff")
-(declare-function drgnx-wb-define-tab "drgnx-area")
+(declare-function drgnx-pane-define-kind "drgnx-panes")
 (declare-function drgnx-wb-area-show "drgnx-area")
 (declare-function forge-get-repository "forge-repo")
 (declare-function forge--get-remote "forge-core")
@@ -230,7 +230,7 @@ newest first at each level.  Every PR appears once, a cycle cut where it is foun
                      (lambda ()
                        (add-hook 'git-commit-setup-hook #'drgnx-prs--commit-setup)
                        (drgnx-notice-define-source 'prs :title "Pull requests" :command 'prs-fetch)
-                       (when (fboundp 'drgnx-wb-define-tab) (drgnx-wb-define-tab 'right 'prs :title "Pull Requests"))
+                       (when (require 'drgnx-panes nil t) (drgnx-pane-define-kind 'prs :home 'right :title "Pull Requests"))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((prs-view "Pull Requests" drgnx-prs-view "This repository's pull requests (forge)")
                                         (prs-fetch "Pull Requests: Fetch" drgnx-prs-fetch "Ask the forge for them (network)")

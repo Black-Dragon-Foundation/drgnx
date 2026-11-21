@@ -5,8 +5,13 @@
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
-(defvar drgnx-keys--applied)
-(defvar drgnx-layouts-pane-fillers)
+(defvar drgnx-keys--profile-keys)
+(defvar drgnx-keys--yours)
+(defvar drgnx-keys-user-map)
+(defvar drgnx-keys--pending-parents)
+(defvar nidhogg-define-key-redirect-function)
+(declare-function drgnx-keys--define "drgnx-keys" (map key def))
+(defvar drgnx-pane--kinds)
 (defvar drgnx-layouts-shapes)
 (defvar drgnx-persist-state-functions)
 (defvar drgnx-persist-after-restore-functions)
@@ -24,18 +29,18 @@
     file))
 
 (ert-deftest drgnx-test-modules/a-module-set-up-and-gone ()
-  ;; tools/browser registers a pane filler and a layout shape; the layouts module wires the persist hooks.
+  ;; tools/browser registers a pane kind (a layout's pane) and a layout shape; the layouts module wires the persist hooks.
   (drgnx-test-with-modules '(tools/browser) nil)   ; loads the libraries, so the values below are their own
   (let ((state-fns (copy-sequence (bound-and-true-p drgnx-persist-state-functions)))
         (after-fns (copy-sequence (bound-and-true-p drgnx-persist-after-restore-functions)))
-        (fillers (copy-tree (bound-and-true-p drgnx-layouts-pane-fillers)))
+        (kinds (mapcar #'car drgnx-pane--kinds))
         (shapes (copy-tree (bound-and-true-p drgnx-layouts-shapes))))
     (drgnx-test-with-modules '(tools/browser) :strict t
-                             (should (assq 'browser drgnx-layouts-pane-fillers))
+                             (should (plist-get (drgnx-pane-kind 'browser) :fill))
                              (should (assq 'editor+browser drgnx-layouts-shapes))
                              (should (memq 'drgnx-layouts--persist-state drgnx-persist-state-functions))
                              (should (eq 'ok (plist-get (alist-get 'tools/browser (drgnx-modules-report)) :status))))
-    (should (equal fillers (bound-and-true-p drgnx-layouts-pane-fillers)))
+    (should (equal kinds (mapcar #'car drgnx-pane--kinds)))
     (should (equal shapes (bound-and-true-p drgnx-layouts-shapes)))
     (should (equal state-fns drgnx-persist-state-functions))
     (should (equal after-fns drgnx-persist-after-restore-functions))))
@@ -272,14 +277,31 @@ another order, which `equal' on two keymaps sees."
           (context context-menu-mode)
           (menu-hook (default-value 'menu-bar-update-hook))
           (context-fns (default-value 'context-menu-functions))
-          (applied drgnx-keys--applied))
+          (profile-keys drgnx-keys--profile-keys))
       (drgnx-test-with-modules '(tools/browser) :strict t (ignore))
       (should (> (hash-table-count drgnx-commands--table) 4))
       (should (equal (drgnx-fixture-test--bindings map) (drgnx-fixture-test--bindings global-map)))
       (should (eq context context-menu-mode))
       (should (equal menu-hook (default-value 'menu-bar-update-hook)))
       (should (equal context-fns (default-value 'context-menu-functions)))
-      (should (equal applied drgnx-keys--applied)))))
+      (should (equal profile-keys drgnx-keys--profile-keys)))))
+
+(ert-deftest drgnx-test-modules/your-keys-bound-in-the-body-are-put-back ()
+  ;; the body binds as you and leaves it: your record, your map's key (in an auxiliary keymap too) and a layer waiting
+  ;; for its parent go with the helper, so the next test starts without them
+  (require 'drgnx-keys)
+  (let ((nidhogg-define-key-redirect-function nil) (pending drgnx-keys--pending-parents)
+        (mine (drgnx-test-modules--map-leaves drgnx-keys-user-map)))
+    (should-not (gethash "C-c C-M-y" drgnx-keys--yours))
+    (drgnx-test-with-modules '(tools/browser)
+      (puthash "C-c C-M-y" (cons #'ignore 'command) drgnx-keys--yours)
+      (define-key drgnx-keys-user-map (kbd "C-c C-M-y") #'ignore)
+      (drgnx-keys--define drgnx-keys-user-map (vector 'normal-state ?y) #'ignore)
+      (push 'drgnx-fixture-test-map drgnx-keys--pending-parents))
+    (should-not (gethash "C-c C-M-y" drgnx-keys--yours))
+    (should (equal mine (drgnx-test-modules--map-leaves drgnx-keys-user-map)))
+    (should-not (assoc (vconcat (kbd "C-c C-M-y")) mine))
+    (should (equal pending drgnx-keys--pending-parents))))
 
 (ert-deftest drgnx-test-modules/a-teardown-problem-is-kept-when-the-body-signals ()
   (ert-with-temp-directory dir

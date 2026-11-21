@@ -1,0 +1,10 @@
+{"scenario": "recording/record-and-replay-refused-together", "requires": ["v1"], "doc": "Pattern B (gates on the hub's exit). DRGNX_RECORD and DRGNX_REPLAY at once: the hub refuses to start (exit 1), says why in its log, and makes no recording; a replay of a directory that is no recording is refused the same way."}
+{"do": "root"}
+{"do": "start", "hub": "both", "env": {"DRGNX_RECORD": "$ROOT/rec", "DRGNX_REPLAY": "$ROOT/rec"}, "wait": false}
+{"do": "expect_exit", "hub": "both", "code": 1}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "DRGNX_RECORD and DRGNX_REPLAY cannot both be set"}
+{"do": "file", "path": "$ROOT/rec/manifest.json", "exists": false}
+{"do": "write_file", "path": "$ROOT/other/manifest.json", "json": {"format": "drgnx-recording", "version": 99}}
+{"do": "start", "hub": "newer", "env": {"DRGNX_REPLAY": "$ROOT/other"}, "wait": false}
+{"do": "expect_exit", "hub": "newer", "code": 1}
+{"do": "file", "path": "$STATE/hub/log/hub-*.jsonl", "contains": "is newer than this drgnx reads"}

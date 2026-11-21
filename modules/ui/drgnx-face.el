@@ -12,8 +12,10 @@
 ;;; Code:
 (require 'seq)
 (require 'subr-x)
+(require 'hl-line)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
 (require 'drgnx-face-state)
 (require 'drgnx-ui-kit)                     ; the glyph table and `drgnx-face-glyph' live in core
 (require 'drgnx-frame-kind)
@@ -24,7 +26,7 @@
 (defvar display-line-numbers-grow-only)
 (declare-function window-divider-mode "frame")
 ;; the parts of the module, beside this file: set up by its setup, turned off by its teardown
-(dolist (part (quote (drgnx-close drgnx-statusbar drgnx-quickhelp drgnx-topline drgnx-start)))
+(dolist (part (quote (drgnx-close drgnx-statusbar drgnx-quickhelp drgnx-menubar drgnx-menu-look drgnx-topline drgnx-inbox drgnx-start)))
   (unless (featurep part)
     (load (expand-file-name (symbol-name part) (file-name-directory (or load-file-name buffer-file-name))) nil t)))
 (defvar drgnx-topline--active)
@@ -32,7 +34,15 @@
 (declare-function drgnx-statusbar-setup "drgnx-statusbar")
 (declare-function drgnx-quickhelp-setup "drgnx-quickhelp")
 (declare-function drgnx-quickhelp-off "drgnx-quickhelp")
+(declare-function drgnx-menubar-setup "drgnx-menubar")
+(declare-function drgnx-menubar-off "drgnx-menubar")
+(declare-function drgnx-menubar-open "drgnx-menubar")
+(declare-function drgnx-menubar-pick "drgnx-menubar")
+(defvar drgnx-menubar-mode)
 (declare-function drgnx-topline-setup "drgnx-topline")
+(declare-function drgnx-inbox-setup "drgnx-inbox")
+(declare-function drgnx-menu-look-setup "drgnx-menu-look")
+(declare-function drgnx-inbox-off "drgnx-inbox")
 (declare-function drgnx-topline--off "drgnx-topline")
 (declare-function drgnx-start-setup "drgnx-start")
 (declare-function drgnx-start-teardown "drgnx-start")
@@ -49,6 +59,21 @@
 
 (defvar-local drgnx-face--numbers-p nil
   "Non-nil in a buffer where this module turned line numbers on (so it can turn them off again).")
+
+(defconst drgnx-face--numbers-gap
+  (propertize " " 'display '(when (display-graphic-p) space :width 0.8) 'invisible t)
+  "The room between the line numbers and the code beyond the numbers' trailing space (`line-prefix').")
+
+(defconst drgnx-face--numbers-gap-current (propertize drgnx-face--numbers-gap 'face 'hl-line)
+  "The gap on the current line: in its colour, so the line's band does not break between the numbers and the code.")
+
+(defun drgnx-face--current-line-gap ()
+  "Give the current line's overlay (`hl-line-overlay', made again when the buffer is selected again) the gap in the
+current line's colour: a line prefix a buffer variable gives takes no overlay's face.  On `post-command-hook' after
+hl-line's own."
+  (when (and (overlayp hl-line-overlay) (not (overlay-get hl-line-overlay 'line-prefix)))
+    (overlay-put hl-line-overlay 'line-prefix drgnx-face--numbers-gap-current)
+    (overlay-put hl-line-overlay 'wrap-prefix drgnx-face--numbers-gap-current)))
 
 ;;;; Settings
 
@@ -73,14 +98,14 @@ module is turned off.  Made by the setup.")
     ('drgnx-face-line-numbers-modes (drgnx-face--apply-line-numbers))
     ('drgnx-face-inline-problems (drgnx-face--apply-inline-problems))
     ('drgnx-face-line-spacing (drgnx-face--apply-line-spacing))
-    ('drgnx-face-line-wrap (drgnx-face--apply-line-wrap))
     ('drgnx-face-frame-title (drgnx-face--apply-frame-title))
     ((or 'drgnx-face-title-bar 'drgnx-face-gtk-theme) (drgnx-face--apply-title-all))))
 
 (defcustom drgnx-face-menu-bar nil
   "Non-nil: show Emacs's menu bar (hidden, the commands are in the palette,
 and F10 opens the menu as text in the minibuffer).
-Toggle for this session with the command Toggle Menu Bar."
+Toggle for this session with the command Toggle Emacs's Menu Bar.  drgnx's own menus are in the title row
+(`drgnx-menubar-visibility', drgnx-menubar.el); while this bar shows, the title row leaves them out."
   :type 'boolean :set #'drgnx-face--set :group 'drgnx-face)
 
 (defcustom drgnx-face-scroll-bars 'none
@@ -109,26 +134,23 @@ Toggle for this session with the command Toggle Menu Bar."
   "Extra pixels between lines (nil: the default).  A number such as 2 or 3 is calmer for reading code."
   :type '(choice (const :tag "Default" nil) (natnum :tag "Pixels"))
   :set #'drgnx-face--set :group 'drgnx-face)
-
-(defcustom drgnx-face-line-wrap 'word
-  "What a line longer than its window does: `word' (continue on the next row, breaking at a space, never in the middle
-of a word; narrow windows too), `truncate' (one row, the rest is off the edge) or nil (leave Emacs's own setting).
-The command Toggle Word Wrap flips it for one buffer.  Buffers that set their own (the Explorer, tables) keep it."
-  :type '(choice (const :tag "Word wrap" word) (const :tag "Truncate" truncate) (const :tag "Emacs's own" nil))
-  :set #'drgnx-face--set :group 'drgnx-face)
+(make-obsolete-variable 'drgnx-face-line-spacing
+                        "the code font role's :line-height (`drgnx-look-font-code') or `drgnx-look-density'" "6")
 
 (defcustom drgnx-face-frame-title t
   "Non-nil: a frame's title is `FILE — PROJECT — drgnx' (the buffer's name when it has no file;
 with no project: `FILE — drgnx').  A `frame-title-format' of your own is left alone."
   :type 'boolean :set #'drgnx-face--set :group 'drgnx-face)
 
-(defcustom drgnx-face-title-bar 'dark
-  "The window's title bar (graphical frames): `dark' (the system's own title bar in its dark variant while the theme
-is dark, light while it is light), `system' (leave it as the desktop has it), or `drgnx' (drgnx draws it in the top
-line; only under a window manager known to be a stacking one, never under a tiling one or one drgnx does not know).
-GTK reads its theme variant once, at launch: on GTK without X11 (Wayland), a change here shows after a restart of
-drgnx (`systemctl --user restart drgnx'); on X11 and on a Mac it applies at once."
-  :type '(choice (const :tag "System title bar, dark variant" dark) (const :tag "System title bar, untouched" system)
+(defcustom drgnx-face-title-bar 'auto
+  "The window's title bar (graphical frames): `auto' (what `drgnx-face-title-bar-default' answers for the frame:
+`drgnx' under GNOME's window manager on Nidhogg's shell, else `dark'), `dark' (the system's own title bar in its dark
+variant while the theme is dark, light while it is light), `system' (leave it as the desktop has it), or `drgnx'
+\(drgnx draws it in the top line; only under a window manager known to be a stacking one, never under a tiling one or
+one drgnx does not know).  GTK reads its theme variant once, at launch: on GTK without X11 (Wayland), a change here
+shows after a restart of drgnx (`systemctl --user restart drgnx'); on X11 and on a Mac it applies at once."
+  :type '(choice (const :tag "Drawn by drgnx where the desktop suits it, else dark" auto)
+                 (const :tag "System title bar, dark variant" dark) (const :tag "System title bar, untouched" system)
                  (const :tag "Drawn by drgnx" drgnx))
   :set #'drgnx-face--set :group 'drgnx-face)
 
@@ -211,6 +233,30 @@ go back when the module is turned off (`drgnx-module-set', `drgnx-module-face-sp
 draws the title bar.  Tiling ones (sway, i3, Hyprland, niri) have none to replace, and `nil', `none', `tty', `x11',
 `other-wayland' or any name not listed are not known: the title bar stays the system's.")
 
+(declare-function nhwl-toplevel-chrome-p "nhwl-win" (&optional frame))
+(declare-function drgnx-look-chrome-current "drgnx-look" (&optional frame))
+
+(defun drgnx-face-title-bar-default (&optional frame)
+  "The value `drgnx-face-title-bar' `auto' stands for on FRAME (default: the selected one): `drgnx' under GNOME's
+window manager when Nidhogg's shell can keep an undecorated frame's resize margins, rounded corners and shadow
+\(`nhwl-toplevel-chrome-p', absent from other Emacs builds), else `dark'.  Never under a tiling window manager."
+  (if (and (fboundp 'nhwl-toplevel-chrome-p) (nhwl-toplevel-chrome-p frame)
+           (fboundp 'drgnx-platform-wm) (eq (drgnx-platform-wm frame) 'gnome))
+      'drgnx
+    'dark))
+
+(defun drgnx-face--title-bar (frame)
+  "`drgnx-face-title-bar' for FRAME, `auto' resolved (`drgnx-face-title-bar-default')."
+  (if (eq drgnx-face-title-bar 'auto) (drgnx-face-title-bar-default frame) drgnx-face-title-bar))
+
+(defun drgnx-face--toplevel-chrome (frame)
+  "The `toplevel-chrome' of FRAME when drgnx draws its title bar on Nidhogg's shell: corners of radius 12 and the
+popups' shadow of the variant (`drgnx-look-chrome-current'; high contrast has none).  nil on other builds."
+  (when (and (fboundp 'nhwl-toplevel-chrome-p) (nhwl-toplevel-chrome-p frame))
+    `((corner-radius . 12)
+      ,@(when-let* (((fboundp 'drgnx-look-chrome-current)) (shadow (alist-get 'shadow (drgnx-look-chrome-current frame))))
+          `((shadow . ,shadow))))))
+
 (defvar drgnx-face--wm-noted nil
   "Non-nil once the message that the window manager is unknown (so no drawn title bar) has been shown.")
 
@@ -222,15 +268,16 @@ draws the title bar.  Tiling ones (sway, i3, Hyprland, niri) have none to replac
   "The title bar's GTK or macOS variant for FRAME (default: the selected one): `dark' or `light' as the frame's
 background is, or nil when `drgnx-face-title-bar' is `system' (the desktop's own choice) or the background is unknown.
 `drgnx' uses the same variant: it is the title bar when drgnx does not draw it."
-  (when (memq drgnx-face-title-bar '(dark drgnx))
-    (let ((mode (frame-parameter (or frame (selected-frame)) 'background-mode)))
-      (and (memq mode '(dark light)) mode))))
+  (let ((frame (or frame (selected-frame))))
+    (when (memq (drgnx-face--title-bar frame) '(dark drgnx))
+      (let ((mode (frame-parameter frame 'background-mode)))
+        (and (memq mode '(dark light)) mode)))))
 
 (defun drgnx-face--drawn-wanted-p (frame)
-  "Non-nil when FRAME's title bar is to be drawn by drgnx: the setting is `drgnx', FRAME is graphical and
-`drgnx-platform-wm' names a stacking window manager (`drgnx-face--stacking-wms').  A tiling, unknown or unrecognised
-one, or no `drgnx-platform-wm' at all, says so once and gives nil: the title bar stays the system's, dark."
-  (and (eq drgnx-face-title-bar 'drgnx) (drgnx-face--gui-system frame)
+  "Non-nil when FRAME's title bar is to be drawn by drgnx: the setting is `drgnx' (or `auto' resolves to it), FRAME is
+graphical and `drgnx-platform-wm' names a stacking window manager (`drgnx-face--stacking-wms').  A tiling, unknown or
+unrecognised one, or no `drgnx-platform-wm' at all, says so once and gives nil: the title bar stays the system's, dark."
+  (and (drgnx-face--gui-system frame) (eq (drgnx-face--title-bar frame) 'drgnx)
        (or (and (fboundp 'drgnx-platform-wm) (memq (drgnx-platform-wm frame) drgnx-face--stacking-wms) t)
            (progn
              (unless drgnx-face--wm-noted
@@ -271,7 +318,8 @@ so the top line may ask on every redisplay."
   "FRAME's title bar as `drgnx-face-title-bar' asks, on a graphical frame.
 X11: the window property GTK reads.  macOS: `ns-appearance'.  GTK without X11 (pgtk): nothing now, GTK reads
 GTK_THEME once, when drgnx starts (bin/drgnx and the systemd unit set it from face.eld).  A drawn title bar makes
-the frame undecorated."
+the frame undecorated, and on Nidhogg's shell gives it `toplevel-chrome' (`drgnx-face--toplevel-chrome'), taken back
+with the drawn bar."
   (when-let* ((system (drgnx-face--gui-system frame)))
     (let ((variant (drgnx-face-title-variant frame)) (drawn (drgnx-face--drawn-wanted-p frame)))
       (pcase system
@@ -279,14 +327,15 @@ the frame undecorated."
         ('ns (drgnx-face--ns-variant frame variant)))
       (when (or drawn (gethash frame drgnx-face--drawn))
         (if drawn (puthash frame t drgnx-face--drawn) (remhash frame drgnx-face--drawn))
-        (modify-frame-parameters frame `((undecorated . ,drawn)))))))
+        (modify-frame-parameters frame `((undecorated . ,drawn)
+                                         (toplevel-chrome . ,(and drawn (drgnx-face--toplevel-chrome frame)))))))))
 
 (defun drgnx-face--sync-state ()
   "Keep `:variant' and `:gtk-theme' in face.eld as the launchers need them (bin/drgnx, the systemd unit), written only
 when they changed.  The variant is that of a graphical frame; with none, or a background not known, nothing is written."
   (when-let* ((frame (seq-find (lambda (f) (and (not (eq (drgnx-state-frame-kind f) 'child)) (drgnx-face--gui-system f))) (frame-list))))
     (let ((variant (drgnx-face-title-variant frame)) (state (drgnx-face-state-read)))
-      (when (or variant (eq drgnx-face-title-bar 'system))
+      (when (or variant (eq (drgnx-face--title-bar frame) 'system))
         (unless (and (eq (plist-get state :variant) variant) (equal (plist-get state :gtk-theme) drgnx-face-gtk-theme))
           ;; an automatic path: no wait for the lock; when another drgnx holds it, the next theme change writes
           (condition-case err
@@ -322,7 +371,12 @@ On `after-change-major-mode-hook'."
     (setq-local display-line-numbers-width-start t
                 display-line-numbers-grow-only t
                 drgnx-face--numbers-p t)
+    ;; window-dark.html `.ln .n': 18 px from the numbers to the code, the number's own trailing space and 0.8 columns
+    ;; more on a graphical frame; continuation lines line up with it.  A terminal keeps the one space (invisible)
+    (setq-local line-prefix drgnx-face--numbers-gap wrap-prefix drgnx-face--numbers-gap)
+    (add-hook 'post-command-hook #'drgnx-face--current-line-gap 90 t)
     (display-line-numbers-mode 1)))
+
 
 (defun drgnx-face--apply-line-numbers ()
   "The modes setting on every open buffer: numbers on where wanted, off where this module put them and they no longer are."
@@ -331,7 +385,59 @@ On `after-change-major-mode-hook'."
       (cond ((drgnx-face--numbers-wanted-p) (drgnx-face-line-numbers-maybe))
             (drgnx-face--numbers-p
              (setq drgnx-face--numbers-p nil)
+             (drgnx-face--numbers-gap-off)
              (display-line-numbers-mode -1))))))
+
+(defun drgnx-face--numbers-gap-off ()
+  "Take the gap between the numbers and the code out of the current buffer."
+  (kill-local-variable 'line-prefix)
+  (kill-local-variable 'wrap-prefix)
+  (remove-hook 'post-command-hook #'drgnx-face--current-line-gap t)
+  (when (overlayp hl-line-overlay)
+    (overlay-put hl-line-overlay 'line-prefix nil)
+    (overlay-put hl-line-overlay 'wrap-prefix nil)))
+
+;;;; The editor: cursor, current line, inlay hints
+
+(defconst drgnx-face-editor-cursor '(bar . 2) "The cursor of a code buffer: a bar two pixels wide.")
+
+(defvar-local drgnx-face--editor-p nil "Non-nil in a buffer this module gave the editor's cursor and current line.")
+
+(defun drgnx-face-editor-maybe ()
+  "In a code buffer (the buffers that get line numbers): the bar cursor, unless a mode set one (the modal box), and
+the current line across the full width.  On `after-change-major-mode-hook'."
+  (when (and (not drgnx-face--editor-p) (drgnx-face--numbers-wanted-p))
+    (setq drgnx-face--editor-p t)
+    (when (eq cursor-type t) (setq-local cursor-type drgnx-face-editor-cursor))
+    (hl-line-mode 1)))
+
+(defun drgnx-face-editor-clear ()
+  "Give the current buffer its cursor and current line back, when this module set them."
+  (when drgnx-face--editor-p
+    (setq drgnx-face--editor-p nil)
+    (when (equal cursor-type drgnx-face-editor-cursor) (kill-local-variable 'cursor-type))
+    (hl-line-mode -1)))
+
+(defun drgnx-face--apply-editor (fn)
+  "Call FN in every open buffer."
+  (dolist (b (buffer-list)) (with-current-buffer b (funcall fn))))
+
+(defface drgnx-inlay-hint '((t :inherit (drgnx-ui-caption drgnx-text-subtle drgnx-selected-quiet)))
+  "An inlay hint: the caption face and the subtle text on the quiet selection."
+  :group 'drgnx-face)
+
+(defvar drgnx-face--eglot-waiting nil "Non-nil while one after-load hook waits for eglot.")
+
+(defun drgnx-face--apply-inlay-hints ()
+  "Give `eglot-inlay-hint-face' its spec: now when eglot is loaded, else once it loads."
+  (cond ((facep 'eglot-inlay-hint-face)
+         (drgnx-module-face-spec 'eglot-inlay-hint-face '((t :inherit drgnx-inlay-hint))))
+        ((not drgnx-face--eglot-waiting)
+         (setq drgnx-face--eglot-waiting t)
+         (eval-after-load 'eglot
+           (drgnx-modules-with-owner
+             (setq drgnx-face--eglot-waiting nil)
+             (when (facep 'eglot-inlay-hint-face) (drgnx-face--apply-inlay-hints)))))))
 
 (defvar drgnx-face--flymake-waiting nil
   "Non-nil while one after-load hook waits for flymake (so a setting changed often adds only one).")
@@ -351,6 +457,110 @@ On `after-change-major-mode-hook'."
              (setq drgnx-face--flymake-waiting nil)
              (when (drgnx-face--flymake-ready-p) (drgnx-face--apply-inline-problems)))))))
 
+(declare-function flymake-diagnostic-type "flymake")
+(declare-function flymake--severity "flymake")
+(declare-function flymake--lookup-type-property "flymake")
+
+(declare-function flymake-diagnostic-beg "flymake")
+
+(defun drgnx-face--eol-fit (text column width)
+  "TEXT cut, with an ellipsis, to the room a window WIDTH columns wide has after COLUMN (the line's end) and a few
+columns of margin: an end-of-line problem that does not fit would wrap onto a second screen line.  At least 8 columns."
+  (let ((room (max 8 (- width column 4))))
+    (if (<= (string-width text) room) text (truncate-string-to-width text room nil nil "…"))))
+
+;; The fit of an end-of-line problem is the hub's (`history/eol-fit'; hub.md "Editor marks"): Flymake builds the text
+;; synchronously, so the editor asks for the fit of what it has not been answered for (after a short pause, one
+;; question for the buffer's problems) and the format function only reads the answers.  The words go whole until the
+;; answer comes (then the overlays are made again); Lisp cuts them (`drgnx-face--eol-fit') only for a buffer the hub
+;; does not track and while it is down.
+
+(declare-function drgnx-history-tracked-p "drgnx-history")
+(declare-function drgnx-history-ask "drgnx-history")
+(declare-function flymake--update-eol-overlays "flymake")
+
+(defvar-local drgnx-face--eol-fits nil "KEY → the hub's fitted text, KEY the hash of (position text width).")
+(defvar-local drgnx-face--eol-wanted nil "(KEY POS TEXT) of the problems shown whole, waiting to be asked for.")
+(defvar-local drgnx-face--eol-down nil "`float-time' until which the hub counts as down for this buffer (Lisp fits).")
+(defconst drgnx-face--eol-fits-max 2000 "Fitted texts kept per buffer before they are dropped.")
+(defconst drgnx-face--eol-down-for 5 "Seconds a buffer's end-of-line fit stays in Lisp after the hub failed it.")
+
+(defun drgnx-face--eol-width ()
+  "The columns the buffer's window has."
+  (let ((w (get-buffer-window (current-buffer)))) (if w (window-body-width w) 80)))
+
+(defun drgnx-face--eol-render ()
+  "Make the current buffer's end-of-line overlays again (their texts come from `drgnx-face--eol-text')."
+  (when (fboundp 'flymake--update-eol-overlays)
+    (with-demoted-errors "drgnx end-of-line problems: %S" (flymake--update-eol-overlays))))
+
+(defun drgnx-face--eol-hub-down ()
+  "The hub could not fit the current buffer's problems: Lisp fits them for a few seconds."
+  (setq drgnx-face--eol-down (+ (float-time) drgnx-face--eol-down-for) drgnx-face--eol-wanted nil)
+  (drgnx-face--eol-render))
+
+(defun drgnx-face--eol-answered (buffer tick result error)
+  "The hub's RESULT (or ERROR) for the question about BUFFER asked at modification TICK."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (cond ((or error (not (plist-get result :tracked))) (drgnx-face--eol-hub-down))
+            ;; typed since: the answer is for older positions; the problems are shown again and ask again
+            ((/= tick (buffer-chars-modified-tick)) (drgnx-face--eol-render))
+            (t (unless drgnx-face--eol-fits (setq drgnx-face--eol-fits (make-hash-table :test #'eql)))
+               (when (> (hash-table-count drgnx-face--eol-fits) drgnx-face--eol-fits-max) (clrhash drgnx-face--eol-fits))
+               (dolist (i (append (plist-get result :items) nil))
+                 (puthash (plist-get i :key) (plist-get i :text) drgnx-face--eol-fits))
+               (drgnx-face--eol-render))))))
+
+(defun drgnx-face--eol-ask (buffer)
+  "Ask the hub to fit the problems of BUFFER shown whole (one question)."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when-let* ((wanted (reverse (delete-dups (prog1 drgnx-face--eol-wanted (setq drgnx-face--eol-wanted nil))))))
+        (let ((tick (buffer-chars-modified-tick)))
+          (unless (condition-case nil
+                      (drgnx-history-ask
+                       buffer "history/eol-fit" (lambda (result error) (drgnx-face--eol-answered buffer tick result error))
+                       (list :width (drgnx-face--eol-width) :tab_width tab-width
+                             :items (vconcat (mapcar (lambda (w) (list :key (nth 0 w) :pos (nth 1 w) :text (nth 2 w)))
+                                                     wanted))))
+                    (error nil))
+            (drgnx-face--eol-hub-down)))))))
+
+(defun drgnx-face--eol-text (diag text)
+  "TEXT of DIAG cut to the room after its line's end: the hub's fit when it has answered; whole while it is asked for
+\(a buffer the hub tracks); Lisp's cut otherwise."
+  (let* ((beg (flymake-diagnostic-beg diag)) (width (drgnx-face--eol-width))
+         (key (sxhash-equal (list beg text width))))
+    (cond ((and drgnx-face--eol-fits (gethash key drgnx-face--eol-fits)))
+          ((and (fboundp 'drgnx-history-tracked-p) (drgnx-history-tracked-p)
+                (not (and drgnx-face--eol-down (< (float-time) drgnx-face--eol-down))))
+           (push (list key beg text) drgnx-face--eol-wanted)
+           (drgnx-timer-debounce (cons 'eol-fit (current-buffer)) 0.05 #'drgnx-face--eol-ask
+                                 :args (list (current-buffer)) :owner (current-buffer))
+           text)
+          (t (drgnx-face--eol-fit text (save-excursion (goto-char beg) (end-of-line) (current-column)) width)))))
+
+(defun drgnx-face--eol-icon (format diag destination face-prop)
+  "Flymake's text for DIAG at DESTINATION by FORMAT, its own function: at a line's end (`:eol', Flymake 1.4's
+`:inline-…') a chip as window-dark.html's `.diag', opening with its kind's icon (`circle-x' for an error,
+`triangle-alert' for a warning, `info' for a note) in the chip's face, then a space; elsewhere as Flymake makes it.
+The icon is its glyph (`drgnx-face-glyph'), text: Flymake puts this text in an overlay's `display' string, whose own
+display specs (an image, a pixel space) Emacs does not draw."
+  (let ((text (funcall format diag destination face-prop)))
+    (if (not (and face-prop (memq destination '(:eol :inline-eol :inline-short :inline-fancy))))
+        text
+      (let* ((type (flymake-diagnostic-type diag))
+             (severity (flymake--severity type))
+             (face (flymake--lookup-type-property type face-prop 'flymake-error)))
+        (setq text (drgnx-face--eol-text diag text))
+        (concat (propertize (drgnx-face-glyph (cond ((>= severity (flymake--severity :error)) 'circle-x)
+                                                    ((>= severity (flymake--severity :warning)) 'triangle-alert)
+                                                    (t 'info)))
+                            'face face)
+                (propertize " " 'face face)
+                text)))))
+
 (defvar drgnx-face--line-spacing-saved nil
   "(VALUE) the default `line-spacing' this module replaced, to give back when the setting returns to nil.")
 
@@ -364,47 +574,37 @@ On `after-change-major-mode-hook'."
          (setq-default line-spacing (car drgnx-face--line-spacing-saved))
          (setq drgnx-face--line-spacing-saved nil))))
 
-;;;; Line wrap
-
-(defvar drgnx-face--wrap-saved nil
-  "(WORD-WRAP TRUNCATE-LINES TRUNCATE-PARTIAL-WIDTH-WINDOWS) the defaults this module replaced, to give back.")
-
-(defun drgnx-face--apply-line-wrap ()
-  "The setting into the default values of `word-wrap', `truncate-lines' and `truncate-partial-width-windows': one
-policy for every window, narrow ones included (Emacs cuts below 50 columns, and wraps in the middle of a word above).
-nil gives back what it replaced."
-  (when (and drgnx-face-line-wrap (not drgnx-face--wrap-saved))
-    (setq drgnx-face--wrap-saved (list (default-value 'word-wrap) (default-value 'truncate-lines)
-                                       (default-value 'truncate-partial-width-windows))))
-  (pcase drgnx-face-line-wrap
-    ('word (setq-default word-wrap t truncate-lines nil truncate-partial-width-windows nil))
-    ('truncate (setq-default truncate-lines t truncate-partial-width-windows nil))
-    (_ (when drgnx-face--wrap-saved
-         (setq-default word-wrap (nth 0 drgnx-face--wrap-saved) truncate-lines (nth 1 drgnx-face--wrap-saved)
-                       truncate-partial-width-windows (nth 2 drgnx-face--wrap-saved))
-         (setq drgnx-face--wrap-saved nil)))))
-
-(defun drgnx-face-toggle-wrap ()
-  "Wrap long lines at a word or cut them at the window's edge, in this buffer only."
-  (interactive)
-  (setq-local truncate-lines (not truncate-lines))
-  (unless truncate-lines (setq-local word-wrap t))
-  (force-mode-line-update)
-  (message "Word wrap %s" (if truncate-lines "off" "on")))
-
 ;;;; The frame's title
+
+(defvar drgnx-face--title-last (make-vector 7 nil)
+  "[BUFFER FILE-NAME BUFFER-NAME FOLDER ROOT-CACHE MODE TITLE]: the title made last and what it was made from
+\(compared with `eq'): a redisplay of the same buffer, file, name, folder, project cache and major mode gives back
+TITLE.  One entry: it keeps at most one buffer that may since have been killed.")
 
 (defun drgnx-face-frame-title ()
   "`FILE — PROJECT — drgnx' for the selected window's buffer: the file's name (else the buffer's), the project from the
-breadcrumb's cache (no lookup: this runs in redisplay), then the framework's name.  The start page is just `drgnx'."
-  (let* ((b (current-buffer))
-         (name (cond ((derived-mode-p 'drgnx-start-mode) nil)
-                     (buffer-file-name (file-name-nondirectory buffer-file-name))
-                     (t (string-trim (buffer-name b)))))
-         (cache (and (boundp 'drgnx-chrome--root) drgnx-chrome--root))
-         (project (and name (consp cache) (stringp (cdr cache)) (equal (car cache) default-directory)
-                       (file-name-nondirectory (directory-file-name (cdr cache))))))
-    (string-join (delq nil (list (and name (not (string-empty-p name)) name) project "drgnx")) " — ")))
+breadcrumb's cache (no lookup: this runs in redisplay), then the framework's name.  The start page is just `drgnx'.
+It runs on every redisplay: when nothing it reads changed, the title made last comes back and nothing is allocated."
+  (let ((b (current-buffer)) (cache (and (boundp 'drgnx-chrome--root) drgnx-chrome--root))
+        (last drgnx-face--title-last))
+    (if (and (eq (aref last 0) b) (eq (aref last 1) buffer-file-name) (eq (aref last 2) (buffer-name b))
+             (eq (aref last 3) default-directory) (eq (aref last 4) cache) (eq (aref last 5) major-mode)
+             (aref last 6))
+        (aref last 6)
+      (let* ((name (cond ((derived-mode-p 'drgnx-start-mode) nil)
+                         (buffer-file-name (file-name-nondirectory buffer-file-name))
+                         ;; a buffer that is no file reads in words, as its tab does (`*drgnx work: drgnx*' is
+                         ;; `work: drgnx'), not by its buffer name
+                         ((fboundp 'drgnx-chrome-title-of-name) (drgnx-chrome-title-of-name (string-trim (buffer-name b))))
+                         (t (string-trim (buffer-name b)))))
+             (project (and name (consp cache) (stringp (cdr cache)) (equal (car cache) default-directory)
+                           (let ((p (file-name-nondirectory (directory-file-name (cdr cache)))))
+                             ;; not again when the name already says it
+                             (and (not (string-match-p (regexp-quote p) name)) p))))
+             (title (string-join (delq nil (list (and name (not (string-empty-p name)) name) project "drgnx")) " — ")))
+        (aset last 0 b) (aset last 1 buffer-file-name) (aset last 2 (buffer-name b))
+        (aset last 3 default-directory) (aset last 4 cache) (aset last 5 major-mode) (aset last 6 title)
+        title))))
 
 (defconst drgnx-face--frame-title-construct '(:eval (drgnx-face-frame-title)) "Our value of `frame-title-format'.")
 
@@ -433,12 +633,13 @@ when it is off and ours is there.  A format of your own stays."
   (message "Menu bar %s" (if drgnx-face-menu-bar "shown" "hidden")))
 
 (defun drgnx-face-menu ()
-  "Open the menu: Emacs's menu bar when it is shown, else the same menu as text in the minibuffer (`tmm-menubar').
+  "Open the menu: Emacs's menu bar when it is shown, else drgnx's menu list under the title row's ☰ (the menu bar,
+drgnx-menubar.el), else the menu as text in the minibuffer (`tmm-menubar').
 F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden, and can freeze the window."
   (interactive)
-  (if (zerop (or (frame-parameter nil 'menu-bar-lines) 0))
-      (tmm-menubar)
-    (call-interactively #'menu-bar-open)))
+  (cond ((not (zerop (or (frame-parameter nil 'menu-bar-lines) 0))) (call-interactively #'menu-bar-open))
+        ((bound-and-true-p drgnx-menubar-mode) (drgnx-menubar-pick))   ; the menu button's list in the title row
+        (t (tmm-menubar))))
 
 (defun drgnx-face-preferences ()
   "Open Customize on the `drgnx-face' group: every setting of how drgnx looks, applied live."
@@ -446,26 +647,29 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (customize-group 'drgnx-face))
 
 (defun drgnx-face--setup ()
-  (drgnx-command-define 'face-toggle-menu-bar :category "View" :title "Toggle Menu Bar" :menu '("View")
+  (drgnx-command-define 'face-toggle-menu-bar :category "View" :title "Toggle Emacs's Menu Bar" :menu '("View")
                         :command #'drgnx-face-toggle-menu-bar
                         :doc "Show or hide Emacs's menu bar for this session (hidden, F10 opens the menu as text)")
-  (drgnx-command-define 'face-toggle-wrap :category "View" :title "Toggle Word Wrap" :menu '("View")
-                        :command #'drgnx-face-toggle-wrap
-                        :doc "Wrap long lines at a word, or cut them at the window's edge, in this buffer")
   (drgnx-command-define 'face-menu :category "View" :title "Open the Menu" :command #'drgnx-face-menu
                         :doc "Open the menu: the menu bar when it is shown, else the same menu as text in the minibuffer (F10)")
   (drgnx-command-define 'face-preferences :category "Preferences" :title "Look and Layout Settings…" :menu '("Options")
                         :command #'drgnx-face-preferences
                         :doc "How drgnx looks: the frame, status bar, top line, quick help, start page (Customize)")
   (drgnx-module-define-key 'global-map [remap menu-bar-open] #'drgnx-face-menu)   ; F10: the menu as text while the bar is hidden
+  ;; window-dark.html `.diag': a problem at a line's end opens with its icon
+  (advice-add 'flymake--format-diagnostic :around #'drgnx-face--eol-icon)
   (drgnx-close-setup)                   ; Esc and q close panes (drgnx-close.el)
   (drgnx-statusbar-setup)               ; the status bar (drgnx-statusbar.el)
   (drgnx-quickhelp-setup)               ; quick help (drgnx-quickhelp.el)
+  (drgnx-menubar-setup)                 ; the menu bar (drgnx-menubar.el)
+  (drgnx-menu-look-setup)               ; Nidhogg's menus in the look (drgnx-menu-look.el)
   (drgnx-topline-setup)                 ; the top line (drgnx-topline.el)
+  (drgnx-inbox-setup)                   ; the needs-you inbox (drgnx-inbox.el)
   (drgnx-start-setup)                   ; the start page (drgnx-start.el)
   (add-hook 'after-make-frame-functions #'drgnx-face-apply-frame)
   (add-hook 'enable-theme-functions #'drgnx-face--on-theme)
   (add-hook 'after-change-major-mode-hook #'drgnx-face-line-numbers-maybe)
+  (add-hook 'after-change-major-mode-hook #'drgnx-face-editor-maybe)
   ;; first on the stack, so last to run: the open frames go back once `default-frame-alist' has
   (let ((had (drgnx-face--frames-then)))
     (drgnx-modules-push-undo "ui/face open frames" (lambda () (drgnx-face--restore-frames had))))
@@ -475,32 +679,37 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (drgnx-face--sync-state)
   (drgnx-face--apply-dividers)
   (drgnx-face--apply-line-numbers)
+  (drgnx-face--apply-editor #'drgnx-face-editor-maybe)
+  (drgnx-face--apply-inlay-hints)
   (drgnx-face--apply-inline-problems)
   (drgnx-face--apply-line-spacing)
-  (drgnx-face--apply-line-wrap)
   (drgnx-face--apply-frame-title))
 
 (defun drgnx-face--teardown ()
   "ui/face's `:teardown': what its cleanup stack cannot see — the parts' own state (the top line's tab bar and
 frame parameters, quick help's card, the start page's hooks), the title bar of the open frames, line numbers in the
-open buffers, and the defaults it keeps a saved value of (line spacing, line wrap, the frame title).  The stack then
+open buffers, and the defaults it keeps a saved value of (line spacing, the frame title).  The stack then
 puts back its options, `default-frame-alist' keys, face specs, the F10 remap, hooks and modes, the open frames' menu
 bar and scroll bars, and the status bar's segments and commands.  Idempotent."
   (setq drgnx-face--active nil drgnx-face--as-module nil drgnx-face--flymake-waiting nil
-        drgnx-topline--active nil)
+        drgnx-face--eglot-waiting nil drgnx-topline--active nil)
+  (drgnx-face--apply-editor #'drgnx-face-editor-clear)
   (drgnx-topline--off)
+  (drgnx-inbox-off)
+  (drgnx-menubar-off)
   (drgnx-quickhelp-off)
   (drgnx-start-teardown)
   (let ((drgnx-face-title-bar 'system))  ; the system's title bar: GTK variant, appearance and decorations taken back
     (dolist (f (frame-list)) (unless (eq (drgnx-state-frame-kind f) 'child) (drgnx-face--apply-title f))))
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-face--numbers-p b)
-      (with-current-buffer b (setq drgnx-face--numbers-p nil) (display-line-numbers-mode -1))))
-  (let ((drgnx-face-dividers nil) (drgnx-face-line-spacing nil) (drgnx-face-line-wrap nil)
-        (drgnx-face-frame-title nil))
+      (with-current-buffer b
+        (setq drgnx-face--numbers-p nil)
+        (drgnx-face--numbers-gap-off)
+        (display-line-numbers-mode -1))))
+  (let ((drgnx-face-dividers nil) (drgnx-face-line-spacing nil) (drgnx-face-frame-title nil))
     (drgnx-face--apply-dividers)         ; the mode off, if the module turned it on
     (drgnx-face--apply-line-spacing)
-    (drgnx-face--apply-line-wrap)
     (drgnx-face--apply-frame-title))
   (force-mode-line-update t))
 
@@ -514,9 +723,8 @@ bar and scroll bars, and the status bar's segments and commands.  Idempotent."
                                  (drgnx-face-line-numbers-modes . "modes whose files show line numbers")
                                  (drgnx-face-inline-problems . "nil, short (default) or t: problems at the end of the line")
                                  (drgnx-face-line-spacing . "extra pixels between lines")
-                                 (drgnx-face-line-wrap . "word (default), truncate or nil: what a long line does")
                                  (drgnx-face-frame-title . "the frame's title: FILE — PROJECT — drgnx")
-                                 (drgnx-face-title-bar . "dark (default), system or drgnx: the window's title bar")
+                                 (drgnx-face-title-bar . "auto (default: drawn on GNOME with Nidhogg, else dark), dark, system or drgnx: the window's title bar")
                                  (drgnx-face-gtk-theme . "the GTK theme whose dark variant the title bar uses")
                                  (drgnx-face-glyphs . "the glyphs drgnx draws, each with an ASCII form")
                                  (drgnx-close-input-modes . "modes whose buffers you type into: Esc and q never close their pane")
@@ -524,7 +732,7 @@ bar and scroll bars, and the status bar's segments and commands.  Idempotent."
                                  (drgnx-statusbar-right . "status bar segments on the right, in order")
                                  (drgnx-statusbar-drop-order . "segments dropped first when the window is narrow")
                                  (drgnx-statusbar-compact . "segments the other editor groups show")
-                                 (drgnx-statusbar-place . "editors (default) or frame: where the status bar is")
+                                 (drgnx-statusbar-place . "frame (default: one bar across the window) or editors: where the status bar is")
                                  (drgnx-statusbar-indent-vars . "variables the indentation segment reads")
                                  (drgnx-statusbar-modes . "modes (besides file buffers) that get the status bar")
                                  (drgnx-statusbar-quiet-modes . "modes that get the quiet bar (the start page)")
@@ -533,6 +741,7 @@ bar and scroll bars, and the status bar's segments and commands.  Idempotent."
                                  (drgnx-quickhelp-delay . "seconds the mouse rests before quick help shows")
                                  (drgnx-quickhelp-max-lines . "most lines of docs on the card")
                                  (drgnx-quickhelp-strip-lines . "height of the quick help strip in a terminal")
+                                 (drgnx-menubar-visibility . "classic (default), compact, toggle or hidden: the menus in the title row")
                                  (drgnx-topline . "the top line: project, branch, the keys that open everything")
                                  (drgnx-topline-min-lines . "fewest lines a terminal needs to show the top line")))
 

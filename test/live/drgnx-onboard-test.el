@@ -31,7 +31,7 @@ report (the doctor fails without one); its name."
          (process-environment (cons (concat "DRGNX_UI_STATE=" root "ui") process-environment)))
     (drgnx-live-ob--repo (concat ws "alpha") "- [ ] first thing\n- [ ] second thing\n")
     (drgnx-live-ob--repo (concat ws "beta") nil)
-    (let* ((s (drgnx-ui-start "drgnx" "1400x800" 30)) (sess (drgnx-ui-own-session (plist-get s :name)))
+    (let* ((s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)) (sess (drgnx-ui-own-session (plist-get s :name)))
            (run (format "(drgnx-onboard-run :non-interactive t :options '(:preset ide :roots (%S) :todos t))" ws)))
       (unwind-protect
           (progn

@@ -1,0 +1,19 @@
+{"scenario": "matrix/an-unknown-choice-is-refused", "requires": ["v1", "test-hooks"], "doc": "A browser card settles only with a choice it lists: plan for a session with no plan, a width for a browser card and a made-up id are invalid-params and leave the card open with no grant. The cockpit's deny is read as refuse, the narrowest: the card is settled refuse, its data says refused (the web proxy then asks no more for the session), and no grant is written. What makes it fail: a choice the card never offered that settles it, or a refusal that is not recorded."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "__test_matrix_ask", "params": {"action": "browser", "who": {"role": "chat"}, "session": "s1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"gate": "ask", "card": "$capture:c1"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "cards/settle", "params": {"card": "$c1", "choice": "plan"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "invalid-params"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "cards/settle", "params": {"card": "$c1", "choice": "session/all-private"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "cards/settle", "params": {"card": "$c1", "choice": "forever"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params"}}}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select state from card where id = $c1", "rows": [["open"]]}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from entity where kind = 'grant'", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "cards/settle", "params": {"card": "$c1", "choice": "deny"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"settled": true}}}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select state, choice, json_extract(data, '$.refused') from card where id = $c1", "rows": [["settled", "refuse", 1]]}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from entity where kind = 'grant'", "rows": [[0]]}

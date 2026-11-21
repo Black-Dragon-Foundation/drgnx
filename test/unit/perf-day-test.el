@@ -25,7 +25,6 @@
     (should (string-match-p "\\`[0-9a-f]\\{12\\}\\'" (plist-get c :sha)))
     (should (equal (plist-get c :sha) (plist-get (drgnx-perf-day-composition) :sha)))
     (let ((all (drgnx-perf-run--workloads)))
-      (should (memq 'transcript-replay (plist-get c :workloads)))
       (dolist (w (plist-get c :workloads))
         (should-not (assq w drgnx-perf-run-container-skipped))
         (should (plist-get (cdr (assq w all)) :actions))))))

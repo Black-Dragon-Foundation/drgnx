@@ -16,11 +16,7 @@ use crate::open::{How, checked_rel, raw_open};
 /// one past `cap` means `TooLarge`.
 pub fn read_regular(dir: BorrowedFd<'_>, rel: &Path, cap: u64) -> Result<Vec<u8>, FsError> {
     checked_rel(rel)?;
-    let fd = raw_open(Some(dir), rel, How::Read)?;
-    let st = fstat(&fd)?;
-    if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile {
-        return Err(FsError::NotRegular);
-    }
+    let (fd, st) = open_regular(dir, rel)?;
     let limit = cap.saturating_add(1);
     let hint = u64::try_from(st.st_size).unwrap_or(0).min(cap).min(1 << 20);
     let mut out = Vec::with_capacity(hint as usize + 1);
@@ -44,12 +40,68 @@ pub fn read_regular(dir: BorrowedFd<'_>, rel: &Path, cap: u64) -> Result<Vec<u8>
     Ok(out)
 }
 
+/// Opens `rel` for reading and returns it with its status, a regular file only.
+///
+/// Linux and Android: the file is pinned with `O_PATH` first, which opens nothing (a device node's or a FIFO's open
+/// has side effects, GL-T1-2), its kind is read from that fd, and only a regular file is opened for reading, through
+/// `/proc/self/fd/N` (the same inode, whatever happens to the path meanwhile). Without `/proc` the file is opened
+/// directly and refused after the open, as it is elsewhere.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn open_regular(
+    dir: BorrowedFd<'_>,
+    rel: &Path,
+) -> Result<(std::os::fd::OwnedFd, rustix::fs::Stat), FsError> {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::fd::AsRawFd;
+    let pin = raw_open(Some(dir), rel, How::Pin(crate::Kind::File))?;
+    let st = fstat(&pin)?;
+    if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile {
+        return Err(FsError::NotRegular);
+    }
+    let via = format!("/proc/self/fd/{}", pin.as_raw_fd());
+    let flags = OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::NOCTTY;
+    match rustix::fs::open(&via, flags, Mode::empty()) {
+        Ok(fd) => {
+            // the same file, checked again on the fd that reads
+            let st = fstat(&fd)?;
+            if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile {
+                return Err(FsError::NotRegular);
+            }
+            Ok((fd, st))
+        }
+        Err(Errno::NOENT) => open_regular_direct(dir, rel),
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn open_regular(
+    dir: BorrowedFd<'_>,
+    rel: &Path,
+) -> Result<(std::os::fd::OwnedFd, rustix::fs::Stat), FsError> {
+    open_regular_direct(dir, rel)
+}
+
+fn open_regular_direct(
+    dir: BorrowedFd<'_>,
+    rel: &Path,
+) -> Result<(std::os::fd::OwnedFd, rustix::fs::Stat), FsError> {
+    let fd = raw_open(Some(dir), rel, How::Read)?;
+    let st = fstat(&fd)?;
+    if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile {
+        return Err(FsError::NotRegular);
+    }
+    Ok((fd, st))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use std::os::fd::{AsFd, OwnedFd};
     use std::os::unix::ffi::OsStrExt;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::fs::symlink;
     use std::sync::mpsc;
     use std::time::Duration;
@@ -80,6 +132,40 @@ mod tests {
         assert!(matches!(read, Err(FsError::NotRegular)), "{read:?}");
         assert!(matches!(pin, Err(FsError::NotRegular)), "{pin:?}");
         assert!(matches!(pin_abs, Err(FsError::NotRegular)), "{pin_abs:?}");
+    }
+
+    /// GL-T1-2: refusing a FIFO must not open it. A writer blocked in `open(O_WRONLY)` is released by any reader's
+    /// open, so a read that opened the FIFO before refusing it would let that writer through.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    #[ignore = "timing: a writer blocked in open(2) stays blocked after a refused read"]
+    fn a_refused_fifo_is_never_opened() {
+        let (root, fd) = root();
+        let fifo = root.path().canonicalize().unwrap().join("p");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let (tx, rx) = mpsc::channel();
+        let path = fifo.clone();
+        let writer = std::thread::spawn(move || {
+            let f = fs::OpenOptions::new().write(true).open(&path); // blocks until a reader opens
+            tx.send(f.is_ok()).unwrap();
+        });
+        std::thread::sleep(Duration::from_millis(200)); // the writer is inside open(2)
+        let r = read_regular(fd.as_fd(), Path::new("p"), 16);
+        assert!(matches!(r, Err(FsError::NotRegular)), "{r:?}");
+        assert!(
+            rx.recv_timeout(Duration::from_millis(500)).is_err(),
+            "the refusal opened the FIFO and released its writer"
+        );
+        // let the writer go
+        drop(
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&fifo),
+        );
+        writer.join().unwrap();
     }
 
     #[test]

@@ -33,6 +33,8 @@ command -v cargo >/dev/null 2>&1 || dnf -y -q install cargo rust gcc >/dev/null 
 export CARGO_TARGET_DIR=/tmp/target CARGO_TERM_COLOR=never
 out=$(mktemp)
 sed 's/#.*//' "$rows" | awk 'NF' | while read -r crate target test mode; do
+  # a fleet row needs the fake fleet: test/runners/drills.sh --timing runs it
+  if [ "${mode:-}" = fleet ]; then echo "$crate::$test fleet (drills.sh --timing)"; continue; fi
   args=(test --locked --manifest-path "$root/runtime/Cargo.toml" -p "$crate")
   [ "$crate" = drgnx-ratatoskr ] && args+=(--features drgnx-ratatoskr/test-hooks)
   [ "${mode:-}" = release ] && args+=(--release)
