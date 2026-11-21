@@ -1252,6 +1252,15 @@ fn every_row_of_the_card_fits_the_window_at_scale_1_1_25_and_2() {
                             r.key,
                             r.text
                         );
+                        // and reaches it: a row that stops short leaves the card's ring ending in the middle of the card
+                        if r.key.starts_with("bg:") {
+                            assert!(
+                                w + 2 >= width,
+                                "scale {scale}, window {width} px: {} ends at {w} px: {:?}",
+                                r.key,
+                                r.text
+                            );
+                        }
                     }
                 }
             }

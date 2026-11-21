@@ -74,6 +74,14 @@ fn cut(cx: &Cx, face: Option<&str>, text: &str, px_room: i64) -> String {
     }
 }
 
+/// Fill the row to the window's right edge less PAD_PX (the card's ring ends where the row's text does: a row that stops
+/// short leaves the ring's right edge in the middle of the card).
+fn to_edge(b: &mut RowBuilder, cx: &Cx, pad_px: u32) {
+    if cx.env.width_px > 0 {
+        b.stop(cx.env.width_px.saturating_sub(pad_px));
+    }
+}
+
 /// A kit face's name, none where the component has none (the surface's own).
 fn kit_face(id: kit_gen::CompId, variant: &[&str]) -> Option<&'static str> {
     let f = kit_gen::face(id, variant);
@@ -245,6 +253,7 @@ fn gui(
             json!("background-stop-all"),
         );
     }
+    to_edge(&mut b, cx, p8);
     b.pad(p8, None);
     out.push(b.finish());
 
@@ -266,6 +275,7 @@ fn gui(
             );
             let end = b.pos();
             b.prop(0, end, "drgnx-agent-panel-action", json!("background-more"));
+            to_edge(&mut b, cx, p8);
             b.pad(p8, None);
             out.push(b.finish());
         }
@@ -392,6 +402,7 @@ fn second_row(cx: &Cx, i: &BackgroundItem, selected: bool) -> Row {
             draw_button(&mut b, cx, label, key, action);
         }
     }
+    to_edge(&mut b, cx, p8);
     b.pad(p4, None);
     let span_end = b.pos();
     b.pad(p4, None);
