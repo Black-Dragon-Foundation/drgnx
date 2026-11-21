@@ -154,7 +154,8 @@ is hidden move the markers, not the numbers.  One entry a tab; the markers of th
          (old (alist-get key (gethash frame drgnx-area--kept) nil nil #'equal)))
     (dolist (m (cdr old)) (when (markerp m) (set-marker m nil)))
     (setf (alist-get key (gethash frame drgnx-area--kept) nil nil #'equal)
-          (list (window-buffer window) (copy-marker (window-start window)) (copy-marker (window-point window))))))
+          (let ((b (window-buffer window)))   ; markers in the window's buffer: `copy-marker' of a number is in the current one
+            (list b (set-marker (make-marker) (window-start window) b) (set-marker (make-marker) (window-point window) b))))))
 
 (defun drgnx-area--kept (area tab buffer frame)
   "(START POINT) as numbers where TAB of AREA was left on FRAME showing BUFFER, or nil: the text may have grown above."

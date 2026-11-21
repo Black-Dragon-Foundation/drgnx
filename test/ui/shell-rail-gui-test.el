@@ -17,15 +17,15 @@
 (dolist (d '("core" "wb" "harness" "modules/ui"))
   (add-to-list 'load-path (expand-file-name d drgnx-ui-shell-rail--repo)))
 (require 'drgnx-grid)
-(load (expand-file-name "test/fixtures/grid-fixture" drgnx-ui-shell-rail--repo) nil t)
 (require 'drgnx-frame-shell)   ; after the load path: wb/ is not on it before
 
 (defmacro drgnx-ui-shell-rail--clean (&rest body)
-  "BODY, then the frame's shell, the grid's ids and the tiles' window parameters it made put back (a leak otherwise)."
+  "BODY in a frame of its own, deleted after: the frame's shell, the grid's ids and the tiles' window parameters a
+place sets are left on no frame the other files share (a leak otherwise)."
   (declare (indent 0))
-  `(unwind-protect (progn ,@body)
-     (drgnx-grid-test--reset)
-     (set-frame-parameter nil 'drgnx-shell nil)))
+  `(let ((frame (make-frame)))
+     (unwind-protect (with-selected-frame frame ,@body)
+       (delete-frame frame))))
 
 (declare-function drgnx-rail-places "drgnx-rail" ())
 (declare-function drgnx-rail-changed-p "drgnx-rail" (place &optional frame))
