@@ -148,6 +148,35 @@ impl Workbench {
         }
     }
 
+    /// The left's section I as requested: the left below its region header, shared evenly by the place's sections.
+    fn section_rect(&self, wi: usize, i: u32) -> Option<Rect> {
+        let win = &self.windows[wi];
+        let left = self
+            .region_rects(wi)
+            .into_iter()
+            .find(|x| x.0 == Region::Left)?
+            .1;
+        let place = win.left.place.as_deref()?;
+        let n = self
+            .kinds
+            .places
+            .iter()
+            .find(|p| p.place == place)?
+            .sections
+            .len() as i32;
+        if i as i32 >= n {
+            return None;
+        }
+        let top = left.y + self.defaults.region_header as i32;
+        let each = (left.h - self.defaults.region_header as i32).max(0) / n;
+        Some(Rect {
+            x: left.x,
+            y: top + i as i32 * each,
+            w: left.w,
+            h: each,
+        })
+    }
+
     /// The rectangle chrome and hit tests use, in device px: the reported edge, else the requested one.
     pub fn rect(&self, w: WinId, key: EdgeKey) -> Option<Rect> {
         let wi = self.windows.iter().position(|x| x.id == w)?;
@@ -158,6 +187,7 @@ impl Workbench {
         let r = match key {
             EdgeKey::Region(reg) => self.region_rects(wi).into_iter().find(|x| x.0 == reg)?.1,
             EdgeKey::Group(g) => self.group_rects(wi).into_iter().find(|x| x.0 == g)?.1,
+            EdgeKey::Section(i) => self.section_rect(wi, i)?,
         };
         let d = |v: i32| (v as f32 * s).round() as i32;
         Some(Rect {

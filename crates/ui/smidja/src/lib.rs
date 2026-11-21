@@ -8,6 +8,7 @@
 //! The rules W1–W10 (§4.5) are checked by `rules`, after every intent of random sequences (`sim`).
 
 pub mod abi;
+pub mod chrome;
 pub mod decl;
 pub mod focus;
 pub mod fold;
@@ -23,6 +24,7 @@ pub mod rules;
 pub mod sim;
 pub mod temp;
 
+pub use chrome::{ChromeDesc, ChromeRole, Element, State, TextRole, element_at, element_id};
 pub use decl::{Decl, Defaults, KindTable, PageKind, Place};
 pub use focus::{BottomRef, Dir, FocusTarget, Vis};
 pub use fold::{FOLD_CELLS, FOLD_PX, FoldTable};

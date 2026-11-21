@@ -341,6 +341,8 @@ pub struct Rect {
 pub enum EdgeKey {
     Region(Region),
     Group(GroupId),
+    /// The left place's Nth section window (its header band, §6.1).
+    Section(u32),
 }
 
 #[derive(Clone, Debug, PartialEq)]

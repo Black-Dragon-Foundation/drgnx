@@ -12,6 +12,7 @@
 //!
 //! The `trace` op is the door's trace sink: while on, each call records its op and microseconds (`smidja.call`).
 
+use crate::chrome::ChromeDesc;
 use crate::decl::Decl;
 use crate::focus::{BottomRef, Dir, FocusTarget, Vis};
 use crate::intent::{How, OpenOpts, TabFields, Target};
@@ -134,6 +135,8 @@ struct Door {
     wb: Workbench,
     snapshots: Vec<Snapshot>,
     trace: Option<Vec<(&'static str, u64)>>,
+    /// The chrome the glue last built per OS window (what is on screen): the `chrome` op's answer, the hit tests'.
+    chrome: Vec<ChromeDesc>,
 }
 
 thread_local! {
@@ -141,6 +144,7 @@ thread_local! {
         wb: Workbench::new(),
         snapshots: Vec::new(),
         trace: None,
+        chrome: Vec::new(),
     });
     /// The last answer's tokens and the bytes their strings point into.
     static ANSWER: RefCell<Answer> = const { RefCell::new((Vec::new(), Vec::new())) };
@@ -168,6 +172,27 @@ pub fn op_number(name: &str) -> i32 {
 /// The workbench, for the glue (hit tests and chrome read it without a Lisp call).
 pub fn with_workbench<T>(f: impl FnOnce(&mut Workbench) -> T) -> T {
     DOOR.with(|d| f(&mut d.borrow_mut().wb))
+}
+
+/// How many door calls ran (each one is a Lisp call): chrome's hover, drag and scroll paths never add to it.
+pub fn calls() -> u64 {
+    CALLS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Keep DESC as its window's chrome on screen (the glue, after it built the scene).
+pub fn set_chrome(desc: ChromeDesc) {
+    DOOR.with(|d| {
+        let mut d = d.borrow_mut();
+        d.chrome.retain(|c| c.window != desc.window);
+        d.chrome.push(desc);
+    })
+}
+
+/// F over window W's chrome on screen, if any.
+pub fn with_chrome<T>(w: u64, f: impl FnOnce(Option<&ChromeDesc>) -> T) -> T {
+    DOOR.with(|d| f(d.borrow().chrome.iter().find(|c| c.window == w)))
 }
 
 // ---- reading arguments
@@ -384,7 +409,10 @@ fn edge_key(v: &Val) -> R<EdgeKey> {
     match h.as_str() {
         "region" => Ok(EdgeKey::Region(region(nth(r, 0))?)),
         "group" => Ok(EdgeKey::Group(GroupId(int(nth(r, 0))? as u64))),
-        x => bad(format!("region or group: {x}")),
+        "section" => Ok(EdgeKey::Section(
+            u32::try_from(int(nth(r, 0))?).map_err(|_| Bad::Arg("section index".into()))?,
+        )),
+        x => bad(format!("region, group or section: {x}")),
     }
 }
 
@@ -941,8 +969,26 @@ fn run(door: &mut Door, op: usize, v: &[Val]) -> R<Val> {
         "realisation" => realisation_val(wb, WinId(a.id()?)),
         // Task 17 fills the chrome description; until then a window has none
         "chrome" => {
-            let _ = a.id()?;
-            Val::Nil
+            let w = a.id()?;
+            match door.chrome.iter().find(|c| c.window == w) {
+                None => Val::Nil,
+                Some(c) => Val::List(
+                    c.elements
+                        .iter()
+                        .map(|e| {
+                            Val::List(vec![
+                                Val::Int(e.id as i64),
+                                Val::Sym(format!("{:?}", e.role)),
+                                Val::Str(e.name.clone()),
+                                Val::Int(e.rect.x.into()),
+                                Val::Int(e.rect.y.into()),
+                                Val::Int(e.rect.w.into()),
+                                Val::Int(e.rect.h.into()),
+                            ])
+                        })
+                        .collect(),
+                ),
+            }
         }
         "query" => {
             let w = WinId(a.id()?);
@@ -982,6 +1028,7 @@ fn run(door: &mut Door, op: usize, v: &[Val]) -> R<Val> {
                 wb: Workbench::new(),
                 snapshots: Vec::new(),
                 trace: door.trace.take(),
+                chrome: Vec::new(),
             };
             Val::Nil
         }
@@ -1060,6 +1107,7 @@ fn run(door: &mut Door, op: usize, v: &[Val]) -> R<Val> {
 pub fn call(op: i32, args: &[Val]) -> R<Val> {
     let op = usize::try_from(op).map_err(|_| Bad::Op)?;
     let name = *OPS.get(op).ok_or(Bad::Op)?;
+    CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     DOOR.with(|d| {
         let mut d = d.borrow_mut();
         let timed = d.trace.is_some().then(Instant::now);
