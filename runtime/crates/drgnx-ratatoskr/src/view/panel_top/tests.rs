@@ -1310,7 +1310,11 @@ fn no_two_stretches_stand_side_by_side_in_the_card() {
     for sel in [None, Some("t1"), Some("c1")] {
         for r in gui_sel(three(), sel)
             .into_iter()
-            .filter(|r| r.key.starts_with("bg:"))
+            // the selected item's rows carry the tint, which splits their pads into two runs: not merged
+            .filter(|r| {
+                r.key.starts_with("bg:")
+                    && sel.is_none_or(|k| !r.key.starts_with(&format!("bg:{k}")))
+            })
         {
             for w in r.spaces.windows(2) {
                 assert!(w[0].0 + 1 < w[1].0, "{}: {:?}", r.key, r.spaces);
