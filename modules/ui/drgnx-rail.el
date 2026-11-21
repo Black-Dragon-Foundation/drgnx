@@ -215,8 +215,9 @@ differ in scale and in the current place."
         (current-buffer)))))
 
 (defun drgnx-rail--gap-line (px)
-  "A line PX device px tall of nothing: a space of that height on a font too small to make the line taller."
-  (concat (propertize " " 'face '(:height 10) 'display `(space :width 0.1 :height (,px)))
+  "A line PX device px tall of nothing: a space of that height on a font too small to make the line taller.  The space
+is a pixel wide, not a tenth of a character: with that width the gap measured 3 px, not PX."
+  (concat (propertize " " 'face '(:height 10) 'display `(space :width (1) :height (,px)))
           (propertize "\n" 'face '(:height 10))))
 
 (defun drgnx-rail--tall (item height frame)
