@@ -67,7 +67,7 @@ impl XdgActivationHandler for State {
 }
 delegate_xdg_activation!(State);
 
-fn slot(kind: SelectionTarget) -> usize {
+pub fn slot(kind: SelectionTarget) -> usize {
     match kind {
         SelectionTarget::Clipboard => 0,
         SelectionTarget::Primary => 1,
@@ -142,6 +142,12 @@ fn finish(state: &State, job: &mut Job, ok: bool) {
         json!({"ok": false})
     };
     write_reply(state, &job.reply, &reply);
+}
+
+/// `selections`: how many selections a client has set so far, `{"ok":true,"clipboard":N,"primary":M}`; a row takes it
+/// before it sets one and waits for a count above it (`wait` `for: selection`).
+pub fn selections(state: &State) -> Value {
+    json!({"ok": true, "clipboard": state.client_selections[0], "primary": state.client_selections[1]})
 }
 
 /// `read`: `{"cmd":"read","kind":…,"type":"MIME"}` asks the client that owns the selection to write it, and replies

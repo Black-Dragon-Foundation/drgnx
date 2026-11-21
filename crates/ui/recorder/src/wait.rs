@@ -5,6 +5,8 @@
 //!   the reply is `{"ok":true,"id":ID}`.
 //! `{"cmd":"wait","for":"input","req":"xdg_toplevel.move","since":SEQ,"timeout_ms":N}`: an input-log entry with that
 //!   `req` and a `seq` of at least `since`; the reply is `{"ok":true,"entry":{…}}`.
+//! `{"cmd":"wait","for":"selection","kind":"clipboard","after":N}`: a client has set more than N selections of that
+//!   kind (N from `selections`, taken before the row sets one); the reply is `{"ok":true,"count":C}`.
 //! `timeout_ms` defaults to 10000.  A wait is checked after every dispatch of the event loop and on each frame tick.
 use crate::control::{err, write_reply};
 use crate::state::State;
@@ -13,8 +15,18 @@ use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
 pub enum Cond {
-    Popup { before: Vec<u64> },
-    Input { req: String, since: u64 },
+    Popup {
+        before: Vec<u64>,
+    },
+    Input {
+        req: String,
+        since: u64,
+    },
+    Selection {
+        slot: usize,
+        kind: String,
+        after: u64,
+    },
 }
 
 impl Cond {
@@ -22,6 +34,9 @@ impl Cond {
         match self {
             Cond::Popup { before } => format!("no popup other than {before:?}"),
             Cond::Input { req, since } => format!("no {req:?} in the input log from seq {since}"),
+            Cond::Selection { kind, after, .. } => {
+                format!("no {kind} selection set by a client after count {after}")
+            }
         }
     }
 }
@@ -56,9 +71,25 @@ pub fn wait(state: &mut State, req: &Value, stream: &UnixStream) -> Option<Value
                 since: req.get("since").and_then(Value::as_u64).unwrap_or(0),
             }
         }
+        Some("selection") => {
+            let (slot, kind) = match req.get("kind").and_then(Value::as_str) {
+                Some("clipboard") => (0, "clipboard"),
+                Some("primary") => (1, "primary"),
+                _ => {
+                    return Some(err(
+                        "wait for selection needs \"kind\" clipboard or primary",
+                    ))
+                }
+            };
+            Cond::Selection {
+                slot,
+                kind: kind.to_string(),
+                after: req.get("after").and_then(Value::as_u64).unwrap_or(0),
+            }
+        }
         other => {
             return Some(err(format!(
-                "wait: unknown \"for\" {other:?} (popup or input)"
+                "wait: unknown \"for\" {other:?} (popup, input or selection)"
             )))
         }
     };
@@ -89,6 +120,10 @@ fn met(state: &mut State, cond: &Cond) -> Option<Value> {
                 (n["role"] == "popup" && !before.contains(&id))
                     .then(|| json!({"ok": true, "id": id}))
             })
+        }
+        Cond::Selection { slot, after, .. } => {
+            let count = state.client_selections[*slot];
+            (count > *after).then(|| json!({"ok": true, "count": count}))
         }
         Cond::Input { req, since } => state
             .input_log

@@ -90,6 +90,58 @@ fn selection_read_returns_client_data() {
     );
 }
 
+#[test]
+fn wait_for_a_selection_answers_once_a_client_sets_one() {
+    let (mut env, device, _surface) = focused("sway");
+    let before = env.rec.control(json!({"cmd": "selections"}));
+    assert_eq!(before["clipboard"], 0, "{before}");
+    // nothing set yet: the wait fails at its deadline, naming what never came
+    let none = env.rec.control(
+        json!({"cmd": "wait", "for": "selection", "kind": "clipboard", "after": 0, "timeout_ms": 100}),
+    );
+    assert_eq!(none["ok"], false, "{none}");
+    assert!(
+        none["error"]
+            .as_str()
+            .unwrap()
+            .contains("clipboard selection"),
+        "{none}"
+    );
+    let path = env.rec.control_path();
+    let asker = std::thread::spawn(move || {
+        send(
+            &path,
+            json!({"cmd": "wait", "for": "selection", "kind": "clipboard", "after": 0, "timeout_ms": 5000}),
+        )
+    });
+    let manager: WlDataDeviceManager = env.bind("wl_data_device_manager", 3);
+    let source = manager.create_data_source(&env.qh, ());
+    source.offer("text/plain".into());
+    device.set_selection(Some(&source), 1);
+    env.roundtrip();
+    let reply = asker.join().unwrap();
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["count"], 1, "{reply}");
+    // a count already above `after` does not wait; one not above it does
+    let again = env.rec.control(
+        json!({"cmd": "wait", "for": "selection", "kind": "clipboard", "after": 0, "timeout_ms": 100}),
+    );
+    assert_eq!(again["ok"], true, "{again}");
+    let newer = env.rec.control(
+        json!({"cmd": "wait", "for": "selection", "kind": "clipboard", "after": 1, "timeout_ms": 100}),
+    );
+    assert_eq!(newer["ok"], false, "{newer}");
+    // the primary selection is counted apart
+    let primary = env.rec.control(
+        json!({"cmd": "wait", "for": "selection", "kind": "primary", "after": 0, "timeout_ms": 100}),
+    );
+    assert_eq!(primary["ok"], false, "{primary}");
+    let bad = env
+        .rec
+        .control(json!({"cmd": "wait", "for": "selection", "kind": "nothing"}));
+    assert_eq!(bad["ok"], false, "{bad}");
+}
+
 /// Dispatch the client until `done` holds (5 s at most).
 fn wait_for(env: &mut Env, done: impl Fn(&Env) -> bool) {
     let end = Instant::now() + Duration::from_secs(5);

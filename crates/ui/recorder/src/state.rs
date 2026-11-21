@@ -147,6 +147,8 @@ pub struct State {
     /// What `offer` set, by clipboard (0) and primary (1); descriptors a silent offer holds open.
     pub offers: [Option<crate::selection::Offer>; 2],
     pub held_fds: Vec<std::os::fd::OwnedFd>,
+    /// How many selections a client has set, by clipboard (0) and primary (1): what `wait` `for: selection` counts.
+    pub client_selections: [u64; 2],
     /// Drag and drop, both ways (dnd.rs), and the touch surface (touch.rs).
     pub dnd: crate::dnd::Dnd,
     pub touch: crate::touch::Touch,
@@ -493,6 +495,7 @@ impl State {
             activation_state,
             offers: [None, None],
             held_fds: Vec::new(),
+            client_selections: [0, 0],
             dnd: Default::default(),
             touch: Default::default(),
             extras: Default::default(),

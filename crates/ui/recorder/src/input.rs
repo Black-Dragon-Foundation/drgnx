@@ -25,7 +25,7 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::selection::data_device::{DataDeviceHandler, DataDeviceState};
 use smithay::wayland::selection::data_device::set_data_device_focus;
 use smithay::wayland::selection::primary_selection::set_primary_focus;
-use smithay::wayland::selection::{SelectionHandler, SelectionTarget};
+use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use std::os::fd::OwnedFd;
 use smithay::wayland::tablet_manager::TabletSeatHandler;
 use smithay::{
@@ -189,6 +189,18 @@ impl TabletSeatHandler for State {}
 // Selections: `offer` and `read` (selection.rs) script them; drag-and-drop is served but not scripted.
 impl SelectionHandler for State {
     type SelectionUserData = ();
+
+    /// A client set (or cleared) a selection: the count `wait` `for: selection` waits on.
+    fn new_selection(
+        &mut self,
+        ty: SelectionTarget,
+        source: Option<SelectionSource>,
+        _seat: Seat<State>,
+    ) {
+        if source.is_some() {
+            self.client_selections[crate::selection::slot(ty)] += 1;
+        }
+    }
 
     fn send_selection(
         &mut self,
