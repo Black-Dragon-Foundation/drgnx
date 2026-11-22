@@ -1073,6 +1073,14 @@ mod virt {
                 // past the limit inside a real wait: its end (an exit from it notifies) is waited for, and the limit
                 // counts again from there for what the task then does
                 if held && tokio::time::Instant::now() >= give_up {
+                    // in the hub's log: a barrier that never answers names the real waits that hold it
+                    let left = self.left(ok, None);
+                    tracing::warn!(
+                        waiting = ?left.waiting,
+                        sites = ?left.sites,
+                        "a barrier waits past {} ms for real waits to end",
+                        within.as_millis()
+                    );
                     note.await;
                     give_up = tokio::time::Instant::now() + within;
                     continue;

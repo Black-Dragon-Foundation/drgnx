@@ -416,6 +416,24 @@ struct Tree {
     hits: Vec<RunHit>,
     /// The breakpoints as they are now: a child session starts with them.
     bps: Vec<SourceBps>,
+    /// The end of what the sessions printed (at most [`SAID_MAX`] bytes): why a fork that ended early ended.
+    said: String,
+}
+
+/// How much of the sessions' output a fork keeps for its error.
+const SAID_MAX: usize = 2048;
+
+impl Tree {
+    fn heard(&mut self, output: &str) {
+        self.said.push_str(output);
+        if self.said.len() > SAID_MAX {
+            let mut cut = self.said.len() - SAID_MAX;
+            while !self.said.is_char_boundary(cut) {
+                cut += 1;
+            }
+            self.said.drain(..cut);
+        }
+    }
 }
 
 impl Tree {
@@ -498,13 +516,13 @@ async fn next_of(
             Update::Caps(c) => t.sessions[i].caps = c,
             Update::Stopped(s) => return Ok(Next::Stopped(i, s)),
             Update::Event { event, body } if event == "output" => {
-                if let Some(h) = body
-                    .get("output")
-                    .and_then(Value::as_str)
-                    .and_then(|o| t.hit(o))
-                {
+                let Some(o) = body.get("output").and_then(Value::as_str) else {
+                    continue;
+                };
+                if let Some(h) = t.hit(o) {
                     return Ok(Next::Hit(h));
                 }
+                t.heard(o);
             }
             Update::StartDebugging { arguments, reply } => {
                 let mut start = start0.clone();
@@ -823,6 +841,7 @@ pub async fn drive(d: Drive) -> Result<Outcome, String> {
         seq: 0,
         hits: vec![],
         bps: vec![],
+        said: String::new(),
     };
     let mut start = d.start.clone();
     start.breakpoints = breakpoints(
@@ -861,10 +880,13 @@ async fn reach_and_run(d: &Drive, t: &mut Tree) -> Result<Outcome, String> {
     let (mut si, mut stop) = loop {
         match d.next(t).await? {
             Next::Hit(_) => {}
-            Next::Ended(_) => {
+            Next::Ended(code) => {
                 return Err(format!(
-                    "the fork ended after {count} of {} hits of line {}",
-                    d.target.hit, d.target.line
+                    "the fork ended after {count} of {} hits of line {} (exit {}; its last output: {:?})",
+                    d.target.hit,
+                    d.target.line,
+                    code.map_or_else(|| "unknown".to_owned(), |c| c.to_string()),
+                    t.said
                 ));
             }
             Next::Stopped(i, s) => {
@@ -886,7 +908,13 @@ async fn reach_and_run(d: &Drive, t: &mut Tree) -> Result<Outcome, String> {
                         ));
                     }
                 }
-                // any other stop (an entry, an exception filter) runs on
+                // any other stop (an entry, an exception filter) runs on; the error of a fork that ends names it
+                if path != d.target.path || line != d.target.line {
+                    t.heard(&format!(
+                        "[stopped at {path}:{line}, not {}:{}]\n",
+                        d.target.path, d.target.line
+                    ));
+                }
                 t.sessions[i]
                     .handle
                     .op(Op::Continue {
@@ -1102,6 +1130,7 @@ pub async fn watch(w: Watched) -> Result<RunEnd, String> {
         seq: 0,
         hits: vec![],
         bps: vec![],
+        said: String::new(),
     };
     let probes = match &w.watch {
         Watch::Probe { path, line, expr } => vec![RunProbe {
