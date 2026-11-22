@@ -336,7 +336,7 @@ fn sections_query_answers_the_current_places_sections() {
         panic!("no window")
     };
     let u = sy("user");
-    call("navigate", vec![i(w), st("one"), u.clone()]);
+    // the first place declared is the left's at first (navigating to it again would hide the left)
     let Val::List(one) = call("query", vec![i(w), st("sections"), sy("left")]) else {
         panic!("not a list")
     };
