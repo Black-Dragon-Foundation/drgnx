@@ -1,5 +1,5 @@
 # The pinned model files the Rust tests run the built-in model from (DRGNX_TEST_MODELS): hrafn-embed's MODELS table
-# (runtime/crates/hrafn-embed/src/models.rs), one file per line, which hrafn-embed's tests/models.rs keeps equal to it.
+# (crates/hub/hrafn-embed/src/models.rs), one file per line, which hrafn-embed's tests/models.rs keeps equal to it.
 # models.sh fetches them; runtime.yml caches them by this file's hash.
 #   ID REPO REVISION FILE SHA256
 gte-modernbert-base Alibaba-NLP/gte-modernbert-base e7f32e3c00f91d699e8c43b53106206bcc72bb22 model.safetensors 3e85899d5728cb7de79781c0c3acfb91ccef9f875f1f7e0b3c9f3dd4b6a724ba

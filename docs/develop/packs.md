@@ -2,7 +2,7 @@
 
 A language pack is a folder with one manifest, `pack.eld`, plus tree-sitter queries and test fixtures. It is data
 that names programs: it contains no code, but it can name a language server, a formatter or a debug adapter that
-drgnx starts for you. The format and its rules live in the `skald` crate (`runtime/crates/skald`); this page is the
+drgnx starts for you. The format and its rules live in the `skald` crate (`crates/hub/skald`); this page is the
 contributor reference. (The user pages arrive with the Extensions side of packs.)
 
 ## Layout

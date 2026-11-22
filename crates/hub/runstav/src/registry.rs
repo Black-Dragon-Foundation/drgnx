@@ -1,0 +1,947 @@
+//! The registry: every method of the hub protocol with its classes, its params and result types (and so their JSON
+//! Schemas), whether it writes work.db, and a line of doc (design 4.3).  `runtime/protocol/methods.json` and the
+//! method table in `docs/develop/hub.md` are generated from it, and tests fail when either is out of date
+//! (`UPDATE_METHODS_JSON=1 cargo test -p runstav registry` rewrites both).
+
+use crate::decode;
+use crate::events::events;
+use crate::methods::{self, Params};
+use crate::wire::{Error, ErrorCode};
+use schemars::generate::SchemaSettings;
+use schemars::{JsonSchema, Schema};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
+use std::sync::LazyLock;
+
+/// The protocol this hub speaks, and the oldest it still serves.
+pub const PROTO: u32 = 1;
+pub const PROTO_MIN: u32 = 1;
+/// The records layout: 2 is JSON (design 4.5).
+pub const RECORDS: u32 = 2;
+/// The work.db schema this code knows (the hub makes it, or migrates an older file to it at start).
+pub const SCHEMA: u32 = 15;
+
+/// What a connection proved (design 4.2): `user` a valid `hello` proof, `agent` the agent socket it came in on,
+/// `service` nothing.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Class {
+    User,
+    Agent,
+    Service,
+}
+
+impl Class {
+    pub fn name(self) -> &'static str {
+        match self {
+            Class::User => "user",
+            Class::Agent => "agent",
+            Class::Service => "service",
+        }
+    }
+}
+
+/// A method's params, decoded, and the dotted paths of the keys it dropped (the answer's `ignored`).
+pub type Decoded = (Params, Vec<String>);
+
+/// One method.
+pub struct Method {
+    pub name: &'static str,
+    /// The classes that may call it.
+    pub classes: &'static [Class],
+    /// It writes work.db, so a read-only hub refuses it (`schema`).
+    pub writes: bool,
+    /// The [`Params`] variant its params decode to (one per method: [`Params::VARIANTS`]).
+    pub variant: &'static str,
+    pub doc: &'static str,
+    pub params: fn() -> Schema,
+    pub result: fn() -> Schema,
+    /// The typed params and the dotted paths of the keys dropped; a bad value is `invalid-params` with its path.
+    pub decode: fn(&Value) -> Result<Decoded, Error>,
+    /// A result decoded into the result type and encoded again: strict, so an unknown key is an error with its
+    /// path (the registry stays complete), and a `null` list comes out `[]`.
+    pub check_result: fn(&Value) -> Result<Value, Error>,
+}
+
+impl Method {
+    pub fn allows(&self, class: Class) -> bool {
+        self.classes.contains(&class)
+    }
+}
+
+static REGISTRY: LazyLock<Vec<Method>> = LazyLock::new(|| {
+    let mut v = methods::all();
+    v.sort_by_key(|m| m.name);
+    v
+});
+
+/// Every method, sorted by name.
+pub fn registry() -> &'static [Method] {
+    &REGISTRY
+}
+
+/// The method called `name`.
+pub fn find(name: &str) -> Option<&'static Method> {
+    let all = registry();
+    all.binary_search_by_key(&name, |m| m.name)
+        .ok()
+        .map(|i| &all[i])
+}
+
+/// `T`'s JSON Schema (2020-12), named types under `$defs`.
+pub fn schema_of<T: JsonSchema>() -> Schema {
+    SchemaSettings::draft2020_12()
+        .into_generator()
+        .into_root_schema_for::<T>()
+}
+
+/// serde names a missing field in its message only (an unknown one is in the path already): put it at the end of
+/// the path, so `{}` for a method that needs `id` is refused at `id`.
+fn field_in_path(mut e: Error) -> Error {
+    if let Some(field) = e
+        .message
+        .strip_prefix("missing field `")
+        .and_then(|r| r.split('`').next())
+    {
+        e.path = Some(match e.path.take() {
+            Some(p) => format!("{p}.{field}"),
+            None => field.to_string(),
+        });
+    }
+    e
+}
+
+/// `v` as the params type `T` (`decode::typed`), a missing field named in the path.
+pub fn decode_params<T: DeserializeOwned>(v: &Value) -> Result<(T, Vec<String>), Error> {
+    decode::typed::<T>(v).map_err(field_in_path)
+}
+
+/// `v` as the result or event type `T`, encoded again.  What does not fit is `internal` with its path.
+pub fn check_as<T: DeserializeOwned + Serialize>(v: &Value) -> Result<Value, Error> {
+    let t: T = serde_path_to_error::deserialize(v).map_err(|e| {
+        field_in_path(Error {
+            code: ErrorCode::Internal,
+            message: e.inner().to_string(),
+            path: e.path().iter().next().map(|_| e.path().to_string()),
+        })
+    })?;
+    serde_json::to_value(&t).map_err(|e| Error {
+        code: ErrorCode::Internal,
+        message: e.to_string(),
+        path: None,
+    })
+}
+
+/// The registry as `methods.json` has it: `{proto, proto_min, records, schema, methods, events}`.
+pub fn methods_json() -> Value {
+    let methods: Vec<Value> = registry()
+        .iter()
+        .map(|m| {
+            json!({
+                "name": m.name,
+                "classes": m.classes.iter().map(|c| c.name()).collect::<Vec<_>>(),
+                "writes": m.writes,
+                "doc": m.doc,
+                "params": (m.params)().to_value(),
+                "result": (m.result)().to_value(),
+            })
+        })
+        .collect();
+    let events: Vec<Value> = events()
+        .iter()
+        .map(|e| json!({"name": e.name, "doc": e.doc, "data": (e.data)().to_value()}))
+        .collect();
+    sorted(json!({
+        "proto": PROTO, "proto_min": PROTO_MIN, "records": RECORDS, "schema": SCHEMA,
+        "methods": methods, "events": events,
+    }))
+}
+
+/// `methods_json()` as the committed file: pretty, keys sorted, a newline at the end.
+pub fn methods_json_text() -> String {
+    let mut s = serde_json::to_string_pretty(&methods_json()).expect("JSON");
+    s.push('\n');
+    s
+}
+
+/// `v` with every object's keys in order (whatever map serde_json was built with).
+fn sorted(v: Value) -> Value {
+    match v {
+        Value::Object(o) => {
+            let mut pairs: Vec<(String, Value)> = o.into_iter().collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(pairs.into_iter().map(|(k, v)| (k, sorted(v))).collect())
+        }
+        Value::Array(a) => Value::Array(a.into_iter().map(sorted).collect()),
+        other => other,
+    }
+}
+
+/// The Markdown table of the registry that `docs/develop/hub.md` holds between `<!-- hub-methods:begin -->` and
+/// `<!-- hub-methods:end -->`.  The schemas' keys are sorted first (as `methods.json`'s are): a build where serde_json
+/// keeps insertion order (the ACP schema crate turns its `preserve_order` on in the hub's build) prints the same table.
+pub fn markdown_table() -> String {
+    let mut s =
+        String::from("| Method | Class | Params | Result | Writes |\n|---|---|---|---|---|\n");
+    for m in registry() {
+        let classes: Vec<&str> = m.classes.iter().map(|c| c.name()).collect();
+        s.push_str(&format!(
+            "| `{}` | {} | `{}` | `{}` | {} |\n",
+            m.name,
+            classes.join(", "),
+            cell(&schema_words(&sorted((m.params)().to_value()), true)),
+            cell(&schema_words(&sorted((m.result)().to_value()), false)),
+            if m.writes { "yes" } else { "no" },
+        ));
+    }
+    s
+}
+
+fn cell(s: &str) -> String {
+    s.replace('|', "\\|")
+}
+
+/// A root schema in words: `{a: T, b?: T}` an object (`?`: may be absent or null), `[T]` a list, `A | B` either,
+/// a name a named type (docs/develop/hub.md, "Types").  Params are spelled out; a result object of more than five
+/// keys is its type's name.
+fn schema_words(root: &Value, params: bool) -> String {
+    let empty = Map::new();
+    let defs = root
+        .get("$defs")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
+    let w = Words { defs, params };
+    let props = root
+        .get("properties")
+        .and_then(Value::as_object)
+        .map_or(0, Map::len);
+    match root.get("title").and_then(Value::as_str) {
+        Some(title) if !params && props > 5 => title.to_string(),
+        _ => w.words(root),
+    }
+}
+
+struct Words<'a> {
+    defs: &'a Map<String, Value>,
+    params: bool,
+}
+
+impl Words<'_> {
+    fn words(&self, s: &Value) -> String {
+        let Some(o) = s.as_object() else {
+            return if s == &Value::Bool(false) {
+                "never"
+            } else {
+                "any"
+            }
+            .into();
+        };
+        if let Some(r) = o.get("$ref").and_then(Value::as_str) {
+            let name = r.trim_start_matches("#/$defs/");
+            let def = self.defs.get(name).unwrap_or(&Value::Null);
+            let is_enum = def.get("enum").is_some() || def.get("oneOf").is_some();
+            let is_object = def.get("properties").is_some();
+            return if is_enum || (self.params && is_object) {
+                self.words(def)
+            } else {
+                name.to_string()
+            };
+        }
+        if let Some(e) = o.get("enum").and_then(Value::as_array) {
+            return e
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join(" | ");
+        }
+        if let Some(c) = o.get("const") {
+            return c.to_string();
+        }
+        for k in ["anyOf", "oneOf"] {
+            if let Some(alts) = o.get(k).and_then(Value::as_array) {
+                return alts
+                    .iter()
+                    .map(|a| self.words(a))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+            }
+        }
+        match o.get("type") {
+            Some(Value::Array(types)) => types
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|t| self.typed(t, o))
+                .collect::<Vec<_>>()
+                .join(" | "),
+            Some(Value::String(t)) => self.typed(t, o),
+            _ => "any".into(),
+        }
+    }
+
+    fn typed(&self, t: &str, o: &Map<String, Value>) -> String {
+        match t {
+            "object" => match o.get("properties").and_then(Value::as_object) {
+                Some(props) => {
+                    let required: Vec<&str> = o
+                        .get("required")
+                        .and_then(Value::as_array)
+                        .map(|r| r.iter().filter_map(Value::as_str).collect())
+                        .unwrap_or_default();
+                    let fields: Vec<String> = props
+                        .iter()
+                        .map(|(k, v)| {
+                            if required.contains(&k.as_str()) {
+                                format!("{k}: {}", self.words(v))
+                            } else {
+                                format!("{k}?: {}", self.words(&without_null(v)))
+                            }
+                        })
+                        .collect();
+                    format!("{{{}}}", fields.join(", "))
+                }
+                // a struct with no fields (no params) is `{}`; a map of anything an object
+                None if o.get("additionalProperties").is_none() => "{}".into(),
+                None => "object".into(),
+            },
+            "array" => {
+                if let Some(items) = o.get("prefixItems").and_then(Value::as_array) {
+                    let parts: Vec<String> = items.iter().map(|i| self.words(i)).collect();
+                    format!("[{}]", parts.join(", "))
+                } else {
+                    format!(
+                        "[{}]",
+                        o.get("items").map_or("any".into(), |i| self.words(i))
+                    )
+                }
+            }
+            "integer" if o.get("minimum").and_then(Value::as_f64) == Some(0.0) => "natnum".into(),
+            other => other.into(),
+        }
+    }
+}
+
+/// An optional key's schema without its `null` alternative (the `?` says it).
+fn without_null(v: &Value) -> Value {
+    let mut v = v.clone();
+    if let Some(o) = v.as_object_mut() {
+        if let Some(Value::Array(types)) = o.get_mut("type") {
+            types.retain(|t| t != "null");
+            if types.len() == 1 {
+                let t = types.remove(0);
+                o.insert("type".into(), t);
+            }
+        }
+        for k in ["anyOf", "oneOf"] {
+            if let Some(Value::Array(alts)) = o.get_mut(k) {
+                alts.retain(|a| a.get("type") != Some(&json!("null")));
+                if alts.len() == 1 {
+                    return alts.remove(0);
+                }
+            }
+        }
+    }
+    v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    fn repo(rel: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .join(rel)
+    }
+
+    fn update() -> bool {
+        std::env::var_os("UPDATE_METHODS_JSON").is_some_and(|v| v == "1")
+    }
+
+    #[test]
+    fn the_registry_is_sorted_and_complete() {
+        let names: Vec<&str> = registry().iter().map(|m| m.name).collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(names, sorted);
+        // every method of the registry is in the committed methods.json, and nothing else is: the count is
+        // whatever that file says, so a new method breaks nothing here
+        let committed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(repo("crates/hub/protocol/methods.json"))
+                .expect("methods.json"),
+        )
+        .expect("methods.json is JSON");
+        let listed: Vec<&str> = committed["methods"]
+            .as_array()
+            .expect("methods")
+            .iter()
+            .map(|m| m["name"].as_str().expect("a name"))
+            .collect();
+        assert_eq!(names, listed);
+        assert!(find("job/start-task").is_some_and(|m| m.writes));
+        assert!(find("job/status").is_some_and(|m| !m.writes));
+        assert!(find("sandbox/global").is_none());
+        let writes: Vec<&str> = registry()
+            .iter()
+            .filter(|m| m.writes)
+            .map(|m| m.name)
+            .collect();
+        let mut want = vec![
+            "agents/config",
+            "agents/do",
+            "agents/grants/revoke",
+            // a past session resumed: a session starts
+            "agents/history/resume",
+            "agents/huddle/start",
+            "agents/kill",
+            "agents/pause",
+            "agents/permission",
+            "agents/send",
+            "agents/start",
+            "agents/stop",
+            "agents/wheel/give",
+            "agents/wheel/take",
+        ];
+        want.extend(FRONT_WRITES);
+        want.extend(CORE_WRITES);
+        // Hrafn's: the index and the consented download change what the hub holds
+        want.extend(["search/index", "search/model-download"]);
+        // the Search view's saved searches: the hub's state, and the project's file on a click
+        // the Search view's writes: project files, on disk or through the editor
+        want.extend(["search/apply", "search/undo"]);
+        // Ask an Agent: a worktree, a session and its brief
+        want.extend(["search/handoff"]);
+        want.extend([
+            "search/saved/delete",
+            "search/saved/put",
+            "search/saved/share",
+        ]);
+        // the runners': the registry's changes
+        want.extend([
+            "runners/add",
+            "runners/bench",
+            "runners/check",
+            "runners/feature",
+            "runners/remove",
+            "runners/set",
+            "runners/unbench",
+        ]);
+        // paragraph comments: a thread, a reply, a resolve
+        want.extend(["comments/add", "comments/reply", "comments/resolve"]);
+        // say's: a planning session, the proposal it writes, its end
+        want.extend(["say/end", "say/revise", "say/start"]);
+        // the plugins': an approval and a switch-off change what the hub may run
+        want.extend(["plugins/approve", "plugins/disable"]);
+        // the edit history's: the editor's buffers, as the user's operations
+        want.extend([
+            "history/batch",
+            "history/register",
+            "history/resync",
+            "history/unregister",
+        ]);
+        // one hunk staged in git's index
+        want.extend(["git/stage-hunk"]);
+        // a file's folds and pinned regions, as Urdr anchor records
+        want.extend(["folds/save"]);
+        // the Source Control view's: the index, the working tree, commits, branches, stashes and the remotes
+        want.extend([
+            "git/checkout",
+            "git/commit",
+            "git/delete-branch",
+            "git/discard",
+            "git/remote",
+            "git/remote-stop",
+            "git/stage",
+            "git/stash",
+            "git/undo-commit",
+            "git/unstage",
+        ]);
+        // a revert to here: the files, the steps, the conversation and a commit; and one hunk of a record
+        want.extend(["history/revert/apply", "history/revert/hunk"]);
+        // a fork from here, its drop, and the text taken across or redone
+        want.extend([
+            "history/fork",
+            "history/fork/drop",
+            "history/redo",
+            "history/take",
+        ]);
+        want.extend(
+            registry()
+                .iter()
+                .map(|m| m.name)
+                .filter(|n| n.starts_with("job/") && *n != "job/status"),
+        );
+        want.sort();
+        assert_eq!(writes, want);
+    }
+
+    /// The methods the front writes work.db for: the editor's five and the Lisp job runner's seam (Task 9).
+    const FRONT_WRITES: [&str; 29] = [
+        "cards/settle",
+        "messages/send",
+        "messages/mark",
+        "events/add",
+        "review/mark",
+        "coord/job-create",
+        "coord/job-set",
+        "coord/task-status",
+        "coord/leases",
+        "coord/decide",
+        "coord/agent",
+        "coord/card-create",
+        "coord/card-set",
+        "coord/held",
+        "coord/prune",
+        // the graph store's (Urdr Task 15a): the tracker scan's door
+        "graph/put-parsed",
+        "graph/record",
+        // the store's methods for the user (Urdr Task 15b)
+        "graph/revert",
+        "graph/excise",
+        "graph/grants",
+        "graph/proposed",
+        "graph/import",
+        "graph/compact",
+        "graph/scrub",
+        "graph/settings",
+        "graph/privacy",
+        "tasks/write",
+        // the settings' history (unified-settings Task 24)
+        "settings/record",
+        // the editor's answer to an agent's settings change (unified-settings Task 32)
+        "settings/confirm",
+    ];
+
+    /// The agent core's methods that write (agent system part 1, Task 0), besides `agents/*` and `job/*`.
+    const CORE_WRITES: [&str; 14] = [
+        "agents/move",
+        "agents/role",
+        "exec/bump",
+        "exec/start",
+        "exec/stop",
+        // a running job's move card; a waiting job's machine
+        "machines/move",
+        "messages/retract",
+        "plans/write",
+        "brief/set",
+        "budget/set",
+        "budget/raise",
+        "records/import",
+        "records/resolve",
+        "work/target/set",
+    ];
+
+    /// Every method is the hub's own: each name decodes to a `Params` variant of its own, and every variant is some
+    /// method's.  The front's `serve` matches `Params` with no catch-all arm, so a variant it does not serve does not
+    /// compile; together, no method can be listed without a handler.
+    #[test]
+    fn every_method_is_served() {
+        let methods = methods_json();
+        let names: Vec<&str> = methods["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| {
+                assert!(m.get("home").is_none(), "{m}");
+                m["name"].as_str().unwrap()
+            })
+            .collect();
+        let mut variants: Vec<&str> = names
+            .iter()
+            .map(|n| find(n).unwrap_or_else(|| panic!("{n}")).variant)
+            .collect();
+        variants.sort();
+        let mut all = Params::VARIANTS.to_vec();
+        all.sort();
+        assert_eq!(variants, all, "one Params variant per method, and no other");
+        // a variant names its method: decoding a method's params gives the variant the registry says
+        for (name, params) in [
+            ("ping", json!({})),
+            ("env/set", json!({"env": []})),
+            ("job/stop", json!({"id": "j"})),
+            ("agents/list", json!({})),
+            ("graph/backup", json!({})),
+            ("coord/prune", json!({})),
+        ] {
+            let m = find(name).unwrap();
+            let (p, _) = (m.decode)(&params).unwrap();
+            assert_eq!(p.variant(), m.variant, "{name}");
+        }
+        // every method of the store is the user's alone
+        assert!(
+            registry()
+                .iter()
+                .filter(|m| m.name.starts_with("graph/") || m.name.starts_with("tasks/"))
+                .all(|m| m.classes == [Class::User])
+        );
+        // an outside agent's bridge attaches without a proof; minting a session's socket is the user's
+        assert_eq!(
+            find("mcp/attach").map(|m| m.classes),
+            Some(&[Class::Service][..])
+        );
+        assert_eq!(
+            find("mcp/session").map(|m| m.classes),
+            Some(&[Class::User][..])
+        );
+        // an event names no side that sends it: the hub sends them all
+        assert!(
+            methods["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|e| e.get("from").is_none())
+        );
+    }
+
+    #[test]
+    fn the_docs_table_has_no_home_column() {
+        let t = markdown_table();
+        assert!(
+            t.starts_with("| Method | Class | Params | Result | Writes |\n"),
+            "{t}"
+        );
+        assert!(
+            t.contains("| `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes |\n"),
+            "{t}"
+        );
+        assert!(
+            t.contains("| `coord/notify` | user, agent, service | `{}` | `boolean` | no |\n"),
+            "{t}"
+        );
+    }
+
+    #[test]
+    fn methods_json_is_the_registry() {
+        let path = repo("crates/hub/protocol/methods.json");
+        let now = methods_json_text();
+        if update() {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, &now).unwrap();
+        }
+        let committed = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            committed == now,
+            "{} is out of date: UPDATE_METHODS_JSON=1 cargo test -p runstav registry",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn the_docs_table_is_the_registry() {
+        let path = repo("docs/develop/hub.md");
+        let (begin, end) = ("<!-- hub-methods:begin -->\n", "<!-- hub-methods:end -->");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (b, e) = (text.find(begin), text.find(end));
+        assert!(
+            b.is_some() && e.is_some(),
+            "hub.md has no {begin:?} … {end:?}"
+        );
+        let (b, e) = (b.unwrap() + begin.len(), e.unwrap());
+        let table = markdown_table();
+        if update() && text[b..e] != table {
+            std::fs::write(&path, format!("{}{table}{}", &text[..b], &text[e..])).unwrap();
+            return;
+        }
+        assert!(
+            text[b..e] == table,
+            "the table in {} is out of date: UPDATE_METHODS_JSON=1 cargo test -p runstav registry\n{table}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn classes_match_the_hand_written_matrix() {
+        let text = std::fs::read_to_string(repo("test/conformance/class-matrix.json")).unwrap();
+        let matrix: BTreeMap<String, Vec<Class>> = serde_json::from_str(&text).unwrap();
+        let ours: BTreeMap<String, Vec<Class>> = registry()
+            .iter()
+            .map(|m| {
+                let mut c = m.classes.to_vec();
+                c.sort();
+                (m.name.to_string(), c)
+            })
+            .collect();
+        let matrix: BTreeMap<String, Vec<Class>> = matrix
+            .into_iter()
+            .map(|(k, mut v)| {
+                v.sort();
+                (k, v)
+            })
+            .collect();
+        assert_eq!(ours, matrix);
+    }
+
+    fn required(schema: &Value) -> Vec<String> {
+        schema
+            .get("required")
+            .and_then(Value::as_array)
+            .map(|r| {
+                r.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn every_method_with_required_params_refuses_empty() {
+        let mut with = 0;
+        // how many refuse `{}` follows from each method's declared required params, not from a number written here
+        let mut expected = 0;
+        for m in registry() {
+            let schema = (m.params)().to_value();
+            let req = required(&schema);
+            if [
+                "agents/presence/subscribe",
+                "coord/agent",
+                "debug/heap",
+                "graph/revert",
+                "graph/grants",
+                "graph/proposed",
+                "graph/settings",
+                "plans/write",
+                "reports/get",
+            ]
+            .contains(&m.name)
+            {
+                // one of several keys, none required on its own: its check refuses `{}`
+                assert!((m.decode)(&json!({})).is_err());
+                continue;
+            }
+            expected += usize::from(!req.is_empty());
+            match (m.decode)(&json!({})) {
+                Ok(_) => assert!(req.is_empty(), "{} took {{}} but needs {req:?}", m.name),
+                Err(e) => {
+                    with += 1;
+                    assert!(!req.is_empty(), "{} refused {{}}: {e:?}", m.name);
+                    assert_eq!(e.code, ErrorCode::InvalidParams, "{}", m.name);
+                    let path = e.path.unwrap_or_default();
+                    assert!(
+                        req.contains(&path),
+                        "{}: path {path:?} is not one of {req:?}",
+                        m.name
+                    );
+                }
+            }
+        }
+        assert_eq!(with, expected);
+        assert!(
+            with > 0,
+            "no method refused {{}}: the schema read found no required params"
+        );
+    }
+
+    #[test]
+    fn empty_lists_encode_as_arrays() {
+        let m = find("job/stop").unwrap();
+        let out =
+            (m.check_result)(&json!({"id": "j1", "title": null, "status": "running"})).unwrap();
+        assert_eq!(out["cards"], json!([]));
+        assert_eq!(out["tasks"], json!([]));
+        assert_eq!(
+            out.get("title"),
+            None,
+            "an absent optional value is left out"
+        );
+        let s = serde_json::to_string(&out).unwrap();
+        assert!(s.contains("\"cards\":[]"), "{s}");
+    }
+
+    #[test]
+    fn a_null_list_in_a_result_becomes_empty() {
+        let m = find("job/status").unwrap();
+        assert_eq!(
+            (m.check_result)(&json!({"jobs": null})).unwrap(),
+            json!({"jobs": []})
+        );
+        let one = (m.check_result)(&json!({"id": "j", "cards": null})).unwrap();
+        assert_eq!(one["cards"], json!([]));
+        let e = (m.check_result)(&json!({"id": "j", "extra": 1})).unwrap_err();
+        assert!(e.message.contains("extra"), "{e:?}");
+        let m = find("agents/list").unwrap();
+        assert_eq!(
+            (m.check_result)(&json!({"sessions": [{"id": "s", "queue": null, "status": "busy"}]}))
+                .unwrap(),
+            json!({"sessions": [{"id": "s", "queue": [], "permissions": [], "reviews": [], "commands": [], "status": "busy"}]})
+        );
+    }
+
+    #[test]
+    fn a_result_key_the_registry_does_not_know_is_an_error_with_its_path() {
+        let m = find("agents/get").unwrap();
+        let e = (m.check_result)(
+            &json!({"session": {"id": "s", "colour": "red"}, "entries": [], "seq": 1}),
+        )
+        .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Internal);
+        assert_eq!(e.path.as_deref(), Some("session.colour"), "{e:?}");
+        let e = (m.check_result)(&json!({"session": {"id": "s", "status": "dancing"}, "seq": 1}))
+            .unwrap_err();
+        assert_eq!(e.path.as_deref(), Some("session.status"), "{e:?}");
+    }
+
+    /// Every schema an object or list of `s` holds, walked: `true`/`{}` (or annotations only) is unconstrained.
+    fn unconstrained(s: &Value, at: &str, out: &mut Vec<String>) {
+        const NOTES: [&str; 8] = [
+            "description",
+            "title",
+            "default",
+            "examples",
+            "$comment",
+            "deprecated",
+            "readOnly",
+            "writeOnly",
+        ];
+        match s {
+            Value::Bool(true) => out.push(at.to_string()),
+            Value::Object(o) => {
+                if o.keys().all(|k| NOTES.contains(&k.as_str())) {
+                    out.push(at.to_string());
+                }
+                for k in [
+                    "items",
+                    "additionalProperties",
+                    "propertyNames",
+                    "not",
+                    "contains",
+                ] {
+                    if let Some(sub) = o.get(k) {
+                        unconstrained(sub, &format!("{at}/{k}"), out);
+                    }
+                }
+                for k in ["prefixItems", "anyOf", "oneOf", "allOf"] {
+                    for (i, sub) in o
+                        .get(k)
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .enumerate()
+                    {
+                        unconstrained(sub, &format!("{at}/{k}/{i}"), out);
+                    }
+                }
+                for k in ["properties", "$defs"] {
+                    for (name, sub) in o.get(k).and_then(Value::as_object).into_iter().flatten() {
+                        unconstrained(sub, &format!("{at}/{k}/{name}"), out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn no_any_in_params() {
+        let mut found = Vec::new();
+        for m in registry() {
+            unconstrained(&(m.params)().to_value(), m.name, &mut found);
+        }
+        assert!(found.is_empty(), "unconstrained params: {found:?}");
+        // the walk finds what it looks for: a result may hold `any` (Entry's ACP rest, a job's tasks)
+        let mut results = Vec::new();
+        unconstrained(
+            &(find("agents/get").unwrap().result)().to_value(),
+            "agents/get",
+            &mut results,
+        );
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn credential_names_are_refused() {
+        use crate::methods::hub::refused_env_name;
+        for name in [
+            "OPENAI_API_KEY",
+            "gh_token",
+            "DB_Password",
+            "MY_SECRET",
+            "AWS_CREDENTIALS",
+        ] {
+            assert!(refused_env_name(name), "{name}");
+        }
+        for name in ["PLAYWRIGHT_MCP_CDP_ENDPOINT", "PATH", "LANG"] {
+            assert!(!refused_env_name(name), "{name}");
+        }
+    }
+
+    // a runner opt-in names its project: a call without one is `invalid-params` at `project`
+    #[test]
+    fn an_opt_in_needs_the_project_parameter() {
+        let m = find("runners/feature").unwrap();
+        assert!(
+            (m.decode)(&json!({"name": "desk", "feature": "kvm", "project": "p", "on": true}))
+                .is_ok()
+        );
+        let e = (m.decode)(&json!({"name": "desk", "feature": "kvm", "on": true}))
+            .err()
+            .expect("a call without a project is refused");
+        assert_eq!(e.code, ErrorCode::InvalidParams);
+        assert_eq!(e.path.as_deref(), Some("project"));
+    }
+
+    #[test]
+    fn agents_start_takes_module_env() {
+        let m = find("agents/start").unwrap();
+        let (p, _) = (m.decode)(
+            &json!({"profile": "p", "env": [{"name": "PLAYWRIGHT_MCP_CDP_ENDPOINT", "value": "u"}]}),
+        )
+        .unwrap();
+        assert_eq!(
+            p.to_value(),
+            json!({"profile": "p", "env": [{"name": "PLAYWRIGHT_MCP_CDP_ENDPOINT", "value": "u"}]})
+        );
+        let nine: Vec<Value> = (0..9)
+            .map(|i| json!({"name": format!("A{i}"), "value": "x"}))
+            .collect();
+        let e = (m.decode)(&json!({"profile": "p", "env": nine}))
+            .err()
+            .unwrap();
+        assert_eq!(e.path.as_deref(), Some("env"), "{e:?}");
+    }
+
+    #[test]
+    fn params_reencode_without_absent_values() {
+        let m = find("agents/start").unwrap();
+        let (p, ignored) =
+            (m.decode)(&json!({"profile": "p", "cwd": null, "task": "T#1", "x": 1})).unwrap();
+        assert_eq!(ignored, ["x"]);
+        assert!(matches!(p, Params::AgentsStart(_)));
+        assert_eq!(p.to_value(), json!({"profile": "p", "task": "T#1"}));
+    }
+
+    #[test]
+    fn a_wrong_type_has_its_path() {
+        let refusal = |m: &str, v: Value| (find(m).unwrap().decode)(&v).err().unwrap();
+        let e = refusal("env/set", json!({"env": [{"name": "A", "value": 7}]}));
+        assert_eq!(e.path.as_deref(), Some("env[0].value"));
+        let e = refusal("env/set", json!({"env": [{"name": "A"}]}));
+        assert_eq!(e.path.as_deref(), Some("env[0].value"), "{e:?}");
+        let e = refusal(
+            "gateway/register",
+            json!({"chain": [], "openrouter": {"zdr": true, "mystery": 1}}),
+        );
+        assert_eq!(e.path.as_deref(), Some("openrouter.mystery"), "{e:?}");
+    }
+
+    #[test]
+    fn the_table_spells_out_params() {
+        let t = markdown_table();
+        assert!(
+            t.contains("| `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |\n"),
+            "{t}"
+        );
+        assert!(
+            t.contains("| `job/stop` | user | `{id: Id}` | `JobSummary` | yes |\n"),
+            "{t}"
+        );
+        assert!(
+            t.contains("`{env: [{name: EnvName, value: string}]}`"),
+            "{t}"
+        );
+    }
+}

@@ -1107,7 +1107,7 @@ reader, and about 1.9 ms of pushes). Opening the page now builds every setting's
 workload drains those steps, `:warm_ms` about 30 ms, outside `:open_ms`), so the search of the first key is at most
 5 ms (`:key_search_max_ms`, from 32).
 
-Ratatoskr's reader is timed by `runtime/crates/huginn/tests/timing.rs`: 64 KiB of settings-shaped data, median of 200
+Ratatoskr's reader is timed by `crates/core/huginn/tests/timing.rs`: 64 KiB of settings-shaped data, median of 200
 reads at most 1 ms. It is `#[ignore]`, run once and alone on a pinned host, optimized:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=2 … cargo test --release -p huginn --test timing -- --ignored --nocapture`
 (2026-10-24, a pinned host, 2 CPUs: median 0.60 ms, max 4.2 ms for 65,677 bytes).
@@ -1146,14 +1146,14 @@ The rows are provisional: they report and never fail until `DRGNX_PERF_LANDED` n
 that judges them. Run them pinned, alone on the perf island:
 `DRGNX_PERF_WORKLOADS='extensions-open extensions-search extensions-scroll extensions-details extensions-progress activate-live activate-live-new install-overhead refresh-job list-packages-compare' perf-exclusive.sh env DRGNX_PERF_CPUS=4 bin/drgnx test --container --perf`.
 
-The hub's side is a Rust bench, `runtime/crates/drgnx-ratatoskr/benches/extensions.rs`: `catalog-load` (parse and merge
+The hub's side is a Rust bench, `crates/hub/drgnx-ratatoskr/benches/extensions.rs`: `catalog-load` (parse and merge
 7,150 rows) at most 100 ms and 15 MB, and `extensions/search` at most 3 ms at the 95th percentile. The 15 MB is what
 the hub's cache keeps (the parsed file and the index): live bytes counted by the bench's own global allocator, not
 resident memory, which a warm process's arenas hide. It is `#[ignore]`d, and a test whose budget is missed fails;
 run it once, optimized and alone on a pinned host:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench extensions -- --ignored --nocapture --test-threads 1`.
 
-The Run and Debug view's hub rows are the bench `runtime/crates/drgnx-ratatoskr/benches/debug_view.rs`:
+The Run and Debug view's hub rows are the bench `crates/hub/drgnx-ratatoskr/benches/debug_view.rs`:
 `debug-step-variables` (the hub's half of a step: lines, model, model diff and rows built again with 300 variables, ten
 changed; with the editor's half within 30 ms at the 95th percentile) and `debug-hub-memory` (a 100,000-element list
 open to its two chunk levels with one page fetched, its lines, model and rows: at most 64 MB more heap, counted by the
@@ -1161,13 +1161,13 @@ bench's own allocator) and `debug-hub-memory-pages` (every one of its 1,000 page
 does: the view keeps the last `PAGE_CAP` = 64 open and lets the rest go; at most 64 MB). Ignored like the others:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_view -- --ignored --nocapture --test-threads 1`.
 
-Recorded runs' hub rows are the bench `runtime/crates/drgnx-ratatoskr/benches/debug_record.rs`: `debug-launch-snapshot`
+Recorded runs' hub rows are the bench `crates/hub/drgnx-ratatoskr/benches/debug_record.rs`: `debug-launch-snapshot`
 (the launch snapshot of a 5,000-file project with nothing changed, at most 150 ms at the 95th percentile) and
 `debug-capture` (a stop's capture cut to 64 KB, appended to the run file and flushed, at most 1 ms at the 95th
 percentile). It is `#[ignore]`d and measures and prints; run it optimized and alone on a pinned host:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_record -- --ignored --nocapture --test-threads 1`.
 
-The budget event's hub rows are the bench `runtime/crates/drgnx-ratatoskr/benches/budget_event.rs`: 30 agents spending ten times
+The budget event's hub rows are the bench `crates/hub/drgnx-ratatoskr/benches/budget_event.rs`: 30 agents spending ten times
 a second under 3 runs and a plan; a scope has at most one `budget` event a second (`budget-event`, 1) and one flush costs
 at most 4 ms at the 95th percentile (`budget-event-patch`). Run:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench budget_event -- --ignored --nocapture --test-threads 1`.
@@ -1179,7 +1179,7 @@ The joint plan forecast's rows are the ignored test `forecast_plan_perf` in `drg
 together, the first call within 300 ms (`forecast-plan-miss`) and the cached repeats within 5 ms at the 95th percentile
 (`forecast-plan-hit`): `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --lib -- --ignored --nocapture forecast_plan_perf`.
 
-Inline values' hub row is the bench `runtime/crates/drgnx-ratatoskr/benches/debug_inline.rs`: `debug-inline`, a stop's
+Inline values' hub row is the bench `crates/hub/drgnx-ratatoskr/benches/debug_inline.rs`: `debug-inline`, a stop's
 values for a 2,000-line Python file stopped in a 200-line function with 42 variables, the parse cached (at most 8 ms at
 the 95th percentile; the first parse is printed too). It is `#[ignore]`d and measures and prints:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_inline -- --ignored --nocapture --test-threads 1`.
@@ -1189,7 +1189,7 @@ its first stop: at most 2 s at the 95th percentile on Linux) is the live row `de
 ten Python traces in a row. It needs the adapter image with bwrap (`ctr.sh --sandbox`), is `#[ignore]`d as a timing
 test, and measures and prints.
 
-Past sessions' warm scan is the bench `runtime/crates/drgnx-ratatoskr/benches/past_scan.rs`: `past-scan`, 5,000 Claude
+Past sessions' warm scan is the bench `crates/hub/drgnx-ratatoskr/benches/past_scan.rs`: `past-scan`, 5,000 Claude
 session files over 100 project folders, one full scan and then 200 scans with nothing changed, each measured in its
 thread's CPU time (`getrusage(RUSAGE_THREAD)`); p95 must stay under 4 ms, and no file may be opened. The files are a day old, as most of a real folder is: a folder with a file changed within the hour is read in full every walk (5,000 stats cost about 12 ms of CPU), a cold one only when its mtime moves or every 30th walk. It is `#[ignore]`d
 and measures and prints; run it optimized and alone on a pinned host:

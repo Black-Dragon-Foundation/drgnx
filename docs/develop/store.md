@@ -408,7 +408,7 @@ one exception is exactly `HOME/org/board.org` (`Verdict::Board`; `board.org.bak`
 - **Project roots** (door 3): `check_root` refuses a root inside a denied path, and for a root that contains denied
   paths (`HOME` itself) lists them (`Contains`): `~/org`, the user's file and folder entries, and the names a glob
   matches at that moment. The code indexer (Hrafn, in the hub) has one door, `files::list`
-  (`runtime/crates/hrafn/src/files.rs`), the one place every indexed path passes, with the hub's deny check as its
+  (`crates/hub/hrafn/src/files.rs`), the one place every indexed path passes, with the hub's deny check as its
   `allow` closure (the opt-ins ignored): a root it denies is refused before its `.drgnx/search.eld` is read, and every
   listed file it denies is dropped before anything reads it.
 - **Import and export** (doors 2 and 5): `may_import` and `may_export` are the hub's filters for `graph/import` and

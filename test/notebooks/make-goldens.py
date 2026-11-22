@@ -1,6 +1,6 @@
 """Regenerates the nbformat goldens of hrafn's notebook tests with nbformat's own writer (pip install nbformat).
 
-    python3 test/notebooks/make-goldens.py runtime/crates/hrafn/tests/fixtures/notebooks
+    python3 test/notebooks/make-goldens.py crates/hub/hrafn/tests/fixtures/notebooks
 
 `minimal.edited.ipynb`: minimal.ipynb with the source of cell 1 set to "print('done')\\nprint(2)\\n", written by
 `nbformat.write`: what hrafn's writer must produce for the same edit, byte for byte.

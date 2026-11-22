@@ -1,6 +1,6 @@
 # sleipnir: the runner
 
-`runtime/crates/sleipnir` is what runs jobs on a machine: the hub's own (local) machine, the user's other machines
+`crates/hub/sleipnir` is what runs jobs on a machine: the hub's own (local) machine, the user's other machines
 over SSH, and jobq's. It is a library, shared by the hub, the runners and jobq, and the `sleipnir` binary (its modes: `serve`, `job-exec`, `job-helper`, `bench`, `git-receive`, `credential-helper`), with `drgnx-key` beside it.
 The scheduling decisions are [`forseti`](forseti.md)'s; sleipnir reads the machine for them and carries them out.
 
@@ -444,7 +444,7 @@ hub's `JobNetwork` (docs/develop/hub.md). A sidecar's image is imported from the
 ## The runner bundle
 
 `bin/drgnx build runner-bundle [--arch x86_64|aarch64]` builds `sleipnir`, `drgnx-key` and the relay sidecar `drgnx-px` (kept in the bundle as `drgnx-px-<arch>-linux-musl`) static (Rust's
-self-contained musl targets, release) into `runtime/target/bundle/<arch>/`, and checks each with `file`. The host's
+self-contained musl targets, release) into `target/bundle/<arch>/`, and checks each with `file`. The host's
 architecture is the default; `install.sh` builds that one, and CI's container lane builds both. `tests/bundle_host.rs`
 (`#[ignore = "bundle"]`, with `DRGNX_TEST_BUNDLE` and a musl image in `DRGNX_TEST_FOREIGN_IMAGE`) checks each binary
 is static and runs `drgnx-key` in an image of another libc.

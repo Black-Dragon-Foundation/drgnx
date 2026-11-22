@@ -36,13 +36,13 @@ source, which the next run updates or clears, never a second one and never a pro
 
 | File | Made from |
 |---|---|
-| `runtime/crates/drgnx-rows/src/faces.rs` | `FaceId`: every `(defface NAME` in `core/`, `wb/` and `modules/` (read as text: a face a loop defines is not seen), the kit's faces and the faces a view patch may name. A variant is the name without `drgnx-` in UpperCamelCase (`drgnx-text-muted` is `TextMuted`); `name()` and `from_name()` go between the two; a numbered family (`NAME-1`… or `NAME-0`…, two or more) is also an associated array (`FaceId::AGENT`, `FaceId::WORK_WHO`, `FaceId::TERM_COLOR`), indexed by the number less the first |
-| `runtime/crates/drgnx-rows/src/kit_gen.rs` | `etc/ui/components.eld`: `CompId`, `State` (serde: its name, `"selected-inactive"`), `STATES` (each state but rest with its semantic face), `GLYPHS` (the glyphs the components name, `(name, Unicode, ASCII)`), `ALL_GLYPHS` (the whole standard table, `drgnx-ui--default-glyphs`: a tab's icon) and per component `geom(id, variant)`, `label(id, variant)` and `face(id, variant)`; a variant slice names variant values and, optionally, a density (`"compact"`, `"comfortable"`, the default, `"roomy"`) |
+| `crates/core/drgnx-rows/src/faces.rs` | `FaceId`: every `(defface NAME` in `core/`, `wb/` and `modules/` (read as text: a face a loop defines is not seen), the kit's faces and the faces a view patch may name. A variant is the name without `drgnx-` in UpperCamelCase (`drgnx-text-muted` is `TextMuted`); `name()` and `from_name()` go between the two; a numbered family (`NAME-1`… or `NAME-0`…, two or more) is also an associated array (`FaceId::AGENT`, `FaceId::WORK_WHO`, `FaceId::TERM_COLOR`), indexed by the number less the first |
+| `crates/core/drgnx-rows/src/kit_gen.rs` | `etc/ui/components.eld`: `CompId`, `State` (serde: its name, `"selected-inactive"`), `STATES` (each state but rest with its semantic face), `GLYPHS` (the glyphs the components name, `(name, Unicode, ASCII)`), `ALL_GLYPHS` (the whole standard table, `drgnx-ui--default-glyphs`: a tab's icon) and per component `geom(id, variant)`, `label(id, variant)` and `face(id, variant)`; a variant slice names variant values and, optionally, a density (`"compact"`, `"comfortable"`, the default, `"roomy"`) |
 | `etc/ui/faces.eld` | the same face list, for Lisp |
 
 Both Rust files are `#[rustfmt::skip]` in `lib.rs`: their layout is the generator's. `bin/drgnx design --check` lists a
 stale code file as it does a stale page, and `drgnx-design/code-files-are-current` fails the unit suite; the Rust test
-`runtime/crates/drgnx-rows/tests/faces.rs` checks every face's name reads back and the kit tables answer. The check
+`crates/core/drgnx-rows/tests/faces.rs` checks every face's name reads back and the kit tables answer. The check
 runner's `cargo` stage runs `drgnx-rows`' clippy and tests.
 
 ## The kit's lint

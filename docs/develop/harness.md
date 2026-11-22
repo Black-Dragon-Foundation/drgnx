@@ -131,16 +131,16 @@ mounts them). A run narrowed by `DRGNX_TEST_SELECTOR` does not hold the list. Th
 
 The GUI suite (`test --ui`'s session) holds every hub row to run, narrowed or not. A session inherits no
 `DRGNX_RATATOSKR_BIN`, so `drgnx-ui-run-ui-session-tests` passes it explicitly: the caller's value, or else the checkout's
-`runtime/target/debug/ratatoskr`. It also sets `DRGNX_TEST_HUB_REQUIRED=1`, and under that a hub fixture that finds no
+`target/debug/ratatoskr`. It also sets `DRGNX_TEST_HUB_REQUIRED=1`, and under that a hub fixture that finds no
 Ratatoskr fails the row (`drgnx-test-no-hub`) instead of skipping it.
 
 #### The test hub
 
 `bin/drgnx test --ui`, `--scenario` and `--tty` (and `--container --ui` / `--scenario` / `--tty`, on the host before the container starts) give every contributor the same
-hub: `test_hub` fetches libghostty-vt's pinned tarballs when they are missing (`runtime/crates/ghostty-vt-sys/fetch.sh`,
+hub: `test_hub` fetches libghostty-vt's pinned tarballs when they are missing (`crates/hub/ghostty-vt-sys/fetch.sh`,
 as `install.sh` sets the terminal's engine up; Zig 0.17 builds it), builds `cargo build --locked -p drgnx-ratatoskr -p
 domr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks` (cargo builds nothing when the binaries are current) and
-sets `DRGNX_RATATOSKR_BIN` to `runtime/target/debug/ratatoskr`, with `ratatoskr-mock` (the gateway tests' provider) and
+sets `DRGNX_RATATOSKR_BIN` to `target/debug/ratatoskr`, with `ratatoskr-mock` (the gateway tests' provider) and
 `drgnx-term` (the terminal rows' worker) beside it. `--container` mounts that directory, so both siblings are seen inside.
 
 - `DRGNX_RATATOSKR_BIN` already naming a binary: used as it is, nothing built (CI builds its own: its GUI tier fetches
@@ -1372,7 +1372,7 @@ Also unset: `drgnx-test-env-ambient-variables` (the SSH agent, `GPG_AGENT_INFO`,
 socket and token) and every other variable of the caller that holds a path under the real HOME (found by a scan; the
 only exceptions are `PATH`, `PWD`, `OLDPWD`, `DRGNX_USER_ELPA`, `DRGNX_RATATOSKR_BIN`, the Ratatoskr the client's
 tests run, which macOS CI builds in the checkout under HOME, and `DRGNX_HUGINN_DUMP`, huginn's dump example for the
-differential test; `drgnx test` finds `runtime/target/debug/examples/dump` without the variable once
+differential test; `drgnx test` finds `target/debug/examples/dump` without the variable once
 `cargo build -p huginn --example dump` has built it, and the test is on the must-run list, so a full run without it fails). `GNUPGHOME` is RUN/gnupg (mode 700). The unit
 runner also binds `user-emacs-directory` to RUN/emacs, so nothing under `~/.emacs.d` or `~/.config/emacs` is written.
 `DRGNX_USER_ELPA` (the real `~/.config/emacs/elpa`, read-only) is the deliberate exception: tests that load packages

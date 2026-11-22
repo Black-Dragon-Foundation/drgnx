@@ -5,7 +5,7 @@
 #   bash test/runners/image-units.sh
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-img=$(cd "$here/../../runtime/crates/drgnx-ratatoskr/src/runners/cloud/image" && pwd)
+img=$(cd "$here/../../crates/hub/drgnx-ratatoskr/src/runners/cloud/image" && pwd)
 boot=$img/drgnx-first-boot
 tmp=$(mktemp -d)
 trap 'rm -r "$tmp"' EXIT
@@ -86,7 +86,7 @@ check "the first-boot unit runs the baked script" grep -q 'ExecStart=/usr/local/
 check "the watchdog starts after the first boot, from its limits" \
   bash -c "grep -q 'Requires=drgnx-first-boot.service' '$img/drgnx-watchdog.service' && grep -q 'EnvironmentFile=/etc/drgnx/watchdog.env' '$img/drgnx-watchdog.service'"
 # every option `sleipnir watchdog` refuses to start without is on the unit's command line
-wd_src=$here/../../runtime/crates/sleipnir/src/watchdog.rs
+wd_src=$here/../../crates/hub/sleipnir/src/watchdog.rs
 wd_exec=$(grep '^ExecStart=' "$img/drgnx-watchdog.service")
 needed=$(grep -o '"--[a-z-]* is needed"' "$wd_src" | cut -d' ' -f1 | tr -d '"' | sort -u)
 check "the watchdog's source names the options it needs" test -n "$needed"

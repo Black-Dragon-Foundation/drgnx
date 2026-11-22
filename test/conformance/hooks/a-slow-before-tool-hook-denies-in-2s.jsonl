@@ -5,7 +5,7 @@
 {"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict allow)))))\n"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "run", "args": ["plugins", "install", "$SCENARIOS/../../runtime/target/plugin-fixtures/plugins/slow-hook"], "expect_code": 0}
+{"do": "run", "args": ["plugins", "install", "$SCENARIOS/../../target/plugin-fixtures/plugins/slow-hook"], "expect_code": 0}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "plugins/list", "params": {}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"plugins": [{"name": "slow-hook", "hash": "$capture:h"}]}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "plugins/approve", "params": {"name": "slow-hook", "hash": "$h"}}}

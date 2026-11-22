@@ -1,7 +1,7 @@
 # The terminal
 
 The terminal's engine is libghostty-vt, Ghostty's terminal library (MIT), linked statically into the `drgnx-term` worker
-through the crate `runtime/crates/ghostty-vt-sys`. This page covers building the engine, the worker, the hub's
+through the crate `crates/hub/ghostty-vt-sys`. This page covers building the engine, the worker, the hub's
 methods and the editor's side.
 
 ## Building the engine
@@ -9,10 +9,10 @@ methods and the editor's side.
 libghostty-vt is written in Zig. **Zig is a build tool only**: it builds one static library, nothing Zig is installed
 with drgnx, and nothing is downloaded by a build script.
 
-- **Pins:** `runtime/crates/ghostty-vt-sys/pin.toml` names the libghostty-vt release (1.0.x), the Zig minor it needs
+- **Pins:** `crates/hub/ghostty-vt-sys/pin.toml` names the libghostty-vt release (1.0.x), the Zig minor it needs
   (0.17.x) and the sha256 of the two signed tarballs (the source and its dependency packages). `NOTICE` in the same
   directory lists every package built from them with its licence; a test checks it against `pin.toml`.
-- **Getting the tarballs:** `runtime/crates/ghostty-vt-sys/fetch.sh` downloads them into `tarballs/` (or
+- **Getting the tarballs:** `crates/hub/ghostty-vt-sys/fetch.sh` downloads them into `tarballs/` (or
   `$GHOSTTY_VT_TARBALLS`), checks the sha256 and, when `minisign` is installed, the signature. The offline bundle carries
   the same two files. A build with the files missing stops and says so.
 - **What the build does:** it checks the sha256 of both tarballs against `pin.toml`, unpacks them into `OUT_DIR`, and runs
@@ -44,7 +44,7 @@ The macOS row (`aarch64-apple-darwin`, a cross-compile from Linux and the real l
 
 ## The worker
 
-`drgnx-term` (crate `runtime/crates/drgnx-term`) runs one terminal: the PTY master, the program on it, the engine's
+`drgnx-term` (crate `crates/hub/drgnx-term`) runs one terminal: the PTY master, the program on it, the engine's
 `Terminal` and `RenderState`, and the key and mouse encoders. The engine's objects are not thread-safe, so the worker
 has **one thread**: a poll loop over the PTY, its socket and the socket's listener (`src/run.rs`). libghostty stays out
 of the hub's binary, and an engine crash ends one terminal, never the hub or Emacs.
@@ -219,7 +219,7 @@ test/runners/fleet.sh host <the term_scope binary> worker_survives_hub_restart_u
 
 ## Lifetime
 
-A terminal's worker outlives the hub that started it (`runtime/crates/drgnx-ratatoskr/src/term/`, the worker's
+A terminal's worker outlives the hub that started it (`crates/hub/drgnx-ratatoskr/src/term/`, the worker's
 `src/{scope,registry,child}.rs`).
 
 **Spawn:** with a user systemd, the worker runs in a scope of its own, `systemd-run --user --scope --unit
@@ -323,7 +323,7 @@ Reconnect, a reattached remote terminal) and the ssh row, `test/ssh/term-ssh-tes
 `test/container/ssh-row.sh`:
 
 ```
-DRGNX_TEST_IMAGE=<the line's drgnx-test image> DRGNX_RATATOSKR_BIN=runtime/target/debug/ratatoskr test/container/ssh-row.sh
+DRGNX_TEST_IMAGE=<the line's drgnx-test image> DRGNX_RATATOSKR_BIN=target/debug/ratatoskr test/container/ssh-row.sh
 ```
 
 It builds `drgnx-test-ssh:<hash>` on the test image (`Containerfile.ssh`: sshd, ssh, tcsh, sudo, tic; tagged by a hash
@@ -340,7 +340,7 @@ on every push (`docs/develop/ci.md`).
 
 One image model, kitty's, in the engine: libghostty-vt keeps kitty images and placements, scrolls, clips and deletes
 them, plays their animations and bounds their memory. It knows no other protocol, so the worker folds the other two
-into it (`runtime/crates/drgnx-term/src/image.rs`, `gallery.rs`):
+into it (`crates/hub/drgnx-term/src/image.rs`, `gallery.rs`):
 
 - **Cut out.** `Cutter` reads the program's output for a sixel (`DCS P1;P2;P3 q`, no intermediates: `DCS $ q`
   DECRQSS and `DCS + q` XTGETTCAP go to the engine untouched) and iTerm2's `OSC 1337 ; File=` (with `MultipartFile`,

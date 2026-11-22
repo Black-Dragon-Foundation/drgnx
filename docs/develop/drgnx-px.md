@@ -1,6 +1,6 @@
 # drgnx-px: the relay sidecar
 
-`drgnx-px` (`runtime/crates/drgnx-px`) relays a networked container job's TCP connections to its owner's proxy. The
+`drgnx-px` (`crates/hub/drgnx-px`) relays a networked container job's TCP connections to its owner's proxy. The
 job reaches nothing but the sidecar; the sidecar holds no policy, no resolver and no TLS. It carries each connection
 as a stream of frames over its own stdin and stdout, which `podman run -i` joins to the owner (the hub locally, the
 job helper on a runner), and the owner hands each stream to the job's proxy.

@@ -8,7 +8,7 @@ hub's facts to the drawing.
 
 ## The map core: `vegvisir`
 
-`runtime/crates/vegvisir` is a pure crate: no I/O, no clock, no threads, and no dependency beyond `serde`. The hub
+`crates/hub/vegvisir` is a pure crate: no I/O, no clock, no threads, and no dependency beyond `serde`. The hub
 turns each of its sources into a typed `vegvisir::Event` and steps a `vegvisir::Core` with it. The core keeps the
 map's model and each view's state, and returns effects for the hub to send.
 
@@ -254,7 +254,7 @@ navigation is gone, the links from this crate (a layout metric moved); a frame t
 
 ## The hub's facts
 
-The hub's code for the Work space lives in `runtime/crates/drgnx-ratatoskr/src/work/`. The pure parts take no clock and
+The hub's code for the Work space lives in `crates/hub/drgnx-ratatoskr/src/work/`. The pure parts take no clock and
 no I/O, so tests run them in every order or directly.
 
 ### Worktree bases

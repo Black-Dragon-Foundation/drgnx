@@ -6,7 +6,7 @@ The user's side is [docs/guide/settings.md](../guide/settings.md).
 ## The data subset
 
 Settings files are data, never code: drgnx never `load`s them. Two readers read them and must agree: the editor's
-(Emacs's `read`, behind the config layer's checks in `core/drgnx-file.el`) and the runtime's (`runtime/crates/huginn`).
+(Emacs's `read`, behind the config layer's checks in `core/drgnx-file.el`) and the runtime's (`crates/core/huginn`).
 Both read the cases in `test/fixtures/huginn/cases.json`.
 
 What the subset holds, and what both readers refuse:
@@ -27,7 +27,7 @@ What the subset holds, and what both readers refuse:
 | a file that is not valid UTF-8 | refused by both. Emacs would decode it to raw bytes; the Lisp side checks for `eight-bit` characters after decoding. A listed divergence from plain `read` |
 | depth > 64, file > 1 MiB | refused |
 
-How `huginn` reads it (`runtime/crates/huginn/src/read.rs`), where Emacs's `lread.c` has rules the table does not
+How `huginn` reads it (`crates/core/huginn/src/read.rs`), where Emacs's `lread.c` has rules the table does not
 spell out. Each is pinned by a row in the shared table or a test in `read::tests`:
 
 - **Values are Emacs's.** Escapes, modifier chains (`?\M-\C-a`, `"\M-\M-a"`), `\x` with three or more digits (a
@@ -57,7 +57,7 @@ surrogate or a code point beyond U+10FFFF (`"\uD800"`, `"\x110000"`), is read by
 
 ## Reading a settings file in Rust
 
-`huginn::form::parse_settings(bytes, expect_head, limits)` reads one settings file (`runtime/crates/huginn/src/form.rs`).
+`huginn::form::parse_settings(bytes, expect_head, limits)` reads one settings file (`crates/core/huginn/src/form.rs`).
 The file is one form, `(HEAD :version 1 META… ENTRY… SECTION…)`, whose head must be `expect_head`
 (`drgnx-settings` or `drgnx-workspace-settings`).
 
@@ -91,7 +91,7 @@ An `Error` carries the byte span of the node that did not fit. Use `serde_path_t
 
 ## Conformance
 
-The two readers are held to each other by four things, all under `test/fixtures/huginn/` and `runtime/crates/huginn`:
+The two readers are held to each other by four things, all under `test/fixtures/huginn/` and `crates/core/huginn`:
 
 - **The shared case table** (`cases.json`, above): hand-written rows both readers' unit tests read.
 - **The corpus** (`corpus/accept/*.el` with a `.json` dump of what Emacs reads; `corpus/refuse/*.el` whose first line
@@ -116,7 +116,7 @@ emacs --batch -L core -l test/fixtures/huginn/gen.el -f huginn-gen-all
 
 `drgnx-huginn/committed-dumps-are-current` fails when a dump no longer matches what Emacs reads, or when Emacs reads
 a refuse file (but for kind `CharName`, the listed `\N{NAME}` divergence). huginn's side is
-`runtime/crates/huginn/tests/{differential,properties}.rs`: `committed_corpus_matches`, `random_seeded_matches`, and
+`crates/core/huginn/tests/{differential,properties}.rs`: `committed_corpus_matches`, `random_seeded_matches`, and
 the property that every node's span, sliced out of the source, reads alone to the same datum. The fuzz target is
 `huginn_read` (docs/develop/runtime.md, "Fuzzing"). The mutation check over the refusal paths is
 `cargo mutants -p huginn --file crates/huginn/src/read.rs`, from `runtime/` (and `form.rs`, and `de.rs` with

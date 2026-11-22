@@ -1,6 +1,6 @@
 # Plugins: the plugin host (`brokkr`)
 
-`runtime/crates/brokkr` is drgnx's plugin host. A plugin is a WebAssembly component that gives agents
+`crates/hub/brokkr` is drgnx's plugin host. A plugin is a WebAssembly component that gives agents
 tools (abilities) and shapes what they do (hooks). This page covers the manifest, the approval hash, the install
 scan, the hook engine, the WASM host that runs plugins ("What a plugin can reach") and the hub's side (install,
 approval, abilities, the hook points). To write a plugin read "Building a plugin" first; users read
@@ -11,7 +11,7 @@ approval, abilities, the hook points). To write a plugin read "Building a plugin
 A plugin is a Rust crate that builds to a WebAssembly component with plain cargo: no `cargo component`.
 
 1. Add the target once: `rustup target add wasm32-wasip2` (drgnx's own toolchain pins it through mise).
-2. Start from `runtime/plugins/template` (copy it; its `Cargo.toml` has `crate-type = ["cdylib"]` and
+2. Start from `crates/hub/plugins/template` (copy it; its `Cargo.toml` has `crate-type = ["cdylib"]` and
    `wit-bindgen =0.63.0`).
 3. `cargo build --target wasm32-wasip2 --release`.
 4. Make a folder named after the plugin, with `plugin.json` and the built `.wasm` copied to `plugin.wasm`
@@ -32,7 +32,7 @@ within 500 ms. No hosts, a 64 KiB store.
 `template/src/lib.rs` does four things:
 
 - `wit_bindgen::generate!` with `path` pointing at the WIT directory (`../../crates/brokkr/wit` in the drgnx sources;
-  copy `runtime/crates/brokkr/wit` next to your plugin otherwise) and `world: "drgnx:agent-tools/plugin"`.
+  copy `crates/hub/brokkr/wit` next to your plugin otherwise) and `world: "drgnx:agent-tools/plugin"`.
 - `impl ability::Guest`: `call(tool, args_json)` matches the ability's name, parses the JSON arguments and answers a
   JSON string or an `Err` text. Arguments were already checked against `input_schema`.
 - `impl hook::Guest`: `run(point, input_json)` returns a `Verdict`. The template ignores every point but
@@ -72,7 +72,7 @@ plugin that spins can neither starve the hub nor another plugin for longer than 
 
 - **By hand:** install it, approve it, enable it in a project, and look at the step's provenance in the agent view: it
   names each rule and hook that looked, its verdict and its time.
-- **In the drgnx tree:** add the plugin to `runtime/plugins/fixtures` (a binary and `manifests/NAME.json`) and use
+- **In the drgnx tree:** add the plugin to `crates/hub/plugins/fixtures` (a binary and `manifests/NAME.json`) and use
   `brokkr::test_support::fixture("NAME")`, which builds every fixture with one cargo run and returns an install folder.
   Drive it through `brokkr::Host` (`brokkr/tests/host.rs` is the model) on real time: the host's timeout runs on the
   caller's runtime, so paused tokio time would end every wait at once. The template builds the same way through
@@ -142,7 +142,7 @@ configuration). Results come in folder-name order.
 
 ## Test fixtures
 
-`runtime/plugins/fixtures` is a crate of its own (its own workspace, excluded from the runtime workspace, so
+`crates/hub/plugins/fixtures` is a crate of its own (its own workspace, excluded from the runtime workspace, so
 `cargo test --workspace` never builds it for the host). One binary per test plugin, each with its manifest in
 `manifests/NAME.json`: `echo-ability`, `deny-rm-hook`, `rewrite-commit-msg`, `annotate-edit`, `change-tool-arg` (a
 `before-tool` change of the `echo-ability` call's arguments to `{"changed": true}`), `slow-hook` (spins),
@@ -161,15 +161,15 @@ rustup it adds the target; the Fedora 45 job's packaged Rust has no `wasm32-wasi
 upstream one (its crates are tagged with its own rustc), so the script installs the same rustc version with rustup-init
 (checked against its published SHA-256) for the fixtures alone. `DRGNX_WASM_CARGO` names the cargo the test support
 builds them with, when it is not the one running the tests. The script builds the fixtures and the template into the
-folders the test support builds into (`runtime/target/plugin-fixtures`), so the tests' own cargo run finds them built
+folders the test support builds into (`target/plugin-fixtures`), so the tests' own cargo run finds them built
 (a minute of brokkr's lib tests on a cold macOS runner).
 
 ## The template
 
-`runtime/plugins/template` is a minimal plugin with one ability (`shout`) and one `before-tool` hook, commented for
+`crates/hub/plugins/template` is a minimal plugin with one ability (`shout`) and one `before-tool` hook, commented for
 plugin authors. Build it with `cargo build --target wasm32-wasip2 --release`, copy `my_plugin.wasm` to `plugin.wasm`
 beside `plugin.json` in a folder named after the plugin, and install the folder. Outside the drgnx sources, copy
-`runtime/crates/brokkr/wit` next to the plugin and change the `path` in `wit_bindgen::generate!`.
+`crates/hub/brokkr/wit` next to the plugin and change the `path` in `wit_bindgen::generate!`.
 
 ## The hook engine
 
@@ -313,7 +313,7 @@ by the `wat` crate (a dev-dependency only) for a disabled proposal and for 1 001
 
 ## Plugins in the hub
 
-`drgnx_ratatoskr::plugins` (`runtime/crates/drgnx-ratatoskr/src/plugins.rs`) is the hub's side: which plugins are
+`drgnx_ratatoskr::plugins` (`crates/hub/drgnx-ratatoskr/src/plugins.rs`) is the hub's side: which plugins are
 installed, which the user approved and with which files, which run for a project, and the I/O the host's calls get.
 It runs nothing; it hands the host the plugins it would run.
 
@@ -371,7 +371,7 @@ It runs nothing; it hands the host the plugins it would run.
 
 ## The interface
 
-`runtime/crates/brokkr/wit/agent-tools.wit` is package `drgnx:agent-tools@0.1.0`. World `plugin` exports
+`crates/hub/brokkr/wit/agent-tools.wit` is package `drgnx:agent-tools@0.1.0`. World `plugin` exports
 `ability.call(tool, args-json) -> result<string, string>` and `hook.run(point, input-json) -> result<verdict,
 string>`, and imports `host`: `http-get`, `http-post`, `kv-get`, `kv-put`, `kv-delete` and `log`. A `verdict` is
 `allow`, `deny(reason)`, `change(replacement-json)` or `annotate(note)`. A plugin with no abilities or no hooks

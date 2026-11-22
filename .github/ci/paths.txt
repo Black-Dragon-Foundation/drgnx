@@ -12,8 +12,13 @@ list runtime: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuz
 .githooks/*                   ALL
 .gitignore                    ALL
 # the Rust workspace and the data its tests read
-runtime/fuzz/*                rt-fuzz
-runtime/*                     ALL
+crates/hub/fuzz/*             rt-fuzz
+crates/*                      ALL
+app/*                         ALL
+xtask/*                       ALL
+Cargo.toml                    ALL
+Cargo.lock                    ALL
+deny.toml                     ALL
 etc/*                         ALL
 settings/*                    ALL
 packs/*                       ALL
@@ -27,15 +32,15 @@ LICENSE                       -
 LICENSES/*                    -
 
 # bite cases (changes.sh --self-test): PATHS | REQUEST | SELECTOR | RUN | PARTIAL
-test runtime/crates/huginn/src/lib.rs       | -        | -                | ALL   | false
-test runtime/Cargo.lock                     | -        | -                | ALL   | false
+test crates/core/huginn/src/lib.rs       | -        | -                | ALL   | false
+test Cargo.lock                     | -        | -                | ALL   | false
 test .github/workflows/ci.yml               | -        | -                | ALL   | false
 test test/container/nidhogg.sh              | -        | -                | ALL   | false
 test some/new/place.txt                     | -        | -                | ALL   | false
 test SECURITY.md                            | -        | -                | -     | false
 test SECURITY.md,LICENSES/GPL-3.0.txt       | -        | -                | -     | false
 test docs/develop/hub.md                    | -        | -                | ALL   | false
-test runtime/fuzz/fuzz_targets/line.rs      | -        | -                | rt-fuzz | false
+test crates/hub/fuzz/fuzz_targets/line.rs      | -        | -                | rt-fuzz | false
 # narrowed dispatches: what the change needs and the run leaves out makes the run partial
-test runtime/crates/huginn/src/lib.rs       | rt-linux | -                | rt-linux | true
+test crates/core/huginn/src/lib.rs       | rt-linux | -                | rt-linux | true
 test SECURITY.md                            | rt-linux | -                | rt-linux | false

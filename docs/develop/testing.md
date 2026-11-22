@@ -29,8 +29,8 @@ table also holds how each kind of group runs (`:kinds`) and which files key its 
 | `test/affected.eld`, `core/drgnx-affected.el` | `lisp:test/unit/affected-test.el` (and `rules` for the Lisp): nothing else reads the table or the tool |
 | `core/`, `modules/` Lisp | `lisp:<test file>` for each unit test file that names the file's feature, plus `rules` and `rust:drgnx-ratatoskr` with its dependents (the doctor and the launch rows read `core/` and `modules/`) |
 | `wb/`, `themes/`, `keys/`, `init/`, `modules/ui/`, `etc/icons/` | the same Lisp groups, plus `ui` and `scenario` |
-| `runtime/crates/<c>/` | `rust:<c>` and every crate that depends on it, `rust-rules`; `domr` when the hub or the harness is among them |
-| `runtime/Cargo.*`, `runtime/protocol/` | `rust-workspace`, `domr`, `rust-rules` |
+| `crates/hub/<c>/` | `rust:<c>` and every crate that depends on it, `rust-rules`; `domr` when the hub or the harness is among them |
+| `runtime/Cargo.*`, `crates/hub/protocol/` | `rust-workspace`, `domr`, `rust-rules` |
 | `test/conformance/<g>/` | `domr:<g>` |
 | `test/unit/X-test.el` | that file and `rules` (the lints read every test file) |
 | `test/ui/`, `test/live/`, `test/scenario/`, `test/tty/`, `test/perf/` | that tier and `rules` |
@@ -129,7 +129,7 @@ red-is-never-cached cases.
 
 A test that needs a real parser (the notebook's, which gives each language one parser over its cells' ranges) cannot rely on
 the image having a grammar. `bin/drgnx test --container` therefore runs `test/packs/ts-grammars.sh` inside the container before
-the suite: the pack job (`ratatoskr packs sync --builtin`, from the hub binary at `runtime/target/debug/ratatoskr`) builds the
+the suite: the pack job (`ratatoskr packs sync --builtin`, from the hub binary at `target/debug/ratatoskr`) builds the
 python grammar at the pack's pin into a host cache (`DRGNX_TEST_TS_CACHE`, default `test-ts-grammars` in drgnx's cache folder, keyed by the
 pin) and the suite gets `DRGNX_TEST_TS_GRAMMARS`. Without the hub binary the test skips; CI sets `DRGNX_TEST_TS_REQUIRED=1`, which
 fails the run when no grammar was built, and `test/no-skip.eld` lists the test. The container needs network, git and a C compiler,

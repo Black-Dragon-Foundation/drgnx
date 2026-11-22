@@ -1,0 +1,12 @@
+[package]
+name = "drgnx"
+description = "The drgnx editor (a placeholder until the foundations stage lands)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "drgnx"
+path = "src/main.rs"

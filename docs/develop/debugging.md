@@ -5,7 +5,7 @@ and Emacs draws the gutter, the toolbar and the views. This page is for contribu
 
 ## vor: the DAP client
 
-`runtime/crates/vor/` (Vör) speaks DAP to one adapter over stdio or TCP, on tokio. It knows nothing of drgnx.
+`crates/hub/vor/` (Vör) speaks DAP to one adapter over stdio or TCP, on tokio. It knows nothing of drgnx.
 
 - **Framing** (`vor::codec::DapCodec`): `Content-Length: N` headers, then N bytes of JSON. Other headers are skipped
   and the header name is matched in any case. A header block over 8 KiB, a missing or malformed length, or a body

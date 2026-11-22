@@ -35,7 +35,7 @@ out=$(mktemp)
 sed 's/#.*//' "$rows" | awk 'NF' | while read -r crate target test mode; do
   # a fleet row needs the fake fleet: test/runners/drills.sh --timing runs it
   if [ "${mode:-}" = fleet ]; then echo "$crate::$test fleet (drills.sh --timing)"; continue; fi
-  args=(test --locked --manifest-path "$root/runtime/Cargo.toml" -p "$crate")
+  args=(test --locked --manifest-path "$root/Cargo.toml" -p "$crate")
   [ "$crate" = drgnx-ratatoskr ] && args+=(--features drgnx-ratatoskr/test-hooks)
   [ "${mode:-}" = release ] && args+=(--release)
   if [ "$target" = lib ]; then args+=(--lib); else args+=(--test "$target"); fi

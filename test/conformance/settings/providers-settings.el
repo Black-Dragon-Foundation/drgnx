@@ -1,5 +1,5 @@
 ;;; providers-settings.el --- a settings.el both sides read: the provider table conformance  -*- mode: lisp-data -*-
-;; The hub's table (runtime/crates/drgnx-ratatoskr/src/settings/conformance.rs) must equal the editor's
+;; The hub's table (crates/hub/drgnx-ratatoskr/src/settings/conformance.rs) must equal the editor's
 ;; (`drgnx-settings-dump--providers-table' with this `drgnx-ai-providers'), which dump.el writes to lisp-dump.json.
 (drgnx-settings
  :version 1

@@ -23,7 +23,7 @@ the old agent runtime, `drgnx-sandbox*.el`, were deleted with it, except the VC 
 
 ## Seeing the files a shell step opens
 
-`gleipnir::trace` (`runtime/crates/gleipnir/src/trace.rs`): layer 2 of the Work space's "reads through shell
+`gleipnir::trace` (`crates/hub/gleipnir/src/trace.rs`): layer 2 of the Work space's "reads through shell
 commands" (layer 1, the files a command names, is the hub's parser, [work-space.md](work-space.md#shell-reads)). It
 only records and never decides: every notified call is answered "continue", and the kernel then applies Landlock and
 the deny-list to it as it would untraced.
@@ -74,7 +74,7 @@ the deny-list to it as it would untraced.
   forked helper inherited). macOS has no tracer.
 - **Cost** (spike S4, desktop): about +8 µs p50 and +9 µs p95 per traced open, 2.7 µs untraced. Budgets: a notified
   open's round trip p95 ≤ 15 µs, 2,000 traced opens add ≤ 50 ms (gleipnir's `tests/timing.rs`, timing rows).
-- **Tests:** `runtime/crates/gleipnir/tests/trace.rs`, real children under Landlock and the deny-list, in the sandbox
+- **Tests:** `crates/hub/gleipnir/tests/trace.rs`, real children under Landlock and the deny-list, in the sandbox
   container (`ctr.sh --sandbox`); the test binary is its own child (`tests/trace_support/`), and each traced child
   announces itself with its hello and parks on the answer (pattern C).
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install the pinned Zig for CI: the Rust job's image (Containerfile.rust) and the macOS job use it to build the
-# terminal engine (runtime/crates/ghostty-vt-sys builds libghostty-vt from pinned sources; Zig is a build tool only).
+# terminal engine (crates/hub/ghostty-vt-sys builds libghostty-vt from pinned sources; Zig is a build tool only).
 # Usage: zig.sh [linux|macos]   (default: this machine's)
 #
 # The tarball's sha256 and Zig's minisign signature (the public key ziglang.org publishes) are both checked before

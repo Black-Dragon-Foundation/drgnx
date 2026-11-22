@@ -72,7 +72,7 @@ and the reservation files. They run only inside a runner:
 
 ```
 cargo test -p sleipnir --no-default-features --features linux --test runner_host --no-run   # in the dev container
-fleet.sh host runtime/target/debug/deps/runner_host-HASH [FILTER]...
+fleet.sh host target/debug/deps/runner_host-HASH [FILTER]...
 ```
 
 `host` copies the binary (and the `sleipnir`, `drgnx-key` and `drgnx-term` binaries beside its `deps/`, which the job-exec,
@@ -88,7 +88,7 @@ the runners over real SSH:
 ```
 cargo test -p sleipnir --features test-hooks --test fleet_serve --no-run   # in the dev container
 fleet.sh up --runners 2 --no-linger-on 2
-DRGNX_FLEET_TEST_BIN=runtime/target/debug/deps/fleet_serve-HASH fleet.sh test --test-threads=1 serve::
+DRGNX_FLEET_TEST_BIN=target/debug/deps/fleet_serve-HASH fleet.sh test --test-threads=1 serve::
 ```
 
 The hub's transport rows (`drgnx-ratatoskr`'s `tests/fleet_link.rs`) and its runner rows (`tests/fleet_runners.rs`)
@@ -127,8 +127,8 @@ runner's own log and attempt record, no key bytes on the runner, the job's proxy
 ```
 cargo test -p drgnx-ratatoskr --features fleet,test-hooks --test fleet_drills --no-run   # in the dev container
 cargo build -p sleipnir --features sleipnir/test-hooks --bin sleipnir --bin drgnx-key
-cargo build -p drgnx-px --bin drgnx-px --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
-cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-px runtime/target/debug/drgnx-px-x86_64-linux-musl
+cargo build -p drgnx-px --bin drgnx-px --target x86_64-unknown-linux-musl --target-dir target/fwd
+cp target/fwd/x86_64-unknown-linux-musl/debug/drgnx-px target/debug/drgnx-px-x86_64-linux-musl
 DRGNX_FLEET_TEST_BIN=<the binary> $HEAVY test/runners/drills.sh --container [--times N] [--timing] [FILTER]
 ```
 
@@ -162,8 +162,8 @@ keys on its console the way cloud-init's `write-ssh-key-fingerprints` does: the 
 ```
 cargo build -p domr --bin ratatoskr-mock                                                  # in the dev container
 cargo test -p drgnx-ratatoskr --features fleet,test-hooks --test fleet_cloud --no-run
-fleet.sh up --runners 0 --cloud runtime/target/debug/ratatoskr-mock
-DRGNX_FLEET_TEST_BIN=runtime/target/debug/deps/fleet_cloud-HASH fleet.sh test --test-threads=1
+fleet.sh up --runners 0 --cloud target/debug/ratatoskr-mock
+DRGNX_FLEET_TEST_BIN=target/debug/deps/fleet_cloud-HASH fleet.sh test --test-threads=1
 ```
 
 A machine also gets what a runner gets (the mock's `--run-opt`: the devices and caps for rootless podman, the share and

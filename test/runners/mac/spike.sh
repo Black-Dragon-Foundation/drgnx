@@ -73,7 +73,7 @@ EOF
   mr "mkdir -p ~/$ROOT_REL && chmod 700 ~/$ROOT_REL && tmutil addexclusion ~/$ROOT_REL; echo tmutil=\$?" 2>&1 | tee -a "$OUT/setup.log"
   mr "cat > ~/$ROOT_REL/mrspike && chmod 755 ~/$ROOT_REL/mrspike" < "$KEYS/mrspike"
   mr "cat > ~/$ROOT_REL/spike.sh" < "$0"
-  mr "cat > ~/$ROOT_REL/base.sbpl" < "$HERE/../../../runtime/crates/gleipnir/src/sbpl/base.sbpl"
+  mr "cat > ~/$ROOT_REL/base.sbpl" < "$HERE/../../../crates/hub/gleipnir/src/sbpl/base.sbpl"
   say "- the root: $(mr "ls -ld ~/$ROOT_REL" 2>&1)"
 }
 
@@ -211,7 +211,7 @@ profile() { # SLOT ATTEMPT CACHE TOOLS DEVDIR USERDIR
   slot=$1 att=$2 cache=$3 tools=$4 dev=$5 udir=$6
   absolute slot "$slot"; absolute attempt "$att"; absolute cache "$cache"; absolute tools "$tools"
   absolute developer-dir "$dev"; absolute user-dir "$udir"
-  cat "$HERE/../../../runtime/crates/gleipnir/src/sbpl/base.sbpl" 2>/dev/null || cat "$HERE/base.sbpl"
+  cat "$HERE/../../../crates/hub/gleipnir/src/sbpl/base.sbpl" 2>/dev/null || cat "$HERE/base.sbpl"
   echo '; the build addition (draft, spike S2)'
   echo '(allow system-socket (socket-domain AF_UNIX))'
   echo '(allow sysctl-read)'
@@ -366,7 +366,7 @@ remote_s2_ert() { # SELECTOR EMACS (relative to tools/nidhogg) FILES (test/unit 
 s2_ert() { # DRGNX_CHECKOUT DRGNX_EMACS SELECTOR FILES (DRGNX_EMACS inside an .app: the whole bundle is copied)
   say "## S2: drgnx ERT selectors under the draft build profile"
   r=$(root_of)
-  # the committed tree only: the checkout's runtime/target holds GBs from the earlier steps (rounds 1-2 spent the
+  # the committed tree only: the checkout's target holds GBs from the earlier steps (rounds 1-2 spent the
   # step copying it)
   stamp "slot"
   sudo mkdir -p "$r/slot-drgnx"

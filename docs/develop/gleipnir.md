@@ -1,6 +1,6 @@
 # Gleipnir: the sandbox
 
-Gleipnir is the Rust sandbox in `runtime/crates/gleipnir` ([runtime.md](runtime.md#crate-names)). It runs a program
+Gleipnir is the Rust sandbox in `crates/hub/gleipnir` ([runtime.md](runtime.md#crate-names)). It runs a program
 inside a boundary the kernel enforces: bubblewrap with Landlock and seccomp on Linux (the full tier), Landlock and
 seccomp alone (the reduced tier), or Seatbelt on macOS. It is self-contained: the caller passes every path, name and
 port, and nothing in gleipnir names a drgnx directory or reads a drgnx variable. The hub runs every agent session in
@@ -571,7 +571,7 @@ roots then. `prepare(inner, helper, inner_args, command)` gives the program (the
 
 Tests: `inner::tests` (the arguments, the thread check in a threaded process, the status lines, the sealed memfd,
 `read_status` on EOF, in pieces and at its deadline, the test-hook fields), `backend::linux::reduced::tests`, and
-`runtime/crates/drgnx-ratatoskr/tests/sandbox_inner.rs`, which runs the built `ratatoskr` as the helper without
+`crates/hub/drgnx-ratatoskr/tests/sandbox_inner.rs`, which runs the built `ratatoskr` as the helper without
 bwrap: the layers reported, exactly the spec's environment, no fd above 2, `NoNewPrivs` and one more seccomp filter,
 a floor refusal, the relay ready before the program (and three relay failures), an unsealed spec, the new session,
 a seccomp or Landlock install that an outer filter makes fail, and the reduced run end to end (ABI 9). With ABI 9,

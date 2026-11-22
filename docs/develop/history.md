@@ -2,7 +2,7 @@
 
 Every change to a project's text — the user's keystrokes, agents' writes, tools, git — recorded with who and why, so
 an agent step can be reverted to (keep mine, or roll back mine too), redone, forked and compared, with anchors exact
-to the character across every worktree. The store is the crate `runtime/crates/verdandi`: `history.db` and a
+to the character across every worktree. The store is the crate `crates/hub/verdandi`: `history.db` and a
 [Loro](https://loro.dev) document per tracked file, with no hub, editor or Urdr type. The hub's capture, methods and the
 editor's tracking build on it.
 
@@ -214,7 +214,7 @@ rows, so every element id, position and anchor stays. Then `secure_delete` is on
 (`History::backup(name)` → `<dir>/backup/<name>.db`, `VACUUM INTO`) are deleted, and `VACUUM` plus a truncating WAL
 checkpoint leave the secret in no file. The `excise` record says how many characters, never which.
 
-`history.db` is the sixth door of the personal-notes canary (`runtime/crates/norn/tests/canary.rs`): a file the
+`history.db` is the sixth door of the personal-notes canary (`crates/hub/norn/tests/canary.rs`): a file the
 deny-list names is never registered, so the notes are in no document, snapshot or log.
 
 ## Size, expiry, compaction
@@ -471,5 +471,5 @@ later deletes); it is a measurement, not a gate. `cargo test -p drgnx-ratatoskr 
 `cargo test -p verdandi`: `tests/store.rs`, `tests/docs.rs`, `tests/log.rs`, `tests/revert.rs` and the property in
 `src/revert_props.rs` (in the crate so it can use a store without a sync at each commit; its 10,000 cases make some
 hundred thousand records). Every test is pattern D: a temporary folder, `git merge-file` at most, every time a
-parameter. Loro and its own crates build with `opt-level = 3` in the dev profile (`runtime/Cargo.toml`), as the
+parameter. Loro and its own crates build with `opt-level = 3` in the dev profile (`Cargo.toml`), as the
 embedder's do.

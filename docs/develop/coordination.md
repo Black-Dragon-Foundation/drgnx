@@ -130,10 +130,10 @@ and never writes. Closing it never checkpoints, so a reader that outlives the wr
 - **Review marks:** `review/mark` writes one (agent, path, state, hash); each is (path, `:state`, `:hash`, `:at`). Accepting or reverting is a review layer only:
   nothing in the files changes.
 
-## The writer (`runtime/crates/norn`, `runtime/crates/urdr`)
+## The writer (`crates/hub/norn`, `crates/hub/urdr`)
 
 Ratatoskr writes the coordination tables through `norn`, on schema 7, and is their only writer (the Lisp writers
-were deleted with the Lisp runtime; `runtime/crates/norn/tests/parity.rs` keeps their frozen results as the
+were deleted with the Lisp runtime; `crates/hub/norn/tests/parity.rs` keeps their frozen results as the
 conformance data). Rules:
 
 - **One writer, the graph writer.** `norn::store::CoordDb` is a thin wrapper over `urdr::graph::WriterHandle`: every
@@ -273,7 +273,7 @@ before it is gone; the review view makes the last two:
 An error is said once as "drgnx hub: TEXT". The editor sends no `coord/notify` after a send: the front notifies
 itself after a write. Reads stay on the read-only path.
 
-## The tracker (`runtime/crates/norn/src/tracker`)
+## The tracker (`crates/hub/norn/src/tracker`)
 
 Tasks agents share, besides a job's tasks. `tracker::op(tx, caller, TaskOp)` runs one op in the caller's tx (the
 `task_write` tool and `tasks/write` call it through `tracker::op_or_roll_back`) and adds one `event` of kind `task`
@@ -338,7 +338,7 @@ While a notice is queued, the next one about the same task merges into it (field
 `changes` counted). Notes appear by id only, so excising a note leaves no copy. `tracker::notices::notices_unread`
 counts them for an actor; the tool calls the hub's `notify()` after `COMMIT`.
 
-## The tools (`runtime/crates/norn/src/tools`)
+## The tools (`crates/hub/norn/src/tools`)
 
 The coordination tools are an MCP server (stdio through the bridge, protocol 2025-06-18: initialize, ping,
 tools/list, tools/call) that runs inside the hub on `mimir`; there is no server process per agent and none in Emacs.
@@ -465,7 +465,7 @@ anything.
 **The command** an outside agent's MCP config holds is `<checkout>/bin/drgnx coord mcp --kind KIND` (stdio), which
 execs `ratatoskr mcp-bridge --outside --kind KIND`.
 
-### The tools in Ratatoskr (`runtime/crates/norn/src/tools`)
+### The tools in Ratatoskr (`crates/hub/norn/src/tools`)
 
 Ratatoskr serves the same tools in its own process, on `mimir`, one `Coord` per hub (the store, the hub, the report
 limit, the clock). Each tool is the Lisp tool of the same name, ported with the Lisp as the oracle: the rules, the
@@ -871,7 +871,7 @@ the user's — a `replaces` of the other side for a contradiction; the proposal 
 decision; for work against a decision, the task back to an agent told which files to revert (A), or the decision
 replaced and the review going on (B) — and the log's delivery tells every agent of the job.
 
-In the hub the rules are `runner::clash` (`runtime/crates/drgnx-ratatoskr/src/runner/clash.rs`), pure functions over
+In the hub the rules are `runner::clash` (`crates/hub/drgnx-ratatoskr/src/runner/clash.rs`), pure functions over
 the run's state: `scan(&RunState, &[Decision], &DiffIndex) -> Vec<Clash>` returns the clashes whose key is not in
 `RunState::carded` (the runner remembers each key it cards); `user_wins(&[Decision])` lists the agent decisions a
 user's decision replaces at once (no card). `DiffIndex` is task id → path → `FileDiff { hash, ranges }`, built from
@@ -982,7 +982,7 @@ delivery (`agents::wheel::tests`); the rows are `test/conformance/wheel/*` and t
 
 ## The permissions matrix
 
-`norn::matrix` (`runtime/crates/norn/src/matrix/`) is the policy on the wire's vocabulary
+`norn::matrix` (`crates/hub/norn/src/matrix/`) is the policy on the wire's vocabulary
 (`runstav::methods::matrix`). Rows are the 25 `Action`s (ids such as `agents.start`, `push.main`); columns are
 roles (manager, worker, chat), named agents and providers; a cell is `Allow`, `Ask` or `Never` with an optional
 limit (`amount` in a `Unit`).
@@ -1107,7 +1107,7 @@ reattaching). The mock agent's `coord TOOL JSON` prompt calls a tool of the serv
 `[drgnx task ID]` does a task, `[drgnx review ID]` reviews one (`MOCK_ACP_VERDICT=fail`), `MOCK_ACP_RATE_LIMIT` answers
 every prompt with a 429.
 
-The Rust tools: `runtime/crates/norn/tests/tools.rs` (identity names refused on every tool, `user` never an
+The Rust tools: `crates/hub/norn/tests/tools.rs` (identity names refused on every tool, `user` never an
 identity, no identity reads only, outside agents kept off the job tools, the report limit and its card, path rules,
 `hello`'s cwd, a planted git hook and fsmonitor that never run, and the frozen cases of the old Lisp tools replayed)
 and the unit tests of `norn::tools::{identity, guard, report}`.

@@ -327,24 +327,24 @@ milliseconds, the look moves off the reader thread.
 
 ## Code
 
-- `runtime/crates/runstav/src/recording.rs`: the format's constants and manifest, the normalizers, the key, the scrub,
+- `crates/hub/runstav/src/recording.rs`: the format's constants and manifest, the normalizers, the key, the scrub,
   the lint. Std, serde_json and sha2 only, so the std-only replayer shares it.
-- `runtime/crates/bifrost/src/engine.rs`: the `Tap` trait (`Gateway::set_tap`): `begin(Sent)` per sent attempt (the
+- `crates/hub/bifrost/src/engine.rs`: the `Tap` trait (`Gateway::set_tap`): `begin(Sent)` per sent attempt (the
   body and the client's body key-scrubbed, the headers without the sensitive ones), then `head`, each `chunk` and
   `end(End::{Complete, Dropped, ClientLeft { chunk }})`. The exchange is ended before the upstream body is dropped.
-- `runtime/crates/drgnx-ratatoskr/src/recording.rs`: `DRGNX_RECORD` / `DRGNX_REPLAY` at start, the `Recorder` (the
+- `crates/hub/drgnx-ratatoskr/src/recording.rs`: `DRGNX_RECORD` / `DRGNX_REPLAY` at start, the `Recorder` (the
   run's clock, `seq`, one writer thread, the scrubber), the replayer's start and the provider substitution (every
   provider's base becomes `http://127.0.0.1:PORT/p/ID` on the replayer, keyless); the ACP tap (`acp_tap`: the
   connection's number, the manifest's entry, the lines, the exit and the effects), `mcp` and the profile
   substitution (`replayed_profile`).
-- `runtime/crates/hermod/src/types.rs`, `conn.rs`: `LineTap`, `Dir`, `ConnOpts::tap`.
-- `runtime/crates/drgnx-ratatoskr/src/agents/session.rs` (`launch` gives every connection its tap; `prepare` takes
+- `crates/hub/hermod/src/types.rs`, `conn.rs`: `LineTap`, `Dir`, `ConnOpts::tap`.
+- `crates/hub/drgnx-ratatoskr/src/agents/session.rs` (`launch` gives every connection its tap; `prepare` takes
   the replayed profile), `agents/probe.rs` (a probe's connection is tapped too), `sessions.rs` (`AfterTool` notes
   each MCP call).
-- `runtime/conformance/src/bin/ratatoskr-mock.rs`: `llm --replay DIR [--speed N] [--misses FILE] [--parent PID]`;
-  `runtime/conformance/src/mock_acp/replay.rs`: `acp --replay DIR --as KIND [--speed N] [--misses FILE] [--roots
+- `crates/hub/conformance/src/bin/ratatoskr-mock.rs`: `llm --replay DIR [--speed N] [--misses FILE] [--parent PID]`;
+  `crates/hub/conformance/src/mock_acp/replay.rs`: `acp --replay DIR --as KIND [--speed N] [--misses FILE] [--roots
   JSON] [--strict]`.
-- `runtime/crates/drgnx-ratatoskr/src/recording_cli.rs` (`ratatoskr recording lint`), `core/drgnx-record.el` and
+- `crates/hub/drgnx-ratatoskr/src/recording_cli.rs` (`ratatoskr recording lint`), `core/drgnx-record.el` and
   `bin/drgnx` (`cmd_record`, `cmd_replay`): the commands.
 
 ## Tests

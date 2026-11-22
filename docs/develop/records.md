@@ -1,6 +1,6 @@
 # Records (saga)
 
-`runtime/crates/saga` reads the record formats of a project's planning folder and writes them back unchanged. It is
+`crates/hub/saga` reads the record formats of a project's planning folder and writes them back unchanged. It is
 pure: strings in, models out, no files and no store.
 
 ## Plans and ledgers

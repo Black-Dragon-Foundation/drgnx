@@ -128,7 +128,7 @@ if [ ! -f "$dir/drgnx.lock.eld" ]; then
   if [ -n "${RATATOSKR:-}" ]; then
     "$RATATOSKR" packs sync --builtin "$tmp" $packs >&2
   else
-    (cd "$here/runtime" && cargo run --locked -q -p drgnx-ratatoskr --bin ratatoskr -- packs sync --builtin "$tmp" $packs) >&2
+    (cd "$here" && cargo run --locked -q -p drgnx-ratatoskr --bin ratatoskr -- packs sync --builtin "$tmp" $packs) >&2
   fi
   fixtures "$tmp/fixtures"
   # a run that built the same key at the same time wins; ours is dropped

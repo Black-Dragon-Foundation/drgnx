@@ -16,7 +16,7 @@ outputs:
     description: the cargo registry cache's key, for the job that saves it
     value: ${{ steps.registry.outputs.cache-primary-key }}
   target-hit:
-    description: "true: runtime/target was restored by its exact key"
+    description: "true: target was restored by its exact key"
     value: ${{ steps.cache.outputs.cache-hit }}
 runs:
   using: composite
@@ -34,17 +34,17 @@ runs:
         path: |
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
-        key: cargo-registry-${{ runner.os }}-${{ hashFiles('runtime/Cargo.lock') }}
+        key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
         restore-keys: cargo-registry-${{ runner.os }}-
     - id: cache
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: runtime/target
-        key: cargo-${{ runner.os }}-rustup-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('runtime/Cargo.lock', 'runtime/Cargo.toml', 'runtime/*/Cargo.toml', 'runtime/crates/*/Cargo.toml') }}
+        path: target
+        key: cargo-${{ runner.os }}-rustup-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/*/Cargo.toml', 'app/Cargo.toml') }}
         restore-keys: cargo-${{ runner.os }}-rustup-mt1-${{ steps.rv.outputs.v }}-
     - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
       shell: bash
-      run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
+      run: bash .github/ci/commit-times.sh target/.drgnx-built-from
     # draugr runs only the git of the developer dir xcode-select's link names, and refuses Xcode under the
     # admin-writable /Applications (on the runner even its git is the runner user's); the Command Line Tools, which
     # the image installs, pass. Before the tests: draugr's git tests and the escape rows run that git.
@@ -83,7 +83,7 @@ runs:
       run: /bin/bash test/container/zig.sh macos
     - name: libghostty-vt's pinned tarballs (build.rs never downloads)
       shell: bash
-      run: /bin/bash runtime/crates/ghostty-vt-sys/fetch.sh
+      run: /bin/bash crates/hub/ghostty-vt-sys/fetch.sh
     # drgnx-term's vttest rows drive the real vttest (the Linux test images carry it; a missing one fails the rows)
     - name: vttest (the terminal's conformance rows)
       shell: bash

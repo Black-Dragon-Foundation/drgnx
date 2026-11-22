@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # wasm-target.sh: the wasm32-wasip2 target for the plugin fixtures, then the fixtures and the template built for it.
-# The plugin tests load real WASM components (runtime/plugins/fixtures) that brokkr's test support builds at test time;
-# building them here, into the folders the test support builds into (runtime/target/plugin-fixtures), names a missing
+# The plugin tests load real WASM components (crates/hub/plugins/fixtures) that brokkr's test support builds at test time;
+# building them here, into the folders the test support builds into (target/plugin-fixtures), names a missing
 # target or a broken fixture in its own step, and leaves the tests' own build nothing to do (a minute of brokkr's lib
 # tests on a cold macOS runner).
 # With rustup (the macOS runner, the Ubuntu jobs): `rustup target add`. Without it (the Fedora container's packaged
@@ -27,7 +27,7 @@ else
   cargo="$HOME/.cargo/bin/cargo"
   if [ -n "${GITHUB_ENV:-}" ]; then echo "DRGNX_WASM_CARGO=$cargo" >> "$GITHUB_ENV"; fi
 fi
-"$cargo" build --locked --release --target wasm32-wasip2 --manifest-path runtime/plugins/fixtures/Cargo.toml \
-  --target-dir runtime/target/plugin-fixtures/build
-"$cargo" build --locked --release --target wasm32-wasip2 --manifest-path runtime/plugins/template/Cargo.toml \
-  --target-dir runtime/target/plugin-fixtures/template/build
+"$cargo" build --locked --release --target wasm32-wasip2 --manifest-path crates/hub/plugins/fixtures/Cargo.toml \
+  --target-dir target/plugin-fixtures/build
+"$cargo" build --locked --release --target wasm32-wasip2 --manifest-path crates/hub/plugins/template/Cargo.toml \
+  --target-dir target/plugin-fixtures/template/build

@@ -205,7 +205,7 @@ case "${1:-}" in
   s1)   # the fake runner's own checks (sleipnir's runner-host tests that pin the image): build, run in every runner
         args=(test -p sleipnir --no-default-features --features linux --test runner_host --no-run --message-format=json)
         if [ -n "${DRGNX_FLEET_HOST_RUSTC:-}" ]; then   # CI: the runner's own toolchain
-          out=$(cd "$top" && cargo "${args[@]}" --locked --manifest-path runtime/Cargo.toml)
+          out=$(cd "$top" && cargo "${args[@]}" --locked --manifest-path Cargo.toml)
         else
           out=$(cd "$top" && DRGNX_BUILDER=local "$ORG/.claude/tmp/ratatoskr-cargo.sh" "${args[@]}")
         fi

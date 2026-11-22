@@ -1,6 +1,6 @@
 # forseti: the scheduler core
 
-`runtime/crates/forseti` decides which job runs where, when and with how much. It is pure: no I/O, no clock and no
+`crates/hub/forseti` decides which job runs where, when and with how much. It is pure: no I/O, no clock and no
 threads. Time (`u64` seconds since the epoch) and machine state are parameters, and sizes are MiB. Its shells read
 the machine and carry out what it returns:
 

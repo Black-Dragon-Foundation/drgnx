@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # commit-times.sh BUILT_FROM: each tracked file of the checkout (the current directory) gets its last commit's time as
 # its mtime, so cargo, which rebuilds a crate when a source is newer than its last build, sees a file a restored
-# runtime/target was built from as unchanged (a fresh checkout gives every file the checkout's time: everything
+# target was built from as unchanged (a fresh checkout gives every file the checkout's time: everything
 # rebuilt).  BUILT_FROM is the file holding the commit the restored target was built from (written before the save):
 # a file that differs from that commit keeps the checkout's time, since its last commit can be older than the cached
 # build (a branch committed before main's run) and it must still rebuild.  No such file, or a commit not in the

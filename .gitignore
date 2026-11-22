@@ -17,5 +17,5 @@ secrets.env
 *.key
 
 # Rust build output (runtime/)
-runtime/target/
-runtime/fuzz/target/
+target/
+crates/hub/fuzz/target/

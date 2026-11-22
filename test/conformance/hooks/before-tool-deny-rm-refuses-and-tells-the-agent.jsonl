@@ -1,11 +1,11 @@
-{"scenario": "hooks/before-tool-deny-rm-refuses-and-tells-the-agent", "requires": ["v1", "test-hooks"], "doc": "[C] The deny-rm-hook fixture (a real WASM plugin, installed and approved) refuses the agent's `rm -rf x` at the permission seam: the request is answered with its reject option and no card is made, the refusal is steered into the turn in the hub's words with the hook's quoted, and one hook row of the hub's own records it. The fixtures are built by brokkr's tests (runtime/target/plugin-fixtures)."}
+{"scenario": "hooks/before-tool-deny-rm-refuses-and-tells-the-agent", "requires": ["v1", "test-hooks"], "doc": "[C] The deny-rm-hook fixture (a real WASM plugin, installed and approved) refuses the agent's `rm -rf x` at the permission seam: the request is answered with its reject option and no card is made, the refusal is steered into the turn in the hub's words with the hook's quoted, and one hook row of the hub's own records it. The fixtures are built by brokkr's tests (target/plugin-fixtures)."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
 {"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict allow)))))\n"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "run", "args": ["plugins", "install", "$SCENARIOS/../../runtime/target/plugin-fixtures/plugins/deny-rm-hook"], "expect_code": 0}
+{"do": "run", "args": ["plugins", "install", "$SCENARIOS/../../target/plugin-fixtures/plugins/deny-rm-hook"], "expect_code": 0}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "plugins/list", "params": {}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"plugins": [{"name": "deny-rm-hook", "state": "unapproved", "hash": "$capture:h"}]}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "plugins/approve", "params": {"name": "deny-rm-hook", "hash": "$h"}}}

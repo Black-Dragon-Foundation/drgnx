@@ -12,14 +12,14 @@ on:
   push:
     branches: [main, "ci/*"]
     paths:
-      - "runtime/crates/gleipnir/**"
-      - "runtime/crates/drgnx-ratatoskr/tests/launch_sandboxed.rs"
+      - "crates/hub/gleipnir/**"
+      - "crates/hub/drgnx-ratatoskr/tests/launch_sandboxed.rs"
       - ".github/workflows/reduced-tier-vm.yml"
       - ".github/ci/browser-vm.sh"
   pull_request:
     paths:
-      - "runtime/crates/gleipnir/**"
-      - "runtime/crates/drgnx-ratatoskr/tests/launch_sandboxed.rs"
+      - "crates/hub/gleipnir/**"
+      - "crates/hub/drgnx-ratatoskr/tests/launch_sandboxed.rs"
       - ".github/workflows/reduced-tier-vm.yml"
       - ".github/ci/browser-vm.sh"
 
@@ -67,22 +67,22 @@ jobs:
       - run: bash .github/ci/rust.sh
       - name: build the launch rows (test hooks) and the binaries they run
         run: |
-          cargo build --locked --manifest-path runtime/Cargo.toml -p domr --bin ratatoskr-mock
-          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
+          cargo build --locked --manifest-path Cargo.toml -p domr --bin ratatoskr-mock
+          cargo build --locked --manifest-path Cargo.toml -p drgnx-ratatoskr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
       - name: the launch rows in the Fedora 45 VM, on the reduced tier
         run: |
-          bin=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test sandbox --no-run --message-format=json | jq -r 'select(.reason == "compiler-artifact" and .executable != null and .target.name == "sandbox" and (.target.kind | index("test"))) | .executable')
+          bin=$(cargo test --locked --no-fail-fast --manifest-path Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test sandbox --no-run --message-format=json | jq -r 'select(.reason == "compiler-artifact" and .executable != null and .target.name == "sandbox" and (.target.kind | index("test"))) | .executable')
           [ -n "$bin" ] && [ "$(printf '%s\n' "$bin" | wc -l)" = 1 ] || { echo "expected one sandbox test binary, got: ${bin:-none}" >&2; exit 1; }
-          t=$PWD/runtime/target/debug
+          t=$PWD/target/debug
           bash .github/ci/browser-vm.sh up "$RUNNER_TEMP/vm"
           bash .github/ci/browser-vm.sh put "$RUNNER_TEMP/vm" /usr/bin/bwrap "$t/ratatoskr" "$t/gleipnir-probe" "$t/ratatoskr-mock" \
-            "$PWD/runtime/crates/drgnx-ratatoskr/tests/data" "$PWD/test/conformance/fixtures" "$bin"
+            "$PWD/crates/hub/drgnx-ratatoskr/tests/data" "$PWD/test/conformance/fixtures" "$bin"
           # the VM's own needs: git (the project-chat row runs it) and a /tmp that holds a copy of the hub binary (800 MB
           # in a debug build) per row: the rows' fixtures live there.  The image's /tmp is a tmpfs with user quotas that
           # stops at about 40 % of the 4 GB of RAM whatever its size= says ("Disk quota exceeded", not "No space"), so
           # /tmp is the disk's /var/tmp
           bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "sudo dnf -y install git >/dev/null && sudo mount --bind /var/tmp /tmp && df -h /tmp"
-          bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "cd '$PWD/runtime' && '$bin' --ignored --test-threads 1 --nocapture launch_sandboxed::" 2>&1 | tee "$RUNNER_TEMP/launch.log"
+          bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "cd '$PWD' && '$bin' --ignored --test-threads 1 --nocapture launch_sandboxed::" 2>&1 | tee "$RUNNER_TEMP/launch.log"
           test "${PIPESTATUS[0]}" = 0
           # the rows say when the kernel's ABI is below 9 and they ran on the full tier: that is not what this job is for
           if grep -q "this row runs on the full tier" "$RUNNER_TEMP/launch.log"; then

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# The runner bundle (sleipnir, drgnx-key, drgnx-px): static musl binaries, into runtime/target/bundle/<arch>/
+# The runner bundle (sleipnir, drgnx-key, drgnx-px): static musl binaries, into target/bundle/<arch>/
 # (docs/develop/sleipnir.md). Run from the repository root:  bash xtask/runner-bundle.sh [--arch x86_64|aarch64]
 # Needs the Rust target <arch>-unknown-linux-musl (rustup target add …); another architecture links with rust-lld.
 set -euo pipefail
-manifest=runtime/Cargo.toml
-target=runtime/target
+manifest=Cargo.toml
+target=target
 arch=$(uname -m)
 while (($#)); do
   case $1 in
