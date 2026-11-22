@@ -1,0 +1,243 @@
+# glitnir
+
+Glitnir (the compositor) is a small Rust library with a C ABI (`include/glitnir.h`). It composes layers, shadows
+and rounded corners into a buffer it is handed, and tracks the damage. Its API takes ids, rectangles, pixels and
+parameters only, so it knows nothing of the program that embeds it.
+
+## Crate rules
+
+- Standard library only. A third-party crate needs a reason, and every one is locked
+  (`Cargo.lock`, which carries each crate's SHA-256; builds run `--locked`) and vendored at release (the release's
+  `nidhogg-vendor-<version>.tar.zst`; nothing is vendored in git), licence-checked (`deny.toml`) and listed here with that reason:
+  - `png =0.18.1` (feature `images`, no default features): PNG decoding in safe Rust, so untrusted PNGs never reach
+    libpng. It brings `fdeflate`, `flate2` (with `miniz_oxide`), `crc32fast`, `bitflags`, `adler2`, `simd-adler32`
+    and `cfg-if`; none starts a thread. `zlib-rs` is locked (and in the vendor tarball) as an optional dependency of `flate2` but
+    not built.
+  - `gif =0.14.2` (feature `images`, no default features but `std`, without which it is empty): GIF's LZW rasters
+    in safe Rust, instead of giflib. It brings `weezl`; no thread.
+  - `image-webp =0.2.4` (feature `images`, no default features): VP8, VP8L and ALPH decoding in safe Rust, instead
+    of libwebp. It brings `byteorder-lite` and `quick-error`; no thread.
+  - `sja` (path `../sja`, always): Sjá, the native view model (its own README). Glitnir carries it so that every
+    Rust-carrying build has its entry point: `libglitnir.a` on NS, and the glue's `libnhglue.a` through its
+    `pub use glitnir::*`. It brings `serde_json` (with `serde_core`, `itoa`, `memchr`, `zmij`) and `libc`; `serde`,
+    `serde_derive`, `syn`, `proc-macro2`, `quote` and `unicode-ident` are locked as optional dependencies but not
+    built. Feature `sja-test-hooks` turns on its test hooks.
+- Builds are locked: `cargo build --release --locked`, with `CARGO_HOME` inside the build directory, never `~/.cargo`.
+  Cargo fetches the locked crates from crates.io, unless the release's vendor tarball is unpacked in `nidhogg/`
+  (`shell/vendor/`, `glitnir/vendor/` and their `.cargo/config.toml`): then the build is offline. `check.sh` compares an
+  unpacked `vendor/` with the lock (`nidhogg/ci/vendor.sh check`); without one it says so.
+- `panic = "unwind"`: every `extern "C"` body runs inside `ffi_guard` and returns `GLITNIR_E_PANIC` (-1) on a panic.
+- Every exported symbol is listed in `ffi::EXPORTS` and declared in `include/glitnir.h`; a test checks that the two
+  agree.
+
+## Compose kernels and shadows
+
+Pixels are premultiplied ARGB32 (Cairo's native-endian `0xAARRGGBB`), read and written in place through strided
+views (`kernels::{Pixels, PixelsMut, Mask}`).
+
+- `kernels::kernels()` returns the machine's kernels, chosen once: on x86-64 the AVX2 build where the CPU has it,
+  else the baseline; on aarch64 the baseline build is already NEON. Both builds compile the same row bodies.
+  `copy`, `over_const` (a layer's opacity), `over` (a translucent source), `mask_over` (source × coverage ×
+  opacity) and `solid_over` (a colour through coverage) use pixman's exact x·a/255 arithmetic: OVER equals
+  `pixman_image_composite32` bit for bit for premultiplied input.
+- `corner_coverage(r)` is the 2r×2r coverage of the disc around the corner arcs' centre; its quadrants are a
+  rectangle's four r×r corner squares in place. Pixels on the arc take 16×16 samples (within 1/255 of 16×16
+  supersampling); the rest are exact. Cached per radius.
+- `ring` redraws the host's square border along the rounded path, in the corner squares only, so straight edges keep
+  the host's pixels. `ring_coverage(r, b)` gives the ring mask and the `inner` mask a bordered layer's corners use.
+- `decor_corners` (C: `glitnir_decor_corners`) draws a decorated box's rounded corners (PD) from one premultiplied
+  tile per (radius, border, colours) built from those masks (`decor_tile`, the 32 most recently used): OVER the
+  pixels for a box just drawn, replacing the corner squares for the repaint of a run's end. A Cairo fill along a
+  curve costs several µs per call; the tile is a copy or one OVER pass.
+- `shadow::ShadowCache` holds nine-slice shadow tiles (one corner tile mirrored four ways, two 1-D edge profiles and
+  the middle value) of the Gaussian-blurred rounded rectangle in closed form (Evan Wallace's method, 8 samples), keyed
+  by size class, radius, blur, spread, colour and scale, the 64 most recently used. σ = blur / 2; the shadow reaches
+  3σ past its box. Tiles hold one sample every 2 px from σ 8 and every 4 px from σ 16, sampled bilinearly: the
+  coarsest that keeps the error within 2/255 of an 8×8-supersampled rounded rectangle convolved with an exact
+  Gaussian.
+- `blur::Backdrop` keeps what lies beneath a translucent layer, blurred, at ¼ resolution, for the composite to sample
+  bilinearly: a 4×4 box average, then three running-sum box passes per axis (the kernels `down4`, `box_h`, `box_v`,
+  `bilerp`), at a cost that does not depend on σ. The image holds the layer's region plus `blur::margin(σ)` (3σ, a
+  multiple of 4). `update` recomputes only the rows the source's damage reaches, and a change of σ, scale, region or
+  source size recomputes it all; it returns the part of the region whose samples changed. Past the source, and past the
+  image, the edge repeats. Box radii are whole cells, so σ takes effect in steps, and below 2 device pixels it blurs only
+  as far as the averaging does.
+
+## Compose
+
+`glitnir_compose` draws a root's committed scene into a target buffer the host hands it (its pixels and their place
+in the root's device pixels), within the given rectangles (the damage, or a draw's clip), from the frames' surfaces
+(sources, by layer id), bottom to top: layers without chrome are copied; a chromed layer's shadow tiles go over what
+lies below, then the layer is copied but for its four corner squares, which go through the corner mask, with the
+border ring when it has a border, and the chrome's edge ring (`ring_px`, `ring_argb`) just outside the rounded
+rectangle after the shadow. Window layers are their frame's pixels (P1 composes a scroll as damage). A window
+layer with a card (`scene::set_card`, Rust only: a `Card`'s beneath colour, edge ring and the rectangles it keeps out,
+with the radius and shadow from the layer's chrome) then draws over the frame's pixels and labels: in the gap around the
+window (inside the frame, never inside a rectangle it keeps out, the other windows), the shadow and then the ring, a
+band just outside the rounded rectangle; in its four corner squares, outside the rounded rectangle, the gap as it is
+beside them: the beneath colour, then the chrome of the frame's other cards below it in paint order, its own shadow
+and ring, and the other cards' above it. The shadow's radius is the corners', clamped to half the shorter side. The
+rest of the window stays a plain copy, so typing inside it composes nothing of the card. A card group's card (one
+card around several windows: `scene::card_group` takes their rectangles when they tile one rectangle as a column or
+a row with gaps of at most `CARD_GROUP_GAP` px, and gives the rectangle and the gaps) also paints its `fill` rectangles,
+the dividers between the windows, in `fill_argb`, before its corners; the outer edges alone are rounded and ringed.
+The model is the `Card`, so another compositor (Naglfar on macOS) draws the same from the same vector. A card's
+change damages where it draws (its corners, its fill and its bounds outside the window), and so does its raise or lower; a change of the rectangles
+it keeps out damages only those that came or went. A window layer with a minimap (`scene::set_minimap`, Rust only: a
+`minimap::Minimap`) then draws it over the window, after the card: its fill, its tiles (`minimap::raster`, 256 rows of
+bars each, a line one bar from its indent to its end in its class's colour, premultiplied) and its bands (a fill and a
+1 px outline), all clipped to the part revealed (`reveal_px` wide from the side it sits on), so opening it grows a clip
+and never rescales a tile. A minimap's change damages only its rectangle. Pixels no
+layer covers are left alone. A pixel's value never depends on how the rectangles cut it, so composing the damage
+equals composing everything. A source whose device scale is not the target's is refused (`GLITNIR_E_STATE`) and the
+host draws that root the stock way. The time taken and the layers drawn fill the root's next frame-time entry.
+
+**Threads.** The scenes, the damage and the sprite cache belong to the host's main thread, behind one lock; a thread
+that calls `glitnir::mark_compose_thread` and then touches them panics in a debug build. A commit through the Rust
+API (`damage::commit_snapshot`) also returns the committed scene as an immutable `Arc<Committed>`: the layers in paint
+order, their labels and the sprites those labels were placed from (the sprite cache is copied on write, so a later
+`glitnir_decor_sprite_put` leaves a snapshot alone). `compose::compose_committed` composes a snapshot with a
+caller-owned `Composer` (shadow tiles and per-root tallies) and takes no lock, so another thread can compose while the
+host goes on drawing. Frame-time records have their own lock, and any thread may record. `glitnir_compose` composes
+the root's latest snapshot with one composer for the process.
+
+**Own outputs.** `glitnir_layer_set_output` makes a window layer right under the root's frame layer its own output
+(at most 4 per root): the shell shows it on a surface of its own. The host gives the window's exact rectangle; the
+commit snaps it outward to the rows and columns a subsurface can take at the root's scale (`snap::outward`, stable
+rounding) and lists the output in the snapshot (`Committed::outputs`: rectangle, scroll, damage in its own
+coordinates, `full` when nothing of its last picture can be kept). Scene damage inside the window goes to the output
+only; the snapped rectangle's overlap with the neighbours goes to both. A `glitnir_scroll` whose area holds the whole
+window becomes the output's scroll distance plus its exposed rows, and damage drawn before it moves with the pixels;
+any other scroll stays damage. A card's corners are composed into the output's buffer like any scene pixel, and they
+move with its rows, so an output's scroll also damages each card corner square in it, where it is and where the
+scroll took it (at most eight r×r squares): a card window keeps its own output, with no mask surface. An output that goes (demoted, hidden, removed) or moves damages its old rectangle on
+the frame. `pool::Ring` is the output buffers' row arithmetic: buffers `min(2·view, 8192)` rows tall, a scroll moves
+the view's offset and rebases to the middle at the buffer's end, and `punch_rows` names the rows more than half a
+view away, whose pages the shell may release.
+
+The `pixman-oracle` feature (Linux; `build.rs` links the system's `pixman-1`) adds the test that compares the
+kernels with pixman; `check.sh` runs it on Linux.
+
+## Decorations
+
+A window layer carries label anchors (`glitnir_decor_*`): the first glyph of a labelled run, its clip and a sprite key,
+in layer pixels. The host keeps them as true as the pixels (a glyph draw drops and records, a clear drops, a scroll
+moves). At commit the scene places a label per anchor whose sprite is cached (`glitnir_decor_sprite_put`, 64 sprites,
+least recently used out): above the glyph, below it on the window's first text row, shifted right past an earlier label
+on the row, one row further from the text when the shift would leave the layer. A label that appears, moves or goes
+damages its old and new bounds; compose draws the sprites over the window layer's pixels, clipped. Sprites are drawn
+as given, at the layer's device scale, never resampled.
+
+## Checks
+
+`check.sh [--container DISTRO] [--test NAME]` runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`,
+`cargo deny check licenses bans sources` (when `cargo-deny` is installed) and a vendor-drift check (it vendors a copy
+of the crate and compares; the source tree is never written). Without `--container` it uses the host's cargo; with
+`--container fedora-45` it runs in a podman container capped at 2 GiB.
+
+## Damage
+
+`damage.rs` keeps each frame's pending damage (device pixels; at most 32 rectangles, `region.rs`):
+`glitnir_damage_add_n` adds rectangles, `glitnir_damage_all` the whole frame, `glitnir_scroll` a scroll's area and the
+strip it left stale. A rectangle the damage already contains adds nothing, and a new one drops those it contains.
+`glitnir_damage_pending` takes the damage (the frame then has none); the rectangles stay valid until that frame's next
+take. Whole-frame damage reads back as `{0, 0, INT32_MAX, INT32_MAX}`, which the host clips to the frame.
+
+`glitnir_commit` runs at the host's consistency points (no drawing in progress on a root or its children): it takes
+the root's pending damage, into which the host has first moved its child frames' damage (in root coordinates), and
+hands it back for invalidation; the rectangles stay valid until the root's next commit, apart from any debug take.
+
+The frame-time record's `backfill_rate` is -1 when no entry knows whether its paint back-filled (`backfill` 2).
+
+## Image decoders
+
+Feature `images` (on by default): `glitnir_img_decode (format, data, len, params, out)` decodes encoded bytes into
+`width * height` words `0x00RRGGBB` and an optional mask (255 draw, 0 transparent), both from the C library's
+`calloc`, so the host frees them with `free` or `glitnir_img_free`. The ABI is stateless: no lock, no global state,
+no thread, no callback, so the host calls it on any thread (its image worker) and outside `ffi_guard`; a panic is
+caught at the boundary and returns `GLITNIR_E_PANIC`, freeing whatever the decode had allocated.
+
+Every allocation is bounded: the header's width and height are checked against the caller's limits and
+`MAX_PIXELS` (2^27) before the result is allocated, rows are decoded one at a time (no whole raw image), and the
+`png` crate's own limit (64 MiB for its buffers and chunks) stays at its default.
+
+The crates allocate infallibly and Rust aborts the process when an allocation fails (a hook cannot catch it), so a
+decode asks first: from the header's size it estimates the most heap it needs at once (`images::reserve`: bytes a
+pixel times the buffers the format holds together), refuses an estimate over `MAX_DECODE_BYTES` (4 GiB), and probes
+that the allocator can give it (`try_reserve_exact`, given back at once). A refusal is `GLITNIR_IMG_E_NOMEM`, as the C
+decoders answered an allocation failure. An animation asks again before each frame it composes.
+
+PNG (`images/png.rs`) gives libpng's pixels for the host's transformations: 16-bit samples keep their high byte,
+palettes and low-depth gray expand (gray scaled ×255, ×85, ×17), gray becomes RGB; a `tRNS` key or a palette whose
+alphas are all 0 or 255 makes a mask, any other alpha is composited over the caller's background with
+`png_composite`'s rounding (`images/composite.rs`, checked against every 8-bit case) at the file's depth, before
+the 16-bit strip. `tRNS` and `bKGD` are read as libpng reads them (lengths, order, CRC). libpng composites in linear
+light when the file carries `gAMA`, `sRGB`, `iCCP` or `cICP`; such an image with alpha to composite returns
+`GLITNIR_IMG_E_HOST`, and the host decodes it itself. Error texts are the crate's.
+
+GIF (`images/gif.rs`) reads the file's records as giflib's `DGifSlurp` does (its error texts and quirks: an
+extension's continuation sub-blocks, a code size over 8, a missing trailer, a frame outside the screen checked after
+the whole file is read) with a walker of its own, and decodes each frame's raster with the `gif` crate's `Decoder`
+over a one-frame file built from the frame's bytes: the crate's `FrameDecoder` loops forever on LZW data that ends
+early, so it is not used. Frames are composed by a port of the host's GIF loader: the frame background outside frame
+0, disposal (none, background, previous), transparency, the delay and the extension blocks (returned as
+function, length, bytes triples). WebP (`images/webp.rs`) decodes a still with `image-webp` and composites it over
+the background with the host's single-precision formula; an animation's container is read as `WebPDemux` reads it,
+each frame's chunks are decoded as a still image of their own (`image-webp`'s own animation path composites with
+the file's background hint, libwebp's does not), and the canvas is built by a port of libwebp's `anim_decode.c`
+(key frames, `BlendPixelNonPremult` checked against every alpha pair, dispose to background; `images/anim.rs`).
+
+Animations: the crate keeps no state between calls. When the caller sets `keep`, the decode returns its animation
+state (`out.anim`, an opaque pointer with its size in `anim_bytes`) and the next call may hand it back in
+`params.anim` (the call then owns it, also when it fails; `data` may be NULL) to decode the next frame from the
+current one, as the C cores' caches do; `glitnir_img_anim_free` frees one the caller drops. An animation has at most
+`MAX_FRAMES` (2^18) frames; more fail as an allocation would.
+
+### Fuzzing the image decoders
+
+`nidhogg/glitnir-fuzz/` is a cargo-fuzz crate (its own workspace, a sibling of this crate because this crate's
+`.cargo/config.toml` points crates.io at `vendor/`, which holds no fuzzer; nightly only). Its target `image_decode` feeds
+arbitrary bytes as a PNG, GIF or WebP to `glitnir_img_decode` with random parameters, decodes animations again from
+the state handed back, and fails on a panic, a mismatch between the return value and `out.err`, an oversize result or a
+result left behind on error. From the repository root, with a nightly and `cargo-fuzz`:
+
+    cargo +nightly fuzz run --fuzz-dir nidhogg/glitnir-fuzz image_decode CORPUS_DIR -- \
+        -max_total_time=600 -rss_limit_mb=3072 -max_len=65536 -dict=nidhogg/glitnir-fuzz/image.dict
+
+A crash lands in `nidhogg/glitnir-fuzz/artifacts/`; turn the input into a unit test next to the format's code.
+
+## Change rings
+
+`history` holds an edit history's change rings for the host (`glitnir_history_*`; Nidhogg's `--with-nidhogg-history`,
+whose description is the top README's "Edit history hook"): one ring per tracked text buffer, keyed by an opaque id. A
+push copies the change's text (in two parts when the host's gap splits it) with its start, old and new lengths, time and
+origin index; `peek` and `pop` take them oldest first, the text copied into the caller's buffer, so no pointer into the
+library's memory crosses. Past `MAX_CHANGES` (65536) or `MAX_BYTES` (64 MiB) a ring drops what it holds and answers
+`GLITNIR_HISTORY_RESYNC` until `glitnir_history_clear`: the host then reads the whole text again. Tests:
+`history::tests` (pattern D).
+
+## Limits
+
+A panic inside the library is caught at the boundary (`GLITNIR_E_PANIC`), and so is any other error a call returns. A
+panic in the shell's glue drops the display it happened on while Emacs keeps running
+(`nhwl-gui/glue-panic-loses-the-display-not-emacs`), and `nhwl-glue-panics` returns the reports. There is no stock path
+to fall back on: pgtk's fallback went with it.
+
+Three failures the fallback cannot catch still abort the process: an allocation failure, a second panic while one is
+being handled, and a stack overflow. To keep the first rare, the frame-time rings are preallocated and the caches
+bounded.
+
+## Headless mutter
+
+The GUI rows run under `mutter --headless` (`nidhogg/test/gui.sh`), which loads mutter's default plugin, not GNOME
+Shell. In mutter 51.1 (Fedora 45) that plugin's size-change effect (`size_change` / `size_changed`,
+`src/compositor/plugins/default.c`) leaks: each fullscreen or maximize change paints the window into a new clone
+actor, which is destroyed only when its 250 ms effect stops normally. A change that comes while an effect still runs
+overwrites the clone pointer, a switch between two states of one size (fullscreen <-> maximized: a headless monitor
+has no panels) never reaches `size_changed`, and with `MUTTER_DEBUG_DISABLE_ANIMATIONS=1` no clone is ever destroyed.
+Every leaked clone keeps a window-sized texture: about 40 MB at 1920x1080, 50-150 MB at 2560x1440 and 1.25. A plain
+GTK 3 window and Nidhogg with Glitnir off leak alike, at every scale; resizes and `glitnir-exact-scale` toggles do
+not leak. I2's OOM (335 MB -> 5.7 GB at 1.25) came from rows switching fullboth <-> maximized every 0.1 s. The rows
+therefore change these states only from a plain window and `glitnir-p15-gui--settle` (0.6 s) apart
+(`glitnir-p15-gui--state`), and `glitnir-gui/exact-compositor-memory-bounded` keeps mutter's growth under 300 MB
+across toggles, resizes and maximize/fullscreen changes at the exact scale.

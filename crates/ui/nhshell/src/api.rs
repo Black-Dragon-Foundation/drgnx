@@ -1,0 +1,812 @@
+//! The shell API: `ShellBackend`, the trait every windowing backend implements, and the plain types around it.
+//!
+//! The glue holds a `Box<dyn ShellBackend>` (`crate::open`) and knows nothing of the backend behind it.  All calls
+//! come from the host's main thread.  Sizes are logical pixels unless a name says `dev` (device pixels).
+
+use crate::caps::NhShellCaps;
+use crate::event::Record;
+use glitnir::geom::Rect;
+use glitnir::layout::LayoutLeg;
+use glitnir::motion::MotionSpec;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::Thread;
+use std::time::Instant;
+
+pub type WindowId = u64;
+
+/// `ack_configure` flag: the ack changes what the window shows, so only a buffer carries it.
+pub const NHSHELL_ACK_CONTENT: u32 = 1;
+/// `window_ready` bits: the host may draw and present a buffer; the window owes a commit (bare or with a buffer); with
+/// `CONTENT`, a content ack waits (present a buffer even with nothing drawn).
+pub const NHSHELL_READY_CONTENT: u32 = 1;
+pub const NHSHELL_READY_OWED: u32 = 2;
+pub const NHSHELL_READY_ACK: u32 = 4;
+
+pub const NHSHELL_OK: i32 = 0;
+pub const NHSHELL_E_PANIC: i32 = -1;
+pub const NHSHELL_E_ARG: i32 = -2;
+/// The call does not apply now (no such window, no buffer begun).
+pub const NHSHELL_E_STATE: i32 = -3;
+/// The backend cannot do this (a protocol it needs is absent, or no backend is built).
+pub const NHSHELL_E_UNSUPPORTED: i32 = -4;
+/// The connection to the display is gone.
+pub const NHSHELL_E_DISCONNECTED: i32 = -5;
+/// Out of memory or descriptors.
+pub const NHSHELL_E_NOMEM: i32 = -6;
+/// The other side did not answer in time (a selection read).
+pub const NHSHELL_E_TIMEOUT: i32 = -7;
+/// The buffer is smaller than the text (`take_text`); the text stays and `*len` says how big it is.
+pub const NHSHELL_E_TOO_SMALL: i32 = -8;
+/// The display is reconnecting (`ShellBackend::reconnect`): the call sent nothing.
+pub const NHSHELL_E_RECONNECTING: i32 = -9;
+
+/// Why a call failed; `code` is the glue's `NHG_E_*` value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellError {
+    Arg,
+    State,
+    Unsupported,
+    Disconnected,
+    NoMem,
+    Timeout,
+    TooSmall,
+    Reconnecting,
+}
+
+impl ShellError {
+    pub fn code(self) -> i32 {
+        match self {
+            ShellError::Arg => NHSHELL_E_ARG,
+            ShellError::State => NHSHELL_E_STATE,
+            ShellError::Unsupported => NHSHELL_E_UNSUPPORTED,
+            ShellError::Disconnected => NHSHELL_E_DISCONNECTED,
+            ShellError::NoMem => NHSHELL_E_NOMEM,
+            ShellError::Timeout => NHSHELL_E_TIMEOUT,
+            ShellError::TooSmall => NHSHELL_E_TOO_SMALL,
+            ShellError::Reconnecting => NHSHELL_E_RECONNECTING,
+        }
+    }
+}
+
+pub type ShellResult<T = ()> = Result<T, ShellError>;
+
+/// The connection's state (`ShellBackend::connection_state`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectionState {
+    Up,
+    /// The host took `RECONNECTING`; `reconnect` has not succeeded yet.
+    Reconnecting,
+    /// The host took `DISCONNECTED`.
+    Lost,
+}
+
+impl ConnectionState {
+    /// `NHSHELL_CONN_UP` 0, `_RECONNECTING` 1, `_LOST` 2.
+    pub fn code(self) -> u32 {
+        match self {
+            ConnectionState::Up => 0,
+            ConnectionState::Reconnecting => 1,
+            ConnectionState::Lost => 2,
+        }
+    }
+}
+
+pub const NHSHELL_WIN_UNDECORATED: u32 = 1 << 0;
+pub const NHSHELL_WIN_FULLSCREEN: u32 = 1 << 1;
+pub const NHSHELL_WIN_MAXIMIZED: u32 = 1 << 2;
+/// A popup that takes the keyboard and pointer (a menu): it grabs with the newest press, key or touch-down serial,
+/// unless a drag is in progress, there is no serial, or it would not become the topmost grab (its parent must be a
+/// top-level window while no popup holds a grab, or the popup holding the topmost grab).
+/// Without the grab it still works by keys through its parent's focus, but an outside click does not dismiss it.
+pub const NHSHELL_WIN_GRAB: u32 = 1 << 3;
+/// With a session name: ask the session to restore the window (before its first commit) instead of just adding it.
+pub const NHSHELL_WIN_RESTORE: u32 = 1 << 4;
+/// A top-level window opens with its top-left at the descriptor's `x`, `y` (`window_new_placed`'s `Place::At`).
+pub const NHSHELL_WIN_PLACED: u32 = 1 << 5;
+
+/// Where a new top-level window opens (`window_new_placed`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    /// Where the shell puts new windows.
+    Shell,
+    /// Beside the window (on its screen): a new frame made from the selected one.
+    Near(WindowId),
+    /// With its top-left at (x, y) logical pixels from the main screen's top-left, as `move_to` takes it.
+    At(i32, i32),
+}
+
+/// Why a session is opened (`session_open`): a fresh launch, a recovery after the compositor restarted, a restore of
+/// a saved session.
+pub const NHSHELL_SESSION_LAUNCH: u32 = 0;
+pub const NHSHELL_SESSION_RECOVER: u32 = 1;
+pub const NHSHELL_SESSION_RESTORE: u32 = 2;
+
+/// Edges for `resize`, OR-ed for a corner.
+pub const NHSHELL_EDGE_TOP: u32 = 1;
+pub const NHSHELL_EDGE_BOTTOM: u32 = 2;
+pub const NHSHELL_EDGE_LEFT: u32 = 4;
+pub const NHSHELL_EDGE_RIGHT: u32 = 8;
+
+/// Pointer shapes for `set_cursor`.
+pub const NHSHELL_CURSOR_DEFAULT: u32 = 0;
+pub const NHSHELL_CURSOR_TEXT: u32 = 1;
+pub const NHSHELL_CURSOR_POINTER: u32 = 2;
+pub const NHSHELL_CURSOR_CROSSHAIR: u32 = 3;
+pub const NHSHELL_CURSOR_WAIT: u32 = 4;
+pub const NHSHELL_CURSOR_HELP: u32 = 5;
+pub const NHSHELL_CURSOR_MOVE: u32 = 6;
+pub const NHSHELL_CURSOR_NOT_ALLOWED: u32 = 7;
+pub const NHSHELL_CURSOR_RESIZE_NS: u32 = 8;
+pub const NHSHELL_CURSOR_RESIZE_EW: u32 = 9;
+pub const NHSHELL_CURSOR_RESIZE_NWSE: u32 = 10;
+pub const NHSHELL_CURSOR_RESIZE_NESW: u32 = 11;
+pub const NHSHELL_CURSOR_HIDDEN: u32 = 12;
+
+/// The selections, for the `selection_*` calls and `ShellEvent::Selection`.
+pub const NHSHELL_SEL_CLIPBOARD: u32 = 0;
+pub const NHSHELL_SEL_PRIMARY: u32 = 1;
+/// The offer of the drag over one of our windows, for `selection_types` and `selection_read` only: valid from
+/// `DND_ENTER` until `DND_LEAVE` or `dnd_finish`.  When it is our own drag's (`own` 1), or after our own drag's offer
+/// is gone, the reads answer from our latest drag's bytes without a round trip.  `selection_owned` says whether our
+/// drag runs.
+pub const NHSHELL_SEL_DND: u32 = 2;
+
+/// Drag-and-drop actions, OR-ed into a set (`DndEv`, `dnd_status`, `drag_start`).
+pub const NHSHELL_DND_COPY: u32 = 1;
+pub const NHSHELL_DND_MOVE: u32 = 2;
+pub const NHSHELL_DND_ASK: u32 = 4;
+
+/// What to open a window with.  Strings are copied by the callee.
+#[derive(Clone, Debug)]
+pub struct WindowDesc {
+    pub w: i32,
+    pub h: i32,
+    pub title: String,
+    pub app_id: String,
+    pub flags: u32,
+}
+
+/// `ChildDesc::kind`: a top-level window (made by `window_new`), a child (a subsurface) or a popup.
+pub const NHSHELL_KIND_TOPLEVEL: u32 = 0;
+pub const NHSHELL_KIND_CHILD: u32 = 1;
+pub const NHSHELL_KIND_POPUP: u32 = 2;
+
+/// `Anchor::adjust`: what the compositor may do when a popup would leave the screen.
+pub const NHSHELL_ADJUST_SLIDE_X: u32 = 1 << 0;
+pub const NHSHELL_ADJUST_SLIDE_Y: u32 = 1 << 1;
+pub const NHSHELL_ADJUST_FLIP_X: u32 = 1 << 2;
+pub const NHSHELL_ADJUST_FLIP_Y: u32 = 1 << 3;
+
+/// Where a popup goes: the rectangle `x`, `y`, `w`, `h` (logical pixels in the parent's surface) it sits beside.
+/// `gravity` is the side (and corner) it grows toward: 0 none, 1 top, 2 bottom, 3 left, 4 right, 5 top-left,
+/// 6 bottom-left, 7 top-right, 8 bottom-right.  The popup's matching corner touches the same corner of the rectangle,
+/// so 8 puts it below and right of the rectangle.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Anchor {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub gravity: u32,
+    pub adjust: u32,
+}
+
+/// What to open a child or popup with: `w` x `h` logical pixels at (`x`, `y`) in `parent`.  A popup is placed by
+/// `anchor` and ignores `x`, `y`.
+#[derive(Clone, Copy, Debug)]
+pub struct ChildDesc {
+    pub kind: u32,
+    pub parent: WindowId,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub anchor: Anchor,
+    /// `NHSHELL_WIN_GRAB` for a popup; 0 otherwise.
+    pub flags: u32,
+}
+
+/// A pixel buffer to draw into until the next `present_commit`.  `age` is how many presents ago these pixels were
+/// last shown (0: contents undefined, draw everything).  Valid until `present_commit` or the next `present_begin`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct NhShellBuffer {
+    pub pixels: *mut u8,
+    pub w: i32,
+    pub h: i32,
+    pub stride: i32,
+    pub age: u32,
+}
+
+/// A windowing backend: connection, windows, events and the presenter.
+///
+/// **Threads.** The glue (`nidhogg/glue`) calls a backend on the Lisp thread that holds Emacs's global lock, which is
+/// usually the main thread but may be another Lisp thread.  A backend may require the main thread (AppKit is main-thread
+/// only); it then defers or refuses other Lisp threads' calls itself, as `nsterm.m`'s `ns_select` falls back off the
+/// main thread.  The macOS backend hands the pump and a commit to the main thread's next pump (`dispatch_main`,
+/// `publish`), as it does a title; it records the input method's pushes without telling Zoom, and refuses
+/// `app_call` and `app_query` with `State`.  The Wayland backend does not require it.
+pub trait ShellBackend {
+    /// A descriptor that becomes readable when `next_event` has something; the host adds it to its wait set.
+    fn wake_fd(&self) -> i32;
+    fn caps(&self) -> NhShellCaps;
+
+    /// The next queued event, or `None` when the queue is empty.  After the connection is lost, one `DISCONNECTED`
+    /// event comes out, then `ShellError::Disconnected`.  Once `DISCONNECTED` has been taken, every call but
+    /// `wake_fd`, `caps` and `last_error` returns `Disconnected`, at once; `window_destroy` still frees the window's
+    /// local state.  A bounded wait in progress (a selection read) gives up with `Disconnected` when the loss comes.
+    fn next_event(&mut self) -> ShellResult<Option<Record>>;
+    /// Run the work that must happen on the host's thread (configure and surface events).
+    fn dispatch_main(&mut self) -> ShellResult;
+    /// The end of a drain that needs no new events (it took some, or the one before did, or it runs inside
+    /// redisplay): the host-thread work without asking the platform for more.  A backend whose `dispatch_main` only
+    /// flushes does that.
+    fn flush_main(&mut self) -> ShellResult {
+        self.dispatch_main()
+    }
+    /// While `on`, leave the host thread's events (configures, the main queue's syncs) unread, as from a compositor
+    /// whose answer is late; off, they are read at the next drain, in the order they came.  For tests
+    /// (`nhwl--hold-configures`); `Unsupported` where the backend has no such queue.
+    fn hold_main(&mut self, on: bool) -> ShellResult {
+        let _ = on;
+        Err(ShellError::Unsupported)
+    }
+    /// Why the connection ended: a protocol error's text, `INTERFACE@ID: error CODE: MESSAGE`; empty while it lives
+    /// or after a plain hangup.
+    fn last_error(&self) -> String {
+        String::new()
+    }
+    /// Reconnect in place when the display goes (`on`; off at open).  With it on, a hangup posts `RECONNECTING`
+    /// instead of `DISCONNECTED`; a protocol error still posts `DISCONNECTED`.  `Unsupported` when the connection
+    /// cannot be made again (an inherited socket).
+    fn set_reconnect(&mut self, on: bool) -> ShellResult {
+        let _ = on;
+        Err(ShellError::Unsupported)
+    }
+    /// Up; reconnecting from the moment the host takes `RECONNECTING` until `reconnect` succeeds; lost once the host
+    /// takes `DISCONNECTED`.  While reconnecting, every call that would send returns `Reconnecting`; `window_destroy`
+    /// frees the window's local state and succeeds.
+    fn connection_state(&self) -> ConnectionState {
+        ConnectionState::Up
+    }
+    /// One bounded step of reconnecting, at most `timeout_ms`: `Ok` once connected again (the globals, input and
+    /// buffers are back, and `RECONNECTED` is posted), `Timeout` while the display is not there yet (call again
+    /// later), `Disconnected` when the new display failed (a protocol error, a required global missing).  `Ok` when
+    /// the connection is up; `State` while `RECONNECTING` waits to be taken.
+    fn reconnect(&mut self, timeout_ms: u32) -> ShellResult {
+        let _ = timeout_ms;
+        Err(ShellError::Unsupported)
+    }
+
+    fn window_new(&mut self, desc: &WindowDesc) -> ShellResult<WindowId> {
+        self.window_new_named(desc, None)
+    }
+    /// `window_new` with a session name: sent to the session (`NHSHELL_WIN_RESTORE`: as a restore) before the window's
+    /// first commit.  The name is ignored without a session, or when it was replaced.
+    fn window_new_named(
+        &mut self,
+        desc: &WindowDesc,
+        session_name: Option<&str>,
+    ) -> ShellResult<WindowId>;
+    /// `window_new_named` opening the window at `place` where the shell places windows itself (macOS), so it shows
+    /// first on the screen whose scale its frame was made for.  Elsewhere the compositor places it: `place` is ignored.
+    fn window_new_placed(
+        &mut self,
+        desc: &WindowDesc,
+        session_name: Option<&str>,
+        place: Place,
+    ) -> ShellResult<WindowId> {
+        let _ = place;
+        self.window_new_named(desc, session_name)
+    }
+    /// The window and its dependents go, and the id with them.  A child whose hide leg runs (`set_motion`) finishes its
+    /// fade first as a surface the host no longer sees, unless its parent goes or the connection does.
+    fn window_destroy(&mut self, window: WindowId) -> ShellResult;
+    /// The scale (times 120) the host made a new window's frame for: its buffers' viewport starts there, not at 1, until
+    /// the compositor says what the scale is (a `SCALE` comes only when it says another).  A frame made a top-level
+    /// again from a child already shows at its output's scale.  Nothing when the compositor has spoken already.
+    fn scale_start(&mut self, window: WindowId, scale120: u32) -> ShellResult;
+    fn set_title(&mut self, window: WindowId, title: &str) -> ShellResult;
+    fn set_app_id(&mut self, window: WindowId, app_id: &str) -> ShellResult;
+    fn set_min_size(&mut self, window: WindowId, w: i32, h: i32) -> ShellResult;
+    /// Place the top-level `window` with its frame's top-left at (`x`, `y`) logical pixels from the main screen's
+    /// top-left, as NS places a frame (`set-frame-position`).  `Unsupported` where clients have no position (Wayland).
+    fn move_to(&mut self, window: WindowId, x: i32, y: i32) -> ShellResult {
+        let _ = (window, x, y);
+        Err(ShellError::Unsupported)
+    }
+    fn set_fullscreen(&mut self, window: WindowId, on: bool) -> ShellResult;
+    fn set_maximized(&mut self, window: WindowId, on: bool) -> ShellResult;
+    fn minimize(&mut self, window: WindowId) -> ShellResult;
+    /// Start an interactive move; the backend uses the latest input serial.
+    fn move_window(&mut self, window: WindowId) -> ShellResult;
+    /// Start an interactive resize from `edges` (`NHSHELL_EDGE_*`); the backend uses the latest input serial.
+    fn resize(&mut self, window: WindowId, edges: u32) -> ShellResult;
+    /// Show the window menu at (`x`, `y`) in the window; the backend uses the latest input serial.
+    fn show_menu(&mut self, window: WindowId, x: i32, y: i32) -> ShellResult;
+    /// Set the window geometry (`xdg_surface.set_window_geometry`, surface-local logical pixels), which takes effect
+    /// with the next commit that carries a buffer.
+    fn set_geometry(&mut self, window: WindowId, x: i32, y: i32, w: i32, h: i32) -> ShellResult;
+    /// Record configure `serial`'s ack; it goes out right before the commit that carries it.  `flags`
+    /// `NHSHELL_ACK_CONTENT` says the ack changes what the window shows (a new size, the first configure, a client
+    /// side state change): it is sent only with a buffer.  The flag is sticky until a buffer carries the ack.
+    fn ack_configure(&mut self, window: WindowId, serial: u32, flags: u32) -> ShellResult;
+    fn set_cursor(&mut self, window: WindowId, shape: u32) -> ShellResult;
+    /// The Xcursor theme (`name`, logical `size`) used where the compositor has no cursor-shape protocol.
+    fn set_cursor_theme(&mut self, name: &str, size: u32) -> ShellResult;
+    /// Ask the compositor to activate the window with `token`; without one, request a token with the latest input
+    /// serial and the window's surface, and activate with it when it arrives (`State` before any input).
+    fn window_activate(&mut self, window: WindowId, token: Option<&str>) -> ShellResult;
+    /// A fresh activation token made with the newest input serial and the window's surface, within `timeout_ms`
+    /// (`Timeout`; `State` before any input; `Unsupported` without the protocol).
+    fn activation_token(&mut self, window: WindowId, timeout_ms: u32) -> ShellResult<String>;
+
+    /// Ring the system bell on the window's root surface (window 0: no surface), at most once per 20 ms.
+    /// `Unsupported` without the protocol.  The visible bell is the host's.
+    fn bell(&mut self, window: WindowId) -> ShellResult;
+    /// Hold (`on`) or release an idle inhibitor on the window's surface.  `Unsupported` without the protocol.
+    fn inhibit_idle(&mut self, window: WindowId, on: bool) -> ShellResult;
+    /// The window's xdg-foreign handle (no scheme prefix), exported at the first call and cached until the window
+    /// goes; waits at most `timeout_ms` for it (`Timeout`).  `Unsupported` without the exporter.
+    fn window_export(&mut self, window: WindowId, timeout_ms: u32) -> ShellResult<String>;
+    /// Open the session (`id` None: a new one) for `reason` (`NHSHELL_SESSION_*`); `ShellEvent::Session` answers.
+    /// `Unsupported` without session management.
+    fn session_open(&mut self, id: Option<&str>, reason: u32) -> ShellResult;
+    /// The open session's id (`State` before the compositor has said).
+    fn session_id(&self) -> ShellResult<String>;
+    /// Take the window out of the session: the compositor forgets its name.  `State` for an unnamed window.
+    fn window_session_remove(&mut self, window: WindowId) -> ShellResult;
+
+    /// The window's preferred scale times 120 (120 when the compositor has not said).
+    fn window_scale(&self, window: WindowId) -> ShellResult<u32>;
+    /// Whether the compositor decorates the window (server-side decorations were granted to it).
+    fn window_ssd(&self, window: WindowId) -> ShellResult<bool>;
+    /// Ask again for server-side decorations (`on`) or for none: a top-level's `undecorated` changed at run time.
+    /// The compositor's answer comes with a configure; nothing when decorations are forced client-side.
+    fn set_decorated(&mut self, window: WindowId, on: bool) -> ShellResult;
+    /// The workbench's strips are on (`on`) or off for a decorated top-level (design §6.7): on macOS its content then
+    /// runs under a transparent title bar with no title text, so the strips' title row sits in the title area beside
+    /// the traffic lights.  Nothing where the title row replaces the client-side strip itself (Wayland).
+    fn set_title_area(&mut self, window: WindowId, on: bool) -> ShellResult {
+        let _ = (window, on);
+        Ok(())
+    }
+    /// The window's opacity, a multiplier of its pixels' alpha (`u32::MAX` is opaque).  The window owes a commit
+    /// (its ancestors too, for a child).  `Unsupported` when the compositor cannot apply it: the host multiplies.
+    fn set_alpha(&mut self, window: WindowId, factor: u32) -> ShellResult;
+
+    /// Create a child (`NHSHELL_KIND_CHILD`) or popup (`NHSHELL_KIND_POPUP`) window.
+    fn child_new(&mut self, desc: &ChildDesc) -> ShellResult<WindowId>;
+    /// `window`, a top-level or a child, takes another place among the trees, keeping its id and its surfaces with
+    /// their picture (`parent-frame` changed): `desc.kind` `NHSHELL_KIND_TOPLEVEL` makes it a top-level titled
+    /// `title` (`desc.flags` as a new one's), `NHSHELL_KIND_CHILD` a child of `desc.parent` at (`desc.x`, `desc.y`).
+    /// Its children come along.  `Unsupported` where a window keeps its role (a Wayland surface): the host makes the
+    /// window again.
+    fn reparent(&mut self, window: WindowId, desc: &ChildDesc, title: &str) -> ShellResult {
+        let _ = (window, desc, title);
+        Err(ShellError::Unsupported)
+    }
+    /// Move a child (applied with its parent's next commit) or a popup (its anchor rectangle's origin).
+    /// `true` when the whole window must be redrawn (a popup that was made again).
+    fn set_position(&mut self, window: WindowId, x: i32, y: i32) -> ShellResult<bool>;
+    /// Put a child above or below `sibling` (0: its parent), applied with the parent's next commit.
+    fn stack(&mut self, window: WindowId, sibling: WindowId, above: bool) -> ShellResult;
+    /// The part of the window that takes input (logical pixels); none at all means the whole surface.
+    fn set_input_region(&mut self, window: WindowId, rects: &[Rect]) -> ShellResult;
+    /// Child `window`'s position and input region as the host's publish step has them for its next picture (`None`:
+    /// unchanged), recorded as `set_position` and `set_input_region` record them.  Nothing wakes for them: the publish
+    /// that follows does, so the commit that shows the picture carries them (a publish with nothing new to show still
+    /// wakes a tree that owes a commit).  `State` for a window that is not a child.
+    fn set_child_place(
+        &mut self,
+        window: WindowId,
+        pos: Option<(i32, i32)>,
+        input: Option<&[Rect]>,
+    ) -> ShellResult;
+    /// Off: show nothing (a null buffer); on: the next present shows the window again.  A child with a motion spec
+    /// (`set_motion`) stays mapped, showing its last picture, while its hide leg runs, and unmaps in the tree commit
+    /// after the leg's end; on, its show leg starts at the first tree commit that carries its new picture.  A hide and
+    /// a show in one command run no leg: on the presenter thread a hide waits a few milliseconds for the show.
+    fn set_mapped(&mut self, window: WindowId, on: bool) -> ShellResult;
+    /// Child `window`'s show and hide transitions, run by whoever presents its tree (`None`: none, and a leg that
+    /// runs ends at once: a show jumps to its end, a hide unmaps in the next tree commit).  `State` for any other
+    /// window.
+    fn set_motion(&mut self, _window: WindowId, _spec: Option<MotionSpec>) -> ShellResult {
+        Err(ShellError::Unsupported)
+    }
+    /// Child `window` has what lies beneath it in its parent blurred under its pixels, with σ `blur_px` logical pixels
+    /// (0: none).  Whoever presents its tree recomputes it from the parent's damage alone, and shows it in the tree
+    /// commit that shows the change.  `State` for any other window, `Arg` for a negative or non-finite σ.
+    fn set_backdrop(&mut self, _window: WindowId, _blur_px: f32) -> ShellResult {
+        Err(ShellError::Unsupported)
+    }
+    /// Whether the shell shows a root's window cards on layers of its own over the root's pixels (`set_cards`), so
+    /// the host composes none into the root's surface.
+    fn cards_on_layers(&self) -> bool {
+        false
+    }
+    /// Root `window`'s window cards, each an image put over the root's pixels at its place, from the tree's next
+    /// commit.  The list replaces the last: a card left out goes; one given without an image keeps the one it has.
+    /// `Unsupported` where `cards_on_layers` is false; `State` for any other window, `Arg` for an image whose length
+    /// is not its size or a card new to the window without one.
+    fn set_cards(&mut self, _window: WindowId, _cards: &[CardImage]) -> ShellResult {
+        Err(ShellError::Unsupported)
+    }
+    /// Whether the shell draws a child's chrome on the window's own layers (`set_chrome`): its surface is then the
+    /// native area alone, with no shadow margin, and the host composes no chrome into it.
+    fn chrome_on_layers(&self) -> bool {
+        false
+    }
+    /// Child `window`'s chrome (corners, border, shadow; device pixels at the window's scale), drawn by the shell on
+    /// the window's layers from the tree's next commit (`None`: none).  `Unsupported` where `chrome_on_layers` is
+    /// false; `State` for any other window.
+    fn set_chrome(
+        &mut self,
+        _window: WindowId,
+        _chrome: Option<&glitnir::scene::Chrome>,
+    ) -> ShellResult {
+        Err(ShellError::Unsupported)
+    }
+    /// Capture `serial` of the window the host calls `key` in root `root`: its rectangle `rect` (root device px) of
+    /// the picture as the presenter has it before the packets published after this call, the old layout a layout leg
+    /// moves from (`layout_leg`).  Without a picture yet (none published, or dropped idle), it is taken after the
+    /// tree's next packet.  A new capture of `key` replaces the one before; `layout_captured` says when it is taken.
+    /// `State` for a window that is not a top-level.
+    fn layout_capture(
+        &mut self,
+        _root: WindowId,
+        _key: u64,
+        _serial: u64,
+        _rect: Rect,
+    ) -> ShellResult {
+        Err(ShellError::Unsupported)
+    }
+    /// Window `key`'s layout leg in root `root`'s picture, from its capture `leg.capture` to the picture of the next
+    /// packet: it starts at the first tree commit after that packet, and every frame of the tree draws it until it ends
+    /// at the new picture.  A leg whose capture is not the newest taken, or whose damage per frame is over the budget,
+    /// is skipped (the new picture shows plain).  A leg while one runs starts each move from where the running one
+    /// shows it.  `None`: none, and a leg that runs ends at once, its new picture shown plain.
+    fn layout_leg(&mut self, _root: WindowId, _key: u64, _leg: Option<LayoutLeg>) -> ShellResult {
+        Err(ShellError::Unsupported)
+    }
+    /// What the presenter did with window `key`'s captures and legs in root `root`.
+    fn layout_captured(&self, _root: WindowId, _key: u64) -> ShellResult<LayoutAck> {
+        Err(ShellError::Unsupported)
+    }
+    /// Whether popup `window` holds a grab (asked with `NHSHELL_WIN_GRAB`, granted, not dismissed); false for other
+    /// windows.
+    fn window_grabbed(&self, window: WindowId) -> ShellResult<bool>;
+    /// A popup's new size (logical pixels), placed again by its anchor.  `true` when the whole window must be redrawn
+    /// (a popup made again), as for `set_position`; the next configure asks for a buffer of the new size.  `State`
+    /// for windows that are not popups (their buffers set their sizes).
+    fn set_size(&mut self, window: WindowId, w: i32, h: i32) -> ShellResult<bool>;
+
+    /// Own selection `kind` (`NHSHELL_SEL_*`) with these MIME types and bytes (copied); other clients' pastes are
+    /// answered from the copy.  `State` without keyboard focus.
+    fn selection_own(&mut self, kind: u32, items: &[(&str, &[u8])]) -> ShellResult;
+    fn selection_disown(&mut self, kind: u32) -> ShellResult;
+    /// Whether our source is the current selection `kind`.
+    fn selection_owned(&self, kind: u32) -> ShellResult<bool>;
+    /// The current selection's MIME types (empty when there is none).
+    fn selection_types(&self, kind: u32) -> ShellResult<Vec<String>>;
+    /// The selection's bytes as `mime`: our own without a round trip, another client's within `timeout_ms` or
+    /// `Timeout`.  `State` when there is no selection or it has no such type.
+    fn selection_read(&mut self, kind: u32, mime: &str, timeout_ms: u32) -> ShellResult<Vec<u8>>;
+
+    /// Answer the drag over our window: accept `mime` (None: nothing) with the actions we take (`NHSHELL_DND_*`) and
+    /// the one we prefer (0 or one of them).  None with 0 actions rejects the drop.  `State` without a drag over us;
+    /// `Arg` for bits outside the set or a preferred action that is not one of `actions`.
+    fn dnd_status(&mut self, mime: Option<&str>, actions: u32, preferred: u32) -> ShellResult;
+    /// Done with the dropped offer: on `success`, tell the source the drop is finished, which needs a dropped offer,
+    /// an accepted type and an action both sides agreed on (else `State`); then, in every case, let the offer go.
+    fn dnd_finish(&mut self, success: bool) -> ShellResult;
+    /// Start dragging `items` (MIME type, bytes; copied) out of `window` with the actions it allows.  It needs the
+    /// newest button press or touch down whose release has not come (`State` without one); there is no drag icon.  The
+    /// bytes are written to targets from the shell's own thread, and stay readable as `NHSHELL_SEL_DND` until the next
+    /// drag starts.  `DRAG_ACTION`, `DRAG_DROPPED` and one `DRAG_DONE` follow; a drag that was running is dropped
+    /// without one.
+    fn drag_start(
+        &mut self,
+        window: WindowId,
+        items: &[(&str, &[u8])],
+        actions: u32,
+    ) -> ShellResult;
+    /// Give up our drag: its source goes, and no `DRAG_DONE` follows.  Nothing when no drag runs.
+    fn drag_cancel(&mut self) -> ShellResult;
+
+    /// Text input for `window` on or off; the state survives the window losing and regaining text-input focus.
+    fn text_input_enable(&mut self, window: WindowId, on: bool) -> ShellResult;
+    /// The cursor rectangle in the window (logical pixels); sent to the input method only when it changed.
+    fn text_input_cursor(
+        &mut self,
+        window: WindowId,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    ) -> ShellResult;
+    /// The text around the cursor (UTF-8; `cursor` and `anchor` are byte offsets), cut to 4000 bytes.
+    fn text_input_surrounding(
+        &mut self,
+        window: WindowId,
+        text: &str,
+        cursor: usize,
+        anchor: usize,
+    ) -> ShellResult;
+    /// Where the line pushed by `text_input_surrounding` starts, point and the selection's other end (the mark when it
+    /// is active, else point), in characters from the buffer's accessible start: the ranges an input method gets on
+    /// macOS, as NS counts them.
+    fn text_input_offsets(
+        &mut self,
+        _window: WindowId,
+        _line_start: usize,
+        _point: usize,
+        _mark: usize,
+    ) -> ShellResult {
+        Err(ShellError::Unsupported)
+    }
+    /// The size of text `id` from a `PREEDIT` or `COMMIT_TEXT` record.
+    fn text_len(&self, id: u32) -> ShellResult<usize>;
+    /// Take text `id` (single-use).
+    fn take_text(&mut self, id: u32) -> ShellResult<Vec<u8>>;
+
+    /// Publish the tree of root `root` at a consistency point: one frame per drawable surface, the root first, then
+    /// its child windows deepest first.  The shell presents: `FRAME_READY` comes for roots only, when the tree's pacer
+    /// lets it present (inline mode), and the host answers with `present_tree`.  Each surface's scene is committed and its damaged pixels copied; nothing is
+    /// read after the call.  `true` when a packet was queued (damage, or a content ack that waits for a picture drawn
+    /// after it).  `t_key_ns` is the key the picture answers (0: none).
+    fn publish(
+        &mut self,
+        root: WindowId,
+        frames: &[SurfaceFrame],
+        t_key_ns: u64,
+    ) -> ShellResult<bool>;
+    /// Commit now what publishes left for the next pump or wait (macOS: the commit is off the redisplay path, as
+    /// NS's).  The host's deadline after a redisplay calls it, so Lisp that runs on without waiting still has its
+    /// frame shown.  Default: a publish leaves nothing.
+    fn flush_presents(&mut self) -> ShellResult {
+        Ok(())
+    }
+    /// Inline mode: present root `root`'s tree by the present path's rule; `true` when the root committed a buffer.
+    /// `State` in thread mode.
+    fn present_tree(&mut self, root: WindowId) -> ShellResult<bool>;
+    /// Present on the shell's own thread (`on`) or inline, when the host calls `present_tree` (off at open).
+    fn set_presenter_thread(&mut self, on: bool) -> ShellResult;
+    fn presenter_stats(&self) -> ShellResult<NhShellPresenterStats>;
+    /// The child windows of root `root` as the compositor was told to stack them, bottom to top, hidden ones too, each
+    /// child's own right after it.  A record for tests.
+    fn window_stacking(&self, root: WindowId) -> ShellResult<Vec<WindowId>>;
+    /// The commits of root `root` that showed something: a buffer, a child's buffer or a child's new state.  A record
+    /// for tests.
+    fn draw_count(&self, root: WindowId) -> ShellResult<u64>;
+    /// Test hook: a roundtrip through the thread that handles the compositor's input.  Every request sent so far has
+    /// reached the compositor, and every event it sent before its answer has been handled (its records are queued).
+    /// `Timeout` when no answer comes within `timeout`; `Unsupported` for a backend without one.
+    #[doc(hidden)]
+    fn reader_roundtrip(&self, timeout: std::time::Duration) -> ShellResult {
+        let _ = timeout;
+        Err(ShellError::Unsupported)
+    }
+
+    /// Root `root`'s tree as the compositor was given it: `frames` (the root's first; a surface not listed is hidden,
+    /// and any that is not in the tree is ignored) composed whole, their chrome and shadows included, at their places,
+    /// in their stacking, with their alpha, popups on top, each placed from the root's own corner (a popup root's
+    /// picture starts at the popup, not at its place in the toplevel).  The root's size, row by row, premultiplied.  For tests and
+    /// captures: it costs presenting nothing, and `frames` must be what was published.  `composed` false: the same
+    /// without Glitnir, the frames' own pixels, square and with no shadows.
+    fn tree_snapshot(
+        &self,
+        root: WindowId,
+        frames: &[SurfaceFrame],
+        composed: bool,
+    ) -> ShellResult<Vec<u32>>;
+
+    /// What a host needs to abandon this backend without touching its state again: the glue calls it once at open and
+    /// uses it only after a panic left the backend's state in doubt.  Every thread the backend runs is in the list.
+    fn abandon(&self) -> Abandon;
+    /// The presenter's own timing since open (Rust only): which frames it committed late.
+    fn presenter_timing(&self) -> ShellResult<PresenterTiming>;
+
+    /// Post a `Timer` record at `CLOCK_MONOTONIC` nanoseconds `at_ns` (`None`: never), replacing the deadline set
+    /// before: the host's own deadlines (the glue's minimap timers) end its wait as an event does.  `Unsupported` for
+    /// a backend without one.
+    fn set_timer(&mut self, at_ns: Option<u64>) -> ShellResult {
+        let _ = at_ns;
+        Err(ShellError::Unsupported)
+    }
+
+    /// A platform call by name with one text argument (`nhmac--call`): what Lisp asks of a platform that has no
+    /// shared call for it.  `Arg` for a name the backend does not know; `Unsupported` for a backend with none.
+    fn app_call(&mut self, kind: &str, arg: &str) -> ShellResult {
+        let _ = (kind, arg);
+        Err(ShellError::Unsupported)
+    }
+    /// A platform query by name (`nhmac--query`); the answer is text (a Lisp reader's form, by the kind's contract).
+    /// It may run a modal session.
+    fn app_query(&mut self, kind: &str, arg: &str) -> ShellResult<String> {
+        let _ = (kind, arg);
+        Err(ShellError::Unsupported)
+    }
+
+    /// The main wait (`nhg_wait`, `crate::wait::run`): register `want`, then put the ready registrations in `out`,
+    /// running the backend's event loop meanwhile; empty after a wake or `timeout`.  `Unsupported` for a backend whose
+    /// host waits in its own select.
+    fn wait(
+        &mut self,
+        want: &std::collections::BTreeSet<crate::wait::Reg>,
+        timeout: Option<std::time::Duration>,
+        out: &mut Vec<crate::wait::Reg>,
+    ) -> ShellResult {
+        let _ = (want, timeout, out);
+        Err(ShellError::Unsupported)
+    }
+}
+
+/// A backend's connection and threads, as a host that abandons the backend sees them (`ShellBackend::abandon`).  The
+/// host shuts the connection down, stops the threads, waits a bounded time and leaks the backend.
+pub struct Abandon {
+    /// The connection's socket (-1: none).  `shutdown` on it makes the compositor drop every object of ours.
+    pub conn_fd: i32,
+    pub threads: Vec<Arc<dyn BackendThread>>,
+}
+
+/// A thread a backend runs.  Both calls touch only atomics and the thread's wake-up, never the backend's state.
+pub trait BackendThread: Send + Sync {
+    /// Ask the thread to leave its loop, and wake it so that it does.
+    fn stop(&self);
+    /// Wait until the thread has finished, at most until `deadline`; whether it has.
+    fn wait_done(&self, deadline: Instant) -> bool;
+}
+
+/// A thread's "finished" report: the thread sets it last, and a host waits for it with a deadline.
+#[derive(Default)]
+pub struct ThreadDone {
+    done: AtomicBool,
+    waiter: Mutex<Option<Thread>>,
+}
+
+impl ThreadDone {
+    /// Called by the thread as the last thing it does.
+    pub fn set(&self) {
+        self.done.store(true, Ordering::Release);
+        let waiter = self.waiter.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(t) = waiter {
+            t.unpark();
+        }
+    }
+
+    /// A new thread takes the report over (the old one has finished).
+    pub fn reset(&self) {
+        self.done.store(false, Ordering::Release);
+    }
+
+    /// Wait until `set`, at most until `deadline`; whether it was set.
+    pub fn wait(&self, deadline: Instant) -> bool {
+        *self.waiter.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::thread::current());
+        loop {
+            if self.done.load(Ordering::Acquire) {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            std::thread::park_timeout(deadline - now);
+        }
+    }
+}
+
+/// The presenter's timing.  A frame is a root buffer that shows published drawing; it was ready when its tree could
+/// first commit it (the later of its first publish and the pacer's opening: a frame callback, the end of starvation).
+/// It is late when committed more than one refresh period after that (the period presentation feedback reports, else
+/// 1/120 s): a vblank the presenter missed, whatever the host's thread did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PresenterTiming {
+    pub frames: u64,
+    pub late: u64,
+    pub ready_to_commit_max_ns: u64,
+}
+
+/// What the presenter did with a window's layout legs (`ShellBackend::layout_captured`): the number of the newest
+/// capture it took (0: none), how many legs it skipped (no capture to move from, over the budget), and whether a leg
+/// runs or waits for its first frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayoutAck {
+    pub captured: u64,
+    pub skipped: u64,
+    pub running: bool,
+}
+
+/// `SurfaceFrame` flags: the surface may show a buffer (without it, its damage waits); the presenter multiplies the
+/// surface's pixels by its alpha (the compositor cannot).
+pub const NHSHELL_SF_DRAWABLE: u32 = 1;
+pub const NHSHELL_SF_ALPHA_HOST: u32 = 2;
+
+/// One surface of a published tree.  `pixels` is the host's backing, `h` rows of `stride` bytes (`w` x `h` device
+/// pixels, premultiplied ARGB32), borrowed for the call.  `glitnir_root` is the surface's scene; `(src_x, src_y)`
+/// is where its layer starts in the backing.  `alpha_cut`: with `NHSHELL_SF_ALPHA_HOST`, the pixels are multiplied
+/// by `1 - alpha_cut / u32::MAX`.
+#[derive(Clone, Copy, Debug)]
+pub struct SurfaceFrame<'a> {
+    pub window: WindowId,
+    pub glitnir_root: u64,
+    pub pixels: &'a [u8],
+    pub w: i32,
+    pub h: i32,
+    pub stride: i32,
+    pub src_x: i32,
+    pub src_y: i32,
+    pub flags: u32,
+    pub alpha_cut: u32,
+}
+
+/// The presenter's counters since open: packets published, those merged into one still waiting or gone with their
+/// window (`superseded`: `packets - superseded` packets commit), buffer and bare commits (counted once flushed to the
+/// compositor), the longest wait of the host's thread and the longest publish copy, fronts dropped idle, and how far
+/// the pictures have gone out.  C reads it as `NhgPresenterCounters` (`nhglue.h`), inside the glue's
+/// `NhgPresenterStats`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NhShellPresenterStats {
+    pub packets: u64,
+    pub superseded: u64,
+    pub commits: u64,
+    pub bare_commits: u64,
+    pub main_wait_max_ns: u64,
+    pub publish_copy_max_ns: u64,
+    pub front_trims: u64,
+    /// The newest request's number (0: none yet): each packet published takes the next one, and so does each
+    /// configure ack and piece of surface state recorded for a commit.
+    pub published: u64,
+    /// The newest request that, with every older one, has gone out to this connection's compositor in a flushed
+    /// commit, or needs none any more (its window is gone or hidden; a content ack whose picture is not published
+    /// yet waits for that packet's number).  `presented < published` while a picture, an ack or recorded state waits
+    /// for its commit, whatever else was committed meanwhile; 0 after a connection loss until the new compositor has
+    /// every picture.
+    pub presented: u64,
+    /// The same, once moreover the compositor has used each shown window's newest commit (its frame callback is
+    /// done): `presented` says the requests are on their way, `shown` that the compositor acted on them.  It stays
+    /// behind while a window the compositor shows holds back its callback.
+    pub shown: u64,
+    pub thread_on: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    /// The shell API names no backend: the files of the API name no Wayland backend identifier, and, apart from
+    /// `caps.rs` (whose table names protocol interfaces), no Wayland object type.  (The patterns are built from halves so this
+    /// file does not match itself.)
+    #[test]
+    fn no_wayland_names_in_ffi() {
+        let wayland = concat!("wayland", "_");
+        let wl = concat!("wl", "_");
+        let files = [
+            ("api.rs", include_str!("api.rs"), true),
+            ("caps.rs", include_str!("caps.rs"), false),
+            ("event.rs", include_str!("event.rs"), true),
+            ("lib.rs", include_str!("lib.rs"), true),
+        ];
+        for (name, text, check_wl) in files {
+            // this test's own name is the one line allowed to say it
+            let text: String = text.lines().filter(|l| !l.contains("fn no_")).collect();
+            assert!(!text.contains(wayland), "{name} names {wayland}");
+            if check_wl {
+                assert!(!text.contains(wl), "{name} names {wl}");
+            }
+        }
+    }
+}
+
+/// One window card for [`ShellBackend::set_cards`]: its id, its place in the root's surface (device pixels: x, y, width,
+/// height) and its image there (premultiplied ARGB, row by row), or `None` to keep the image it has; `shown`, the part
+/// of the place that shows (inside it; `None`: all of it), so a card that slides past an edge is cut there without a
+/// new image (the minimap's pieces).
+#[derive(Debug, Clone)]
+pub struct CardImage {
+    pub id: u64,
+    pub rect: (i32, i32, u32, u32),
+    pub argb: Option<std::sync::Arc<[u32]>>,
+    pub shown: Option<(i32, i32, u32, u32)>,
+}

@@ -1,0 +1,440 @@
+//! T1 tests of xdg toplevels against nh-recorder: configure sequencing, states, close and decoration negotiation.
+//! The harness is `common/mod.rs`.
+
+mod common;
+
+use common::*;
+use nhshell::api::{
+    NHSHELL_ACK_CONTENT, NHSHELL_READY_OWED, NHSHELL_WIN_UNDECORATED, ShellBackend, ShellError,
+    WindowDesc,
+};
+use nhshell::event::*;
+use nhshell::wayland::WaylandShell;
+use std::time::{Duration, Instant};
+
+/// The raw token after `"key":` (a string keeps its quotes).
+fn token<'a>(json: &'a str, key: &str) -> Option<&'a str> {
+    let pat = format!("\"{key}\":");
+    let rest = json[json.find(&pat)? + pat.len()..].trim_start();
+    let end = rest.find([',', '}']).unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// The commits of a `log` reply, one JSON object text each.
+fn commits(rec: &Recorder, since: u64) -> Vec<String> {
+    let log = rec.control(&format!(r#"{{"cmd":"log","since":{since}}}"#));
+    // the reply's objects have sorted keys, so `ack_serial` opens each commit
+    log.split("{\"ack_serial\":")
+        .skip(1)
+        .map(|c| format!("{{\"ack_serial\":{c}"))
+        .collect()
+}
+
+fn new_window(shell: &mut WaylandShell) -> u64 {
+    shell
+        .window_new(&WindowDesc {
+            w: 200,
+            h: 100,
+            title: "t".into(),
+            app_id: "nidhogg.test".into(),
+            flags: 0,
+        })
+        .unwrap()
+}
+
+/// Commits since `since` until one satisfies `pred`, within 3 s.
+fn wait_commit(rec: &Recorder, since: u64, pred: impl Fn(&str) -> bool) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let all = commits(rec, since);
+        if all.iter().any(|c| pred(c)) || Instant::now() > deadline {
+            return all;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[allow(clippy::module_inception)]
+mod toplevel {
+    use super::*;
+
+    #[test]
+    fn first_configure_maps() {
+        let rec = Recorder::start("mutter");
+        let mut shell = rec.open();
+        let id = new_window(&mut shell);
+        let first = configure_of(&wait_event(&mut shell, Kind::Configure));
+        // the initial bare commit carries no ack and no buffer: the window is not mapped yet
+        let log = wait_commit(&rec, 1, |c| token(c, "role") == Some("\"toplevel\""));
+        let initial = &log[0];
+        assert_eq!(token(initial, "ack_serial"), Some("null"), "{initial}");
+        assert_eq!(token(initial, "buffer"), Some("null"), "{initial}");
+        // the host acks, then commits
+        shell.ack_configure(id, first.serial, 0).unwrap();
+        shell.present_bare(id).unwrap();
+        shell.flush().unwrap();
+        let log = wait_commit(&rec, 1, |c| token(c, "ack_serial") != Some("null"));
+        let acked = log
+            .iter()
+            .find(|c| token(c, "ack_serial") != Some("null"))
+            .expect("a commit with an ack");
+        assert_eq!(number(acked, "ack_serial"), Some(u64::from(first.serial)));
+        assert_eq!(token(acked, "ack_stale"), Some("false"), "{acked}");
+        assert_eq!(token(acked, "role"), Some("\"toplevel\""));
+    }
+
+    /// Two configures reach the host in order, each with its own serial and size.  Which one the host acks is the
+    /// glue's policy (the newest), pinned by the GUI rows.
+    #[test]
+    fn double_configure_in_order() {
+        let rec = Recorder::start("mutter");
+        let mut shell = rec.open();
+        let id = new_window(&mut shell);
+        let first = configure_of(&wait_event(&mut shell, Kind::Configure));
+        shell.ack_configure(id, first.serial, 0).unwrap();
+        shell.present_bare(id).unwrap();
+        shell.flush().unwrap();
+        collect(&mut shell, 50);
+        // two configures before the client commits
+        let r1 = rec.control(r#"{"cmd":"configure","surface":"focused","size":[300,200]}"#);
+        let r2 = rec.control(r#"{"cmd":"configure","surface":"focused","size":[400,300]}"#);
+        let (s1, s2) = (
+            number(&r1, "serial").unwrap(),
+            number(&r2, "serial").unwrap(),
+        );
+        assert!(s1 < s2);
+        let got: Vec<ConfigureEv> = {
+            let mut v = Vec::new();
+            while v.len() < 2 {
+                v.push(configure_of(&wait_event(&mut shell, Kind::Configure)));
+            }
+            v
+        };
+        assert_eq!(
+            (got[0].serial, got[0].w, got[0].h),
+            (s1 as u32, 300, 200),
+            "first of the two"
+        );
+        assert_eq!((got[1].serial, got[1].w, got[1].h), (s2 as u32, 400, 300));
+    }
+
+    #[test]
+    fn states_bits() {
+        let rec = Recorder::start("mutter");
+        let mut shell = rec.open();
+        new_window(&mut shell);
+        wait_event(&mut shell, Kind::Configure);
+        let reply = rec.control(
+            r#"{"cmd":"configure","surface":"focused","size":[0,0],"states":["maximized","fullscreen","tiled_left","suspended"]}"#,
+        );
+        assert!(reply.contains("\"ok\":true"), "{reply}");
+        let ev = collect(&mut shell, 100)
+            .into_iter()
+            .rfind(|e| e.kind() == Kind::Configure)
+            .expect("a configure");
+        assert_eq!(
+            configure_of(&ev).states,
+            NHSHELL_STATE_MAXIMIZED
+                | NHSHELL_STATE_FULLSCREEN
+                | NHSHELL_STATE_TILED_L
+                | NHSHELL_STATE_SUSPENDED
+        );
+        let reply = rec.control(
+            r#"{"cmd":"configure","surface":"focused","states":["activated","resizing","tiled_right","tiled_top","tiled_bottom"]}"#,
+        );
+        assert!(reply.contains("\"ok\":true"), "{reply}");
+        let ev = wait_event(&mut shell, Kind::Configure);
+        assert_eq!(
+            configure_of(&ev).states,
+            NHSHELL_STATE_ACTIVATED
+                | NHSHELL_STATE_RESIZING
+                | NHSHELL_STATE_TILED_R
+                | NHSHELL_STATE_TILED_T
+                | NHSHELL_STATE_TILED_B
+        );
+    }
+
+    /// Commit after the first ack and return the logged decoration of the window's commits.
+    fn decoration_logged(rec: &Recorder, shell: &mut WaylandShell, id: u64) -> Option<String> {
+        let first = collect(shell, 100)
+            .into_iter()
+            .rfind(|e| e.kind() == Kind::Configure)
+            .expect("a configure");
+        shell
+            .ack_configure(id, configure_of(&first).serial, 0)
+            .unwrap();
+        shell.present_bare(id).unwrap();
+        shell.flush().unwrap();
+        let log = wait_commit(rec, 1, |c| token(c, "ack_serial") != Some("null"));
+        let acked = log
+            .iter()
+            .find(|c| token(c, "ack_serial") != Some("null"))
+            .expect("a commit with an ack");
+        token(acked, "decoration")
+            .filter(|t| *t != "null")
+            .map(|t| t.trim_matches('"').to_owned())
+    }
+
+    #[test]
+    fn ssd_on_sway_profile() {
+        let rec = Recorder::start("sway");
+        let mut shell = rec.open();
+        let id = new_window(&mut shell);
+        let logged = decoration_logged(&rec, &mut shell, id);
+        assert!(shell.caps().ssd);
+        assert!(shell.window_ssd(id).unwrap());
+        assert_eq!(logged.as_deref(), Some("server"));
+        // sway serves xdg_wm_base 5: the window's capabilities were sent (all four, by the recorder)
+        assert_ne!(shell.window_wm_capabilities(id).unwrap(), 0);
+    }
+
+    #[test]
+    fn csd_on_mutter_profile() {
+        let rec = Recorder::start("mutter");
+        let mut shell = rec.open();
+        let id = new_window(&mut shell);
+        let logged = decoration_logged(&rec, &mut shell, id);
+        assert!(!shell.caps().ssd);
+        assert!(!shell.window_ssd(id).unwrap());
+        assert_eq!(logged.as_deref(), None);
+    }
+
+    #[test]
+    fn force_csd_env() {
+        let rec = Recorder::start("sway");
+        let mut shell = {
+            let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+            // SAFETY: every open in this binary holds ENV, and only open reads the variable.
+            unsafe { std::env::set_var("NIDHOGG_SHELL_FORCE_CSD", "1") };
+            let shell = rec.open_locked();
+            // SAFETY: as above.
+            unsafe { std::env::remove_var("NIDHOGG_SHELL_FORCE_CSD") };
+            shell
+        };
+        assert!(shell.caps().force_csd);
+        let id = new_window(&mut shell);
+        let logged = decoration_logged(&rec, &mut shell, id);
+        assert!(!shell.caps().ssd, "no get_toplevel_decoration was sent");
+        assert_eq!(logged, None);
+    }
+
+    #[test]
+    fn close_event() {
+        let rec = Recorder::start("mutter");
+        let mut shell = rec.open();
+        let id = new_window(&mut shell);
+        wait_event(&mut shell, Kind::Configure);
+        let reply = rec.control(r#"{"cmd":"close","surface":"focused"}"#);
+        assert!(reply.contains("\"ok\":true"), "{reply}");
+        let ev = wait_event(&mut shell, Kind::Close);
+        assert_eq!(ev.window, id);
+    }
+
+    /// `alpha` is surface state; the window owes a commit, and a bare one carries the multiplier.
+    #[test]
+    fn alpha_rides_a_bare_commit() {
+        let rec = Recorder::start("sway");
+        let mut shell = rec.open();
+        let id = new_window(&mut shell);
+        let first = configure_of(&wait_event(&mut shell, Kind::Configure));
+        shell.ack_configure(id, first.serial, 0).unwrap();
+        shell.present_bare(id).unwrap();
+        shell.set_alpha(id, u32::MAX / 2).unwrap();
+        assert_ne!(shell.window_ready(id).unwrap() & NHSHELL_READY_OWED, 0);
+        shell.present_bare(id).unwrap();
+        shell.flush().unwrap();
+        let alpha = |c: &str| {
+            token(c, "alpha")
+                .filter(|t| *t != "null")
+                .and_then(|t| t.parse::<f64>().ok())
+        };
+        let log = wait_commit(&rec, 0, |c| alpha(c).is_some());
+        let a = log
+            .iter()
+            .rev()
+            .find_map(|c| alpha(c))
+            .expect("a commit with an alpha");
+        assert!((a - 0.5).abs() < 0.01, "alpha {a}");
+    }
+
+    #[test]
+    fn alpha_unsupported_without_the_protocol() {
+        let rec = Recorder::start("mutter");
+        let mut shell = rec.open();
+        let id = new_window(&mut shell);
+        assert!(matches!(
+            shell.set_alpha(id, 0),
+            Err(ShellError::Unsupported)
+        ));
+    }
+
+    /// An undecorated window has its decoration object from the start, so `set_decorated` changes the mode after a
+    /// buffer without a protocol error (version 1 forbids making the object then).
+    #[test]
+    fn undecorated_window_can_be_decorated_later() {
+        let rec = Recorder::start("sway");
+        let mut shell = rec.open();
+        let id = shell
+            .window_new(&WindowDesc {
+                w: 200,
+                h: 100,
+                title: "t".into(),
+                app_id: "nidhogg.test".into(),
+                flags: NHSHELL_WIN_UNDECORATED,
+            })
+            .unwrap();
+        let logged = decoration_logged(&rec, &mut shell, id);
+        assert!(
+            logged.is_some(),
+            "the recorder answered the decoration object"
+        );
+        shell.set_decorated(id, true).unwrap();
+        shell.set_decorated(id, false).unwrap();
+        shell.present_bare(id).unwrap();
+        shell.flush().unwrap();
+        shell.dispatch_main().unwrap();
+        assert!(shell.window_ssd(id).is_ok());
+    }
+
+    /// Set window `id`'s window geometry to `w` x `h` and commit a buffer of that size.
+    fn show_at(shell: &mut WaylandShell, id: u64, w: i32, h: i32) {
+        shell.set_geometry(id, 0, 0, w, h).unwrap();
+        draw(shell, id, w, h);
+    }
+
+    /// A window shown at 200 x 100, its first configure acked, every record read and the commit at the recorder.
+    fn shown_window(shell: &mut WaylandShell) -> u64 {
+        let id = new_window(shell);
+        let first = configure_of(&wait_event(shell, Kind::Configure));
+        shell
+            .ack_configure(id, first.serial, NHSHELL_ACK_CONTENT)
+            .unwrap();
+        show_at(shell, id, 200, 100);
+        sync(shell);
+        collect(shell, 50);
+        id
+    }
+
+    /// The compositor's configure of a size `size` and `states`, sent now; the shell reads it at its next record.
+    fn configure_now(rec: &Recorder, size: (i32, i32), states: &str) {
+        rec.control_ok(&format!(
+            r#"{{"cmd":"configure","surface":"focused","size":[{},{}],"states":[{states}]}}"#,
+            size.0, size.1
+        ));
+    }
+
+    /// Mutter answers a window's first buffer with a configure of its size.  A window that chose a new size of its
+    /// own before reading it keeps that size: the configure was sent before the compositor read the commit, so its
+    /// size is the window's choice (0 x 0).  Once the compositor has shown the commit, the same size is its own
+    /// request again.
+    #[test]
+    fn configure_sent_before_an_own_size_leaves_it() {
+        let rec = Recorder::start_clock("mutter", "manual");
+        let mut shell = rec.open();
+        let id = shown_window(&mut shell);
+        configure_now(&rec, (200, 100), r#""activated""#);
+        show_at(&mut shell, id, 300, 150);
+        let c = configure_of(&wait_event(&mut shell, Kind::Configure));
+        assert_eq!(
+            (c.w, c.h),
+            (0, 0),
+            "sent before the recorder read 300 x 150"
+        );
+        // the recorder has read the commit and shown it
+        present(&rec);
+        sync(&shell);
+        collect(&mut shell, 50);
+        configure_now(&rec, (200, 100), r#""activated""#);
+        let c = configure_of(&wait_event(&mut shell, Kind::Configure));
+        assert_eq!((c.w, c.h), (200, 100), "sent after the recorder showed it");
+    }
+
+    /// The manual clock's next frame: the frame callbacks of what the recorder has are answered.
+    fn present(rec: &Recorder) {
+        rec.control_ok(r#"{"cmd":"present","advance_ns":16000000}"#);
+    }
+
+    /// Mutter sends a configure at its repaint, while it answers a `wl_display.sync` as soon as it reads it: a
+    /// configure of the old size can come after the answer to a sync sent after the commit of the new size.  It is
+    /// the window's choice all the same until that commit has been shown (its frame callback), and the compositor's
+    /// after that.
+    #[test]
+    fn configure_after_the_sync_before_the_frame_leaves_it() {
+        let rec = Recorder::start_clock("mutter", "manual");
+        let mut shell = rec.open();
+        let id = shown_window(&mut shell);
+        present(&rec);
+        sync(&shell);
+        collect(&mut shell, 50);
+        show_at(&mut shell, id, 300, 150);
+        // the recorder has read the commit and answered every sync after it; it shows nothing until `present`
+        sync(&shell);
+        collect(&mut shell, 50);
+        configure_now(&rec, (200, 100), r#""activated""#);
+        let c = configure_of(&wait_event(&mut shell, Kind::Configure));
+        assert_eq!(
+            (c.w, c.h),
+            (0, 0),
+            "after the sync's answer, before the frame"
+        );
+        present(&rec);
+        sync(&shell);
+        collect(&mut shell, 50);
+        configure_now(&rec, (200, 100), r#""activated""#);
+        let c = configure_of(&wait_event(&mut shell, Kind::Configure));
+        assert_eq!((c.w, c.h), (200, 100), "after the frame");
+    }
+
+    /// A size of the window's own recorded, not committed yet: a configure of the size the compositor has is the
+    /// window's choice too.
+    #[test]
+    fn configure_while_an_own_size_waits_leaves_it() {
+        let rec = Recorder::start("mutter");
+        let mut shell = rec.open();
+        let id = shown_window(&mut shell);
+        configure_now(&rec, (200, 100), r#""activated""#);
+        shell.set_geometry(id, 0, 0, 300, 150).unwrap();
+        let c = configure_of(&wait_event(&mut shell, Kind::Configure));
+        assert_eq!((c.w, c.h), (0, 0));
+    }
+
+    /// A size the compositor sets (maximized here) binds, sent before the commit or not.
+    #[test]
+    fn compositor_sized_configure_before_an_own_size_binds() {
+        let rec = Recorder::start("mutter");
+        let mut shell = rec.open();
+        let id = shown_window(&mut shell);
+        configure_now(&rec, (200, 100), r#""maximized","activated""#);
+        show_at(&mut shell, id, 300, 150);
+        let c = configure_of(&wait_event(&mut shell, Kind::Configure));
+        assert_eq!((c.w, c.h), (200, 100));
+    }
+
+    /// `hold_main` leaves a configure that has come unread until it is released; then it is read, after what the
+    /// window did meanwhile: mutter's late answer, in a fixed order.
+    #[test]
+    fn a_held_configure_is_read_after_the_release() {
+        let rec = Recorder::start("mutter");
+        let mut shell = rec.open();
+        let id = shown_window(&mut shell);
+        shell.hold_main(true).unwrap();
+        configure_now(&rec, (200, 100), r#""activated""#);
+        // the configure is at the client (the roundtrip after it is answered), and stays unread
+        sync(&shell);
+        assert!(
+            !collect(&mut shell, 50)
+                .iter()
+                .any(|e| e.kind() == Kind::Configure),
+            "a configure read while held"
+        );
+        show_at(&mut shell, id, 300, 150);
+        sync(&shell);
+        shell.hold_main(false).unwrap();
+        let c = configure_of(&wait_event(&mut shell, Kind::Configure));
+        assert_eq!(
+            (c.w, c.h),
+            (0, 0),
+            "sent before the recorder read 300 x 150"
+        );
+    }
+}

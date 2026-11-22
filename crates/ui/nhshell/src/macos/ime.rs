@@ -1,0 +1,390 @@
+//! The input method on AppKit: the root view's `NSTextInputClient`, answered from pushed state.
+//!
+//! A key that makes text (a plain or shifted printable key, an Option key that is no modifier, a dead key) goes
+//! through `interpretKeyEvents:` while it is the current key; any key does while text is marked.  The input system
+//! then calls back: `insertText:` with the key's own characters and nothing marked is that key, sent as a key; other
+//! text is a commit; `setMarkedText:` is a preedit; `doCommandBySelector:` sends the current key, or, with none (a
+//! backspace the input method passes on), a delete, as NS does.  Its questions are answered from what C pushed at the
+//! last consistency point (`crate::ime_text`): the cursor rectangle, the line around point and NS's offsets of point
+//! and the region.  Nothing here calls Emacs, and no key waits on anything.
+
+use super::runloop::{MacEv, deliver};
+use crate::api::{ShellError, ShellResult, WindowId};
+use crate::event::{KeyEv, ShellEvent, TextEv};
+use crate::ime_text::Surrounding;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{LazyLock, Mutex, MutexGuard};
+
+/// What C pushed for one window: the cursor rectangle (points from the content's top left) and the text around it.
+#[derive(Clone, Debug, Default)]
+pub struct Pushed {
+    pub cursor: [i32; 4],
+    pub text: Surrounding,
+}
+
+// The pushed state and the record texts are the process's, not a thread's: C pushes at the consistency point of
+// whichever Lisp thread holds the lock, and the host that takes a record's text may be a Lisp thread too, while AppKit
+// asks and makes records on the main thread.  Each lock is held for one short access, never across a call out.
+static PUSHED: LazyLock<Mutex<HashMap<WindowId, Pushed>>> = LazyLock::new(Mutex::default);
+/// The texts of the preedit and commit records, until the host takes them.
+static TEXTS: LazyLock<Mutex<HashMap<u32, Vec<u8>>>> = LazyLock::new(Mutex::default);
+static NEXT: AtomicU32 = AtomicU32::new(1);
+
+thread_local! {
+    /// The key `interpretKeyEvents:` is running for, and its characters (the main thread's).
+    static CURRENT: RefCell<Option<(Option<KeyEv>, String)>> = const { RefCell::new(None) };
+}
+
+fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    // a panic under the lock left whole values behind (every access is one insert, remove or field write)
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// `window`'s pushed state, changed by `f`.
+pub fn with<R>(window: WindowId, f: impl FnOnce(&mut Pushed) -> R) -> R {
+    f(locked(&PUSHED).entry(window).or_default())
+}
+
+/// The window went.
+pub fn forget(window: WindowId) {
+    locked(&PUSHED).remove(&window);
+}
+
+/// `ShellBackend::text_len`.
+pub fn text_len(id: u32) -> ShellResult<usize> {
+    locked(&TEXTS)
+        .get(&id)
+        .map(Vec::len)
+        .ok_or(ShellError::State)
+}
+
+/// `ShellBackend::take_text`.
+pub fn take_text(id: u32) -> ShellResult<Vec<u8>> {
+    locked(&TEXTS).remove(&id).ok_or(ShellError::State)
+}
+
+fn text_event(text: &str) -> TextEv {
+    if text.is_empty() {
+        return TextEv::default();
+    }
+    let id = match NEXT.fetch_add(1, Ordering::Relaxed) {
+        0 => NEXT.fetch_add(1, Ordering::Relaxed),
+        id => id,
+    };
+    locked(&TEXTS).insert(id, text.as_bytes().to_vec());
+    TextEv {
+        id,
+        len: u32::try_from(text.len()).unwrap_or(u32::MAX),
+        ..TextEv::default()
+    }
+}
+
+fn send(window: WindowId, ev: ShellEvent) {
+    deliver(MacEv::Input(window, ev));
+}
+
+/// Whether key `k` goes through the input system: it makes text, it is `dead` (no characters, no chord), or text is
+/// marked.
+pub fn wants(window: WindowId, k: Option<&KeyEv>, dead: bool) -> bool {
+    dead || with(window, |p| p.text.marked > 0) || k.is_some_and(|k| k.utf8[0] != 0)
+}
+
+/// Run `interpret` (the view's `interpretKeyEvents:`) with `k` and `chars` as the current key.
+pub fn interpret(k: Option<KeyEv>, chars: String, interpret: impl FnOnce()) {
+    CURRENT.with(|c| *c.borrow_mut() = Some((k, chars)));
+    interpret();
+    CURRENT.with(|c| c.borrow_mut().take());
+}
+
+/// `setMarkedText:selectedRange:replacementRange:` (empty text ends the composition).
+pub fn mark(window: WindowId, text: &str) {
+    with(window, |p| p.text.marked = text.chars().count());
+    send(window, ShellEvent::Preedit(text_event(text)));
+}
+
+/// `unmarkText`.
+pub fn unmark(window: WindowId) {
+    if with(window, |p| std::mem::take(&mut p.text.marked)) > 0 {
+        send(window, ShellEvent::Preedit(TextEv::default()));
+    }
+}
+
+/// `insertText:replacementRange:`.
+pub fn insert(window: WindowId, text: &str) {
+    let had = with(window, |p| std::mem::take(&mut p.text.marked)) > 0;
+    if had {
+        send(window, ShellEvent::Preedit(TextEv::default()));
+    }
+    let own = CURRENT.with(|c| match c.borrow().as_ref() {
+        Some((Some(k), chars)) if !had && chars == text => Some(*k),
+        _ => None,
+    });
+    match own {
+        Some(k) => send(window, ShellEvent::Key(k)),
+        None if !text.is_empty() => send(window, ShellEvent::CommitText(text_event(text))),
+        None => {}
+    }
+}
+
+/// `doCommandBySelector:`: the current key, or a delete for `deleteBackward:` with none.
+pub fn command(window: WindowId, delete_backward: bool) {
+    let k = CURRENT.with(|c| c.borrow().as_ref().and_then(|(k, _)| *k));
+    match k {
+        Some(k) => send(window, ShellEvent::Key(k)),
+        None if delete_backward => {
+            if let Some(k) = crate::mac_input::key("\u{7f}", "\u{7f}", 0, false) {
+                send(window, ShellEvent::Key(k));
+            }
+        }
+        None => {}
+    }
+}
+
+/// Test hook: send `view` what an input method sends: `op` 0 marked `text`, 1 inserted `text`, 2 the composition's
+/// end, 3 the command named by selector `text`.
+#[cfg(feature = "test-hooks")]
+pub fn test_send(view: &super::view::NhView, op: i64, text: &str) -> ShellResult {
+    use objc2::msg_send;
+    use objc2_foundation::{NSNotFound, NSRange, NSString};
+    let s = NSString::from_str(text);
+    let none = NSRange::new(NSNotFound as usize, 0);
+    // SAFETY: the view is the NhView, an NSTextInputClient; the arguments are the types its methods take.
+    unsafe {
+        match op {
+            0 => {
+                let _: () = msg_send![view, setMarkedText: &*s, selectedRange: NSRange::new(s.length(), 0), replacementRange: none];
+            }
+            1 => {
+                let _: () = msg_send![view, insertText: &*s, replacementRange: none];
+            }
+            2 => {
+                let _: () = msg_send![view, unmarkText];
+            }
+            3 => {
+                let sel = objc2::runtime::Sel::register(
+                    &std::ffi::CString::new(text).map_err(|_| ShellError::Arg)?,
+                );
+                let _: () = msg_send![view, doCommandBySelector: sel];
+            }
+            _ => return Err(ShellError::Arg),
+        }
+    }
+    Ok(())
+}
+
+/// Test hook: what `view` answers an input method, as a plist: `:selected`, `:marked` (nil without), `:rect` (the
+/// first rectangle of one character at the selection, screen points), `:window` (the window's frame), and the
+/// substring of (`loc`, `len`) with its `:actual` range.
+#[cfg(feature = "test-hooks")]
+pub fn test_state(
+    view: &super::view::NhView,
+    window: &objc2_app_kit::NSWindow,
+    loc: usize,
+    len: usize,
+) -> String {
+    use objc2::msg_send;
+    use objc2::rc::Retained;
+    use objc2_foundation::{NSAttributedString, NSNotFound, NSRange, NSRect};
+    let rect = |r: NSRect| {
+        format!(
+            "({} {} {} {})",
+            r.origin.x.round(),
+            r.origin.y.round(),
+            r.size.width.round(),
+            r.size.height.round()
+        )
+    };
+    // SAFETY: the view is the NhView, an NSTextInputClient; the arguments are the types its methods take.
+    unsafe {
+        let sel: NSRange = msg_send![view, selectedRange];
+        let marked: NSRange = msg_send![view, markedRange];
+        let mut actual = NSRange::new(0, 0);
+        let first: NSRect = msg_send![view, firstRectForCharacterRange: NSRange::new(sel.location, 1), actualRange: &mut actual as *mut NSRange];
+        let mut sub_range = NSRange::new(0, 0);
+        let sub: Option<Retained<NSAttributedString>> = msg_send![view, attributedSubstringForProposedRange: NSRange::new(loc, len), actualRange: &mut sub_range as *mut NSRange];
+        format!(
+            "(:selected ({} {}) :marked {} :rect {} :window {} :substring {} :actual ({} {}))",
+            sel.location,
+            sel.length,
+            if marked.location == NSNotFound as usize {
+                "nil".to_string()
+            } else {
+                format!("({} {})", marked.location, marked.length)
+            },
+            rect(first),
+            rect(window.frame()),
+            sub.map_or("nil".into(), |s| crate::pasteboard::lisp_string(
+                &s.string().to_string()
+            )),
+            sub_range.location,
+            sub_range.length
+        )
+    }
+}
+
+/// Text Input Sources, for the test hook that selects a real input source.
+#[cfg(feature = "test-hooks")]
+mod tis {
+    use crate::api::ShellResult;
+
+    /// `TISInputSourceRef` and the other Core Foundation objects the input source calls take.
+    type CFRef = *const std::ffi::c_void;
+
+    #[link(name = "Carbon", kind = "framework")]
+    unsafe extern "C" {
+        static kTISPropertyInputSourceID: CFRef;
+        static kTISPropertyInputSourceIsSelectCapable: CFRef;
+        static kTISPropertyInputSourceIsEnabled: CFRef;
+        fn TISCreateInputSourceList(properties: CFRef, include_all_installed: u8) -> CFRef;
+        fn TISEnableInputSource(source: CFRef) -> i32;
+        fn TISSelectInputSource(source: CFRef) -> i32;
+        fn TISCopyCurrentKeyboardInputSource() -> CFRef;
+        fn TISGetInputSourceProperty(source: CFRef, key: CFRef) -> CFRef;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFArrayGetCount(a: CFRef) -> isize;
+        fn CFArrayGetValueAtIndex(a: CFRef, i: isize) -> CFRef;
+        fn CFBooleanGetValue(b: CFRef) -> u8;
+    }
+
+    /// An input source's id, whether it is enabled and select-capable, and the source.
+    type Source = (String, bool, bool, CFRef);
+
+    /// The installed (`all`) or enabled input sources whose id starts with `prefix`: each one's id, whether it is
+    /// enabled and whether it can be selected, and the source (borrowed from `list`, which the caller keeps).
+    ///
+    /// # Safety
+    ///
+    /// The sources are borrowed from the returned list; they live as long as it does.
+    unsafe fn sources(prefix: &str, all: bool) -> (Option<super::super::text::Cf>, Vec<Source>) {
+        use super::super::text::{Cf, string};
+        let flag = |src: CFRef, key: CFRef| {
+            // SAFETY: a borrowed CFBoolean property of a live source, or null.
+            unsafe {
+                let v = TISGetInputSourceProperty(src, key);
+                !v.is_null() && CFBooleanGetValue(v) != 0
+            }
+        };
+        // SAFETY: a Create call (+1, owned by `Cf`); the elements and their id properties are borrowed while it lives.
+        unsafe {
+            let Some(list) = Cf::new(TISCreateInputSourceList(std::ptr::null(), u8::from(all)))
+            else {
+                return (None, Vec::new());
+            };
+            let mut out = Vec::new();
+            for i in 0..CFArrayGetCount(list.get()) {
+                let src = CFArrayGetValueAtIndex(list.get(), i);
+                let id = TISGetInputSourceProperty(src, kTISPropertyInputSourceID);
+                if id.is_null() {
+                    continue;
+                }
+                let id = string(id);
+                if id.starts_with(prefix) {
+                    out.push((
+                        id,
+                        flag(src, kTISPropertyInputSourceIsEnabled),
+                        flag(src, kTISPropertyInputSourceIsSelectCapable),
+                        src,
+                    ));
+                }
+            }
+            (Some(list), out)
+        }
+    }
+
+    /// The current keyboard input source's id (`kTISPropertyInputSourceID`).
+    fn current_source_id() -> Option<String> {
+        use super::super::text::{Cf, string};
+        // SAFETY: a Copy call (+1, owned by `Cf`); the property is a borrowed CFString of the live source.
+        unsafe {
+            let cur = Cf::new(TISCopyCurrentKeyboardInputSource())?;
+            let id = TISGetInputSourceProperty(cur.get(), kTISPropertyInputSourceID);
+            (!id.is_null()).then(|| string(id))
+        }
+    }
+
+    /// Test hook (`test-input-source`): enable and select the installed input source `id` (Text Input Sources, e.g.
+    /// `com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese`), or with an empty `id` only report.  Enabling returns
+    /// before the enabled list has it, and only a select-capable source (an input mode, not its input method) can be
+    /// selected (round 9: select paramErr -50): the enabled list is read again for up to 2 s until `id` is in it, and
+    /// the select-capable source with that id is selected.  Its answer, for Lisp: `(:found BOOL :enable STATUS
+    /// :enabled-after MS :select STATUS :current "ID" :candidates ((ID ENABLED SELECT-CAPABLE) ...))`, STATUS the
+    /// OSStatus (0 is done), the candidates every installed source of `id`'s input method (its id less the last part).
+    pub fn test_input_source(id: &str) -> ShellResult<String> {
+        let id = id.trim_matches('"');
+        let b = |v: bool| if v { "t" } else { "nil" };
+        let (mut found, mut enable, mut select, mut after) = (false, -1, -1, -1i64);
+        let mut parent = -1;
+        let family = id.rsplit_once('.').map_or(id, |(f, _)| f);
+        let mut candidates = String::new();
+        if !id.is_empty() {
+            // SAFETY: each list is kept while its borrowed sources are used.
+            unsafe {
+                let (_all, installed) = sources(family, true);
+                for (cid, en, sel, _) in &installed {
+                    candidates.push_str(&format!(
+                        "({} {} {})",
+                        crate::pasteboard::lisp_string(cid),
+                        b(*en),
+                        b(*sel)
+                    ));
+                }
+                if let Some((_, _, _, src)) = installed.iter().find(|c| c.0 == id) {
+                    found = true;
+                    // a mode is selectable only when it and its parent input method are both enabled
+                    // (TextInputSources.h); round 11: the mode enabled, its parent not, select gave paramErr
+                    if let Some((_, en, _, p)) = installed.iter().find(|c| c.0 == family) {
+                        parent = if *en { 0 } else { TISEnableInputSource(*p) };
+                    }
+                    enable = TISEnableInputSource(*src);
+                    let start = std::time::Instant::now();
+                    while start.elapsed() < std::time::Duration::from_secs(2) {
+                        let (_list, enabled) = sources(family, false);
+                        let parent_on = parent == -1 || enabled.iter().any(|c| c.0 == family);
+                        if let Some((_, _, _, src)) =
+                            enabled.iter().find(|c| c.0 == id && c.2 && parent_on)
+                        {
+                            after = i64::try_from(start.elapsed().as_millis()).unwrap_or(i64::MAX);
+                            select = TISSelectInputSource(*src);
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                }
+            }
+        }
+        Ok(format!(
+            "(:found {} :parent-enable {parent} :enable {enable} :enabled-after {after} :select {select} :current {} \
+             :candidates ({candidates}))",
+            b(found),
+            current_source_id()
+                .map_or_else(|| "nil".into(), |s| crate::pasteboard::lisp_string(&s))
+        ))
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+pub use tis::test_input_source;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_lisp_threads_push_and_take_reach_the_main_threads_state() {
+        // C pushes at a Lisp thread's consistency point; AppKit reads on the main thread
+        std::thread::spawn(|| with(0x7e57, |p| p.cursor = [1, 2, 3, 4]))
+            .join()
+            .unwrap();
+        assert_eq!(with(0x7e57, |p| p.cursor), [1, 2, 3, 4]);
+        forget(0x7e57);
+        // a commit's text, made here, taken by the Lisp thread that runs `read_socket`
+        let ev = text_event("かな");
+        let took = std::thread::spawn(move || take_text(ev.id)).join().unwrap();
+        assert_eq!(took.expect("the text is there"), "かな".as_bytes());
+    }
+}
