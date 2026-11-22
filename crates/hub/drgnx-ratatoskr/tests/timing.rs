@@ -151,7 +151,9 @@ async fn synthetic(dir: &Path, chunks: usize, refs: bool) -> CodeStore {
                 (k, vector(seed))
             })
             .collect();
-        put_vectors(&store, MODEL, &rows).await.unwrap();
+        put_vectors(&store, MODEL, DIMS as u32, &rows)
+            .await
+            .unwrap();
     }
     store
 }
@@ -491,7 +493,9 @@ async fn worktree_search_p95() {
                 (k, vector(seed))
             })
             .collect();
-        put_vectors(&store, MODEL, &rows).await.unwrap();
+        put_vectors(&store, MODEL, DIMS as u32, &rows)
+            .await
+            .unwrap();
     }
     println!("50,000 chunks and 10 trees built in {:?}", built.elapsed());
     let base = ask(&store, hrafn::View::Base, true, 6).await;

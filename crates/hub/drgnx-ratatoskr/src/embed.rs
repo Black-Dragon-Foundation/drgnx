@@ -25,6 +25,7 @@
 //!   [`IDLE`] (the writer's `texts`, [`urdr::graph::writer::WriterStatus::texts`]).  Lease, status, event and `kv` writes do
 //!   not count: housekeeping (leases, the prune) writes every minute, and would keep every round away.
 
+use hrafn_embed::fingerprint::{FingerprintRecord, Identity, Pooling};
 use norn::deny::{DenyList, Source, Verdict};
 use norn::store::{CoordDb, CoordError};
 use serde_json::{Value, json};
@@ -59,17 +60,27 @@ enum Api {
 
 /// The `tei` or `ollama` provider PROVIDER at BASE (its URL in the table), reached through the gateway's loopback
 /// listener on PORT with TOKEN.
+///
+/// Its model is what its last [`probe`](crate::search::DocEmbedder::probe) proved, as a fingerprint: a TEI server's
+/// `/info` (model, revision, dtype, pooling, longest input) or an Ollama model's `/api/show` and `/api/tags` digest, and
+/// the length of one probe embed. Until it has answered it has none, and it embeds nothing: no vector of a model that is
+/// not known is ever stored.
 pub struct ProviderEmbedder {
     port: u16,
     token: String,
     provider: String,
     base: String,
     api: Api,
-    model: String,
+    ident: std::sync::Mutex<Option<Identity>>,
+    /// What the server said when the dims were last measured, and the dims.
+    dims_seen: std::sync::Mutex<Option<(String, u32)>>,
 }
 
+/// The text a probe embeds to learn a server's dimensions (the mock server answers it with the model's real dims).
+pub const PROBE_TEXT: &str = "drgnx fingerprint probe";
+
 impl ProviderEmbedder {
-    /// A TEI provider; its model name is `tei:<provider>`.
+    /// A TEI provider.
     pub(crate) fn tei(port: u16, token: String, provider: &str, base: &str) -> ProviderEmbedder {
         ProviderEmbedder {
             port,
@@ -77,11 +88,12 @@ impl ProviderEmbedder {
             provider: provider.to_owned(),
             base: base.to_owned(),
             api: Api::Tei,
-            model: format!("tei:{provider}"),
+            ident: std::sync::Mutex::new(None),
+            dims_seen: std::sync::Mutex::new(None),
         }
     }
 
-    /// An Ollama provider embedding with MODEL; its model name is `ollama:<provider>:<model>`.
+    /// An Ollama provider embedding with MODEL.
     pub(crate) fn ollama(
         port: u16,
         token: String,
@@ -95,8 +107,40 @@ impl ProviderEmbedder {
             provider: provider.to_owned(),
             base: base.to_owned(),
             api: Api::Ollama(model.to_owned()),
-            model: format!("ollama:{provider}:{model}"),
+            ident: std::sync::Mutex::new(None),
+            dims_seen: std::sync::Mutex::new(None),
         }
+    }
+
+    /// What a probe of this server is cached under: the provider and, for Ollama, the model asked for.
+    pub(crate) fn cache_key(&self) -> String {
+        match &self.api {
+            Api::Tei => format!("tei:{}", self.provider),
+            Api::Ollama(m) => format!("ollama:{}:{m}", self.provider),
+        }
+    }
+
+    /// Takes IDENTITY as what a probe proved (a probe of this server a moment ago, kept by the hub).
+    pub(crate) fn seed(&self, identity: Identity) {
+        *self
+            .ident
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(identity);
+    }
+
+    /// What the last probe proved, if it did.
+    fn known(&self) -> Option<Identity> {
+        self.ident
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The key the entity chain knows this embedder by: its fingerprint's hex, or `unprobed:<provider>` before it has
+    /// answered (never a key of a vector: an unprobed embedder embeds nothing).
+    fn key(&self) -> String {
+        self.known()
+            .map_or_else(|| format!("unprobed:{}", self.provider), |i| i.fp.hex())
     }
 
     /// The provider's id in the table.
@@ -128,14 +172,17 @@ impl ProviderEmbedder {
             .ok_or_else(|| EmbedError(format!("{} answered no vector", self.provider)))
     }
 
-    async fn post(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
-        let (path, body) = match &self.api {
-            Api::Tei => ("embed", json!({"inputs": texts})),
-            Api::Ollama(model) => ("api/embed", json!({"model": model, "input": texts})),
-        };
-        let body = body.to_string();
+    /// One request to the provider through the gateway: METHOD of PATH (under `/p/ID/`) with BODY (JSON text; none for a
+    /// GET). The payload of a 200; any other status is an error naming it.
+    async fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<String>,
+    ) -> Result<Vec<u8>, String> {
+        let body = body.unwrap_or_default();
         let head = format!(
-            "POST /p/{}/{path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\n\
+            "{method} /p/{}/{path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\n\
              Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             self.provider,
             self.port,
@@ -164,6 +211,20 @@ impl ProviderEmbedder {
                     .collect::<String>()
             ));
         }
+        Ok(payload)
+    }
+
+    /// Embeds TEXTS (an Ollama request never truncates, and sets its context to CTX tokens).
+    async fn post(&self, texts: &[String], ctx: u32) -> Result<Vec<Vec<f32>>, String> {
+        let (path, body) = match &self.api {
+            Api::Tei => ("embed", json!({"inputs": texts})),
+            Api::Ollama(model) => (
+                "api/embed",
+                json!({"model": model, "input": texts, "truncate": false,
+                       "options": {"num_ctx": ctx}}),
+            ),
+        };
+        let payload = self.request("POST", path, Some(body.to_string())).await?;
         let vectors =
             |e: serde_json::Error| format!("{} answered what is not vectors: {e}", self.provider);
         let rows: Vec<Vec<f32>> = match &self.api {
@@ -196,7 +257,13 @@ impl Embedder for ProviderEmbedder {
         texts: &'a [String],
     ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
         Box::pin(async move {
-            match crate::clock::timeout(DEADLINE, self.post(texts)).await {
+            let Some(id) = self.known() else {
+                return Err(EmbedError(format!(
+                    "{} has not stated its model yet: it is probed before it embeds",
+                    self.provider
+                )));
+            };
+            match crate::clock::timeout(DEADLINE, self.post(texts, id.record.max_tokens)).await {
                 Ok(r) => r.map_err(EmbedError),
                 Err(_) => Err(EmbedError(format!(
                     "{} did not answer in time",
@@ -206,19 +273,192 @@ impl Embedder for ProviderEmbedder {
         })
     }
 
-    fn model(&self) -> &str {
-        &self.model
+    /// The fingerprint's hex once probed, else `unprobed:<provider>`.
+    fn model(&self) -> String {
+        self.key()
     }
 }
 
-impl crate::search::DocEmbedder for ProviderEmbedder {
-    fn model(&self) -> &str {
-        &self.model
+impl ProviderEmbedder {
+    /// Asks the server what its model is, and remembers the answer ([`DocEmbedder::probe`]).
+    async fn probe_identity(&self) -> Result<Identity, EmbedError> {
+        let asked = async {
+            let (record, label) = match &self.api {
+                Api::Tei => {
+                    let info = self.request("GET", "info", None).await?;
+                    let info: Value = serde_json::from_slice(&info)
+                        .map_err(|e| format!("{} answered no model info: {e}", self.provider))?;
+                    let dims = self.probe_dims(&info.to_string()).await?;
+                    let record = record_from_tei(&info, dims).map_err(|e| e.0)?;
+                    let label = record.model_id.clone();
+                    (record, label)
+                }
+                Api::Ollama(model) => {
+                    let show = self
+                        .request(
+                            "POST",
+                            "api/show",
+                            Some(json!({"model": model}).to_string()),
+                        )
+                        .await?;
+                    let show: Value = serde_json::from_slice(&show)
+                        .map_err(|e| format!("{} answered no model details: {e}", self.provider))?;
+                    let tags = self.request("GET", "api/tags", None).await?;
+                    let tags: Value = serde_json::from_slice(&tags)
+                        .map_err(|e| format!("{} answered no model list: {e}", self.provider))?;
+                    let digest = tags["models"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .find(|m| m["name"] == *model || m["model"] == *model)
+                        .and_then(|m| m["digest"].as_str())
+                        .ok_or_else(|| format!("{} has no model {model}", self.provider))?
+                        .to_owned();
+                    let dims = self.probe_dims(&format!("{show}{digest}")).await?;
+                    (
+                        record_from_ollama(&show, &digest, dims).map_err(|e| e.0)?,
+                        model.clone(),
+                    )
+                }
+            };
+            Ok::<_, String>(Identity::new(record, label))
+        };
+        let id = match crate::clock::timeout(DEADLINE, asked).await {
+            Ok(r) => r.map_err(EmbedError)?,
+            Err(_) => {
+                return Err(EmbedError(format!(
+                    "{} did not answer in time",
+                    self.provider
+                )));
+            }
+        };
+        *self
+            .ident
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id.clone());
+        Ok(id)
     }
 
-    /// Not known before the server has answered.
-    fn dims(&self) -> usize {
-        0
+    /// The length of the vector of [`PROBE_TEXT`]: the dims the fingerprint says. A model's dims do not change while
+    /// what the server says of it (SAID) does not, so an unchanged answer reuses the last probe's: a probe before every
+    /// batch of tier 2 is then one request, not two.
+    async fn probe_dims(&self, said: &str) -> Result<u32, String> {
+        if let Some((s, d)) = self
+            .dims_seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            && s == said
+        {
+            return Ok(*d);
+        }
+        let rows = self
+            .post(&[PROBE_TEXT.to_owned()], crate::embed_direct::OLLAMA_CTX)
+            .await?;
+        let dims = rows
+            .first()
+            .map(|v| v.len() as u32)
+            .ok_or_else(|| format!("{} answered no vector", self.provider))?;
+        *self
+            .dims_seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((said.to_owned(), dims));
+        Ok(dims)
+    }
+}
+
+/// The record of a TEI server from its `GET /info` answer INFO and the dims DIMS of one probe embed: the model, its
+/// revision (`model_sha`), dtype, pooling and longest input. TEI normalises what it returns. An answer that names no
+/// model, or dims of 0, proves nothing.
+pub fn record_from_tei(info: &Value, dims: u32) -> Result<FingerprintRecord, EmbedError> {
+    let model_id = info["model_id"]
+        .as_str()
+        .filter(|m| !m.is_empty())
+        .ok_or_else(|| EmbedError("the server's info names no model".to_owned()))?;
+    if dims == 0 {
+        return Err(EmbedError("the server's vectors have no dims".to_owned()));
+    }
+    let text = |v: &Value| v.as_str().unwrap_or_default().to_owned();
+    Ok(FingerprintRecord {
+        model_id: model_id.to_owned(),
+        weights_sha256: text(&info["model_sha"]),
+        quant: text(&info["model_dtype"]),
+        pooling: Pooling::parse(
+            info["model_type"]["embedding"]["pooling"]
+                .as_str()
+                .unwrap_or(""),
+        ),
+        normalized: true,
+        dims,
+        max_tokens: info["max_input_length"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(0),
+        doc_prefix: String::new(),
+        query_template: QUERY_TEMPLATE.to_owned(),
+        embed_text_version: crate::search::EMBED_TEXT_VERSION,
+    })
+}
+
+/// The record of an Ollama model from its `POST /api/show` answer SHOW, the digest DIGEST its `/api/tags` row gives and
+/// the dims DIMS of one probe embed. The digest is what proves the weights. A show without a family proves nothing.
+pub fn record_from_ollama(
+    show: &Value,
+    digest: &str,
+    dims: u32,
+) -> Result<FingerprintRecord, EmbedError> {
+    let family = show["details"]["family"]
+        .as_str()
+        .filter(|f| !f.is_empty())
+        .ok_or_else(|| EmbedError("the model's details name no family".to_owned()))?;
+    if digest.is_empty() || dims == 0 {
+        return Err(EmbedError(
+            "no digest or no dims: the model is not proven".to_owned(),
+        ));
+    }
+    let model_id = match show["details"]["parameter_size"].as_str() {
+        Some(size) if !size.is_empty() => format!("{family}/{size}"),
+        _ => family.to_owned(),
+    };
+    let info = &show["model_info"];
+    let arch = info["general.architecture"].as_str().unwrap_or(family);
+    // llama.cpp's pooling types: 0 none, 1 mean, 2 cls, 3 last
+    let pooling = match info[format!("{arch}.pooling_type")].as_u64() {
+        Some(1) => Pooling::Mean,
+        Some(2) => Pooling::Cls,
+        Some(3) => Pooling::Last,
+        _ => Pooling::Unknown,
+    };
+    Ok(FingerprintRecord {
+        model_id,
+        weights_sha256: digest.to_owned(),
+        quant: show["details"]["quantization_level"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        pooling,
+        normalized: true,
+        dims,
+        max_tokens: info[format!("{arch}.context_length")]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(crate::embed_direct::OLLAMA_CTX),
+        doc_prefix: String::new(),
+        query_template: QUERY_TEMPLATE.to_owned(),
+        embed_text_version: crate::search::EMBED_TEXT_VERSION,
+    })
+}
+
+/// The wording of a query to a server ([`ProviderEmbedder::embed_query`]): the Qwen3 embedding models' instruction form.
+const QUERY_TEMPLATE: &str = "Instruct: {task}\nQuery:{query}";
+
+impl crate::search::DocEmbedder for ProviderEmbedder {
+    fn identity(&self) -> Option<Identity> {
+        self.known()
+    }
+
+    fn probe(&self) -> BoxFuture<'_, Result<Identity, EmbedError>> {
+        Box::pin(self.probe_identity())
     }
 
     fn embed_docs<'a>(
@@ -227,11 +467,6 @@ impl crate::search::DocEmbedder for ProviderEmbedder {
         _overriding: bool,
     ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
         self.embed(texts)
-    }
-
-    /// The server's own address accepts a connection (the doctor's probe, [`answered_family`]).
-    fn answers(&self) -> BoxFuture<'_, bool> {
-        Box::pin(async move { answered_family(&self.base).await.is_some() })
     }
 }
 
@@ -523,7 +758,7 @@ pub async fn fill_chain(
     let mut embedded = 0;
     let mut stops: Vec<String> = Vec::new();
     loop {
-        let Some(first) = embedders.iter().position(|e| chain.answering(e.model())) else {
+        let Some(first) = embedders.iter().position(|e| chain.answering(&e.model())) else {
             return Outcome::Stopped {
                 embedded,
                 why: if stops.is_empty() {
@@ -533,7 +768,7 @@ pub async fn fill_chain(
                 },
             };
         };
-        let (m, extra) = (embedders[first].model().to_owned(), skipped.len());
+        let (m, extra) = (embedders[first].model(), skipped.len());
         *reads += 1;
         let rows = db
             .read(move |c| {
@@ -626,19 +861,20 @@ pub async fn fill_chain(
         // the same batch down the chain: a failure marks the embedder down and the next one that answers takes it
         let mut answer = None;
         for e in &embedders[first..] {
-            if !chain.answering(e.model()) {
+            let model = e.model();
+            if !chain.answering(&model) {
                 continue;
             }
             let why = match e.embed(&texts).await {
                 Ok(v) if v.len() == send.len() => {
-                    answer = Some((e.model().to_owned(), v));
+                    answer = Some((model, v));
                     break;
                 }
                 Ok(v) => format!("{} vectors for {} texts", v.len(), send.len()),
                 Err(err) => err.0,
             };
-            stops.push(format!("{}: {why}", e.model()));
-            changes.extend(chain.fail(e.model(), &why, now));
+            stops.push(format!("{model}: {why}"));
+            changes.extend(chain.fail(&model, &why, now));
         }
         let Some((m, vectors)) = answer else { continue };
         let put: Vec<(Row, Vec<f32>)> = send.into_iter().zip(vectors).collect();
@@ -674,7 +910,7 @@ pub async fn fill_chain(
 /// stops it.
 pub async fn fill(db: &CoordDb, e: &dyn Embedder, deny: &DenyList) -> Outcome {
     let mut chain = Chain::default();
-    chain.sync(&[e.model().to_owned()]);
+    chain.sync(&[e.model()]);
     fill_chain(
         db,
         &[e],
@@ -736,7 +972,7 @@ pub async fn run(
     now: Instant,
     changes: &mut Vec<Change>,
 ) -> Outcome {
-    let models: Vec<String> = embedders.iter().map(|e| e.model().to_owned()).collect();
+    let models: Vec<String> = embedders.iter().map(|e| e.model()).collect();
     chain.sync(&models);
     fill_chain(db, embedders, deny, chain, now, changes, &mut 0).await
 }
@@ -808,7 +1044,7 @@ impl Driver {
         texts: u64,
         now: Instant,
     ) -> Step {
-        let models: Vec<String> = embedders.iter().map(|e| e.model().to_owned()).collect();
+        let models: Vec<String> = embedders.iter().map(|e| e.model()).collect();
         self.chain.sync(&models);
         self.last = Some(now);
         let mut step = Step::default();
@@ -895,7 +1131,7 @@ pub fn ordered(
     search_builtin: bool,
 ) -> Vec<(Label, std::sync::Arc<dyn Embedder>)> {
     let builtin_label = |e: &std::sync::Arc<dyn Embedder>| Label {
-        model: e.model().to_owned(),
+        model: e.model(),
         label: "the built-in model".to_owned(),
     };
     let mut servers: Vec<Option<ProviderEmbedder>> = servers.into_iter().map(Some).collect();
@@ -919,7 +1155,7 @@ pub fn ordered(
             let label = format!("{} at {}", e.kind().to_uppercase(), short_base(&e.base));
             out.push((
                 Label {
-                    model: e.model.clone(),
+                    model: e.model(),
                     label,
                 },
                 std::sync::Arc::new(e),
@@ -1031,6 +1267,22 @@ pub(crate) mod tests {
         gate.apply(&table).unwrap();
         gate.listen(None).await.unwrap();
         let e = gate.embedders(&[]).unwrap().remove(0);
+        // the scripted mock answers vectors only (no `/info`): the embedder is given the identity a probe would make
+        e.seed(Identity::new(
+            FingerprintRecord {
+                model_id: "scripted".into(),
+                weights_sha256: String::new(),
+                quant: String::new(),
+                pooling: Pooling::Unknown,
+                normalized: true,
+                dims: 4,
+                max_tokens: 512,
+                doc_prefix: String::new(),
+                query_template: QUERY_TEMPLATE.into(),
+                embed_text_version: crate::search::EMBED_TEXT_VERSION,
+            },
+            "scripted",
+        ));
         (gate, e)
     }
 
@@ -1190,7 +1442,12 @@ pub(crate) mod tests {
         let sizes: Vec<usize> = mock.requests().iter().map(Vec::len).collect();
         assert_eq!(sizes, [64, 64, 2]);
         assert_eq!(vectors(&db).await, 130);
-        let stale = db.read(|c| Ok(vec_stale(c, "tei:tei", 10)?)).await.unwrap();
+        let model = Embedder::model(&e);
+        assert_eq!(model.len(), 64, "the vectors are keyed by a fingerprint");
+        let stale = db
+            .read(move |c| Ok(vec_stale(c, &model, 10)?))
+            .await
+            .unwrap();
         assert!(stale.is_empty());
         // a second round has nothing to do and sends nothing
         assert_eq!(
@@ -1244,8 +1501,8 @@ pub(crate) mod tests {
             })
         }
 
-        fn model(&self) -> &str {
-            "fake"
+        fn model(&self) -> String {
+            "fake".to_owned()
         }
     }
 
@@ -1627,8 +1884,8 @@ pub(crate) mod tests {
             })
         }
 
-        fn model(&self) -> &str {
-            &self.model
+        fn model(&self) -> String {
+            self.model.clone()
         }
     }
 
@@ -1741,15 +1998,19 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>()
         };
         // [a, b] with search_builtin off: those two, in that order; c and the built-in model never
-        assert_eq!(models(&[step("a"), step("b")], false), ["tei:a", "tei:b"]);
+        // (a server that has not answered a probe yet is known as `unprobed:<provider>`)
+        assert_eq!(
+            models(&[step("a"), step("b")], false),
+            ["unprobed:a", "unprobed:b"]
+        );
         // the user put the built-in model between them: there it stays, whatever search_builtin says
         let mid = [step("b"), step("builtin"), step("a")];
-        assert_eq!(models(&mid, false), ["tei:b", "builtin", "tei:a"]);
-        assert_eq!(models(&mid, true), ["tei:b", "builtin", "tei:a"]);
+        assert_eq!(models(&mid, false), ["unprobed:b", "builtin", "unprobed:a"]);
+        assert_eq!(models(&mid, true), ["unprobed:b", "builtin", "unprobed:a"]);
         // search_builtin adds it last only when no step names it
-        assert_eq!(models(&[step("a")], true), ["tei:a", "builtin"]);
+        assert_eq!(models(&[step("a")], true), ["unprobed:a", "builtin"]);
         // an unknown step adds nothing
-        assert_eq!(models(&[step("nope"), step("c")], false), ["tei:c"]);
+        assert_eq!(models(&[step("nope"), step("c")], false), ["unprobed:c"]);
         let labels = ordered(&mid, servers(), Some(builtin.clone()), false);
         assert_eq!(labels[0].0.label, "TEI at 127.0.0.1:80b");
         assert_eq!(labels[1].0.label, "the built-in model");

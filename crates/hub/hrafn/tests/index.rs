@@ -88,8 +88,38 @@ fn vectors(keys: &[([u8; 32], String)]) -> Vec<([u8; 32], Vec<f32>)> {
 /// Embeds everything tier 2 would: what `missing` gives goes back through `put_vectors`.
 async fn embed_all(s: &CodeStore) -> usize {
     let keys = missing(s, MODEL, 1000).await.unwrap();
-    put_vectors(s, MODEL, &vectors(&keys)).await.unwrap();
+    put_vectors(s, MODEL, DIMS as u32, &vectors(&keys))
+        .await
+        .unwrap();
     keys.len()
+}
+
+/// A row whose length is not the fingerprint's dims is an error, and nothing of the batch is written.
+#[tokio::test]
+async fn wrong_dims_are_refused_on_write() {
+    let (_d, s) = store().await;
+    let tree = Tree::new(&[("a.el", "(defun a () 1)\n"), ("b.el", "(defun b () 2)\n")]);
+    run(&s, &tree, &[el("a.el", "a1"), el("b.el", "b1")]).await;
+    let keys = missing(&s, MODEL, 1000).await.unwrap();
+    assert!(keys.len() >= 2);
+    let mut rows = vectors(&keys);
+    rows[1].1.push(0.5); // one row of 5 in a batch of 4
+    let err = put_vectors(&s, MODEL, DIMS as u32, &rows)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("5 dims") && err.to_string().contains("4"),
+        "{err}"
+    );
+    assert_eq!(
+        missing(&s, MODEL, 1000).await.unwrap().len(),
+        keys.len(),
+        "nothing of the batch was written"
+    );
+    put_vectors(&s, MODEL, DIMS as u32, &vectors(&keys))
+        .await
+        .unwrap();
+    assert!(missing(&s, MODEL, 1000).await.unwrap().is_empty());
 }
 
 async fn ids_of(s: &CodeStore, path: &str) -> Vec<i64> {

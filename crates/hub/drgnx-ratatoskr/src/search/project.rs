@@ -1203,9 +1203,11 @@ impl Inner {
     }
 
     fn models(&self) -> Vec<(String, usize)> {
+        // the fingerprints the embedders have proved so far (an embedder not probed yet has none)
         self.embedders
             .iter()
-            .map(|e| (e.model().to_string(), e.dims()))
+            .filter_map(|e| e.identity())
+            .map(|i| (i.fp.hex(), i.record.dims as usize))
             .collect()
     }
 
@@ -1276,11 +1278,14 @@ impl Inner {
             let overriding = self.gates().await;
             let mut sent = false;
             for e in &self.embedders {
-                // a server that is not running is no failure of tier 2: it is asked again at the next change
-                if !e.answers().await {
+                // a server that is not running is no failure of tier 2: it is asked again at the next change. The
+                // probe says which model it is now: a swapped server is another fingerprint, and the batch goes
+                // under that one (the rows under the old one stay).
+                let Ok(id) = e.probe().await else {
                     continue;
-                }
-                let keys = match hrafn::missing(&self.store, e.model(), REQUEST_KEYS).await {
+                };
+                let (model, dims) = (id.fp.hex(), id.record.dims);
+                let keys = match hrafn::missing(&self.store, &model, REQUEST_KEYS).await {
                     Ok(k) => k,
                     Err(err) => {
                         self.publish(Tier2::Failed(err.to_string()));
@@ -1294,9 +1299,19 @@ impl Inner {
                 let texts: Vec<String> = keys.iter().map(|(_, t)| t.clone()).collect();
                 match e.embed_docs(&texts, overriding).await {
                     Ok(vectors) if vectors.len() == keys.len() => {
+                        // the fingerprint says how long a vector is: another length writes nothing of the batch
+                        if let Some(v) = vectors.iter().find(|v| v.len() != dims as usize) {
+                            self.publish(Tier2::Failed(format!(
+                                "{}: {} dims, the fingerprint says {dims}",
+                                id.label,
+                                v.len()
+                            )));
+                            continue;
+                        }
                         let rows: Vec<([u8; 32], Vec<f32>)> =
                             keys.iter().map(|(k, _)| *k).zip(vectors).collect();
-                        if let Err(err) = hrafn::put_vectors(&self.store, e.model(), &rows).await {
+                        if let Err(err) = hrafn::put_vectors(&self.store, &model, dims, &rows).await
+                        {
                             self.publish(Tier2::Failed(err.to_string()));
                             continue;
                         }
@@ -1316,7 +1331,9 @@ impl Inner {
                     g.overriding = false;
                 }
                 for e in &self.embedders {
-                    let _ = hrafn::collect(&self.store, e.model()).await;
+                    if let Some(i) = e.identity() {
+                        let _ = hrafn::collect(&self.store, &i.fp.hex()).await;
+                    }
                 }
                 if !matches!(self.status.borrow().tier2, Tier2::Failed(_)) {
                     self.publish(Tier2::Idle);
@@ -1334,8 +1351,8 @@ impl Inner {
             self.wake.notified().await;
             for e in &self.embedders {
                 // a store error is the pass's to report
-                if e.answers().await
-                    && !matches!(hrafn::missing(&self.store, e.model(), 1).await, Ok(k) if k.is_empty())
+                if let Ok(id) = e.probe().await
+                    && !matches!(hrafn::missing(&self.store, &id.fp.hex(), 1).await, Ok(k) if k.is_empty())
                 {
                     return;
                 }

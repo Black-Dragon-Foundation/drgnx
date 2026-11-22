@@ -10,10 +10,12 @@
 use drgnx_ratatoskr::dispatch::Caller;
 use drgnx_ratatoskr::embed::{self, Outcome};
 use drgnx_ratatoskr::gateway::Gate;
-use drgnx_ratatoskr::search::prefer;
 use drgnx_ratatoskr::search::worker::{WorkerEmbedder, WorkerSpec};
+use drgnx_ratatoskr::search::{DocEmbedder, builtin_identity, prefer};
 use drgnx_ratatoskr::settings::providers::ChainStep;
 use hrafn::Lag;
+use hrafn_embed::default_model;
+use hrafn_embed::fingerprint::Fingerprint;
 use norn::deny::DenyList;
 use norn::store::CoordDb;
 use runstav::methods::gateway::{ProviderConfig, SpendParams};
@@ -38,10 +40,12 @@ fn mock_bin() -> PathBuf {
 }
 
 /// `ratatoskr-mock embed`: TEI's `/embed` and Ollama's `/api/embed` on 127.0.0.1, logging every request.
-struct Server {
+pub(crate) struct Server {
     child: Child,
-    port: u16,
+    pub(crate) port: u16,
     log: PathBuf,
+    /// `--model-file`: the model the server stands in for; rewriting it swaps the model under the same URL.
+    pub(crate) model_file: PathBuf,
 }
 
 impl Drop for Server {
@@ -52,11 +56,15 @@ impl Drop for Server {
 }
 
 impl Server {
-    fn start(dir: &Path) -> Server {
+    pub(crate) fn start(dir: &Path) -> Server {
         let log = dir.join("embed.log");
+        let model_file = dir.join("model.txt");
+        std::fs::write(&model_file, "mock/embed-1\n").unwrap();
         let mut child = Command::new(mock_bin())
             .args(["embed", "--dims", "8", "--log"])
             .arg(&log)
+            .arg("--model-file")
+            .arg(&model_file)
             .arg("--parent")
             .arg(std::process::id().to_string())
             .stdout(Stdio::piped())
@@ -72,11 +80,33 @@ impl Server {
             .unwrap()
             .parse()
             .unwrap();
-        Server { child, port, log }
+        Server {
+            child,
+            port,
+            log,
+            model_file,
+        }
+    }
+
+    /// Swaps the model the server stands in for (`MODEL [DIMS [EMBED_DIMS]]`).
+    pub(crate) fn set_model(&self, line: &str) {
+        std::fs::write(&self.model_file, format!("{line}\n")).unwrap();
+    }
+
+    /// The embedding requests that are not the hub's probe: what the hub sent to be embedded.
+    pub(crate) fn embeds(&self) -> Vec<(String, Value)> {
+        self.requests()
+            .into_iter()
+            .filter(|(p, b)| {
+                p.contains("embed")
+                    && b["inputs"] != json!(["drgnx fingerprint probe"])
+                    && b["input"] != json!(["drgnx fingerprint probe"])
+            })
+            .collect()
     }
 
     /// What reached the server: `(path, body)`, in order.
-    fn requests(&self) -> Vec<(String, Value)> {
+    pub(crate) fn requests(&self) -> Vec<(String, Value)> {
         std::fs::read_to_string(&self.log)
             .unwrap_or_default()
             .lines()
@@ -85,7 +115,8 @@ impl Server {
             .map(|r| {
                 (
                     r["path"].as_str().unwrap().to_owned(),
-                    serde_json::from_str(r["body"].as_str().unwrap()).unwrap(),
+                    // a GET (the probe's `/info`, `/api/tags`) has no body
+                    serde_json::from_str(r["body"].as_str().unwrap()).unwrap_or(Value::Null),
                 )
             })
             .collect()
@@ -102,7 +133,7 @@ fn dead_port() -> u16 {
 }
 
 /// A gateway listening, with these providers.
-async fn gate(dir: &Path, providers: Value) -> Gate {
+pub(crate) async fn gate(dir: &Path, providers: Value) -> Gate {
     let gate = Gate::new(CoordDb::spawn(dir.join("gw.db")));
     let table: Vec<ProviderConfig> = serde_json::from_value(providers).unwrap();
     gate.apply(&table).unwrap();
@@ -110,17 +141,24 @@ async fn gate(dir: &Path, providers: Value) -> Gate {
     gate
 }
 
-fn tei(base: &str) -> Value {
+pub(crate) fn tei(base: &str) -> Value {
     json!({"id": "tei", "kind": "tei", "base": base, "auth": "none", "messages": false, "caps": ["embed"]})
 }
 
-fn ollama(base: &str) -> Value {
+pub(crate) fn ollama(base: &str) -> Value {
     json!({"id": "ollama", "kind": "ollama", "base": base, "auth": "none", "messages": false, "caps": ["embed"]})
 }
 
-fn lag(model: &str, total: u32, behind: u32) -> Lag {
+/// The built-in model's fingerprint, and a server's (any other).
+fn builtin_fp() -> Fingerprint {
+    builtin_identity(default_model()).fp
+}
+
+const SERVER_FP: Fingerprint = Fingerprint([7; 32]);
+
+fn lag(fp: &Fingerprint, total: u32, behind: u32) -> Lag {
     Lag {
-        model: Some(model.into()),
+        model: Some(fp.hex()),
         chunks_total: total,
         chunks_behind: behind,
         ..Lag::default()
@@ -130,31 +168,33 @@ fn lag(model: &str, total: u32, behind: u32) -> Lag {
 /// Pattern D. A server that does not answer is passed over: the query uses the built-in model, which says so.
 #[test]
 fn server_down_falls_back_to_builtin() {
-    let builtin = lag(BUILTIN, 100, 0);
-    let servers = [("tei:tei".to_string(), lag("tei:tei", 100, 0), false)];
-    assert_eq!(prefer(Some(&builtin), &servers).as_deref(), Some(BUILTIN));
+    let b = builtin_fp();
+    let builtin = lag(&b, 100, 0);
+    let servers = [(SERVER_FP, lag(&SERVER_FP, 100, 0), false)];
+    assert_eq!(prefer(Some((&b, &builtin)), &servers), Some(b));
 }
 
 /// Pattern D. A server that answers but holds fewer than 95 % of the live chunks does not qualify; at 95 % it does.
 #[test]
 fn server_partial_coverage_uses_builtin() {
-    let builtin = lag(BUILTIN, 100, 0);
-    let partial = [("tei:tei".to_string(), lag("tei:tei", 100, 6), true)];
-    assert_eq!(prefer(Some(&builtin), &partial).as_deref(), Some(BUILTIN));
-    let enough = [("tei:tei".to_string(), lag("tei:tei", 100, 5), true)];
-    assert_eq!(prefer(Some(&builtin), &enough).as_deref(), Some("tei:tei"));
+    let b = builtin_fp();
+    let builtin = lag(&b, 100, 0);
+    let partial = [(SERVER_FP, lag(&SERVER_FP, 100, 6), true)];
+    assert_eq!(prefer(Some((&b, &builtin)), &partial), Some(b));
+    let enough = [(SERVER_FP, lag(&SERVER_FP, 100, 5), true)];
+    assert_eq!(prefer(Some((&b, &builtin)), &enough), Some(SERVER_FP));
     // nothing indexed yet: nothing is behind
-    let empty = [("tei:tei".to_string(), lag("tei:tei", 0, 0), true)];
-    assert_eq!(prefer(Some(&builtin), &empty).as_deref(), Some("tei:tei"));
+    let empty = [(SERVER_FP, lag(&SERVER_FP, 0, 0), true)];
+    assert_eq!(prefer(Some((&b, &builtin)), &empty), Some(SERVER_FP));
 }
 
 /// Pattern D. With the built-in model off (`drgnx-search-builtin` nil) or not downloaded, an answering server is used
 /// whatever it covers, and with none answering there is no vector model.
 #[test]
 fn builtin_off_server_only() {
-    let partial = [("tei:tei".to_string(), lag("tei:tei", 100, 60), true)];
-    assert_eq!(prefer(None, &partial).as_deref(), Some("tei:tei"));
-    let down = [("tei:tei".to_string(), lag("tei:tei", 100, 0), false)];
+    let partial = [(SERVER_FP, lag(&SERVER_FP, 100, 60), true)];
+    assert_eq!(prefer(None, &partial), Some(SERVER_FP));
+    let down = [(SERVER_FP, lag(&SERVER_FP, 100, 0), false)];
     assert_eq!(prefer(None, &down), None);
     assert_eq!(prefer(None, &[]), None);
 }
@@ -170,14 +210,19 @@ async fn server_query_carries_the_instruction() {
     )
     .await;
     let e = g.embedders(&[]).unwrap().remove(0);
-    assert_eq!(e.model(), "tei:tei");
+    let id = e.probe().await.unwrap();
+    assert_eq!(
+        Embedder::model(&e),
+        id.fp.hex(),
+        "the model is the fingerprint"
+    );
     let q = e
         .embed_query("where is the timer set", Some(TASK))
         .await
         .unwrap();
     assert_eq!(q.len(), 8);
     e.embed(&["(defun f ())".to_string()]).await.unwrap();
-    let seen = server.requests();
+    let seen = server.embeds();
     assert_eq!(seen[0].0, "/embed");
     assert_eq!(
         seen[0].1["inputs"],
@@ -204,16 +249,20 @@ async fn ollama_embed_through_gateway_counts_spend() {
         model: Some("qwen3-embedding:0.6b".into()),
     }];
     let e = g.embedders(&chain).unwrap().remove(0);
-    assert_eq!(e.model(), "ollama:ollama:qwen3-embedding:0.6b");
+    server.set_model("qwen3-embedding:0.6b");
+    let id = e.probe().await.unwrap();
+    assert_eq!(
+        Embedder::model(&e),
+        id.fp.hex(),
+        "the model is the fingerprint"
+    );
     let texts = vec!["alpha beta".to_string(), "gamma".to_string()];
     let got = e.embed(&texts).await.unwrap();
     assert_eq!((got.len(), got[0].len()), (2, 8));
-    let seen = server.requests();
+    let seen = server.embeds();
     assert_eq!(seen[0].0, "/api/embed");
-    assert_eq!(
-        seen[0].1,
-        json!({"model": "qwen3-embedding:0.6b", "input": ["alpha beta", "gamma"]})
-    );
+    assert_eq!(seen[0].1["model"], "qwen3-embedding:0.6b");
+    assert_eq!(seen[0].1["input"], json!(["alpha beta", "gamma"]));
     let params: SpendParams = runstav::decode::typed(&json!({})).unwrap().0;
     let caller = Caller {
         class: runstav::registry::Class::User,
@@ -221,12 +270,14 @@ async fn ollama_embed_through_gateway_counts_spend() {
         job: None,
         conn_id: 1,
     };
-    let spent = skuld::wait_until_async("the request is in spend", 30, || async {
+    // the probe's embed ("drgnx fingerprint probe", 3 words) and the texts' 3 words, all through the gateway
+    let spent = skuld::wait_until_async("the requests are in spend", 30, || async {
         let s = g.spend(&caller, params.clone()).await.unwrap();
-        (s.requests > 0).then_some(s)
+        (s.input >= 6).then_some(s)
     })
     .await;
-    assert_eq!((spent.requests, spent.input), (1, 3), "{spent:?}");
+    assert_eq!(spent.input, 6, "{spent:?}");
+    assert!(spent.requests >= 2, "{spent:?}");
 }
 
 /// Pattern C. An endpoint named `localhost` reaches a server that listens on 127.0.0.1 only, and the doctor's probe
@@ -238,6 +289,7 @@ async fn localhost_resolves_to_127() {
     let base = format!("http://localhost:{}", server.port);
     let g = gate(dir.path(), json!([tei(&base)])).await;
     let e = g.embedders(&[]).unwrap().remove(0);
+    e.probe().await.unwrap();
     assert_eq!(e.embed(&["x".to_string()]).await.unwrap().len(), 1);
     assert_eq!(embed::answered_family(&base).await, Some("ipv4"));
     assert_eq!(
@@ -336,7 +388,7 @@ async fn entity_vectors_fill_with_builtin() {
             denied: 0
         }
     );
-    assert_eq!(models_of_vectors(&db).await, vec![(BUILTIN.to_string(), 2)]);
+    assert_eq!(models_of_vectors(&db).await, vec![(builtin_fp().hex(), 2)]);
     assert!(
         matches!(changes.as_slice(), [embed::Change::Down { .. }]),
         "{changes:?}"
@@ -347,4 +399,36 @@ async fn entity_vectors_fill_with_builtin() {
         Outcome::Nothing
     );
     assert_eq!(changes.len(), 1);
+}
+
+/// Pattern C (Hrafn redesign Task 5). A server's round writes its entities' vectors under the fingerprint it proved
+/// (64 hex), never a label (`tei:tei`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn entity_round_writes_fingerprint_hex() {
+    let dir = TempDir::new().unwrap();
+    let server = Server::start(dir.path());
+    server.set_model("model-a");
+    let g = gate(
+        dir.path(),
+        json!([tei(&format!("http://127.0.0.1:{}", server.port))]),
+    )
+    .await;
+    let e = g.embedders(&[]).unwrap().remove(0);
+    let id = e.probe().await.unwrap();
+    let db = CoordDb::spawn(dir.path().join("work.db"));
+    for (id, title) in [("task:a", "fix the timer"), ("task:b", "write the docs")] {
+        put(&db, id, title).await;
+    }
+    let deny = DenyList::load(&dir.path().join("home"), &dir.path().join("config"));
+    let mut chain = embed::Chain::default();
+    let (now, mut changes) = (tokio::time::Instant::from_std(skuld::origin()), Vec::new());
+    let out = embed::run(&db, &[&e], &deny, &mut chain, now, &mut changes).await;
+    assert_eq!(
+        out,
+        Outcome::Filled {
+            embedded: 2,
+            denied: 0
+        }
+    );
+    assert_eq!(models_of_vectors(&db).await, vec![(id.fp.hex(), 2)]);
 }

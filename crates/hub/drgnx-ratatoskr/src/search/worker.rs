@@ -18,6 +18,7 @@
 
 use super::power;
 use hrafn_embed::device::{self, Choice};
+use hrafn_embed::fingerprint::Identity;
 use hrafn_embed::pace::Pacer;
 use hrafn_embed::{Device, EmbedFail, LocalEmbedder, ModelSpec, adapters};
 use serde_json::{Value, json};
@@ -819,13 +820,24 @@ fn answer(pending: &Mutex<Pending>, facts: &Mutex<WorkerFacts>, v: Value) {
     }
 }
 
+impl WorkerEmbedder {
+    /// The built-in model's identity: its table row's record, which it knows without asking the worker.
+    pub fn identity(&self) -> Option<Identity> {
+        super::model(&self.spec.model).map(super::builtin_identity)
+    }
+}
+
 impl super::DocEmbedder for WorkerEmbedder {
-    fn model(&self) -> &str {
-        &self.spec.model
+    fn identity(&self) -> Option<Identity> {
+        WorkerEmbedder::identity(self)
     }
 
-    fn dims(&self) -> usize {
-        super::model(&self.spec.model).map_or(0, |s| s.dims)
+    /// The built-in worker is started on demand and always answers.
+    fn probe(&self) -> BoxFuture<'_, Result<Identity, EmbedError>> {
+        Box::pin(async move {
+            WorkerEmbedder::identity(self)
+                .ok_or_else(|| EmbedError(format!("no model {}", self.spec.model)))
+        })
     }
 
     fn embed_docs<'a>(
@@ -845,7 +857,8 @@ impl Embedder for WorkerEmbedder {
         Box::pin(self.embed_docs(texts, false))
     }
 
-    fn model(&self) -> &str {
-        &self.spec.model
+    /// The fingerprint's hex: the key of the entity vectors the built-in model makes.
+    fn model(&self) -> String {
+        WorkerEmbedder::identity(self).map_or_else(|| self.spec.model.clone(), |i| i.fp.hex())
     }
 }

@@ -773,7 +773,8 @@ fn run_set(
         let texts: Vec<String> = todo.iter().map(|(_, t)| t.clone()).collect();
         let vectors = docs.embed_docs(&texts)?;
         let put: Vec<_> = todo.iter().map(|(k, _)| *k).zip(vectors).collect();
-        rt.block_on(hrafn::put_vectors(&store, &model_id, &put))
+        let dims = put.first().map_or(0, |(_, v)| v.len() as u32);
+        rt.block_on(hrafn::put_vectors(&store, &model_id, dims, &put))
             .map_err(|e| e.to_string())?;
         embedded += put.len() as u64;
         if embedded % 2048 < 256 {

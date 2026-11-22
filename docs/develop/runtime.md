@@ -1653,11 +1653,25 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   terminal clients of the `search/*` methods.
 - **Servers as embedders (`embed.rs`, `Gate::embedders`).** The providers of kind `tei` and `ollama` with the `embed`
   capability embed through the hub's own gateway listener (`/p/ID/embed`, `/p/ID/api/embed`), so each request is in
-  `spend`. An Ollama provider needs the model the `embed` role names for it, and its model name is
-  `ollama:<provider>:<model>` (TEI's is `tei:<provider>`). A query to a server carries `Instruct: <task>\nQuery:<q>`;
-  documents go plain. `search::prefer` picks the model a query uses: an answering server with at least 95 % of the live
-  chunks covered, else the built-in model (unless `drgnx-search-builtin` is nil), else an answering server whatever it
-  covers. `embed::answered_family` is the doctor's probe of which address family answers; `localhost` of a local
+  `spend`. An Ollama provider needs the model the `embed` role names for it. **A server's model is its fingerprint**, not
+  a label: `DocEmbedder::probe` asks what the server is now and answers an `Identity`. TEI: `GET /info` (`model_id`,
+  `model_sha`, `model_dtype`, pooling, `max_input_length`) and one embed of `embed::PROBE_TEXT` for the dims
+  (`record_from_tei`). Ollama: `POST /api/show` and the `/api/tags` digest, plus the same probe embed
+  (`record_from_ollama`); every Ollama embed sets `truncate: false` and `options.num_ctx` to the record's token limit, so
+  a long chunk is an error, never a quietly cut vector. The probes go through the gateway too (`/info`, `/api/show` and
+  `/api/tags` are among the paths an editor token reaches), so they are in `spend`; the probe embed is made once per
+  answer of `/info` or `/api/show` (an unchanged answer reuses its dims). A server whose answer changes between probes
+  (another model under the same URL) is another fingerprint: tier 2 probes before each batch, writes it under the new
+  hex, and the rows under the old one stay (`search_fingerprint::swapped_server_model_is_a_new_fingerprint_and_old_vectors_stay`).
+  A server that has not answered a probe has no fingerprint and embeds nothing; the entity chain knows it as
+  `unprobed:<provider>`, which no vector is ever stored under. `hrafn::put_vectors(store, model, dims, rows)` refuses a
+  row whose length is not `dims`, and tier 2 then publishes `Tier2::Failed("<label>: N dims, the fingerprint says D")` and
+  writes nothing of that batch. The hub reuses a probe for 10 s in the calls that only need the fingerprint (a query,
+  `Hub::project`'s signature, which is the joined fingerprints, so a changed probe reopens the project). A query to a
+  server carries `Instruct: <task>\nQuery:<q>`; documents go plain. `search::prefer(builtin, servers)` works on
+  fingerprints and picks the model a query uses: an answering server with at least 95 % of the live chunks covered, else
+  the built-in model (unless `drgnx-search-builtin` is nil), else an answering server whatever it covers. The answers
+  carry the fingerprint as `model` and the model's name as `label`; clients print the label. `embed::answered_family` is the doctor's probe of which address family answers; `localhost` of a local
   server's URL is used as `127.0.0.1`. The hub never starts a server. The entity embedder (`embed::run`) fills with the
   first embedder in line that answers, a server before the built-in model, and each model keeps its own vector
   (`entity_vec` is keyed `(n, model)`), so a server that comes back finds its vectors still there.

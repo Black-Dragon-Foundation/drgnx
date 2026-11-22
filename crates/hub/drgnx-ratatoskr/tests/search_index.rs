@@ -36,6 +36,13 @@ fn exe() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ratatoskr"))
 }
 
+/// What the built-in model's vectors are keyed by: its fingerprint (`vec.model` is never the model's name).
+fn model_hex() -> String {
+    drgnx_ratatoskr::search::builtin_identity(hrafn_embed::default_model())
+        .fp
+        .hex()
+}
+
 fn model_dir() -> PathBuf {
     PathBuf::from(
         std::env::var("DRGNX_TEST_MODELS").expect("DRGNX_TEST_MODELS names the model volume"),
@@ -626,7 +633,7 @@ fn typing_holds_tier2_between_requests() {
         let again = status_until(&p, "typing again", |s| s.tier2 == Tier2::Typing).await;
         assert_eq!(again.embedded, 8, "held between requests, never inside one");
         assert_eq!(
-            p.lag(Some(MODEL)).await.unwrap().chunks_behind as u64,
+            p.lag(Some(&model_hex())).await.unwrap().chunks_behind as u64,
             total - 8
         );
 
@@ -636,7 +643,7 @@ fn typing_holds_tier2_between_requests() {
         }
         let done = status_until(&p, "idle", |s| s.tier2 == Tier2::Idle).await;
         assert_eq!(done.embedded, total);
-        assert_eq!(p.lag(Some(MODEL)).await.unwrap().chunks_behind, 0);
+        assert_eq!(p.lag(Some(&model_hex())).await.unwrap().chunks_behind, 0);
     })
 }
 

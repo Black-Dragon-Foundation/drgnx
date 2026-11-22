@@ -976,15 +976,12 @@ fn embed_idle(front: &Arc<Front>) {
         &crate::settings::defaults().roles,
         "embed",
     );
-    let entries = crate::embed::ordered(
-        &steps,
-        front.gate.embedders(&steps).unwrap_or_default(),
-        front
-            .search
-            .builtin()
-            .map(|b| b as Arc<dyn urdr::graph::search::Embedder>),
-        current.loaded.values.search_builtin,
-    );
+    let providers = front.gate.embedders(&steps).unwrap_or_default();
+    let builtin = front
+        .search
+        .builtin()
+        .map(|b| b as Arc<dyn urdr::graph::search::Embedder>);
+    let search_builtin = current.loaded.values.search_builtin;
     let (front, deny) = (
         front.clone(),
         g.deny
@@ -993,6 +990,12 @@ fn embed_idle(front: &Arc<Front>) {
             .clone(),
     );
     crate::clock::spawn("server:embed", async move {
+        // a server's vectors are keyed by the fingerprint it proves: each provider states its model before the chain
+        // is built, and one that does not answer stays `unprobed:<provider>` (it embeds nothing)
+        for p in &providers {
+            let _ = crate::search::DocEmbedder::probe(p).await;
+        }
+        let entries = crate::embed::ordered(&steps, providers, builtin, search_builtin);
         let mut guard = guard;
         let driver = guard.get_or_insert_with(|| crate::embed::Driver::new(now));
         if retry {

@@ -39,9 +39,16 @@ impl Kind {
     pub fn paths(self) -> &'static [&'static str] {
         match self {
             Self::Openai => &["/chat/completions", "/completions", "/embeddings"],
-            Self::Ollama => &["/api/chat", "/api/generate", "/api/embed"],
+            // `/api/show` and `/api/tags` (Ollama) and `/info` (TEI) are what the hub's fingerprint probe asks
+            Self::Ollama => &[
+                "/api/chat",
+                "/api/generate",
+                "/api/embed",
+                "/api/show",
+                "/api/tags",
+            ],
             Self::Llamacpp => &["/infill", "/v1/chat/completions", "/v1/embeddings"],
-            Self::Tei => &["/embed"],
+            Self::Tei => &["/embed", "/info"],
             Self::Anthropic => &[],
         }
     }

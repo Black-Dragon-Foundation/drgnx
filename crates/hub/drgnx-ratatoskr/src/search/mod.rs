@@ -18,6 +18,7 @@ pub use methods::Hub;
 use bifrost::Uri;
 use hrafn::Lag;
 use hrafn_embed::cache::{ModelState, model_dir, state};
+use hrafn_embed::fingerprint::{Fingerprint, Identity, builtin_record};
 use hrafn_embed::{MODELS, ModelSpec, default_model};
 use runstav::paths::{Env, cache_dir};
 use std::path::PathBuf;
@@ -27,33 +28,48 @@ use urdr::graph::search::{BoxFuture, EmbedError};
 /// What a server's vectors must cover of the live chunks, in percent, for a query to use the server's model.
 const SERVER_COVERAGE: u64 = 95;
 
-/// Which model a query uses: BUILTIN is the built-in model's lag (none: the model is off in the settings or not
-/// downloaded), SERVERS each server's model, lag and whether it answers now.  A server that answers and covers at least
-/// [`SERVER_COVERAGE`] percent of the live chunks wins (the first such one); else the built-in model; with no built-in
-/// model, the answering server that covers most.  None: no vector model can answer, so the answer is keyword and symbol
-/// results with the lag said.
-pub fn prefer(builtin: Option<&Lag>, servers: &[(String, Lag, bool)]) -> Option<String> {
+/// The embed-text version of a chunk's embedded text (a field of every fingerprint). The key work of Hrafn redesign
+/// Wave 4 owns it; until then the text is what it always was.
+pub const EMBED_TEXT_VERSION: u32 = 1;
+
+/// The identity of the built-in model SPEC: its record at [`EMBED_TEXT_VERSION`], labelled with its id.
+pub fn builtin_identity(spec: &ModelSpec) -> Identity {
+    Identity::new(builtin_record(spec, EMBED_TEXT_VERSION), spec.id)
+}
+
+/// Which model a query uses: BUILTIN is the built-in model's fingerprint and lag (none: the model is off in the
+/// settings or not downloaded), SERVERS each server's fingerprint, lag and whether it answers now.  A server that
+/// answers and covers at least [`SERVER_COVERAGE`] percent of the live chunks wins (the first such one); else the
+/// built-in model; with no built-in model, the answering server that covers most.  None: no vector model can answer, so
+/// the answer is keyword and symbol results with the lag said.
+pub fn prefer(
+    builtin: Option<(&Fingerprint, &Lag)>,
+    servers: &[(Fingerprint, Lag, bool)],
+) -> Option<Fingerprint> {
     let covered = |l: &Lag| u64::from(l.chunks_total.saturating_sub(l.chunks_behind));
     let answering = servers.iter().filter(|(_, _, up)| *up);
     match builtin {
-        Some(b) => answering
+        Some((b, _)) => answering
             .clone()
             .find(|(_, l, _)| covered(l) * 100 >= u64::from(l.chunks_total) * SERVER_COVERAGE)
-            .map(|(m, _, _)| m.clone())
-            .or_else(|| b.model.clone()),
+            .map(|(m, _, _)| *m)
+            .or(Some(*b)),
         None => answering
             .max_by_key(|(_, l, _)| covered(l))
-            .map(|(m, _, _)| m.clone()),
+            .map(|(m, _, _)| *m),
     }
 }
 
 /// Something tier 2 sends document texts to: the built-in model's worker, or a server through the gateway.
 pub trait DocEmbedder: Send + Sync {
-    /// The model's name, the key of its `vec` rows.
-    fn model(&self) -> &str;
+    /// What the last [`probe`](Self::probe) proved of its model; none before the first answer (or when it never
+    /// answered). The `model` of its `vec` rows is `identity().fp.hex()`.
+    fn identity(&self) -> Option<Identity>;
 
-    /// Its dimensions when known; 0 when it has not answered yet.
-    fn dims(&self) -> usize;
+    /// Asks the embedder what its model is now: a TEI or Ollama server states it (`/info`, `/api/show` and one probe
+    /// embed for the dims), the built-in worker knows it. A server that does not answer is an error; one whose model
+    /// changed answers another fingerprint, and the next write goes under that one.
+    fn probe(&self) -> BoxFuture<'_, Result<Identity, EmbedError>>;
 
     /// Vectors for TEXTS, in order. OVERRIDING (`search/index` with `now`) lets the built-in worker run on battery.
     fn embed_docs<'a>(
@@ -62,11 +78,11 @@ pub trait DocEmbedder: Send + Sync {
         overriding: bool,
     ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>>;
 
-    /// Whether it answers now. One that does not (a server that is not running) gets no request in a pass of tier 2
-    /// and does not mark tier 2 failed; it is asked again when the next change wakes tier 2. The built-in worker,
-    /// started on demand, always does.
+    /// Whether it answers now ([`probe`](Self::probe) succeeds). One that does not (a server that is not running) gets
+    /// no request in a pass of tier 2 and does not mark tier 2 failed; it is asked again when the next change wakes
+    /// tier 2. The built-in worker, started on demand, always does.
     fn answers(&self) -> BoxFuture<'_, bool> {
-        Box::pin(async { true })
+        Box::pin(async move { self.probe().await.is_ok() })
     }
 }
 

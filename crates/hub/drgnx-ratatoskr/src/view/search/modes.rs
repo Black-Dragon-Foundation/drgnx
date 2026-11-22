@@ -568,6 +568,7 @@ mod tests {
             ],
             lag: Lag::default(),
             model: None,
+            label: None,
             notice: None,
             lag_line: String::new(),
             view: view(),

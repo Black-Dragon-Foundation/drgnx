@@ -17,9 +17,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use support::{Client, FAILED_AFTER, Hub, Root};
 
-/// The built-in model.
-fn model() -> &'static str {
-    hrafn_embed::default_model().id
+/// The built-in model, as the wire names it: by its fingerprint (the label is `hrafn_embed::default_model().id`).
+fn model() -> String {
+    drgnx_ratatoskr::search::builtin_identity(hrafn_embed::default_model())
+        .fp
+        .hex()
 }
 
 fn git(dir: &Path, args: &[&str]) {
@@ -500,6 +502,11 @@ fn end_to_end_builtin_top5() {
             json!({"root": proj, "text": q, "k": 5}),
         );
         assert_eq!(a["result"]["model"], model(), "{q}: {a}");
+        assert_eq!(
+            a["result"]["label"],
+            hrafn_embed::default_model().id,
+            "{q}: {a}"
+        );
         let paths: Vec<&str> = a["result"]["hits"]
             .as_array()
             .unwrap()

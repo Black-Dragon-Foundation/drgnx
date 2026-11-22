@@ -282,7 +282,7 @@ async fn vector_hit_resolves_to_a_visible_chunk() {
             (k, v)
         })
         .collect();
-    put_vectors(&s, MODEL, &keys).await.unwrap();
+    put_vectors(&s, MODEL, DIMS as u32, &keys).await.unwrap();
     for (_, v) in &keys {
         let base = search(
             &s,
@@ -344,7 +344,7 @@ async fn view_lag_counts_the_views_content() {
         .into_iter()
         .map(|(k, _)| (k, vec![1.0; DIMS]))
         .collect();
-    put_vectors(&s, MODEL, &keys).await.unwrap();
+    put_vectors(&s, MODEL, DIMS as u32, &keys).await.unwrap();
     let base_total = lag(&s, Some(MODEL), View::Base).await.unwrap().chunks_total;
     put(
         &s,

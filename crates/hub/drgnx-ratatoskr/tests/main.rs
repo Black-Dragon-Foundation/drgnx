@@ -13,6 +13,7 @@ mod runners_orders;
 mod sandbox_check;
 mod search_download;
 mod search_eval_sources;
+mod search_fingerprint;
 mod search_modes_rows;
 mod search_prefer;
 mod search_query;

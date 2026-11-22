@@ -22,6 +22,7 @@ use crate::embed::ProviderEmbedder;
 use crate::front::Front;
 use hrafn::{Config, Lag, Query, Scope};
 use hrafn_embed::cache::{ModelState, model_dir, state};
+use hrafn_embed::fingerprint::{Fingerprint, Identity};
 use hrafn_embed::{default_model, download_bytes};
 use runstav::methods::Params;
 use runstav::methods::search as w;
@@ -83,7 +84,13 @@ pub struct Hub {
     download: Arc<Mutex<Download>>,
     /// The entity embedder's chain and its driver (`crate::server`'s tick steps it; Task 192).
     pub embed: Arc<crate::embed::Shared>,
+    /// What each server proved at its last probe, and when ([`Hub::probed`]); a server that did not answer is `None`.
+    probes: Mutex<HashMap<String, (tokio::time::Instant, Option<Identity>)>>,
 }
+
+/// How long a call that only needs a server's fingerprint (a query, a project's signature) reuses a probe, so that
+/// none of them costs a request to the server. Tier 2 probes before every batch on its own.
+const PROBE_TTL: Duration = Duration::from_secs(10);
 
 fn error(code: ErrorCode, message: impl Into<String>, path: Option<&str>) -> Error {
     Error {
@@ -156,6 +163,7 @@ pub fn wire_answer(a: &hrafn::Answer, view: w::QueryView) -> w::QueryAnswer {
             .collect(),
         lag: wire_lag(&a.lag),
         model: a.model.clone(),
+        label: None,
         notice: a.notice.clone(),
         lag_line: format!("{note}{}", a.lag_line()),
         view,
@@ -378,6 +386,33 @@ impl Hub {
         front.gate.embedders(&chain).unwrap_or_default()
     }
 
+    /// What server S proves of its model now, from a probe of the last [`PROBE_TTL`] when there is one (which S then
+    /// takes as its own), else from a new probe. None: it does not answer.
+    async fn probed(&self, s: &ProviderEmbedder) -> Option<Identity> {
+        let key = s.cache_key();
+        let now = crate::clock::now();
+        let cached = self.probes.lock().ok().and_then(|p| {
+            p.get(&key)
+                .filter(|(at, _)| now.saturating_duration_since(*at) < PROBE_TTL)
+                .map(|(_, got)| got.clone())
+        });
+        match cached {
+            Some(got) => {
+                if let Some(i) = &got {
+                    s.seed(i.clone());
+                }
+                got
+            }
+            None => {
+                let got = DocEmbedder::probe(s).await.ok();
+                if let Ok(mut p) = self.probes.lock() {
+                    p.insert(key, (now, got.clone()));
+                }
+                got
+            }
+        }
+    }
+
     fn builtin_on(front: &Front) -> bool {
         front.settings.current().loaded.values.search_builtin
     }
@@ -474,14 +509,23 @@ impl Hub {
                     Some("root"),
                 )
             })?;
-        let mut embedders: Vec<Arc<dyn DocEmbedder>> = self
-            .servers(front)
-            .into_iter()
-            .map(|e| Arc::new(e) as Arc<dyn DocEmbedder>)
-            .collect();
+        let mut embedders: Vec<Arc<dyn DocEmbedder>> = Vec::new();
+        // what each embedder proves now: the project is another one when a fingerprint changes (a server swapped for
+        // another model), and a server that does not answer has none
+        let mut fingerprints: Vec<String> = Vec::new();
+        for (i, s) in self.servers(front).into_iter().enumerate() {
+            fingerprints.push(
+                self.probed(&s)
+                    .await
+                    .map_or_else(|| format!("down:{i}"), |id| id.fp.hex()),
+            );
+            embedders.push(Arc::new(s));
+        }
         if Self::builtin_on(front)
             && let Some(b) = self.builtin()
         {
+            fingerprints
+                .push(DocEmbedder::identity(b.as_ref()).map_or_else(String::new, |id| id.fp.hex()));
             embedders.push(b);
         }
         // a project that cannot be read is an error the user sees (the Search view's state line), never a search
@@ -489,9 +533,8 @@ impl Hub {
         let unread = |e: String| internal(format!("search: {e}"));
         let base = Self::base_for(front, &real).await.map_err(unread)?;
         // another base is another project too: it is opened again (and its base rebuilt)
-        let sig = embedders
-            .iter()
-            .map(|e| e.model().to_string())
+        let sig = fingerprints
+            .into_iter()
             .chain(base.iter().map(|b| format!("base={}", b.display())))
             .collect::<Vec<_>>()
             .join(",");
@@ -617,49 +660,68 @@ impl Hub {
         } else {
             None
         };
-        let builtin_lag = match &builtin {
-            Some(b) => Some(
-                p.lag(Some(DocEmbedder::model(b.as_ref())))
-                    .await
-                    .map_err(project_error)?,
-            ),
+        let builtin_id = builtin
+            .as_ref()
+            .and_then(|b| DocEmbedder::identity(b.as_ref()));
+        let builtin_lag = match &builtin_id {
+            Some(id) => Some(p.lag(Some(&id.fp.hex())).await.map_err(project_error)?),
             None => None,
         };
         let covers = |l: &Lag| {
             u64::from(l.chunks_total.saturating_sub(l.chunks_behind)) * 100
                 >= u64::from(l.chunks_total) * 95
         };
-        let mut infos: Vec<(String, Lag, bool)> = Vec::new();
-        let mut qvecs: HashMap<String, Vec<f32>> = HashMap::new();
+        let mut infos: Vec<(Fingerprint, Lag, bool)> = Vec::new();
+        let mut qvecs: HashMap<Fingerprint, Vec<f32>> = HashMap::new();
+        let mut labels: HashMap<Fingerprint, String> = HashMap::new();
         let mut down: Vec<String> = Vec::new();
         for s in self.servers(front) {
-            let model = DocEmbedder::model(&s).to_string();
-            let lag = p.lag(Some(&model)).await.map_err(project_error)?;
+            // a server states its model now (a probe of the last few seconds counts): another model under the same
+            // URL is another fingerprint, with its own vectors
+            let Some(id) = self.probed(&s).await else {
+                down.push(s.provider().to_owned());
+                continue;
+            };
+            let lag = p.lag(Some(&id.fp.hex())).await.map_err(project_error)?;
             // only a server that could win is asked: one that covers enough, or the only way to vectors
-            let up = if covers(&lag) || builtin.is_none() {
+            let up = if covers(&lag) || builtin_id.is_none() {
                 match s.embed_query(text, Some(scope.instruction())).await {
                     Ok(v) => {
-                        qvecs.insert(model.clone(), v);
+                        qvecs.insert(id.fp, v);
                         true
                     }
                     Err(e) => {
-                        tracing::debug!("search: {model} did not answer the question: {}", e.0);
-                        down.push(model.clone());
+                        tracing::debug!(
+                            "search: {} did not answer the question: {}",
+                            id.label,
+                            e.0
+                        );
+                        down.push(id.label.clone());
                         false
                     }
                 }
             } else {
                 false
             };
-            infos.push((model, lag, up));
+            labels.insert(id.fp, id.label);
+            infos.push((id.fp, lag, up));
         }
-        let chosen = prefer(builtin_lag.as_ref(), &infos);
+        let chosen = prefer(
+            builtin_id
+                .as_ref()
+                .zip(builtin_lag.as_ref())
+                .map(|(i, l)| (&i.fp, l)),
+            &infos,
+        );
+        if let Some(i) = &builtin_id {
+            labels.insert(i.fp, i.label.clone());
+        }
         let mut notice = None;
         let qvec: Option<(String, Vec<f32>)> = match chosen {
-            Some(m) if qvecs.contains_key(&m) => qvecs.remove(&m).map(|v| (m, v)),
+            Some(m) if qvecs.contains_key(&m) => qvecs.remove(&m).map(|v| (m.hex(), v)),
             Some(m) => match &builtin {
                 Some(b) => match b.embed_query(text, None).await {
-                    Ok(v) => Some((m, v)),
+                    Ok(v) => Some((m.hex(), v)),
                     Err(e) => {
                         notice = Some(format!("the built-in model did not answer: {}", e.0));
                         None
@@ -695,7 +757,15 @@ impl Hub {
             a.notice = notice.or(a.notice);
         }
         let view = wire_view(&of, &a);
-        Ok(wire_answer(&a, view))
+        let mut out = wire_answer(&a, view);
+        // clients print the label, not the 64 hex characters
+        if let Some(hex) = &a.model
+            && let Some(label) = Fingerprint::parse(hex).and_then(|fp| labels.get(&fp))
+        {
+            out.lag_line = out.lag_line.replace(hex.as_str(), label);
+            out.label = Some(label.clone());
+        }
+        Ok(out)
     }
 
     /// ROOT's files by their rank in Hrafn's map (the path relative to the project, its unpersonalised rank; a file
@@ -979,6 +1049,7 @@ impl Hub {
                     .query_map([], |r| {
                         Ok(w::ModelCount {
                             model: r.get(0)?,
+                            label: None,
                             vectors: r.get::<_, i64>(1)?.try_into().unwrap_or(0),
                         })
                     })?
@@ -988,10 +1059,30 @@ impl Hub {
             .await
             .map_err(internal)?;
         let builtin = self.builtin();
+        let builtin_id = builtin
+            .as_ref()
+            .and_then(|b| DocEmbedder::identity(b.as_ref()));
         let lag = p
-            .lag(builtin.as_ref().map(|b| DocEmbedder::model(b.as_ref())))
+            .lag(builtin_id.as_ref().map(|i| i.fp.hex()).as_deref())
             .await
             .map_err(project_error)?;
+        // the labels of the fingerprints that have vectors: the models this hub's embedders state now
+        let mut known: HashMap<String, String> = HashMap::new();
+        if let Some(i) = &builtin_id {
+            known.insert(i.fp.hex(), i.label.clone());
+        }
+        for s in self.servers(front) {
+            if let Some(i) = self.probed(&s).await {
+                known.insert(i.fp.hex(), i.label);
+            }
+        }
+        let models: Vec<w::ModelCount> = models
+            .into_iter()
+            .map(|m| w::ModelCount {
+                label: known.get(&m.model).cloned(),
+                ..m
+            })
+            .collect();
         let coverage_errors = p.coverage_errors().await.map_err(project_error)?;
         let st = p.status().borrow().clone();
         let trees: Vec<w::TreeInfo> = p
@@ -1066,24 +1157,37 @@ impl Hub {
         for s in self.servers(front) {
             let url = front.gate.base_of(s.provider()).unwrap_or_default();
             let family = crate::embed::answered_family(&url).await;
-            if family.is_some() && preferred.is_none() {
-                preferred = Some(DocEmbedder::model(&s).to_string());
+            let id = if family.is_some() {
+                self.probed(&s).await
+            } else {
+                None
+            };
+            if let Some(i) = &id
+                && preferred.is_none()
+            {
+                preferred = Some(i.fp.hex());
             }
             servers.push(w::ServerInfo {
                 kind: s.kind().to_string(),
                 url,
-                model: DocEmbedder::model(&s).to_string(),
+                fingerprint: id.as_ref().map(|i| i.fp.hex()),
+                label: id
+                    .as_ref()
+                    .map_or_else(|| s.provider().to_owned(), |i| i.label.clone()),
                 answering: family.is_some(),
                 family: family.map(str::to_string),
             });
         }
+        let builtin_id = super::builtin_identity(spec);
         if preferred.is_none() && Self::builtin_on(front) && builtin.is_some() {
-            preferred = Some(spec.id.to_string());
+            preferred = Some(builtin_id.fp.hex());
         }
         let facts = worker_status(builtin.as_deref());
         Ok(w::EmbeddersAnswer {
             builtin: w::BuiltinInfo {
                 model: spec.id.to_string(),
+                fingerprint: builtin_id.fp.hex(),
+                label: builtin_id.label,
                 state: st.to_string(),
                 bytes: download_bytes(spec),
                 downloaded: held,

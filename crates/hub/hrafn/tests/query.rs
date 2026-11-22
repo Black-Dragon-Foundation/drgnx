@@ -322,7 +322,7 @@ async fn vector_route_and_lag_line() {
         .find(|(_, t)| t.contains("drgnx-hub-call"))
         .unwrap()
         .0;
-    put_vectors(&store, MODEL, &[(hub, vec![1.0, 0.0, 0.0, 0.0])])
+    put_vectors(&store, MODEL, 4, &[(hub, vec![1.0, 0.0, 0.0, 0.0])])
         .await
         .unwrap();
     let a = search(
@@ -362,6 +362,7 @@ async fn what_a_query_keeps_ends_at_the_next_write() {
     put_vectors(
         &store,
         MODEL,
+        4,
         &[(key("drgnx-hub-call"), vec![1.0, 0.0, 0.0, 0.0])],
     )
     .await
@@ -386,6 +387,7 @@ async fn what_a_query_keeps_ends_at_the_next_write() {
     put_vectors(
         &store,
         MODEL,
+        4,
         &[(key("drgnx-ai-embed"), vec![0.0, 1.0, 0.0, 0.0])],
     )
     .await

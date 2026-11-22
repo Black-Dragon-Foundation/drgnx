@@ -380,11 +380,20 @@ pub async fn missing(
 
 /// MODEL's vectors for content keys. Each is stored quantized (`urdr::graph::search::vec::quantize`): `vec` holds the
 /// sign bits (`dims / 8` bytes, rounded up) and then the int8 values, `scale` their scale, and `bits` is 8.
+/// MODEL is the fingerprint's hex and DIMS its dims: a row of another length is an error, and nothing of the batch is
+/// written.
 pub async fn put_vectors(
     store: &CodeStore,
     model: &str,
+    dims: u32,
     rows: &[([u8; 32], Vec<f32>)],
 ) -> Result<(), StoreError> {
+    if let Some((_, v)) = rows.iter().find(|(_, v)| v.len() != dims as usize) {
+        return Err(StoreError::Io(io::Error::other(format!(
+            "a vector of {} dims, the fingerprint says {dims}",
+            v.len()
+        ))));
+    }
     let model = model.to_string();
     let rows: Vec<_> = rows
         .iter()

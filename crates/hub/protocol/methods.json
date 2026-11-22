@@ -41076,6 +41076,14 @@
                   "null"
                 ]
               },
+              "fingerprint": {
+                "description": "The model's fingerprint (64 hex characters): what its vectors are keyed by.",
+                "type": "string"
+              },
+              "label": {
+                "description": "The model as the user reads it.",
+                "type": "string"
+              },
               "model": {
                 "type": "string"
               },
@@ -41086,6 +41094,8 @@
             },
             "required": [
               "model",
+              "fingerprint",
+              "label",
               "state",
               "bytes",
               "downloaded"
@@ -41167,10 +41177,18 @@
                   "null"
                 ]
               },
+              "fingerprint": {
+                "description": "The fingerprint its model proved at the last probe; none while it has not answered one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "kind": {
                 "type": "string"
               },
-              "model": {
+              "label": {
+                "description": "Its model as the user reads it (the server's model id), or the provider's id while it has not answered.",
                 "type": "string"
               },
               "url": {
@@ -41180,7 +41198,7 @@
             "required": [
               "kind",
               "url",
-              "model",
+              "label",
               "answering"
             ],
             "type": "object"
@@ -41200,7 +41218,7 @@
             "type": "array"
           },
           "prefer": {
-            "description": "The model a query uses when every project is fully indexed: a server that answers, else the built-in model.",
+            "description": "The fingerprint of the model a query uses when every project is fully indexed: a server that answers, else the\nbuilt-in model.",
             "type": [
               "string",
               "null"
@@ -42932,6 +42950,7 @@
                 "type": "integer"
               },
               "model": {
+                "description": "The fingerprint (64 hex characters) of the model these vectors belong to.",
                 "type": [
                   "string",
                   "null"
@@ -42985,6 +43004,13 @@
             },
             "type": "array"
           },
+          "label": {
+            "description": "That model as the user reads it (`granite-embedding-small-english-r2`); what a client prints.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "lag": {
             "$ref": "#/$defs/Lag"
           },
@@ -42993,7 +43019,7 @@
             "type": "string"
           },
           "model": {
-            "description": "The model whose vectors took part; none when the answer is keyword, symbol and path results only.",
+            "description": "The fingerprint of the model whose vectors took part; none when the answer is keyword, symbol and path results only.",
             "type": [
               "string",
               "null"
@@ -44808,6 +44834,7 @@
                 "type": "integer"
               },
               "model": {
+                "description": "The fingerprint (64 hex characters) of the model these vectors belong to.",
                 "type": [
                   "string",
                   "null"
@@ -44826,7 +44853,15 @@
           "ModelCount": {
             "additionalProperties": false,
             "properties": {
+              "label": {
+                "description": "The model as the user reads it, when an embedder of this hub states that fingerprint now.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "model": {
+                "description": "The fingerprint (64 hex characters).",
                 "type": "string"
               },
               "vectors": {
