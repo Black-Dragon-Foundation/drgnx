@@ -1069,6 +1069,11 @@ impl ShellBackend for MacShell {
         self.win(window).map(drop)
     }
 
+    fn set_title_area(&mut self, window: WindowId, on: bool) -> ShellResult {
+        super::windowing::title_area(&self.win(window)?.window, on);
+        Ok(())
+    }
+
     fn set_alpha(&mut self, window: WindowId, factor: u32) -> ShellResult {
         if self.kids.contains_key(&window) {
             return self.kid_alpha(window, factor);

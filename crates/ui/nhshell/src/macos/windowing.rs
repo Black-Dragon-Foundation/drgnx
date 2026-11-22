@@ -9,6 +9,7 @@ use objc2::{msg_send, sel};
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSApplication, NSApplicationPresentationOptions,
     NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask, NSWindowTabbingMode,
+    NSWindowTitleVisibility,
 };
 use objc2_foundation::{NSArray, NSString};
 
@@ -16,6 +17,29 @@ use objc2_foundation::{NSArray, NSString};
 pub fn setup(window: &NSWindow) {
     window.setCollectionBehavior(NSWindowCollectionBehavior::FullScreenPrimary);
     window.setTabbingMode(NSWindowTabbingMode::Disallowed);
+}
+
+/// The workbench's title row in the title area (design §6.7; `ShellBackend::set_title_area`): with `on` the content
+/// view runs under a transparent title bar that shows no title, so the backing's top strip sits beside the traffic
+/// lights; off, AppKit's own title bar again.  A window without a title bar (undecorated, or full screen's borderless
+/// stand-in) is left alone.
+pub fn title_area(window: &NSWindow, on: bool) {
+    let mut style = window.styleMask();
+    if !style.contains(NSWindowStyleMask::Titled) {
+        return;
+    }
+    if on {
+        style.insert(NSWindowStyleMask::FullSizeContentView);
+    } else {
+        style.remove(NSWindowStyleMask::FullSizeContentView);
+    }
+    window.setStyleMask(style);
+    window.setTitlebarAppearsTransparent(on);
+    window.setTitleVisibility(if on {
+        NSWindowTitleVisibility::Hidden
+    } else {
+        NSWindowTitleVisibility::Visible
+    });
 }
 
 /// The application's presentation options for `auto_hide`.

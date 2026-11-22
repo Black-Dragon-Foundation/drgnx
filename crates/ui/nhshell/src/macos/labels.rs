@@ -2,6 +2,9 @@
 //! glitnir-decor.c draws it with Cairo on Linux, so the labels match the UI text Emacs draws.  The glue asks through
 //! C's label renderer (`nhmac_minimap_label_render`, `nhg_label_raster`); the sprite it gets is cached and placed by
 //! the glue, and shown as one of the minimap's pieces.
+//!
+//! Chrome text's glyph masks (design §6.2) are drawn here too, one glyph at a time ([`glyph_mask`]), for the glue's
+//! `nhg_font_glyph_mask`: the workbench's atlases on Naglfar.
 
 use super::draw::Canvas;
 use super::fonts;
@@ -92,4 +95,66 @@ pub fn render(
         });
     }
     Some((used, cap_h))
+}
+
+/// `kCTFontTraitColorGlyphs`: the font's glyphs are colour pictures (Apple Color Emoji).
+const COLOUR_GLYPHS: u32 = 1 << 13;
+
+/// One glyph's mask for chrome text (design §6.2; `nhwl_glyph_mask`'s Core Text twin): `data` holds `w` × `h`
+/// coverage bytes (A8), or, for a colour font, `w` × `h` premultiplied ARGB words in memory order (B G R A), drawn
+/// untinted.  Its top-left is `bearing_x` right of the pen and `bearing_y` above the baseline.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GlyphMask {
+    pub colour: bool,
+    pub w: i32,
+    pub h: i32,
+    pub bearing_x: i32,
+    pub bearing_y: i32,
+    pub data: Vec<u8>,
+}
+
+/// Glyph `glyph` of the open font `handle` (at its own size), drawn once by Core Text in white over its bounds grown
+/// by a pixel each side, as `nhwl_glyph_mask` draws through Cairo.  `None`: the font is not open, or nothing could be
+/// drawn.
+pub fn glyph_mask(handle: u64, glyph: u16) -> Option<GlyphMask> {
+    let mut b = [[0.0f64; 5]; 1];
+    if !fonts::bounds_for(handle, &[glyph], &mut b) {
+        return None;
+    }
+    // (advance, left, right, top, bottom), y up
+    let [_, l, r, top, bottom] = b[0];
+    let (x0, x1) = (l.floor() as i32 - 1, r.ceil() as i32 + 1);
+    let (y_top, y_bottom) = (top.ceil() as i32 + 1, bottom.floor() as i32 - 1);
+    let (w, h) = ((x1 - x0).max(1), (y_top - y_bottom).max(1));
+    let colour = fonts::raw(handle)?.symbolic & COLOUR_GLYPHS != 0;
+    let mut px = vec![0u32; (w * h) as usize];
+    {
+        let mut slot = None;
+        let canvas = Canvas::over(&mut slot, &mut px, w, h)?;
+        canvas.paint(&Paint {
+            clip: vec![Rect { x: 0, y: 0, w, h }],
+            shapes: vec![Shape::Glyphs {
+                font: handle,
+                x: f64::from(-x0),
+                y: f64::from(y_top),
+                glyphs: vec![glyph],
+                xs: vec![0.0],
+                argb: 0xffff_ffff,
+                integral: fonts::integral(handle).unwrap_or(false),
+            }],
+        });
+    }
+    let data = if colour {
+        px.iter().flat_map(|p| p.to_le_bytes()).collect()
+    } else {
+        px.iter().map(|p| (p >> 24) as u8).collect()
+    };
+    Some(GlyphMask {
+        colour,
+        w,
+        h,
+        bearing_x: x0,
+        bearing_y: y_top,
+        data,
+    })
 }

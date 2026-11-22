@@ -366,6 +366,13 @@ pub trait ShellBackend {
     /// Ask again for server-side decorations (`on`) or for none: a top-level's `undecorated` changed at run time.
     /// The compositor's answer comes with a configure; nothing when decorations are forced client-side.
     fn set_decorated(&mut self, window: WindowId, on: bool) -> ShellResult;
+    /// The workbench's strips are on (`on`) or off for a decorated top-level (design §6.7): on macOS its content then
+    /// runs under a transparent title bar with no title text, so the strips' title row sits in the title area beside
+    /// the traffic lights.  Nothing where the title row replaces the client-side strip itself (Wayland).
+    fn set_title_area(&mut self, window: WindowId, on: bool) -> ShellResult {
+        let _ = (window, on);
+        Ok(())
+    }
     /// The window's opacity, a multiplier of its pixels' alpha (`u32::MAX` is opaque).  The window owes a commit
     /// (its ancestors too, for a child).  `Unsupported` when the compositor cannot apply it: the host multiplies.
     fn set_alpha(&mut self, window: WindowId, factor: u32) -> ShellResult;
