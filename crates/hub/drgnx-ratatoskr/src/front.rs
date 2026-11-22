@@ -1057,6 +1057,7 @@ impl Front {
             | Params::SearchSymbolAt(_)
             | Params::SearchSymbols(_)
             | Params::SearchOutline(_)
+            | Params::SearchWhy(_)
             | Params::SearchMap(_)
             | Params::SearchUsages(_)
             | Params::SearchRecent(_)

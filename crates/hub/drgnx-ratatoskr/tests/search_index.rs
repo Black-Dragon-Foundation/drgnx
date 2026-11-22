@@ -1064,6 +1064,32 @@ async fn base_names(p: &Project) -> Vec<String> {
         .unwrap()
 }
 
+/// Pattern D. The repo's rules are read at every tier-1 listing, not when the project opens: no reopen, and a file a
+/// new line ignores loses its rows at the next refresh; take the line away and the rows come back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn editing_search_toml_takes_effect_at_the_next_refresh() {
+    let f = fixture(&lisp_files(3));
+    let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
+        .await
+        .unwrap();
+    assert_eq!(p.refresh_now().await.unwrap().files_changed, 3);
+    assert!(base_names(&p).await.contains(&"f1-run".to_string()));
+    let toml = f.root.join(".drgnx/search.toml");
+    std::fs::create_dir_all(toml.parent().unwrap()).unwrap();
+    std::fs::write(&toml, "ignore = [\"core/f1.el\"]\n").unwrap();
+    assert_eq!(p.refresh_now().await.unwrap().files_changed, 1);
+    let n = base_names(&p).await;
+    assert!(!n.contains(&"f1-run".to_string()), "{n:?}");
+    assert!(n.contains(&"f0-run".to_string()) && n.contains(&"f2-run".to_string()));
+    // a file that cannot be read is an error the listing reports, not the defaults
+    std::fs::write(&toml, "ignore = [\n").unwrap();
+    let e = p.refresh_now().await.unwrap_err();
+    assert!(e.to_string().contains("search.toml cannot be read"), "{e}");
+    std::fs::remove_file(&toml).unwrap();
+    assert_eq!(p.refresh_now().await.unwrap().files_changed, 1);
+    assert!(base_names(&p).await.contains(&"f1-run".to_string()));
+}
+
 /// Pattern D. The base-checkout setting (H16 overlay design §6.5): with another checkout as the base, tier 1 builds
 /// from it, a query there answers from the base, and the main checkout is a worktree with its own overlay. Changing
 /// the base back rebuilds from main and re-seeds the trees.

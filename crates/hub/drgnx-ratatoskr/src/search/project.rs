@@ -121,7 +121,8 @@ pub struct ProjectSpec {
     /// HOME and the config directory, for the deny-list.
     pub home: PathBuf,
     pub config_dir: PathBuf,
-    /// The project's `drgnx-search-*` settings and `.drgnx/search.eld`, as the hub resolved them.
+    /// The project's user layer (`drgnx-search-rules`) and `drgnx-search-off`, as the hub resolved them. The repo's
+    /// layer (`.drgnx/search.toml`) is read at every listing, not here.
     pub config: Config,
     /// Tier 2's embedders (the built-in model's worker, and the servers that answer): each fills its own model's
     /// vectors.
@@ -1108,12 +1109,15 @@ impl Inner {
         let root = PathBuf::from(&row.root);
         let door = hrafn::door(row.door);
         let allow = |p: &str| self.deny.check(&root.join(p)) == Verdict::Allowed;
+        // the repo's rules are read for every run, so an edit of `.drgnx/search.toml` takes effect at once
+        let repo = hrafn::files::read_repo(&self.base)?;
         let cx = hrafn::overlay::Cx {
             store: &self.store,
             tree: t,
             root: &root,
             door: &*door,
             config: &self.config,
+            repo: &repo,
             allow: &allow,
         };
         let s = match job {

@@ -443,6 +443,7 @@ params! {
     SearchSymbolAt(search::SymbolAtParams),
     SearchSymbols(search::SymbolsParams),
     SearchOutline(search::OutlineParams),
+    SearchWhy(search::WhyParams),
     SearchMap(search::MapParams),
     SearchUsages(search::UsagesParams),
     SearchGrepReplace(search::GrepReplaceParams),

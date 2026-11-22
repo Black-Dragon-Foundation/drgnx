@@ -3,9 +3,10 @@
 //! - **Projects.** [`Hub`] opens a project (its store, tier 1, tier 2) the first time a method names its root, keeps it
 //!   while its embedders stay the same, and runs its driver: a task that gives tier 1 its tick (`Project::tick`) twice a
 //!   second until the project is dropped. The watcher is the host's (`notify`); without one a query diffs the blobs.
-//! - **Config.** A project's globs are `.drgnx/search.eld` (read here as data, at most 64 KiB; one that does not read
-//!   turns the project's search off, never widens it) and the project's runtime settings `drgnx-search-*` (the editor
-//!   sends them per project): only the settings' `include` replaces the file's, and the excludes add up.
+//! - **Rules.** What is indexed follows three layers (`hrafn::rules`): the built-in defaults, the repo's
+//!   `.drgnx/search.toml` (read as data by tier 1 at every listing, not here; one that does not read is an error the
+//!   listing reports, never the defaults) and the user's `drgnx-search-rules` for the project (the editor sends them
+//!   per project; read here when the project opens). `search/why` says which layer decided a file.
 //! - **A query** refreshes tier 1 when the files changed, picks the model (`search::prefer`: a server that answers and
 //!   covers 95 % of the chunks, else the built-in model), embeds the question with it and asks `hrafn::search`. With no
 //!   model the answer is keyword, symbol and path results at once, and says why.
@@ -35,9 +36,6 @@ use std::time::Duration;
 
 /// How often a project's driver looks at its watcher.
 pub const DRIVER_TICK: Duration = Duration::from_millis(500);
-
-/// `.drgnx/search.eld` is read up to this size.
-const CONFIG_MAX: u64 = 64 * 1024;
 
 /// What the hub needs to open a project.
 struct Dirs {
@@ -227,61 +225,10 @@ fn scope_of(s: Option<w::Scope>) -> Scope {
     }
 }
 
-/// `.drgnx/search.eld` of ROOT as a [`Config`]: its plist `(:include GLOBS :exclude GLOBS :off BOOL)`, read as data.
-/// No file is the default; a file that does not read is an `Err` (the project's search is then off, never wider).
-pub fn config_file(root: &Path) -> Result<Config, String> {
-    use huginn::value::{Datum, Node};
-    let file = root.join(".drgnx").join("search.eld");
-    let meta = match std::fs::symlink_metadata(&file) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
-        Err(e) => return Err(e.to_string()),
-    };
-    if !meta.is_file() || meta.len() > CONFIG_MAX || meta.len() == 0 {
-        return Err("it is not a regular file of 1 byte to 64 KiB".into());
-    }
-    let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
-    let nodes = huginn::read::read_all(&bytes, huginn::read::Limits::default())
-        .map_err(|r| format!("{r:?}"))?;
-    let [one] = nodes.as_slice() else {
-        return Err("it holds one plist".into());
-    };
-    let Datum::List(items) = &one.datum else {
-        return Err("it is not a plist".into());
-    };
-    let mut cfg = Config::default();
-    for pair in items.chunks(2) {
-        let [k, v] = pair else {
-            return Err("a key has no value".into());
-        };
-        let Datum::Sym(key) = &k.datum else {
-            return Err("a key is not a keyword".into());
-        };
-        let globs = |v: &Node| -> Result<Vec<String>, String> {
-            match &v.datum {
-                Datum::Sym(s) if s == "nil" => Ok(Vec::new()),
-                Datum::List(xs) => xs
-                    .iter()
-                    .map(|x| match &x.datum {
-                        Datum::Str(s) => Ok(s.clone()),
-                        _ => Err(format!("{key} holds what is not a string")),
-                    })
-                    .collect(),
-                _ => Err(format!("{key} is not a list of strings")),
-            }
-        };
-        match key.as_str() {
-            ":include" => cfg.include = globs(v)?,
-            ":exclude" => cfg.exclude = globs(v)?,
-            ":off" => match &v.datum {
-                Datum::Sym(s) if s == "t" => cfg.off = true,
-                Datum::Sym(s) if s == "nil" => cfg.off = false,
-                _ => return Err(":off is t or nil".into()),
-            },
-            other => return Err(format!("{other} is not a key of the file")),
-        }
-    }
-    Ok(cfg)
+/// `.drgnx/search.toml` of ROOT as a layer ([`hrafn::files::read_repo`], at most 64 KiB, read as data). No file is an
+/// empty layer; a file that does not read is an `Err`.
+pub fn config_file(root: &Path) -> Result<hrafn::rules::RuleSet, String> {
+    hrafn::files::read_repo(root).map_err(|e| e.to_string())
 }
 
 impl Hub {
@@ -409,22 +356,11 @@ impl Hub {
             .and_then(|v| v.as_str().map(PathBuf::from)))
     }
 
-    /// The project's globs: the file (in ROOT, the base checkout), narrowed by what the editor sent for the project;
-    /// `Err` (naming git) when the project cannot be read: never the global settings in its place.
+    /// The project's user layer (`drgnx-search-rules`) and `drgnx-search-off`, as the editor sent them for the project;
+    /// `Err` (naming git) when the project cannot be read: never the global settings in its place. The repo's layer
+    /// (`.drgnx/search.toml`, in the base checkout) is not read here: tier 1 reads it at every listing.
     async fn config_for(&self, front: &Front, root: &Path) -> Result<Config, String> {
-        let mut cfg = match config_file(root) {
-            Ok(c) => c,
-            Err(why) => {
-                tracing::warn!(
-                    "search: {}/.drgnx/search.eld cannot be read ({why}): the project's search is off",
-                    root.display()
-                );
-                return Ok(Config {
-                    off: true,
-                    ..Config::default()
-                });
-            }
-        };
+        let mut cfg = Config::default();
         let names = Self::project_names(root).await?;
         let get = |name: &str| -> Option<Value> {
             names.iter().find_map(|p| {
@@ -435,19 +371,12 @@ impl Hub {
                     .map(|(v, _)| v)
             })
         };
-        let strings = |v: Option<Value>| -> Vec<String> {
-            v.and_then(|v| serde_json::from_value(v).ok())
-                .unwrap_or_default()
-        };
-        let include = strings(get("drgnx-search-include"));
-        if !include.is_empty() {
-            cfg.include = include;
-        }
-        for g in strings(get("drgnx-search-exclude")) {
-            if !cfg.exclude.contains(&g) {
-                cfg.exclude.push(g);
-            }
-        }
+        cfg.user = get("drgnx-search-rules")
+            .and_then(|v| {
+                serde_json::from_value::<std::collections::BTreeMap<String, Vec<String>>>(v).ok()
+            })
+            .and_then(|m| crate::settings::search_rules(m.into_iter().collect()).ok())
+            .unwrap_or_default();
         if get("drgnx-search-off").and_then(|v| v.as_bool()) == Some(true) {
             cfg.off = true;
         }
@@ -841,6 +770,57 @@ impl Hub {
                 })
                 .collect(),
             fresh: self.fresh(&p, &of).await?,
+        })
+    }
+
+    /// `search/why`: the layer and rule that decide whether PATH is indexed, from the project's base checkout, its
+    /// `.drgnx/search.toml` as it is now and the project's user layer. Asks nothing of the index.
+    pub async fn why(&self, front: &Front, a: w::WhyParams) -> Result<w::WhyAnswer, Error> {
+        check_rel(&a.path, "path")?;
+        let dirs = self.dirs()?;
+        let given = PathBuf::from(a.root.as_str());
+        let (real, _) = crate::clock::blocking(move || project_id(&given))
+            .await
+            .map_err(internal)?
+            .map_err(|e| {
+                error(
+                    ErrorCode::InvalidParams,
+                    format!("not a project folder: {e}"),
+                    Some("root"),
+                )
+            })?;
+        let unread = |e: String| internal(format!("search: {e}"));
+        let base = Self::base_for(front, &real).await.map_err(unread)?;
+        let base = base.unwrap_or(real);
+        let config = self.config_for(front, &base).await.map_err(unread)?;
+        let deny = norn::deny::DenyList::load(&dirs.home, &dirs.config);
+        let (root, path) = (base.clone(), a.path.clone());
+        let d = crate::clock::blocking(move || {
+            let allow = |p: &str| deny.check(&root.join(p)) == norn::deny::Verdict::Allowed;
+            hrafn::files::why(&root, &hrafn::GitCli, &config, &allow, &path)
+        })
+        .await
+        .map_err(internal)?
+        .map_err(|e| internal(format!("search: {e}")))?;
+        use hrafn::rules::{Layer, List, Verdict};
+        Ok(w::WhyAnswer {
+            verdict: match d.verdict {
+                Verdict::Index => w::WhyVerdict::Index,
+                Verdict::NoEmbed => w::WhyVerdict::NoEmbed,
+                Verdict::Ignored => w::WhyVerdict::Ignored,
+            },
+            layer: match d.layer {
+                Layer::Builtin => w::WhyLayer::Builtin,
+                Layer::Repo => w::WhyLayer::Repo,
+                Layer::User => w::WhyLayer::User,
+            },
+            list: match d.list {
+                List::Include => w::WhyList::Include,
+                List::Ignore => w::WhyList::Ignore,
+                List::NoEmbed => w::WhyList::NoEmbed,
+                List::Default => w::WhyList::Default,
+            },
+            rule: d.rule,
         })
     }
 
@@ -1399,6 +1379,7 @@ pub async fn serve(
         Params::SearchSymbolAt(a) => symbol_at(a).await.map(|s| json!(s)),
         Params::SearchSymbols(a) => hub.symbols(front, a).await.map(|s| json!(s)),
         Params::SearchOutline(a) => hub.outline(front, a).await.map(|o| json!(o)),
+        Params::SearchWhy(a) => hub.why(front, a).await.map(|o| json!(o)),
         Params::SearchMap(a) => hub.map(front, a).await.map(|m| json!(m)),
         Params::SearchUsages(a) => hub.usages(front, a).await.map(|u| json!(u)),
         Params::SearchRecent(r) => hub.saved().map(|s| {

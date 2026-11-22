@@ -1194,6 +1194,54 @@ pub struct OutlineAnswer {
     pub fresh: Fresh,
 }
 
+/// `search/why`: which layer and rule decide whether a file is indexed.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WhyParams {
+    pub root: AbsPath,
+    /// Relative to ROOT, inside it.
+    pub path: String,
+}
+
+/// What the rules do with a file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum WhyVerdict {
+    Index,
+    NoEmbed,
+    Ignored,
+}
+
+/// The layer that decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum WhyLayer {
+    Builtin,
+    Repo,
+    User,
+}
+
+/// The list of that layer that decided (`default`: none did).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum WhyList {
+    Include,
+    Ignore,
+    NoEmbed,
+    Default,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WhyAnswer {
+    pub verdict: WhyVerdict,
+    pub layer: WhyLayer,
+    pub list: WhyList,
+    /// The rule line that matched (`!` and all); none when no line did (the allowlist, or no rule at all).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+}
+
 /// What a repo map ranks: code only, or tests and docs too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -1573,6 +1621,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/outline", SearchOutline(OutlineParams) -> OutlineAnswer,
             classes: [User], writes: false,
             doc: "one indexed file's definitions in file order with their lines, signatures and nesting, from the index alone; an error for a file the view does not index",
+        ),
+        method!(
+            "search/why", SearchWhy(WhyParams) -> WhyAnswer,
+            classes: [User], writes: false,
+            doc: "why a file is or is not indexed: the verdict (index, no-embed, ignored) with the layer (built-in, repo, user), the list and the rule line that decided it",
         ),
         method!(
             "search/map", SearchMap(MapParams) -> MapAnswer,
