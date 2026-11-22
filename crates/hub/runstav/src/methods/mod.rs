@@ -284,6 +284,8 @@ params! {
     RecordsStatus(records::ByPath),
     RecordsConflict(exec::ById),
     RecordsResolve(records::ResolveParams),
+    RecordsWrite(records::RecordWrite),
+    RecordsRead(records::RecordRead),
     MachinesReport(work::MachineReport),
     MachinesMove(work::MoveParams),
     CommentsAdd(comments::AddParams),

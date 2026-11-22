@@ -375,7 +375,7 @@ pub async fn plan_for_job(front: &Front, id: &str) -> Result<(PathBuf, Plan), Er
 
 /// Whether the agent C may change the graph: the matrix's `graph.change` for C's session as it is (its role, agent
 /// and provider; a chat's is Never), the worker column for an agent the hub does not hold.
-async fn may_change(f: &Front, c: &Caller, plan: Option<String>) -> Result<(), Error> {
+pub(crate) async fn may_change(f: &Front, c: &Caller, plan: Option<String>) -> Result<(), Error> {
     use crate::matrix_gate::{ActionCtx, Gate};
     if c.class != Class::Agent {
         return Ok(());
@@ -527,12 +527,40 @@ fn write_plan(tx: &mut WTx<'_>, p: &WriteParams, scope: &Scope) -> Result<PlanWr
         let task = match task_by_number(tx.sql(), plan.n, number)? {
             Some(e) => {
                 scope.allows_ent(tx.sql(), &e)?;
+                // a task of a plan with a view file: its text in the file changes too, at the next sync
+                let (mut title, mut body) =
+                    (w.title.as_ref().map(|t| Some(t.as_str().to_owned())), None);
+                if e.data.get("records").is_some() {
+                    let steps: Option<Vec<(bool, String)>> = w.steps.as_ref().map(|s| {
+                        s.0.iter()
+                            .map(|s| (s.done, s.text.as_str().to_owned()))
+                            .collect()
+                    });
+                    let old = e.body.clone().unwrap_or_default();
+                    let new = saga::plan::rewrite_task(
+                        &old,
+                        &saga::plan::TaskRewrite {
+                            title: w.title.as_ref().map(|t| t.as_str()),
+                            body: w.body.as_ref().map(|b| b.as_str()),
+                            steps: steps.as_deref(),
+                        },
+                    );
+                    if new != old {
+                        body = Some(Some(new));
+                    }
+                    // a record's task title is its number and its heading text
+                    title = w
+                        .title
+                        .as_ref()
+                        .map(|t| Some(format!("{number} {}", t.as_str())));
+                }
                 entity::update(
                     tx,
                     e.n,
                     None,
                     Changes {
-                        title: w.title.as_ref().map(|t| Some(t.as_str().to_owned())),
+                        title,
+                        body,
                         status: w.status.as_ref().map(|s| Some(s.as_str().to_owned())),
                         data_patch: Some(Value::Object(data)),
                         ..Changes::default()
@@ -607,10 +635,54 @@ fn write_plan(tx: &mut WTx<'_>, p: &WriteParams, scope: &Scope) -> Result<PlanWr
     })
 }
 
+/// The view `plans/get` gives of PLAN (tests).
+#[cfg(test)]
+pub(crate) fn load_view(conn: &Tx, plan: &str) -> Result<PlanView, CoordError> {
+    Ok(load(conn, plan)?.view)
+}
+
+/// `plans/write` as META, with no matrix checks (tests).
+#[cfg(test)]
+pub(crate) async fn write_plan_as(
+    db: &norn::store::CoordDb,
+    meta: &urdr::graph::TxMeta,
+    p: &WriteParams,
+    scope: &Scope,
+) -> Result<PlanWritten, Error> {
+    let (p, scope) = (p.clone(), scope.clone());
+    db.write(meta.clone(), move |tx| write_plan(tx, &p, &scope))
+        .await
+        .map_err(fail)
+}
+
 pub async fn plans_write(f: &Front, c: &Caller, p: WriteParams) -> Result<PlanWritten, Error> {
+    if p.plan.is_none() && p.path.is_none() && c.class == Class::Agent {
+        return Err(refuse(
+            "an agent's new plan names its view file: path docs/plans/<repo>/<name>.md",
+        ));
+    }
     may_change(f, c, p.plan.as_ref().map(|i| i.as_str().to_owned())).await?;
     may_finish(f, c, &p).await?;
     let scope = scope_of(f, c).await?;
+    if let (None, Some(rel)) = (&p.plan, &p.path) {
+        let rel = rel.as_str().to_owned();
+        let actor = crate::records::write::actor_for(
+            f,
+            c,
+            scope,
+            p.project.as_ref().map(|i| i.as_str()),
+            "plans/write",
+        )
+        .await?;
+        return crate::records::write::create_plan_core(
+            &f.writer.db,
+            &f.core.records,
+            &actor,
+            &p,
+            &rel,
+        )
+        .await;
+    }
     f.writer
         .write(c, "plans/write", move |tx| write_plan(tx, &p, &scope))
         .await
@@ -620,7 +692,6 @@ pub async fn plans_write(f: &Front, c: &Caller, p: WriteParams) -> Result<PlanWr
 /// A task an agent marks `done` is the matrix's `task.done` (never for a worker), not just `graph.change`: the
 /// status is the same fact the review and the user's own close write.
 async fn may_finish(f: &Front, c: &Caller, p: &WriteParams) -> Result<(), Error> {
-    use crate::matrix_gate::{ActionCtx, Gate};
     if c.class != Class::Agent
         || !p
             .tasks
@@ -630,6 +701,40 @@ async fn may_finish(f: &Front, c: &Caller, p: &WriteParams) -> Result<(), Error>
     {
         return Ok(());
     }
+    matrix_allows_done(
+        f,
+        c,
+        p.plan.as_ref().map(|i| i.as_str().to_owned()),
+        "marking a task done asks the user first",
+        "write the plan again once it is settled",
+    )
+    .await
+}
+
+/// Whether the matrix lets the agent C approve a record (`task.done`, the same fact as closing a task): `Ok`, or why
+/// not.  Never asked of the user or the hub.
+pub(crate) async fn may_approve(f: &Front, c: &Caller) -> Result<(), Error> {
+    if c.class != Class::Agent {
+        return Ok(());
+    }
+    matrix_allows_done(
+        f,
+        c,
+        None,
+        "approving a record asks the user first",
+        "write the record again once it is settled",
+    )
+    .await
+}
+
+async fn matrix_allows_done(
+    f: &Front,
+    c: &Caller,
+    plan: Option<String>,
+    asks: &str,
+    again: &str,
+) -> Result<(), Error> {
+    use crate::matrix_gate::{ActionCtx, Gate};
     let who = c
         .sid
         .as_deref()
@@ -643,11 +748,7 @@ async fn may_finish(f: &Front, c: &Caller, p: &WriteParams) -> Result<(), Error>
         None => ActionCtx::default(),
     };
     let ctx = ActionCtx {
-        plan: p
-            .plan
-            .as_ref()
-            .map(|i| i.as_str().to_owned())
-            .or(base.plan.clone()),
+        plan: plan.or(base.plan.clone()),
         ..base
     };
     match f
@@ -663,9 +764,7 @@ async fn may_finish(f: &Front, c: &Caller, p: &WriteParams) -> Result<(), Error>
         .await
     {
         Gate::Allow => Ok(()),
-        Gate::Ask(card) => Err(refuse(format!(
-            "marking a task done asks the user first (card {card}); write the plan again once it is settled"
-        ))),
+        Gate::Ask(card) => Err(refuse(format!("{asks} (card {card}); {again}"))),
         Gate::Never(why) => Err(refuse(why)),
     }
 }
@@ -1362,7 +1461,7 @@ pub async fn dependents(f: &Front, n: i64) -> Result<Dependents, Error> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use norn::store::CoordDb;
     use norn::write::decisions::{Decide, decide};
@@ -1562,6 +1661,7 @@ mod tests {
             title: Some(serde_json::from_value(json!("P")).unwrap()),
             tasks: Bounded(vec![write_task("1", &[]), write_task("2", &["1"])]),
             base_version: None,
+            path: None,
         };
         let p2 = p.clone();
         let (w, deps, ri, status, stale) = db
@@ -1597,7 +1697,7 @@ mod tests {
         assert!(stale);
     }
 
-    fn front_in(dir: &Path) -> Front {
+    pub(crate) fn front_in(dir: &Path) -> Front {
         Front::new(
             runstav::proof::Cap::generate().unwrap(),
             dir.join("hub-x.sock"),
@@ -1702,6 +1802,7 @@ mod tests {
                 title: Some(serde_json::from_value(json!("P")).unwrap()),
                 tasks: Bounded(vec![write_task("1", &[])]),
                 base_version: None,
+                path: None,
             };
             let theirs = write_plan(tx, &plan_in("project:b"), &Scope::Anyone)?;
             let mine = Scope::Project {
@@ -1727,6 +1828,7 @@ mod tests {
                     serde_json::from_value(json!({"number": "1", "status": "done"})).unwrap(),
                 ]),
                 base_version: None,
+                path: None,
             };
             assert!(write_plan(tx, &change, &mine).is_err());
             assert_eq!(

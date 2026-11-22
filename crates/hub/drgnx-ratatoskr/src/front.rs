@@ -978,6 +978,8 @@ impl Front {
             | Params::RecordsStatus(_)
             | Params::RecordsConflict(_)
             | Params::RecordsResolve(_)
+            | Params::RecordsWrite(_)
+            | Params::RecordsRead(_)
             | Params::MachinesReport(_)
             | Params::MachinesMove(_)
             | Params::CommentsAdd(_)

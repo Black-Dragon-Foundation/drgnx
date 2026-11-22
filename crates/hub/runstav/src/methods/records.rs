@@ -3,9 +3,11 @@
 //! the other through a three-way merge per piece; both sides changing one piece keeps the file's text and flags the
 //! record, which the user (or a manager, under `graph.change`) resolves.  The hub never commits the files.
 
-use super::method;
+use super::graph::ParsedId;
+use super::{invalid, method};
 use crate::registry::Method;
-use crate::types::{AbsPath, Id, null_as_empty};
+use crate::types::{AbsPath, Bounded, Id, Status, Text, null_as_empty};
+use crate::wire::Error;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -166,6 +168,122 @@ pub struct ViewWritten {
     pub hash: String,
 }
 
+/// What a written record is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DocKind {
+    Spec,
+    Decision,
+}
+
+/// One section written: with a `key` (from `records/read`) it replaces that section, without one it is new (after
+/// `after`, else last).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct SectionWrite {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<Bounded<String, 128>>,
+    /// The heading text: no `#`, no line break.
+    pub heading: Bounded<String, 256>,
+    /// The text under the heading; it may hold no level-2 heading outside a code fence.
+    pub body: Text,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<Bounded<String, 128>>,
+}
+
+/// A spec or decision record written, in one transaction.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct RecordWrite {
+    /// The record (its head's id); none creates one (then `project`, `path` and `title` are needed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<ParsedId>,
+    pub kind: DocKind,
+    /// The project of a new record (an agent's is its own).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ParsedId>,
+    /// A new record's view file, relative to the project root: `docs/specs/<repo>/<name>.md` (or `docs/decisions/…`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<Bounded<String, 512>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<Bounded<String, 512>>,
+    /// `proposed` or `approved` (`accepted` for a decision), `superseded`; an agent may not approve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<Status>,
+    #[serde(default)]
+    pub sections: Bounded<Vec<SectionWrite>, 64>,
+    /// Section keys to drop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remove: Option<Bounded<Vec<Bounded<String, 128>>, 64>>,
+    /// The version the writer read (`records/read`); 0 for a new record.
+    pub base_version: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SectionId {
+    pub key: String,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecordWritten {
+    pub record: String,
+    pub path: String,
+    pub tx: u64,
+    pub version: u64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub sections: Vec<SectionId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct RecordRead {
+    pub record: ParsedId,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SectionView {
+    pub key: String,
+    pub id: String,
+    pub heading: String,
+    pub body: String,
+    pub conflict: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecordLink {
+    pub kind: String,
+    pub to: String,
+    pub outgoing: bool,
+}
+
+/// A spec or decision with its sections, as `records/write` takes them back.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecordView {
+    pub record: String,
+    pub kind: DocKind,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    pub version: u64,
+    pub head: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub sections: Vec<SectionView>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub links: Vec<RecordLink>,
+}
+
+fn check_write(p: &RecordWrite) -> Result<(), Error> {
+    if p.path.is_some() && p.record.is_some() {
+        return Err(invalid("path", "a record that exists has its path already"));
+    }
+    Ok(())
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -182,6 +300,17 @@ pub(crate) fn methods() -> Vec<Method> {
             "records/conflict", RecordsConflict(crate::methods::exec::ById) -> Conflict,
             classes: [User], writes: false,
             doc: "a conflicted record: the file's text and the graph's version",
+        ),
+        method!(
+            "records/write", RecordsWrite(RecordWrite) -> RecordWritten,
+            classes: [User], writes: true,
+            doc: "a spec or decision record created or changed by section, in one tx (refused when base_version is behind); a new one names its view file under the project's docs/specs|decisions/<repo>/",
+            check: check_write,
+        ),
+        method!(
+            "records/read", RecordsRead(RecordRead) -> RecordView,
+            classes: [User], writes: false,
+            doc: "a spec or decision record: its head, sections with keys, links and version",
         ),
         method!(
             "records/resolve", RecordsResolve(ResolveParams) -> Resolved,

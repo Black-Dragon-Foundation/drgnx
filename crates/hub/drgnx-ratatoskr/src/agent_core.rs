@@ -201,6 +201,8 @@ pub async fn serve(
         Params::RecordsStatus(p) => answer(records::status(f, c, p).await),
         Params::RecordsConflict(p) => answer(records::conflict(f, c, p).await),
         Params::RecordsResolve(p) => answer(records::resolve(f, c, p).await),
+        Params::RecordsWrite(p) => answer(records::write::records_write(f, c, p).await),
+        Params::RecordsRead(p) => answer(records::read::records_read(f, c, p).await),
         Params::MachinesReport(p) => answer(work::machines::report(f, c, p).await),
         Params::MachinesMove(p) => answer(work::machines::move_to(f, c, p).await),
         Params::CommentsAdd(p) => answer(work::comments::add(f, c, p).await),

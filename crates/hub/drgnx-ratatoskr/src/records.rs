@@ -6,6 +6,9 @@
 //! the file's text and is flagged until it is resolved.  The hub never commits the files.
 
 mod ignore;
+mod paths;
+pub(crate) mod read;
+pub(crate) mod write;
 
 use crate::coord::fail;
 use crate::dispatch::Caller;
@@ -432,7 +435,7 @@ fn backup(hub: &Path, root: &Path, found: &[Found], at: f64) -> Result<PathBuf, 
 }
 
 /// A piece's entity data: where it is (its file, kind, key and place) and, for a plan's task, its fields.
-fn data_of(op: &GraphOp, file: &Path, kind: RecordKind) -> Value {
+pub(super) fn data_of(op: &GraphOp, file: &Path, kind: RecordKind) -> Value {
     let r = json!({
         "seq": op.seq, "role": op.role, "key": op.key,
         "file": file.to_string_lossy(), "kind": kind_name(kind),
@@ -619,7 +622,13 @@ fn apply_acts(
 }
 
 /// Read, parse and diff one file; apply the diff unless DRY.  Answers the report row.
-async fn import_one(db: &CoordDb, f: &Found, dry: bool, back: bool) -> Result<ImportedFile, Error> {
+async fn import_one(
+    db: &CoordDb,
+    f: &Found,
+    dry: bool,
+    back: bool,
+    meta: TxMeta,
+) -> Result<ImportedFile, Error> {
     let text =
         std::fs::read_to_string(&f.path).map_err(|e| err(format!("{}: {e}", f.path.display())))?;
     let doc: AnyDoc = import::parse(f.parse, view::strip_header(&text))
@@ -647,7 +656,7 @@ async fn import_one(db: &CoordDb, f: &Found, dry: bool, back: bool) -> Result<Im
             .await
             .map_err(fail)?;
         if !retired.is_empty() {
-            db.write(meta(), move |tx| {
+            db.write(crate::records::meta(), move |tx| {
                 for n in retired {
                     entity::unretire(tx, n)?;
                 }
@@ -669,7 +678,7 @@ async fn import_one(db: &CoordDb, f: &Found, dry: bool, back: bool) -> Result<Im
     let (entities, n_ops) = if dry || n_ops == 0 {
         (entities, n_ops)
     } else {
-        db.write(meta(), move |tx| {
+        db.write(meta, move |tx| {
             let acts = diff(tx.sql(), &ops, &data)?;
             let done = apply_acts(acts, &ops, &data, Some(&mut *tx))?;
             link_structure(tx, &ops)?;
@@ -2692,7 +2701,7 @@ pub async fn import_core(
         let has = !pieces(db, &f.path).await?.is_empty();
         if dry || !has {
             let back = !noticed(db, &f.path).await?;
-            files.push(import_one(db, f, dry, back).await?);
+            files.push(import_one(db, f, dry, back, meta()).await?);
         } else {
             files.push(ImportedFile {
                 path: f.path.to_string_lossy().into_owned(),
@@ -2989,7 +2998,7 @@ async fn tool_call(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const FILES: [(&str, &str); 5] = [
@@ -3015,16 +3024,16 @@ mod tests {
         ),
     ];
 
-    struct Fix {
-        _dir: tempfile::TempDir,
-        root: PathBuf,
-        hub: PathBuf,
-        db: CoordDb,
-        views: Views,
-        deny: DenyList,
+    pub(crate) struct Fix {
+        pub(crate) _dir: tempfile::TempDir,
+        pub(crate) root: PathBuf,
+        pub(crate) hub: PathBuf,
+        pub(crate) db: CoordDb,
+        pub(crate) views: Views,
+        pub(crate) deny: DenyList,
     }
 
-    fn fix() -> Fix {
+    pub(crate) fn fix() -> Fix {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("org");
         for (rel, text) in FILES {
@@ -3044,7 +3053,7 @@ mod tests {
     }
 
     impl Fix {
-        async fn import(&self, only: Option<RecordKind>, dry: bool) -> ImportReport {
+        pub(crate) async fn import(&self, only: Option<RecordKind>, dry: bool) -> ImportReport {
             self.import_heard(only, dry).await.0
         }
         async fn import_heard(
@@ -3073,10 +3082,10 @@ mod tests {
             let heard = heard.lock().unwrap().clone();
             (r, heard)
         }
-        async fn sync(&self, p: &Path) -> Flush {
+        pub(crate) async fn sync(&self, p: &Path) -> Flush {
             self.views.sync(&self.db, p).await.unwrap().0
         }
-        async fn count(&self, sql: &'static str) -> i64 {
+        pub(crate) async fn count(&self, sql: &'static str) -> i64 {
             self.db
                 .read(move |c| Ok(c.query_row(sql, [], |r| r.get(0))?))
                 .await

@@ -1581,15 +1581,17 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `pair/read-answer` | user | `{error?: Text, req: natnum, text?: string, version?: natnum}` | `boolean` | no |
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
 | `plans/get` | user | `{plan: string}` | `PlanView` | no |
-| `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], body?: Text, interfaces?: Text, model?: string, number: string, profile?: string, role?: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
+| `plans/write` | user | `{base_version?: natnum, path?: string, plan?: string, project?: string, tasks?: [{blocks?: [string], body?: Text, interfaces?: Text, model?: string, number: string, profile?: string, role?: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
 | `plugins/approve` | user | `{hash: Hex64, name: string}` | `PluginRow` | yes |
 | `plugins/disable` | user | `{name: string}` | `PluginRow` | yes |
 | `plugins/list` | user | `{}` | `{plugins?: [PluginRow]}` | no |
 | `presence/set` | user | `{away: boolean}` | `boolean` | no |
 | `records/conflict` | user | `{id: Id}` | `{at: number, file: string, graph: string, id: string, path: string}` | no |
 | `records/import` | user | `{dry_run?: boolean, only?: "specs" \| "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board" \| "decisions", path?: AbsPath, root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes |
+| `records/read` | user | `{record: string}` | `RecordView` | no |
 | `records/resolve` | user | `{id: Id, keep: "file" \| "graph"}` | `{id: string, keep: "file" \| "graph", path: string}` | yes |
 | `records/status` | user | `{path?: AbsPath}` | `{views?: [ViewStatus]}` | no |
+| `records/write` | user | `{base_version: natnum, kind: "spec" \| "decision", path?: string, project?: string, record?: string, remove?: [string], sections?: [{after?: string, body: Text, heading: string, key?: string}], status?: Status, title?: string}` | `{path: string, record: string, sections?: [SectionId], tx: natnum, version: natnum}` | yes |
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
 | `review-screen/close` | user | `{view: string}` | `boolean` | no |
