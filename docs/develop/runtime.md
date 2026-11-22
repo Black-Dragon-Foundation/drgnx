@@ -1508,6 +1508,17 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   AVX2 + FMA, and chosen at run time; the build itself stays baseline. aarch64 uses baseline NEON, so `gemm` is built without
   its `f16` feature, whose kernels need FEAT_FP16 (an aarch64 build failed on them). No AVX-512: it ran slower
   here. `worst_submit` is zero on this path.
+- **The fingerprint (`fingerprint.rs`).** A vector's identity is a `Fingerprint`, the sha256 of a canonical
+  `FingerprintRecord`: the model id, the weights file's sha256 (a server's revision or digest when that is all it proves),
+  the quantisation, the pooling (`Cls`, `Mean`, `Last`, `Unknown`), whether the vectors are normalised, the dims (after any
+  cut), the token limit, the document prefix, the query template (`Instruct: {task}\nQuery:{query}`) and the embed-text
+  version. `canonical()` is `FP_RECORD_VERSION` followed by those fields in that order, each length-prefixed; a test pins one
+  record's hex, so a change of encoding is seen at once. The engine is not a field: llama.cpp on Vulkan or Metal, a TEI
+  server and the built-in forward pass make vectors of one record that agree closely and are interchangeable. A search
+  mixes only vectors of one fingerprint, and the `model` column of every stored vector is `Fingerprint::hex()` (64
+  characters; `hex16()` names a file or a log line). `Identity` pairs a fingerprint and its record with a **label** for the
+  screen (never a key). `builtin_record(spec, embed_text_version)` is a model-table row's record: CLS, normalised, the row's
+  dims, token limit and prefixes, and its pinned `.safetensors` sum.
 
 - **The download (`drgnx-ratatoskr/src/search/`).** `download` fetches exactly a table row's files into `<cache>/models`, from
   `drgnx-search-model-mirror` or the Hugging Face host at `{base}/{repo}/resolve/{revision}/{file}`, and only with a `Consent`

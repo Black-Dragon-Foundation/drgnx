@@ -3,6 +3,7 @@
 //! process of its own is a `[[test]]` of its own in Cargo.toml, with the reason there, and is named in `APART`.
 
 mod device;
+mod fingerprint;
 mod models;
 mod pace;
 
