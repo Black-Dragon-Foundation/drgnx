@@ -231,8 +231,9 @@ instead (its part has no `test result` line), the lib runs one test at a time, w
 test running when the process died, and the step prints the `.ips` under `~/Library/Logs/DiagnosticReports` named for
 that binary and written after the step started: an abort libsystem raises says why only in its crash report.
 
-The macOS tests job has 45 minutes, and a cold build takes 22 to 26 of them (a scratch branch restores no cache), so it
-builds once: a `--no-run` step first (`--message-format=json-render-diagnostics`, the list of test binaries in
+The macOS tests job has 90 minutes until the build-once redesign (it had 45; PR 5's pull-request run was cut there
+after a 43-minute test build with no warm sccache), and a cold build takes 22 to 43 of them (a scratch branch restores
+no cache), so it builds once: a `--no-run` step first (`--message-format=json-render-diagnostics`, the list of test binaries in
 `test-bins.json`), then the workspace's tests, and every later step reuses that build. The failed lib tests and the
 terminal worker's root run start the listed binaries; the sshd step runs `--test macos` with `--workspace` and the
 workspace's features. A `-p` alone resolves other features, so it rebuilt the hub (about four minutes a step). Also

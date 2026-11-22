@@ -402,7 +402,10 @@ jobs:
     permissions:
       contents: read
       packages: read
-    timeout-minutes: 45
+    # 75 until the build-once redesign (docs: the CI flow redesign, 2026-11-22). Each leg builds the hub three ways
+    # (tests, release, the sandbox lane's); on ubuntu-24.04 a green leg took 38.5 minutes, the real-start rows alone
+    # 16.5, and the other leg of the same commit was cut at 45 inside them.
+    timeout-minutes: 75
     # Every runner is pinned (never `ubuntu-latest`, which moves to 26.04 by 2026-11-19). The 24.04 legs lift AppArmor's
     # userns restriction with a global sysctl; the 26.04 legs do not: they test the configuration Gleipnir recommends
     # (bubblewrap 0.12.0 as /usr/bin/bwrap, which 26.04's `bwrap-userns-restrict` profile covers).
@@ -1055,7 +1058,9 @@ jobs:
     name: tests (macOS 27)
     if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
     runs-on: xcode-27
-    timeout-minutes: 45
+    # 90 until the build-once redesign (docs: the CI flow redesign, 2026-11-22). The test build alone took 17 minutes
+    # with sccache warm from a run of the same commit, and was cut at 45 after 43 without it (the pull request's run)
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
