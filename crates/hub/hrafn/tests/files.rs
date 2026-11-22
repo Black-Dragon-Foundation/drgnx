@@ -54,10 +54,8 @@ fn lists_el_and_shebang_script() {
         ("blob.bin", "a\0b"),
     ]);
     let l = run(d.path(), &Config::default()).unwrap();
-    assert_eq!(
-        paths(&l),
-        ["LICENSE", "bin/tool", "core/a.el", "src/lib.rs"]
-    );
+    // (LICENSE is a licence text: ignored by the built-in rules)
+    assert_eq!(paths(&l), ["bin/tool", "core/a.el", "src/lib.rs"]);
     let by = |p: &str| l.iter().find(|x| x.path == p).unwrap();
     assert_eq!(by("bin/tool").lang, Lang::Shell);
     assert_eq!(by("core/a.el").lang, Lang::Elisp);

@@ -108,7 +108,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
         return crate::eval_cli::parse(p.raw_args().map_err(e)?.collect()).map(SearchCommand::Eval);
     }
     if ![
-        "index", "query", "mcp", "symbols", "outline", "map", "usages",
+        "index", "query", "mcp", "symbols", "outline", "why", "map", "usages",
     ]
     .contains(&name.as_str())
     {

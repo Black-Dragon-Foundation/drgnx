@@ -218,7 +218,8 @@ fn only_runtime_names_decode() {
     // and the model price table; and the plugin list with the hook rules and their off list; and search's base
     // checkout and ignore rules; and a Mac runner's Homebrew packages and toolchains; and the past sessions' switch
     // and their CLIs)
-    assert_eq!(RUNTIME_NAMES.len(), 56);
+    // (search's include and exclude globs became one setting, the rules: 56 less one)
+    assert_eq!(RUNTIME_NAMES.len(), 55);
     assert!(RUNTIME_NAMES.iter().all(|n| {
         n.starts_with("drgnx-agents-")
             || n.starts_with("drgnx-ai-")
