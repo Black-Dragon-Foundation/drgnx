@@ -212,7 +212,7 @@ fn listen(port: u16, reuseport: bool) -> (std::os::fd::OwnedFd, u16) {
         // close-on-exec from the start: a descriptor without it is inherited by every child another test spawns in the
         // meantime (a Command's fork/exec in a parallel test), and the child, in this process's group, keeps the
         // listener alive after it is dropped here, which the "nothing listens" check then finds
-        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+        let fd = cloexec_socket();
         assert!(fd >= 0);
         let owned = OwnedFd::from_raw_fd(fd);
         let on: libc::c_int = i32::from(reuseport);
@@ -269,12 +269,33 @@ fn a_listener_that_another_process_of_the_account_could_join_is_refused() {
     assert_eq!(ports::exclusively_owned(q, &[me]), Ok(false));
 }
 
+/// A TCP socket with close-on-exec: set at creation on Linux; elsewhere (macOS has no `SOCK_CLOEXEC`) by `fcntl` straight
+/// after, which leaves a fork in between the two calls the one window. -1 when socket(2) fails.
+///
+/// # Safety
+/// Plain socket(2) and fcntl(2) on a descriptor the caller then owns.
+unsafe fn cloexec_socket() -> libc::c_int {
+    unsafe {
+        #[cfg(target_os = "linux")]
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+        #[cfg(not(target_os = "linux"))]
+        let fd = {
+            let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            if fd >= 0 {
+                assert_eq!(libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC), 0);
+            }
+            fd
+        };
+        fd
+    }
+}
+
 /// A port 127.0.0.1 gives, held by a socket that is bound and does not listen (so no child's copy of it is a listener).
 fn reserve() -> (std::os::fd::OwnedFd, u16) {
     use std::os::fd::{FromRawFd, OwnedFd};
     // SAFETY: plain socket calls on a descriptor made here and owned by the returned OwnedFd; the sockaddr is zeroed then set.
     unsafe {
-        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+        let fd = cloexec_socket();
         assert!(fd >= 0);
         let owned = OwnedFd::from_raw_fd(fd);
         let mut a: libc::sockaddr_in = std::mem::zeroed();

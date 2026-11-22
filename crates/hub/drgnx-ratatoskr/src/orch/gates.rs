@@ -378,6 +378,18 @@ pub fn cleanup(run: &Run) {
     }
 }
 
+/// Whether a run of the task's has no result yet (BUSY), asked before its evidence is read (READ): a run that ends
+/// between the two is busy in the answer, and one that ended before has its evidence in READ's (its end is taken before
+/// it stops being busy), so red first never judges on evidence read before a run's end was recorded (PR 5, macOS: the
+/// run ended and its evidence landed between the gate's read and its look).
+async fn busy_then_read<T, E>(
+    busy: impl std::future::Future<Output = bool>,
+    read: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<(bool, T), E> {
+    let busy = busy.await;
+    Ok((busy, read.await?))
+}
+
 /// The gates before task TID (number N) of JOB at TREE merges: trailers, red first, the author check, judged at
 /// JUDGED (the tip the merge gate checked; none: the branch as it is).  A job approved without a rule pack passes.
 pub async fn before_merge(
@@ -390,17 +402,21 @@ pub async fn before_merge(
     data: &Map<String, Value>,
 ) -> Result<Decision, String> {
     let (j, t) = (job.to_owned(), tid.to_owned());
-    let (pack, evidence) = front
-        .writer
-        .db
-        .read(move |c| {
-            Ok((
-                norn::read::evidence::pack_of_job(c, &j)?,
-                norn::read::evidence::of_task(c, &t)?,
-            ))
+    let (busy, (pack, evidence)) =
+        busy_then_read(front.core.exec.busy_in_tree(&tree.path), async {
+            front
+                .writer
+                .db
+                .read(move |c| {
+                    Ok((
+                        norn::read::evidence::pack_of_job(c, &j)?,
+                        norn::read::evidence::of_task(c, &t)?,
+                    ))
+                })
+                .await
+                .map_err(|e| e.to_string())
         })
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     let Some(pack) = pack else {
         return Ok(Decision::Pass("the job has no rule pack".into()));
     };
@@ -456,7 +472,7 @@ pub async fn before_merge(
     let top = tree.path.as_path();
     // a run of the task's that has no result yet (its exec/start on its way, or queued or running) is evidence to
     // come: red first waits for it and is judged again, never holds without it (a slow start, the macOS lane's)
-    if front.core.exec.busy_in_tree(top).await {
+    if busy {
         return Ok(Decision::Wait(
             "a run in the task's tree has no result yet".into(),
         ));
@@ -637,5 +653,34 @@ mod tests {
         let r = rerun_of(&[sel], "P", top, metas).unwrap();
         assert_eq!(r.env, env);
         assert_eq!(vordr::facts::selector(&r.rel, &r.argv, &r.env), r.selector);
+    }
+
+    /// A run that ends, and has its evidence recorded, right after the gate read the task's evidence is still busy in
+    /// the gate's answer: it waits for it, never holds on "no run to repeat" over evidence read before the run's end
+    /// (PR 5, macOS: the run's evidence landed between the gate's read and its busy check).
+    #[tokio::test]
+    async fn a_run_that_ends_after_the_evidence_read_is_busy_in_the_answer() {
+        // the run is busy and has no evidence yet; the read is the moment it ends and its evidence is recorded
+        let state = std::sync::Mutex::new((true, Vec::<&str>::new()));
+        let (busy, evidence) = busy_then_read(async { state.lock().unwrap().0 }, async {
+            let mut s = state.lock().unwrap();
+            let read = s.1.clone();
+            *s = (false, vec!["the run's red"]);
+            Ok::<_, ()>(read)
+        })
+        .await
+        .unwrap();
+        assert!(
+            busy || !evidence.is_empty(),
+            "the run is in neither: busy {busy}, evidence {evidence:?}"
+        );
+        // a run that ended before: its evidence is read, and nothing is busy
+        let state = std::sync::Mutex::new((false, vec!["the run's red"]));
+        let (busy, evidence) = busy_then_read(async { state.lock().unwrap().0 }, async {
+            Ok::<_, ()>(state.lock().unwrap().1.clone())
+        })
+        .await
+        .unwrap();
+        assert_eq!((busy, evidence), (false, vec!["the run's red"]));
     }
 }

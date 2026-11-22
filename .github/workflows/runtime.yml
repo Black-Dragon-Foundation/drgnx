@@ -260,7 +260,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/escape"
           target/debug/gleipnir-escape --ratatoskr target/debug/ratatoskr --probe target/debug/gleipnir-probe \
-            --rows crates/gleipnir-escape/rows --rows crates/gleipnir-escape/rows/container \
+            --rows crates/hub/gleipnir-escape/rows/any --rows crates/hub/gleipnir-escape/rows/container \
             --report "$RUNNER_TEMP/escape/escape-container.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -1196,7 +1196,7 @@ jobs:
       - name: a terminal worker drops another uid's connection (getpeereid, as root)
         if: ${{ !cancelled() }}
         run: |
-          bin=$(jq -r 'select(.profile.test == true and .target.name == "it" and (.manifest_path | endswith("/crates/drgnx-term/Cargo.toml"))) | .executable' "$RUNNER_TEMP/test-bins.json" | tail -n 1)
+          bin=$(jq -r 'select(.profile.test == true and .target.name == "it" and (.manifest_path | endswith("/crates/hub/drgnx-term/Cargo.toml"))) | .executable' "$RUNNER_TEMP/test-bins.json" | tail -n 1)
           [ -x "$bin" ] || { echo "::error::no test binary for drgnx-term's integration tests"; exit 1; }
           out=$(sudo env RUST_LOG=debug "$bin" --exact running::the_socket_is_private_and_another_uid_is_dropped --nocapture 2>&1) || { echo "$out"; exit 1; }
           echo "$out"

@@ -13,7 +13,9 @@ use forseti::{
     Expected, Grant, Job, LastStart, Limits, MachineState, Priority, Profile, Psi, RunningJob,
     WaitReason,
 };
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The scheduler name of the hub's own reservations.
