@@ -114,9 +114,6 @@ jobs:
       needs.images.outputs.rust, github.actor, github.token))
       || fromJSON('{"image":"registry.fedoraproject.org/fedora:45","options":"--init"}') }}
     timeout-minutes: 45
-    defaults:
-      run:
-        working-directory: runtime
     env:
       PREBUILT: ${{ needs.images.outputs.rust }}
     steps:
@@ -367,8 +364,8 @@ jobs:
         run: |
           sudo bash test/container/zig.sh linux
           bash crates/hub/ghostty-vt-sys/fetch.sh
-      - name: the Wayland client and xkbcommon headers (nhshell and nh-recorder link them)
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libwayland-dev libxkbcommon-dev
+      - name: the Wayland client, xkbcommon and pixman headers (nhshell and nh-recorder link them)
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libwayland-dev libxkbcommon-dev libpixman-1-dev
       - id: build
         run: cargo +1.95.0 build --locked --manifest-path Cargo.toml
       - id: prune
@@ -636,9 +633,6 @@ jobs:
       needs.images.outputs.rust, github.actor, github.token))
       || fromJSON('{"image":"registry.fedoraproject.org/fedora:45","options":"--init --cap-add SYS_PTRACE"}') }}
     timeout-minutes: 45
-    defaults:
-      run:
-        working-directory: runtime
     env:
       PREBUILT: ${{ needs.images.outputs.rust }}
     steps:
@@ -1081,10 +1075,12 @@ jobs:
       # The build first, on its own: its time apart from the tests', and the list of test binaries (test-bins.json) the
       # later steps run as they are. Every step after it reuses this build: another feature set (`-p` alone resolves
       # one) or another profile would rebuild the hub, four minutes a step on a cold runner. --timings: where a cold
-      # build's time goes (the `cargo-timings` artifact), before the job is split any further
+      # build's time goes (the `cargo-timings` artifact), before the job is split any further. nhshell and nh-recorder
+      # are the Wayland shell and its test compositor (libwayland, Smithay): Linux only; macOS gets its own shell later
+      # (D8), so every step of this job leaves them out the same way
       - id: build
         run: |
-          cargo test --locked --no-fail-fast --manifest-path Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks \
+          cargo test --locked --no-fail-fast --manifest-path Cargo.toml --workspace --exclude nhshell --exclude nh-recorder --features drgnx-ratatoskr/test-hooks \
             --no-run --timings --message-format=json-render-diagnostics > "$RUNNER_TEMP/test-bins.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
@@ -1136,7 +1132,7 @@ jobs:
             exit $rc
           ) 2>&1 | tee "$RUNNER_TEMP/tests.log"
           rc=$?
-          cargo test --locked --no-fail-fast --manifest-path Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks \
+          cargo test --locked --no-fail-fast --manifest-path Cargo.toml --workspace --exclude nhshell --exclude nh-recorder --features drgnx-ratatoskr/test-hooks \
             --doc 2>&1 | tee -a "$RUNNER_TEMP/tests.log" || rc=1
           exit $rc
       # A crash report from a macOS row reads the line tables: one panic's full backtrace names a file and a line in
@@ -1219,7 +1215,7 @@ jobs:
           # the timing rows are #[ignore] too: a debug build on a shared runner would judge a release budget
           skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == "drgnx-ratatoskr" { printf " --skip %s", $3 }')
           # --workspace and the workspace's features (tests/macos.rs is the only `macos` test target): the build above
-          cargo test --locked --no-fail-fast --manifest-path Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks --test macos -- --ignored $skips
+          cargo test --locked --no-fail-fast --manifest-path Cargo.toml --workspace --exclude nhshell --exclude nh-recorder --features drgnx-ratatoskr/test-hooks --test macos -- --ignored $skips
       # Debug forks on a Mac (spec §21): each fork's adapter and program in Seatbelt with only their block of loopback
       # ports. lsof sweeps their sockets while the Python and the JS fork run (tests_fork_live's mac row). debugpy and
       # js-debug at the hub's pins (etc/debug-adapters.eld), installed as Debug: Install Adapter does; the lib's test

@@ -303,8 +303,8 @@ mod timeline_schedule {
         assert!(p <= 50, "schedule-zoom p95 {p} ms");
     }
 
+    // the clock is the `now` argument, not the wall: a plain test, not a timing one
     #[test]
-    #[ignore = "timing: the now-line drawn at most once in 5 s of 1-s ticks"]
     fn now_line_at_most_once_per_5_s() {
         let win = Window {
             from: 0.0,

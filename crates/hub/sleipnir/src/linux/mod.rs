@@ -23,8 +23,7 @@ pub mod disk;
 pub mod jobexec;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod probe;
-/// the progress guard reads cgroups through the probe
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// the progress guard reads cgroups through the probe where there is one; elsewhere (Android) no slice can be read
 pub mod progress;
 /// also a Mac runner's (its start times from `proc_pidinfo`)
 #[cfg(any(target_os = "linux", target_os = "macos"))]

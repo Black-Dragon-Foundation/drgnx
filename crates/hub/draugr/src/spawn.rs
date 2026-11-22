@@ -643,8 +643,31 @@ mod tests {
     /// GL-T6-1: another thread closes a held number that is a target; std's exec-report socket may take it, and the
     /// child's `dup2` onto it must not make a failed exec look like a start: the child stops (`EBUSY`), the spawn is
     /// tried again, and the exec failure is then reported as it is.
+    ///
+    /// Fd numbers are the process's: under `cargo test` the other tests' threads open files meanwhile and can take the
+    /// numbers this test frees before std's report pipe does, so the guard never fires (the escape lane, 2026-11-22).
+    /// The test therefore runs itself again as the only test of a process of its own (nextest gives each test one).
     #[tokio::test]
     async fn a_failed_exec_is_reported_when_a_held_number_was_closed() {
+        const NAME: &str = "spawn::tests::a_failed_exec_is_reported_when_a_held_number_was_closed";
+        if std::env::var_os("DRAUGR_TEST_ALONE").is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--test-threads", "1", "--nocapture"])
+                .env("DRAUGR_TEST_ALONE", "1")
+                .output()
+                .unwrap();
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(out.status.success(), "the test alone failed:\n{text}");
+            assert!(
+                text.contains("1 passed"),
+                "the test alone did not run:\n{text}"
+            );
+            return;
+        }
         let (_r, w) = pipe();
         let w = Arc::new(w);
         let mut spec = sh("exit 0", true);

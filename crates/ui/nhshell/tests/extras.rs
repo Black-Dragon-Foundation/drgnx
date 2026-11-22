@@ -163,7 +163,7 @@ mod extras {
         std::fs::create_dir_all(&dir).unwrap();
         let text = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../test/recorder/profiles/mutter.json"
+            "/../recorder/profiles/mutter.json"
         ))
         .unwrap()
         .replace("\"zxdg_exporter_v2\": 1,\n", "");

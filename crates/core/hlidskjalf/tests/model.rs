@@ -210,14 +210,9 @@ fn a_1mb_ascii_line_looks_up_no_width() {
     let line = "x".repeat(1 << 20) + "\n";
     let before = lookups();
     let mut p = Pair::new(&line, false);
-    let t = std::time::Instant::now();
     for i in 0..20 {
         p.edit(1000 + i, 0, "y");
     }
-    eprintln!(
-        "lines-type-1mb-line: {:?} per keystroke (cols on)",
-        t.elapsed() / 20
-    );
     assert_eq!(lookups(), before);
     assert_eq!(
         p.m.widest(1, 1, p.text.len() as u64 + 1),

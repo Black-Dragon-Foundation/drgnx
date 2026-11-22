@@ -22,4 +22,5 @@ tokio = { workspace = true, features = ["sync", "rt"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+skuld = { path = "../skuld", version = "0.1.0" }   # waits in tests
 tokio = { workspace = true, features = ["rt", "macros"] }

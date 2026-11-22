@@ -1284,22 +1284,24 @@ mod tests {
         let pid = fx.start();
         fx.cdp(r#"{"id":1,"method":"Fake.stubborn"}"#);
         fx.reply(1);
-        fx.control(json!({"op": "stop", "why": "idle"}));
-        // the host takes the stop and sits in its grace before the next frames are written (a sleep only separates the
-        // writes, so the two cannot be read as one chunk; the check below is on what is read, not on this wait)
-        std::thread::sleep(Duration::from_millis(300));
-        fx.control(json!({"op": "start"}));
-        fx.cdp(r#"{"id":2,"method":"Page.enable"}"#);
         use std::os::fd::AsRawFd;
         let fd = fx.hub.as_raw_fd();
-        // the hub's send queue empties: the host read both frames (TIOCOUTQ: bytes sent and not yet read by the peer),
-        // within 10 s of a grace of 20 s
-        skuld::wait_until("the host to read the hub's frames", 10, || {
-            let mut n: libc::c_int = -1;
-            // SAFETY: TIOCOUTQ writes one c_int to the pointer, which lives across the call
-            let r = unsafe { libc::ioctl(fd, libc::TIOCOUTQ, &mut n) };
-            (r == 0 && n == 0).then_some(())
-        });
+        // the hub's send queue empties: the host read what was sent (TIOCOUTQ: bytes sent and not yet read by the
+        // peer), within 10 s of a grace of 20 s
+        let host_read = |what: &str| {
+            skuld::wait_until(what, 10, || {
+                let mut n: libc::c_int = -1;
+                // SAFETY: TIOCOUTQ writes one c_int to the pointer, which lives across the call
+                let r = unsafe { libc::ioctl(fd, libc::TIOCOUTQ, &mut n) };
+                (r == 0 && n == 0).then_some(())
+            })
+        };
+        fx.control(json!({"op": "stop", "why": "idle"}));
+        // the host took the stop (it now sits in its grace) before the next frames are written
+        host_read("the host to read the stop");
+        fx.control(json!({"op": "start"}));
+        fx.cdp(r#"{"id":2,"method":"Page.enable"}"#);
+        host_read("the host to read the hub's frames");
         // end the stop's grace here (the browser is killed from outside), then the order: exited, the new browser, its reply
         // SAFETY: SIGKILL to the browser this test started, its group
         unsafe { libc::kill(-pid, libc::SIGKILL) };

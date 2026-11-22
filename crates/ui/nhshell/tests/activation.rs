@@ -21,17 +21,21 @@ struct Recorder {
 
 impl Recorder {
     fn start(profile: &str) -> Recorder {
+        // `NH_RECORDER`, else the workspace's own debug build (target/debug/nh-recorder)
         let bin = std::env::var_os("NH_RECORDER")
-            .expect("NH_RECORDER is not set (the path of the nh-recorder binary)");
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/nh-recorder")
+            });
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir =
             std::env::temp_dir().join(format!("nhshell-activation-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let profile = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../test/recorder/profiles")
+            .join("../recorder/profiles")
             .join(format!("{profile}.json"));
-        let mut child = Command::new(bin)
+        let mut child = Command::new(&bin)
             .args(["--socket", "wl", "--control"])
             .arg(dir.join("control"))
             .arg("--profile")
@@ -39,7 +43,7 @@ impl Recorder {
             .env("XDG_RUNTIME_DIR", &dir)
             .stdout(Stdio::piped())
             .spawn()
-            .expect("spawn nh-recorder");
+            .unwrap_or_else(|e| panic!("spawn nh-recorder {bin:?}: {e}"));
         let mut line = String::new();
         BufReader::new(child.stdout.take().unwrap())
             .read_line(&mut line)

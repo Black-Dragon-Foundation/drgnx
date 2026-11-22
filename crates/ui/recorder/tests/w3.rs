@@ -122,12 +122,17 @@ fn refresh_120_paces_callbacks() {
             std::thread::sleep(Duration::from_micros(300));
         }
     }
-    // the compositor's own presentation times (ns): the client's wake-ups are late by a scheduling jitter that
-    // moves the first stamp as much as the last
+    // the compositor's own presentation times are the vblanks of its refresh grid: each is a whole number of periods
+    // of 1/120 s (8_333_333 ns) after the one before, however late the recorder's or the client's wake-ups ran (a
+    // slow client may miss a vblank, so the count of periods is not fixed, but it is never a fraction of one)
+    const PERIOD: u128 = 8_333_333;
     let stamps = &env.client.presented;
-    let span = stamps[9] - stamps[0];
-    assert!(
-        span >= Duration::from_millis(75) && span <= Duration::from_millis(85),
-        "{span:?}"
-    );
+    for pair in stamps.windows(2) {
+        let gap = (pair[1] - pair[0]).as_nanos();
+        let periods = (gap + PERIOD / 2) / PERIOD;
+        assert!(
+            periods >= 1 && gap.abs_diff(periods * PERIOD) <= 1_000 * periods,
+            "{gap} ns after the one before is not whole periods of {PERIOD} ns"
+        );
+    }
 }

@@ -250,6 +250,11 @@ impl State {
             }
             Clock::Auto => Duration::from(SmClock::<Monotonic>::new().now()),
         };
+        self.present_at(now);
+    }
+
+    /// [`Self::present`] with the time the callbacks and feedback report.
+    fn present_at(&mut self, now: Duration) {
         if self.pacing.occluded {
             return;
         }
@@ -288,10 +293,12 @@ impl State {
         }
     }
 
-    /// The periodic tick: auto clock frames, ping timeouts and wait deadlines.
-    pub fn tick(&mut self) {
+    /// The periodic tick: auto clock frames, ping timeouts and wait deadlines.  `vblank` is the tick's scheduled time
+    /// on the monotonic clock: a real compositor reports the vblank, not when it woke, so the stamps keep the refresh
+    /// period however late a wake-up was.
+    pub fn tick(&mut self, vblank: Duration) {
         if self.clock == Clock::Auto {
-            self.present(0);
+            self.present_at(vblank);
         }
         self.expire_pings();
         crate::wait::check(self);

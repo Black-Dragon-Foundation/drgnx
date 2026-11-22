@@ -2068,7 +2068,7 @@ mod tests {
     /// (`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --lib -- --ignored
     /// --nocapture forecast_plan_perf`).
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "perf lane"]
+    #[ignore = "timing: perf lane, the plan forecast's miss and hit budgets"]
     async fn forecast_plan_perf() {
         let dir = tempfile::tempdir().unwrap();
         let f = front(dir.path());
@@ -2208,7 +2208,7 @@ mod tests {
     /// miss of the cache).  Ignored in normal runs: release, pinned (`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo
     /// test --release -p drgnx-ratatoskr --lib -- --ignored --nocapture forecast_remaining_perf`).
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "perf lane"]
+    #[ignore = "timing: perf lane, what remains of a 40-task job within 300 ms"]
     async fn forecast_remaining_perf() {
         let dir = tempfile::tempdir().unwrap();
         let f = front(dir.path());

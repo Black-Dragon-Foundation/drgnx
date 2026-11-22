@@ -11,11 +11,26 @@ pub fn err(msg: impl Into<String>) -> Value {
     json!({"ok": false, "error": msg.into()})
 }
 
+/// `v` with every object's keys sorted.  The tests read the replies as text (`{"ack_serial":` opens each logged
+/// commit), so the order is part of the format: without `preserve_order` a `Map` sorts, but another crate of the
+/// workspace build turns the feature on, and objects then keep the order they were built in.
+fn sorted(v: Value) -> Value {
+    match v {
+        Value::Object(m) => {
+            let mut entries: Vec<_> = m.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(entries.into_iter().map(|(k, v)| (k, sorted(v))).collect())
+        }
+        Value::Array(a) => Value::Array(a.into_iter().map(sorted).collect()),
+        other => other,
+    }
+}
+
 /// Write one reply line on a (non-blocking) control stream.  What the socket does not take at once is queued on the
 /// event loop and written when the socket is writable; the loop never waits on a slow reader.  (A client sends one
 /// command and reads its reply before the next, so replies to one stream do not overtake each other.)
 pub fn write_reply(state: &State, stream: &UnixStream, reply: &Value) {
-    let mut line = reply.to_string();
+    let mut line = sorted(reply.clone()).to_string();
     line.push('\n');
     let mut w = stream;
     let mut done = 0;

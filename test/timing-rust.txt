@@ -30,6 +30,10 @@ drgnx-ratatoskr lib regroup_ten_thousand_time release
 drgnx-ratatoskr lib debug_fork_start
 drgnx-ratatoskr lib a_python_fork_to_a_late_pass_is_quick
 drgnx-ratatoskr lib a_js_fork_to_a_late_pass_is_quick
+# the perf lane's budgets (perf-exclusive.sh, release, pinned): timing rows since they read real time
+drgnx-ratatoskr lib forecast_plan_perf release
+drgnx-ratatoskr lib forecast_remaining_perf release
+drgnx-ratatoskr lib density_200mb_log release
 norn it timing_before_tool_cost_per_call release
 urdr lib a_lone_write_waits_max_wait_for_company
 verdandi timing undone_by_scan_cost_by_later_deletes
@@ -38,7 +42,6 @@ vegvisir timing layout_200_items_within_2_ms release
 vegvisir timing activity_open_within_100_ms release
 vegvisir timing schedule_open_within_100_ms release
 vegvisir timing schedule_zoom_within_50_ms release
-vegvisir timing now_line_at_most_once_per_5_s release
 vegvisir timing now_line_patch_within_3_ms release
 drgnx-ratatoskr fleet_drills a_set_spreads_over_two_runners_within_its_bound fleet
 eitri lib a_refused_fifo_is_never_opened

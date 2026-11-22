@@ -382,6 +382,9 @@ mod reader {
         "set_cards",
         // the default leaves nothing to commit (only macOS defers a commit)
         "flush_presents",
+        // the host's own timer thread, not the connection's; and the title area, which only macOS has (the default)
+        "set_timer",
+        "set_title_area",
     ];
 
     /// The names of `ShellBackend`'s methods, read from its source.

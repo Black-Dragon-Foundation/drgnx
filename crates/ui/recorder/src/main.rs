@@ -193,11 +193,18 @@ fn main() {
         .unwrap_or_else(|e| die(e.to_string()));
 
     // frame clock tick and ping timeouts
+    // on a grid of the refresh period from the start: `ToDuration` counts from when the callback ran, so every wake-up's
+    // latency added to the period and the stamps drifted slower than the refresh rate (more so under load)
     let frame = state.pacing.frame;
+    let start = std::time::Instant::now();
+    let mono_start =
+        std::time::Duration::from(smithay::utils::Clock::<smithay::utils::Monotonic>::new().now());
+    let mut next = start + frame;
     handle
-        .insert_source(Timer::from_duration(frame), move |_, _, state| {
-            state.tick();
-            TimeoutAction::ToDuration(frame)
+        .insert_source(Timer::from_deadline(next), move |_, _, state| {
+            state.tick(mono_start + (next - start));
+            next += frame;
+            TimeoutAction::ToInstant(next)
         })
         .unwrap_or_else(|e| die(e.to_string()));
 

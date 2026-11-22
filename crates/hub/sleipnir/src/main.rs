@@ -189,7 +189,7 @@ fn tools(_root: &str, _pins: &[&str]) -> ExitCode {
 }
 
 /// An attempt that must not run (WHY: its slot can't be held at its inputs): `infra: setup`, WHY in its log.
-#[cfg(feature = "sync")]
+#[cfg(all(feature = "sync", any(target_os = "linux", target_os = "macos")))]
 fn job_setup_failed(dir: &std::path::Path, why: &str) -> ExitCode {
     use forseti::Verdict;
     use forseti::classify::infra;
@@ -223,6 +223,13 @@ fn job_setup_failed(dir: &std::path::Path, why: &str) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(_) => ExitCode::from(2),
     }
+}
+
+/// no job spec reader here (Android): the reason goes to stderr only
+#[cfg(all(feature = "sync", not(any(target_os = "linux", target_os = "macos"))))]
+fn job_setup_failed(dir: &std::path::Path, why: &str) -> ExitCode {
+    eprintln!("sleipnir job-exec: {}: {why}", dir.display());
+    ExitCode::from(2)
 }
 
 #[cfg(target_os = "linux")]

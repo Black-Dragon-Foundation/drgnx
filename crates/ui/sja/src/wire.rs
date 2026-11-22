@@ -173,6 +173,9 @@ fn links(v: Option<&Value>, what: &str) -> R<Vec<(String, String)>> {
             out.push((k.clone(), t));
         }
     }
+    // sorted by key: a `Map` iterates in insertion order when another crate of the build turns on `preserve_order`,
+    // and the typed decode (typed.rs) is sorted
+    out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
 }
 
@@ -204,6 +207,7 @@ fn node(v: &Value) -> R<NodeIn> {
         for (form, set) in obj(n, "navs")? {
             navs.push((form.clone(), links(Some(set), "navs")?));
         }
+        navs.sort_by(|a, b| a.0.cmp(&b.0));
     }
     let mut fields = Vec::new();
     if let Some(fs) = o.get("fields").filter(|v| !v.is_null()) {

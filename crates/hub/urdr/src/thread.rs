@@ -196,20 +196,19 @@ mod tests {
             .await
             .unwrap();
         let (at, age) = h.running().expect("the job runs");
-        assert!(at.starts_with("crates/urdr/src/thread.rs:"), "{at}");
+        assert!(at.starts_with("crates/hub/urdr/src/thread.rs:"), "{at}");
         assert!(age < std::time::Duration::from_secs(60));
         release.send(()).unwrap();
         job.await.unwrap().unwrap();
         // idle again once it ended (the thread notes it just after the reply)
-        let mut idle = false;
-        for _ in 0..200 {
-            if h.running().is_none() {
-                idle = true;
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-        assert!(idle);
+        let h = tokio::task::spawn_blocking(move || {
+            skuld::wait_until("the thread is idle again", 30, || {
+                h.running().is_none().then_some(())
+            });
+            h
+        })
+        .await
+        .unwrap();
         drop(h);
         tokio::task::spawn_blocking(move || store.shutdown())
             .await

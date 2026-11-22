@@ -440,6 +440,11 @@ fn spec(id: &str, j: &JobDir, argv: Vec<String>) -> JobExec {
 }
 
 /// Starts SPEC as its unit running `sleipnir job-exec`.
+/// A file's modification time.
+fn mtime(p: &Path) -> std::time::SystemTime {
+    std::fs::metadata(p).unwrap().modified().unwrap()
+}
+
 fn start_job(name: &str, s: &JobExec, j: &JobDir) {
     s.write(&j.dir).unwrap();
     unit::start(&unit_req(
@@ -858,10 +863,12 @@ fn progress_silent_but_busy_stops_at_silent() {
     let j = job_dir();
     slices::ensure_tree(ROOT, forseti::Profile::Dedicated).unwrap();
     let s = guarded("g1", &j, "while :; do :; done");
-    let t0 = std::time::Instant::now();
+    // the time is read off the files (the job dir before the start, the report when written), not off a clock
+    let t0 = mtime(&j.dir);
     start_job("sltest-g1-1", &s, &j);
     stopped_as_stuck("sltest-g1-1", &s, &j, "silent");
-    assert!(t0.elapsed().as_secs() >= 40, "{:?}", t0.elapsed());
+    let took = mtime(&j.dir.join("stuck.txt")).duration_since(t0).unwrap();
+    assert!(took.as_secs() >= 40, "{took:?}");
 }
 
 /// [C] `sleep 600`: no output, no CPU, no IO stops at stall, as `infra: stuck`.
@@ -871,10 +878,13 @@ fn progress_idle_sleep_stops_at_stall() {
     let j = job_dir();
     slices::ensure_tree(ROOT, forseti::Profile::Dedicated).unwrap();
     let s = guarded("g2", &j, "sleep 600");
-    let t0 = std::time::Instant::now();
+    let t0 = mtime(&j.dir);
     start_job("sltest-g2-1", &s, &j);
     stopped_as_stuck("sltest-g2-1", &s, &j, "stall");
-    let took = t0.elapsed().as_secs();
+    let took = mtime(&j.dir.join("stuck.txt"))
+        .duration_since(t0)
+        .unwrap()
+        .as_secs();
     assert!((20..40).contains(&took), "{took}");
 }
 
@@ -890,7 +900,7 @@ fn progress_slow_but_printing_is_not_stopped() {
         &j,
         "echo deadline=$DRGNX_JOB_DEADLINE; i=0; while [ $i -lt 18 ]; do echo .; sleep 5; i=$((i+1)); done",
     );
-    let start = std::time::SystemTime::now()
+    let start = mtime(&j.dir)
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();

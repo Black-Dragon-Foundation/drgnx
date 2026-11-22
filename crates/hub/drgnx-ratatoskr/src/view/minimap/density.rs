@@ -271,7 +271,8 @@ mod tests {
             st.len
         );
         let (error, warning) = (re("ERROR|FATAL"), re("WARN"));
-        let Scanned::Done(b, _) = scan(&p, st, &error, &warning, Instant::now, |_| true).unwrap()
+        let Scanned::Done(b, _) =
+            scan(&p, st, &error, &warning, crate::clock::real_now, |_| true).unwrap()
         else {
             panic!("not done")
         };
@@ -297,7 +298,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = log(dir.path(), 900_000);
         let st = stamp(&p).unwrap();
-        let t0 = Instant::now();
+        let t0 = crate::clock::real_now();
         let calls = std::cell::Cell::new(0u32);
         let clock = || {
             calls.set(calls.get() + 1);
@@ -325,7 +326,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = log(dir.path(), 900_000);
         let st = stamp(&p).unwrap();
-        let at = std::cell::Cell::new(Instant::now());
+        let at = std::cell::Cell::new(crate::clock::real_now());
         // the scan's own start is the clock's first reading; the deadline counts from it
         let t0 = std::cell::Cell::new(None);
         let clock = || {
@@ -351,7 +352,7 @@ mod tests {
     /// (`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --lib -- --ignored
     /// --nocapture density_200mb`; docs/develop/perf.md).
     #[test]
-    #[ignore = "perf lane"]
+    #[ignore = "timing: perf lane, the first part of a 200 MB log within the first-paint budget"]
     fn density_200mb_log() {
         let dir = tempfile::tempdir().unwrap();
         let p = log(dir.path(), 5_600_000);
@@ -409,25 +410,39 @@ mod tests {
         let p = log(dir.path(), 600_000);
         let st = stamp(&p).unwrap();
         let mut asked = 0;
-        let r = scan(&p, st, &re("ERROR"), &re("WARN"), Instant::now, |_| {
-            asked += 1;
-            asked < 2
-        })
+        let r = scan(
+            &p,
+            st,
+            &re("ERROR"),
+            &re("WARN"),
+            crate::clock::real_now,
+            |_| {
+                asked += 1;
+                asked < 2
+            },
+        )
         .unwrap();
         assert_eq!(r, Scanned::Cancelled);
         assert_eq!(asked, 2, "stopped at the second block");
         let mut first = true;
-        let r = scan(&p, st, &re("ERROR"), &re("WARN"), Instant::now, |_| {
-            if std::mem::take(&mut first) {
-                std::fs::OpenOptions::new()
-                    .append(true)
-                    .open(&p)
-                    .unwrap()
-                    .write_all(b"more\n")
-                    .unwrap();
-            }
-            true
-        })
+        let r = scan(
+            &p,
+            st,
+            &re("ERROR"),
+            &re("WARN"),
+            crate::clock::real_now,
+            |_| {
+                if std::mem::take(&mut first) {
+                    std::fs::OpenOptions::new()
+                        .append(true)
+                        .open(&p)
+                        .unwrap()
+                        .write_all(b"more\n")
+                        .unwrap();
+                }
+                true
+            },
+        )
         .unwrap();
         assert_eq!(r, Scanned::Changed);
     }

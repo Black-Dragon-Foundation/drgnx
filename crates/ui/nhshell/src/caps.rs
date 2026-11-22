@@ -159,10 +159,10 @@ mod tests {
     fn profile_names_map() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../test/recorder/profiles/mutter.json"
+            "/../recorder/profiles/mutter.json"
         );
         let json = std::fs::read_to_string(path)
-            .unwrap_or_else(|_| panic!("profiles/mutter.json not found (nidhogg/test/recorder)"));
+            .unwrap_or_else(|_| panic!("profiles/mutter.json not found (crates/ui/recorder)"));
         let keys = profile_globals(&json);
         assert!(!keys.is_empty(), "no globals parsed");
         let mut caps = NhShellCaps::default();

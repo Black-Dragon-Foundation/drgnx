@@ -178,7 +178,7 @@ typed!(Flags, u32, deserialize_any, {
     }
 });
 
-/// A map's entries sorted by key, as the `Value` decode's map iterates them; a key twice is refused.
+/// A map's entries sorted by key, as the `Value` decode sorts them (`wire.rs`); a key twice is refused.
 fn sorted<T, E: de::Error>(mut v: Vec<(String, T)>) -> Result<Vec<(String, T)>, E> {
     v.sort_by(|a, b| a.0.cmp(&b.0));
     if v.windows(2).any(|w| w[0].0 == w[1].0) {

@@ -158,21 +158,29 @@ mod tests {
         git(&["commit", "-q", "-m", "base"]);
         let hist = tempfile::tempdir().unwrap();
         let hub = Arc::new(Hub::open(hist.path()).unwrap());
-        let tree = Tree::new(repo.path(), &repo.path().join(".git"), None);
+        // the base is the commit: the document starts as the file on disk (with no base it starts empty and
+        // `register` records the disk as an outside change, an op before anyone typed)
+        let head = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        let head = String::from_utf8(head.stdout).unwrap().trim().to_owned();
+        let tree = Tree::new(repo.path(), &repo.path().join(".git"), Some(&head));
         let cfg = repo.path().join(".cfg-none");
         std::fs::create_dir_all(&cfg).unwrap();
         let deny = DenyList::load(&cfg, &cfg);
         hub.register(&tree, "a.txt", "b1", &deny, 1.0).unwrap();
         let change = BatchChange {
-            // the tree has no base commit: the document starts empty
-            start: 0,
+            // the document holds the file as registered (the committed "one\n"): the user types after it
+            start: 3,
             old_len: 0,
-            inserted: "one\n".into(),
+            inserted: "!".into(),
             origin: "user".into(),
         };
         let now = crate::clock::wall_secs();
         let reply = hub
-            .batch("b1", &[change], Some(&hash("one\n")), 1, now)
+            .batch("b1", &[change], Some(&hash("one!\n")), 1, now)
             .unwrap();
         assert_eq!(reply, crate::history::BatchReply::Ok);
         (hub, repo, hist)

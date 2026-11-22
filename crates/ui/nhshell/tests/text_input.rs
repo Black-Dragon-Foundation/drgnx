@@ -24,8 +24,12 @@ struct Recorder {
 
 impl Recorder {
     fn start() -> Recorder {
+        // `NH_RECORDER`, else the workspace's own debug build (target/debug/nh-recorder)
         let bin = std::env::var_os("NH_RECORDER")
-            .expect("NH_RECORDER is not set (the path of the nh-recorder binary)");
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/nh-recorder")
+            });
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir =

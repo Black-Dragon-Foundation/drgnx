@@ -23,6 +23,28 @@ ignore = [
   "RUSTSEC-2026-0251", # sized-chunks: unmaintained (archived upstream); no code defect
   "RUSTSEC-2026-0255", # sized-chunks: double free on a panicking Drop in Chunk/RingBuffer/InlineArray; not reached, only SparseChunk of u64/i32 is used
   "RUSTSEC-2026-0247", # bitmaps: unmaintained (archived upstream); no code defect
+  # heapless 0.7.17 (postcard 1.1.3) and 0.8.0 (loro-delta 1.13.0; faster-hex 0.10.1 only without its alloc feature,
+  # which is on) have no fixed release: the fixes are in 0.9.4, which the lock uses where it can. These crates use
+  # heapless::Vec and String alone, so the Deque, IndexMap, Spsc, pool and SortedLinkedList defects are not reached.
+  # Vec's IntoIter drop is unsound only when an element's Drop panics: postcard's are bytes, and loro's list values
+  # (strings, Arcs, numbers) never panic in Drop. Reviewed 2026-11-22; review again at each Loro or postcard bump.
+  "RUSTSEC-2026-0574", # heapless: SortedLinkedList FindMutView::pop; not reached
+  "RUSTSEC-2026-0575", # heapless: Spsc::peek ordering; not reached
+  "RUSTSEC-2026-0576", # heapless: IndexMap::truncate; not reached
+  "RUSTSEC-2026-0577", # heapless: a panicking Drop in Vec's IntoIter and others; no element's Drop panics
+  "RUSTSEC-2026-0578", # heapless: SortedLinkedList::zeroize; not reached
+  "RUSTSEC-2026-0579", # heapless: Deque from TryFrom; not reached
+  "RUSTSEC-2026-0580", # heapless: the treiber stack pool; not reached
+  "RUSTSEC-2026-0581", # heapless: Deque::make_contiguous; not reached
+  "RUSTSEC-2026-0582", # heapless: IndexMap::insert at u16::MAX; not reached
+  # cgmath 0.18.0 comes only through Smithay 0.7.0 (its renderer's Matrix3/Vector2/Vector3), in nh-recorder, the test
+  # compositor (not shipped). Smithay 0.7.0 is the newest release and never calls swap_columns. Reviewed 2026-11-22;
+  # review again at the next Smithay release.
+  "RUSTSEC-2026-0196", # cgmath: unmaintained; no code defect
+  "RUSTSEC-2026-0197", # cgmath: unsound Matrix swap_columns with identical indices; not reached, Smithay never calls it
+  # chrono 0.4.45 comes through rmcp (a normal dependency, still in rmcp 3.11.0) and serde_with (an optional feature
+  # agent-client-protocol-schema turns on). Reviewed 2026-11-22; review again at each rmcp bump.
+  "RUSTSEC-2026-0543", # chrono: unmaintained; no code defect
 ]
 
 [licenses]

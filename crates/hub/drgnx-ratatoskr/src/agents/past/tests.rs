@@ -415,8 +415,16 @@ fn an_unchanged_scan_opens_no_file_and_writes_nothing() {
     let reads = h.history.reads();
     assert_eq!(reads, 2);
     let db = h.state.join(DB);
+    // the index's mtime moved into the past, so a write would show without waiting for a clock tick
+    let past =
+        std::fs::metadata(&db).unwrap().modified().unwrap() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&db)
+        .unwrap()
+        .set_modified(past)
+        .unwrap();
     let before = std::fs::metadata(&db).unwrap().modified().unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(20));
     let (n, changed) = h.history.scan_changed().unwrap();
     assert_eq!((n, changed), (2, false), "nothing changed");
     assert_eq!(h.history.reads(), reads, "no file was opened");
@@ -446,7 +454,9 @@ fn a_session_older_than_the_cap_is_neither_listed_nor_searchable() {
     let old = h.claude("old1", "count the quinces");
     let fresh = h.claude("new1", "count the quinces");
     let back = |p: &Path, days: u64| {
-        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
+        // from the file's own mtime (just made), so no clock is read
+        let t = std::fs::metadata(p).unwrap().modified().unwrap()
+            - std::time::Duration::from_secs(days * 86_400);
         std::fs::File::options()
             .write(true)
             .open(p)
@@ -589,7 +599,9 @@ async fn a_past_claude_session_resumes_through_the_mock_on_the_original() {
 fn a_cold_folder_is_read_again_when_it_changes_or_on_the_31st_walk() {
     let h = Home::new();
     let back = |p: &Path| {
-        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
+        // from the file's own mtime (just made), so no clock is read
+        let t = std::fs::metadata(p).unwrap().modified().unwrap()
+            - std::time::Duration::from_secs(2 * 3600);
         std::fs::File::options()
             .write(true)
             .open(p)

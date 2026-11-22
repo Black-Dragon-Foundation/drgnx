@@ -400,10 +400,12 @@ fn the_cleanup_runs_every_ten_minutes() {
     let before = calls.borrow().cleanups;
     assert!(s.tick() == Next::Go);
     assert_eq!(calls.borrow().cleanups, before, "not before ten minutes");
-    s.last_cleanup = Instant::now() - CLEANUP_EVERY + Duration::from_secs(5);
+    // backdated from the loop's own last-cleanup reading (taken at its start), so no clock is read here
+    let base = s.last_cleanup;
+    s.last_cleanup = base - CLEANUP_EVERY + Duration::from_secs(5);
     assert!(s.tick() == Next::Go);
     assert_eq!(calls.borrow().cleanups, before, "five seconds early");
-    s.last_cleanup = Instant::now() - CLEANUP_EVERY;
+    s.last_cleanup = base - CLEANUP_EVERY;
     assert!(s.tick() == Next::Go);
     assert_eq!(calls.borrow().cleanups, before + 1);
     assert!(s.tick() == Next::Go);

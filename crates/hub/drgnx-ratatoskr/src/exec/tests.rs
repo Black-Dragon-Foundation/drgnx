@@ -764,7 +764,29 @@ async fn exec_runs_in_the_starters_sandbox() {
     let wt = d.path().join("wt");
     std::fs::create_dir_all(&wt).unwrap();
     // the hub's dirs (state, runtime, tmp) are the tempdir's, never $HOME's; the session dir is made the way a
-    // session start makes it. Only this test runs under `--ignored`, so nothing reads the environment meanwhile.
+    // session start makes it. The `--ignored` lane runs one test at a time (`--test-threads 1`), so nothing reads
+    // the environment meanwhile; the tests after this one in the same process read it again, so the guard puts the
+    // three variables back when the test ends, a panic included (a TMPDIR left naming the removed tempdir made every
+    // later `tempfile::tempdir()` of the lane fail)
+    struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            for (k, v) in &self.0 {
+                unsafe {
+                    match v {
+                        Some(v) => std::env::set_var(k, v),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
+    }
+    let _restore = Restore(
+        ["XDG_STATE_HOME", "TMPDIR", "XDG_RUNTIME_DIR"]
+            .into_iter()
+            .map(|k| (k, std::env::var_os(k)))
+            .collect(),
+    );
     unsafe {
         std::env::set_var("XDG_STATE_HOME", d.path().join("state"));
         std::env::set_var("TMPDIR", d.path());
@@ -2457,11 +2479,10 @@ fn local_stuck(root: &Path, row: &ExecRow, id: &str, rule: &str) {
 async fn progress_local_idle_job_stops_at_stall() {
     let d = tempfile::tempdir().unwrap();
     let r = guard_open(d.path(), Some(idle_slice(d.path())));
-    let t0 = std::time::Instant::now();
     let id = r.start(guarded_spec(d.path(), "sleep 60")).await.unwrap();
+    // ended before the job's own 60 s: the stall rule stopped it (the row says so)
     let row = ended(&r, &id).await;
     local_stuck(d.path(), &row, &id, "stall");
-    assert!(t0.elapsed() < Duration::from_secs(10), "{:?}", t0.elapsed());
 }
 
 /// [C] A busy loop that prints nothing stops at silent; a slice the hub can't read never stalls (an unknown is no
@@ -2497,10 +2518,11 @@ fn paced_guard(root: &Path, more_output: bool) -> Runner {
                     }
                     let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
                     let at = len(&log);
-                    let _ = tokio::time::timeout(Duration::from_secs(60), async {
-                        while len(&log) <= at {
-                            tokio::time::sleep(Duration::from_millis(20)).await;
-                        }
+                    // on a blocking thread: the wait is a poll on the log's size, and the runtime keeps running
+                    let _ = tokio::task::spawn_blocking(move || {
+                        skuld::wait_until("the job's next output", 60, || {
+                            (len(&log) > at).then_some(())
+                        })
                     })
                     .await;
                 })

@@ -12,6 +12,7 @@
 //! A stop is `infra: stuck (<rule>)` ([`verdict_text`]): not the job's fault, never red, never rerun. The hosts share
 //! [`read`] and [`stuck_report`].
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::probe::CgroupStat;
 use std::fs;
 use std::io;
@@ -176,8 +177,14 @@ pub fn read(at: Duration, slice: Option<&Path>, logs: &[PathBuf], prev: &Reading
         .iter()
         .map(|p| fs::metadata(p).map(|m| m.len()).unwrap_or(0))
         .sum();
-    let (cpu_usec, io_bytes) = match slice.map(CgroupStat::read) {
-        Some(Ok(s)) => (s.cpu_usec, s.io_bytes),
+    // no cgroups to read without the probe (Android): every slice is one that can't be read
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let stat = slice.map(|p| CgroupStat::read(p).map(|s| (s.cpu_usec, s.io_bytes)));
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let stat: Option<io::Result<(u64, u64)>> =
+        slice.map(|_| Err(io::ErrorKind::Unsupported.into()));
+    let (cpu_usec, io_bytes) = match stat {
+        Some(Ok(s)) => s,
         _ => (
             prev.cpu_usec + at.saturating_sub(prev.at).as_micros() as u64,
             prev.io_bytes,
@@ -193,6 +200,7 @@ pub fn read(at: Duration, slice: Option<&Path>, logs: &[PathBuf], prev: &Reading
 }
 
 /// How long `podman top` may take for one container of the report.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const TOP_LIMIT: Duration = Duration::from_secs(20);
 
 /// Writes [`STUCK`] into DIR for STOP of the job in SLICE (its cgroup folder) with LOG: the rule, the slice's
@@ -229,9 +237,13 @@ pub fn stuck_report(dir: &Path, stop: &Stop, slice: Option<&Path>, log: &Path) -
         t.push_str("none\n");
     }
     for c in &containers {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let top = super::run::limited(Path::new("podman"), &["top", c.as_str()], &[], TOP_LIMIT)
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
             .unwrap_or_else(|e| format!("({e})\n"));
+        // no podman to ask where jobs never run (Android)
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let top = String::from("(no podman here)\n");
         t.push_str(&format!("-- {c}\n{top}"));
     }
     t.push_str("\n== log (last 60 lines)\n");
