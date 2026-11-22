@@ -47,7 +47,7 @@ impl Recorder {
         let dir = std::env::temp_dir().join(format!("nhshell-t1-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let profile = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../test/recorder/profiles")
+            .join("../recorder/profiles")
             .join(format!("{profile}.json"));
         let mut child = Command::new(bin)
             .args(["--socket", "wl", "--clock", clock, "--control"])

@@ -3,8 +3,15 @@
 # crates/ext (the extension API and hosts), crates/std (the standards); app/ is the editor binary. Members write
 # `x.workspace = true`. The fuzz crates and the plugin fixtures and template are their own workspaces.
 [workspace]
-members = ["app", "crates/core/*", "crates/hub/*"]
-exclude = ["crates/hub/fuzz", "crates/hub/plugins", "crates/hub/protocol"]
+members = ["app", "crates/core/*", "crates/hub/*", "crates/ui/*"]
+exclude = [
+    "crates/hub/fuzz",
+    "crates/hub/plugins",
+    "crates/hub/protocol",
+    "crates/ui/glitnir-fuzz",
+    "crates/ui/sja-fuzz",
+    "crates/ui/smidja-fuzz",
+]
 resolver = "3"
 
 [workspace.package]

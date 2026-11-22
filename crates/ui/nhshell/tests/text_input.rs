@@ -31,8 +31,7 @@ impl Recorder {
         let dir =
             std::env::temp_dir().join(format!("nhshell-textinput-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let profile =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../test/recorder/profiles/sway.json");
+        let profile = Path::new(env!("CARGO_MANIFEST_DIR")).join("../recorder/profiles/sway.json");
         let mut child = Command::new(bin)
             .args(["--socket", "wl", "--control"])
             .arg(dir.join("control"))

@@ -64,16 +64,25 @@ fuzz_target!(|data: &[u8]| {
         if r == GLITNIR_OK {
             assert!(!out.pixels.is_null(), "no pixels on success");
             assert!(
-                out.width > 0 && out.height > 0 && i64::from(out.width) <= limit && i64::from(out.height) <= limit,
+                out.width > 0
+                    && out.height > 0
+                    && i64::from(out.width) <= limit
+                    && i64::from(out.height) <= limit,
                 "size {}x{} against limit {limit}",
                 out.width,
                 out.height
             );
-            assert!(out.anim.is_null() || p.keep != 0, "anim state handed out unasked");
+            assert!(
+                out.anim.is_null() || p.keep != 0,
+                "anim state handed out unasked"
+            );
             anim = out.anim;
         } else {
             assert!(
-                out.pixels.is_null() && out.mask.is_null() && out.ext.is_null() && out.anim.is_null(),
+                out.pixels.is_null()
+                    && out.mask.is_null()
+                    && out.ext.is_null()
+                    && out.anim.is_null(),
                 "a result left behind on error {r}"
             );
         }
@@ -82,7 +91,11 @@ fuzz_target!(|data: &[u8]| {
         if anim.is_null() {
             break;
         }
-        p.frame_index = p.frame_index.saturating_add(i32::from(round) + 1).rem_euclid(6) - 1;
+        p.frame_index = p
+            .frame_index
+            .saturating_add(i32::from(round) + 1)
+            .rem_euclid(6)
+            - 1;
     }
     // SAFETY: a state from the last decode, not handed back since; NULL is allowed.
     unsafe { glitnir_img_anim_free(anim) };

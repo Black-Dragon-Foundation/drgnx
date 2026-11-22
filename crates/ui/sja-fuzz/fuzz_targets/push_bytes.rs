@@ -4,8 +4,8 @@
 
 use libfuzzer_sys::fuzz_target;
 use sja::abi::{
-    Ans, SJA_CLOSE, SJA_DRAIN, SJA_FOLLOW, SJA_GET, SJA_OPEN, SJA_PUSH, SJA_STATS, SJA_WALK, call_for_test, int, nil,
-    text,
+    Ans, SJA_CLOSE, SJA_DRAIN, SJA_FOLLOW, SJA_GET, SJA_OPEN, SJA_PUSH, SJA_STATS, SJA_WALK,
+    call_for_test, int, nil, text,
 };
 
 fuzz_target!(|data: &[u8]| {
