@@ -123,7 +123,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
         match arg {
             Long("rebuild") if name == "index" => rebuild = true,
             Long("now") if name == "index" => now = true,
-            Long("json") if asks || name == "outline" || name == "map" => json = true,
+            Long("json") if asks || name == "outline" || name == "why" || name == "map" => {
+                json = true
+            }
             Long("budget") if name == "map" => {
                 let b: u32 = p.value().map_err(e)?.parse().map_err(e)?;
                 if !(256..=32_000).contains(&b) {

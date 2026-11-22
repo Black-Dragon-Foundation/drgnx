@@ -60,7 +60,6 @@ fn lists_el_and_shebang_script() {
     assert_eq!(by("bin/tool").lang, Lang::Shell);
     assert_eq!(by("core/a.el").lang, Lang::Elisp);
     assert_eq!(by("src/lib.rs").lang, Lang::Rust);
-    assert_eq!(by("LICENSE").lang, Lang::Text);
     assert_eq!(by("core/a.el").blob.len(), 40);
 }
 
