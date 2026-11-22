@@ -736,3 +736,122 @@ async fn an_outside_agent_never_marks_done() {
     assert!(!w.root.join("docs/specs/org/mine.md").exists());
     assert_eq!(w.cards().await, 0);
 }
+
+/// An entity ID written by ACTOR (class CLASS) with DATA: its `n`.
+async fn entity_by(
+    w: &World,
+    actor: &str,
+    class: urdr::graph::Class,
+    id: &str,
+    kind: &str,
+    data: Value,
+) -> i64 {
+    use urdr::graph::entity::{EntityNew, Origin};
+    let (id, kind) = (id.to_owned(), kind.to_owned());
+    w.f.writer
+        .db
+        .write(urdr::graph::TxMeta::new(actor, class, "test"), move |tx| {
+            Ok(urdr::graph::entity::create(
+                tx,
+                EntityNew {
+                    id,
+                    kind,
+                    project: None,
+                    title: Some("t".into()),
+                    status: Some("active".into()),
+                    body: None,
+                    priority: None,
+                    assignee: None,
+                    data,
+                    origin: Origin::Recorded,
+                    source: None,
+                },
+            )?
+            .n)
+        })
+        .await
+        .unwrap()
+}
+
+/// [review] An id that is its pid alone (no start time) owns nothing: a later process with that pid is another.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pid_alone_id_owns_nothing() {
+    let w = world();
+    let ext = urdr::graph::Class::Ext;
+    let alone = entity_by(&w, "ext:claude:42", ext, "note:a", "note", json!({})).await;
+    let hashed = entity_by(&w, "ext:claude:42-abcdef", ext, "note:b", "note", json!({})).await;
+    let r =
+        w.f.writer
+            .db
+            .read(move |c| {
+                Ok((
+                    own_record(c, &[alone], "ext:claude:42")?,
+                    own_record(c, &[hashed], "ext:claude:42-abcdef")?,
+                    own_record(c, &[hashed], "ext:claude:43-abcdef")?,
+                    own_record(c, &[], "ext:claude:42-abcdef")?,
+                ))
+            })
+            .await
+            .unwrap();
+    assert_eq!(r, (false, true, false, false));
+}
+
+/// [review] A binding entity another writer made never counts, and `outside/bind` says so instead of answering a
+/// binding that gives nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn bind_refuses_a_binding_another_writer_made() {
+    let w = world();
+    // the hub's guard refuses any other writer of a binding ...
+    let id = bindings::binding_id("claude", &w.root);
+    let (bid, root) = (id.clone(), w.root.clone());
+    let refused =
+        w.f.writer
+            .db
+            .write(
+                urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "test"),
+                move |tx| {
+                    Ok(urdr::graph::entity::create(
+                        tx,
+                        urdr::graph::entity::EntityNew {
+                            id: bid,
+                            kind: "binding".into(),
+                            project: None,
+                            title: None,
+                            status: Some("active".into()),
+                            body: None,
+                            priority: None,
+                            assignee: None,
+                            data: json!({"kind": "claude", "root": root, "role": "manager"}),
+                            origin: urdr::graph::entity::Origin::Recorded,
+                            source: None,
+                        },
+                    )?
+                    .n)
+                },
+            )
+            .await;
+    assert!(refused.is_err(), "{refused:?}");
+    // ... so one is made by hand in the file: the user's binding whose first tx is then not the user's
+    w.bind("claude", &w.root, "manager").await;
+    let file = w.dir.path().join("hub").join("work.db");
+    let raw = urdr::Connection::open(&file).unwrap();
+    let n = raw
+        .execute(
+            "update tx set class = 'system' where id = (select created_tx from entity where id = ?1)",
+            [&id],
+        )
+        .unwrap();
+    assert_eq!(n, 1);
+    drop(raw);
+    let e = bind_in(
+        &w.f,
+        &user(),
+        bind_params("claude", &w.root, "worker"),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(e.message.contains("never counts"), "{}", e.message);
+    let a = w.attach(&w.root).await;
+    assert_eq!(a.who.outside_role(), None);
+}

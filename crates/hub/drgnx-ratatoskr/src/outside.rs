@@ -237,7 +237,13 @@ pub(crate) async fn scope_of(f: &Front, sid: &str) -> Result<Scope, Error> {
 /// Whether ACTOR created every entity of NS (its `created_tx`'s actor), so a change to them is a change to its own
 /// record.
 pub(crate) fn own_record(conn: &Tx, ns: &[i64], actor: &str) -> Result<bool, CoordError> {
-    if ns.is_empty() {
+    // an id that is its pid alone (`ext:KIND:PID`, no start time) is another process's once the pid is reused: it
+    // owns nothing
+    let pid_alone = actor
+        .rsplit(':')
+        .next()
+        .is_none_or(|tag| !tag.contains('-'));
+    if ns.is_empty() || pid_alone {
         return Ok(false);
     }
     for n in ns {
@@ -321,7 +327,15 @@ pub(crate) async fn bind_in(
     let (kind, top, role) = (p.kind.as_str().to_owned(), found.root, p.role);
     f.writer
         .write(c, "outside/bind", move |tx| {
-            Ok(bindings::bind(tx, &kind, &top, role)?)
+            let b = bindings::bind(tx, &kind, &top, role)?;
+            // a binding entity another writer once touched never counts (`role_for`): say so, and write nothing
+            if bindings::role_for(tx.sql(), &kind, &top)? != Some(role) {
+                return Err(CoordError::Refused(format!(
+                    "{} was written by someone other than you and never counts: graph excise it, then bind again",
+                    b.id
+                )));
+            }
+            Ok(b)
         })
         .await
         .map(row)

@@ -688,6 +688,25 @@ const OUTSIDE_BY_MATRIX: [Action; 19] = [
     Action::DebugDrive,
 ];
 
+/// What an outside agent never gets (MP-2), written out here as the design lists it.
+const MUST_NEVER: [Action; 15] = [
+    Action::TaskDone,
+    Action::PushCi,
+    Action::PushMain,
+    Action::MergeIntegration,
+    Action::AgentsStart,
+    Action::AgentsModel,
+    Action::AgentsControl,
+    Action::Spend,
+    Action::SpendOver,
+    Action::JobContainer,
+    Action::JobKeys,
+    Action::Machines,
+    Action::SettingsChange,
+    Action::Unsandboxed,
+    Action::UserPrivate,
+];
+
 fn outside_who() -> Who {
     Who {
         role: Some(Role::Worker),
@@ -723,7 +742,8 @@ fn an_allow_layer_cannot_open_an_outside_cap() {
         let e = eff(&layers, &outside_who());
         for own in [true, false] {
             let o = outside_effective(&e, own);
-            for a in OUTSIDE_NEVER {
+            // the design's rows by name, not only the list the code keeps (a row dropped from it is caught here)
+            for a in MUST_NEVER.iter().chain(OUTSIDE_NEVER.iter()).copied() {
                 assert_eq!(o.cell(a).verdict, Verdict::Never, "{} own={own}", a.id());
                 assert_eq!(decide(&o, a, None), Verdict::Never, "{}", a.id());
             }

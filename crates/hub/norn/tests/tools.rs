@@ -1431,9 +1431,23 @@ async fn record_decision_of_a_bound_outside_agent_is_proposed_with_sources() {
         hub.calls(),
         [format!("gate {} graph.change own=true", me.id().unwrap())]
     );
-    // a replacement is of another record: the gate is asked with own=false, and its refusal is the answer
+    // it replaces only its own decisions (review finding): another's, or a number nothing has, is refused before the
+    // matrix is asked
     let no = GateHub::new(Err("the matrix asks the user first (card 3)".into()));
     let coord = Arc::new(Coord::new(w.db.clone(), no.clone()));
+    let (error, text) = call_on(
+        &coord,
+        &me,
+        "record_decision",
+        with(json!({"origin": "from-brief", "sources": src, "replaces": 99, "seen_version": 1})),
+    )
+    .await;
+    assert!(
+        error && text.starts_with("an outside agent replaces only its own decisions"),
+        "{text}"
+    );
+    assert!(no.calls().is_empty(), "{:?}", no.calls());
+    // replacing its own decision #1 is its own record: the gate is asked with own=true, and its refusal is the answer
     let (error, text) = call_on(
         &coord,
         &me,
@@ -1447,7 +1461,7 @@ async fn record_decision_of_a_bound_outside_agent_is_proposed_with_sources() {
     );
     assert_eq!(
         no.calls(),
-        [format!("gate {} graph.change own=false", me.id().unwrap())]
+        [format!("gate {} graph.change own=true", me.id().unwrap())]
     );
     assert_eq!(w.count("select count(*) from decision"), 1);
 }

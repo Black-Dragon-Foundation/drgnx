@@ -731,8 +731,8 @@ async fn own_of_plan(f: &Front, c: &Caller, p: &WriteParams, scope: &Scope) -> R
         .db
         .read(move |conn| {
             let Some(e) = live_by_id(conn, &plan)? else {
-                // `write_plan` answers a missing plan
-                return Ok(false);
+                // refused before the matrix is asked: a plan that is not there makes no card
+                return Err(CoordError::Refused(format!("no plan {plan}")));
             };
             scope.allows_ent(conn, &e)?;
             let Some(actor) = ext else { return Ok(true) };

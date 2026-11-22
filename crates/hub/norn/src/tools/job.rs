@@ -336,13 +336,30 @@ async fn record_decision(
         crate::write::work::check_sources(s).map_err(|e| e.to_string())?;
     }
     if bound {
+        // it replaces only a decision it recorded itself (another's is the user's or its author's to replace), so
+        // what it writes is its own record
+        if let Some(n) = args.replaces {
+            let author: Option<String> = coord
+                .db()
+                .read(move |c| {
+                    Ok(
+                        c.query_row("select author from decision where n = ?1", [n], |r| {
+                            r.get(0)
+                        })
+                        .ok(),
+                    )
+                })
+                .await
+                .map_err(err)?;
+            if author.as_deref() != Some(me.as_str()) {
+                return Err(format!(
+                    "an outside agent replaces only its own decisions: #{n} is not yours (record a new one)"
+                ));
+            }
+        }
         coord
             .hub()
-            .gate(
-                &me,
-                crate::matrix::Action::GraphChange,
-                args.replaces.is_none(),
-            )
+            .gate(&me, crate::matrix::Action::GraphChange, true)
             .await?;
     }
     let sources = args.sources.clone().filter(|s| !s.is_empty());
