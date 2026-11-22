@@ -55,20 +55,26 @@ fn a_split_under_320x160_is_refused_with_a_reason() {
 }
 
 #[test]
-fn swap_moves_tabs_never_windows() {
+fn swap_moves_the_groups_and_their_ids_hold() {
+    // a group id is identity (W5, manager): a swap moves the groups with their tabs, it never renumbers them
     let (mut wb, w) = wb_1920();
     let (g1, g2) = two_groups(&mut wb, w);
     let (a, b) = (wb.tabs_of(g1), wb.tabs_of(g2));
-    let tree = win(&wb, w).center.tree.clone();
     wb.swap(g1, Dir4::Right, U).unwrap();
+    assert_eq!(wb.groups(w), [g2, g1], "the groups changed places");
+    assert_eq!(wb.tabs_of(g1), a, "g1 keeps its tabs");
+    assert_eq!(wb.tabs_of(g2), b, "g2 keeps its tabs");
     assert_eq!(
-        win(&wb, w).center.tree,
-        tree,
-        "the groups stay where they are"
+        wb.active_group(w),
+        Some(g1),
+        "the moved group keeps the focus"
     );
-    assert_eq!(wb.tabs_of(g1), b);
-    assert_eq!(wb.tabs_of(g2), a);
-    assert!(wb.swap(g1, Dir4::Left, U).is_err(), "nothing to its left");
+    assert!(
+        wb.swap(g1, Dir4::Right, U).is_err(),
+        "nothing to its right now"
+    );
+    wb.swap(g1, Dir4::Left, U).unwrap();
+    assert_eq!(wb.groups(w), [g1, g2], "and back");
 }
 
 #[test]

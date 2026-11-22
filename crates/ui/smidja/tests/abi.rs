@@ -301,3 +301,66 @@ fn a_refusal_is_an_answer_with_its_reason() {
     assert_eq!(xs[0], sy("refused"));
     assert!(matches!(&xs[1], Val::Str(s) if !s.is_empty()));
 }
+
+/// `query W "sections" REGION` answers `(PLACE (ID TITLE SIZE) ...)` for the region's current place, a lone section
+/// still a list of one row (W5, Task 27's section windows).
+#[test]
+fn sections_query_answers_the_current_places_sections() {
+    call("reset", vec![]);
+    for d in [
+        l(vec![
+            sy("place"),
+            st("one"),
+            sy(":sections"),
+            l(vec![st("Files")]),
+        ]),
+        l(vec![
+            sy("place"),
+            st("two"),
+            sy(":sections"),
+            l(vec![st("Open"), st("Outline")]),
+        ]),
+    ] {
+        call("declare", vec![d]);
+    }
+    call("set_monitors", vec![l(vec![st("m0")])]);
+    let Val::Int(w) = call(
+        "window_new",
+        vec![
+            st("m0"),
+            l(vec![sy("px"), i(1920), i(1080)]),
+            Val::Float(1.0),
+            Val::Nil,
+        ],
+    ) else {
+        panic!("no window")
+    };
+    let u = sy("user");
+    call("navigate", vec![i(w), st("one"), u.clone()]);
+    let Val::List(one) = call("query", vec![i(w), st("sections"), sy("left")]) else {
+        panic!("not a list")
+    };
+    assert_eq!(one.len(), 2, "the place and one row: {one:?}");
+    assert_eq!(one[0], st("one"));
+    let Val::List(row) = &one[1] else {
+        panic!("a lone row is a list: {one:?}")
+    };
+    assert_eq!(row[0], i(0));
+    assert_eq!(row[1], st("Files"));
+    assert!(matches!(row[2], Val::Int(h) if h > 0), "a size: {row:?}");
+    call("navigate", vec![i(w), st("two"), u]);
+    let Val::List(two) = call("query", vec![i(w), st("sections"), sy("left")]) else {
+        panic!("not a list")
+    };
+    assert_eq!(two[0], st("two"));
+    let titles: Vec<&Val> = two[1..]
+        .iter()
+        .map(|r| match r {
+            Val::List(x) => &x[1],
+            _ => panic!("{r:?}"),
+        })
+        .collect();
+    assert_eq!(titles, [&st("Open"), &st("Outline")]);
+    let Val::List(r1) = &two[2] else { panic!() };
+    assert_eq!(r1[0], i(1));
+}
