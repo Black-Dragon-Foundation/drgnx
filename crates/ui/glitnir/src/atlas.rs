@@ -8,8 +8,20 @@
 //! atlas says how often the host rasterised.
 //!
 //! Lucide icons are masks too ([`ICON_FONT`] as their font id), so a sprite is an A8 entry tinted like text.
+//!
+//! One pair serves a process ([`with_shared`]): the shell's chrome text puts its glyphs there, and a scene's chrome
+//! primitives on window layers are composed from it.
 
 use std::collections::HashMap;
+use std::sync::Mutex;
+
+static SHARED: Mutex<Option<Atlases>> = Mutex::new(None);
+
+/// F over the process's atlases.  Never call it from inside F (the lock is not re-entrant).
+pub fn with_shared<R>(f: impl FnOnce(&mut Atlases) -> R) -> R {
+    let mut g = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+    f(g.get_or_insert_with(Atlases::default))
+}
 
 /// A page's side, texels.
 pub const PAGE: u32 = 1024;

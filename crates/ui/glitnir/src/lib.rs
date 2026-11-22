@@ -20,6 +20,7 @@ pub mod edge;
 pub mod ffi;
 pub mod geom;
 pub mod history;
+pub mod icon;
 #[cfg(feature = "images")]
 pub mod images;
 pub mod kernels;

@@ -59,6 +59,15 @@ Crates locked for the cursor theme (`nidhogg/shell/Cargo.lock`; fetched from cra
 - Files: `nidhogg/glitnir/src/ease.rs` (the cubic-Bézier solver for CSS easing curves: sample table, Newton steps,
   bisection; rewritten in Rust)
 
+## https://lucide.dev lucide-static@1.69.0 icons
+
+- URL: https://github.com/lucide-icons/lucide (the icons as lucide-static 1.69.0 ships them, the set drgnx carries in
+  `etc/icons`)
+- Commit: the lucide-static 1.69.0 release
+- Licence: ISC (`nidhogg/licenses/LICENSE-ISC-lucide`); the icons Lucide took from Feather also MIT
+  (`nidhogg/licenses/LICENSE-MIT-feather`); the adapted file is `GPL-3.0-or-later AND ISC AND MIT`
+- Files: `nidhogg/glitnir/src/icon/lucide.rs` (each icon's SVG shapes as Rust data, drawn by `glitnir::icon`)
+
 Crates locked for SVG on macOS (the shell's feature `svg`; `nidhogg/shell/Cargo.lock` and `nidhogg/glue/Cargo.lock`;
 fetched from crates.io, vendored unmodified in the release's vendor tarball; each under a licence `deny.toml` accepts,
 which `cargo deny` checks): `resvg` 0.45.1 and `usvg` 0.45.1, with `arrayref` 0.3.9, `arrayvec`

@@ -412,3 +412,45 @@ fn a_colour_strike_scales_once_to_the_run_size() {
     let MaskData::Bgra(d) = &s.data else { panic!() };
     assert!(d.iter().all(|p| *p == 0xff00_00ff));
 }
+
+/// An icon sprite is its Lucide mask tinted (manager's icon case): rasterised by Glitnir itself on its first use, no
+/// host raster; on a transparent target every pixel is the tint scaled by the mask's coverage, two tints of one mask
+/// differ only by colour, and the mask is rasterised once.
+#[test]
+fn an_icon_sprite_is_its_mask_tinted() {
+    use glitnir::icon;
+    const TEAL: u32 = 0xff00_8080;
+    let mut a = Atlases::default();
+    let k = icon::key("minus", 16, 1.0);
+    let m = icon::mask("minus", 16).expect("minus has a mask");
+    let MaskData::A8(cov) = &m.data else {
+        panic!("an icon mask is A8")
+    };
+    for tint in [RED, TEAL] {
+        let mut px = vec![0u32; (W * H) as usize];
+        let sprite = Prim::Sprite {
+            id: 1,
+            at: (4, 2),
+            key: k,
+            tint,
+        };
+        compose(
+            &[sprite],
+            &mut a,
+            Rect::new(0, 0, W, H),
+            &mut target(&mut px),
+        );
+        let mut inked = 0;
+        for y in 0..16 {
+            for x in 0..16 {
+                let c = u32::from(cov[(y * 16 + x) as usize]);
+                assert_eq!(at(&px, 4 + x, 2 + y), over(0, tint, c), "at {x},{y}");
+                inked += u32::from(c > 0);
+            }
+        }
+        assert!(inked > 10, "the mask has ink: {inked} px");
+        // nothing outside the sprite
+        assert_eq!(at(&px, 30, 20), 0);
+    }
+    assert_eq!(a.a8.misses(), 1);
+}

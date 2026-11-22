@@ -2,8 +2,8 @@
 //!
 //! Quads with a radius, a two-stop gradient quad (the tab strip's fade), rings, shadows, sprites (icon masks from the
 //! A8 atlas, tinted) and text runs. Every primitive carries a stable id per chrome element part, so a commit diffs by
-//! id and a GPU presenter resubmits. There is no primitive that carries pixels: the one host raster is the glyph and
-//! icon masks in the atlases. Colours are premultiplied ARGB, Cairo's order.
+//! id and a GPU presenter resubmits. There is no primitive that carries pixels: the one host raster is the glyph masks
+//! in the atlases; icon masks are Glitnir's own raster ([`crate::icon`]). Colours are premultiplied ARGB, Cairo's order.
 //!
 //! [`compose`] draws a list in order, source-over, into a premultiplied ARGB buffer (the CPU presenter); each primitive
 //! is clipped to the strip or band it belongs to, so nothing draws outside it. Naglfar draws the same list.
@@ -81,6 +81,30 @@ impl Prim {
             | Prim::Shadow { id, .. }
             | Prim::Sprite { id, .. }
             | Prim::Text { id, .. } => *id,
+        }
+    }
+
+    /// Where the primitive may draw (device px): its rect, a shadow's reach, a sprite's square, a run's clip.
+    pub fn bounds(&self) -> Rect {
+        match self {
+            Prim::Quad { rect, .. } | Prim::GradQuad { rect, .. } | Prim::Ring { rect, .. } => {
+                *rect
+            }
+            Prim::Shadow {
+                rect,
+                blur,
+                offset,
+                spread,
+                ..
+            } => {
+                let reach = (3.0 * (blur / 2.0).max(0.5)).ceil() as i32 + spread.ceil() as i32;
+                let r = rect.translate(offset.0.round() as i32, offset.1.round() as i32);
+                Rect::new(r.x - reach, r.y - reach, r.w + 2 * reach, r.h + 2 * reach)
+            }
+            Prim::Sprite { at, key, .. } => {
+                Rect::new(at.0, at.1, key.size_px as i32, key.size_px as i32)
+            }
+            Prim::Text { run, .. } => run.clip,
         }
     }
 
@@ -214,6 +238,8 @@ pub fn compose(prims: &[Prim], atlases: &mut Atlases, clip: Rect, t: &mut Target
             Prim::Sprite {
                 at, key, tint: c, ..
             } => {
+                // an icon's mask is Glitnir's own raster, made on its first use (`icon`)
+                crate::icon::ensure(atlases, key);
                 if let Some(s) = atlases.a8.get(key) {
                     let r = Rect::new(at.0, at.1, s.w as i32, s.h as i32);
                     each_px(t, clip, r, |t, i, x, y| {
