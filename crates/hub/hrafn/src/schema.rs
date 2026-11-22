@@ -85,7 +85,44 @@ create index vec_used on vec(model, last_used);
 ";
 
 /// The migrations for `urdr::StoreSpec`.
-pub const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4), (5, V5), (6, V6)];
+pub const MIGRATIONS: &[(u32, &str)] = &[
+    (1, V1),
+    (2, V2),
+    (3, V3),
+    (4, V4),
+    (5, V5),
+    (6, V6),
+    (7, V7),
+];
+
+/// Schema v7 (Hrafn redesign Task 9): a vector is of a chunk's text or of a path's (`store::KeyKind`, `vec.kind` 0 or
+/// 1), and `path_key` names each base path's key (a directory's ends in `/`), which tier 1 keeps with the file rows.
+/// The rows already there are chunks' (kind 0): their keys are of the old texts, which no chunk names after the
+/// chunker's version 3, and `collect` takes them in time.
+const V7: &str = "
+create table vec_v7(
+  model text not null,
+  kind integer not null default 0,
+  dims integer not null,
+  key blob not null,
+  bits integer not null,
+  vec blob not null,
+  scale real not null,
+  last_used integer not null,
+  primary key(model, kind, key)
+);
+insert into vec_v7(model, kind, dims, key, bits, vec, scale, last_used)
+  select model, 0, dims, key, bits, vec, scale, last_used from vec;
+drop table vec;
+alter table vec_v7 rename to vec;
+create index vec_used on vec(model, last_used);
+
+create table path_key(
+  path text primary key,
+  key blob not null
+) without rowid;
+create index path_key_key on path_key(key);
+";
 
 /// Schema v6: `ref_name` carries the count, so a name's usages are ranked on the index alone (`refs::COUNTS_SQL`):
 /// at 22,000 files using one name, the table's rows were most of the answer's time.

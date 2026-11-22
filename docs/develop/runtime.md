@@ -1193,7 +1193,7 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 ### The code store
 
 `CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
-0600, migrations as data). Schema v6:
+0600, migrations as data). Schema v7:
 
 | Table | Holds |
 |---|---|
@@ -1203,7 +1203,8 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 | `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
 | `symbol`, `symbol_fts` | defined names with kind, span and lines, signature (`sig`: the definition's lines up to the one that names it, cut before a `{`), `(path, blob)`, chunk and definer (`id` an explicit rowid, so it survives `VACUUM`); a trigram FTS over the names |
 | `ref` | the names a pair's content uses: `(path, blob, name)`, how often (`n`) and the first 8 lines it is used on; `ref_name` (`name, path, blob, n`) finds a name's users and their counts on the index alone (v6) |
-| `vec` | one quantized vector per `(model, key)` |
+| `vec` | one quantized vector per `(model, kind, key)`: `kind` 0 a chunk's text, 1 a path's (v7; the rows before it are chunks') |
+| `path_key` | the base's paths that want vectors and their directories (`dir/`), each with its path vector's `key` (v7) |
 | `meta` | `urdr`'s table: the schema version, `chunker_version`, `parse_version`, `built_from` and the like |
 
 **Shared content.** Chunks, symbols and references belong to a `(path, blob)` pair, not to a tree: every `file` row
@@ -1580,10 +1581,16 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
 
 - **Tier 1 (`hrafn::index::refresh`).** The file list against the store's blobs: rows (chunks, FTS, symbols) are rebuilt
   only for files whose blob changed, all of them after a chunker change, 64 files to a transaction; files gone from the
-  list leave the store. Vectors are keyed by content, so a branch switch back embeds nothing. `vec.last_used` is a
+  list leave the store. Vectors are keyed by content, so a branch switch back embeds nothing. A path has a vector too
+  (`vec.kind` 1, schema 7; a chunk's is 0): after a refresh that changed files, `path_key` is made to hold every base
+  path whose content wants vectors and each of its directories (`dir/`), with `path_key(path)`, the key of
+  `path_text(path)` (the path, a newline, then its words split on `/ _ - .` and camelCase). `missing(store, model,
+  limit)` gives `(kind, key, text)`: the chunk keys in chunk order, each file's path key after its chunks', then the
+  path keys of files whose chunks have vectors (a move or a copy embeds only these); directories' keys only when
+  `DIR_WEIGHT` is above 0 (`missing_with`'s `dirs`, which the eval sets). `put_vectors` takes the kind. `vec.last_used` is a
   logical clock (one past the store's highest), moved when a vector is written and when tier 1 writes a chunk that
-  refers to its key; `collect` keeps unreferenced keys up to twice the live set, the least recently referenced going
-  first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8). A refresh writes
+  refers to its key (a path's when its `path_key` row comes); `collect` keeps unreferenced keys up to twice the live set,
+  each kind on its own, the least recently referenced going first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8). A refresh writes
   with a 64 MB page cache and then puts the store's cache size back and lets the pages go: a file's references land
   all over the name index, and at the default 2 MB that index was most of what references cost tier 1 (6.7 s against
   5.4 s on a drgnx checkout, on the desktop).
@@ -1636,14 +1643,19 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   until 100 chunks are seen (the ranking is asked again for four times as many when the view hides most of it: still
   filtered before the limit, but only candidates are probed; joining every match first was 80 of 143 ms at 50,000
   chunks, where a common word matches 40,000); vectors are scanned by Hamming
-  distance over the sign bits and the nearest 200 re-ranked by their int8 values. A test or generated file keeps half
+  distance over the chunk vectors' sign bits, and the nearest 200 keys are re-ranked: each key is every place the view
+  sees its text (`KEY_CHUNKS_SQL`: one chunk per `(path, blob)`, at most 8, so a text in two files is two hits), and
+  each place scores `dot8(q, chunk) + PATH_WEIGHT · dot8(q, its path's vector) + DIR_WEIGHT · the best dot8(q, one of
+  its directories' vectors)`, the best 50 kept (`Query::path_weight` and `dir_weight`, `hrafn::query`'s constants
+  except in an eval that tunes them; a path or directory without a vector adds nothing; each is read once per query,
+  by `VEC_SQL`'s primary-key probe of `vec`). A test or generated file keeps half
   its score. Hits in files changed since indexing are looked for again by their first line, else their symbol (20 files,
   50 ms). The scope (`code`, which holds tests below it, `tests`, `docs`, `all`) filters by file class. Every answer has
   the lag line.
   A query reads indexes and small tables, never the `chunk` table (its rows hold their text): the lag's counts run on
   `chunk_embed`, name prefixes on `symbol_name_nc` (`like` ignores case, so the index has the same collation), path
-  tokens on `file`, and the vector scan reads `vec` alone, looking a chunk up only for a vector that can enter the best
-  200. Each is a plan test in `hrafn/tests/query.rs`. The lag's counts and the vectors' sign bits are kept between two
+  tokens on `file`, and the vector scan reads `vec` alone, looking a key's chunks up only for a vector that can enter
+  the best 200. Each is a plan test in `hrafn/tests/query.rs`. The lag's counts and the vectors' sign bits are kept between two
   changes of the store (`hrafn/src/memo.rs`: the store thread's own changes and SQLite's `data_version` for another
   connection's commits), so a query between two index writes reads neither again: at 100,000 chunks they were 38 and
   28 ms of each query. `what_a_query_keeps_ends_at_the_next_write` pins that a write ends them. Store schema 2 adds the two indexes; schema 3 widens `chunk_embed` to `(embed, key, path, blob)` and the path list reads the base's `file` rows by primary key.

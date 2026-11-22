@@ -154,8 +154,24 @@ pub fn chunk_key(embed_text: &str) -> [u8; 32] {
 
 /// What a path vector embeds: the whole path, a newline, then its words, split on `/ _ - .` and camelCase boundaries.
 pub fn path_text(path: &str) -> String {
-    let _ = path;
-    unimplemented!()
+    let mut words: Vec<String> = Vec::new();
+    for part in path.split(['/', '_', '-', '.']).filter(|p| !p.is_empty()) {
+        let cs: Vec<char> = part.chars().collect();
+        let mut word = String::new();
+        for (i, &ch) in cs.iter().enumerate() {
+            // a word starts at an upper-case letter after a lower-case one or a digit (`queueTest`), and at the last
+            // upper-case letter of a run that a lower-case one follows (`HTTPServer`)
+            let cut = i > 0
+                && ch.is_uppercase()
+                && (!cs[i - 1].is_uppercase() || cs.get(i + 1).is_some_and(|n| n.is_lowercase()));
+            if cut && !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            word.push(ch);
+        }
+        words.push(word);
+    }
+    format!("{path}\n{}", words.join(" "))
 }
 
 /// The key of PATH's vector: [`KeyKind::Path`]'s key of its [`path_text`].
