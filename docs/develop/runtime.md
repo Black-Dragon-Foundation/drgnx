@@ -1642,7 +1642,21 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   server's URL is used as `127.0.0.1`. The hub never starts a server. The entity embedder (`embed::run`) fills with the
   first embedder in line that answers, a server before the built-in model, and each model keeps its own vector
   (`entity_vec` is keyed `(n, model)`), so a server that comes back finds its vectors still there.
-  `ratatoskr-mock embed` is the test stand-in for TEI and Ollama (`tests/search_prefer.rs`).
+  `ratatoskr-mock embed` is the test stand-in for TEI, Ollama and llama.cpp (`tests/search_prefer.rs`,
+  `tests/search_eval_sources.rs`).
+- **The embed chain (`embed::Chain`, `embed::Driver`, `embed::Shared`).** The entity embedder's embedders are a chain in
+  the user's order (the `embed` role's steps, `embed::ordered`): the chain is never reordered or extended, and the
+  built-in model goes last only when no step names it and `drgnx-search-builtin` is on. A batch goes to the first
+  embedder that answers; one that fails is passed over for that batch (fall-through), and the rest of the chain
+  answers. A failing embedder backs off on the hub's clock (`embed::backoff`, `BACKOFF`): 1 minute after its first
+  failure in a row, 5 after the second, 30 after the third, then every 6 hours. When the wait is over it is asked again
+  with one text (`Chain::probes_due`), and an answer (`Chain::answered`) resets the backoff, so the preferred embedder
+  takes over again. While every embedder is down a round does no record work. A change of state is one log line, and
+  the Notices row `embed-chain` follows the chain (`embed::notice_text`: which embedder is not answering and what takes
+  its place, or that search falls back to text). It is cleared when everything answers. `search/embed-retry` (Retry now)
+  probes every backing-off embedder at the hub's next tick (`Chain::retry_now`), and `search/embedders` lists the chain
+  as `chain` (`ChainEntry`: model, label, `answering` or `backing-off`, when it is asked again, why it failed). The hub
+  never starts a provider, in any of this.
 
 Tests read the real models from a read-only volume (`DRGNX_TEST_MODELS`) and **fail** when it's unset; they never skip.
 `tests/fixtures/<model>.json` holds what CI can't make: reference vectors for token-id lists of 1, 2, 128, 129, 130, 1,023

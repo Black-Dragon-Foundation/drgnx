@@ -404,6 +404,7 @@ params! {
     SearchStatus(search::RootParams),
     SearchIndex(search::IndexParams),
     SearchEmbedders(Empty),
+    SearchEmbedRetry(Empty),
     SearchModelDownload(search::DownloadParams),
     SearchTyping(Empty),
     GitLetters(git::LettersParams),

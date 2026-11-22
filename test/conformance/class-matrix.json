@@ -295,6 +295,7 @@
   "say/revise": ["user"],
   "say/start": ["user"],
   "search/embedders": ["user"],
+  "search/embed-retry": ["user"],
   "search/files": ["user"],
   "search/run": ["user"],
   "search/applied": ["user"],

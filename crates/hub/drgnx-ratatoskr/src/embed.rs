@@ -5,20 +5,25 @@
 //!   Texts go to the hub's own loopback listener as the editor's `POST /p/PROVIDER/embed` (TEI) or `/api/embed`
 //!   (Ollama), with an in-memory editor token and no key, so the gateway counts the request in `spend` like any
 //!   other.  The hub **never starts** a provider: one that does not answer is passed over.
-//! - **One embedder per round.**  A round ([`run`]) fills with the first embedder in line that answers, a server before
-//!   the built-in model; `entity_vec` is keyed `(n, model)`, so each model keeps its own vectors and a server that comes
-//!   back finds them still there.
-//! - **A round** ([`fill`]) takes at most [`BATCH`] stale entities (no vector of the model, [`urdr::graph::search::vec_stale`])
-//!   at a time.  An entity whose source, id or `data.path` the personal-notes deny-list denies (an unknown source form
-//!   too) is never sent, even when the scan's door let it in (door 4).  A batch that fails is tried once more; failing
-//!   twice stops the round.
+//! - **The chain is the user's** ([`ordered`]): the embed role's steps in their order, each a server or `(builtin)`
+//!   (the built-in model); the built-in model goes last only when no step names it and `drgnx-search-builtin` is on.
+//!   Nothing else is added and nothing is reordered.  `entity_vec` is keyed `(n, model)`, so each model keeps its own
+//!   vectors and the preferred one takes over again when it answers.
+//! - **A round** ([`fill_chain`]) takes at most [`BATCH`] stale entities (no vector of the first answering model,
+//!   [`urdr::graph::search::vec_stale`]) at a time.  An embedder that fails (refused, 5xx, timeout) is marked down and
+//!   the **same batch** goes to the next one that answers.  An entity whose source, id or `data.path` the
+//!   personal-notes deny-list denies (an unknown source form too) is never sent, even when the scan's door let it in
+//!   (door 4).
 //! - **The write checks again.** The provider is awaited outside the writer, so the write stores a vector only for an
 //!   entity that, in the writer's tx, is live at the version and with the text that was read: one excised, revoked,
 //!   retired or changed meanwhile keeps no vector of the old text, and the next batch sends its text of now.
+//! - **Backoff per embedder** ([`Chain`], [`BACKOFF`]): a down one is asked again with one cached text after 1, 5 and
+//!   30 minutes, then every 6 hours, on the hub's clock; an answer resets it.  While every embedder is down no round
+//!   starts and no record is read ([`Driver`]).  Each change of state is one [`Change`]: one log line, and the
+//!   Notices row ([`notice_text`]) follows the chain.
 //! - **The schedule** ([`Timer`]): a round runs after the store has seen no write that put an entity's text for
 //!   [`IDLE`] (the writer's `texts`, [`urdr::graph::writer::WriterStatus::texts`]).  Lease, status, event and `kv` writes do
-//!   not count: housekeeping (leases, the prune) writes every minute, and would keep every round away.  After a stop,
-//!   one text is sent each idle minute, and rounds resume when the provider answers it.
+//!   not count: housekeeping (leases, the prune) writes every minute, and would keep every round away.
 
 use norn::deny::{DenyList, Source, Verdict};
 use norn::store::{CoordDb, CoordError};
@@ -259,7 +264,7 @@ pub async fn answered_family(base: &str) -> Option<&'static str> {
 }
 
 /// An HTTP/1.1 response read to its end: the status and the (de-chunked) body.
-fn split_response(raw: &[u8]) -> Result<(u16, Vec<u8>), String> {
+pub(crate) fn split_response(raw: &[u8]) -> Result<(u16, Vec<u8>), String> {
     let end = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -363,13 +368,173 @@ fn unchanged(c: &urdr::Connection, r: &Row) -> Result<bool, CoordError> {
     }
 }
 
-/// Give the stale entities of E's model their vectors, BATCH at a time, until none is left that may be sent.
-pub async fn fill(db: &CoordDb, e: &dyn Embedder, deny: &DenyList) -> Outcome {
-    let model = e.model().to_owned();
+/// How long a down embedder waits before it is asked again, after its first, second, third and later failures in a row:
+/// 1, 5 and 30 minutes, then every 6 hours (on the hub's clock, virtual in tests).
+pub const BACKOFF: [Duration; 4] = [
+    Duration::from_secs(60),
+    Duration::from_secs(5 * 60),
+    Duration::from_secs(30 * 60),
+    Duration::from_secs(6 * 60 * 60),
+];
+
+/// The wait after FAILURES failures in a row (1 or more).
+pub fn backoff(failures: u32) -> Duration {
+    let i = usize::try_from(failures.max(1) - 1).unwrap_or(usize::MAX);
+    BACKOFF[i.min(BACKOFF.len() - 1)]
+}
+
+/// How one embedder of the chain stands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Health {
+    /// It answered last time (or has not been asked yet).
+    Answering,
+    /// It failed FAILURES times in a row; it is asked again, with one text, at UNTIL.
+    Down {
+        failures: u32,
+        until: Instant,
+        why: String,
+    },
+}
+
+/// A change of an embedder's state: what the log and the Notices say, once each.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Change {
+    Down { model: String, why: String },
+    Up { model: String },
+}
+
+/// The embedders of the chain by model name, in the user's order, with their health.
+#[derive(Debug, Default)]
+pub struct Chain {
+    entries: Vec<(String, Health)>,
+}
+
+impl Chain {
+    /// The chain is MODELS now, in that order: an embedder already known keeps its health, a new one answers.
+    pub fn sync(&mut self, models: &[String]) {
+        let mut old = std::mem::take(&mut self.entries);
+        for m in models {
+            let health = match old.iter().position(|(o, _)| o == m) {
+                Some(i) => old.swap_remove(i).1,
+                None => Health::Answering,
+            };
+            self.entries.push((m.clone(), health));
+        }
+    }
+
+    /// Each embedder with its health, in the chain's order.
+    pub fn entries(&self) -> &[(String, Health)] {
+        &self.entries
+    }
+
+    fn health_mut(&mut self, model: &str) -> Option<&mut Health> {
+        self.entries
+            .iter_mut()
+            .find(|(m, _)| m == model)
+            .map(|(_, h)| h)
+    }
+
+    /// Whether MODEL may take a batch: it answered last time.
+    pub fn answering(&self, model: &str) -> bool {
+        self.entries
+            .iter()
+            .any(|(m, h)| m == model && *h == Health::Answering)
+    }
+
+    /// Whether any embedder of the chain may take a batch.
+    pub fn any_answering(&self) -> bool {
+        self.entries.iter().any(|(_, h)| *h == Health::Answering)
+    }
+
+    /// MODEL failed at NOW with WHY: it waits for its next backoff.  A change only when it was answering.
+    pub fn fail(&mut self, model: &str, why: &str, now: Instant) -> Option<Change> {
+        let h = self.health_mut(model)?;
+        match h {
+            Health::Answering => {
+                *h = Health::Down {
+                    failures: 1,
+                    until: now + backoff(1),
+                    why: why.to_owned(),
+                };
+                Some(Change::Down {
+                    model: model.to_owned(),
+                    why: why.to_owned(),
+                })
+            }
+            Health::Down {
+                failures,
+                until,
+                why: w,
+            } => {
+                *failures += 1;
+                *until = now + backoff(*failures);
+                why.clone_into(w);
+                None
+            }
+        }
+    }
+
+    /// MODEL answered: its backoff is over.  A change only when it was down.
+    pub fn answered(&mut self, model: &str) -> Option<Change> {
+        let h = self.health_mut(model)?;
+        if *h == Health::Answering {
+            return None;
+        }
+        *h = Health::Answering;
+        Some(Change::Up {
+            model: model.to_owned(),
+        })
+    }
+
+    /// The down embedders whose wait is over at NOW, in the chain's order.
+    pub fn probes_due(&self, now: Instant) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|(_, h)| matches!(h, Health::Down { until, .. } if *until <= now))
+            .map(|(m, _)| m.clone())
+            .collect()
+    }
+
+    /// Retry now: every down embedder is asked at the next step.
+    pub fn retry_now(&mut self, now: Instant) {
+        for (_, h) in &mut self.entries {
+            if let Health::Down { until, .. } = h {
+                *until = now;
+            }
+        }
+    }
+}
+
+/// Give the stale entities their vectors, BATCH at a time, from the first embedder of EMBEDDERS (the chain, in the
+/// user's order) that answers: the batch is read for it, and when it fails the same batch goes to the next one that
+/// answers (each model's vectors are its own, so a fallback fills its own and the preferred one takes over when it
+/// answers again).  CHAIN says which answer; a failure marks one down at NOW and is told in CHANGES.  READS counts the
+/// store reads, the record work.  While no embedder answers, nothing is read.
+pub async fn fill_chain(
+    db: &CoordDb,
+    embedders: &[&dyn Embedder],
+    deny: &DenyList,
+    chain: &mut Chain,
+    now: Instant,
+    changes: &mut Vec<Change>,
+    reads: &mut u64,
+) -> Outcome {
     let mut skipped: BTreeSet<i64> = BTreeSet::new();
     let mut embedded = 0;
+    let mut stops: Vec<String> = Vec::new();
     loop {
-        let (m, extra) = (model.clone(), skipped.len());
+        let Some(first) = embedders.iter().position(|e| chain.answering(e.model())) else {
+            return Outcome::Stopped {
+                embedded,
+                why: if stops.is_empty() {
+                    "no embedder of the chain answers".to_owned()
+                } else {
+                    stops.join("; ")
+                },
+            };
+        };
+        let (m, extra) = (embedders[first].model().to_owned(), skipped.len());
+        *reads += 1;
         let rows = db
             .read(move |c| {
                 let limit = u32::try_from(BATCH + extra).unwrap_or(u32::MAX);
@@ -405,6 +570,7 @@ pub async fn fill(db: &CoordDb, e: &dyn Embedder, deny: &DenyList) -> Outcome {
             };
         }
         let ns = todo.clone();
+        *reads += 1;
         let loaded = db
             .read(move |c| {
                 let mut st = c.prepare(
@@ -457,26 +623,25 @@ pub async fn fill(db: &CoordDb, e: &dyn Embedder, deny: &DenyList) -> Outcome {
             continue;
         }
         let texts: Vec<String> = send.iter().map(|r| r.text.clone()).collect();
-        let vectors = match e.embed(&texts).await {
-            Ok(v) => v,
-            Err(first) => match e.embed(&texts).await {
-                Ok(v) => v,
-                Err(second) => {
-                    return Outcome::Stopped {
-                        embedded,
-                        why: format!("{}; then {}", first.0, second.0),
-                    };
+        // the same batch down the chain: a failure marks the embedder down and the next one that answers takes it
+        let mut answer = None;
+        for e in &embedders[first..] {
+            if !chain.answering(e.model()) {
+                continue;
+            }
+            let why = match e.embed(&texts).await {
+                Ok(v) if v.len() == send.len() => {
+                    answer = Some((e.model().to_owned(), v));
+                    break;
                 }
-            },
-        };
-        if vectors.len() != send.len() {
-            return Outcome::Stopped {
-                embedded,
-                why: format!("{} vectors for {} texts", vectors.len(), send.len()),
+                Ok(v) => format!("{} vectors for {} texts", v.len(), send.len()),
+                Err(err) => err.0,
             };
+            stops.push(format!("{}: {why}", e.model()));
+            changes.extend(chain.fail(e.model(), &why, now));
         }
+        let Some((m, vectors)) = answer else { continue };
         let put: Vec<(Row, Vec<f32>)> = send.into_iter().zip(vectors).collect();
-        let m = model.clone();
         let wrote = db
             .write(meta(), move |tx| {
                 let mut count = 0;
@@ -505,6 +670,23 @@ pub async fn fill(db: &CoordDb, e: &dyn Embedder, deny: &DenyList) -> Outcome {
     }
 }
 
+/// Give the stale entities of E's model their vectors, BATCH at a time, until none is left that may be sent; a failure
+/// stops it.
+pub async fn fill(db: &CoordDb, e: &dyn Embedder, deny: &DenyList) -> Outcome {
+    let mut chain = Chain::default();
+    chain.sync(&[e.model().to_owned()]);
+    fill_chain(
+        db,
+        &[e],
+        deny,
+        &mut chain,
+        crate::clock::now(),
+        &mut Vec::new(),
+        &mut 0,
+    )
+    .await
+}
+
 /// When a round may start: no text was written for [`IDLE`], and no round runs.  Pure (the clock and the writer's
 /// count of writes that put text, [`urdr::graph::writer::WriterStatus::texts`], are arguments).
 #[derive(Debug)]
@@ -512,8 +694,6 @@ pub struct Timer {
     texts: u64,
     since: Instant,
     running: bool,
-    /// A round stopped: the next one starts by sending one text.
-    stopped: bool,
 }
 
 impl Timer {
@@ -522,7 +702,6 @@ impl Timer {
             texts: 0,
             since: now,
             running: false,
-            stopped: false,
         }
     }
 
@@ -540,54 +719,229 @@ impl Timer {
         true
     }
 
-    /// Whether the round that starts now begins with a probe.
-    pub fn probing(&self) -> bool {
-        self.stopped
-    }
-
-    /// The round ended; STOPPED: it ended on a failure.  The quiet minute starts over either way.
-    pub fn finish(&mut self, stopped: bool, now: Instant) {
+    /// The round ended; the quiet minute starts over.
+    pub fn finish(&mut self, now: Instant) {
         self.running = false;
-        self.stopped = stopped;
         self.since = now;
     }
 }
 
-/// A round with its probe: after a stop, one text must be answered first.
-pub async fn run_one(db: &CoordDb, e: &dyn Embedder, deny: &DenyList, probe: bool) -> Outcome {
-    if probe && let Err(err) = e.embed(&["ping".to_owned()]).await {
-        return Outcome::Stopped {
-            embedded: 0,
-            why: err.0,
-        };
-    }
-    fill(db, e, deny).await
-}
-
-/// A round over the embedders in order of preference (a server before the built-in model): the first that answers
-/// fills, and a round that ends `Filled` or `Nothing` is the round (one model's vectors per round keeps the work to
-/// one embedder; the others' vectors stay).  An embedder that stops is passed over; when all stop, the round
-/// stopped, with every reason.
+/// A round over the chain EMBEDDERS (the user's order) with its health CHAIN at NOW ([`fill_chain`]); the changes of
+/// state it made go to CHANGES.
 pub async fn run(
     db: &CoordDb,
     embedders: &[&dyn Embedder],
     deny: &DenyList,
-    probe: bool,
+    chain: &mut Chain,
+    now: Instant,
+    changes: &mut Vec<Change>,
 ) -> Outcome {
-    let mut stops = Vec::new();
-    for e in embedders {
-        match run_one(db, *e, deny, probe).await {
-            Outcome::Stopped { why, .. } => stops.push(format!("{}: {why}", e.model())),
-            done => return done,
+    let models: Vec<String> = embedders.iter().map(|e| e.model().to_owned()).collect();
+    chain.sync(&models);
+    fill_chain(db, embedders, deny, chain, now, changes, &mut 0).await
+}
+
+/// What one step of the embedder did.
+#[derive(Debug, Default)]
+pub struct Step {
+    /// The changes of state, in order: each one is one log line, and the Notices row follows them.
+    pub changes: Vec<Change>,
+    /// The round, when one ran.
+    pub outcome: Option<Outcome>,
+}
+
+/// The embedder's schedule and the chain's health, stepped by the hub's tick (Task 192): the down embedders whose
+/// wait is over are asked with one cached text; a round runs after a quiet minute only while one answers, so while
+/// every embedder is down no record is read.
+#[derive(Debug)]
+pub struct Driver {
+    timer: Timer,
+    chain: Chain,
+    /// The one text a probe sends, made once.
+    ping: Vec<String>,
+    /// The store reads of every round so far.
+    reads: u64,
+    /// When the last step ran.
+    last: Option<Instant>,
+}
+
+impl Driver {
+    pub fn new(now: Instant) -> Driver {
+        Driver {
+            timer: Timer::new(now),
+            chain: Chain::default(),
+            ping: vec!["ping".to_owned()],
+            reads: 0,
+            last: None,
         }
     }
-    if stops.is_empty() {
-        return Outcome::Nothing;
+
+    /// Whether the hub's tick at NOW steps it: the first time, on Retry now (RETRY), when a down embedder's wait is
+    /// over, and else once every [`IDLE`] (the chain is read again then: a changed setting, a model now ready).
+    /// Between those the tick costs nothing.
+    pub fn wants(&self, now: Instant, retry: bool) -> bool {
+        retry
+            || self.last.is_none_or(|l| now.duration_since(l) >= IDLE)
+            || !self.chain.probes_due(now).is_empty()
     }
-    Outcome::Stopped {
-        embedded: 0,
-        why: stops.join("; "),
+
+    pub fn chain(&self) -> &Chain {
+        &self.chain
     }
+
+    /// The store reads of every round so far.
+    pub fn reads(&self) -> u64 {
+        self.reads
+    }
+
+    /// Retry now: every down embedder is asked at the next step.
+    pub fn retry_now(&mut self, now: Instant) {
+        self.chain.retry_now(now);
+    }
+
+    /// One step at NOW: EMBEDDERS is the chain in the user's order, TEXTS the writer's count of writes that put text.
+    pub async fn step(
+        &mut self,
+        db: &CoordDb,
+        embedders: &[&dyn Embedder],
+        deny: &DenyList,
+        texts: u64,
+        now: Instant,
+    ) -> Step {
+        let models: Vec<String> = embedders.iter().map(|e| e.model().to_owned()).collect();
+        self.chain.sync(&models);
+        self.last = Some(now);
+        let mut step = Step::default();
+        for m in self.chain.probes_due(now) {
+            let Some(e) = embedders.iter().find(|e| e.model() == m) else {
+                continue;
+            };
+            match e.embed(&self.ping).await {
+                Ok(_) => step.changes.extend(self.chain.answered(&m)),
+                Err(err) => step.changes.extend(self.chain.fail(&m, &err.0, now)),
+            }
+        }
+        if !self.chain.any_answering() || !self.timer.due(texts, now) {
+            return step;
+        }
+        let out = fill_chain(
+            db,
+            embedders,
+            deny,
+            &mut self.chain,
+            now,
+            &mut step.changes,
+            &mut self.reads,
+        )
+        .await;
+        self.timer.finish(now);
+        step.outcome = Some(out);
+        step
+    }
+}
+
+/// The hub's embedder ([`crate::server`]'s tick steps it): the driver, one step at a time, and what `search/embedders`
+/// says of the chain.
+#[derive(Default)]
+pub struct Shared {
+    /// None until the first step.
+    pub driver: std::sync::Arc<tokio::sync::Mutex<Option<Driver>>>,
+    /// The chain as the last step left it: each entry's label and health.
+    pub view: std::sync::Mutex<Vec<(Label, Health)>>,
+    /// Retry now was asked (`search/embed-retry`): the next tick probes every down embedder.
+    pub retry: std::sync::atomic::AtomicBool,
+}
+
+/// One entry of the chain as the user reads it: LABEL ("TEI at 127.0.0.1:8080", "the built-in model") and its model.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Label {
+    pub model: String,
+    pub label: String,
+}
+
+/// The Notices row of the chain CHAIN with LABELS: none while every embedder answers; else the first down one, and
+/// what takes its place (the next that answers, or search on text alone).
+pub fn notice_text(chain: &Chain, labels: &[Label]) -> Option<String> {
+    let name = |m: &str| {
+        labels
+            .iter()
+            .find(|l| l.model == m)
+            .map_or_else(|| m.to_owned(), |l| l.label.clone())
+    };
+    let down = chain
+        .entries()
+        .iter()
+        .position(|(_, h)| *h != Health::Answering)?;
+    let instead = chain.entries()[down + 1..]
+        .iter()
+        .find(|(_, h)| *h == Health::Answering)
+        .map(|(m, _)| m);
+    let first = name(&chain.entries()[down].0);
+    Some(match instead {
+        Some(m) => format!("Embeddings: {first} is not answering; using {}", name(m)),
+        None => format!(
+            "Embeddings: {first} is not answering; search falls back to text until it answers"
+        ),
+    })
+}
+
+/// The role's chain in the user's order (Task 192): each step of STEPS that names a server of SERVERS (by provider
+/// id) or `builtin` (the built-in model, BUILTIN when it is ready), nothing else and nothing reordered; the built-in
+/// model goes last only when no step names it and SEARCH_BUILTIN is on.
+pub fn ordered(
+    steps: &[crate::settings::ChainStep],
+    servers: Vec<ProviderEmbedder>,
+    builtin: Option<std::sync::Arc<dyn Embedder>>,
+    search_builtin: bool,
+) -> Vec<(Label, std::sync::Arc<dyn Embedder>)> {
+    let builtin_label = |e: &std::sync::Arc<dyn Embedder>| Label {
+        model: e.model().to_owned(),
+        label: "the built-in model".to_owned(),
+    };
+    let mut servers: Vec<Option<ProviderEmbedder>> = servers.into_iter().map(Some).collect();
+    let mut out: Vec<(Label, std::sync::Arc<dyn Embedder>)> = Vec::new();
+    let mut placed = false;
+    for s in steps {
+        if s.provider == BUILTIN_STEP {
+            if let Some(b) = &builtin
+                && !placed
+            {
+                out.push((builtin_label(b), b.clone()));
+            }
+            placed = true;
+            continue;
+        }
+        if let Some(e) = servers
+            .iter_mut()
+            .find(|e| e.as_ref().is_some_and(|e| e.provider() == s.provider))
+            .and_then(Option::take)
+        {
+            let label = format!("{} at {}", e.kind().to_uppercase(), short_base(&e.base));
+            out.push((
+                Label {
+                    model: e.model.clone(),
+                    label,
+                },
+                std::sync::Arc::new(e),
+            ));
+        }
+    }
+    if !placed
+        && search_builtin
+        && let Some(b) = builtin
+    {
+        out.push((builtin_label(&b), b));
+    }
+    out
+}
+
+/// The step of the embed role that names the built-in model: `(builtin)`.
+pub const BUILTIN_STEP: &str = "builtin";
+
+/// BASE without its scheme: `127.0.0.1:8080`.
+fn short_base(base: &str) -> &str {
+    let rest = base.split_once("://").map_or(base, |(_, r)| r);
+    rest.trim_end_matches('/')
 }
 
 #[cfg(test)]
@@ -1039,21 +1393,18 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_round_starts_after_a_quiet_minute_and_probes_after_a_stop() {
+    fn a_round_starts_after_a_quiet_minute() {
         let t0 = Instant::from_std(skuld::origin());
         let mut t = Timer::new(t0);
         assert!(!t.due(0, t0 + IDLE / 2));
         assert!(t.due(0, t0 + IDLE));
         // one round at a time
         assert!(!t.due(0, t0 + IDLE * 3));
-        t.finish(true, t0 + IDLE * 3);
-        assert!(t.probing());
+        t.finish(t0 + IDLE * 3);
         // a write restarts the quiet minute
         assert!(!t.due(5, t0 + IDLE * 5));
         assert!(!t.due(5, t0 + IDLE * 5 + IDLE / 2));
         assert!(t.due(5, t0 + IDLE * 6 + IDLE));
-        t.finish(false, t0 + IDLE * 7);
-        assert!(!t.probing());
     }
 
     /// The writer's counts: (every write, the writes that put text).
@@ -1165,7 +1516,7 @@ pub(crate) mod tests {
             assert!(!by_writes.due(w, now), "every write restarts its minute");
             // each minute is quiet: its round starts (and ends, which starts the next minute)
             assert!(t.due(x, now), "minute {minute}: no round");
-            t.finish(false, now);
+            t.finish(now);
         }
     }
 
@@ -1215,5 +1566,401 @@ pub(crate) mod tests {
         assert!(!t.due(x2, at));
         assert!(!t.due(x2, at + IDLE / 2));
         assert!(t.due(x2, at + IDLE), "a quiet minute after the last text");
+    }
+
+    // ---- the chain (Task 192): fallback in the user's order, backoff per embedder, nothing done while all are down ----
+
+    /// An embedder of the chain whose answers the test turns on and off: its vectors are `Fake`'s, and it keeps the
+    /// virtual time of each call (set by the test) and the texts of each.
+    struct Toy {
+        model: String,
+        up: std::sync::atomic::AtomicBool,
+        calls: std::sync::Mutex<Vec<(Instant, Vec<String>)>>,
+        at: std::sync::Mutex<Instant>,
+    }
+
+    impl Toy {
+        fn new(model: &str, up: bool) -> Toy {
+            Toy {
+                model: model.to_owned(),
+                up: std::sync::atomic::AtomicBool::new(up),
+                calls: Default::default(),
+                at: std::sync::Mutex::new(Instant::from_std(skuld::origin())),
+            }
+        }
+
+        fn set_up(&self, up: bool) {
+            self.up.store(up, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        /// The virtual time of each call.
+        fn times(&self) -> Vec<Instant> {
+            self.calls.lock().unwrap().iter().map(|c| c.0).collect()
+        }
+
+        fn texts(&self) -> Vec<Vec<String>> {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|c| c.1.clone())
+                .collect()
+        }
+    }
+
+    impl Embedder for Toy {
+        fn embed<'a>(
+            &'a self,
+            texts: &'a [String],
+        ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
+            Box::pin(async move {
+                let at = *self.at.lock().unwrap();
+                self.calls.lock().unwrap().push((at, texts.to_vec()));
+                if self.up.load(std::sync::atomic::Ordering::SeqCst) {
+                    Ok(texts.iter().map(|t| Fake::vector(t)).collect())
+                } else {
+                    Err(EmbedError(format!(
+                        "{} answered 502: connection refused",
+                        self.model
+                    )))
+                }
+            })
+        }
+
+        fn model(&self) -> &str {
+            &self.model
+        }
+    }
+
+    /// The models that have vectors, with how many.
+    async fn models_of_vectors(db: &CoordDb) -> Vec<(String, i64)> {
+        db.read(|c| {
+            let mut st =
+                c.prepare("select model, count(*) from entity_vec group by model order by model")?;
+            let rows = st
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap()
+    }
+
+    /// The hub's tick, as `server::embed_idle` runs it: every 2 s of virtual time from FROM to UNTIL, a step when the
+    /// driver wants one.  Each embedder's clock is set to the step's time first.  The steps' changes, in order.
+    async fn ticks(
+        d: &mut Driver,
+        db: &CoordDb,
+        chain: &[&Toy],
+        deny: &DenyList,
+        texts: u64,
+        from: Instant,
+        until: Instant,
+    ) -> Vec<Change> {
+        let each: Vec<&dyn Embedder> = chain.iter().map(|t| *t as &dyn Embedder).collect();
+        let mut changes = Vec::new();
+        let mut now = from;
+        while now <= until {
+            if d.wants(now, false) {
+                for t in chain {
+                    *t.at.lock().unwrap() = now;
+                }
+                changes.extend(d.step(db, &each, deny, texts, now).await.changes);
+            }
+            now += crate::server::SCHEMA_TICK;
+        }
+        changes
+    }
+
+    const MIN: Duration = Duration::from_secs(60);
+
+    #[tokio::test]
+    async fn a_down_provider_falls_through_to_the_next_in_the_users_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        for (id, title) in [("task:a", "one"), ("task:b", "two"), ("task:c", "three")] {
+            put(&db, id, None, title, json!({})).await;
+        }
+        let (tei, builtin) = (Toy::new("tei:tei", false), Toy::new("builtin", true));
+        let mut chain = Chain::default();
+        chain.sync(&["tei:tei".to_owned(), "builtin".to_owned()]);
+        let mut changes = Vec::new();
+        let mut reads = 0;
+        let now = Instant::from_std(skuld::origin());
+        let out = fill_chain(
+            &db,
+            &[&tei, &builtin],
+            &allow_all(dir.path()),
+            &mut chain,
+            now,
+            &mut changes,
+            &mut reads,
+        )
+        .await;
+        assert_eq!(
+            out,
+            Outcome::Filled {
+                embedded: 3,
+                denied: 0
+            }
+        );
+        // the same batch, in the same round: TEI was asked first, then the built-in model with the same texts, and
+        // the store was read for it once (the stale list and the rows, then the empty stale list that ends the round)
+        assert_eq!(reads, 3);
+        assert_eq!(tei.texts().len(), 1);
+        assert_eq!(builtin.texts(), tei.texts());
+        assert_eq!(models_of_vectors(&db).await, [("builtin".to_owned(), 3)]);
+        assert_eq!(
+            changes,
+            [Change::Down {
+                model: "tei:tei".into(),
+                why: "tei:tei answered 502: connection refused".into()
+            }]
+        );
+        assert!(!chain.answering("tei:tei") && chain.answering("builtin"));
+    }
+
+    #[test]
+    fn the_chain_is_never_reordered_or_extended() {
+        let server = |id: &str| {
+            ProviderEmbedder::tei(1, "t".into(), id, &format!("http://127.0.0.1:80{id}"))
+        };
+        let servers = || vec![server("b"), server("a"), server("c")];
+        let builtin: std::sync::Arc<dyn Embedder> = std::sync::Arc::new(Toy::new("builtin", true));
+        let step = |p: &str| crate::settings::ChainStep {
+            provider: p.into(),
+            model: None,
+        };
+        let models = |steps: &[crate::settings::ChainStep], on: bool| {
+            ordered(steps, servers(), Some(builtin.clone()), on)
+                .into_iter()
+                .map(|(l, e)| {
+                    assert_eq!(l.model, e.model());
+                    l.model
+                })
+                .collect::<Vec<_>>()
+        };
+        // [a, b] with search_builtin off: those two, in that order; c and the built-in model never
+        assert_eq!(models(&[step("a"), step("b")], false), ["tei:a", "tei:b"]);
+        // the user put the built-in model between them: there it stays, whatever search_builtin says
+        let mid = [step("b"), step("builtin"), step("a")];
+        assert_eq!(models(&mid, false), ["tei:b", "builtin", "tei:a"]);
+        assert_eq!(models(&mid, true), ["tei:b", "builtin", "tei:a"]);
+        // search_builtin adds it last only when no step names it
+        assert_eq!(models(&[step("a")], true), ["tei:a", "builtin"]);
+        // an unknown step adds nothing
+        assert_eq!(models(&[step("nope"), step("c")], false), ["tei:c"]);
+        let labels = ordered(&mid, servers(), Some(builtin.clone()), false);
+        assert_eq!(labels[0].0.label, "TEI at 127.0.0.1:80b");
+        assert_eq!(labels[1].0.label, "the built-in model");
+    }
+
+    #[tokio::test]
+    async fn backoff_is_1_5_30_min_then_6_h_on_the_virtual_clock() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        put(&db, "task:a", None, "one", json!({})).await;
+        let tei = Toy::new("tei:tei", false);
+        let t0 = Instant::from_std(skuld::origin());
+        let mut d = Driver::new(t0);
+        let deny = allow_all(dir.path());
+        ticks(&mut d, &db, &[&tei], &deny, 0, t0, t0 + MIN * 60 * 13).await;
+        let times = tei.times();
+        // the first round after a quiet minute fails at F; then one text each wait: 1, 5, 30 min, then every 6 h
+        let f = times[0];
+        assert_eq!(f, t0 + MIN);
+        let waits: Vec<Duration> = times.windows(2).map(|w| w[1] - w[0]).collect();
+        assert_eq!(
+            waits,
+            [MIN, MIN * 5, MIN * 30, MIN * 360, MIN * 360],
+            "{times:?}"
+        );
+        // each probe is one text
+        assert!(tei.texts()[1..].iter().all(|t| t.len() == 1));
+    }
+
+    #[tokio::test]
+    async fn an_answer_resets_the_backoff_and_the_preferred_model_takes_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        put(&db, "task:a", None, "one", json!({})).await;
+        put(&db, "task:b", None, "two", json!({})).await;
+        let (tei, builtin) = (Toy::new("tei:tei", false), Toy::new("builtin", true));
+        let t0 = Instant::from_std(skuld::origin());
+        let mut d = Driver::new(t0);
+        let deny = allow_all(dir.path());
+        // TEI down: the built-in model fills; its probes at +1 and +6 min fail
+        ticks(&mut d, &db, &[&tei, &builtin], &deny, 0, t0, t0 + MIN * 3).await;
+        assert_eq!(models_of_vectors(&db).await, [("builtin".to_owned(), 2)]);
+        tei.set_up(true);
+        let changes = ticks(
+            &mut d,
+            &db,
+            &[&tei, &builtin],
+            &deny,
+            0,
+            t0 + MIN * 3,
+            t0 + MIN * 10,
+        )
+        .await;
+        // it answered the probe at +7 min (1 + 1 + 5): it is back, and the same step's round filled its own vectors
+        assert_eq!(
+            changes,
+            [Change::Up {
+                model: "tei:tei".into()
+            }]
+        );
+        assert_eq!(tei.times()[2], t0 + MIN * 7);
+        assert_eq!(
+            models_of_vectors(&db).await,
+            [("builtin".to_owned(), 2), ("tei:tei".to_owned(), 2)]
+        );
+        // it fails again: the wait starts over at 1 minute, not 30
+        tei.set_up(false);
+        put(&db, "task:c", None, "three", json!({})).await;
+        let n = tei.times().len();
+        ticks(
+            &mut d,
+            &db,
+            &[&tei, &builtin],
+            &deny,
+            1,
+            t0 + MIN * 10,
+            t0 + MIN * 20,
+        )
+        .await;
+        let times = tei.times();
+        assert_eq!(times[n + 1] - times[n], MIN, "{times:?}");
+    }
+
+    #[tokio::test]
+    async fn all_down_does_no_record_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        for i in 0..10 {
+            put(
+                &db,
+                &format!("task:e{i}"),
+                None,
+                &format!("text {i}"),
+                json!({}),
+            )
+            .await;
+        }
+        let (a, b) = (Toy::new("tei:a", false), Toy::new("ollama:b:m", false));
+        let t0 = Instant::from_std(skuld::origin());
+        let mut d = Driver::new(t0);
+        let deny = allow_all(dir.path());
+        // the first round reads its batch and both fail it
+        ticks(&mut d, &db, &[&a, &b], &deny, 0, t0, t0 + MIN).await;
+        let read = d.reads();
+        assert!(read > 0);
+        assert!(!d.chain().any_answering());
+        // 60 virtual minutes with every embedder down: the probes only, no store read
+        ticks(&mut d, &db, &[&a, &b], &deny, 0, t0 + MIN, t0 + MIN * 61).await;
+        assert_eq!(d.reads(), read, "record work while every embedder was down");
+        // the probes: the round, then +1, +6 and +36 min, each one text
+        assert_eq!(a.times().len(), 4);
+        assert_eq!(b.times().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn one_log_line_per_state_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        put(&db, "task:a", None, "one", json!({})).await;
+        let tei = Toy::new("tei:tei", false);
+        let t0 = Instant::from_std(skuld::origin());
+        let mut d = Driver::new(t0);
+        let deny = allow_all(dir.path());
+        // 60 failing minutes: one change (it went down), whatever the probes
+        let changes = ticks(&mut d, &db, &[&tei], &deny, 0, t0, t0 + MIN * 61).await;
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert!(tei.times().len() > 1);
+        let labels = [Label {
+            model: "tei:tei".into(),
+            label: "TEI at 127.0.0.1:8080".into(),
+        }];
+        assert_eq!(
+            notice_text(d.chain(), &labels).as_deref(),
+            Some(
+                "Embeddings: TEI at 127.0.0.1:8080 is not answering; search falls back to text until it answers"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_now_probes_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        put(&db, "task:a", None, "one", json!({})).await;
+        let tei = Toy::new("tei:tei", false);
+        let t0 = Instant::from_std(skuld::origin());
+        let mut d = Driver::new(t0);
+        let deny = allow_all(dir.path());
+        ticks(&mut d, &db, &[&tei], &deny, 0, t0, t0 + MIN * 2).await;
+        assert_eq!(tei.times().len(), 2); // the round at +1, the probe at +2
+        // 10 s later the next wait is 5 minutes away; Retry now asks at the next tick
+        let at = t0 + MIN * 2 + Duration::from_secs(10);
+        assert!(!d.wants(at, false));
+        assert!(d.wants(at, true));
+        d.retry_now(at);
+        *tei.at.lock().unwrap() = at;
+        d.step(&db, &[&tei], &deny, 0, at).await;
+        assert_eq!(tei.times().last(), Some(&at));
+    }
+
+    /// The perf row `embed-idle-dead-provider`: the hub's embedder over 10 virtual minutes with the only provider (a TEI
+    /// that refuses, through the gateway) down costs under its budget of one percent of one core's CPU.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn embed_idle_dead_provider() {
+        // the budget the Lisp era kept in test/perf/budgets.eld (gone with it)
+        let pct: f64 = 1.0;
+        let dir = tempfile::tempdir().unwrap();
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let (_gate, e) = tei(dir.path(), port).await;
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        for i in 0..300 {
+            put(
+                &db,
+                &format!("task:e{i:03}"),
+                None,
+                &format!("text {i:03}"),
+                json!({}),
+            )
+            .await;
+        }
+        let deny = allow_all(dir.path());
+        let t0 = Instant::from_std(skuld::origin());
+        let mut d = Driver::new(t0);
+        let span = MIN * 10;
+        let cpu = || {
+            let mut r = std::mem::MaybeUninit::<libc::rusage>::uninit();
+            // SAFETY: getrusage fills the struct it is given
+            unsafe { libc::getrusage(libc::RUSAGE_THREAD, r.as_mut_ptr()) };
+            // SAFETY: filled above
+            let r = unsafe { r.assume_init() };
+            let us = |t: libc::timeval| t.tv_sec as f64 * 1e6 + t.tv_usec as f64;
+            Duration::from_micros((us(r.ru_utime) + us(r.ru_stime)) as u64)
+        };
+        let before = cpu();
+        let mut now = t0;
+        while now <= t0 + span {
+            if d.wants(now, false) {
+                d.step(&db, &[&e], &deny, 0, now).await;
+            }
+            now += crate::server::SCHEMA_TICK;
+        }
+        let used = cpu() - before;
+        assert!(!d.chain().any_answering(), "the provider is down");
+        let share = used.as_secs_f64() / span.as_secs_f64() * 100.0;
+        assert!(
+            share < pct,
+            "embed-idle-dead-provider: {share:.3} % of one core over 10 virtual minutes (budget {pct} %)"
+        );
     }
 }

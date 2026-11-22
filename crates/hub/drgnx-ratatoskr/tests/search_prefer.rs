@@ -310,7 +310,7 @@ async fn models_of_vectors(db: &CoordDb) -> Vec<(String, i64)> {
 }
 
 /// Pattern C. On a fresh install, with no server, tasks and notes get vectors from the built-in model; with a server
-/// that does not answer first in line, the round passes it over and the built-in model fills them.
+/// that does not answer first in line, its batch goes to the built-in model, which fills them, and the server backs off.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn entity_vectors_fill_with_builtin() {
     let dir = TempDir::new().unwrap();
@@ -326,7 +326,9 @@ async fn entity_vectors_fill_with_builtin() {
         put(&db, id, title).await;
     }
     let deny = DenyList::load(&dir.path().join("home"), &dir.path().join("config"));
-    let out = embed::run(&db, &[&down, &own], &deny, false).await;
+    let mut chain = embed::Chain::default();
+    let (now, mut changes) = (tokio::time::Instant::from_std(skuld::origin()), Vec::new());
+    let out = embed::run(&db, &[&down, &own], &deny, &mut chain, now, &mut changes).await;
     assert_eq!(
         out,
         Outcome::Filled {
@@ -335,9 +337,14 @@ async fn entity_vectors_fill_with_builtin() {
         }
     );
     assert_eq!(models_of_vectors(&db).await, vec![(BUILTIN.to_string(), 2)]);
-    // a second round has nothing to do
+    assert!(
+        matches!(changes.as_slice(), [embed::Change::Down { .. }]),
+        "{changes:?}"
+    );
+    // a second round has nothing to do, and the server is not asked while it backs off
     assert_eq!(
-        embed::run(&db, &[&down, &own], &deny, false).await,
+        embed::run(&db, &[&down, &own], &deny, &mut chain, now, &mut changes).await,
         Outcome::Nothing
     );
+    assert_eq!(changes.len(), 1);
 }

@@ -3037,6 +3037,17 @@
         "additionalProperties": false,
         "description": "A message for the user from the hub itself (the notices' shape).",
         "properties": {
+          "actions": {
+            "description": "More commands that act on it, each a button after the command's.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "clear": {
+            "description": "The notice ID is over: the editor takes it away (the other fields are not shown).",
+            "type": "boolean"
+          },
           "command": {
             "description": "The command that acts on it.",
             "type": [
@@ -41003,6 +41014,25 @@
       "classes": [
         "user"
       ],
+      "doc": "Retry now: every embedder of the chain that backs off is asked again at the hub's next tick",
+      "name": "search/embed-retry",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the built-in model's state and device, the servers that can embed and which answer, and the model a query prefers",
       "name": "search/embedders",
       "params": {
@@ -41059,6 +41089,45 @@
               "state",
               "bytes",
               "downloaded"
+            ],
+            "type": "object"
+          },
+          "ChainEntry": {
+            "additionalProperties": false,
+            "description": "One embedder of the chain and how it stands.",
+            "properties": {
+              "label": {
+                "description": "As the user reads it: `TEI at 127.0.0.1:8080`, `the built-in model`.",
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "state": {
+                "description": "`answering` or `backing-off`.",
+                "type": "string"
+              },
+              "until": {
+                "description": "While backing off: when it is asked again, in seconds since the epoch.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "why": {
+                "description": "While backing off: why it failed last.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "model",
+              "label",
+              "state"
             ],
             "type": "object"
           },
@@ -41122,6 +41191,13 @@
         "properties": {
           "builtin": {
             "$ref": "#/$defs/BuiltinInfo"
+          },
+          "chain": {
+            "description": "The entity embedder's chain in the user's order (the embed role), each entry's live state; empty until its first\nstep.",
+            "items": {
+              "$ref": "#/$defs/ChainEntry"
+            },
+            "type": "array"
           },
           "prefer": {
             "description": "The model a query uses when every project is fully indexed: a server that answers, else the built-in model.",

@@ -81,6 +81,8 @@ pub struct Hub {
     /// Each open project's watch state, for `status.watch` (a closed project's entry dies with its watcher).
     watches: Mutex<Vec<(PathBuf, Weak<Mutex<hrafn::WatchState>>)>>,
     download: Arc<Mutex<Download>>,
+    /// The entity embedder's chain and its driver (`crate::server`'s tick steps it; Task 192).
+    pub embed: Arc<crate::embed::Shared>,
 }
 
 fn error(code: ErrorCode, message: impl Into<String>, path: Option<&str>) -> Error {
@@ -1090,7 +1092,38 @@ impl Hub {
             },
             servers,
             prefer: preferred,
+            chain: self.chain_entries(),
         })
+    }
+
+    /// The entity embedder's chain as its last step left it, each entry's state; a wait as wall-clock seconds.
+    fn chain_entries(&self) -> Vec<w::ChainEntry> {
+        let (now, wall) = (crate::clock::now(), crate::clock::wall());
+        let Ok(view) = self.embed.view.lock() else {
+            return Vec::new();
+        };
+        view.iter()
+            .map(|(l, h)| {
+                let (state, until, why) = match h {
+                    crate::embed::Health::Answering => ("answering", None, None),
+                    crate::embed::Health::Down { until, why, .. } => (
+                        "backing-off",
+                        (wall + until.saturating_duration_since(now))
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .ok()
+                            .map(|d| d.as_secs()),
+                        Some(why.clone()),
+                    ),
+                };
+                w::ChainEntry {
+                    model: l.model.clone(),
+                    label: l.label.clone(),
+                    state: state.to_owned(),
+                    until,
+                    why,
+                }
+            })
+            .collect()
     }
 
     async fn model_download(
@@ -1353,6 +1386,12 @@ pub async fn serve(
             .map(|s| json!(s)),
         Params::SearchIndex(i) => hub.index(front, i).await.map(|s| json!(s)),
         Params::SearchEmbedders(_) => hub.embedders(front).await.map(|e| json!(e)),
+        Params::SearchEmbedRetry(_) => {
+            hub.embed
+                .retry
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(json!(true))
+        }
         Params::SearchModelDownload(d) => hub.model_download(front, d).await.map(|s| json!(s)),
         Params::SearchServerPlan(k) => hub.server_plan(k.kind).await.map(|p| json!(p)),
         Params::SearchServerStart(s) => hub.server_start(s).await.map(|r| json!(r)),

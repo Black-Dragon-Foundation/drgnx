@@ -249,6 +249,27 @@ pub struct EmbeddersAnswer {
     /// The model a query uses when every project is fully indexed: a server that answers, else the built-in model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefer: Option<String>,
+    /// The entity embedder's chain in the user's order (the embed role), each entry's live state; empty until its first
+    /// step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chain: Vec<ChainEntry>,
+}
+
+/// One embedder of the chain and how it stands.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChainEntry {
+    pub model: String,
+    /// As the user reads it: `TEI at 127.0.0.1:8080`, `the built-in model`.
+    pub label: String,
+    /// `answering` or `backing-off`.
+    pub state: String,
+    /// While backing off: when it is asked again, in seconds since the epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<u64>,
+    /// While backing off: why it failed last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 /// The user agreed to the download of this size.
@@ -1507,6 +1528,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/index", SearchIndex(IndexParams) -> Started,
             classes: [User], writes: true,
             doc: "start or rebuild a project's index; now overrides the battery gate",
+        ),
+        method!(
+            "search/embed-retry", SearchEmbedRetry(Empty) -> bool,
+            classes: [User], writes: false,
+            doc: "Retry now: every embedder of the chain that backs off is asked again at the hub's next tick",
         ),
         method!(
             "search/embedders", SearchEmbedders(Empty) -> EmbeddersAnswer,

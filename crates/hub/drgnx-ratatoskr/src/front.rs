@@ -1049,6 +1049,7 @@ impl Front {
             | Params::SearchStatus(_)
             | Params::SearchIndex(_)
             | Params::SearchEmbedders(_)
+            | Params::SearchEmbedRetry(_)
             | Params::SearchModelDownload(_)
             | Params::SearchServerPlan(_)
             | Params::SearchServerStart(_)
