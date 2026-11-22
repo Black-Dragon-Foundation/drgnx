@@ -367,6 +367,8 @@ jobs:
         run: |
           sudo bash test/container/zig.sh linux
           bash crates/hub/ghostty-vt-sys/fetch.sh
+      - name: the Wayland client and xkbcommon headers (nhshell and nh-recorder link them)
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libwayland-dev libxkbcommon-dev
       - id: build
         run: cargo +1.95.0 build --locked --manifest-path Cargo.toml
       - id: prune

@@ -4,7 +4,8 @@
 # tools the tests run.  setpriv is in util-linux (the fedora image has only util-linux-core; the `sudo` rows and
 # draugr's pdeathsig test run it); diffutils for the rows that compare with cmp; curl, tar and xz for nidhogg.sh (curl
 # for .github/ci/models.sh too); the Vulkan loader and Mesa's drivers for llvmpipe, the software adapter Hrafn's GPU
-# tests run the real shaders on; vttest for the terminal worker's vttest goldens (drgnx-term tests/vttest.rs).
+# tests run the real shaders on; vttest for the terminal worker's vttest goldens (drgnx-term tests/vttest.rs); the
+# Wayland client and xkbcommon headers that nhshell and nh-recorder link (crates/ui).
 # Containerfile.rust runs it into the prebuilt image; a job without that image (a change to its inputs not yet on
 # main) runs it itself.  docs/develop/ci.md, "Prebuilt images"
 # Rust is the version in rust-version beside this script (the one place CI names it: .github/ci/rust.sh), never
@@ -12,6 +13,6 @@
 set -eu
 rust=$(tr -d '[:space:]' < "$(dirname "$0")/rust-version")
 dnf -y install git "cargo-$rust" "rust-$rust" gcc "clippy-$rust" "rustfmt-$rust" tar zstd gzip procps-ng util-linux \
-  bubblewrap jq diffutils curl xz vulkan-loader mesa-vulkan-drivers vttest
+  bubblewrap jq diffutils curl xz vulkan-loader mesa-vulkan-drivers vttest wayland-devel libxkbcommon-devel pkgconf-pkg-config
 dnf clean all
 rustc -V | grep -q "^rustc $rust " || { echo "rust-packages.sh: rustc is $(rustc -V), not $rust" >&2; exit 1; }
