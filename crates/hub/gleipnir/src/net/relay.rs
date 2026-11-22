@@ -40,14 +40,34 @@ pub fn parse_pair(s: &str) -> Result<RelayPair, String> {
 }
 
 /// Forwards one accepted connection to the socket; an unreachable socket closes only this connection.
-async fn forward(mut tcp: TcpStream, socket: PathBuf) {
+async fn forward(tcp: TcpStream, socket: PathBuf) {
     match UnixStream::connect(&socket).await {
         // Errors mid-stream (a peer reset) end this connection only; there is nothing to report.
-        Ok(mut unix) => {
-            let _ = tokio::io::copy_bidirectional(&mut tcp, &mut unix).await;
-        }
+        Ok(unix) => splice(tcp, unix).await,
         Err(e) => eprintln!("gleipnir relay: cannot reach {}: {e}", socket.display()),
     }
+}
+
+/// Both directions on their own: one that ends or fails never cuts the other short, so what the socket's side sent
+/// before it went (the proxy's 403 to a client still sending, GLP-T10-3) still reaches the client. Once the socket's
+/// side takes no more, what the client still sends is read and dropped: its connection then ends with nothing unread,
+/// where a close with unread data would reset it and the client could lose the answer.
+async fn splice(tcp: TcpStream, unix: UnixStream) {
+    use tokio::io::AsyncWriteExt;
+    let (mut tr, mut tw) = tcp.into_split();
+    let (mut ur, mut uw) = unix.into_split();
+    let up = async {
+        if tokio::io::copy(&mut tr, &mut uw).await.is_ok() {
+            let _ = uw.shutdown().await;
+        } else {
+            let _ = tokio::io::copy(&mut tr, &mut tokio::io::sink()).await;
+        }
+    };
+    let down = async {
+        let _ = tokio::io::copy(&mut ur, &mut tw).await;
+        let _ = tw.shutdown().await;
+    };
+    tokio::join!(up, down);
 }
 
 async fn accept_loop(listener: TcpListener, socket: PathBuf) {
@@ -473,6 +493,58 @@ mod tests {
         c.read_to_string(&mut reply).await.unwrap();
         assert_eq!(reply, "saw 1000");
         h.abort();
+    }
+
+    /// The socket's side answers and goes while the client is still sending (the proxy's 403 to a flooding client,
+    /// GLP-T10-3): the answer still reaches the client, and the client's connection is never reset under it. The order
+    /// is forced: the answer and the close both land while the relay cannot run (the test holds its runtime's only
+    /// thread), so its next poll sees them at once, with most of the client's 32 MiB still to come.
+    #[tokio::test]
+    async fn an_answer_sent_before_the_socket_went_reaches_a_client_still_sending() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("p.sock");
+        let ul = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let tl = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = tl.local_addr().unwrap();
+        // the client: its head, then 32 MiB without reading (more than both sockets' buffers), then its answer
+        let client = std::thread::spawn(move || {
+            let mut c = std::net::TcpStream::connect(addr).unwrap();
+            c.write_all(b"HEAD\n").unwrap();
+            let sent = c.write_all(&vec![b'x'; 32 << 20]).map_err(|e| e.kind());
+            let mut got = Vec::new();
+            let _ = c.read_to_end(&mut got);
+            (sent, got)
+        });
+        let (tcp, _) = tl.accept().unwrap();
+        tcp.set_nonblocking(true).unwrap();
+        let tcp = TcpStream::from_std(tcp).unwrap();
+        let unix = UnixStream::connect(&sock).await.unwrap();
+        let (mut server, _) = ul.accept().unwrap();
+        let (head_tx, head_rx) = tokio::sync::oneshot::channel();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let (gone_tx, gone_rx) = std::sync::mpsc::channel::<()>();
+        let srv = std::thread::spawn(move || {
+            let mut head = [0u8; 5];
+            server.read_exact(&mut head).unwrap();
+            head_tx.send(()).unwrap();
+            go_rx.recv().unwrap();
+            server.write_all(b"403\n").unwrap();
+            // closed with the flood unread
+            drop(server);
+            gone_tx.send(()).unwrap();
+        });
+        let relay = tokio::spawn(splice(tcp, unix));
+        head_rx.await.unwrap();
+        // this thread is the relay's: held here, it runs again only after the answer and the close
+        go_tx.send(()).unwrap();
+        gone_rx.recv().unwrap();
+        relay.await.unwrap();
+        srv.join().unwrap();
+        // the client's flood was read to its end (a relay that closed with it unread resets the connection, and a reset
+        // can take the answer with it), and the answer arrived
+        let (sent, got) = client.join().unwrap();
+        assert_eq!(sent, Ok(()), "the client's connection was reset");
+        assert_eq!(got, b"403\n");
     }
 
     /// Not a test of its own: the entry the parent test re-executes this binary into.

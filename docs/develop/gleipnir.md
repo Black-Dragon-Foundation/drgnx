@@ -1072,8 +1072,12 @@ published policy file of its own and holds no LaunchServices or Keychain service
 
 With the network isolated, a program inside the sandbox still reaches the session's proxy through loopback ports.
 The relay (`gleipnir::net::relay`) is the process that makes those ports: for each `PORT=SOCKET` pair it listens on
-`127.0.0.1:PORT` and forwards every connection to the Unix socket the session mounted in, with
-`tokio::io::copy_bidirectional`, so a half-close (a client that finishes sending and still reads) is kept.
+`127.0.0.1:PORT` and forwards every connection to the Unix socket the session mounted in, each direction copied on
+its own, so a half-close (a client that finishes sending and still reads) is kept, and one direction that ends or
+fails never cuts the other short: the proxy's 403 to a client that is still sending reaches it (GLP-T10-3). Once
+the socket's side takes no more, what the client still sends is read and dropped, so its connection ends with
+nothing unread (a close with unread data resets it, and the client could lose the answer). Not
+`copy_bidirectional`, which ends both directions at the first error of either.
 
 - **Ready before the program starts.** Every port is bound first; then `ready\n` is written to the `--ready-fd` and
   the fd is closed. A port that cannot be bound makes the relay exit 1 with the fd closed and nothing written, so the
