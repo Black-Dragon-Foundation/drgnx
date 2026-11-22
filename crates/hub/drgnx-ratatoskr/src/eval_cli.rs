@@ -3,10 +3,13 @@
 //! the frozen questions. Nothing here runs by itself.
 //!
 //! - `eval gen ROOT [--out DIR]`: the questions of ROOT's history, written once to `DIR/dev.jsonl` and `DIR/test.jsonl`
-//!   (default `runtime/crates/hrafn/eval/<name of ROOT>`); an existing set is never overwritten.
+//!   (default `crates/hub/hrafn/eval/<name of ROOT>`); an existing set is never overwritten.
 //! - `eval run ROOT [--model ID] [--set dev|test] [--rows FILE] [--device cpu|gpu:ADAPTER] [--models DIR] [--state DIR]
-//!   [--out FILE] [--map TOKENS]`: embeds ROOT with the model, asks the set, prints the numbers and writes the run as
-//!   JSON. With `--map`, also the repo map's yield at that budget: the share of each question's target definitions and
+//!   [--out FILE] [--map TOKENS] [--source SRC] [--query-source SRC]`: embeds ROOT with the model (or with a server:
+//!   SRC is `builtin`, `tei:URL`, `ollama:URL:MODEL` or `llama:URL`, talked to directly, with no hub or gateway), asks
+//!   the set and prints the numbers and writes the run as JSON. `--query-source` embeds the questions with another
+//!   source (the same model on another machine); with `--state DIR` the chunk vectors already in DIR are reused.
+//!   With `--map`, also the repo map's yield at that budget: the share of each question's target definitions and
 //!   files that the global map shows, that the top 5 hits followed by the map focused on their files show, and that
 //!   search hits packed in rank order show (each in the same token estimate).
 //! - `eval compare [--by chunk|file|floor] A.json B.json`: B against A, paired. The restated gate (2026-11-10): `chunk` (the
@@ -16,14 +19,89 @@
 //!   Exit 0 when B passes, 1 when it does not.
 
 use crate::clock;
+use crate::embed_direct::{Api, Direct};
 use hrafn::eval::{self, EvalRow, Report};
 use hrafn::{Answer, CodeStore, Config, GitCli, Lag, Query};
 use hrafn_embed::{Device, LocalEmbedder, MODELS, ModelSpec, default_model};
+use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+
+/// Where `eval run` gets its vectors from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceArg {
+    Builtin,
+    Tei { url: String },
+    Ollama { url: String, model: String },
+    Llama { url: String },
+}
+
+impl SourceArg {
+    /// `builtin`, `tei:URL`, `ollama:URL:MODEL` or `llama:URL`; a URL is `http://HOST[:PORT]` (TLS is not spoken).
+    pub fn parse(s: &str) -> Result<SourceArg, String> {
+        let url = |kind: &str, u: &str| -> Result<String, String> {
+            match u.strip_prefix("http://") {
+                Some(rest) if !rest.is_empty() => Ok(u.trim_end_matches('/').to_owned()),
+                _ => Err(format!(
+                    "{kind}: needs an http://HOST[:PORT] URL, not {u:?}"
+                )),
+            }
+        };
+        if s == "builtin" {
+            return Ok(SourceArg::Builtin);
+        }
+        if let Some(u) = s.strip_prefix("tei:") {
+            return Ok(SourceArg::Tei {
+                url: url("tei", u)?,
+            });
+        }
+        if let Some(u) = s.strip_prefix("llama:") {
+            return Ok(SourceArg::Llama {
+                url: url("llama", u)?,
+            });
+        }
+        if let Some(rest) = s.strip_prefix("ollama:") {
+            let no_model = || format!("ollama: needs ollama:http://HOST[:PORT]:MODEL, not {s:?}");
+            let after = rest.strip_prefix("http://").ok_or_else(no_model)?;
+            // the model may hold colons of its own (`qwen3-embedding:0.6b`): a port is the digits right after the host
+            let mut parts = after.splitn(3, ':');
+            let host = parts.next().unwrap_or_default();
+            let (host_port, model) = match (parts.next(), parts.next()) {
+                (Some(p), Some(m)) if !p.is_empty() && p.bytes().all(|c| c.is_ascii_digit()) => {
+                    (format!("{host}:{p}"), m.to_owned())
+                }
+                (Some(p), None) if p.bytes().all(|c| c.is_ascii_digit()) => return Err(no_model()),
+                (Some(a), Some(b)) => (host.to_owned(), format!("{a}:{b}")),
+                (Some(a), None) => (host.to_owned(), a.to_owned()),
+                (None, _) => return Err(no_model()),
+            };
+            if host.is_empty() || model.is_empty() {
+                return Err(no_model());
+            }
+            return Ok(SourceArg::Ollama {
+                url: format!("http://{host_port}"),
+                model,
+            });
+        }
+        Err(format!(
+            "--source is builtin, tei:URL, ollama:URL:MODEL or llama:URL, not {s:?}"
+        ))
+    }
+}
+
+impl std::fmt::Display for SourceArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SourceArg::Builtin => f.write_str("builtin"),
+            SourceArg::Tei { url } => write!(f, "tei:{url}"),
+            SourceArg::Ollama { url, model } => write!(f, "ollama:{url}:{model}"),
+            SourceArg::Llama { url } => write!(f, "llama:{url}"),
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum EvalCommand {
@@ -42,6 +120,9 @@ pub enum EvalCommand {
         out: Option<PathBuf>,
         /// Also measure the repo map's yield at this many tokens.
         map: Option<usize>,
+        /// Boxed: the variant is otherwise far larger than the others.
+        source: Box<SourceArg>,
+        query_source: Option<Box<SourceArg>>,
     },
     Compare {
         a: PathBuf,
@@ -67,6 +148,7 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
     let (mut model, mut set, mut rows, mut device) =
         (None, "dev".to_string(), None, "cpu".to_string());
     let (mut models, mut state, mut out, mut map) = (None, None, None, None);
+    let (mut source, mut query_source) = (Box::new(SourceArg::Builtin), None);
     let mut by = eval::Gate::Chunk;
     let mut words: Vec<PathBuf> = Vec::new();
     while let Some(arg) = p.next().map_err(e)? {
@@ -98,6 +180,16 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
             }
             Long("models") if name == "run" => models = Some(PathBuf::from(p.value().map_err(e)?)),
             Long("state") if name == "run" => state = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("source") if name == "run" => {
+                source = Box::new(SourceArg::parse(
+                    &p.value().map_err(e)?.string().map_err(e)?,
+                )?)
+            }
+            Long("query-source") if name == "run" => {
+                query_source = Some(Box::new(SourceArg::parse(
+                    &p.value().map_err(e)?.string().map_err(e)?,
+                )?))
+            }
             Long("map") if name == "run" => {
                 let v = p.value().map_err(e)?.string().map_err(e)?;
                 match v.parse::<usize>() {
@@ -130,6 +222,8 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
             state,
             out,
             map,
+            source,
+            query_source,
         },
         _ => EvalCommand::Compare {
             a: next("two reports")?,
@@ -213,6 +307,12 @@ struct RunFile {
     device: String,
     chunks_embedded: u64,
     embed_seconds: f64,
+    /// The `--source` the run used (`builtin` for a report from before sources).
+    #[serde(default)]
+    source: String,
+    /// `embed_seconds` over `chunks_embedded`; 0 when the vectors were already in `--state`.
+    #[serde(default)]
+    embed_seconds_per_chunk: f64,
     /// What one question cost (embedding it and searching), in seconds.
     query_latency: Latency,
     report: Report,
@@ -430,6 +530,116 @@ fn gen_sets(root: &Path, out: Option<PathBuf>) -> Result<String, String> {
     ))
 }
 
+/// What `eval run` embeds with: a model in this process or a server over HTTP. The id names the vectors in the store.
+trait DocSource {
+    fn id(&self) -> String;
+    fn dims(&mut self) -> Result<usize, String>;
+    /// Documents go plain.
+    fn embed_docs(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String>;
+    /// The vector of the question Q of its scope.
+    fn embed_query(&mut self, q: &Query) -> Result<Vec<f32>, String>;
+}
+
+/// The built-in model, in this process.
+struct LocalSource {
+    spec: &'static ModelSpec,
+    embedder: LocalEmbedder,
+}
+
+impl DocSource for LocalSource {
+    fn id(&self) -> String {
+        self.spec.id.to_string()
+    }
+
+    fn dims(&mut self) -> Result<usize, String> {
+        Ok(self.spec.dims)
+    }
+
+    fn embed_docs(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        self.embedder
+            .embed_docs(texts)
+            .map_err(|e| format!("embedding: {e:?}"))
+    }
+
+    fn embed_query(&mut self, q: &Query) -> Result<Vec<f32>, String> {
+        self.embedder
+            .embed_query(&q.text, None)
+            .map_err(|e| format!("embedding a question: {e:?}"))
+    }
+}
+
+/// A server, through [`Direct`]. Its questions carry `Instruct: <task>\nQuery:<q>`, as the hub's do.
+struct ServerSource<'a> {
+    id: String,
+    direct: Direct,
+    rt: &'a tokio::runtime::Runtime,
+    dims: Option<usize>,
+}
+
+impl DocSource for ServerSource<'_> {
+    fn id(&self) -> String {
+        self.id.clone()
+    }
+
+    fn dims(&mut self) -> Result<usize, String> {
+        if let Some(d) = self.dims {
+            return Ok(d);
+        }
+        // one question-shaped text, so that what the server sees as documents is exactly the chunks
+        let probe = Query {
+            text: "dimension probe".into(),
+            scope: hrafn::Scope::All,
+            k: 1,
+        };
+        let d = self.embed_query(&probe)?.len();
+        self.dims = Some(d);
+        Ok(d)
+    }
+
+    fn embed_docs(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        self.rt.block_on(self.direct.embed(texts)).map_err(|e| e.0)
+    }
+
+    fn embed_query(&mut self, q: &Query) -> Result<Vec<f32>, String> {
+        let text = format!("Instruct: {}\nQuery:{}", q.scope.instruction(), q.text);
+        let mut v = self
+            .rt
+            .block_on(self.direct.embed(&[text]))
+            .map_err(|e| e.0)?;
+        v.pop()
+            .ok_or_else(|| "the server answered no vector".into())
+    }
+}
+
+/// The source ARG names. A built-in model loads from MODELS on DEVICE; a server needs nothing loaded.
+fn open_source<'a>(
+    arg: &SourceArg,
+    spec: &'static ModelSpec,
+    models: &Path,
+    device: &Device,
+    rt: &'a tokio::runtime::Runtime,
+) -> Result<Box<dyn DocSource + 'a>, String> {
+    let server = |api: Api, url: &str| -> Result<Box<dyn DocSource + 'a>, String> {
+        let base: Uri = url.parse().map_err(|e| format!("{url}: {e}"))?;
+        Ok(Box::new(ServerSource {
+            id: arg.to_string(),
+            direct: Direct::new(api, base),
+            rt,
+            dims: None,
+        }))
+    };
+    match arg {
+        SourceArg::Builtin => {
+            let embedder = LocalEmbedder::load(spec, &models.join(spec.id), device)
+                .map_err(|e| format!("loading {}: {e:?}", spec.id))?;
+            Ok(Box::new(LocalSource { spec, embedder }))
+        }
+        SourceArg::Tei { url } => server(Api::Tei, url),
+        SourceArg::Ollama { url, model } => server(Api::Ollama(model.clone()), url),
+        SourceArg::Llama { url } => server(Api::Llama, url),
+    }
+}
+
 fn spec_of(id: Option<&str>) -> Result<&'static ModelSpec, String> {
     match id {
         None => Ok(default_model()),
@@ -500,6 +710,8 @@ fn run_set(
     state: Option<PathBuf>,
     out: Option<PathBuf>,
     map: Option<usize>,
+    source: SourceArg,
+    query_source: Option<SourceArg>,
 ) -> Result<String, String> {
     let spec = spec_of(model.as_deref())?;
     let rows_path = rows.unwrap_or_else(|| {
@@ -520,15 +732,28 @@ fn run_set(
             threads: std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).max(1)),
         },
     };
-    let mut embedder = LocalEmbedder::load(spec, &models.join(spec.id), &dev)
-        .map_err(|e| format!("loading {}: {e:?}", spec.id))?;
+    let rt = runtime()?;
+    let mut docs = open_source(&source, spec, &models, &dev, &rt)?;
+    let mut queries = query_source
+        .as_ref()
+        .map(|a| open_source(a, spec, &models, &dev, &rt))
+        .transpose()?;
+    let model_id = docs.id();
+    let dims = docs.dims()?;
+    if let Some(q) = queries.as_mut()
+        && q.dims()? != dims
+    {
+        return Err(format!(
+            "--query-source gives {} dimensions, --source {dims}: they are not one model",
+            q.dims()?
+        ));
+    }
     let state_dir = state.clone().unwrap_or_else(|| scratch("run"));
     std::fs::create_dir_all(&state_dir).map_err(|e| e.to_string())?;
     let store = CodeStore::open(&state_dir.join("code.db")).map_err(|e| e.to_string())?;
-    let rt = runtime()?;
     eprintln!("indexing {} into {}", root.display(), state_dir.display());
     let began = clock::real_now();
-    let listed = rt.block_on(index(&store, root, &[(spec.id, spec.dims)]))?;
+    let listed = rt.block_on(index(&store, root, &[(model_id.as_str(), dims)]))?;
     eprintln!(
         "indexed {} files in {:.0}s",
         listed.len(),
@@ -540,17 +765,15 @@ fn run_set(
     let mut embedded = 0u64;
     loop {
         let todo = rt
-            .block_on(hrafn::missing(&store, spec.id, 256))
+            .block_on(hrafn::missing(&store, &model_id, 256))
             .map_err(|e| e.to_string())?;
         if todo.is_empty() {
             break;
         }
         let texts: Vec<String> = todo.iter().map(|(_, t)| t.clone()).collect();
-        let vectors = embedder
-            .embed_docs(&texts)
-            .map_err(|e| format!("embedding: {e:?}"))?;
+        let vectors = docs.embed_docs(&texts)?;
         let put: Vec<_> = todo.iter().map(|(k, _)| *k).zip(vectors).collect();
-        rt.block_on(hrafn::put_vectors(&store, spec.id, &put))
+        rt.block_on(hrafn::put_vectors(&store, &model_id, &put))
             .map_err(|e| e.to_string())?;
         embedded += put.len() as u64;
         if embedded % 2048 < 256 {
@@ -564,7 +787,8 @@ fn run_set(
 
     eprintln!("embedded {embedded} chunks in {embed_seconds:.0}s; sampling names");
     let names = rt.block_on(sample_names(&store, 300))?;
-    let embedder = RefCell::new(embedder);
+    let docs = RefCell::new(docs);
+    let queries = queries.map(RefCell::new);
     let base = root.to_path_buf();
     let phase = RefCell::new(Tally::new("scoring", questions.len(), 25));
     let ask = |q: &Query| -> Answer {
@@ -574,7 +798,11 @@ fn run_set(
             model: None,
             notice: None,
         };
-        let Ok(v) = embedder.borrow_mut().embed_query(&q.text, None) else {
+        let asked = match &queries {
+            Some(src) => src.borrow_mut().embed_query(q),
+            None => docs.borrow_mut().embed_query(q),
+        };
+        let Ok(v) = asked else {
             return none();
         };
         let now = |p: &str| std::fs::read_to_string(base.join(p)).ok();
@@ -582,7 +810,7 @@ fn run_set(
             &store,
             q,
             hrafn::View::Base,
-            Some((spec.id, v.as_slice())),
+            Some((model_id.as_str(), v.as_slice())),
             &now,
         ))
         .unwrap_or_else(|_| none())
@@ -622,7 +850,7 @@ fn run_set(
         .map(|e| format!("{e:?}"))
         .collect();
 
-    let mut text = summary(spec.id, set, &report, embedded, embed_seconds);
+    let mut text = summary(&model_id, set, &report, embedded, embed_seconds);
     text.push_str(&format!(
         "one question (embed + search), {} asked: p50 {:.3}s, p95 {:.3}s, max {:.3}s\n",
         query_latency.n, query_latency.p50, query_latency.p95, query_latency.max
@@ -638,7 +866,13 @@ fn run_set(
         None => None,
     };
     let file = RunFile {
-        model: spec.id.to_string(),
+        model: model_id.clone(),
+        source: source.to_string(),
+        embed_seconds_per_chunk: if embedded == 0 {
+            0.0
+        } else {
+            embed_seconds / embedded as f64
+        },
         set: set.to_string(),
         device: device.to_string(),
         chunks_embedded: embedded,
@@ -741,10 +975,22 @@ pub fn run(env: &runstav::paths::Env, cmd: EvalCommand) -> i32 {
             state,
             out,
             map,
+            source,
+            query_source,
         } => {
             let models = models.unwrap_or_else(|| crate::search::models_root(env));
             done(run_set(
-                &root, model, &set, rows, &device, models, state, out, map,
+                &root,
+                model,
+                &set,
+                rows,
+                &device,
+                models,
+                state,
+                out,
+                map,
+                *source,
+                query_source.map(|q| *q),
             ))
         }
         EvalCommand::Compare { a, b, by } => match compare_files(&a, &b, by) {
@@ -892,5 +1138,87 @@ mod tests {
         assert_eq!(chunk_chars(text, 2, 3), "two\nthree\n".len());
         assert_eq!(chunk_chars(text, 4, 9), "four\n".len());
         assert_eq!(chunk_chars(text, 7, 9), 0);
+    }
+
+    /// The `--source` forms, and what the parser refuses.
+    #[test]
+    fn parse_source_args() {
+        let url = "http://127.0.0.1:8087";
+        assert_eq!(SourceArg::parse("builtin"), Ok(SourceArg::Builtin));
+        assert_eq!(
+            SourceArg::parse(&format!("tei:{url}")),
+            Ok(SourceArg::Tei { url: url.into() })
+        );
+        assert_eq!(
+            SourceArg::parse("llama:http://127.0.0.1:8013"),
+            Ok(SourceArg::Llama {
+                url: "http://127.0.0.1:8013".into()
+            })
+        );
+        // the model name may hold colons of its own
+        assert_eq!(
+            SourceArg::parse("ollama:http://127.0.0.1:11434:qwen3-embedding:0.6b"),
+            Ok(SourceArg::Ollama {
+                url: "http://127.0.0.1:11434".into(),
+                model: "qwen3-embedding:0.6b".into()
+            })
+        );
+        assert_eq!(
+            SourceArg::parse("ollama:http://gpu-box:qwen3-embedding:0.6b"),
+            Ok(SourceArg::Ollama {
+                url: "http://gpu-box".into(),
+                model: "qwen3-embedding:0.6b".into()
+            })
+        );
+        for text in [
+            "builtin",
+            "tei:http://127.0.0.1:8087",
+            "llama:http://h:8013",
+            "ollama:http://h:11434:m:1",
+        ] {
+            assert_eq!(SourceArg::parse(text).unwrap().to_string(), text);
+        }
+        for bad in [
+            "tei",
+            "tei:",
+            "llama:",
+            "tei:127.0.0.1:8087",
+            "ollama:http://h:11434",
+            "ollama:http://h:11434:",
+            "nope:http://h:1",
+            "",
+        ] {
+            assert!(SourceArg::parse(bad).is_err(), "{bad:?} must not parse");
+        }
+        let EvalCommand::Run {
+            source,
+            query_source,
+            ..
+        } = p(&[
+            "run",
+            "/r",
+            "--source",
+            "tei:http://h:1",
+            "--query-source",
+            "llama:http://h:2",
+        ])
+        .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            *source,
+            SourceArg::Tei {
+                url: "http://h:1".into()
+            }
+        );
+        assert_eq!(
+            query_source.map(|q| *q),
+            Some(SourceArg::Llama {
+                url: "http://h:2".into()
+            })
+        );
+        assert!(p(&["run", "/r", "--source", "tei:"]).is_err());
+        assert!(p(&["compare", "--source", "builtin", "a.json", "b.json"]).is_err());
     }
 }

@@ -1624,7 +1624,15 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   intervals per stratum, for three contexts of the same token estimate: `map` (the global map, tests and docs
   included), `map-around-search` (the top 5 hits' chunks, then the map focused on their files in what is left; the
   focus files themselves are not in a focused map, so the hits stand for them) and `search` (hits packed in rank order,
-  each with its `path:lines` line). It needs no hub.
+  each with its `path:lines` line). It needs no hub. `eval run … --source SRC` takes the vectors from a server instead
+  of the built-in model: `builtin` (the default), `tei:http://HOST:PORT`, `ollama:http://HOST:PORT:MODEL` or
+  `llama:http://HOST:PORT`, spoken to directly over HTTP (`embed_direct::Direct`: TEI's `/embed`, Ollama's `/api/embed`
+  with `truncate: false` and `num_ctx`, llama.cpp's `/v1/embeddings`; no hub, no gateway, no TLS). The vectors are
+  stored under the source's own text as their model id, so a server's vectors never mix with the built-in model's.
+  Documents go plain and questions carry `Instruct: <task>\nQuery:<q>` as the hub's do. `--query-source SRC` embeds the
+  questions with another source (the same model on another machine, for a parity check); with `--state DIR` the chunk
+  vectors already in DIR are reused and no document text is sent. The report JSON has `source` and
+  `embed_seconds_per_chunk`.
 - **The MCP tools (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets
   `search.sock` beside `mcp.sock` (recorded in the session's row, so it is bound again at a restart and closed with the
   session): the tools `search` (`query`, `scope`, `k`), `symbols` (`name`, `match`, `kind`, `path`, `scope`, `k`) and

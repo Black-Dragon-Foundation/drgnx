@@ -39,7 +39,7 @@
 //!
 //! - `embed [--dims N] [--log FILE] [--parent PID]` prints `MOCK-EMBED-PORT N` and serves, on 127.0.0.1 only, TEI's `POST
 //!   /embed {"inputs"}` (a list of vectors) and Ollama's `POST /api/embed {"model", "input"}` (`{"model", "embeddings",
-//!   "prompt_eval_count"}`, the words of the inputs). A vector is made from its text's bytes, so equal texts give equal
+//!   "prompt_eval_count"}`, the words of the inputs) and llama.cpp's `POST /v1/embeddings {"input"}`. A vector is made from its text's bytes, so equal texts give equal
 //!   vectors. The log is JSONL like `llm`'s.
 //!
 //! `llm` and `embed` end when `--parent` is gone.
@@ -943,7 +943,8 @@ fn embed_vector(text: &str, dims: usize) -> Vec<f64> {
 
 /// One request of the embedding server: TEI's `POST /embed {"inputs": [...]}` answers a list of vectors, Ollama's
 /// `POST /api/embed {"model", "input": TEXT|[TEXT...]}` answers `{"model", "embeddings", "prompt_eval_count"}` (the
-/// words of the inputs, which the gateway counts as input tokens). Anything else is 404.
+/// words of the inputs, which the gateway counts as input tokens), llama.cpp's `POST /v1/embeddings {"input"}` answers
+/// `{"data": [{"index", "embedding"}]}`. Anything else is 404.
 fn embed_serve(mut sock: TcpStream, dims: usize, log: &Option<Mutex<File>>) {
     let Some(req) = read_request(&mut sock) else {
         return;
@@ -981,6 +982,15 @@ fn embed_serve(mut sock: TcpStream, dims: usize, log: &Option<Mutex<File>>) {
                 "model": parsed["model"],
                 "embeddings": inputs.iter().map(|t| embed_vector(t, dims)).collect::<Vec<_>>(),
                 "prompt_eval_count": words,
+            }))
+        }
+        "/v1/embeddings" => {
+            let inputs = texts(&parsed["input"]);
+            Some(json!({
+                "object": "list",
+                "data": inputs.iter().enumerate().map(|(i, t)| json!({
+                    "object": "embedding", "index": i, "embedding": embed_vector(t, dims),
+                })).collect::<Vec<_>>(),
             }))
         }
         _ => None,
