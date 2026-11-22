@@ -406,6 +406,10 @@ jobs:
     # (tests, release, the sandbox lane's); on ubuntu-24.04 a green leg took 38.5 minutes, the real-start rows alone
     # 16.5, and the other leg of the same commit was cut at 45 inside them.
     timeout-minutes: 75
+    # ubuntu-24.04-arm's runner shut down 4 of 4 times about 3.5 minutes into the hub's test build (rounds 1-2 of PR 5),
+    # read as running out of memory; two compile jobs there until the build-once redesign. 4 is the runners' core count.
+    env:
+      CARGO_BUILD_JOBS: ${{ matrix.os == 'ubuntu-24.04-arm' && '2' || '4' }}
     # Every runner is pinned (never `ubuntu-latest`, which moves to 26.04 by 2026-11-19). The 24.04 legs lift AppArmor's
     # userns restriction with a global sysctl; the 26.04 legs do not: they test the configuration Gleipnir recommends
     # (bubblewrap 0.12.0 as /usr/bin/bwrap, which 26.04's `bwrap-userns-restrict` profile covers).
@@ -904,6 +908,8 @@ jobs:
     timeout-minutes: 60
     env:
       NIGHTLY: nightly-2026-10-15
+      # its runner shut down 2 of 2 push runs mid-build (PR 5), read as running out of memory: two compile jobs
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
