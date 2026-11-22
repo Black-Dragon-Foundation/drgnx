@@ -64,6 +64,15 @@ pub struct ActionCtx {
     pub session: Option<String>,
     pub amount: Option<f64>,
     pub facts: Facts,
+    /// An outside agent acts on records it created itself (`crate::outside::own_record`); on another's its
+    /// `graph.change` is Ask at most.  Read only for an outside agent ([`is_outside`]).
+    pub own_record: bool,
+}
+
+/// Whether CTX is an outside agent's: its session is `ext:…`.  Only `crate::outside::who_for` builds such a ctx, from
+/// an attached, bound bridge.
+pub(crate) fn is_outside(ctx: &ActionCtx) -> bool {
+    ctx.session.as_deref().is_some_and(crate::outside::is_ext)
 }
 
 impl ActionCtx {
@@ -427,6 +436,15 @@ impl MatrixGate {
         ctx: &ActionCtx,
         now: f64,
     ) -> Effective {
+        if is_outside(ctx) {
+            // an outside agent: rights only from the user's binding (its role), its role's and kind's cells from every
+            // layer, then the caps (`norn::matrix::outside_effective`); no manager delegates to it
+            if who.role.is_none() {
+                // no cell is Never
+                return Effective::default();
+            }
+            return norn::matrix::outside_effective(&self.own(conn, who, ctx, now), ctx.own_record);
+        }
         let own = self.own(conn, who, ctx, now);
         let delegated = ctx.session.as_ref().and_then(|s| self.delegated_to(s));
         let Some(d) = delegated else {
@@ -536,6 +554,7 @@ impl MatrixGate {
                     "plan": ctx.plan,
                     "amount": ctx.amount,
                     "facts": ctx.facts,
+                    "own_record": ctx.own_record,
                 });
                 if is_browser(a) {
                     // what the card offers, and how long its once lasts (the settle reads both back)
@@ -583,6 +602,12 @@ impl MatrixGate {
                 .get("facts")
                 .and_then(|f| serde_json::from_value(f.clone()).ok())
                 .unwrap_or_default(),
+            // the cap the Ask was made under holds at the recheck
+            own_record: c
+                .data
+                .get("own_record")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         };
         let who = who_of(c.data.get("who").unwrap_or(&Value::Null));
         let (v, why) = self.verdict(conn, &who, a, &ctx, now);
@@ -824,6 +849,7 @@ pub async fn check_method(f: &Front, _: &Caller, p: CheckParams) -> Result<Check
         session: None,
         amount: p.amount,
         facts: Facts::default(),
+        own_record: false,
     };
     f.writer
         .db

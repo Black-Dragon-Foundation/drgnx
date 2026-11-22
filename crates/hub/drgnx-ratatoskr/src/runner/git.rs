@@ -1087,6 +1087,7 @@ impl GatePolicy for HubPolicy {
                 session,
                 amount: None,
                 facts,
+                own_record: false,
             };
             Ok(front
                 .core

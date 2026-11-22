@@ -663,3 +663,118 @@ fn debug_rows_per_preset() {
         assert_eq!(Action::from_id(id), Some(a));
     }
 }
+
+/// The rows an outside agent's cells take from the matrix (the others are [`OUTSIDE_NEVER`]): a new action fails
+/// [`every_action_is_classified_for_outside_agents`] until it is placed in one list or the other.
+const OUTSIDE_BY_MATRIX: [Action; 19] = [
+    Action::GraphChange,
+    Action::CodeRead,
+    Action::CodeEdit,
+    Action::Commit,
+    Action::CodeCiConfig,
+    Action::Network,
+    Action::Browser,
+    Action::BrowserWeb,
+    Action::BrowserPrivate,
+    Action::UserEmacs,
+    Action::ChatProjectRead,
+    Action::PluginAbilities,
+    Action::ChatProjectEdit,
+    Action::Huddles,
+    Action::DebugRead,
+    Action::DebugProbe,
+    Action::DebugFork,
+    Action::DebugLiveEval,
+    Action::DebugDrive,
+];
+
+fn outside_who() -> Who {
+    Who {
+        role: Some(Role::Worker),
+        agent: Some("ext:claude".into()),
+        provider: Some("anthropic".into()),
+    }
+}
+
+/// [MP-2] Allow with no limit in every column (the three roles, the outside agent's own column and its provider) of
+/// every layer opens no outside cap: each `OUTSIDE_NEVER` row stays Never, on its own record or another's.
+#[test]
+fn an_allow_layer_cannot_open_an_outside_cap() {
+    let cols = [
+        Column::Role(Role::Manager),
+        Column::Role(Role::Worker),
+        Column::Role(Role::Chat),
+        agent_column("ext:claude"),
+        provider_column("anthropic"),
+    ];
+    let mut open = Matrix::default();
+    for a in Action::ALL {
+        for c in &cols {
+            open.set(a, c.clone(), cell(Verdict::Allow));
+        }
+    }
+    let base = preset(Preset::Autonomous);
+    for layers in [
+        vec![&open],
+        vec![&base, &open],
+        vec![&base, &open, &open],
+        vec![&base, &Matrix::default(), &open, &open],
+    ] {
+        let e = eff(&layers, &outside_who());
+        for own in [true, false] {
+            let o = outside_effective(&e, own);
+            for a in OUTSIDE_NEVER {
+                assert_eq!(o.cell(a).verdict, Verdict::Never, "{} own={own}", a.id());
+                assert_eq!(decide(&o, a, None), Verdict::Never, "{}", a.id());
+            }
+        }
+    }
+}
+
+/// [MP-2] `graph.change` on a record the outside agent did not create is Ask at most: an Allow becomes Ask (its limit
+/// kept), an Ask and a Never stay as they are; on its own record the matrix's cell stands.
+#[test]
+fn graph_change_on_anothers_record_is_ask_at_most() {
+    let limit = Some(Limit {
+        amount: 3.0,
+        unit: Unit::Count,
+    });
+    for (verdict, limit, not_own) in [
+        (Verdict::Allow, None, Verdict::Ask),
+        (Verdict::Allow, limit, Verdict::Ask),
+        (Verdict::Ask, None, Verdict::Ask),
+        (Verdict::Never, None, Verdict::Never),
+    ] {
+        let mut e = Effective::default();
+        e.cells.insert(Action::GraphChange, Cell { verdict, limit });
+        let other = outside_effective(&e, false).cell(Action::GraphChange);
+        assert_eq!(
+            (other.verdict, other.limit),
+            (not_own, limit),
+            "{verdict:?}"
+        );
+        let own = outside_effective(&e, true).cell(Action::GraphChange);
+        assert_eq!((own.verdict, own.limit), (verdict, limit), "{verdict:?}");
+    }
+    // the other rows the matrix gives are not touched by the not-own cap
+    let mut e = Effective::default();
+    e.cells.insert(Action::CodeEdit, cell(Verdict::Allow));
+    assert_eq!(
+        outside_effective(&e, false).cell(Action::CodeEdit).verdict,
+        Verdict::Allow
+    );
+}
+
+/// Every action is either an outside cap or the matrix's to decide, never both.
+#[test]
+fn every_action_is_classified_for_outside_agents() {
+    let mut placed: Vec<Action> = OUTSIDE_NEVER
+        .iter()
+        .chain(OUTSIDE_BY_MATRIX.iter())
+        .copied()
+        .collect();
+    placed.sort();
+    let mut all = Action::ALL.to_vec();
+    all.sort();
+    assert_eq!(placed, all);
+}
