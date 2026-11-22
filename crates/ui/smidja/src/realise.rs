@@ -149,7 +149,7 @@ impl Workbench {
     }
 
     /// The left's section I as requested: the left below its region header, shared evenly by the place's sections.
-    fn section_rect(&self, wi: usize, i: u32) -> Option<Rect> {
+    pub(crate) fn section_rect(&self, wi: usize, i: u32) -> Option<Rect> {
         let win = &self.windows[wi];
         let left = self
             .region_rects(wi)

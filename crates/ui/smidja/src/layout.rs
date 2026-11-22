@@ -92,6 +92,16 @@ impl Node {
         }
     }
 
+    /// Exchange the leaves `a` and `b`; the splits and their weights stay where they are.
+    fn swap_leaves(&mut self, a: GroupId, b: GroupId) {
+        match self {
+            Node::Leaf(x) if *x == a => *x = b,
+            Node::Leaf(x) if *x == b => *x = a,
+            Node::Leaf(_) => {}
+            Node::Split { children, .. } => children.iter_mut().for_each(|c| c.swap_leaves(a, b)),
+        }
+    }
+
     pub fn contains(&self, g: GroupId) -> bool {
         match self {
             Node::Leaf(x) => *x == g,
@@ -794,7 +804,8 @@ impl Workbench {
         }
     }
 
-    /// Swap two neighbouring groups' tabs; the groups (Emacs's windows) stay where they are.
+    /// Swap two neighbouring groups: they change places in the tree, each with its tabs. A group id is identity (W5,
+    /// manager): it holds across a swap, so a group that moves is the same group in its new place.
     pub fn swap(&mut self, g: GroupId, d: Dir4, origin: Origin) -> Result<Version, Refusal> {
         let wi = self.layout_gate(g, origin)?;
         let Some(n) = self.neighbour(wi, g, d) else {
@@ -804,16 +815,8 @@ impl Workbench {
             return refuse("a temporary layout holds the group");
         }
         self.push_undo(wi);
-        let a = self.groups[&g].clone();
-        let b = self.groups[&n].clone();
-        for (to, from) in [(g, &b), (n, &a)] {
-            let grp = self.group_mut(to);
-            grp.tabs = from.tabs.clone();
-            grp.active = from.active;
-            grp.preview = from.preview;
-            grp.mru = from.mru.clone();
-        }
-        self.set_base_focus(wi, Focus::Center(n));
+        self.windows[wi].center.tree.swap_leaves(g, n);
+        self.set_base_focus(wi, Focus::Center(g));
         Ok(self.bump())
     }
 

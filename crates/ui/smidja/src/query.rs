@@ -190,7 +190,7 @@ impl Workbench {
     }
 
     /// Read a path as tokens: `active-tab`, `selection`, `focus`, `fold`, `tabs`, `groups`, `attention`, `roles`,
-    /// `detail`, `places`.
+    /// `detail`, `places`, `sections` (the left's; [`Workbench::sections`] for a region).
     pub fn query(&self, w: WinId, path: &str) -> Result<Vec<Token>, Refusal> {
         let Some(win) = self.window(w) else {
             return refuse("no such OS window");
@@ -271,8 +271,43 @@ impl Workbench {
                     out.push(Token::Str(p.place.clone()));
                 }
             }
+            "sections" => return self.sections(w, Region::Left),
             _ => return refuse(format!("no query path {path}")),
         }
+        Ok(out)
+    }
+
+    /// A region's sections as tokens: one list `(PLACE (ID TITLE SIZE) ...)` for the region's current place, `nil`
+    /// when it shows none. ID is the section's index (`set_edges`' `(section ID)`), SIZE its requested height. Only
+    /// the left has places; the answer is one list, so a lone section still comes back as a list of one row.
+    pub fn sections(&self, w: WinId, region: Region) -> Result<Vec<Token>, Refusal> {
+        let wi = self.wi(w)?;
+        let place = match region {
+            Region::Left => self.windows[wi].left.place.clone(),
+            _ => None,
+        };
+        let Some(place) = place else {
+            return Ok(vec![sym("nil")]);
+        };
+        let names = self
+            .kinds
+            .places
+            .iter()
+            .find(|p| p.place == place)
+            .map(|p| p.sections.clone())
+            .unwrap_or_default();
+        let mut out = vec![Token::Open, Token::Str(place)];
+        for (i, name) in names.into_iter().enumerate() {
+            let h = self.section_rect(wi, i as u32).map_or(0, |r| r.h);
+            out.extend([
+                Token::Open,
+                Token::Int(i as i64),
+                Token::Str(name),
+                Token::Int(i64::from(h)),
+                Token::Close,
+            ]);
+        }
+        out.push(Token::Close);
         Ok(out)
     }
 

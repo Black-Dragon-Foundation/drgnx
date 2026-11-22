@@ -997,7 +997,17 @@ fn run(door: &mut Door, op: usize, v: &[Val]) -> R<Val> {
         }
         "query" => {
             let w = WinId(a.id()?);
-            match wb.query(w, &a.str()?) {
+            let path = a.str()?;
+            // `query W "sections" [REGION]`: the region's sections (default the left)
+            let answer = if path == "sections" {
+                match a.next() {
+                    Val::Nil => wb.sections(w, Region::Left),
+                    x => wb.sections(w, region(x)?),
+                }
+            } else {
+                wb.query(w, &path)
+            };
+            match answer {
                 Ok(t) => tokens_val(&t),
                 Err(e) => refused(e),
             }
