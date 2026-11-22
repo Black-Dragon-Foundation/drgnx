@@ -128,6 +128,7 @@ fn the_methods_are_the_users() {
     for m in [
         "search/symbols",
         "search/outline",
+        "search/why",
         "search/map",
         "search/usages",
     ] {
@@ -135,6 +136,111 @@ fn the_methods_are_the_users() {
         assert_eq!(method.classes, &[Class::User], "{m}");
         assert!(!method.writes, "{m}");
     }
+}
+
+fn why(c: &mut Client, id: u64, root: &Path, path: &str) -> Value {
+    let a = call(c, id, "search/why", json!({"root": root, "path": path}));
+    assert!(a.get("error").is_none(), "{a}");
+    a["result"].clone()
+}
+
+/// The user's rules for the project NAME, as the editor sends them (`config/settings`).
+fn user_rules(c: &mut Client, id: u64, name: &str, rules: Value) {
+    let a = call(
+        c,
+        id,
+        "config/settings",
+        json!({"project": name,
+               "overrides": [{"name": "drgnx-search-rules", "source": "test", "value": rules}]}),
+    );
+    assert!(a.get("error").is_none(), "{a}");
+}
+
+/// Pattern C. Which layer and which rule decided a file, for each of the three layers, the fixed refusals and a file no
+/// rule touches.
+#[test]
+fn why_names_layer_and_rule() {
+    let root = Root::new();
+    let (proj, _wt) = project(&root, "proj");
+    std::fs::create_dir_all(proj.join(".drgnx")).unwrap();
+    std::fs::write(
+        proj.join(".drgnx/search.toml"),
+        "ignore = [\"src/user.rs\"]\n",
+    )
+    .unwrap();
+    let (_hub, mut c) = ready(&root);
+    user_rules(
+        &mut c,
+        1,
+        "proj",
+        json!({"ignore": ["core/hub.el"], "no-embed": ["src/widget.rs"]}),
+    );
+    let r = why(&mut c, 2, &proj, "docs/logo.svg");
+    assert_eq!(
+        (r["verdict"].clone(), r["layer"].clone(), r["list"].clone()),
+        (json!("ignored"), json!("builtin"), json!("ignore")),
+        "{r}"
+    );
+    assert_eq!(r["rule"], "*.svg");
+    let r = why(&mut c, 3, &proj, "src/user.rs");
+    assert_eq!(
+        (r["verdict"].clone(), r["layer"].clone(), r["list"].clone()),
+        (json!("ignored"), json!("repo"), json!("ignore")),
+        "{r}"
+    );
+    assert_eq!(r["rule"], "src/user.rs");
+    let r = why(&mut c, 4, &proj, "core/hub.el");
+    assert_eq!(
+        (r["verdict"].clone(), r["layer"].clone(), r["list"].clone()),
+        (json!("ignored"), json!("user"), json!("ignore")),
+        "{r}"
+    );
+    assert_eq!(r["rule"], "core/hub.el");
+    let r = why(&mut c, 5, &proj, "src/widget.rs");
+    assert_eq!(
+        (r["verdict"].clone(), r["layer"].clone(), r["list"].clone()),
+        (json!("no-embed"), json!("user"), json!("no-embed")),
+        "{r}"
+    );
+    let r = why(&mut c, 6, &proj, "src/secret_key.rs");
+    assert_eq!(r["verdict"], "ignored", "{r}");
+    assert_eq!(r["layer"], "builtin", "{r}");
+    let r = why(&mut c, 7, &proj, "tests/widget_test.rs");
+    assert_eq!(
+        (r["verdict"].clone(), r["list"].clone()),
+        (json!("index"), json!("default")),
+        "{r}"
+    );
+    assert!(r.get("rule").is_none(), "{r}");
+    // a bad path is the caller's error
+    let a = call(
+        &mut c,
+        8,
+        "search/why",
+        json!({"root": proj, "path": "../x"}),
+    );
+    assert_eq!(a["error"]["path"], "path", "{a}");
+}
+
+/// Pattern C. The user's layer belongs to the project it was sent for.
+#[test]
+fn user_rules_are_per_project() {
+    let root = Root::new();
+    let (proj, _wt) = project(&root, "proj");
+    let (other, _owt) = project(&root, "other");
+    let (_hub, mut c) = ready(&root);
+    user_rules(&mut c, 1, "proj", json!({"ignore": ["core/hub.el"]}));
+    let mine = why(&mut c, 2, &proj, "core/hub.el");
+    assert_eq!(
+        (mine["verdict"].clone(), mine["layer"].clone()),
+        (json!("ignored"), json!("user")),
+        "{mine}"
+    );
+    let theirs = why(&mut c, 3, &other, "core/hub.el");
+    assert_eq!(theirs["verdict"], "index", "{theirs}");
+    // and a rule the editor takes back is gone at the next question
+    user_rules(&mut c, 4, "proj", json!({}));
+    assert_eq!(why(&mut c, 5, &proj, "core/hub.el")["verdict"], "index");
 }
 
 /// Pattern C. Definitions by name and a file's outline, from the index: lines, signature, doc line, nesting; code

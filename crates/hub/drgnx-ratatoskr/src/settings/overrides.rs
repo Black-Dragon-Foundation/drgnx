@@ -178,8 +178,10 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         }
         "drgnx-search-model-mirror" => values.search_model_mirror = de(v)?,
         "drgnx-search-builtin" => values.search_builtin = de(v)?,
-        "drgnx-search-include" => values.search_include = de(v)?,
-        "drgnx-search-exclude" => values.search_exclude = de(v)?,
+        "drgnx-search-rules" => {
+            let Alist(pairs) = de::<Alist<Vec<String>>>(v)?;
+            values.search_rules = super::search_rules(pairs).map_err(|why| refused("", why))?;
+        }
         "drgnx-search-off" => values.search_off = de(v)?,
         "drgnx-search-base" => values.search_base = de(v)?,
         "drgnx-search-ignore-rules" => {
@@ -333,8 +335,11 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         ),
         "drgnx-search-model-mirror" => json!(values.search_model_mirror),
         "drgnx-search-builtin" => json!(values.search_builtin),
-        "drgnx-search-include" => json!(values.search_include),
-        "drgnx-search-exclude" => json!(values.search_exclude),
+        "drgnx-search-rules" => json!({
+            "include": values.search_rules.include,
+            "ignore": values.search_rules.ignore,
+            "no-embed": values.search_rules.no_embed,
+        }),
         "drgnx-search-off" => json!(values.search_off),
         "drgnx-search-base" => json!(values.search_base),
         "drgnx-search-ignore-rules" => json!(values.search_ignore_rules),
@@ -384,8 +389,7 @@ pub const PER_PROJECT: &[&str] = &[
     "drgnx-runners-mac-tools",
     "drgnx-runners-mac-toolchains",
     "drgnx-runners-origin-key",
-    "drgnx-search-include",
-    "drgnx-search-exclude",
+    "drgnx-search-rules",
     "drgnx-search-off",
     "drgnx-search-base",
     // the user's own per-project plugin choice and hook rules: the Lisp declares them `:scope project :workspace never`,
@@ -680,8 +684,7 @@ mod tests {
                 name == "drgnx-ai-roles"
                     || name.starts_with("drgnx-runners-")
                     || [
-                        "drgnx-search-include",
-                        "drgnx-search-exclude",
+                        "drgnx-search-rules",
                         "drgnx-search-off",
                         "drgnx-search-base",
                         "drgnx-agents-plugins",

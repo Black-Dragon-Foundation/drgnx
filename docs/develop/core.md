@@ -366,9 +366,9 @@ header doc)` returns NAME:
   the pre-flight for a flow that ends in a write: it reads the file fresh and signals `drgnx-config-refused` when it
   has a mistake or is newer, so call it before the flow's first side effect (Import, Save Layout As…, a settings page
   that asks questions first) and a refusal changes nothing.
-- A project file is untrusted data: it is read, never evaluated. `search-project` (`.drgnx/search.eld`, in
-  `core/drgnx-settings-runtime.el`) is the first: Hrafn, in the hub, reads the file itself as data and fails closed (a file
-  that does not read turns the project's search off) rather than fall back to the defaults the layer applies.
+- A project file is untrusted data: it is read, never evaluated. The repo's search rules (`.drgnx/search.toml`) are the
+  example: Hrafn, in the hub, reads the file itself as data at every listing and fails closed (a file that does not
+  read stops the listing) rather than fall back to the defaults.
 - `:last-good` (t) applies the last good copy on a mistake. `:max-bytes` (1 MiB) caps reads and writes.
 - `:on-mistake` is a string saying what happens instead of using the file when it is not the last good copy or the
   defaults ("drgnx sync stops until it is fixed; nothing is changed"). The mistake notice and the reference's "On a

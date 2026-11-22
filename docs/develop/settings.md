@@ -89,6 +89,22 @@ The file is one form, `(HEAD :version 1 META… ENTRY… SECTION…)`, whose hea
 An `Error` carries the byte span of the node that did not fit. Use `serde_path_to_error::deserialize` around
 `Deserializer::new` for the path; `huginn` itself does not depend on it.
 
+## `drgnx-search-rules`
+
+What Hrafn indexes is decided in three layers (runtime.md, "The file list and coverage"): the built-in defaults, the
+repo's `.drgnx/search.toml` and this setting, the user's own layer, per project (`overrides::PER_PROJECT`, never
+committed). Its value is an alist of up to three lists of gitignore-style lines, `include`, `ignore` and `no-embed`
+(from the editor as the same three keys in a JSON object). It replaces `drgnx-search-include` and
+`drgnx-search-exclude`, which are gone with `.drgnx/search.eld`:
+
+```elisp
+(drgnx-search-rules ((ignore "scratch/**" "!vendor/our-fork/**")
+                     (no-embed "*.json")))
+```
+
+`ratatoskr search why ROOT PATH` shows which layer and rule decided a file. The user layer is read when the project
+opens; the repo's file at every listing.
+
 ## Conformance
 
 The two readers are held to each other by four things, all under `test/fixtures/huginn/` and `crates/core/huginn`:

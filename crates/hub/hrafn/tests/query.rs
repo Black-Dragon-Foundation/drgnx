@@ -106,6 +106,7 @@ async fn indexed() -> (
             class: f.class,
             lang: f.lang,
             generated: f.generated,
+            embed: true,
             size: f.text.len() as u64,
         })
         .collect();
@@ -510,6 +511,7 @@ async fn an_unchanged_file_moves_no_hit() {
         class: Class::Code,
         lang: Lang::Rust,
         generated: false,
+        embed: true,
         size: text.len() as u64,
     }];
     refresh(

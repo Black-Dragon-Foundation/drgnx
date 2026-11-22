@@ -20,6 +20,7 @@ fn el(path: &str, blob: &str) -> Listed {
         class: Class::Code,
         lang: Lang::Elisp,
         generated: false,
+        embed: true,
         size: 1,
     }
 }
@@ -363,7 +364,10 @@ mod fresh {
     async fn excluded_only_commit_is_not_stale() {
         let d = repo(&[("a.el", A), ("notes.txt", "one\n")]);
         let config = Config {
-            exclude: vec!["*.txt".into()],
+            user: hrafn::rules::RuleSet {
+                ignore: vec!["*.txt".into()],
+                ..Default::default()
+            },
             ..Config::default()
         };
         let (_s, s) = store().await;

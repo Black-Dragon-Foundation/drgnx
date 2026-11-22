@@ -3392,6 +3392,7 @@ dependencies = [
  "skuld",
  "tempfile",
  "tokio",
+ "toml_edit",
  "tree-sitter",
  "tree-sitter-elisp",
  "urdr",

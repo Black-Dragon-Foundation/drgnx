@@ -45757,6 +45757,101 @@
       "classes": [
         "user"
       ],
+      "doc": "why a file is or is not indexed: the verdict (index, no-embed, ignored) with the layer (built-in, repo, user), the list and the rule line that decided it",
+      "name": "search/why",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/why`: which layer and rule decide whether a file is indexed.",
+        "properties": {
+          "path": {
+            "description": "Relative to ROOT, inside it.",
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "path"
+        ],
+        "title": "WhyParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "WhyLayer": {
+            "description": "The layer that decided.",
+            "enum": [
+              "builtin",
+              "repo",
+              "user"
+            ],
+            "type": "string"
+          },
+          "WhyList": {
+            "description": "The list of that layer that decided (`default`: none did).",
+            "enum": [
+              "include",
+              "ignore",
+              "no-embed",
+              "default"
+            ],
+            "type": "string"
+          },
+          "WhyVerdict": {
+            "description": "What the rules do with a file.",
+            "enum": [
+              "index",
+              "no-embed",
+              "ignored"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "layer": {
+            "$ref": "#/$defs/WhyLayer"
+          },
+          "list": {
+            "$ref": "#/$defs/WhyList"
+          },
+          "rule": {
+            "description": "The rule line that matched (`!` and all); none when no line did (the allowlist, or no rule at all).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verdict": {
+            "$ref": "#/$defs/WhyVerdict"
+          }
+        },
+        "required": [
+          "verdict",
+          "layer",
+          "list"
+        ],
+        "title": "WhyAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the editor's answer to settings/proposed: ok accepts the agent's proposed tx (the editor wrote the file), else it is reverted (blocked when a later change of the setting came first); the agent gets a message either way; only a proposed tx of the tool mcp:settings_change",
       "name": "settings/confirm",
       "params": {

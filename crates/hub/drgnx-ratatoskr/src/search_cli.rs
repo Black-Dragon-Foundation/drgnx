@@ -7,6 +7,7 @@
 //! - `search symbols ROOT NAME [--match auto|exact|prefix|contains|regex] [--kind K]… [--path GLOB] [--scope S] [-k N]
 //!   [--json]`: `search/symbols`, printed as the MCP `symbols` tool prints it.
 //! - `search outline ROOT PATH [--no-docs] [--json]`: `search/outline`, printed as the MCP `outline` tool prints it.
+//! - `search why ROOT PATH [--json]`: `search/why`: which layer and rule decide whether PATH is indexed.
 //! - `search map ROOT [--budget N] [--focus PATH]… [--name ID]… [--scope code|all] [--json]`: `search/map`, printed as
 //!   the MCP `repo_map` tool prints it.
 //! - `search usages ROOT NAME [--scope S] [-k N] [--json]`: `search/usages`, printed as the MCP `find_usages` tool
@@ -68,6 +69,11 @@ pub enum SearchCommand {
         docs: bool,
         json: bool,
     },
+    Why {
+        root: PathBuf,
+        path: String,
+        json: bool,
+    },
     Map {
         root: PathBuf,
         budget: Option<u32>,
@@ -102,7 +108,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
         return crate::eval_cli::parse(p.raw_args().map_err(e)?.collect()).map(SearchCommand::Eval);
     }
     if ![
-        "index", "query", "mcp", "symbols", "outline", "map", "usages",
+        "index", "query", "mcp", "symbols", "outline", "why", "map", "usages",
     ]
     .contains(&name.as_str())
     {
@@ -117,7 +123,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
         match arg {
             Long("rebuild") if name == "index" => rebuild = true,
             Long("now") if name == "index" => now = true,
-            Long("json") if asks || name == "outline" || name == "map" => json = true,
+            Long("json") if asks || name == "outline" || name == "why" || name == "map" => {
+                json = true
+            }
             Long("budget") if name == "map" => {
                 let b: u32 = p.value().map_err(e)?.parse().map_err(e)?;
                 if !(256..=32_000).contains(&b) {
@@ -224,6 +232,18 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
                 root: root.into(),
                 path,
                 docs,
+                json,
+            }
+        }
+        "why" => {
+            let root = words.next().ok_or("search why needs a project root")?;
+            let path = words.next().ok_or("search why needs a file")?;
+            if let Some(extra) = words.next() {
+                return Err(format!("search why: unexpected argument {extra:?}"));
+            }
+            SearchCommand::Why {
+                root: root.into(),
+                path,
                 json,
             }
         }
@@ -349,6 +369,36 @@ fn serve_mcp(env: &Env, root: PathBuf) -> i32 {
     0
 }
 
+/// `search/why`'s text answer: `ignored by repo rule "vendor/**" (.drgnx/search.toml, ignore)`.
+pub fn render_why(a: &w::WhyAnswer) -> String {
+    let (layer, source) = match a.layer {
+        w::WhyLayer::Builtin => ("built-in", "built-in defaults"),
+        w::WhyLayer::Repo => ("repo", ".drgnx/search.toml"),
+        w::WhyLayer::User => ("user", "drgnx-search-rules"),
+    };
+    let list = match a.list {
+        w::WhyList::Include => "include",
+        w::WhyList::Ignore => "ignore",
+        w::WhyList::NoEmbed => "no-embed",
+        w::WhyList::Default => "default",
+    };
+    let by = match (&a.rule, a.list) {
+        (Some(r), w::WhyList::Default) => format!("{r} (never indexed)"),
+        (Some(r), _) => format!("{layer} rule {r:?} ({source}, {list})"),
+        (None, w::WhyList::Include) => {
+            format!("the {layer} include list: no line matches it ({source}, include)")
+        }
+        (None, _) => "no rule".to_string(),
+    };
+    let what = match (a.verdict, a.list) {
+        (w::WhyVerdict::Ignored, _) => format!("ignored by {by}"),
+        (w::WhyVerdict::NoEmbed, _) => format!("indexed without vectors by {by}"),
+        (w::WhyVerdict::Index, w::WhyList::Default) => "indexed: no rule applies".to_string(),
+        (w::WhyVerdict::Index, _) => format!("indexed: taken back by {by}"),
+    };
+    format!("{what}\n")
+}
+
 /// METHOD's answer A as the MCP tool prints it (`search/index`'s as data); PARAMS are the call's.
 fn text(
     method: &str,
@@ -359,6 +409,7 @@ fn text(
         "search/query" => render(&serde_json::from_value(a)?),
         "search/symbols" => render_symbols(&serde_json::from_value(a)?),
         "search/outline" => render_outline(&serde_json::from_value(a)?),
+        "search/why" => render_why(&serde_json::from_value(a)?),
         "search/map" => render_map(&serde_json::from_value(a)?),
         "search/usages" => render_usages(
             params["name"].as_str().unwrap_or_default(),
@@ -451,6 +502,11 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
         } => (
             "search/outline",
             json!({"root": absolute(&cwd, root), "path": path, "docs": docs}),
+            *json,
+        ),
+        SearchCommand::Why { root, path, json } => (
+            "search/why",
+            json!({"root": absolute(&cwd, root), "path": path}),
             *json,
         ),
         SearchCommand::Map {
@@ -584,6 +640,52 @@ mod tests {
         assert!(p(&["symbols", "/r", "x", "--match", "fuzzy"]).is_err());
         assert!(p(&["outline", "/r"]).is_err());
         assert!(p(&["outline", "/r", "a.rs", "--match", "exact"]).is_err());
+    }
+
+    #[test]
+    fn why_parses_and_prints_the_layer_and_rule() {
+        assert_eq!(
+            p(&["why", "/r", "vendor/a.go", "--json"]).unwrap(),
+            SearchCommand::Why {
+                root: "/r".into(),
+                path: "vendor/a.go".into(),
+                json: true
+            }
+        );
+        assert!(p(&["why", "/r"]).is_err());
+        let a = |verdict, layer, list, rule: Option<&str>| w::WhyAnswer {
+            verdict,
+            layer,
+            list,
+            rule: rule.map(str::to_string),
+        };
+        assert_eq!(
+            render_why(&a(
+                w::WhyVerdict::Ignored,
+                w::WhyLayer::Repo,
+                w::WhyList::Ignore,
+                Some("vendor/**")
+            )),
+            "ignored by repo rule \"vendor/**\" (.drgnx/search.toml, ignore)\n"
+        );
+        assert_eq!(
+            render_why(&a(
+                w::WhyVerdict::NoEmbed,
+                w::WhyLayer::User,
+                w::WhyList::NoEmbed,
+                Some("*.json")
+            )),
+            "indexed without vectors by user rule \"*.json\" (drgnx-search-rules, no-embed)\n"
+        );
+        assert_eq!(
+            render_why(&a(
+                w::WhyVerdict::Index,
+                w::WhyLayer::Builtin,
+                w::WhyList::Default,
+                None
+            )),
+            "indexed: no rule applies\n"
+        );
     }
 
     #[test]

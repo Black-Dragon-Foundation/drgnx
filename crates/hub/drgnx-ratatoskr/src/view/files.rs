@@ -258,21 +258,25 @@ fn invalid(path: &str, message: &str) -> Error {
     }
 }
 
-/// The exclude globs of ROOT: `.drgnx/search.eld`'s and the setting `drgnx-search-exclude`'s.
+/// The exclude globs of ROOT: the `ignore` lists of `.drgnx/search.toml` and of the setting `drgnx-search-rules` (a `!`
+/// line takes nothing back here: a name list only drops what a glob names). The built-in defaults are left out of
+/// it: Quick Open still finds a licence text or an image by name.
 fn excludes(f: &Front, root: &std::path::Path) -> Vec<String> {
     let mut globs = crate::search::methods::config_file(root)
-        .map(|c| c.exclude)
+        .map(|c| c.ignore)
         .unwrap_or_default();
     let setting: Vec<String> = f
         .settings
-        .effective("drgnx-search-exclude", None)
-        .and_then(|(v, _)| serde_json::from_value(v).ok())
+        .effective("drgnx-search-rules", None)
+        .and_then(|(v, _)| v.get("ignore").cloned())
+        .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
     for g in setting {
         if !globs.contains(&g) {
             globs.push(g);
         }
     }
+    globs.retain(|g| !g.trim_start().starts_with('!'));
     globs
 }
 

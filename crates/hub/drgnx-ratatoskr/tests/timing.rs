@@ -94,6 +94,7 @@ fn listed(path: String, text: &str) -> Listed {
         class: Class::Code,
         lang: Lang::Rust,
         generated: false,
+        embed: true,
         size: text.len() as u64,
     }
 }
@@ -581,6 +582,7 @@ async fn tier1_of_a_checkout_and_one_saved_file() {
                 class,
                 lang,
                 generated: false,
+                embed: true,
                 size: b.len() as u64,
             }
         })

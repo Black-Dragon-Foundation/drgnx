@@ -324,6 +324,7 @@
   "search/symbol-at": ["user"],
   "search/symbols": ["user"],
   "search/outline": ["user"],
+  "search/why": ["user"],
   "search/map": ["user"],
   "search/usages": ["user"],
   "search/recent": ["user"],

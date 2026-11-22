@@ -52,6 +52,7 @@ fn listed(path: &str, text: &str) -> Listed {
         class,
         lang,
         generated: false,
+        embed: true,
         size: text.len() as u64,
     }
 }
@@ -420,7 +421,10 @@ mod listed {
         git(dir.path(), &["add", "-A"]);
         git(dir.path(), &["commit", "-q", "-m", "one"]);
         let config = Config {
-            exclude: vec!["src/skip.rs".into()],
+            user: hrafn::rules::RuleSet {
+                ignore: vec!["src/skip.rs".into()],
+                ..Default::default()
+            },
             ..Config::default()
         };
         let l = list(dir.path(), &GitCli, &config, &|_: &str| true).unwrap();

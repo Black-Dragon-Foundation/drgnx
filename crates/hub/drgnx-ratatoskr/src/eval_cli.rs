@@ -852,6 +852,23 @@ fn run_set(
         .collect();
 
     let mut text = summary(&model_id, set, &report, embedded, embed_seconds);
+    // a target the rules (the defaults and the root's `.drgnx/search.toml`) leave out of the list is a rule bug: the
+    // wave gate wants 0
+    let kept: std::collections::HashSet<&str> = listed.iter().map(|l| l.path.as_str()).collect();
+    let hidden: std::collections::BTreeSet<&str> = questions
+        .iter()
+        .flat_map(|q| q.targets.iter().map(|t| t.0.as_str()))
+        .filter(|p| !kept.contains(p))
+        .collect();
+    text.push_str(&format!(
+        "eval targets the default rules ignore: {}{}\n",
+        hidden.len(),
+        hidden
+            .iter()
+            .take(5)
+            .map(|p| format!(" {p}"))
+            .collect::<String>()
+    ));
     text.push_str(&format!(
         "one question (embed + search), {} asked: p50 {:.3}s, p95 {:.3}s, max {:.3}s\n",
         query_latency.n, query_latency.p50, query_latency.p95, query_latency.max
