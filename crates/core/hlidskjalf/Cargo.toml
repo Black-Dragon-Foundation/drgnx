@@ -3,6 +3,8 @@ name = "hlidskjalf"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.93"
+# Planned licence: Apache-2.0 (a library of the text core). It stays GPL-3.0-or-later until the licence audit clears it:
+# all our own code, no outside contributor, nothing derived from Emacs (see THIRD_PARTY.md for what it adapts).
 license = "GPL-3.0-or-later"
 description = "Hlidskjalf, a buffer text's line model: line index, marks, folds and hidden lines, with a C ABI"
 publish = false

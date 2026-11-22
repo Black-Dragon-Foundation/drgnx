@@ -18,6 +18,9 @@ resolver = "3"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
+# Every crate is GPL-3.0-or-later for now (LICENSE-GPL). The plan (README.md, "Licences"): the editor and the hub
+# GPL-3.0-or-later, hosted server parts AGPL-3.0-or-later, libraries and the extension SDK Apache-2.0, each library moved
+# only after an audit shows it is all our own code.
 license = "GPL-3.0-or-later"
 
 # Library evaluation section 17, nothing else.  Only crates a member uses enter Cargo.lock.

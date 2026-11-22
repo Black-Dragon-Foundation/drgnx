@@ -28,8 +28,12 @@ docs/develop/hub.md           ALL
 docs/*                        -
 README.md                     -
 SECURITY.md                   -
-LICENSE                       -
+LICENSE-*                     -
 LICENSES/*                    -
+THIRD_PARTY.md                -
+CLA.md                        -
+CONTRIBUTING.md               -
+funding.json                  -
 
 # bite cases (changes.sh --self-test): PATHS | REQUEST | SELECTOR | RUN | PARTIAL
 test crates/core/huginn/src/lib.rs       | -        | -                | ALL   | false

@@ -6,6 +6,9 @@
 name = "my-plugin"
 version = "0.1.0"
 edition = "2024"
+# Planned licence: Apache-2.0 (the extension SDK: a plugin may take any licence). GPL-3.0-or-later until the licence
+# audit clears it.
+license = "GPL-3.0-or-later"
 publish = false
 
 [lib]
