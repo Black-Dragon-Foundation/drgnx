@@ -860,7 +860,7 @@ fn rerun_is_a_no_op() {
     assert_eq!(
         open(&mut c, &fx.db, &fx.opts),
         OpenOutcome::Ready {
-            schema: crate::migrate15::SCHEMA
+            schema: crate::migrate16::SCHEMA
         }
     );
     assert_eq!(census(&c), before);
@@ -932,7 +932,7 @@ fn a_fresh_file_is_schema_7() {
     assert_eq!(
         open(&mut c, &fx.db, &fx.opts),
         OpenOutcome::Ready {
-            schema: crate::migrate15::SCHEMA
+            schema: crate::migrate16::SCHEMA
         }
     );
     assert!(fx.backups().is_empty(), "nothing to copy");
@@ -941,7 +941,7 @@ fn a_fresh_file_is_schema_7() {
         kv,
         vec![
             vec![json!("compat-read"), json!("6")],
-            vec![json!("schema"), json!("15")]
+            vec![json!("schema"), json!("16")]
         ]
     );
     let schema = |c: &Connection| {
@@ -955,7 +955,7 @@ fn a_fresh_file_is_schema_7() {
     assert_eq!(
         open(&mut migrated_conn, &m.db, &m.opts),
         OpenOutcome::Ready {
-            schema: crate::migrate15::SCHEMA
+            schema: crate::migrate16::SCHEMA
         }
     );
     assert_eq!(schema(&c), schema(&migrated_conn));
@@ -1183,7 +1183,7 @@ async fn a_migrated_lease_stays_in_history() {
     assert_eq!(
         handle.status().last_open,
         Some(OpenOutcome::Ready {
-            schema: crate::migrate15::SCHEMA
+            schema: crate::migrate16::SCHEMA
         })
     );
     let read = || Connection::open(&fx.db).unwrap();
@@ -1251,7 +1251,7 @@ async fn excise_on_a_migrated_store_leaves_no_trace() {
     assert_eq!(
         handle.status().last_open,
         Some(OpenOutcome::Ready {
-            schema: crate::migrate15::SCHEMA
+            schema: crate::migrate16::SCHEMA
         })
     );
     let read = || Connection::open(&fx.db).unwrap();

@@ -1,4 +1,4 @@
-# The store (Urdr): `work.db` schema 15
+# The store (Urdr): `work.db` schema 16
 
 `work.db` holds one knowledge graph across projects: entities and immutable links with transaction-time history,
 written by Ratatoskr only. The graph layer is the generic `urdr::graph` (kinds, link names and policy are the
@@ -640,11 +640,11 @@ result. What the rule answers for the file it finds:
 
 | The file | The answer |
 |---|---|
-| missing (or empty) | made at schema 7 and moved to 15: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
-| schema 6 | migrated (below), then moved to 8 and on to 15, then `Ready { 15 }` |
-| schema 7 to 14 | moved one schema at a time to 15 (next sections), then `Ready { 15 }` |
-| schema 15 | `Ready { 15 }` |
-| above 15 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
+| missing (or empty) | made at schema 7 and moved to 16: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
+| schema 6 | migrated (below), then moved to 8 and on to 16, then `Ready { 16 }` |
+| schema 7 to 15 | moved one schema at a time to 16 (next sections), then `Ready { 16 }` |
+| schema 16 | `Ready { 16 }` |
+| above 16 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
 | below 6 | `NotReady`: "work.db is schema N; open it once with drgnx 6 first, or remove it (installs are disposable)" |
 | a migration that failed | `Failed { reason }`, never tried again in this process (call 18) |
 
@@ -760,7 +760,7 @@ so older files and fresh ones arrive at 10 too; a crash leaves 9): it builds the
 for), drops the old table and sets `schema = 10`. A table that already has the key (a file made from today's DDL) only
 gets the number. A second move does nothing. Tests: `rebuild_keeps_every_row_and_its_model`,
 `a_second_model_sits_beside_the_first`, `a_table_with_the_key_is_left_alone`, `a_failed_move_changes_nothing`, and
-`tests/entity_vec_schema8.rs` (a schema-8 file through the real opening rule). A file of schema 15 or above is
+`tests/entity_vec_schema8.rs` (a schema-8 file through the real opening rule). A file of schema 16 or above is
 read-only.
 
 ## Schema 11: forecast samples (agent system part 5)
@@ -808,6 +808,21 @@ pieces (which keep none), the source of the live `parent_of` link into it: a tas
 importer's plan tasks were in neither `node` nor `jtask`, and the editor's Work tab, `drgnx work status` and
 `drgnx-work-nodes` showed none. Tests: `migrate15_lists_the_importers_tasks_as_nodes` (a populated schema-14 file) and
 `a_failed_move_leaves_schema_14`.
+
+## Schema 16: `entity_vec.model` is a fingerprint (Hrafn redesign, MP-17's identity part)
+
+Until schema 16 the `model` of an `entity_vec` row was a label: a model id, or a server's name (`tei:tei`,
+`ollama:<provider>:<model>`), which says nothing of the weights, the pooling or the prompt that made the vector. It is now
+the model's fingerprint (`hrafn_embed::fingerprint::Fingerprint::hex()`, 64 lowercase hex characters), which
+`urdr::graph::search::Embedder::model()` returns. `norn::migrate16` moves a schema-15 file to 16 in one `BEGIN
+IMMEDIATE` transaction (a crash leaves 15): it deletes every row whose `model` is not 64 hex characters (a label, an
+empty name, none), then sets `schema = 16`; rows keyed by a fingerprint stay as they are. The work graph embeds the
+entities that lost their vector again, at its next round, with whichever embedder answers first. Entity vectors never use
+the shared vector cache, vector packs or any remote vector source (design MP-17: work-graph text can include material near
+the personal-notes deny-list); they are made by the embed role's chain and kept in this table only. A file of schema 16
+is `Ready { 16 }` and one above it is read-only. Tests: `tests/entity_vec_fingerprint.rs`
+(`migrate16_drops_label_rows_keeps_hex_rows`, through the real opening rule) and, in drgnx-ratatoskr,
+`search_prefer::entity_round_writes_fingerprint_hex`.
 
 ## Parsed entities (Task 15a)
 
