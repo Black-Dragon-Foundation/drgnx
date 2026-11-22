@@ -178,6 +178,15 @@ impl Workbench {
     }
 
     /// The rectangle chrome and hit tests use, in device px: the reported edge, else the requested one.
+    /// The edges Emacs last reported for OS window `w` (empty: none, or no such window): what the chrome's rects
+    /// follow besides the version, which a report does not change.
+    pub fn reported_edges(&self, w: WinId) -> &[(EdgeKey, Rect)] {
+        self.windows
+            .iter()
+            .find(|x| x.id == w)
+            .map_or(&[], |x| x.edges.as_slice())
+    }
+
     pub fn rect(&self, w: WinId, key: EdgeKey) -> Option<Rect> {
         let wi = self.windows.iter().position(|x| x.id == w)?;
         if let Some((_, r)) = self.windows[wi].edges.iter().find(|(k, _)| *k == key) {
