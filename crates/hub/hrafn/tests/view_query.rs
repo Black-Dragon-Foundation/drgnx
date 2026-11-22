@@ -71,18 +71,21 @@ async fn put(s: &CodeStore, tree: TreeId, path: &str, text: &str) {
         hrafn::chunk::chunk_file(path, Lang::Rust, false, text, hrafn::chunk::BUDGET);
     let chunks: Vec<hrafn::ChunkIn> = chunks
         .into_iter()
-        .map(|c| hrafn::ChunkIn {
-            start: c.start,
-            end: c.end,
-            line_start: c.line_start,
-            line_end: c.line_end,
-            symbol: c.symbol,
-            key: hrafn::vec_key(hrafn::chunk::CHUNKER_VERSION, &c.embed_text),
-            embed: c.embed,
-            embed_text: c.embed_text,
-            symbols: c.fts.symbols,
-            doc: c.fts.doc,
-            body: c.fts.body,
+        .map(|c| {
+            let (_, key) = hrafn::chunk::embed_text_and_key(&c);
+            hrafn::ChunkIn {
+                start: c.start,
+                end: c.end,
+                line_start: c.line_start,
+                line_end: c.line_end,
+                symbol: c.symbol,
+                key,
+                embed: c.embed,
+                embed_text: c.embed_text,
+                symbols: c.fts.symbols,
+                doc: c.fts.doc,
+                body: c.fts.body,
+            }
         })
         .collect();
     let symbols: Vec<hrafn::SymbolIn> = symbols
@@ -125,6 +128,8 @@ fn q(text: &str) -> Query {
         text: text.into(),
         scope: Scope::All,
         k: 10,
+        path_weight: hrafn::query::PATH_WEIGHT,
+        dir_weight: hrafn::query::DIR_WEIGHT,
     }
 }
 
@@ -276,14 +281,17 @@ async fn vector_hit_resolves_to_a_visible_chunk() {
         .await
         .unwrap()
         .into_iter()
+        .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
         .enumerate()
-        .map(|(i, (k, _))| {
+        .map(|(i, (_, k, _))| {
             let mut v = vec![0.0; DIMS];
             v[i % DIMS] = 1.0;
             (k, v)
         })
         .collect();
-    put_vectors(&s, MODEL, DIMS as u32, &keys).await.unwrap();
+    put_vectors(&s, MODEL, DIMS as u32, hrafn::KeyKind::Chunk, &keys)
+        .await
+        .unwrap();
     for (_, v) in &keys {
         let base = search(
             &s,
@@ -343,9 +351,12 @@ async fn view_lag_counts_the_views_content() {
         .await
         .unwrap()
         .into_iter()
-        .map(|(k, _)| (k, vec![1.0; DIMS]))
+        .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
+        .map(|(_, k, _)| (k, vec![1.0; DIMS]))
         .collect();
-    put_vectors(&s, MODEL, DIMS as u32, &keys).await.unwrap();
+    put_vectors(&s, MODEL, DIMS as u32, hrafn::KeyKind::Chunk, &keys)
+        .await
+        .unwrap();
     let base_total = lag(&s, Some(MODEL), View::Base).await.unwrap().chunks_total;
     put(
         &s,
@@ -409,7 +420,7 @@ async fn overlay_predicates_use_indexes() {
         hrafn::query::PATH_ANY_SQL,
         hrafn::query::PATH_NAME_SQL,
         hrafn::query::VISIBLE_SQL,
-        hrafn::query::FIRST_CHUNK_SQL,
+        hrafn::query::KEY_CHUNKS_SQL,
         hrafn::query::META_SQL,
         hrafn::refs::REFS_SQL,
         hrafn::index::LAG_TOTAL_SQL,

@@ -26,8 +26,20 @@ pub use registry::{MissingHook, hub_grammars, on_missing, stamp as lang_stamp};
 /// The chunk budget, in non-whitespace characters (the eval tunes it).
 pub const BUDGET: usize = 1800;
 
-/// Bump it when chunking changes: the content key of every vector changes with it.
+/// Bump it when chunking changes: tier 1 chunks every stored file again.
 pub const CHUNKER_VERSION: u32 = 2;
+
+/// The version of what a chunk's `embed_text` holds (title, section, `defines:`, `part i/n: sig`, body; no path). It is
+/// hashed into every chunk key ([`crate::chunk_key`]) and is a field of every model fingerprint: bump it when the text
+/// changes, and every vector is made again.
+pub const EMBED_TEXT_VERSION: u32 = 3;
+
+/// The text tier 2 sends for CHUNK and the key its vector is stored under: the only way to obtain either, so the key is
+/// always the hash of the very bytes that are embedded.
+pub fn embed_text_and_key(chunk: &Chunk) -> (&str, [u8; 32]) {
+    let _ = chunk;
+    unimplemented!()
+}
 
 /// Bump it when what a parse derives besides the chunks changes (a symbol's lines or signature, a new language, the
 /// references): tier 1 parses every stored file again, and the chunks keep their content keys, so no vector changes.

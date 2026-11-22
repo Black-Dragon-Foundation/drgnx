@@ -395,6 +395,8 @@ fn map_yields(
             text: r.query.clone(),
             scope: hrafn::Scope::All,
             k: PACK_HITS,
+            path_weight: hrafn::query::PATH_WEIGHT,
+            dir_weight: hrafn::query::DIR_WEIGHT,
         })
         .hits;
         let top = &hits[..hits.len().min(5)];
@@ -590,6 +592,8 @@ impl DocSource for ServerSource<'_> {
             text: "dimension probe".into(),
             scope: hrafn::Scope::All,
             k: 1,
+            path_weight: hrafn::query::PATH_WEIGHT,
+            dir_weight: hrafn::query::DIR_WEIGHT,
         };
         let d = self.embed_query(&probe)?.len();
         self.dims = Some(d);
@@ -638,6 +642,22 @@ fn open_source<'a>(
         SourceArg::Ollama { url, model } => server(Api::Ollama(model.clone()), url),
         SourceArg::Llama { url } => server(Api::Llama, url),
     }
+}
+
+/// The vector score's path and directory weights for this run: `HRAFN_EVAL_PATH_WEIGHT` and `HRAFN_EVAL_DIR_WEIGHT`
+/// when set (how the eval tunes them on the dev halves), else the query's own. Only `eval run` reads them; the hub
+/// never does.
+fn eval_weights() -> (f32, f32) {
+    let read = |name: &str, default: f32| {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .unwrap_or(default)
+    };
+    (
+        read("HRAFN_EVAL_PATH_WEIGHT", hrafn::query::PATH_WEIGHT),
+        read("HRAFN_EVAL_DIR_WEIGHT", hrafn::query::DIR_WEIGHT),
+    )
 }
 
 fn spec_of(id: Option<&str>) -> Result<&'static ModelSpec, String> {
@@ -760,23 +780,40 @@ fn run_set(
         began.elapsed().as_secs_f64()
     );
 
-    // tier 2, in this process: every chunk the model lacks
+    // tier 2, in this process: every chunk and path the model lacks (directories too when their weight counts)
+    let (path_weight, dir_weight) = eval_weights();
     let begun = clock::real_now();
     let mut embedded = 0u64;
     loop {
         let todo = rt
-            .block_on(hrafn::missing(&store, &model_id, 256))
+            .block_on(hrafn::missing_with(
+                &store,
+                &model_id,
+                256,
+                dir_weight > 0.0,
+            ))
             .map_err(|e| e.to_string())?;
         if todo.is_empty() {
             break;
         }
-        let texts: Vec<String> = todo.iter().map(|(_, t)| t.clone()).collect();
+        let texts: Vec<String> = todo.iter().map(|(_, _, t)| t.clone()).collect();
         let vectors = docs.embed_docs(&texts)?;
-        let put: Vec<_> = todo.iter().map(|(k, _)| *k).zip(vectors).collect();
-        let dims = put.first().map_or(0, |(_, v)| v.len() as u32);
-        rt.block_on(hrafn::put_vectors(&store, &model_id, dims, &put))
-            .map_err(|e| e.to_string())?;
-        embedded += put.len() as u64;
+        let dims = vectors.first().map_or(0, |v| v.len() as u32);
+        let (chunks, paths): (Vec<_>, Vec<_>) = todo
+            .iter()
+            .zip(vectors)
+            .partition(|((kind, _, _), _)| *kind == hrafn::KeyKind::Chunk);
+        for (kind, rows) in [
+            (hrafn::KeyKind::Chunk, chunks),
+            (hrafn::KeyKind::Path, paths),
+        ] {
+            let put: Vec<_> = rows.into_iter().map(|((_, k, _), v)| (*k, v)).collect();
+            if !put.is_empty() {
+                rt.block_on(hrafn::put_vectors(&store, &model_id, dims, kind, &put))
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        embedded += texts.len() as u64;
         if embedded % 2048 < 256 {
             eprintln!(
                 "embedded {embedded} chunks, {:.0}s",
@@ -793,6 +830,11 @@ fn run_set(
     let base = root.to_path_buf();
     let phase = RefCell::new(Tally::new("scoring", questions.len(), 25));
     let ask = |q: &Query| -> Answer {
+        let q = &Query {
+            path_weight,
+            dir_weight,
+            ..q.clone()
+        };
         let none = || Answer {
             hits: Vec::new(),
             lag: Lag::default(),
@@ -852,6 +894,9 @@ fn run_set(
         .collect();
 
     let mut text = summary(&model_id, set, &report, embedded, embed_seconds);
+    text.push_str(&format!(
+        "vector score weights: path {path_weight}, directories {dir_weight}\n"
+    ));
     // a target the rules (the defaults and the root's `.drgnx/search.toml`) leave out of the list is a rule bug: the
     // wave gate wants 0
     let kept: std::collections::HashSet<&str> = listed.iter().map(|l| l.path.as_str()).collect();

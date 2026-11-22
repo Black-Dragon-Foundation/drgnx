@@ -671,6 +671,8 @@ impl Hub {
             text: text.to_string(),
             scope,
             k: k.clamp(1, 100),
+            path_weight: hrafn::query::PATH_WEIGHT,
+            dir_weight: hrafn::query::DIR_WEIGHT,
         };
         let (pr, at) = (p.clone(), of.root.clone());
         let mut a = hrafn::search(

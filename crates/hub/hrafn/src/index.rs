@@ -10,8 +10,8 @@ use crate::chunk::{BUDGET, CHUNKER_VERSION, PARSE_VERSION, chunk_file_refs};
 use crate::files::Listed;
 use crate::memo;
 use crate::store::{
-    ChunkIn, CodeStore, FileRow, RefIn, StoreError, SymbolIn, content_ids, remove_file_row,
-    sweep_all, vec_key, write_version,
+    ChunkIn, CodeStore, FileRow, KeyKind, RefIn, StoreError, SymbolIn, content_ids,
+    remove_file_row, sweep_all, vec_key, write_version,
 };
 use crate::tree::{View, transition};
 use rusqlite::{Connection, params};
@@ -375,12 +375,25 @@ async fn refresh_files(
     Ok(out)
 }
 
-/// Up to `limit` content keys MODEL lacks, with the text to embed, in chunk order.
+/// Up to `limit` keys MODEL lacks, with the text to embed: [`missing_with`], with directories when
+/// [`crate::query::DIR_WEIGHT`] gives them a part in the score.
 pub async fn missing(
     store: &CodeStore,
     model: &str,
     limit: u32,
-) -> Result<Vec<([u8; 32], String)>, StoreError> {
+) -> Result<Vec<(KeyKind, [u8; 32], String)>, StoreError> {
+    missing_with(store, model, limit, crate::query::DIR_WEIGHT > 0.0).await
+}
+
+/// Up to `limit` keys MODEL lacks, with the text to embed: the chunk keys in chunk order, each file's path key after its
+/// chunks' (and, with DIRS, its directories' keys after it), then the path keys of files whose chunks have vectors.
+pub async fn missing_with(
+    store: &CodeStore,
+    model: &str,
+    limit: u32,
+    dirs: bool,
+) -> Result<Vec<(KeyKind, [u8; 32], String)>, StoreError> {
+    let _ = dirs; // STUB (the red run)
     let model = model.to_string();
     Ok(store
         .handle()
@@ -399,7 +412,9 @@ pub async fn missing(
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows
                 .into_iter()
-                .filter_map(|(k, t)| Some((<[u8; 32]>::try_from(k.as_slice()).ok()?, t)))
+                .filter_map(|(k, t)| {
+                    Some((KeyKind::Chunk, <[u8; 32]>::try_from(k.as_slice()).ok()?, t))
+                })
                 .collect())
         })
         .await?)
@@ -408,13 +423,15 @@ pub async fn missing(
 /// MODEL's vectors for content keys. Each is stored quantized (`urdr::graph::search::vec::quantize`): `vec` holds the
 /// sign bits (`dims / 8` bytes, rounded up) and then the int8 values, `scale` their scale, and `bits` is 8.
 /// MODEL is the fingerprint's hex and DIMS its dims: a row of another length is an error, and nothing of the batch is
-/// written.
+/// written. KIND says what the keys are of: chunk texts or paths.
 pub async fn put_vectors(
     store: &CodeStore,
     model: &str,
     dims: u32,
+    kind: KeyKind,
     rows: &[([u8; 32], Vec<f32>)],
 ) -> Result<(), StoreError> {
+    let _ = kind; // STUB (the red run)
     if let Some((_, v)) = rows.iter().find(|(_, v)| v.len() != dims as usize) {
         return Err(StoreError::Io(io::Error::other(format!(
             "a vector of {} dims, the fingerprint says {dims}",

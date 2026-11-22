@@ -60,7 +60,7 @@ pub struct FileRow {
 }
 
 /// A chunk to write. `symbols` is the raw symbol text: it is encoded (see [`encode_symbol`]) on its way into the FTS
-/// column. `key` is [`vec_key`] of the chunker version and `embed_text`.
+/// column. `key` is [`chunk_key`] of `embed_text`.
 #[derive(Clone, Debug)]
 pub struct ChunkIn {
     pub start: u32,
@@ -111,15 +111,56 @@ pub struct VecRow {
     pub last_used: i64,
 }
 
-/// The key of a chunk's content: sha256 over length-prefixed fields (the chunker version, then the text), so a key
-/// plus its row names the model, dims, chunker and text.
-pub fn vec_key(chunker: u32, embed_text: &str) -> [u8; 32] {
+/// STUB (the red run): the old key, until Task 8.
+pub(crate) fn vec_key(chunker: u32, embed_text: &str) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(4u64.to_be_bytes());
     h.update(chunker.to_be_bytes());
     h.update((embed_text.len() as u64).to_be_bytes());
     h.update(embed_text.as_bytes());
     h.finalize().into()
+}
+
+/// What a vector embeds: a chunk's text, or a path's (`vec.kind` 0 and 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum KeyKind {
+    Chunk,
+    Path,
+}
+
+impl KeyKind {
+    /// Its number in `vec.kind`.
+    pub fn as_i64(self) -> i64 {
+        match self {
+            KeyKind::Chunk => 0,
+            KeyKind::Path => 1,
+        }
+    }
+
+    /// The key of TEXT as this kind's text: sha256 over the length-prefixed version of the text and the text.
+    pub fn key(self, text: &str) -> [u8; 32] {
+        let _ = (text, Sha256::new());
+        unimplemented!()
+    }
+}
+
+/// The version of [`path_text`], hashed into every path key.
+pub const PATH_TEXT_VERSION: u32 = 1;
+
+/// The key of a chunk's embedded text (`chunk::embed_text_and_key` is how tier 1 gets it).
+pub fn chunk_key(embed_text: &str) -> [u8; 32] {
+    KeyKind::Chunk.key(embed_text)
+}
+
+/// What a path vector embeds: the whole path, a newline, then its words, split on `/ _ - .` and camelCase boundaries.
+pub fn path_text(path: &str) -> String {
+    let _ = path;
+    unimplemented!()
+}
+
+/// The key of PATH's vector: [`KeyKind::Path`]'s key of its [`path_text`].
+pub fn path_key(path: &str) -> [u8; 32] {
+    KeyKind::Path.key(&path_text(path))
 }
 
 /// TREE's blob of PATH: none when TREE has no row, `Some(None)` for a tombstone.

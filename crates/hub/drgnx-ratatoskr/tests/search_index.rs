@@ -587,7 +587,7 @@ async fn denied_root_refused_and_canary_never_embedded() {
     };
     assert_eq!(leaked, 0);
     let pending = hrafn::missing(p.store(), MODEL, 1000).await.unwrap();
-    assert!(pending.iter().all(|(_, t)| !t.contains(&canary)));
+    assert!(pending.iter().all(|(_, _, t)| !t.contains(&canary)));
 }
 
 /// Pattern B: tier 2 holds while typing holds, and only between requests. The clock moves by 250 ms advances;

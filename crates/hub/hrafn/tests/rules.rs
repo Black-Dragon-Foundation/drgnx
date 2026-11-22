@@ -320,7 +320,7 @@ async fn no_embed_is_listed_without_vectors() {
     let wanted = missing(&s, "m", 100).await.unwrap();
     assert!(!wanted.is_empty());
     assert!(
-        wanted.iter().all(|(_, t)| !t.contains("plain text")),
+        wanted.iter().all(|(_, _, t)| !t.contains("plain text")),
         "missing() never offers a no-embed file: {wanted:?}"
     );
 }

@@ -1,4 +1,4 @@
-use hrafn::{ChunkIn, CodeStore, FileRow, SymbolIn, VecRow, encode_symbol, vec_key};
+use hrafn::{ChunkIn, CodeStore, FileRow, KeyKind, SymbolIn, VecRow, chunk_key, encode_symbol};
 
 fn chunk(text: &str, symbols: &str, body: &str) -> ChunkIn {
     ChunkIn {
@@ -7,7 +7,7 @@ fn chunk(text: &str, symbols: &str, body: &str) -> ChunkIn {
         line_start: 1,
         line_end: 1,
         symbol: None,
-        key: vec_key(1, text),
+        key: chunk_key(text),
         embed: true,
         embed_text: text.into(),
         symbols: symbols.into(),
@@ -39,7 +39,7 @@ fn file(path: &str) -> FileRow {
 async fn open_creates_v1() {
     let dir = tempfile::tempdir().unwrap();
     let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("6"));
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("7"));
     for t in [
         "tree",
         "file",
@@ -48,6 +48,7 @@ async fn open_creates_v1() {
         "symbol",
         "symbol_fts",
         "vec",
+        "path_key",
         "meta",
     ] {
         let n = s
@@ -83,7 +84,7 @@ async fn reopen_is_idempotent() {
         .unwrap();
     let s = CodeStore::open(&p).unwrap();
     assert_eq!(count(&s, "select count(*) from file").await, 1);
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("6"));
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("7"));
     assert_eq!(
         s.meta_get("chunker_version").await.unwrap().as_deref(),
         Some("1")
@@ -91,11 +92,12 @@ async fn reopen_is_idempotent() {
 }
 
 #[test]
-fn vec_key_changes_with_each_field() {
-    let a = vec_key(1, "text");
-    assert_eq!(a, vec_key(1, "text"));
-    assert_ne!(a, vec_key(2, "text"));
-    assert_ne!(a, vec_key(1, "text2"));
+fn keys_change_with_the_text_and_its_kind() {
+    let a = chunk_key("text");
+    assert_eq!(a, chunk_key("text"));
+    assert_eq!(a, KeyKind::Chunk.key("text"));
+    assert_ne!(a, chunk_key("text2"));
+    assert_ne!(a, KeyKind::Path.key("text"), "another version, another key");
 }
 
 #[tokio::test]

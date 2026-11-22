@@ -1300,7 +1300,8 @@ impl Inner {
                     continue;
                 }
                 self.publish(Tier2::Running);
-                let texts: Vec<String> = keys.iter().map(|(_, t)| t.clone()).collect();
+                // the texts exactly as `missing` gives them: each is the text its key was made of
+                let texts: Vec<String> = keys.iter().map(|(_, _, t)| t.clone()).collect();
                 match e.embed_docs(&texts, overriding).await {
                     Ok(vectors) if vectors.len() == keys.len() => {
                         // the fingerprint says how long a vector is: another length writes nothing of the batch
@@ -1312,14 +1313,32 @@ impl Inner {
                             )));
                             continue;
                         }
-                        let rows: Vec<([u8; 32], Vec<f32>)> =
-                            keys.iter().map(|(k, _)| *k).zip(vectors).collect();
-                        if let Err(err) = hrafn::put_vectors(&self.store, &model, dims, &rows).await
-                        {
-                            self.publish(Tier2::Failed(err.to_string()));
+                        let (chunks, paths): (Vec<_>, Vec<_>) = keys
+                            .iter()
+                            .zip(vectors)
+                            .partition(|((kind, _, _), _)| *kind == hrafn::KeyKind::Chunk);
+                        let mut failed = None;
+                        for (kind, rows) in [
+                            (hrafn::KeyKind::Chunk, chunks),
+                            (hrafn::KeyKind::Path, paths),
+                        ] {
+                            let rows: Vec<([u8; 32], Vec<f32>)> =
+                                rows.into_iter().map(|((_, k, _), v)| (*k, v)).collect();
+                            if rows.is_empty() {
+                                continue;
+                            }
+                            if let Err(err) =
+                                hrafn::put_vectors(&self.store, &model, dims, kind, &rows).await
+                            {
+                                failed = Some(err.to_string());
+                                break;
+                            }
+                        }
+                        if let Some(err) = failed {
+                            self.publish(Tier2::Failed(err));
                             continue;
                         }
-                        self.status.send_modify(|s| s.embedded += rows.len() as u64);
+                        self.status.send_modify(|s| s.embedded += keys.len() as u64);
                         sent = true;
                     }
                     Ok(vectors) => self.publish(Tier2::Failed(format!(

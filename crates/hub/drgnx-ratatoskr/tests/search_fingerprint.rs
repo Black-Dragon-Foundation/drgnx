@@ -164,14 +164,15 @@ async fn project(embedders: Vec<Arc<dyn DocEmbedder>>) -> Fixture {
 }
 
 impl Fixture {
-    /// `(model, rows)` of the `vec` table.
+    /// `(model, rows)` of the `vec` table's chunk vectors (the path vectors left out).
     async fn vec_models(&self) -> Vec<(String, i64)> {
         self.project
             .store()
             .handle()
             .read(|c| {
-                let mut st =
-                    c.prepare("select model, count(*) from vec group by model order by model")?;
+                let mut st = c.prepare(
+                    "select model, count(*) from vec where kind = 0 group by model order by model",
+                )?;
                 Ok(st
                     .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
                     .collect::<Result<Vec<_>, _>>()?)
@@ -264,6 +265,73 @@ async fn swapped_server_model_is_a_new_fingerprint_and_old_vectors_stay() {
     let id_b = e.identity().unwrap();
     assert_ne!(id_b.fp, id_a.fp);
     assert_eq!(id_b.record.model_id, "model-b");
+}
+
+/// Pattern C (Hrafn redesign Review Focus 1). Every text tier 2 sends is the text its key was made of: for each text
+/// the server received, sha256 over its version and the text (a chunk's, or a path's) is a key tier 2 wrote, and every
+/// key written is one of a received text.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sent_text_hashes_to_its_key() {
+    let dir = TempDir::new().unwrap();
+    let server = Server::start(dir.path());
+    server.set_model("model-a");
+    let g = gate(
+        dir.path(),
+        json!([tei(&format!("http://127.0.0.1:{}", server.port))]),
+    )
+    .await;
+    let e = Arc::new(g.embedders(&[]).unwrap().remove(0));
+    let f = project(vec![e.clone() as Arc<dyn DocEmbedder>]).await;
+    f.project.start_tier2();
+    let chunks = f.live_keys().await;
+    f.wait_for_rows("the chunk rows", |r| {
+        r.iter().map(|(_, n)| n).sum::<i64>() == chunks
+    })
+    .await;
+    let hex = e.identity().expect("it has probed").fp.hex();
+    let store = f.project.store();
+    let mut done = false;
+    for _ in 0..600 {
+        if hrafn::missing(store, &hex, 1).await.unwrap().is_empty() {
+            done = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(done, "tier 2 never embedded every key");
+    let written: std::collections::HashSet<(i64, Vec<u8>)> = store
+        .handle()
+        .read(|c| {
+            let mut st = c.prepare("select kind, key from vec")?;
+            Ok(st
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?)
+        })
+        .await
+        .unwrap();
+    assert!(
+        written.iter().any(|(k, _)| *k == 1),
+        "the files' path keys too: {written:?}"
+    );
+    let mut received = std::collections::HashSet::new();
+    for (_, body) in server.embeds() {
+        for t in body["inputs"].as_array().expect("TEI's inputs") {
+            let t = t.as_str().unwrap();
+            let chunk = (0, hrafn::KeyKind::Chunk.key(t).to_vec());
+            let path = (1, hrafn::KeyKind::Path.key(t).to_vec());
+            let key = if written.contains(&chunk) {
+                chunk
+            } else {
+                path
+            };
+            assert!(
+                written.contains(&key),
+                "a sent text whose key was not written: {t:?}"
+            );
+            received.insert(key);
+        }
+    }
+    assert_eq!(received, written, "every key written is a sent text's");
 }
 
 /// Pattern C. A server whose vectors are not as long as its probe said is refused on write: tier 2 fails naming the

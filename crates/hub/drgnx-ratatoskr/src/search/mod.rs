@@ -28,9 +28,9 @@ use urdr::graph::search::{BoxFuture, EmbedError};
 /// What a server's vectors must cover of the live chunks, in percent, for a query to use the server's model.
 const SERVER_COVERAGE: u64 = 95;
 
-/// The embed-text version of a chunk's embedded text (a field of every fingerprint). The key work of Hrafn redesign
-/// Wave 4 owns it; until then the text is what it always was.
-pub const EMBED_TEXT_VERSION: u32 = 1;
+/// The embed-text version of a chunk's embedded text (a field of every fingerprint): hrafn's, which its chunk keys
+/// hash too.
+pub use hrafn::chunk::EMBED_TEXT_VERSION;
 
 /// The identity of the built-in model SPEC: its record at [`EMBED_TEXT_VERSION`], labelled with its id.
 pub fn builtin_identity(spec: &ModelSpec) -> Identity {

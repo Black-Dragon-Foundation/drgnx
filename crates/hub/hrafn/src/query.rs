@@ -97,11 +97,19 @@ impl Scope {
     }
 }
 
+/// The weight of a chunk's path vector in its vector score (the dev halves of the eval sets set it).
+pub const PATH_WEIGHT: f32 = 0.3;
+/// The weight of the best of its directories' vectors; 0: directories are not embedded.
+pub const DIR_WEIGHT: f32 = 0.0;
+
 #[derive(Clone, Debug)]
 pub struct Query {
     pub text: String,
     pub scope: Scope,
     pub k: u32,
+    /// [`PATH_WEIGHT`] and [`DIR_WEIGHT`], except in an eval that tunes them.
+    pub path_weight: f32,
+    pub dir_weight: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -367,6 +375,10 @@ pub const FIRST_CHUNK_SQL: &str = concat!(
     seen_through!("c", "?2"),
     " where c.key = ?1 and c.embed = 1 and f.blob = c.blob"
 );
+/// STUB (the red run).
+pub const KEY_CHUNKS_SQL: &str = FIRST_CHUNK_SQL;
+/// STUB (the red run).
+pub const VEC_SQL: &str = "select v.vec, v.scale from chunk c join vec v on v.key = c.key and v.model = ?1 where c.id = ?2";
 
 /// The nearest chunks of MODEL to the query vector V: Hamming over the sign bits, then the int8 dot product. The sign
 /// bits are read from the store once per change of it (`memo.rs`).
