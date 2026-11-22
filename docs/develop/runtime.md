@@ -1647,7 +1647,7 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   sees its text (`KEY_CHUNKS_SQL`: one chunk per `(path, blob)`, at most 8, so a text in two files is two hits), and
   each place scores `dot8(q, chunk) + PATH_WEIGHT · dot8(q, its path's vector) + DIR_WEIGHT · the best dot8(q, one of
   its directories' vectors)`, the best 50 kept (`Query::path_weight` and `dir_weight`, `hrafn::query`'s constants
-  except in an eval that tunes them; a path or directory without a vector adds nothing; each is read once per query,
+  except in an eval that tunes them: both 0.1, the best mean chunk MRR@10 of the four sets' dev halves with Qwen3; a path or directory without a vector adds nothing; each is read once per query,
   by `VEC_SQL`'s primary-key probe of `vec`). A test or generated file keeps half
   its score. Hits in files changed since indexing are looked for again by their first line, else their symbol (20 files,
   50 ms). The scope (`code`, which holds tests below it, `tests`, `docs`, `all`) filters by file class. Every answer has

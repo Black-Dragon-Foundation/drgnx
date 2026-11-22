@@ -98,10 +98,12 @@ impl Scope {
     }
 }
 
-/// The weight of a chunk's path vector in its vector score (the dev halves of the eval sets set it).
-pub const PATH_WEIGHT: f32 = 0.3;
+/// The weight of a chunk's path vector in its vector score. The dev halves of the four eval sets set it with
+/// [`DIR_WEIGHT`] (Qwen3-Embedding-0.6B Q8; mean chunk MRR@10 over the grid {0.1, 0.2, 0.3, 0.5} × {0, 0.1}: 0.338 at
+/// (0.1, 0.1), the best; 0.330 at the best without directories, (0.3, 0)).
+pub const PATH_WEIGHT: f32 = 0.1;
 /// The weight of the best of its directories' vectors; 0: directories are not embedded.
-pub const DIR_WEIGHT: f32 = 0.0;
+pub const DIR_WEIGHT: f32 = 0.1;
 
 #[derive(Clone, Debug)]
 pub struct Query {
