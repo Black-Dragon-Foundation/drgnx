@@ -250,15 +250,8 @@ async fn an_env_for_a_view_nobody_asked_for_builds_nothing() {
 #[cfg(feature = "test-hooks")]
 #[test]
 fn changes_are_rebuilt_once_after_the_pause_on_the_virtual_clock() {
-    crate::clock::install_virtual();
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .on_thread_park(crate::clock::worker_parks)
-        .on_thread_unpark(crate::clock::worker_unparks)
-        .build()
-        .unwrap();
-    rt.block_on(async {
+    // the test's own clock: the process's (install_virtual) would reach every other test's threads
+    crate::clock::on_virtual(async {
         let w = world().await;
         let view = w
             .views

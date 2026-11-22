@@ -399,7 +399,10 @@ tier 2) call `clock::install_virtual()`, `clock::advance(d)` and `clock::barrier
 answers the origins still waiting or busy (none when it held). Both wait for the runtime's workers to park, which only
 a runtime built with `clock::worker_parks` and `clock::worker_unparks` as its park hooks reports: on a plain
 `#[tokio::test]` runtime every advance runs out its 5 s of real time instead. The clock is the process's, so these
-tests share one such runtime and run one at a time.
+tests share one such runtime and run one at a time. The hub's own unit tests never install it (it panics there): they
+share one process under libtest (the macOS job runs the test binaries as they are), and a process clock standing
+still stops every other test's timeouts and sleeps. A unit test takes a clock of its own with `clock::on_virtual(f)`,
+a two-worker runtime with the park hooks whose threads alone read it.
 
 A hub without the sequencer refuses `__test_barrier` (`not-allowed`). A release build has none of these: `__test_advance`
 and `__test_barrier` are unknown methods (`no-method`), `__seq` is dropped and listed in the answer's `ignored`, and

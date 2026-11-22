@@ -527,15 +527,8 @@ async fn workers_a_kernel_forked_go_with_it_and_nothing_is_signalled_after_it_is
 #[cfg(feature = "test-hooks")]
 #[test]
 fn a_wait_for_an_exit_that_never_comes_ends_at_its_bound_on_the_virtual_clock() {
-    crate::clock::install_virtual();
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .on_thread_park(crate::clock::worker_parks)
-        .on_thread_unpark(crate::clock::worker_unparks)
-        .build()
-        .unwrap();
-    rt.block_on(async {
+    // the test's own clock: the process's (install_virtual) would reach every other test's threads
+    crate::clock::on_virtual(async {
         // the sender stays: the exit is never sent, and the channel is not closed
         let (_tx, mut rx) = watch::channel(None::<Exit>);
         let waiting = crate::clock::spawn("test:exit-wait", async move {

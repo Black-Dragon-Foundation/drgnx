@@ -471,6 +471,13 @@ mod virt {
     }
 
     pub(super) fn install() {
+        // the lib's tests share one process under libtest (macOS's job runs the binary as it is): the process's clock
+        // would stand still under every other test's timeouts. A unit test takes its own (`on_virtual`)
+        if cfg!(test) {
+            panic!(
+                "a unit test runs on its own virtual clock (clock::on_virtual), never the process's"
+            );
+        }
         let _ = GLOBAL.set(Arc::new(Virtual::new()));
         urdr::wait::set(store_wait);
         install_provider();
