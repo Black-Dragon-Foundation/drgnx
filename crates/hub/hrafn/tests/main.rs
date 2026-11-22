@@ -19,6 +19,7 @@ mod overlay;
 mod query;
 mod rank;
 mod refs;
+mod rules;
 mod shared_content;
 mod store;
 mod structural;

@@ -614,3 +614,36 @@ fn acp_v2_defaults_per_profile() {
         ]
     );
 }
+
+/// `drgnx-search-rules` reads as an alist of the three lists, from `settings.el` and from the editor's JSON alike; a
+/// key that is none of them is refused.
+#[test]
+fn search_rules_read_the_three_lists() {
+    let dir = config(" (drgnx-search-rules ((ignore \"a/**\" \"b\") (no-embed \"*.json\")))\n");
+    let l = Settings::load(dir.path(), &Kv::default());
+    assert_eq!(l.problems, []);
+    let r = &l.values.search_rules;
+    assert_eq!(r.ignore, ["a/**", "b"]);
+    assert_eq!(r.no_embed, ["*.json"]);
+    assert!(r.include.is_empty());
+    let mut values = RuntimeValues::default();
+    overrides::from_json(
+        "drgnx-search-rules",
+        &json!({"include": ["src/**"]}),
+        &mut values,
+    )
+    .unwrap();
+    assert_eq!(values.search_rules.include, ["src/**"]);
+    assert!(
+        overrides::from_json(
+            "drgnx-search-rules",
+            &json!({"exclude": ["x"]}),
+            &mut values
+        )
+        .is_err()
+    );
+    assert_eq!(
+        overrides::to_json("drgnx-search-rules", &values),
+        Some(json!({"include": ["src/**"], "ignore": [], "no-embed": []}))
+    );
+}

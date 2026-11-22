@@ -228,6 +228,7 @@ async fn tier1_writes_references_and_the_reset_clears_them() {
         class: Class::Code,
         lang: Lang::Rust,
         generated: false,
+        embed: true,
         size: text.len() as u64,
     }];
     let read = move |_: &str| Ok::<_, io::Error>(text.as_bytes().to_vec());
@@ -268,6 +269,7 @@ async fn tier1_gives_back_its_page_cache() {
         class: Class::Code,
         lang: Lang::Rust,
         generated: false,
+        embed: true,
         size: text.len() as u64,
     }];
     let read = move |_: &str| Ok::<_, io::Error>(text.as_bytes().to_vec());
@@ -288,6 +290,7 @@ async fn a_store_from_the_parse_before_references_gains_them() {
         class: Class::Code,
         lang: Lang::Rust,
         generated: false,
+        embed: true,
         size: text.len() as u64,
     }];
     let read = move |_: &str| Ok::<_, io::Error>(text.as_bytes().to_vec());

@@ -25,8 +25,9 @@
 //! Reading, hashing and chunking run in the caller's task, as tier 1's do; only the batch writes are store jobs.
 
 use crate::door::{Blob, TreeGit};
-use crate::files::{Config, Rules, listed, read_admitted};
+use crate::files::{Config, listed, read_admitted};
 use crate::index::{Built, META_BUILT_FROM, build, known_blobs, row_of};
+use crate::rules::{RuleSet, Rules, Verdict, builtin_rules};
 use crate::store::{CodeStore, FileRow, StoreError, content_ids, remove_file_row, write_version};
 use crate::tree::{TreeId, TreeState};
 use rusqlite::params;
@@ -50,6 +51,8 @@ pub struct Cx<'a> {
     pub root: &'a Path,
     pub door: &'a (dyn TreeGit + Sync),
     pub config: &'a Config,
+    /// The base's `.drgnx/search.toml` ([`crate::files::read_repo`]), read for this run.
+    pub repo: &'a RuleSet,
     pub allow: &'a (dyn Fn(&str) -> bool + Sync),
 }
 
@@ -129,7 +132,12 @@ async fn diff(cx: &Cx<'_>, only: Option<&[String]>) -> Result<Seed, StoreError> 
     let root_fd = eitri::open_path(cx.root, eitri::Kind::Dir)
         .map_err(|e| std::io::Error::other(format!("worktree root: {e}")))?;
     let git = cx.door.as_git();
-    let rules = Rules::new(cx.config, &git.nested(cx.root)?);
+    let rules = Rules::new(
+        &builtin_rules(),
+        cx.repo,
+        &cx.config.user,
+        &git.nested(cx.root)?,
+    );
     let head = cx.door.head(cx.root)?;
 
     // the candidates, and the committed entries of those that are stat-clean
@@ -168,9 +176,22 @@ async fn diff(cx: &Cx<'_>, only: Option<&[String]>) -> Result<Seed, StoreError> 
     };
     let mut want: Vec<(String, Want)> = Vec::new();
     let mut to_hash: Vec<(String, Vec<u8>)> = Vec::new();
+    // what the rules let in (and whether embedded), less what `.gitattributes` marks generated or vendored
+    let admit: HashMap<&String, bool> = candidates
+        .iter()
+        .filter(|_| !cx.config.off)
+        .filter_map(|p| match rules.decide(p, cx.allow).verdict {
+            Verdict::Ignored => None,
+            v => Some((p, v == Verdict::Index)),
+        })
+        .collect();
+    let names: Vec<String> = admit.keys().map(|p| (*p).clone()).collect();
+    let attr: HashSet<String> = git.generated(cx.root, &names)?.into_iter().collect();
+    let embeds: HashMap<String, bool> = admit.iter().map(|(p, e)| ((*p).clone(), *e)).collect();
+    drop(admit);
     for p in candidates {
         let in_base = base.get(&p);
-        if !rules.admits(&p, cx.allow) {
+        if !embeds.contains_key(&p) || attr.contains(&p) {
             want.push((p.clone(), absent(in_base)));
             continue;
         }
@@ -213,14 +234,12 @@ async fn diff(cx: &Cx<'_>, only: Option<&[String]>) -> Result<Seed, StoreError> 
         }
         to_hash = again;
     }
-    let paths: Vec<String> = hashed.iter().map(|h| h.0.clone()).collect();
-    let generated: HashSet<String> = git.generated(cx.root, &paths)?.into_iter().collect();
     let mut facts: HashMap<String, bool> = HashMap::new();
     for (p, bytes, b) in hashed {
         if base.get(&p) == Some(&b.id) && !b.uncertain {
             want.push((p, Want::None));
         } else {
-            facts.insert(p.clone(), generated.contains(&p));
+            facts.insert(p.clone(), embeds[&p]);
             want.push((p, Want::Row { blob: b.id, bytes }));
         }
     }
@@ -322,7 +341,7 @@ async fn diff(cx: &Cx<'_>, only: Option<&[String]>) -> Result<Seed, StoreError> 
                         row.path.clone(),
                         row.blob.clone().unwrap_or_default(),
                         bytes.as_deref().unwrap_or_default(),
-                        row.generated,
+                        !row.generated,
                     );
                     Write::Built(build(&l, bytes.as_deref().unwrap_or_default()))
                 })

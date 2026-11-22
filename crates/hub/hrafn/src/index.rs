@@ -55,6 +55,15 @@ pub struct Lag {
     pub differing_files: Option<u32>,
 }
 
+/// Whether each indexed file's chunks in the base were written with no vectors wanted.
+fn known_flags(c: &Connection) -> urdr::Result<HashMap<String, bool>> {
+    let mut q = c.prepare("select path, generated from file where tree = 0")?;
+    let rows = q
+        .query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)))?
+        .collect::<Result<HashMap<String, bool>, _>>()?;
+    Ok(rows)
+}
+
 /// Each indexed file's blob in the base.
 pub(crate) fn known_blobs(c: &Connection) -> urdr::Result<HashMap<String, String>> {
     let mut q = c.prepare("select path, blob from file where tree = 0")?;
@@ -89,6 +98,8 @@ const MISSING_KEYS: &str =
 
 /// One file's rows, chunked off the store thread.
 pub(crate) struct Built {
+    /// Written over content the pair already has (its embed flag moved with a rule).
+    pub(crate) force: bool,
     pub(crate) row: FileRow,
     pub(crate) chunks: Vec<ChunkIn>,
     pub(crate) symbols: Vec<SymbolIn>,
@@ -102,7 +113,8 @@ pub(crate) fn row_of(l: &Listed) -> FileRow {
         blob: Some(l.blob.clone()),
         class: l.class.as_str().into(),
         lang: l.lang.as_str().into(),
-        generated: l.generated,
+        // no vectors wanted (generated, or a `no-embed` rule): one flag, so a rule's change rebuilds the file
+        generated: l.generated || !l.embed,
         size: l.size,
         indexed_at: now_secs(),
     }
@@ -116,8 +128,10 @@ enum Pending {
 
 pub(crate) fn build(l: &Listed, bytes: &[u8]) -> Built {
     let text = String::from_utf8_lossy(bytes);
-    let (chunks, symbols, refs) = chunk_file_refs(&l.path, l.lang, l.generated, &text, BUDGET);
+    let (chunks, symbols, refs) =
+        chunk_file_refs(&l.path, l.lang, l.generated || !l.embed, &text, BUDGET);
     Built {
+        force: false,
         row: row_of(l),
         refs: refs
             .into_iter()
@@ -222,11 +236,12 @@ async fn refresh_files(
     models: &[(&str, usize)],
 ) -> Result<Refresh, StoreError> {
     let stamp = crate::chunk::lang_stamp();
-    let (known, chunker, parse, langs) = store
+    let (known, flags, chunker, parse, langs) = store
         .handle()
         .read(|c| {
             Ok((
                 known_blobs(c)?,
+                known_flags(c)?,
                 urdr::meta(c, META_CHUNKER)?,
                 urdr::meta(c, META_PARSE)?,
                 urdr::meta(c, META_LANGS)?,
@@ -243,9 +258,20 @@ async fn refresh_files(
         .filter(|p| !names.contains(p.as_str()))
         .cloned()
         .collect();
+    // a file whose embed flag moved (a `no-embed` rule came or went) is written again, though its blob is the same
+    let flipped = |l: &Listed| {
+        flags
+            .get(&l.path)
+            .is_some_and(|g| *g != (l.generated || !l.embed))
+    };
+    let built = |l: &Listed, bytes: &[u8]| {
+        let mut b = build(l, bytes);
+        b.force = flipped(l);
+        b
+    };
     let changed: Vec<&Listed> = listed
         .iter()
-        .filter(|l| rebuild || known.get(&l.path) != Some(&l.blob))
+        .filter(|l| rebuild || known.get(&l.path) != Some(&l.blob) || flipped(l))
         .collect();
     let mut out = Refresh::default();
     if rebuild {
@@ -257,6 +283,7 @@ async fn refresh_files(
     } else {
         let pairs: Vec<(String, String)> = changed
             .iter()
+            .filter(|l| !flipped(l))
             .map(|l| (l.path.clone(), l.blob.clone()))
             .collect();
         store
@@ -280,7 +307,7 @@ async fn refresh_files(
                 continue;
             }
             match read(&l.path) {
-                Ok(bytes) => pending.push(Pending::Built(build(l, &bytes))),
+                Ok(bytes) => pending.push(Pending::Built(built(l, &bytes))),
                 Err(_) if known.contains_key(&l.path) => gone.push(l.path.clone()),
                 Err(_) => {}
             }
@@ -306,7 +333,7 @@ async fn refresh_files(
             pending = Vec::new();
             for l in batch.iter().filter(|l| missed.contains(&l.path)) {
                 match read(&l.path) {
-                    Ok(bytes) => pending.push(Pending::Built(build(l, &bytes))),
+                    Ok(bytes) => pending.push(Pending::Built(built(l, &bytes))),
                     Err(_) => gone.push(l.path.clone()),
                 }
             }
@@ -457,7 +484,7 @@ fn write_base(c: &Connection, pending: &[Pending], rebuild: bool) -> urdr::Resul
                     0,
                     &b.row,
                     Some((&b.chunks, &b.symbols, &b.refs)),
-                    rebuild,
+                    rebuild || b.force,
                 )?;
                 for ch in &b.chunks {
                     c.execute(

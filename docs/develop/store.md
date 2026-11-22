@@ -409,7 +409,7 @@ one exception is exactly `HOME/org/board.org` (`Verdict::Board`; `board.org.bak`
   paths (`HOME` itself) lists them (`Contains`): `~/org`, the user's file and folder entries, and the names a glob
   matches at that moment. The code indexer (Hrafn, in the hub) has one door, `files::list`
   (`crates/hub/hrafn/src/files.rs`), the one place every indexed path passes, with the hub's deny check as its
-  `allow` closure (the opt-ins ignored): a root it denies is refused before its `.drgnx/search.eld` is read, and every
+  `allow` closure (the opt-ins ignored): a root it denies is refused before its `.drgnx/search.toml` is read, and every
   listed file it denies is dropped before anything reads it.
 - **Import and export** (doors 2 and 5): `may_import` and `may_export` are the hub's filters for `graph/import` and
   `graph/export` (`check_record` over the record's source, id and `data`; an unreadable source string is denied).

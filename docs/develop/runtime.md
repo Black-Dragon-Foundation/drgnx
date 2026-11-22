@@ -1261,8 +1261,8 @@ answers from the root's view (`base: true` asks for the base) with `view: {workt
 `search/status` lists `trees` and the `watch` budget.
 
 **The base checkout** is the main checkout unless the project's `drgnx-search-base` names another checkout of it
-(a folder that is not one is warned about and ignored). Tier 1 lists, reads and diffs that checkout, `.drgnx/search.eld`
-is read there, and it is the watcher's main tree; the main checkout is then a worktree like any other. The store keeps
+(a folder that is not one is warned about and ignored). Tier 1 lists, reads and diffs that checkout, `.drgnx/search.toml`
+is read there at every listing, and it is the watcher's main tree; the main checkout is then a worktree like any other. The store keeps
 the base's folder in `meta.base_root`: a different one at open resets the index (the trees with it), so the base is
 built again and every tree re-seeds against it. The setting is part of the project's signature, so changing it opens
 the project again.
@@ -1289,14 +1289,53 @@ skipped), and `allow` is the hub's deny-list check on the relative path. A path 
 
 - a component starts with a dot, or the basename looks like a key, certificate, secret or credential file;
 - it is inside a nested repository (an untracked clone or a submodule);
-- it has a NUL byte in its first 8,000 bytes;
-- the project's `include`/`exclude` globs (the editor sends `drgnx-search-{include,exclude,off}` per project) leave it out, or `off` is set.
+- it has a NUL byte in its first 8,000 bytes or is over 1 MiB;
+- the rules leave it out (below), or `drgnx-search-off` is set;
+- `.gitattributes` marks it `linguist-generated` or `linguist-vendored` (an ignore by default, not a mark).
 
-`.drgnx/search.eld` that is there but cannot be read (a directory, a link, empty, over 64 KiB) is an error that
-stops the listing, never the defaults. Each file gets a class (`code`, `test`, `docs`) and a language, from its extension, or
-from a `#!` line when it has none. A file is marked `generated` (listed, not dropped) by `.gitattributes`
-`linguist-generated`/`linguist-vendored`, by "generated" or "DO NOT EDIT" in its first five lines, or by a name like
-`*-autoloads.el`, `loaddefs.el`, `*.lock` or `*.min.*`.
+**Three layers of rules** (`hrafn::rules`), later wins:
+
+1. the built-in defaults;
+2. the repo's committed `.drgnx/search.toml`, so the team and CI index the same set;
+3. the user's own override for the project, `drgnx-search-rules` (settings.md).
+
+Each layer has three lists in gitignore syntax: `include` (when a layer has one, only matching paths are indexed; the
+latest layer with one decides), `ignore` (not indexed at all) and `no-embed` (listed, in keyword and symbol search, with
+its chunks written `embed = 0`, so `missing()` never offers them). A `!` line takes a path back; within a layer the last
+matching line wins; `#` starts a comment; a leading or inner `/` anchors a line to the root, otherwise it matches at
+any depth; a trailing `/` names a directory. The fixed refusals (dot paths, secret-looking names, nested
+repositories, the hub's deny-list) are no layer's to lift. `ratatoskr search why ROOT PATH` (`search/why`) names the
+layer, list and rule that decided a file.
+
+The defaults' `ignore` list, verbatim (`builtin_rules`):
+
+```
+**/fuzz/corpus/**  **/*fuzz*/corpus/**
+*.snap  **/golden/**  **/snapshots/**
+*.png  *.jpg  *.jpeg  *.gif  *.webp  *.bmp  *.tiff  *.ico  *.icns  *.svg
+LICENSE*  COPYING*  LICENSES/**  THIRD_PARTY*
+*.lock  package-lock.json  pnpm-lock.yaml  *.min.js  *.min.css
+vendor/**  third_party/**
+```
+
+**What gets indexed: `.drgnx/search.toml`.** Three keys, each a list of strings; the file is at most 64 KiB:
+
+```toml
+# keep generated bindings out, and the vendored copy of a library
+ignore = ["src/bindings/**", "!vendor/our-fork/**"]
+# keyword and symbol search find these, but they get no vectors
+no-embed = ["*.json", "data/**"]
+# only these (omit the key to index everything the other lists allow)
+# include = ["src/**", "docs/**"]
+```
+
+The file is read at every listing, not when the project opens: an edit takes effect at the next refresh, with no
+reopen, and a file a new line ignores loses its rows. A rule that moves a file between `index` and `no-embed` writes its
+chunks again with the new flag. A file that is there but cannot be read (a directory, a link, empty, not TOML, a key
+that is none of the three, over 64 KiB) is an error that stops the listing, never the defaults. Each file gets a class
+(`code`, `test`, `docs`) and a language, from its extension, or from a `#!` line when it has none. A file is marked
+`generated` (listed, not dropped) by "generated" or "DO NOT EDIT" in its first five lines, or by a name like
+`*-autoloads.el` or `loaddefs.el`.
 
 `files::list_with(…, &mut Snapshot)` is the same listing, reusing what the last one read: per path, the file's status
 when it was read (device, inode, size, modification and status-change times, through `eitri::stat_in` on the parent
@@ -1595,8 +1634,9 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   the files changed (the watcher's events, else a blob diff), picks the model (`search::prefer`), embeds the question
   with it and answers; `search/status`, `search/index`, `search/embedders`, `search/model-download` (consent checked
   against the model's size; the projects open again once it lands) and `search/typing` are the others. All are the
-  user's: an agent has no search method. A project's globs are `.drgnx/search.eld` (a file that does not read turns
-  its search off) and the editor's per-project `drgnx-search-{include,exclude,off}` (`overrides::PER_PROJECT`).
+  user's: an agent has no search method. A project's rules are `.drgnx/search.toml` (read at every listing; a file that does
+  not read is an error the listing reports) and the editor's per-project `drgnx-search-{rules,off}`
+  (`overrides::PER_PROJECT`); `search/why` says which layer decided a file.
 - **Servers on request (`search/servers.rs`).** `search/server-plan` shows what starting TEI or Ollama would run (it
   writes and runs nothing); `search/server-start` needs `confirm: true` and answers the provider entry for the settings'
   provider table (the hub writes no settings: the editor's writer adds it); `search/server-stop` stops it. TEI is a

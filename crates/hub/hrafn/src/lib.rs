@@ -21,6 +21,7 @@ pub mod overlay;
 pub mod query;
 pub mod rank;
 pub mod refs;
+pub mod rules;
 pub mod schema;
 pub mod store;
 pub mod structural;

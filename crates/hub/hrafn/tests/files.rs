@@ -95,19 +95,32 @@ fn generated_marked_not_dropped() {
     ]);
     let l = run(d.path(), &Config::default()).unwrap();
     let marks: Vec<(&str, bool)> = l.iter().map(|x| (x.path.as_str(), x.generated)).collect();
+    // a marker in the file or a generated name is a mark; what `.gitattributes` calls generated or vendored, a lock
+    // file and a minified file are ignored by the built-in rules (Cargo.lock, app.min.js, d.el, vend/v.el)
     assert_eq!(
         marks,
         [
-            ("Cargo.lock", true),
             ("a.el", false),
-            ("app.min.js", true),
             ("b.el", true),
             ("c.el", true),
-            ("d.el", true),
-            ("vend/v.el", true),
             ("x-autoloads.el", true),
         ]
     );
+}
+
+#[test]
+fn no_embed_lists_the_file_without_embedding() {
+    let d = repo(&[("a.el", "(a)\n"), ("data/big.json", "{}\n")]);
+    let cfg = Config {
+        user: hrafn::rules::RuleSet {
+            no_embed: vec!["*.json".into()],
+            ..Default::default()
+        },
+        ..Config::default()
+    };
+    let l = run(d.path(), &cfg).unwrap();
+    let rows: Vec<(&str, bool)> = l.iter().map(|x| (x.path.as_str(), x.embed)).collect();
+    assert_eq!(rows, [("a.el", true), ("data/big.json", false)]);
 }
 
 #[test]
@@ -127,12 +140,15 @@ fn include_exclude_globs_narrow_the_list() {
         ("sub/b.el", "b\n"),
         ("sub/deep/c.el", "c\n"),
         ("notes.md", "n\n"),
-        ("vendor/v.el", "v\n"),
+        ("lib/v.el", "v\n"),
         ("README", "r\n"),
     ]);
     let cfg = |inc: &[&str], exc: &[&str]| Config {
-        include: inc.iter().map(|s| s.to_string()).collect(),
-        exclude: exc.iter().map(|s| s.to_string()).collect(),
+        user: hrafn::rules::RuleSet {
+            include: inc.iter().map(|s| s.to_string()).collect(),
+            ignore: exc.iter().map(|s| s.to_string()).collect(),
+            no_embed: vec![],
+        },
         off: false,
     };
     let p = |c: Config| {
@@ -144,11 +160,11 @@ fn include_exclude_globs_narrow_the_list() {
     // no slash: any depth
     assert_eq!(
         p(cfg(&["*.el"], &[])),
-        ["a.el", "sub/b.el", "sub/deep/c.el", "vendor/v.el"]
+        ["a.el", "lib/v.el", "sub/b.el", "sub/deep/c.el"]
     );
     // a trailing slash: everything below
     assert_eq!(
-        p(cfg(&["*.el"], &["vendor/"])),
+        p(cfg(&["*.el"], &["lib/"])),
         ["a.el", "sub/b.el", "sub/deep/c.el"]
     );
     // `*` stays in a component, `**/` crosses directories
@@ -172,22 +188,6 @@ fn off_lists_nothing() {
         ..Config::default()
     };
     assert!(run(d.path(), &cfg).unwrap().is_empty());
-}
-
-#[test]
-fn unreadable_search_eld_stops_the_listing() {
-    let d = repo(&[("a.el", "a\n")]);
-    // a directory where the file should be
-    std::fs::create_dir_all(d.path().join(".drgnx/search.eld")).unwrap();
-    let e = run(d.path(), &Config::default()).unwrap_err();
-    assert!(e.to_string().contains("search.eld cannot be read"), "{e}");
-    // empty
-    std::fs::remove_dir(d.path().join(".drgnx/search.eld")).unwrap();
-    std::fs::write(d.path().join(".drgnx/search.eld"), "").unwrap();
-    assert!(run(d.path(), &Config::default()).is_err());
-    // readable: fine
-    std::fs::write(d.path().join(".drgnx/search.eld"), "(:off nil)\n").unwrap();
-    assert_eq!(paths(&run(d.path(), &Config::default()).unwrap()), ["a.el"]);
 }
 
 #[test]
@@ -268,10 +268,10 @@ fn backdate(file: &Path) {
 #[test]
 fn a_second_listing_hashes_only_what_changed() {
     let d = repo(&[
-        ("a.el", "a\n"),
+        ("a.el", ";; DO NOT EDIT\na\n"),
         ("b.el", "b\n"),
         ("c.rs", "fn c() {}\n"),
-        (".gitattributes", "a.el linguist-generated\n"),
+        (".gitattributes", "x.el linguist-generated\n"),
     ]);
     let file = |p: &str| d.path().join(p);
     for p in ["a.el", "b.el", "c.rs", ".gitattributes"] {
@@ -313,8 +313,9 @@ fn a_second_listing_hashes_only_what_changed() {
     std::fs::write(file(".gitattributes"), "c.rs linguist-generated\n").unwrap();
     backdate(&file(".gitattributes"));
     let (l, hashed) = list_again();
-    assert_eq!(hashed, ["b.el", "c.rs", "d.el"]);
-    assert!(l[1].generated);
+    // (c.rs is now ignored by default: the attribute marks it generated)
+    assert_eq!(hashed, ["b.el", "d.el"]);
+    assert_eq!(paths(&l), ["b.el", "d.el"]);
 }
 
 fn listed(path: &str, class: Class, size: u64) -> Listed {
@@ -324,6 +325,7 @@ fn listed(path: &str, class: Class, size: u64) -> Listed {
         class,
         lang: Lang::Text,
         generated: false,
+        embed: true,
         size,
     }
 }

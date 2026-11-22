@@ -29,6 +29,7 @@ fn listed(path: &str, text: &str) -> Listed {
         class: Class::Code,
         lang: Lang::Rust,
         generated: false,
+        embed: true,
         size: text.len() as u64,
     }
 }
