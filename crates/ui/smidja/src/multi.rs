@@ -77,6 +77,7 @@ impl Workbench {
             selection: None,
             selection_gen: 0,
             focus: Focus::Center(g),
+            focus_visible: false,
             overlays: Vec::new(),
             toasts: Vec::new(),
             layout_undo: Vec::new(),

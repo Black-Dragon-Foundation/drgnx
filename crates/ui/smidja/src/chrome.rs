@@ -210,6 +210,8 @@ impl Workbench {
         let (fw, fh) = (b.d(win.size.width() as i32), b.d(win.size.height() as i32));
         let reg = |r: Region| self.rect(w, EdgeKey::Region(r));
         let focus = win.focus.base().clone();
+        // the ring is `:focus-visible': only for focus that came by key (F6, Shift-F6, Esc to the center)
+        let ring = win.focus_visible;
 
         // the frame strips: title row, status bar (the rail is a region)
         if !win.chrome_hidden {
@@ -319,7 +321,7 @@ impl Workbench {
             reg(Region::Left).filter(|_| win.left.visible && win.fold.left == SideFold::Open)
         {
             let card = b.push(ChromeRole::Card, Region::Left as u64, r, None);
-            if focus == Focus::Left {
+            if ring && focus == Focus::Left {
                 b.push(ChromeRole::FocusRing, Region::Left as u64, r, Some(card));
             }
             let hh = b.d(d.region_header as i32);
@@ -364,13 +366,13 @@ impl Workbench {
             let Some(r) = self.rect(w, EdgeKey::Group(*g)) else {
                 continue;
             };
-            self.group_chrome(&mut b, *g, r, focus == Focus::Center(*g));
+            self.group_chrome(&mut b, *g, r, ring && focus == Focus::Center(*g));
         }
 
         // the bottom panel's strip
         if let Some(r) = reg(Region::Bottom).filter(|_| win.bottom.visible) {
             let card = b.push(ChromeRole::Card, Region::Bottom as u64, r, None);
-            if focus == Focus::Bottom {
+            if ring && focus == Focus::Bottom {
                 b.push(ChromeRole::FocusRing, Region::Bottom as u64, r, Some(card));
             }
             let strip = b.push(
@@ -420,7 +422,7 @@ impl Workbench {
                 }
             } else {
                 let card = b.push(ChromeRole::Card, Region::Right as u64, r, None);
-                if focus == Focus::Right {
+                if ring && focus == Focus::Right {
                     b.push(ChromeRole::FocusRing, Region::Right as u64, r, Some(card));
                 }
                 let hh = b.d(d.region_header as i32);
@@ -480,11 +482,11 @@ impl Workbench {
         })
     }
 
-    fn group_chrome(&self, b: &mut Builder, g: GroupId, r: Rect, focused: bool) {
+    fn group_chrome(&self, b: &mut Builder, g: GroupId, r: Rect, ringed: bool) {
         let d = &self.defaults;
         let grp = &self.groups[&g];
         let card = b.push(ChromeRole::Card, 0x100 + g.0, r, None);
-        if focused {
+        if ringed {
             b.push(ChromeRole::FocusRing, 0x100 + g.0, r, Some(card));
         }
         let th = b.d(d.tab_strip as i32);
@@ -580,7 +582,8 @@ impl Workbench {
         b.text(&crumb, TextRole::Ui);
     }
 
-    /// Tab T's width in its strip: icon, title, marks and ×, within the tab's bounds.
+    /// Tab T's width in its strip: icon, title, marks and ×, within the tab's bounds.  The parts are the ones
+    /// `tabs_chrome` lays out, each rounded on its own, so a title that fits gets its whole measured width.
     fn tab_w(&self, b: &Builder, t: TabId) -> i32 {
         let tab = &self.tabs[&t];
         let role = if tab.preview {
@@ -589,8 +592,16 @@ impl Workbench {
             TextRole::Ui
         };
         let marks = i32::from(tab.dirty) + i32::from(tab.marks.iter().any(|m| m == "agent"));
-        (b.d(PAD + ICON + 6 + CLOSE + PAD + 6 * marks) + b.width(&tab.title, role))
-            .clamp(b.d(TAB_MIN), b.d(TAB_MAX))
+        // pad, icon, gap, title, gap to the marks (4 + 2), each mark, ×, pad
+        let parts = b.d(PAD)
+            + b.d(ICON)
+            + b.d(6)
+            + b.d(4)
+            + b.d(2)
+            + marks * b.d(6)
+            + b.d(CLOSE)
+            + b.d(PAD);
+        (parts + b.width(&tab.title, role)).clamp(b.d(TAB_MIN), b.d(TAB_MAX))
     }
 
     /// TABS laid out in a strip of height TH from (X, Y): icon, title (italic for a preview), dirty dot, agent mark, ×.

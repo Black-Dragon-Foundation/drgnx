@@ -429,6 +429,9 @@ pub struct OsWindow {
     pub selection: Option<Selection>,
     pub selection_gen: u64,
     pub focus: Focus,
+    /// The focus ring shows (`:focus-visible'): focus last came by key (F6, Shift-F6, Esc to the center), not by a
+    /// pointer click into a region.
+    pub focus_visible: bool,
     /// Overlays bottom to top (toasts are in `toasts`).
     pub overlays: Vec<Overlay>,
     /// The toast lane: the first is the one shown.

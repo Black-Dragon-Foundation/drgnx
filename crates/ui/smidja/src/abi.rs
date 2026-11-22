@@ -831,7 +831,12 @@ fn run(door: &mut Door, op: usize, v: &[Val]) -> R<Val> {
         "focus" => {
             let w = WinId(a.id()?);
             let t = focus_target(a.next())?;
-            version(wb.focus(w, t, a.origin()?))
+            let o = a.origin()?;
+            match a.next() {
+                Val::Nil => version(wb.focus(w, t, o)),
+                Val::Sym(k) if k == "key" => version(wb.focus_key(w, t, o)),
+                v => return bad(format!("key or nothing: {v:?}")),
+            }
         }
         "cycle_region" => {
             let w = WinId(a.id()?);

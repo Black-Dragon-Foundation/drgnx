@@ -151,6 +151,10 @@ fn abi_round_trips_every_op() {
         "focus",
         vec![i(w), l(vec![sy("group"), i(g)]), u.clone()],
     ));
+    ok(&c(
+        "focus",
+        vec![i(w), l(vec![sy("group"), i(g)]), u.clone(), sy("key")],
+    ));
     ok(&c("cycle_region", vec![i(w), sy("next"), u.clone()]));
     ok(&c("side", vec![i(w), sy("right"), sy("show"), u.clone()]));
     ok(&c("resize", vec![i(w), sy("left"), i(300), u.clone()]));

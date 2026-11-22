@@ -95,9 +95,8 @@ fn chrome_scene_for_flow_f0_at_1920() {
     assert_eq!(rt.len(), 4);
     assert!(rt[0].state.lit);
     one(&d, ChromeRole::DetailPin);
-    // the focus ring is on the focused group's card
-    let ring = one(&d, ChromeRole::FocusRing);
-    assert_eq!(ring.rect, cards[1]);
+    // focus that did not come by region cycling has no ring
+    assert_eq!(d.of_role(ChromeRole::FocusRing).count(), 0);
     // ids are unique
     let mut ids: Vec<u64> = d.elements.iter().map(|e| e.id).collect();
     ids.sort_unstable();
@@ -269,4 +268,62 @@ fn element_at_answers_the_deepest_element() {
         element_at(&d, tab.x + 2, tab.y + 2).unwrap().id,
         element_id(ChromeRole::Tab, a.0)
     );
+}
+
+#[test]
+fn ring_shows_only_after_keyboard_region_cycling() {
+    let (mut wb, w, a, _) = f0(1.0);
+    let rings = |wb: &Workbench| -> Vec<Rect> {
+        let d = wb.chrome(w, &measure).unwrap();
+        d.of_role(ChromeRole::FocusRing).map(|e| e.rect).collect()
+    };
+    let cards: Vec<Rect> = wb
+        .chrome(w, &measure)
+        .unwrap()
+        .of_role(ChromeRole::Card)
+        .map(|e| e.rect)
+        .collect();
+    assert_eq!(rings(&wb), vec![], "focus by pointer or program: no ring");
+    // F6 from the group: the right, ringed
+    wb.cycle_region(w, Dir::Next, U).unwrap();
+    assert_eq!(rings(&wb), vec![cards[2]]);
+    // Shift-F6 back: the group, ringed
+    wb.cycle_region(w, Dir::Prev, U).unwrap();
+    assert_eq!(rings(&wb), vec![cards[1]]);
+    // Esc to the center from the left, by key: ringed
+    wb.cycle_region(w, Dir::Prev, U).unwrap();
+    assert_eq!(rings(&wb), vec![cards[0]]);
+    wb.focus_key(w, FocusTarget::Region(Region::Center), U)
+        .unwrap();
+    assert_eq!(rings(&wb), vec![cards[1]]);
+    // the next pointer click into a region (a tab): the focus moves, the ring goes
+    wb.focus(w, FocusTarget::Tab(a), U).unwrap();
+    assert_eq!(rings(&wb), vec![]);
+}
+
+#[test]
+fn a_title_that_fits_gets_its_whole_width_at_1_1_25_2() {
+    for scale in [1.0, 1.25, 2.0] {
+        let (mut wb, w, a, b) = f0(scale);
+        wb.update_tab(
+            a,
+            TabFields {
+                dirty: Some(true),
+                marks: Some(vec!["agent".into()]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let p = open(&mut wb, w, file("preview-title.rs"), How::Preview);
+        let d = wb.chrome(w, &measure).unwrap();
+        for t in [a, b, p] {
+            let title = d.get(element_id(ChromeRole::TabTitle, t.0)).unwrap();
+            assert!(
+                title.rect.w >= measure(&title.name, TextRole::Ui) as i32,
+                "scale {scale}: {:?} in {:?}",
+                title.name,
+                title.rect
+            );
+        }
+    }
 }

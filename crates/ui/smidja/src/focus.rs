@@ -47,7 +47,7 @@ enum Stop {
 }
 
 impl Workbench {
-    /// Move focus to a region, a group or a tab.
+    /// Move focus to a region, a group or a tab: a pointer click into a region, so the ring goes.
     pub fn focus(
         &mut self,
         w: WinId,
@@ -125,7 +125,21 @@ impl Workbench {
                 }
             }
         }
+        self.windows[wi].focus_visible = false;
         Ok(self.bump())
+    }
+
+    /// Move focus by key (Esc to the center): as [`Self::focus`], the region ring shown.
+    pub fn focus_key(
+        &mut self,
+        w: WinId,
+        target: FocusTarget,
+        origin: Origin,
+    ) -> Result<Version, Refusal> {
+        let v = self.focus(w, target, origin)?;
+        let wi = self.wi(w)?;
+        self.windows[wi].focus_visible = true;
+        Ok(v)
     }
 
     /// F6 / Shift-F6: the region ring.
@@ -169,6 +183,7 @@ impl Workbench {
         };
         self.dismiss_side(wi);
         self.go_stop(wi, next);
+        self.windows[wi].focus_visible = true;
         Ok(self.bump())
     }
 
