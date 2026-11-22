@@ -457,12 +457,23 @@ pub fn configure(state: &mut State, req: &Value) -> Value {
     json!({"ok": true, "serial": u32::from(serial)})
 }
 
-/// `{"cmd":"decoration","mode":"server|client"}`: the mode sent from now on.
+/// `{"cmd":"decoration","mode":"server|client"}`: the mode sent from now on, and at once (a configure) to every
+/// toplevel that asked for one, as a compositor whose policy changed: `client` refuses server-side decorations to a
+/// window already up.
 pub fn decoration(state: &mut State, req: &Value) -> Value {
     match req.get("mode").and_then(Value::as_str) {
         Some("server") => state.decoration_mode = Mode::ServerSide,
         Some("client") => state.decoration_mode = Mode::ClientSide,
         _ => return err("\"mode\" must be \"server\" or \"client\""),
+    }
+    let asked: Vec<ToplevelSurface> = state
+        .toplevels
+        .iter()
+        .filter(|t| t.with_pending_state(|s| s.decoration_mode.is_some()))
+        .cloned()
+        .collect();
+    for t in &asked {
+        state.send_decoration(t);
     }
     json!({"ok": true})
 }
