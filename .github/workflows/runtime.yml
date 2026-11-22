@@ -113,7 +113,9 @@ jobs:
       && fromJSON(format('{{"image":"{0}","options":"--init","credentials":{{"username":"{1}","password":"{2}"}}}}',
       needs.images.outputs.rust, github.actor, github.token))
       || fromJSON('{"image":"registry.fedoraproject.org/fedora:45","options":"--init"}') }}
-    timeout-minutes: 45
+    # 120 until the build-once redesign (docs: the CI flow redesign, 2026-11-22). With no warm cache, clippy, grammars,
+    # the test build and the tests alone took 43 of the old 45 minutes, so conformance, release and perf never ran.
+    timeout-minutes: 120
     env:
       PREBUILT: ${{ needs.images.outputs.rust }}
     steps:

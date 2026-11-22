@@ -5,8 +5,10 @@
 name: CI
 
 on:
+  # main only (2026-11-22): a push to a PR's branch ran this workflow twice, push and pull_request, on the same commit.
+  # ci/* diagnostics run through workflow_dispatch.
   push:
-    branches: [main, "ci/**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
