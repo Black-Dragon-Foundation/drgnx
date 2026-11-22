@@ -29,6 +29,7 @@ pub use crate::edge::Edge;
 use crate::ffi::{GLITNIR_E_ARG, GLITNIR_E_STATE};
 use crate::geom::Rect;
 use crate::minimap::Minimap;
+use crate::prim::Prim;
 use crate::stack::Stack;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -260,7 +261,7 @@ impl Block {
     }
 }
 
-/// The parts of the scene the blocks, edges and minimap of a window layer at P draw (root px, clipped to its
+/// The parts of the scene the blocks, edges, minimap and chrome primitives of a window layer at P draw (root px, clipped to its
 /// rectangle).
 pub fn block_patches(p: &Placed) -> Vec<Rect> {
     p.blocks
@@ -268,6 +269,7 @@ pub fn block_patches(p: &Placed) -> Vec<Rect> {
         .map(Block::bounds)
         .chain(p.edges.iter().map(crate::edge::bounds))
         .chain(p.minimap.iter().map(|m| m.rect))
+        .chain(p.prims.iter().map(Prim::bounds))
         .map(|r| r.intersect(&p.rect))
         .filter(|r| !r.is_empty())
         .collect()
@@ -487,6 +489,8 @@ struct Layer {
     edges: Arc<[Edge]>,
     /// A window layer's minimap.
     minimap: Option<Arc<Minimap>>,
+    /// A window layer's chrome primitives.
+    prims: Arc<[Prim]>,
     /// A window layer that is its own output.
     own: bool,
 }
@@ -508,6 +512,8 @@ pub struct Placed {
     pub edges: Arc<[Edge]>,
     /// A window layer's minimap ([`Scene::set_minimap`]).
     pub minimap: Option<Arc<Minimap>>,
+    /// A window layer's chrome primitives ([`Scene::set_prims`]): the workbench's bands over its windows.
+    pub prims: Arc<[Prim]>,
     /// [`bounds`] of the rectangle and chrome, with a card's ring.
     pub bounds: Rect,
 }
@@ -522,6 +528,7 @@ impl Placed {
             && self.blocks == o.blocks
             && self.edges == o.edges
             && self.minimap == o.minimap
+            && self.prims == o.prims
     }
 }
 
@@ -555,8 +562,16 @@ impl Scene {
                 self.mark_restacked(d.id);
             }
         }
-        let (chrome, card, blocks, edges, minimap, own) = self.layers.get(&d.id).map_or(
-            (None, None, Arc::from([]), Arc::from([]), None, false),
+        let (chrome, card, blocks, edges, minimap, prims, own) = self.layers.get(&d.id).map_or(
+            (
+                None,
+                None,
+                Arc::from([]),
+                Arc::from([]),
+                None,
+                Arc::from([]),
+                false,
+            ),
             |l| {
                 (
                     l.chrome,
@@ -564,6 +579,7 @@ impl Scene {
                     Arc::clone(&l.blocks),
                     Arc::clone(&l.edges),
                     l.minimap.clone(),
+                    Arc::clone(&l.prims),
                     l.own,
                 )
             },
@@ -581,6 +597,7 @@ impl Scene {
                 blocks: if window { blocks } else { Arc::from([]) },
                 edges: if window { edges } else { Arc::from([]) },
                 minimap: minimap.filter(|_| window),
+                prims: if window { prims } else { Arc::from([]) },
                 own: own && window,
             },
         );
@@ -685,6 +702,18 @@ impl Scene {
         match self.layers.get_mut(&id) {
             Some(l) if l.kind == Kind::Window => {
                 l.minimap = minimap;
+                Ok(())
+            }
+            _ => Err(GLITNIR_E_ARG),
+        }
+    }
+
+    /// Set window layer ID's chrome primitives (empty: none), drawn over everything else of it with the process's
+    /// atlases.  `GLITNIR_E_ARG` for an unknown id or a layer that is not a window.
+    pub fn set_prims(&mut self, id: u64, prims: Arc<[Prim]>) -> Result<(), i32> {
+        match self.layers.get_mut(&id) {
+            Some(l) if l.kind == Kind::Window => {
+                l.prims = prims;
                 Ok(())
             }
             _ => Err(GLITNIR_E_ARG),
@@ -861,6 +890,7 @@ impl Scene {
                     blocks: Arc::clone(&l.blocks),
                     edges: Arc::clone(&l.edges),
                     minimap: l.minimap.clone(),
+                    prims: Arc::clone(&l.prims),
                     bounds: card_bounds(l.rect, l.chrome.as_ref(), l.card.as_ref()),
                 });
                 self.walk(id, out);
@@ -958,7 +988,11 @@ impl Scene {
                         } else {
                             out.extend(card_change(o, n));
                         }
-                        if o.blocks != n.blocks || o.edges != n.edges || o.minimap != n.minimap {
+                        if o.blocks != n.blocks
+                            || o.edges != n.edges
+                            || o.minimap != n.minimap
+                            || o.prims != n.prims
+                        {
                             out.extend(block_patches(o));
                             out.extend(block_patches(n));
                         }
@@ -1101,6 +1135,12 @@ pub fn set_minimap(root: u64, layer: u64, minimap: Option<Arc<Minimap>>) -> Resu
 /// Set window layer LAYER's blocks in ROOT's scene ([`Scene::set_blocks`]); `GLITNIR_E_STATE` when ROOT has no scene.
 pub fn set_blocks(root: u64, layer: u64, blocks: Arc<[Block]>) -> Result<(), i32> {
     with(root, |s| s.set_blocks(layer, blocks))
+}
+
+/// Set window layer LAYER's chrome primitives in ROOT's scene ([`Scene::set_prims`]); `GLITNIR_E_STATE` when ROOT has
+/// no scene.
+pub fn set_prims(root: u64, layer: u64, prims: Arc<[Prim]>) -> Result<(), i32> {
+    with(root, |s| s.set_prims(layer, prims))
 }
 
 /// Set window layer LAYER's edges in ROOT's scene ([`Scene::set_edges`]); `GLITNIR_E_STATE` when ROOT has no scene.

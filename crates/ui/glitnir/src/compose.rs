@@ -598,6 +598,26 @@ fn compose_layers(
                 draw_minimap(k, t, m, c.intersect(&area));
             }
         }
+        // a window's chrome primitives (the workbench's bands) over all of it, inside the window
+        if !p.prims.is_empty()
+            && p.kind == Kind::Window
+            && sources.iter().any(|s| s.layer == p.parent)
+            && let Some(frame) = scene.iter().find(|q| q.id == p.parent).map(|q| q.rect)
+        {
+            let area = p.rect.intersect(&frame);
+            let mut pt = crate::prim::Target {
+                px: &mut *t.data,
+                w: t.rect.w,
+                h: t.rect.h,
+                stride: t.stride,
+                origin: (t.rect.x, t.rect.y),
+            };
+            crate::atlas::with_shared(|a| {
+                for c in &pieces {
+                    crate::prim::compose(&p.prims, a, c.intersect(&area), &mut pt);
+                }
+            });
+        }
     }
     Ok(drawn)
 }
@@ -4056,6 +4076,72 @@ mod tests {
             let area: u64 = d.iter().map(Rect::area).sum();
             assert!(area <= 2 * 70 * 15, "damage {d:?}");
             for p in [(20, 10), (80, 10), (20, 50), (80, 50)] {
+                assert!(
+                    d.iter().any(|r| r.contains(p.0, p.1)),
+                    "{p:?} damaged: {d:?}"
+                );
+            }
+        }
+
+        /// A window layer's chrome primitives (the workbench's bands, Task 19) go over the frame's pixels inside the
+        /// window, an icon sprite from Glitnir's own raster; nothing outside the window.
+        #[test]
+        fn chrome_prims_draw_over_the_frame_in_the_window() {
+            use crate::prim::Prim;
+            let window = Rect::new(0, 0, 100, 80);
+            let (mut s, mut f) = (Scene::default(), Frames::new());
+            s.upsert(&desc(ROOT, 0, 1, Rect::new(0, 0, 120, 80), 1.0, true))
+                .unwrap();
+            s.upsert(&desc(WIN, ROOT, 2, window, 1.0, true)).unwrap();
+            s.set_prims(
+                WIN,
+                vec![
+                    Prim::Quad {
+                        id: 1,
+                        rect: Rect::new(10, 10, 110, 20),
+                        radius: 0.0,
+                        fill: RING,
+                    },
+                    Prim::Sprite {
+                        id: 2,
+                        at: (20, 40),
+                        key: crate::icon::key("minus", 16, 1.0),
+                        tint: RING,
+                    },
+                ]
+                .into(),
+            )
+            .unwrap();
+            s.commit(ROOT, &mut f);
+            let out = compose_all(&s, &Buf::new(120, 80, FRONT), 1.0);
+            assert_eq!(out.at(40, 20), RING, "the band");
+            assert_eq!(out.at(105, 20), FRONT, "nothing past the window");
+            assert_eq!(out.at(40, 31), FRONT, "nothing below the band");
+            assert_ne!(out.at(28, 47), FRONT, "the icon's stroke");
+            assert_ne!(out.at(28, 48), FRONT, "the icon's stroke");
+            assert_eq!(out.at(28, 42), FRONT, "away from the stroke");
+        }
+
+        /// A change of the chrome primitives only damages their bounds, old and new, not the window.
+        #[test]
+        fn a_prims_change_damages_the_prims() {
+            use crate::prim::Prim;
+            let quad = |y: i32| Prim::Quad {
+                id: 1,
+                rect: Rect::new(20, y, 60, 10),
+                radius: 0.0,
+                fill: RING,
+            };
+            let (mut s, mut f) = (Scene::default(), Frames::new());
+            s.upsert(&desc(ROOT, 0, 1, ALL, 1.0, true)).unwrap();
+            s.upsert(&desc(WIN, ROOT, 2, ALL, 1.0, true)).unwrap();
+            s.set_prims(WIN, vec![quad(10)].into()).unwrap();
+            s.commit(ROOT, &mut f);
+            s.set_prims(WIN, vec![quad(50)].into()).unwrap();
+            let d = s.commit(ROOT, &mut f).to_vec();
+            let area: u64 = d.iter().map(Rect::area).sum();
+            assert!(area <= 2 * 60 * 10, "damage {d:?}");
+            for p in [(20, 10), (79, 19), (20, 50), (79, 59)] {
                 assert!(
                     d.iter().any(|r| r.contains(p.0, p.1)),
                     "{p:?} damaged: {d:?}"
