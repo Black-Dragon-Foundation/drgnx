@@ -813,8 +813,13 @@ fn run_set(
                     .map_err(|e| e.to_string())?;
             }
         }
-        embedded += texts.len() as u64;
-        if embedded % 2048 < 256 {
+        let before = embedded;
+        // the chunks (what the report's `chunks_embedded` says); the path vectors ride along
+        embedded += todo
+            .iter()
+            .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
+            .count() as u64;
+        if embedded / 2048 > before / 2048 {
             eprintln!(
                 "embedded {embedded} chunks, {:.0}s",
                 begun.elapsed().as_secs_f64()

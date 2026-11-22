@@ -188,7 +188,7 @@ pub enum Tier2 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Status {
     pub tier2: Tier2,
-    /// Vectors tier 2 has written since the project opened.
+    /// Chunk vectors tier 2 has written since the project opened (the path vectors that go with them not counted).
     pub embedded: u64,
 }
 
@@ -1338,7 +1338,12 @@ impl Inner {
                             self.publish(Tier2::Failed(err));
                             continue;
                         }
-                        self.status.send_modify(|s| s.embedded += keys.len() as u64);
+                        // the chunks embedded (what `keys_missing` and the lag count); a path's vector rides along
+                        let chunks = keys
+                            .iter()
+                            .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
+                            .count();
+                        self.status.send_modify(|s| s.embedded += chunks as u64);
                         sent = true;
                     }
                     Ok(vectors) => self.publish(Tier2::Failed(format!(

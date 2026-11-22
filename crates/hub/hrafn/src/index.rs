@@ -488,6 +488,9 @@ pub async fn missing_with(
                 Ok(())
             };
             for (i, (k, text, path)) in chunks.iter().enumerate() {
+                if out.len() >= limit {
+                    break;
+                }
                 if let Ok(k) = <[u8; 32]>::try_from(k.as_slice()) {
                     out.push((KeyKind::Chunk, k, text.clone()));
                 }

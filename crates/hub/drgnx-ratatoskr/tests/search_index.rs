@@ -624,17 +624,18 @@ fn typing_holds_tier2_between_requests() {
             );
         }
         clock::advance(Duration::from_millis(250)).await;
-        // one request of 8 keys, then tier 2 waits for its next permit
-        let after_one = status_until(&p, "the first request", |s| s.embedded == 8).await;
+        // one request of 8 keys (4 one-chunk files: each chunk's key, then its path's), then tier 2 waits for its
+        // next permit
+        let after_one = status_until(&p, "the first request", |s| s.embedded == 4).await;
         assert_eq!(after_one.tier2, Tier2::Running);
 
         p.note_typing();
         permits.add_permits(1);
         let again = status_until(&p, "typing again", |s| s.tier2 == Tier2::Typing).await;
-        assert_eq!(again.embedded, 8, "held between requests, never inside one");
+        assert_eq!(again.embedded, 4, "held between requests, never inside one");
         assert_eq!(
             p.lag(Some(&model_hex())).await.unwrap().chunks_behind as u64,
-            total - 8
+            total - 4
         );
 
         permits.add_permits(100);

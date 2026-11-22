@@ -271,6 +271,9 @@ async fn dir_weight_zero_embeds_no_directories() {
             assert_eq!(*key, path_key(p));
         }
     }
+    // a limit is the batch's size, path keys counted: two files' chunk keys and path keys do not fit in two
+    let two = missing_with(&s, MODEL, 2, true).await.unwrap();
+    assert_eq!(two.len(), 2, "{two:?}");
     if hrafn::query::DIR_WEIGHT <= 0.0 {
         assert_eq!(missing(&s, MODEL, 1000).await.unwrap(), without);
     }
