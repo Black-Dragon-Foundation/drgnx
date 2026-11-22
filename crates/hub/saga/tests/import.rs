@@ -2,12 +2,14 @@ use saga::import::{AnyDoc, ops, parse, source_key};
 use saga::view::{ViewModel, render, strip_header};
 use std::path::Path;
 
-const CASES: [(&str, &str); 5] = [
+const CASES: [(&str, &str); 7] = [
     ("plan", include_str!("fixtures/plan-h2.md")),
     ("ledger", include_str!("fixtures/ledger-a.md")),
     ("deferred", include_str!("fixtures/deferred-a.md")),
     ("board-md", include_str!("fixtures/board-a.md")),
     ("org", include_str!("fixtures/board-a.org")),
+    ("spec", include_str!("fixtures/spec-a.md")),
+    ("decision", include_str!("fixtures/decision-a.md")),
 ];
 
 fn pieces(doc: &AnyDoc, p: &Path) -> ViewModel {
