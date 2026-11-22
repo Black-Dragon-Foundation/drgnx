@@ -12,6 +12,7 @@ pub mod chrome;
 pub mod decl;
 pub mod focus;
 pub mod fold;
+pub mod hit;
 pub mod intent;
 pub mod layout;
 pub mod model;
