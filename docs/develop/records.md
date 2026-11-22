@@ -51,6 +51,13 @@ finds `docs/specs/**/*.md`, `docs/plans/**/*.md` (ledgers end in `.ledger.md`), 
 plan's `**Spec:**` line names (`.md` or `.org`, anywhere) is read too, by its plain path (`a/../b` as `b`), unless the
 privacy deny-list refuses it: a file under `~/org` is read only when the user opted it in (`personal-notes-allow.json`).
 
+- **The ignore list.** `archive/` is skipped by default. A root-level `.drgnx/records.toml` adds lines
+  (`ignore = ["docs/specs/old/**", "!docs/specs/old/keep.md"]`) in gitignore syntax, relative to DIR: the last match
+  wins, `!` re-includes, and a file under an ignored folder stays ignored (so `!archive/` imports the archive). The
+  default comes first, then the file's lines. The file is at most 64 KiB; an unknown key, a non-string entry or bad
+  TOML fails the import before anything is written, with an error naming the file. A file already adopted that the
+  list now ignores is forgotten at the next full import, like a deleted one (its pieces are retired).
+
 - **Backup first.** Before anything is imported, every file is copied to `<state>/hub/records-backup/<date>/` (a
   second import on the same day gets `<date>-2`, never overwriting); a file outside DIR (a spec a plan names elsewhere)
   goes under `outside/<its absolute path>`. Every target is checked before the first copy: one outside the backup
