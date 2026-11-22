@@ -39,8 +39,9 @@ pub struct Session {
     pub peer_pid: Option<i32>,
     /// The folder the hello said the client started in (`cwd`): an outside agent's home for `mcp/attach`.
     pub cwd: Option<PathBuf>,
-    /// Set by `mcp/attach` once answered: the connection carries MCP from its next byte, as this identity.
-    pub attach: Option<norn::tools::Identity>,
+    /// Set by `mcp/attach` once answered: the connection carries MCP from its next byte, as this identity, holding
+    /// its place among the attached bridges ([`crate::outside::Bound`]).
+    pub attach: Option<crate::outside::Attached>,
 }
 
 impl Session {

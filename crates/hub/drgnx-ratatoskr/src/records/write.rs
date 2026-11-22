@@ -454,13 +454,55 @@ pub(crate) async fn create_plan_core(
     })
 }
 
+/// Whether the record write P is in SCOPE (refused when not), and whether every piece of the record it changes was
+/// created by C itself (an outside agent's own record: [`crate::runner::effects::may_change`]).  A new record is the
+/// caller's own.
+async fn own_of_record(
+    f: &Front,
+    c: &Caller,
+    p: &RecordWrite,
+    scope: &Scope,
+) -> Result<bool, Error> {
+    let Some(id) = &p.record else {
+        scope
+            .allows_project(p.project.as_ref().map(|i| i.as_str()))
+            .map_err(fail)?;
+        return Ok(true);
+    };
+    let (file, _) = locate(&f.writer.db, id.as_str()).await?;
+    scope.allows_path(&file).map_err(fail)?;
+    let Some(actor) = c
+        .sid
+        .as_deref()
+        .filter(|s| crate::outside::is_ext(s))
+        .map(str::to_owned)
+    else {
+        return Ok(true);
+    };
+    let key = import::source_key(&file);
+    f.writer
+        .db
+        .read(move |conn| {
+            let mut st =
+                conn.prepare("select n from entity where source = ?1 and retired_tx is null")?;
+            let ns = st
+                .query_map([&key], |r| r.get(0))?
+                .collect::<Result<Vec<i64>, _>>()?;
+            crate::outside::own_record(conn, &ns, &actor)
+        })
+        .await
+        .map_err(fail)
+}
+
 pub(crate) async fn records_write(
     f: &Front,
     c: &Caller,
     p: RecordWrite,
 ) -> Result<RecordWritten, Error> {
     let scope = crate::runner::effects::scope_of(f, c).await?;
-    crate::runner::effects::may_change(f, c, None).await?;
+    // the scope first: a record outside the caller's project is refused before the matrix is asked (no card)
+    let own = own_of_record(f, c, &p, &scope).await?;
+    crate::runner::effects::may_change(f, c, None, own).await?;
     let actor = actor_for(
         f,
         c,

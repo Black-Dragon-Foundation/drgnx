@@ -463,7 +463,7 @@ async fn serve_conn(stream: UnixStream, front: Arc<Front>, socket: Socket) {
         }
     }
     front.gone(id);
-    let Some(who) = attached else {
+    let Some(a) = attached else {
         let _ = writer.await;
         return;
     };
@@ -473,7 +473,10 @@ async fn serve_conn(stream: UnixStream, front: Arc<Front>, socket: Socket) {
         return;
     };
     let rest = std::io::Cursor::new(reader.buf.to_vec());
-    front.mcp.serve_outside(who, rest.chain(r), w).await;
+    front
+        .mcp
+        .serve_outside(a.who, a.guard, rest.chain(r), w)
+        .await;
 }
 
 /// The read loop under the sequencer (test-hooks): the socket is read when the sequencer asks (each readable socket
@@ -487,7 +490,7 @@ async fn sequenced(
     front: &Front,
     out: &Arc<Outbox>,
     session: &mut Session,
-) -> Option<norn::tools::Identity> {
+) -> Option<crate::outside::Attached> {
     use crate::sequencer::{End, Msg};
     // asked to be read and not read since; read EOF; an `mcp/attach` handed over and not served
     let (mut kicked, mut ended, mut attaching) = (false, false, false);

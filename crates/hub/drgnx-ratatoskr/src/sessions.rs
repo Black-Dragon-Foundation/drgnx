@@ -277,8 +277,10 @@ struct Live {
 pub struct Sessions {
     uid: u32,
     tools: Arc<Coord>,
-    /// Every tool: an outside bridge's.
+    /// Every tool: an unbound outside bridge's.
     list: ToolList,
+    /// A bound outside bridge's: every tool and the plan and record tools (`norn::tools::OUTSIDE_TOOLS`).
+    outside_list: ToolList,
     /// A session's, made when first served, by [`set_index`]: with or without the tracker tools, and the debugger's.
     by_sets: [OnceLock<ToolList>; 4],
     store: OnceLock<Store>,
@@ -676,11 +678,12 @@ async fn accept<C, F, Fut>(
 
 impl Sessions {
     /// No session yet, and none until [`Sessions::open_store`] gives it `runtime.db`.
-    pub fn new(uid: u32, tools: Arc<Coord>, list: ToolList) -> Sessions {
+    pub fn new(uid: u32, tools: Arc<Coord>, list: ToolList, outside_list: ToolList) -> Sessions {
         Sessions {
             uid,
             tools,
             list,
+            outside_list,
             by_sets: Default::default(),
             store: OnceLock::new(),
             live: Mutex::new(BTreeMap::new()),
@@ -1407,29 +1410,46 @@ impl Sessions {
 
     /// An outside bridge's connection, after `mcp/attach`'s answer: the tools as WHO until it closes, or until the
     /// hub ends ([`Sessions::end_outside`]): then R and W are dropped, so the bridge reads its end of file.
-    pub async fn serve_outside<R, W>(&self, who: Identity, r: R, w: W)
-    where
+    /// BOUND holds the bridge's place among the attached ones ([`crate::outside::Bound`]) while it is served.
+    pub async fn serve_outside<R, W>(
+        &self,
+        who: Identity,
+        bound: Option<crate::outside::BoundGuard>,
+        r: R,
+        w: W,
+    ) where
         R: AsyncRead + Unpin,
         W: AsyncWrite + Unpin,
     {
         let _counted = Counted::new(&self.outside);
+        let _bound = bound;
         let id = who.id().unwrap_or_default().to_owned();
         tracing::info!(identity = id, "an outside agent's bridge attached");
+        let list = self.outside_list_for(&who);
         let ctx: Arc<Ctx> = Arc::new((self.tools.clone(), who));
-        let serve = mimir::serve(
-            ctx,
-            self.list.clone(),
-            ServerInfo::default(),
-            r,
-            w,
-            Limits::default(),
-        );
+        let serve = mimir::serve(ctx, list, ServerInfo::default(), r, w, Limits::default());
         tokio::select! {
             end = serve => tracing::info!(identity = id, ?end, "an outside agent's bridge ended"),
             () = self.outside_end.cancelled() => {
                 tracing::info!(identity = id, "closed an outside agent's bridge: the hub ends");
             }
         }
+    }
+
+    /// The tools an outside bridge WHO is served: a bound one's (its role as read at `mcp/attach`) has the plan and
+    /// record tools; the hub reads the binding again at each of their calls.
+    pub(crate) fn outside_list_for(&self, who: &Identity) -> ToolList {
+        if who.outside_role().is_some() {
+            self.outside_list.clone()
+        } else {
+            self.list.clone()
+        }
+    }
+
+    /// The tools' shared state (tests call a tool as a connection would).
+    #[cfg(test)]
+    pub(crate) fn coord(&self) -> Arc<Coord> {
+        self.tools.clone()
     }
 
     /// The hub ends: every outside bridge's connection is closed, now and whenever one is handed on later.

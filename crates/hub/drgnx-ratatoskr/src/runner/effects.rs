@@ -76,6 +76,16 @@ impl Scope {
             let owner = live(conn, n)?.map(|p| p.id);
             return self.allows_project(owner.as_deref());
         }
+        // a piece of a records file (imported or written through `records/write`: no project) is the project's whose
+        // root holds the file
+        if let Some(file) = e
+            .data
+            .get("records")
+            .and_then(|r| r.get("file"))
+            .and_then(Value::as_str)
+        {
+            return self.allows_path(Path::new(file));
+        }
         let mut job = str_of(e, "job");
         if job.is_none() && e.kind == "report" {
             for t in dsts(conn, e.n, "report_of")? {
@@ -150,6 +160,7 @@ pub(crate) async fn scope_of(f: &Front, c: &Caller) -> Result<Scope, Error> {
         return Ok(Scope::Anyone);
     }
     match &c.sid {
+        Some(sid) if crate::outside::is_ext(sid) => crate::outside::scope_of(f, sid).await,
         Some(sid) => scope_of_session(f, sid).await,
         None => Err(refuse("an agent call without a session reaches no project")),
     }
@@ -374,27 +385,30 @@ pub async fn plan_for_job(front: &Front, id: &str) -> Result<(PathBuf, Plan), Er
 // ---- writing a plan ---------------------------------------------------------------------------------------------
 
 /// Whether the agent C may change the graph: the matrix's `graph.change` for C's session as it is (its role, agent
-/// and provider; a chat's is Never), the worker column for an agent the hub does not hold.
-pub(crate) async fn may_change(f: &Front, c: &Caller, plan: Option<String>) -> Result<(), Error> {
+/// and provider; a chat's is Never), the worker column for an agent the hub does not hold.  For an outside agent
+/// ([`crate::outside::who_for`]: its binding read now, no plan) OWN says whether the records changed are ones it
+/// created itself; on another's its `graph.change` is Ask at most.
+pub(crate) async fn may_change(
+    f: &Front,
+    c: &Caller,
+    plan: Option<String>,
+    own: bool,
+) -> Result<(), Error> {
     use crate::matrix_gate::{ActionCtx, Gate};
     if c.class != Class::Agent {
         return Ok(());
     }
-    let who = c
-        .sid
-        .as_deref()
-        .and_then(|s| f.core.agents.who(s))
-        .unwrap_or(norn::matrix::Who {
-            role: Some(norn::matrix::Role::Worker),
-            ..Default::default()
-        });
-    let base = match c.sid.as_deref() {
-        Some(s) => ActionCtx::of_session(&f.core.runs.scopes(), s),
-        None => ActionCtx::default(),
-    };
-    let ctx = ActionCtx {
-        plan: plan.or(base.plan.clone()),
-        ..base
+    let (who, base) = crate::outside::who_for(f, c).await?;
+    let ctx = if crate::matrix_gate::is_outside(&base) {
+        ActionCtx {
+            own_record: own,
+            ..base
+        }
+    } else {
+        ActionCtx {
+            plan: plan.or(base.plan.clone()),
+            ..base
+        }
     };
     match f
         .core
@@ -661,9 +675,11 @@ pub async fn plans_write(f: &Front, c: &Caller, p: WriteParams) -> Result<PlanWr
             "an agent's new plan names its view file: path docs/plans/<repo>/<name>.md",
         ));
     }
-    may_change(f, c, p.plan.as_ref().map(|i| i.as_str().to_owned())).await?;
-    may_finish(f, c, &p).await?;
+    // the scope first: a plan outside the caller's project is refused before the matrix is asked (no card)
     let scope = scope_of(f, c).await?;
+    let own = own_of_plan(f, c, &p, &scope).await?;
+    may_change(f, c, p.plan.as_ref().map(|i| i.as_str().to_owned()), own).await?;
+    may_finish(f, c, &p).await?;
     if let (None, Some(rel)) = (&p.plan, &p.path) {
         let rel = rel.as_str().to_owned();
         let actor = crate::records::write::actor_for(
@@ -687,6 +703,53 @@ pub async fn plans_write(f: &Front, c: &Caller, p: WriteParams) -> Result<PlanWr
         .write(c, "plans/write", move |tx| write_plan(tx, &p, &scope))
         .await
         .map_err(fail)
+}
+
+/// Whether the plan write P is in SCOPE (refused when not), and whether it changes only records C created itself:
+/// the plan and the tasks it names, by their `created_tx`'s actor.  A new plan is the caller's own; only an outside
+/// agent's answer is read ([`may_change`]).
+async fn own_of_plan(f: &Front, c: &Caller, p: &WriteParams, scope: &Scope) -> Result<bool, Error> {
+    let Some(plan) = &p.plan else {
+        scope
+            .allows_project(p.project.as_ref().map(|i| i.as_str()))
+            .map_err(fail)?;
+        return Ok(true);
+    };
+    let ext = c
+        .sid
+        .as_deref()
+        .filter(|s| crate::outside::is_ext(s))
+        .map(str::to_owned);
+    let (plan, scope) = (plan.as_str().to_owned(), scope.clone());
+    let numbers: Vec<String> = p
+        .tasks
+        .0
+        .iter()
+        .map(|t| t.number.as_str().to_owned())
+        .collect();
+    f.writer
+        .db
+        .read(move |conn| {
+            let Some(e) = live_by_id(conn, &plan)? else {
+                // `write_plan` answers a missing plan
+                return Ok(false);
+            };
+            scope.allows_ent(conn, &e)?;
+            let Some(actor) = ext else { return Ok(true) };
+            let mut ns = vec![e.n];
+            for n in &numbers {
+                if let Some(t) = task_by_number(conn, e.n, n)? {
+                    ns.push(t.n);
+                }
+            }
+            crate::outside::own_record(conn, &ns, &actor)
+        })
+        .await
+        .map_err(fail)
+}
+
+fn live_by_id(conn: &Tx, id: &str) -> Result<Option<Ent>, CoordError> {
+    Ok(entity::by_id(conn, id)?.filter(|e| e.retired_tx.is_none()))
 }
 
 /// A task an agent marks `done` is the matrix's `task.done` (never for a worker), not just `graph.change`: the
@@ -735,21 +798,14 @@ async fn matrix_allows_done(
     again: &str,
 ) -> Result<(), Error> {
     use crate::matrix_gate::{ActionCtx, Gate};
-    let who = c
-        .sid
-        .as_deref()
-        .and_then(|s| f.core.agents.who(s))
-        .unwrap_or(norn::matrix::Who {
-            role: Some(norn::matrix::Role::Worker),
-            ..Default::default()
-        });
-    let base = match c.sid.as_deref() {
-        Some(s) => ActionCtx::of_session(&f.core.runs.scopes(), s),
-        None => ActionCtx::default(),
-    };
-    let ctx = ActionCtx {
-        plan: plan.or(base.plan.clone()),
-        ..base
+    let (who, base) = crate::outside::who_for(f, c).await?;
+    let ctx = if crate::matrix_gate::is_outside(&base) {
+        base
+    } else {
+        ActionCtx {
+            plan: plan.or(base.plan.clone()),
+            ..base
+        }
     };
     match f
         .core
