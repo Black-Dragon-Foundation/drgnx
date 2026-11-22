@@ -32,6 +32,9 @@ pub struct ImportParams {
     /// Read and count, write nothing (no backup, no graph, no view).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dry_run: Option<bool>,
+    /// Only this record file, which must lie under `root` and be one the importer would find (not ignored).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<AbsPath>,
 }
 
 /// One file the importer read.

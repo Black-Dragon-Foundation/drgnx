@@ -19,6 +19,17 @@ use serde_json::{Value, json};
 use crate::cli::ENSURE_TIMEOUT;
 use crate::client::Client;
 
+/// The kinds `import-records --only` takes (`runstav`'s `RecordKind`).
+const RECORD_KINDS: [&str; 7] = [
+    "specs",
+    "plans",
+    "ledgers",
+    "decisions",
+    "deferred",
+    "build-board",
+    "board",
+];
+
 /// A backup, an export or a scrub of a big store takes a while; the hub answers when it is done.
 const LONG: Duration = Duration::from_secs(600);
 
@@ -32,7 +43,7 @@ pub const USAGE: &str = "usage: ratatoskr graph export [--project P --out DIR] [
     \x20      ratatoskr graph sql 'SELECT …' [--json]\n\
     \x20      ratatoskr graph compact [--dry-run] [--json]\n\
     \x20      ratatoskr graph proposed accept|reject TX... [--json]\n\
-    \x20      ratatoskr graph import-records --root DIR [--only plans|ledgers|deferred|build-board|board] [--dry-run] [--json]";
+    \x20      ratatoskr graph import-records --root DIR [--only specs|plans|ledgers|decisions|deferred|build-board|board] [--path FILE] [--dry-run] [--json]";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct GraphCommand {
@@ -80,6 +91,7 @@ pub enum Sub {
     ImportRecords {
         root: PathBuf,
         only: Option<String>,
+        path: Option<PathBuf>,
         dry_run: bool,
     },
 }
@@ -121,7 +133,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
     // options that take a value
     let valued = [
         "project", "out", "since", "tx", "entity", "to-ver", "field", "reason", "who", "access",
-        "expires", "with", "root", "only",
+        "expires", "with", "root", "only", "path",
     ];
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
@@ -192,14 +204,15 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
             }
         }
         "import-records" => {
-            known(&["root", "only", "dry-run"])?;
+            known(&["root", "only", "path", "dry-run"])?;
             no_words(0)?;
             let only = get("only");
             if let Some(o) = &only
-                && !["plans", "ledgers", "deferred", "build-board", "board"].contains(&o.as_str())
+                && !RECORD_KINDS.contains(&o.as_str())
             {
                 return Err(format!(
-                    "--only takes plans, ledgers, deferred, build-board or board, not {o:?}"
+                    "--only takes {}, not {o:?}",
+                    RECORD_KINDS.join(", ")
                 ));
             }
             Sub::ImportRecords {
@@ -207,6 +220,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
                     .map(PathBuf::from)
                     .ok_or("graph import-records needs --root DIR")?,
                 only,
+                path: get("path").map(PathBuf::from),
                 dry_run: flag("dry-run"),
             }
         }
@@ -393,11 +407,15 @@ impl GraphCommand {
             Sub::ImportRecords {
                 root,
                 only,
+                path,
                 dry_run,
             } => {
                 let mut p = json!({"root": absolute(root, cwd)});
                 if let Some(o) = only {
                     p["only"] = json!(o);
+                }
+                if let Some(f) = path {
+                    p["path"] = json!(absolute(f, cwd));
                 }
                 if *dry_run {
                     p["dry_run"] = json!(true);
@@ -820,6 +838,55 @@ mod tests {
             .request(Path::new("/w"), 0.0)
             .unwrap();
         assert_eq!(none, json!({}));
+    }
+
+    #[test]
+    fn only_takes_every_record_kind() {
+        for k in [
+            "specs",
+            "plans",
+            "ledgers",
+            "decisions",
+            "deferred",
+            "build-board",
+            "board",
+        ] {
+            assert!(
+                p(&["import-records", "--root", "/r", "--only", k]).is_ok(),
+                "{k}"
+            );
+        }
+        let e = p(&["import-records", "--root", "/r", "--only", "foo"]).unwrap_err();
+        for k in [
+            "specs",
+            "decisions",
+            "plans",
+            "ledgers",
+            "deferred",
+            "build-board",
+            "board",
+        ] {
+            assert!(e.contains(k), "{e}");
+        }
+    }
+
+    #[test]
+    fn path_is_parsed_and_needs_a_value() {
+        let c = p(&[
+            "import-records",
+            "--root",
+            "/r",
+            "--path",
+            "docs/specs/x/a.md",
+        ])
+        .unwrap();
+        let (method, params) = c.request(Path::new("/w"), 0.0).unwrap();
+        assert_eq!(method, "records/import");
+        assert_eq!(
+            params,
+            json!({"root": "/r", "path": "/w/docs/specs/x/a.md"})
+        );
+        assert!(p(&["import-records", "--root", "/r", "--path"]).is_err());
     }
 
     #[test]

@@ -36882,6 +36882,17 @@
             ],
             "description": "Only one kind of file (`board` is never imported unless named)."
           },
+          "path": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only this record file, which must lie under `root` and be one the importer would find (not ignored)."
+          },
           "root": {
             "$ref": "#/$defs/AbsPath",
             "description": "The org folder."

@@ -45,12 +45,16 @@ All four satisfy `render(parse(t)) == t`. A 1600-row register parses in well und
 ## Adopting and keeping in step
 
 `ratatoskr graph import-records --root DIR [--only specs|plans|ledgers|decisions|deferred|build-board|board]
-[--dry-run]` (method `records/import`; `records/status` lists the files and their conflicted records). The importer
+[--path FILE] [--dry-run]` (method `records/import`; `records/status` lists the files and their conflicted records). The importer
 finds `docs/specs/**/*.md`, `docs/plans/**/*.md` (ledgers end in `.ledger.md`), `docs/decisions/**/*.md`,
 `docs/adr/**/*.md`, `DEFERRED.md` and `BUILD-BOARD.md` under DIR; `board.org` only with `--only board`. A spec a
 plan's `**Spec:**` line names (`.md` or `.org`, anywhere) is read too, by its plain path (`a/../b` as `b`), unless the
 privacy deny-list refuses it: a file under `~/org` is read only when the user opted it in (`personal-notes-allow.json`).
 
+- **One file.** `--path FILE` imports only that file: it must lie under DIR (compared as written and as canonical
+  paths), be one the importer would find (same kinds) and not be ignored or denied; only it is backed up, imported
+  and synced, and nothing is forgotten (as with `--only`). Refusals: `FILE is not under ROOT`, `FILE is not a record
+  file (…)`, `FILE is ignored by .drgnx/records.toml`. `--only` takes all seven kinds.
 - **The ignore list.** `archive/` is skipped by default. A root-level `.drgnx/records.toml` adds lines
   (`ignore = ["docs/specs/old/**", "!docs/specs/old/keep.md"]`) in gitignore syntax, relative to DIR: the last match
   wins, `!` re-includes, and a file under an ignored folder stays ignored (so `!archive/` imports the archive). The

@@ -2620,12 +2620,14 @@ pub struct Ears<'a> {
 pub const PERSONAL_NOTES_REFUSAL: &str =
     "the work tracker never reads a project inside ~/org (personal notes)";
 
+#[allow(clippy::too_many_arguments)] // the plan's signature: ROOT, the kind filter, the one file, the flags
 pub async fn import_core(
     db: &CoordDb,
     views: &Views,
     hub: &Path,
     root: &Path,
     only: Option<RecordKind>,
+    one: Option<&Path>,
     dry: bool,
     ears: Ears<'_>,
 ) -> Result<ImportReport, Error> {
@@ -2641,6 +2643,28 @@ pub async fn import_core(
     // opted in (`personal-notes-allow.json`) is
     let ign = Ignore::load(root).map_err(err)?;
     let mut found = discover(root, only, &ign);
+    if let Some(one) = one {
+        let shown = one.display();
+        let (lex, root_lex) = (lexical(one), lexical(root));
+        let under = lex.strip_prefix(&root_lex).is_ok()
+            && canonical_beyond(&lex).starts_with(canonical_beyond(&root_lex));
+        if !under {
+            return Err(err(format!("{shown} is not under {}", root.display())));
+        }
+        let rel = lex.strip_prefix(&root_lex).unwrap_or(&lex);
+        if ign.ignored(rel, false) {
+            return Err(err(format!(
+                "{shown} is ignored by {}",
+                ignore::RECORDS_TOML
+            )));
+        }
+        found.retain(|f| f.path == lex);
+        if found.is_empty() {
+            return Err(err(format!(
+                "{shown} is not a record file (specs, plans, ledgers, decisions, DEFERRED.md, BUILD-BOARD.md)"
+            )));
+        }
+    }
     found.retain(|f| {
         let v = deny.check(&f.path);
         v == Verdict::Allowed
@@ -2714,7 +2738,7 @@ pub async fn import_core(
             emit(e);
         }
     }
-    if only.is_none() {
+    if only.is_none() && one.is_none() {
         forget_gone(db, root, &found).await?;
     }
     Ok(ImportReport {
@@ -2817,6 +2841,7 @@ pub async fn import(f: &Front, _: &Caller, p: ImportParams) -> Result<ImportRepo
         &hub,
         Path::new(p.root.as_str()),
         p.only,
+        p.path.as_ref().map(|a| Path::new(a.as_str())),
         p.dry_run.unwrap_or(false),
         Ears {
             emit: &emit,
@@ -3036,6 +3061,7 @@ mod tests {
                 &self.hub,
                 &self.root,
                 only,
+                None,
                 dry,
                 Ears {
                     emit: &emit,
@@ -4049,6 +4075,7 @@ mod tests {
             &f.hub,
             &proj,
             None,
+            None,
             false,
             Ears {
                 emit: &heard,
@@ -4064,6 +4091,7 @@ mod tests {
             &f.views,
             &f.hub,
             &f.root,
+            None,
             None,
             false,
             Ears {
@@ -4101,6 +4129,7 @@ mod tests {
             &f.views,
             &f.hub,
             &f.root,
+            None,
             None,
             false,
             Ears {
@@ -4163,6 +4192,7 @@ mod tests {
             &f.views,
             &f.hub,
             &f.root,
+            None,
             None,
             false,
             Ears {
@@ -4317,6 +4347,7 @@ mod tests {
             &f.hub,
             &org,
             None,
+            None,
             false,
             Ears {
                 emit: &heard,
@@ -4331,6 +4362,7 @@ mod tests {
             &f.hub,
             &org,
             Some(RecordKind::Board),
+            None,
             false,
             Ears {
                 emit: &heard,
@@ -4455,6 +4487,7 @@ mod tests {
             &f.hub,
             &wt,
             Some(RecordKind::Plans),
+            None,
             false,
             Ears {
                 emit: &heard,
@@ -4469,6 +4502,7 @@ mod tests {
             &f.hub,
             &wt,
             Some(RecordKind::Ledgers),
+            None,
             false,
             Ears {
                 emit: &heard,
@@ -4929,6 +4963,7 @@ mod tests {
                 &f.hub,
                 &f.root,
                 None,
+                None,
                 false,
                 Ears {
                     emit: &heard,
@@ -4941,5 +4976,85 @@ mod tests {
             assert_eq!(f.count(TX).await, before);
             assert!(!f.hub.join("records-backup").exists());
         }
+    }
+
+    // ---- one file: `--path` ----
+
+    async fn import_path(f: &Fix, one: &Path) -> Result<ImportReport, Error> {
+        let heard = |_e: ViewEvent| {};
+        import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &f.root,
+            None,
+            Some(one),
+            false,
+            Ears {
+                emit: &heard,
+                deny: &f.deny,
+            },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn import_path_reads_only_that_file() {
+        let f = fix();
+        put(&f, "docs/plans/x/a.md", PLAN);
+        put(&f, "docs/plans/x/b.md", "# B\n\n### Task 1: b\n\n- [ ] y\n");
+        let r = import_path(&f, &f.root.join("docs/plans/x/a.md"))
+            .await
+            .unwrap();
+        assert_eq!(r.files.len(), 1, "{:?}", r.files);
+        assert!(r.files[0].path.ends_with("docs/plans/x/a.md"));
+        let of = |name: &'static str| match name {
+            "a" => {
+                "select count(*) from entity where source like 'records:%' and json_extract(data, '$.records.file') like '%/x/a.md'"
+            }
+            _ => {
+                "select count(*) from entity where source like 'records:%' and json_extract(data, '$.records.file') like '%/x/b.md'"
+            }
+        };
+        assert!(f.count(of("a")).await > 0);
+        assert_eq!(f.count(of("b")).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_path_outside_the_root_is_refused() {
+        let f = fix();
+        let other = f._dir.path().join("elsewhere/docs/plans/x/a.md");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(&other, PLAN).unwrap();
+        for p in [other, f.root.join("docs/plans/../../../org2/a.md")] {
+            let e = import_path(&f, &p).await.unwrap_err();
+            assert!(e.message.contains("is not under"), "{}", e.message);
+        }
+        assert_eq!(f.count(RECS).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_path_that_is_no_record_is_refused() {
+        let f = fix();
+        put(&f, "src/main.rs", "fn main() {}\n");
+        let e = import_path(&f, &f.root.join("src/main.rs"))
+            .await
+            .unwrap_err();
+        assert!(e.message.contains("is not a record file"), "{}", e.message);
+    }
+
+    #[tokio::test]
+    async fn an_ignored_path_is_refused() {
+        let f = fix();
+        put(&f, "archive/docs/plans/x.md", PLAN);
+        let e = import_path(&f, &f.root.join("archive/docs/plans/x.md"))
+            .await
+            .unwrap_err();
+        assert!(
+            e.message.contains("is ignored by .drgnx/records.toml"),
+            "{}",
+            e.message
+        );
+        assert_eq!(f.count(RECS).await, 0);
     }
 }
