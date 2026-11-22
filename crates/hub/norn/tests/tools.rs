@@ -1144,3 +1144,116 @@ async fn a_work_db_made_after_the_start_is_used_by_the_next_tool_call() {
         .unwrap();
     assert_eq!(events, 1);
 }
+
+// ---- work_status: paged, filtered, compact ----
+
+/// A world with plans `p01`.. whose paths and statuses are given: `(id suffix, path or None, status or None)`.
+async fn world_with_plans(plans: &[(&str, Option<&str>, Option<&str>)]) -> World {
+    let w = World::new(&[]);
+    let stmts: Vec<String> = plans
+        .iter()
+        .map(|(id, path, status)| {
+            let q = |v: &Option<&str>| v.map_or("null".to_owned(), |s| format!("'{s}'"));
+            format!(
+                "insert into node values ('plan:{id}', 'plan', 'Plan {id}', {}, 1, {}, null, 0, 'f', null, 1.0)",
+                q(path),
+                q(status)
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = stmts.iter().map(String::as_str).collect();
+    w.put_scanned(Scanned::of(&refs)).await;
+    w
+}
+
+async fn work_status(w: &World, args: Value) -> Value {
+    let (error, text) = w.call(&Identity::None, "work_status", args).await;
+    assert!(!error, "{text}");
+    serde_json::from_str(&text).unwrap()
+}
+
+#[tokio::test]
+async fn work_status_defaults_to_plans_not_done() {
+    let w = world_with_plans(&[
+        ("a", Some("docs/plans/a.md"), None),
+        ("b", Some("docs/plans/b.md"), Some("done")),
+        ("c", Some("docs/plans/c.md"), Some("open")),
+    ])
+    .await;
+    let got = work_status(&w, json!({})).await;
+    let ids: Vec<&str> = got["plans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["plan:a", "plan:c"]);
+    let all = work_status(&w, json!({"status": "all"})).await;
+    assert_eq!(all["plans"].as_array().unwrap().len(), 3);
+    let done = work_status(&w, json!({"status": "done"})).await;
+    assert_eq!(done["plans"].as_array().unwrap().len(), 1);
+    // the compact row
+    let row = &got["plans"][0];
+    for k in ["id", "title", "path", "status", "tasks", "steps"] {
+        assert!(row.get(k).is_some(), "{k}");
+    }
+    for k in ["spec", "branch", "merged", "todos", "commits"] {
+        assert!(row.get(k).is_none(), "{k}");
+    }
+}
+
+#[tokio::test]
+async fn work_status_pages_with_a_cursor() {
+    let ids: Vec<String> = (0..25).map(|i| format!("p{i:02}")).collect();
+    let paths: Vec<String> = ids.iter().map(|i| format!("docs/plans/{i}.md")).collect();
+    let plans: Vec<(&str, Option<&str>, Option<&str>)> = ids
+        .iter()
+        .zip(&paths)
+        .map(|(i, p)| (i.as_str(), Some(p.as_str()), None))
+        .collect();
+    let w = world_with_plans(&plans).await;
+    let first = work_status(&w, json!({"limit": 10})).await;
+    assert_eq!(first["plans"].as_array().unwrap().len(), 10);
+    assert_eq!(first["next_cursor"], "o:10");
+    let last = work_status(&w, json!({"limit": 10, "cursor": "o:20"})).await;
+    assert_eq!(last["plans"].as_array().unwrap().len(), 5);
+    assert!(last.get("next_cursor").is_none());
+}
+
+#[tokio::test]
+async fn work_status_path_prefix_filters() {
+    let w = world_with_plans(&[
+        ("a", Some("docs/plans/x/a.md"), None),
+        ("b", Some("docs/plans/y/b.md"), None),
+        ("c", None, None),
+    ])
+    .await;
+    let got = work_status(&w, json!({"path_prefix": "docs/plans/x/"})).await;
+    assert_eq!(got["plans"].as_array().unwrap().len(), 1);
+    assert_eq!(got["plans"][0]["id"], "plan:a");
+}
+
+#[tokio::test]
+async fn a_plan_without_a_path_is_null() {
+    let w = world_with_plans(&[("a", None, None)]).await;
+    let got = work_status(&w, json!({})).await;
+    let rows = got["plans"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].as_object().unwrap().contains_key("path"));
+    assert_eq!(rows[0]["path"], Value::Null);
+}
+
+#[tokio::test]
+async fn limit_over_50_is_refused() {
+    let w = world_with_plans(&[("a", None, None)]).await;
+    for limit in [51, 0] {
+        let (error, text) = w
+            .call(&Identity::None, "work_status", json!({"limit": limit}))
+            .await;
+        assert!(error && text.contains("limit"), "{limit}: {text}");
+    }
+    let (ok, _) = w
+        .call(&Identity::None, "work_status", json!({"limit": 50}))
+        .await;
+    assert!(!ok);
+}

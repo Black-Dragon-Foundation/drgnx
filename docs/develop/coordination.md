@@ -365,7 +365,7 @@ identity of its own (below). Messages are addressed to a session's id (or its na
 | `record_decision {kind, subject, task?, paths?, reason, replaces?, seen_version}` | current inside its own task, else proposed |
 | `claim_task`, `update_task`, `complete_task` `{task, …, seen_version}` | the lease and the status; `update_task` takes `running`, `needs-input`, `in-review` (and `failed` outside a job), nothing else |
 | `task_status {job?}` | the job's tasks |
-| `work_status` | the work tracker's plans, read from the graph (UTF-8 JSON; counts as `[done, all]`) |
+| `work_status` | the work tracker's plans, paged: `{plans: [{id, title, path, status, tasks, steps}], next_cursor?}` (counts as `[done, all]`; `status`, `limit` 1-50 (20), `cursor`, `path_prefix`; default the plans not done) |
 | `escalate {subject, text, seen_version}` | a message to `user`, queued (the Work space's What needs you shows it) |
 
 A held write answers `HELD: the decision log moved on — read these changes, then retry with seen_version N.` and
@@ -512,7 +512,9 @@ is `HELD: …` with the decisions since (`changes`, newest first). A recipient i
 or a hub session named by id or name (asked last); an outside agent's `send_message` counts as a report.
 `read.rs` has `read_inbox` (its rows are as they were read, then marked `read`), `ack`, `read_decisions` (the caller's
 `seen:ID` is written only when it changed), `task_status` and `work_status`: the work tracker's plans from the `node`
-and `edge` tables, read-only, sorted by path, with the counts of `drgnx-work-counts`. The size of `tools/list` is
+and `edge` tables, read-only, sorted by path, with the counts of `drgnx-work-counts`; a page holds 20 plans by default
+(`limit` up to 50, `cursor` `o:N`), the plans not done unless `status` says otherwise (a status word or `all`), and a plan
+without a path or title has `null` there. The size of `tools/list` is
 measured by `tools_schema::the_tool_list_fits_the_budget` against the 24,000-byte (about 6k-token) budget for the 16
 tools and 36,000 bytes (about 9k tokens) for the 21 with the tracker set.
 
@@ -522,7 +524,8 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
   kept in `Coord::projects()`. Writes register a new project; reads use only one the store knows. It is never an
   argument.
 - **Answers** are text plus `structuredContent` (`Authored` text: `{text, by, class, tx, project, trust}`), a
-  `resource_link` (`drgnx://entity/ID`) per entity named, and `_meta["dev.drgnx/notices"] = n`, with a last text line
+  `resource_link` (`drgnx://entity/ID`) per entity named only when the call has `links: true` (the rows are already in
+  the text and `structuredContent`), and `_meta["dev.drgnx/notices"] = n`, with a last text line
   `notices: n (read_inbox)` only when n > 0. Untrusted text, the caller's own included, is fenced in the text. Lists
   hold 50 rows and a `next_cursor` (`o:N`).
 - `task_write` and `note_add` take an optional `req`; a repeat returns the first answer. A caller without a project
@@ -539,7 +542,8 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
   names there are; the text is the pack's as the job's approval froze it (`orchestration.md`, "The rule pack").
 - `hello` keeps its first text item and adds a second one and `structuredContent.brief`; `record_decision` takes
   `about: [id]`.
-- `task_read find` ranks by words (FTS) and says `vectors: "behind N"` while entities in the caller's scope (its
+- `task_read find` takes `kind` (`task`, the default, `plan`, `spec` or `decision`; a spec or decision of no project
+  shows as a stub to an agent: `records_read` reads it in full) and ranks by words (FTS) and says `vectors: "behind N"` while entities in the caller's scope (its
   project and the projects granted to it) lack a vector; the vector half
   waits for the embedder (Task 12b).
 
@@ -800,7 +804,8 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
   needs `task.done` (never for a worker). An agent reaches its own project's plans, reports and tasks only (its
   session's project: the plan run's, else the one its folder is in): `plans/get`, `plans/write`, `reports/get` and the
   manager's `report_read` refuse another project's records, and a new plan lands in the agent's project (naming
-  another is refused); a record of no project, such as a job's tasks, belongs to its job: only that job's sessions and their manager reach it (else the session that wrote it). `job/propose` takes the
+  another is refused; `path` names a new plan's view file under `docs/plans/<repo>/`, which an agent's new plan needs, see
+  `records.md`, "Writing specs and decisions"); a record of no project, such as a job's tasks, belongs to its job: only that job's sessions and their manager reach it (else the session that wrote it). `job/propose` takes the
   entity id too: the plan's tasks (numbers must start with digits), roles and dependencies become the job. A task's
   `body` is its section of the brief, before its steps and interfaces; a task's `profile` is the profile it runs on
   (the job's `data.profiles` entry for it, as a reassignment would be; none: its role's route). A plan an agent
