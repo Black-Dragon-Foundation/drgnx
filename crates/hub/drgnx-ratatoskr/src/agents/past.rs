@@ -1208,7 +1208,9 @@ pub fn put_grant(sid: &str, g: Grant) {
     lock(&GRANTS).insert(sid.to_owned(), g);
 }
 
-/// FILE checked for a grant: a regular file (not a link), still under ROOT once its true name is read.
+/// FILE checked for a grant: a regular file (not a link), still under ROOT once its true name is read. Below ROOT the
+/// path must be its true name (no link, no `..`); above it links are the machine's (macOS's `/var` is
+/// `/private/var`, an atomic Fedora's `/home` is `/var/home`) and ROOT and FILE may name it either way.
 pub fn checked_file(root: &Path, file: &Path) -> Result<PathBuf, String> {
     let meta = file
         .symlink_metadata()
@@ -1222,7 +1224,16 @@ pub fn checked_file(root: &Path, file: &Path) -> Result<PathBuf, String> {
     let root = root
         .canonicalize()
         .map_err(|e| format!("{}: {e}", root.display()))?;
-    if !real.starts_with(&root) || real != file {
+    // the part below the root as the true name has it, and as FILE spells it: the same, under a folder that is ROOT
+    let true_name = real.strip_prefix(&root).ok().filter(|rel| {
+        file.ends_with(rel)
+            && file
+                .ancestors()
+                .nth(rel.components().count())
+                .and_then(|above| above.canonicalize().ok())
+                .is_some_and(|above| above == root)
+    });
+    if true_name.is_none() {
         return Err(format!(
             "{} is not under {}",
             file.display(),

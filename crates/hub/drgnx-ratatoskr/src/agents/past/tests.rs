@@ -353,6 +353,31 @@ fn a_grant_is_one_regular_file_under_its_root() {
     );
 }
 
+/// A link above the root is the machine's (macOS's `/var` is `/private/var`): the file is granted whichever way the
+/// root and the file name it; a link below the root is still refused.
+#[test]
+fn a_link_above_the_root_is_the_machines_and_one_below_it_is_refused() {
+    let h = Home::new();
+    let p = h.claude("5f0c", "count the apples");
+    let linked = h.home.with_file_name("linked-home");
+    std::os::unix::fs::symlink(&h.home, &linked).unwrap();
+    let via_link = linked.join(p.strip_prefix(&h.home).unwrap());
+    let real = p.canonicalize().unwrap();
+    assert_eq!(
+        checked_file(&linked.join(".claude"), &via_link),
+        Ok(real.clone())
+    );
+    assert_eq!(
+        checked_file(&h.home.join(".claude"), &via_link),
+        Ok(real.clone())
+    );
+    assert_eq!(checked_file(&linked.join(".claude"), &p), Ok(real));
+    // a folder below the root that is a link to another folder of the root
+    let root = h.home.join(".claude");
+    std::os::unix::fs::symlink(p.parent().unwrap(), root.join("projects/-w-elsewhere")).unwrap();
+    assert!(checked_file(&root, &root.join("projects/-w-elsewhere/5f0c.jsonl")).is_err());
+}
+
 #[test]
 fn the_history_methods_are_the_users_alone() {
     let ours: Vec<_> = runstav::registry::registry()
