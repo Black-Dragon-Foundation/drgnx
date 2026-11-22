@@ -10,6 +10,7 @@
 pub mod abi;
 pub mod chrome;
 pub mod decl;
+pub mod drag;
 pub mod focus;
 pub mod fold;
 pub mod hit;

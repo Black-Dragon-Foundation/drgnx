@@ -62,7 +62,10 @@ pub fn target_of(desc: &ChromeDesc, id: u64) -> Option<HitTarget> {
         ChromeRole::TitleNeedsYou | ChromeRole::StatusNeedsYou => ("needs-you-show", vec![]),
         ChromeRole::TitleSearch => ("quick-open", vec![]),
         ChromeRole::StripSplit => ("group-split", vec![int(k), sym("right")]),
-        ChromeRole::StripMore => ("group-more", vec![int(k)]),
+        ChromeRole::StripMore | ChromeRole::StripCount => ("group-more", vec![int(k)]),
+        // the glue scrolls the strip itself (`Workbench::tab_strip_scroll`), with no Lisp
+        ChromeRole::StripScrollLeft => ("strip-scroll", vec![int(k), Val::Int(-1)]),
+        ChromeRole::StripScrollRight => ("strip-scroll", vec![int(k), Val::Int(1)]),
         ChromeRole::DetailPin => ("detail-pin", vec![]),
         ChromeRole::WinMinimize => ("window-minimize", vec![]),
         ChromeRole::WinMaximize => ("window-maximize", vec![]),

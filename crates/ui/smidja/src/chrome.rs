@@ -37,6 +37,11 @@ pub enum ChromeRole {
     TabClose,
     StripSplit,
     StripMore,
+    /// A strip whose tabs do not all fit: the arrows, the fade at the shown tabs' end, and "+N" (the hidden ones).
+    StripScrollLeft,
+    StripScrollRight,
+    StripFade,
+    StripCount,
     Breadcrumb,
     BottomStrip,
     RegionHeader,
@@ -121,6 +126,9 @@ const PAD: i32 = 10;
 const TAB_MIN: i32 = 80;
 const TAB_MAX: i32 = 240;
 const CLOSE: i32 = 16;
+const ARROW: i32 = 20;
+const COUNT: i32 = 36;
+const FADE: i32 = 24;
 const BUTTON: i32 = 28;
 const RAIL_ITEM: i32 = 36;
 const CHIP: i32 = 28;
@@ -488,7 +496,65 @@ impl Workbench {
         );
         let bw = b.d(BUTTON);
         let tabs = grp.tabs.clone();
-        self.tabs_chrome(b, strip, r.x, r.y, th, &tabs, grp.active);
+        // the tabs that fit before the split and more buttons; when not all do, from the strip's start (the user's
+        // scroll, or the active tab brought into view), then the fade, "+N" and the arrows
+        let x0 = r.x + b.d(4);
+        let avail = r.x + r.w - 2 * bw - b.d(4) - x0;
+        let widths: Vec<i32> = tabs.iter().map(|t| self.tab_w(b, *t)).collect();
+        let (first, n) = if widths.iter().sum::<i32>() <= avail {
+            (0, tabs.len())
+        } else {
+            let lim = avail - b.d(COUNT) - 2 * b.d(ARROW);
+            let fits = |from: usize, to: usize| widths[from..to].iter().sum::<i32>() <= lim;
+            let (mut first, reveal) = self.strip_start(g);
+            first = first.min(tabs.len() - 1);
+            if let Some(ai) = grp
+                .active
+                .and_then(|a| tabs.iter().position(|t| *t == a))
+                .filter(|_| reveal)
+            {
+                first = first.min(ai);
+                while first < ai && !fits(first, ai + 1) {
+                    first += 1;
+                }
+            }
+            while first > 0 && fits(first - 1, tabs.len()) {
+                first -= 1;
+            }
+            let n = (first..tabs.len())
+                .take_while(|i| fits(first, i + 1))
+                .count()
+                .max(1);
+            (first, n)
+        };
+        self.strip_shown.set(g, first);
+        self.tabs_chrome(b, strip, r.x, r.y, th, &tabs[first..first + n], grp.active);
+        if n < tabs.len() {
+            let mut x = x0 + avail - b.d(COUNT) - 2 * b.d(ARROW);
+            b.push(
+                ChromeRole::StripFade,
+                g.0,
+                rect(x - b.d(FADE), r.y, b.d(FADE), th),
+                Some(strip),
+            );
+            b.push(
+                ChromeRole::StripCount,
+                g.0,
+                rect(x, r.y, b.d(COUNT), th),
+                Some(strip),
+            );
+            b.text(&format!("+{}", tabs.len() - n), TextRole::Ui);
+            x += b.d(COUNT);
+            for (role, icon) in [
+                (ChromeRole::StripScrollLeft, "chevron-left"),
+                (ChromeRole::StripScrollRight, "chevron-right"),
+            ] {
+                let aw = b.d(ARROW);
+                b.push(role, g.0, rect(x, r.y + (th - aw) / 2, aw, aw), Some(strip));
+                b.last().icon = icon.into();
+                x += aw;
+            }
+        }
         for (i, (role, icon)) in [
             (ChromeRole::StripSplit, "columns-2"),
             (ChromeRole::StripMore, "ellipsis"),
@@ -514,6 +580,19 @@ impl Workbench {
         b.text(&crumb, TextRole::Ui);
     }
 
+    /// Tab T's width in its strip: icon, title, marks and ×, within the tab's bounds.
+    fn tab_w(&self, b: &Builder, t: TabId) -> i32 {
+        let tab = &self.tabs[&t];
+        let role = if tab.preview {
+            TextRole::UiItalic
+        } else {
+            TextRole::Ui
+        };
+        let marks = i32::from(tab.dirty) + i32::from(tab.marks.iter().any(|m| m == "agent"));
+        (b.d(PAD + ICON + 6 + CLOSE + PAD + 6 * marks) + b.width(&tab.title, role))
+            .clamp(b.d(TAB_MIN), b.d(TAB_MAX))
+    }
+
     /// TABS laid out in a strip of height TH from (X, Y): icon, title (italic for a preview), dirty dot, agent mark, ×.
     #[allow(clippy::too_many_arguments)]
     fn tabs_chrome(
@@ -534,10 +613,7 @@ impl Workbench {
             } else {
                 TextRole::Ui
             };
-            let title_w = b.width(&tab.title, role);
-            let marks = i32::from(tab.dirty) + i32::from(tab.marks.iter().any(|m| m == "agent"));
-            let w = (b.d(PAD + ICON + 6 + CLOSE + PAD + 6 * marks) + title_w)
-                .clamp(b.d(TAB_MIN), b.d(TAB_MAX));
+            let w = self.tab_w(b, *t);
             let id = b.push(ChromeRole::Tab, t.0, rect(x, y, w, th), Some(strip));
             {
                 let e = b.last();

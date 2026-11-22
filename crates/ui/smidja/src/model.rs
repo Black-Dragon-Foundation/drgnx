@@ -462,6 +462,37 @@ pub struct SavedLayout {
     pub layout: LayoutSnapshot,
 }
 
+/// The first tab each strip showed at the last chrome build: what the chrome drew, not the model's state, so never
+/// part of a comparison.
+#[derive(Debug, Default)]
+pub struct StripShown(pub(crate) std::sync::Mutex<BTreeMap<GroupId, usize>>);
+
+impl StripShown {
+    pub(crate) fn get(&self, g: GroupId) -> usize {
+        self.0.lock().map_or(0, |m| m.get(&g).copied().unwrap_or(0))
+    }
+
+    pub(crate) fn set(&self, g: GroupId, first: usize) {
+        if let Ok(mut m) = self.0.lock() {
+            m.insert(g, first);
+        }
+    }
+}
+
+impl Clone for StripShown {
+    fn clone(&self) -> Self {
+        StripShown(std::sync::Mutex::new(
+            self.0.lock().map(|m| m.clone()).unwrap_or_default(),
+        ))
+    }
+}
+
+impl PartialEq for StripShown {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
 /// The whole model, process-wide.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Workbench {
@@ -478,6 +509,12 @@ pub struct Workbench {
     pub(crate) restore: Restore,
     pub(crate) notices: Vec<String>,
     pub(crate) next_id: u64,
+    /// Tab strips the user scrolled: the first tab shown and the active tab then (`drag.rs`).
+    pub(crate) strip_scroll: BTreeMap<GroupId, (usize, Option<TabId>)>,
+    /// The first tab each strip showed when the chrome was last built.
+    pub(crate) strip_shown: StripShown,
+    /// The chrome's own changes that are not the model's (a strip scrolled).
+    pub(crate) chrome_gen: u64,
 }
 
 impl Workbench {
