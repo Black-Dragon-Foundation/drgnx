@@ -183,7 +183,8 @@ fn abi_round_trips_every_op() {
     ));
     ok(&c("full_size", vec![i(w), u.clone()]));
     ok(&c("full_size", vec![i(w), u.clone()]));
-    ok(&c("stack", vec![i(g2), sy("left"), u.clone()]));
+    // the swap moved g to g2's right: g2 is the left one now
+    ok(&c("stack", vec![i(g2), sy("right"), u.clone()]));
     ok(&c("restore_previous_layout", vec![i(w), u.clone()]));
     let Val::List(gl) = c("query", vec![i(w), st("groups")]) else {
         panic!()
