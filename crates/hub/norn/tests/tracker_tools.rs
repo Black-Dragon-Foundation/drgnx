@@ -313,7 +313,7 @@ mod tools {
             .call(
                 &a,
                 "task_read",
-                json!({"op": "get", "id": id, "detail": true}),
+                json!({"op": "get", "id": id, "detail": true, "links": true}),
             )
             .await;
         let t = &got.structured["task"];
@@ -1082,6 +1082,156 @@ mod tools {
             let o = w.call(&a, "task_write", args).await;
             assert!(o.err, "{}", o.text);
         }
+    }
+
+    // ---- answers once, and `find` by kind ----
+
+    #[tokio::test]
+    async fn a_list_answer_has_its_rows_once() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        let mut ids = Vec::new();
+        for t in ["one", "two", "three"] {
+            ids.push(id_of(&create(&w, &a, t).await));
+        }
+        let o = w.call(&a, "task_read", json!({"op": "find"})).await;
+        assert!(!o.err, "{}", o.text);
+        assert_eq!(o.structured["tasks"].as_array().unwrap().len(), 3);
+        assert!(
+            o.content.is_empty(),
+            "no resource links by default: {:?}",
+            o.content
+        );
+        // the text keeps its rows (amendment MP-7), once each
+        for id in &ids {
+            assert_eq!(o.text.matches(id.as_str()).count(), 1, "{id}: {}", o.text);
+        }
+    }
+
+    #[tokio::test]
+    async fn links_true_adds_resource_links() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        for t in ["one", "two", "three"] {
+            create(&w, &a, t).await;
+        }
+        let o = w
+            .call(&a, "task_read", json!({"op": "find", "links": true}))
+            .await;
+        assert!(!o.err, "{}", o.text);
+        assert_eq!(
+            o.content
+                .iter()
+                .filter(|c| c["type"] == "resource_link")
+                .count(),
+            3
+        );
+        let bad = w
+            .call(&a, "task_read", json!({"op": "find", "links": "yes"}))
+            .await;
+        assert!(bad.err, "{}", bad.text);
+    }
+
+    /// A plan of the project at HOME, and a spec head of no project (as an import makes it).
+    async fn plan_and_spec(w: &World, home: &Path) -> (String, String) {
+        let n = w.project_n(home);
+        w.user_write(move |tx| {
+            let mk = |kind: &str, id: &str, title: &str, project: Option<i64>| EntityNew {
+                id: id.into(),
+                kind: kind.into(),
+                project,
+                title: Some(title.into()),
+                status: None,
+                body: Some(format!("{title} body")),
+                priority: None,
+                assignee: None,
+                data: json!({}),
+                origin: Origin::Recorded,
+                source: None,
+            };
+            entity::create(tx, mk("plan", "plan:menus", "Menus plan", Some(n)))?;
+            entity::create(tx, mk("spec", "spec:menus", "Menus spec", None))?;
+            entity::create(tx, mk("decision", "decision:menus", "Menus decision", None))?;
+            Ok(())
+        })
+        .await;
+        ("plan:menus".into(), "spec:menus".into())
+    }
+
+    fn kinds_of(o: &Out) -> Vec<String> {
+        o.structured["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["kind"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn find_kind_plan_returns_plans() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        create(&w, &a, "a task").await;
+        let (plan, _) = plan_and_spec(&w, &h).await;
+        let o = w
+            .call(&a, "task_read", json!({"op": "find", "kind": "plan"}))
+            .await;
+        assert!(!o.err, "{}", o.text);
+        assert_eq!(kinds_of(&o), ["plan"]);
+        assert_eq!(o.structured["tasks"][0]["id"], plan);
+    }
+
+    #[tokio::test]
+    async fn find_kind_spec_and_decision() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        create(&w, &a, "a task").await;
+        plan_and_spec(&w, &h).await;
+        for (kind, id) in [("spec", "spec:menus"), ("decision", "decision:menus")] {
+            let o = w
+                .call(&a, "task_read", json!({"op": "find", "kind": kind}))
+                .await;
+            assert!(!o.err, "{}", o.text);
+            assert_eq!(o.structured["tasks"][0]["id"], id, "{kind}");
+            // of no project: to an agent a stub (its reference, no status or version)
+            assert!(o.structured["tasks"][0].get("ver").is_none(), "{kind}");
+        }
+        let words = w
+            .call(
+                &a,
+                "task_read",
+                json!({"op": "find", "kind": "spec", "query": "menus"}),
+            )
+            .await;
+        assert!(!words.err, "{}", words.text);
+        assert_eq!(kinds_of(&words), ["spec"]);
+    }
+
+    #[tokio::test]
+    async fn find_without_kind_is_tasks() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        create(&w, &a, "a task").await;
+        plan_and_spec(&w, &h).await;
+        let o = w.call(&a, "task_read", json!({"op": "find"})).await;
+        assert_eq!(kinds_of(&o), ["task"]);
+    }
+
+    #[tokio::test]
+    async fn find_kind_grant_is_refused() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        create(&w, &a, "registers the project").await;
+        let o = w
+            .call(&a, "task_read", json!({"op": "find", "kind": "grant"}))
+            .await;
+        assert!(o.err && o.text.contains("kind"), "{}", o.text);
     }
 
     #[test]

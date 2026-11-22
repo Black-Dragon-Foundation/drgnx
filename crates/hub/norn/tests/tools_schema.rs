@@ -88,15 +88,18 @@ fn listing(mut all: Vec<Box<dyn Tool<Ctx>>>) -> Value {
 /// What `tools/list` may weigh: the 23 tools (the 21 of answer 1, option A, and the two settings tools every agent
 /// has) and the 18 without the tracker set, each the size measured when the settings tools came (unified-settings
 /// Task 32: 15,564 and 8,930 bytes) plus 10 %, at most 40,000 bytes (call 10).
-const BUDGET_BYTES: usize = 17_121;
+/// Re-measured 17,295 when `links` joined every tracker tool, `task_read` took `kind` and `work_status` took its paging
+/// arguments (174 bytes over the old figure).
+const BUDGET_BYTES: usize = 17_295;
 const BUDGET_BYTES_16: usize = 9_823;
 /// The four job tools (agent system part 1, Task 15) on top of the 18; the whole list stays under 40,000 bytes.
 const BUDGET_JOBS: usize = 6_000;
 /// The three tools the rest of part 1 added for every worker (Task 21): `report_submit`, `plan_read`, `plan_write`.
 /// Their schemas come from the plan methods' types.  Measured after the schemas were trimmed (`guard::compact_schema`):
 /// 4,105 bytes together (report_submit 2,058, plan_write 1,756, plan_read 277, plus the list's own brackets); 4,266
-/// since a plan's task names its role, profile and body (161 bytes, no descriptions).
-const BUDGET_PART1: usize = 4_266;
+/// since a plan's task names its role, profile and body (161 bytes, no descriptions); 4,448 since `plan_write` takes
+/// a new plan's view file, `path` (182 bytes with its description).
+const BUDGET_PART1: usize = 4_448;
 /// `extensions_suggest`, which every agent has (the Extensions view: an agent suggests, the user installs).
 const BUDGET_EXTENSIONS: usize = 800;
 /// `huddle_reply`, which every agent has (a huddle's position).
