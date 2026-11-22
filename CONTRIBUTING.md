@@ -57,7 +57,7 @@ the pull request with exactly:
 The bot records your GitHub account, the date and the pull request on the repository's `cla-signatures` branch, and
 the pull request's "CLA signed" check turns green. You sign once; later pull requests pass on their own. Comment
 `recheck` if the check did not update. If you contribute on behalf of your employer, make sure you are allowed to (the
-agreement's section 4). Questions about the agreement: TODO@example.org.
+agreement's section 4). Questions about the agreement: upmanyu900@gmail.com.
 
 ## Licences
 

@@ -80,7 +80,7 @@ Foundation, You reserve all right, title, and interest in and to Your Contributi
 8. **Changes in your circumstances.** You agree to notify the Foundation of any facts or circumstances of which you
    become aware that would make these representations inaccurate in any respect.
 
-9. **Contact.** Questions about this agreement go to TODO@example.org.
+9. **Contact.** Questions about this agreement go to upmanyu900@gmail.com.
 
 ---
 
