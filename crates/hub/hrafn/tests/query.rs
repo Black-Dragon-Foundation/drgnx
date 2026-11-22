@@ -483,7 +483,8 @@ async fn vector_route_reads_no_chunk_rows() {
     );
 }
 
-/// Embeds every key the fixture's store lacks: a chunk's vector from CHUNK, a path's from PATH (by its path).
+/// Embeds every key the fixture's store lacks: a chunk's vector from CHUNK, a path's from PATH (by its path). How many
+/// files' path keys it embedded.
 async fn embed_with(
     store: &CodeStore,
     chunk: &dyn Fn(&str) -> Vec<f32>,
@@ -504,7 +505,13 @@ async fn embed_with(
             })
             .collect();
         if kind == KeyKind::Path {
-            paths = rows.len();
+            // the files' path keys (directories', `dir/`, come too while DIR_WEIGHT is above 0)
+            paths = want
+                .iter()
+                .filter(|(k, _, t)| {
+                    *k == kind && !t.lines().next().unwrap_or_default().ends_with('/')
+                })
+                .count();
         }
         if !rows.is_empty() {
             put_vectors(store, MODEL, DIMS as u32, kind, &rows)
