@@ -111,16 +111,6 @@ pub struct VecRow {
     pub last_used: i64,
 }
 
-/// STUB (the red run): the old key, until Task 8.
-pub(crate) fn vec_key(chunker: u32, embed_text: &str) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(4u64.to_be_bytes());
-    h.update(chunker.to_be_bytes());
-    h.update((embed_text.len() as u64).to_be_bytes());
-    h.update(embed_text.as_bytes());
-    h.finalize().into()
-}
-
 /// What a vector embeds: a chunk's text, or a path's (`vec.kind` 0 and 1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum KeyKind {
@@ -137,10 +127,20 @@ impl KeyKind {
         }
     }
 
-    /// The key of TEXT as this kind's text: sha256 over the length-prefixed version of the text and the text.
+    /// The key of TEXT as this kind's text: sha256 over length-prefixed fields, the version of the kind's text
+    /// ([`crate::chunk::EMBED_TEXT_VERSION`], [`PATH_TEXT_VERSION`]) and then the text itself. Nothing else goes in: one
+    /// text is one key in any path, branch, clone or repo.
     pub fn key(self, text: &str) -> [u8; 32] {
-        let _ = (text, Sha256::new());
-        unimplemented!()
+        let version = match self {
+            KeyKind::Chunk => crate::chunk::EMBED_TEXT_VERSION,
+            KeyKind::Path => PATH_TEXT_VERSION,
+        };
+        let mut h = Sha256::new();
+        h.update(4u64.to_be_bytes());
+        h.update(version.to_be_bytes());
+        h.update((text.len() as u64).to_be_bytes());
+        h.update(text.as_bytes());
+        h.finalize().into()
     }
 }
 

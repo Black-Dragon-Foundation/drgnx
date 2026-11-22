@@ -1,17 +1,17 @@
 //! The index: tier 1 (chunks, FTS rows and symbols, rebuilt for the files whose blob changed) and the store side of
 //! tier 2 (which content keys a model still lacks, their vectors, and the keys kept for a branch switch back).
 //!
-//! Vectors are keyed by content ([`crate::vec_key`]), so a file that comes back to an earlier content finds its
+//! Vectors are keyed by content ([`crate::chunk_key`]), so a file that comes back to an earlier content finds its
 //! vectors still there. Each vector row's `last_used` is a logical clock (one more than the store's highest), moved
 //! on write and whenever tier 1 writes a chunk that refers to the key; unreferenced keys are kept up to twice the live
 //! set, the least recently referenced going first.
 
-use crate::chunk::{BUDGET, CHUNKER_VERSION, PARSE_VERSION, chunk_file_refs};
+use crate::chunk::{BUDGET, CHUNKER_VERSION, PARSE_VERSION, chunk_file_refs, embed_text_and_key};
 use crate::files::Listed;
 use crate::memo;
 use crate::store::{
     ChunkIn, CodeStore, FileRow, KeyKind, RefIn, StoreError, SymbolIn, content_ids,
-    remove_file_row, sweep_all, vec_key, write_version,
+    remove_file_row, sweep_all, write_version,
 };
 use crate::tree::{View, transition};
 use rusqlite::{Connection, params};
@@ -143,18 +143,22 @@ pub(crate) fn build(l: &Listed, bytes: &[u8]) -> Built {
             .collect(),
         chunks: chunks
             .into_iter()
-            .map(|c| ChunkIn {
-                start: c.start,
-                end: c.end,
-                line_start: c.line_start,
-                line_end: c.line_end,
-                symbol: c.symbol,
-                key: vec_key(CHUNKER_VERSION, &c.embed_text),
-                embed: c.embed,
-                embed_text: c.embed_text,
-                symbols: c.fts.symbols,
-                doc: c.fts.doc,
-                body: c.fts.body,
+            .map(|c| {
+                // the stored text is the one the key is of, and what tier 2 sends
+                let (_, key) = embed_text_and_key(&c);
+                ChunkIn {
+                    start: c.start,
+                    end: c.end,
+                    line_start: c.line_start,
+                    line_end: c.line_end,
+                    symbol: c.symbol,
+                    key,
+                    embed: c.embed,
+                    embed_text: c.embed_text,
+                    symbols: c.fts.symbols,
+                    doc: c.fts.doc,
+                    body: c.fts.body,
+                }
             })
             .collect(),
         symbols: symbols

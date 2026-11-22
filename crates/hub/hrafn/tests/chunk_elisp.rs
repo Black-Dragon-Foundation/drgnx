@@ -177,14 +177,16 @@ fn elisp_title_never_carries_the_file_name() {
         for path in ["core/foo.el", "moved/elsewhere/bar.el"] {
             let (cs, _) = chunk_file(path, Lang::Elisp, false, &text, BUDGET);
             for c in &cs {
-                assert!(
-                    !c.header.contains(".el"),
-                    "{path} {first:?}: {:?}",
-                    c.header
-                );
+                // the title is the first line; a `;;;` first line is also the file's first section heading, which
+                // is the file's own text (the same wherever it is), not its name
+                let line = c.header.lines().next().unwrap_or_default();
                 match title {
-                    Some(t) => assert!(c.header.starts_with(&format!("{t}\n")), "{:?}", c.header),
-                    None => assert!(c.header.starts_with("defines: "), "{:?}", c.header),
+                    Some(t) => assert_eq!(line, t, "{path} {first:?}: {:?}", c.header),
+                    None => assert!(
+                        line.starts_with("section: ") || line.starts_with("defines: "),
+                        "{path} {first:?}: no title: {:?}",
+                        c.header
+                    ),
                 }
             }
             headers.push(cs.iter().map(|c| c.embed_text.clone()).collect::<Vec<_>>());

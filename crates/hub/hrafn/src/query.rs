@@ -589,8 +589,11 @@ fn meta(c: &Connection, id: i64, view: View) -> rusqlite::Result<Option<Meta>> {
     })
 }
 
-/// The chunk's own text: what follows the header.
+/// The chunk's own text: what follows the header (a chunk with no header lines starts with the newline that ends it).
 fn body(embed_text: &str) -> &str {
+    if let Some(b) = embed_text.strip_prefix('\n') {
+        return b;
+    }
     embed_text.split_once("\n\n").map_or(embed_text, |(_, b)| b)
 }
 
@@ -767,7 +770,7 @@ pub async fn search(
 mod tests {
     use super::*;
     use crate::door::DoorKind;
-    use crate::store::{ChunkIn, FileRow, SymbolIn, vec_key};
+    use crate::store::{ChunkIn, FileRow, SymbolIn, chunk_key};
 
     /// N chunks of PATH, each defining one symbol `needle`.
     fn needles(path: &str, n: usize) -> (Vec<ChunkIn>, Vec<SymbolIn>) {
@@ -780,7 +783,7 @@ mod tests {
                     line_start: i as u32 + 1,
                     line_end: i as u32 + 1,
                     symbol: Some("needle".into()),
-                    key: vec_key(1, &text),
+                    key: chunk_key(&text),
                     embed: true,
                     embed_text: text,
                     symbols: "needle".into(),
@@ -866,7 +869,7 @@ mod tests {
                 line_start: i as u32 + 1,
                 line_end: i as u32 + 1,
                 symbol: None,
-                key: vec_key(1, &text),
+                key: chunk_key(&text),
                 embed: true,
                 embed_text: text,
                 symbols: String::new(),

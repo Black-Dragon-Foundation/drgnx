@@ -1,8 +1,9 @@
 //! Chunking: a file becomes chunks (what is embedded and searched) and symbols (what the file defines).
 //!
 //! A file's chunks put together give back the file, byte for byte. Offsets are byte offsets into the text. The
-//! header (path, title line, section, defined symbols and kinds) goes into `embed_text` and the FTS `path` and
-//! `symbols` columns, never into `body`.
+//! header (title line, section, defined symbols and kinds) goes into `embed_text` and the FTS `symbols` column, never
+//! into `body`. The path goes into the FTS `path` column only: the embedded text is the same wherever the file is, so a
+//! move or a copy embeds no chunk again (a path has a vector of its own, `store::path_key`).
 
 mod definers;
 mod elisp;
@@ -26,8 +27,8 @@ pub use registry::{MissingHook, hub_grammars, on_missing, stamp as lang_stamp};
 /// The chunk budget, in non-whitespace characters (the eval tunes it).
 pub const BUDGET: usize = 1800;
 
-/// Bump it when chunking changes: tier 1 chunks every stored file again.
-pub const CHUNKER_VERSION: u32 = 2;
+/// Bump it when chunking changes: tier 1 chunks every stored file again (3: the embedded text lost its path).
+pub const CHUNKER_VERSION: u32 = 3;
 
 /// The version of what a chunk's `embed_text` holds (title, section, `defines:`, `part i/n: sig`, body; no path). It is
 /// hashed into every chunk key ([`crate::chunk_key`]) and is a field of every model fingerprint: bump it when the text
@@ -37,8 +38,10 @@ pub const EMBED_TEXT_VERSION: u32 = 3;
 /// The text tier 2 sends for CHUNK and the key its vector is stored under: the only way to obtain either, so the key is
 /// always the hash of the very bytes that are embedded.
 pub fn embed_text_and_key(chunk: &Chunk) -> (&str, [u8; 32]) {
-    let _ = chunk;
-    unimplemented!()
+    (
+        &chunk.embed_text,
+        crate::store::chunk_key(&chunk.embed_text),
+    )
 }
 
 /// Bump it when what a parse derives besides the chunks changes (a symbol's lines or signature, a new language, the
@@ -251,7 +254,7 @@ impl Lines {
     }
 }
 
-/// What a chunk's header says.
+/// What a chunk's header says. The path is the FTS row's, never in the rendered header.
 pub(crate) struct Header<'a> {
     pub path: &'a str,
     pub title: Option<&'a str>,
@@ -265,10 +268,9 @@ pub(crate) struct Header<'a> {
 }
 
 impl Header<'_> {
+    /// The header lines, each ending in a newline (none at all for a chunk that says nothing but its body).
     pub(crate) fn render(&self) -> String {
         let mut h = String::new();
-        h.push_str(self.path);
-        h.push('\n');
         if let Some(t) = self.title {
             h.push_str(t);
             h.push('\n');
@@ -299,7 +301,9 @@ impl Header<'_> {
     }
 }
 
-/// Assemble a chunk over `text[start..end]`. `embed_body` replaces the body in `embed_text` (data-heavy forms).
+/// Assemble a chunk over `text[start..end]`. `embed_body` replaces the body in `embed_text` (data-heavy forms). The
+/// embedded text is the header, a newline, then the body: with no header it starts with that newline, so the body is
+/// always what follows the first blank line (`query::body`).
 pub(crate) fn build_chunk(
     text: &str,
     lines: &Lines,

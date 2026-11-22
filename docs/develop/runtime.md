@@ -1272,8 +1272,11 @@ its new paths: `base_paths` is the one shared list, `delta(view)` reads only the
 query, n)` puts a basename that starts with the query first, then one that holds it, then a path that holds it. The
 ranked query of render offload Task 21 (`search/files`) builds on these.
 
-`vec_key(chunker, embed_text)` is sha256 over the length-prefixed chunker version and text. A chunk has one key; each
-model that embeds it adds a `vec` row, so a branch switch back embeds nothing.
+A vector's key is of its text alone: `KeyKind::key(text)` is sha256 over the length-prefixed version of the kind's text
+(`chunk::EMBED_TEXT_VERSION` for a chunk, `PATH_TEXT_VERSION` for a path) and the text. `chunk::embed_text_and_key` is
+the one place a chunk's text and key come from, and tier 2 sends that same text. The text carries no path, so a chunk
+has one key in any path, branch, clone or repo; each model that embeds it adds a `vec` row, so a branch switch back, a
+move or a copy embeds nothing.
 
 FTS5 has one tokenizer per table, and `tokenchars '-'` would hide `timer` in `drgnx-timer--fire` from the `body`
 column. So the `symbols` column holds names encoded by `encode_symbol`, which maps each ASCII punctuation character to a
@@ -1378,11 +1381,12 @@ the file list's `Git`, so the full listing runs on it too.
 
 `chunk::chunk_file(path, lang, generated, text, budget)` returns the file's chunks and symbols. A file's chunks put
 together give back the file, byte for byte (offsets are bytes). The budget is 1,800 non-whitespace characters
-(`BUDGET`); `CHUNKER_VERSION` is part of every vector's content key. A chunk's `line_start` is the line of its first
+(`BUDGET`). A chunk's `line_start` is the line of its first
 non-blank character (chunks are cut on the previous chunk's last newline, so the byte offset alone would name the line
-before), which is where a hit opens and what `reanchor` compares against. Version 2 is that rule: an index made by
-version 1 is chunked again at the next refresh, whether or not a file changed (and, the version being in every
-vector's key, embedded again).
+before), which is where a hit opens and what `reanchor` compares against. Version 2 is that rule; version 3 took the
+path out of the embedded text. An index made by an older version is chunked again at the next refresh, whether or not a
+file changed; a chunk is embedded again only when its text changed (the key is of the text and
+`EMBED_TEXT_VERSION`, 3, not of the chunker version).
 
 `chunk::chunk_file_refs` also returns the file's references (`chunk::Ref`: a name, how often, its first 8 lines),
 from the same parse, which tier 1 and the overlay write to `ref`. Tree-sitter languages run a tags query and keep the
@@ -1434,8 +1438,11 @@ them. Adjacent units merge greedily up to the budget and never across a section 
 column 0). A form over the budget splits at its child forms; every part's header repeats the signature, the first
 docstring line and "part i/n". A `defconst`, `defvar` or `defcustom` whose value is a literal list or vector and
 which is over the budget is one chunk that embeds only its first line and docstring (the FTS body keeps all of it).
-The header (path, title line, section, defined symbols and kinds) is in `embed_text` and the FTS `path` and `symbols`
-columns, never in `body`; a generated file gets `embed = false`.
+The header (title line, section, defined symbols and kinds) is in `embed_text` and the FTS `symbols` column, never in
+`body`; the path is only in the FTS `path` column (it has a vector of its own, below), and a chunk with no header lines
+embeds a newline and its body. The title is the first `;;;` line's text after `---`; without `---` a first word that is
+a file name (`name.el`, `name.el:`) is dropped, so no title carries the file's name. A generated file gets
+`embed = false`.
 
 The definer table (`chunk/definers.rs`) is closed: it names `defun`, `defvar`, `defcustom`, `defmacro`, `cl-defun`,
 `defconst`, `defvar-local`, `defface`, `defgroup`, `defsubst`, `cl-defmacro`, `defvar-keymap`, `defalias`,

@@ -103,6 +103,15 @@ fn embed_text_has_no_path() {
             let (lang, _) = classify(&path, text.as_bytes());
             let (chunks, _) = chunk_file(&path, lang, false, &text, BUDGET);
             assert!(!chunks.is_empty(), "{path}");
+            let (elsewhere, _) = chunk_file(&format!("other/{name}"), lang, false, &text, BUDGET);
+            let texts = |cs: &[hrafn::chunk::Chunk]| -> Vec<String> {
+                cs.iter().map(|c| c.embed_text.clone()).collect()
+            };
+            assert_eq!(
+                texts(&chunks),
+                texts(&elsewhere),
+                "{name}: the path changed the text"
+            );
             for c in &chunks {
                 let (sent, key) = embed_text_and_key(c);
                 assert_eq!(sent, c.embed_text);
@@ -112,8 +121,9 @@ fn embed_text_has_no_path() {
                     "{path}: {:?}",
                     c.embed_text
                 );
+                // (a header may quote the file's own text, a section heading naming the file, but never its path)
                 assert!(
-                    !c.header.contains(*name) && !c.header.contains("deep/nested"),
+                    !c.header.contains("deep/nested"),
                     "{path}: the header {:?}",
                     c.header
                 );
