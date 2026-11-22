@@ -91,7 +91,8 @@ fn listing(mut all: Vec<Box<dyn Tool<Ctx>>>) -> Value {
 /// Re-measured 17,295 when `links` joined every tracker tool, `task_read` took `kind` and `work_status` took its paging
 /// arguments (174 bytes over the old figure).
 const BUDGET_BYTES: usize = 17_295;
-const BUDGET_BYTES_16: usize = 9_823;
+/// Re-measured 10,047 when `work_status` took its paging arguments (224 bytes over 9,823).
+const BUDGET_BYTES_16: usize = 10_047;
 /// The four job tools (agent system part 1, Task 15) on top of the 18; the whole list stays under 40,000 bytes.
 const BUDGET_JOBS: usize = 6_000;
 /// The three tools the rest of part 1 added for every worker (Task 21): `report_submit`, `plan_read`, `plan_write`.
