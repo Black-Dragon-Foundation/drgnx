@@ -310,7 +310,7 @@ is Nidhogg's), and `actions/checkout` without `repository` checks out the caller
 Between releases each repository is tested against the other's **current integration branch**, never an old release:
 
 - **drgnx's CI** (`nidhogg: line`): the `nidhogg-line` job reads the branch name in `.github/ci/nidhogg-line`
-  (`rel7-next` on rel7-next; a release branch names its partner release branch: `rel/6-final` on drgnx's `rel/6-final`), resolves its head with `git ls-remote`, and `.github/ci/nidhogg-line.sh` finds Nidhogg's newest
+  (`main` on main, `next` on next, `line/rel7` on line/rel7; a release branch names its partner release branch, e.g. `rel/6-final` on drgnx's `rel/6-final`), resolves its head with `git ls-remote`, and `.github/ci/nidhogg-line.sh` finds Nidhogg's newest
   `build.yml` run of that commit (any event: a pull request, a by-hand or a scratch run) whose tarball jobs
   (`Linux (fedora-45)`, `macOS (Naglfar app)`) succeeded, even when its test jobs are red, and that still holds
   the tarballs the asked tiers need (`tarball-fedora-45` for the Linux tiers, `tarball-macos` for `macos`). It

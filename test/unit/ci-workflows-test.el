@@ -1001,7 +1001,7 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
                        "steps.own.outputs.commit == (github.event.pull_request.head.sha || github.sha)"
                        "github.repository == 'Black-Dragon-Foundation/drgnx'"))
         (should (string-search s cond)))
-      (should-not (string-search "nidhogg-31" cond)))
+      (should-not (string-search "nidhogg" cond)))
     ;; the binaries stay for the upload; the save takes the restore's key
     (drgnx-ci-test--has bins "cargo-prune.sh\" \"$DIR/runtime/Cargo.toml\" \"$DIR/runtime/target\" --keep-bins"
                         "key: ${{ steps.bins-cache.outputs.cache-primary-key }}")))
