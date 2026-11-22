@@ -1573,6 +1573,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
 | `outline/scopes` | user | `{file?: string, line: natnum, path?: string, worktree_root?: string}` | `{scopes: [OutlineScope]}` | no |
 | `outline/set` | user | `{file?: string, folded?: [natnum], view: string}` | `boolean` | no |
+| `outside/bind` | user | `{kind: AgentKind, role: "manager" \| "worker" \| "chat", root: AbsPath}` | `{at: number, id: string, kind: string, role: "manager" \| "worker" \| "chat", root: string}` | yes |
+| `outside/bindings` | user | `{}` | `{bindings: [BindingRow]}` | no |
+| `outside/unbind` | user | `{id: Id}` | `boolean` | yes |
 | `pace/get` | user | `{history?: boolean, provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
 | `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |

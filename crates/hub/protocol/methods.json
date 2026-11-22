@@ -35183,6 +35183,214 @@
       "classes": [
         "user"
       ],
+      "doc": "the user binds outside agents of kind in root's project to role (a rebind replaces the role)",
+      "name": "outside/bind",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "AgentKind": {
+            "description": "an agent kind: lowercase letters, digits, _ and - (a letter or digit first), at most 32",
+            "maxLength": 32,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "type": "string"
+          },
+          "Role": {
+            "description": "A session's role: what its matrix column is.",
+            "enum": [
+              "manager",
+              "worker",
+              "chat"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/AgentKind",
+            "description": "The outside agents' kind (`claude`, `codex`, …), as their bridge names it."
+          },
+          "role": {
+            "$ref": "#/$defs/Role"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath",
+            "description": "A folder in the project: the hub binds the project's top-level (a worktree's main repository)."
+          }
+        },
+        "required": [
+          "kind",
+          "root",
+          "role"
+        ],
+        "title": "BindParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Role": {
+            "description": "A session's role: what its matrix column is.",
+            "enum": [
+              "manager",
+              "worker",
+              "chat"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "One binding.",
+        "properties": {
+          "at": {
+            "description": "When it was last written (seconds since the epoch).",
+            "format": "double",
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/$defs/Role"
+          },
+          "root": {
+            "description": "The project's top-level the binding is for.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "root",
+          "role",
+          "at"
+        ],
+        "title": "BindingRow",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the live bindings",
+      "name": "outside/bindings",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BindingRow": {
+            "additionalProperties": false,
+            "description": "One binding.",
+            "properties": {
+              "at": {
+                "description": "When it was last written (seconds since the epoch).",
+                "format": "double",
+                "type": "number"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "role": {
+                "$ref": "#/$defs/Role"
+              },
+              "root": {
+                "description": "The project's top-level the binding is for.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "root",
+              "role",
+              "at"
+            ],
+            "type": "object"
+          },
+          "Role": {
+            "description": "A session's role: what its matrix column is.",
+            "enum": [
+              "manager",
+              "worker",
+              "chat"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "bindings": {
+            "items": {
+              "$ref": "#/$defs/BindingRow"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "bindings"
+        ],
+        "title": "Bindings",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user revokes a binding: its agents' next call has no role (false: no such binding)",
+      "name": "outside/unbind",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id",
+            "description": "The binding's id (`outside/bindings`)."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "UnbindParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the subscriptions' meters: share used, rate per hour and when it runs out at that rate (estimates)",
       "name": "pace/get",
       "params": {

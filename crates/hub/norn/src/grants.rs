@@ -378,6 +378,7 @@ pub fn register(guard: &mut Guard) {
     crate::write::huddles::register(guard);
     crate::write::always::register(guard);
     crate::write::evidence::register(guard);
+    crate::bindings::register(guard);
 }
 
 /// The grants' version: the highest `updated_tx` of a grant row (0 when none).
