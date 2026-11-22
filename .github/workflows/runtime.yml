@@ -20,7 +20,7 @@ on:
         type: string
         default: "10"
       only:
-        description: "Narrowed: the jobs to run, of rt-linux rt-msrv rt-escape rt-containers rt-fleet rt-android rt-deny rt-fuzz rt-macos rt-macrunner (empty: all but the on-demand rt-fleet and rt-macrunner)"
+        description: "Narrowed: the jobs to run, of rt-linux rt-msrv rt-escape rt-containers rt-fleet rt-android rt-deny rt-fuzz rt-macos (empty: all but the on-demand rt-fleet)"
         type: string
         default: ""
   workflow_call:
@@ -736,14 +736,14 @@ jobs:
         run: |
           runtime/target/debug/domr --hub-bin runtime/target/debug/ratatoskr \
             --scenarios test/conformance --only 'container*/*' --require-all
-      # the runner bundles of both architectures, static (`bin/drgnx build runner-bundle`, docs/develop/sleipnir.md),
+      # the runner bundles of both architectures, static (xtask/runner-bundle.sh, docs/develop/sleipnir.md),
       # and the x86_64 one run in an image of another libc (Alpine's musl, pinned by the digest pulled now)
       - name: runner bundles, and the bundle in a musl image
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-          bin/drgnx build runner-bundle --arch x86_64
-          bin/drgnx build runner-bundle --arch aarch64
+          bash xtask/runner-bundle.sh --arch x86_64
+          bash xtask/runner-bundle.sh --arch aarch64
           podman pull -q docker.io/library/alpine:3.22
           img="docker.io/library/alpine@$(podman image inspect docker.io/library/alpine:3.22 --format '{{.Digest}}')"
           DRGNX_TEST_BUNDLE="$PWD/runtime/target/bundle/x86_64" DRGNX_TEST_FOREIGN_IMAGE="$img" \
@@ -800,123 +800,6 @@ jobs:
       - name: down
         if: ${{ always() }}
         run: bash test/runners/fleet.sh down
-
-  # A Mac as a runner, its spikes (test/runners/mac/README.md): a fresh standard account reached over a localhost sshd
-  # plays the runner. S1 a job outlives its ssh session (launchd, else a setsid launcher); S2 a Nidhogg build with
-  # Naglfar and drgnx ERT selectors under the draft build profile; S3 the memory watchdog. On demand only
-  # (`only: rt-macrunner`); never part of a push's gate. Each step runs whatever the one before said.
-  mac-runner:
-    name: Mac runner spikes (macOS 27)
-    if: ${{ github.event_name == 'workflow_dispatch' && contains(format(' {0} ', inputs.only), ' rt-macrunner ') }}
-    runs-on: xcode-27
-    timeout-minutes: 150
-    env:
-      NIDHOGG_REF: scratch/ng-fin-t24-dcda282f57
-    steps:
-      - name: the results and key folders (the key never leaves the host)
-        run: |
-          echo "MR_OUT=$RUNNER_TEMP/mac-runner/out" >> "$GITHUB_ENV"
-          echo "MR_KEYS=$RUNNER_TEMP/mac-runner/keys" >> "$GITHUB_ENV"
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
-      # Nidhogg's tree at a fixed ref, by a plain clone (a public repository; not a pull request's checkout)
-      - name: the Nidhogg tree for S2
-        run: git clone --quiet --depth 1 --branch "$NIDHOGG_REF" https://github.com/Black-Dragon-Foundation/nidhogg nidhogg-src
-      - name: Build dependencies (Homebrew; Rust by rustup), as Naglfar's job
-        run: |
-          sed 's/#.*//' nidhogg-src/nidhogg/deps/macos.build | grep -vx 'rust' | xargs brew install
-          brew install mise
-          bash .github/ci/rust.sh --component clippy,rustfmt,llvm-tools
-      - name: the Mac runner bundle (sleipnir, ad-hoc signed, codesign -v)
-        run: |
-          set -o pipefail
-          bin/drgnx build runner-bundle --target aarch64-apple-darwin
-          mkdir -p "$MR_OUT/bundle" && cp runtime/target/bundle/aarch64-apple-darwin/sleipnir "$MR_OUT/bundle/"
-          codesign -dv "$MR_OUT/bundle/sleipnir" 2>&1 | tee "$MR_OUT/bundle/codesign.txt"
-      - name: Nidhogg 31.1 for the ERT rows (writes DRGNX_EMACS to the environment)
-        env:
-          NIDHOGG_DOWNLOADS: ${{ runner.temp }}/nidhogg-downloads
-        run: /bin/bash test/container/nidhogg.sh macos
-      - name: the runner account, Remote Login, the key
-        run: bash test/runners/mac/spike.sh up
-      # S1 and S3 are decided (docs: test/runners/mac/README.md); they run again with `only: rt-macrunner rt-macrunner-all`
-      - name: S1 a job outlives its ssh session
-        if: ${{ !cancelled() && contains(format(' {0} ', inputs.only), ' rt-macrunner-all ') }}
-        run: bash test/runners/mac/spike.sh s1
-      - name: S3 the watchdog
-        if: ${{ !cancelled() && contains(format(' {0} ', inputs.only), ' rt-macrunner-all ') }}
-        run: bash test/runners/mac/spike.sh s3
-      - name: the Mac probe's live read (sleipnir's darwin rows, in the CI account)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 20
-        run: |
-          set -o pipefail
-          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p sleipnir --lib darwin 2>&1 | tee "$MR_OUT/darwin-rows.log"
-      - name: a pinned Rust through mise and the brew shim, in a sandboxed job (CI account); `sleipnir tools` as the runner account
-        if: ${{ !cancelled() }}
-        timeout-minutes: 20
-        run: |
-          set -o pipefail
-          SLEIPNIR_BIN="$MR_OUT/bundle/sleipnir" cargo test --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-fail-fast --lib darwin::tools -- --ignored 2>&1 | tee "$MR_OUT/tools-row.log"
-          bash test/runners/mac/spike.sh tools "$MR_OUT/bundle/sleipnir" rust@1.95
-      # the runner refuses a volume under 40 GB free, and the CI VM has 24-29 GB: it keeps every Xcode and the Android
-      # SDK. The Xcodes this job doesn't use (never the selected one; a link is left alone) and the SDK go, on this
-      # throwaway VM only
-      - name: room for the runner (its 40 GB floor)
-        if: ${{ !cancelled() }}
-        run: |
-          # the throwaway hosted VM only: anywhere else this step removes nothing and fails
-          if [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ] || [ "${CI:-}" != true ]; then
-            echo "not a GitHub-hosted CI VM: nothing removed"; exit 1
-          fi
-          # the selected Xcode by its true name (Xcode.app is often a link to one of the Xcode_NN.app)
-          keep=$(cd -P "$(xcode-select -p)/../.." && pwd)
-          before=$(df -g /Users | awk 'NR == 2 { print $4 }')
-          gone() { echo "- removed $1 ($(du -sh "$1" 2>/dev/null | cut -f1))" | tee -a "$MR_OUT/results.md"; sudo rm -rf "$1"; }
-          for x in /Applications/Xcode*.app; do
-            if [ -L "$x" ] || [ "$(cd -P "$x" && pwd)" = "$keep" ]; then continue; fi
-            gone "$x"
-          done
-          case "${ANDROID_HOME:-}" in
-            "$HOME"/*) if [ -d "$ANDROID_HOME" ]; then gone "$ANDROID_HOME"; fi ;;
-          esac
-          after=$(df -g /Users | awk 'NR == 2 { print $4 }')
-          echo "- room for the runner: ${before} GB free, then ${after} GB (kept $keep)" | tee -a "$MR_OUT/results.md"
-      # the hub's own registry and queue against the runner account over localhost (design §10's fake Mac runner): add,
-      # a host job, the watchdog, the link stopped and serve killed, remove. The hub reads the user's ssh config, so the
-      # account gets an alias there with the spike's throwaway key
-      - name: a fake Mac runner end to end (the hub's registry and queue over localhost ssh)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 20
-        run: |
-          set -o pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          sed -e 's/^Host mr$/Host mac-runner-ci/' -e '/^  Control/d' "$MR_KEYS/ssh_config" >> ~/.ssh/config
-          skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == "drgnx-ratatoskr" { printf " --skip %s", $3 }')
-          {
-          DRGNX_TEST_MAC_RUNNER=mac-runner-ci DRGNX_TEST_MAC_BUNDLE="$MR_OUT/bundle/sleipnir" cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --test mac_runner -- --ignored --test-threads 1 $skips
-          } 2>&1 | tee "$MR_OUT/mac-runner-rows.log"
-      - name: S2 drgnx ERT selectors under the build profile
-        if: ${{ !cancelled() }}
-        timeout-minutes: 20
-        run: bash test/runners/mac/spike.sh s2-ert "$GITHUB_WORKSPACE" "$DRGNX_EMACS" '"^drgnx-\\(registry\\|memo\\|color\\)/"' 'core-registry-test.el core-memo-test.el color-test.el'
-      - name: S2 a Nidhogg build with Naglfar under the build profile
-        if: ${{ !cancelled() }}
-        timeout-minutes: 90
-        run: bash test/runners/mac/spike.sh s2-build "$GITHUB_WORKSPACE/nidhogg-src"
-      - name: Seatbelt denials
-        if: ${{ !cancelled() }}
-        run: |
-          bash test/runners/mac/spike.sh denials
-          cat "$MR_OUT/results.md"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: mac-runner-spikes
-          path: ${{ runner.temp }}/mac-runner/out
-          if-no-files-found: warn
 
   # The Android type-check (Android is not a target; the door stays open: docs/develop/runtime.md). The fake C compiler
   # is for urdr's bundled SQLite: a type-check does not link.

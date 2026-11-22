@@ -1,9 +1,0 @@
-# Terminal test tiers in a container, on the base image (base/Containerfile.tty; the line `# base:` names it, image.sh
-# and image-tag.sh read it).  Emacs is Nidhogg 31.1 from its release tarball for FEDORA (nidhogg.sh; 45, the only one).
-# base: drgnx-base-tty base/Containerfile.tty
-ARG BASE
-FROM ${BASE}
-ARG FEDORA=45
-COPY nidhogg.sh /tmp/nidhogg.sh
-RUN bash /tmp/nidhogg.sh fedora-${FEDORA} && rm /tmp/nidhogg.sh
-ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.5/bin/nidhogg

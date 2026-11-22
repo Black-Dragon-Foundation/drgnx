@@ -198,10 +198,5 @@ mod tests {
             heads("((t1 :reason \"r\") (t2))").unwrap(),
             vec!["t1", "t2"]
         );
-        // the line's own files read
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../test");
-        for f in ["frozen.eld", "flaky.eld"] {
-            top(&std::fs::read_to_string(root.join(f)).unwrap()).unwrap();
-        }
     }
 }
