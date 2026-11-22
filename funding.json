@@ -1,0 +1,83 @@
+{
+  "version": "v1.0.0",
+  "entity": {
+    "type": "group",
+    "role": "owner",
+    "name": "Black Dragon Foundation",
+    "email": "TODO@example.org",
+    "description": "The Black Dragon Foundation builds drgnx, a native code editor written in Rust with agents at the centre of the work, in the open.",
+    "webpageUrl": {
+      "url": "https://github.com/Black-Dragon-Foundation"
+    }
+  },
+  "projects": [
+    {
+      "guid": "drgnx",
+      "name": "drgnx",
+      "description": "A native code editor written in Rust, with agents at the centre of the work. Its goals: agents that use the same commands as people, in a sandbox, with any model; huge projects and huge files; a multi-window workbench; extensibility to the core through one extension API (WebAssembly components and Luau); and a small, measured resource footprint. It is built around an agent hub, code search, a workbench model and a native windowing shell that already exist; the text core, editor view and extension runtime are new. Status: early, foundations stage.",
+      "webpageUrl": {
+        "url": "https://github.com/Black-Dragon-Foundation/drgnx"
+      },
+      "repositoryUrl": {
+        "url": "https://github.com/Black-Dragon-Foundation/drgnx"
+      },
+      "licenses": ["spdx:GPL-3.0-or-later", "spdx:AGPL-3.0-or-later", "spdx:Apache-2.0"],
+      "tags": ["editor", "code-editor", "rust", "ai-agents", "developer-tools", "wayland"]
+    }
+  ],
+  "funding": {
+    "channels": [
+      {
+        "guid": "github-sponsors",
+        "type": "payment-provider",
+        "address": "https://github.com/sponsors/Black-Dragon-Foundation",
+        "description": "Sponsor the Black Dragon Foundation through GitHub Sponsors."
+      },
+      {
+        "guid": "open-collective",
+        "type": "payment-provider",
+        "address": "https://opencollective.com/black-dragon-foundation",
+        "description": "Support the Black Dragon Foundation through Open Collective, with a public ledger."
+      },
+      {
+        "guid": "polar",
+        "type": "payment-provider",
+        "address": "https://polar.sh/black-dragon-foundation",
+        "description": "Support the Black Dragon Foundation through Polar."
+      }
+    ],
+    "plans": [
+      {
+        "guid": "developer-time",
+        "status": "active",
+        "name": "Developer time",
+        "description": "TODO: set the amount. One developer working on drgnx full time.",
+        "amount": 0,
+        "currency": "EUR",
+        "frequency": "monthly",
+        "channels": ["github-sponsors", "open-collective", "polar"]
+      },
+      {
+        "guid": "test-infrastructure",
+        "status": "active",
+        "name": "Test machines and CI",
+        "description": "TODO: set the amount. The build and test machines (Linux and macOS) and CI minutes that every change runs on.",
+        "amount": 0,
+        "currency": "EUR",
+        "frequency": "monthly",
+        "channels": ["github-sponsors", "open-collective", "polar"]
+      },
+      {
+        "guid": "supporter",
+        "status": "active",
+        "name": "Supporter",
+        "description": "TODO: set the amount, or keep 0 for any amount. Any amount, once or regularly, to support the work.",
+        "amount": 0,
+        "currency": "EUR",
+        "frequency": "one-time",
+        "channels": ["github-sponsors", "open-collective", "polar"]
+      }
+    ],
+    "history": []
+  }
+}

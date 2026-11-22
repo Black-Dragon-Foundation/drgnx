@@ -13,7 +13,8 @@ advisory; once a fix is on `main`, the advisory is published, with credit to you
 
 ## What counts
 
-drgnx runs the user's configuration, installs packages, builds Emacs from source, starts AI agents and hands them
-API keys. Anything that lets someone run code, read secrets or write outside drgnx's own directories without the
-user asking for it is in scope — for example in `install.sh`, `drgnx sync`, the agent and job runners, or the
-test harness's control socket and MCP server.
+drgnx starts AI agents in a sandbox and hands them API keys, runs jobs on the user's machines, and serves its
+commands to agents over MCP. Anything that lets someone run code, read secrets or write outside drgnx's own
+directories without the user asking for it is in scope — for example in the hub, the sandbox (Gleipnir), the agent
+and job runners, the gateway, or the MCP server. The earlier Emacs-based drgnx (tag `classic-final`) is no longer
+supported.

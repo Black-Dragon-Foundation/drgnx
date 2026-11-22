@@ -1,104 +1,77 @@
-<p align="center">
-  <img src="etc/images/banner.jpg" alt="drgnx, by the Black Dragon Foundation" width="1024">
-</p>
+# drgnx
 
-# dragonX (`drgnx`)
+**A native code editor, written in Rust, with agents at the centre of the work.** By the Black Dragon Foundation.
 
-**A modern, workbench-first Emacs framework**, by the Black Dragon Foundation. VS Code / Zed / Cursor ergonomics — stable docks and
-editor groups, a command palette, mouse-first discoverability, AI completion and agents with any model —
-on top of everything that makes Emacs worth it: org, deep programmability, a persistent daemon and the
-whole Emacs package ecosystem. Light on memory: the target is a daemon under 400 MB with all modules on.
+drgnx is a new editor built around parts we have already written and tested: an agent hub that runs coding agents in
+a sandbox, code search for large projects, a workbench model for panes and tabs, and a native windowing shell with
+its own compositor. The text core, the editor view and the extension runtime are being built new.
 
-> **Status: pre-release.** drgnx is being built in the open. You can install it to follow along, but there is no
-> support, and contributions are not being accepted yet. Watch the repo for updates.
+> **Status: early, foundations stage.** drgnx is not an editor you can use yet. We are laying the foundations first:
+> one crate, one lint, one document and one conformance test for each cross-cutting standard (errors, processes,
+> logging, settings, commands, keys, views, the UI kit and more), before any feature code is written on top of them.
+> Watch the repository to follow along.
 
-## What makes it different
+## Goals
 
-- **Zero-jank layout, as a tested guarantee.** The workbench window manager (left/right/bottom docks,
-  editor groups that never split on their own, popups that leave no trace) is verified by layout
-  invariants that run in a headless test session on every change.
-- **Agent-testable editor.** A headless harness lets AI agents start an isolated Emacs, click, type,
-  take screenshots and measure layout jank and latency through MCP tools — so UI changes come with
-  evidence, not hope.
-- **Any model, local first.** One provider registry for OpenRouter and local runners (Ollama, LM Studio,
-  llama.cpp, vLLM, LocalAI, Jan, …) feeds ghost-text completion, inline edits with per-hunk review, chat,
-  agents and semantic search.
-- **Semantic search built in**, shared by the editor and by agents, set up with one command.
-- **Guided onboarding**: environment checks, keys and theme, importing your projects into an org board,
-  AI providers, indexing, agents, the daemon — every step re-runnable and checked by `drgnx doctor`.
+1. **Agents at the centre.** Agents work in the editor as people do: through the same commands, with their own
+   cursors, history and review, in a sandbox, with any model.
+2. **Huge projects and huge files.** Opening, searching and editing stay fast in very large repositories and in files
+   of gigabytes.
+3. **A multi-window workbench.** One project across several windows and displays, with layouts you arrange and keep,
+   and zoom at every level.
+4. **Extensible to the core.** Every feature is a command you can find, inspect, redefine and bind, live, through
+   one extension API: WebAssembly components for packages and Luau for configuration and quick extensions.
+5. **Light on resources.** A fast cold start, no work when idle, and a small memory footprint, measured on every
+   change against set budgets.
 
-## Requirements
+## What is in this repository
 
-- GNU Emacs **31.1 or newer**, with native compilation. Emacs 30 and older are no longer supported.
-- Linux (GNOME, KDE, XFCE, Cinnamon, tiling window managers) and macOS
+One Cargo workspace:
 
-**Coming next: Nidhogg**, dragonX's own Emacs build: GNU Emacs 31 with dragonX's patches
-([Black-Dragon-Foundation/nidhogg](https://github.com/Black-Dragon-Foundation/nidhogg)). dragonX will run on it, and
-the installer will build and install it for you. It is in progress and not released yet.
+| Path | What it holds |
+|---|---|
+| `crates/core` | text and models |
+| `crates/ui` | drawing, the native shell, views and the UI kit |
+| `crates/hub` | the hub and its services: agents, sandboxing, code search, the model gateway, the MCP server |
+| `crates/ext` | the extension API and its hosts (to come) |
+| `crates/std` | the standards every crate uses (to come) |
+| `app/` | the editor binary |
+| `docs/` | documentation ([start here](docs/index.md)) |
 
-## Install
+## Licences
 
-Pre-release: this installs the work in progress.
+drgnx follows the model of editors such as Zed:
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash
-```
+- the editor and the hub: **GPL-3.0-or-later** ([LICENSE-GPL](LICENSE-GPL));
+- hosted server parts: **AGPL-3.0-or-later** ([LICENSE-AGPL](LICENSE-AGPL));
+- the libraries and the extension SDK: **Apache-2.0** ([LICENSE-APACHE](LICENSE-APACHE)), so extensions and other
+  projects can use them under any licence.
 
-It prints a plan first, asks before every root step, and builds Nidhogg, drgnx's own Emacs (GNU Emacs 31.1 with drgnx's
-patches, native compilation), on Fedora 45, Ubuntu 26.04 and macOS; elsewhere it stops (no Nidhogg recipe yet), and
-the doctor fails on a stock GNU Emacs. On macOS, run it in Terminal: it installs Homebrew
-(after asking) and builds Nidhogg with it, adds a **drgnx** app to `~/Applications` and opens it, and the Welcome sets up keys,
-AI and Claude Code; afterwards open drgnx with Spotlight (⌘Space, type "drgnx") or Launchpad, or run `drgnx .` in a
-project, like `code .`; to keep it in the Dock, drag `~/Applications/drgnx.app` there.
-`--dry-run` shows the plan only. On a second machine, `bash -s -- --config URL` (after the `| bash`) also sets it up from
-your configuration repository ([docs/guide/second-machine.md](docs/guide/second-machine.md)). Details,
-manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Check a machine with `drgnx doctor`. Keep it current with `drgnx update` (`--restart` restarts drgnx afterwards; `--back` undoes the last update).
+Today every crate is GPL-3.0-or-later. A library moves to Apache-2.0 once an audit confirms it is entirely our own
+code. Code adapted from other projects is listed in [THIRD_PARTY.md](THIRD_PARTY.md).
 
-## Documentation
+## Contributing
 
-- [Guide](docs/index.md#guide): install, onboarding, the workbench, keys, modules, packages, agents, the work tracker
-- [Develop](docs/index.md#develop): architecture, core, the test harness, performance, scenarios
+Contributions are welcome; please open an issue before a large change. Every contributor signs our
+[contributor licence agreement](CLA.md) once, through a comment on their first pull request. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to build, the rules for a change, and how signing works. Security issues:
+[SECURITY.md](SECURITY.md).
 
-## Roadmap
+## Sponsoring
 
-- **Done:** the test harness for agents, the installer and `drgnx doctor`, VS Code / Emacs / Vim key profiles,
-  modal Vim editing on evil (states, the `SPC` leader, ex commands that keep the workbench's groups, panels and
-  AI working with it), the workbench (Explorer, Buffers, docks, panel, editor groups, several windows, layout that
-  survives restarts), modules, reproducible packages with rollback, onboarding, AI agents with queued input and edit
-  review, the perf lab, the work tracker, AI completion and inline edits with any model (local runners first),
-  built-in semantic search, terminal windows (`drgnx -t`, SSH, tmux: keys, mouse, clipboard, colours), several
-  monitors under sway, i3, Hyprland, niri, KDE Plasma, X11 and macOS (move a window to another monitor, restore each
-  window to its own; GNOME explains its key), your own shell in drgnx's terminal, and a second machine from one command
-  (`drgnx bootstrap`).
-- **Next:** **Nidhogg**, dragonX's own Emacs build (see Requirements); dragonX then runs on it.
-- **Polish:** a compositor for rounded, shadowed, animated popups and panels. Linux Wayland first, then macOS.
-- **Speed:** no freezes while Lisp works; parsing, process output and JSON move off the main thread; smooth scrolling.
-- **Agents:** the agent runtime in Rust is built: the hub runs sessions, plan runs, managers, budgets and the permissions
-  matrix ([docs/guide/agents.md](docs/guide/agents.md)), and since Ratatoskr's phase 7 (done) it is the only agent
-  runtime: the old Lisp one is deleted. Agent sessions can drive a headless browser inside their own sandbox, reaching
-  only what you allow ([docs/guide/agent-browser.md](docs/guide/agent-browser.md)); watching it comes later. Plugins (WebAssembly components with tools for agents and hooks that narrow what they do) are
-built: [docs/guide/plugins.md](docs/guide/plugins.md) for users, [docs/develop/plugins.md](docs/develop/plugins.md) for
-authors. Next, a panel that shows what agents do in detail (each step,
-  diffs, permissions, context and cost), with collapse per step type that remembers your choice.
-- **Extensions:** WebAssembly extensions, so tools can be written in any language (agent tools first). Community
-  Emacs packages keep working.
-- **Also planned:** a settings editor, a Meow modal module, then the public launch. (Language servers, a debugger,
-  multiple cursors and the keyboard shortcuts editor are already modules: `lang/eglot`, `extra/debug`, `extra/mc`,
-  `tools/shortcuts`.)
+drgnx is built in the open by the Black Dragon Foundation. Sponsorship pays for the time to build it, and for the
+machines its tests run on:
 
-No dates and no promises: this is the direction, not a schedule.
+- [GitHub Sponsors](https://github.com/sponsors/Black-Dragon-Foundation)
+- [Open Collective](https://opencollective.com/black-dragon-foundation)
+- [Polar](https://polar.sh/black-dragon-foundation)
 
-## License
+Funding details for grant programmes are in [funding.json](funding.json) ([FLOSS/fund](https://fundingjson.org)
+format).
 
-drgnx is free software under the **GNU General Public License v3.0 or later** (see `LICENSE`).
-Code derived from [Emacs Bedrock](https://codeberg.org/ashton314/emacs-bedrock) keeps its MIT notice.
-The Seatbelt base policy in `runtime/crates/gleipnir/src/sbpl/base.sbpl` is OpenAI Codex's, Copyright 2025 OpenAI, under the
-Apache License 2.0 (`LICENSES/Apache-2.0.txt`).
-The language packs' fold queries (`packs/*/queries/folds.scm`) are drgnx's own; which nodes fold follows
-[nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter)'s `folds.scm` files, under the Apache License 2.0.
-The Black Dragon Foundation logo (`etc/images/banner.jpg`, `etc/images/drgnx-logo.jpg`) is Copyright 2026 Black Dragon
-Foundation, under the GPL v3.0 or later like the rest of drgnx.
-The app icon (`etc/images/icon/`) is an AI redraw of the project's dragon art, made at 1024 px and scaled down for the
-other sizes; it is under the same licence.
-A separate `drgnx-pro` add-on may follow later under a source-available license that stays free for
-individuals, open-source developers and small businesses.
+## drgnx classic
+
+Before this rewrite, drgnx was a workbench-first framework for GNU Emacs. That version is no longer developed. Its
+last state is kept at the tag
+[`classic-final`](https://github.com/Black-Dragon-Foundation/drgnx/tree/classic-final): check that tag out to keep
+using it or to read its code.
