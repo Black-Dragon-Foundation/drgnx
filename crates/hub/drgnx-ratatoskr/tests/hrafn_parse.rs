@@ -230,8 +230,10 @@ fn the_hub_finds_the_fetched_packs_in_active_eld() {
     );
     let (real_lib, sha) = lib_of("c-sharp");
     let libdir = data_dir(&env).join("grammars/c-sharp/abc123");
+    // the platform's library name, as the lock's reader builds it (`.dylib` on macOS)
+    let lib_name = format!("libtree-sitter-c-sharp.{}", skald::job::LIB_EXT);
     std::fs::create_dir_all(&libdir).unwrap();
-    std::fs::copy(&real_lib, libdir.join("libtree-sitter-c-sharp.so")).unwrap();
+    std::fs::copy(&real_lib, libdir.join(&lib_name)).unwrap();
     std::fs::create_dir_all(config_dir(&env)).unwrap();
     std::fs::write(
         config_dir(&env).join("drgnx.lock.eld"),
@@ -268,7 +270,7 @@ fn the_hub_finds_the_fetched_packs_in_active_eld() {
     assert_eq!(f.spec.pack, "csx");
     assert_eq!(f.spec.grammar, "c-sharp");
     assert_eq!(f.spec.sha256, sha);
-    assert_eq!(f.spec.lib, libdir.join("libtree-sitter-c-sharp.so"));
+    assert_eq!(f.spec.lib, libdir.join(&lib_name));
     assert_eq!(f.extensions, ["xcs"]);
     assert!(f.init.chunks_scm.contains("@definition.class"));
     assert!(
@@ -278,12 +280,15 @@ fn the_hub_finds_the_fetched_packs_in_active_eld() {
             .is_some_and(|t| t.contains("@reference.call"))
     );
     // no library, no pack
-    std::fs::remove_file(libdir.join("libtree-sitter-c-sharp.so")).unwrap();
+    std::fs::remove_file(libdir.join(&lib_name)).unwrap();
     assert!(drgnx_ratatoskr::parse_worker::fetched(&env).is_empty());
 }
 
 /// What is hashed is what is loaded: the library's file is replaced between the two (as a writer of the folder could), and
-/// the worker still serves the grammar it hashed, because it loads through the descriptor it hashed.
+/// the worker still serves the grammar it hashed, because it loads through the descriptor it hashed. Linux only: the
+/// descriptor is named through /proc; macOS loads by path, inside a sandbox that grants the one file read-only
+/// (`hrafn::chunk::worker::serve_with`).
+#[cfg(target_os = "linux")]
 #[test]
 fn the_library_loaded_is_the_one_hashed_whatever_the_path_becomes() {
     use hrafn::chunk::worker::{Reply, read_frame, serve_with, write_frame};

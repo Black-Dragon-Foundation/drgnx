@@ -112,7 +112,10 @@ fn a_plan_stages_the_grammar_and_answers_in_eld() {
         "{answer}"
     );
     assert!(
-        answer.contains(&format!("grammars/json/{commit}/libtree-sitter-json.so")),
+        answer.contains(&format!(
+            "grammars/json/{commit}/libtree-sitter-json.{}",
+            skald::job::LIB_EXT
+        )),
         "{answer}"
     );
     assert!(answer.contains(":abi 14"), "{answer}");
@@ -166,7 +169,8 @@ fn load_check_answers_one_line_and_a_crash_is_the_childs() {
     let (code, _) = sync(&plan(d.path(), &repo, &commit, &tree(&repo), ""));
     assert_eq!(code, 0);
     let lib = d.path().join(format!(
-        "staging/grammars/json/{commit}/libtree-sitter-json.so"
+        "staging/grammars/json/{commit}/libtree-sitter-json.{}",
+        skald::job::LIB_EXT
     ));
     let out = Command::new(bin())
         .args(["packs", "load-check"])
