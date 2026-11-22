@@ -10,6 +10,11 @@ use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
+/// The grammar registry is the process's: libtest runs this file's tests on threads of one process (macOS's job runs the
+/// binaries as they are; nextest gives each its own), so a test that installs grammars holds this while it does, and
+/// the stamp is never read between its installs.
+static REGISTRY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 const PY: &str = "def make_widget(n):\n    \"\"\"Makes one.\"\"\"\n    return n\n";
 
 fn listed(path: &str, text: &str) -> Listed {
@@ -71,6 +76,7 @@ async fn keys(s: &CodeStore) -> Vec<Vec<u8>> {
 async fn a_grammar_built_later_re_parses_the_files_without_an_edit() {
     let lock = std::env::var("DRGNX_PACK_LOCK").expect("the test run's pack grammars");
     let grammars = std::env::var("DRGNX_PACK_GRAMMARS").expect("the test run's pack grammars");
+    let _registry = REGISTRY.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let s = CodeStore::open(&dir.path().join("code.db")).unwrap();
 
@@ -98,6 +104,7 @@ async fn a_grammar_built_later_re_parses_the_files_without_an_edit() {
 /// ([`hrafn::files::LANG_RULES`]): the same twice, and a hash of 64 hex digits.
 #[test]
 fn the_stamp_is_a_stable_hash() {
+    let _registry = REGISTRY.blocking_lock();
     let s = hrafn::chunk::lang_stamp();
     assert_eq!(s, hrafn::chunk::lang_stamp());
     assert_eq!(s.len(), 64);
