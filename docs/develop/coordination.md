@@ -409,14 +409,51 @@ never from an argument or an environment variable:
   session").
   `hello`'s `name` is a label the user sees, never who the agent is.
 
-**What an outside agent may write:** only its own events and messages, within the report limit.
-- `claim_task`, `update_task`, `complete_task` and `record_decision` answer `jobs are drgnx's: report your work with
-  report_edit`.
+**What an outside agent may write:** unbound, only its own events and messages, within the report limit. Bound by
+the user (below), also plans, specs and decision records in its project, as the matrix allows.
+- `claim_task`, `update_task` and `complete_task` answer `T is for drgnx's own job agents: the user starts jobs;
+  report your work with report_edit and report_test`, bound or not; `report_submit` answers `report_submit ends a
+  drgnx job's task: …`. Jobs are started by the user and run by drgnx's own agents.
+- Unbound, `plan_read`, `plan_write`, `records_read`, `records_write` and `record_decision` answer `T needs the user's
+  binding for KIND agents in this folder (ratatoskr outside bind --kind KIND --root DIR --role worker); until then
+  report with report_edit and note_add` (`norn::tools::identity::outside_refusal`; DIR is the bridge's folder).
 - `escalate` answers `ask the user with ask_user`.
 - `send_message` counts against the same limit as the reports.
 - A `task` that names a job's task (`JOB#N`) is refused in `hello` and `ask_user`.
 - Its events and messages carry no job and no task, even when `DRGNX_JOB` or `DRGNX_TASK` leaked into its
   environment. `list_agents` and recipient lookup ignore a leaked job too.
+
+**Binding an outside agent** (`norn::bindings`, `drgnx-ratatoskr/src/outside.rs`). An outside agent's rights come
+only from the user's binding: `ratatoskr outside bind --kind KIND --root DIR --role manager|worker|chat` (the
+methods `outside/bind`, `outside/unbind`, `outside/bindings`, user class only; their handlers refuse any other
+caller too, because the tools' `Hub::exec` checks no registry class). DIR is resolved to its project's top-level (a
+linked worktree's main repository, `norn::project::resolve`); `/`, the home folder and a folder in no repository are
+refused. A binding is a graph entity of kind `binding`, id `binding:KIND-<12 hex of sha1 of the root>`, data `{kind,
+root, role}`; the guard keeps the kind the user's, and `bindings::role_for` counts it only when every tx that wrote it
+(created, updated, each field) is of class `user`, so a write slipped past the guard is ignored.
+- **Attach.** `mcp/attach` resolves the bridge's folder to its project and reads the role (`outside::attach`). A
+  bridge in a project goes into the hub's `Bound` table (by id, counted; its guard leaves when the connection ends).
+  A bound bridge is served the plan and record tools as well (`Sessions::outside_list_for`); the role read here only
+  picks that list.
+- **Every call reads the binding again** (`outside::actor_for`): an `ext:` id no attached bridge holds, or whose
+  binding is gone, is refused (`this outside agent is not bound here`), never taken for a worker. An unbind reaches a
+  live bridge at its next call.
+- **Who it is to the matrix** (`outside::who_for`): its role's column and the agent column `ext:KIND`, its project,
+  no plan, and whether it acts on its own record ([The matrix in the hub](#the-matrix-in-the-hub-drgnx-ratatoskrsrcmatrix_gaters)).
+- **What it reaches:** through the tools' `exec` only `plans/get`, `plans/write`, `records/read` and
+  `records/write` (`outside::OUTSIDE_METHODS`; any other method answers `M is not open to an outside agent`). Its
+  scope is its project (`outside::scope_of`): records of that project, records of no project whose file lies under its
+  root, and records of no project it wrote itself. The scope is checked before the matrix, so a record outside it
+  makes no card.
+- **Its writes** are txs with actor its `ext:KIND:PID-HASH`, class `ext`, session the same id (`coord::tx_meta`), so
+  `graph revert --tx` undoes them and its own records are the ones whose `created_tx` it wrote
+  (`outside::own_record`).
+- **`record_decision`** of a bound agent takes no `task`, must name its sources and an origin of `from-brief` or
+  `needs-user`, replaces only a decision it recorded itself, and asks the matrix's `graph.change` on its own record
+  (`Hub::gate`); its decision is always proposed.
+- An id that is its pid alone (`ext:KIND:PID`, no start time) owns no record, so a later process given that pid
+  inherits nothing; `outside/bind` refuses a binding entity another writer made (it would never count).
+- Two bridges of one process share an id: the latest attach's folder is the one the table holds.
 
 **Text.**
 - Questions and message texts (`ask_user`, `send_message`, `escalate`'s subject and text) are trimmed and cut to
@@ -482,7 +519,9 @@ from an argument or an environment variable (`DRGNX_AGENT` is never read):
 - `Identity::Session {agent, job, task, home}`: a session's own `mcp.sock` (hub.md, "Sessions and their sockets"). Its
   job and task are what `DRGNX_JOB` and `DRGNX_TASK` were; `home` is the folder the session started in, the Lisp
   server's `default-directory`.
-- `Identity::Outside {id, kind, home}`: an outside bridge. `Identity::outside(KIND, PID, START, HOME)` makes
+- `Identity::Outside {id, kind, home, role}`: an outside bridge; `role` is the user's binding as `mcp/attach` read it
+  (`None`: unbound; `with_role`, `outside_role`), and the hub reads the binding again at every call that needs it.
+  `Identity::outside(KIND, PID, START, HOME)` makes
   `ext:KIND:PID-HASH` from the bridge's peer process, as the Lisp did for itself: PID the agent's process, HASH 6 hex
   of sha1 over its start time to the second (`ext:KIND:PID` without one; `hello` then says so in `note`). An outside
   agent has no job and no task. With no `home` (a bridge that named no folder), `hello` and `report_edit` answer "No
@@ -588,7 +627,10 @@ server's checks. That includes an agent, a command an agent ran, and any process
 - open `work.db` and write to it directly;
 - start a coordination server with any other agent's id in `DRGNX_AGENT` (`ext:…` ones included; never `user`, which
   the server refuses, but the store itself can be written directly), or with a `DRGNX_AGENT_KIND` of its choice, and
-  write as that identity.
+  write as that identity;
+- start an outside bridge with another `--kind` and a hello `cwd` of another folder: the hub verifies only the
+  bridge's parent process, so the user's binding for that kind and folder is a convention among cooperating agents,
+  not authentication.
 
 `DRGNX_AGENT` is trusted as it is set, and an outside agent's `ext:KIND:PID-HASH` identity and its limits stop a
 confused or runaway agent. They do not stop a same-uid process that sets up its own environment. The checks above
@@ -1074,6 +1116,18 @@ Work space) releases the request, and either way `recheck` decides. A manager's 
 and its arguments, with their hash), and the manager's pending answer is keyed on them. The weekly-share check on a
 subscription is the budget gate's (Task 20), not the matrix's.
 Methods: `matrix/get`, `matrix/check` (no card), `presence/set`.
+
+**Outside agents.** A ctx whose session is `ext:…` (`matrix_gate::is_outside`; only `outside::who_for` builds one,
+from an attached, bound bridge) is an outside agent's. `effective_for` gives it:
+- with no role (unbound): Never at every action, whatever any layer says;
+- else its role's and its kind's (`ext:KIND`) cells from every layer, as for a session (an agent column only
+  tightens), then `norn::matrix::outside_effective`: every row of `OUTSIDE_NEVER` (task done, the pushes and merge,
+  starting or steering agents, spending, containers and keys, machines, `settings.change`, and the two rows no one
+  gets) is Never, and on a record it did not create (`ActionCtx.own_record` false) `graph.change` is at most Ask.
+No delegation is ever read for it. An Ask's card keeps `own_record` in its data, and `recheck` reads it back, so the
+cap holds at execution. The plan and record writes check the scope first, then `graph.change` (`effects::may_change`
+with the write's own-record answer), then `task.done` for a status of done or an approval (Never for an outside
+agent).
 
 ### Plan runs: git, the merge gate, trial merges (`drgnx-ratatoskr/src/runner/git.rs`)
 

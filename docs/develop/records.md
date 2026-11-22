@@ -144,7 +144,13 @@ answers the head, every section (`key`, `id`, `heading`, `body`, `conflict`), th
   sync writes the file, merges a hand edit of another section and flags a section changed in both places.
 - **Agents:** the matrix's `graph.change` is needed. An agent's record starts `proposed`; moving it to approved
   (`done`, `approved`, `accepted`) also needs `task.done`, which a worker never has. A text that sets a user-only field
-  (`matrix: …`) is refused. An agent reaches the records of files under its own project root only.
+  (`matrix: …`) is refused. An agent reaches the records of files under its own project root only: a piece of no
+  project (an imported or `records/write` record keeps `project` null) is its project's when its `data.records.file`
+  lies under that root (`effects::Scope::allows_ent`). The scope is checked before the matrix, so a record outside it
+  makes no card. Every session has `records_read` and `records_write`.
+- **Outside agents** (bound by the user: [coordination.md](coordination.md), "Binding an outside agent") write as
+  their own `ext:…` actor. Rewriting a record whose pieces they did not all create is `graph.change` at most Ask: a
+  card, and nothing is written until the user answers; they never approve one.
 - **A plan's view file:** `plans/write` takes the same `path` for a new plan (`docs/plans/<repo>/<name>.md`; an agent's new
   plan needs it). On a plan that has a view file, a task's title, body and steps change its piece too (the body
   keeps its `**Label:**` paragraphs and replaces its prose; the steps replace its steps), so the file shows it at the next
