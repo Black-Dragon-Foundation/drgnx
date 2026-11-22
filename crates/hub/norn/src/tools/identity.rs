@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use sha1::{Digest, Sha1};
 
 use super::Identity;
+use crate::matrix::Role;
 
 /// Whether ID is a plain agent id (`drgnx-coord-mcp--id-regexp`): ASCII letters, digits and `. _ : -`, not starting
 /// with one of those four, at most 64 characters.  A newline or `]` would break out of the hub's header, a lookalike
@@ -43,6 +44,34 @@ pub fn start_hash(start: f64) -> String {
         .collect()
 }
 
+/// Why an outside agent WHO may not call TOOL, and what it does instead: the job tools are drgnx's own job
+/// agents', a job's task (`task T`) is named by none, and the plan, records and decision tools need the user's binding
+/// for its kind in its folder.
+pub(crate) fn outside_refusal(tool: &str, who: &Identity) -> String {
+    match tool {
+        "claim_task" | "update_task" | "complete_task" => format!(
+            "{tool} is for drgnx's own job agents: the user starts jobs; report your work with report_edit and \
+             report_test"
+        ),
+        "report_submit" => {
+            "report_submit ends a drgnx job's task: report your work with report_edit and report_test".into()
+        }
+        t if t.starts_with("task ") => {
+            format!("{t} is a drgnx job's task: an outside agent names no job task")
+        }
+        _ => {
+            let kind = who.outside_kind().unwrap_or("KIND");
+            let home = who
+                .home()
+                .map_or_else(|| "DIR".to_owned(), |h| h.display().to_string());
+            format!(
+                "{tool} needs the user's binding for {kind} agents in this folder (ratatoskr outside bind --kind \
+                 {kind} --root {home} --role worker); until then report with report_edit and note_add"
+            )
+        }
+    }
+}
+
 /// The `hello` note of an identity that is its pid alone (`drgnx-coord-mcp--parent`'s fallback).
 const PID_ALONE: &str = "the agent's start time could not be read: this identity is its pid alone, which another process may get later";
 
@@ -69,7 +98,30 @@ impl Identity {
             id: format!("ext:{kind}:{tag}"),
             kind: kind.to_owned(),
             home,
+            role: None,
         })
+    }
+
+    /// This identity with ROLE, the user's binding as the hub read it at `mcp/attach` (an outside agent's only; any
+    /// other identity is returned as it is).
+    pub fn with_role(self, role: Option<Role>) -> Identity {
+        match self {
+            Identity::Outside { id, kind, home, .. } => Identity::Outside {
+                id,
+                kind,
+                home,
+                role,
+            },
+            other => other,
+        }
+    }
+
+    /// A bound outside agent's role (as read at `mcp/attach`), else `None`.
+    pub fn outside_role(&self) -> Option<Role> {
+        match self {
+            Identity::Outside { role, .. } => *role,
+            _ => None,
+        }
     }
 
     /// The check every call starts with (`drgnx-coord-mcp--guard` calls `--identity`): an identity that is the user
@@ -147,12 +199,10 @@ impl Identity {
         }
     }
 
-    /// An error for an outside agent: WHAT (a job's task, a decision) is drgnx's (`drgnx-coord-mcp--not-outside`).
-    pub fn not_outside(&self, what: &str) -> Result<(), String> {
+    /// An error for an outside agent calling TOOL (or naming a job's task, `task T`): [`outside_refusal`]'s text.
+    pub fn not_outside(&self, tool: &str) -> Result<(), String> {
         match self {
-            Identity::Outside { .. } => Err(format!(
-                "jobs are drgnx's: report your work with report_edit ({what} is for drgnx's own job agents)"
-            )),
+            Identity::Outside { .. } => Err(outside_refusal(tool, self)),
             _ => Ok(()),
         }
     }
@@ -253,9 +303,68 @@ mod tests {
         let out = Identity::outside("zed", 9, Some(1.0), None).unwrap();
         assert_eq!(
             out.not_outside("claim_task").unwrap_err(),
-            "jobs are drgnx's: report your work with report_edit (claim_task is for drgnx's own job agents)"
+            "claim_task is for drgnx's own job agents: the user starts jobs; report your work with report_edit and report_test"
         );
         assert_eq!(session("s-1").not_outside("claim_task"), Ok(()));
         assert_eq!(Identity::None.not_outside("claim_task"), Ok(()));
+    }
+
+    /// [Task 12] Each refusal of an unbound outside agent names the tool, says why and what to do instead; ROOT is the
+    /// folder the agent started in.
+    #[test]
+    fn each_refusal_names_the_tool_why_and_what_instead() {
+        let out = Identity::outside("claude", 9, Some(1.0), Some(PathBuf::from("/w/org"))).unwrap();
+        let jobs = |t: &str| {
+            format!(
+                "{t} is for drgnx's own job agents: the user starts jobs; report your work with report_edit and report_test"
+            )
+        };
+        let bind = |t: &str| {
+            format!(
+                "{t} needs the user's binding for claude agents in this folder (ratatoskr outside bind --kind claude --root /w/org --role worker); until then report with report_edit and note_add"
+            )
+        };
+        let table: [(&str, String); 10] = [
+            ("claim_task", jobs("claim_task")),
+            ("update_task", jobs("update_task")),
+            ("complete_task", jobs("complete_task")),
+            (
+                "report_submit",
+                "report_submit ends a drgnx job's task: report your work with report_edit and report_test".into(),
+            ),
+            (
+                "task j1#1",
+                "task j1#1 is a drgnx job's task: an outside agent names no job task".into(),
+            ),
+            ("plan_read", bind("plan_read")),
+            ("plan_write", bind("plan_write")),
+            ("records_read", bind("records_read")),
+            ("records_write", bind("records_write")),
+            ("record_decision", bind("record_decision")),
+        ];
+        for (tool, want) in table {
+            assert_eq!(out.not_outside(tool), Err(want.clone()), "{tool}");
+            assert_eq!(outside_refusal(tool, &out), want, "{tool}");
+        }
+        // with no folder known, the command says where to put it
+        let nowhere = Identity::outside("codex", 9, Some(1.0), None).unwrap();
+        assert!(
+            outside_refusal("plan_read", &nowhere)
+                .contains("--kind codex --root DIR --role worker"),
+            "{}",
+            outside_refusal("plan_read", &nowhere)
+        );
+    }
+
+    #[test]
+    fn the_role_is_an_outside_agents_only() {
+        let out = Identity::outside("claude", 9, Some(1.0), None).unwrap();
+        assert_eq!(out.outside_role(), None);
+        let bound = out.clone().with_role(Some(Role::Worker));
+        assert_eq!(bound.outside_role(), Some(Role::Worker));
+        assert_eq!(bound.id(), out.id());
+        assert_eq!(bound.with_role(None).outside_role(), None);
+        let s = session("s-1").with_role(Some(Role::Manager));
+        assert_eq!((s.outside_role(), s), (None, session("s-1")));
     }
 }
