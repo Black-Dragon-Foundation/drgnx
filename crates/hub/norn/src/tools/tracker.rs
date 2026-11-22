@@ -76,6 +76,7 @@ pub fn tools_for(sets: ToolSets) -> Vec<Box<dyn Tool<Ctx>>> {
     all.extend(super::jobs::tools());
     all.extend(super::reports::tools());
     all.extend(super::plan::tools());
+    all.extend(super::records::rw_tools());
     all.extend(super::procedure::tools());
     if sets.tracker {
         all.extend(tools());

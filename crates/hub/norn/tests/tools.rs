@@ -220,7 +220,7 @@ async fn outside_is_refused_the_job_tools() {
         Some(w.dir.path().into()),
     )
     .unwrap();
-    let refused = "jobs are drgnx's: report your work with report_edit (task j1#1 is for drgnx's own job agents)";
+    let refused = "task j1#1 is a drgnx job's task: an outside agent names no job task";
     for name in ["hello", "ask_user"] {
         let args = if name == "hello" {
             json!({"task": "j1#1"})
@@ -238,22 +238,22 @@ async fn outside_is_refused_the_job_tools() {
         (
             "record_decision",
             json!({"kind": "build", "subject": "s", "reason": "r", "seen_version": 0}),
-            "jobs are drgnx's",
+            "record_decision needs the user's binding for claude agents in this folder",
         ),
         (
             "claim_task",
             json!({"task": "j1#1", "seen_version": 0}),
-            "jobs are drgnx's",
+            "claim_task is for drgnx's own job agents",
         ),
         (
             "update_task",
             json!({"task": "j1#1", "status": "running", "seen_version": 0}),
-            "jobs are drgnx's",
+            "update_task is for drgnx's own job agents",
         ),
         (
             "complete_task",
             json!({"task": "j1#1", "seen_version": 0}),
-            "jobs are drgnx's",
+            "complete_task is for drgnx's own job agents",
         ),
         (
             "escalate",
@@ -871,6 +871,7 @@ fn identity_of(v: &Value) -> Identity {
             id: format!("ext:{kind}:{}", text("tag").unwrap()),
             kind,
             home: None,
+            role: None,
         }
     } else {
         Identity::Session {
@@ -1241,6 +1242,261 @@ async fn a_plan_without_a_path_is_null() {
     assert_eq!(rows.len(), 1);
     assert!(rows[0].as_object().unwrap().contains_key("path"));
     assert_eq!(rows[0]["path"], Value::Null);
+}
+
+// ---- outside agents the user bound (MP-3) ----
+
+/// A hub whose matrix answers GATE for every call, and which records the gate's and `exec`'s calls.
+struct GateHub {
+    gate: Result<(), String>,
+    calls: std::sync::Mutex<Vec<String>>,
+}
+
+impl GateHub {
+    fn new(gate: Result<(), String>) -> Arc<GateHub> {
+        Arc::new(GateHub {
+            gate,
+            calls: std::sync::Mutex::default(),
+        })
+    }
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl Hub for GateHub {
+    fn sessions(&self) -> BoxFuture<'_, Option<Vec<SessionRow>>> {
+        Box::pin(async { None })
+    }
+    fn notify(&self) {}
+    fn gate(
+        &self,
+        actor: &str,
+        action: norn::matrix::Action,
+        own_record: bool,
+    ) -> BoxFuture<'_, Result<(), String>> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("gate {actor} {} own={own_record}", action.id()));
+        let g = self.gate.clone();
+        Box::pin(async move { g })
+    }
+    fn exec(
+        &self,
+        sid: &str,
+        method: &'static str,
+        _params: Value,
+    ) -> BoxFuture<'_, Result<Value, String>> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("exec {sid} {method}"));
+        Box::pin(async { Ok(json!({"ok": true})) })
+    }
+}
+
+fn bound(home: &Path, role: norn::matrix::Role) -> Identity {
+    Identity::outside("claude", 4242, Some(1_700_000_000.0), Some(home.into()))
+        .unwrap()
+        .with_role(Some(role))
+}
+
+/// Call tool NAME of LIST as the server does.
+async fn call_in(
+    list: &[Box<dyn mimir::Tool<norn::tools::Ctx>>],
+    coord: &Arc<Coord>,
+    who: &Identity,
+    name: &str,
+    args: Value,
+) -> (bool, String) {
+    let tool = list
+        .iter()
+        .find(|t| t.name() == name)
+        .unwrap_or_else(|| panic!("no tool {name}"));
+    if let Err(e) = tool.check(&args) {
+        return (true, e.to_string());
+    }
+    match tool.call(&(coord.clone(), who.clone()), args).await {
+        ToolResult::Ok { text, .. } | ToolResult::Rich { text, .. } => (false, text),
+        ToolResult::Err(text) => (true, text),
+    }
+}
+
+/// [MP-3] The four tools a bound outside agent gets reach the hub as its own id; an unbound one is told how to be
+/// bound and reaches nothing.
+#[tokio::test]
+async fn the_outside_tools_reach_the_hub_as_a_bound_agent() {
+    let w = World::new(&[]);
+    let hub = GateHub::new(Ok(()));
+    let coord = Arc::new(Coord::new(w.db.clone(), hub.clone()));
+    let list = norn::tools::records::outside_tools();
+    let names: Vec<&str> = list.iter().map(|t| t.name()).collect();
+    assert_eq!(names, norn::tools::OUTSIDE_TOOLS);
+    let me = bound(w.dir.path(), norn::matrix::Role::Worker);
+    let id = me.id().unwrap().to_owned();
+    let calls = [
+        ("plan_read", json!({"plan": "plan:p"}), "plans/get"),
+        (
+            "plan_write",
+            json!({"plan": "plan:p", "tasks": []}),
+            "plans/write",
+        ),
+        ("records_read", json!({"record": "spec:s"}), "records/read"),
+        (
+            "records_write",
+            json!({"record": "spec:s", "kind": "spec", "base_version": 1}),
+            "records/write",
+        ),
+    ];
+    for (tool, args, method) in calls.clone() {
+        let (error, text) = call_in(&list, &coord, &me, tool, args).await;
+        assert!(!error, "{tool}: {text}");
+        assert_eq!(hub.calls().last().unwrap(), &format!("exec {id} {method}"));
+    }
+    let unbound = me.clone().with_role(None);
+    let before = hub.calls().len();
+    for (tool, args, _) in calls {
+        let (error, text) = call_in(&list, &coord, &unbound, tool, args).await;
+        assert!(
+            error
+                && text.starts_with(&format!(
+                    "{tool} needs the user's binding for claude agents"
+                )),
+            "{tool}: {text}"
+        );
+    }
+    assert_eq!(
+        hub.calls().len(),
+        before,
+        "an unbound agent reaches no hub method"
+    );
+}
+
+/// [MP-3] A bound outside agent's decision is proposed, names its origin (from-brief or needs-user) and its sources,
+/// and passes the matrix's `graph.change` (its own record unless it replaces one); the author is its id.
+#[tokio::test]
+async fn record_decision_of_a_bound_outside_agent_is_proposed_with_sources() {
+    let w = World::new(&[]);
+    let hub = GateHub::new(Ok(()));
+    let coord = Arc::new(Coord::new(w.db.clone(), hub.clone()));
+    let me = bound(w.dir.path(), norn::matrix::Role::Worker);
+    let base = json!({"kind": "build", "subject": "s", "reason": "r", "seen_version": 0});
+    let with = |extra: Value| {
+        let mut v = base.clone();
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        v
+    };
+    let src = json!([{"path": "docs/specs/x.md"}]);
+    for (args, says) in [
+        (
+            with(json!({"origin": "own", "sources": src})),
+            "from-brief or needs-user",
+        ),
+        (with(json!({"sources": src})), "from-brief or needs-user"),
+        (with(json!({"origin": "from-brief"})), "names its sources"),
+        (
+            with(json!({"origin": "from-brief", "sources": []})),
+            "names its sources",
+        ),
+        (
+            with(json!({"origin": "from-brief", "sources": src, "task": "j1#1"})),
+            "task j1#1 is a drgnx job's task",
+        ),
+    ] {
+        let (error, text) = call_on(&coord, &me, "record_decision", args.clone()).await;
+        assert!(error && text.contains(says), "{args}: {text}");
+    }
+    assert_eq!(w.count("select count(*) from decision"), 0);
+    assert!(hub.calls().is_empty(), "{:?}", hub.calls());
+    let (error, text) = call_on(
+        &coord,
+        &me,
+        "record_decision",
+        with(json!({"origin": "needs-user", "sources": src})),
+    )
+    .await;
+    assert!(!error, "{text}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap()["status"],
+        "proposed"
+    );
+    assert_eq!(
+        w.text("select author || ':' || status from decision"),
+        Some(format!("{}:proposed", me.id().unwrap()))
+    );
+    assert_eq!(
+        hub.calls(),
+        [format!("gate {} graph.change own=true", me.id().unwrap())]
+    );
+    // a replacement is of another record: the gate is asked with own=false, and its refusal is the answer
+    let no = GateHub::new(Err("the matrix asks the user first (card 3)".into()));
+    let coord = Arc::new(Coord::new(w.db.clone(), no.clone()));
+    let (error, text) = call_on(
+        &coord,
+        &me,
+        "record_decision",
+        with(json!({"origin": "from-brief", "sources": src, "replaces": 1, "seen_version": 1})),
+    )
+    .await;
+    assert_eq!(
+        (error, text.as_str()),
+        (true, "the matrix asks the user first (card 3)")
+    );
+    assert_eq!(
+        no.calls(),
+        [format!("gate {} graph.change own=false", me.id().unwrap())]
+    );
+    assert_eq!(w.count("select count(*) from decision"), 1);
+}
+
+/// [MP-3] Binding opens no job tool: `claim_task`, `update_task`, `complete_task` and `report_submit` refuse a bound
+/// outside agent as an unbound one, and write nothing.
+#[tokio::test]
+async fn the_job_tools_still_refuse_a_bound_outside_agent() {
+    let w = World::new(&[
+        "insert into job values ('j1', 'Job', null, null, 'running', 1.0, null)",
+        "insert into jtask (id, job, n, title, role, status) values ('j1#1', 'j1', 1, 'One', 'implement', 'ready')",
+    ]);
+    let hub = GateHub::new(Ok(()));
+    let coord = Arc::new(Coord::new(w.db.clone(), hub.clone()));
+    let me = bound(w.dir.path(), norn::matrix::Role::Manager);
+    for (name, args) in [
+        ("claim_task", json!({"task": "j1#1", "seen_version": 0})),
+        (
+            "update_task",
+            json!({"task": "j1#1", "status": "running", "seen_version": 0}),
+        ),
+        ("complete_task", json!({"task": "j1#1", "seen_version": 0})),
+    ] {
+        let (error, text) = call_on(&coord, &me, name, args).await;
+        assert_eq!(
+            (error, text),
+            (
+                true,
+                format!(
+                    "{name} is for drgnx's own job agents: the user starts jobs; report your work with report_edit and report_test"
+                )
+            )
+        );
+    }
+    let reports = norn::tools::reports::tools();
+    let (error, text) = call_in(
+        &reports,
+        &coord,
+        &me,
+        "report_submit",
+        json!({"tip": "0123456789abcdef0123456789abcdef01234567"}),
+    )
+    .await;
+    assert!(
+        error && text.starts_with("report_submit ends a drgnx job's task"),
+        "{text}"
+    );
+    assert_eq!(w.written(), 0);
+    assert!(hub.calls().is_empty(), "{:?}", hub.calls());
 }
 
 #[tokio::test]

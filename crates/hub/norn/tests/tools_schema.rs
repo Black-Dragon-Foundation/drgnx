@@ -51,6 +51,8 @@ fn tool_names_are_the_lisp_names() {
                 | "report_submit"
                 | "plan_read"
                 | "plan_write"
+                | "records_read"
+                | "records_write"
                 | "extensions_suggest"
                 | "huddle_reply"
                 | "comment_reply"
@@ -99,8 +101,9 @@ const BUDGET_JOBS: usize = 6_000;
 /// Their schemas come from the plan methods' types.  Measured after the schemas were trimmed (`guard::compact_schema`):
 /// 4,105 bytes together (report_submit 2,058, plan_write 1,756, plan_read 277, plus the list's own brackets); 4,266
 /// since a plan's task names its role, profile and body (161 bytes, no descriptions); 4,448 since `plan_write` takes
-/// a new plan's view file, `path` (182 bytes with its description).
-const BUDGET_PART1: usize = 4_448;
+/// a new plan's view file, `path` (182 bytes with its description); 6,868 since every session also gets
+/// `records_read` and `records_write` (norn outside agents, Task 11: 2,420 bytes, their schemas the record methods').
+const BUDGET_PART1: usize = 6_900;
 /// `extensions_suggest`, which every agent has (the Extensions view: an agent suggests, the user installs).
 const BUDGET_EXTENSIONS: usize = 800;
 /// `huddle_reply`, which every agent has (a huddle's position).
@@ -123,7 +126,17 @@ const _: () = assert!(
         <= 40_000
 );
 
-const PART1_TOOLS: [&str; 3] = ["report_submit", "plan_read", "plan_write"];
+/// What a bound outside agent's list adds to every outside agent's (`records::outside_tools`: the plan and record
+/// tools, MP-3).
+const BUDGET_OUTSIDE: usize = 4_900;
+
+const PART1_TOOLS: [&str; 5] = [
+    "report_submit",
+    "plan_read",
+    "plan_write",
+    "records_read",
+    "records_write",
+];
 
 #[test]
 fn the_tool_list_fits_the_budget() {
@@ -140,14 +153,26 @@ fn the_tool_list_fits_the_budget() {
     let jobs = json!({"tools": listing(norn::tools::jobs::tools())})
         .to_string()
         .len();
-    let part1 = json!({"tools": listing(
-        without_tracker()
-            .into_iter()
-            .filter(|t| PART1_TOOLS.contains(&t.name()))
-            .collect()
-    )})
-    .to_string()
-    .len();
+    let part1_tools: Vec<_> = without_tracker()
+        .into_iter()
+        .filter(|t| PART1_TOOLS.contains(&t.name()))
+        .collect();
+    assert_eq!(
+        part1_tools.len(),
+        PART1_TOOLS.len(),
+        "every session has the plan and record tools"
+    );
+    let part1 = json!({"tools": listing(part1_tools)}).to_string().len();
+    // a bound outside agent: every outside agent's list and the four plan and record tools
+    let outside = json!({"tools": listing(norn::tools::records::outside_tools())})
+        .to_string()
+        .len();
+    eprintln!("the outside tools: {outside} bytes (budget {BUDGET_OUTSIDE})");
+    assert!(
+        outside <= BUDGET_OUTSIDE,
+        "the outside tools are {outside} bytes, over {BUDGET_OUTSIDE}"
+    );
+    assert!(bytes + outside <= 40_000, "a bound outside agent's list");
     let debug = json!({"tools": listing(norn::tools::debug::tools())})
         .to_string()
         .len();

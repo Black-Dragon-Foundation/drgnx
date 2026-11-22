@@ -1203,6 +1203,7 @@ mod tests {
             id: "ext:claude:1-ab".into(),
             kind: "claude".into(),
             home: Some(w.home.clone()),
+            role: None,
         };
         let out = w
             .call(

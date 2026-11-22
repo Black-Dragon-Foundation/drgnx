@@ -297,7 +297,12 @@ async fn record_decision(
     who: &Identity,
     args: RecordDecisionArgs,
 ) -> Result<String, String> {
-    who.not_outside("record_decision")?;
+    // a bound outside agent records proposed decisions with their sources, under the matrix (MP-3); an unbound one
+    // is told how to be bound
+    let bound = who.outside_role().is_some();
+    if !bound {
+        who.not_outside("record_decision")?;
+    }
     let me = who.me()?.to_owned();
     if let Some(o) = args.origin.as_deref()
         && !matches!(o, "from-brief" | "own" | "needs-user")
@@ -306,8 +311,39 @@ async fn record_decision(
             "origin is from-brief, own or needs-user, not {o:?}"
         ));
     }
+    if bound {
+        match args.origin.as_deref() {
+            Some("from-brief" | "needs-user") => {}
+            _ => {
+                return Err(
+                    "an outside agent's decision names its origin: from-brief or needs-user (the user decides it)"
+                        .into(),
+                );
+            }
+        }
+        if args.sources.as_ref().is_none_or(Vec::is_empty) {
+            return Err(
+                "an outside agent's decision names its sources (the files or records it rests on)"
+                    .into(),
+            );
+        }
+        // a job's task is drgnx's: a decision in one would be current, and an outside agent's is always proposed
+        if let Some(t) = &args.task {
+            who.not_outside(&format!("task {t}"))?;
+        }
+    }
     if let Some(s) = &args.sources {
         crate::write::work::check_sources(s).map_err(|e| e.to_string())?;
+    }
+    if bound {
+        coord
+            .hub()
+            .gate(
+                &me,
+                crate::matrix::Action::GraphChange,
+                args.replaces.is_none(),
+            )
+            .await?;
     }
     let sources = args.sources.clone().filter(|s| !s.is_empty());
     // the step is the hub's stamp (the MCP call's own timeline step), never the agent's claim: `args.step` is ignored
