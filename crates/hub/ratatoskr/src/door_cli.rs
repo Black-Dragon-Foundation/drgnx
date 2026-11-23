@@ -8,6 +8,8 @@
 //! - `task status ID STATUS` sets a tracker task's status (`tasks/write update`, at the version just read).
 //! - `plan status PLAN TASK STATUS` sets a plan task's status (`plans/write`), the one way into a task of an imported
 //!   plan file; `done` ticks the task's steps too, so the file and the graph agree.
+//! - `records status [PATH]` lists the record view files and their conflicts, `records conflict ID` shows a conflicted
+//!   record's file text and graph version, `records resolve ID --keep file|graph` keeps one (`records/status|conflict|resolve`).
 //!
 //! A status is any word of the tracker's status set: this side checks only its shape, and the hub names the set when it
 //! refuses one, so a new status needs no change here.
@@ -31,7 +33,10 @@ pub const USAGE: &str = "usage: ratatoskr card list [--open] [--json]\n\
     \x20      ratatoskr message send TO TEXT [--json]\n\
     \x20      ratatoskr message reply ID TEXT [--json]\n\
     \x20      ratatoskr task status ID STATUS [--reason TEXT] [--json]\n\
-    \x20      ratatoskr plan status PLAN TASK STATUS [--reason TEXT] [--json]";
+    \x20      ratatoskr plan status PLAN TASK STATUS [--reason TEXT] [--json]\n\
+    \x20      ratatoskr records status [PATH] [--json]\n\
+    \x20      ratatoskr records conflict ID [--json]\n\
+    \x20      ratatoskr records resolve ID --keep file|graph [--json]";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct DoorCommand {
@@ -67,6 +72,19 @@ pub enum Sub {
         status: String,
         reason: Option<String>,
     },
+    /// The record files and where they stand (`records/status`).
+    RecordsStatus {
+        path: Option<String>,
+    },
+    /// A conflicted record, both versions (`records/conflict`).
+    RecordsConflict {
+        id: String,
+    },
+    /// The file's or the graph's version stays (`records/resolve`).
+    RecordsResolve {
+        id: String,
+        keep: String,
+    },
 }
 
 /// A status word, as the registry's `Status` type takes it (lowercase letters and `-`, a letter first, at most 32).
@@ -83,7 +101,7 @@ fn status_word(s: &str) -> Result<String, String> {
     }
 }
 
-/// The arguments after GROUP (`card`, `message`, `task` or `plan`).
+/// The arguments after GROUP (`card`, `message`, `task`, `plan` or `records`).
 pub fn parse(group: &str, args: impl IntoIterator<Item = OsString>) -> Result<DoorCommand, String> {
     use lexopt::Arg::{Long, Value as Word};
     use lexopt::ValueExt;
@@ -92,12 +110,16 @@ pub fn parse(group: &str, args: impl IntoIterator<Item = OsString>) -> Result<Do
     let (mut json, mut open) = (false, false);
     let mut words: Vec<String> = Vec::new();
     let mut reason: Option<String> = None;
+    let mut keep: Option<String> = None;
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
             Long("json") => json = true,
             Long("open") if group == "card" => open = true,
             Long("reason") if group == "plan" || group == "task" => {
                 reason = Some(p.value().map_err(e)?.string().map_err(e)?)
+            }
+            Long("keep") if group == "records" => {
+                keep = Some(p.value().map_err(e)?.string().map_err(e)?)
             }
             Word(v) => words.push(v.string().map_err(e)?),
             other => return Err(other.unexpected().to_string()),
@@ -133,8 +155,23 @@ pub fn parse(group: &str, args: impl IntoIterator<Item = OsString>) -> Result<Do
             status: status_word(status)?,
             reason: reason.take(),
         },
+        ("records", ["status"]) => Sub::RecordsStatus { path: None },
+        ("records", ["status", path]) => Sub::RecordsStatus {
+            path: Some((*path).into()),
+        },
+        ("records", ["conflict", id]) => Sub::RecordsConflict { id: (*id).into() },
+        ("records", ["resolve", id]) => match keep.take().as_deref() {
+            Some(k @ ("file" | "graph")) => Sub::RecordsResolve {
+                id: (*id).into(),
+                keep: k.into(),
+            },
+            _ => return Err("records resolve needs --keep file|graph".into()),
+        },
         _ => return Err(format!("{group}: not a command of this kind\n{USAGE}")),
     };
+    if keep.is_some() {
+        return Err("--keep goes with records resolve".into());
+    }
     if open && !matches!(sub, Sub::CardList { .. }) {
         return Err("--open goes with card list".into());
     }
@@ -266,6 +303,63 @@ pub fn execute(sub: &Sub, hub: &mut Hub<'_>) -> Result<(String, Value, bool), St
             )?;
             Ok((format!("{plan} task {task}: {status}\n"), a, true))
         }
+        Sub::RecordsStatus { path } => {
+            let a = hub(
+                "records/status",
+                path.as_ref()
+                    .map_or_else(|| json!({}), |p| json!({"path": p})),
+            )?;
+            let mut out = String::new();
+            let mut ok = true;
+            for v in a["views"].as_array().into_iter().flatten() {
+                let conflicts: Vec<&str> = v["conflicts"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect();
+                ok &= conflicts.is_empty();
+                out.push_str(&format!(
+                    "{}  {}{}{}\n",
+                    v["path"].as_str().unwrap_or("?"),
+                    v["entity"].as_str().unwrap_or("?"),
+                    if v["changed"] == true {
+                        "  changed"
+                    } else {
+                        ""
+                    },
+                    if conflicts.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  conflicts: {}", conflicts.join(", "))
+                    }
+                ));
+            }
+            if out.is_empty() {
+                out.push_str("no record views\n");
+            }
+            Ok((out, a, ok))
+        }
+        Sub::RecordsConflict { id } => {
+            let a = hub("records/conflict", json!({"id": id}))?;
+            let t = format!(
+                "{} ({})\n--- file\n{}\n--- graph\n{}\n",
+                a["id"].as_str().unwrap_or(id),
+                a["path"].as_str().unwrap_or("?"),
+                a["file"].as_str().unwrap_or(""),
+                a["graph"].as_str().unwrap_or("")
+            );
+            Ok((t, a, true))
+        }
+        Sub::RecordsResolve { id, keep } => {
+            let a = hub("records/resolve", json!({"id": id, "keep": keep}))?;
+            let t = format!(
+                "{}: kept the {keep} version ({})\n",
+                a["id"].as_str().unwrap_or(id),
+                a["path"].as_str().unwrap_or("?")
+            );
+            Ok((t, a, true))
+        }
     }
 }
 
@@ -296,7 +390,7 @@ fn task_answer(id: &str, status: &str, a: Value) -> (String, Value, bool) {
     (format!("{id}: {status}\n"), a, true)
 }
 
-/// `card|message|task|plan …`: the exit code.
+/// `card|message|task|plan|records …`: the exit code.
 pub fn run(env: &Env, cmd: DoorCommand) -> i32 {
     let hub = crate::supervise::ensure_quiet(env, ENSURE_TIMEOUT);
     if hub != 0 {
@@ -421,6 +515,83 @@ mod tests {
         );
         let (r, _) = run_fake(&rp.sub, vec![Ok(json!({"rows": []}))]);
         assert_eq!(r.unwrap_err(), "no message 9");
+    }
+
+    #[test]
+    fn records_commands_call_the_hubs_methods() {
+        let st = p("records", &["status"]).unwrap();
+        let (r, seen) = run_fake(
+            &st.sub,
+            vec![Ok(json!({"views": [
+                {"path": "/w/a.md", "entity": "plan:a-1", "changed": true, "conflicts": []},
+                {"path": "/w/b.md", "entity": "spec:b-1", "changed": false, "conflicts": ["spec:b-1"]}]}))],
+        );
+        assert_eq!(seen, [("records/status".into(), json!({}))]);
+        let (t, _, ok) = r.unwrap();
+        // a conflicted view is not a clean status
+        assert!(
+            !ok && t.contains("/w/a.md  plan:a-1  changed") && t.contains("conflicts: spec:b-1"),
+            "{t}"
+        );
+        let one = p("records", &["status", "/w/a.md"]).unwrap();
+        let (r, seen) = run_fake(&one.sub, vec![Ok(json!({"views": []}))]);
+        assert_eq!(
+            seen,
+            [("records/status".into(), json!({"path": "/w/a.md"}))]
+        );
+        assert_eq!(r.unwrap().0, "no record views\n");
+        let c = p("records", &["conflict", "spec:b-1"]).unwrap();
+        let (r, seen) = run_fake(
+            &c.sub,
+            vec![Ok(
+                json!({"id": "spec:b-1", "path": "/w/b.md", "file": "F", "graph": "G", "at": 1.0}),
+            )],
+        );
+        assert_eq!(
+            seen,
+            [("records/conflict".into(), json!({"id": "spec:b-1"}))]
+        );
+        let t = r.unwrap().0;
+        assert!(t.contains("--- file\nF\n--- graph\nG"), "{t}");
+        for keep in ["file", "graph"] {
+            let r = p(
+                "records",
+                &["resolve", "spec:b-1", "--keep", keep, "--json"],
+            )
+            .unwrap();
+            assert!(r.json);
+            let (res, seen) = run_fake(
+                &r.sub,
+                vec![Ok(
+                    json!({"id": "spec:b-1", "keep": keep, "path": "/w/b.md"}),
+                )],
+            );
+            assert_eq!(
+                seen,
+                [(
+                    "records/resolve".into(),
+                    json!({"id": "spec:b-1", "keep": keep})
+                )]
+            );
+            assert!(res.unwrap().2);
+        }
+        let (r, _) = run_fake(
+            &Sub::RecordsResolve {
+                id: "x".into(),
+                keep: "file".into(),
+            },
+            vec![Err("not-allowed: no such conflict".into())],
+        );
+        assert_eq!(r.unwrap_err(), "not-allowed: no such conflict");
+        for bad in [
+            &["resolve", "spec:b-1"][..],
+            &["resolve", "spec:b-1", "--keep", "both"],
+            &["conflict"],
+            &["status", "a", "b"],
+        ] {
+            assert!(p("records", bad).is_err(), "{bad:?} should not parse");
+        }
+        assert!(p("task", &["status", "task:a", "done", "--keep", "file"]).is_err());
     }
 
     #[test]

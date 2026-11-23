@@ -449,7 +449,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "store" => store(&mut p).map(Command::Store),
         "graph" => crate::graph_cli::parse(p.raw_args().map_err(e)?).map(Command::Graph),
         "outside" => crate::outside_cli::parse(p.raw_args().map_err(e)?).map(Command::Outside),
-        group @ ("card" | "message" | "task" | "plan") => {
+        group @ ("card" | "message" | "task" | "plan" | "records") => {
             crate::door_cli::parse(group, p.raw_args().map_err(e)?).map(Command::Door)
         }
         "browser" => crate::browser::parse(p.raw_args().map_err(e)?).map(Command::Browser),
