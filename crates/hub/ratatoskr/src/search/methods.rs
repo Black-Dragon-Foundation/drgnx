@@ -15,6 +15,7 @@
 //!   `drgnx-search-builtin` is on and the model is `Ready`). A change in that set opens the project again.
 
 use super::engine::LocalEngine;
+use super::manage::{PauseWhy, RootState};
 use super::project::{Project, ProjectError, ProjectSpec, Tier2, ViewOf, project_id};
 use super::saved::Saved;
 use super::worker::WorkerEmbedder;
@@ -87,6 +88,8 @@ pub struct Hub {
     pub embed: Arc<crate::embed::Shared>,
     /// What each server proved at its last probe, and when ([`Hub::probed`]); a server that did not answer is `None`.
     probes: Mutex<HashMap<String, (tokio::time::Instant, Option<Identity>)>>,
+    /// The vector server (`embed/serve-start`), while it runs.
+    serve: tokio::sync::Mutex<Option<crate::embed_serve::Running>>,
 }
 
 /// How long a call that only needs a server's fingerprint (a query, a project's signature) reuses a probe, so that
@@ -509,6 +512,11 @@ impl Hub {
                 .push(DocEmbedder::identity(b.as_ref()).map_or_else(String::new, |id| id.fp.hex()));
             embedders.push(b);
         }
+        // the `vectors` providers (another machine's `embed serve`): lookup sources, embedders when trusted (MP-18)
+        let remotes = front.gate.vectors();
+        for (id, url, _, trusted) in &remotes {
+            fingerprints.push(format!("vectors:{id}:{url}:{trusted}"));
+        }
         // a project that cannot be read is an error the user sees (the Search view's state line), never a search
         // with the global settings or off; nothing is opened, the next call asks git again
         let unread = |e: String| internal(format!("search: {e}"));
@@ -547,6 +555,31 @@ impl Hub {
             })
             .await
             .map_err(project_error)?,
+        );
+        let db = front.gate.runtime_db();
+        project.add_sources(
+            remotes
+                .into_iter()
+                .map(|(id, url, token, trusted)| {
+                    let pins: Arc<dyn super::remote::Pins> = match &db {
+                        Some(db) => Arc::new(super::remote::KvPins {
+                            db: db.clone(),
+                            key: super::remote::pin_key(&id),
+                        }),
+                        None => Arc::new(super::remote::MemPins::default()),
+                    };
+                    Arc::new(super::remote::RemoteVectors::new(
+                        super::remote::RemoteSpec {
+                            id,
+                            url,
+                            token,
+                            trusted,
+                            pins,
+                            ledger: Some(front.gate.ledger()),
+                        },
+                    )) as Arc<dyn super::sources::Source>
+                })
+                .collect(),
         );
         let common = real.join(".git");
         let watch = Arc::new(hrafn::ProjectWatch::new(move || {
@@ -1097,7 +1130,11 @@ impl Hub {
         })
     }
 
-    async fn status(&self, front: &Front, root: &Path) -> Result<w::StatusAnswer, Error> {
+    pub(crate) async fn status(
+        &self,
+        front: &Front,
+        root: &Path,
+    ) -> Result<w::StatusAnswer, Error> {
         let p = self.project(front, root).await?;
         let per_class = p
             .store()
@@ -1231,6 +1268,8 @@ impl Hub {
                 .collect(),
             worker: worker_status(builtin.as_deref()),
             tier2: tier2_name(&st.tier2).to_string(),
+            state: p.state().name().to_owned(),
+            why: wire_why(p.state()),
             embedded: st.embedded,
             trees,
             watch,
@@ -1668,9 +1707,281 @@ impl Hub {
         } else {
             p.refresh_now().await.map_err(project_error)?;
         }
+        // `search/index` goes on from a stop (a pause holds until `resume`)
+        if p.state() == RootState::Stopped {
+            p.resume().await.map_err(project_error)?;
+        }
         p.start_tier2();
         Ok(w::Started { started: true })
     }
+
+    /// Every root with a store in this state, as `search/list` shows it.
+    pub(crate) async fn list(&self) -> Result<w::ListAnswer, Error> {
+        let dirs = self.dirs()?;
+        let state = paths::state_dir(&dirs.env);
+        let ids = super::caches::Caches::shared(&state).stores();
+        let mut roots = Vec::new();
+        for id in ids {
+            if let Some(r) = self.root_info(&state, &id).await {
+                roots.push(r);
+            }
+        }
+        Ok(w::ListAnswer { roots })
+    }
+
+    /// Store ID's row: its counts read-only, its state from the open project or from what the user set.
+    async fn root_info(&self, state: &Path, id: &str) -> Option<w::RootInfo> {
+        let path = super::project::store_path(state, id);
+        let bytes: u64 = super::manage::store_files(state, id)
+            .iter()
+            .filter_map(|f| std::fs::metadata(f).ok())
+            .map(|m| m.len())
+            .sum();
+        let p2 = path.clone();
+        let (root, user, files, chunks) = crate::clock::blocking(move || {
+            let c = urdr::open_readonly(&p2).ok()?;
+            let root = urdr::meta(&c, super::project::META_BASE_ROOT).ok()??;
+            let user = urdr::meta(&c, super::manage::META_STATE).ok().flatten();
+            let count = |sql: &str| {
+                c.query_row(sql, [], |r| r.get::<_, i64>(0))
+                    .unwrap_or(0)
+                    .max(0) as u64
+            };
+            let files = count("select count(*) from file where tree = 0");
+            let chunks = count("select count(*) from chunk");
+            Some((root, user, files, chunks))
+        })
+        .await
+        .ok()??;
+        let open = self.opened(id);
+        let st = match &open {
+            Some(p) => p.state(),
+            None => match super::manage::UserState::parse(user.as_deref()) {
+                super::manage::UserState::Paused => RootState::Paused(PauseWhy::User),
+                super::manage::UserState::Stopped => RootState::Stopped,
+                super::manage::UserState::On => RootState::Idle,
+            },
+        };
+        Some(w::RootInfo {
+            root,
+            id: id.to_owned(),
+            state: st.name().to_owned(),
+            why: wire_why(st),
+            open: open.is_some(),
+            files,
+            chunks,
+            bytes,
+        })
+    }
+
+    /// `search/pause`, `resume`, `stop` of P's root, or of every root with `all`. A closed root's state is written to
+    /// its store; it holds when the root is next opened.
+    async fn manage(
+        &self,
+        front: &Front,
+        verb: &str,
+        p: w::ManageParams,
+    ) -> Result<w::ManageAnswer, Error> {
+        let all = p.all == Some(true);
+        if all == p.root.is_some() {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "a root or all, one of them",
+                Some("root"),
+            ));
+        }
+        let dirs = self.dirs()?;
+        let state = paths::state_dir(&dirs.env);
+        let ids: Vec<String> = match &p.root {
+            Some(r) => vec![
+                self.project(front, Path::new(r.as_str()))
+                    .await?
+                    .id()
+                    .to_owned(),
+            ],
+            None => super::caches::Caches::shared(&state).stores(),
+        };
+        let user = match verb {
+            "pause" => super::manage::UserState::Paused,
+            "stop" => super::manage::UserState::Stopped,
+            _ => super::manage::UserState::On,
+        };
+        let mut roots = Vec::new();
+        for id in ids {
+            match self.opened(&id) {
+                Some(project) => match verb {
+                    "pause" => project.pause().await,
+                    "stop" => project.stop().await,
+                    _ => project.resume().await,
+                }
+                .map_err(project_error)?,
+                None => {
+                    let store = hrafn::CodeStore::open(&super::project::store_path(&state, &id))
+                        .map_err(internal)?;
+                    store
+                        .meta_set(super::manage::META_STATE, user.as_str())
+                        .await
+                        .map_err(internal)?;
+                }
+            }
+            if let Some(r) = self.root_info(&state, &id).await {
+                roots.push(r);
+            }
+        }
+        Ok(w::ManageAnswer { roots })
+    }
+
+    /// `search/delete`: the root's project closed, then its store, packs and unshared vectors removed; the deletion is
+    /// recorded in `runtime.db` (`search.deleted.<id>`) with its reason.
+    async fn delete(&self, front: &Front, p: w::DeleteParams) -> Result<w::DeleteAnswer, Error> {
+        if !p.confirm {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "a delete needs confirm: true (the user's answer)",
+                Some("confirm"),
+            ));
+        }
+        let dirs = self.dirs()?;
+        let state = paths::state_dir(&dirs.env);
+        let given = PathBuf::from(p.root.as_str());
+        let (real, id) = crate::clock::blocking(move || project_id(&given))
+            .await
+            .map_err(internal)?
+            .map_err(|e| {
+                error(
+                    ErrorCode::InvalidParams,
+                    format!("{}: {e}", p.root.as_str()),
+                    Some("root"),
+                )
+            })?;
+        if !super::project::store_path(&state, &id).exists() {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "no index of this root",
+                Some("root"),
+            ));
+        }
+        // closed first: its tier 2 ends with it
+        let base = match self.projects.lock().await.remove(&id) {
+            Some(o) => {
+                let base = o.project.base_root().to_path_buf();
+                o.project.stop().await.map_err(project_error)?;
+                base
+            }
+            None => real.clone(),
+        };
+        let caches = super::caches::Caches::shared(&state);
+        let gone = super::manage::delete_root(&caches, &id, Some(&base))
+            .await
+            .map_err(internal)?;
+        let record = json!({
+            "root": real, "reason": "the user's search/delete", "at": clock::wall_secs() as i64,
+            "bytes": gone.bytes, "vectors": gone.vectors, "packs": gone.packs,
+        });
+        tracing::info!(root = %real.display(), bytes = gone.bytes, vectors = gone.vectors, "search: an index deleted");
+        if let Some(db) = front.gate.runtime_db() {
+            crate::gateway::kv_set(&db, &format!("search.deleted.{id}"), &record.to_string()).await;
+        }
+        Ok(w::DeleteAnswer {
+            root: real.to_string_lossy().into_owned(),
+            bytes: gone.bytes,
+            vectors: gone.vectors,
+            packs: gone.packs,
+        })
+    }
+
+    /// `search/forget-pin`: the provider's pinned certificate forgotten (the next answer pins anew).
+    async fn forget_pin(&self, front: &Front, p: w::ForgetPinParams) -> Result<bool, Error> {
+        let db = front
+            .gate
+            .runtime_db()
+            .ok_or_else(|| internal("runtime.db is not open"))?;
+        Ok(crate::gateway::kv_del(&db, &super::remote::pin_key(&p.provider)).await)
+    }
+
+    /// `embed/serve-start`: this machine's caches and its local embedders (the engine, the built-in model) served.
+    async fn serve_start(
+        &self,
+        front: &Front,
+        p: w::ServeStartParams,
+    ) -> Result<w::ServeAnswer, Error> {
+        let listen: std::net::SocketAddr = p.listen.parse().map_err(|e| {
+            error(
+                ErrorCode::InvalidParams,
+                format!("ADDR:PORT: {e}"),
+                Some("listen"),
+            )
+        })?;
+        let mut serving = self.serve.lock().await;
+        if let Some(r) = serving.take() {
+            r.stop();
+        }
+        let dirs = self.dirs()?;
+        let state = paths::state_dir(&dirs.env);
+        let mut embedders: Vec<Arc<dyn DocEmbedder>> = Vec::new();
+        if let Some((_, e)) = self.engine(front).await {
+            embedders.push(e);
+        }
+        if Self::builtin_on(front)
+            && let Some(b) = self.builtin()
+        {
+            embedders.push(b);
+        }
+        let serve = Arc::new(
+            crate::embed_serve::CacheServe::new(super::caches::Caches::shared(&state), embedders)
+                .with_ledger(front.gate.ledger()),
+        );
+        let (running, token) = crate::embed_serve::start(
+            crate::embed_serve::ServeSpec {
+                listen,
+                plain: p.plain == Some(true),
+                no_embed: p.no_embed == Some(true),
+                dir: state.join("embed-serve"),
+            },
+            serve,
+        )
+        .await
+        .map_err(|e| error(ErrorCode::InvalidParams, e, Some("listen")))?;
+        let answer = w::ServeAnswer {
+            url: running.url().to_owned(),
+            cert_sha256: running.cert_sha256().map(str::to_owned),
+            token,
+        };
+        *serving = Some(running);
+        Ok(answer)
+    }
+
+    async fn serve_stop(&self) -> bool {
+        match self.serve.lock().await.take() {
+            Some(r) => {
+                r.stop();
+                true
+            }
+            None => false,
+        }
+    }
+
+    async fn serve_token(&self) -> Result<w::ServeToken, Error> {
+        let serving = self.serve.lock().await;
+        let r = serving.as_ref().ok_or_else(|| {
+            error(
+                ErrorCode::InvalidParams,
+                "no vector server runs: embed serve --listen first",
+                None,
+            )
+        })?;
+        Ok(w::ServeToken {
+            token: r.new_token().map_err(internal)?,
+        })
+    }
+}
+
+/// Why a root waits, as the wire has it.
+fn wire_why(st: RootState) -> Option<w::PauseReason> {
+    st.why().map(|why| w::PauseReason {
+        name: why.name().to_owned(),
+        text: why.text().to_owned(),
+    })
 }
 
 fn tier2_name(t: &Tier2) -> &'static str {
@@ -1680,6 +1991,9 @@ fn tier2_name(t: &Tier2) -> &'static str {
         Tier2::Running => "running",
         Tier2::Typing => "typing",
         Tier2::Battery => "battery",
+        Tier2::Load => "load",
+        Tier2::DiskFloor => "disk-floor",
+        Tier2::Paused => "paused",
         Tier2::Failed(_) => "failed",
     }
 }
@@ -1843,6 +2157,15 @@ pub async fn serve(
             hub.typing().await;
             Ok(json!({}))
         }
+        Params::SearchList(_) => hub.list().await.map(|a| json!(a)),
+        Params::SearchPause(p) => hub.manage(front, "pause", p).await.map(|a| json!(a)),
+        Params::SearchResume(p) => hub.manage(front, "resume", p).await.map(|a| json!(a)),
+        Params::SearchStop(p) => hub.manage(front, "stop", p).await.map(|a| json!(a)),
+        Params::SearchDelete(p) => hub.delete(front, p).await.map(|a| json!(a)),
+        Params::SearchForgetPin(p) => hub.forget_pin(front, p).await.map(|a| json!(a)),
+        Params::EmbedServeStart(p) => hub.serve_start(front, p).await.map(|a| json!(a)),
+        Params::EmbedServeStop(_) => Ok(json!(hub.serve_stop().await)),
+        Params::EmbedServeToken(_) => hub.serve_token().await.map(|a| json!(a)),
         other => return Err(Box::new(other)),
     })
 }

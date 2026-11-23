@@ -559,9 +559,12 @@ fn a_worktree_root_answers_from_its_view() {
 }
 
 /// The tools a search socket lists, by name.
-/// A session's search tools; `search_results` answers only the session a Search view hand-off went to.
-const TOOLS: [&str; 6] = [
+/// A session's search tools; `search_results` answers only the session a Search view hand-off went to; `index_list` and
+/// `index_status` read the index's state (§11A: agents see it, the user changes it).
+const TOOLS: [&str; 8] = [
     "find_usages",
+    "index_list",
+    "index_status",
     "outline",
     "repo_map",
     "search",
@@ -597,6 +600,29 @@ async fn the_session_socket_serves_symbols_and_outline() {
         tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>(),
         TOOLS
     );
+    // the index's state, read only (§11A): this project's status, and every root in the list
+    let r = client
+        .call_tool(CallToolRequestParams::new("index_status").with_arguments(args(json!({}))))
+        .await
+        .unwrap();
+    let text = text_of(&r);
+    assert!(
+        text.contains(" files, ") && text.contains("tier 2"),
+        "{text}"
+    );
+    let r = client
+        .call_tool(CallToolRequestParams::new("index_list").with_arguments(args(json!({}))))
+        .await
+        .unwrap();
+    let text = text_of(&r);
+    let real = std::fs::canonicalize(&proj).unwrap();
+    assert!(text.contains(&*real.to_string_lossy()), "{text}");
+    for verb in ["index_pause", "index_stop", "index_delete"] {
+        let r = client
+            .call_tool(CallToolRequestParams::new(verb).with_arguments(args(json!({}))))
+            .await;
+        assert!(r.is_err(), "{verb}: {r:?}");
+    }
     let r = client
         .call_tool(
             CallToolRequestParams::new("symbols")

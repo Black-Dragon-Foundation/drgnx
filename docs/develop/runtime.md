@@ -1025,7 +1025,7 @@ Rows with `"requires": ["v1"]` (all of them) run against Ratatoskr:
 | `lifecycle/` (Task 16) | `ensure-starts-once` (two `ensure`s at once with no supervisor: one hub), `stop-ends-it`, `kill-9-then-ensure-restarts`, `stop-ends-a-non-dumpable-hub` (`test-hooks`: `--test-ignore-shutdown`, so `stop` reaches its SIGTERM through the listener's pidfd; `drop_ptrace`), `stop-never-signals-a-forged-argv0` (`test-hooks`, `linux`: the lock's text rewritten to name a `sleep` started as `exec -a ratatoskr`, with its true start time; `stop` exits 1 and both live), `stop-with-a-stale-lock-signals-nothing` (a lock file naming a live `sleep` that nobody holds: not running, no signal) |
 | `restart/` | `the-restart-method-exits-75`, `a-self-detached-hub-re-execs`; with `test-hooks` (`--idle-tick-ms 200`; a running turn of a mock agent is what keeps the hub): `a-changed-binary-sends-the-notice`, `a-busy-session-delays-it`, `a-missing-or-broken-new-binary-never-restarts` |
 | `reaper/` | `a-recorded-orphan-is-killed-at-start` (`linux`: the row plants a `runtime.db` record for a live process of its own group, as an older hub's Emacs child left one; the next hub kills it within 4 s and logs it), `a-row-without-a-pid-is-dropped-and-kills-nothing` (NULL rows in `runtime.db`: removed, nothing signalled) |
-| `mcp/` | the coordination tools on session sockets and outside bridges ([hub.md](hub.md#sessions-and-their-sockets)): `the-session-directory-is-private`, `a-gone-owners-sessions-are-closed` (a `spawn`ed owner killed), `a-closed-session-is-gone`, `an-unknown-tool-is-32602`, `a-fifth-connection-is-closed`, `a-session-socket-is-its-identity` (an `agent` argument changes nothing), `an-outside-bridge-is-ext-and-unverified`, `sessions-come-back-after-a-restart`, `bad-argument-is-a-tool-error-with-its-path`, `modern-and-legacy-handshakes`, `tool-writes-are-broadcast-as-events`, `drgnx-agent-in-the-environment-is-ignored`; with `test-hooks`: `attach-needs-service-or-gets-not-allowed` |
+| `mcp/` | the coordination tools on session sockets and outside bridges ([hub.md](hub.md#sessions-and-their-sockets)): `the-session-directory-is-private`, `a-gone-owners-sessions-are-closed` (a `spawn`ed owner killed), `a-closed-session-is-gone`, `an-unknown-tool-is-32602`, `a-fifth-connection-is-closed`, `a-session-socket-is-its-identity` (an `agent` argument changes nothing), `an-outside-bridge-is-ext-and-unverified`, `sessions-come-back-after-a-restart`, `bad-argument-is-a-tool-error-with-its-path`, `modern-and-legacy-handshakes`, `tool-writes-are-broadcast-as-events`, `drgnx-agent-in-the-environment-is-ignored`, `search-tools-read-the-index-only` (a session's `search.sock`: eight tools, `index_list` and `index_status` answer, a pause or delete tool is unknown); with `test-hooks`: `attach-needs-service-or-gets-not-allowed` |
 | `bridge/` | `ratatoskr mcp-bridge` ([hub.md](hub.md#the-mcp-bridge)), a copy of the hub under test (`install_bin`) run by `spawn_conn`: `outside-refuses-an-untrusted-directory` (the socket's directory at 0755: exit 1, the reason on stderr); more: `survives-a-hub-restart` and `survives-a-hub-restart-modern` (the gate rows: a TERM, a start on the same root, the next call works; both eras), `an-in-flight-call-is-an-error-never-a-retry` (a call to a STOPped hub, then KILL: the went-away tool error, one event after the restart), `a-call-while-away-waits-then-errors`, `tools-list-from-the-cache-while-away`, `drgnx-agent-in-the-environment-is-ignored`, `outside-is-service-class-and-ext`, `stdin-eof-ends-it`; with `test-hooks` (`--bridge-backoff-ms`, `--bridge-give-up-ms`): `gives-up` |
 | `panel/` | what the agent panel reads from the hub: `tool-output-pages` (a 600000-byte output reaches the editor as head, tail and `outputBytes`; `agents/tool-output` pages it, 256 KiB at most, `truncated` only when the answer is short) |
 
@@ -1764,7 +1764,7 @@ hub's clock) without one, and started again, once, when it dies inside a request
   at 127.0.0.1:8080 when it is not running) has no fingerprint in that pass, gets no request and does not make tier 2
   `Failed`, so tier 2 ends `Idle` once the others are done, and the server is asked again at the next change. Between
   requests it waits while typing holds (3 s from the last `note_typing`). Its state (`Stopped`, `Idle`, `Running`,
-  `Typing`, `Battery`, `Failed`) and the vectors written are published for `search/status`. Its embedders are
+  `Typing`, `Battery`, `Paused`, `Failed`) and the vectors written are published for `search/status`. Its embedders are
   `DocEmbedder`s (the built-in model's worker and each server that answers), each wrapped in a `DocSource`; the
   sources that state one fingerprint are one chain, filling that fingerprint's cache (`Project::cache(id)`).
 - **The source chain (`search/sources.rs`, `chain.rs`).** Per batch of at most the chain's `max_batch` missing keys (8
@@ -1772,15 +1772,26 @@ hub's clock) without one, and started again, once, when it dies inside a request
   1. The cache is asked first (a vector that arrived since the keys were read: an import, another repo).
   2. Lookup sources (`SourceKind::Lookup`) get the keys, never a text; the vectors they hold go into the cache.
   3. The keys still missing go, as the texts their keys were made of, to the first source that may be sent text and
-     answers: an `Embed` source only when it is on this machine (`embed::is_loopback`; a remote needs `trusted`,
-     which Task 23's provider entry adds), the local engine, the built-in model. A source that fails is marked down and
+     answers: an `Embed` source only when it is on this machine (`embed::is_loopback`) or its provider entry says
+     `trusted`, the local engine, the built-in model. A source that fails is marked down and
      the **same** batch goes to the next. Each source has its own backoff (`chain::Chain`, shared with the entity
      embedder: 1, 5, 30 minutes, then 6 hours, on the hub's clock); a source whose wait is over is asked again with
      the next batch, and tier 2 wakes when one is due. While every source is down and none is due,
      `SourceChain::step` reads no store rows.
   A `Guarded` wrapper refuses `embed` for a source that may not be sent text, so a lookup-only source never sees one
-  whatever the chain does. `Project::add_sources` adds sources before tier 2 starts (Waves 7 to 9 add the engine and
-  the remotes). Entity vectors build no chain (MP-17).
+  whatever the chain does. `Project::add_sources` adds sources before tier 2 starts (the engine, and the remotes).
+  **Remote sources (`search/remote.rs`, MP-18).** A `vectors` provider (another machine's `ratatoskr embed serve`,
+  [vector-protocol.md](vector-protocol.md)) is a `RemoteVectors` source: `Lookup` (source 2: keys only) unless its
+  entry says `trusted`, then `Embed` (source 3: its `embed` asks `/v1/lookup` for the batch first and sends only the
+  misses as texts). Its identity is the first fingerprint of its `/v1/info`; its certificate is pinned on first use.
+  Entity vectors build no chain (MP-17).
+  **The user's state (§11A, `search/manage.rs`).** `Project::pause` writes `index_state = paused` to the store's meta
+  and wakes tier 2, which finishes the batch in flight and then holds in its gates (`Tier2::Paused`) until `resume`;
+  `stop` writes `stopped`, aborts tier 2 and publishes `Stopped`, and the next refresh that changed files (or
+  `search/index`) resumes it. The user's pause is checked before any automatic gate, so the battery's end never lifts
+  it. `Project::state()` is `RootState` (`Idle`, `Running`, `Paused(PauseWhy)`, `Stopped`), the user's reason first.
+  `manage::delete_root` removes a closed root's store files and packs and drops its holds in every cache
+  (`VectorCache::drop_holder`, which deletes only the keys no other holder holds).
   **Order of work (MP-14).** `missing_first(store, cache, n, order)` takes the chunks of `order`'s paths first (open
   files from `Project::order_hint`, files the history feed names as edited, then the paths of the newest 300 commits,
   at most 500 paths), then the rest in chunk order. **The built-in model's chain** (its own fingerprint, its own
@@ -1863,7 +1874,10 @@ hub's clock) without one, and started again, once, when it dies inside a request
   `outline` (`path`, `docs`), pinned to the session's `cwd`; the paths a tool takes are relative and stay inside it.
   The agent's `mcpServers` list them as `drgnx-search`. `ratatoskr search mcp [ROOT]` serves the same tools on stdio
   for an agent outside drgnx, their questions going to the hub; `ratatoskr search index|query|symbols|outline` are
-  terminal clients of the `search/*` methods.
+  terminal clients of the `search/*` methods, and `search list|status|pause|resume|stop|delete` manage every root's
+  index (`delete` asks first unless `--yes`). The tools `index_list` and `index_status` (no arguments) read every
+  root's state and the session folder's; the MCP tools may call only `mcp::MCP_METHODS` (reading, `list`, `status`):
+  pausing, resuming, stopping and deleting are the user's, and no tool does them.
 - **Servers as embedders (`embed.rs`, `Gate::embedders`).** The providers of kind `tei` and `ollama` with the `embed`
   capability embed through the hub's own gateway listener (`/p/ID/embed`, `/p/ID/api/embed`), so each request is in
   `spend`. An Ollama provider needs the model the `embed` role names for it. **A server's model is its fingerprint**, not

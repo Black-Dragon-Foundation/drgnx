@@ -34,6 +34,9 @@ pub enum Kind {
     Anthropic,
     /// drgnx's own llama.cpp engine, which the hub starts and reaches itself: no path is forwarded to it.
     Llama,
+    /// Another machine's vector server (`ratatoskr embed serve`, the vector protocol v1), which the hub's search asks
+    /// itself: no path is forwarded to it.
+    Vectors,
 }
 
 impl Kind {
@@ -52,7 +55,7 @@ impl Kind {
             ],
             Self::Llamacpp => &["/infill", "/v1/chat/completions", "/v1/embeddings"],
             Self::Tei => &["/embed", "/info"],
-            Self::Anthropic | Self::Llama => &[],
+            Self::Anthropic | Self::Llama | Self::Vectors => &[],
         }
     }
 }

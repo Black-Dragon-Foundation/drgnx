@@ -131,6 +131,8 @@ http = "1"                # the download's request (already in the tree through 
 rustls.workspace = true
 rustls-platform-verifier.workspace = true
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+# `embed serve`'s self-signed certificate, made once (already in the tree as a dev-dependency for hub_io's tests)
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 zeroize.workspace = true  # the line that carries provider keys to the backend is wiped once written
 secrecy.workspace = true  # job keys held in memory (runners::keys; already in the tree through bifrost and sleipnir)
 # cloud runners over plain HTTPS (runners::cloud): EC2 Query requests signed. `sign-http` alone does not compile in
@@ -175,7 +177,6 @@ tempfile.workspace = true
 proptest.workspace = true  # the shell-command parser never panics and is deterministic (work::shell_read)
 # plugins::hub_io's tests: the fixture plugins, and an in-test TLS server with certificates made at run time
 brokkr = { path = "../brokkr", version = "0.1.0", features = ["test-support"] }
-rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 
 # --- integration tests: one binary (`it`) plus the files that need a process of their own (reason on each) ---
 

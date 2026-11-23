@@ -1190,6 +1190,15 @@ impl Front {
             | Params::SearchScopeBases(_)
             | Params::SearchExport(_)
             | Params::SearchImport(_)
+            | Params::SearchList(_)
+            | Params::SearchPause(_)
+            | Params::SearchResume(_)
+            | Params::SearchStop(_)
+            | Params::SearchDelete(_)
+            | Params::SearchForgetPin(_)
+            | Params::EmbedServeStart(_)
+            | Params::EmbedServeStop(_)
+            | Params::EmbedServeToken(_)
             | Params::SearchTyping(_)) => arm!(
                 crate::search::methods::serve(self, &caller, p)
                     .await

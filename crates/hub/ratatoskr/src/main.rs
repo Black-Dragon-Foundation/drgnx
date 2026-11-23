@@ -99,6 +99,8 @@ fn main() -> ExitCode {
         Command::Plugins(p) => return code(ratatoskr::plugins_cli::run(&Env::process(), p)),
         // Hrafn from a terminal (and `search mcp`, which builds a runtime of its own).
         Command::Search(s) => return code(ratatoskr::search_cli::run(&Env::process(), s)),
+        // The vector server lives in the hub: one call to it.
+        Command::Embed(c) => return code(ratatoskr::embed_serve::run(&Env::process(), c)),
         // Hrafn's embed worker: threads of its own (stdin, the CPU path's pool), never a tokio runtime.
         // A fetched pack's grammar in its own process: stdin and stdout are the whole interface.
         Command::HrafnParse {

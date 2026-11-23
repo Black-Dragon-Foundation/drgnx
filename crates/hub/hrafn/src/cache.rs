@@ -358,6 +358,33 @@ impl VectorCache {
             .await?)
     }
 
+    /// STORE_ID is no holder any more (its repo's index was deleted): its rows go, and with them the vectors of the keys
+    /// only it held. A key another holder holds keeps its vector. How many vectors went.
+    pub async fn drop_holder(&self, store_id: &str) -> Result<u32, StoreError> {
+        let id = store_id.to_string();
+        Ok(self
+            .handle
+            .write(move |c| {
+                let mut n = 0u32;
+                for kind in [KeyKind::Chunk, KeyKind::Path] {
+                    n += c.execute(
+                        &format!(
+                            "delete from {} where key in
+                               (select h.key from held h where h.holder = ?1 and h.kind = ?2
+                                and not exists (select 1 from held o
+                                                where o.kind = h.kind and o.key = h.key and o.holder != ?1))",
+                            table(kind)
+                        ),
+                        params![id, kind.as_i64()],
+                    )? as u32;
+                }
+                c.execute("delete from held where holder = ?1", [&id])?;
+                c.execute("delete from holder where id = ?1", [&id])?;
+                Ok(n)
+            })
+            .await?)
+    }
+
     /// Whether a live holder holds each of KEYS.
     pub async fn referenced(
         &self,

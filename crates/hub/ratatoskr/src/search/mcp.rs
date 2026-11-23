@@ -18,6 +18,32 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
+/// The hub methods an MCP tool may call: reading the index, and `search/list` and `search/status`. Pausing, resuming,
+/// stopping and deleting an index are the user's (Hrafn redesign §11A): no tool names them, and both backends refuse
+/// any method not listed here.
+pub const MCP_METHODS: &[&str] = &[
+    "search/query",
+    "search/symbols",
+    "search/outline",
+    "search/map",
+    "search/usages",
+    "search/results",
+    "search/list",
+    "search/status",
+];
+
+/// Whether an MCP tool may call METHOD.
+pub fn mcp_may_call(method: &str) -> bool {
+    MCP_METHODS.contains(&method)
+}
+
+/// What a backend answers a method no MCP tool may call.
+pub fn not_for_mcp(method: &str) -> String {
+    format!(
+        "{method} is not for an MCP tool: it is the user's (Search: pause, resume, stop, delete)"
+    )
+}
+
 /// Where a question goes: the hub itself, or (for `search mcp`) the hub's socket.
 pub trait Backend: Send + Sync {
     fn query<'a>(
@@ -62,6 +88,13 @@ impl HubBackend {
                 let p = serde_json::from_value(params).map_err(|e| e.to_string())?;
                 s.usages(&front, p).await.map(|a| json!(a))
             }
+            "search/list" => s.list().await.map(|a| json!(a)),
+            "search/status" => {
+                let p: w::RootParams = serde_json::from_value(params).map_err(|e| e.to_string())?;
+                s.status(&front, Path::new(p.root.as_str()))
+                    .await
+                    .map(|a| json!(a))
+            }
             // a Search view's hand-off, to the session it went to only (not a wire method)
             "search/results" => {
                 let a: ResultsArgs = serde_json::from_value(params).map_err(|e| e.to_string())?;
@@ -83,6 +116,9 @@ impl Backend for HubBackend {
         method: &'static str,
         params: Value,
     ) -> BoxFuture<'a, Result<Value, String>> {
+        if !mcp_may_call(method) {
+            return Box::pin(async move { Err(not_for_mcp(method)) });
+        }
         Box::pin(self.structural(method, params))
     }
 
@@ -789,7 +825,105 @@ impl Tool<SearchCtx> for FindUsages {
     }
 }
 
-/// The tools of a search socket: `search`, `symbols`, `outline`, `repo_map` and `find_usages`.
+/// No arguments.
+fn no_args(args: &Value) -> Result<(), ArgsError> {
+    match args {
+        Value::Null => Ok(()),
+        Value::Object(m) if m.is_empty() => Ok(()),
+        Value::Object(m) => Err(arg_err(
+            m.keys().next().map_or("", String::as_str),
+            "takes no arguments",
+        )),
+        _ => Err(arg_err("", "an object")),
+    }
+}
+
+/// `search/list` for an agent (§11A: agents see every root's index, and change none).
+struct IndexList;
+
+impl Tool<SearchCtx> for IndexList {
+    fn name(&self) -> &'static str {
+        "index_list"
+    }
+
+    fn description(&self) -> &'static str {
+        "Every project this machine keeps a search index of: its state (idle, running, paused, stopped), why it waits, \
+         and its files, chunks and size. Read only: pausing, stopping and deleting an index are the user's."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object", "properties": {}, "additionalProperties": false})
+    }
+
+    fn check(&self, args: &Value) -> Result<(), ArgsError> {
+        no_args(args)
+    }
+
+    fn call<'a>(&'a self, ctx: &'a SearchCtx, args: Value) -> BoxFuture<'a, ToolResult> {
+        Box::pin(async move {
+            if let Err(e) = no_args(&args) {
+                return ToolResult::Err(e.to_string());
+            }
+            match ctx.backend.call("search/list", json!({})).await {
+                Ok(v) => match serde_json::from_value::<w::ListAnswer>(v.clone()) {
+                    Ok(a) => ToolResult::Ok {
+                        text: crate::search_cli::render_roots(&a.roots),
+                        structured: Some(v),
+                    },
+                    Err(e) => ToolResult::Err(e.to_string()),
+                },
+                Err(e) => ToolResult::Err(e),
+            }
+        })
+    }
+}
+
+/// `search/status` of this project for an agent.
+struct IndexStatus;
+
+impl Tool<SearchCtx> for IndexStatus {
+    fn name(&self) -> &'static str {
+        "index_status"
+    }
+
+    fn description(&self) -> &'static str {
+        "This project's search index: its state and why it waits, files and chunks, the models that have vectors, and \
+         where vectors come from. Read only."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object", "properties": {}, "additionalProperties": false})
+    }
+
+    fn check(&self, args: &Value) -> Result<(), ArgsError> {
+        no_args(args)
+    }
+
+    fn call<'a>(&'a self, ctx: &'a SearchCtx, args: Value) -> BoxFuture<'a, ToolResult> {
+        Box::pin(async move {
+            if let Err(e) = no_args(&args) {
+                return ToolResult::Err(e.to_string());
+            }
+            match ctx
+                .backend
+                .call("search/status", json!({"root": ctx.root}))
+                .await
+            {
+                Ok(v) => match serde_json::from_value::<w::StatusAnswer>(v.clone()) {
+                    Ok(a) => ToolResult::Ok {
+                        text: crate::search_cli::render_status(&a),
+                        structured: Some(v),
+                    },
+                    Err(e) => ToolResult::Err(e.to_string()),
+                },
+                Err(e) => ToolResult::Err(e),
+            }
+        })
+    }
+}
+
+/// The tools of a search socket: `search`, `symbols`, `outline`, `repo_map`, `find_usages`, `search_results`, and the
+/// index's `index_list` and `index_status` (read only: no tool pauses, stops or deletes an index).
 pub fn tools() -> Arc<[Box<dyn Tool<SearchCtx>>]> {
     let list: Vec<Box<dyn Tool<SearchCtx>>> = vec![
         Box::new(Search),
@@ -798,6 +932,8 @@ pub fn tools() -> Arc<[Box<dyn Tool<SearchCtx>>]> {
         Box::new(RepoMap),
         Box::new(FindUsages),
         Box::new(Results),
+        Box::new(IndexList),
+        Box::new(IndexStatus),
     ];
     list.into()
 }

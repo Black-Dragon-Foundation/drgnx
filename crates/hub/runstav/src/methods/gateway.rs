@@ -157,6 +157,9 @@ pub enum ProviderKind {
     /// drgnx's own engine (Hrafn's llama.cpp, a process the hub starts after the download's consent): no URL, so the
     /// gateway never forwards to it.
     Llama,
+    /// Another machine's vector server (`ratatoskr embed serve`): Hrafn asks it for vectors by key, and for texts only
+    /// when the entry is `trusted`. The gateway never forwards to it.
+    Vectors,
 }
 
 /// How a provider takes its key; `none` is a keyless (local) provider.
@@ -251,6 +254,10 @@ pub struct ProviderConfig {
     pub caps: Bounded<Vec<ProviderCap>, 3>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub price: Option<ProviderPrice>,
+    /// Document text may be sent to it (a `vectors`, `tei` or `ollama` server not on this machine); a server on
+    /// loopback is trusted without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted: Option<bool>,
 }
 
 /// A warning about one provider (a keyed one whose key travels in clear text).

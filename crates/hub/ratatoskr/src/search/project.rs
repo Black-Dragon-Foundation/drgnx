@@ -22,6 +22,7 @@
 //!   [`Status`].
 
 use super::caches::Caches;
+use super::manage::{META_STATE, PauseWhy, RootState, UserState};
 use super::sources::{ChainEntry, DocSource, Slot, Source, SourceChain, run_pass_with};
 use super::{DocEmbedder, power};
 use crate::clock;
@@ -226,6 +227,12 @@ pub enum Tier2 {
     Typing,
     /// Waiting on battery.
     Battery,
+    /// Waiting while the machine is busy ([`super::host::busy`]).
+    Load,
+    /// Waiting for space on the state directory's disk ([`super::host::below_floor`]).
+    DiskFloor,
+    /// Paused by the user (`search/pause`) until `search/resume`.
+    Paused,
     /// An embedder failed; tier 2 waits for the next change.
     Failed(String),
 }
@@ -295,7 +302,11 @@ struct Inner {
     /// Each fingerprint's chain as the last pass left it, for `search/status`.
     chains: Mutex<Vec<(String, Vec<ChainEntry>)>>,
     power_root: PathBuf,
+    /// The hub's state directory: the disk floor is its filesystem's.
+    state_dir: PathBuf,
     gate: Mutex<Gate>,
+    /// What the user set (`search/pause`, `resume`, `stop`), as the store's `index_state` keeps it.
+    user: Mutex<UserState>,
     wake: Notify,
     status: watch::Sender<Status>,
     tier1: tokio::sync::Mutex<()>,
@@ -389,6 +400,7 @@ impl Project {
         }
         // edits may have happened while the hub was down: every tree is checked on its next use
         store.trees_reopened().await?;
+        let user = UserState::parse(store.meta_get(META_STATE).await?.as_deref());
         let (status, _) = watch::channel(Status {
             tier2: Tier2::Stopped,
             embedded: 0,
@@ -415,7 +427,9 @@ impl Project {
                 recency: Mutex::new(None),
                 chains: Mutex::new(Vec::new()),
                 power_root: spec.power_root,
+                state_dir: spec.state.clone(),
                 gate: Mutex::new(Gate::default()),
+                user: Mutex::new(user),
                 wake: Notify::new(),
                 status,
                 tier1: tokio::sync::Mutex::new(()),
@@ -507,6 +521,10 @@ impl Project {
             .map_err(io::Error::other)??;
         if r.keys_missing > 0 || r.files_changed > 0 {
             inner.wake.notify_one();
+        }
+        // a stop holds until the next change
+        if r.files_changed > 0 && inner.user() == UserState::Stopped {
+            self.resume().await?;
         }
         Ok(r)
     }
@@ -650,7 +668,8 @@ impl Project {
         }
     }
 
-    /// `search/index` with `now`: tier 2 runs on battery too, until nothing is missing.
+    /// `search/index` with `now`: tier 2 runs on battery and on a busy machine too (not below the disk floor), until
+    /// nothing is missing.
     pub fn index_now(&self) {
         if let Ok(mut g) = self.inner.gate.lock() {
             g.overriding = true;
@@ -694,10 +713,72 @@ impl Project {
             .unwrap_or_default()
     }
 
-    /// Starts tier 2 (once).
+    /// `search/pause`: the batch in flight finishes, then tier 2 holds until [`resume`](Self::resume); kept in the
+    /// store, so a restart or a file change does not undo it.
+    pub async fn pause(&self) -> Result<(), ProjectError> {
+        self.inner.set_user(UserState::Paused).await?;
+        self.inner.wake.notify_one();
+        Ok(())
+    }
+
+    /// `search/resume`: tier 2 goes on with the keys still missing (a pause or a stop lifted).
+    pub async fn resume(&self) -> Result<(), ProjectError> {
+        self.inner.set_user(UserState::On).await?;
+        self.start_tier2();
+        self.inner.wake.notify_one();
+        Ok(())
+    }
+
+    /// `search/stop`: the running build is cancelled now; what it finished stays. The watcher stays on: the next change
+    /// or `search/index` goes on from there.
+    pub async fn stop(&self) -> Result<(), ProjectError> {
+        self.inner.set_user(UserState::Stopped).await?;
+        let running = self.tier2.lock().ok().and_then(|mut t| t.take());
+        if let Some(h) = running {
+            h.abort();
+            let _ = h.await;
+        }
+        self.inner.publish(Tier2::Stopped);
+        Ok(())
+    }
+
+    /// The root's state as the user sees it: the user's pause or stop first, then what tier 2 waits for.
+    pub fn state(&self) -> RootState {
+        match self.inner.user() {
+            UserState::Stopped => return RootState::Stopped,
+            UserState::Paused => return RootState::Paused(PauseWhy::User),
+            UserState::On => {}
+        }
+        match self.inner.status.borrow().tier2 {
+            Tier2::Battery => RootState::Paused(PauseWhy::Battery),
+            Tier2::Load => RootState::Paused(PauseWhy::Load),
+            Tier2::DiskFloor => RootState::Paused(PauseWhy::DiskFloor),
+            Tier2::Failed(_) => RootState::Paused(PauseWhy::NoEmbedder),
+            Tier2::Running | Tier2::Typing | Tier2::Paused => RootState::Running,
+            // no source at all, or none answered its probe (no chain formed: a built-in model not downloaded, a
+            // server not there)
+            Tier2::Idle | Tier2::Stopped
+                if self.inner.sources().is_empty()
+                    || self
+                        .inner
+                        .chains
+                        .lock()
+                        .map(|c| c.is_empty())
+                        .unwrap_or(true) =>
+            {
+                RootState::Paused(PauseWhy::NoEmbedder)
+            }
+            Tier2::Idle | Tier2::Stopped => RootState::Idle,
+        }
+    }
+
+    /// Starts tier 2 (once; again when it ended), unless the user stopped it.
     pub fn start_tier2(&self) {
+        if self.inner.user() == UserState::Stopped {
+            return;
+        }
         let Ok(mut t) = self.tier2.lock() else { return };
-        if t.is_some() {
+        if t.as_ref().is_some_and(|h| !h.is_finished()) {
             return;
         }
         let inner = self.inner.clone();
@@ -976,7 +1057,7 @@ impl Project {
 }
 
 /// The store's meta key naming the checkout its base was built from.
-const META_BASE_ROOT: &str = "base_root";
+pub(crate) const META_BASE_ROOT: &str = "base_root";
 
 /// `max_user_watches`: the user's inotify budget.
 const MAX_USER_WATCHES: &str = "/proc/sys/fs/inotify/max_user_watches";
@@ -1401,6 +1482,19 @@ impl Inner {
         Ok(cache)
     }
 
+    fn user(&self) -> UserState {
+        self.user.lock().map_or(UserState::On, |u| *u)
+    }
+
+    /// The user's state, kept in the store first.
+    async fn set_user(&self, state: UserState) -> Result<(), ProjectError> {
+        self.store.meta_set(META_STATE, state.as_str()).await?;
+        if let Ok(mut u) = self.user.lock() {
+            *u = state;
+        }
+        Ok(())
+    }
+
     fn publish(&self, tier2: Tier2) {
         self.status.send_if_modified(|s| {
             let changed = s.tier2 != tier2;
@@ -1409,10 +1503,17 @@ impl Inner {
         });
     }
 
-    /// Waits until typing lets a request go; whether it goes as `index now`, and whether the local sources wait for AC
-    /// (on battery, unless `index now` or `drgnx-search-battery-engine`; remote sources are never held by battery).
-    async fn gates(&self) -> (bool, bool) {
+    /// Waits until the user's pause, typing and the disk floor let a request go; whether it goes as `index now`, and
+    /// what holds the local sources: the battery (unless `index now` or `drgnx-search-battery-engine`), else a busy
+    /// machine (unless `index now`). Remote sources are held by neither.
+    async fn gates(&self) -> (bool, Option<Tier2>) {
         loop {
+            // the user's pause first: no automatic reason lifts it, only `resume`
+            if self.user() != UserState::On {
+                self.publish(Tier2::Paused);
+                self.wake.notified().await;
+                continue;
+            }
             let (typing, overriding) = match self.gate.lock() {
                 Ok(g) => (g.hold_until.is_some_and(|t| t > clock::now()), g.overriding),
                 Err(_) => (false, false),
@@ -1422,12 +1523,30 @@ impl Inner {
                 self.wake.notified().await;
                 continue;
             }
-            let battery = !overriding
-                && !self
-                    .battery_engine
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                && power::on_battery(&self.power_root);
-            return (overriding, battery);
+            // the disk floor holds every source, even for `index now`: tier 2 writes vectors
+            if super::host::below_floor(&self.power_root, &self.state_dir) {
+                self.publish(Tier2::DiskFloor);
+                tokio::select! {
+                    () = self.wake.notified() => {}
+                    () = clock::sleep(POWER_POLL) => {}
+                }
+                continue;
+            }
+            // the battery, then the load: they hold the local sources only, and not for `index now`
+            let hold = if overriding {
+                None
+            } else if !self
+                .battery_engine
+                .load(std::sync::atomic::Ordering::Relaxed)
+                && power::on_battery(&self.power_root)
+            {
+                Some(Tier2::Battery)
+            } else if super::host::busy(&self.power_root) {
+                Some(Tier2::Load)
+            } else {
+                None
+            };
+            return (overriding, hold);
         }
     }
 
@@ -1526,8 +1645,8 @@ impl Inner {
             }
             let mut sent = false;
             loop {
-                let (overriding, battery) = self.gates().await;
-                slots = self.slots(slots, battery, overriding).await;
+                let (overriding, hold) = self.gates().await;
+                slots = self.slots(slots, hold.is_some(), overriding).await;
                 if let Ok(mut v) = self.chains.lock() {
                     *v = slots
                         .iter()
@@ -1554,8 +1673,9 @@ impl Inner {
                         sent = true;
                     }
                     Ok(out) if out.held => {
-                        // only the battery keeps a local source from the work: wait for AC, `index now` or a change
-                        self.publish(Tier2::Battery);
+                        // only the battery or the load keeps a local source from the work: wait for it to clear,
+                        // `index now` or a change
+                        self.publish(hold.unwrap_or(Tier2::Battery));
                         tokio::select! {
                             () = self.wake.notified() => {}
                             () = clock::sleep(POWER_POLL) => {}

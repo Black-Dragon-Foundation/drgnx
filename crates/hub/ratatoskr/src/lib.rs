@@ -90,6 +90,7 @@ pub mod doctor;
 pub mod editor;
 pub mod embed;
 pub mod embed_direct;
+pub mod embed_serve;
 pub mod eval_cli;
 pub mod exec;
 pub mod extensions;

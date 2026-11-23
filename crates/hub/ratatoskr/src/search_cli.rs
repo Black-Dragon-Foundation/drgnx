@@ -104,6 +104,75 @@ pub enum SearchCommand {
     },
     /// `eval gen|run|compare` (`crate::eval_cli`): needs no hub.
     Eval(crate::eval_cli::EvalCommand),
+    /// Every root's index (`search/list`).
+    List {
+        json: bool,
+    },
+    /// One root's index (`search/status`), the working folder's without ROOT.
+    Status {
+        root: Option<PathBuf>,
+        json: bool,
+    },
+    /// `pause`, `resume` or `stop` of ROOT's index, or of every root's with `--all`.
+    Manage {
+        verb: Verb,
+        root: Option<PathBuf>,
+        all: bool,
+    },
+    /// ROOT's index removed (`search/delete`); asks first unless YES.
+    Delete {
+        root: PathBuf,
+        yes: bool,
+    },
+}
+
+/// What `search pause|resume|stop` does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verb {
+    Pause,
+    Resume,
+    Stop,
+}
+
+impl Verb {
+    pub fn method(self) -> &'static str {
+        match self {
+            Verb::Pause => "search/pause",
+            Verb::Resume => "search/resume",
+            Verb::Stop => "search/stop",
+        }
+    }
+}
+
+/// Whether `search delete ROOT` goes on: with YES at once; else the question on OUT and a `y` answer from INPUT, which
+/// only a terminal (TTY) can give.
+pub fn confirm_delete(
+    root: &str,
+    yes: bool,
+    tty: bool,
+    input: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> bool {
+    if yes {
+        return true;
+    }
+    if !tty {
+        let _ = writeln!(
+            out,
+            "search delete {root}: not a terminal to ask; run it with --yes to delete"
+        );
+        return false;
+    }
+    let _ = write!(
+        out,
+        "Delete the index of {root} (its store, packs and the vectors no other root holds)? [y/N] "
+    );
+    let _ = out.flush();
+    let mut answer = String::new();
+    if input.read_line(&mut answer).is_err() {
+        return false;
+    }
+    matches!(answer.trim(), "y" | "Y" | "yes")
 }
 
 /// The arguments after `search`.
@@ -129,7 +198,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
     ]
     .contains(&name.as_str())
     {
-        return Err(format!("unknown search subcommand {name:?}"));
+        return parse_manage(&name, p);
     }
     let (mut rebuild, mut now, mut json, mut scope, mut k) = (false, false, false, None, None);
     let (mut mode, mut kinds, mut glob, mut docs) = (None, Vec::new(), None, true);
@@ -340,6 +409,53 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
     })
 }
 
+/// `list`, `status`, `pause`, `resume`, `stop` and `delete` (Hrafn redesign §11A).
+fn parse_manage(name: &str, mut p: lexopt::Parser) -> Result<SearchCommand, String> {
+    use lexopt::Arg::{Long, Value as Word};
+    use lexopt::ValueExt;
+    let verb = match name {
+        "pause" => Some(Verb::Pause),
+        "resume" => Some(Verb::Resume),
+        "stop" => Some(Verb::Stop),
+        "list" | "status" | "delete" => None,
+        _ => return Err(format!("unknown search subcommand {name:?}")),
+    };
+    let e = |e: lexopt::Error| e.to_string();
+    let (mut json, mut all, mut yes, mut words) = (false, false, false, Vec::new());
+    while let Some(arg) = p.next().map_err(e)? {
+        match arg {
+            Long("json") if matches!(name, "list" | "status") => json = true,
+            Long("all") if verb.is_some() => all = true,
+            Long("yes") if name == "delete" => yes = true,
+            Word(v) => words.push(PathBuf::from(v.string().map_err(e)?)),
+            other => return Err(other.unexpected().to_string()),
+        }
+    }
+    let max = if name == "list" { 0 } else { 1 };
+    if words.len() > max {
+        return Err(format!(
+            "search {name}: unexpected argument {:?}",
+            words[max]
+        ));
+    }
+    let root = words.pop();
+    Ok(match (name, verb) {
+        ("list", _) => SearchCommand::List { json },
+        ("status", _) => SearchCommand::Status { root, json },
+        ("delete", _) => SearchCommand::Delete {
+            root: root.ok_or("search delete needs a project root (one at a time)")?,
+            yes,
+        },
+        (_, Some(verb)) => {
+            if root.is_some() == all {
+                return Err(format!("search {name} needs a project root or --all"));
+            }
+            SearchCommand::Manage { verb, root, all }
+        }
+        _ => unreachable!("every name is matched above"),
+    })
+}
+
 fn absolute(cwd: &Path, p: &Path) -> String {
     cwd.join(p).to_string_lossy().into_owned()
 }
@@ -382,6 +498,9 @@ impl Backend for ClientBackend {
         params: serde_json::Value,
     ) -> mimir::BoxFuture<'a, Result<serde_json::Value, String>> {
         Box::pin(async move {
+            if !crate::search::mcp::mcp_may_call(method) {
+                return Err(crate::search::mcp::not_for_mcp(method));
+            }
             let env = self.env.clone();
             crate::clock::blocking(move || {
                 Client::user(&env, Duration::from_secs(5))
@@ -463,6 +582,59 @@ pub fn render_export(a: &w::ExportAnswer) -> String {
     )
 }
 
+/// Roots, one a line: the state (and why it waits), the counts, the root.
+pub fn render_roots(roots: &[w::RootInfo]) -> String {
+    if roots.is_empty() {
+        return "no index on this machine\n".into();
+    }
+    let mut out = String::new();
+    for r in roots {
+        let why = r
+            .why
+            .as_ref()
+            .map_or_else(String::new, |w| format!(" ({})", w.text));
+        out.push_str(&format!(
+            "{:<8} {:>7} files {:>8} chunks {:>6} MiB  {}{why}\n",
+            r.state,
+            r.files,
+            r.chunks,
+            r.bytes >> 20,
+            r.root
+        ));
+    }
+    out
+}
+
+/// `search/status`'s text answer: the state and why, the counts, tier 2, the lag, the sources.
+pub fn render_status(s: &w::StatusAnswer) -> String {
+    let why = s
+        .why
+        .as_ref()
+        .map_or_else(String::new, |w| format!(": {}", w.text));
+    let mut out = format!(
+        "{}{why}\n{} files, {} chunks; tier 2 {}, {} vectors written since the hub opened it\n",
+        s.state, s.files, s.chunks, s.tier2, s.embedded
+    );
+    for m in &s.models {
+        out.push_str(&format!(
+            "model {} ({}): {} vectors\n",
+            m.label.as_deref().unwrap_or("?"),
+            &m.model[..16.min(m.model.len())],
+            m.vectors
+        ));
+    }
+    for c in &s.sources {
+        for e in &c.entries {
+            let why = e
+                .why
+                .as_ref()
+                .map_or_else(String::new, |w| format!(": {w}"));
+            out.push_str(&format!("source {} ({}): {}{why}\n", e.id, e.kind, e.state));
+        }
+    }
+    out
+}
+
 /// `search/import`'s text answer: what was kept, and of which model.
 pub fn render_import(a: &w::ImportAnswer) -> String {
     format!(
@@ -492,6 +664,18 @@ fn text(
         "search/map" => render_map(&serde_json::from_value(a)?),
         "search/export" => render_export(&serde_json::from_value(a)?),
         "search/import" => render_import(&serde_json::from_value(a)?),
+        "search/list" => render_roots(&serde_json::from_value::<w::ListAnswer>(a)?.roots),
+        "search/pause" | "search/resume" | "search/stop" => {
+            render_roots(&serde_json::from_value::<w::ManageAnswer>(a)?.roots)
+        }
+        "search/status" => render_status(&serde_json::from_value(a)?),
+        "search/delete" => {
+            let d: w::DeleteAnswer = serde_json::from_value(a)?;
+            format!(
+                "deleted the index of {}: {} bytes, {} vectors no other root held, {} packs\n",
+                d.root, d.bytes, d.vectors, d.packs
+            )
+        }
         "search/usages" => render_usages(
             params["name"].as_str().unwrap_or_default(),
             &serde_json::from_value(a)?,
@@ -521,6 +705,36 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
             return serve_mcp(env, root);
         }
         SearchCommand::Eval(_) => unreachable!("handled above"),
+        SearchCommand::List { json } => ("search/list", json!({}), *json),
+        SearchCommand::Status { root, json } => {
+            let root = root.as_ref().map_or(cwd.clone(), |r| cwd.join(r));
+            (
+                "search/status",
+                json!({"root": absolute(&cwd, &root)}),
+                *json,
+            )
+        }
+        SearchCommand::Manage { verb, root, all } => {
+            let p = match root {
+                Some(r) => json!({"root": absolute(&cwd, r)}),
+                None => json!({"all": all}),
+            };
+            (verb.method(), p, false)
+        }
+        SearchCommand::Delete { root, yes } => {
+            use std::io::IsTerminal as _;
+            let root = absolute(&cwd, root);
+            let tty = std::io::stdin().is_terminal();
+            let (mut input, mut out) = (std::io::stdin().lock(), std::io::stderr());
+            if !confirm_delete(&root, *yes, tty, &mut input, &mut out) {
+                return 1;
+            }
+            (
+                "search/delete",
+                json!({"root": root, "confirm": true}),
+                false,
+            )
+        }
         SearchCommand::Export {
             root,
             out,
@@ -843,6 +1057,118 @@ mod tests {
         assert!(p(&["import", "/f", "--out", "/x"]).is_err());
         assert!(p(&["export", "/r", "--branch", "a", "--all-trees"]).is_err());
         assert!(p(&["import", "/f", "/r", "extra"]).is_err());
+    }
+
+    /// Task 23b. `delete` asks unless `--yes`, and only a terminal's `y` goes on; the other verbs take ROOT or `--all`.
+    #[test]
+    fn delete_asks_without_yes() {
+        assert_eq!(
+            p(&["delete", "/r"]).unwrap(),
+            SearchCommand::Delete {
+                root: "/r".into(),
+                yes: false
+            }
+        );
+        assert_eq!(
+            p(&["delete", "/r", "--yes"]).unwrap(),
+            SearchCommand::Delete {
+                root: "/r".into(),
+                yes: true
+            }
+        );
+        assert!(p(&["delete"]).is_err());
+        assert!(p(&["delete", "--all"]).is_err(), "one root at a time");
+        let ask = |yes: bool, tty: bool, answer: &str| {
+            let mut out = Vec::new();
+            let ok = confirm_delete("/r", yes, tty, &mut answer.as_bytes(), &mut out);
+            (ok, String::from_utf8(out).unwrap())
+        };
+        let (ok, question) = ask(false, true, "y\n");
+        assert!(
+            ok && question.contains("/r") && question.contains("[y/N]"),
+            "{question}"
+        );
+        assert!(!ask(false, true, "\n").0, "the default is no");
+        assert!(!ask(false, true, "no\n").0);
+        let (ok, said) = ask(false, false, "y\n");
+        assert!(
+            !ok && said.contains("--yes"),
+            "no terminal: refused, {said}"
+        );
+        assert_eq!(
+            ask(true, false, ""),
+            (true, String::new()),
+            "--yes asks nothing"
+        );
+        assert_eq!(
+            p(&["pause", "--all"]).unwrap(),
+            SearchCommand::Manage {
+                verb: Verb::Pause,
+                root: None,
+                all: true
+            }
+        );
+        assert_eq!(
+            p(&["stop", "/r"]).unwrap(),
+            SearchCommand::Manage {
+                verb: Verb::Stop,
+                root: Some("/r".into()),
+                all: false
+            }
+        );
+        assert!(p(&["resume"]).is_err(), "ROOT or --all");
+        assert!(p(&["pause", "/r", "--all"]).is_err(), "not both");
+        assert_eq!(p(&["list"]).unwrap(), SearchCommand::List { json: false });
+        assert_eq!(
+            p(&["status", "/r", "--json"]).unwrap(),
+            SearchCommand::Status {
+                root: Some("/r".into()),
+                json: true
+            }
+        );
+    }
+
+    /// Task 23b. No MCP tool pauses, resumes, stops or deletes, and neither backend calls those methods for one: an
+    /// agent gets the index's list and status only.
+    #[test]
+    fn mcp_has_no_pause_stop_or_delete() {
+        use crate::search::mcp::{Backend, HubBackend, mcp_may_call, tools};
+        let all = tools();
+        let names: Vec<&str> = all.iter().map(|t| t.name()).collect();
+        for verb in ["pause", "resume", "stop", "delete"] {
+            assert!(names.iter().all(|n| !n.contains(verb)), "{names:?}");
+            assert!(!mcp_may_call(&format!("search/{verb}")), "{verb}");
+        }
+        for ok in [
+            "search/list",
+            "search/status",
+            "search/symbols",
+            "search/usages",
+        ] {
+            assert!(mcp_may_call(ok), "{ok}");
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let client = ClientBackend {
+            env: Env::new(&[("HOME", "/nonexistent")], 1),
+        };
+        let hub = HubBackend(std::sync::Weak::new());
+        for method in [
+            "search/pause",
+            "search/resume",
+            "search/stop",
+            "search/delete",
+        ] {
+            for (who, got) in [
+                ("client", rt.block_on(client.call(method, json!({})))),
+                ("hub", rt.block_on(hub.call(method, json!({})))),
+            ] {
+                let e = got.expect_err(method);
+                assert!(e.contains("not for an MCP tool"), "{who} {method}: {e}");
+            }
+        }
     }
 
     #[test]
