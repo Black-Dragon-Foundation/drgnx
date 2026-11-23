@@ -166,6 +166,10 @@ impl Front {
         let budgets = crate::budget::Budgets::default();
         gate.attach_budgets(budgets.clone());
         let tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]> = norn::tools::tools().into();
+        // a bound outside agent's: every tool and the plan and record tools (MP-3)
+        let mut outside = norn::tools::tools();
+        outside.extend(norn::tools::records::outside_tools());
+        let outside_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]> = outside.into();
         let matrix = crate::matrix_gate::MatrixGate::default();
         matrix.announce_to(editors.clone());
         // one presence model: the door's writes show in it beside the sessions' own tool calls
@@ -183,7 +187,7 @@ impl Front {
                 db: coord_db,
                 signals,
             },
-            mcp: Sessions::new(uid, tools.clone(), tool_list.clone()),
+            mcp: Sessions::new(uid, tools.clone(), tool_list.clone(), outside_list),
             gate,
             settings,
             editors,
@@ -603,11 +607,17 @@ impl Front {
             }
             Params::McpSessionClose(p) => self.mcp.close(p.sid.as_str()).await.map(|b| json!(b)),
             // the answer goes out first; the connection loop then hands the connection to MCP
-            Params::McpAttach(p) => sessions::outside(s, p.kind.as_str()).map(|who| {
-                let identity = who.id().unwrap_or_default().to_owned();
-                s.attach = Some(who);
-                json!(AttachAnswer { identity })
-            }),
+            // with the role the user bound for its kind in its folder's project (none: unbound)
+            Params::McpAttach(p) => match sessions::outside(s, p.kind.as_str()) {
+                Ok(who) => {
+                    // `outside` refused a connection with no peer pid
+                    let a = crate::outside::attach(self, who, s.peer_pid.unwrap_or(0)).await;
+                    let identity = a.who.id().unwrap_or_default().to_owned();
+                    s.attach = Some(a);
+                    Ok(json!(AttachAnswer { identity }))
+                }
+                Err(e) => Err(e),
+            },
             // the gateway's
             Params::Spend(p) => self.gate.spend(&caller, p).await.map(|r| json!(r)),
             Params::GatewayRegister(p) => {
@@ -978,6 +988,11 @@ impl Front {
             | Params::RecordsStatus(_)
             | Params::RecordsConflict(_)
             | Params::RecordsResolve(_)
+            | Params::RecordsWrite(_)
+            | Params::RecordsRead(_)
+            | Params::OutsideBind(_)
+            | Params::OutsideUnbind(_)
+            | Params::OutsideBindings(_)
             | Params::MachinesReport(_)
             | Params::MachinesMove(_)
             | Params::CommentsAdd(_)
@@ -1575,7 +1590,11 @@ mod tests {
             format!("ext:claude:{}-{hash}", std::process::id()),
             "{a:?}"
         );
-        let who = s.attach.as_ref().expect("the connection is handed to MCP");
+        let who = &s
+            .attach
+            .as_ref()
+            .expect("the connection is handed to MCP")
+            .who;
         assert_eq!(
             (who.id(), who.home(), who.job()),
             (Some(id), Some(std::path::Path::new("/w")), None)
@@ -1634,7 +1653,7 @@ mod tests {
         let who = norn::tools::Identity::outside("claude", std::process::id(), None, None).unwrap();
         let served = {
             let f = f.clone();
-            tokio::spawn(async move { f.mcp.serve_outside(who, r, w).await })
+            tokio::spawn(async move { f.mcp.serve_outside(who, None, r, w).await })
         };
         f.end_connections().await;
         // the bridge reads its end of file at the hub's end, not at the process's exit (the bound is only the failure)

@@ -1576,6 +1576,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
 | `outline/scopes` | user | `{file?: string, line: natnum, path?: string, worktree_root?: string}` | `{scopes: [OutlineScope]}` | no |
 | `outline/set` | user | `{file?: string, folded?: [natnum], view: string}` | `boolean` | no |
+| `outside/bind` | user | `{kind: AgentKind, role: "manager" \| "worker" \| "chat", root: AbsPath}` | `{at: number, id: string, kind: string, role: "manager" \| "worker" \| "chat", root: string}` | yes |
+| `outside/bindings` | user | `{}` | `{bindings: [BindingRow]}` | no |
+| `outside/unbind` | user | `{id: Id}` | `boolean` | yes |
 | `pace/get` | user | `{history?: boolean, provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
 | `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
@@ -1584,15 +1587,17 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `pair/read-answer` | user | `{error?: Text, req: natnum, text?: string, version?: natnum}` | `boolean` | no |
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
 | `plans/get` | user | `{plan: string}` | `PlanView` | no |
-| `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], body?: Text, interfaces?: Text, model?: string, number: string, profile?: string, role?: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
+| `plans/write` | user | `{base_version?: natnum, path?: string, plan?: string, project?: string, tasks?: [{blocks?: [string], body?: Text, interfaces?: Text, model?: string, number: string, profile?: string, role?: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
 | `plugins/approve` | user | `{hash: Hex64, name: string}` | `PluginRow` | yes |
 | `plugins/disable` | user | `{name: string}` | `PluginRow` | yes |
 | `plugins/list` | user | `{}` | `{plugins?: [PluginRow]}` | no |
 | `presence/set` | user | `{away: boolean}` | `boolean` | no |
 | `records/conflict` | user | `{id: Id}` | `{at: number, file: string, graph: string, id: string, path: string}` | no |
-| `records/import` | user | `{dry_run?: boolean, only?: "specs" \| "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board" \| "decisions", root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes |
+| `records/import` | user | `{dry_run?: boolean, only?: "specs" \| "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board" \| "decisions", path?: AbsPath, root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes |
+| `records/read` | user | `{record: string}` | `RecordView` | no |
 | `records/resolve` | user | `{id: Id, keep: "file" \| "graph"}` | `{id: string, keep: "file" \| "graph", path: string}` | yes |
 | `records/status` | user | `{path?: AbsPath}` | `{views?: [ViewStatus]}` | no |
+| `records/write` | user | `{base_version: natnum, kind: "spec" \| "decision", path?: string, project?: string, record?: string, remove?: [string], sections?: [{after?: string, body: Text, heading: string, key?: string}], status?: Status, title?: string}` | `{path: string, record: string, sections?: [SectionId], tx: natnum, version: natnum}` | yes |
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
 | `review-screen/close` | user | `{view: string}` | `boolean` | no |
@@ -3792,7 +3797,9 @@ stdio server that died (anthropics/claude-code#82746), so the bridge outlives th
   main socket as every client does (its environment's data dir), checks the socket's directory first (the client's
   rule: the user's, 0700; otherwise it ends with exit 1 and the reason on stderr, never connecting), reads
   the challenge, says `hello {proto: 1, nonce, client: "mcp-bridge", cwd}` with no proof (the connection stays
-  `service`) and `mcp/attach {kind}`; the next byte is MCP. `cwd` is `--cwd`, else the bridge's working directory.
+  `service`) and `mcp/attach {kind}`; the next byte is MCP. `cwd` is `--cwd`, else the bridge's working directory. A binding counts
+  only when the bridge process works in that folder (`outside::folder_check`), so a `--cwd` other than the bridge's
+  own folder gets no rights.
   A refused `hello` or `mcp/attach` ends the bridge with exit 1; a hub that is not there yet is dialled again.
 - **When the hub goes away.** The bridge dials again after 0.1 s, doubling to 5 s between dials, and gives up after
   10 min without a connection (exit 1, "giving up" on stderr). On each reconnect it replays the agent's cached

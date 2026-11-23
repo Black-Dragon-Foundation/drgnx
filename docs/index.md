@@ -39,6 +39,9 @@ One Cargo workspace:
 Developer notes for the hub's crates are in [`develop/`](develop/runtime.md), carried over from the earlier drgnx;
 some of them still describe that version's Emacs side, and they are revised as the new editor replaces it.
 
+User guides: [agents outside drgnx](guide/outside-agents.md) (Claude Code, Codex… joining the work, and binding them
+to a role).
+
 ## Licences
 
 - The editor and the hub: GPL-3.0-or-later (`LICENSE-GPL`).

@@ -56,6 +56,9 @@ required-features = ["fleet", "test-hooks"]
 runstav = { path = "../runstav", version = "0.1.0" }
 # background tasks' problem-matcher patterns (already in the tree)
 regex.workspace = true
+# the importer's ignore list (records::ignore): `.drgnx/records.toml`, gitignore syntax
+gix-ignore = "0.24"
+toml_edit = "0.25"
 # the minimap's density scan of huge files (view::minimap::density)
 memchr.workspace = true
 # hub-built view rows (view): the row and patch types and their diff

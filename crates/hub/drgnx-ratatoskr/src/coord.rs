@@ -141,6 +141,7 @@ pub const HOOKS_ACTOR: &str = "hub:hooks";
 /// - for the editor's own methods (`cards/settle`, `messages/*`, `events/add`, `review/mark`) from the user's
 ///   connection: `user`, class `user`;
 /// - for an agent socket's session: `agent:SID`, class `agent`;
+/// - for an outside agent (`ext:KIND:PID-HASH`, through the tools' `exec` only): that id, class `ext`;
 /// - for anyone else (a service connection, the front's own timers): `hub`, class `system`;
 /// - for the hub's hook records ([`HOOKS_METHOD`], whoever the caller): `hub:hooks`, class `system`. No wire method
 ///   has that name, so no connection writes as `hub:hooks`, and a step's provenance reads only its rows.
@@ -155,6 +156,13 @@ pub fn tx_meta(caller: &Caller, method: &str) -> TxMeta {
     } else {
         match (caller.class, &caller.sid) {
             (Class::User, _) => TxMeta::new("user", TxClass::User, tool),
+            // an outside agent (only ever through the tools' `exec`, after `crate::outside` found it bound): its own
+            // id, class `ext`
+            (Class::Agent, Some(sid)) if crate::outside::is_ext(sid) => {
+                let mut m = TxMeta::new(sid.clone(), TxClass::Ext, tool);
+                m.session = Some(sid.clone());
+                m
+            }
             (Class::Agent, Some(sid)) => {
                 let mut m = TxMeta::new(format!("agent:{sid}"), TxClass::Agent, tool);
                 m.session = Some(sid.clone());
@@ -702,6 +710,10 @@ impl Hub for ToolHub {
                 .get()
                 .and_then(std::sync::Weak::upgrade)
                 .ok_or("jobs are not ready: the hub is starting")?;
+            // `agent_core::serve` checks no registry class: an outside actor reaches its four methods only
+            if crate::outside::is_ext(&sid) && !crate::outside::OUTSIDE_METHODS.contains(&method) {
+                return Err(format!("{method} is not open to an outside agent"));
+            }
             let m = registry::find(method).ok_or_else(|| format!("no method {method}"))?;
             let (params, _) = (m.decode)(&params).map_err(|e| e.message)?;
             let caller = Caller {
@@ -713,6 +725,48 @@ impl Hub for ToolHub {
             match crate::agent_core::serve(&front, &caller, params).await {
                 Ok(answer) => answer.map_err(|e| e.message),
                 Err(_) => Err(format!("{method} is not a job method")),
+            }
+        })
+    }
+
+    /// The matrix for a bound outside agent (`crate::outside::who_for`: its binding read now, its caps applied).
+    fn gate(
+        &self,
+        actor: &str,
+        action: norn::matrix::Action,
+        own_record: bool,
+        change: norn::grants::Change,
+    ) -> BoxFuture<'_, Result<(), String>> {
+        let actor = actor.to_owned();
+        Box::pin(async move {
+            use crate::matrix_gate::{ActionCtx, Gate};
+            let front = self.front().ok_or("the hub is starting")?;
+            if !crate::outside::is_ext(&actor) {
+                return Err("the gate here is an outside agent's".into());
+            }
+            let caller = Caller {
+                class: Class::Agent,
+                sid: Some(actor),
+                job: None,
+                conn_id: 0,
+            };
+            let (who, base) = crate::outside::who_for(&front, &caller)
+                .await
+                .map_err(|e| e.message)?;
+            let ctx = ActionCtx {
+                own_record,
+                change: Some(change),
+                ..base
+            };
+            match front
+                .core
+                .matrix
+                .decide(&front.settings, &front.writer, who, action, ctx)
+                .await
+            {
+                Gate::Allow => Ok(()),
+                Gate::Ask(card) => Err(format!("the matrix asks the user first (card {card})")),
+                Gate::Never(why) => Err(why),
             }
         })
     }
@@ -942,6 +996,24 @@ mod tests {
                 agent.job.as_deref()
             ),
             ("agent:s-1", TxClass::Agent, Some("s-1"), Some("j"))
+        );
+        // an outside agent writes as its own id, class `ext`
+        let ext = tx_meta(
+            &Caller {
+                class: Class::Agent,
+                sid: Some("ext:claude:42-abcdef".into()),
+                job: None,
+                conn_id: 0,
+            },
+            "plans/write",
+        );
+        assert_eq!(
+            (ext.actor.as_str(), ext.class, ext.session.as_deref()),
+            (
+                "ext:claude:42-abcdef",
+                TxClass::Ext,
+                Some("ext:claude:42-abcdef")
+            )
         );
     }
 

@@ -39,6 +39,8 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr search mcp [ROOT]   (the MCP search tool on stdio, for an agent outside drgnx)\n\
     \x20      ratatoskr mcp-bridge --socket PATH   (an agent's coordination tools: stdio to its session's mcp.sock)\n\
     \x20      ratatoskr mcp-bridge --outside --kind KIND [--cwd DIR]   (an agent outside drgnx: stdio to the hub)\n\
+    \x20      ratatoskr outside bind --kind K --root DIR --role manager|worker|chat | unbind ID | list   [--json]\n\
+    \x20          (the outside agents you bind to a role in a project)\n\
     \x20      ratatoskr embed-worker --model ID --dir D --device auto|cpu --device-cache FILE [--threads N] [--idle-ms N]\n\
     \x20          (Hrafn's embed worker; run by the hub only)\n\
     \x20      ratatoskr recording lint DIR...   (the secret lint over recorded runs: bin/drgnx record lint)\n\
@@ -116,6 +118,9 @@ pub enum Command {
     Store(StoreCommand),
     /// `graph …`: the store's commands, a client of the running hub (`crate::graph_cli`).
     Graph(crate::graph_cli::GraphCommand),
+    /// `outside bind|unbind|list`: the user's bindings of outside agents, a client of the running hub
+    /// (`crate::outside_cli`).
+    Outside(crate::outside_cli::OutsideCommand),
     /// `browser install|list`: the agent browser (`crate::browser`).
     Browser(crate::browser::BrowserCommand),
     /// `job …`: plan runs, a client of the running hub (`crate::job_cli`).
@@ -424,6 +429,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "mcp-bridge" => mcp_bridge(&mut p).map(Command::McpBridge),
         "store" => store(&mut p).map(Command::Store),
         "graph" => crate::graph_cli::parse(p.raw_args().map_err(e)?).map(Command::Graph),
+        "outside" => crate::outside_cli::parse(p.raw_args().map_err(e)?).map(Command::Outside),
         "browser" => crate::browser::parse(p.raw_args().map_err(e)?).map(Command::Browser),
         "job" => crate::job_cli::parse(p.raw_args().map_err(e)?).map(Command::Job),
         "machines" => crate::machines_cli::parse(p.raw_args().map_err(e)?).map(Command::Machines),

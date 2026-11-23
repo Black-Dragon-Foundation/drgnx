@@ -59,6 +59,8 @@ pub const ENTITY_KINDS: &[&str] = &[
     "debug_hypothesis",
     "comment",
     "anchor",
+    // the user's binding of outside agents of a kind in a folder to a role (`crate::bindings`)
+    "binding",
 ];
 
 const ANY: &[&str] = &["*"];
@@ -215,7 +217,8 @@ mod tests {
                 "debug_run",
                 "debug_hypothesis",
                 "comment",
-                "anchor"
+                "anchor",
+                "binding"
             ]
         );
         let rows: Vec<(&str, Vec<&str>, Vec<&str>, bool)> = LINKS

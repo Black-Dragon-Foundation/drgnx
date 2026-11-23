@@ -274,6 +274,7 @@ mod tests {
             id: "ext:x:1".into(),
             kind: "x".into(),
             home: None,
+            role: None,
         };
         let read = all.iter().find(|t| t.name() == "debug_read").unwrap();
         // a heap graph: an expression in a stopped session's frame

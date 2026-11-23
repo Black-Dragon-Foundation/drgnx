@@ -110,6 +110,8 @@ pub mod manager;
 pub mod matrix_gate;
 pub mod notebook;
 pub mod orch;
+pub mod outside;
+pub mod outside_cli;
 pub mod packs_cli;
 pub mod pair;
 pub mod parse_worker;

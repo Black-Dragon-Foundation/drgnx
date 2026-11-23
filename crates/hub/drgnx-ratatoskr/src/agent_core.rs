@@ -22,6 +22,7 @@
 //! | `say/*` | [`crate::say`] |
 //! | `records/{import,status}` | [`crate::records`] |
 //! | `records/{proposals,decide}` | [`crate::records`] |
+//! | `outside/{bind,unbind,bindings}` | [`crate::outside`] |
 //! | `machines/{report,list}` | [`crate::work::machines`] |
 //! | `comments/{add,reply,list,resolve}` | [`crate::work::comments`] |
 //! | `runners/*` | [`crate::runners::methods`] |
@@ -86,6 +87,8 @@ pub struct Core {
     pub views: crate::view::Views,
     /// The terminals' workers and where their patches go ([`crate::term`]).
     pub terms: crate::term::Terms,
+    /// The outside bridges attached now: every gate and scope lookup of an `ext:` caller asks it ([`crate::outside`]).
+    pub outside: crate::outside::Bound,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
@@ -201,6 +204,11 @@ pub async fn serve(
         Params::RecordsStatus(p) => answer(records::status(f, c, p).await),
         Params::RecordsConflict(p) => answer(records::conflict(f, c, p).await),
         Params::RecordsResolve(p) => answer(records::resolve(f, c, p).await),
+        Params::RecordsWrite(p) => answer(records::write::records_write(f, c, p).await),
+        Params::RecordsRead(p) => answer(records::read::records_read(f, c, p).await),
+        Params::OutsideBind(p) => answer(crate::outside::bind(f, c, p).await),
+        Params::OutsideUnbind(p) => answer(crate::outside::unbind(f, c, p).await),
+        Params::OutsideBindings(p) => answer(crate::outside::list(f, c, p).await),
         Params::MachinesReport(p) => answer(work::machines::report(f, c, p).await),
         Params::MachinesMove(p) => answer(work::machines::move_to(f, c, p).await),
         Params::CommentsAdd(p) => answer(work::comments::add(f, c, p).await),

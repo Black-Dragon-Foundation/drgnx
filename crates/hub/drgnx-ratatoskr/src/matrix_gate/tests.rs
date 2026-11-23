@@ -67,9 +67,17 @@ async fn ask_makes_one_card_with_facts_only() {
     assert_eq!(
         keys,
         [
-            "action", "amount", "facts", "plan", "project", "session", "who"
+            "action",
+            "amount",
+            "facts",
+            "own_record",
+            "plan",
+            "project",
+            "session",
+            "who"
         ]
     );
+    assert_eq!(v["own_record"], json!(false));
     assert_eq!(
         v["facts"],
         json!({"command": "git commit -m x", "paths": []})
@@ -1364,4 +1372,237 @@ async fn recheck_follows_the_grant_a_browser_card_wrote() {
         "{:?}",
         r[2]
     );
+}
+
+// ---- outside agents (MP-2) ----
+
+const EXT: &str = "ext:claude:42-abcdef";
+
+/// An outside agent as `outside::who_for` builds it: ROLE (none: unbound), its kind's agent column, its session.
+fn outside(role: Option<Role>) -> Who {
+    Who {
+        role,
+        agent: Some("ext:claude".into()),
+        provider: None,
+    }
+}
+
+fn outside_ctx(own_record: bool) -> ActionCtx {
+    ActionCtx {
+        session: Some(EXT.into()),
+        own_record,
+        ..ActionCtx::default()
+    }
+}
+
+/// A user layer with VERDICT for every action in COLUMN.
+fn every_row(column: Value, verdict: &str) -> Value {
+    let cells: Vec<Value> = Action::ALL
+        .iter()
+        .map(|a| json!({"action": a.id(), "column": column, "verdict": verdict}))
+        .collect();
+    json!({"preset": "autonomous", "cells": cells})
+}
+
+async fn cells_of(db: &CoordDb, g: &MatrixGate, who: Who, ctx: ActionCtx) -> Effective {
+    let g = g.clone();
+    db.read(move |c| Ok(g.effective_for(c, &who, &ctx, 1.0)))
+        .await
+        .unwrap()
+}
+
+async fn gate_of(db: &CoordDb, g: &MatrixGate, who: Who, a: Action, ctx: ActionCtx) -> Gate {
+    let g = g.clone();
+    db.write(meta(Class::System), move |tx| {
+        g.check(tx, &who, a, &ctx, 1.0)
+    })
+    .await
+    .unwrap()
+}
+
+/// [Review Focus 1] Rights come only from the binding: an outside agent with no role gets Never at every action,
+/// even where a user layer allows its own column.
+#[tokio::test]
+async fn an_unbound_outside_agent_gets_nothing_even_with_an_allow_cell() {
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&every_row(json!({"agent": "ext:claude"}), "allow"))
+        .unwrap();
+    for own in [true, false] {
+        let e = cells_of(&db, &g, outside(None), outside_ctx(own)).await;
+        for a in Action::ALL {
+            assert_eq!(e.cell(a).verdict, Verdict::Never, "{} own={own}", a.id());
+        }
+        let r = gate_of(
+            &db,
+            &g,
+            outside(None),
+            Action::GraphChange,
+            outside_ctx(own),
+        )
+        .await;
+        assert!(matches!(r, Gate::Never(_)), "{r:?}");
+    }
+    let n = db.read(|c| Ok(count_cards(c))).await.unwrap();
+    assert_eq!(n, 0, "no card for an unbound agent");
+}
+
+fn count_cards(c: &urdr::Connection) -> i64 {
+    c.query_row("select count(*) from card where kind = 'matrix'", [], |r| {
+        r.get(0)
+    })
+    .unwrap()
+}
+
+/// [MP-2] A bound worker outside agent under Balanced: the worker column on its own records; Ask (a card) for
+/// `graph.change` on another's; never a task done.
+#[tokio::test]
+async fn a_bound_worker_outside_agent_follows_the_worker_column() {
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+    let w = || outside(Some(Role::Worker));
+    let own = cells_of(&db, &g, w(), outside_ctx(true)).await;
+    assert_eq!(own.cell(Action::GraphChange).verdict, Verdict::Allow);
+    assert_eq!(own.cell(Action::CodeEdit).verdict, Verdict::Allow);
+    assert_eq!(own.cell(Action::TaskDone).verdict, Verdict::Never);
+    assert_eq!(
+        gate_of(&db, &g, w(), Action::GraphChange, outside_ctx(true)).await,
+        Gate::Allow
+    );
+    let other = gate_of(&db, &g, w(), Action::GraphChange, outside_ctx(false)).await;
+    assert!(matches!(other, Gate::Ask(n) if n > 0), "{other:?}");
+    // the card names the outside agent's session and that the record is not its own
+    let data: String = db
+        .read(|c| {
+            Ok(
+                c.query_row("select data from card where kind = 'matrix'", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .await
+        .unwrap();
+    let v: Value = serde_json::from_str(&data).unwrap();
+    assert_eq!(
+        (v["session"].clone(), v["own_record"].clone()),
+        (json!(EXT), json!(false))
+    );
+    // a manager outside agent is never given what the caps hold, though Autonomous allows a manager a task done
+    g.apply_setting(&json!({"preset": "autonomous"})).unwrap();
+    let m = cells_of(&db, &g, outside(Some(Role::Manager)), outside_ctx(true)).await;
+    for a in norn::matrix::OUTSIDE_NEVER {
+        assert_eq!(m.cell(a).verdict, Verdict::Never, "{}", a.id());
+    }
+}
+
+/// [MP-2] The agent column of an outside agent's kind narrows its role's column and never widens it.
+#[tokio::test]
+async fn the_agent_column_only_tightens() {
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced", "cells": [
+        {"action": "graph.change", "column": {"agent": "ext:claude"}, "verdict": "never"},
+        {"action": "code.ci-config", "column": {"agent": "ext:claude"}, "verdict": "allow"},
+        {"action": "task.done", "column": {"agent": "ext:claude"}, "verdict": "allow"}]}))
+        .unwrap();
+    let e = cells_of(&db, &g, outside(Some(Role::Worker)), outside_ctx(true)).await;
+    assert_eq!(e.cell(Action::GraphChange).verdict, Verdict::Never);
+    assert_eq!(e.cell(Action::CodeCiConfig).verdict, Verdict::Ask);
+    assert_eq!(e.cell(Action::TaskDone).verdict, Verdict::Never);
+}
+
+/// [MP-2] A project's override (the user's) narrows an outside agent in that project, and opens no cap.
+#[tokio::test]
+async fn a_project_layer_narrows_an_outside_agent() {
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+    db.write(meta(Class::User), |tx| {
+        entity::create(
+            tx,
+            EntityNew {
+                id: "project:p".into(),
+                kind: "project".into(),
+                project: None,
+                title: Some("p".into()),
+                status: None,
+                body: None,
+                priority: None,
+                assignee: None,
+                data: json!({"matrix": [
+                    {"action": "graph.change", "column": {"role": "worker"}, "verdict": "never"},
+                    {"action": "task.done", "column": {"role": "worker"}, "verdict": "allow"},
+                    {"action": "push.main", "column": {"agent": "ext:claude"}, "verdict": "allow"}]}),
+                origin: Origin::Recorded,
+                source: None,
+            },
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let ctx = ActionCtx {
+        project: Some("project:p".into()),
+        ..outside_ctx(true)
+    };
+    let e = cells_of(&db, &g, outside(Some(Role::Worker)), ctx.clone()).await;
+    assert_eq!(e.cell(Action::GraphChange).verdict, Verdict::Never);
+    assert_eq!(e.cell(Action::TaskDone).verdict, Verdict::Never);
+    assert_eq!(e.cell(Action::PushMain).verdict, Verdict::Never);
+    // elsewhere the worker column stands
+    let free = cells_of(&db, &g, outside(Some(Role::Worker)), outside_ctx(true)).await;
+    assert_eq!(free.cell(Action::GraphChange).verdict, Verdict::Allow);
+}
+
+/// [MP-2] A card an outside agent's Ask made keeps the cap when it is checked again: the matrix allowing the action
+/// now does not answer it, the user does.
+#[tokio::test]
+async fn recheck_keeps_the_outside_cap() {
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+    let card = match gate_of(
+        &db,
+        &g,
+        outside(Some(Role::Worker)),
+        Action::GraphChange,
+        outside_ctx(false),
+    )
+    .await
+    {
+        Gate::Ask(n) => n,
+        other => panic!("asked, got {other:?}"),
+    };
+    let g2 = g.clone();
+    let again = db
+        .read(move |c| Ok(g2.recheck(c, card, 2.0)))
+        .await
+        .unwrap();
+    assert_eq!(again, Gate::Ask(card));
+    // the user's yes answers it
+    db.write(meta(Class::User), move |tx| {
+        card_settle(tx, card, "allow", 3.0)?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let g2 = g.clone();
+    let yes = db
+        .read(move |c| Ok(g2.recheck(c, card, 4.0)))
+        .await
+        .unwrap();
+    assert_eq!(yes, Gate::Allow);
+}
+
+/// [MP-2] A delegation is never read for an outside agent: one stored under its id neither narrows nor widens it.
+#[tokio::test]
+async fn a_delegation_never_reaches_an_outside_agent() {
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+    g.set_delegated(EXT, Delegation::default());
+    let e = cells_of(&db, &g, outside(Some(Role::Worker)), outside_ctx(true)).await;
+    assert_eq!(e.cell(Action::CodeEdit).verdict, Verdict::Allow);
+    assert_eq!(e.cell(Action::GraphChange).verdict, Verdict::Allow);
 }

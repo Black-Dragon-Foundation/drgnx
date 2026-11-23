@@ -686,6 +686,7 @@ mod tests {
                 id: "ext:claude:1-ab".into(),
                 kind: "claude".into(),
                 home: Some(PathBuf::from("/w/proj")),
+                role: None,
             },
             Identity::Session {
                 agent: "a".into(),
@@ -710,6 +711,7 @@ mod tests {
             id: "ext:claude:123-abcd".into(),
             kind: "claude".into(),
             home: home.map(PathBuf::from),
+            role: None,
         };
         let c = Caller::from_identity(&ext(Some("/w/proj")), &cache);
         assert_eq!(c.class, Class::Ext);

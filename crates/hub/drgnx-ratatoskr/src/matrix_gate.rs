@@ -64,6 +64,19 @@ pub struct ActionCtx {
     pub session: Option<String>,
     pub amount: Option<f64>,
     pub facts: Facts,
+    /// An outside agent acts on records it created itself (`crate::outside::own_record`); on another's its
+    /// `graph.change` is Ask at most.  Read only for an outside agent ([`is_outside`]).
+    pub own_record: bool,
+    /// The one call an outside agent's `graph.change` is about (method, record, a digest of its arguments): its card
+    /// asks about it, the user's yes is a grant of exactly it, used once ([`change_grant`]).  Read only for an
+    /// outside agent.
+    pub change: Option<grants::Change>,
+}
+
+/// Whether CTX is an outside agent's: its session is `ext:…`.  Only `crate::outside::who_for` builds such a ctx, from
+/// an attached, bound bridge.
+pub(crate) fn is_outside(ctx: &ActionCtx) -> bool {
+    ctx.session.as_deref().is_some_and(crate::outside::is_ext)
 }
 
 impl ActionCtx {
@@ -180,6 +193,34 @@ fn granted(conn: &urdr::Connection, a: Action, ctx: &ActionCtx, now: f64) -> boo
             _ => true,
         }
     })
+}
+
+/// The card of the user's live, unspent yes to exactly CTX's change (an outside agent's `graph.change` Ask), if one
+/// is: a change grant to CTX's session naming the same method, record and argument digest, not expired at NOW, whose
+/// card has not let a call through yet.
+fn change_grant(conn: &urdr::Connection, a: Action, ctx: &ActionCtx, now: f64) -> Option<i64> {
+    let ch = ctx
+        .change
+        .as_ref()
+        .filter(|_| a == Action::GraphChange && is_outside(ctx))?;
+    let found = grants::matrix_grants_for(conn, a.id(), ctx.session.as_deref(), None, now).ok()?;
+    found
+        .iter()
+        .filter_map(|g| match &g.what {
+            grants::What::Matrix {
+                change: Some(c), ..
+            } if c == ch => g.card,
+            _ => None,
+        })
+        .find(|card| !norn::write::cards::matrix_card_spent(conn, *card).unwrap_or(true))
+}
+
+/// What the card of an outside agent's change says beyond the matrix's facts: the change, and how long a yes lasts.
+fn change_data(data: &mut Value, ctx: &ActionCtx, once: u64) {
+    if let Some(ch) = ctx.change.as_ref().filter(|_| is_outside(ctx)) {
+        data["change"] = json!(ch);
+        data["once_window"] = json!(once);
+    }
 }
 
 /// Whether A is a browser row: its cards list their answers (scopes, and widths for a private literal) and settle
@@ -305,6 +346,9 @@ fn card_title(a: Action, who: &Who, ctx: &ActionCtx) -> String {
             .or_else(|| who.agent.clone())
             .unwrap_or_else(|| "an agent".into())
     };
+    if let Some(ch) = ctx.change.as_ref().filter(|_| is_outside(ctx)) {
+        return format!("{} wants {} on {}", name(), ch.method, ch.record);
+    }
     match a {
         Action::Browser => return format!("{} wants a browser in its sandbox", name()),
         Action::BrowserWeb => {
@@ -427,6 +471,15 @@ impl MatrixGate {
         ctx: &ActionCtx,
         now: f64,
     ) -> Effective {
+        if is_outside(ctx) {
+            // an outside agent: rights only from the user's binding (its role), its role's and kind's cells from every
+            // layer, then the caps (`norn::matrix::outside_effective`); no manager delegates to it
+            if who.role.is_none() {
+                // no cell is Never
+                return Effective::default();
+            }
+            return norn::matrix::outside_effective(&self.own(conn, who, ctx, now), ctx.own_record);
+        }
         let own = self.own(conn, who, ctx, now);
         let delegated = ctx.session.as_ref().and_then(|s| self.delegated_to(s));
         let Some(d) = delegated else {
@@ -528,6 +581,12 @@ impl MatrixGate {
             Verdict::Never => Gate::Never(why),
             Verdict::Ask if granted(tx.sql(), a, ctx, now) => Gate::Allow,
             Verdict::Ask => {
+                // the user's yes to exactly this change: it goes through once, and the card is spent in the same tx
+                if let Some(card) = change_grant(tx.sql(), a, ctx, now)
+                    && norn::write::cards::matrix_card_spend(tx, card)?
+                {
+                    return Ok(Gate::Allow);
+                }
                 let mut data = json!({
                     "action": a.id(),
                     "who": who_json(who),
@@ -536,6 +595,7 @@ impl MatrixGate {
                     "plan": ctx.plan,
                     "amount": ctx.amount,
                     "facts": ctx.facts,
+                    "own_record": ctx.own_record,
                 });
                 if is_browser(a) {
                     // what the card offers, and how long its once lasts (the settle reads both back)
@@ -546,11 +606,20 @@ impl MatrixGate {
                         data["body"] = json!(b);
                     }
                 }
+                change_data(&mut data, ctx, self.once_window());
                 let ask = MatrixAsk {
                     title: card_title(a, who, ctx),
                     data,
                     job: None,
                 };
+                // an outside agent's change the user said no to stays refused (a different change asks again)
+                if ask.data.get("change").is_some()
+                    && let Some(card) = norn::write::cards::matrix_card_declined(tx, &ask)?
+                {
+                    return Ok(Gate::Never(format!(
+                        "the user refused this change (card {card}); do not retry it"
+                    )));
+                }
                 Gate::Ask(matrix_card(tx, ask, now)?)
             }
         })
@@ -583,6 +652,16 @@ impl MatrixGate {
                 .get("facts")
                 .and_then(|f| serde_json::from_value(f.clone()).ok())
                 .unwrap_or_default(),
+            // the cap the Ask was made under holds at the recheck
+            own_record: c
+                .data
+                .get("own_record")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            change: c
+                .data
+                .get("change")
+                .and_then(|ch| serde_json::from_value(ch.clone()).ok()),
         };
         let who = who_of(c.data.get("who").unwrap_or(&Value::Null));
         let (v, why) = self.verdict(conn, &who, a, &ctx, now);
@@ -824,6 +903,8 @@ pub async fn check_method(f: &Front, _: &Caller, p: CheckParams) -> Result<Check
         session: None,
         amount: p.amount,
         facts: Facts::default(),
+        own_record: false,
+        change: None,
     };
     f.writer
         .db

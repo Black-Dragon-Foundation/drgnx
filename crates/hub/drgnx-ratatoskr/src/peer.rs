@@ -281,6 +281,18 @@ pub fn zombie(pid: i32) -> bool {
     pid > 0 && os::zombie(pid).unwrap_or(false)
 }
 
+/// The working directory of PID as the kernel holds it (an outside bridge's real folder, `outside::attach`):
+/// `/proc/PID/cwd` on Linux and Android, `proc_pidinfo(PROC_PIDVNODEPATHINFO)` on macOS; `Unsupported` elsewhere.
+pub fn cwd_of(pid: i32) -> io::Result<std::path::PathBuf> {
+    if pid <= 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a process id",
+        ));
+    }
+    os::cwd(pid)
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod os {
     use std::io;
@@ -314,6 +326,10 @@ mod os {
 
     pub(super) fn ppid(pid: i32) -> io::Result<i32> {
         number(field(&fields(pid)?, 4)?)
+    }
+
+    pub(super) fn cwd(pid: i32) -> io::Result<std::path::PathBuf> {
+        std::fs::read_link(format!("/proc/{pid}/cwd"))
     }
 
     pub(super) fn zombie(pid: i32) -> io::Result<bool> {
@@ -372,6 +388,48 @@ mod os {
         Ok(info(pid)?.pbi_ppid as i32)
     }
 
+    /// `pvi_cdir.vip_path` of PROC_PIDVNODEPATHINFO: the current directory's path, NUL-terminated.
+    pub(super) fn cwd(pid: i32) -> io::Result<std::path::PathBuf> {
+        use std::os::unix::ffi::OsStrExt;
+        let mut info = std::mem::MaybeUninit::<libc::proc_vnodepathinfo>::zeroed();
+        let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
+        // SAFETY: the buffer is a proc_vnodepathinfo of `size` bytes, as PROC_PIDVNODEPATHINFO expects.
+        let n = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDVNODEPATHINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        if n < size {
+            return Err(if n <= 0 {
+                io::Error::last_os_error()
+            } else {
+                io::Error::new(io::ErrorKind::InvalidData, "short proc_vnodepathinfo")
+            });
+        }
+        // SAFETY: proc_pidinfo filled all `size` bytes (a zeroed buffer to begin with).
+        let info = unsafe { info.assume_init() };
+        // the path is MAXPATHLEN bytes, as libc spells it: 32 rows of 32
+        let raw: Vec<u8> = info
+            .pvi_cdir
+            .vip_path
+            .iter()
+            .flatten()
+            .map(|c| *c as u8)
+            .take_while(|b| *b != 0)
+            .collect();
+        if raw.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "no current directory",
+            ));
+        }
+        Ok(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&raw)))
+    }
+
     pub(super) fn zombie(pid: i32) -> io::Result<bool> {
         Ok(info(pid)?.pbi_status == libc::SZOMB)
     }
@@ -387,6 +445,10 @@ mod os {
     use std::io;
 
     pub(super) fn ppid(_pid: i32) -> io::Result<i32> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    pub(super) fn cwd(_pid: i32) -> io::Result<std::path::PathBuf> {
         Err(io::ErrorKind::Unsupported.into())
     }
 
@@ -419,6 +481,26 @@ mod tests {
         assert_eq!(parent_of(me).unwrap(), p);
         assert!(!zombie(me));
         assert!(parent_of(0).is_err() && !zombie(-1));
+    }
+
+    /// [Task 14] A process's folder as the kernel holds it: a child started in a temp folder is in it.
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+    #[test]
+    fn cwd_of_a_child_is_the_folder_it_started_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut kid = std::process::Command::new("sleep")
+            .arg("60")
+            .current_dir(dir.path())
+            .spawn()
+            .unwrap();
+        let got = cwd_of(kid.id() as i32);
+        kid.kill().unwrap();
+        kid.wait().unwrap();
+        assert_eq!(
+            std::fs::canonicalize(got.unwrap()).unwrap(),
+            std::fs::canonicalize(dir.path()).unwrap()
+        );
+        assert!(cwd_of(0).is_err());
     }
 
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]

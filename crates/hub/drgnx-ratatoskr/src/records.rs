@@ -5,9 +5,15 @@
 //! find their paragraphs again (`work::comments::reanchor`).  A hand edit is applied; a piece both sides changed keeps
 //! the file's text and is flagged until it is resolved.  The hub never commits the files.
 
+mod ignore;
+mod paths;
+pub(crate) mod read;
+pub(crate) mod write;
+
 use crate::coord::fail;
 use crate::dispatch::Caller;
 use crate::front::Front;
+use ignore::Ignore;
 use norn::deny::{DenyList, RootVerdict, Verdict};
 use norn::store::CoordDb;
 use runstav::methods::records::{
@@ -151,7 +157,11 @@ fn parse_of(kind: RecordKind) -> &'static str {
 
 /// The record files of ROOT: specs under `docs/specs/`, plans and ledgers under `docs/plans/`, decision records under
 /// `docs/decisions/` and `docs/adr/`, `DEFERRED.md`, `BUILD-BOARD.md`; `board.org` only when ONLY names it.
-fn discover(root: &Path, only: Option<RecordKind>) -> Vec<Found> {
+fn discover(root: &Path, only: Option<RecordKind>, ign: &Ignore) -> Vec<Found> {
+    let skip = |p: &Path| {
+        p.strip_prefix(root)
+            .is_ok_and(|rel| ign.ignored(rel, false))
+    };
     let mut out = Vec::new();
     for (dir, kind) in [
         ("docs/specs", RecordKind::Specs),
@@ -162,7 +172,7 @@ fn discover(root: &Path, only: Option<RecordKind>) -> Vec<Found> {
         let mut md = Vec::new();
         walk(&root.join(dir), &mut md);
         md.sort();
-        for p in md {
+        for p in md.into_iter().filter(|p| !skip(p)) {
             let ledger = kind == RecordKind::Plans && p.to_string_lossy().ends_with(".ledger.md");
             out.push(found(p, if ledger { RecordKind::Ledgers } else { kind }));
         }
@@ -179,7 +189,7 @@ fn discover(root: &Path, only: Option<RecordKind>) -> Vec<Found> {
     }
     // what the Lisp scan's walk met: plans, specs and ledgers anywhere under the root (see [`walk_scan`])
     let mut met = Vec::new();
-    walk_scan(root, root, 7, false, &mut met);
+    walk_scan(root, root, 7, false, ign, &mut met);
     met.sort_by(|a, b| a.0.cmp(&b.0));
     for (p, kind) in met {
         if !out.iter().any(|f| f.path == p) {
@@ -195,6 +205,7 @@ fn discover(root: &Path, only: Option<RecordKind>) -> Vec<Found> {
     for plan in plans {
         if let Some(spec) = plan_spec_of(&plan)
             && spec.extension().is_some_and(|e| e == "md" || e == "org")
+            && !skip(&spec)
             && !out.iter().any(|f| f.path == spec)
         {
             out.push(found(spec, RecordKind::Specs));
@@ -282,6 +293,7 @@ fn walk_scan(
     dir: &Path,
     depth: u32,
     ledgers_only: bool,
+    ign: &Ignore,
     out: &mut Vec<(PathBuf, RecordKind)>,
 ) {
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -298,11 +310,19 @@ fn walk_scan(
         }
         if meta.is_dir() {
             let in_claude = dir.file_name().is_some_and(|n| n == ".claude");
-            if depth > 0 && !SKIP.contains(&name.as_str()) && !(name == "tmp" && in_claude) {
+            let ignored = p.strip_prefix(root).is_ok_and(|rel| ign.ignored(rel, true));
+            if depth > 0
+                && !ignored
+                && !SKIP.contains(&name.as_str())
+                && !(name == "tmp" && in_claude)
+            {
                 let linked = std::fs::symlink_metadata(p.join(".git")).is_ok_and(|m| m.is_file());
-                walk_scan(root, &p, depth - 1, ledgers_only || linked, out);
+                walk_scan(root, &p, depth - 1, ledgers_only || linked, ign, out);
             }
         } else if meta.is_file()
+            && !p
+                .strip_prefix(root)
+                .is_ok_and(|rel| ign.ignored(rel, false))
             && let Some(kind) = classify(&p, root)
             && (!ledgers_only || kind == RecordKind::Ledgers)
         {
@@ -415,7 +435,7 @@ fn backup(hub: &Path, root: &Path, found: &[Found], at: f64) -> Result<PathBuf, 
 }
 
 /// A piece's entity data: where it is (its file, kind, key and place) and, for a plan's task, its fields.
-fn data_of(op: &GraphOp, file: &Path, kind: RecordKind) -> Value {
+pub(super) fn data_of(op: &GraphOp, file: &Path, kind: RecordKind) -> Value {
     let r = json!({
         "seq": op.seq, "role": op.role, "key": op.key,
         "file": file.to_string_lossy(), "kind": kind_name(kind),
@@ -602,7 +622,13 @@ fn apply_acts(
 }
 
 /// Read, parse and diff one file; apply the diff unless DRY.  Answers the report row.
-async fn import_one(db: &CoordDb, f: &Found, dry: bool, back: bool) -> Result<ImportedFile, Error> {
+async fn import_one(
+    db: &CoordDb,
+    f: &Found,
+    dry: bool,
+    back: bool,
+    meta: TxMeta,
+) -> Result<ImportedFile, Error> {
     let text =
         std::fs::read_to_string(&f.path).map_err(|e| err(format!("{}: {e}", f.path.display())))?;
     let doc: AnyDoc = import::parse(f.parse, view::strip_header(&text))
@@ -630,7 +656,7 @@ async fn import_one(db: &CoordDb, f: &Found, dry: bool, back: bool) -> Result<Im
             .await
             .map_err(fail)?;
         if !retired.is_empty() {
-            db.write(meta(), move |tx| {
+            db.write(crate::records::meta(), move |tx| {
                 for n in retired {
                     entity::unretire(tx, n)?;
                 }
@@ -652,7 +678,7 @@ async fn import_one(db: &CoordDb, f: &Found, dry: bool, back: bool) -> Result<Im
     let (entities, n_ops) = if dry || n_ops == 0 {
         (entities, n_ops)
     } else {
-        db.write(meta(), move |tx| {
+        db.write(meta, move |tx| {
             let acts = diff(tx.sql(), &ops, &data)?;
             let done = apply_acts(acts, &ops, &data, Some(&mut *tx))?;
             link_structure(tx, &ops)?;
@@ -2603,12 +2629,14 @@ pub struct Ears<'a> {
 pub const PERSONAL_NOTES_REFUSAL: &str =
     "the work tracker never reads a project inside ~/org (personal notes)";
 
+#[allow(clippy::too_many_arguments)] // the plan's signature: ROOT, the kind filter, the one file, the flags
 pub async fn import_core(
     db: &CoordDb,
     views: &Views,
     hub: &Path,
     root: &Path,
     only: Option<RecordKind>,
+    one: Option<&Path>,
     dry: bool,
     ears: Ears<'_>,
 ) -> Result<ImportReport, Error> {
@@ -2622,7 +2650,30 @@ pub async fn import_core(
     }
     // a file the hard tier denies (a spec a plan names inside `~/org`, even through a link) is never read; one the user
     // opted in (`personal-notes-allow.json`) is
-    let mut found = discover(root, only);
+    let ign = Ignore::load(root).map_err(err)?;
+    let mut found = discover(root, only, &ign);
+    if let Some(one) = one {
+        let shown = one.display();
+        let (lex, root_lex) = (lexical(one), lexical(root));
+        let under = lex.strip_prefix(&root_lex).is_ok()
+            && canonical_beyond(&lex).starts_with(canonical_beyond(&root_lex));
+        if !under {
+            return Err(err(format!("{shown} is not under {}", root.display())));
+        }
+        let rel = lex.strip_prefix(&root_lex).unwrap_or(&lex);
+        if ign.ignored(rel, false) {
+            return Err(err(format!(
+                "{shown} is ignored by {}",
+                ignore::RECORDS_TOML
+            )));
+        }
+        found.retain(|f| f.path == lex);
+        if found.is_empty() {
+            return Err(err(format!(
+                "{shown} is not a record file (specs, plans, ledgers, decisions, DEFERRED.md, BUILD-BOARD.md)"
+            )));
+        }
+    }
     found.retain(|f| {
         let v = deny.check(&f.path);
         v == Verdict::Allowed
@@ -2650,7 +2701,7 @@ pub async fn import_core(
         let has = !pieces(db, &f.path).await?.is_empty();
         if dry || !has {
             let back = !noticed(db, &f.path).await?;
-            files.push(import_one(db, f, dry, back).await?);
+            files.push(import_one(db, f, dry, back, meta()).await?);
         } else {
             files.push(ImportedFile {
                 path: f.path.to_string_lossy().into_owned(),
@@ -2696,7 +2747,7 @@ pub async fn import_core(
             emit(e);
         }
     }
-    if only.is_none() {
+    if only.is_none() && one.is_none() {
         forget_gone(db, root, &found).await?;
     }
     Ok(ImportReport {
@@ -2799,6 +2850,7 @@ pub async fn import(f: &Front, _: &Caller, p: ImportParams) -> Result<ImportRepo
         &hub,
         Path::new(p.root.as_str()),
         p.only,
+        p.path.as_ref().map(|a| Path::new(a.as_str())),
         p.dry_run.unwrap_or(false),
         Ears {
             emit: &emit,
@@ -2946,7 +2998,7 @@ async fn tool_call(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const FILES: [(&str, &str); 5] = [
@@ -2972,16 +3024,16 @@ mod tests {
         ),
     ];
 
-    struct Fix {
-        _dir: tempfile::TempDir,
-        root: PathBuf,
-        hub: PathBuf,
-        db: CoordDb,
-        views: Views,
-        deny: DenyList,
+    pub(crate) struct Fix {
+        pub(crate) _dir: tempfile::TempDir,
+        pub(crate) root: PathBuf,
+        pub(crate) hub: PathBuf,
+        pub(crate) db: CoordDb,
+        pub(crate) views: Views,
+        pub(crate) deny: DenyList,
     }
 
-    fn fix() -> Fix {
+    pub(crate) fn fix() -> Fix {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("org");
         for (rel, text) in FILES {
@@ -3001,7 +3053,7 @@ mod tests {
     }
 
     impl Fix {
-        async fn import(&self, only: Option<RecordKind>, dry: bool) -> ImportReport {
+        pub(crate) async fn import(&self, only: Option<RecordKind>, dry: bool) -> ImportReport {
             self.import_heard(only, dry).await.0
         }
         async fn import_heard(
@@ -3018,6 +3070,7 @@ mod tests {
                 &self.hub,
                 &self.root,
                 only,
+                None,
                 dry,
                 Ears {
                     emit: &emit,
@@ -3029,10 +3082,10 @@ mod tests {
             let heard = heard.lock().unwrap().clone();
             (r, heard)
         }
-        async fn sync(&self, p: &Path) -> Flush {
+        pub(crate) async fn sync(&self, p: &Path) -> Flush {
             self.views.sync(&self.db, p).await.unwrap().0
         }
-        async fn count(&self, sql: &'static str) -> i64 {
+        pub(crate) async fn count(&self, sql: &'static str) -> i64 {
             self.db
                 .read(move |c| Ok(c.query_row(sql, [], |r| r.get(0))?))
                 .await
@@ -3509,7 +3562,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("outside/plans")).unwrap();
         std::fs::write(dir.path().join("outside/plans/o.md"), plan).unwrap();
         std::os::unix::fs::symlink(dir.path().join("outside"), root.join("linked")).unwrap();
-        let mut got: Vec<String> = discover(&root, None)
+        let mut got: Vec<String> = discover(&root, None, &Ignore::load(&root).unwrap())
             .into_iter()
             .map(|f| {
                 format!(
@@ -4031,6 +4084,7 @@ mod tests {
             &f.hub,
             &proj,
             None,
+            None,
             false,
             Ears {
                 emit: &heard,
@@ -4046,6 +4100,7 @@ mod tests {
             &f.views,
             &f.hub,
             &f.root,
+            None,
             None,
             false,
             Ears {
@@ -4083,6 +4138,7 @@ mod tests {
             &f.views,
             &f.hub,
             &f.root,
+            None,
             None,
             false,
             Ears {
@@ -4145,6 +4201,7 @@ mod tests {
             &f.views,
             &f.hub,
             &f.root,
+            None,
             None,
             false,
             Ears {
@@ -4299,6 +4356,7 @@ mod tests {
             &f.hub,
             &org,
             None,
+            None,
             false,
             Ears {
                 emit: &heard,
@@ -4313,6 +4371,7 @@ mod tests {
             &f.hub,
             &org,
             Some(RecordKind::Board),
+            None,
             false,
             Ears {
                 emit: &heard,
@@ -4379,7 +4438,7 @@ mod tests {
         std::fs::write(root.join("notes/n.md"), "# Notes\n\n### Task 1: a\n").unwrap();
         std::fs::create_dir_all(root.join("sub/plans")).unwrap();
         std::fs::write(root.join("sub/plans/p.md"), "# P\n\n### Task 1: a\n").unwrap();
-        let got: Vec<String> = discover(&root, None)
+        let got: Vec<String> = discover(&root, None, &Ignore::load(&root).unwrap())
             .into_iter()
             .map(|f| f.path.strip_prefix(&root).unwrap().display().to_string())
             .collect();
@@ -4437,6 +4496,7 @@ mod tests {
             &f.hub,
             &wt,
             Some(RecordKind::Plans),
+            None,
             false,
             Ears {
                 emit: &heard,
@@ -4451,6 +4511,7 @@ mod tests {
             &f.hub,
             &wt,
             Some(RecordKind::Ledgers),
+            None,
             false,
             Ears {
                 emit: &heard,
@@ -4821,5 +4882,188 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&p).unwrap(), written);
         assert!(conflicts(&f, &p).await.is_empty());
         assert!(!fresh.changed(&p));
+    }
+
+    // ---- the importer's ignore list (.drgnx/records.toml) ----
+
+    const PLAN: &str = "# P\n\n### Task 1: a\n\n- [ ] x\n";
+
+    fn put(f: &Fix, rel: &str, text: &str) {
+        let p = f.root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+
+    fn found_rels(f: &Fix) -> Vec<String> {
+        let mut v: Vec<String> = discover(&f.root, None, &Ignore::load(&f.root).unwrap())
+            .into_iter()
+            .map(|x| x.path.strip_prefix(&f.root).unwrap().display().to_string())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn archive_is_skipped_by_default() {
+        let f = fix();
+        put(&f, "archive/docs/plans/x.md", PLAN);
+        put(&f, "docs/plans/y.md", PLAN);
+        let got = found_rels(&f);
+        assert!(got.contains(&"docs/plans/y.md".to_owned()), "{got:?}");
+        assert!(!got.iter().any(|p| p.starts_with("archive/")), "{got:?}");
+    }
+
+    #[test]
+    fn records_toml_ignore_lines_are_gitignore() {
+        let f = fix();
+        put(
+            &f,
+            ".drgnx/records.toml",
+            "ignore = [\"docs/specs/old/**\", \"!docs/specs/old/keep.md\"]\n",
+        );
+        put(&f, "docs/specs/old/a.md", "# A\n");
+        put(&f, "docs/specs/old/keep.md", "# Keep\n");
+        let got = found_rels(&f);
+        assert!(
+            got.contains(&"docs/specs/old/keep.md".to_owned()),
+            "{got:?}"
+        );
+        assert!(!got.contains(&"docs/specs/old/a.md".to_owned()), "{got:?}");
+    }
+
+    #[test]
+    fn a_negated_archive_is_imported() {
+        let f = fix();
+        put(&f, ".drgnx/records.toml", "ignore = [\"!archive/\"]\n");
+        put(&f, "archive/docs/plans/x.md", PLAN);
+        let got = found_rels(&f);
+        assert!(
+            got.contains(&"archive/docs/plans/x.md".to_owned()),
+            "{got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ignored_file_already_adopted_is_forgotten() {
+        let f = fix();
+        f.import(None, false).await;
+        let live = "select count(*) from entity where source like 'records:%' and retired_tx is null \
+                    and json_extract(data, '$.records.file') like '%/docs/plans/drgnx/p.md'";
+        assert!(f.count(live).await > 0);
+        put(
+            &f,
+            ".drgnx/records.toml",
+            "ignore = [\"docs/plans/drgnx/p.md\"]\n",
+        );
+        f.import(None, false).await;
+        assert_eq!(f.count(live).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_bad_records_toml_fails_the_import_and_writes_nothing() {
+        for text in ["nope = 1\n", &format!("# {}\n", "x".repeat(65 * 1024))] {
+            let f = fix();
+            put(&f, ".drgnx/records.toml", text);
+            let before = f.count(TX).await;
+            let heard = |_e: ViewEvent| {};
+            let e = import_core(
+                &f.db,
+                &f.views,
+                &f.hub,
+                &f.root,
+                None,
+                None,
+                false,
+                Ears {
+                    emit: &heard,
+                    deny: &f.deny,
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(e.message.contains(".drgnx/records.toml"), "{}", e.message);
+            assert_eq!(f.count(TX).await, before);
+            assert!(!f.hub.join("records-backup").exists());
+        }
+    }
+
+    // ---- one file: `--path` ----
+
+    async fn import_path(f: &Fix, one: &Path) -> Result<ImportReport, Error> {
+        let heard = |_e: ViewEvent| {};
+        import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &f.root,
+            None,
+            Some(one),
+            false,
+            Ears {
+                emit: &heard,
+                deny: &f.deny,
+            },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn import_path_reads_only_that_file() {
+        let f = fix();
+        put(&f, "docs/plans/x/a.md", PLAN);
+        put(&f, "docs/plans/x/b.md", "# B\n\n### Task 1: b\n\n- [ ] y\n");
+        let r = import_path(&f, &f.root.join("docs/plans/x/a.md"))
+            .await
+            .unwrap();
+        assert_eq!(r.files.len(), 1, "{:?}", r.files);
+        assert!(r.files[0].path.ends_with("docs/plans/x/a.md"));
+        let of = |name: &'static str| match name {
+            "a" => {
+                "select count(*) from entity where source like 'records:%' and json_extract(data, '$.records.file') like '%/x/a.md'"
+            }
+            _ => {
+                "select count(*) from entity where source like 'records:%' and json_extract(data, '$.records.file') like '%/x/b.md'"
+            }
+        };
+        assert!(f.count(of("a")).await > 0);
+        assert_eq!(f.count(of("b")).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_path_outside_the_root_is_refused() {
+        let f = fix();
+        let other = f._dir.path().join("elsewhere/docs/plans/x/a.md");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(&other, PLAN).unwrap();
+        for p in [other, f.root.join("docs/plans/../../../org2/a.md")] {
+            let e = import_path(&f, &p).await.unwrap_err();
+            assert!(e.message.contains("is not under"), "{}", e.message);
+        }
+        assert_eq!(f.count(RECS).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_path_that_is_no_record_is_refused() {
+        let f = fix();
+        put(&f, "src/main.rs", "fn main() {}\n");
+        let e = import_path(&f, &f.root.join("src/main.rs"))
+            .await
+            .unwrap_err();
+        assert!(e.message.contains("is not a record file"), "{}", e.message);
+    }
+
+    #[tokio::test]
+    async fn an_ignored_path_is_refused() {
+        let f = fix();
+        put(&f, "archive/docs/plans/x.md", PLAN);
+        let e = import_path(&f, &f.root.join("archive/docs/plans/x.md"))
+            .await
+            .unwrap_err();
+        assert!(
+            e.message.contains("is ignored by .drgnx/records.toml"),
+            "{}",
+            e.message
+        );
+        assert_eq!(f.count(RECS).await, 0);
     }
 }
