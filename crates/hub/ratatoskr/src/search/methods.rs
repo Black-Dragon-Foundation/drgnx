@@ -575,6 +575,7 @@ impl Hub {
                             token,
                             trusted,
                             pins,
+                            ledger: Some(front.gate.ledger()),
                         },
                     )) as Arc<dyn super::sources::Source>
                 })
@@ -1129,7 +1130,11 @@ impl Hub {
         })
     }
 
-    async fn status(&self, front: &Front, root: &Path) -> Result<w::StatusAnswer, Error> {
+    pub(crate) async fn status(
+        &self,
+        front: &Front,
+        root: &Path,
+    ) -> Result<w::StatusAnswer, Error> {
         let p = self.project(front, root).await?;
         let per_class = p
             .store()
@@ -1711,7 +1716,7 @@ impl Hub {
     }
 
     /// Every root with a store in this state, as `search/list` shows it.
-    async fn list(&self) -> Result<w::ListAnswer, Error> {
+    pub(crate) async fn list(&self) -> Result<w::ListAnswer, Error> {
         let dirs = self.dirs()?;
         let state = paths::state_dir(&dirs.env);
         let ids = super::caches::Caches::shared(&state).stores();
@@ -1891,12 +1896,7 @@ impl Hub {
             .gate
             .runtime_db()
             .ok_or_else(|| internal("runtime.db is not open"))?;
-        let key = super::remote::pin_key(&p.provider);
-        let had = crate::gateway::kv_get(&db, &key)
-            .await
-            .is_some_and(|v| !v.is_empty());
-        crate::gateway::kv_set(&db, &key, "").await;
-        Ok(had)
+        Ok(crate::gateway::kv_del(&db, &super::remote::pin_key(&p.provider)).await)
     }
 
     /// `embed/serve-start`: this machine's caches and its local embedders (the engine, the built-in model) served.
@@ -1927,10 +1927,10 @@ impl Hub {
         {
             embedders.push(b);
         }
-        let serve = Arc::new(crate::embed_serve::CacheServe::new(
-            super::caches::Caches::shared(&state),
-            embedders,
-        ));
+        let serve = Arc::new(
+            crate::embed_serve::CacheServe::new(super::caches::Caches::shared(&state), embedders)
+                .with_ledger(front.gate.ledger()),
+        );
         let (running, token) = crate::embed_serve::start(
             crate::embed_serve::ServeSpec {
                 listen,
@@ -1991,6 +1991,8 @@ fn tier2_name(t: &Tier2) -> &'static str {
         Tier2::Running => "running",
         Tier2::Typing => "typing",
         Tier2::Battery => "battery",
+        Tier2::Load => "load",
+        Tier2::DiskFloor => "disk-floor",
         Tier2::Paused => "paused",
         Tier2::Failed(_) => "failed",
     }

@@ -63,7 +63,8 @@ Answered from the cache alone; a key the cache lacks is not in `found`. A lookup
 Every item's key must be the key of its text (`kind.key(text)`); if one is not, the answer is
 `422 {"error": "key-mismatch", "key": "THAT KEY"}` and **nothing** of the request is embedded or written, so a client
 cannot put a vector into the cache under another text's key. Otherwise the texts are embedded by this machine's
-embedder of that fingerprint, added to the cache, and answered as stored.
+embedder of that fingerprint, added to the cache, and answered as stored. An embed is spend on both sides (a lookup is
+free): the server records a `spend` row as `embed-serve`, the client one under its provider id.
 
 ### Errors and limits
 
@@ -101,5 +102,5 @@ local text.
 - **The certificate is pinned on first use** in `runtime.db`'s `kv` (`vectors.pin.<provider>`). A later handshake
   with another certificate fails with "the server's certificate changed; check it and run Search: forget server pin"
   and nothing is asked of the server; `search/forget-pin {provider}` forgets the pin, and the next answer pins anew.
-- A remote is never held by this machine's battery, and one that is down is backed off like any source (1, 5, 30
+- A remote is never held by this machine's battery or load, and one that is down is backed off like any source (1, 5, 30
   minutes, then 6 hours); its keys go on to the next source meanwhile.

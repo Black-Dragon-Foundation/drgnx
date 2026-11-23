@@ -245,6 +245,8 @@ async fn mcp_search_answers_with_lag_line() {
         tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>(),
         [
             "find_usages",
+            "index_list",
+            "index_status",
             "outline",
             "repo_map",
             "search",

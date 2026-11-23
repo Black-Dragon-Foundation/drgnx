@@ -532,6 +532,125 @@ async fn an_auto_pause_never_clears_a_user_pause() {
     assert!(!local.texts().is_empty());
 }
 
+/// The stand-in machine beside a stand-in sysfs (`search::host`): a load average of LOAD over CPUS online, and AVAIL
+/// free of TOTAL bytes under the state directory.
+fn machine(dir: &Path, load: f64, cpus: u32, avail: u64, total: u64) -> PathBuf {
+    let cpu = dir.join("devices/system/cpu");
+    std::fs::create_dir_all(&cpu).unwrap();
+    std::fs::write(cpu.join("online"), format!("0-{}\n", cpus - 1)).unwrap();
+    std::fs::write(
+        dir.join("loadavg"),
+        format!("{load:.2} 1.00 1.00 2/300 42\n"),
+    )
+    .unwrap();
+    std::fs::write(dir.join("statvfs"), format!("{avail} {total}\n")).unwrap();
+    dir.to_path_buf()
+}
+
+const GB: u64 = 1 << 30;
+
+/// Pattern C. A busy machine pauses tier 2 by itself (a load of 9 on 4 CPUs): it says so, and nothing is asked of the
+/// source; `index now` goes through the load; quiet again, a root that was not overridden goes on by itself (woken by
+/// the next change; here `resume`, which changes nothing else for a root the user never paused).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn load_pauses_until_the_machine_is_quiet() {
+    let (home, state, sys) = (
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    );
+    let root = repo(home.path(), "a", 5, false);
+    let id = ident("builtin");
+    let local = Gated::new(SourceKind::Builtin, &id, None);
+    let permits = Arc::new(Semaphore::new(1000));
+    let host = machine(sys.path(), 9.0, 4, 500 * GB, 1000 * GB);
+    let p = open(
+        home.path(),
+        state.path(),
+        &root,
+        vec![local.clone()],
+        &host,
+        &permits,
+    )
+    .await;
+    p.start_tier2();
+    until(&p, "held by the load", |t| *t == Tier2::Load).await;
+    assert_eq!(p.state(), RootState::Paused(PauseWhy::Load));
+    assert!(local.texts().is_empty(), "a busy machine embedded");
+    machine(sys.path(), 7.9, 4, 500 * GB, 1000 * GB);
+    p.resume().await.unwrap();
+    until(&p, "done", |t| *t == Tier2::Idle).await;
+    assert!(!local.texts().is_empty());
+    assert_eq!(p.state(), RootState::Idle);
+}
+
+/// Pattern C. `index now` overrides the load: a busy machine embeds when asked to now.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn index_now_goes_through_the_load() {
+    let (home, state, sys) = (
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    );
+    let root = repo(home.path(), "a", 5, false);
+    let id = ident("builtin");
+    let local = Gated::new(SourceKind::Builtin, &id, None);
+    let permits = Arc::new(Semaphore::new(1000));
+    let host = machine(sys.path(), 9.0, 4, 500 * GB, 1000 * GB);
+    let p = open(
+        home.path(),
+        state.path(),
+        &root,
+        vec![local.clone()],
+        &host,
+        &permits,
+    )
+    .await;
+    p.start_tier2();
+    until(&p, "held by the load", |t| *t == Tier2::Load).await;
+    p.index_now();
+    until(&p, "done", |t| *t == Tier2::Idle).await;
+    assert!(!local.texts().is_empty());
+}
+
+/// Pattern C. Below the disk floor (1 GB free of 10: under the 2 GB floor) tier 2 waits, even for `index now`, since it
+/// writes vectors; with space again it goes on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_disk_floor_pauses_even_index_now() {
+    let (home, state, sys) = (
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    );
+    let root = repo(home.path(), "a", 5, false);
+    let id = ident("builtin");
+    let local = Gated::new(SourceKind::Builtin, &id, None);
+    let permits = Arc::new(Semaphore::new(1000));
+    let host = machine(sys.path(), 0.5, 4, GB, 10 * GB);
+    let p = open(
+        home.path(),
+        state.path(),
+        &root,
+        vec![local.clone()],
+        &host,
+        &permits,
+    )
+    .await;
+    // asked to go now before tier 2 starts: its first gates already see the override, and the floor still holds
+    p.index_now();
+    p.start_tier2();
+    until(&p, "held by the disk floor", |t| *t == Tier2::DiskFloor).await;
+    assert_eq!(p.state(), RootState::Paused(PauseWhy::DiskFloor));
+    assert!(
+        local.texts().is_empty(),
+        "below the floor, index now embedded"
+    );
+    machine(sys.path(), 0.5, 4, 3 * GB, 10 * GB);
+    p.resume().await.unwrap();
+    until(&p, "done", |t| *t == Tier2::Idle).await;
+    assert!(!local.texts().is_empty());
+}
+
 /// Pattern D and C. Each reason has its words, and a root says which one holds: no embedder at all, an embedder that
 /// is down, the battery (above), the user.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -7,6 +7,7 @@ pub mod context;
 pub mod download;
 pub mod engine;
 pub mod engine_install;
+pub mod host;
 pub mod manage;
 pub mod mcp;
 pub mod methods;

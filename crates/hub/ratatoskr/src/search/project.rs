@@ -227,6 +227,10 @@ pub enum Tier2 {
     Typing,
     /// Waiting on battery.
     Battery,
+    /// Waiting while the machine is busy ([`super::host::busy`]).
+    Load,
+    /// Waiting for space on the state directory's disk ([`super::host::below_floor`]).
+    DiskFloor,
     /// Paused by the user (`search/pause`) until `search/resume`.
     Paused,
     /// An embedder failed; tier 2 waits for the next change.
@@ -298,6 +302,8 @@ struct Inner {
     /// Each fingerprint's chain as the last pass left it, for `search/status`.
     chains: Mutex<Vec<(String, Vec<ChainEntry>)>>,
     power_root: PathBuf,
+    /// The hub's state directory: the disk floor is its filesystem's.
+    state_dir: PathBuf,
     gate: Mutex<Gate>,
     /// What the user set (`search/pause`, `resume`, `stop`), as the store's `index_state` keeps it.
     user: Mutex<UserState>,
@@ -421,6 +427,7 @@ impl Project {
                 recency: Mutex::new(None),
                 chains: Mutex::new(Vec::new()),
                 power_root: spec.power_root,
+                state_dir: spec.state.clone(),
                 gate: Mutex::new(Gate::default()),
                 user: Mutex::new(user),
                 wake: Notify::new(),
@@ -661,7 +668,8 @@ impl Project {
         }
     }
 
-    /// `search/index` with `now`: tier 2 runs on battery too, until nothing is missing.
+    /// `search/index` with `now`: tier 2 runs on battery and on a busy machine too (not below the disk floor), until
+    /// nothing is missing.
     pub fn index_now(&self) {
         if let Ok(mut g) = self.inner.gate.lock() {
             g.overriding = true;
@@ -743,9 +751,21 @@ impl Project {
         }
         match self.inner.status.borrow().tier2 {
             Tier2::Battery => RootState::Paused(PauseWhy::Battery),
+            Tier2::Load => RootState::Paused(PauseWhy::Load),
+            Tier2::DiskFloor => RootState::Paused(PauseWhy::DiskFloor),
             Tier2::Failed(_) => RootState::Paused(PauseWhy::NoEmbedder),
             Tier2::Running | Tier2::Typing | Tier2::Paused => RootState::Running,
-            Tier2::Idle | Tier2::Stopped if self.inner.sources().is_empty() => {
+            // no source at all, or none answered its probe (no chain formed: a built-in model not downloaded, a
+            // server not there)
+            Tier2::Idle | Tier2::Stopped
+                if self.inner.sources().is_empty()
+                    || self
+                        .inner
+                        .chains
+                        .lock()
+                        .map(|c| c.is_empty())
+                        .unwrap_or(true) =>
+            {
                 RootState::Paused(PauseWhy::NoEmbedder)
             }
             Tier2::Idle | Tier2::Stopped => RootState::Idle,
@@ -1483,9 +1503,10 @@ impl Inner {
         });
     }
 
-    /// Waits until typing lets a request go; whether it goes as `index now`, and whether the local sources wait for AC
-    /// (on battery, unless `index now` or `drgnx-search-battery-engine`; remote sources are never held by battery).
-    async fn gates(&self) -> (bool, bool) {
+    /// Waits until the user's pause, typing and the disk floor let a request go; whether it goes as `index now`, and
+    /// what holds the local sources: the battery (unless `index now` or `drgnx-search-battery-engine`), else a busy
+    /// machine (unless `index now`). Remote sources are held by neither.
+    async fn gates(&self) -> (bool, Option<Tier2>) {
         loop {
             // the user's pause first: no automatic reason lifts it, only `resume`
             if self.user() != UserState::On {
@@ -1502,12 +1523,30 @@ impl Inner {
                 self.wake.notified().await;
                 continue;
             }
-            let battery = !overriding
-                && !self
-                    .battery_engine
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                && power::on_battery(&self.power_root);
-            return (overriding, battery);
+            // the disk floor holds every source, even for `index now`: tier 2 writes vectors
+            if super::host::below_floor(&self.power_root, &self.state_dir) {
+                self.publish(Tier2::DiskFloor);
+                tokio::select! {
+                    () = self.wake.notified() => {}
+                    () = clock::sleep(POWER_POLL) => {}
+                }
+                continue;
+            }
+            // the battery, then the load: they hold the local sources only, and not for `index now`
+            let hold = if overriding {
+                None
+            } else if !self
+                .battery_engine
+                .load(std::sync::atomic::Ordering::Relaxed)
+                && power::on_battery(&self.power_root)
+            {
+                Some(Tier2::Battery)
+            } else if super::host::busy(&self.power_root) {
+                Some(Tier2::Load)
+            } else {
+                None
+            };
+            return (overriding, hold);
         }
     }
 
@@ -1606,8 +1645,8 @@ impl Inner {
             }
             let mut sent = false;
             loop {
-                let (overriding, battery) = self.gates().await;
-                slots = self.slots(slots, battery, overriding).await;
+                let (overriding, hold) = self.gates().await;
+                slots = self.slots(slots, hold.is_some(), overriding).await;
                 if let Ok(mut v) = self.chains.lock() {
                     *v = slots
                         .iter()
@@ -1634,8 +1673,9 @@ impl Inner {
                         sent = true;
                     }
                     Ok(out) if out.held => {
-                        // only the battery keeps a local source from the work: wait for AC, `index now` or a change
-                        self.publish(Tier2::Battery);
+                        // only the battery or the load keeps a local source from the work: wait for it to clear,
+                        // `index now` or a change
+                        self.publish(hold.unwrap_or(Tier2::Battery));
                         tokio::select! {
                             () = self.wake.notified() => {}
                             () = clock::sleep(POWER_POLL) => {}

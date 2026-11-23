@@ -654,6 +654,7 @@ async fn remote_down_falls_through_to_local_engine() {
         token: Some("t".into()),
         trusted: false,
         pins: Arc::new(MemPins::default()),
+        ledger: None,
     }));
     let state = tempfile::tempdir().unwrap();
     let id = ident("engine");

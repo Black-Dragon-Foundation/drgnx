@@ -26,6 +26,9 @@ pub const CHANGED_CERT: &str =
     "the server's certificate changed; check it and run Search: forget server pin";
 
 /// The `runtime.db` `kv` key of provider ID's pinned certificate sha256.
+/// The spend row's agent for the index's embeds by a remote vector server (the provider is the remote's id).
+pub const SPEND_AGENT: &str = "hrafn";
+
 pub fn pin_key(id: &str) -> String {
     format!("vectors.pin.{id}")
 }
@@ -61,12 +64,7 @@ pub struct KvPins {
 
 impl Pins for KvPins {
     fn get(&self) -> BoxFuture<'_, Option<String>> {
-        // a forgotten pin is kept as an empty value (`search/forget-pin`)
-        Box::pin(async move {
-            crate::gateway::kv_get(&self.db, &self.key)
-                .await
-                .filter(|v| !v.is_empty())
-        })
+        Box::pin(crate::gateway::kv_get(&self.db, &self.key))
     }
     fn set<'a>(&'a self, sha256: &'a str) -> BoxFuture<'a, ()> {
         Box::pin(crate::gateway::kv_set(&self.db, &self.key, sha256))
@@ -84,6 +82,8 @@ pub struct RemoteSpec {
     /// Texts may be sent to it.
     pub trusted: bool,
     pub pins: Arc<dyn Pins>,
+    /// Where its embeds are counted, under `id` (the hub's `spend` table); lookups are free. None: not counted.
+    pub ledger: Option<Arc<dyn bifrost::engine::Ledger>>,
 }
 
 /// A remote vector source.
@@ -448,6 +448,21 @@ impl Source for RemoteVectors {
                     let a: EmbedAnswer = self
                         .call_as("POST", "/v1/embed", Some(to_value(&req)))
                         .await?;
+                    if let Some(l) = &self.spec.ledger {
+                        let texts: Vec<&str> = part.iter().map(|&i| items[i].2.as_str()).collect();
+                        let model = self
+                            .ident
+                            .lock()
+                            .ok()
+                            .and_then(|g| g.as_ref().map(|i| i.record.model_id.clone()));
+                        l.record(crate::embed_serve::spend_row(
+                            &self.spec.id,
+                            SPEND_AGENT,
+                            &model.unwrap_or_default(),
+                            &texts,
+                        ))
+                        .await;
+                    }
                     for &i in part {
                         let v = a
                             .vectors

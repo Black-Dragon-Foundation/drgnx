@@ -240,6 +240,12 @@ impl Gate {
         let _ = self.budgets.set(b);
     }
 
+    /// The spend ledger the engine records through, for spend that does not pass the engine (a remote vector server's
+    /// embeds, the embeds this hub serves).
+    pub(crate) fn ledger(&self) -> Arc<dyn Ledger> {
+        Arc::new(WorkLedger(self.coord.clone(), self.budgets.get().cloned()))
+    }
+
     fn db(&self) -> Result<&urdr::Handle, Error> {
         self.db
             .get()
@@ -1314,6 +1320,21 @@ pub(crate) async fn kv_set(db: &urdr::Handle, key: &str, value: &str) {
     }
 }
 
+/// KEY gone from `runtime.db`'s `kv`: whether it was there.
+pub(crate) async fn kv_del(db: &urdr::Handle, key: &str) -> bool {
+    let k = key.to_owned();
+    match db
+        .write(move |c| Ok(c.execute("delete from kv where key = ?1", [k])?))
+        .await
+    {
+        Ok(n) => n > 0,
+        Err(e) => {
+            tracing::warn!(key, "cannot write runtime.db's kv: {e}");
+            false
+        }
+    }
+}
+
 /// The engine's events to FRONT's subscribers, until the gateway is gone.
 pub async fn run_events(mut events: mpsc::UnboundedReceiver<GatewayEvent>, front: Arc<Front>) {
     while let Some(e) = events.recv().await {
@@ -1633,6 +1654,34 @@ mod tests {
     /// Pattern D (the squatter holds the port before the hub listens: nothing races).  The kept port is taken at start:
     /// the hub listens on another, and the tokens issued for the old one (the editor's, a loopback agent's) are
     /// dropped, so a process squatting it collects only dead tokens; their holders ask again.
+    /// Pure (D) over a real `runtime.db`. A deleted key is gone (not kept as an empty value): `kv_get` has none, and a
+    /// second delete says it was not there; the other keys stay.
+    #[tokio::test]
+    async fn kv_del_removes_the_key() {
+        let h = unopened().await;
+        let db = h.front.gate.db().unwrap().clone();
+        kv_set(&db, "vectors.pin.desk", "ab12").await;
+        kv_set(&db, "vectors.pin.team", "cd34").await;
+        assert!(kv_del(&db, "vectors.pin.desk").await);
+        assert_eq!(kv_get(&db, "vectors.pin.desk").await, None);
+        let rows: i64 = db
+            .read(|c| {
+                Ok(c.query_row(
+                    "select count(*) from kv where key = 'vectors.pin.desk'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows, 0, "no row left behind");
+        assert!(!kv_del(&db, "vectors.pin.desk").await);
+        assert_eq!(
+            kv_get(&db, "vectors.pin.team").await.as_deref(),
+            Some("cd34")
+        );
+    }
+
     #[tokio::test]
     async fn a_moved_port_drops_the_tokens_issued_for_the_old_one() {
         let h = unopened().await;

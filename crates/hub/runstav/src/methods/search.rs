@@ -151,7 +151,7 @@ pub struct StatusAnswer {
     /// Where each fingerprint's vectors come from here: its chain of sources as the last pass of tier 2 left it.
     pub sources: Vec<ChainStatus>,
     pub worker: WorkerStatus,
-    /// `stopped`, `idle`, `running`, `typing`, `battery`, `paused` or `failed`.
+    /// `stopped`, `idle`, `running`, `typing`, `battery`, `load`, `disk-floor`, `paused` or `failed`.
     pub tier2: String,
     /// The root's state as the user sees it: `idle`, `running`, `paused` or `stopped` (Hrafn redesign §11A).
     pub state: String,
@@ -350,7 +350,7 @@ pub struct IndexParams {
     /// Drop the index and build it again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rebuild: Option<bool>,
-    /// Overrides the battery gate: tier 2 runs until nothing is missing.
+    /// Overrides the battery and load gates (not the disk floor): tier 2 runs until nothing is missing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub now: Option<bool>,
 }
@@ -1717,7 +1717,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "search/index", SearchIndex(IndexParams) -> Started,
             classes: [User], writes: true,
-            doc: "start or rebuild a project's index; now overrides the battery gate",
+            doc: "start or rebuild a project's index; now overrides the battery and load gates",
         ),
         method!(
             "search/embed-retry", SearchEmbedRetry(Empty) -> bool,

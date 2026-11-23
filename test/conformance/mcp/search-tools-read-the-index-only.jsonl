@@ -1,0 +1,29 @@
+{"scenario": "mcp/search-tools-read-the-index-only", "requires": ["v1"], "doc": "Hrafn redesign §11A: agents get the index's list and status, and nothing that changes it. A session whose profile has the search tools (drgnx-agents-mcp holds search) gets a search.sock whose tools/list is the eight search tools, index_list and index_status among them; index_status answers its folder's state and why it waits (no embedder), index_list names the root; tools/call of a pause, resume, stop or delete is -32602 Unknown tool, and the root is not paused."}
+{"do": "root"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-mcp (coordination search)))\n"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/p && cd $ROOT/p && git init -q && printf 'fn alpha() {}\\n' > a.rs && git add a.rs && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-index", "cwd": "$ROOT/p", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$string"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$SOCKET_DIR/s/$sid/search.sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": "find_usages"}, {"name": "index_list"}, {"name": "index_status"}, {"name": "outline"}, {"name": "repo_map"}, {"name": "search"}, {"name": "search_results"}, {"name": "symbols"}]}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "index_status", "arguments": {}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": {"$text": ["paused: no embedder", " files, ", "tier 2 "]}}], "isError": "$absent"}}, "within_ms": 20000}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "index_list", "arguments": {}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": {"$text": ["paused ", "/p (no embedder"]}}], "isError": "$absent"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "index_list", "arguments": {"all": true}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "result": {"isError": true}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "index_pause", "arguments": {}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 6, "error": {"code": -32602, "message": "Unknown tool: index_pause"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "index_resume", "arguments": {}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 7, "error": {"code": -32602, "message": "Unknown tool: index_resume"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"name": "index_stop", "arguments": {}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 8, "error": {"code": -32602, "message": "Unknown tool: index_stop"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "index_delete", "arguments": {}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 9, "error": {"code": -32602, "message": "Unknown tool: index_delete"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "search/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"roots": [{"why": {"name": "no-embedder"}}]}}}

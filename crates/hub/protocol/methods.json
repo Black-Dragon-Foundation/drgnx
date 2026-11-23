@@ -43014,7 +43014,7 @@
       "classes": [
         "user"
       ],
-      "doc": "start or rebuild a project's index; now overrides the battery gate",
+      "doc": "start or rebuild a project's index; now overrides the battery and load gates",
       "name": "search/index",
       "params": {
         "$defs": {
@@ -43028,7 +43028,7 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "now": {
-            "description": "Overrides the battery gate: tier 2 runs until nothing is missing.",
+            "description": "Overrides the battery and load gates (not the disk floor): tier 2 runs until nothing is missing.",
             "type": [
               "boolean",
               "null"
@@ -46229,7 +46229,7 @@
             "type": "string"
           },
           "tier2": {
-            "description": "`stopped`, `idle`, `running`, `typing`, `battery`, `paused` or `failed`.",
+            "description": "`stopped`, `idle`, `running`, `typing`, `battery`, `load`, `disk-floor`, `paused` or `failed`.",
             "type": "string"
           },
           "trees": {

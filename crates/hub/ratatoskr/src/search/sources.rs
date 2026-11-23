@@ -13,7 +13,8 @@
 //!   rows.
 //! - **A pass** ([`run_pass`]) steps the main fingerprints' chains; the built-in model's chain (its own fingerprint, so
 //!   its own vectors) steps only when no main chain had work (MP-15). On battery the local sources (the built-in model,
-//!   the local engine) wait unless `index now` or `drgnx-search-battery-engine` says otherwise; remote sources never do.
+//!   the local engine) wait unless `index now` or `drgnx-search-battery-engine` says otherwise, and on a busy machine
+//!   ([`super::host::busy`]) unless `index now`; remote sources never do.
 
 use super::DocEmbedder;
 use super::project::REQUEST_KEYS;

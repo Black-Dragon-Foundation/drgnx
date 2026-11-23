@@ -3184,9 +3184,17 @@ Every root's index has a state the user controls, kept in its store's `meta` (`i
 
 - `search/list {}` → `{roots: [{root, id, state, why?, open, files, chunks, bytes}]}`: every store under the state's
   `code/`, open or not. `state` is `idle`, `running`, `paused` or `stopped`; `why` (`{name, text}`) says what a paused
-  root waits for: `user`, `battery`, `load`, `disk-floor` or `no-embedder` (tier 2 has gates for the battery and for no
-  embedder; load and the disk floor are named for the gates to come). The user's pause comes first: an automatic
-  reason that clears never lifts it. `search/status` has the same `state` and `why`.
+  root waits for: `user`, `battery`, `load`, `disk-floor` or `no-embedder` (no source, none that answers its probe,
+  such as a built-in model not downloaded, or one that failed). The user's pause comes first: an automatic
+  reason that clears never lifts it. `search/status` has the same `state` and `why`, and `tier2` says `load` or
+  `disk-floor` while one holds.
+- **The automatic pauses** (`search/host.rs`, read before every pass of tier 2, then every `POWER_POLL` while one
+  holds). *Battery*: the local sources (the built-in model, the engine) wait for AC, unless `index now` or
+  `drgnx-search-battery-engine`. *Load*: the local sources wait while the 1-minute load average is above 2 per online
+  CPU (the machine's CPUs, `/sys/devices/system/cpu/online`, not a container's share), unless `index now`.
+  *Disk floor*: every source waits while the state directory's filesystem has less free than 2 GiB or 5% of it,
+  whichever is more (`statvfs`), even for `index now`, since tier 2 writes vectors. Remote sources are never held by
+  the battery or the load. A stand-in sysfs root (tests) holds `loadavg` and `statvfs` (`AVAIL TOTAL`) files.
 - `search/pause|resume|stop {root} | {all: true}` → `{roots}` (the roots as they are after it). **Pause**: the batch in
   flight finishes and is written, then tier 2 holds (`Tier2::Paused`) until resume; queries answer from what is
   indexed. **Resume**: tier 2 goes on with the keys still missing, nothing done is sent again. **Stop**: tier 2 is
@@ -3196,9 +3204,12 @@ Every root's index has a state the user controls, kept in its store's `meta` (`i
   its `.drgnx/packs/` and the vectors only it held (`VectorCache::drop_holder`: a key another store holds stays) go;
   `runtime.db`'s `kv` records it (`search.deleted.<id>`: the root, the reason, when, what was freed). `confirm` must be
   true: the CLI asks (`[y/N]`, a terminal only) unless `--yes`.
-- **Agents.** The MCP search tools call only `search/query`, `symbols`, `outline`, `map`, `usages`, `results`, `list`
-  and `status` (`mcp::MCP_METHODS`); both MCP backends refuse anything else ("… is not for an MCP tool"), so no agent
-  pauses, resumes, stops or deletes an index.
+- **Agents.** An agent reads the index with the MCP tools `index_list` (`search/list`) and `index_status`
+  (`search/status` of the session's folder); no tool pauses, resumes, stops or deletes. The MCP search tools call only
+  `search/query`, `symbols`, `outline`, `map`, `usages`, `results`, `list` and `status` (`mcp::MCP_METHODS`); both MCP
+  backends refuse anything else ("… is not for an MCP tool"). On the wire every verb here is the user's class only.
+  Conformance: `search/managing-an-index`, `search/an-agent-cannot-change-an-index`,
+  `mcp/search-tools-read-the-index-only`.
 
 ### The vector server (`embed/serve-*`) and remote sources
 
@@ -3210,7 +3221,12 @@ The protocol, the token, TLS and pinning are in [vector-protocol.md](vector-prot
   does not bind.
 - `embed/serve-stop {}` → whether one ran. `embed/serve-token {}` → `{token}`: a new token, the old refused from the
   next request.
-- `search/forget-pin {provider}` → whether a pin was kept: the `vectors` provider's pinned certificate is forgotten.
+- `search/forget-pin {provider}` → whether a pin was kept: the `vectors` provider's pinned certificate is forgotten
+  (its `kv` row deleted: `gateway::kv_del`).
+- **Spend.** Embeds are spend and lookups are free (MP-9): each `/v1/embed` this hub serves is a `spend` row with
+  provider and agent `embed-serve`, and each request of texts to a trusted remote one under the remote's provider id
+  (agent `hrafn`). Both through the gateway's ledger (`Gate::ledger`, `WorkLedger`), with the model's id; the protocol
+  carries no token counts, so `input` is estimated at four bytes a token, and `cost` is 0.
 - **Remote sources.** Each `vectors` provider of the table (`Gate::vectors`: id, URL, the token its `key_env` handed
   over, `trusted`) is a `RemoteVectors` source of every project the hub opens; the providers are part of the project's
   signature, so a change opens it again.

@@ -9,6 +9,7 @@
 #![cfg(feature = "test-hooks")]
 
 use crate::search_prefer::{Server, gate, tei};
+use bifrost::engine::{Ledger, SpendRow};
 use hrafn::{KeyKind, VectorCache};
 use hrafn_embed::fingerprint::Identity;
 use ratatoskr::embed_serve::{self, CacheServe, Running, ServeSpec, key_hex};
@@ -36,6 +37,29 @@ struct Machine {
     cache: Arc<VectorCache>,
     running: Option<Running>,
     token: String,
+    /// The spend rows of the embeds it served.
+    spent: Arc<Spent>,
+}
+
+/// A spend ledger that keeps its rows.
+#[derive(Default)]
+struct Spent(Mutex<Vec<SpendRow>>);
+
+impl Ledger for Spent {
+    fn spent(&self, _job: &str) -> bifrost::engine::BoxFuture<'_, Result<f64, String>> {
+        Box::pin(async { Ok(0.0) })
+    }
+
+    fn record(&self, row: SpendRow) -> bifrost::engine::BoxFuture<'_, ()> {
+        self.0.lock().unwrap().push(row);
+        Box::pin(async {})
+    }
+}
+
+impl Spent {
+    fn rows(&self) -> Vec<SpendRow> {
+        self.0.lock().unwrap().clone()
+    }
 }
 
 impl Machine {
@@ -61,7 +85,8 @@ impl Machine {
             )
             .await
             .unwrap();
-        let serve = Arc::new(CacheServe::new(caches, vec![Arc::new(e)]));
+        let spent = Arc::new(Spent::default());
+        let serve = Arc::new(CacheServe::new(caches, vec![Arc::new(e)]).with_ledger(spent.clone()));
         let (running, token) = embed_serve::start(
             ServeSpec {
                 listen: "127.0.0.1:0".parse().unwrap(),
@@ -82,6 +107,7 @@ impl Machine {
             cache,
             running: Some(running),
             token: token.expect("the first start shows a token"),
+            spent,
         }
     }
 
@@ -408,12 +434,22 @@ async fn no_embed_flag_refuses_embed() {
 // ---- Task 23: the client source `vectors` against the server
 
 fn client(m: &Machine, trusted: bool, pins: Arc<MemPins>) -> Arc<RemoteVectors> {
+    client_counted(m, trusted, pins, None)
+}
+
+fn client_counted(
+    m: &Machine,
+    trusted: bool,
+    pins: Arc<MemPins>,
+    ledger: Option<Arc<Spent>>,
+) -> Arc<RemoteVectors> {
     Arc::new(RemoteVectors::new(RemoteSpec {
         id: "desk".into(),
         url: m.running().url().to_owned(),
         token: Some(m.token.clone()),
         trusted,
         pins,
+        ledger: ledger.map(|l| l as Arc<dyn Ledger>),
     }))
 }
 
@@ -560,4 +596,62 @@ async fn remote_not_gated_by_battery() {
         }
     );
     assert_eq!(chain.status()[1].state, "answering");
+}
+
+/// Pattern C (MP-9: embeds are spend, lookups are free). A trusted remote's fill of one held key and one text is one
+/// spend row on each side: the client's under the provider id, the server's as `embed-serve`, both for the one text.
+/// An untrusted remote's lookups, and a fill the remote holds whole, count nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn served_and_trusted_remote_embeds_count_as_spend() {
+    let m = Machine::start(true, false).await;
+    let mine = Arc::new(Spent::default());
+    // each fill into a cache of its own, so every key is missing here
+    let fill = |remote: Arc<RemoteVectors>, texts: &'static [&'static str]| async move {
+        let here = tempfile::tempdir().unwrap();
+        let id = remote.probe().await.unwrap();
+        let cache = Caches::shared(here.path()).get(&id).await.unwrap();
+        let mut chain = SourceChain::new(id.fp, vec![remote as Arc<dyn Source>]);
+        chain.fill(&cache, &items(texts), Instant::now()).await
+    };
+    // lookups only: nothing counted
+    let looked = fill(
+        client_counted(&m, false, Arc::default(), Some(mine.clone())),
+        &["held", "never sent"],
+    )
+    .await;
+    assert!(
+        matches!(looked, FillOutcome::Filled { n: 1, .. }),
+        "{looked:?}"
+    );
+    let held = fill(
+        client_counted(&m, true, Arc::default(), Some(mine.clone())),
+        &["held"],
+    )
+    .await;
+    assert!(matches!(held, FillOutcome::Filled { n: 1, .. }), "{held:?}");
+    assert!(mine.rows().is_empty(), "{:?}", mine.rows());
+    assert!(m.spent.rows().is_empty(), "{:?}", m.spent.rows());
+    // a text sent: one row each side, for that text only
+    let text = "sixteen bytes!!!";
+    let sent = fill(
+        client_counted(&m, true, Arc::default(), Some(mine.clone())),
+        &["held", "sixteen bytes!!!"],
+    )
+    .await;
+    assert!(matches!(sent, FillOutcome::Filled { n: 2, .. }), "{sent:?}");
+    let label = m.id.record.model_id.clone();
+    assert_eq!(
+        mine.rows(),
+        [embed_serve::spend_row("desk", "hrafn", &label, &[text])]
+    );
+    assert_eq!(
+        m.spent.rows(),
+        [embed_serve::spend_row(
+            "embed-serve",
+            "embed-serve",
+            &label,
+            &[text]
+        )]
+    );
+    assert_eq!(mine.rows()[0].input, 4, "16 bytes, four to a token");
 }

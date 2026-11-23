@@ -33,6 +33,27 @@ pub const MAX_TOKENS: u32 = 8192;
 /// The largest request body, in bytes.
 pub const MAX_BODY: usize = 8 << 20;
 
+/// The spend row's agent for an embed this hub served to a peer.
+pub const SERVED: &str = "embed-serve";
+
+/// One embed request of TEXTS to PROVIDER as a spend row (MP-9: embeds are spend, lookups are free). The protocol
+/// carries no token counts, so `input` is estimated at four bytes a token; no price is known, so `cost` is 0.
+pub fn spend_row(
+    provider: &str,
+    agent: &str,
+    model: &str,
+    texts: &[&str],
+) -> bifrost::engine::SpendRow {
+    bifrost::engine::SpendRow {
+        agent: Some(agent.to_owned()),
+        provider: provider.to_owned(),
+        model: Some(model.to_owned()),
+        input: texts.iter().map(|t| t.len().div_ceil(4) as u64).sum(),
+        status: 200,
+        ..Default::default()
+    }
+}
+
 /// `GET /v1/info`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -206,11 +227,24 @@ pub trait Serve: Send + Sync {
 pub struct CacheServe {
     caches: Arc<Caches>,
     embedders: Vec<Arc<dyn DocEmbedder>>,
+    /// Where a served embed is counted (the hub's `spend` table); none: not counted.
+    ledger: Option<Arc<dyn bifrost::engine::Ledger>>,
 }
 
 impl CacheServe {
     pub fn new(caches: Arc<Caches>, embedders: Vec<Arc<dyn DocEmbedder>>) -> CacheServe {
-        CacheServe { caches, embedders }
+        CacheServe {
+            caches,
+            embedders,
+            ledger: None,
+        }
+    }
+
+    /// Every embed served is a spend row in LEDGER (provider and agent [`SERVED`]).
+    #[must_use]
+    pub fn with_ledger(mut self, ledger: Arc<dyn bifrost::engine::Ledger>) -> CacheServe {
+        self.ledger = Some(ledger);
+        self
     }
 
     /// The identity of EMBEDDER: what it last proved, else what it answers now.
@@ -285,6 +319,11 @@ impl Serve for CacheServe {
             };
             let texts: Vec<String> = items.iter().map(|(_, t)| t.clone()).collect();
             let vecs = e.embed_docs(&texts, false).await.map_err(|e| e.0)?;
+            if let Some(l) = &self.ledger {
+                let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+                l.record(spend_row(SERVED, SERVED, &id.record.model_id, &texts))
+                    .await;
+            }
             let dims = id.record.dims;
             if vecs.len() != items.len() || vecs.iter().any(|v| v.len() != dims as usize) {
                 return Err(format!(
