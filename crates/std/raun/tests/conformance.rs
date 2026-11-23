@@ -80,7 +80,12 @@ fn a_test_child_talks_on_stdout_and_goes_with_its_group() {
     );
     let pid = child.pid();
     assert!(draugr::alive(pid));
+    let t = stund::Instant::now();
     drop(child);
+    assert!(
+        t.elapsed() < Duration::from_secs(20),
+        "the group was ended, not waited for"
+    );
     assert!(!draugr::alive(pid), "the child and its group were ended");
 }
 

@@ -67,6 +67,19 @@ fn drop_at(
 }
 
 #[test]
+fn a_press_moves_a_scaled_threshold_before_it_is_a_drag() {
+    let (wb, w, _g1, _g2, a) = scene(2.0);
+    let d = wb.chrome(w, &measure).expect("graphical");
+    let (px, py) = mid(tab(&d, a).expect("the tab").rect);
+    let mut g = wb.drag_begin(w, &d, px, py).expect("a drag on a tab");
+    // 5 device px is 2.5 logical: under the 4 lp threshold at scale 2 (8 px), over it at scale 1
+    g.motion(&wb, &d, px + 5, py);
+    assert!(!g.started());
+    g.motion(&wb, &d, px + 8, py);
+    assert!(g.started());
+}
+
+#[test]
 fn drop_targets_group_new_split_bottom_outside_tear_out() {
     for scale in [1.0, 2.0] {
         let (wb, w, g1, g2, a) = scene(scale);

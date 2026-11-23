@@ -72,3 +72,24 @@ fn a_blocking_sleep_waits_for_real_with_no_clock() {
     stund::sleep_blocking(Duration::from_millis(30));
     assert!(start.elapsed() >= Duration::from_millis(30));
 }
+
+#[test]
+fn instants_add_and_subtract_durations_and_each_other() {
+    let clock = stund::Manual::default();
+    let _on = clock.on_this_thread();
+    clock.advance(Duration::from_secs(10));
+    let t = stund::Instant::now();
+    assert_eq!(
+        t - Duration::from_secs(4),
+        t.checked_sub(Duration::from_secs(4)).unwrap()
+    );
+    assert_eq!(
+        (t - Duration::from_secs(4)).elapsed(),
+        Duration::from_secs(4)
+    );
+    assert_eq!((t + Duration::from_secs(3)) - t, Duration::from_secs(3));
+    assert_eq!(t - (t - Duration::from_secs(4)), Duration::from_secs(4));
+    let mut u = t;
+    u += Duration::from_secs(1);
+    assert_eq!(u - t, Duration::from_secs(1));
+}

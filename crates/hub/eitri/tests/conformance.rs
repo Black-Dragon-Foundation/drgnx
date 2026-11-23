@@ -108,5 +108,8 @@ fn read_file_never_follows_a_link_and_is_bounded() {
 
     let bad = root.path().join("bad");
     fs::write(&bad, [0xff, 0xfe]).unwrap();
-    assert!(matches!(eitri::read_string(&bad, 100), Err(FsError::Io(_))));
+    match eitri::read_string(&bad, 100) {
+        Err(FsError::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::InvalidData),
+        other => panic!("{other:?}"),
+    }
 }

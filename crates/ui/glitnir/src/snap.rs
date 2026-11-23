@@ -213,6 +213,13 @@ mod tests {
     use crate::rng::XorShift;
 
     #[test]
+    fn a_scale_is_the_hosts_120ths_rounded_not_cut() {
+        assert_eq!(s120_of(1.0), 120);
+        assert_eq!(s120_of(1.005), 121);
+        assert_eq!(s120_of(1.5), 180);
+    }
+
+    #[test]
     fn viewport_size_maps_exactly_or_cuts() {
         // sizes a logical size maps to: shown whole, as the rounded destination always did
         assert_eq!(viewport_size(400, 240), (200, 400));
