@@ -17,19 +17,14 @@ pub struct RectF {
     pub h: f64,
 }
 
-fn scale_of(scale120: u32) -> f32 {
-    scale120 as f32 / 120.0
-}
-
-/// `roundf(pos * s)`: the device origin of a surface at logical `pos`.
+/// `roundf(pos * s)`: the device origin of a surface at logical `pos` (kvardi's rule).
 pub fn stable_origin(pos: i32, scale120: u32) -> i32 {
-    (pos as f32 * scale_of(scale120)).round() as i32
+    kvardi::snap::stable_origin(pos, scale120)
 }
 
-/// `roundf((pos + size) * s) - roundf(pos * s)`: the device extent of the span `pos .. pos + size`.
+/// `roundf((pos + size) * s) - roundf(pos * s)`: the device extent of the span `pos .. pos + size` (kvardi's rule).
 pub fn stable_extent(pos: i32, size: i32, scale120: u32) -> i32 {
-    let s = scale_of(scale120);
-    ((pos + size) as f32 * s).round() as i32 - (pos as f32 * s).round() as i32
+    kvardi::snap::stable_extent(pos, size, scale120)
 }
 
 /// The logical size of a buffer extent of `device` pixels at `scale120`, and the device extent it shows: the logical
@@ -69,29 +64,10 @@ pub fn outward(r: Rect, scale120: u32) -> Rect {
     if r.is_empty() || scale120 == 0 {
         return Rect::default();
     }
-    let guess = |d: i32| (d as f64 * 120.0 / scale120 as f64) as i32;
-    // the last logical position whose device origin is at or before d
-    let before = |d: i32| {
-        let mut l = guess(d);
-        while stable_origin(l, scale120) > d {
-            l -= 1;
-        }
-        while stable_origin(l + 1, scale120) <= d {
-            l += 1;
-        }
-        l
-    };
-    // the first logical position whose device origin is at or after d
-    let after = |d: i32| {
-        let mut l = guess(d);
-        while stable_origin(l, scale120) < d {
-            l += 1;
-        }
-        while stable_origin(l - 1, scale120) >= d {
-            l -= 1;
-        }
-        l
-    };
+    let (before, after) = (
+        |d| kvardi::snap::outward_before(d, scale120),
+        |d| kvardi::snap::outward_after(d, scale120),
+    );
     let (x0, y0) = (before(r.x), before(r.y));
     let (x1, y1) = (after(r.x + r.w), after(r.y + r.h));
     Rect::new(x0, y0, x1 - x0, y1 - y0)
@@ -99,46 +75,25 @@ pub fn outward(r: Rect, scale120: u32) -> Rect {
 
 /// A scale as the host's 120ths.
 pub(crate) fn s120_of(scale: f64) -> u32 {
-    kvardi::device_f64(120.0, scale).round() as u32
-}
-
-fn identity_scale(scale: f64) -> bool {
-    !scale.is_finite() || scale <= 0.0 || scale.fract() == 0.0
-}
-
-/// One axis: the snapped start and length, in logical units.
-fn snap_span(pos: f64, len: f64, scale: f64) -> (f64, f64) {
-    let dev = |v: f64| kvardi::device_f64(v, scale);
-    if dev(len) < 2.0 {
-        (dev(pos).round() / scale, dev(len).floor().max(1.0) / scale)
-    } else {
-        let a = dev(pos).round();
-        let b = dev(pos + len).round();
-        (a / scale, (b - a) / scale)
-    }
+    kvardi::snap::scale_120ths(scale)
 }
 
 /// Snap a rectangle's edges to the device grid at `scale`.
 pub fn snap_rect(x: f64, y: f64, w: f64, h: f64, scale: f64) -> RectF {
-    if identity_scale(scale) {
+    if kvardi::snap::identity_scale(scale) {
         return RectF { x, y, w, h };
     }
-    let (x, w) = snap_span(x, w, scale);
-    let (y, h) = snap_span(y, h, scale);
+    let (x, w) = kvardi::snap::snap_span(x, w, scale);
+    let (y, h) = kvardi::snap::snap_span(y, h, scale);
     RectF { x, y, w, h }
 }
 
 /// Snap a line width: under two device pixels `max(1, floor(w * s))` of them, else the nearest whole count.
 pub fn snap_line(w: f64, scale: f64) -> f64 {
-    if identity_scale(scale) {
+    if kvardi::snap::identity_scale(scale) {
         return w;
     }
-    let px = kvardi::device_f64(w, scale);
-    if px < 2.0 {
-        px.floor().max(1.0) / scale
-    } else {
-        px.round() / scale
-    }
+    kvardi::snap::snap_line(w, scale)
 }
 
 /// Whether pixel `x` of the A1 row `row` is set (cairo's A1: bit `x % 8` of byte `x / 8` from the least significant

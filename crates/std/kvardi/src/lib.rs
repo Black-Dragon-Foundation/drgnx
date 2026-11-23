@@ -10,6 +10,7 @@
 //! remembered per display and per window preset.
 
 mod screens;
+pub mod snap;
 
 pub use screens::{Display, DisplayId, Rect, Screens, Window};
 
