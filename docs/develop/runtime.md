@@ -1284,6 +1284,30 @@ column. So the `symbols` column holds names encoded by `encode_symbol`, which ma
 private-use character (a token character in `unicode61`): a whole name matches only the whole name, and `body`
 still splits it. Queries encode the same way.
 
+### The vector cache
+
+`hrafn::VectorCache` (`cache.rs`) holds the vectors of one embedding fingerprint for the whole machine:
+`<state>/vectors/<fingerprint-hex16>.db`, one SQLite file per fingerprint, mode 0600, WAL. A key is of its text alone,
+so one vector serves every repo, clone, branch and worktree that has the text.
+
+| Table | Holds |
+|---|---|
+| `chunk_vec`, `path_vec` | one quantized vector per key (`key, bits, vec, scale, last_used`): the sign bits, then the int8 values, and their scale (`urdr::graph::search::vec::quantize`) |
+| `holder` | the repo stores that hold keys: `id` (the store file's stem), the checkout `root`, `live`, `last_refresh` (ms) |
+| `held` | `(holder, kind, key)`: which holder holds which key |
+| `meta` | `urdr`'s table, with `fingerprint` (all 64 hex characters) and its `record` |
+
+- **The file is its fingerprint's.** Opening a file whose `meta.fingerprint` is another one is refused
+  (`StoreError::Mismatch`), by a writer and by a reader, before anything is written: two fingerprints with the same
+  first 16 hex characters never share a file.
+- **One writer.** `open_writer` takes an exclusive lock on `<db>.writer` (`File::try_lock`) and writes its PID there. A
+  second writer, in this process or another, is refused with `StoreError::Busy` ("the cache is written by hub PID
+  N"). Readers (`VectorCache::open`, and the repo stores, which attach the file read-only as `vc`) never wait on it.
+- `put(kind, dims, rows)` checks every row's length against the fingerprint's dims before it writes anything, and
+  quantizes; `put_quantized` writes rows already in the stored form (a vector pack's). `has` and `get` read by key.
+- **`last_used` is a logical clock**: one more than the largest in the file, set by a write and by a holder's taking
+  or dropping the key (see the collection, below).
+
 ### The file list and coverage
 
 `files::list(root, git, config, allow)` is the one place a path enters the index. Git sits behind the `Git` trait

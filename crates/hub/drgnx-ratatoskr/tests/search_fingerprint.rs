@@ -186,9 +186,11 @@ impl Fixture {
                 )
                 .ok()?;
                 let fp: String = c
-                    .query_row("select v from meta where k = 'fingerprint'", [], |r| {
-                        r.get(0)
-                    })
+                    .query_row(
+                        "select value from meta where key = 'fingerprint'",
+                        [],
+                        |r| r.get(0),
+                    )
                     .ok()?;
                 let n: i64 = c
                     .query_row("select count(*) from chunk_vec", [], |r| r.get(0))
