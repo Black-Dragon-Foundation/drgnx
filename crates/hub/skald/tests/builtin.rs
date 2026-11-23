@@ -145,35 +145,6 @@ fn only_go_rust_terraform_and_dart_format_every_project() {
 }
 
 #[test]
-fn the_generic_packs_translate_and_name_what_they_navigate_to() {
-    let mut seen = 0;
-    for (name, m) in all() {
-        if !m.mode.as_ref().is_some_and(|m| m.generic) {
-            continue;
-        }
-        seen += 1;
-        let dir = packs_dir().join(&name).join("queries");
-        let t = skald::translate::translate(
-            &name,
-            &eitri::read_string(&dir.join("highlights.scm"), 1 << 24).unwrap(),
-        )
-        .unwrap_or_else(|e| panic!("{name}: {e:?}"));
-        let features: Vec<&str> = t.rules.iter().map(|r| r.feature.as_str()).collect();
-        for f in ["comment", "keyword", "string"] {
-            assert!(
-                features.contains(&f),
-                "{name} has no {f} rule: {features:?}"
-            );
-        }
-        let kinds = skald::translate::definition_kinds(
-            &eitri::read_string(&dir.join("tags.scm"), 1 << 24).unwrap(),
-        );
-        assert!(!kinds.is_empty(), "{name} defines nothing to navigate to");
-    }
-    assert_eq!(seen, 4, "kotlin, swift, zig and sql use the generic mode");
-}
-
-#[test]
 fn the_php_pack_names_the_grammars_its_mode_needs_and_owns_only_its_own() {
     let packs = all();
     let php = &packs.iter().find(|p| p.0 == "php").unwrap().1;

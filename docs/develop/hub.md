@@ -56,8 +56,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
      (their bridges fail and their editors open them again), which is accepted because installs are disposable.
   6. The process groups `runtime.db` recorded are reaped ([The reaper](#the-reaper): a crashed run's, or the Emacs
      child an older hub ran).
-  7. What the Lisp hub left in `<state>` is moved aside, once (`legacy::migrate`, [below](#what-the-lisp-runtime-left)),
-     then the session sockets whose owners still run are bound again. No child Emacs is
+  7. The session sockets whose owners still run are bound again. No child Emacs is
      started: the hub serves every method itself ([The registry](#the-registry-protocol-v1)).
 
   It stops on SIGTERM, on SIGINT, or one second after the `--parent-pid` process is gone (`kill(pid, 0)`; the last
@@ -713,33 +712,6 @@ start time or boot id is skipped and never signalled; a pid whose start time or 
 deletes them all, so the Emacs child an older or crashed hub left is killed with its group when the new binary starts.
 The window left open is the reused leader ("The window left open", above): the recorded group died and its leader's
 pid went to another process's group before the next start.
-
-### What the Lisp runtime left
-
-`legacy::migrate` (`src/legacy.rs`) runs once per start, after the reaper and before anything is served. It moves, each
-only when present, into `<state>/hub/migrated-p7/` (0700, original names): from `<state>/hub/` the files
-`registrations.eld`, `sessions.eld`, `port` and `hub-timers-report.eld`, the folder `bodies/` and every `hub-*.d/` that
-holds only `backend.sock`; then each entry of `<state>/sandbox/` except `folders.eld` (the editor's VC guard,
-`core/drgnx-sandbox-vc.el`, still reads that list, so it stays; it is written by nothing now); and each `<state>/jobs/<id>/` of the editor's old command jobs
-(the Lisp runtime's, before the hub ran them as `exec/*`) that has ended (an `exit` file, or a `pid` file naming a process that is gone; a job with neither
-counts as ended once its folder has been quiet for a minute). A live job's folder stays and is listed in `left`.
-
-A move is a `rename`; across filesystems (`EXDEV`) it copies into a temporary name beside the target, syncs every file
-and folder, renames it into place and only then removes the source. A copy that fails (a socket in the tree cannot be
-copied) leaves the source untouched and the name in `left`. Once the copy is in place the name is `moved`: if syncing
-its folder or removing the source then fails, the name also goes in `source_left`, and the next start removes the
-source, but only while the copy is there and holds all of it (a source that changed since stays). Nothing is deleted
-otherwise. `migrated-p7/done` is the JSON `Moved` `{at, moved, left, source_left}` (names relative to `<state>`;
-`source_left` is absent when empty); once it exists later starts skip the `hub/` and
-`sandbox/` items and only move the jobs that have ended since, shrinking `left`. A fresh install (nothing to move,
-nothing left) writes nothing.
-
-`doctor --json` has `legacy: {moved, left, at, lisp_processes: [{pid, what}]}`: `moved` and `at` from `done`, `left`
-read afresh (a job may have ended since), and the user's Emacs processes started with the Lisp hub's or the Lisp
-coordination server's entry function (`MARKERS` in `legacy.rs`: `drgnx-hub-main`, `drgnx-coord-mcp-main`) as an
-`-f`/`--funcall`, `-l`/`--load` or `--eval` argument (a command that only names them, such as `rg drgnx-hub-main`, does
-not count; from `/proc/*/cmdline` on Linux; `ps -x -o pid=,command=` with a 2 s deadline on macOS).
-Rows: `lifecycle/{an-old-backend-is-reaped-at-start,lisp-state-is-moved-once,a-second-start-moves-nothing,a-running-lisp-job-is-left-in-place}`.
 
 ## The client
 
@@ -3984,8 +3956,7 @@ needs one fails over or answers "no key", and the `gateway/need-keys {providers}
 subscriber for the providers kept registrations need) tells the editor to hand them over. The hub is not dumpable
 ([Stopping a hub](#stopping-a-hub)), so another process of the user's cannot read them from its memory.
 
-The registrations, the port and the keys of the Lisp runtime's gateway (`registrations.eld`, `port`) are among what
-[`legacy::migrate`](#what-the-lisp-runtime-left) moves aside; nothing reads them.
+The registrations, the port and the keys of the Lisp runtime's gateway (`registrations.eld`, `port`) are read by nothing.
 
 **The editor's side** (`core/drgnx-hub-client.el`):
 - **The runtime settings** (`core/drgnx-settings-runtime.el`). Once a subscription is answered (`drgnx-hub-core--subscribed`),
@@ -4895,7 +4866,7 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
   so a refresh run from the command line is seen too. A file that does not read (truncated JSON, a catalog of another
   `version`, a lock with a mistake) keeps its last good copy; `extensions/details` carries a note saying so. A file that
   is gone is empty.
-- **Ids:** `pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`, `bundled:NAME` (a package a module that is on names: kind
+- **Ids:** `pkg:NAME`, `module:NAME`, `plugin:NAME`, `bundled:NAME` (a package a module that is on names: kind
   `package`, state `built-in`, source `drgnx`, `why` the modules; the `bundled` filter keeps them). A plugin's row comes from the plugins' last look
   (`plugins/list`, memory only), with the hub's `unapproved`, `changed`, `disabled` or `broken`, and for an approved one
   `on` or `off` by the global `drgnx-agents-plugins`; `signed` is `hash-approved`. A search never reads the folder.

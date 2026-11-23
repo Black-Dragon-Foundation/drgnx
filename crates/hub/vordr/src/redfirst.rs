@@ -49,12 +49,12 @@ pub fn class_word(c: Option<Class>) -> &'static str {
     }
 }
 
-/// A build row's language: cargo's are `build` / `build:CRATE (TARGET)`, an ERT row is a test's name.
+/// A build row's language: cargo's are `build` / `build:CRATE (TARGET)`, any other row is a test's name.
 fn lang(row: &Row) -> &'static str {
     if row.name == "build" || row.name.starts_with("build:") {
         "rust"
     } else {
-        "elisp"
+        "other"
     }
 }
 
@@ -248,30 +248,11 @@ const RUST_ITEMS: &[&str] = &[
     "union ",
     "macro_rules! ",
 ];
-const LISP_DEFS: &[&str] = &[
-    "(defun ",
-    "(defmacro ",
-    "(defvar ",
-    "(defvar-local ",
-    "(defcustom ",
-    "(defconst ",
-    "(defface ",
-    "(defsubst ",
-    "(cl-defun ",
-    "(cl-defmacro ",
-    "(cl-defgeneric ",
-    "(cl-defmethod ",
-    "(cl-defstruct ",
-    "(define-minor-mode ",
-    "(define-derived-mode ",
-    "(define-inline ",
-];
-
-fn ident(s: &str, lisp: bool) -> Option<String> {
+fn ident(s: &str) -> Option<String> {
     let s = s.trim_start_matches('(');
     let id: String = s
         .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_' || (lisp && "-/*+<>=!?:.".contains(*c)))
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
         .collect();
     (!id.is_empty()).then_some(id)
 }
@@ -295,7 +276,7 @@ fn rust_symbol(line: &str) -> Option<String> {
         r = &r["const ".len()..];
     }
     if let Some(x) = RUST_ITEMS.iter().find_map(|k| r.strip_prefix(k)) {
-        return ident(x, false);
+        return ident(x);
     }
     // a field; a variant isn't read
     let (name, rest) = r.split_once(':')?;
@@ -306,18 +287,12 @@ fn rust_symbol(line: &str) -> Option<String> {
     .then(|| name.to_string())
 }
 
-/// The symbols LINES (added to PATH) define: a Rust item's name (and a field's: `name: Type,`), an Emacs Lisp
-/// definition's.
+/// The symbols LINES (added to PATH) define: a Rust item's name (and a field's: `name: Type,`).
 pub fn added_symbols(path: &str, lines: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for l in lines {
         let t = l.trim_start();
-        let found = if path.ends_with(".el") {
-            LISP_DEFS
-                .iter()
-                .find_map(|d| t.strip_prefix(d))
-                .and_then(|r| ident(r, true))
-        } else if path.ends_with(".rs") {
+        let found = if path.ends_with(".rs") {
             rust_symbol(t)
         } else {
             None
@@ -385,7 +360,7 @@ mod tests {
                 kind: "enforced".into(),
                 doc: String::new(),
             }],
-            compile_fail_reds: vec!["rust".into(), "elisp".into()],
+            compile_fail_reds: vec!["rust".into()],
             test_globs: vec!["test/*".into(), "*/tests.rs".into()],
             ..Pack::default()
         }
@@ -504,15 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn an_ert_red_passes_and_a_void_function_naming_an_added_symbol_counts() {
-        let e = [
-            ev(
-                "T",
-                vec![Row::fail("t-three", Class::Build, vec!["drgnx-new".into()])],
-            ),
-            ev("P", vec![Row::pass("t-three")]),
-        ];
-        assert!(is_pass(&decide(&pack(), &inputs(), &e)));
+    fn an_assert_red_with_a_slashed_name_passes() {
         let e = [
             ev("T", vec![Row::fail("drgnx-x/one", Class::Assert, vec![])]),
             ev("P", vec![Row::pass("drgnx-x/one")]),
@@ -557,7 +524,7 @@ mod tests {
         );
         // not where the pack doesn't allow the language
         let rust_off = Pack {
-            compile_fail_reds: vec!["elisp".into()],
+            compile_fail_reds: vec!["other".into()],
             ..pack()
         };
         assert!(matches!(
@@ -607,10 +574,10 @@ mod tests {
             ev("P", vec![Row::pass("a")]),
         ];
         let i = Inputs {
-            weakened: vec!["test/a.el: (should (= x 2))".into()],
+            weakened: vec!["test/a.rs: assert!(x == 2)".into()],
             ..inputs()
         };
-        assert!(matches!(decide(&pack(), &i, &e), Decision::Hold(w) if w.contains("should")));
+        assert!(matches!(decide(&pack(), &i, &e), Decision::Hold(w) if w.contains("assert")));
     }
 
     #[test]
@@ -670,8 +637,8 @@ mod tests {
         let d = parse_diff(
             "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -3,0 +4,2 @@ fn x()\n\
              +pub fn start_or_reuse(&self) {}\n+    pub(crate) struct Pack;\n@@ -9 +10,0 @@\n-    assert!(x);\n\
-             diff --git a/test/b-test.el b/test/b-test.el\nnew file mode 100644\n--- /dev/null\n+++ b/test/b-test.el\n\
-             @@ -0,0 +1 @@\n+(ert-deftest b () (should (drgnx-new)))\n",
+             diff --git a/test/b.txt b/test/b.txt\nnew file mode 100644\n--- /dev/null\n+++ b/test/b.txt\n\
+             @@ -0,0 +1 @@\n+text\n",
         );
         assert_eq!(d.len(), 2);
         assert_eq!(d[0].path, "src/a.rs");
@@ -683,22 +650,14 @@ mod tests {
             ]
         );
         assert_eq!(d[0].removed, vec!["    assert!(x);".to_string()]);
-        assert_eq!(d[1].path, "test/b-test.el");
+        assert_eq!(d[1].path, "test/b.txt");
         let rs: Vec<String> = d[0].added.iter().map(|(_, l)| l.clone()).collect();
         assert_eq!(
             added_symbols("src/a.rs", &rs),
             vec!["start_or_reuse", "Pack"]
         );
-        let el = vec![
-            "(defun drgnx-new (x)".to_string(),
-            "(cl-defmethod drgnx-m ((x t)))".into(),
-            "  (defvar-local drgnx--v nil)".into(),
-            "(foo bar)".into(),
-        ];
-        assert_eq!(
-            added_symbols("core/x.el", &el),
-            vec!["drgnx-new", "drgnx-m", "drgnx--v"]
-        );
+        // only Rust files name symbols
+        assert!(added_symbols("core/x.txt", &rs).is_empty());
         // a test path's lines are all test lines; a source file's only below its #[cfg(test)]
         let added = vec![
             (2, "fn f() {}".to_string()),
@@ -710,7 +669,7 @@ mod tests {
             vec!["    assert!(f());"]
         );
         assert_eq!(test_lines(&pack(), "src/x/tests.rs", "", &added).len(), 2);
-        assert!(test_lines(&pack(), "core/a.el", text, &added).is_empty());
+        assert!(test_lines(&pack(), "core/a.txt", text, &added).is_empty());
         // weakened: a test line the tip deletes and doesn't add back
         let at_tip = parse_diff(
             "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -5 +5 @@\n-    assert!(f());\n+    assert!(true);\n",
