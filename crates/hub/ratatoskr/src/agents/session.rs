@@ -3417,6 +3417,15 @@ pub(crate) async fn relaunch(
             st.step_begin(StepClass::JobWait, None);
         }
     }
+    // `RATATOSKR_TEST_RESUME_INSERT_DELAY_MS` (test-hooks): the session is back in the hub's table that late after its
+    // agent has resumed or loaded, as when the machine is loaded (a restart serves while it brings the sessions back)
+    #[cfg(feature = "test-hooks")]
+    if let Some(ms) = std::env::var("RATATOSKR_TEST_RESUME_INSERT_DELAY_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        crate::clock::sleep(Duration::from_millis(ms)).await;
+    }
     hub.insert(s.clone());
     crate::stall::spawn("session:run", s.clone().run(rx, done));
     s.changed();
@@ -7147,7 +7156,11 @@ async fn write_whole(real: PathBuf, content: String) -> std::io::Result<()> {
         let mode = eitri::open_beneath(std::os::fd::AsFd::as_fd(&dir), name, eitri::Kind::File)
             .ok()
             .and_then(|o| rustix::fs::fstat(&o.fd).ok())
-            .map_or(0o644, |st| u32::from(st.st_mode) & 0o777);
+            .map_or(0o644, |st| {
+                #[allow(clippy::useless_conversion, reason = "st_mode is u16 on macOS")]
+                let mode = u32::from(st.st_mode);
+                mode & 0o777
+            });
         eitri::write_regular(
             std::os::fd::AsFd::as_fd(&dir),
             name,

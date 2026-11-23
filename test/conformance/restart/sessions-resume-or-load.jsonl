@@ -1,4 +1,4 @@
-{"scenario": "restart/sessions-resume-or-load", "requires": ["v1", "test-hooks"], "doc": "Task 24: after a hub restart each recorded session is brought back on the same agent session: session/resume where the agent has it (Claude), else session/load (Gemini loads only). Both are listed again on the same profile and directory and their earlier turns are still in the transcript."}
+{"scenario": "restart/sessions-resume-or-load", "requires": ["v1", "test-hooks"], "doc": "Task 24: after a hub restart each recorded session is brought back on the same agent session: session/resume where the agent has it (Claude), else session/load (Gemini loads only). Both are listed again on the same profile and directory and their earlier turns are still in the transcript. The hub serves while it brings the sessions back (a test-hooks hub puts each back in its table 1.5 s after its agent resumed or loaded it, as a loaded machine once did), so the list is awaited until both are in, not asked once."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
@@ -17,13 +17,12 @@
 {"do": "file", "path": "$ROOT/load.log", "contains": "hello load", "within_ms": 15000}
 {"do": "kill", "hub": "h", "signal": "TERM"}
 {"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
-{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "start", "hub": "h2", "same_root_as": "h", "env": {"RATATOSKR_TEST_RESUME_INSERT_DELAY_MS": "1500"}}
 {"do": "connect", "conn": "c2", "hub": "h2"}
 {"do": "file", "path": "$ROOT/resume.log", "contains": "\"session/resume\"", "within_ms": 30000}
 {"do": "file", "path": "$ROOT/load.log", "contains": "\"session/load\"", "within_ms": 30000}
 {"do": "file", "path": "$ROOT/resume.log", "contains": "\"session/new\"", "count": 1, "at_most": 1}
 {"do": "file", "path": "$ROOT/load.log", "contains": "\"session/new\"", "count": 1, "at_most": 1}
-{"do": "send", "conn": "c2", "json": {"id": 1, "method": "agents/list"}}
-{"do": "expect", "conn": "c2", "json": {"id": 1, "result": {"sessions": {"$contains": [{"id": "$r", "profile": "mock-resume", "cwd": "$ROOT/work"}, {"id": "$l", "profile": "mock-load", "cwd": "$ROOT/work"}]}}}, "within_ms": 30000}
+{"do": "poll", "conn": "c2", "json": {"id": 1, "method": "agents/list"}, "expect": {"id": 1, "result": {"sessions": {"$contains": [{"id": "$r", "profile": "mock-resume", "cwd": "$ROOT/work"}, {"id": "$l", "profile": "mock-load", "cwd": "$ROOT/work"}]}}}, "within_ms": 30000, "every_ms": 100}
 {"do": "send", "conn": "c2", "json": {"id": 2, "method": "agents/get", "params": {"id": "$r"}}}
 {"do": "expect", "conn": "c2", "json": {"id": 2, "result": {"session": {"id": "$r"}, "seq": "$number", "entries": {"$contains": [{"type": "user", "text": "hello resume"}]}}}}
