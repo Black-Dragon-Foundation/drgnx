@@ -10,6 +10,7 @@ interface i {
   record table { rows: list<row>, title: string }
   put: func(t: table) -> result<list<row>, kind>;
   grid: func(g: list<list<u32>>) -> list<list<u32>>;
+  clusters: func(g: list<list<row>>) -> list<list<row>>;
 }
 
 interface e {

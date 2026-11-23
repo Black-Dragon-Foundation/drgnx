@@ -248,6 +248,11 @@ mod snapping {
         // a thin line is at least one device pixel; a thick one is whole pixels
         assert_eq!(snap_line(0.5, 1.5), 1.0 / 1.5);
         assert_eq!(snap_line(2.0, 1.5), 3.0 / 1.5);
+        assert_eq!(
+            snap_line(2.5, 1.5),
+            4.0 / 1.5,
+            "3.75 device pixels is 4, not 3"
+        );
         // an axis at 1.5: start 1.2 -> device 1.8 -> 2 -> 4/3; length 2 -> end 3.2 -> 4.8 -> 5, so 3 px
         let (p, l) = snap_span(1.2, 2.0, 1.5);
         assert_eq!((p, l), (2.0 / 1.5, 3.0 / 1.5));
