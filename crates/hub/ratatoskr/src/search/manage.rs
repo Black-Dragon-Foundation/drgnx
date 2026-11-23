@@ -46,7 +46,13 @@ impl PauseWhy {
 
     /// What `status` says of it.
     pub fn text(self) -> &'static str {
-        unimplemented!("Wave 9 stub")
+        match self {
+            PauseWhy::User => "paused by the user: `search resume` goes on",
+            PauseWhy::Battery => "on battery: waits for AC (or `search index --now`)",
+            PauseWhy::Load => "the machine is busy: waits until it is not",
+            PauseWhy::DiskFloor => "the disk is near its floor: waits for space",
+            PauseWhy::NoEmbedder => "no embedder answers: waits for one",
+        }
     }
 }
 
@@ -125,8 +131,40 @@ pub async fn delete_root(
     id: &str,
     base: Option<&Path>,
 ) -> Result<Deleted, String> {
-    let _ = (caches, id, base);
-    unimplemented!("Wave 9 stub")
+    let mut gone = Deleted {
+        bytes: 0,
+        vectors: 0,
+        packs: 0,
+    };
+    // the store first: a cache opened after this registers no hold for it again
+    for f in store_files(caches.state(), id) {
+        if let Ok(m) = std::fs::metadata(&f) {
+            std::fs::remove_file(&f).map_err(|e| format!("{}: {e}", f.display()))?;
+            gone.bytes += m.len();
+        }
+    }
+    if let Some(packs) = base.map(|b| b.join(".drgnx/packs"))
+        && packs.is_dir()
+    {
+        for e in std::fs::read_dir(&packs)
+            .map_err(|e| format!("{}: {e}", packs.display()))?
+            .flatten()
+        {
+            let p = e.path();
+            if let Ok(m) = std::fs::metadata(&p) {
+                gone.bytes += m.len();
+                if p.extension().is_some_and(|x| x == "vpack") {
+                    gone.packs += 1;
+                }
+            }
+        }
+        std::fs::remove_dir_all(&packs).map_err(|e| format!("{}: {e}", packs.display()))?;
+    }
+    for ident in caches.stored() {
+        let cache = caches.get(&ident).await.map_err(|e| e.to_string())?;
+        gone.vectors += u64::from(cache.drop_holder(id).await.map_err(|e| e.to_string())?);
+    }
+    Ok(gone)
 }
 
 /// The files of store ID under STATE: the database and its WAL and shared-memory files.

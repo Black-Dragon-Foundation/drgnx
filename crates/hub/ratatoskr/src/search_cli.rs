@@ -153,8 +153,26 @@ pub fn confirm_delete(
     input: &mut dyn std::io::BufRead,
     out: &mut dyn std::io::Write,
 ) -> bool {
-    let _ = (root, yes, tty, input, out);
-    unimplemented!("Wave 9 stub")
+    if yes {
+        return true;
+    }
+    if !tty {
+        let _ = writeln!(
+            out,
+            "search delete {root}: not a terminal to ask; run it with --yes to delete"
+        );
+        return false;
+    }
+    let _ = write!(
+        out,
+        "Delete the index of {root} (its store, packs and the vectors no other root holds)? [y/N] "
+    );
+    let _ = out.flush();
+    let mut answer = String::new();
+    if input.read_line(&mut answer).is_err() {
+        return false;
+    }
+    matches!(answer.trim(), "y" | "Y" | "yes")
 }
 
 /// The arguments after `search`.
@@ -180,7 +198,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
     ]
     .contains(&name.as_str())
     {
-        return Err(format!("unknown search subcommand {name:?}"));
+        return parse_manage(&name, p);
     }
     let (mut rebuild, mut now, mut json, mut scope, mut k) = (false, false, false, None, None);
     let (mut mode, mut kinds, mut glob, mut docs) = (None, Vec::new(), None, true);
@@ -391,6 +409,53 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
     })
 }
 
+/// `list`, `status`, `pause`, `resume`, `stop` and `delete` (Hrafn redesign §11A).
+fn parse_manage(name: &str, mut p: lexopt::Parser) -> Result<SearchCommand, String> {
+    use lexopt::Arg::{Long, Value as Word};
+    use lexopt::ValueExt;
+    let verb = match name {
+        "pause" => Some(Verb::Pause),
+        "resume" => Some(Verb::Resume),
+        "stop" => Some(Verb::Stop),
+        "list" | "status" | "delete" => None,
+        _ => return Err(format!("unknown search subcommand {name:?}")),
+    };
+    let e = |e: lexopt::Error| e.to_string();
+    let (mut json, mut all, mut yes, mut words) = (false, false, false, Vec::new());
+    while let Some(arg) = p.next().map_err(e)? {
+        match arg {
+            Long("json") if matches!(name, "list" | "status") => json = true,
+            Long("all") if verb.is_some() => all = true,
+            Long("yes") if name == "delete" => yes = true,
+            Word(v) => words.push(PathBuf::from(v.string().map_err(e)?)),
+            other => return Err(other.unexpected().to_string()),
+        }
+    }
+    let max = if name == "list" { 0 } else { 1 };
+    if words.len() > max {
+        return Err(format!(
+            "search {name}: unexpected argument {:?}",
+            words[max]
+        ));
+    }
+    let root = words.pop();
+    Ok(match (name, verb) {
+        ("list", _) => SearchCommand::List { json },
+        ("status", _) => SearchCommand::Status { root, json },
+        ("delete", _) => SearchCommand::Delete {
+            root: root.ok_or("search delete needs a project root (one at a time)")?,
+            yes,
+        },
+        (_, Some(verb)) => {
+            if root.is_some() == all {
+                return Err(format!("search {name} needs a project root or --all"));
+            }
+            SearchCommand::Manage { verb, root, all }
+        }
+        _ => unreachable!("every name is matched above"),
+    })
+}
+
 fn absolute(cwd: &Path, p: &Path) -> String {
     cwd.join(p).to_string_lossy().into_owned()
 }
@@ -433,6 +498,9 @@ impl Backend for ClientBackend {
         params: serde_json::Value,
     ) -> mimir::BoxFuture<'a, Result<serde_json::Value, String>> {
         Box::pin(async move {
+            if !crate::search::mcp::mcp_may_call(method) {
+                return Err(crate::search::mcp::not_for_mcp(method));
+            }
             let env = self.env.clone();
             crate::clock::blocking(move || {
                 Client::user(&env, Duration::from_secs(5))

@@ -21,12 +21,27 @@ use std::sync::{Arc, Weak};
 /// The hub methods an MCP tool may call: reading the index, and `search/list` and `search/status`. Pausing, resuming,
 /// stopping and deleting an index are the user's (Hrafn redesign §11A): no tool names them, and both backends refuse
 /// any method not listed here.
-pub const MCP_METHODS: &[&str] = &[];
+pub const MCP_METHODS: &[&str] = &[
+    "search/query",
+    "search/symbols",
+    "search/outline",
+    "search/map",
+    "search/usages",
+    "search/results",
+    "search/list",
+    "search/status",
+];
 
 /// Whether an MCP tool may call METHOD.
 pub fn mcp_may_call(method: &str) -> bool {
-    let _ = method;
-    unimplemented!("Wave 9 stub")
+    MCP_METHODS.contains(&method)
+}
+
+/// What a backend answers a method no MCP tool may call.
+pub fn not_for_mcp(method: &str) -> String {
+    format!(
+        "{method} is not for an MCP tool: it is the user's (Search: pause, resume, stop, delete)"
+    )
 }
 
 /// Where a question goes: the hub itself, or (for `search mcp`) the hub's socket.
@@ -94,6 +109,9 @@ impl Backend for HubBackend {
         method: &'static str,
         params: Value,
     ) -> BoxFuture<'a, Result<Value, String>> {
+        if !mcp_may_call(method) {
+            return Box::pin(async move { Err(not_for_mcp(method)) });
+        }
         Box::pin(self.structural(method, params))
     }
 

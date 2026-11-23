@@ -22,6 +22,7 @@
 //!   [`Status`].
 
 use super::caches::Caches;
+use super::manage::{META_STATE, PauseWhy, RootState, UserState};
 use super::sources::{ChainEntry, DocSource, Slot, Source, SourceChain, run_pass_with};
 use super::{DocEmbedder, power};
 use crate::clock;
@@ -298,6 +299,8 @@ struct Inner {
     chains: Mutex<Vec<(String, Vec<ChainEntry>)>>,
     power_root: PathBuf,
     gate: Mutex<Gate>,
+    /// What the user set (`search/pause`, `resume`, `stop`), as the store's `index_state` keeps it.
+    user: Mutex<UserState>,
     wake: Notify,
     status: watch::Sender<Status>,
     tier1: tokio::sync::Mutex<()>,
@@ -391,6 +394,7 @@ impl Project {
         }
         // edits may have happened while the hub was down: every tree is checked on its next use
         store.trees_reopened().await?;
+        let user = UserState::parse(store.meta_get(META_STATE).await?.as_deref());
         let (status, _) = watch::channel(Status {
             tier2: Tier2::Stopped,
             embedded: 0,
@@ -418,6 +422,7 @@ impl Project {
                 chains: Mutex::new(Vec::new()),
                 power_root: spec.power_root,
                 gate: Mutex::new(Gate::default()),
+                user: Mutex::new(user),
                 wake: Notify::new(),
                 status,
                 tier1: tokio::sync::Mutex::new(()),
@@ -509,6 +514,10 @@ impl Project {
             .map_err(io::Error::other)??;
         if r.keys_missing > 0 || r.files_changed > 0 {
             inner.wake.notify_one();
+        }
+        // a stop holds until the next change
+        if r.files_changed > 0 && inner.user() == UserState::Stopped {
+            self.resume().await?;
         }
         Ok(r)
     }
@@ -699,29 +708,57 @@ impl Project {
     /// `search/pause`: the batch in flight finishes, then tier 2 holds until [`resume`](Self::resume); kept in the
     /// store, so a restart or a file change does not undo it.
     pub async fn pause(&self) -> Result<(), ProjectError> {
-        unimplemented!("Wave 9 stub")
+        self.inner.set_user(UserState::Paused).await?;
+        self.inner.wake.notify_one();
+        Ok(())
     }
 
     /// `search/resume`: tier 2 goes on with the keys still missing (a pause or a stop lifted).
     pub async fn resume(&self) -> Result<(), ProjectError> {
-        unimplemented!("Wave 9 stub")
+        self.inner.set_user(UserState::On).await?;
+        self.start_tier2();
+        self.inner.wake.notify_one();
+        Ok(())
     }
 
     /// `search/stop`: the running build is cancelled now; what it finished stays. The watcher stays on: the next change
     /// or `search/index` goes on from there.
     pub async fn stop(&self) -> Result<(), ProjectError> {
-        unimplemented!("Wave 9 stub")
+        self.inner.set_user(UserState::Stopped).await?;
+        let running = self.tier2.lock().ok().and_then(|mut t| t.take());
+        if let Some(h) = running {
+            h.abort();
+            let _ = h.await;
+        }
+        self.inner.publish(Tier2::Stopped);
+        Ok(())
     }
 
     /// The root's state as the user sees it: the user's pause or stop first, then what tier 2 waits for.
-    pub fn state(&self) -> super::manage::RootState {
-        unimplemented!("Wave 9 stub")
+    pub fn state(&self) -> RootState {
+        match self.inner.user() {
+            UserState::Stopped => return RootState::Stopped,
+            UserState::Paused => return RootState::Paused(PauseWhy::User),
+            UserState::On => {}
+        }
+        match self.inner.status.borrow().tier2 {
+            Tier2::Battery => RootState::Paused(PauseWhy::Battery),
+            Tier2::Failed(_) => RootState::Paused(PauseWhy::NoEmbedder),
+            Tier2::Running | Tier2::Typing | Tier2::Paused => RootState::Running,
+            Tier2::Idle | Tier2::Stopped if self.inner.sources().is_empty() => {
+                RootState::Paused(PauseWhy::NoEmbedder)
+            }
+            Tier2::Idle | Tier2::Stopped => RootState::Idle,
+        }
     }
 
-    /// Starts tier 2 (once).
+    /// Starts tier 2 (once; again when it ended), unless the user stopped it.
     pub fn start_tier2(&self) {
+        if self.inner.user() == UserState::Stopped {
+            return;
+        }
         let Ok(mut t) = self.tier2.lock() else { return };
-        if t.is_some() {
+        if t.as_ref().is_some_and(|h| !h.is_finished()) {
             return;
         }
         let inner = self.inner.clone();
@@ -1425,6 +1462,19 @@ impl Inner {
         Ok(cache)
     }
 
+    fn user(&self) -> UserState {
+        self.user.lock().map_or(UserState::On, |u| *u)
+    }
+
+    /// The user's state, kept in the store first.
+    async fn set_user(&self, state: UserState) -> Result<(), ProjectError> {
+        self.store.meta_set(META_STATE, state.as_str()).await?;
+        if let Ok(mut u) = self.user.lock() {
+            *u = state;
+        }
+        Ok(())
+    }
+
     fn publish(&self, tier2: Tier2) {
         self.status.send_if_modified(|s| {
             let changed = s.tier2 != tier2;
@@ -1437,6 +1487,12 @@ impl Inner {
     /// (on battery, unless `index now` or `drgnx-search-battery-engine`; remote sources are never held by battery).
     async fn gates(&self) -> (bool, bool) {
         loop {
+            // the user's pause first: no automatic reason lifts it, only `resume`
+            if self.user() != UserState::On {
+                self.publish(Tier2::Paused);
+                self.wake.notified().await;
+                continue;
+            }
             let (typing, overriding) = match self.gate.lock() {
                 Ok(g) => (g.hold_until.is_some_and(|t| t > clock::now()), g.overriding),
                 Err(_) => (false, false),
