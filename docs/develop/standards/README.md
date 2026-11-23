@@ -1,7 +1,7 @@
 # The standards
 
 Every cross-cutting concern of the editor (errors, logging, paths, files, processes, time, concurrency, secrets, the
-test harness, and more to come) is a **standard**: one owning crate with one API, lints that reject any other way, a
+test harness, commands, keys, settings, prompts, notices, the extension API, and more to come) is a **standard**: one owning crate with one API, lints that reject any other way, a
 page here, and a conformance test that drives the API. They are written before feature code, so code starts out
 right instead of being migrated later.
 
@@ -47,4 +47,6 @@ site outside its owner. Code that cannot meet a standard yet sits in a crate tha
 ## The pages
 
 [errors](errors.md) · [logging](logging.md) · [paths](paths.md) · [files](files.md) · [processes](processes.md) ·
-[time](time.md) · [concurrency](concurrency.md) · [data-hygiene](data-hygiene.md) · [test-harness](test-harness.md)
+[time](time.md) · [concurrency](concurrency.md) · [data-hygiene](data-hygiene.md) · [test-harness](test-harness.md) ·
+[commands](commands.md) · [keys](keys.md) · [settings](settings.md) · [prompts](prompts.md) · [attention](attention.md) ·
+[api-versioning](api-versioning.md)

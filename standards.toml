@@ -22,6 +22,14 @@ stig = { clean = true }
 raun = { clean = true }
 saman = { clean = true }
 hulda = { clean = true }
+bod = { clean = true }
+lykill = { clean = true }
+skipan = { clean = true }
+spurn = { clean = true }
+tidindi = { clean = true }
+mal = { clean = true }
+mal-gen = { clean = true }
+sattr = { clean = true }
 
 [[standard]]
 id = "errors"
@@ -102,7 +110,61 @@ owner = "hulda"
 scan = ["secret-has-redact"]
 conformance = "crates/std/hulda/tests/conformance.rs"
 
+[[standard]]
+id = "commands"
+owner = "bod"
+scan = ["command-has-doc"]
+conformance = "crates/std/bod/tests/conformance.rs"
+
+[[standard]]
+id = "keys"
+owner = "lykill"
+scan = ["no-raw-key-event"]
+conformance = "crates/std/lykill/tests/conformance.rs"
+
+[[standard]]
+id = "settings"
+owner = "skipan"
+conformance = "crates/std/skipan/tests/conformance.rs"
+
+[[standard]]
+id = "prompts"
+owner = "spurn"
+conformance = "crates/std/spurn/tests/conformance.rs"
+
+[[standard]]
+id = "attention"
+owner = "tidindi"
+conformance = "crates/std/tidindi/tests/conformance.rs"
+
+[[standard]]
+id = "api-versioning"
+owner = "sattr"
+scan = ["no-hand-luau-binding"]
+conformance = "crates/ext/sattr/tests/conformance.rs"
+
 # The layers: a crate may not depend on these, directly or through other workspace crates (cargo metadata).
 [[layer]]
 crate = "drgnx"
 may_not_depend = ["glitnir"]
+
+# Settings files are read through skipan and key profiles through lykill: the UI crates do not read huginn themselves.
+[[layer]]
+crate = "glitnir"
+may_not_depend = ["huginn"]
+
+[[layer]]
+crate = "sja"
+may_not_depend = ["huginn"]
+
+[[layer]]
+crate = "smidja"
+may_not_depend = ["huginn"]
+
+[[layer]]
+crate = "skel"
+may_not_depend = ["huginn"]
+
+[[layer]]
+crate = "ritari"
+may_not_depend = ["huginn"]

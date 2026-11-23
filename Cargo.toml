@@ -3,7 +3,7 @@
 # crates/ext (the extension API and hosts), crates/std (the standards); app/ is the editor binary. Members write
 # `x.workspace = true`. The fuzz crates and the plugin fixtures and template are their own workspaces.
 [workspace]
-members = ["app", "crates/core/*", "crates/hub/*", "crates/std/*", "crates/ui/*", "xtask"]
+members = ["app", "crates/core/*", "crates/ext/*", "crates/hub/*", "crates/std/*", "crates/ui/*", "xtask"]
 exclude = [
     "crates/hub/hrista",
     "crates/hub/plugins",
@@ -142,6 +142,15 @@ raun = { path = "crates/std/raun" }
 saman = { path = "crates/std/saman" }
 hulda = { path = "crates/std/hulda" }
 stund = { path = "crates/hub/stund" }
+bod = { path = "crates/std/bod" }
+mal = { path = "crates/ext/mal" }
+mal-gen = { path = "crates/ext/mal-gen" }
+# the commands registry's link-time registration (bod's `command!`)
+inventory = "0.3"
+# the extension API (sattr): Luau bound from the WIT by mal-gen; the WIT read by wit-parser (the version already in the
+# lock through wasmtime's bindgen). mlua builds the Luau VM from C++ (the image carries gcc-c++)
+mlua = { version = "0.12", features = ["luau"] }
+wit-parser = "=0.254.2"
 
 # The standards' clippy lints (standards.toml's `lints`, and the two disallowed-* lints its `clippy` rows feed), denied
 # for every crate that has `[lints] workspace = true`: a clean crate must (cargo xtask standards checks it). Each is

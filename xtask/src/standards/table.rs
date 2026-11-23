@@ -17,6 +17,10 @@ pub const SCAN_RULES: &[&str] = &[
     "no-env-home",
     "no-blocking-recv-on-ui",
     "secret-has-redact",
+    "no-hand-luau-binding",
+    "no-raw-key-event",
+    "no-colour-literal",
+    "command-has-doc",
 ];
 
 #[derive(Debug, Default, Deserialize)]
