@@ -127,6 +127,16 @@ fn add_files(dir: &Path, n: usize, tag: &str) {
     }
 }
 
+/// The vector cache files of STATE (`STATE/vectors/*.db`).
+fn cache_files(state: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(state.join("vectors")) else {
+        return Vec::new();
+    };
+    rd.filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "db"))
+        .collect()
+}
+
 /// A project over a fresh repository with the embedders EMBEDDERS: its tier 2 runs freely (no gates).
 struct Fixture {
     _home: TempDir,
@@ -164,21 +174,54 @@ async fn project(embedders: Vec<Arc<dyn DocEmbedder>>) -> Fixture {
 }
 
 impl Fixture {
-    /// `(model, rows)` of the `vec` table's chunk vectors (the path vectors left out).
+    /// `(fingerprint, rows)` of the state's vector caches' chunk vectors (the path vectors left out), one per cache file
+    /// with any: the fixture's project is the only one of its state, so a cache's rows are its keys.
     async fn vec_models(&self) -> Vec<(String, i64)> {
-        self.project
-            .store()
-            .handle()
-            .read(|c| {
-                let mut st = c.prepare(
-                    "select model, count(*) from vec where kind = 0 group by model order by model",
-                )?;
-                Ok(st
-                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-                    .collect::<Result<Vec<_>, _>>()?)
+        let mut out: Vec<(String, i64)> = cache_files(self._state.path())
+            .iter()
+            .filter_map(|f| {
+                let c = rusqlite::Connection::open_with_flags(
+                    f,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                )
+                .ok()?;
+                let fp: String = c
+                    .query_row(
+                        "select value from meta where key = 'fingerprint'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .ok()?;
+                let n: i64 = c
+                    .query_row("select count(*) from chunk_vec", [], |r| r.get(0))
+                    .ok()?;
+                (n > 0).then_some((fp, n))
             })
-            .await
-            .unwrap()
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// `(kind, key)` of every vector in the state's caches (0 a chunk's, 1 a path's).
+    fn written(&self) -> std::collections::HashSet<(i64, Vec<u8>)> {
+        let mut out = std::collections::HashSet::new();
+        for f in cache_files(self._state.path()) {
+            let c = rusqlite::Connection::open_with_flags(
+                &f,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            for (kind, table) in [(0, "chunk_vec"), (1, "path_vec")] {
+                let mut st = c.prepare(&format!("select key from {table}")).unwrap();
+                let keys = st
+                    .query_map([], |r| r.get::<_, Vec<u8>>(0))
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                out.extend(keys.into_iter().map(|k| (kind, k)));
+            }
+        }
+        out
     }
 
     /// The distinct keys of embeddable chunks.
@@ -288,27 +331,19 @@ async fn sent_text_hashes_to_its_key() {
         r.iter().map(|(_, n)| n).sum::<i64>() == chunks
     })
     .await;
-    let hex = e.identity().expect("it has probed").fp.hex();
+    let id = e.identity().expect("it has probed");
     let store = f.project.store();
+    let cache = f.project.cache(&id).await.unwrap();
     let mut done = false;
     for _ in 0..600 {
-        if hrafn::missing(store, &hex, 1).await.unwrap().is_empty() {
+        if hrafn::missing(store, &cache, 1).await.unwrap().is_empty() {
             done = true;
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert!(done, "tier 2 never embedded every key");
-    let written: std::collections::HashSet<(i64, Vec<u8>)> = store
-        .handle()
-        .read(|c| {
-            let mut st = c.prepare("select kind, key from vec")?;
-            Ok(st
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .collect::<Result<_, _>>()?)
-        })
-        .await
-        .unwrap();
+    let written = f.written();
     assert!(
         written.iter().any(|(k, _)| *k == 1),
         "the files' path keys too: {written:?}"

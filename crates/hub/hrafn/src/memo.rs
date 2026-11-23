@@ -37,21 +37,30 @@ impl Signs {
 #[derive(Default)]
 pub(crate) struct Memo {
     generation: Option<(u64, i64)>,
+    /// The attached vector cache's file and its `data_version` (`store::ensure_vc`).
+    vectors: Option<Option<(String, i64)>>,
     pub lag: HashMap<(Option<String>, View), Counts>,
     pub signs: Option<Signs>,
     pub graphs: crate::graph::Graphs,
 }
 
 impl Memo {
-    /// The memo as of the store's state now: emptied when anything was written since it was filled.
+    /// The memo as of the store's state now: emptied when anything was written since it was filled. What reads the
+    /// vectors (the lag, the sign bits) goes too when another cache is attached or the cache's writer committed; the
+    /// graphs, which read no vector, stay then.
     pub fn at(&mut self, c: &Connection) -> rusqlite::Result<&mut Memo> {
         let now = Some(generation(c)?);
+        let vectors = Some(attached(c)?);
         if self.generation != now {
             self.lag.clear();
             self.signs = None;
             self.graphs.clear();
             self.generation = now;
+        } else if self.vectors != vectors {
+            self.lag.clear();
+            self.signs = None;
         }
+        self.vectors = vectors;
         Ok(self)
     }
 }
@@ -63,6 +72,24 @@ fn generation(c: &Connection) -> rusqlite::Result<(u64, i64)> {
         c.total_changes(),
         c.query_row("pragma data_version", [], |r| r.get(0))?,
     ))
+}
+
+/// The vector cache attached as `vc` (its file) and its `data_version`, which moves with every commit of its writer
+/// (another process's connection); none when nothing is attached.
+fn attached(c: &Connection) -> rusqlite::Result<Option<(String, i64)>> {
+    let mut st = c.prepare("pragma database_list")?;
+    let file: Option<String> = st
+        .query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+        .filter_map(Result::ok)
+        .find(|(name, _)| name == "vc")
+        .map(|(_, f)| f);
+    match file {
+        None => Ok(None),
+        Some(f) => Ok(Some((
+            f,
+            c.query_row("pragma vc.data_version", [], |r| r.get(0))?,
+        ))),
+    }
 }
 
 pub(crate) type Shared = Arc<Mutex<Memo>>;

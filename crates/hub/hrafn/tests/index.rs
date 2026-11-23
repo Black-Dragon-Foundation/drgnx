@@ -1,19 +1,20 @@
 //! Tier 1 (the incremental index: chunks, FTS and symbols for the files whose blob changed) and the store side of
-//! tier 2 (`missing`, `put_vectors`, `collect`, `lag`); in `fresh`, when tier 1 runs.
+//! tier 2 (`missing`, the cache's `put`, `hold`, `lag`); in `fresh`, when tier 1 runs.
 //!
 //! test-pattern: the store tests and the git ones are pure (D): no clock and no timing; the store thread answers in
 //! order and `git` runs to its exit. `fresh::git_event_waits_for_index_lock` is every-order (A) over the settle core.
 
 use hrafn::{
-    Class, CodeStore, KeyKind, Lang, Listed, Refresh, collect, lag, missing, missing_with,
-    path_key, path_text, put_vectors, refresh,
+    Class, CodeStore, KeyKind, Lang, Listed, Refresh, VectorCache, hold, lag, missing,
+    missing_with, path_key, path_text, refresh,
 };
 use std::collections::HashMap;
 use std::io;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-const MODEL: &str = "m";
+/// The fingerprint every vector here is of.
+const FP: &str = "5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed";
 const DIMS: usize = 4;
 
 fn el(path: &str, blob: &str) -> Listed {
@@ -66,14 +67,41 @@ impl Tree {
     }
 }
 
-async fn store() -> (tempfile::TempDir, CodeStore) {
-    let dir = tempfile::tempdir().unwrap();
-    let s = CodeStore::open(&dir.path().join("code.db")).unwrap();
-    (dir, s)
+/// A repo store and the vector cache of [`FP`] beside it: `<dir>/code/a.db` and `<dir>/vectors/`.
+struct Fx {
+    dir: tempfile::TempDir,
+    s: CodeStore,
+    c: VectorCache,
 }
 
-async fn run(s: &CodeStore, tree: &Tree, listed: &[Listed]) -> Refresh {
-    refresh(s, listed, &|p: &str| tree.read(p), &[(MODEL, DIMS)])
+impl std::ops::Deref for Fx {
+    type Target = CodeStore;
+    fn deref(&self) -> &CodeStore {
+        &self.s
+    }
+}
+
+async fn store() -> Fx {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("code")).unwrap();
+    let s = CodeStore::open(&dir.path().join("code/a.db")).unwrap();
+    let c = VectorCache::open_writer(&dir.path().join("vectors"), FP, "{}").unwrap();
+    Fx { dir, s, c }
+}
+
+impl Fx {
+    /// Another repo store over the same cache.
+    fn other(&self, id: &str) -> CodeStore {
+        CodeStore::open(&self.dir.path().join(format!("code/{id}.db"))).unwrap()
+    }
+}
+
+async fn run(s: &Fx, tree: &Tree, listed: &[Listed]) -> Refresh {
+    run_in(&s.s, &s.c, tree, listed).await
+}
+
+async fn run_in(s: &CodeStore, c: &VectorCache, tree: &Tree, listed: &[Listed]) -> Refresh {
+    refresh(s, listed, &|p: &str| tree.read(p), &[c])
         .await
         .unwrap()
 }
@@ -92,24 +120,30 @@ fn vectors(keys: &Missing, kind: KeyKind) -> Vec<([u8; 32], Vec<f32>)> {
         .collect()
 }
 
-/// Embeds everything tier 2 would: what `missing` gives goes back through `put_vectors`, each kind on its own. How
-/// many chunk keys it embedded.
-async fn embed_all(s: &CodeStore) -> usize {
-    let keys = missing(s, MODEL, 1000).await.unwrap();
+/// Embeds everything tier 2 would: what `missing` gives goes back through the cache's `put`, each kind on its own.
+/// How many chunk keys it embedded.
+async fn embed_all(s: &Fx) -> usize {
+    embed_all_in(&s.s, &s.c).await
+}
+
+async fn embed_all_in(s: &CodeStore, c: &VectorCache) -> usize {
+    let keys = missing(s, c, 1000).await.unwrap();
     for kind in [KeyKind::Chunk, KeyKind::Path] {
         let rows = vectors(&keys, kind);
         if !rows.is_empty() {
-            put_vectors(s, MODEL, DIMS as u32, kind, &rows)
-                .await
-                .unwrap();
+            c.put(kind, DIMS as u32, &rows).await.unwrap();
         }
     }
     keys.iter().filter(|(k, _, _)| *k == KeyKind::Chunk).count()
 }
 
 /// The chunk keys tier 2 is offered (the path keys left out).
-async fn chunk_keys(s: &CodeStore) -> Missing {
-    missing(s, MODEL, 1000)
+async fn chunk_keys(s: &Fx) -> Missing {
+    chunk_keys_in(&s.s, &s.c).await
+}
+
+async fn chunk_keys_in(s: &CodeStore, c: &VectorCache) -> Missing {
+    missing(s, c, 1000)
         .await
         .unwrap()
         .into_iter()
@@ -128,16 +162,17 @@ fn offered_paths(keys: &Missing) -> Vec<String> {
 /// A row whose length is not the fingerprint's dims is an error, and nothing of the batch is written.
 #[tokio::test]
 async fn wrong_dims_are_refused_on_write() {
-    let (_d, s) = store().await;
+    let s = store().await;
     let tree = Tree::new(&[("a.el", "(defun a () 1)\n"), ("b.el", "(defun b () 2)\n")]);
     run(&s, &tree, &[el("a.el", "a1"), el("b.el", "b1")]).await;
     let keys = chunk_keys(&s).await;
     assert!(keys.len() >= 2);
     let mut rows = vectors(&keys, KeyKind::Chunk);
     rows[1].1.push(0.5); // one row of 5 in a batch of 4
-    let err = put_vectors(&s, MODEL, DIMS as u32, KeyKind::Chunk, &rows)
-        .await
-        .unwrap_err();
+    let err =
+        s.c.put(KeyKind::Chunk, DIMS as u32, &rows)
+            .await
+            .unwrap_err();
     assert!(
         err.to_string().contains("5 dims") && err.to_string().contains("4"),
         "{err}"
@@ -147,16 +182,233 @@ async fn wrong_dims_are_refused_on_write() {
         keys.len(),
         "nothing of the batch was written"
     );
-    put_vectors(
-        &s,
-        MODEL,
-        DIMS as u32,
-        KeyKind::Chunk,
-        &vectors(&keys, KeyKind::Chunk),
-    )
-    .await
-    .unwrap();
+    s.c.put(KeyKind::Chunk, DIMS as u32, &vectors(&keys, KeyKind::Chunk))
+        .await
+        .unwrap();
     assert!(chunk_keys(&s).await.is_empty());
+}
+
+/// Pattern D (Task 12). Two repos with one identical file share its vectors through the cache: once the first has
+/// embedded it, the second's tier 2 is offered no chunk of it, only its own file's chunks and its paths.
+#[tokio::test]
+async fn two_repos_share_one_vector() {
+    let s = store().await;
+    let shared = ";;; util.el --- shared helpers\n\n(defun util-clamp (x)\n  \"Clamp X.\"\n  x)\n";
+    let tree = Tree::new(&[
+        ("lisp/util.el", shared),
+        ("a.el", A),
+        ("util.el", shared),
+        ("b.el", B),
+    ]);
+    run(&s, &tree, &[el("lisp/util.el", "u"), el("a.el", "a1")]).await;
+    assert!(embed_all(&s).await >= 2);
+    let b = s.other("b");
+    let r = run_in(&b, &s.c, &tree, &[el("util.el", "u"), el("b.el", "b1")]).await;
+    let b_only = keys_of(&b, "b.el").await;
+    assert_eq!(
+        r.keys_missing as usize,
+        b_only.len(),
+        "only b.el's chunks lack vectors: {r:?}"
+    );
+    let offered: Vec<[u8; 32]> = chunk_keys_in(&b, &s.c)
+        .await
+        .into_iter()
+        .map(|(_, k, _)| k)
+        .collect();
+    let want: Vec<[u8; 32]> = b_only.iter().map(|(k, _)| *k).collect();
+    assert_eq!(
+        offered, want,
+        "nothing of the shared file is embedded again"
+    );
+    let mut paths = offered_paths(&missing_with(&b, &s.c, 1000, false).await.unwrap());
+    paths.sort();
+    assert_eq!(paths, ["b.el", "util.el"], "the second repo's own paths");
+    assert_eq!(embed_all_in(&b, &s.c).await, b_only.len());
+    assert_eq!(
+        lag(&b, Some(&s.c), hrafn::View::Base)
+            .await
+            .unwrap()
+            .chunks_behind,
+        0
+    );
+}
+
+/// Pattern D (Task 12). A branch switch that changes one file and adds another embeds exactly their chunks: every
+/// other key is in the cache already.
+#[tokio::test]
+async fn branch_switch_embeds_only_the_diff() {
+    let s = store().await;
+    let c_text = ";;; c.el\n(defun c-one () \"C.\" 3)\n";
+    let tree = Tree::new(&[("a.el", A), ("b.el", B), ("c.el", c_text)]);
+    run(
+        &s,
+        &tree,
+        &[el("a.el", "a1"), el("b.el", "b1"), el("c.el", "c1")],
+    )
+    .await;
+    embed_all(&s).await;
+    assert!(missing(&s, &s.c, 1000).await.unwrap().is_empty());
+    tree.set("b.el", ";;; b.el\n(defvar b-var 2 \"Another var.\")\n");
+    tree.set("d.el", ";;; d.el\n(defun d-new () \"New.\" 4)\n");
+    let r = run(
+        &s,
+        &tree,
+        &[
+            el("a.el", "a1"),
+            el("b.el", "b2"),
+            el("c.el", "c1"),
+            el("d.el", "d1"),
+        ],
+    )
+    .await;
+    let mut want: Vec<[u8; 32]> = keys_of(&s, "b.el")
+        .await
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    want.extend(keys_of(&s, "d.el").await.into_iter().map(|(k, _)| k));
+    want.sort();
+    let mut offered: Vec<[u8; 32]> = chunk_keys(&s)
+        .await
+        .into_iter()
+        .map(|(_, k, _)| k)
+        .collect();
+    offered.sort();
+    assert_eq!(offered, want);
+    assert_eq!(r.keys_missing as usize, want.len());
+    assert_eq!(
+        offered_paths(&missing_with(&s, &s.c, 1000, false).await.unwrap()),
+        ["d.el"],
+        "the one new path"
+    );
+}
+
+/// Pattern D (Task 12). A schema-7 store (vectors in its own `vec` table) opens at schema 8 without that table, and
+/// every key is embedded again into the cache.
+#[tokio::test]
+async fn v8_drops_vec_and_reembeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("old.db");
+    {
+        let c = rusqlite::Connection::open(&file).unwrap();
+        c.execute_batch("create table meta(key text primary key, value text not null)")
+            .unwrap();
+        for (v, sql) in hrafn::MIGRATIONS.iter().filter(|(v, _)| *v <= 7) {
+            c.execute_batch(sql).unwrap();
+            c.execute(
+                "insert or replace into meta(key, value) values ('schema', ?1)",
+                [v.to_string()],
+            )
+            .unwrap();
+        }
+        c.execute(
+            "insert into vec(model, kind, dims, key, bits, vec, scale, last_used)
+             values ('m', 0, 4, x'00', 8, x'00', 1.0, 1)",
+            [],
+        )
+        .unwrap();
+    }
+    let s = CodeStore::open(&file).unwrap();
+    let (tables, schema): (i64, Option<String>) = s
+        .handle()
+        .read(|c| {
+            Ok((
+                c.query_row(
+                    "select count(*) from sqlite_master where name = 'vec'",
+                    [],
+                    |r| r.get(0),
+                )?,
+                urdr::meta(c, "schema")?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!((tables, schema.as_deref()), (0, Some("8")));
+    let cache = VectorCache::open_writer(&dir.path().join("vectors"), FP, "{}").unwrap();
+    let tree = Tree::new(&[("a.el", A), ("b.el", B)]);
+    let r = run_in(&s, &cache, &tree, &[el("a.el", "a1"), el("b.el", "b1")]).await;
+    assert_eq!(r.keys_missing, r.chunks_written, "every chunk embeds again");
+    assert_eq!(embed_all_in(&s, &cache).await as u32, r.chunks_written);
+}
+
+/// Pattern D (Task 13). `hold` reports the store's live key set to the cache as a diff: what a refresh added is held,
+/// what it dropped is not, and a key another store holds stays held.
+#[tokio::test]
+async fn hold_reports_the_live_key_set() {
+    let s = store().await;
+    let tree = Tree::new(&[("a.el", A), ("b.el", B)]);
+    run(&s, &tree, &[el("a.el", "a1"), el("b.el", "b1")]).await;
+    embed_all(&s).await;
+    let root = tempfile::tempdir().unwrap();
+    hold(&s, &s.c, root.path(), 1000).await.unwrap();
+    let a: Vec<[u8; 32]> = keys_of(&s, "a.el")
+        .await
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    let b: Vec<[u8; 32]> = keys_of(&s, "b.el")
+        .await
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    assert!(
+        s.c.referenced(KeyKind::Chunk, &a)
+            .await
+            .unwrap()
+            .iter()
+            .all(|h| *h)
+    );
+    assert!(
+        s.c.referenced(KeyKind::Chunk, &b)
+            .await
+            .unwrap()
+            .iter()
+            .all(|h| *h)
+    );
+    assert_eq!(
+        s.c.referenced(KeyKind::Path, &[path_key("a.el"), path_key("b.el")])
+            .await
+            .unwrap(),
+        [true, true]
+    );
+    // b.el goes: its keys are no one's after the next report
+    run(&s, &tree, &[el("a.el", "a1")]).await;
+    hold(&s, &s.c, root.path(), 2000).await.unwrap();
+    assert!(
+        s.c.referenced(KeyKind::Chunk, &b)
+            .await
+            .unwrap()
+            .iter()
+            .all(|h| !*h)
+    );
+    assert_eq!(
+        s.c.referenced(KeyKind::Path, &[path_key("b.el")])
+            .await
+            .unwrap(),
+        [false]
+    );
+    assert!(
+        s.c.referenced(KeyKind::Chunk, &a)
+            .await
+            .unwrap()
+            .iter()
+            .all(|h| *h)
+    );
+    s.c.collect(0).await.unwrap();
+    assert!(
+        s.c.has(KeyKind::Chunk, &b)
+            .await
+            .unwrap()
+            .iter()
+            .all(|h| !*h)
+    );
+    assert!(
+        s.c.has(KeyKind::Chunk, &a)
+            .await
+            .unwrap()
+            .iter()
+            .all(|h| *h)
+    );
 }
 
 /// The `(key, embed_text)` of PATH's chunks, in order.
@@ -182,7 +434,7 @@ async fn keys_of(s: &CodeStore, path: &str) -> Vec<([u8; 32], String)> {
 /// offered it once.
 #[tokio::test]
 async fn same_text_two_paths_one_key() {
-    let (_d, s) = store().await;
+    let s = store().await;
     let text = ";;; shared.el --- A helper both crates carry\n\n(defun shared-help ()\n  \"Help.\"\n  1)\n";
     let tree = Tree::new(&[("a/shared.el", text), ("b/lisp/copy.el", text)]);
     run(
@@ -207,7 +459,7 @@ async fn same_text_two_paths_one_key() {
 /// the path route still have it.
 #[tokio::test]
 async fn fts_path_column_still_holds_the_path() {
-    let (_d, s) = store().await;
+    let s = store().await;
     let tree = Tree::new(&[("core/drgnx-walrus.el", A)]);
     run(&s, &tree, &[el("core/drgnx-walrus.el", "w1")]).await;
     let hits: i64 = s
@@ -253,14 +505,14 @@ async fn fts_path_column_still_holds_the_path() {
 /// directory is embedded; with them, each directory once, after its file's key. Every path key is its path text's.
 #[tokio::test]
 async fn dir_weight_zero_embeds_no_directories() {
-    let (_d, s) = store().await;
+    let s = store().await;
     let tree = Tree::new(&[("core/sub/a.el", A), ("b.el", B)]);
     run(&s, &tree, &[el("core/sub/a.el", "a1"), el("b.el", "b1")]).await;
-    let without = missing_with(&s, MODEL, 1000, false).await.unwrap();
+    let without = missing_with(&s, &s.c, 1000, false).await.unwrap();
     let mut files = offered_paths(&without);
     files.sort();
     assert_eq!(files, ["b.el", "core/sub/a.el"]);
-    let with = missing_with(&s, MODEL, 1000, true).await.unwrap();
+    let with = missing_with(&s, &s.c, 1000, true).await.unwrap();
     let mut all = offered_paths(&with);
     all.sort();
     assert_eq!(all, ["b.el", "core/", "core/sub/", "core/sub/a.el"]);
@@ -272,10 +524,10 @@ async fn dir_weight_zero_embeds_no_directories() {
         }
     }
     // a limit is the batch's size, path keys counted: two files' chunk keys and path keys do not fit in two
-    let two = missing_with(&s, MODEL, 2, true).await.unwrap();
+    let two = missing_with(&s, &s.c, 2, true).await.unwrap();
     assert_eq!(two.len(), 2, "{two:?}");
     if hrafn::query::DIR_WEIGHT <= 0.0 {
-        assert_eq!(missing(&s, MODEL, 1000).await.unwrap(), without);
+        assert_eq!(missing(&s, &s.c, 1000).await.unwrap(), without);
     }
 }
 
@@ -310,21 +562,13 @@ async fn ids_of(s: &CodeStore, path: &str) -> Vec<i64> {
         .unwrap()
 }
 
-/// The chunk vectors stored (the path vectors left out).
-async fn vec_rows(s: &CodeStore) -> i64 {
-    s.handle()
-        .read(|c| Ok(c.query_row("select count(*) from vec where kind = 0", [], |r| r.get(0))?))
-        .await
-        .unwrap()
-}
-
 const A: &str = ";;; a.el\n(defun a-one () \"One.\" 1)\n\n(defun a-two () \"Two.\" 2)\n";
 const B: &str = ";;; b.el\n(defvar b-var 1 \"A var.\")\n";
 
 /// Pattern D.
 #[tokio::test]
 async fn second_refresh_touches_nothing() {
-    let (_d, s) = store().await;
+    let s = store().await;
     let tree = Tree::new(&[("a.el", A), ("b.el", B)]);
     let listed = [el("a.el", "blob-a"), el("b.el", "blob-b")];
     let first = run(&s, &tree, &listed).await;
@@ -343,7 +587,7 @@ async fn second_refresh_touches_nothing() {
     assert_eq!(second.keys_missing, first.keys_missing);
     assert_eq!(tree.reads(), 0, "an unchanged blob is not even read");
     assert_eq!(ids_of(&s, "a.el").await, ids);
-    let l = lag(&s, Some(MODEL), hrafn::View::Base).await.unwrap();
+    let l = lag(&s, Some(&s.c), hrafn::View::Base).await.unwrap();
     assert_eq!(l.chunks_behind, first.keys_missing);
     assert_eq!(l.files_behind, 2);
 }
@@ -351,7 +595,7 @@ async fn second_refresh_touches_nothing() {
 /// Pattern D. A branch switch and back: content keys make the second switch embed nothing.
 #[tokio::test]
 async fn branch_back_and_forth_embeds_nothing() {
-    let (_d, s) = store().await;
+    let s = store().await;
     let tree = Tree::new(&[("a.el", A)]);
     run(&s, &tree, &[el("a.el", "main")]).await;
     let on_main = embed_all(&s).await;
@@ -367,9 +611,9 @@ async fn branch_back_and_forth_embeds_nothing() {
     let back = run(&s, &tree, &[el("a.el", "main")]).await;
     assert_eq!(back.files_changed, 1, "the rows are rebuilt");
     assert_eq!(back.keys_missing, 0, "and nothing is embedded again");
-    assert!(missing(&s, MODEL, 1000).await.unwrap().is_empty());
+    assert!(missing(&s, &s.c, 1000).await.unwrap().is_empty());
     assert_eq!(
-        lag(&s, Some(MODEL), hrafn::View::Base)
+        lag(&s, Some(&s.c), hrafn::View::Base)
             .await
             .unwrap()
             .chunks_behind,
@@ -380,7 +624,7 @@ async fn branch_back_and_forth_embeds_nothing() {
 /// Pattern D.
 #[tokio::test]
 async fn changed_file_only_rewritten() {
-    let (_d, s) = store().await;
+    let s = store().await;
     let tree = Tree::new(&[("a.el", A), ("b.el", B)]);
     run(&s, &tree, &[el("a.el", "a1"), el("b.el", "b1")]).await;
     let b_ids = ids_of(&s, "b.el").await;
@@ -419,7 +663,7 @@ async fn line_starts(s: &CodeStore, path: &str) -> Vec<i64> {
 /// again, though no file changed: its lines are the corrected ones.
 #[tokio::test]
 async fn an_index_of_the_old_chunker_is_chunked_again() {
-    let (_d, s) = store().await;
+    let s = store().await;
     let text = ";;; a.el\n\n(defun a-one () \"One.\" 1)\n\n(defun a-two () \"Two.\" 2)\n";
     let tree = Tree::new(&[("a.el", text)]);
     let listed = [el("a.el", "a1")];
@@ -439,38 +683,6 @@ async fn an_index_of_the_old_chunker_is_chunked_again() {
 
     run(&s, &tree, &listed).await;
     assert_eq!(line_starts(&s, "a.el").await, right);
-}
-
-/// Pattern D. Unreferenced keys are kept up to 2× the live set, least recently referenced first out.
-#[tokio::test]
-async fn collect_keeps_two_x() {
-    let (_d, s) = store().await;
-    let version = |n: u32| format!(";;; a.el\n(defun a-{n} () \"Version {n}.\" {n})\n");
-    let tree = Tree::new(&[("a.el", &version(1))]);
-    for n in 1..=5 {
-        tree.set("a.el", &version(n));
-        run(&s, &tree, &[el("a.el", &format!("v{n}"))]).await;
-        assert_eq!(embed_all(&s).await, 1);
-    }
-    assert_eq!(vec_rows(&s).await, 5, "one live key, four unreferenced");
-    assert_eq!(collect(&s, MODEL).await.unwrap(), 2, "v1 and v2 go");
-    assert_eq!(vec_rows(&s).await, 3);
-    assert_eq!(
-        collect(&s, MODEL).await.unwrap(),
-        0,
-        "a second pass removes nothing"
-    );
-
-    // v4 and v3 were kept: switching back to them embeds nothing; v1 went
-    for (n, behind) in [(4, 0), (3, 0), (1, 1)] {
-        tree.set("a.el", &version(n));
-        let r = run(&s, &tree, &[el("a.el", &format!("v{n}"))]).await;
-        assert_eq!(r.keys_missing, behind, "v{n}");
-    }
-    // the live key is never collected, however old: v1 is live now, the oldest key, and stays
-    embed_all(&s).await;
-    collect(&s, MODEL).await.unwrap();
-    assert!(missing(&s, MODEL, 1000).await.unwrap().is_empty());
 }
 
 mod fresh {
@@ -509,16 +721,16 @@ mod fresh {
         list(dir, &GitCli, config, &|_: &str| true).unwrap()
     }
 
-    async fn index(s: &CodeStore, dir: &Path, l: &[Listed]) -> Refresh {
+    async fn index(s: &Fx, dir: &Path, l: &[Listed]) -> Refresh {
         let read = |p: &str| std::fs::read(dir.join(p));
-        refresh(s, l, &read, &[(MODEL, DIMS)]).await.unwrap()
+        refresh(s, l, &read, &[&s.c]).await.unwrap()
     }
 
     /// Pattern D.
     #[tokio::test]
     async fn uncommitted_edit_counts() {
         let d = repo(&[("a.el", A)]);
-        let (_s, s) = store().await;
+        let s = store().await;
         let first = listed(d.path(), &Config::default());
         index(&s, d.path(), &first).await;
 
@@ -552,7 +764,7 @@ mod fresh {
 
     /// A repository of [`sixty`] files, indexed with every key embedded, then 50 of them moved by `git mv` (half into
     /// another directory under their name, half renamed too) and indexed again. The new paths.
-    async fn moved() -> (tempfile::TempDir, tempfile::TempDir, CodeStore, Vec<String>) {
+    async fn moved() -> (tempfile::TempDir, Fx, Vec<String>) {
         let files = sixty();
         let refs: Vec<(&str, &str)> = files
             .iter()
@@ -570,10 +782,10 @@ mod fresh {
             git(dir.path(), &["commit", "-q", "-m", "one"]);
             dir
         };
-        let (sd, s) = store().await;
+        let s = store().await;
         index(&s, d.path(), &listed(d.path(), &Config::default())).await;
         assert!(embed_all(&s).await >= 60);
-        assert!(missing(&s, MODEL, 1000).await.unwrap().is_empty());
+        assert!(missing(&s, &s.c, 1000).await.unwrap().is_empty());
         std::fs::create_dir_all(d.path().join("moved")).unwrap();
         let mut new = Vec::new();
         for i in 0..50 {
@@ -588,15 +800,15 @@ mod fresh {
         git(d.path(), &["commit", "-q", "-m", "move"]);
         let r = index(&s, d.path(), &listed(d.path(), &Config::default())).await;
         assert!(r.files_changed >= 50, "{r:?}");
-        (d, sd, s, new)
+        (d, s, new)
     }
 
     /// Pattern D (Hrafn redesign Task 8). 50 files moved: every chunk keeps its key, so no chunk is embedded again.
     #[tokio::test]
     async fn a_move_embeds_no_chunk() {
-        let (_d, _sd, s, _new) = moved().await;
+        let (_d, s, _new) = moved().await;
         assert_eq!(chunk_keys(&s).await.len(), 0);
-        let behind = lag(&s, Some(MODEL), hrafn::View::Base)
+        let behind = lag(&s, Some(&s.c), hrafn::View::Base)
             .await
             .unwrap()
             .chunks_behind;
@@ -607,8 +819,8 @@ mod fresh {
     /// nothing else (no chunk, no path that did not change).
     #[tokio::test]
     async fn a_move_embeds_one_path_key_per_new_path() {
-        let (_d, _sd, s, new) = moved().await;
-        let keys = missing_with(&s, MODEL, 1000, false).await.unwrap();
+        let (_d, s, new) = moved().await;
+        let keys = missing_with(&s, &s.c, 1000, false).await.unwrap();
         let mut offered = offered_paths(&keys);
         offered.sort();
         let mut want = new.clone();
@@ -628,7 +840,7 @@ mod fresh {
             },
             ..Config::default()
         };
-        let (_s, s) = store().await;
+        let s = store().await;
         index(&s, d.path(), &listed(d.path(), &config)).await;
 
         std::fs::write(d.path().join("notes.txt"), "two\n").unwrap();
@@ -642,7 +854,7 @@ mod fresh {
     #[tokio::test]
     async fn no_watches_falls_back_to_the_hash_diff() {
         let d = repo(&[("a.el", A), ("b.el", B)]);
-        let (_s, s) = store().await;
+        let s = store().await;
         index(&s, d.path(), &listed(d.path(), &Config::default())).await;
         assert!(
             diff(&s, &listed(d.path(), &Config::default()), 1000)

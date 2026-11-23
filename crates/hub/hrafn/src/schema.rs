@@ -93,7 +93,15 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (5, V5),
     (6, V6),
     (7, V7),
+    (8, V8),
 ];
+
+/// Schema v8 (Hrafn redesign Task 12): the vectors live in the machine-wide cache (`cache::VectorCache`, one file per
+/// fingerprint), so the store keeps keys only: `vec` goes (its index with it), and every key is embedded again into
+/// the cache the first time tier 2 runs (no back-compat before the launch).
+const V8: &str = "
+drop table vec;
+";
 
 /// Schema v7 (Hrafn redesign Task 9): a vector is of a chunk's text or of a path's (`store::KeyKind`, `vec.kind` 0 or
 /// 1), and `path_key` names each base path's key (a directory's ends in `/`), which tier 1 keeps with the file rows.

@@ -1193,7 +1193,7 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 ### The code store
 
 `CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
-0600, migrations as data). Schema v7:
+0600, migrations as data). Schema v8 (the store keeps keys only: the vectors are in the machine-wide cache, below):
 
 | Table | Holds |
 |---|---|
@@ -1203,7 +1203,6 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 | `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
 | `symbol`, `symbol_fts` | defined names with kind, span and lines, signature (`sig`: the definition's lines up to the one that names it, cut before a `{`), `(path, blob)`, chunk and definer (`id` an explicit rowid, so it survives `VACUUM`); a trigram FTS over the names |
 | `ref` | the names a pair's content uses: `(path, blob, name)`, how often (`n`) and the first 8 lines it is used on; `ref_name` (`name, path, blob, n`) finds a name's users and their counts on the index alone (v6) |
-| `vec` | one quantized vector per `(model, kind, key)`: `kind` 0 a chunk's text, 1 a path's (v7; the rows before it are chunks') |
 | `path_key` | the base's paths that want vectors and their directories (`dir/`), each with its path vector's `key` (v7) |
 | `meta` | `urdr`'s table: the schema version, `chunker_version`, `parse_version`, `built_from` and the like |
 
@@ -1214,8 +1213,9 @@ content: a row is set, the pair is chunked only when nothing stores it yet, and 
 `file_path_blob` index answers "is it still named". A query sees a row when the view's `file` row of its path names
 its blob (`blob_V(p) = r.blob`); every route applies that before its `limit`, the base view too, and joins `file` on
 `(tree, path)`. Schema 3 migrates a schema-2 store in place: `chunk` gains `blob` (ids kept), `symbol` is rebuilt
-with `id` set from its old rowid, `file` gets `tree = 0`; the FTS tables and `vec` are untouched, so nothing is
-re-chunked or re-embedded. A chunker change or `index::reset` drops every worktree's rows and marks the trees
+with `id` set from its old rowid, `file` gets `tree = 0`; the FTS tables are untouched, so nothing is
+re-chunked. Schema 8 drops the store's own `vec` table (v7 and before kept a store's vectors in it): every key is
+embedded again, into the cache. A chunker change or `index::reset` drops every worktree's rows and marks the trees
 `stale`.
 
 **Worktree overlays** (`hrafn::overlay`). A worktree T's rows are the paths where its admitted blob differs from the
@@ -1235,7 +1235,8 @@ transaction as each base change (a tree whose row equals the new base content lo
 naming the old content, a tombstone if there was none), so no tree reads a file for it; and tier 1 neither reads nor
 chunks a `(path, blob)` a worktree already stores.
 
-**Views.** `hrafn::search(store, query, view, qvec, now)` and `hrafn::lag(store, model, view)` take a `View`: `Base`,
+**Views.** `hrafn::search(store, query, view, qvec, now)` (`qvec`: the fingerprint's `VectorCache` and the query's
+vector) and `hrafn::lag(store, cache, view)` take a `View`: `Base`,
 or `Tree(id)`, the base with T's rows over it. A path resolves to one `file` row per view (T's over the base's: at
 most two primary-key probes), and a chunk or symbol is seen when that row names its blob; every route (the pinned,
 name, path, keyword and vector lists, and a hit's metadata) applies it before its `limit`, and the vector scan takes
@@ -1276,13 +1277,62 @@ ranked query of render offload Task 21 (`search/files`) builds on these.
 A vector's key is of its text alone: `KeyKind::key(text)` is sha256 over the length-prefixed version of the kind's text
 (`chunk::EMBED_TEXT_VERSION` for a chunk, `PATH_TEXT_VERSION` for a path) and the text. `chunk::embed_text_and_key` is
 the one place a chunk's text and key come from, and tier 2 sends that same text. The text carries no path, so a chunk
-has one key in any path, branch, clone or repo; each model that embeds it adds a `vec` row, so a branch switch back, a
-move or a copy embeds nothing.
+has one key in any path, branch, clone or repo; each fingerprint that embeds it adds one row to its cache, so a branch
+switch back, a move, a copy or another clone embeds nothing.
 
 FTS5 has one tokenizer per table, and `tokenchars '-'` would hide `timer` in `drgnx-timer--fire` from the `body`
 column. So the `symbols` column holds names encoded by `encode_symbol`, which maps each ASCII punctuation character to a
 private-use character (a token character in `unicode61`): a whole name matches only the whole name, and `body`
 still splits it. Queries encode the same way.
+
+### The vector cache
+
+`hrafn::VectorCache` (`cache.rs`) holds the vectors of one embedding fingerprint for the whole machine:
+`<state>/vectors/<fingerprint-hex16>.db`, one SQLite file per fingerprint, mode 0600, WAL. A key is of its text alone,
+so one vector serves every repo, clone, branch and worktree that has the text.
+
+| Table | Holds |
+|---|---|
+| `chunk_vec`, `path_vec` | one quantized vector per key (`key, bits, vec, scale, last_used`): the sign bits, then the int8 values, and their scale (`urdr::graph::search::vec::quantize`) |
+| `holder` | the repo stores that hold keys: `id` (the store file's stem), the checkout `root`, `live`, `last_refresh` (ms) |
+| `held` | `(holder, kind, key)`: which holder holds which key |
+| `meta` | `urdr`'s table, with `fingerprint` (all 64 hex characters) and its `record` |
+
+- **The file is its fingerprint's.** Opening a file whose `meta.fingerprint` is another one is refused
+  (`StoreError::Mismatch`), by a writer and by a reader, before anything is written: two fingerprints with the same
+  first 16 hex characters never share a file.
+- **One writer.** `open_writer` takes an exclusive lock on `<db>.writer` (`File::try_lock`) and writes its PID there. A
+  second writer, in this process or another, is refused with `StoreError::Busy` ("the cache is written by hub PID
+  N"). Readers (`VectorCache::open`, and the repo stores, which attach the file read-only as `vc`) never wait on it.
+- `put(kind, dims, rows)` checks every row's length against the fingerprint's dims before it writes anything, and
+  quantizes; `put_quantized` writes rows already in the stored form (a vector pack's). `has` and `get` read by key.
+- **`last_used` is a logical clock**: one more than the largest in the file, set by a write and by a holder's taking
+  or dropping the key (see the collection, below).
+- **Read through the repo store.** `CodeStore::attach_cache(path, f)` runs F on the store's connection with the cache
+  attached read-only as `vc` (`file:…?mode=ro`; an attach is outside any transaction, so only reads attach), and
+  `missing`, `lag` and the vector route attach the cache they are given themselves. The scan
+  (`query::NEAREST_SQL`, `select key, vec from vc.chunk_vec`) reads the whole cache's sign bits and keeps the keys
+  that are this store's own (`REPO_KEYS_SQL`), so another repo's vector is never a hit and never takes a place in
+  the best `SCAN`; a vector of other dims has another length and is left out. The query memo's generation includes
+  the attached file and its `data_version`, so a commit of the cache's writer ends what a query keeps (the reference
+  graphs, which read no vector, stay).
+- **In the hub** (`search::caches`), `Caches::shared(state)` is the state's one set of caches in the process: `get(id)`
+  opens a fingerprint's writer on first use, and the projects' tier 2 fills it (`missing(store, &cache, n)`, then
+  `cache.put`); `search/query` picks the fingerprint (`prefer`) and passes its cache with the query's vector, and
+  `search/status` counts, per open cache, the vectors of this project's keys. `eval run --state DIR` writes its own
+  cache in `DIR/vectors/`, under a fingerprint of the source's name and dims.
+- **Holders (MP-21).** A cache's first open in the hub registers every repo store of the state (`<state>/code/*.db`,
+  by stem) as a live holder with no root, so a closed project's keys are kept before it next refreshes. After each
+  refresh, and when tier 2 first uses a fingerprint, `hrafn::hold(store, cache, root, now)` reports the store's live
+  key set (the distinct keys of its chunks that want vectors, and its `path_key` keys) as the diff against the cache's
+  `held` rows for it; the holder is live again, with its root and `last_refresh`. `release_gone(now, TREE_IDLE)` makes
+  a holder not live when its root is no folder and it has not refreshed for 14 days; a registered holder with no root
+  yet is never released.
+- **The collection (MP-7).** `collect(cap)` keeps every key a live holder holds; of the rest, both kinds together, the
+  most recently used are kept while their bytes (32 for the key and the stored vector's) fit the cap, and the others
+  go. The cap is `drgnx-search-cache-cap`, or `default_cap(live_bytes)`: twice the bytes live holders hold, at least
+  1 GiB. The hub sweeps at most once an hour (`CACHE_SWEEP`), from the projects' tree sweep: gone holders released,
+  then each open cache collected.
 
 ### The file list and coverage
 
@@ -1581,16 +1631,15 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
 
 - **Tier 1 (`hrafn::index::refresh`).** The file list against the store's blobs: rows (chunks, FTS, symbols) are rebuilt
   only for files whose blob changed, all of them after a chunker change, 64 files to a transaction; files gone from the
-  list leave the store. Vectors are keyed by content, so a branch switch back embeds nothing. A path has a vector too
-  (`vec.kind` 1, schema 7; a chunk's is 0): after a refresh that changed files, `path_key` is made to hold every base
-  path whose content wants vectors and each of its directories (`dir/`), with `path_key(path)`, the key of
-  `path_text(path)` (the path, a newline, then its words split on `/ _ - .` and camelCase). `missing(store, model,
-  limit)` gives `(kind, key, text)`: the chunk keys in chunk order, each file's path key after its chunks', then the
-  path keys of files whose chunks have vectors (a move or a copy embeds only these); directories' keys only when
-  `DIR_WEIGHT` is above 0 (`missing_with`'s `dirs`, which the eval sets). `put_vectors` takes the kind. `vec.last_used` is a
-  logical clock (one past the store's highest), moved when a vector is written and when tier 1 writes a chunk that
-  refers to its key (a path's when its `path_key` row comes); `collect` keeps unreferenced keys up to twice the live set,
-  each kind on its own, the least recently referenced going first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8). A refresh writes
+  list leave the store. Vectors are keyed by content and live in the vector cache, so a branch switch back embeds
+  nothing. A path has a vector too (the cache's `path_vec`): after a refresh that changed files, `path_key` is made to
+  hold every base path whose content wants vectors and each of its directories (`dir/`), with `path_key(path)`, the key
+  of `path_text(path)` (the path, a newline, then its words split on `/ _ - .` and camelCase). `missing(store, cache,
+  limit)` gives `(kind, key, text)` of the keys the cache lacks: the chunk keys in chunk order, each file's path key
+  after its chunks', then the path keys of files whose chunks have vectors (a move or a copy embeds only these);
+  directories' keys only when `DIR_WEIGHT` is above 0 (`missing_with`'s `dirs`, which the eval sets). Tier 2 writes
+  them with `cache.put(kind, dims, rows)`. `refresh(store, listed, read, caches)` counts `keys_missing` over the caches
+  given, and the hub then reports the store's live key set to each (`hrafn::hold`). A refresh writes
   with a 64 MB page cache and then puts the store's cache size back and lets the pages go: a file's references land
   all over the name index, and at the default 2 MB that index was most of what references cost tier 1 (6.7 s against
   5.4 s on a drgnx checkout, on the desktop).
@@ -1634,7 +1683,7 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   ends `Idle` once the others are done, and the server is asked again at the next change. Between requests it waits while typing holds (3 s from the last `note_typing`) and,
   on battery, until AC or `index_now`. Its state (`Stopped`, `Idle`, `Running`, `Typing`, `Battery`, `Failed`) and the
   vectors written are published for `search/status`. Its embedders are `DocEmbedder`s: the built-in model's worker and
-  each server that answers, every one filling its own model's `vec` rows.
+  each server that answers, every one filling its own fingerprint's cache (`Project::cache(id)`).
 - **The query (`hrafn::query`).** Lists from the routes, fused by RRF (k = 60): an exact one-identifier query pins its
   definitions first (non-test before test, then by kind); prefix and trigram name matches from the identifier-like
   tokens of a question add a list that is never pinned; a token that names a file adds a path list; `bm25(chunk_fts, 5,
@@ -1643,21 +1692,24 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   until 100 chunks are seen (the ranking is asked again for four times as many when the view hides most of it: still
   filtered before the limit, but only candidates are probed; joining every match first was 80 of 143 ms at 50,000
   chunks, where a common word matches 40,000); vectors are scanned by Hamming
-  distance over the chunk vectors' sign bits, and the nearest 200 keys are re-ranked: each key is every place the view
+  distance over the sign bits of the cache's chunk vectors whose keys are the store's own, and the nearest 200 keys
+  are re-ranked: each key is every place the view
   sees its text (`KEY_CHUNKS_SQL`: one chunk per `(path, blob)`, at most 8, so a text in two files is two hits), and
   each place scores `dot8(q, chunk) + PATH_WEIGHT · dot8(q, its path's vector) + DIR_WEIGHT · the best dot8(q, one of
   its directories' vectors)`, the best 50 kept (`Query::path_weight` and `dir_weight`, `hrafn::query`'s constants
   except in an eval that tunes them: both 0.1, the best mean chunk MRR@10 of the four sets' dev halves with Qwen3; a path or directory without a vector adds nothing; each is read once per query,
-  by `VEC_SQL`'s primary-key probe of `vec`). A test or generated file keeps half
+  by a primary-key probe of the cache's `chunk_vec` or `path_vec`, `VEC_SQL` and `PATH_VEC_SQL`). A test or generated
+  file keeps half
   its score. Hits in files changed since indexing are looked for again by their first line, else their symbol (20 files,
   50 ms). The scope (`code`, which holds tests below it, `tests`, `docs`, `all`) filters by file class. Every answer has
   the lag line.
   A query reads indexes and small tables, never the `chunk` table (its rows hold their text): the lag's counts run on
   `chunk_embed`, name prefixes on `symbol_name_nc` (`like` ignores case, so the index has the same collation), path
-  tokens on `file`, and the vector scan reads `vec` alone, looking a key's chunks up only for a vector that can enter
-  the best 200. Each is a plan test in `hrafn/tests/query.rs`. The lag's counts and the vectors' sign bits are kept between two
-  changes of the store (`hrafn/src/memo.rs`: the store thread's own changes and SQLite's `data_version` for another
-  connection's commits), so a query between two index writes reads neither again: at 100,000 chunks they were 38 and
+  tokens on `file`, and the vector scan reads the cache's `chunk_vec` alone, looking a key's chunks up only for a
+  vector that can enter the best 200. Each is a plan test in `hrafn/tests/query.rs`. The lag's counts and the vectors'
+  sign bits are kept between two changes of the store or the cache (`hrafn/src/memo.rs`: the store thread's own
+  changes, SQLite's `data_version` for another connection's commits, and the attached cache's file and
+  `data_version`), so a query between two index writes reads neither again: at 100,000 chunks they were 38 and
   28 ms of each query. `what_a_query_keeps_ends_at_the_next_write` pins that a write ends them. Store schema 2 adds the two indexes; schema 3 widens `chunk_embed` to `(embed, key, path, blob)` and the path list reads the base's `file` rows by primary key.
 - **The methods (`search/methods.rs`).** `Hub` (`Front::search`) opens a project on first use of its root and runs its
   driver (`Project::tick` every 500 ms on the hub clock, dropped with the project); `search/query` refreshes tier 1 when
@@ -1721,9 +1773,9 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   `/api/tags` are among the paths an editor token reaches), so they are in `spend`; the probe embed is made once per
   answer of `/info` or `/api/show` (an unchanged answer reuses its dims). A server whose answer changes between probes
   (another model under the same URL) is another fingerprint: tier 2 probes before each batch, writes it under the new
-  hex, and the rows under the old one stay (`search_fingerprint::swapped_server_model_is_a_new_fingerprint_and_old_vectors_stay`).
+  hex, into that fingerprint's cache file, and the old one's file stays (`search_fingerprint::swapped_server_model_is_a_new_fingerprint_and_old_vectors_stay`).
   A server that has not answered a probe has no fingerprint and embeds nothing; the entity chain knows it as
-  `unprobed:<provider>`, which no vector is ever stored under. `hrafn::put_vectors(store, model, dims, rows)` refuses a
+  `unprobed:<provider>`, which no vector is ever stored under. `VectorCache::put(kind, dims, rows)` refuses a
   row whose length is not `dims`, and tier 2 then publishes `Tier2::Failed("<label>: N dims, the fingerprint says D")` and
   writes nothing of that batch. The hub reuses a probe for 10 s in the calls that only need the fingerprint (a query,
   `Hub::project`'s signature, which is the joined fingerprints, so a changed probe reopens the project). A query to a

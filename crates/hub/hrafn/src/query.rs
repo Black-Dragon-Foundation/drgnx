@@ -7,8 +7,9 @@
 //!   list. Identifier tokens are exact phrases on the `symbols` column and their parts a phrase on `doc` and `body`;
 //!   the other words are OR'ed over `doc` and `body`; `bm25(chunk_fts, 5, 5, 2, 1)` ranks them on the FTS index,
 //!   and the view's predicate is applied to the ranked candidates until the list is full.
-//! - **Vectors** (when the caller gives the query's vector and its model) are scanned by Hamming distance over the chunk
-//!   vectors' sign bits, and the nearest [`SCAN`] keys' places re-ranked by their int8 values plus their path's vector
+//! - **Vectors** (when the caller gives the query's vector and its fingerprint's cache, attached as `vc`) are scanned by
+//!   Hamming distance over the sign bits of the chunk vectors whose keys are this store's (the cache is the machine's),
+//!   and the nearest [`SCAN`] keys' places re-ranked by their int8 values plus their path's vector
 //!   (`Query::path_weight`) and their directories' (`Query::dir_weight`).
 //! - **Fusion** is RRF with k = 60. A chunk of a test file or a generated file keeps [`DEMOTE`] of its score.
 //! - **Re-anchoring.** The hits' files are read as they are now (the caller's `now`, at most [`REANCHOR_FILES`] files
@@ -365,11 +366,15 @@ fn paths(c: &Connection, token: &str, view: View) -> rusqlite::Result<Vec<i64>> 
     }
 }
 
-/// The vectors the scan reads: MODEL's chunk vectors, and nothing else. A key's chunks are looked up
+/// The vectors the scan reads: the attached cache's (`vc`) chunk vectors, and nothing else. The cache is the machine's,
+/// so the keys are kept to this store's own ([`REPO_KEYS_SQL`]) as they are read; a key's chunks are looked up
 /// ([`KEY_CHUNKS_SQL`]) only for a vector that can enter the best SCAN, not for each of them: a lookup per vector was
-/// 160 ms of the 180 at 50,000 chunks. (A join of `chunk` with `vec` and `c.id in (select min(id) … group by key)` made
-/// SQLite probe a list once per vector: 37 s for 16,000 chunks.)
-pub const NEAREST_SQL: &str = "select key, dims, vec from vec where model = ?1 and kind = 0";
+/// 160 ms of the 180 at 50,000 chunks. (A join of `chunk` with the vectors and `c.id in (select min(id) … group by
+/// key)` made SQLite probe a list once per vector: 37 s for 16,000 chunks.)
+pub const NEAREST_SQL: &str = "select key, vec from vc.chunk_vec";
+
+/// The store's own embeddable chunk keys, one pass over the key index.
+pub const REPO_KEYS_SQL: &str = "select distinct key from chunk where embed = 1";
 
 /// The visible chunks of a content key (?1), in the view ?2: one per `(path, blob)` that holds the text, its first, at
 /// most 8 (none: the vector is kept for a file that is gone, or only another worktree has the content). A text in two
@@ -380,8 +385,11 @@ pub const KEY_CHUNKS_SQL: &str = concat!(
     " where c.key = ?1 and c.embed = 1 and f.blob = c.blob group by c.path, c.blob order by 1 limit 8"
 );
 
-/// MODEL's (?1) vector of kind ?2 (`store::KeyKind`) for key ?3: one primary-key probe of `vec`.
-pub const VEC_SQL: &str = "select vec, scale from vec where model = ?1 and kind = ?2 and key = ?3";
+/// A chunk text's vector for key ?1: one primary-key probe of the cache's `chunk_vec`.
+pub const VEC_SQL: &str = "select vec, scale from vc.chunk_vec where key = ?1";
+
+/// A path's vector for key ?1: one primary-key probe of the cache's `path_vec`.
+pub const PATH_VEC_SQL: &str = "select vec, scale from vc.path_vec where key = ?1";
 
 /// The int8 dot product of the query's values QINTS with the stored vector BLOB (sign bits first, BYTES of them),
 /// dequantised by the vector's own scale.
@@ -461,12 +469,14 @@ fn nearest(
             .map(|(_, _, i)| (i, signs.keys[i]))
             .collect();
     }
-    let mut vec_of = c.prepare(VEC_SQL)?;
+    let (mut chunk_vec, mut path_vec) = (c.prepare(VEC_SQL)?, c.prepare(PATH_VEC_SQL)?);
     let mut dot_of = |kind: KeyKind, key: &[u8; 32]| -> rusqlite::Result<Option<f64>> {
-        let row: Option<(Vec<u8>, f64)> = vec_of
-            .query_row(params![model, kind.as_i64(), &key[..]], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+        let st = match kind {
+            KeyKind::Chunk => &mut chunk_vec,
+            KeyKind::Path => &mut path_vec,
+        };
+        let row: Option<(Vec<u8>, f64)> = st
+            .query_row([&key[..]], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()?;
         Ok(row.map(|(blob, scale)| dot8(&blob, bytes, &qints, scale)))
     };
@@ -516,7 +526,9 @@ fn nearest(
     Ok(scored.into_iter().map(|s| s.0).collect())
 }
 
-/// MODEL's vectors of DIMS dimensions, in the store's order: each key and its sign bits (BYTES of them).
+/// The attached cache's (MODEL's) vectors of DIMS dimensions whose keys are this store's, in the cache's order: each
+/// key and its sign bits (BYTES of them). A stored vector is its sign bits and then one byte a dimension, so a vector
+/// of other dims has another length and is left out.
 fn signs(c: &Connection, model: &str, dims: usize, bytes: usize) -> rusqlite::Result<Signs> {
     let mut out = Signs {
         model: model.to_string(),
@@ -525,17 +537,30 @@ fn signs(c: &Connection, model: &str, dims: usize, bytes: usize) -> rusqlite::Re
         keys: Vec::new(),
         bits: Vec::new(),
     };
+    let ours: HashSet<[u8; 32]> = {
+        let mut st = c.prepare(REPO_KEYS_SQL)?;
+        let keys = st.query_map([], |r| r.get::<_, Vec<u8>>(0))?;
+        let mut set = HashSet::new();
+        for k in keys {
+            if let Ok(k) = <[u8; 32]>::try_from(k?.as_slice()) {
+                set.insert(k);
+            }
+        }
+        set
+    };
     let mut st = c.prepare(NEAREST_SQL)?;
-    let mut rows = st.query([model])?;
+    let mut rows = st.query([])?;
     while let Some(r) = rows.next()? {
-        let n: i64 = r.get(1)?;
-        let blob = r.get_ref(2)?.as_blob()?;
-        if usize::try_from(n).ok() != Some(dims) || blob.len() < bytes {
+        let blob = r.get_ref(1)?.as_blob()?;
+        if blob.len() != bytes + dims {
             continue;
         }
         let Ok(key) = <[u8; 32]>::try_from(r.get_ref(0)?.as_blob()?) else {
             continue;
         };
+        if !ours.contains(&key) {
+            continue;
+        }
         out.keys.push(key);
         out.bits.extend_from_slice(&blob[..bytes]);
     }
@@ -721,16 +746,21 @@ pub async fn search(
     store: &CodeStore,
     q: &Query,
     view: View,
-    qvec: Option<(&str, &[f32])>,
+    qvec: Option<(&crate::cache::VectorCache, &[f32])>,
     now: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Answer, StoreError> {
     let (text, scope, k) = (q.text.clone(), q.scope, q.k.max(1) as usize);
     let weights = (q.path_weight, q.dir_weight);
-    let owned = qvec.map(|(m, v)| (m.to_string(), v.to_vec()));
+    let owned = qvec.map(|(m, v)| (m.fp_hex().to_string(), v.to_vec()));
     let memo = store.memo();
+    let (attached, cache) = (store.attached(), qvec.map(|(c, _)| c.path().to_path_buf()));
     let (mut hits, texts) = store
         .handle()
         .read(move |c| {
+            // the vectors are the cache's, attached on this connection
+            if let Some(p) = &cache {
+                crate::store::ensure_vc(c, &attached, p)?;
+            }
             let l = lists(
                 c,
                 &mut memo::lock(&memo),
@@ -825,8 +855,8 @@ pub async fn search(
             (h.line_start, h.line_end, h.reanchored) = (a, b, true);
         }
     }
-    let model = qvec.map(|(m, _)| m.to_string());
-    let lag = lag(store, model.as_deref(), view).await?;
+    let model = qvec.map(|(c, _)| c.fp_hex().to_string());
+    let lag = lag(store, qvec.map(|(c, _)| c), view).await?;
     let notice = model
         .is_none()
         .then(|| "no embedding model answered".to_string());

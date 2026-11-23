@@ -6,7 +6,7 @@
 //! The embedding rows (tokens per second, one question's embedding, VRAM, the stall) are `hrafn-embed/tests/timing.rs`.
 
 use hrafn::{
-    Class, CodeStore, KeyKind, Lang, Listed, Query, Scope, missing, put_vectors, refresh, search,
+    Class, CodeStore, KeyKind, Lang, Listed, Query, Scope, VectorCache, missing, refresh, search,
 };
 use std::collections::HashMap;
 use std::io;
@@ -21,7 +21,8 @@ const ONE_FILE_SEARCHABLE: Duration = Duration::from_secs(1);
 const QUERY_P95: Duration = Duration::from_millis(100);
 const QUERY_P95_100K: Duration = Duration::from_millis(200);
 
-const MODEL: &str = "granite-embedding-small-english-r2";
+/// The fingerprint of the synthetic vectors (a cache file's name and `meta`).
+const FP: &str = "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e";
 const DIMS: usize = 384;
 /// Functions per synthetic file; about 5 fit one chunk at the default budget, so a file is 2 chunks.
 const FNS: usize = 10;
@@ -114,10 +115,11 @@ fn vector(seed: u64) -> Vec<f32> {
         .collect()
 }
 
-/// A store of about CHUNKS chunks (files of synthetic functions) with a vector for each key; with REFS, the functions
-/// call each other ([`callees`]).
-async fn synthetic(dir: &Path, chunks: usize, refs: bool) -> CodeStore {
+/// A store of about CHUNKS chunks (files of synthetic functions) with a vector for each key in its cache (under DIR);
+/// with REFS, the functions call each other ([`callees`]).
+async fn synthetic(dir: &Path, chunks: usize, refs: bool) -> (CodeStore, VectorCache) {
     let store = CodeStore::open(&dir.join("code.db")).unwrap();
+    let cache = VectorCache::open_writer(&dir.join("vectors"), FP, "{}").unwrap();
     let files = chunks / 2;
     // `refresh` drops the files it is not given: each batch is given all the earlier ones too, as unchanged
     let mut all: Vec<Listed> = Vec::new();
@@ -136,19 +138,19 @@ async fn synthetic(dir: &Path, chunks: usize, refs: bool) -> CodeStore {
                     .map(|t| t.as_bytes().to_vec())
                     .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
             },
-            &[(MODEL, DIMS)],
+            &[&cache],
         )
         .await
         .unwrap();
     }
-    embed_all(&store, &mut 1).await;
-    store
+    embed_all(&store, &cache, &mut 1).await;
+    (store, cache)
 }
 
-/// A vector for every key the store lacks, chunks and paths, each from the running SEED.
-async fn embed_all(store: &CodeStore, seed: &mut u64) {
+/// A vector for every key the store lacks in CACHE, chunks and paths, each from the running SEED.
+async fn embed_all(store: &CodeStore, cache: &VectorCache, seed: &mut u64) {
     loop {
-        let keys = missing(store, MODEL, 5_000).await.unwrap();
+        let keys = missing(store, cache, 5_000).await.unwrap();
         if keys.is_empty() {
             break;
         }
@@ -162,9 +164,7 @@ async fn embed_all(store: &CodeStore, seed: &mut u64) {
                 })
                 .collect();
             if !rows.is_empty() {
-                put_vectors(store, MODEL, DIMS as u32, kind, &rows)
-                    .await
-                    .unwrap();
+                cache.put(kind, DIMS as u32, &rows).await.unwrap();
             }
         }
     }
@@ -188,7 +188,12 @@ fn percentile(sorted: &[Duration], p: f64) -> Duration {
 }
 
 /// Ask every question ROUNDS times (after one warming round); the sorted times.
-async fn ask(store: &CodeStore, view: hrafn::View, vectors: bool, rounds: usize) -> Vec<Duration> {
+async fn ask(
+    (store, cache): (&CodeStore, &VectorCache),
+    view: hrafn::View,
+    vectors: bool,
+    rounds: usize,
+) -> Vec<Duration> {
     let now = |_: &str| None;
     let mut times = Vec::new();
     for round in 0..=rounds {
@@ -206,7 +211,7 @@ async fn ask(store: &CodeStore, view: hrafn::View, vectors: bool, rounds: usize)
                 store,
                 &q,
                 view,
-                vectors.then_some((MODEL, v.as_slice())),
+                vectors.then_some((cache, v.as_slice())),
                 &now,
             )
             .await
@@ -225,10 +230,10 @@ async fn ask(store: &CodeStore, view: hrafn::View, vectors: bool, rounds: usize)
 async fn query_row(chunks: usize, budget: Duration) {
     let dir = tempfile::tempdir().unwrap();
     let built = Instant::now();
-    let store = synthetic(dir.path(), chunks, false).await;
+    let (store, cache) = synthetic(dir.path(), chunks, false).await;
     println!("{chunks} chunks built in {:?}", built.elapsed());
-    let keyword = ask(&store, hrafn::View::Base, false, 6).await;
-    let full = ask(&store, hrafn::View::Base, true, 6).await;
+    let keyword = ask((&store, &cache), hrafn::View::Base, false, 6).await;
+    let full = ask((&store, &cache), hrafn::View::Base, true, 6).await;
     for (what, t) in [
         ("keyword and symbol only", &keyword),
         ("with vectors", &full),
@@ -292,7 +297,7 @@ async fn agent_tools_at_50k_chunks() {
     use hrafn::symbols::{Find, Match, find, outline};
     let dir = tempfile::tempdir().unwrap();
     let built = Instant::now();
-    let store = synthetic(dir.path(), 50_000, true).await;
+    let (store, _cache) = synthetic(dir.path(), 50_000, true).await;
     let files = 25_000;
     let refs: i64 = store
         .handle()
@@ -428,7 +433,7 @@ fn line_text(f: usize, line: usize) -> String {
 async fn worktree_search_p95() {
     let dir = tempfile::tempdir().unwrap();
     let built = Instant::now();
-    let store = synthetic(dir.path(), 50_000, false).await;
+    let (store, cache) = synthetic(dir.path(), 50_000, false).await;
     let files = 25_000;
     let mut trees = Vec::new();
     for n in 0..10 {
@@ -497,10 +502,10 @@ async fn worktree_search_p95() {
         }
         trees.push(t);
     }
-    embed_all(&store, &mut 1_000_000).await;
+    embed_all(&store, &cache, &mut 1_000_000).await;
     println!("50,000 chunks and 10 trees built in {:?}", built.elapsed());
-    let base = ask(&store, hrafn::View::Base, true, 6).await;
-    let tree = ask(&store, hrafn::View::Tree(trees[7]), true, 6).await;
+    let base = ask((&store, &cache), hrafn::View::Base, true, 6).await;
+    let tree = ask((&store, &cache), hrafn::View::Tree(trees[7]), true, 6).await;
     let (b, t) = (percentile(&base, 0.95), percentile(&tree, 0.95));
     println!(
         "base view: p50 {:?} p95 {b:?}; worktree view: p50 {:?} p95 {t:?}; ratio {:.2} (targets {WORKTREE_P95:?}, \
@@ -597,9 +602,7 @@ async fn tier1_of_a_checkout_and_one_saved_file() {
             .cloned()
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
     };
-    let r = refresh(&store, &list, &read, &[(MODEL, DIMS)])
-        .await
-        .unwrap();
+    let r = refresh(&store, &list, &read, &[]).await.unwrap();
     let full = started.elapsed();
     println!(
         "tier 1 of {} files, {} chunks: {full:?}",
@@ -631,9 +634,7 @@ async fn tier1_of_a_checkout_and_one_saved_file() {
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
     };
     let started = Instant::now();
-    refresh(&store, &list, &read, &[(MODEL, DIMS)])
-        .await
-        .unwrap();
+    refresh(&store, &list, &read, &[]).await.unwrap();
     let a = search(
         &store,
         &Query {

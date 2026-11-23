@@ -409,6 +409,7 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         "drgnx-search-rules" => values.search_rules = default.search_rules.clone(),
         "drgnx-search-off" => values.search_off = default.search_off,
         "drgnx-search-base" => values.search_base = default.search_base.clone(),
+        "drgnx-search-cache-cap" => values.search_cache_cap = default.search_cache_cap,
         "drgnx-search-ignore-rules" => {
             values.search_ignore_rules = default.search_ignore_rules.clone();
         }

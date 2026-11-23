@@ -105,6 +105,16 @@ committed). Its value is an alist of up to three lists of gitignore-style lines,
 `ratatoskr search why ROOT PATH` shows which layer and rule decided a file. The user layer is read when the project
 opens; the repo's file at every listing.
 
+## `drgnx-search-cache-cap`
+
+The bytes of vectors that no repo holds which each machine-wide vector cache keeps (runtime.md, "The vector cache"):
+an integer, or nil (the default) for twice the bytes the repos hold, at least 1 GiB. Global, not per project. The hub
+reads it at every search call, so a change counts from the next hourly sweep.
+
+```elisp
+(drgnx-search-cache-cap 4294967296)   ; 4 GiB of vectors no checkout uses
+```
+
 ## Conformance
 
 The two readers are held to each other by four things, all under `test/fixtures/huginn/` and `crates/core/huginn`:

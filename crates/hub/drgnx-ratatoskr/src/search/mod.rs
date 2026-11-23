@@ -1,6 +1,8 @@
 //! Hrafn in the hub: where models live, the user's consent and the download; the embed worker and the hub's handle on
-//! it (`worker`); one project's index, its tiers and gates (`project`); and the battery rule (`power`).
+//! it (`worker`); the machine-wide vector caches (`caches`); one project's index, its tiers and gates (`project`); and
+//! the battery rule (`power`).
 
+pub mod caches;
 pub mod context;
 pub mod download;
 pub mod mcp;

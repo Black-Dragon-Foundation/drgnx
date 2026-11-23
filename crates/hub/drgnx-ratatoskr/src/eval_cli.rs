@@ -8,7 +8,8 @@
 //!   [--out FILE] [--map TOKENS] [--source SRC] [--query-source SRC]`: embeds ROOT with the model (or with a server:
 //!   SRC is `builtin`, `tei:URL`, `ollama:URL:MODEL` or `llama:URL`, talked to directly, with no hub or gateway), asks
 //!   the set and prints the numbers and writes the run as JSON. `--query-source` embeds the questions with another
-//!   source (the same model on another machine); with `--state DIR` the chunk vectors already in DIR are reused.
+//!   source (the same model on another machine); with `--state DIR` the vectors already in DIR's cache (`DIR/vectors/`,
+//!   one writer: a hub on the same state is refused) are reused.
 //!   With `--map`, also the repo map's yield at that budget: the share of each question's target definitions and
 //!   files that the global map shows, that the top 5 hits followed by the map focused on their files show, and that
 //!   search hits packed in rank order show (each in the same token estimate).
@@ -21,7 +22,7 @@
 use crate::clock;
 use crate::embed_direct::{Api, Direct};
 use hrafn::eval::{self, EvalRow, Report};
-use hrafn::{Answer, CodeStore, Config, GitCli, Lag, Query};
+use hrafn::{Answer, CodeStore, Config, GitCli, Lag, Query, VectorCache};
 use hrafn_embed::{Device, LocalEmbedder, MODELS, ModelSpec, default_model};
 use http::Uri;
 use serde::{Deserialize, Serialize};
@@ -478,11 +479,11 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
         .map_err(|e| format!("no runtime: {e}"))
 }
 
-/// A tier-1 index of ROOT's files in STATE, with the models that will fill it. The listed files come back.
+/// A tier-1 index of ROOT's files in STATE, with the caches that tier 2 will fill. The listed files come back.
 async fn index(
     store: &CodeStore,
     root: &Path,
-    models: &[(&str, usize)],
+    models: &[&VectorCache],
 ) -> Result<Vec<hrafn::Listed>, String> {
     let listed = hrafn::list(root, &GitCli, &Config::default(), &|_| true)
         .map_err(|e| format!("listing {}: {e}", root.display()))?;
@@ -496,6 +497,24 @@ async fn index(
     .await
     .map_err(|e| e.to_string())?;
     Ok(listed)
+}
+
+/// The fingerprint `eval run` keys its cache by (hex, record): the source as named (MODEL_ID) and its DIMS, with the
+/// embed text's version. Not a model's own fingerprint (`hrafn_embed::fingerprint`): the eval names its sources, and
+/// its state is its own.
+fn eval_fingerprint(model_id: &str, dims: usize) -> (String, String) {
+    use sha2::{Digest, Sha256};
+    let record = serde_json::json!({
+        "eval_source": model_id,
+        "dims": dims,
+        "embed_text_version": hrafn::chunk::EMBED_TEXT_VERSION,
+    })
+    .to_string();
+    let hex = Sha256::digest(record.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    (hex, record)
 }
 
 /// A scratch folder of this process under the temporary directory.
@@ -771,9 +790,13 @@ fn run_set(
     let state_dir = state.clone().unwrap_or_else(|| scratch("run"));
     std::fs::create_dir_all(&state_dir).map_err(|e| e.to_string())?;
     let store = CodeStore::open(&state_dir.join("code.db")).map_err(|e| e.to_string())?;
+    // the vectors in STATE's cache, the source's own (a second writer, a hub on the same state, is refused)
+    let (fp, record) = eval_fingerprint(&model_id, dims);
+    let cache = VectorCache::open_writer(&state_dir.join("vectors"), &fp, &record)
+        .map_err(|e| e.to_string())?;
     eprintln!("indexing {} into {}", root.display(), state_dir.display());
     let began = clock::real_now();
-    let listed = rt.block_on(index(&store, root, &[(model_id.as_str(), dims)]))?;
+    let listed = rt.block_on(index(&store, root, &[&cache]))?;
     eprintln!(
         "indexed {} files in {:.0}s",
         listed.len(),
@@ -786,12 +809,7 @@ fn run_set(
     let mut embedded = 0u64;
     loop {
         let todo = rt
-            .block_on(hrafn::missing_with(
-                &store,
-                &model_id,
-                256,
-                dir_weight > 0.0,
-            ))
+            .block_on(hrafn::missing_with(&store, &cache, 256, dir_weight > 0.0))
             .map_err(|e| e.to_string())?;
         if todo.is_empty() {
             break;
@@ -809,7 +827,7 @@ fn run_set(
         ] {
             let put: Vec<_> = rows.into_iter().map(|((_, k, _), v)| (*k, v)).collect();
             if !put.is_empty() {
-                rt.block_on(hrafn::put_vectors(&store, &model_id, dims, kind, &put))
+                rt.block_on(cache.put(kind, dims, &put))
                     .map_err(|e| e.to_string())?;
             }
         }
@@ -858,7 +876,7 @@ fn run_set(
             &store,
             q,
             hrafn::View::Base,
-            Some((model_id.as_str(), v.as_slice())),
+            Some((&cache, v.as_slice())),
             &now,
         ))
         .unwrap_or_else(|_| none())

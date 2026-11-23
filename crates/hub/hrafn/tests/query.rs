@@ -4,12 +4,19 @@
 //! test-pattern: pure (D): the store thread answers in order, nothing here has a clock or a timeout.
 
 use hrafn::query::{Query, Scope, search};
-use hrafn::{Class, CodeStore, KeyKind, Lang, Listed, collect, lag, put_vectors, refresh};
+use hrafn::{Class, CodeStore, KeyKind, Lang, Listed, VectorCache, lag, refresh};
 use std::collections::HashMap;
 use std::io;
+use std::path::Path;
 
-const MODEL: &str = "m";
+/// The fingerprint every vector here is of.
+const FP: &str = "0fa70fa70fa70fa70fa70fa70fa70fa70fa70fa70fa70fa70fa70fa70fa70fa7";
 const DIMS: usize = 4;
+
+/// The vector cache of [`FP`] under DIR (`DIR/vectors/`).
+fn cache(dir: &Path) -> VectorCache {
+    VectorCache::open_writer(&dir.join("vectors"), FP, "{}").unwrap()
+}
 
 struct File {
     path: &'static str,
@@ -121,7 +128,7 @@ async fn indexed() -> (
                 .map(|t| t.as_bytes().to_vec())
                 .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
         },
-        &[(MODEL, DIMS)],
+        &[],
     )
     .await
     .unwrap();
@@ -316,8 +323,9 @@ async fn no_model_answers_keyword_with_lag() {
 /// vectors of the model.
 #[tokio::test]
 async fn vector_route_and_lag_line() {
-    let (_dir, store, texts) = indexed().await;
-    let want = hrafn::missing(&store, MODEL, 100).await.unwrap();
+    let (dir, store, texts) = indexed().await;
+    let c = cache(dir.path());
+    let want = hrafn::missing(&store, &c, 100).await.unwrap();
     assert!(want.len() >= 6, "{}", want.len());
     // one chunk, the hub's, gets a vector; nothing else does
     let hub = want
@@ -325,28 +333,22 @@ async fn vector_route_and_lag_line() {
         .find(|(k, _, t)| *k == KeyKind::Chunk && t.contains("drgnx-hub-call"))
         .unwrap()
         .1;
-    put_vectors(
-        &store,
-        MODEL,
-        4,
-        KeyKind::Chunk,
-        &[(hub, vec![1.0, 0.0, 0.0, 0.0])],
-    )
-    .await
-    .unwrap();
+    c.put(KeyKind::Chunk, 4, &[(hub, vec![1.0, 0.0, 0.0, 0.0])])
+        .await
+        .unwrap();
     let a = search(
         &store,
         &q("completely unrelated words", Scope::All),
         hrafn::View::Base,
-        Some((MODEL, &[1.0, 0.0, 0.0, 0.0])),
+        Some((&c, &[1.0, 0.0, 0.0, 0.0])),
         &unchanged(texts),
     )
     .await
     .unwrap();
     assert_eq!(a.hits[0].path, "core/drgnx-hub.el", "{:?}", a.hits);
     assert_eq!(a.hits[0].routes, ["vector"]);
-    assert_eq!(a.model.as_deref(), Some(MODEL));
-    let behind = lag(&store, Some(MODEL), hrafn::View::Base)
+    assert_eq!(a.model.as_deref(), Some(FP));
+    let behind = lag(&store, Some(&c), hrafn::View::Base)
         .await
         .unwrap()
         .files_behind;
@@ -357,27 +359,69 @@ async fn vector_route_and_lag_line() {
         "{}",
         a.lag_line()
     );
-    let _ = collect(&store, MODEL).await;
 }
 
-/// Pattern D. The lag and the vectors a query reads are kept between two changes of the store, never past one: a
-/// vector written after a query is the next query's nearest and leaves one file fewer behind, and a commit by another
-/// connection (`data_version`) is seen too.
+/// Pattern D (Task 12). The cache is shared, so it holds other repos' keys: none of them is ever a hit here, nor takes
+/// the place of this repo's own. 250 keys of another repo lie nearer the question than this repo's one vector; it is
+/// still the vector route's hit, and the answer has nothing else from the route.
+#[tokio::test]
+async fn query_sees_only_its_repos_keys() {
+    let (dir, store, texts) = indexed().await;
+    let c = cache(dir.path());
+    let hub = hrafn::missing(&store, &c, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|(k, _, t)| *k == KeyKind::Chunk && t.contains("drgnx-hub-call"))
+        .unwrap()
+        .1;
+    // the question's own direction for the foreign keys; one sign bit off for the repo's key
+    let foreign: Vec<([u8; 32], Vec<f32>)> = (0..250u32)
+        .map(|i| {
+            let mut k = [0xee; 32];
+            k[..4].copy_from_slice(&i.to_be_bytes());
+            (k, vec![1.0, 0.0, 0.0, 0.0])
+        })
+        .collect();
+    c.put(KeyKind::Chunk, 4, &foreign).await.unwrap();
+    c.put(KeyKind::Chunk, 4, &[(hub, vec![0.9, 0.3, 0.0, 0.0])])
+        .await
+        .unwrap();
+    let a = search(
+        &store,
+        &q("completely unrelated words", Scope::All),
+        hrafn::View::Base,
+        Some((&c, &[1.0, 0.0, 0.0, 0.0])),
+        &unchanged(texts),
+    )
+    .await
+    .unwrap();
+    let by_vector: Vec<&str> = a
+        .hits
+        .iter()
+        .filter(|h| h.routes.contains(&"vector"))
+        .map(|h| h.path.as_str())
+        .collect();
+    assert_eq!(by_vector, ["core/drgnx-hub.el"], "{:?}", a.hits);
+}
+
+/// Pattern D. The lag and the vectors a query reads are kept between two changes of the store or the cache, never past
+/// one: a vector written after a query is the next query's nearest and leaves one file fewer behind, and a commit to
+/// the cache by another connection (its `data_version`) is seen too.
 #[tokio::test]
 async fn what_a_query_keeps_ends_at_the_next_write() {
     let (dir, store, texts) = indexed().await;
-    let want = hrafn::missing(&store, MODEL, 100).await.unwrap();
+    let c = cache(dir.path());
+    let want = hrafn::missing(&store, &c, 100).await.unwrap();
     let key = |name: &str| {
         want.iter()
             .find(|(k, _, t)| *k == KeyKind::Chunk && t.contains(name))
             .unwrap()
             .1
     };
-    put_vectors(
-        &store,
-        MODEL,
-        4,
+    c.put(
         KeyKind::Chunk,
+        4,
         &[(key("drgnx-hub-call"), vec![1.0, 0.0, 0.0, 0.0])],
     )
     .await
@@ -391,7 +435,7 @@ async fn what_a_query_keeps_ends_at_the_next_write() {
             &store,
             &query,
             hrafn::View::Base,
-            Some((MODEL, &[0.0, 1.0, 0.0, 0.0])),
+            Some((&c, &[0.0, 1.0, 0.0, 0.0])),
             &same,
         )
     };
@@ -399,11 +443,9 @@ async fn what_a_query_keeps_ends_at_the_next_write() {
     assert_eq!(first.hits[0].path, "core/drgnx-hub.el", "{:?}", first.hits);
     let again = ask().await.unwrap();
     assert_eq!(again.lag, first.lag);
-    put_vectors(
-        &store,
-        MODEL,
-        4,
+    c.put(
         KeyKind::Chunk,
+        4,
         &[(key("drgnx-ai-embed"), vec![0.0, 1.0, 0.0, 0.0])],
     )
     .await
@@ -412,8 +454,8 @@ async fn what_a_query_keeps_ends_at_the_next_write() {
     assert_eq!(after.hits[0].path, "core/drgnx-ai.el", "{:?}", after.hits);
     assert_eq!(after.lag.files_behind + 1, first.lag.files_behind);
     // another connection takes every vector away
-    let other = rusqlite::Connection::open(dir.path().join("code.db")).unwrap();
-    other.execute("delete from vec", []).unwrap();
+    let other = rusqlite::Connection::open(c.path()).unwrap();
+    other.execute("delete from chunk_vec", []).unwrap();
     let gone = ask().await.unwrap();
     assert!(
         gone.hits.iter().all(|h| !h.routes.contains(&"vector")),
@@ -427,53 +469,50 @@ async fn what_a_query_keeps_ends_at_the_next_write() {
 /// no list built from a subquery (that plan took 37 s on a 16,000-chunk project, 55 ms the other way).
 #[tokio::test]
 async fn the_vector_scan_plan_is_one_pass_over_the_vectors() {
-    let (_dir, store, _texts) = indexed().await;
-    let plan: Vec<String> = store
-        .handle()
-        .read(|c| {
-            let mut st = c.prepare(&format!("explain query plan {}", hrafn::query::NEAREST_SQL))?;
-            let rows = st
-                .query_map([MODEL], |r| r.get::<_, String>(3))?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(rows)
-        })
-        .await
-        .unwrap();
-    let text = plan.join("\n");
+    let (dir, store, _texts) = indexed().await;
+    let c = cache(dir.path());
+    let text = plan_vc(&store, &c, hrafn::query::NEAREST_SQL, 0).await;
     assert!(!text.contains("LIST SUBQUERY"), "{text}");
-    assert!(!text.contains("SCAN chunk"), "{text}");
-    assert!(
-        text.contains("SCAN v") || text.contains("SEARCH v"),
-        "{text}"
-    );
+    assert!(!text.contains("SCAN chunk "), "{text}");
+    assert!(text.contains("SCAN vc.chunk_vec"), "{text}");
 }
 
 /// Pattern D. The scan touches the vectors and nothing else: a chunk is looked up only for a vector that enters the
 /// best 200, not for each of the 50,000 (a subquery per vector was 160 ms of the 180 at 50,000 chunks).
 #[tokio::test]
 async fn the_vector_scan_reads_no_chunk_per_vector() {
-    let (_dir, store, _texts) = indexed().await;
-    let plan = plan_of(&store, hrafn::query::NEAREST_SQL, 1).await;
+    let (dir, store, _texts) = indexed().await;
+    let c = cache(dir.path());
+    let plan = plan_vc(&store, &c, hrafn::query::NEAREST_SQL, 0).await;
     assert!(!plan.contains("SUBQUERY"), "{plan}");
-    assert!(!plan.contains("chunk"), "{plan}");
+    assert!(!plan.replace("chunk_vec", "").contains("chunk"), "{plan}");
 }
 
-/// Pattern D (Hrafn redesign Task 9, the plan test extended to `path_key`). The vector route's own reads, the scan and
-/// the re-rank's vectors (a chunk's and its path's, by key), touch `vec` alone: no `chunk`, `symbol`, `file` or
-/// `path_key` row; a candidate's chunks are found by the key's index, never by a scan.
+/// Pattern D (Hrafn redesign Task 9, the plan test extended to `path_key`; Task 12, the vectors in the cache). The
+/// vector route's own reads, the scan and the re-rank's vectors (a chunk's and its path's, by key), touch the cache's
+/// `chunk_vec` and `path_vec` alone: no `chunk`, `symbol`, `file` or `path_key` row; a candidate's chunks are found by
+/// the key's index, never by a scan.
 #[tokio::test]
 async fn vector_route_reads_no_chunk_rows() {
-    let (_dir, store, _texts) = indexed().await;
-    for sql in [hrafn::query::NEAREST_SQL, hrafn::query::VEC_SQL] {
-        let plan = plan_of(&store, sql, 1).await;
-        // every table step is of `vec` (a plan names a table by its alias, so the step itself is read)
+    let (dir, store, _texts) = indexed().await;
+    let c = cache(dir.path());
+    for sql in [
+        hrafn::query::NEAREST_SQL,
+        hrafn::query::VEC_SQL,
+        hrafn::query::PATH_VEC_SQL,
+    ] {
+        let plan = plan_vc(&store, &c, sql, usize::from(sql.contains("?1"))).await;
+        // every table step is of the cache's vectors (a plan names a table by its alias, so the step itself is read)
         for l in plan.lines().map(str::trim_start) {
             if l.starts_with("SEARCH") || l.starts_with("SCAN") {
                 let table = l.split_whitespace().nth(1).unwrap_or_default();
-                assert_eq!(table, "vec", "{plan}\n{sql}");
+                assert!(
+                    table == "vc.chunk_vec" || table == "vc.path_vec",
+                    "{plan}\n{sql}"
+                );
             }
         }
-        assert!(plan.contains("vec"), "{plan}");
+        assert!(plan.contains("_vec"), "{plan}");
     }
     let plan = plan_of(&store, hrafn::query::KEY_CHUNKS_SQL, 2).await;
     assert!(plan.contains("SEARCH c "), "{plan}");
@@ -487,10 +526,11 @@ async fn vector_route_reads_no_chunk_rows() {
 /// files' path keys it embedded.
 async fn embed_with(
     store: &CodeStore,
+    c: &VectorCache,
     chunk: &dyn Fn(&str) -> Vec<f32>,
     path: &dyn Fn(&str) -> Vec<f32>,
 ) -> usize {
-    let want = hrafn::missing(store, MODEL, 1000).await.unwrap();
+    let want = hrafn::missing(store, c, 1000).await.unwrap();
     let mut paths = 0;
     for kind in [KeyKind::Chunk, KeyKind::Path] {
         let rows: Vec<([u8; 32], Vec<f32>)> = want
@@ -514,9 +554,7 @@ async fn embed_with(
                 .count();
         }
         if !rows.is_empty() {
-            put_vectors(store, MODEL, DIMS as u32, kind, &rows)
-                .await
-                .unwrap();
+            c.put(kind, DIMS as u32, &rows).await.unwrap();
         }
     }
     paths
@@ -527,8 +565,9 @@ async fn embed_with(
 /// 0 the tie stands, and the hub's file is not first.
 #[tokio::test]
 async fn path_vector_lifts_the_file_named_by_the_query() {
-    let (_dir, store, texts) = indexed().await;
-    let paths = embed_with(&store, &|_| vec![1.0, 0.0, 0.0, 0.0], &|p| {
+    let (dir, store, texts) = indexed().await;
+    let c = cache(dir.path());
+    let paths = embed_with(&store, &c, &|_| vec![1.0, 0.0, 0.0, 0.0], &|p| {
         if p == "core/drgnx-hub.el" {
             vec![0.0, 1.0, 0.0, 0.0]
         } else {
@@ -546,9 +585,9 @@ async fn path_vector_lifts_the_file_named_by_the_query() {
             ..q("completely unrelated words", Scope::All)
         };
         let now = &now;
-        let store = &store;
+        let (store, c) = (&store, &c);
         async move {
-            search(store, &q, hrafn::View::Base, Some((MODEL, &qv)), now)
+            search(store, &q, hrafn::View::Base, Some((c, &qv)), now)
                 .await
                 .unwrap()
         }
@@ -595,11 +634,12 @@ async fn one_key_in_two_files_is_two_hits() {
                 .map(|t| t.as_bytes().to_vec())
                 .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
         },
-        &[(MODEL, DIMS)],
+        &[],
     )
     .await
     .unwrap();
-    let want = hrafn::missing(&store, MODEL, 100).await.unwrap();
+    let c = cache(dir.path());
+    let want = hrafn::missing(&store, &c, 100).await.unwrap();
     let chunks: Vec<_> = want
         .iter()
         .filter(|(k, _, _)| *k == KeyKind::Chunk)
@@ -607,6 +647,7 @@ async fn one_key_in_two_files_is_two_hits() {
     assert_eq!(chunks.len(), 2, "one key for the shared text: {chunks:?}");
     embed_with(
         &store,
+        &c,
         &|t| {
             if t.contains("util-clamp") {
                 vec![1.0, 0.0, 0.0, 0.0]
@@ -621,7 +662,7 @@ async fn one_key_in_two_files_is_two_hits() {
         &store,
         &q("completely unrelated words", Scope::All),
         hrafn::View::Base,
-        Some((MODEL, &[1.0, 0.0, 0.0, 0.0])),
+        Some((&c, &[1.0, 0.0, 0.0, 0.0])),
         &|p: &str| by_path.get(p).map(|t| t.to_string()),
     )
     .await
@@ -641,13 +682,14 @@ async fn one_key_in_two_files_is_two_hits() {
 /// (100 ms of each query at 50,000 chunks, twice more with a model).
 #[tokio::test]
 async fn the_lag_counts_are_passes_over_an_index() {
-    let (_dir, store, _texts) = indexed().await;
+    let (dir, store, _texts) = indexed().await;
+    let c = cache(dir.path());
     for sql in [
         hrafn::index::LAG_TOTAL_SQL,
         hrafn::index::LAG_BEHIND_SQL,
         hrafn::index::LAG_FILES_SQL,
     ] {
-        let plan = plan_of(&store, sql, usize::from(sql.contains("?1"))).await;
+        let plan = plan_vc(&store, &c, sql, usize::from(sql.contains("?1"))).await;
         for line in plan.lines().filter(|l| l.starts_with("SCAN")) {
             assert!(line.contains("COVERING INDEX"), "{line}\n{plan}");
         }
@@ -682,7 +724,25 @@ async fn plan_of(store: &CodeStore, sql: &str, binds: usize) -> String {
             let mut st = c.prepare(&sql)?;
             let rows = st
                 .query_map(
-                    rusqlite::params_from_iter(vec![MODEL; binds.max(st.parameter_count())]),
+                    rusqlite::params_from_iter(vec!["x"; binds.max(st.parameter_count())]),
+                    |r| r.get::<_, String>(3),
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows.join("\n"))
+        })
+        .await
+        .unwrap()
+}
+
+/// [`plan_of`] with the cache C attached (`vc`), for the SQL that reads vectors.
+async fn plan_vc(store: &CodeStore, c: &VectorCache, sql: &str, binds: usize) -> String {
+    let sql = format!("explain query plan {sql}");
+    store
+        .attach_cache(c.path(), move |c| {
+            let mut st = c.prepare(&sql)?;
+            let rows = st
+                .query_map(
+                    rusqlite::params_from_iter(vec!["x"; binds.max(st.parameter_count())]),
                     |r| r.get::<_, String>(3),
                 )?
                 .collect::<Result<Vec<_>, _>>()?;

@@ -270,14 +270,9 @@ async fn store_of(d: &Path) -> CodeStore {
 
 async fn index(s: &CodeStore, d: &Path, l: &[Listed]) {
     let root = d.to_path_buf();
-    refresh(
-        s,
-        l,
-        &move |p: &str| std::fs::read(root.join(p)),
-        &[("m", 4)],
-    )
-    .await
-    .unwrap();
+    refresh(s, l, &move |p: &str| std::fs::read(root.join(p)), &[])
+        .await
+        .unwrap();
 }
 
 /// (chunks, embedded chunks) of one path.
@@ -317,7 +312,13 @@ async fn no_embed_is_listed_without_vectors() {
     assert!(n > 0, "keyword and symbol search have its chunks");
     assert_eq!(embedded, 0, "no vectors wanted");
     assert!(chunk_counts(&s, "a.rs").await.1 > 0);
-    let wanted = missing(&s, "m", 100).await.unwrap();
+    let cache = hrafn::VectorCache::open_writer(
+        &d.path().join(".git/vectors"),
+        "7ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee5",
+        "{}",
+    )
+    .unwrap();
+    let wanted = missing(&s, &cache, 100).await.unwrap();
     assert!(!wanted.is_empty());
     assert!(
         wanted.iter().all(|(_, _, t)| !t.contains("plain text")),

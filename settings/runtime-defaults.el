@@ -127,6 +127,7 @@
  (drgnx-search-rules nil)
  (drgnx-search-off nil)
  (drgnx-search-base nil)
+ (drgnx-search-cache-cap nil)
  (drgnx-search-ignore-rules "index")
  (drgnx-agents-plugins nil)
  (drgnx-agents-hook-rules nil)

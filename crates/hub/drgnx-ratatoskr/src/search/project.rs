@@ -9,16 +9,22 @@
 //! - **Tier 1.** [`Project::refresh_now`] lists the files and rebuilds the rows of those whose blob changed.
 //!   [`Project::tick`] does it when the settle core says a watcher's events are due (git after `index.lock` and 2 s
 //!   of quiet, a save after 30 s); without watches, [`Project::fresh_for_query`] diffs the blobs at query time.
+//! - **The vectors** are in the state's machine-wide caches ([`Caches`], one file per fingerprint): the store holds
+//!   keys only, and every refresh reports its live key set to the cache of each fingerprint the embedders proved.
 //! - **Tier 2.** Requests of [`REQUEST_KEYS`] missing keys to each embedder that answers (a server that is not running
 //!   gets none, and is no failure, until the next change wakes tier 2). Between requests it waits while typing
 //!   holds ([`TYPING_HOLD`] from the last [`Project::note_typing`]) and, on battery, until AC or
 //!   [`Project::index_now`]. Idle, it stays idle until a wake finds a key missing. What it does is published as a
 //!   [`Status`].
 
+use super::caches::Caches;
 use super::{DocEmbedder, power};
 use crate::clock;
 use hrafn::fresh::{Due, Fresh, Settle};
-use hrafn::{CodeStore, Config, Git, GitCli, Lag, Listed, Refresh, StoreError, WatchEvent};
+use hrafn::{
+    CodeStore, Config, Git, GitCli, Lag, Listed, Refresh, StoreError, VectorCache, WatchEvent,
+};
+use hrafn_embed::fingerprint::Identity;
 use norn::deny::{DenyList, RootVerdict, Verdict};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -233,6 +239,10 @@ struct Inner {
     base: PathBuf,
     id: String,
     store: CodeStore,
+    /// The state's vector caches, shared with every project of the state.
+    caches: Arc<Caches>,
+    /// The fingerprints (hex) whose cache holds the store's live key set as of the last refresh.
+    held: Mutex<HashSet<String>>,
     deny: DenyList,
     config: Config,
     embedders: Vec<Arc<dyn DocEmbedder>>,
@@ -341,6 +351,8 @@ impl Project {
                 base,
                 id,
                 store,
+                caches: Caches::shared(&spec.state),
+                held: Mutex::new(HashSet::new()),
                 deny,
                 config: spec.config,
                 embedders: spec.embedders,
@@ -504,6 +516,11 @@ impl Project {
                         inner.root.display()
                     );
                 }
+                // the state's caches, beside it (once per CACHE_SWEEP, whichever project comes first)
+                let now_ms = (clock::wall_secs() * 1000.0) as i64;
+                if let Err(e) = inner.caches.sweep_if_due(clock::now(), now_ms).await {
+                    tracing::warn!("search: the vector cache sweep: {e}");
+                }
             });
             if let Ok(mut j) = self.inner.jobs.lock() {
                 j.push(h);
@@ -596,17 +613,32 @@ impl Project {
         ));
     }
 
-    pub async fn lag(&self, model: Option<&str>) -> Result<Lag, ProjectError> {
+    /// The lag of the base against MODEL's vectors (none: no model, nothing behind on vectors).
+    pub async fn lag(&self, model: Option<&Identity>) -> Result<Lag, ProjectError> {
         self.lag_in(model, hrafn::View::Base).await
     }
 
     /// The lag of VIEW.
     pub async fn lag_in(
         &self,
-        model: Option<&str>,
+        model: Option<&Identity>,
         view: hrafn::View,
     ) -> Result<Lag, ProjectError> {
-        Ok(hrafn::lag(&self.inner.store, model, view).await?)
+        let cache = match model {
+            Some(id) => Some(self.cache(id).await?),
+            None => None,
+        };
+        Ok(hrafn::lag(&self.inner.store, cache.as_deref(), view).await?)
+    }
+
+    /// ID's vector cache (the state's, shared by every project).
+    pub async fn cache(&self, id: &Identity) -> Result<Arc<VectorCache>, ProjectError> {
+        Ok(self.inner.caches.get(id).await?)
+    }
+
+    /// The state's vector caches.
+    pub fn caches(&self) -> &Arc<Caches> {
+        &self.inner.caches
     }
 
     /// The view a query about ROOT answers from: the base for the main checkout (or a folder in it); for a linked
@@ -1206,13 +1238,16 @@ impl Inner {
         )
     }
 
-    fn models(&self) -> Vec<(String, usize)> {
-        // the fingerprints the embedders have proved so far (an embedder not probed yet has none)
-        self.embedders
-            .iter()
-            .filter_map(|e| e.identity())
-            .map(|i| (i.fp.hex(), i.record.dims as usize))
-            .collect()
+    /// The caches of the fingerprints the embedders have proved so far (an embedder not probed yet has none).
+    async fn models(&self) -> Result<Vec<Arc<VectorCache>>, ProjectError> {
+        let mut out: Vec<Arc<VectorCache>> = Vec::new();
+        for id in self.embedders.iter().filter_map(|e| e.identity()) {
+            let c = self.caches.get(&id).await?;
+            if !out.iter().any(|o| o.fp_hex() == c.fp_hex()) {
+                out.push(c);
+            }
+        }
+        Ok(out)
     }
 
     async fn refresh(&self) -> Result<Refresh, ProjectError> {
@@ -1223,15 +1258,42 @@ impl Inner {
             eitri::read_regular(root.fd.as_fd(), Path::new(p), hrafn::files::MAX_FILE_BYTES)
                 .map_err(|e| io::Error::other(e.to_string()))
         };
-        let models = self.models();
-        let pairs: Vec<(&str, usize)> = models.iter().map(|(m, d)| (m.as_str(), *d)).collect();
-        let r = hrafn::refresh(&self.store, &listed, &read, &pairs).await?;
+        let caches = self.models().await?;
+        let refs: Vec<&VectorCache> = caches.iter().map(|c| c.as_ref()).collect();
+        let r = hrafn::refresh(&self.store, &listed, &read, &refs).await?;
         if let Ok(head) = GitCli.head(&self.base) {
             self.store
                 .meta_set(hrafn::index::META_BUILT_FROM, &head)
                 .await?;
         }
+        // the store's live key set, to each cache (MP-21); a fingerprint first proved later is held by tier 2
+        if let Ok(mut h) = self.held.lock() {
+            h.clear();
+        }
+        for c in &caches {
+            self.hold(c).await?;
+        }
         Ok(r)
+    }
+
+    /// The store's live key set reported to CACHE (once per refresh and fingerprint).
+    async fn hold(&self, cache: &VectorCache) -> Result<(), ProjectError> {
+        let now_ms = (clock::wall_secs() * 1000.0) as i64;
+        hrafn::hold(&self.store, cache, &self.base, now_ms).await?;
+        if let Ok(mut h) = self.held.lock() {
+            h.insert(cache.fp_hex().to_string());
+        }
+        Ok(())
+    }
+
+    /// ID's cache, holding the store's live key set (reported now when no refresh has since ID was first proved).
+    async fn cache_held(&self, id: &Identity) -> Result<Arc<VectorCache>, ProjectError> {
+        let cache = self.caches.get(id).await?;
+        let held = self.held.lock().is_ok_and(|h| h.contains(cache.fp_hex()));
+        if !held {
+            self.hold(&cache).await?;
+        }
+        Ok(cache)
     }
 
     fn publish(&self, tier2: Tier2) {
@@ -1288,8 +1350,15 @@ impl Inner {
                 let Ok(id) = e.probe().await else {
                     continue;
                 };
-                let (model, dims) = (id.fp.hex(), id.record.dims);
-                let keys = match hrafn::missing(&self.store, &model, REQUEST_KEYS).await {
+                let dims = id.record.dims;
+                let cache = match self.cache_held(&id).await {
+                    Ok(c) => c,
+                    Err(err) => {
+                        self.publish(Tier2::Failed(err.to_string()));
+                        continue;
+                    }
+                };
+                let keys = match hrafn::missing(&self.store, &cache, REQUEST_KEYS).await {
                     Ok(k) => k,
                     Err(err) => {
                         self.publish(Tier2::Failed(err.to_string()));
@@ -1327,9 +1396,7 @@ impl Inner {
                             if rows.is_empty() {
                                 continue;
                             }
-                            if let Err(err) =
-                                hrafn::put_vectors(&self.store, &model, dims, kind, &rows).await
-                            {
+                            if let Err(err) = cache.put(kind, dims, &rows).await {
                                 failed = Some(err.to_string());
                                 break;
                             }
@@ -1358,11 +1425,7 @@ impl Inner {
                 if let Ok(mut g) = self.gate.lock() {
                     g.overriding = false;
                 }
-                for e in &self.embedders {
-                    if let Some(i) = e.identity() {
-                        let _ = hrafn::collect(&self.store, &i.fp.hex()).await;
-                    }
-                }
+                // (unreferenced vectors are the caches' to collect: their hourly sweep)
                 if !matches!(self.status.borrow().tier2, Tier2::Failed(_)) {
                     self.publish(Tier2::Idle);
                 }
@@ -1380,7 +1443,8 @@ impl Inner {
             for e in &self.embedders {
                 // a store error is the pass's to report
                 if let Ok(id) = e.probe().await
-                    && !matches!(hrafn::missing(&self.store, &id.fp.hex(), 1).await, Ok(k) if k.is_empty())
+                    && let Ok(cache) = self.cache_held(&id).await
+                    && !matches!(hrafn::missing(&self.store, &cache, 1).await, Ok(k) if k.is_empty())
                 {
                     return;
                 }
