@@ -27,7 +27,8 @@ that rounding is the open question of moving it into `kvardi`.
   display's zoom again.
 
 **Enforced by:** the scan rule `no-raw-scale-mul` (a `*` or `*=` with a value named `…scale…` on either side, through
-casts, references and parentheses, anywhere but `kvardi`); the layer rows that keep the view crates (`sja`, `smidja`) off
+casts, references and parentheses, in the UI crates (`ui = true` in `standards.toml`, and anything under `crates/ui/`) but
+`kvardi`; a quantiser's `scale` elsewhere is not a UI scale); the layer rows that keep the view crates (`sja`, `smidja`) off
 `glitnir`; and a compile-fail test (`trybuild`) that a logical length does not reach Glitnir. Owner: `kvardi`.
 Conformance: `crates/std/kvardi/tests/conformance.rs`.
 

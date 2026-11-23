@@ -982,6 +982,7 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
     fn visit_expr(&mut self, e: &'ast Expr) {
         if let Expr::Binary(b) = e
             && matches!(b.op, syn::BinOp::Mul(_) | syn::BinOp::MulAssign(_))
+            && self.rules.reactive
             && (names_scale(&b.left) || names_scale(&b.right))
             && let Some(id) = self.rule("no-raw-scale-mul")
         {

@@ -349,17 +349,18 @@ fn a_hand_made_scale_multiplication_fails() {
     let ws = fixture();
     let (code, out) = run(ws.path(), &[]);
     assert_eq!(code, 1, "{out}");
-    // `x * scale`, `… * s.scale_factor`, `s.zoom_scale() * 2.0`, `d *= scale` and `scale as f32 * x`; not `x * 2.0`
+    // `x * scale`, `… * s.scale_factor`, `s.zoom_scale() * 2.0`, `d *= scale` and `scale as f32 * x`; not `x * 2.0`.
+    // The rule is for UI crates: a non-UI crate's `sum * scale` (villa's quantiser step) is no finding.
     let hits = lines(
         &out,
-        "crates/bad/src/scale.rs",
+        "crates/uiapp/src/scale.rs",
         "[scale-zoom/no-raw-scale-mul]",
     );
     let at: Vec<&str> = hits.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
     assert_eq!(at, ["2", "3", "4", "6", "7"], "{out}");
     assert!(
         !out.lines()
-            .any(|l| l.starts_with("crates/villa/") && l.contains("no-raw-scale-mul")),
+            .any(|l| !l.starts_with("crates/uiapp/") && l.contains("no-raw-scale-mul")),
         "{out}"
     );
 }
