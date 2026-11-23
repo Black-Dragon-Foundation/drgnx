@@ -1103,9 +1103,66 @@ mod tools {
             "no resource links by default: {:?}",
             o.content
         );
-        // the text keeps its rows (amendment MP-7), once each
+        // MP-7 follow-up: the rows are in `structuredContent` once each, and the text is the header
+        let rows = o.structured.to_string();
         for id in &ids {
-            assert_eq!(o.text.matches(id.as_str()).count(), 1, "{id}: {}", o.text);
+            assert_eq!(rows.matches(id.as_str()).count(), 1, "{id}: {rows}");
+            assert!(
+                !o.text.contains(id.as_str()),
+                "{id} in the text: {}",
+                o.text
+            );
+        }
+        assert!(o.text.starts_with("3 tasks"), "{}", o.text);
+        assert!(o.text.contains("structured result"), "{}", o.text);
+    }
+
+    /// Every list or read tool whose text is a header declares an `outputSchema` (or its rows would vanish: mimir sends
+    /// `structuredContent` only for a tool that has one), and its `structuredContent` validates against it.
+    #[tokio::test]
+    async fn header_only_tools_declare_a_schema_their_rows_validate_against() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        let t1 = id_of(&create(&w, &a, "one").await);
+        let t2 = id_of(&create(&w, &a, "two").await);
+        let l = w
+            .call(
+                &a,
+                "task_write",
+                json!({"op": "link", "src": t1, "kind": "blocks", "dst": t2}),
+            )
+            .await;
+        assert!(!l.err, "{}", l.text);
+        let list = tools();
+        for (name, args) in [
+            ("task_read", json!({"op": "find"})),
+            ("task_read", json!({"op": "ready"})),
+            ("task_read", json!({"op": "mine"})),
+            (
+                "graph_read",
+                json!({"op": "neighbors", "id": t1, "depth": 2}),
+            ),
+            ("graph_read", json!({"op": "path", "start": t1, "end": t2})),
+            ("graph_read", json!({"op": "history", "id": t1})),
+            ("graph_read", json!({"op": "who_touched", "path": "a.rs"})),
+        ] {
+            let tool = list.iter().find(|t| t.name() == name).unwrap();
+            let schema = tool
+                .output_schema()
+                .unwrap_or_else(|| panic!("{name} has no outputSchema"));
+            let o = w.call(&a, name, args.clone()).await;
+            assert!(!o.err, "{name} {args}: {}", o.text);
+            brokkr::schema::check(&schema, &o.structured)
+                .unwrap_or_else(|e| panic!("{name} {args}: {e:?}"));
+            for id in [&t1, &t2] {
+                assert!(!o.text.contains(id.as_str()), "{name} {args}: {}", o.text);
+            }
+            assert!(
+                o.text.contains("structured result"),
+                "{name} {args}: {}",
+                o.text
+            );
         }
     }
 

@@ -47,6 +47,10 @@ proposals. It works in its own project only, and it follows the matrix like drgn
 - Its decisions are always proposals, and each names where it comes from.
 - Every change it makes is its own entry in the history, so `ratatoskr graph revert --tx N` undoes it.
 
+Lists the agent reads (`task_read` find, ready and mine, `graph_read`) come back as a one-line header ("3 tasks (rows
+in the structured result)") and the rows in the tool's structured result, so each row costs the agent's context once.
+Resource links to the entities are sent only when the agent asks for them with `links: true`.
+
 When a bound tool is refused, the answer says why and what to do instead; an unbound agent is told the
 `ratatoskr outside bind` command to ask you for.
 
