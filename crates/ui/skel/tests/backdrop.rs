@@ -13,6 +13,7 @@ use glitnir::geom::Rect;
 use glitnir::motion::{Kind as Move, Leg, MotionSpec};
 use glitnir::scene::{Chrome, LayerDesc};
 use glitnir::stats::{Percentiles, summary};
+use kvardi::Px;
 use skel::api::*;
 use skel::event::*;
 use skel::wayland::WaylandShell;
@@ -28,7 +29,7 @@ const ROOT: (i32, i32) = (200, 100);
 /// σ, device and logical pixels: scale 1.
 const SIGMA: f32 = 4.0;
 /// A window of the root that is its own output, and its Glitnir id (a window id carries the top bit, as the glue's do).
-const VIEW: Rect = Rect::new(0, 0, 200, 80);
+const VIEW: Rect = Rect::new(Px(0), Px(0), Px(200), Px(80));
 const WIN: u64 = (1 << 63) | 7;
 
 fn stats(g: u64) -> u64 {
@@ -72,7 +73,7 @@ impl Tree {
             kid: 0,
             kb: Backing::new(SIZE.0, SIZE.1),
             at: (80, 40),
-            layer: Rect::new(0, 0, SIZE.0, SIZE.1),
+            layer: Rect::new(Px(0), Px(0), Px(SIZE.0), Px(SIZE.1)),
             rec,
         };
         let ev = wait_for(&mut t.shell, |e| e.kind() == Kind::Configure);
@@ -80,7 +81,7 @@ impl Tree {
             .ack_configure(t.root, configure_of(&ev).serial, NHSHELL_ACK_CONTENT)
             .unwrap();
         t.rb.fill_all(BLACK);
-        t.rb.fill(Rect::new(100, 0, 100, ROOT.1), WHITE);
+        t.rb.fill(Rect::new(Px(100), Px(0), Px(100), Px(ROOT.1)), WHITE);
         assert!(publish(&mut t.shell, t.root, &[(&t.rb, t.root)], 0));
         t.committed();
         t.step();
@@ -118,7 +119,7 @@ impl Tree {
     /// The child's surface is 60x40, with its one layer inset by 10 and `chrome` on it.
     fn chromed(&mut self, chrome: Chrome) {
         self.kb = Backing::new(60, 40);
-        self.layer = Rect::new(10, 10, SIZE.0, SIZE.1);
+        self.layer = Rect::new(Px(10), Px(10), Px(SIZE.0), Px(SIZE.1));
         self.at = (70, 30);
         self.kb.src = (10, 10);
         let (g, layer) = (self.kb.g, self.layer);
@@ -249,7 +250,7 @@ impl Tree {
 
     /// The child's layer in the root.
     fn region(&self) -> Rect {
-        self.layer.translate(self.at.0, self.at.1)
+        self.layer.translate(Px(self.at.0), Px(self.at.1))
     }
 
     /// The root's pixels blurred afresh.
@@ -301,6 +302,7 @@ impl Tree {
 
 mod backdrop {
     use super::*;
+    use kvardi::Px;
 
     fn follows_parent_damage(inline: bool) {
         let mut t = Tree::blurred(inline);
@@ -308,7 +310,7 @@ mod backdrop {
         assert_eq!(first, t.fresh().recomputed_px(), "all of it, once");
         // a change beneath: the child's new picture goes in the commit of the root's
         let seq = t.next_seq();
-        t.rb.fill(Rect::new(84, 44, 12, 12), WHITE);
+        t.rb.fill(Rect::new(Px(84), Px(44), Px(12), Px(12)), WHITE);
         t.frame();
         assert_eq!(t.buffers(seq, t.kid), 1);
         assert_eq!(t.buffers(seq, t.root), 1);
@@ -317,7 +319,7 @@ mod backdrop {
         assert!(second > first, "{second} after {first}");
         // a change beyond the blur's reach costs the child nothing
         let seq = t.next_seq();
-        t.rb.fill(Rect::new(0, 0, 10, 10), WHITE);
+        t.rb.fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), WHITE);
         t.frame();
         assert_eq!(t.buffers(seq, t.kid), 0);
         assert_eq!(stats(t.kb.g), second);
@@ -342,13 +344,13 @@ mod backdrop {
         let mut t = Tree::blurred(false);
         let g = t.kb.g;
         assert!(summary(g, true).blur_ms.max > 0.0, "the first picture's");
-        t.rb.fill(Rect::new(0, 0, 10, 10), WHITE);
+        t.rb.fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), WHITE);
         t.frame();
-        t.kb.fill(Rect::new(2, 2, 2, 8), 0xff10_2030);
+        t.kb.fill(Rect::new(Px(2), Px(2), Px(2), Px(8)), 0xff10_2030);
         t.frame();
         assert_eq!(summary(g, false).blur_ms, Percentiles::default());
         let began = Instant::now();
-        t.rb.fill(Rect::new(84, 44, 12, 12), WHITE);
+        t.rb.fill(Rect::new(Px(84), Px(44), Px(12), Px(12)), WHITE);
         t.frame();
         let span = began.elapsed().as_secs_f64() * 1e3;
         let got = summary(g, false).blur_ms;
@@ -363,7 +365,7 @@ mod backdrop {
         let before = stats(t.kb.g);
         let seq = t.next_seq();
         for i in 0..10 {
-            t.kb.fill(Rect::new(2 + 3 * i, 2, 2, 8), 0xff10_2030);
+            t.kb.fill(Rect::new(Px(2 + 3 * i), Px(2), Px(2), Px(8)), 0xff10_2030);
             t.frame();
         }
         assert_eq!(t.buffers(seq, t.kid), 10);
@@ -388,7 +390,7 @@ mod backdrop {
         summary(t.kb.g, true);
         summary(t.rb.g, true);
         let key = skel::wayland::publish::now_ns() - 5_000_000_000;
-        t.kb.fill(Rect::new(2, 2, 2, 8), 0xff10_2030);
+        t.kb.fill(Rect::new(Px(2), Px(2), Px(2), Px(8)), 0xff10_2030);
         assert!(publish(
             &mut t.shell,
             t.root,
@@ -404,7 +406,7 @@ mod backdrop {
             "the child's key to commit {kid:?}"
         );
         // the root changes later, with no key
-        t.rb.fill(Rect::new(0, 0, 10, 10), WHITE);
+        t.rb.fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), WHITE);
         t.frame();
         assert_eq!(summary(t.rb.g, false).update_ms, Percentiles::default());
     }
@@ -494,7 +496,7 @@ mod backdrop {
     fn hidden_child_catches_up() {
         let mut t = Tree::blurred(false);
         let before = stats(t.kb.g);
-        t.rb.fill(Rect::new(84, 44, 12, 12), WHITE);
+        t.rb.fill(Rect::new(Px(84), Px(44), Px(12), Px(12)), WHITE);
         t.hide();
         assert_eq!(stats(t.kb.g), before, "nothing for a child not shown");
         t.shell.set_mapped(t.kid, true).unwrap();
@@ -524,7 +526,7 @@ mod backdrop {
         .unwrap();
         for y in (0..VIEW.h).step_by(4) {
             let v = 0x1_0101 * (y as u32 * 3);
-            rb.fill(Rect::new(0, y, VIEW.w, 4), 0xff00_0000 | v);
+            rb.fill(Rect::new(Px(0), Px(y), Px(VIEW.w), Px(4)), 0xff00_0000 | v);
         }
         assert!(publish(&mut t.shell, root, &[(&t.rb, root)], 0));
         t.committed();
@@ -541,7 +543,7 @@ mod backdrop {
             let w4 = (rb.w * 4) as usize;
             let rows = (VIEW.h + dy) as usize;
             rb.px.copy_within(16 * w4..(16 + rows) * w4, 0);
-            let exposed = Rect::new(0, VIEW.h + dy, VIEW.w, -dy);
+            let exposed = Rect::new(Px(0), Px(VIEW.h + dy), Px(VIEW.w), Px(-dy));
             glitnir::damage::scroll(rb.g, WIN, VIEW, dy, exposed);
             rb.fill(exposed, 0xff80_4020);
             t.frame();
@@ -611,7 +613,7 @@ mod backdrop {
             },
         };
         t.shell.set_motion(t.kid, Some(spec)).unwrap();
-        t.rb.fill(Rect::new(0, 0, 1, 1), WHITE);
+        t.rb.fill(Rect::new(Px(0), Px(0), Px(1), Px(1)), WHITE);
         t.hide();
         t.shell.set_mapped(t.kid, true).unwrap();
         t.kb.fill_all(0xff20_4060);

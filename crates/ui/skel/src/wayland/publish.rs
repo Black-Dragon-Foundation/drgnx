@@ -52,6 +52,7 @@ use glitnir::layout::{LayoutLeg, active_tiles, compose_leg, disjoint, subtract, 
 use glitnir::motion::{Kind, Motion, MotionSpec, Sample};
 use glitnir::pool::IDLE_NS;
 use glitnir::stats::StatsEntry;
+use kvardi::Px;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -309,7 +310,7 @@ impl Front {
     /// Move the rows of `r` by `dy` (negative: up) within the front, as the host's backing moved them; a row whose
     /// source lies outside the front keeps its pixels (it is damage).
     fn scroll(&mut self, r: &Rect, dy: i32) {
-        let r = r.intersect(&Rect::new(0, 0, self.w, self.h));
+        let r = r.intersect(&Rect::new(Px(0), Px(0), Px(self.w), Px(self.h)));
         if r.is_empty() || dy == 0 {
             return;
         }
@@ -327,7 +328,7 @@ impl Front {
 
     /// The plain copy when there is nothing to compose with: each pixel at its own place, within `clips`.
     fn copy_to(&self, t: &mut TargetView, clips: &[Rect]) {
-        let bounds = Rect::new(0, 0, self.w, self.h).intersect(&t.rect);
+        let bounds = Rect::new(Px(0), Px(0), Px(self.w), Px(self.h)).intersect(&t.rect);
         let (ox, oy) = (t.rect.x, t.rect.y);
         for r in clips.iter().map(|r| r.intersect(&bounds)) {
             if r.is_empty() {
@@ -389,10 +390,10 @@ fn snapshot_backdrop(
         .rect;
     let device = |logical: i32| crate::units::device_px(logical, scale);
     let region = Rect::new(
-        device(at.0) + layer.x,
-        device(at.1) + layer.y,
-        layer.w,
-        layer.h,
+        Px(device(at.0) + layer.x),
+        Px(device(at.1) + layer.y),
+        Px(layer.w),
+        Px(layer.h),
     );
     let mut b = Backdrop::new();
     b.update(
@@ -709,10 +710,10 @@ impl Blur {
         let device = |logical: i32| crate::units::device_px(logical, scale);
         (scale == child.scale).then(|| Aim {
             region: Rect::new(
-                device(self.at.0) + layer.x,
-                device(self.at.1) + layer.y,
-                layer.w,
-                layer.h,
+                Px(device(self.at.0) + layer.x),
+                Px(device(self.at.1) + layer.y),
+                Px(layer.w),
+                Px(layer.h),
             ),
             sigma_px: crate::units::device_len(self.blur_px, scale),
             scale,
@@ -781,7 +782,7 @@ pub const LEG_BUDGET_PX: u64 = 6_000_000;
 
 /// `rect`'s pixels of `f`, row by row; `None` unless `rect` lies inside it.
 fn copy_out(f: &Front, rect: Rect) -> Option<Vec<u32>> {
-    if rect.is_empty() || rect.intersect(&Rect::new(0, 0, f.w, f.h)) != rect {
+    if rect.is_empty() || rect.intersect(&Rect::new(Px(0), Px(0), Px(f.w), Px(f.h))) != rect {
         return None;
     }
     let mut px = Vec::with_capacity(rect.area() as usize);
@@ -916,7 +917,7 @@ impl Stage {
             && let Some(s) = self.surfaces.get_mut(&id)
             && let Some(f) = &s.front
         {
-            s.damage = vec![Rect::new(0, 0, f.w, f.h)];
+            s.damage = vec![Rect::new(Px(0), Px(0), Px(f.w), Px(f.h))];
         }
     }
 
@@ -975,7 +976,7 @@ impl Stage {
             b.recomputed += b.image.recomputed_px();
             if let (Some(r), Some(s)) = (changed, surfaces.get_mut(id)) {
                 let (x, y) = aim.layer_at;
-                let r = r.translate(x - aim.region.x, y - aim.region.y);
+                let r = r.translate(Px(x - aim.region.x), Px(y - aim.region.y));
                 s.damage_px += r.area();
                 s.damage.push(r);
                 if s.draw_start_ns == 0 {
@@ -1016,7 +1017,7 @@ impl Stage {
                 if !m.wanted && !m.bare {
                     self.unmaps.push(id);
                 } else if let (true, Some(f)) = (m.last, &s.front) {
-                    s.damage = vec![Rect::new(0, 0, f.w, f.h)];
+                    s.damage = vec![Rect::new(Px(0), Px(0), Px(f.w), Px(f.h))];
                 }
             }
         }
@@ -1170,7 +1171,7 @@ impl Stage {
             }
             // a front that went or changed size ends the leg: its picture is the new one
             let fits = |f: &&Front| {
-                let all = Rect::new(0, 0, f.w, f.h);
+                let all = Rect::new(Px(0), Px(0), Px(f.w), Px(f.h));
                 let same = run.src.as_ref().is_none_or(|r| (r.w, r.h) == (f.w, f.h));
                 same && run.leg.rect.intersect(&all) == run.leg.rect
             };
@@ -1325,7 +1326,7 @@ impl Stage {
                 continue;
             }
             if let Some(f) = &s.front {
-                s.damage = vec![Rect::new(0, 0, f.w, f.h)];
+                s.damage = vec![Rect::new(Px(0), Px(0), Px(f.w), Px(f.h))];
             }
             m.ticked = true;
             m.last = m.motion.running(t);
@@ -1421,7 +1422,7 @@ impl Stage {
             }
             if !self.blurs.is_empty() {
                 let dirt: Vec<Rect> = if part.full || !size_ok {
-                    vec![Rect::new(0, 0, part.w, part.h)]
+                    vec![Rect::new(Px(0), Px(0), Px(part.w), Px(part.h))]
                 } else {
                     let scrolled = outputs.iter().filter(|o| !o.full && o.scroll != 0);
                     (part.rects.iter().copied())
@@ -1488,7 +1489,7 @@ impl Stage {
             && s.damage.is_empty()
             && let Some(f) = &s.front
         {
-            s.damage.push(Rect::new(0, 0, f.w, f.h));
+            s.damage.push(Rect::new(Px(0), Px(0), Px(f.w), Px(f.h)));
         }
     }
 
@@ -1524,7 +1525,7 @@ impl Stage {
         }
         for s in self.surfaces.values_mut() {
             if let Some(f) = &s.front {
-                s.damage = vec![Rect::new(0, 0, f.w, f.h)];
+                s.damage = vec![Rect::new(Px(0), Px(0), Px(f.w), Px(f.h))];
             }
         }
         if self.picture_waits() {
@@ -1567,7 +1568,7 @@ impl Stage {
         if buf.w <= 0 || buf.h <= 0 || buf.stride < 4 * buf.w || buf.pixels.is_null() {
             return;
         }
-        let all = Rect::new(0, 0, buf.w, buf.h);
+        let all = Rect::new(Px(0), Px(0), Px(buf.w), Px(buf.h));
         let age = buf.age as usize;
         let mut clips = Vec::new();
         if s.alpha_host || age == 0 || age - 1 > s.hist.len() {
@@ -1925,7 +1926,7 @@ fn commit_scene(g: u64, w: i32, h: i32) -> (Vec<Rect>, Option<Arc<Committed>>) {
         Some((rects, c)) => (rects, Some(c)),
         None => (glitnir::damage::with(g, |d| d.commit().to_vec()), None),
     };
-    let all = Rect::new(0, 0, w, h);
+    let all = Rect::new(Px(0), Px(0), Px(w), Px(h));
     let rects = rects
         .iter()
         .map(|r| r.intersect(&all))
@@ -1998,7 +1999,7 @@ impl WaylandShell {
         let mut parts = Vec::with_capacity(committed.len());
         for (f, (damage, scene)) in committed {
             let full = self.presenting.fronts.get(&f.window) != Some(&(f.w, f.h));
-            let all = Rect::new(0, 0, f.w, f.h);
+            let all = Rect::new(Px(0), Px(0), Px(f.w), Px(f.h));
             let rects = if full {
                 vec![all]
             } else {
@@ -2097,7 +2098,7 @@ impl WaylandShell {
             let Some(f) = frames.iter().find(|f| f.window == id) else {
                 continue;
             };
-            let all = Rect::new(0, 0, f.w, f.h);
+            let all = Rect::new(Px(0), Px(0), Px(f.w), Px(f.h));
             let mut front = Front::new(f.w, f.h);
             let mut px = Vec::with_capacity(front.data.len());
             copy_rect(f, &all, &mut px);
@@ -2276,6 +2277,7 @@ mod tests {
     use super::*;
     use glitnir::ease::Curve;
     use glitnir::motion::Leg;
+    use kvardi::Px;
 
     /// A hide whose wait ran out between the tick that saw it and the presenter's next sleep still needs its wake.
     #[test]
@@ -2322,12 +2324,12 @@ mod tests {
             flags: NHSHELL_SF_DRAWABLE,
             alpha_cut: 0,
             scale: 1.0,
-            rects: vec![Rect::new(0, 0, 4, 4)],
+            rects: vec![Rect::new(Px(0), Px(0), Px(4), Px(4))],
             patch: vec![0; 16],
             full: true,
         };
         let pool = PatchPool::default();
-        let all = Rect::new(0, 0, 4, 4);
+        let all = Rect::new(Px(0), Px(0), Px(4), Px(4));
         // the key's packet: the root drew, the child did not
         let p = Packet {
             root,
@@ -2349,7 +2351,7 @@ mod tests {
             seq: 2,
             t_key_ns: 8,
             t_publish_ns: 10,
-            parts: vec![part(kid, vec![Rect::new(0, 0, 1, 1)])],
+            parts: vec![part(kid, vec![Rect::new(Px(0), Px(0), Px(1), Px(1))])],
             whole: false,
         };
         stage.apply(p, &pool);

@@ -24,6 +24,7 @@ const KEY_A: u32 = 30;
 
 mod reconnect {
     use super::*;
+    use kvardi::Px;
 
     fn shared() -> std::sync::RwLockReadGuard<'static, ()> {
         SERIAL.read().unwrap_or_else(|e| e.into_inner())
@@ -391,7 +392,7 @@ mod reconnect {
         // SAFETY: the begun buffer is `stride * h` readable bytes until the commit.
         assert_eq!(unsafe { *b.pixels }, 0x80);
         shell
-            .present_commit(w, &[glitnir::geom::Rect::new(0, 0, 64, 48)])
+            .present_commit(w, &[glitnir::geom::Rect::new(Px(0), Px(0), Px(64), Px(48))])
             .unwrap();
         shell.flush().unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -1042,7 +1043,7 @@ mod reconnect {
     /// A window layer's Glitnir id (a window id carries the top bit, as the glue's do).
     const WIN: u64 = (1 << 63) | 7;
     /// The window's rectangle on a 400 x 300 frame, with 60 rows of frame below it.
-    const VIEW: Rect = Rect::new(0, 0, 400, 240);
+    const VIEW: Rect = Rect::new(Px(0), Px(0), Px(400), Px(240));
 
     /// Dispatch the records until `f` holds (10 s at most).
     fn until(shell: &mut WaylandShell, what: &str, f: impl Fn(&mut WaylandShell) -> bool) {
@@ -1193,7 +1194,7 @@ mod reconnect {
         shell.set_compose_delay(100);
         for i in 0..20u32 {
             b.fill(
-                Rect::new(i as i32 * 10, 0, 10, 100),
+                Rect::new(Px(i as i32 * 10), Px(0), Px(10), Px(100)),
                 0xff00_0000 | i.wrapping_mul(0x000a_0b0c),
             );
             assert!(backing::publish(&mut shell, w, &[(&b, w)], 0));
@@ -1275,7 +1276,7 @@ mod reconnect {
         let (mut shell, w) = presenting(&rec, &mut b);
         let made = commits_made(&shell);
         shell.set_compose_gate(true);
-        b.fill(Rect::new(20, 20, 60, 40), 0xff11_2233);
+        b.fill(Rect::new(Px(20), Px(20), Px(60), Px(40)), 0xff11_2233);
         assert!(backing::publish(&mut shell, w, &[(&b, w)], 0));
         assert!(
             shell.composes_held(1, Duration::from_secs(10)),
@@ -1358,8 +1359,8 @@ mod reconnect {
         for cycle in 1..=20u32 {
             // rows in the window (its layer's ring buffers) and in the frame below it, queued at the loss
             let argb = 0xff00_0000 | cycle.wrapping_mul(0x0001_0203);
-            b.fill(Rect::new(0, 100, 400, 10), argb);
-            b.fill(Rect::new(0, 250, 400, 20), argb);
+            b.fill(Rect::new(Px(0), Px(100), Px(400), Px(10)), argb);
+            b.fill(Rect::new(Px(0), Px(250), Px(400), Px(20)), argb);
             assert!(backing::publish(&mut shell, w, &[(&b, w)], 0));
             restart(&rec, r#"{"cmd":"restart","mode":"keep-socket"}"#);
             until_reconnecting(&mut shell);

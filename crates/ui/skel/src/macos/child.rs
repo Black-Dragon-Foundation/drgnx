@@ -30,6 +30,7 @@ use crate::mac_child::{self, Node};
 use crate::units::Scale;
 use glitnir::geom::Rect;
 use glitnir::scene::Chrome;
+use kvardi::Px;
 use objc2::rc::Retained;
 use objc2_app_kit::NSWindow;
 use objc2_foundation::{NSPoint, NSRect, NSSize};
@@ -626,7 +627,7 @@ impl MacShell {
             let now = k.visible()
                 && (k.backdrop > 0.0
                     || mac_child::overhangs(
-                        Rect::new(k.x + c.x, k.y + c.y, c.w, c.h),
+                        Rect::new(Px(k.x + c.x), Px(k.y + c.y), Px(c.w), Px(c.h)),
                         rw,
                         rh,
                         k.out,

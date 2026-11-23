@@ -90,6 +90,7 @@ fn draw(shell: &mut WaylandShell, id: u64, w: i32, h: i32, damage: &[Rect]) -> u
 #[allow(clippy::module_inception)]
 mod present {
     use super::*;
+    use kvardi::Px;
 
     #[test]
     fn damage_is_logged() {
@@ -107,7 +108,13 @@ mod present {
         let (w, h) = shell.present_buffer_size(id, 200, 100);
         assert_eq!((w, h), (300, 150));
         // a buffer that was never written is committed whole; the first reuse carries the host's own damage
-        draw(&mut shell, id, w, h, &[Rect::new(5, 6, 100, 20)]);
+        draw(
+            &mut shell,
+            id,
+            w,
+            h,
+            &[Rect::new(Px(5), Px(6), Px(100), Px(20))],
+        );
         let first = wait_buffer_commits(&rec, 1);
         assert!(
             first[0].contains("\"rect\":[0,0,300,150]}]"),
@@ -122,7 +129,14 @@ mod present {
             // the callback and the releases sent with it are handled
             sync(&shell);
             n += 1;
-            if draw(&mut shell, id, w, h, &[Rect::new(5, 6, 100, 20)]) > 0 {
+            if draw(
+                &mut shell,
+                id,
+                w,
+                h,
+                &[Rect::new(Px(5), Px(6), Px(100), Px(20))],
+            ) > 0
+            {
                 break;
             }
             assert!(n < 6, "no buffer was ever reused");
@@ -138,8 +152,20 @@ mod present {
         let rec = Recorder::start_clock("sway", "manual");
         let mut shell = rec.open();
         let id = window(&mut shell);
-        draw(&mut shell, id, 200, 100, &[Rect::new(0, 0, 10, 10)]);
-        draw(&mut shell, id, 200, 100, &[Rect::new(50, 50, 10, 10)]);
+        draw(
+            &mut shell,
+            id,
+            200,
+            100,
+            &[Rect::new(Px(0), Px(0), Px(10), Px(10))],
+        );
+        draw(
+            &mut shell,
+            id,
+            200,
+            100,
+            &[Rect::new(Px(50), Px(50), Px(10), Px(10))],
+        );
         let log = wait_buffer_commits(&rec, 2);
         assert_eq!(log.len(), 2);
         assert!(log[1].contains("\"rect\":[0,0,200,100]}]"), "{}", log[1]);
@@ -150,7 +176,13 @@ mod present {
         let rec = Recorder::start_clock("no-presentation", "manual");
         let mut shell = rec.open();
         let id = window(&mut shell);
-        draw(&mut shell, id, 200, 100, &[Rect::new(0, 0, 10, 10)]);
+        draw(
+            &mut shell,
+            id,
+            200,
+            100,
+            &[Rect::new(Px(0), Px(0), Px(10), Px(10))],
+        );
         wait_buffer_commits(&rec, 1);
         assert_eq!(shell.present_pacer(id).map(|p| p.0), Some(true), "waits");
         while shell.next_event().unwrap().is_some() {}
@@ -178,7 +210,13 @@ mod present {
         let rec = Recorder::start_clock("sway", "manual");
         let mut shell = rec.open();
         let id = window(&mut shell);
-        draw(&mut shell, id, 200, 100, &[Rect::new(0, 0, 10, 10)]);
+        draw(
+            &mut shell,
+            id,
+            200,
+            100,
+            &[Rect::new(Px(0), Px(0), Px(10), Px(10))],
+        );
         wait_buffer_commits(&rec, 1);
         assert!(
             !arrives(&mut shell, 200, Kind::FrameDone),
@@ -201,7 +239,13 @@ mod present {
         let mut shell = rec.open();
         let id = window(&mut shell);
         for _ in 0..2 {
-            draw(&mut shell, id, 200, 100, &[Rect::new(0, 0, 10, 10)]);
+            draw(
+                &mut shell,
+                id,
+                200,
+                100,
+                &[Rect::new(Px(0), Px(0), Px(10), Px(10))],
+            );
             present(&rec);
             wait_for(&mut shell, |e| e.kind() == Kind::FrameDone);
         }
@@ -236,7 +280,7 @@ mod present {
         let mut b = Backing::bare(200, 100);
         b.src = (8, 8);
         b.fill_all(0xff20_4060);
-        b.fill(Rect::new(20, 20, 10, 10), 0xffff_8000);
+        b.fill(Rect::new(Px(20), Px(20), Px(10), Px(10)), 0xffff_8000);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         assert!(shell.present_tree(id).unwrap());
         shell.flush().unwrap();
@@ -389,7 +433,13 @@ mod present {
         let rec = Recorder::start_clock("sway", "manual");
         let mut shell = rec.open();
         let id = window(&mut shell);
-        draw(&mut shell, id, 200, 100, &[Rect::new(0, 0, 200, 100)]);
+        draw(
+            &mut shell,
+            id,
+            200,
+            100,
+            &[Rect::new(Px(0), Px(0), Px(200), Px(100))],
+        );
         wait_buffer_commits(&rec, 1);
         assert_eq!(shell.present_pacer(id).map(|p| p.0), Some(true), "waits");
         let callbacks =
@@ -429,7 +479,7 @@ mod present {
             (
                 "content: damage on the root",
                 |t| {
-                    t.b[0].fill(Rect::new(0, 0, 10, 10), 0xffc0_2020);
+                    t.b[0].fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), 0xffc0_2020);
                     assert!(t.publish());
                 },
                 &[(Root, Buffer)],
@@ -438,7 +488,7 @@ mod present {
                 "content: damage on a child that may not show a buffer waits",
                 |t| {
                     t.b[1].flags = 0;
-                    t.b[1].fill(Rect::new(0, 0, 10, 10), 0xffc0_2020);
+                    t.b[1].fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), 0xffc0_2020);
                     assert!(!t.publish(), "nothing drawable was damaged");
                     t.b[1].flags = NHSHELL_SF_DRAWABLE;
                 },
@@ -447,7 +497,7 @@ mod present {
             (
                 "content: a drawable grandchild, and the child's damage that waited; deepest first",
                 |t| {
-                    t.b[2].fill(Rect::new(0, 0, 10, 10), 0xffc0_2020);
+                    t.b[2].fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), 0xffc0_2020);
                     assert!(t.publish());
                 },
                 &[(Grand, Buffer), (Kid, Buffer), (Root, Bare)],
@@ -474,10 +524,10 @@ mod present {
             (
                 "gate: a waiting pacer holds content",
                 |t| {
-                    t.b[0].fill(Rect::new(0, 0, 10, 10), 0xff20_c020);
+                    t.b[0].fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), 0xff20_c020);
                     assert!(t.publish());
                     assert!(t.shell.present_tree(t.ids[0]).unwrap());
-                    t.b[0].fill(Rect::new(20, 0, 10, 10), 0xff20_c020);
+                    t.b[0].fill(Rect::new(Px(20), Px(0), Px(10), Px(10)), 0xff20_c020);
                     assert!(t.publish());
                 },
                 &[],
@@ -485,7 +535,7 @@ mod present {
             (
                 "gate: a content ack waives the wait",
                 |t| {
-                    t.b[0].fill(Rect::new(0, 0, 10, 10), 0xff20_20c0);
+                    t.b[0].fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), 0xff20_20c0);
                     assert!(t.publish());
                     assert!(t.shell.present_tree(t.ids[0]).unwrap());
                     t.configure(NHSHELL_ACK_CONTENT);
@@ -497,7 +547,7 @@ mod present {
                 "buffer branch: every surface damaged, deepest first, the root last",
                 |t| {
                     for b in &mut t.b {
-                        b.fill(Rect::new(1, 1, 5, 5), 0xff80_8080);
+                        b.fill(Rect::new(Px(1), Px(1), Px(5), Px(5)), 0xff80_8080);
                     }
                     assert!(t.publish());
                 },

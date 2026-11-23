@@ -7,6 +7,7 @@ mod common;
 use common::backing::*;
 use common::*;
 use glitnir::geom::Rect;
+use kvardi::Px;
 use skel::api::*;
 use skel::event::*;
 use skel::wayland::WaylandShell;
@@ -139,7 +140,12 @@ fn starve(rec: &Recorder) -> (WaylandShell, Backing, u64) {
     rec.control_ok(r#"{"cmd":"mode","hold_buffers":64}"#);
     for i in 0..200u32 {
         b.fill(
-            Rect::new((i % 20) as i32 * 10, (i % 10) as i32 * 10, 10, 10),
+            Rect::new(
+                Px((i % 20) as i32 * 10),
+                Px((i % 10) as i32 * 10),
+                Px(10),
+                Px(10),
+            ),
             0xff00_0000 | (i * 997),
         );
         publish(&mut shell, id, &[(&b, id)], 0);
@@ -325,9 +331,9 @@ fn reused_buffers_show_the_backing(hold: u32, flags: u32) {
         present(&rec);
         until(&mut shell, "the frame callback", |s| !waiting(s, id));
         let y = lcg.next(10) as i32 * 10;
-        b.fill(Rect::new(0, y, 200, 10), BG);
+        b.fill(Rect::new(Px(0), Px(y), Px(200), Px(10)), BG);
         b.fill(
-            Rect::new(0, y, if i % 2 == 0 { 190 } else { 15 }, 10),
+            Rect::new(Px(0), Px(y), Px(if i % 2 == 0 { 190 } else { 15 }), Px(10)),
             0xff00_0000 | (i * 7919),
         );
         let seq = next_seq(&rec);
@@ -370,6 +376,7 @@ fn reused_buffers_show_the_backing(hold: u32, flags: u32) {
 
 mod presenter {
     use super::*;
+    use kvardi::Px;
 
     #[test]
     fn reused_buffers_at_ages_two_and_three_show_the_backing() {
@@ -608,7 +615,7 @@ mod presenter {
             waiting(&shell, id),
             "the first picture waits for its callback"
         );
-        b.fill(Rect::new(10, 10, 20, 20), 0xff12_3456);
+        b.fill(Rect::new(Px(10), Px(10), Px(20), Px(20)), 0xff12_3456);
         let seq = next_seq(&rec);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         // the presenter has had its turn for the packet: the pacer holds it
@@ -645,7 +652,7 @@ mod presenter {
             st.presented == st.published
         };
         until(&mut shell, "the first picture presented", presented);
-        b.fill(Rect::new(10, 10, 20, 20), 0xff12_3456);
+        b.fill(Rect::new(Px(10), Px(10), Px(20), Px(20)), 0xff12_3456);
         let seq = next_seq(&rec);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         stays_up(&mut shell);
@@ -743,7 +750,7 @@ mod presenter {
         let rec = Recorder::start("sway");
         let (mut shell, mut b, id) = starve(&rec);
         b.fill_all(0xff65_4321);
-        b.fill(Rect::new(50, 20, 30, 30), 0xff11_2233);
+        b.fill(Rect::new(Px(50), Px(20), Px(30), Px(30)), 0xff11_2233);
         publish(&mut shell, id, &[(&b, id)], 0);
         rec.control_ok(r#"{"cmd":"mode","hold_buffers":0}"#);
         rec.control_ok(r#"{"cmd":"release"}"#);
@@ -764,7 +771,7 @@ mod presenter {
         present(&rec);
         until(&mut shell, "the callback", |s| !waiting(s, id));
         shell.set_compose_gate(true);
-        b.fill(Rect::new(0, 0, 50, 50), 0xff00_ff00);
+        b.fill(Rect::new(Px(0), Px(0), Px(50), Px(50)), 0xff00_ff00);
         let seq = next_seq(&rec);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         assert!(
@@ -806,7 +813,7 @@ mod presenter {
         present(&rec);
         until(&mut shell, "the callback", |s| !waiting(s, id));
         shell.set_compose_gate(true);
-        b.fill(Rect::new(0, 0, 50, 50), 0xff00_ff00);
+        b.fill(Rect::new(Px(0), Px(0), Px(50), Px(50)), 0xff00_ff00);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         assert!(
             shell.composes_held(1, Duration::from_secs(10)),
@@ -823,7 +830,10 @@ mod presenter {
         })
         .unwrap();
         for i in 0..50u32 {
-            b.fill(Rect::new(i as i32, 0, 10, 10), 0xff00_0000 | (i * 7919));
+            b.fill(
+                Rect::new(Px(i as i32), Px(0), Px(10), Px(10)),
+                0xff00_0000 | (i * 7919),
+            );
             assert!(publish(&mut shell, id, &[(&b, id)], 0));
         }
         shell.window_destroy(id).unwrap();
@@ -842,7 +852,7 @@ mod presenter {
         let id = window(&mut shell, &rec, &mut b);
         shell.set_compose_delay(50);
         for i in 0..5 {
-            b.fill(Rect::new(i * 10, 0, 10, 10), 0xff00_00ff);
+            b.fill(Rect::new(Px(i * 10), Px(0), Px(10), Px(10)), 0xff00_00ff);
             publish(&mut shell, id, &[(&b, id)], 0);
         }
         let t = Instant::now();
@@ -867,7 +877,10 @@ mod presenter {
         for i in 0..10_000u64 {
             let k = (i % 3) as usize;
             let (x, y) = (rng.next(150) as i32, rng.next(80) as i32);
-            bs[k].fill(Rect::new(x, y, 10, 10), 0xff00_0000 | (i as u32 * 7919));
+            bs[k].fill(
+                Rect::new(Px(x), Px(y), Px(10), Px(10)),
+                0xff00_0000 | (i as u32 * 7919),
+            );
             publish(&mut shell, ids[k], &[(&bs[k], ids[k])], 0);
             while shell.next_event().unwrap().is_some() {}
             if rng.next(100) == 0 {
@@ -914,7 +927,10 @@ mod presenter {
                 (&mut root, 230)
             };
             let (x, y) = (rng.next(w) as i32, rng.next(50) as i32);
-            b.fill(Rect::new(x, y, 10, 10), 0xff00_0000 | (i as u32 * 104_729));
+            b.fill(
+                Rect::new(Px(x), Px(y), Px(10), Px(10)),
+                0xff00_0000 | (i as u32 * 104_729),
+            );
             publish(&mut shell, id, &[(&root, id), (&kid, child)], 0);
             while let Some(ev) = shell.next_event().unwrap() {
                 if let ShellEvent::Configure(c) = ev.event

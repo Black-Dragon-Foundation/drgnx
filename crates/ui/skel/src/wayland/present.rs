@@ -56,6 +56,7 @@ use crate::wayland::shm::ShmBuf;
 use crate::wayland::{MainState, WaylandShell};
 use glitnir::geom::Rect;
 use glitnir::pool::{BufferSlot, GROWN_BUFFERS, Pool, merged};
+use kvardi::Px;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
@@ -753,7 +754,7 @@ impl Present {
     ) -> u64 {
         // a buffer that was never written has no age: the whole of it is new
         let all = if slot.age == 0 {
-            vec![Rect::new(0, 0, buf.w, buf.h)]
+            vec![Rect::new(Px(0), Px(0), Px(buf.w), Px(buf.h))]
         } else {
             merged(damage)
         };
@@ -1998,7 +1999,7 @@ impl WaylandShell {
             }
             if let Some(p) = &own {
                 let mut p = lock(p);
-                p.rec.input = Some(vec![Rect::new(0, 0, 0, 0)]);
+                p.rec.input = Some(vec![Rect::new(Px(0), Px(0), Px(0), Px(0))]);
                 p.owed = true;
             }
             destroy(&mut self.main);

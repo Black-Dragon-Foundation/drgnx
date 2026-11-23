@@ -12,6 +12,7 @@
 use crate::api::SurfaceFrame;
 use crate::ring::{Fill, Paced, Pacer, Pick, Ring};
 use glitnir::geom::Rect;
+use kvardi::Px;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -258,7 +259,7 @@ fn make(w: i32, h: i32, srgb: bool) -> Option<Cf> {
 /// Copy `fill` of `f`'s layer from its backing into `s` (`w` x `h`).  Writes pixels; `false` when the surface would
 /// not lock (nothing copied).
 fn copy(s: &Cf, fill: &Fill, f: &SurfaceFrame, w: i32, h: i32) -> bool {
-    let all = [Rect::new(0, 0, w, h)];
+    let all = [Rect::new(Px(0), Px(0), Px(w), Px(h))];
     let rects: &[Rect] = match fill {
         Fill::All => &all,
         Fill::Rects(r) => r,

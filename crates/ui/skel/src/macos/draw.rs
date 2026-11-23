@@ -6,6 +6,7 @@
 
 use crate::shapes::{Paint, RRect, Shape};
 use glitnir::geom::Rect;
+use kvardi::Px;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -526,7 +527,12 @@ impl Canvas {
                         self.fill_colour(*bg);
                         CGContextFillRect(
                             c,
-                            cg(&Rect::new(*x, *y, w * mag, rows.len() as i32 * mag)),
+                            cg(&Rect::new(
+                                Px(*x),
+                                Px(*y),
+                                Px(w * mag),
+                                Px(rows.len() as i32 * mag),
+                            )),
                         );
                     }
                     self.fill_colour(*fg);

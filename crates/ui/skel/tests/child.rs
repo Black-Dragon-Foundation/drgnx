@@ -4,6 +4,7 @@
 //! `{"above":`.
 
 use glitnir::geom::Rect;
+use kvardi::Px;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fd::BorrowedFd;
 use skel::api::*;
@@ -209,7 +210,9 @@ fn draw(shell: &mut WaylandShell, id: u64, w: i32, h: i32) {
     let b = shell.present_begin(id, w, h).unwrap();
     // SAFETY: the buffer is `stride * h` writable bytes.
     unsafe { std::ptr::write_bytes(b.pixels, 0x80, (b.stride * b.h) as usize) };
-    shell.present_commit(id, &[Rect::new(0, 0, w, h)]).unwrap();
+    shell
+        .present_commit(id, &[Rect::new(Px(0), Px(0), Px(w), Px(h))])
+        .unwrap();
     shell.flush().unwrap();
 }
 
@@ -266,6 +269,7 @@ fn commits_of(rec: &Recorder, seq: u64, id: u64) -> Vec<String> {
 #[allow(clippy::module_inception)]
 mod child {
     use super::*;
+    use kvardi::Px;
 
     #[test]
     fn child_is_a_subsurface_at_its_position() {
@@ -353,7 +357,7 @@ mod child {
         let parent = window(&mut shell);
         let c = child(&mut shell, parent, 0, 0);
         shell
-            .set_input_region(c, &[Rect::new(10, 10, 80, 40)])
+            .set_input_region(c, &[Rect::new(Px(10), Px(10), Px(80), Px(40))])
             .unwrap();
         // a sync child's commit applies with its parent's
         present(&mut shell, parent);
@@ -643,7 +647,7 @@ mod child {
 
         // input region (recorded: the child's commit carries it, the root's applies it)
         shell
-            .set_input_region(a, &[Rect::new(10, 10, 80, 40)])
+            .set_input_region(a, &[Rect::new(Px(10), Px(10), Px(80), Px(40))])
             .unwrap();
         assert!(owed(&mut shell));
         still(&shell, &rec, a, |n| n.contains("\"input_region\":null"));
@@ -784,12 +788,14 @@ mod child {
         let seq = next_seq(&rec);
         shell.set_position(a, 30, 20).unwrap();
         shell.stack(a, b, true).unwrap();
-        shell.set_input_region(b, &[Rect::new(5, 5, 9, 9)]).unwrap();
+        shell
+            .set_input_region(b, &[Rect::new(Px(5), Px(5), Px(9), Px(9))])
+            .unwrap();
         shell.set_mapped(b, false).unwrap();
         shell.set_alpha(a, u32::MAX / 2).unwrap();
         shell.set_alpha(root, u32::MAX / 2).unwrap();
         shell
-            .set_input_region(root, &[Rect::new(0, 0, 150, 80)])
+            .set_input_region(root, &[Rect::new(Px(0), Px(0), Px(150), Px(80))])
             .unwrap();
         shell.set_geometry(root, 0, 0, 200, 100).unwrap();
         shell.set_mapped(root, true).unwrap();
@@ -827,7 +833,7 @@ mod child {
         rec.wait_window(&shell, g, |n| n.contains("\"mapped\":true"));
         shell.set_position(g, 9, 9).unwrap();
         shell
-            .set_input_region(c, &[Rect::new(1, 1, 10, 10)])
+            .set_input_region(c, &[Rect::new(Px(1), Px(1), Px(10), Px(10))])
             .unwrap();
         shell.stack(c, 0, false).unwrap();
         shell.flush().unwrap();

@@ -9,6 +9,7 @@ use skel::event::{Kind, Record, ShellEvent};
 
 mod scale {
     use super::*;
+    use kvardi::Px;
 
     fn is_scale(id: u64, v: u32) -> impl Fn(&Record) -> bool {
         move |e| matches!(e.event, ShellEvent::Scale(s) if e.window == id && s.scale120 == v)
@@ -71,7 +72,7 @@ mod scale {
             let b = shell.present_begin(w, dw, dh).unwrap();
             unsafe { std::ptr::write_bytes(b.pixels, 0x80, (b.stride * b.h) as usize) };
             shell
-                .present_commit(w, &[glitnir::geom::Rect::new(0, 0, dw, dh)])
+                .present_commit(w, &[glitnir::geom::Rect::new(Px(0), Px(0), Px(dw), Px(dh))])
                 .unwrap();
             shell.flush().unwrap();
         };
@@ -154,7 +155,7 @@ mod scale {
             let b = shell.present_begin(w, dw, dh).unwrap();
             unsafe { std::ptr::write_bytes(b.pixels, 0x80, (b.stride * b.h) as usize) };
             shell
-                .present_commit(w, &[glitnir::geom::Rect::new(0, 0, dw, dh)])
+                .present_commit(w, &[glitnir::geom::Rect::new(Px(0), Px(0), Px(dw), Px(dh))])
                 .unwrap();
             shell.flush().unwrap();
         };

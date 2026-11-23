@@ -269,6 +269,7 @@ impl Tree {
 
 mod motion {
     use super::*;
+    use kvardi::Px;
 
     #[test]
     fn pop_in_commits_each_present_until_identity() {
@@ -432,7 +433,7 @@ mod motion {
         t.committed();
         t.step();
         let seq = t.next_seq();
-        t.rb.fill(Rect::new(0, 0, 10, 10), 0xff00_ff00);
+        t.rb.fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), 0xff00_ff00);
         assert!(publish(&mut t.shell, t.root, &[(&t.rb, t.root)], 0));
         t.step();
         assert_eq!(t.buffers(seq, t.kid), 1, "the leg went on");
@@ -534,7 +535,7 @@ mod motion {
         t.shown_with(pop());
         let seq = t.next_seq();
         t.shell.set_mapped(t.kid, false).unwrap();
-        t.rb.fill(Rect::new(0, 0, 10, 10), 0xff00_ff00);
+        t.rb.fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), 0xff00_ff00);
         assert!(publish(&mut t.shell, t.root, &[(&t.rb, t.root)], 0));
         t.committed();
         seq
@@ -693,7 +694,7 @@ mod motion {
 
     /// The child drawn and hidden again while the tree waits for its frame callback, so no frame has seen the child.
     fn hidden_before_its_first_frame(t: &mut Tree) {
-        t.rb.fill(Rect::new(0, 0, 10, 10), 0xff00_ff00);
+        t.rb.fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), 0xff00_ff00);
         assert!(publish(&mut t.shell, t.root, &[(&t.rb, t.root)], 0));
         t.committed();
         t.kid_with(pop());

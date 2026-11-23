@@ -4,6 +4,7 @@
 
 pub mod backing;
 
+use kvardi::Px;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fd::BorrowedFd;
 use rustix::process::{Pid, Signal, kill_process};
@@ -337,7 +338,7 @@ pub fn draw(shell: &mut WaylandShell, id: u64, w: i32, h: i32) {
     // SAFETY: the buffer is `stride * h` writable bytes.
     unsafe { std::ptr::write_bytes(b.pixels, 0x80, (b.stride * b.h) as usize) };
     shell
-        .present_commit(id, &[glitnir::geom::Rect::new(0, 0, w, h)])
+        .present_commit(id, &[glitnir::geom::Rect::new(Px(0), Px(0), Px(w), Px(h))])
         .unwrap();
     shell.flush().unwrap();
 }

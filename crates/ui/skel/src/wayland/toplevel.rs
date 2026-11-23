@@ -17,6 +17,7 @@ use crate::wayland::serial::SerialKind;
 use glitnir::geom::Rect;
 use glitnir::layout::LayoutLeg;
 use glitnir::motion::MotionSpec;
+use kvardi::Px;
 use std::sync::atomic::Ordering;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, QueueHandle};
@@ -498,8 +499,9 @@ impl ShellBackend for WaylandShell {
             return Err(ShellError::Arg);
         }
         self.window(id)?;
-        self.main
-            .present_record(id, |p| p.rec.geometry = Some(Rect::new(x, y, w, h)));
+        self.main.present_record(id, |p| {
+            p.rec.geometry = Some(Rect::new(Px(x), Px(y), Px(w), Px(h)))
+        });
         Ok(())
     }
 
