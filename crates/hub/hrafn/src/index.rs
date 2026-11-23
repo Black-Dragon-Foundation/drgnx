@@ -499,9 +499,11 @@ pub async fn missing_ordered(
             let mut chunks: Vec<Row> = Vec::new();
             if !order.is_empty() {
                 let mut by_path = c.prepare(
+                    // (`+c.embed` keeps the planner on the path index; a key's first chunk is found by the key
+                    // index, not by grouping every chunk of the store once per path)
                     "select c.key, c.embed_text, c.path from chunk c
-                     where c.path = ?1
-                       and c.id in (select min(id) from chunk where embed = 1 group by key)
+                     where c.path = ?1 and +c.embed = 1
+                       and not exists (select 1 from chunk d where d.embed = 1 and d.key = c.key and d.id < c.id)
                        and not exists (select 1 from vc.chunk_vec v where v.key = c.key)
                      order by c.id",
                 )?;
@@ -528,8 +530,9 @@ pub async fn missing_ordered(
             }
             let mut q = c.prepare(
                 "select c.key, c.embed_text, c.path from chunk c
-                 where c.id in (select min(id) from chunk where embed = 1 group by key)
+                 where c.embed = 1
                    and not exists (select 1 from vc.chunk_vec v where v.key = c.key)
+                   and not exists (select 1 from chunk d where d.embed = 1 and d.key = c.key and d.id < c.id)
                  order by c.id limit ?1",
             )?;
             let first = chunks.len();

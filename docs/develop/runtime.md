@@ -1764,7 +1764,8 @@ hub's clock) without one, and started again, once, when it dies inside a request
   refuses is refused before anything is listed; inside an allowed root every file is checked again. Tier 2 is a chain of
   sources per fingerprint (`search/sources.rs`, below): a server whose own address accepts no connection (the default TEI
   at 127.0.0.1:8080 when it is not running) has no fingerprint in that pass, gets no request and does not make tier 2
-  `Failed`, so tier 2 ends `Idle` once the others are done, and the server is asked again at the next change. Between
+  `Failed`, so tier 2 ends `Idle` once the others are done, and the server is asked again at the next change, or every 30 s (`PROBE_POLL`) while no source answers at all (an engine or a
+  model whose install has just finished is found that way). Between
   requests it waits while typing holds (3 s from the last `note_typing`). Its state (`Stopped`, `Idle`, `Running`,
   `Typing`, `Battery`, `Paused`, `Failed`) and the vectors written are published for `search/status`. Its embedders are
   `DocEmbedder`s (the built-in model's worker and each server that answers), each wrapped in a `DocSource`; the

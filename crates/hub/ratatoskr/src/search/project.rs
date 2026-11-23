@@ -54,6 +54,9 @@ pub const RECENT_PATHS: usize = 64;
 pub const TYPING_HOLD: Duration = Duration::from_secs(3);
 /// How often tier 2 looks at the power supply again while it waits on battery.
 pub const POWER_POLL: Duration = Duration::from_secs(10);
+/// How often tier 2 asks again while no source answers its probe (an engine or a model whose install has just
+/// finished, a server that came back): nothing else wakes it.
+pub const PROBE_POLL: Duration = Duration::from_secs(30);
 /// The gitdir's quiet period before a git change is refreshed.
 pub const GIT_QUIET: Duration = Duration::from_secs(2);
 /// A saved file is refreshed once it has been quiet this long.
@@ -100,6 +103,20 @@ pub struct TreeLive {
     pub last: Option<hrafn::overlay::Seed>,
 }
 
+/// The top level of the working tree ROOT is in, if it is one.
+fn toplevel(root: &Path) -> Option<PathBuf> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--show-toplevel"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
+}
+
 /// The project of ROOT: its main checkout's real path and its id.
 pub fn project_id(root: &Path) -> io::Result<(PathBuf, String)> {
     let out = Command::new("git")
@@ -116,6 +133,15 @@ pub fn project_id(root: &Path) -> io::Result<(PathBuf, String)> {
         }
     } else {
         root.to_path_buf()
+    };
+    // a main checkout that holds nothing but its `.git` (or is not there: a worktree mounted alone, beside the repo's
+    // git dir) has no files to index: the worktree is its own project
+    let hollow =
+        !std::fs::read_dir(&main).is_ok_and(|d| d.flatten().any(|e| e.file_name() != ".git"));
+    let main = if hollow && let Some(top) = toplevel(root) {
+        top
+    } else {
+        main
     };
     let real = std::fs::canonicalize(main)?;
     let sum = Sha256::digest(real.as_os_str().as_bytes());
@@ -1700,7 +1726,11 @@ impl Inner {
                     self.publish(Tier2::Idle);
                 }
                 let now = clock::now();
-                let due = slots.iter().filter_map(|s| s.chain.next_due(now)).min();
+                let mut due = slots.iter().filter_map(|s| s.chain.next_due(now)).min();
+                if slots.is_empty() {
+                    // no chain formed: no backoff to wait out, so ask the sources again after a while
+                    due = Some(PROBE_POLL);
+                }
                 self.until_missing(due).await;
             }
         }
