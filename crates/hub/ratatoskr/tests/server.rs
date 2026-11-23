@@ -158,10 +158,10 @@ fn the_stop_command_ends_a_hub_and_signals_nothing_for_a_stale_lock() {
     );
     let _ = sleeper.kill();
     let _ = sleeper.wait();
-    // a running hub: stopped by name and pid
+    // a running hub: stopped by name and pid (`stop` answers at the hub's mark: its budget only bounds a failure)
     let mut hub = Hub::start(&root, 1);
     hub.wait_ready(&socket);
-    let out = stop(&["--timeout", "10"]);
+    let out = stop(&["--timeout", &support::FAILED_AFTER.as_secs().to_string()]);
     assert_eq!(out.status.code(), Some(0), "{out:?} {}", hub.stderr_text());
     assert!(
         String::from_utf8_lossy(&out.stdout)
@@ -603,22 +603,27 @@ fn cli(root: &Root, args: &[&str]) -> std::process::Output {
 #[cfg(feature = "test-hooks")]
 #[test]
 fn stop_answers_when_the_hub_stopped_serving_and_its_store_finishes_under_the_lock() {
-    // a hub that ignores `shutdown` (so stop's SIGTERM) with runtime.db's thread held at its end and a write queued
-    // behind it (`--test-hold-store`): `stop` answers within its 2 s once the hub serves no more and has marked its lock
-    // stopping; the hub still writes, under the lock, and `ensure` meanwhile starts no second hub on its store;
-    // released, the queued write is written and the hub ends 0, nothing abandoned
+    // a hub with runtime.db's thread held at its end and a write queued behind it (`--test-hold-store`): `stop` answers
+    // once the hub serves no more and has marked its lock stopping, though the hub still holds the lock; the hub still
+    // writes, under the lock, and `ensure` meanwhile starts no second hub on its store; released, the queued write is
+    // written and the hub ends 0, nothing abandoned.  The store is held until SIGUSR1, so a `stop` that waited for the
+    // lock's release would never answer: its budget is `FAILED_AFTER`, which only bounds that failure, and the hub's
+    // end is slowed past the old 2 s (`--test-slow-stop-ms`), which a loaded machine once took.
     let root = Root::new();
     let socket = root.socket();
     let lock = paths::lock_path(&socket);
-    let mut hub = Hub::start_with(&root, 1, &["--test-ignore-shutdown", "--test-hold-store"]);
+    let mut hub = Hub::start_with(
+        &root,
+        1,
+        &["--test-hold-store", "--test-slow-stop-ms", "2500"],
+    );
     hub.wait_ready(&socket);
-    let out = cli(&root, &["stop", "--timeout", "2"]);
+    let budget = FAILED_AFTER.as_secs().to_string();
+    let out = cli(&root, &["stop", "--timeout", &budget]);
     assert_eq!(out.status.code(), Some(0), "{out:?} {}", hub.stderr_text());
     assert!(
-        String::from_utf8_lossy(&out.stdout).contains(&format!(
-            "stopped Ratatoskr (pid {}, by SIGTERM)",
-            hub.pid()
-        )),
+        String::from_utf8_lossy(&out.stdout)
+            .contains(&format!("stopped Ratatoskr (pid {})", hub.pid())),
         "{out:?}"
     );
     assert!(!socket.exists() && !ping(&socket), "nothing serves");
@@ -682,6 +687,35 @@ fn stop_answers_when_the_hub_stopped_serving_and_its_store_finishes_under_the_lo
 
 #[cfg(feature = "test-hooks")]
 #[test]
+fn stop_signals_a_hub_that_ignores_shutdown() {
+    // `shutdown` is answered and ignored (`--test-ignore-shutdown`): `stop` waits its budget for the mark, then sends
+    // SIGTERM to the process listening on the socket and answers once that hub marked its lock stopping.  One budget
+    // covers both waits, so the first always elapses: `FAILED_AFTER` is what reaching the signal costs, and it only
+    // bounds the second (the hub's end slowed past the old 2 s, as a loaded machine once made it).
+    let root = Root::new();
+    let socket = root.socket();
+    let mut hub = Hub::start_with(
+        &root,
+        1,
+        &["--test-ignore-shutdown", "--test-slow-stop-ms", "2500"],
+    );
+    hub.wait_ready(&socket);
+    let budget = FAILED_AFTER.as_secs().to_string();
+    let out = cli(&root, &["stop", "--timeout", &budget]);
+    assert_eq!(out.status.code(), Some(0), "{out:?} {}", hub.stderr_text());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!(
+            "stopped Ratatoskr (pid {}, by SIGTERM)",
+            hub.pid()
+        )),
+        "{out:?}"
+    );
+    assert_eq!(hub.wait_exit().code(), Some(0), "{}", hub.stderr_text());
+    assert!(!ping(&socket), "nothing serves");
+}
+
+#[cfg(feature = "test-hooks")]
+#[test]
 fn a_stopping_hub_that_is_killed_leaves_ensure_nothing_to_wait_for() {
     // the stopping hub of the row above dies (SIGKILL) while its store is held: its lock went with it, so `ensure`
     // starts a hub within its usual budget instead of waiting for a mark nobody holds.  The hub is stopped by its
@@ -717,10 +751,13 @@ fn a_stopping_hub_that_is_killed_leaves_ensure_nothing_to_wait_for() {
             .ends_with(" stopping"),
         "the dead hub's file still says stopping"
     );
-    let out = cli(&root, &["ensure", "--timeout", "5"]);
+    // `ensure` and `stop` answer at the hub's readiness and its mark: their budget only bounds a failure (an `ensure`
+    // that waited for the dead hub's mark would never answer 0)
+    let budget = FAILED_AFTER.as_secs().to_string();
+    let out = cli(&root, &["ensure", "--timeout", &budget]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert!(ping(&socket), "a hub serves again");
-    let out = cli(&root, &["stop", "--timeout", "10"]);
+    let out = cli(&root, &["stop", "--timeout", &budget]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 }
 
