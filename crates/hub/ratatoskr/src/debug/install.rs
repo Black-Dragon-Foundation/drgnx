@@ -438,7 +438,7 @@ fn copy_hashed(from: &Path, to: &Path) -> Result<String, String> {
 
 /// The tar.gz TGZ into DEST, by the zip unpacker's rules: only regular files and folders, no entry absolute or
 /// climbing, no name twice, files created new, sizes counted as written.
-fn unpack_tgz(
+pub(crate) fn unpack_tgz(
     tgz: &Path,
     dest: &Path,
     limits: Limits,

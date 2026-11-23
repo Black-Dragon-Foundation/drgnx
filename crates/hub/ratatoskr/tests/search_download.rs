@@ -1,12 +1,16 @@
 //! The model download against `ratatoskr-mock hf`, the stand-in for the model host (`runtime/conformance/src/bin/`). The mock
 //! is found at `RATATOSKR_MOCK`, else beside this test's binary: build it first (`cargo build -p domr --bin ratatoskr-mock`).
+//! The engine's rows serve a llama.cpp release archive from the same host; `no_download_on_an_idle_path` runs the real
+//! hub with the built-in model of the model volume (`DRGNX_TEST_MODELS`).
 
+use crate::support::{self, FAILED_AFTER};
 use bifrost::Uri;
 use hrafn_embed::cache::{self, ModelState, model_dir};
-use hrafn_embed::{Arch, ModelFile, ModelSpec, download_bytes};
+use hrafn_embed::{Arch, EngineAsset, ModelFile, ModelSpec, download_bytes};
+use ratatoskr::search::engine_install;
 use ratatoskr::search::{Consent, DownloadError, download, model_base};
 use ratatoskr::settings;
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
@@ -377,4 +381,229 @@ fn import_dir_counts_as_ready() {
     let r = rig(&[]);
     cache::import(r.spec, r.served.path(), &r.dir()).unwrap();
     assert_eq!(r.state(), ModelState::Ready);
+}
+
+// ------------------------------------------------------------------------------------------ the engine's asset
+
+/// A tar.gz of ENTRIES (name, bytes, mode), each name written as given: `..` too, which `tar::Header::set_path` refuses.
+fn tgz(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
+    let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    let mut b = tar::Builder::new(gz);
+    for (name, data, mode) in entries {
+        let mut h = tar::Header::new_old();
+        h.as_old_mut().name[..name.len()].copy_from_slice(name.as_bytes());
+        h.set_size(data.len() as u64);
+        h.set_mode(*mode);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        b.append(&h, *data).unwrap();
+    }
+    b.into_inner().unwrap().finish().unwrap()
+}
+
+const SERVER: &[u8] = b"#!/bin/sh\nexit 0\n";
+
+/// A release archive as llama.cpp's Linux assets are: one folder, the server in it.
+fn release() -> Vec<u8> {
+    tgz(&[
+        ("llama-b1/llama-server", SERVER, 0o755),
+        ("llama-b1/libllama.so", b"lib", 0o755),
+    ])
+}
+
+/// The archive ARCHIVE served by R's host as `engine.tar.gz`, and an asset row for it (leaked) at its sum.
+fn asset(r: &Rig, archive: &[u8]) -> &'static EngineAsset {
+    std::fs::write(r.served.path().join("engine.tar.gz"), archive).unwrap();
+    let sum: String = Sha256::digest(archive)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let base = r.base.to_string();
+    let url = format!(
+        "{}/ggml-org/llama.cpp/resolve/b1/engine.tar.gz",
+        base.trim_end_matches('/')
+    );
+    Box::leak(Box::new(EngineAsset {
+        tag: "b1",
+        os: "linux",
+        arch: "x86_64",
+        backend: "vulkan",
+        url: Box::leak(url.into_boxed_str()),
+        sha256: Box::leak(sum.into_boxed_str()),
+        bytes: archive.len() as u64,
+        binary: "llama-b1/llama-server",
+    }))
+}
+
+fn engine_consent(a: &EngineAsset) -> Consent {
+    Consent {
+        model: a.id(),
+        bytes: a.bytes,
+        at: 1.0,
+    }
+}
+
+#[tokio::test]
+async fn engine_download_needs_consent_for_its_bytes() {
+    let r = rig(&[]);
+    let a = asset(&r, &release());
+    let dir = r.root.path().join("engines").join(a.id());
+    let short = Consent {
+        bytes: a.bytes - 1,
+        ..engine_consent(a)
+    };
+    let other = Consent {
+        model: "llama.cpp-b0-linux-x86_64-vulkan".into(),
+        ..engine_consent(a)
+    };
+    for consent in [short, other] {
+        let got = engine_install::install(a, &consent, &dir).await;
+        assert_eq!(got, Err(DownloadError::NoConsent));
+    }
+    assert!(r.requests("resolve").is_empty(), "nothing asked");
+    assert_eq!(engine_install::installed(a, &dir), None);
+
+    let exe = engine_install::install(a, &engine_consent(a), &dir)
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(&exe).unwrap(), SERVER);
+    let mode = std::fs::metadata(&exe).unwrap().permissions().mode();
+    assert_eq!(mode & 0o111, 0o111, "llama-server runs: {mode:o}");
+    assert_eq!(engine_install::installed(a, &dir), Some(exe));
+    assert!(dir.join("bin/llama-b1/libllama.so").is_file());
+    assert!(
+        !dir.join("engine.tar.gz").exists() && !dir.join("engine.tar.gz.part").exists(),
+        "the archive goes once unpacked"
+    );
+}
+
+#[tokio::test]
+async fn archive_entry_outside_dir_is_refused() {
+    let r = rig(&[]);
+    let a = asset(
+        &r,
+        &tgz(&[
+            ("llama-b1/llama-server", SERVER, 0o755),
+            ("../evil", b"escaped", 0o644),
+        ]),
+    );
+    let engines = r.root.path().join("engines");
+    let dir = engines.join(a.id());
+    let got = engine_install::install(a, &engine_consent(a), &dir).await;
+    assert!(
+        matches!(&got, Err(DownloadError::Archive(why)) if why.contains("../evil")),
+        "{got:?}"
+    );
+    let mut landed = Vec::new();
+    for d in [r.root.path(), &engines, &dir, &dir.join("bin")] {
+        if d.join("evil").exists() {
+            landed.push(d.display().to_string());
+        }
+    }
+    assert_eq!(landed, Vec::<String>::new(), "nothing outside its folder");
+    assert_eq!(engine_install::installed(a, &dir), None);
+}
+
+#[tokio::test]
+async fn wrong_sum_keeps_part_and_says_so() {
+    let r = rig(&["--bad", "engine.tar.gz"]);
+    let a = asset(&r, &release());
+    let dir = r.root.path().join("engines").join(a.id());
+    let got = engine_install::install(a, &engine_consent(a), &dir).await;
+    let part = dir.join("engine.tar.gz.part");
+    match &got {
+        Err(DownloadError::Corrupt(why)) => {
+            assert!(
+                why.contains("engine.tar.gz") && why.contains(&part.display().to_string()),
+                "it names the file and where it is kept: {why}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        std::fs::metadata(&part).unwrap().len(),
+        a.bytes,
+        "kept whole"
+    );
+    assert_eq!(engine_install::installed(a, &dir), None);
+    assert!(!dir.join("bin").exists(), "nothing unpacked");
+}
+
+/// The built-in model of the model volume, in ROOT's cache.
+fn install_builtin(root: &support::Root) {
+    let volume =
+        std::env::var("DRGNX_TEST_MODELS").expect("DRGNX_TEST_MODELS names the model volume");
+    let models = root.dir.path().join("h/xk/drgnx/models");
+    std::fs::create_dir_all(&models).unwrap();
+    let spec = hrafn_embed::default_model();
+    std::os::unix::fs::symlink(
+        std::path::Path::new(&volume).join(spec.id),
+        model_dir(&models, spec),
+    )
+    .unwrap();
+}
+
+/// Pattern C. With the shipped `embed` role (the engine) and no engine installed, tier 2 runs on the built-in model and
+/// settles: nothing is fetched from the model host (the mirror is the test host) and no engine folder appears.
+#[test]
+fn no_download_on_an_idle_path() {
+    let r = rig(&[]);
+    let root = support::Root::new();
+    let conf = root.dir.path().join("h/c");
+    std::fs::create_dir_all(&conf).unwrap();
+    let file = conf.join("settings.el");
+    std::fs::write(
+        &file,
+        format!(
+            "(drgnx-settings\n :version 1\n (drgnx-search-model-mirror \"{}\"))\n",
+            r.base
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    install_builtin(&root);
+    let proj = root.dir.path().join("h/proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("a.el"), "(defun a-thing ()\n  \"Do a thing.\")\n").unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["add", "-A"],
+        &["commit", "-q", "-m", "one"],
+    ] {
+        let st = Command::new("git")
+            .arg("-C")
+            .arg(&proj)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(st.success(), "git {args:?}");
+    }
+    let mut hub = support::Hub::start(&root, 1);
+    let socket = root.socket();
+    hub.wait_ready(&socket);
+    let mut c = support::Client::open(&socket);
+    c.hello(&socket);
+    let mut id = 1;
+    c.send(json!({"id": id, "method": "search/index", "params": {"root": proj}}));
+    assert_eq!(c.answer(id).0["result"]["started"], true);
+    let s = skuld::wait_until(
+        "every chunk has its vector and tier 2 has settled",
+        FAILED_AFTER.as_secs() * 10,
+        || {
+            id += 1;
+            c.send(json!({"id": id, "method": "search/status", "params": {"root": proj}}));
+            let s = c.answer(id).0["result"].clone();
+            (s["lag"]["chunks_behind"] == 0
+                && s["lag"]["chunks_total"].as_u64() > Some(0)
+                && (s["tier2"] == "idle" || s["tier2"] == "failed"))
+                .then_some(s)
+        },
+    );
+    assert_eq!(s["tier2"], "idle", "{s}");
+    assert_eq!(r.requests("resolve"), Vec::<Value>::new(), "no transfer");
+    assert!(
+        !root.dir.path().join("h/xk/drgnx/engines").exists(),
+        "no engine folder"
+    );
 }

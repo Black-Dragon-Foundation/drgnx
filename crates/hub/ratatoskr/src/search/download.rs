@@ -8,7 +8,7 @@
 use bifrost::Uri;
 use bifrost::upstream::{Fetched, Upstream, UpstreamError, UpstreamOpts};
 use hrafn_embed::cache::{model_dir, part_path, sha256_file};
-use hrafn_embed::{ModelFile, ModelSpec, download_bytes};
+use hrafn_embed::{GgufSpec, ModelFile, ModelSpec, download_bytes};
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -38,6 +38,8 @@ pub enum DownloadError {
     Http(u16),
     /// This file does not match its sum, or the host sent more than the table says.
     Corrupt(String),
+    /// The engine's archive does not unpack safely (an entry outside its folder, a link, a size past the limits).
+    Archive(String),
     Disk,
 }
 
@@ -68,8 +70,8 @@ pub async fn download(
     let mut done = 0;
     for file in spec.files {
         if !sum_holds(dir.join(file.name), file).await? {
-            let url = file_url(base, spec, file.name)?;
-            fetch(&client, url, &dir, file, &|have| {
+            let url = file_url(base, spec.repo, spec.revision, file.name)?;
+            fetch(&client, url, &dir, file, false, &|have| {
                 progress(done + have, total)
             })
             .await?;
@@ -80,9 +82,44 @@ pub async fn download(
     Ok(())
 }
 
-fn file_url(base: &Uri, spec: &ModelSpec, name: &str) -> Result<Uri, DownloadError> {
+/// The engine's GGUF SPEC into `<models>/<id>/` from BASE (a model host, as [`download`]'s); the caller holds the
+/// consent. `progress` gets bytes held.
+pub async fn download_gguf(
+    spec: &GgufSpec,
+    models: &Path,
+    base: &Uri,
+    progress: &(dyn Fn(u64) + Sync),
+) -> Result<(), DownloadError> {
+    let url = file_url(base, spec.repo, spec.revision, spec.file)?;
+    fetch_one(
+        url,
+        &models.join(spec.id),
+        &spec.model_file(),
+        false,
+        progress,
+    )
+    .await
+}
+
+/// FILE from URL into DIR, unless it is there at its sum. KEEP_BAD: a download whose sum does not match stays as its
+/// `.part` (the engine's archive), and the error says where; else it is removed.
+pub(crate) async fn fetch_one(
+    url: Uri,
+    dir: &Path,
+    file: &ModelFile,
+    keep_bad: bool,
+    progress: &(dyn Fn(u64) + Sync),
+) -> Result<(), DownloadError> {
+    if sum_holds(dir.join(file.name), file).await? {
+        progress(file.bytes);
+        return Ok(());
+    }
+    let client = Upstream::new(UpstreamOpts::default()).map_err(offline)?;
+    fetch(&client, url, dir, file, keep_bad, progress).await
+}
+
+fn file_url(base: &Uri, repo: &str, revision: &str, name: &str) -> Result<Uri, DownloadError> {
     let base = base.to_string();
-    let (repo, revision) = (spec.repo, spec.revision);
     let root = base.trim_end_matches('/');
     format!("{root}/{repo}/resolve/{revision}/{name}")
         .parse()
@@ -103,12 +140,14 @@ async fn sum_holds(path: PathBuf, file: &ModelFile) -> Result<bool, DownloadErro
     }
 }
 
-/// `file` into its `.part`, from where an earlier run stopped, and on to its real name once the sum holds.
+/// `file` into its `.part`, from where an earlier run stopped, and on to its real name once the sum holds. KEEP_BAD:
+/// a whole `.part` whose sum does not match is kept and named in the error (and fetched over by the next run).
 async fn fetch(
     client: &Upstream,
     url: Uri,
     dir: &Path,
     file: &ModelFile,
+    keep_bad: bool,
     progress: &(dyn Fn(u64) + Sync),
 ) -> Result<(), DownloadError> {
     let (dest, part) = (dir.join(file.name), part_path(dir, file));
@@ -116,7 +155,8 @@ async fn fetch(
         fs::create_dir_all(parent).await.map_err(disk)?;
     }
     let mut have = fs::metadata(&part).await.map_or(0, |m| m.len());
-    if have > file.bytes {
+    // past the size, or whole but kept for its bad sum: fetched over
+    if have > file.bytes || (have == file.bytes && sum_of(part.clone()).await? != file.sha256) {
         fs::remove_file(&part).await.map_err(disk)?;
         have = 0;
     }
@@ -137,6 +177,13 @@ async fn fetch(
         }
     }
     if sum_of(part.clone()).await? != file.sha256 {
+        if keep_bad {
+            return Err(DownloadError::Corrupt(format!(
+                "{}: its sum is not the pinned one; the download is kept at {}",
+                file.name,
+                part.display()
+            )));
+        }
         fs::remove_file(&part).await.map_err(disk)?;
         return Err(DownloadError::Corrupt(file.name.to_string()));
     }
