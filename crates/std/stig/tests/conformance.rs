@@ -79,3 +79,16 @@ fn the_system_runtime_dir_is_the_xdg_one_and_absolute() {
     // not drgnx's own folder
     assert_ne!(stig::system_runtime_dir().as_deref(), Some(stig::runtime()));
 }
+
+#[test]
+fn a_relative_system_runtime_dir_is_ignored() {
+    let at = |v: &str| {
+        stig::system_runtime_dir_from(|k| (k == "XDG_RUNTIME_DIR").then(|| OsString::from(v)))
+    };
+    assert_eq!(
+        at("/run/user/1000"),
+        Some(std::path::PathBuf::from("/run/user/1000"))
+    );
+    assert_eq!(at("run/user"), None);
+    assert_eq!(stig::system_runtime_dir_from(|_| None), None);
+}

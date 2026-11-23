@@ -130,7 +130,12 @@ pub const SYSTEM_RUNTIME_VAR: &str = "XDG_RUNTIME_DIR";
 
 /// The system's runtime directory (see [`SYSTEM_RUNTIME_VAR`]), when the environment gives an absolute one.
 pub fn system_runtime_dir() -> Option<PathBuf> {
-    std::env::var_os(SYSTEM_RUNTIME_VAR)
+    system_runtime_dir_from(|k| std::env::var_os(k))
+}
+
+/// [`system_runtime_dir`] from any environment: a relative value is ignored (the XDG spec).
+pub fn system_runtime_dir_from(lookup: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    lookup(SYSTEM_RUNTIME_VAR)
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
 }

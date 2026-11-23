@@ -65,7 +65,7 @@ fn a_test_child_talks_on_stdout_and_goes_with_its_group() {
         std::path::Path::new("/bin/sh"),
         &[
             OsStr::new("-c"),
-            OsStr::new("echo READY; echo $MARK; sleep 60 & wait"),
+            OsStr::new("echo READY; echo $MARK; echo ${HOME-unset}; sleep 60 & wait"),
         ],
         &[("MARK", OsStr::new("given"))],
     )
@@ -73,6 +73,11 @@ fn a_test_child_talks_on_stdout_and_goes_with_its_group() {
     assert_eq!(child.read_line().unwrap(), "READY\n");
     // exactly the environment the test gave
     assert_eq!(child.read_line().unwrap(), "given\n");
+    assert_eq!(
+        child.read_line().unwrap(),
+        "unset\n",
+        "HOME is not passed on"
+    );
     let pid = child.pid();
     assert!(draugr::alive(pid));
     drop(child);
