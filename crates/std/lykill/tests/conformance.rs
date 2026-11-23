@@ -274,3 +274,25 @@ fn an_extension_cannot_bind_a_reserved_key() {
         Resolution::Command("cancel".into())
     );
 }
+
+#[test]
+fn an_extension_cannot_shadow_a_prefix() {
+    let mut k = Keymap::new();
+    let ext = bod::Origin::Extension("vim".into());
+    k.bind_by(&bod::Origin::User, "C-x C-f", "find-file", "")
+        .expect("the user's chord");
+    // `C-x` alone would turn the user's two-key chord into something the extension decides
+    let e = k
+        .bind_by(&ext, "C-x", "evil", "")
+        .expect_err("shadows C-x C-f");
+    assert_eq!(e.kind(), villa::Kind::Refused);
+    k.bind_by(&ext, "C-y", "ok", "").expect("a free key");
+    k.bind_by(&ext, "C-x C-f C-v", "longer", "")
+        .expect("a longer chord does not shadow");
+    assert_eq!(
+        k.resolve(&chord("C-x C-f"), &KeyContext::new()),
+        Resolution::Command("find-file".into())
+    );
+    k.bind_by(&bod::Origin::User, "C-x", "user-cut", "")
+        .expect("the user may");
+}

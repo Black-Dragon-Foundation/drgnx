@@ -69,7 +69,8 @@ impl Keymap {
         Ok(())
     }
 
-    /// What `bind` does, for the origin ORIGIN: an extension's binding may not be, or start with, a reserved key.
+    /// What `bind` does, for the origin ORIGIN: an extension's binding may not be, or start with, a reserved key, and
+    /// may not be the start of a longer chord that is bound already.
     pub fn bind_by(
         &mut self,
         origin: &bod::Origin,
@@ -88,7 +89,19 @@ impl Keymap {
                 }
             }
         }
+        if matches!(origin, bod::Origin::Extension(_)) && self.shadows(&parse_chord(chord)?) {
+            return Err(villa::Error::refused(
+                "That chord is the start of a longer binding: an extension may not shadow it.",
+            ));
+        }
         self.bind(chord, command, when)
+    }
+
+    /// Whether CHORD is the start of a longer chord that is bound (binding it would make that chord a prefix).
+    pub fn shadows(&self, chord: &[KeyEvent]) -> bool {
+        self.bindings
+            .iter()
+            .any(|b| b.chord.len() > chord.len() && b.chord.starts_with(chord))
     }
 
     /// Lay a profile over this keymap: its bindings win over the ones already here.
