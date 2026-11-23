@@ -16,6 +16,18 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+/// `write!` and `writeln!` into a `String`, which never fails.
+macro_rules! put {
+    ($out:expr, $($args:tt)*) => {{
+        let _string_write_cannot_fail = write!($out, $($args)*);
+    }};
+}
+macro_rules! putln {
+    ($out:expr, $($args:tt)*) => {{
+        let _string_write_cannot_fail = writeln!($out, $($args)*);
+    }};
+}
+
 use crate::layout::{SnapGroup, SnapNode, SnapTab};
 use crate::model::{
     Axis, GroupId, Node, Ref, Refusal, RightTab, TabId, Version, WinId, WinSize, Workbench, refuse,
@@ -153,9 +165,9 @@ fn write_node(out: &mut String, depth: usize, n: &SnapNode) {
             weights,
         } => {
             let a = if *axis == Axis::Row { "row" } else { "column" };
-            let _ = write!(out, "{pad}split {a} {}", children.len());
+            put!(out, "{pad}split {a} {}", children.len());
             for w in weights {
-                let _ = write!(out, " {w}");
+                put!(out, " {w}");
             }
             out.push('\n');
             for c in children {
@@ -164,7 +176,7 @@ fn write_node(out: &mut String, depth: usize, n: &SnapNode) {
         }
         SnapNode::Leaf(g) => {
             let act = g.active.map_or("-".to_string(), |a| a.to_string());
-            let _ = writeln!(out, "{pad}group {act} {}", g.tabs.len());
+            putln!(out, "{pad}group {act} {}", g.tabs.len());
             for t in &g.tabs {
                 write_tab(out, depth + 1, "tab", t);
             }
@@ -192,11 +204,11 @@ impl Workbench {
                 WinSize::Px { w, h } => ("px", w, h),
                 WinSize::Cells { cols, lines } => ("cells", cols, lines),
             };
-            let _ = writeln!(out, " {units} {a} {b} {}", win.scale);
-            let _ = write!(out, " left {} {} ", u8::from(l.left_visible), l.left_width);
+            putln!(out, " {units} {a} {b} {}", win.scale);
+            put!(out, " left {} {} ", u8::from(l.left_visible), l.left_width);
             qo(&mut out, l.left_place.as_deref());
             out.push('\n');
-            let _ = writeln!(
+            putln!(
                 out,
                 " right {} {} {}",
                 u8::from(l.right_visible),
@@ -207,15 +219,15 @@ impl Workbench {
                 .bottom
                 .active
                 .and_then(|a| win.bottom.tabs.iter().position(|x| *x == a));
-            let _ = writeln!(
+            putln!(
                 out,
                 " bottom {} {} {}",
                 u8::from(l.bottom_visible),
                 l.bottom_height,
                 opt_idx(bact)
             );
-            let _ = writeln!(out, " chrome {}", u8::from(l.chrome_hidden));
-            let _ = writeln!(out, " center {} {}", l.active, opt_idx(l.full_size));
+            putln!(out, " chrome {}", u8::from(l.chrome_hidden));
+            putln!(out, " center {} {}", l.active, opt_idx(l.full_size));
             write_node(&mut out, 1, &l.tree);
             for t in &win.bottom.tabs {
                 let tab = &self.tabs[t];
@@ -664,7 +676,7 @@ impl Workbench {
     pub fn restore_tick(&mut self) -> Version {
         let waiting = self.pending_refs();
         for r in waiting {
-            let _ = self.resolve(&r, Resolved::Placeholder);
+            let _already_resolved = self.resolve(&r, Resolved::Placeholder);
         }
         let mut notes = Vec::new();
         for t in self.tabs.values_mut() {

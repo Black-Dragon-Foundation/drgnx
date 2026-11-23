@@ -7,6 +7,7 @@
 
 use super::{Kernels, row_kernel};
 use crate::geom::Rect;
+use kvardi::Px;
 
 const LANES: u32 = 0x00ff_00ff;
 const HALF: u32 = 0x0080_0080;
@@ -73,7 +74,7 @@ impl Kernels {
         s: f32,
         clip: Rect,
     ) {
-        let clip = clip.intersect(&Rect::new(0, 0, w as i32, h as i32));
+        let clip = clip.intersect(&Rect::new(Px(0), Px(0), Px(w as i32), Px(h as i32)));
         if clip.is_empty() || s <= 0.0 || s.is_nan() {
             return;
         }

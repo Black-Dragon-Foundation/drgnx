@@ -32,6 +32,7 @@ use crate::wayland::shm::ShmBuf;
 use glitnir::committed::OutputFrame;
 use glitnir::geom::Rect;
 use glitnir::pool::{BufferSlot, GROWN_BUFFERS, Pool, Ring, RingStep, merged};
+use kvardi::Px;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use wayland_client::protocol::wl_buffer::{self, WlBuffer};
@@ -63,7 +64,7 @@ impl Pending {
     }
 
     pub fn from_frame(o: &OutputFrame) -> Pending {
-        let view = Rect::new(0, 0, o.rect.w, o.rect.h);
+        let view = Rect::new(Px(0), Px(0), Px(o.rect.w), Px(o.rect.h));
         Pending {
             rect: o.rect,
             scroll: if o.full { 0 } else { o.scroll },
@@ -77,17 +78,17 @@ impl Pending {
         if o.full || self.rect != o.rect {
             *self = Pending::from_frame(o);
             self.full = true;
-            self.damage = vec![Rect::new(0, 0, o.rect.w, o.rect.h)];
+            self.damage = vec![Rect::new(Px(0), Px(0), Px(o.rect.w), Px(o.rect.h))];
             return;
         }
         if self.full {
             return;
         }
-        let view = Rect::new(0, 0, o.rect.w, o.rect.h);
+        let view = Rect::new(Px(0), Px(0), Px(o.rect.w), Px(o.rect.h));
         let moved = self
             .damage
             .iter()
-            .map(|r| r.translate(0, o.scroll).intersect(&view))
+            .map(|r| r.translate(Px(0), Px(o.scroll)).intersect(&view))
             .filter(|r| !r.is_empty());
         self.damage = moved.chain(o.damage.iter().copied()).collect();
         self.scroll = self.scroll.saturating_add(o.scroll);
@@ -114,7 +115,7 @@ impl Pending {
     pub fn root_rects(&self) -> Vec<Rect> {
         self.damage
             .iter()
-            .map(|r| r.translate(self.rect.x, self.rect.y))
+            .map(|r| r.translate(Px(self.rect.x), Px(self.rect.y)))
             .collect()
     }
 }
@@ -158,8 +159,8 @@ impl Dispatch<WlBuffer, LayerBufData> for ReaderState {
 fn copy_rows(src: &ShmBuf, dst: &ShmBuf, r: Rect, dst_y: i32) {
     let dy = dst_y - r.y;
     let r = r
-        .intersect(&Rect::new(0, 0, src.w.min(dst.w), src.h))
-        .intersect(&Rect::new(0, -dy, dst.w, dst.h));
+        .intersect(&Rect::new(Px(0), Px(0), Px(src.w.min(dst.w)), Px(src.h)))
+        .intersect(&Rect::new(Px(0), Px(-dy), Px(dst.w), Px(dst.h)));
     if r.is_empty() {
         return;
     }
@@ -359,7 +360,7 @@ impl ContentLayer {
                 }
             }
         };
-        let view = Rect::new(0, ring.offset, w, vh);
+        let view = Rect::new(Px(0), Px(ring.offset), Px(w), Px(vh));
         let source = self
             .newest
             .filter(|_| !reshape)
@@ -367,7 +368,9 @@ impl ContentLayer {
             .filter(|b| (b.w, b.h) == (w, ring.height))
             .cloned();
         let to_root = |rs: &[Rect]| -> Vec<Rect> {
-            rs.iter().map(|r| r.translate(p.rect.x, p.rect.y)).collect()
+            rs.iter()
+                .map(|r| r.translate(Px(p.rect.x), Px(p.rect.y)))
+                .collect()
         };
         let mut job = LayerJob {
             layer: self.id,
@@ -389,7 +392,7 @@ impl ContentLayer {
             // the newest view, moved by the scroll, at the new offset; the exposed rows are composed
             let (s, n) = (p.scroll, vh - p.scroll.abs());
             if n > 0 {
-                let src = Rect::new(0, prev + (-s).max(0), w, n);
+                let src = Rect::new(Px(0), Px(prev + (-s).max(0)), Px(w), Px(n));
                 job.copies.push((src, ring.offset + s.max(0)));
                 job.clips = to_root(&p.damage);
             }

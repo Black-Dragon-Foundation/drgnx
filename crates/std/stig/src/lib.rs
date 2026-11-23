@@ -127,6 +127,21 @@ pub fn reset_for_test() {
 /// The name of the variable a child process needs to find its own home (a toolchain, a compiler cache). It is passed
 /// through to the child by name and never read here: the editor's own directories come from the functions below.
 pub const HOME_VAR: &str = "HOME";
+/// The name of the variable that holds the system's runtime directory (`XDG_RUNTIME_DIR`): where a Wayland compositor
+/// puts its socket, for a child process to be pointed at another one. Not drgnx's own [`runtime`] folder.
+pub const SYSTEM_RUNTIME_VAR: &str = "XDG_RUNTIME_DIR";
+
+/// The system's runtime directory (see [`SYSTEM_RUNTIME_VAR`]), when the environment gives an absolute one.
+pub fn system_runtime_dir() -> Option<PathBuf> {
+    system_runtime_dir_from(|k| std::env::var_os(k))
+}
+
+/// [`system_runtime_dir`] from any environment: a relative value is ignored (the XDG spec).
+pub fn system_runtime_dir_from(lookup: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    lookup(SYSTEM_RUNTIME_VAR)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+}
 
 pub fn profile() -> Profile {
     current().profile

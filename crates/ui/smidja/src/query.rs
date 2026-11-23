@@ -8,7 +8,7 @@ use crate::model::{
 
 /// A flat token: lists are bracketed by `Open` and `Close`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Token {
+pub enum QueryItem {
     Int(i64),
     Str(String),
     Sym(String),
@@ -30,22 +30,22 @@ pub struct Role {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot(Box<Workbench>);
 
-fn sym(s: &str) -> Token {
-    Token::Sym(s.to_string())
+fn sym(s: &str) -> QueryItem {
+    QueryItem::Sym(s.to_string())
 }
 
-fn focus_tokens(f: &Focus, out: &mut Vec<Token>) {
+fn focus_tokens(f: &Focus, out: &mut Vec<QueryItem>) {
     match f {
         Focus::Left => out.push(sym("left")),
         Focus::Right => out.push(sym("right")),
         Focus::Bottom => out.push(sym("bottom")),
         Focus::Center(g) => {
             out.push(sym("center"));
-            out.push(Token::Int(g.0 as i64));
+            out.push(QueryItem::Int(g.0 as i64));
         }
         Focus::Overlay(id, r) => {
             out.push(sym("overlay"));
-            out.push(Token::Int(id.0 as i64));
+            out.push(QueryItem::Int(id.0 as i64));
             focus_tokens(r, out);
         }
     }
@@ -191,23 +191,23 @@ impl Workbench {
 
     /// Read a path as tokens: `active-tab`, `selection`, `focus`, `fold`, `tabs`, `groups`, `attention`, `roles`,
     /// `detail`, `places`, `sections` (the left's; [`Workbench::sections`] for a region).
-    pub fn query(&self, w: WinId, path: &str) -> Result<Vec<Token>, Refusal> {
+    pub fn query(&self, w: WinId, path: &str) -> Result<Vec<QueryItem>, Refusal> {
         let Some(win) = self.window(w) else {
             return refuse("no such OS window");
         };
         let mut out = Vec::new();
-        let sel = |s: Option<&Selection>, out: &mut Vec<Token>| match s {
+        let sel = |s: Option<&Selection>, out: &mut Vec<QueryItem>| match s {
             Some(s) => {
-                out.push(Token::Str(s.kind.clone()));
-                out.push(Token::Str(s.id.clone()));
-                out.push(Token::Int(s.generation as i64));
+                out.push(QueryItem::Str(s.kind.clone()));
+                out.push(QueryItem::Str(s.id.clone()));
+                out.push(QueryItem::Int(s.generation as i64));
             }
             None => out.push(sym("nil")),
         };
         match path {
             "active-tab" => out.push(
                 self.active_tab(w)
-                    .map_or(sym("nil"), |t| Token::Int(t.0 as i64)),
+                    .map_or(sym("nil"), |t| QueryItem::Int(t.0 as i64)),
             ),
             "selection" => sel(win.selection.as_ref(), &mut out),
             "detail" => sel(self.detail(w), &mut out),
@@ -231,44 +231,47 @@ impl Workbench {
             "tabs" => {
                 for t in self.center_tabs(self.wi(w)?) {
                     let tab = &self.tabs[&t];
-                    out.push(Token::Open);
-                    out.push(Token::Int(t.0 as i64));
-                    out.push(Token::Str(tab.kind.clone()));
-                    out.push(Token::Str(tab.title.clone()));
+                    out.push(QueryItem::Open);
+                    out.push(QueryItem::Int(t.0 as i64));
+                    out.push(QueryItem::Str(tab.kind.clone()));
+                    out.push(QueryItem::Str(tab.title.clone()));
                     out.push(sym(if tab.preview { "preview" } else { "pinned" }));
-                    out.push(Token::Close);
+                    out.push(QueryItem::Close);
                 }
             }
             "groups" => {
                 for g in win.center.tree.leaves() {
                     let grp = &self.groups[&g];
-                    out.push(Token::Open);
-                    out.push(Token::Int(g.0 as i64));
-                    out.push(grp.active.map_or(sym("nil"), |t| Token::Int(t.0 as i64)));
-                    out.push(Token::Int(grp.tabs.len() as i64));
-                    out.push(Token::Close);
+                    out.push(QueryItem::Open);
+                    out.push(QueryItem::Int(g.0 as i64));
+                    out.push(
+                        grp.active
+                            .map_or(sym("nil"), |t| QueryItem::Int(t.0 as i64)),
+                    );
+                    out.push(QueryItem::Int(grp.tabs.len() as i64));
+                    out.push(QueryItem::Close);
                 }
             }
             "attention" => {
-                out.push(Token::Int(self.attention.count as i64));
+                out.push(QueryItem::Int(self.attention.count as i64));
                 for (k, n) in &self.attention.by_kind {
-                    out.push(Token::Str(k.clone()));
-                    out.push(Token::Int(*n as i64));
+                    out.push(QueryItem::Str(k.clone()));
+                    out.push(QueryItem::Int(*n as i64));
                 }
             }
             "roles" => {
                 for r in self.roles(w) {
-                    out.push(Token::Open);
-                    out.push(Token::Int(i64::from(r.depth)));
+                    out.push(QueryItem::Open);
+                    out.push(QueryItem::Int(i64::from(r.depth)));
                     out.push(sym(r.role));
-                    out.push(Token::Str(r.name));
-                    out.push(Token::Str(r.key));
-                    out.push(Token::Close);
+                    out.push(QueryItem::Str(r.name));
+                    out.push(QueryItem::Str(r.key));
+                    out.push(QueryItem::Close);
                 }
             }
             "places" => {
                 for p in self.kinds.rail() {
-                    out.push(Token::Str(p.place.clone()));
+                    out.push(QueryItem::Str(p.place.clone()));
                 }
             }
             "sections" => return self.sections(w, Region::Left),
@@ -280,7 +283,7 @@ impl Workbench {
     /// A region's sections as tokens: one list `(PLACE (ID TITLE SIZE) ...)` for the region's current place, `nil`
     /// when it shows none. ID is the section's index (`set_edges`' `(section ID)`), SIZE its requested height. Only
     /// the left has places; the answer is one list, so a lone section still comes back as a list of one row.
-    pub fn sections(&self, w: WinId, region: Region) -> Result<Vec<Token>, Refusal> {
+    pub fn sections(&self, w: WinId, region: Region) -> Result<Vec<QueryItem>, Refusal> {
         let wi = self.wi(w)?;
         let place = match region {
             Region::Left => self.windows[wi].left.place.clone(),
@@ -296,18 +299,18 @@ impl Workbench {
             .find(|p| p.place == place)
             .map(|p| p.sections.clone())
             .unwrap_or_default();
-        let mut out = vec![Token::Open, Token::Str(place)];
+        let mut out = vec![QueryItem::Open, QueryItem::Str(place)];
         for (i, name) in names.into_iter().enumerate() {
             let h = self.section_rect(wi, i as u32).map_or(0, |r| r.h);
             out.extend([
-                Token::Open,
-                Token::Int(i as i64),
-                Token::Str(name),
-                Token::Int(i64::from(h)),
-                Token::Close,
+                QueryItem::Open,
+                QueryItem::Int(i as i64),
+                QueryItem::Str(name),
+                QueryItem::Int(i64::from(h)),
+                QueryItem::Close,
             ]);
         }
-        out.push(Token::Close);
+        out.push(QueryItem::Close);
         Ok(out)
     }
 

@@ -8,6 +8,7 @@
 use crate::ffi::{GLITNIR_E_ARG, ffi_guard};
 use crate::geom::Rect;
 use hlidskjalf::abi::with_model;
+use kvardi::Px;
 use std::sync::Arc;
 
 /// Minimap rows in one tile.
@@ -63,7 +64,7 @@ impl Minimap {
         } else {
             self.rect.x + self.rect.w - w
         };
-        Rect::new(x, self.rect.y, w, self.rect.h)
+        Rect::new(Px(x), Px(self.rect.y), Px(w), Px(self.rect.h))
     }
 }
 
@@ -231,9 +232,7 @@ pub fn take_hub_folds(key: u64, file: &str) -> bool {
     .flatten() else {
         return false;
     };
-    let mut taken = TAKEN
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut taken = saman::lock(&TAKEN);
     // a buffer its own parser folds (source 0) keeps those: the hub's would be the same ranges again
     if with_model(key, |m| m.has_folds_of(0)) != Some(false) {
         return false;

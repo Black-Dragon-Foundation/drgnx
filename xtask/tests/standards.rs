@@ -363,3 +363,43 @@ fn a_hand_made_scale_multiplication_fails() {
         "{out}"
     );
 }
+
+/// Review Focus 1: a closure given to a formula or registered as a callback that captures a shared cell, a lock or a
+/// channel is an observer outside tafl, and so is a channel held as UI state; a plain capture and an iterator's closure
+/// are not.
+#[test]
+fn a_formula_capturing_a_mutex_fails_the_scan() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    let hits = lines(
+        &out,
+        "crates/reactive/src/lib.rs",
+        "[ui-reactivity/no-ui-observer]",
+    );
+    let at: Vec<&str> = hits.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
+    // Rc<RefCell>, an Arc<Mutex>'s clone in a callback, a channel's end, a typed Rc<RefCell>, a channel as state
+    assert_eq!(at, ["7", "10", "12", "14", "21"], "{out}");
+    // the owner (villa in the fixture) is not scanned for its own standard
+    assert!(
+        !out.lines()
+            .any(|l| l.starts_with("crates/villa/") && l.contains("ui-reactivity")),
+        "{out}"
+    );
+}
+
+/// G8's lint: a hook, signal or dependency-list API does not exist in UI code; a Unix `signal` or a `use_store` setter
+/// is not one.
+#[test]
+fn use_effect_named_api_fails_the_scan() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    let hits = lines(
+        &out,
+        "crates/reactive/src/lib.rs",
+        "[ui-reactivity/no-dependency-list-api]",
+    );
+    let at: Vec<&str> = hits.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
+    assert_eq!(at, ["25", "27", "31"], "{out}");
+}

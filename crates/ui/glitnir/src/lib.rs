@@ -90,17 +90,18 @@ pub(crate) fn state() -> MutexGuard<'static, State> {
         !COMPOSE_THREAD.get(),
         "glitnir: a compose thread touched the global state"
     );
-    STATE.lock().unwrap_or_else(|p| p.into_inner())
+    saman::lock(&STATE)
 }
 
 #[cfg(test)]
 mod state {
     #[test]
     fn state_is_main_thread_only() {
-        let compose = std::thread::spawn(|| {
+        let compose = saman::spawn_thread("glitnir-test", || {
             crate::mark_compose_thread();
             crate::damage::with(8601, |d| d.is_empty())
-        });
+        })
+        .unwrap();
         let err = compose.join().expect_err("a compose thread took the state");
         let msg = err
             .downcast_ref::<&str>()
@@ -109,8 +110,25 @@ mod state {
             .unwrap_or_default();
         assert!(msg.contains("compose thread"), "{msg}");
         // the lock is not poisoned, and other threads go on using it
-        let other = std::thread::spawn(|| crate::damage::with(8601, |d| d.is_empty()));
+        let other = saman::spawn_thread("glitnir-test", || {
+            crate::damage::with(8601, |d| d.is_empty())
+        })
+        .unwrap();
         assert!(other.join().unwrap());
         crate::damage::forget(8601);
+    }
+}
+
+/// What the tests draw with comes from the UI kit's tokens, as every colour does (the ui-kit standard).
+#[cfg(test)]
+pub(crate) mod testkit {
+    /// The dark theme's COLOUR token as `0xAARRGGBB`.
+    pub fn argb(token: mot::Token) -> u32 {
+        mot::Theme::builtin()[0].colour(token).to_argb()
+    }
+
+    /// [`argb`] with its alpha byte replaced by ALPHA.
+    pub fn argb_alpha(token: mot::Token, alpha: u32) -> u32 {
+        alpha << 24 | argb(token) & 0x00ff_ffff
     }
 }

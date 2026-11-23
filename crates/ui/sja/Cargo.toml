@@ -11,6 +11,9 @@ publish = false
 crate-type = ["rlib"]
 
 [dependencies]
+annall.workspace = true
+saman.workspace = true
+stund.workspace = true
 # The wire is JSON (the hub writes it); read by hand-written visitors (serde_core's traits, already serde_json's own
 # dependency), with `serde_json::Value` as the fallback, so no serde_derive and no syn (README, "Crate rules").  Exact
 # pins; std only.
@@ -30,3 +33,6 @@ required-features = ["test-hooks"]
 
 [profile.test]
 opt-level = 1
+
+[lints]
+workspace = true

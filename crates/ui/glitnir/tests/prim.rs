@@ -3,6 +3,7 @@ use glitnir::atlas::*;
 use glitnir::geom::Rect;
 use glitnir::prim::*;
 use glitnir::text::*;
+use kvardi::Px;
 
 const W: i32 = 64;
 const H: i32 = 32;
@@ -28,8 +29,8 @@ fn at(px: &[u32], x: i32, y: i32) -> u32 {
     px[(y * W + x) as usize]
 }
 
-fn key(glyph: u32) -> GlyphKey {
-    GlyphKey {
+fn key(glyph: u32) -> GlyphId {
+    GlyphId {
         font: 1,
         glyph,
         size_px: 13,
@@ -47,6 +48,11 @@ fn block(cov: u8) -> Mask {
         data: MaskData::A8(vec![cov; 24]),
     }
 }
+
+/// Pixel patterns of the compositor's arithmetic tests: premultiplied half-alpha blue, and two shadow strengths.
+const HALF_ALPHA_BLUE_PREMULTIPLIED: u32 = 0x8000_0080;
+const FAINT_SHADOW: u32 = 0x4000_0000;
+const SOLID_SHADOW: u32 = 0xff00_0000;
 
 fn colour_block(argb: u32) -> Mask {
     Mask {
@@ -81,7 +87,7 @@ fn g(glyph: u32, x: i32, kind: AtlasKind) -> PlacedGlyph {
     }
 }
 
-const ALL: Rect = Rect::new(0, 0, W, H);
+const ALL: Rect = Rect::new(Px(0), Px(0), Px(W), Px(H));
 
 #[test]
 fn a_text_run_composes_from_atlas_masks_tinted() {
@@ -147,7 +153,7 @@ fn bgra_is_premultiplied_over_the_background() {
     let mut a = Atlases::default();
     // half-alpha blue, premultiplied: 0x80 alpha, 0x80 blue
     a.bgra
-        .get_or_insert(key(9), || Some(colour_block(0x8000_0080)))
+        .get_or_insert(key(9), || Some(colour_block(HALF_ALPHA_BLUE_PREMULTIPLIED)))
         .unwrap();
     let card = 0xff40_4040u32;
     let mut px = vec![card; (W * H) as usize];
@@ -176,7 +182,7 @@ fn ellipsis_clips_at_the_run_clip() {
         baseline: 20,
         glyphs,
         color: RED,
-        clip: Rect::new(0, 0, 24, H),
+        clip: Rect::new(Px(0), Px(0), Px(24), Px(H)),
         ellipsis: Some(Ellipsis {
             key: key(2),
             adv: 5,
@@ -209,7 +215,7 @@ fn gradient_quad_two_stops() {
     let mut px = vec![0u32; (W * H) as usize];
     let p = Prim::GradQuad {
         id: 3,
-        rect: Rect::new(0, 0, W, 8),
+        rect: Rect::new(Px(0), Px(0), Px(W), Px(8)),
         radius: 0.0,
         axis: Axis::H,
         stops: [(0.0, 0xff00_0000), (1.0, 0x0000_0000)],
@@ -224,7 +230,7 @@ fn gradient_quad_two_stops() {
 
 fn evict_case<T: Texel>(atlas: &mut Atlas<T>, mask: impl Fn() -> Mask) {
     // a mask that fills most of a page: one per page
-    let big = |i| GlyphKey {
+    let big = |i| GlyphId {
         font: 2,
         glyph: i,
         size_px: 600,
@@ -276,7 +282,7 @@ fn atlas_evicts_lru_and_reinserts() {
 
 #[test]
 fn every_prim_has_a_stable_id() {
-    let r = Rect::new(1, 1, 10, 10);
+    let r = Rect::new(Px(1), Px(1), Px(10), Px(10));
     let k = key(1);
     let prims = vec![
         Prim::Quad {
@@ -306,7 +312,7 @@ fn every_prim_has_a_stable_id() {
             blur: 8.0,
             offset: (0.0, 2.0),
             spread: 0.0,
-            argb: 0x4000_0000,
+            argb: FAINT_SHADOW,
         },
         Prim::Sprite {
             id: 5,
@@ -345,8 +351,8 @@ fn a_scene_holds_only_allowed_prim_kinds() {
 fn every_prim_clips_to_its_band() {
     let mut a = Atlases::default();
     a.a8.get_or_insert(key(1), || Some(block(255))).unwrap();
-    let band = Rect::new(0, 10, W, 12);
-    let half_out = Rect::new(4, 4, 20, 12);
+    let band = Rect::new(Px(0), Px(10), Px(W), Px(12));
+    let half_out = Rect::new(Px(4), Px(4), Px(20), Px(12));
     let prims = vec![
         Prim::Quad {
             id: 1,
@@ -375,7 +381,7 @@ fn every_prim_clips_to_its_band() {
             blur: 6.0,
             offset: (0.0, 0.0),
             spread: 2.0,
-            argb: 0xff00_0000,
+            argb: SOLID_SHADOW,
         },
         Prim::Sprite {
             id: 5,
@@ -437,7 +443,7 @@ fn an_icon_sprite_is_its_mask_tinted() {
         compose(
             &[sprite],
             &mut a,
-            Rect::new(0, 0, W, H),
+            Rect::new(Px(0), Px(0), Px(W), Px(H)),
             &mut target(&mut px),
         );
         let mut inked = 0;

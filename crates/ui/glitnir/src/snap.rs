@@ -6,6 +6,7 @@
 //! under two device pixels as a line width (CSS Values 4); at an integer scale nothing changes.
 
 use crate::geom::Rect;
+use kvardi::Px;
 
 /// A rectangle in logical units.
 #[repr(C)]
@@ -17,19 +18,14 @@ pub struct RectF {
     pub h: f64,
 }
 
-fn scale_of(scale120: u32) -> f32 {
-    scale120 as f32 / 120.0
-}
-
-/// `roundf(pos * s)`: the device origin of a surface at logical `pos`.
+/// `roundf(pos * s)`: the device origin of a surface at logical `pos` (kvardi's rule).
 pub fn stable_origin(pos: i32, scale120: u32) -> i32 {
-    (pos as f32 * scale_of(scale120)).round() as i32
+    kvardi::snap::stable_origin(pos, scale120)
 }
 
-/// `roundf((pos + size) * s) - roundf(pos * s)`: the device extent of the span `pos .. pos + size`.
+/// `roundf((pos + size) * s) - roundf(pos * s)`: the device extent of the span `pos .. pos + size` (kvardi's rule).
 pub fn stable_extent(pos: i32, size: i32, scale120: u32) -> i32 {
-    let s = scale_of(scale120);
-    ((pos + size) as f32 * s).round() as i32 - (pos as f32 * s).round() as i32
+    kvardi::snap::stable_extent(pos, size, scale120)
 }
 
 /// The logical size of a buffer extent of `device` pixels at `scale120`, and the device extent it shows: the logical
@@ -55,10 +51,10 @@ pub fn viewport_size(device: i32, scale120: u32) -> (i32, i32) {
 pub fn stable_rect(logical: Rect, ox: i32, oy: i32, scale120: u32) -> Rect {
     let (x, y) = (ox + logical.x, oy + logical.y);
     Rect::new(
-        stable_origin(x, scale120) - stable_origin(ox, scale120),
-        stable_origin(y, scale120) - stable_origin(oy, scale120),
-        stable_extent(x, logical.w, scale120),
-        stable_extent(y, logical.h, scale120),
+        Px(stable_origin(x, scale120) - stable_origin(ox, scale120)),
+        Px(stable_origin(y, scale120) - stable_origin(oy, scale120)),
+        Px(stable_extent(x, logical.w, scale120)),
+        Px(stable_extent(y, logical.h, scale120)),
     )
 }
 
@@ -69,73 +65,36 @@ pub fn outward(r: Rect, scale120: u32) -> Rect {
     if r.is_empty() || scale120 == 0 {
         return Rect::default();
     }
-    let guess = |d: i32| (d as f64 * 120.0 / scale120 as f64) as i32;
-    // the last logical position whose device origin is at or before d
-    let before = |d: i32| {
-        let mut l = guess(d);
-        while stable_origin(l, scale120) > d {
-            l -= 1;
-        }
-        while stable_origin(l + 1, scale120) <= d {
-            l += 1;
-        }
-        l
-    };
-    // the first logical position whose device origin is at or after d
-    let after = |d: i32| {
-        let mut l = guess(d);
-        while stable_origin(l, scale120) < d {
-            l += 1;
-        }
-        while stable_origin(l - 1, scale120) >= d {
-            l -= 1;
-        }
-        l
-    };
+    let (before, after) = (
+        |d| kvardi::snap::outward_before(d, scale120),
+        |d| kvardi::snap::outward_after(d, scale120),
+    );
     let (x0, y0) = (before(r.x), before(r.y));
     let (x1, y1) = (after(r.x + r.w), after(r.y + r.h));
-    Rect::new(x0, y0, x1 - x0, y1 - y0)
+    Rect::new(Px(x0), Px(y0), Px(x1 - x0), Px(y1 - y0))
 }
 
-fn identity_scale(scale: f64) -> bool {
-    !scale.is_finite() || scale <= 0.0 || scale.fract() == 0.0
-}
-
-/// One axis: the snapped start and length, in logical units.
-fn snap_span(pos: f64, len: f64, scale: f64) -> (f64, f64) {
-    if len * scale < 2.0 {
-        (
-            (pos * scale).round() / scale,
-            (len * scale).floor().max(1.0) / scale,
-        )
-    } else {
-        let a = (pos * scale).round();
-        let b = ((pos + len) * scale).round();
-        (a / scale, (b - a) / scale)
-    }
+/// A scale as the host's 120ths.
+pub(crate) fn s120_of(scale: f64) -> u32 {
+    kvardi::snap::scale_120ths(scale)
 }
 
 /// Snap a rectangle's edges to the device grid at `scale`.
 pub fn snap_rect(x: f64, y: f64, w: f64, h: f64, scale: f64) -> RectF {
-    if identity_scale(scale) {
+    if kvardi::snap::identity_scale(scale) {
         return RectF { x, y, w, h };
     }
-    let (x, w) = snap_span(x, w, scale);
-    let (y, h) = snap_span(y, h, scale);
+    let (x, w) = kvardi::snap::snap_span(x, w, scale);
+    let (y, h) = kvardi::snap::snap_span(y, h, scale);
     RectF { x, y, w, h }
 }
 
 /// Snap a line width: under two device pixels `max(1, floor(w * s))` of them, else the nearest whole count.
 pub fn snap_line(w: f64, scale: f64) -> f64 {
-    if identity_scale(scale) {
+    if kvardi::snap::identity_scale(scale) {
         return w;
     }
-    let px = w * scale;
-    if px < 2.0 {
-        px.floor().max(1.0) / scale
-    } else {
-        px.round() / scale
-    }
+    kvardi::snap::snap_line(w, scale)
 }
 
 /// Whether pixel `x` of the A1 row `row` is set (cairo's A1: bit `x % 8` of byte `x / 8` from the least significant
@@ -208,6 +167,14 @@ pub fn mask_to_device(
 mod tests {
     use super::*;
     use crate::rng::XorShift;
+    use kvardi::Px;
+
+    #[test]
+    fn a_scale_is_the_hosts_120ths_rounded_not_cut() {
+        assert_eq!(s120_of(1.0), 120);
+        assert_eq!(s120_of(1.005), 121);
+        assert_eq!(s120_of(1.5), 180);
+    }
 
     #[test]
     fn viewport_size_maps_exactly_or_cuts() {
@@ -264,7 +231,7 @@ mod tests {
 
     #[test]
     fn stable_rect_is_relative_to_the_surface() {
-        let r = stable_rect(Rect::new(10, 4, 20, 8), 26, 0, 150);
+        let r = stable_rect(Rect::new(Px(10), Px(4), Px(20), Px(8)), 26, 0, 150);
         assert_eq!(r.x, stable_origin(36, 150) - stable_origin(26, 150));
         assert_eq!(r.w, stable_extent(36, 20, 150));
         assert_eq!((r.y, r.h), (5, 10));
@@ -276,10 +243,10 @@ mod tests {
         for scale120 in [120u32, 150, 180, 210, 240, 300] {
             for _ in 0..500 {
                 let r = Rect::new(
-                    g.below(2000) as i32 - 100,
-                    g.below(2000) as i32 - 100,
-                    1 + g.below(900) as i32,
-                    1 + g.below(900) as i32,
+                    Px(g.below(2000) as i32 - 100),
+                    Px(g.below(2000) as i32 - 100),
+                    Px(1 + g.below(900) as i32),
+                    Px(1 + g.below(900) as i32),
                 );
                 let l = outward(r, scale120);
                 let d = stable_rect(l, 0, 0, scale120);
@@ -287,7 +254,7 @@ mod tests {
                 // one logical unit in from any side no longer holds it
                 for (dx, dy, dw, dh) in [(1, 0, -1, 0), (0, 1, 0, -1), (0, 0, -1, 0), (0, 0, 0, -1)]
                 {
-                    let s = Rect::new(l.x + dx, l.y + dy, l.w + dw, l.h + dh);
+                    let s = Rect::new(Px(l.x + dx), Px(l.y + dy), Px(l.w + dw), Px(l.h + dh));
                     let sd = stable_rect(s, 0, 0, scale120);
                     assert_ne!(
                         sd.intersect(&r),
@@ -299,12 +266,12 @@ mod tests {
         }
         // an integer scale's cover of an aligned rectangle is that rectangle
         assert_eq!(
-            outward(Rect::new(10, 20, 30, 40), 120),
-            Rect::new(10, 20, 30, 40)
+            outward(Rect::new(Px(10), Px(20), Px(30), Px(40)), 120),
+            Rect::new(Px(10), Px(20), Px(30), Px(40))
         );
         assert_eq!(
-            outward(Rect::new(11, 20, 30, 40), 240),
-            Rect::new(5, 10, 16, 20)
+            outward(Rect::new(Px(11), Px(20), Px(30), Px(40)), 240),
+            Rect::new(Px(5), Px(10), Px(16), Px(20))
         );
         assert_eq!(outward(Rect::default(), 150), Rect::default());
     }

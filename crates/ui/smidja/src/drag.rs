@@ -14,6 +14,16 @@ use crate::hit::element_key;
 use crate::layout::{MoveTarget, Side};
 use crate::model::{Axis, GroupId, Node, Rect, Region, TabId, WinId, Workbench};
 
+/// LP logical pixels at the window's SCALE, through the one conversion (the scale-zoom standard).
+fn px(lp: f32, scale: f32) -> i32 {
+    kvardi::Lp(lp)
+        .to_px(&kvardi::Scale {
+            output: scale,
+            ..kvardi::Scale::default()
+        })
+        .0
+}
+
 /// Logical px the pointer moves from the press before a tab drag starts.
 pub const THRESHOLD: f32 = 4.0;
 
@@ -222,7 +232,7 @@ impl Drag {
     /// The pointer moved to (X, Y); a divider's resize there waits for [`Drag::take_live`].
     pub fn motion(&mut self, wb: &Workbench, desc: &ChromeDesc, x: i32, y: i32) {
         self.at = (x, y);
-        let t = (THRESHOLD * desc.scale).round() as i32;
+        let t = px(THRESHOLD, desc.scale);
         if (x - self.from.0).abs() >= t || (y - self.from.1).abs() >= t {
             self.started = true;
         }
@@ -403,8 +413,8 @@ impl Workbench {
         if element_at(desc, x, y).is_some_and(|e| e.role != ChromeRole::Card) {
             return None;
         }
-        let gap = (self.defaults.gap as f32 * desc.scale).round() as i32;
-        let slack = (2.0 * desc.scale).round() as i32;
+        let gap = px(self.defaults.gap as f32, desc.scale);
+        let slack = px(2.0, desc.scale);
         let near = |r: Rect| {
             x >= r.x - slack && x < r.x + r.w + slack && y >= r.y - slack && y < r.y + r.h + slack
         };

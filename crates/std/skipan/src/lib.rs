@@ -17,6 +17,9 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
+mod theme;
+pub use theme::{THEME_KEY, ThemeSwitch};
+
 /// The head of a settings file: `(drgnx-settings :version 1 (KEY VALUE)…)`.
 pub const FILE_HEAD: &str = "drgnx-settings";
 

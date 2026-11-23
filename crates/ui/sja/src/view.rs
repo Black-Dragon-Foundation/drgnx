@@ -32,7 +32,7 @@ pub enum Status {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum SelKey {
+pub enum SelId {
     Group(String),
     Own(u32),
 }
@@ -49,7 +49,7 @@ pub struct Sel {
 
 #[derive(Clone, Debug)]
 pub struct Inst {
-    pub sel: SelKey,
+    pub sel: SelId,
     pub form: Option<String>,
     pub search: Option<String>,
     pub lit: Option<String>,
@@ -100,7 +100,7 @@ pub struct View {
     pub version: u64,
     /// The hub connection went: keys keep working on what is drawn.
     pub stale: bool,
-    pub sels: HashMap<SelKey, Sel>,
+    pub sels: HashMap<SelId, Sel>,
     pub insts: BTreeMap<u32, Inst>,
     /// The models the hub sent that the draw has not applied yet (`queue`).
     pub queue: Queue,
@@ -112,7 +112,7 @@ pub struct View {
 impl View {
     /// A new instance with handle `h`, sharing `group`'s selection when given.
     pub fn open(&mut self, h: u32, group: Option<&str>) {
-        let sel = group.map_or(SelKey::Own(h), |g| SelKey::Group(g.to_string()));
+        let sel = group.map_or(SelId::Own(h), |g| SelId::Group(g.to_string()));
         self.sels.entry(sel.clone()).or_default();
         self.insts.insert(
             h,

@@ -21,7 +21,7 @@ use calloop::timer::{TimeoutAction, Timer};
 use calloop::{EventLoop, Interest, Mode, PostAction};
 use smithay::reexports::wayland_server::Display;
 use state::{Clock, Profile, State};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
@@ -35,8 +35,18 @@ struct Args {
     session_store: Option<PathBuf>,
 }
 
+/// A line on stderr; with stderr gone there is nowhere left to say it.
+fn say(line: &str) {
+    annall::cli_err(line).unwrap_or_default();
+}
+
+/// A line on stdout that the test harness waits for.
+fn announce(line: &str) {
+    annall::cli_out(line).unwrap_or_default();
+}
+
 fn usage() -> ! {
-    eprintln!(
+    say(
         "usage: nh-recorder --socket NAME --control PATH --profile FILE [--clock auto|manual] [--output WxH@SCALE120] [--refresh-mhz N] [--session-store FILE]\n       nh-recorder --virtual-pointer   (a client: a pointer on $WAYLAND_DISPLAY driven from stdin)"
     );
     std::process::exit(2)
@@ -95,7 +105,7 @@ fn parse_args() -> Args {
 }
 
 fn die(msg: String) -> ! {
-    eprintln!("nh-recorder: {msg}");
+    say(&format!("nh-recorder: {msg}"));
     std::process::exit(1)
 }
 
@@ -104,7 +114,7 @@ fn main() {
         vpointer::run();
     }
     let args = parse_args();
-    let profile = Profile::load(&args.profile).unwrap_or_else(|e| die(e));
+    let profile = Profile::load(&args.profile).unwrap_or_else(|e| die(format!("{e:?}")));
     let mut event_loop: EventLoop<State> =
         EventLoop::try_new().unwrap_or_else(|e| die(e.to_string()));
     let handle = event_loop.handle();
@@ -120,7 +130,10 @@ fn main() {
         handle.clone(),
     );
     if let Some(path) = args.session_store.clone() {
-        state.extras.use_store(path).unwrap_or_else(|e| die(e));
+        state
+            .extras
+            .use_store(path)
+            .unwrap_or_else(|e| die(format!("{e:?}")));
     }
 
     // the Wayland display and its listening socket; the display is shared with the restart's kick below
@@ -152,7 +165,7 @@ fn main() {
     handle
         .insert_source(kick_source, move |_, _, state| {
             if let Some(id) = state.restart.killed.take() {
-                let _ = d.borrow_mut().backend().dispatch_single_client(state, id);
+                let _client_gone = d.borrow_mut().backend().dispatch_single_client(state, id);
             }
         })
         .unwrap_or_else(|e| die(e.to_string()));
@@ -164,10 +177,10 @@ fn main() {
         args.output,
         args.refresh_mhz,
     );
-    restart::listen(&mut state).unwrap_or_else(|e| die(e));
+    restart::listen(&mut state).unwrap_or_else(|e| die(format!("{e:?}")));
 
     // the control socket
-    let _ = std::fs::remove_file(&args.control);
+    let _first_run = std::fs::remove_file(&args.control);
     let listener = UnixListener::bind(&args.control).unwrap_or_else(|e| die(e.to_string()));
     listener.set_nonblocking(true).unwrap();
     let conn_handle = handle.clone();
@@ -196,41 +209,42 @@ fn main() {
     // on a grid of the refresh period from the start: `ToDuration` counts from when the callback ran, so every wake-up's
     // latency added to the period and the stamps drifted slower than the refresh rate (more so under load)
     let frame = state.pacing.frame;
-    let start = std::time::Instant::now();
+    let start = stund::Instant::now();
     let mono_start =
         std::time::Duration::from(smithay::utils::Clock::<smithay::utils::Monotonic>::new().now());
     let mut next = start + frame;
+    // calloop's deadline timer wants a `std::time::Instant`, which no code reads the time from (the time standard):
+    // each wake-up asks for the time left to the next grid point on the installed clock instead
     handle
-        .insert_source(Timer::from_deadline(next), move |_, _, state| {
+        .insert_source(Timer::from_duration(frame), move |_, _, state| {
             state.tick(mono_start + (next - start));
             next += frame;
-            TimeoutAction::ToInstant(next)
+            TimeoutAction::ToDuration(next.saturating_duration_since(stund::Instant::now()))
         })
         .unwrap_or_else(|e| die(e.to_string()));
 
-    println!("READY");
-    std::io::stdout().flush().ok();
+    announce("READY");
 
     event_loop
         .run(None, &mut state, |state| {
             wait::check(state);
-            let _ = state.display.flush_clients();
+            let _client_gone = state.display.flush_clients();
         })
         .unwrap_or_else(|e| die(e.to_string()));
 
     drop(event_loop);
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    let _ = std::fs::remove_file(runtime.join(&args.socket));
-    let _ = std::fs::remove_file(runtime.join(format!("{}.lock", args.socket)));
-    let _ = std::fs::remove_file(&args.control);
+    let runtime = stig::system_runtime_dir().unwrap_or_default();
+    let _socket_may_be_gone = std::fs::remove_file(runtime.join(&args.socket));
+    let _lock_may_be_gone = std::fs::remove_file(runtime.join(format!("{}.lock", args.socket)));
+    let _control_may_be_gone = std::fs::remove_file(&args.control);
 }
 
 fn add_control_connection(handle: &calloop::LoopHandle<'static, State>, stream: UnixStream) {
-    stream.set_nonblocking(true).ok();
+    if let Err(e) = stream.set_nonblocking(true) {
+        annall::cli_err(&format!("nh-recorder: control connection: {e}")).unwrap_or_default();
+    }
     let mut pending: Vec<u8> = Vec::new();
-    let _ = handle.insert_source(
+    let _registered = handle.insert_source(
         Generic::new(stream, Interest::READ, Mode::Level),
         move |_, stream, state| {
             let mut buf = [0u8; 4096];

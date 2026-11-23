@@ -7,7 +7,7 @@
 //! description carries only the model's state (active, preview, dirty, counts, focus).
 
 use crate::model::{
-    EdgeKey, Focus, GroupId, Rect, Ref, Region, RightTab, SideFold, TabId, WinId, Workbench,
+    Focus, GroupId, Rect, Ref, Region, RightTab, SideFold, TabId, WinId, WindowEdge, Workbench,
 };
 
 /// What an element is. The glue's style table gives each role its look.
@@ -208,7 +208,7 @@ impl Workbench {
             measure,
         };
         let (fw, fh) = (b.d(win.size.width() as i32), b.d(win.size.height() as i32));
-        let reg = |r: Region| self.rect(w, EdgeKey::Region(r));
+        let reg = |r: Region| self.rect(w, WindowEdge::Region(r));
         let focus = win.focus.base().clone();
         // the ring is `:focus-visible': only for focus that came by key (F6, Shift-F6, Esc to the center)
         let ring = win.focus_visible;
@@ -347,7 +347,9 @@ impl Workbench {
                 .map(|p| p.sections.clone())
                 .unwrap_or_default();
             for (i, name) in sections.iter().enumerate() {
-                let sr = self.rect(w, EdgeKey::Section(i as u32)).unwrap_or_default();
+                let sr = self
+                    .rect(w, WindowEdge::Section(i as u32))
+                    .unwrap_or_default();
                 // the first section's header sits under the region header, on the same window (R I-7)
                 let y = if i == 0 { r.y + hh } else { sr.y };
                 b.push(
@@ -363,7 +365,7 @@ impl Workbench {
         // the center: each group's card, tab strip and breadcrumb
         let groups = self.group_rects(wi);
         for (g, _) in &groups {
-            let Some(r) = self.rect(w, EdgeKey::Group(*g)) else {
+            let Some(r) = self.rect(w, WindowEdge::Group(*g)) else {
                 continue;
             };
             self.group_chrome(&mut b, *g, r, ring && focus == Focus::Center(*g));

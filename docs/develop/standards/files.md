@@ -18,6 +18,9 @@ eitri::replace_file(&stig::state().join("session.json"), &bytes)?;
 
 - `eitri::rename_dir(from, to)` moves a directory, and `eitri::rename_file(from, to)` a file too large to rewrite (both
   parents opened with `open_path`; a link as `from`, even to a directory, is refused; both parents are synced).
+- A file read goes through `eitri::read_file(abs, cap)` / `eitri::read_string(abs, cap)` (an absolute path, at most
+  `cap` bytes, regular files only, a link in any component refused: `/proc/self` is a link, so a process reads
+  `/proc/<its pid>/…`). A test that needs a file other code will write to makes it with `tempfile`.
 
 **Enforced by:** clippy's `disallowed-methods` on the `std::fs` calls above. Owner: `eitri` (in `crates/hub/eitri`
 until it moves into `crates/std`), with `hlaup` as co-owner: it creates the files a program writes and then runs, with a

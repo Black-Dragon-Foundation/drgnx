@@ -410,9 +410,7 @@ const NAMED_BASE: usize = 1 << 31;
 /// Every listing made so far (leaked: a face's key, held in Emacs's entities, stays good for the session).
 fn listings() -> std::sync::MutexGuard<'static, Vec<&'static [Face]>> {
     static L: OnceLock<std::sync::Mutex<Vec<&'static [Face]>>> = OnceLock::new();
-    L.get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+    saman::lock(L.get_or_init(Default::default))
 }
 
 /// The current listing and its generation: every face, in Core Text's family order
@@ -471,15 +469,12 @@ struct Named {
 
 fn named_store() -> std::sync::MutexGuard<'static, Named> {
     static NAMED: OnceLock<std::sync::Mutex<Named>> = OnceLock::new();
-    NAMED
-        .get_or_init(|| {
-            std::sync::Mutex::new(Named {
-                faces: Vec::new(),
-                asked: Default::default(),
-            })
+    saman::lock(NAMED.get_or_init(|| {
+        std::sync::Mutex::new(Named {
+            faces: Vec::new(),
+            asked: Default::default(),
         })
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+    }))
 }
 
 /// The face of key `k` (`key`): a face of the listing of its generation, or one found by name.

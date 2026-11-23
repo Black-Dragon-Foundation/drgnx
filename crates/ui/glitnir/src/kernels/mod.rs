@@ -295,5 +295,5 @@ impl<K: PartialEq, V: Clone> Lru<K, V> {
 
 /// Lock a cache; a panic while it was held leaves nothing half-written (values are inserted whole), so go on.
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }

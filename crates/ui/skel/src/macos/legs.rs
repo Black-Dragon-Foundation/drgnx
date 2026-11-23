@@ -16,6 +16,7 @@ use super::chrome::{CGImageRelease, argb_image};
 use crate::units::Scale;
 use glitnir::geom::Rect;
 use glitnir::layout::{ENTER_NS, EXIT_NS, ItemKind, LayoutLeg};
+use kvardi::Px;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_foundation::{NSNumber, NSPoint, NSRect, NSSize, NSString, NSValue};
@@ -299,7 +300,7 @@ fn start(
     scale: Scale,
 ) -> Option<Retained<CALayer>> {
     let r = leg.rect;
-    let local = |x: Rect| x.intersect(&r).translate(-r.x, -r.y);
+    let local = |x: Rect| x.intersect(&r).translate(Px(-r.x), Px(-r.y));
     let lh = scale.pt(f64::from(r.h));
     let bg = [leg.background];
     let secs = leg.duration_ns as f64 / 1e9;
@@ -317,7 +318,7 @@ fn start(
             .then(|| image_layer(&bg, 1, 1, x, lh, scale))
             .flatten()
     };
-    let rect0 = Rect::new(0, 0, r.w, r.h);
+    let rect0 = Rect::new(Px(0), Px(0), Px(r.w), Px(r.h));
 
     // the new side of the background: the new places filled
     for it in leg.items.iter().filter(|i| i.kind != ItemKind::Exit) {
@@ -399,7 +400,7 @@ fn start(
                 }
                 ItemKind::Move => {
                     let to = local(it.to);
-                    let st = it.start.translate(-r.x, -r.y);
+                    let st = it.start.translate(Px(-r.x), Px(-r.y));
                     animate(
                         &l,
                         "position",

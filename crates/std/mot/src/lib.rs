@@ -5,18 +5,15 @@
 //! tokens). Nothing else makes a colour from numbers: the scan rule `no-colour-literal` rejects `Rgba::new(…)`, `rgb(…)`,
 //! a hex number used as a colour and a `"#…"` string anywhere outside this crate and `themes/`.
 //!
-//! [`ThemeSwitch`] follows the `ui.theme` setting, and counts a damage event for each switch that changes the theme.
+//! The live switch of theme, `skipan::ThemeSwitch`, follows the `ui.theme` setting; this crate knows no settings.
 
 mod sexp;
-mod switch;
 
 use std::collections::BTreeMap;
 use std::os::fd::AsFd;
 use std::path::Path;
 
 use kvardi::Lp;
-
-pub use switch::{THEME_KEY, ThemeSwitch};
 
 /// What a token is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -39,6 +36,11 @@ pub struct Rgba {
 impl Rgba {
     pub const fn new(r: u8, g: u8, b: u8, a: u8) -> Rgba {
         Rgba { r, g, b, a }
+    }
+
+    /// `0xAARRGGBB`, not premultiplied: the number Glitnir's `argb` fields hold.
+    pub const fn to_argb(self) -> u32 {
+        (self.a as u32) << 24 | (self.r as u32) << 16 | (self.g as u32) << 8 | self.b as u32
     }
 
     /// `#rrggbb` or `#rrggbbaa`.

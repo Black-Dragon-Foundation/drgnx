@@ -14,9 +14,15 @@ serde = ["dep:serde"]
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]
+stund.workspace = true
+eitri.workspace = true
+annall.workspace = true
 insta.workspace = true
 proptest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true
 tempfile.workspace = true
+
+[lints]
+workspace = true

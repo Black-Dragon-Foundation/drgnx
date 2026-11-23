@@ -144,11 +144,7 @@ impl WaylandShell {
         if !on_top {
             return None;
         }
-        self.shared
-            .serials
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .grab_serial()
+        saman::lock(&self.shared.serials).grab_serial()
     }
 
     /// Send popup `id`'s grab when its rules allow one; it goes out before the commit that makes the popup.
@@ -229,7 +225,7 @@ impl WaylandShell {
         if let Some(i) = self.main.grabs.iter().position(|g| *g == id) {
             let above: Vec<WindowId> = self.main.grabs[i + 1..].iter().rev().copied().collect();
             for a in above {
-                let _ = self.window_destroy(a);
+                let _outcome_not_needed = self.window_destroy(a);
             }
         }
         if !self.main.popups.contains_key(&id) {
@@ -344,7 +340,7 @@ impl WaylandShell {
                 self.main
                     .present_placed(id, self.main.present_place_gen(id));
             } else {
-                let _ = self.popup_place(id, |_| {});
+                let _outcome_not_needed = self.popup_place(id, |_| {});
             }
         }
     }
@@ -379,7 +375,7 @@ impl WaylandShell {
             self.shared.post(Record::new(ShellEvent::PopupDone, id, 0));
         }
         for (_, _, id) in order {
-            let _ = self.window_destroy_local(id);
+            let _outcome_not_needed = self.window_destroy_local(id);
             self.main.orphans.insert(id);
         }
     }

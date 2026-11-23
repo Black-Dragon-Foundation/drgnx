@@ -10,6 +10,7 @@
 //! remembered per display and per window preset.
 
 mod screens;
+pub mod snap;
 
 pub use screens::{Display, DisplayId, Rect, Screens, Window};
 
@@ -21,9 +22,70 @@ pub const MAX_ZOOM: f32 = 5.0;
 #[derive(Clone, Copy, PartialEq, PartialOrd, Debug, Default)]
 pub struct Lp(pub f32);
 
-/// A length in physical pixels: what Glitnir draws in.
+/// A length in physical pixels: what Glitnir draws in. It adds, subtracts and scales by whole numbers with its own
+/// kind and with plain `i32`s (a count of pixels), never with an [`Lp`]: a logical length reaches pixels only through
+/// [`Lp::to_px`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+#[repr(transparent)]
 pub struct Px(pub i32);
+
+impl Px {
+    pub const ZERO: Px = Px(0);
+
+    pub const fn abs(self) -> Px {
+        Px(self.0.abs())
+    }
+}
+
+macro_rules! px_ops {
+    ($($tr:ident $m:ident $op:tt, $tra:ident $ma:ident $opa:tt);* $(;)?) => {$(
+        impl std::ops::$tr for Px {
+            type Output = Px;
+            fn $m(self, o: Px) -> Px { Px(self.0 $op o.0) }
+        }
+        impl std::ops::$tr<i32> for Px {
+            type Output = Px;
+            fn $m(self, o: i32) -> Px { Px(self.0 $op o) }
+        }
+        impl std::ops::$tra for Px {
+            fn $ma(&mut self, o: Px) { self.0 $opa o.0 }
+        }
+        impl std::ops::$tra<i32> for Px {
+            fn $ma(&mut self, o: i32) { self.0 $opa o }
+        }
+    )*};
+}
+px_ops! {
+    Add add +, AddAssign add_assign +=;
+    Sub sub -, SubAssign sub_assign -=;
+    Mul mul *, MulAssign mul_assign *=;
+    Div div /, DivAssign div_assign /=;
+}
+
+impl std::ops::Neg for Px {
+    type Output = Px;
+    fn neg(self) -> Px {
+        Px(-self.0)
+    }
+}
+
+impl PartialEq<i32> for Px {
+    fn eq(&self, o: &i32) -> bool {
+        self.0 == *o
+    }
+}
+
+impl PartialOrd<i32> for Px {
+    fn partial_cmp(&self, o: &i32) -> Option<std::cmp::Ordering> {
+        self.0.partial_cmp(o)
+    }
+}
+
+impl From<Px> for i32 {
+    fn from(p: Px) -> i32 {
+        p.0
+    }
+}
 
 impl From<i32> for Px {
     fn from(v: i32) -> Px {
@@ -60,6 +122,12 @@ impl Scale {
     }
 }
 
+/// A logical length (in f64) as device pixels at SCALE, unrounded: the one place a length meets a scale for geometry
+/// that rounds by its own rules (Glitnir's edge snapping).
+pub fn device_f64(logical: f64, scale: f64) -> f64 {
+    logical * scale
+}
+
 /// Clamp a zoom level to the range the editor allows; a value that is not a number is 1.
 pub fn clamp_zoom(z: f32) -> f32 {
     if z.is_nan() {
@@ -78,9 +146,9 @@ impl Lp {
         Px(v.round() as i32)
     }
 
-    /// The length at SCALE, not rounded to a pixel: for what lies between pixels (a stroke's width, a dash). The same
-    /// product as [`Lp::to_px`] before its rounding.
-    pub fn to_len(self, s: &Scale) -> f32 {
-        (f64::from(self.0) * f64::from(s.effective())) as f32
+    /// The same length in device pixels, not rounded: for what is not a pixel count (a blur's sigma, a stroke's width
+    /// before it is snapped).
+    pub fn to_px_f32(self, s: &Scale) -> f32 {
+        self.0 * s.effective()
     }
 }

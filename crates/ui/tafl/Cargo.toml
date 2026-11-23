@@ -1,0 +1,41 @@
+[package]
+name = "tafl"
+description = "The UI's reactive engine: state and formula cells in slabs, push-dirty pull-on-demand with early cutoff and durability, model objects with field masks, versioned collections, the state table, clock cells and frames (the ui-reactivity standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+villa.workspace = true
+saman.workspace = true
+stund.workspace = true
+sja = { path = "../sja", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+annall.workspace = true
+raun.workspace = true
+stund = { workspace = true, features = ["test-hooks"] }
+proptest.workspace = true
+trybuild.workspace = true
+vag = { path = "../../std/vag", version = "0.1.0" }
+
+# The measured gates (spec §17): each writes a vag::Report and exits 1 on a missed bar
+[[bench]]
+name = "tafl_cells"
+harness = false
+
+[[bench]]
+name = "tafl_cursors"
+harness = false
+
+[[bench]]
+name = "tafl_hour"
+harness = false
+
+[lints]
+workspace = true

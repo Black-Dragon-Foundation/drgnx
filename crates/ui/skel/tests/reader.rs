@@ -10,7 +10,8 @@ use skel::api::*;
 use skel::event::{Kind, Record, ShellEvent};
 use skel::wayland::WaylandShell;
 use skel::wayland::registry::supported;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 /// Take every queued record.
 fn drain(shell: &mut WaylandShell) -> Vec<Record> {
@@ -25,6 +26,7 @@ fn drain(shell: &mut WaylandShell) -> Vec<Record> {
 #[allow(clippy::module_inception)]
 mod reader {
     use super::*;
+    use kvardi::Px;
 
     #[test]
     fn caps_follow_profile() {
@@ -109,7 +111,7 @@ mod reader {
             shell.flush().unwrap();
         }
         // a span for the reader's retries: none can succeed while the recorder is stopped, so no event marks it
-        std::thread::sleep(Duration::from_millis(100));
+        stund::sleep_blocking(Duration::from_millis(100));
         assert!(
             shell.flush_pending(),
             "the retry cannot succeed while the socket is full"
@@ -124,7 +126,7 @@ mod reader {
             if got >= sent {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(20));
+            stund::sleep_blocking(Duration::from_millis(20));
         }
         assert_eq!(got, sent, "commits that reached the recorder");
         assert!(!shell.flush_pending());
@@ -286,7 +288,7 @@ mod reader {
         ("set_position", |s, w| s.set_position(w, 1, 1).map(drop)),
         ("stack", |s, w| s.stack(w, 0, true)),
         ("set_input_region", |s, w| {
-            s.set_input_region(w, &[Rect::new(0, 0, 1, 1)])
+            s.set_input_region(w, &[Rect::new(Px(0), Px(0), Px(1), Px(1))])
         }),
         ("set_child_place", |s, w| {
             s.set_child_place(w, Some((1, 1)), None)
@@ -295,7 +297,7 @@ mod reader {
         ("set_motion", |s, w| s.set_motion(w, None)),
         ("set_backdrop", |s, w| s.set_backdrop(w, 0.0)),
         ("layout_capture", |s, w| {
-            s.layout_capture(w, 1, 1, Rect::new(0, 0, 1, 1))
+            s.layout_capture(w, 1, 1, Rect::new(Px(0), Px(0), Px(1), Px(1)))
         }),
         ("layout_leg", |s, w| s.layout_leg(w, 1, None)),
         ("layout_captured", |s, w| s.layout_captured(w, 1).map(drop)),
@@ -303,7 +305,7 @@ mod reader {
         ("set_size", |s, w| s.set_size(w, 10, 10).map(drop)),
         ("present_begin", |s, w| s.present_begin(w, 64, 48).map(drop)),
         ("present_commit", |s, w| {
-            s.present_commit(w, &[Rect::new(0, 0, 1, 1)])
+            s.present_commit(w, &[Rect::new(Px(0), Px(0), Px(1), Px(1))])
         }),
         ("selection_own", |s, _| {
             s.selection_own(NHSHELL_SEL_CLIPBOARD, &[("text/plain", b"x")])
@@ -459,7 +461,7 @@ mod reader {
         let fd = shell.connection_fd();
         let (dropped_at, r, returned_at) = std::thread::scope(|s| {
             let dropper = s.spawn(move || {
-                std::thread::sleep(Duration::from_millis(300));
+                stund::sleep_blocking(Duration::from_millis(300));
                 // SAFETY: the shell's connection stays open until the shell is dropped, after this thread ends.
                 let fd = unsafe { rustix::fd::BorrowedFd::borrow_raw(fd) };
                 rustix::net::shutdown(fd, rustix::net::Shutdown::Both).unwrap();
@@ -487,8 +489,8 @@ mod reader {
         assert_eq!(shell.last_error(), "");
         // a configure serial the compositor never sent: xdg_wm_base's invalid_surface_state (4)
         shell.ack_configure(w, 999_999, 0).unwrap();
-        let _ = shell.present_bare(w);
-        let _ = shell.flush();
+        let _not_under_test = shell.present_bare(w);
+        let _not_under_test_either = shell.flush();
         wait_lost(&mut shell);
         let text = shell.last_error();
         assert!(

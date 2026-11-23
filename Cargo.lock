@@ -3083,13 +3083,19 @@ dependencies = [
 name = "glitnir"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "eitri",
  "gif",
  "hlidskjalf",
  "image-webp",
  "kvardi",
+ "mot",
  "png 0.18.1",
+ "saman",
  "sja",
  "smidja",
+ "stund",
+ "villa",
 ]
 
 [[package]]
@@ -3300,6 +3306,9 @@ name = "hlidskjalf"
 version = "0.1.0"
 dependencies = [
  "regex-lite",
+ "saman",
+ "stund",
+ "villa",
 ]
 
 [[package]]
@@ -3410,11 +3419,14 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 name = "huginn"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "eitri",
  "insta",
  "proptest",
  "serde",
  "serde_json",
  "serde_path_to_error",
+ "stund",
  "tempfile",
 ]
 
@@ -4499,8 +4511,6 @@ dependencies = [
  "eitri",
  "kvardi",
  "raun",
- "serde_json",
- "skipan",
  "villa",
 ]
 
@@ -5771,11 +5781,14 @@ dependencies = [
 name = "raun"
 version = "0.1.0"
 dependencies = [
+ "draugr",
  "eitri",
  "saman",
  "stig",
  "stund",
  "tempfile",
+ "tracing",
+ "villa",
 ]
 
 [[package]]
@@ -5996,11 +6009,20 @@ dependencies = [
 name = "ritari"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "calloop",
+ "eitri",
  "png 0.17.16",
+ "raun",
+ "saman",
  "serde",
  "serde_json",
  "smithay",
+ "stig",
+ "stund",
+ "tempfile",
+ "tracing",
+ "villa",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
@@ -6781,9 +6803,12 @@ dependencies = [
 name = "sja"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "libc",
+ "saman",
  "serde_core",
  "serde_json",
+ "stund",
 ]
 
 [[package]]
@@ -6813,14 +6838,23 @@ dependencies = [
 name = "skel"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "eitri",
  "glitnir",
+ "kvardi",
  "libc",
+ "mot",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
  "objc2-quartz-core",
+ "raun",
  "resvg",
  "rustix",
+ "saman",
+ "stig",
+ "stund",
+ "villa",
  "wayland-backend",
  "wayland-client",
  "wayland-cursor",
@@ -6835,6 +6869,7 @@ version = "0.1.0"
 dependencies = [
  "eitri",
  "huginn",
+ "mot",
  "raun",
  "saman",
  "serde_json",
@@ -6918,6 +6953,11 @@ dependencies = [
 [[package]]
 name = "smidja"
 version = "0.1.0"
+dependencies = [
+ "kvardi",
+ "saman",
+ "stund",
+]
 
 [[package]]
 name = "smithay"
@@ -7197,6 +7237,24 @@ dependencies = [
  "libc",
  "thiserror 1.0.69",
  "walkdir",
+]
+
+[[package]]
+name = "tafl"
+version = "0.1.0"
+dependencies = [
+ "annall",
+ "proptest",
+ "raun",
+ "saman",
+ "serde",
+ "serde_json",
+ "sja",
+ "stund",
+ "tracing",
+ "trybuild",
+ "vag",
+ "villa",
 ]
 
 [[package]]

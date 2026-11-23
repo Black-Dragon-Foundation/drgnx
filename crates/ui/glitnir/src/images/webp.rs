@@ -862,7 +862,7 @@ mod tests {
         bad[n - 2] ^= 0xff;
         bad[n - 3] ^= 0xff;
         // whatever it gives, it gives without panicking
-        let _ = decode(&bad, &params(0, None), None);
+        let _only_must_not_panic = decode(&bad, &params(0, None), None);
         let mut p = params(0, None);
         p.limit_w = 1;
         assert!(matches!(decode(&f, &p, None), Err(Error::Size)));

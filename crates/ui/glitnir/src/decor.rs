@@ -17,6 +17,7 @@
 //! the [`SPRITE_CAP`] most recently used.
 
 use crate::geom::Rect;
+use kvardi::Px;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
@@ -78,8 +79,8 @@ impl Anchors {
             if band.intersect(&a.glyph) != a.glyph {
                 return true;
             }
-            a.glyph = a.glyph.translate(0, dy);
-            a.clip = a.clip.translate(0, dy);
+            a.glyph = a.glyph.translate(Px(0), Px(dy));
+            a.clip = a.clip.translate(Px(0), Px(dy));
             room.intersect(&a.glyph) == a.glyph
         });
     }
@@ -233,7 +234,7 @@ pub fn place(
     sprites: &Sprites,
     out: &mut Vec<Label>,
 ) {
-    let extent = Rect::new(0, 0, layer_rect.w, layer_rect.h);
+    let extent = Rect::new(Px(0), Px(0), Px(layer_rect.w), Px(layer_rect.h));
     let mut order: Vec<&Anchor> = anchors.iter().collect();
     order.sort_by_key(|a| (a.glyph.y, a.glyph.x, a.sprite));
     let mut placed: Vec<Rect> = Vec::new();
@@ -262,13 +263,13 @@ pub fn place(
             }
             break;
         }
-        let rect = Rect::new(x, y, sw, sh);
+        let rect = Rect::new(Px(x), Px(y), Px(sw), Px(sh));
         placed.push(rect);
         let clip = a.clip.intersect(&extent);
         out.push(Label {
             layer,
-            rect: rect.translate(layer_rect.x, layer_rect.y),
-            clip: clip.translate(layer_rect.x, layer_rect.y),
+            rect: rect.translate(Px(layer_rect.x), Px(layer_rect.y)),
+            clip: clip.translate(Px(layer_rect.x), Px(layer_rect.y)),
             sprite: a.sprite,
             generation,
         });
@@ -284,6 +285,7 @@ mod tests {
     use crate::rng::XorShift;
     use crate::scene::{LayerDesc, Scene};
     use crate::shadow::ShadowCache;
+    use kvardi::Px;
 
     const ROOT: u64 = 1;
     const WIN: u64 = 2;
@@ -293,13 +295,13 @@ mod tests {
     const ROWS: i32 = 8;
 
     fn cell(c: i32, r: i32) -> Rect {
-        Rect::new(c * CW, r * CH, CW, CH)
+        Rect::new(Px(c * CW), Px(r * CH), Px(CW), Px(CH))
     }
 
     fn anchor(glyph: Rect, sprite: u64) -> Anchor {
         Anchor {
             glyph,
-            clip: Rect::new(0, 0, COLS * CW, ROWS * CH),
+            clip: Rect::new(Px(0), Px(0), Px(COLS * CW), Px(ROWS * CH)),
             sprite,
             row_top: 0,
         }
@@ -335,7 +337,7 @@ mod tests {
 
     #[test]
     fn anchors_depend_only_on_draw_sequence() {
-        let layer = Rect::new(0, 0, COLS * CW, ROWS * CH);
+        let layer = Rect::new(Px(0), Px(0), Px(COLS * CW), Px(ROWS * CH));
         for seed in 1..=60u64 {
             let mut g = XorShift::new(seed);
             let mut canvas = vec![0u64; (COLS * ROWS) as usize];
@@ -355,7 +357,7 @@ mod tests {
                     2 => {
                         let (c0, r0) = (g.below(COLS as u32) as i32, g.below(ROWS as u32) as i32);
                         let (cn, rn) = (1 + g.below(4) as i32, 1 + g.below(3) as i32);
-                        let rect = Rect::new(c0 * CW, r0 * CH, cn * CW, rn * CH);
+                        let rect = Rect::new(Px(c0 * CW), Px(r0 * CH), Px(cn * CW), Px(rn * CH));
                         a.drop_rect(rect);
                         for r in r0..(r0 + rn).min(ROWS) {
                             for c in c0..(c0 + cn).min(COLS) {
@@ -367,7 +369,7 @@ mod tests {
                         let (r0, rn) = (g.below(ROWS as u32) as i32, 1 + g.below(5) as i32);
                         let rn = rn.min(ROWS - r0);
                         let dy_rows = g.below(5) as i32 - 2;
-                        let band = Rect::new(0, r0 * CH, COLS * CW, rn * CH);
+                        let band = Rect::new(Px(0), Px(r0 * CH), Px(COLS * CW), Px(rn * CH));
                         a.scroll(band, dy_rows * CH, layer);
                         let old = canvas.clone();
                         for r in r0..r0 + rn {
@@ -392,16 +394,16 @@ mod tests {
 
     #[test]
     fn translation_equals_redraw() {
-        let layer = Rect::new(0, 0, 100, 100);
-        let band = Rect::new(0, 20, 100, 60);
+        let layer = Rect::new(Px(0), Px(0), Px(100), Px(100));
+        let band = Rect::new(Px(0), Px(20), Px(100), Px(60));
         let at = [(0, 0), (10, 20), (30, 40), (50, 64), (70, 90)];
         for dy in [-30, -10, 0, 7, 25] {
             let mut moved = Anchors::default();
             let mut fresh = Anchors::default();
             for (i, (x, y)) in at.iter().enumerate() {
-                let g = Rect::new(*x, *y, 8, 16);
+                let g = Rect::new(Px(*x), Px(*y), Px(8), Px(16));
                 moved.put(&anchor(g, i as u64 + 1));
-                let to = g.translate(0, dy);
+                let to = g.translate(Px(0), Px(dy));
                 let inside = |r: Rect, b: Rect| b.intersect(&r) == r;
                 // the redraw: content of the band lands moved; what leaves the band or the layer is gone
                 if !inside(g, band) {
@@ -448,26 +450,26 @@ mod tests {
     #[test]
     fn label_goes_below_on_first_row() {
         let s = sprites_of(&[(1, 40, 12)]);
-        let layer = Rect::new(100, 50, 200, 160);
+        let layer = Rect::new(Px(100), Px(50), Px(200), Px(160));
         let first = Anchor {
-            glyph: Rect::new(20, 0, 8, 16),
+            glyph: Rect::new(Px(20), Px(0), Px(8), Px(16)),
             row_top: 0,
             ..anchor(Rect::default(), 1)
         };
         let later = Anchor {
-            glyph: Rect::new(20, 64, 8, 16),
+            glyph: Rect::new(Px(20), Px(64), Px(8), Px(16)),
             row_top: 0,
             ..first
         };
         let l = labels(layer, &[first, later], &s);
         assert_eq!(
             l[0].rect,
-            Rect::new(120, 50 + 16, 40, 12),
+            Rect::new(Px(120), Px(50 + 16), Px(40), Px(12)),
             "below the first row"
         );
         assert_eq!(
             l[1].rect,
-            Rect::new(120, 50 + 64 - 12, 40, 12),
+            Rect::new(Px(120), Px(50 + 64 - 12), Px(40), Px(12)),
             "above the others"
         );
     }
@@ -475,26 +477,30 @@ mod tests {
     #[test]
     fn overlapping_labels_shift_right_then_stack_up() {
         let s = sprites_of(&[(1, 40, 12)]);
-        let layer = Rect::new(0, 0, 100, 160);
+        let layer = Rect::new(Px(0), Px(0), Px(100), Px(160));
         let at = |x| Anchor {
-            glyph: Rect::new(x, 64, 8, 16),
+            glyph: Rect::new(Px(x), Px(64), Px(8), Px(16)),
             row_top: 0,
             ..anchor(Rect::default(), 1)
         };
         // reading order, whatever the order given
         let l = labels(layer, &[at(30), at(10), at(20)], &s);
-        assert_eq!(l[0].rect, Rect::new(10, 52, 40, 12));
-        assert_eq!(l[1].rect, Rect::new(50, 52, 40, 12), "right past the first");
+        assert_eq!(l[0].rect, Rect::new(Px(10), Px(52), Px(40), Px(12)));
+        assert_eq!(
+            l[1].rect,
+            Rect::new(Px(50), Px(52), Px(40), Px(12)),
+            "right past the first"
+        );
         // 90 + 40 leaves the 100-wide layer: one row up, back at its own x
-        assert_eq!(l[2].rect, Rect::new(30, 40, 40, 12));
+        assert_eq!(l[2].rect, Rect::new(Px(30), Px(40), Px(40), Px(12)));
         // a label on the first row stacks down instead
         let top = |x| Anchor {
-            glyph: Rect::new(x, 0, 8, 16),
+            glyph: Rect::new(Px(x), Px(0), Px(8), Px(16)),
             row_top: 0,
             ..anchor(Rect::default(), 1)
         };
         let l = labels(layer, &[top(10), top(20), top(30)], &s);
-        assert_eq!(l[2].rect, Rect::new(30, 28, 40, 12));
+        assert_eq!(l[2].rect, Rect::new(Px(30), Px(28), Px(40), Px(12)));
     }
 
     fn win_scene() -> (Scene, Frames) {
@@ -507,14 +513,16 @@ mod tests {
             scale: 1.0,
             visible: 1,
         };
-        s.upsert(&d(ROOT, 0, 1, Rect::new(0, 0, 200, 120))).unwrap();
-        s.upsert(&d(WIN, ROOT, 2, Rect::new(10, 10, 150, 90)))
+        s.upsert(&d(ROOT, 0, 1, Rect::new(Px(0), Px(0), Px(200), Px(120))))
+            .unwrap();
+        s.upsert(&d(WIN, ROOT, 2, Rect::new(Px(10), Px(10), Px(150), Px(90))))
             .unwrap();
         (s, f)
     }
 
     fn covers(damage: &[Rect], r: Rect) -> bool {
-        (r.y..r.y + r.h).all(|y| (r.x..r.x + r.w).all(|x| damage.iter().any(|d| d.contains(x, y))))
+        (r.y..r.y + r.h)
+            .all(|y| (r.x..r.x + r.w).all(|x| damage.iter().any(|d| d.contains(Px(x), Px(y)))))
     }
 
     #[test]
@@ -524,7 +532,12 @@ mod tests {
         s.commit_with(ROOT, &mut f, &sp);
         s.decor_put(WIN, &anchor(cell(2, 3), 1)).unwrap();
         let d = s.commit_with(ROOT, &mut f, &sp).to_vec();
-        let a = labels(Rect::new(10, 10, 150, 90), &[anchor(cell(2, 3), 1)], &sp)[0].visible();
+        let a = labels(
+            Rect::new(Px(10), Px(10), Px(150), Px(90)),
+            &[anchor(cell(2, 3), 1)],
+            &sp,
+        )[0]
+        .visible();
         assert!(covers(&d, a), "appears: {d:?}");
         assert!(
             s.commit_with(ROOT, &mut f, &sp).is_empty(),
@@ -533,7 +546,12 @@ mod tests {
         // moves
         s.decor_drop_extent(WIN, cell(2, 3)).unwrap();
         s.decor_put(WIN, &anchor(cell(5, 1), 1)).unwrap();
-        let b = labels(Rect::new(10, 10, 150, 90), &[anchor(cell(5, 1), 1)], &sp)[0].visible();
+        let b = labels(
+            Rect::new(Px(10), Px(10), Px(150), Px(90)),
+            &[anchor(cell(5, 1), 1)],
+            &sp,
+        )[0]
+        .visible();
         let d = s.commit_with(ROOT, &mut f, &sp).to_vec();
         assert!(covers(&d, a) && covers(&d, b), "moves: {d:?}");
         // a different sprite under the same key
@@ -567,7 +585,7 @@ mod tests {
         let mut t = TargetView {
             data: &mut out.px,
             stride: out.w as usize,
-            rect: Rect::new(0, 0, out.w, h),
+            rect: Rect::new(Px(0), Px(0), Px(out.w), Px(h)),
             scale: 1.0,
         };
         compose_with(
@@ -603,7 +621,7 @@ mod tests {
                         0 => s.decor_drop_extent(WIN, cell(c.0, c.1)).unwrap(),
                         _ => {
                             let a = Anchor {
-                                clip: Rect::new(0, 0, 70 + g.below(80) as i32, 90),
+                                clip: Rect::new(Px(0), Px(0), Px(70 + g.below(80) as i32), Px(90)),
                                 ..anchor(cell(c.0, c.1), 1 + g.below(3) as u64)
                             };
                             s.decor_put(WIN, &a).unwrap()
@@ -617,7 +635,13 @@ mod tests {
                 w,
                 px: vec![0; (w * h) as usize],
             };
-            compose_into(&s, &sp, &src, &mut inc, &[Rect::new(0, 0, w, h)]);
+            compose_into(
+                &s,
+                &sp,
+                &src,
+                &mut inc,
+                &[Rect::new(Px(0), Px(0), Px(w), Px(h))],
+            );
             for round in 0..6 {
                 random(&mut g, &mut s);
                 let d = s.commit_with(ROOT, &mut f, &sp).to_vec();
@@ -626,7 +650,13 @@ mod tests {
                     w,
                     px: vec![0; (w * h) as usize],
                 };
-                compose_into(&s, &sp, &src, &mut full, &[Rect::new(0, 0, w, h)]);
+                compose_into(
+                    &s,
+                    &sp,
+                    &src,
+                    &mut full,
+                    &[Rect::new(Px(0), Px(0), Px(w), Px(h))],
+                );
                 assert!(inc.px == full.px, "seed {seed} round {round}");
             }
         }

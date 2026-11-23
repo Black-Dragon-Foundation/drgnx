@@ -12,22 +12,29 @@ use serde_json::json;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let [path] = args.as_slice() else {
-        eprintln!("usage: dump FILE");
-        std::process::exit(2);
+        usage_error("usage: dump FILE");
     };
-    let bytes = std::fs::read(path).unwrap_or_else(|e| {
-        eprintln!("dump: {path}: {e}");
-        std::process::exit(2);
-    });
+    let bytes = std::fs::read(path).unwrap_or_else(|e| usage_error(&format!("dump: {path}: {e}")));
     match read_all(&bytes, Limits::default()) {
         Ok(nodes) => {
             for node in &nodes {
-                println!("{}", common::dump(node));
+                out(&common::dump(node).to_string());
             }
         }
-        Err(r) => println!(
-            "{}",
-            json!(["refused", format!("{:?}", r.kind), r.span.start])
-        ),
+        Err(r) => out(&json!(["refused", format!("{:?}", r.kind), r.span.start]).to_string()),
     }
+}
+
+/// One line of the dump on stdout; a closed pipe ends the run.
+fn out(line: &str) {
+    if annall::cli_out(line).is_err() {
+        std::process::exit(2);
+    }
+}
+
+/// A usage or I/O problem: the line on stderr, exit 2.
+fn usage_error(line: &str) -> ! {
+    // with stderr gone too there is nowhere left to say it: the exit code does
+    annall::cli_err(line).unwrap_or_default();
+    std::process::exit(2)
 }

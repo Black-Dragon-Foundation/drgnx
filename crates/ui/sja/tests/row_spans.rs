@@ -18,7 +18,7 @@ fn rows(h: i64, what: &str, a: SjaArg, b: SjaArg) -> Ans {
 /// buffer order; another node's row is not in it.
 #[test]
 fn row_spans_cover_the_whole_row_once() {
-    let _l = EMACS.lock().unwrap_or_else(|e| e.into_inner());
+    let _l = saman::lock(&EMACS);
     let Ans::Int(h) = ok(SJA_OPEN, &[text("row-spans"), nil()]) else {
         panic!("open")
     };

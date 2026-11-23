@@ -8,15 +8,17 @@ mod common;
 
 use common::*;
 use glitnir::geom::Rect;
+use kvardi::Px;
 use skel::api::{
     NHSHELL_ACK_CONTENT, NHSHELL_READY_CONTENT, NHSHELL_READY_OWED, ShellBackend, WindowDesc,
 };
 use skel::event::*;
 use skel::wayland::WaylandShell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 fn full() -> Rect {
-    Rect::new(0, 0, 200, 100)
+    Rect::new(Px(0), Px(0), Px(200), Px(100))
 }
 
 /// (callbacks, feedback, buffers) the recorder has not answered or released.
@@ -40,7 +42,7 @@ fn until(shell: &mut WaylandShell, what: &str, f: impl Fn(&mut WaylandShell) -> 
             return;
         }
         assert!(Instant::now() < deadline, "never: {what}");
-        std::thread::sleep(Duration::from_millis(10));
+        stund::sleep_blocking(Duration::from_millis(10));
     }
 }
 

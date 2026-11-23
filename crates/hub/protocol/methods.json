@@ -20371,8 +20371,7 @@
                 "enum": [
                   "package",
                   "plugin",
-                  "module",
-                  "emacs"
+                  "module"
                 ],
                 "type": "string"
               },
@@ -20415,7 +20414,7 @@
                 ]
               },
               "id": {
-                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.",
+                "description": "`pkg:NAME`, `module:NAME`, `plugin:NAME`.",
                 "type": "string"
               },
               "kind": {
@@ -20442,7 +20441,7 @@
                 "$ref": "#/$defs/Signed"
               },
               "source": {
-                "description": "The archive (`gnu`, `melpa`, …), `git`, `emacs` or `module`.",
+                "description": "The archive (`gnu`, `melpa`, …), `git` or `module`.",
                 "type": "string"
               },
               "state": {
@@ -20535,11 +20534,6 @@
               {
                 "const": "held",
                 "description": "A newer version exists that the update plan does not take (a pin or a dependant's bound).",
-                "type": "string"
-              },
-              {
-                "const": "incompat",
-                "description": "Installed, and the newest version needs a newer Emacs than this one.",
                 "type": "string"
               },
               {
@@ -20727,10 +20721,6 @@
                   "null"
                 ]
               },
-              "builtin": {
-                "default": false,
-                "type": "boolean"
-              },
               "bundled": {
                 "default": false,
                 "description": "The packages drgnx itself provides and activates (the modules' `:packages`, rows `bundled:NAME`).",
@@ -20893,8 +20883,7 @@
                 "enum": [
                   "package",
                   "plugin",
-                  "module",
-                  "emacs"
+                  "module"
                 ],
                 "type": "string"
               },
@@ -20942,7 +20931,6 @@
               "filters": {
                 "$ref": "#/$defs/Filters",
                 "default": {
-                  "builtin": false,
                   "bundled": false,
                   "disabled": false,
                   "enabled": false,
@@ -21264,8 +21252,7 @@
                 "enum": [
                   "package",
                   "plugin",
-                  "module",
-                  "emacs"
+                  "module"
                 ],
                 "type": "string"
               },
@@ -21289,7 +21276,7 @@
                 ]
               },
               "id": {
-                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.",
+                "description": "`pkg:NAME`, `module:NAME`, `plugin:NAME`.",
                 "type": "string"
               },
               "kind": {
@@ -21316,7 +21303,7 @@
                 "$ref": "#/$defs/Signed"
               },
               "source": {
-                "description": "The archive (`gnu`, `melpa`, …), `git`, `emacs` or `module`.",
+                "description": "The archive (`gnu`, `melpa`, …), `git` or `module`.",
                 "type": "string"
               },
               "state": {
@@ -21409,11 +21396,6 @@
               {
                 "const": "held",
                 "description": "A newer version exists that the update plan does not take (a pin or a dependant's bound).",
-                "type": "string"
-              },
-              {
-                "const": "incompat",
-                "description": "Installed, and the newest version needs a newer Emacs than this one.",
                 "type": "string"
               },
               {
@@ -21533,7 +21515,7 @@
         "user",
         "agent"
       ],
-      "doc": "rows of the extensions catalog (packages, modules, Emacs built-ins) matching words, filters and an order; reads the refresh job's catalog, the lock and the modules, never the network",
+      "doc": "rows of the extensions catalog (packages, modules) matching words, filters and an order; reads the refresh job's catalog, the lock and the modules, never the network",
       "name": "extensions/search",
       "params": {
         "$defs": {
@@ -21545,10 +21527,6 @@
                   "string",
                   "null"
                 ]
-              },
-              "builtin": {
-                "default": false,
-                "type": "boolean"
               },
               "bundled": {
                 "default": false,
@@ -21632,8 +21610,7 @@
                 "enum": [
                   "package",
                   "plugin",
-                  "module",
-                  "emacs"
+                  "module"
                 ],
                 "type": "string"
               },
@@ -21673,7 +21650,6 @@
           "filters": {
             "$ref": "#/$defs/Filters",
             "default": {
-              "builtin": false,
               "bundled": false,
               "disabled": false,
               "enabled": false,
@@ -21729,8 +21705,7 @@
                 "enum": [
                   "package",
                   "plugin",
-                  "module",
-                  "emacs"
+                  "module"
                 ],
                 "type": "string"
               },
@@ -21754,7 +21729,7 @@
                 ]
               },
               "id": {
-                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.",
+                "description": "`pkg:NAME`, `module:NAME`, `plugin:NAME`.",
                 "type": "string"
               },
               "kind": {
@@ -21781,7 +21756,7 @@
                 "$ref": "#/$defs/Signed"
               },
               "source": {
-                "description": "The archive (`gnu`, `melpa`, …), `git`, `emacs` or `module`.",
+                "description": "The archive (`gnu`, `melpa`, …), `git` or `module`.",
                 "type": "string"
               },
               "state": {
@@ -21874,11 +21849,6 @@
               {
                 "const": "held",
                 "description": "A newer version exists that the update plan does not take (a pin or a dependant's bound).",
-                "type": "string"
-              },
-              {
-                "const": "incompat",
-                "description": "Installed, and the newest version needs a newer Emacs than this one.",
                 "type": "string"
               },
               {
@@ -32625,7 +32595,6 @@
               "unsandboxed",
               "settings.change",
               "user.private",
-              "user.emacs",
               "chat.project-read",
               "plugin.abilities",
               "chat.project-edit",
@@ -32862,7 +32831,6 @@
               "unsandboxed",
               "settings.change",
               "user.private",
-              "user.emacs",
               "chat.project-read",
               "plugin.abilities",
               "chat.project-edit",

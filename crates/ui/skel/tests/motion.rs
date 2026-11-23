@@ -13,7 +13,8 @@ use glitnir::stats::{Percentiles, summary};
 use skel::api::*;
 use skel::event::*;
 use skel::wayland::WaylandShell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 /// One frame at 120 Hz.
 const STEP: u64 = 8_333_333;
@@ -178,7 +179,7 @@ impl Tree {
                 return;
             }
             assert!(Instant::now() < deadline, "never: {what}");
-            std::thread::sleep(Duration::from_millis(1));
+            stund::sleep_blocking(Duration::from_millis(1));
         }
     }
 
@@ -268,6 +269,7 @@ impl Tree {
 
 mod motion {
     use super::*;
+    use kvardi::Px;
 
     #[test]
     fn pop_in_commits_each_present_until_identity() {
@@ -350,7 +352,7 @@ mod motion {
         t.committed();
         t.until("the first tick's entry", |_| summary(g, false).ticks == 1);
         assert_eq!(summary(g, false).tick_interval_ms, Percentiles::default());
-        std::thread::sleep(Duration::from_millis(30));
+        stund::sleep_blocking(Duration::from_millis(30));
         t.step();
         t.until("the second tick's entry", |_| summary(g, false).ticks == 2);
         let span = began.elapsed().as_secs_f64() * 1e3;
@@ -431,7 +433,7 @@ mod motion {
         t.committed();
         t.step();
         let seq = t.next_seq();
-        t.rb.fill(Rect::new(0, 0, 10, 10), 0xff00_ff00);
+        t.rb.fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), 0xff00_ff00);
         assert!(publish(&mut t.shell, t.root, &[(&t.rb, t.root)], 0));
         t.step();
         assert_eq!(t.buffers(seq, t.kid), 1, "the leg went on");
@@ -533,7 +535,7 @@ mod motion {
         t.shown_with(pop());
         let seq = t.next_seq();
         t.shell.set_mapped(t.kid, false).unwrap();
-        t.rb.fill(Rect::new(0, 0, 10, 10), 0xff00_ff00);
+        t.rb.fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), 0xff00_ff00);
         assert!(publish(&mut t.shell, t.root, &[(&t.rb, t.root)], 0));
         t.committed();
         seq
@@ -618,7 +620,7 @@ mod motion {
         for _ in 0..20 {
             t.rec.present(STEP);
         }
-        std::thread::sleep(Duration::from_millis(50));
+        stund::sleep_blocking(Duration::from_millis(50));
         assert!(t.commits(seq, t.kid).is_empty());
         assert!(t.commits(seq, t.root).is_empty());
         assert_eq!(t.shell.presenter_stats().unwrap().commits, before);
@@ -648,7 +650,7 @@ mod motion {
         }
         t.finish();
         t.rec.present(STEP);
-        std::thread::sleep(Duration::from_millis(50));
+        stund::sleep_blocking(Duration::from_millis(50));
         assert_eq!(t.pump(), 0, "none after the leg");
     }
 
@@ -673,9 +675,9 @@ mod motion {
         let deadline = Instant::now() + Duration::from_secs(10);
         while t.shell.present_pacer(t.root).unwrap().0 {
             assert!(Instant::now() < deadline, "the frame callback never came");
-            std::thread::sleep(Duration::from_millis(1));
+            stund::sleep_blocking(Duration::from_millis(1));
         }
-        std::thread::sleep(Duration::from_millis(50));
+        stund::sleep_blocking(Duration::from_millis(50));
         assert_eq!(t.buffers(seq, t.kid), 0, "no tick while the ack is held");
         assert!(t.commits(seq, t.root).is_empty());
         t.rb.resize(300, 150);
@@ -692,7 +694,7 @@ mod motion {
 
     /// The child drawn and hidden again while the tree waits for its frame callback, so no frame has seen the child.
     fn hidden_before_its_first_frame(t: &mut Tree) {
-        t.rb.fill(Rect::new(0, 0, 10, 10), 0xff00_ff00);
+        t.rb.fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), 0xff00_ff00);
         assert!(publish(&mut t.shell, t.root, &[(&t.rb, t.root)], 0));
         t.committed();
         t.kid_with(pop());
@@ -708,7 +710,7 @@ mod motion {
         hidden_before_its_first_frame(&mut t);
         t.rec.present(STEP);
         t.idle();
-        std::thread::sleep(Duration::from_millis(50));
+        stund::sleep_blocking(Duration::from_millis(50));
         t.sync();
         assert_eq!(t.buffers(seq, t.kid), 0, "a hidden child's picture");
         assert!(!t.ticking());
@@ -732,7 +734,7 @@ mod motion {
         let deadline = Instant::now() + Duration::from_secs(3);
         while t.rec.surfaces("subsurface") != 0 {
             assert!(Instant::now() < deadline, "a stuck ghost");
-            std::thread::sleep(Duration::from_millis(5));
+            stund::sleep_blocking(Duration::from_millis(5));
         }
         assert!(!t.ticking());
         t.no_protocol_error();
@@ -743,7 +745,7 @@ mod motion {
     fn hide_after_a_quiet_period_fades() {
         let mut t = Tree::open("kwin", false);
         t.shown_with(pop());
-        std::thread::sleep(Duration::from_millis(2300));
+        stund::sleep_blocking(Duration::from_millis(2300));
         assert!(
             t.shell.presenter_stats().unwrap().front_trims >= 1,
             "the root's"
@@ -776,7 +778,7 @@ mod motion {
         let deadline = Instant::now() + Duration::from_secs(3);
         while t.rec.surfaces("subsurface") != 0 {
             assert!(Instant::now() < deadline, "a stuck ghost");
-            std::thread::sleep(Duration::from_millis(5));
+            stund::sleep_blocking(Duration::from_millis(5));
         }
         t.no_protocol_error();
         let seq = t.next_seq();
@@ -797,7 +799,7 @@ mod motion {
         let deadline = Instant::now() + Duration::from_secs(3);
         while t.rec.surfaces("subsurface") + t.rec.surfaces("toplevel") != 0 {
             assert!(Instant::now() < deadline, "a ghost outlived its parent");
-            std::thread::sleep(Duration::from_millis(5));
+            stund::sleep_blocking(Duration::from_millis(5));
         }
         assert_eq!(t.shell.connection_state(), ConnectionState::Up);
         assert_eq!(t.shell.presenter_stats().unwrap().thread_on, 1);
@@ -816,7 +818,7 @@ mod motion {
                 Err(e) => panic!("reconnect: {e:?}"),
             }
             assert!(Instant::now() < deadline, "no reconnect");
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         }
         let ev = wait_for(&mut t.shell, |e| {
             e.kind() == Kind::Configure && e.window == t.root
@@ -899,7 +901,7 @@ mod motion {
         let deadline = Instant::now() + Duration::from_secs(3);
         while t.rec.surfaces("subsurface") != 1 {
             assert!(Instant::now() < deadline, "a stuck ghost");
-            std::thread::sleep(Duration::from_millis(5));
+            stund::sleep_blocking(Duration::from_millis(5));
         }
         let snap = t.rec.snapshot();
         assert_eq!(

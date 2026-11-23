@@ -1,5 +1,5 @@
 //! The Extensions view's methods (docs/develop/hub.md, "Extensions"): search and read the catalog of packages, the
-//! lock, the modules and the Emacs built-ins as one list of rows.  None writes; the install itself is `drgnx sync`
+//! lock and the modules as one list of rows.  None writes; the install itself is `drgnx sync`
 //! run as a job, never a method.
 //!
 //! `extensions/search` and `extensions/details` are open to agents (a catalog is public data); `extensions/rows` and
@@ -24,7 +24,6 @@ pub enum Kind {
     Package,
     Plugin,
     Module,
-    Emacs,
     /// A language pack (`pack:NAME`): a language's grammar, mode, server, formatter and debug adapter in one.
     Pack,
 }
@@ -42,8 +41,6 @@ pub enum State {
     Dependency,
     /// A newer version exists that the update plan does not take (a pin or a dependant's bound).
     Held,
-    /// Installed, and the newest version needs a newer Emacs than this one.
-    Incompat,
     /// Named by a module, `packages.eld`, the wanted file or the lock's `:wanted`, and not in the lock.
     Missing,
     On,
@@ -100,13 +97,13 @@ pub enum Why {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Row {
-    /// `pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.
+    /// `pkg:NAME`, `module:NAME`, `plugin:NAME`.
     pub id: String,
     pub kind: Kind,
     pub name: String,
     pub summary: String,
     pub state: State,
-    /// The archive (`gnu`, `melpa`, …), `git`, `emacs` or `module`.
+    /// The archive (`gnu`, `melpa`, …), `git` or `module`.
     pub source: String,
     pub signed: Signed,
     /// What is installed (a module has none).
@@ -137,8 +134,6 @@ pub struct Filters {
     /// Modules that are off.
     #[serde(default)]
     pub disabled: bool,
-    #[serde(default)]
-    pub builtin: bool,
     /// The packages drgnx itself provides and activates (the modules' `:packages`, rows `bundled:NAME`).
     #[serde(default)]
     pub bundled: bool,
@@ -394,7 +389,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "extensions/search", ExtensionsSearch(SearchParams) -> SearchResult,
             classes: [User, Agent], writes: false,
-            doc: "rows of the extensions catalog (packages, modules, Emacs built-ins) matching words, filters and an order; reads the refresh job's catalog, the lock and the modules, never the network",
+            doc: "rows of the extensions catalog (packages, modules) matching words, filters and an order; reads the refresh job's catalog, the lock and the modules, never the network",
             check: |p| {
                 if p.query.chars().count() > QUERY_MAX {
                     return Err(invalid("query", "the query is too long"));

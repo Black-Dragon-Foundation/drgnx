@@ -49,4 +49,4 @@ site outside its owner. Code that cannot meet a standard yet sits in a crate tha
 [errors](errors.md) · [logging](logging.md) · [paths](paths.md) · [files](files.md) · [processes](processes.md) ·
 [time](time.md) · [concurrency](concurrency.md) · [data-hygiene](data-hygiene.md) · [test-harness](test-harness.md) ·
 [commands](commands.md) · [keys](keys.md) · [settings](settings.md) · [prompts](prompts.md) · [attention](attention.md) ·
-[api-versioning](api-versioning.md)
+[api-versioning](api-versioning.md) · [ui-reactivity](ui-reactivity.md)

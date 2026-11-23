@@ -209,7 +209,7 @@ pub(crate) fn rounded(lp: f32, scale: &kvardi::Scale) -> u32 {
 
 /// LP logical pixels as a device length that may lie between pixels (a stroke, a dash).
 pub(crate) fn len(lp: f32, scale: &kvardi::Scale) -> f32 {
-    kvardi::Lp(lp).to_len(scale)
+    kvardi::Lp(lp).to_px_f32(scale)
 }
 
 /// Units and px at one scale.

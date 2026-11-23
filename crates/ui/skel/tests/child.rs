@@ -4,6 +4,7 @@
 //! `{"above":`.
 
 use glitnir::geom::Rect;
+use kvardi::Px;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fd::BorrowedFd;
 use skel::api::*;
@@ -14,11 +15,11 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 struct Recorder {
-    child: Child,
+    child: raun::proc::TestChild,
     dir: PathBuf,
 }
 
@@ -41,20 +42,21 @@ impl Recorder {
         let profile = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../ritari/profiles")
             .join(format!("{name}.json"));
-        let mut child = Command::new(bin)
-            .args(["--socket", "wl", "--control"])
-            .arg(dir.join("control"))
-            .arg("--profile")
-            .arg(&profile)
-            .env("XDG_RUNTIME_DIR", &dir)
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("spawn nh-recorder");
-        let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
-        assert_eq!(line, "READY\n");
+        let control = dir.join("control");
+        let mut child = raun::proc::TestChild::start(
+            Path::new(&bin),
+            &[
+                "--socket".as_ref(),
+                "wl".as_ref(),
+                "--control".as_ref(),
+                control.as_ref(),
+                "--profile".as_ref(),
+                profile.as_ref(),
+            ],
+            &[(stig::SYSTEM_RUNTIME_VAR, dir.as_os_str())],
+        )
+        .expect("spawn nh-recorder");
+        assert_eq!(child.read_line().unwrap(), "READY\n");
         Recorder { child, dir }
     }
 
@@ -104,7 +106,7 @@ impl Recorder {
                 Instant::now() < deadline,
                 "window {id} (protocol id {pid}) never matched; last: {node:?}"
             );
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         }
     }
 
@@ -112,7 +114,7 @@ impl Recorder {
         let deadline = Instant::now() + Duration::from_secs(3);
         while self.tree().len() != n {
             assert!(Instant::now() < deadline, "never {n} surfaces");
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         }
     }
 
@@ -127,9 +129,8 @@ impl Recorder {
 
 impl Drop for Recorder {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.dir);
+        self.child.kill();
+        let _scratch_dir_may_be_gone = std::fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -209,7 +210,9 @@ fn draw(shell: &mut WaylandShell, id: u64, w: i32, h: i32) {
     let b = shell.present_begin(id, w, h).unwrap();
     // SAFETY: the buffer is `stride * h` writable bytes.
     unsafe { std::ptr::write_bytes(b.pixels, 0x80, (b.stride * b.h) as usize) };
-    shell.present_commit(id, &[Rect::new(0, 0, w, h)]).unwrap();
+    shell
+        .present_commit(id, &[Rect::new(Px(0), Px(0), Px(w), Px(h))])
+        .unwrap();
     shell.flush().unwrap();
 }
 
@@ -266,6 +269,7 @@ fn commits_of(rec: &Recorder, seq: u64, id: u64) -> Vec<String> {
 #[allow(clippy::module_inception)]
 mod child {
     use super::*;
+    use kvardi::Px;
 
     #[test]
     fn child_is_a_subsurface_at_its_position() {
@@ -353,7 +357,7 @@ mod child {
         let parent = window(&mut shell);
         let c = child(&mut shell, parent, 0, 0);
         shell
-            .set_input_region(c, &[Rect::new(10, 10, 80, 40)])
+            .set_input_region(c, &[Rect::new(Px(10), Px(10), Px(80), Px(40))])
             .unwrap();
         // a sync child's commit applies with its parent's
         present(&mut shell, parent);
@@ -643,7 +647,7 @@ mod child {
 
         // input region (recorded: the child's commit carries it, the root's applies it)
         shell
-            .set_input_region(a, &[Rect::new(10, 10, 80, 40)])
+            .set_input_region(a, &[Rect::new(Px(10), Px(10), Px(80), Px(40))])
             .unwrap();
         assert!(owed(&mut shell));
         still(&shell, &rec, a, |n| n.contains("\"input_region\":null"));
@@ -784,12 +788,14 @@ mod child {
         let seq = next_seq(&rec);
         shell.set_position(a, 30, 20).unwrap();
         shell.stack(a, b, true).unwrap();
-        shell.set_input_region(b, &[Rect::new(5, 5, 9, 9)]).unwrap();
+        shell
+            .set_input_region(b, &[Rect::new(Px(5), Px(5), Px(9), Px(9))])
+            .unwrap();
         shell.set_mapped(b, false).unwrap();
         shell.set_alpha(a, u32::MAX / 2).unwrap();
         shell.set_alpha(root, u32::MAX / 2).unwrap();
         shell
-            .set_input_region(root, &[Rect::new(0, 0, 150, 80)])
+            .set_input_region(root, &[Rect::new(Px(0), Px(0), Px(150), Px(80))])
             .unwrap();
         shell.set_geometry(root, 0, 0, 200, 100).unwrap();
         shell.set_mapped(root, true).unwrap();
@@ -827,7 +833,7 @@ mod child {
         rec.wait_window(&shell, g, |n| n.contains("\"mapped\":true"));
         shell.set_position(g, 9, 9).unwrap();
         shell
-            .set_input_region(c, &[Rect::new(1, 1, 10, 10)])
+            .set_input_region(c, &[Rect::new(Px(1), Px(1), Px(10), Px(10))])
             .unwrap();
         shell.stack(c, 0, false).unwrap();
         shell.flush().unwrap();

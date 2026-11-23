@@ -19,7 +19,7 @@ fn select_bumps_selection_gen() {
         2,
         "the same item again is a new generation"
     );
-    assert_eq!(wb.query(w, "selection").unwrap()[2], Token::Int(2));
+    assert_eq!(wb.query(w, "selection").unwrap()[2], QueryItem::Int(2));
 }
 
 #[test]

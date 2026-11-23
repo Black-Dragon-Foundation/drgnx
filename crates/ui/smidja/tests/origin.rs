@@ -273,5 +273,5 @@ fn attention_count_is_shared_by_every_os_window() {
     assert_eq!(wb.attention().count, 3);
     let q1 = wb.query(w1, "attention").unwrap();
     assert_eq!(q1, wb.query(w2, "attention").unwrap());
-    assert_eq!(q1[0], Token::Int(3));
+    assert_eq!(q1[0], QueryItem::Int(3));
 }
