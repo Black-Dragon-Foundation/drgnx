@@ -872,7 +872,7 @@ impl ShellBackend for MacShell {
                     let f = n.window.frame();
                     let from =
                         objc2_foundation::NSPoint::new(f.origin.x, f.origin.y + f.size.height);
-                    let _ = win.window.cascadeTopLeftFromPoint(from);
+                    let _outcome_not_needed = win.window.cascadeTopLeftFromPoint(from);
                 }
             }
             Place::Shell => {}

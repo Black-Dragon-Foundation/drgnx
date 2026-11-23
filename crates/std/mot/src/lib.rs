@@ -41,6 +41,11 @@ impl Rgba {
         Rgba { r, g, b, a }
     }
 
+    /// `0xAARRGGBB`, not premultiplied: the number Glitnir's `argb` fields hold.
+    pub const fn to_argb(self) -> u32 {
+        (self.a as u32) << 24 | (self.r as u32) << 16 | (self.g as u32) << 8 | self.b as u32
+    }
+
     /// `#rrggbb` or `#rrggbbaa`.
     pub fn parse(text: &str) -> villa::Result<Rgba> {
         let bad =

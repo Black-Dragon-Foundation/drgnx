@@ -129,11 +129,11 @@ pub struct Stats {
 }
 
 /// Adds the time from its making to its drop to a counter of nanoseconds.
-pub struct Timed(&'static AtomicU64, std::time::Instant);
+pub struct Timed(&'static AtomicU64, stund::Instant);
 
 impl Timed {
     pub fn start(c: &'static AtomicU64) -> Timed {
-        Timed(c, std::time::Instant::now())
+        Timed(c, stund::Instant::now())
     }
 }
 

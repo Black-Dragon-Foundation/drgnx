@@ -12,7 +12,8 @@ use skel::api::{
 };
 use skel::event::*;
 use skel::wayland::WaylandShell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 /// Whether a matching record arrives within `ms`.
 fn arrives(shell: &mut WaylandShell, ms: u64, kind: Kind) -> bool {
@@ -48,7 +49,7 @@ fn wait_buffer_commits(rec: &Recorder, n: usize) -> Vec<String> {
         if all.len() >= n || Instant::now() > deadline {
             return all;
         }
-        std::thread::sleep(Duration::from_millis(10));
+        stund::sleep_blocking(Duration::from_millis(10));
     }
 }
 
@@ -208,7 +209,7 @@ mod present {
         sync(&shell);
         assert_eq!(shell.present_stats(id).map(|s| (s.0, s.1)), Some((2, 0)));
         // the pool's quiet period (2 s) is time itself: a sleep never ends before it has passed
-        std::thread::sleep(Duration::from_millis(2100));
+        stund::sleep_blocking(Duration::from_millis(2100));
         shell.dispatch_main().unwrap();
         assert_eq!(shell.present_stats(id).map(|s| (s.0, s.1)), Some((1, 1)));
     }
@@ -340,7 +341,7 @@ mod present {
             while self.shell.present_pacer(self.ids[0]).unwrap().0 {
                 while self.shell.next_event().unwrap().is_some() {}
                 assert!(Instant::now() < deadline, "the root never stopped waiting");
-                std::thread::sleep(Duration::from_millis(10));
+                stund::sleep_blocking(Duration::from_millis(10));
             }
             // the releases sent with the callback are handled
             sync(&self.shell);

@@ -274,7 +274,7 @@ impl MacShell {
         let under = self.order.remove(&id).unwrap_or_default();
         self.retired.push((root, k));
         for c in under {
-            let _ = self.child_destroy(c);
+            let _outcome_not_needed = self.child_destroy(c);
         }
         self.hover.retain(|_, t| *t != id);
         if self.grab.is_some_and(|(_, t)| t == id) {
@@ -407,7 +407,7 @@ impl MacShell {
     /// A top-level goes: its children with it.
     pub(super) fn children_gone(&mut self, root: WindowId) {
         for c in self.order.remove(&root).unwrap_or_default() {
-            let _ = self.child_destroy(c);
+            let _outcome_not_needed = self.child_destroy(c);
         }
         self.retired.retain(|(r, _)| *r != root);
         self.owed.remove(&root);

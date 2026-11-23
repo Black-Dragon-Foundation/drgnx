@@ -190,7 +190,7 @@ impl Reader {
             if shared.stop.load(Ordering::Acquire) {
                 // take what is queued for these handlers: an event left in a queue nobody dispatches keeps its
                 // object's data, and any descriptor it carries, for good
-                let _ = self.dispatch();
+                let _outcome_not_needed = self.dispatch();
                 return Ok(());
             }
             // 1. prepare; a non-empty libwayland queue is routed and dispatched first
@@ -293,7 +293,7 @@ impl crate::api::BackendThread for ReaderThread {
         self.0.reader_wake.signal();
     }
 
-    fn wait_done(&self, deadline: std::time::Instant) -> bool {
+    fn wait_done(&self, deadline: stund::Instant) -> bool {
         self.0.reader_done.wait(deadline)
     }
 }
@@ -438,11 +438,7 @@ impl Dispatch<WlKeyboard, ()> for ReaderState {
             } => {
                 let pressed = key_state == KeyState::Pressed;
                 if pressed {
-                    let mut serials = state
-                        .shared
-                        .serials
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let mut serials = saman::lock(&state.shared.serials);
                     serials.update(SerialKind::KeyPress, serial);
                     selection::lock(&state.shared).input(serial);
                 }
@@ -496,7 +492,7 @@ impl Dispatch<WlCallback, Synced> for ReaderState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        let _ = synced.0.try_send(());
+        let _receiver_gone = synced.0.try_send(());
     }
 }
 
@@ -508,10 +504,11 @@ mod tests {
     #[test]
     fn reader_marker_is_per_thread() {
         assert!(!is_reader_thread() && !crate::is_reader_thread());
-        let on_reader = std::thread::spawn(|| {
+        let on_reader = saman::spawn_thread("skel-thread", || {
             READER_THREAD.set(true);
             crate::is_reader_thread()
         })
+        .unwrap()
         .join()
         .unwrap();
         assert!(on_reader);

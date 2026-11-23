@@ -8,7 +8,8 @@
 
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 /// A registration's filter: readable, writable.
 pub const FILT_READ: u8 = 1;
@@ -271,7 +272,7 @@ static KICK: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
 
 /// Install the backend's kick (once per process).
 pub fn set_kick(kick: fn()) {
-    let _ = KICK.set(kick);
+    let _kick_already_installed = KICK.set(kick);
 }
 
 /// Any thread: end the main wait if it is parked, or the next one before it sleeps.
@@ -623,7 +624,7 @@ mod tests {
     #[test]
     fn a_wake_during_the_check_is_not_lost() {
         let (p, s) = (Park::new(), Sleeper::new());
-        let slept = p.park(
+        let _slept = p.park(
             || {
                 p.wake(|| s.kick());
                 false
@@ -631,7 +632,6 @@ mod tests {
             || s.sleep(),
         );
         assert_eq!(s.slept_full.get(), 0);
-        let _ = slept;
     }
 
     #[test]
@@ -882,7 +882,7 @@ mod tests {
             stop: &AtomicBool,
             done: impl Fn(&T) -> bool,
         ) -> bool {
-            let mut g = m.lock().unwrap();
+            let mut g = saman::lock(m);
             while !done(&g) {
                 let now = Instant::now();
                 if now >= end || stop.load(Ordering::SeqCst) {
@@ -898,21 +898,22 @@ mod tests {
             true
         }
         let (t2, h2) = (tokens.clone(), hand.clone());
-        let waiter = std::thread::spawn(move || {
+        let waiter = saman::spawn_thread("skel-thread", move || {
             for round in 1..=ROUNDS {
                 count.fetch_add(1, Ordering::SeqCst);
                 park.wake(|| {
-                    *t2.0.lock().unwrap() += 1;
+                    *saman::lock(&t2.0) += 1;
                     t2.1.notify_one();
                 });
                 if !wait_for(&h2.0, &h2.1, end, stop, |h| h.0 >= round) {
                     return;
                 }
                 count.fetch_sub(1, Ordering::SeqCst);
-                h2.0.lock().unwrap().1 = round;
+                saman::lock(&h2.0).1 = round;
                 h2.1.notify_all();
             }
-        });
+        })
+        .unwrap();
         let mut lost = 0u32;
         let mut round = 0;
         while round < ROUNDS && !stop.load(Ordering::SeqCst) {
@@ -926,7 +927,7 @@ mod tests {
                 || {
                     let start = count.load(Ordering::SeqCst);
                     let at = Instant::now();
-                    let mut g = tokens.0.lock().unwrap();
+                    let mut g = saman::lock(&tokens.0);
                     while *g == 0 && at.elapsed() < Duration::from_millis(100) {
                         g = tokens
                             .1
@@ -944,7 +945,7 @@ mod tests {
             park.take();
             if count.load(Ordering::SeqCst) > 0 {
                 round += 1;
-                hand.0.lock().unwrap().0 = round;
+                saman::lock(&hand.0).0 = round;
                 hand.1.notify_all();
                 // the waiter lowers the count before its next round
                 if !wait_for(&hand.0, &hand.1, end, stop, |h| h.1 >= round) {

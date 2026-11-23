@@ -35,7 +35,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_shm::WlShm;
 use wayland_client::protocol::wl_subcompositor::WlSubcompositor;
@@ -108,19 +109,19 @@ impl Counters {
 
     /// Change what window `key` of root `root` has of its layout legs.
     pub fn layout(&self, root: u64, key: u64, f: impl FnOnce(&mut LayoutAck)) {
-        let mut l = self.layouts.lock().unwrap_or_else(|e| e.into_inner());
+        let mut l = saman::lock(&self.layouts);
         f(l.entry((root, key)).or_default());
     }
 
     /// What window `key` of root `root` has of its layout legs.
     pub fn layout_ack(&self, root: u64, key: u64) -> LayoutAck {
-        let l = self.layouts.lock().unwrap_or_else(|e| e.into_inner());
+        let l = saman::lock(&self.layouts);
         l.get(&(root, key)).copied().unwrap_or_default()
     }
 
     /// Root `root` is gone: so are its windows' layout legs.
     pub fn layout_forget(&self, root: u64) {
-        let mut l = self.layouts.lock().unwrap_or_else(|e| e.into_inner());
+        let mut l = saman::lock(&self.layouts);
         l.retain(|(r, _), _| *r != root);
     }
 
@@ -164,7 +165,7 @@ impl Counters {
 }
 
 fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }
 
 /// What a display's threads share with its presenter: the wake, the mode, the registered roots and the counters.
@@ -288,7 +289,7 @@ impl Link {
     fn compose_hold(&self) {
         let delay = self.delay();
         if !delay.is_zero() {
-            std::thread::sleep(delay);
+            stund::sleep_blocking(delay);
         }
         let mut h = locked(&self.hooks);
         if !h.gate_closed {
@@ -399,7 +400,7 @@ impl Timer {
     fn drain(&self) {
         if let Some(fd) = &self.0 {
             let mut buf = [0u8; 8];
-            let _ = rustix::io::read(fd, &mut buf);
+            let _wake_is_best_effort = rustix::io::read(fd, &mut buf);
         }
     }
 }
@@ -507,7 +508,7 @@ fn run(link: &Link, mail: &Mailbox, mut stage: Stage) -> Stage {
             }
             // EAGAIN is the reader's to retry; any other failure reaches the host through the reader's DISCONNECTED
             note_unlocked_work(&stage.stats);
-            let _ = wire.shared.host_flush(&wire.conn);
+            let _outcome_not_needed = wire.shared.host_flush(&wire.conn);
             stage.flushed();
             note_presented(&stage, mail, &roots);
         }

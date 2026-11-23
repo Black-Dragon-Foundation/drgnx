@@ -10,7 +10,8 @@ mod keyboard {
     use skel::event::*;
     use skel::wayland::keyboard::{RepeatState, Xkb};
     use std::ffi::OsStr;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
+    use stund::Instant;
 
     const KEY_LEFTCTRL: u32 = 29;
     const KEY_A: u32 = 30;

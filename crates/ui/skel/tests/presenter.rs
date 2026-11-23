@@ -10,7 +10,8 @@ use glitnir::geom::Rect;
 use skel::api::*;
 use skel::event::*;
 use skel::wayland::WaylandShell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 const BG: u32 = 0xff20_4060;
 
@@ -28,7 +29,7 @@ fn until(shell: &mut WaylandShell, what: &str, f: impl Fn(&mut WaylandShell) -> 
             return;
         }
         assert!(Instant::now() < deadline, "never: {what}");
-        std::thread::sleep(Duration::from_millis(10));
+        stund::sleep_blocking(Duration::from_millis(10));
     }
 }
 
@@ -119,7 +120,11 @@ impl Lcg {
 
 /// `tid`'s context switches so far (each wake of a sleeping thread is one).
 fn switches(tid: i32) -> u64 {
-    let s = std::fs::read_to_string(format!("/proc/self/task/{tid}/status")).unwrap();
+    let s = eitri::read_string(
+        std::path::Path::new(&format!("/proc/{}/task/{tid}/status", std::process::id())),
+        1 << 16,
+    )
+    .unwrap();
     s.lines()
         .filter(|l| l.contains("ctxt_switches:"))
         .map(|l| l.split_whitespace().last().unwrap().parse::<u64>().unwrap())
@@ -222,7 +227,11 @@ fn read_records(shell: &mut WaylandShell) {
 
 /// Thread `tid` is asleep (blocked in a wait), not running or ready to run.
 fn asleep(tid: i32) -> bool {
-    let s = std::fs::read_to_string(format!("/proc/self/task/{tid}/stat")).unwrap();
+    let s = eitri::read_string(
+        std::path::Path::new(&format!("/proc/{}/task/{tid}/stat", std::process::id())),
+        1 << 16,
+    )
+    .unwrap();
     // "TID (COMM) STATE ...": the name may hold spaces, so the state is what follows the last parenthesis
     s[s.rfind(')').unwrap() + 1..].trim_start().starts_with('S')
 }
@@ -337,7 +346,7 @@ fn reused_buffers_show_the_backing(hold: u32, flags: u32) {
                 shell.present_pacer(id),
                 rec.control(&format!(r#"{{"cmd":"log","since":{seq}}}"#))
             );
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         }
         if !shows(&rec, &b) {
             let snap = rec.snapshot();
@@ -618,7 +627,7 @@ mod presenter {
                 "the presenter never committed on its own"
             );
             // the recorder's log has no wake-up to wait on: ask again shortly
-            std::thread::sleep(Duration::from_millis(2));
+            stund::sleep_blocking(Duration::from_millis(2));
         }
         assert!(shell.next_event().is_ok(), "no protocol error");
     }
@@ -805,13 +814,14 @@ mod presenter {
         );
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let watch = done.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(30));
+        saman::spawn_thread("skel-test", move || {
+            stund::sleep_blocking(Duration::from_secs(30));
             if !watch.load(std::sync::atomic::Ordering::SeqCst) {
-                eprintln!("a host call is waiting for a parked compose");
+                annall::cli_err("a host call is waiting for a parked compose").unwrap_or_default();
                 std::process::abort();
             }
-        });
+        })
+        .unwrap();
         for i in 0..50u32 {
             b.fill(Rect::new(i as i32, 0, 10, 10), 0xff00_0000 | (i * 7919));
             assert!(publish(&mut shell, id, &[(&b, id)], 0));
@@ -963,7 +973,7 @@ mod presenter {
         until(&mut shell, "the presenter asleep", |_| asleep(tid));
         let before = switches(tid);
         // an idle span: nothing may wake the thread in it (no event marks the absence of wake-ups)
-        std::thread::sleep(Duration::from_secs(3));
+        stund::sleep_blocking(Duration::from_secs(3));
         assert_eq!(switches(tid), before, "nh-present woke while idle");
     }
 }

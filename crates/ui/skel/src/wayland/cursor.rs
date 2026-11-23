@@ -37,11 +37,7 @@ impl WaylandShell {
         if !self.main.is_window(id) {
             return Err(ShellError::State);
         }
-        let serial = self
-            .shared
-            .serials
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        let serial = saman::lock(&self.shared.serials)
             .get(SerialKind::MouseEnter)
             .as_raw();
         // Redisplay sets the frame's shape again and again with no input; the pointer shows it already.  The
@@ -70,19 +66,10 @@ impl WaylandShell {
     }
 
     fn apply_cursor(&mut self, id: WindowId, shape: u32) -> ShellResult {
-        let serial = self
-            .shared
-            .serials
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        let serial = saman::lock(&self.shared.serials)
             .get(SerialKind::MouseEnter)
             .as_raw();
-        let pointer = self
-            .shared
-            .pointer
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let pointer = saman::lock(&self.shared.pointer).clone();
         if shape == NHSHELL_CURSOR_HIDDEN {
             if let Some(pointer) = pointer {
                 pointer.set_cursor(serial, None, 0, 0);
@@ -90,21 +77,9 @@ impl WaylandShell {
             }
             return Ok(());
         }
-        let device = self
-            .shared
-            .cursor_device
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let device = saman::lock(&self.shared.cursor_device).clone();
         if let Some(device) = device {
-            let (serial, shape) = shape_request(
-                &self
-                    .shared
-                    .serials
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()),
-                shape,
-            )?;
+            let (serial, shape) = shape_request(&saman::lock(&self.shared.serials), shape)?;
             device.set_shape(serial, shape);
             return self.flush();
         }
@@ -137,10 +112,7 @@ impl WaylandShell {
     /// Test hook: the serial of the latest button press the reader saw.
     #[doc(hidden)]
     pub fn latest_press_serial(&self) -> u32 {
-        self.shared
-            .serials
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.shared.serials)
             .get(SerialKind::MousePress)
             .as_raw()
     }

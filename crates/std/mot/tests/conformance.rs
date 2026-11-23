@@ -141,3 +141,16 @@ fn theme_switch_redraws() {
     assert_eq!(e.kind(), villa::Kind::NotFound);
     assert_eq!(sw.current().name(), "dark");
 }
+
+#[test]
+fn a_colour_as_the_argb_number_glitnir_takes() {
+    assert_eq!(
+        mot::Rgba::new(0x12, 0x34, 0x56, 0x78).to_argb(),
+        0x7812_3456
+    );
+    assert_eq!(mot::Rgba::new(0, 0, 0, 255).to_argb(), 0xff00_0000);
+    assert_eq!(
+        mot::Rgba::parse("#80ff0010").unwrap().to_argb(),
+        0x1080_ff00
+    );
+}

@@ -100,43 +100,19 @@ pub fn seat_capabilities(
                 .cursor_manager
                 .as_ref()
                 .map(|m| m.get_pointer(&ptr, qh, ()));
-            *state
-                .shared
-                .cursor_device
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = device;
-            *state
-                .shared
-                .pointer
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = Some(ptr.clone());
+            *saman::lock(&state.shared.cursor_device) = device;
+            *saman::lock(&state.shared.pointer) = Some(ptr.clone());
             crate::wayland::gesture::pointer_added(state, &ptr, qh);
             state.pointer.pointer = Some(ptr);
         }
         (false, Some(ptr)) => {
             crate::wayland::gesture::pointer_removed(state);
-            state
-                .shared
-                .pointer
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .take();
-            if let Some(d) = state
-                .shared
-                .cursor_device
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .take()
-            {
+            saman::lock(&state.shared.pointer).take();
+            if let Some(d) = saman::lock(&state.shared.cursor_device).take() {
                 d.destroy();
             }
             state.pointer.surface = 0;
-            state
-                .shared
-                .serials
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .release_all(false);
+            saman::lock(&state.shared.serials).release_all(false);
             if ptr.version() >= 3 {
                 ptr.release();
             }
@@ -152,11 +128,7 @@ fn time_ns(ms: u32) -> u64 {
 impl ReaderState {
     /// Surface-local logical -> device pixels, at the scale of window `id`.
     pub(super) fn to_device(&self, id: u64, x: f64, y: f64) -> (f64, f64) {
-        let s = self
-            .shared
-            .scale120
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        let s = saman::lock(&self.shared.scale120)
             .get(&id)
             .copied()
             .unwrap_or(120);
@@ -180,12 +152,7 @@ impl ReaderState {
     /// The connection is gone and no release will come: a release for every button still held, on the window the
     /// pointer is over, at its last position.
     pub(super) fn release_held_buttons(&mut self) {
-        let held = self
-            .shared
-            .serials
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .held_buttons();
+        let held = saman::lock(&self.shared.serials).held_buttons();
         let id = self.pointer.surface;
         let (x, y) = self.to_device(id, self.pointer.x, self.pointer.y);
         for button in held {
@@ -224,11 +191,7 @@ impl Dispatch<WlPointer, ()> for ReaderState {
                 surface_y,
             } => {
                 {
-                    let mut serials = state
-                        .shared
-                        .serials
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let mut serials = saman::lock(&state.shared.serials);
                     serials.update(SerialKind::MouseEnter, serial);
                     // a press is held only within one surface's implicit grab
                     serials.release_all(false);
@@ -238,12 +201,7 @@ impl Dispatch<WlPointer, ()> for ReaderState {
             }
             wl_pointer::Event::Leave { .. } => {
                 // the implicit grab ended (or a drag took the pointer): no release will come for a held button
-                state
-                    .shared
-                    .serials
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .release_all(false);
+                saman::lock(&state.shared.serials).release_all(false);
                 state.post_pointer(ShellEvent::PointerLeave, 0, 0.0, 0.0);
                 state.pointer.surface = 0;
             }
@@ -260,11 +218,7 @@ impl Dispatch<WlPointer, ()> for ReaderState {
             } => {
                 let pressed = bs == ButtonState::Pressed;
                 {
-                    let mut serials = state
-                        .shared
-                        .serials
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let mut serials = saman::lock(&state.shared.serials);
                     if pressed {
                         serials.update(SerialKind::MousePress, serial);
                         serials.press(Held::Button(button), serial);

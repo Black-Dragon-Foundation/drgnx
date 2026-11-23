@@ -34,7 +34,7 @@ mod scale {
             seen: &mut Seen,
             done: &dyn Fn(&Seen, Option<&Record>) -> bool,
         ) -> Option<Record> {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let deadline = stund::Instant::now() + std::time::Duration::from_secs(10);
             while !done(seen, None) {
                 while let Some(e) = shell.next_event().unwrap() {
                     if let ShellEvent::Scale(s) = e.event {
@@ -44,7 +44,7 @@ mod scale {
                         return Some(e);
                     }
                 }
-                assert!(std::time::Instant::now() < deadline, "never came: {seen:?}");
+                assert!(stund::Instant::now() < deadline, "never came: {seen:?}");
                 readable_within(shell.wake_fd(), 50);
             }
             None
@@ -102,11 +102,11 @@ mod scale {
                 }
             }
         };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = stund::Instant::now() + std::time::Duration::from_secs(10);
         while shell.window_scale(kid).unwrap() != 150 {
             drain(&mut shell, &mut seen);
             assert!(
-                std::time::Instant::now() < deadline,
+                stund::Instant::now() < deadline,
                 "the child never took 150: {seen:?}"
             );
             readable_within(shell.wake_fd(), 50);
@@ -160,11 +160,11 @@ mod scale {
         };
         draw(&mut shell, id, (400, 200));
         // its SCALE may have come with the configure: the scale itself is what counts
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = stund::Instant::now() + std::time::Duration::from_secs(5);
         while shell.window_scale(id).unwrap() != 240 {
             while shell.next_event().unwrap().is_some() {}
             assert!(
-                std::time::Instant::now() < deadline,
+                stund::Instant::now() < deadline,
                 "the window never took 240"
             );
             readable_within(shell.wake_fd(), 50);
@@ -223,13 +223,10 @@ mod scale {
         let id = shell.surface_new().unwrap();
         shell.scale_attach(id).unwrap();
         shell.flush().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = stund::Instant::now() + std::time::Duration::from_secs(5);
         let mut seen = Vec::new();
         while !seen.contains(&150) {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "no scale 150: {seen:?}"
-            );
+            assert!(stund::Instant::now() < deadline, "no scale 150: {seen:?}");
             while let Some(e) = shell.next_event().unwrap() {
                 if let ShellEvent::Scale(s) = e.event
                     && e.window == id

@@ -174,10 +174,7 @@ impl WaylandShell {
 
     /// The latest input serial the move, resize and menu requests are sent with (0 before any input).
     fn input_serial(&self) -> u32 {
-        self.shared
-            .serials
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.shared.serials)
             .get(SerialKind::MousePress)
             .as_raw()
     }
@@ -216,7 +213,7 @@ impl ShellBackend for WaylandShell {
             self.shared.wake.drain();
             if self.shared.main_pending.swap(false, Ordering::AcqRel) {
                 // an error here reaches the host as the reader's DISCONNECTED record
-                let _ = self.dispatch_main_queue();
+                let _outcome_not_needed = self.dispatch_main_queue();
                 self.popups_place_again();
                 continue;
             }
@@ -804,7 +801,7 @@ impl WaylandShell {
         self.extras_forget(id);
         for dep in self.dependents_of(id) {
             let popup = self.main.popups.contains_key(&dep);
-            let _ = self.window_destroy_local(dep);
+            let _outcome_not_needed = self.window_destroy_local(dep);
             if popup {
                 self.main.orphans.insert(dep);
                 self.shared.post(Record::new(ShellEvent::PopupDone, dep, 0));

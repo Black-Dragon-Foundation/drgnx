@@ -12,7 +12,8 @@ use skel::caps::NhShellCaps;
 use skel::event::*;
 use skel::wayland::WaylandShell;
 use std::sync::RwLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 static SERIAL: RwLock<()> = RwLock::new(());
 
@@ -71,7 +72,7 @@ mod reconnect {
                 Ok(()) => break,
                 Err(ShellError::Timeout) => {
                     assert!(Instant::now() < deadline, "never reconnected");
-                    std::thread::sleep(Duration::from_millis(10));
+                    stund::sleep_blocking(Duration::from_millis(10));
                 }
                 Err(e) => panic!("reconnect: {e:?}"),
             }
@@ -167,8 +168,8 @@ mod reconnect {
         let w = mapped_window(&mut shell, 64, 48);
         // a configure serial the compositor never sent: xdg_wm_base's invalid_surface_state
         shell.ack_configure(w, 999_999, 0).unwrap();
-        let _ = shell.present_bare(w);
-        let _ = shell.flush();
+        let _not_under_test = shell.present_bare(w);
+        let _not_under_test_either = shell.flush();
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             match shell.next_event() {
@@ -400,7 +401,7 @@ mod reconnect {
                 break;
             }
             assert!(Instant::now() < deadline, "the old bytes never showed");
-            std::thread::sleep(Duration::from_millis(20));
+            stund::sleep_blocking(Duration::from_millis(20));
         }
     }
 
@@ -572,7 +573,7 @@ mod reconnect {
         let deadline = Instant::now() + Duration::from_secs(3);
         while rec.surfaces("popup") < 3 {
             assert!(Instant::now() < deadline, "the popups never arrived");
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         }
         let evs = restart_and_reconnect(&rec, &mut shell);
         let done: Vec<u64> = evs
@@ -594,7 +595,7 @@ mod reconnect {
         let deadline = Instant::now() + Duration::from_secs(3);
         while rec.surfaces("popup") < 1 {
             assert!(Instant::now() < deadline, "the new popup never arrived");
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         }
         for ev in collect(&mut shell, 200) {
             assert_ne!(ev.kind(), Kind::Disconnected, "a protocol error");
@@ -647,7 +648,7 @@ mod reconnect {
         let deadline = Instant::now() + Duration::from_secs(3);
         while rec.surfaces("popup") < 2 {
             assert!(Instant::now() < deadline, "the popups never arrived");
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         }
         for f in fillers {
             shell.window_destroy(f).unwrap();
@@ -775,7 +776,7 @@ mod reconnect {
                 Instant::now() < deadline,
                 "no buffer on the new surface: {log:?}"
             );
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         };
         let first_buffer = log.iter().position(|c| c.contains("\"buffer\":{")).unwrap();
         let first_ack = log
@@ -817,7 +818,7 @@ mod reconnect {
                 break;
             }
             assert!(Instant::now() < deadline, "the ack never went: {log:?}");
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         }
     }
 
@@ -990,7 +991,11 @@ mod reconnect {
 
     /// VmRSS in KiB.
     fn rss_kib() -> u64 {
-        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let status = eitri::read_string(
+            std::path::Path::new(&format!("/proc/{}/status", std::process::id())),
+            1 << 16,
+        )
+        .unwrap();
         let line = status.lines().find(|l| l.starts_with("VmRSS:")).unwrap();
         line.split_whitespace().nth(1).unwrap().parse().unwrap()
     }
@@ -1048,7 +1053,7 @@ mod reconnect {
                 return;
             }
             assert!(Instant::now() < deadline, "never: {what}");
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         }
     }
 
@@ -1208,7 +1213,7 @@ mod reconnect {
                 started.elapsed() < Duration::from_secs(1),
                 "the presenter does not run again"
             );
-            std::thread::sleep(Duration::from_millis(1));
+            stund::sleep_blocking(Duration::from_millis(1));
         };
         assert_ne!(again, tid, "the presenter thread was not started again");
         // the new presenter has had its turn for every request: the tree waits for its configure

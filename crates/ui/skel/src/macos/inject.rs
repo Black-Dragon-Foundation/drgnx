@@ -541,8 +541,8 @@ pub fn real_drag(
         }
     };
     post(CG_LEFT_DOWN, cg(from));
-    std::thread::spawn(move || {
-        std::thread::sleep(delay);
+    saman::spawn_thread("skel-thread", move || {
+        stund::sleep_blocking(delay);
         let n = steps.max(1);
         for i in 1..=n {
             let t = f64::from(i) / f64::from(n);
@@ -550,9 +550,10 @@ pub fn real_drag(
                 CG_LEFT_DRAGGED,
                 cg((from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t)),
             );
-            std::thread::sleep(std::time::Duration::from_millis(20));
+            stund::sleep_blocking(std::time::Duration::from_millis(20));
         }
         post(CG_LEFT_UP, cg(to));
-    });
+    })
+    .unwrap();
     Ok(())
 }

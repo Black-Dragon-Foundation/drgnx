@@ -13,7 +13,8 @@ use skel::api::{
 };
 use skel::event::*;
 use skel::wayland::WaylandShell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 fn full() -> Rect {
     Rect::new(0, 0, 200, 100)
@@ -40,7 +41,7 @@ fn until(shell: &mut WaylandShell, what: &str, f: impl Fn(&mut WaylandShell) -> 
             return;
         }
         assert!(Instant::now() < deadline, "never: {what}");
-        std::thread::sleep(Duration::from_millis(10));
+        stund::sleep_blocking(Duration::from_millis(10));
     }
 }
 

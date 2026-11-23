@@ -15,7 +15,8 @@ use skel::api::*;
 use skel::event::*;
 use skel::wayland::WaylandShell;
 use skel::wayland::scale::viewport_size;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 const BG: u32 = 0xff20_4060;
 /// The window layer's Glitnir id (a window id carries the top bit, as the glue's do).
@@ -33,7 +34,7 @@ fn until(shell: &mut WaylandShell, what: &str, f: impl Fn(&mut WaylandShell) -> 
             return;
         }
         assert!(Instant::now() < deadline, "never: {what}");
-        std::thread::sleep(Duration::from_millis(5));
+        stund::sleep_blocking(Duration::from_millis(5));
     }
 }
 
@@ -545,7 +546,7 @@ mod layers {
             publish(&mut shell, id, &[(&b, id)], 0);
             while shell.next_event().unwrap().is_some() {}
             // pacing only, so that frames commit while every buffer is held; no interleaving may write a held one
-            std::thread::sleep(Duration::from_millis(2));
+            stund::sleep_blocking(Duration::from_millis(2));
         }
         let w = rec.control(r#"{"cmd":"held_buffer_writes","since":0}"#);
         assert!(w.contains("\"writes\":[]"), "held buffers written: {w}");

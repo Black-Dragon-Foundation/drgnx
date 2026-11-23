@@ -141,12 +141,9 @@ mod popup {
             r#"{"cmd":"dnd_offer","types":{"text/plain;charset=utf-8":"x"},"surface":"toplevel","at":[20,20]}"#,
         );
         assert!(r.contains("\"ok\":true"), "{r}");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = stund::Instant::now() + std::time::Duration::from_secs(3);
         while !shell.dragging() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the drag never entered"
-            );
+            assert!(stund::Instant::now() < deadline, "the drag never entered");
             collect(&mut shell, 20);
         }
         let p = popup(&mut shell, top, NHSHELL_WIN_GRAB);
@@ -155,7 +152,7 @@ mod popup {
         // the drag leaves: grabs are allowed again
         rec.control_ok(r#"{"cmd":"dnd_leave"}"#);
         while shell.dragging() {
-            assert!(std::time::Instant::now() < deadline, "the drag never left");
+            assert!(stund::Instant::now() < deadline, "the drag never left");
             collect(&mut shell, 20);
         }
     }

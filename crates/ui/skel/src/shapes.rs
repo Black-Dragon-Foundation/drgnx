@@ -142,8 +142,8 @@ impl Paint {
 }
 
 /// The rectangles a bitmap's set bits cover (`Shape::Bitmap`): one per run of set bits in a row, the leftmost bit in
-/// bit `w - 1`, each bit `scale` pixels square.
-pub fn bitmap_runs(x: i32, y: i32, w: i32, rows: &[u16], scale: i32) -> Vec<Rect> {
+/// bit `w - 1`, each bit `dot` pixels square.
+pub fn bitmap_runs(x: i32, y: i32, w: i32, rows: &[u16], dot: i32) -> Vec<Rect> {
     let mut out = Vec::new();
     for (i, bits) in rows.iter().enumerate() {
         let mut j = 0;
@@ -157,10 +157,10 @@ pub fn bitmap_runs(x: i32, y: i32, w: i32, rows: &[u16], scale: i32) -> Vec<Rect
                 j += 1;
             }
             out.push(Rect::new(
-                x + start * scale,
-                y + i as i32 * scale,
-                (j - start) * scale,
-                scale,
+                x + start * dot,
+                y + i as i32 * dot,
+                (j - start) * dot,
+                dot,
             ));
         }
     }

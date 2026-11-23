@@ -35,6 +35,7 @@ mot = { clean = true }
 huginn = { clean = true }
 hlidskjalf = { clean = true }
 ritari = { clean = true }
+skel = { clean = true }
 
 [[standard]]
 id = "errors"

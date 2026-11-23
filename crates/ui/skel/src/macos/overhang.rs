@@ -205,12 +205,12 @@ unsafe extern "C" {
 /// `kCGImageAlphaOnly`: an alpha channel alone.
 const ALPHA_ONLY: u32 = 7;
 /// The mask's pixels per point: enough for a Retina screen's edge.
-const MASK_SCALE: f64 = 2.0;
+const MASK_OVERSAMPLE: f64 = 2.0;
 
 /// The blur's mask: a rounded rectangle of `radius` points, stretchable between its corners (`capInsets`).
 fn corner_mask(radius: f64) -> Option<Retained<NSImage>> {
     let side = 2.0 * radius.max(0.0) + 1.0;
-    let px = (side * MASK_SCALE).ceil() as usize;
+    let px = (side * MASK_OVERSAMPLE).ceil() as usize;
     let mut buf = vec![0u8; px * px];
     // SAFETY: the context draws into `buf`, alive for the calls; the image copies it; every +1 is released.
     let img = unsafe {
@@ -226,7 +226,7 @@ fn corner_mask(radius: f64) -> Option<Retained<NSImage>> {
         if c.is_null() {
             return None;
         }
-        let r = radius * MASK_SCALE;
+        let r = radius * MASK_OVERSAMPLE;
         let path = CGPathCreateWithRoundedRect(
             NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(px as f64, px as f64)),
             r,

@@ -145,11 +145,7 @@ impl MainState {
         s.current = scale120;
         self.present_scale(id, scale120);
         if let Some(shared) = &self.shared {
-            shared
-                .scale120
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(id, scale120);
+            saman::lock(&shared.scale120).insert(id, scale120);
         }
     }
 
@@ -163,11 +159,7 @@ impl MainState {
             s.current = scale;
         }
         if let Some(shared) = &self.shared {
-            shared
-                .scale120
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(id, scale);
+            saman::lock(&shared.scale120).insert(id, scale);
         }
     }
 
@@ -188,11 +180,7 @@ impl MainState {
 
     fn take_scale(&mut self, id: u64) -> Option<SurfaceScale> {
         if let Some(shared) = &self.shared {
-            shared
-                .scale120
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .remove(&id);
+            saman::lock(&shared.scale120).remove(&id);
         }
         self.scales.remove(&id)
     }
@@ -226,11 +214,7 @@ impl MainState {
         }
         self.present_scale(id, new);
         if let Some(shared) = &self.shared {
-            shared
-                .scale120
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(id, new);
+            saman::lock(&shared.scale120).insert(id, new);
         }
         let s = ScaleEv { scale120: new };
         self.post(Record::new(ShellEvent::Scale(s), id, 0));

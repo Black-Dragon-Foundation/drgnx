@@ -39,7 +39,7 @@ thread_local! {
 
 fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     // a panic under the lock left whole values behind (every access is one insert, remove or field write)
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(m)
 }
 
 /// `window`'s pushed state, changed by `f`.
@@ -341,7 +341,7 @@ mod tis {
                         parent = if *en { 0 } else { TISEnableInputSource(*p) };
                     }
                     enable = TISEnableInputSource(*src);
-                    let start = std::time::Instant::now();
+                    let start = stund::Instant::now();
                     while start.elapsed() < std::time::Duration::from_secs(2) {
                         let (_list, enabled) = sources(family, false);
                         let parent_on = parent == -1 || enabled.iter().any(|c| c.0 == family);
@@ -352,7 +352,7 @@ mod tis {
                             select = TISSelectInputSource(*src);
                             break;
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        stund::sleep_blocking(std::time::Duration::from_millis(50));
                     }
                 }
             }
@@ -377,14 +377,18 @@ mod tests {
     #[test]
     fn a_lisp_threads_push_and_take_reach_the_main_threads_state() {
         // C pushes at a Lisp thread's consistency point; AppKit reads on the main thread
-        std::thread::spawn(|| with(0x7e57, |p| p.cursor = [1, 2, 3, 4]))
+        saman::spawn_thread("skel-thread", || with(0x7e57, |p| p.cursor = [1, 2, 3, 4]))
+            .unwrap()
             .join()
             .unwrap();
         assert_eq!(with(0x7e57, |p| p.cursor), [1, 2, 3, 4]);
         forget(0x7e57);
         // a commit's text, made here, taken by the Lisp thread that runs `read_socket`
         let ev = text_event("かな");
-        let took = std::thread::spawn(move || take_text(ev.id)).join().unwrap();
+        let took = saman::spawn_thread("skel-thread", move || take_text(ev.id))
+            .unwrap()
+            .join()
+            .unwrap();
         assert_eq!(took.expect("the text is there"), "かな".as_bytes());
     }
 }

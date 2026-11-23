@@ -77,4 +77,10 @@ impl Lp {
         let v = f64::from(self.0) * f64::from(s.effective());
         Px(v.round() as i32)
     }
+
+    /// The same length in device pixels, not rounded: for what is not a pixel count (a blur's sigma, a stroke's width
+    /// before it is snapped).
+    pub fn to_px_f32(self, s: &Scale) -> f32 {
+        self.0 * s.effective()
+    }
 }

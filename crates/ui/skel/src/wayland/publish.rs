@@ -79,7 +79,7 @@ pub fn now_ns() -> u64 {
 }
 
 fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }
 
 /// Recycled patch buffers: a publish takes one, the presenter gives it back once the patch is in the front.
@@ -387,7 +387,7 @@ fn snapshot_backdrop(
         .iter()
         .find(|p| p.id == layer_id)?
         .rect;
-    let device = |logical: i32| (f64::from(logical) * scale).round() as i32;
+    let device = |logical: i32| crate::units::device_px(logical, scale);
     let region = Rect::new(
         device(at.0) + layer.x,
         device(at.1) + layer.y,
@@ -400,7 +400,7 @@ fn snapshot_backdrop(
         *w as usize,
         (*w, *h),
         region,
-        blur_px * scale as f32,
+        crate::units::device_len(blur_px, scale),
         scale,
         &[],
     )?;
@@ -706,7 +706,7 @@ impl Blur {
             .rect;
         let (front, scale) = Stage::beneath(surfaces, self.parent)?;
         child.front.as_ref()?;
-        let device = |logical: i32| (f64::from(logical) * scale).round() as i32;
+        let device = |logical: i32| crate::units::device_px(logical, scale);
         (scale == child.scale).then(|| Aim {
             region: Rect::new(
                 device(self.at.0) + layer.x,
@@ -714,7 +714,7 @@ impl Blur {
                 layer.w,
                 layer.h,
             ),
-            sigma_px: self.blur_px * scale as f32,
+            sigma_px: crate::units::device_len(self.blur_px, scale),
             scale,
             size: (front.w, front.h),
             layer_at: (layer.x, layer.y),
@@ -2086,7 +2086,7 @@ impl WaylandShell {
         let size = (first.w, first.h);
         let scale120 = |id| m.scales.get(&id).map_or(SCALE_ONE, |s| s.scale120()).max(1);
         let root_scale = f64::from(scale120(root)) / 120.0;
-        let at = |v: i32| (f64::from(v) * root_scale).round() as i32;
+        let at = |v: i32| crate::units::device_px(v, root_scale);
         // every surface's place counts from the root's own corner: a popup (a tree of its own) has an origin in the
         // toplevel it hangs from, which is not where its own picture starts
         let base = m.origin(root);

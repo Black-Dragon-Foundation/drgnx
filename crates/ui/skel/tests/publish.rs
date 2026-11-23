@@ -9,7 +9,8 @@ use glitnir::geom::Rect;
 use skel::api::*;
 use skel::event::*;
 use skel::wayland::WaylandShell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 const BG: u32 = 0xff20_4060;
 
@@ -27,7 +28,7 @@ fn until(shell: &mut WaylandShell, what: &str, f: impl Fn(&mut WaylandShell) -> 
             return;
         }
         assert!(Instant::now() < deadline, "never: {what}");
-        std::thread::sleep(Duration::from_millis(10));
+        stund::sleep_blocking(Duration::from_millis(10));
     }
 }
 
@@ -95,7 +96,7 @@ fn buffer_commits(rec: &Recorder, seq: u64, id: u64, n: usize) -> Vec<String> {
         if all.len() >= n || Instant::now() > deadline {
             return all;
         }
-        std::thread::sleep(Duration::from_millis(10));
+        stund::sleep_blocking(Duration::from_millis(10));
     }
 }
 
@@ -497,7 +498,7 @@ mod publish {
         shell.flush().unwrap();
         shown(&mut shell, &rec, id);
         // the front's quiet period (2 s) is time itself: a sleep never ends before it has passed
-        std::thread::sleep(Duration::from_millis(2100));
+        stund::sleep_blocking(Duration::from_millis(2100));
         shell.dispatch_main().unwrap();
         assert_eq!(shell.presenter_stats().unwrap().front_trims, 1);
         b.fill(Rect::new(30, 30, 8, 8), 0xff65_4321);

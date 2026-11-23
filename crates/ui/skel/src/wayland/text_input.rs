@@ -160,7 +160,7 @@ impl Inner {
 }
 
 fn lock(m: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }
 
 impl TextInput {

@@ -13,7 +13,8 @@ use glitnir::scene::LayerDesc;
 use skel::api::*;
 use skel::event::*;
 use skel::wayland::WaylandShell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 /// One frame at 120 Hz.
 const STEP: u64 = 8_333_333;
@@ -160,7 +161,7 @@ impl Tree {
                 return;
             }
             assert!(Instant::now() < deadline, "never: {what}");
-            std::thread::sleep(Duration::from_millis(1));
+            stund::sleep_blocking(Duration::from_millis(1));
         }
     }
 

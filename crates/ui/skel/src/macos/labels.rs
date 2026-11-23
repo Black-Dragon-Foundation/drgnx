@@ -139,7 +139,7 @@ pub fn glyph_mask(handle: u64, glyph: u16) -> Option<GlyphMask> {
                 y: f64::from(y_top),
                 glyphs: vec![glyph],
                 xs: vec![0.0],
-                argb: 0xffff_ffff,
+                argb: mot::Theme::builtin()[0].colour(mot::Token::Fg).to_argb(),
                 integral: fonts::integral(handle).unwrap_or(false),
             }],
         });

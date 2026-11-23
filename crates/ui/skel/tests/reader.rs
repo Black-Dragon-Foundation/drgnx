@@ -10,7 +10,8 @@ use skel::api::*;
 use skel::event::{Kind, Record, ShellEvent};
 use skel::wayland::WaylandShell;
 use skel::wayland::registry::supported;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 /// Take every queued record.
 fn drain(shell: &mut WaylandShell) -> Vec<Record> {
@@ -109,7 +110,7 @@ mod reader {
             shell.flush().unwrap();
         }
         // a span for the reader's retries: none can succeed while the recorder is stopped, so no event marks it
-        std::thread::sleep(Duration::from_millis(100));
+        stund::sleep_blocking(Duration::from_millis(100));
         assert!(
             shell.flush_pending(),
             "the retry cannot succeed while the socket is full"
@@ -124,7 +125,7 @@ mod reader {
             if got >= sent {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(20));
+            stund::sleep_blocking(Duration::from_millis(20));
         }
         assert_eq!(got, sent, "commits that reached the recorder");
         assert!(!shell.flush_pending());
@@ -459,7 +460,7 @@ mod reader {
         let fd = shell.connection_fd();
         let (dropped_at, r, returned_at) = std::thread::scope(|s| {
             let dropper = s.spawn(move || {
-                std::thread::sleep(Duration::from_millis(300));
+                stund::sleep_blocking(Duration::from_millis(300));
                 // SAFETY: the shell's connection stays open until the shell is dropped, after this thread ends.
                 let fd = unsafe { rustix::fd::BorrowedFd::borrow_raw(fd) };
                 rustix::net::shutdown(fd, rustix::net::Shutdown::Both).unwrap();
@@ -487,8 +488,8 @@ mod reader {
         assert_eq!(shell.last_error(), "");
         // a configure serial the compositor never sent: xdg_wm_base's invalid_surface_state (4)
         shell.ack_configure(w, 999_999, 0).unwrap();
-        let _ = shell.present_bare(w);
-        let _ = shell.flush();
+        let _not_under_test = shell.present_bare(w);
+        let _not_under_test_either = shell.flush();
         wait_lost(&mut shell);
         let text = shell.last_error();
         assert!(

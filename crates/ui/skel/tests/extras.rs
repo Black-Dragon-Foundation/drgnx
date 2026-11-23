@@ -8,7 +8,8 @@ use rustix::process::Signal;
 use skel::api::*;
 use skel::event::*;
 use skel::wayland::WaylandShell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 fn desc(flags: u32) -> WindowDesc {
     WindowDesc {
@@ -29,7 +30,7 @@ fn until(rec: &Recorder, cmd: &str, pred: impl Fn(&str) -> bool) -> String {
             return r;
         }
         assert!(Instant::now() < deadline, "{cmd} never matched; last: {r}");
-        std::thread::sleep(Duration::from_millis(10));
+        stund::sleep_blocking(Duration::from_millis(10));
     }
 }
 
@@ -74,7 +75,7 @@ mod extras {
             r.contains(&format!("\"surface\":{id}"))
         });
         // past the rings' spacing (20 ms), which is time itself: a sleep never ends before it has passed
-        std::thread::sleep(Duration::from_millis(30));
+        stund::sleep_blocking(Duration::from_millis(30));
         shell.bell(0).unwrap();
         until(&rec, "bell_log", |r| r.contains("\"surface\":null"));
         assert_eq!(shell.bell(9999), Err(ShellError::State));
@@ -92,7 +93,7 @@ mod extras {
         // the unit test's, on its own clock)
         let close = t.elapsed() < Duration::from_millis(20);
         // past the rings' spacing (20 ms), which is time itself: a sleep never ends before it has passed
-        std::thread::sleep(Duration::from_millis(30));
+        stund::sleep_blocking(Duration::from_millis(30));
         shell.bell(id).unwrap();
         let log = until(&rec, "bell_log", |r| r.matches("\"surface\"").count() >= 2);
         // the recorder has every ring the shell sent
@@ -161,19 +162,22 @@ mod extras {
     fn export_unsupported_without_the_exporter() {
         let dir = std::env::temp_dir().join(format!("nhshell-extras-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let text = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../ritari/profiles/mutter.json"
-        ))
+        let text = eitri::read_string(
+            std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../ritari/profiles/mutter.json"
+            )),
+            1 << 20,
+        )
         .unwrap()
         .replace("\"zxdg_exporter_v2\": 1,\n", "");
-        std::fs::write(dir.join("no-exporter.json"), text).unwrap();
+        eitri::replace_file(&dir.join("no-exporter.json"), text.as_bytes()).unwrap();
         let rec = Recorder::start(dir.join("no-exporter").to_str().unwrap());
         let mut shell = rec.open();
         let id = mapped_window(&mut shell, 200, 100);
         assert_eq!(shell.caps().xdg_foreign, 0);
         assert_eq!(shell.window_export(id, 100), Err(ShellError::Unsupported));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _scratch_dir_may_be_gone = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

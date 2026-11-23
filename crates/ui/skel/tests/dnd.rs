@@ -8,7 +8,8 @@ use common::*;
 use skel::api::*;
 use skel::event::*;
 use skel::wayland::WaylandShell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 const TEXT: &str = "text/plain;charset=utf-8";
 
@@ -65,7 +66,7 @@ fn wait_reply(rec: &Recorder, req: &str, want: &[&str]) -> String {
             return r;
         }
         assert!(Instant::now() < deadline, "{req}: want {want:?}, last {r}");
-        std::thread::sleep(Duration::from_millis(10));
+        stund::sleep_blocking(Duration::from_millis(10));
     }
 }
 
