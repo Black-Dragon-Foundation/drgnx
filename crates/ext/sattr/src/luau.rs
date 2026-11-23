@@ -16,6 +16,7 @@ use crate::generated::Api;
 use crate::generated::drgnx_api_v0_1_0::entry::AnsweredHow;
 use crate::generated::drgnx_api_v0_1_0::exports::entry;
 use crate::generated::drgnx_api_v0_1_0::types::Error;
+use crate::generated::rt::HandleTable;
 use crate::{Caller, Limits};
 
 /// A Luau state with the API installed, for one extension.
@@ -25,6 +26,10 @@ pub struct LuauHost {
     deadline: Rc<Cell<Option<Duration>>>,
     caller: Arc<RwLock<Caller>>,
     limits: Limits,
+    /// the extension's resource handles, held to `limits.handles`
+    handles: Arc<Mutex<HandleTable>>,
+    /// drops every handle and tells the editor (see [`LuauHost::unload`])
+    unload: Box<dyn Fn() -> usize>,
 }
 
 /// A failed script as a villa error: the script's own text is the detail.
@@ -68,7 +73,8 @@ impl LuauHost {
             extension: extension.to_string(),
             origin: Origin::Extension(extension.to_string()),
         }));
-        crate::generated::install_luau(&lua, api, &caller, limits.max_list)
+        let handles = Arc::new(Mutex::new(HandleTable::new(limits.handles)));
+        crate::generated::install_luau(&lua, api, &caller, &handles, limits.max_list)
             .map_err(script_error)?;
         lua.sandbox(true).map_err(script_error)?;
         lua.set_memory_limit(lua.used_memory() + limits.memory_bytes)
@@ -89,13 +95,31 @@ impl LuauHost {
             }
             Ok(VmState::Continue)
         });
+        let unload = {
+            let (api, caller, handles) =
+                (Arc::clone(api), Arc::clone(&caller), Arc::clone(&handles));
+            Box::new(move || crate::generated::drain_handles(&api, &caller, &handles))
+        };
         Ok(Self {
             lua,
             steps,
             deadline,
             caller,
             limits,
+            handles,
+            unload,
         })
+    }
+
+    /// Unload the extension: every resource handle it still holds is dropped and the editor is told once of each. How
+    /// many. Done when the host is dropped too; a second call finds nothing.
+    pub fn unload(&self) -> usize {
+        (self.unload)()
+    }
+
+    /// The extension's table of resource handles.
+    pub fn handles(&self) -> &Arc<Mutex<HandleTable>> {
+        &self.handles
     }
 
     /// F with the step budget renewed and the call made for ORIGIN: an agent that has the extension act is the origin
@@ -165,5 +189,11 @@ impl LuauHost {
 
     pub fn limits(&self) -> Limits {
         self.limits
+    }
+}
+
+impl Drop for LuauHost {
+    fn drop(&mut self) {
+        self.unload();
     }
 }

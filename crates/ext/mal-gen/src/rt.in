@@ -204,56 +204,267 @@ pub mod rt {
         }
     }
 
-    /// One extension's live handles.
+    /// One extension's live handles: a slot per handle, each with a generation, so a handle that was dropped is never
+    /// read as the one that took its slot. A slot whose last generation is used is retired, never reused, so a
+    /// generation never wraps onto a handle somebody still holds.
     pub struct HandleTable {
         cap: usize,
+        first_generation: u32,
+        slots: Vec<Slot>,
+        free: Vec<u32>,
+        live: usize,
+        deferred: Vec<(u32, u64)>,
+    }
+
+    struct Slot {
+        generation: u32,
+        /// (resource type, the editor's rep)
+        entry: Option<(u32, u64)>,
+        spent: bool,
     }
 
     impl HandleTable {
+        /// A table that holds at most CAP handles at once.
         pub fn new(cap: usize) -> Self {
-            Self { cap }
+            Self::new_at(cap, 1)
         }
 
-        pub fn new_at(cap: usize, _first_generation: u32) -> Self {
-            Self { cap }
+        /// The same, whose new slots start at FIRST_GENERATION (0 is never used): for a test of what the last
+        /// generations do.
+        pub fn new_at(cap: usize, first_generation: u32) -> Self {
+            Self {
+                cap,
+                first_generation: first_generation.max(1),
+                slots: Vec::new(),
+                free: Vec::new(),
+                live: 0,
+                deferred: Vec::new(),
+            }
         }
 
         pub fn cap(&self) -> usize {
             self.cap
         }
 
+        /// The handles held now.
         pub fn live(&self) -> usize {
-            0
+            self.live
         }
 
+        /// Whether one more handle may be held.
         pub fn has_room(&self) -> Result<(), HandleError> {
-            Ok(())
+            if self.live >= self.cap {
+                Err(HandleError::Full(self.cap))
+            } else {
+                Ok(())
+            }
         }
 
-        pub fn insert(&mut self, _kind: u32, _rep: u64) -> Result<RHandle, HandleError> {
-            Ok(RHandle(1))
+        /// A handle for REP of resource type KIND.
+        pub fn insert(&mut self, kind: u32, rep: u64) -> Result<RHandle, HandleError> {
+            self.has_room()?;
+            let index = match self.free.pop() {
+                Some(i) => i,
+                None => {
+                    let i = u32::try_from(self.slots.len()).map_err(|_| HandleError::Full(self.cap))?;
+                    self.slots.push(Slot {
+                        generation: self.first_generation,
+                        entry: None,
+                        spent: false,
+                    });
+                    i
+                }
+            };
+            let slot = &mut self.slots[index as usize];
+            slot.entry = Some((kind, rep));
+            self.live += 1;
+            Ok(RHandle(u64::from(slot.generation) << 32 | u64::from(index)))
         }
 
-        pub fn get(&self, _h: RHandle, _kind: u32) -> Result<u64, HandleError> {
-            Ok(0)
+        fn slot_of(&self, h: RHandle, kind: u32) -> Result<(usize, u64), HandleError> {
+            let index = h.index() as usize;
+            let slot = self.slots.get(index).ok_or(HandleError::Stale)?;
+            match slot.entry {
+                Some((k, rep)) if slot.generation == h.generation() => {
+                    if k == kind {
+                        Ok((index, rep))
+                    } else {
+                        Err(HandleError::WrongKind)
+                    }
+                }
+                _ => Err(HandleError::Stale),
+            }
         }
 
-        pub fn remove(&mut self, _h: RHandle, _kind: u32) -> Result<u64, HandleError> {
-            Ok(0)
+        /// The rep of H, if it is live and of resource type KIND.
+        pub fn get(&self, h: RHandle, kind: u32) -> Result<u64, HandleError> {
+            self.slot_of(h, kind).map(|(_, rep)| rep)
         }
 
+        /// Drop H: its rep, once; the handle is stale from now on.
+        pub fn remove(&mut self, h: RHandle, kind: u32) -> Result<u64, HandleError> {
+            let (index, rep) = self.slot_of(h, kind)?;
+            self.release(index);
+            Ok(rep)
+        }
+
+        fn release(&mut self, index: usize) {
+            let slot = &mut self.slots[index];
+            slot.entry = None;
+            self.live -= 1;
+            match slot.generation.checked_add(1) {
+                Some(next) => {
+                    slot.generation = next;
+                    self.free.push(index as u32);
+                }
+                None => slot.spent = true,
+            }
+        }
+
+        /// The live handle in slot INDEX (the rep a component's handle carries).
         pub fn at_index(&self, index: u32) -> Option<RHandle> {
-            Some(RHandle(u64::from(index)))
+            let slot = self.slots.get(index as usize)?;
+            slot.entry
+                .map(|_| RHandle(u64::from(slot.generation) << 32 | u64::from(index)))
         }
 
-        pub fn defer(&mut self, _kind: u32, _rep: u64) {}
+        /// A drop the editor could not be told of yet (its API was in use): kept until the next call.
+        pub fn defer(&mut self, kind: u32, rep: u64) {
+            self.deferred.push((kind, rep));
+        }
 
         pub fn take_deferred(&mut self) -> Vec<(u32, u64)> {
-            Vec::new()
+            std::mem::take(&mut self.deferred)
         }
 
+        /// Every live handle, dropped: (resource type, rep) of each, once. They are stale afterwards.
         pub fn drain(&mut self) -> Vec<(u32, u64)> {
-            Vec::new()
+            let mut out = Vec::new();
+            for index in 0..self.slots.len() {
+                if let Some(e) = self.slots[index].entry {
+                    out.push(e);
+                    self.release(index);
+                }
+            }
+            out
         }
+    }
+
+    fn table(hs: &std::sync::Mutex<HandleTable>) -> std::sync::MutexGuard<'_, HandleTable> {
+        saman::lock(hs)
+    }
+
+    /// A drop that the editor is told of, when the API is free: the handle table's drops deferred, taken.
+    pub fn deferred(hs: &std::sync::Mutex<HandleTable>) -> Vec<(u32, u64)> {
+        table(hs).take_deferred()
+    }
+
+    /// Every handle of the table, dropped (see [`HandleTable::drain`]).
+    pub fn drained(hs: &std::sync::Mutex<HandleTable>) -> Vec<(u32, u64)> {
+        table(hs).drain()
+    }
+
+    /// Hold back a drop for the next call.
+    pub fn defer(hs: &std::sync::Mutex<HandleTable>, kind: u32, rep: u64) {
+        table(hs).defer(kind, rep);
+    }
+
+    /// What a Luau state's resources share: the API, the caller and the table of the one extension in the state.
+    pub struct LuaInst<A, C> {
+        pub api: std::sync::Arc<std::sync::Mutex<A>>,
+        pub caller: std::sync::Arc<std::sync::RwLock<C>>,
+        pub hs: std::sync::Arc<std::sync::Mutex<HandleTable>>,
+        pub max: usize,
+    }
+
+    /// A handle is used only in the state it was made in: one of another extension is refused.
+    pub fn own<A: 'static, C: 'static>(
+        lua: &mlua::Lua,
+        inst: &std::sync::Arc<LuaInst<A, C>>,
+        ctx: &str,
+    ) -> mlua::Result<()> {
+        match lua.app_data_ref::<std::sync::Arc<LuaInst<A, C>>>() {
+            Some(mine) if std::sync::Arc::ptr_eq(&mine, inst) => Ok(()),
+            _ => Err(bad(ctx, "the handle belongs to another extension")),
+        }
+    }
+
+    pub fn lua_room(hs: &std::sync::Mutex<HandleTable>, ctx: &str) -> mlua::Result<()> {
+        table(hs).has_room().map_err(|e| bad(ctx, &e.to_string()))
+    }
+
+    pub fn lua_insert(
+        hs: &std::sync::Mutex<HandleTable>,
+        kind: u32,
+        rep: u64,
+        ctx: &str,
+    ) -> mlua::Result<RHandle> {
+        table(hs).insert(kind, rep).map_err(|e| bad(ctx, &e.to_string()))
+    }
+
+    pub fn lua_get(
+        hs: &std::sync::Mutex<HandleTable>,
+        h: RHandle,
+        kind: u32,
+        ctx: &str,
+    ) -> mlua::Result<u64> {
+        table(hs).get(h, kind).map_err(|e| bad(ctx, &e.to_string()))
+    }
+
+    /// Take H out of the table if it is there (a handle let go: there is no one to tell of a refusal).
+    pub fn forget(hs: &std::sync::Mutex<HandleTable>, h: RHandle, kind: u32) -> Option<u64> {
+        table(hs).remove(h, kind).ok()
+    }
+
+    pub fn lua_remove(
+        hs: &std::sync::Mutex<HandleTable>,
+        h: RHandle,
+        kind: u32,
+        ctx: &str,
+    ) -> mlua::Result<u64> {
+        table(hs).remove(h, kind).map_err(|e| bad(ctx, &e.to_string()))
+    }
+
+    fn wasm_err(ctx: &str, e: HandleError) -> wasmtime::Error {
+        wasmtime::Error::msg(format!("{ctx}: {e}"))
+    }
+
+    pub fn wasm_room(hs: &std::sync::Mutex<HandleTable>, ctx: &str) -> wasmtime::Result<()> {
+        table(hs).has_room().map_err(|e| wasm_err(ctx, e))
+    }
+
+    /// A component's handle carries the slot's index: the table finds the live handle there.
+    pub fn wasm_insert(
+        hs: &std::sync::Mutex<HandleTable>,
+        kind: u32,
+        rep: u64,
+        ctx: &str,
+    ) -> wasmtime::Result<u32> {
+        table(hs)
+            .insert(kind, rep)
+            .map(|h| h.index())
+            .map_err(|e| wasm_err(ctx, e))
+    }
+
+    pub fn wasm_get(
+        hs: &std::sync::Mutex<HandleTable>,
+        kind: u32,
+        index: u32,
+        ctx: &str,
+    ) -> wasmtime::Result<u64> {
+        let t = table(hs);
+        let h = t.at_index(index).ok_or_else(|| wasm_err(ctx, HandleError::Stale))?;
+        t.get(h, kind).map_err(|e| wasm_err(ctx, e))
+    }
+
+    pub fn wasm_remove(
+        hs: &std::sync::Mutex<HandleTable>,
+        kind: u32,
+        index: u32,
+        ctx: &str,
+    ) -> wasmtime::Result<u64> {
+        let mut t = table(hs);
+        let h = t.at_index(index).ok_or_else(|| wasm_err(ctx, HandleError::Stale))?;
+        t.remove(h, kind).map_err(|e| wasm_err(ctx, e))
     }
 }

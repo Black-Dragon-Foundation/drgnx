@@ -320,7 +320,7 @@ fn every_api_method_gets_the_caller() {
     );
     assert!(out.rust.contains("::f(__m, &__c"), "{}", out.rust);
     // the component host: `WasmApi` holds the cell, and a Host method passes the caller too
-    assert!(out.rust.contains("pub struct WasmApi<A>(pub std::sync::Arc<std::sync::Mutex<A>>, pub std::sync::Arc<std::sync::RwLock<crate::C>>, pub usize)"), "{}", out.rust);
+    assert!(out.rust.contains("pub struct WasmApi<A>(pub std::sync::Arc<std::sync::Mutex<A>>, pub std::sync::Arc<std::sync::RwLock<crate::C>>, pub usize, pub std::sync::Arc<std::sync::Mutex<rt::HandleTable>>)"), "{}", out.rust);
     assert!(
         out.rust.contains("let __c = rt::caller(&self.1);"),
         "{}",
@@ -358,7 +358,7 @@ world w { import i; }
         "rt::check_len(",
         "rt::len_ok(",
         "max_list: usize",
-        ", pub usize);",
+        ", pub usize, pub std::sync::Arc<",
         "__lt.set(",
     ] {
         assert!(out.rust.contains(want), "`{want}` missing:\n{}", out.rust);
@@ -463,4 +463,134 @@ world w { import b; }
     );
     parses(&out);
     assert!(out.rust.contains("pub enum K"), "{}", out.rust);
+}
+
+// resource types: a constructor and methods; the handle is held by the host, never passed by value
+
+const RESOURCE: &str = "package acme:thing@1.0.0;
+interface i {
+  enum oops { big }
+  resource buf {
+    constructor(size: u32);
+    read: func(at: u32, n: u32) -> result<string, oops>;
+    len: func() -> u32;
+  }
+  resource view {
+    constructor();
+  }
+}
+world w { import i; }
+";
+
+#[test]
+fn a_resource_generates_its_api_its_userdata_and_its_host_impls() {
+    let out = must(RESOURCE);
+    parses(&out);
+    for want in [
+        // the editor's side: a constructor that returns its rep, methods that get it, and the notice of a drop
+        "fn buf_new(&mut self, __caller: &crate::C, size: u32) -> u64;",
+        "fn buf_read(&mut self, __caller: &crate::C, __rep: u64, at: u32, n: u32) -> Result<String, crate::g::acme_thing_v1_0_0::i::Oops>;",
+        "fn buf_len(&mut self, __caller: &crate::C, __rep: u64) -> u32;",
+        "fn buf_dropped(&mut self, __caller: &crate::C, __rep: u64);",
+        "fn view_dropped(&mut self, __caller: &crate::C, __rep: u64);",
+        // Luau: the constructor in the interface's table, the userdata with its methods and `drop`
+        "pub struct BufRef<A: AllApi + 'static>",
+        "impl<A: AllApi + 'static> mlua::UserData for BufRef<A>",
+        "__m.add_method(\"read\"",
+        "__m.add_method(\"drop\"",
+        "__rt.set(\"new\"",
+        // the component host: bindgen's resource trait on `WasmApi`, the handle in the table, dropped through it
+        "::HostBuf for WasmApi<A>",
+        "rt::wasm_insert(&self.3, 0,",
+        "rt::wasm_insert(&self.3, 1,",
+        "rt::wasm_get(&self.3, 0,",
+        "rt::wasm_remove(&self.3, 0,",
+        // the unload that drains, with a notice per type
+        "pub fn drain_handles<A: Api>(",
+        "0 => crate::g::acme_thing_v1_0_0::i::Api::buf_dropped(__a, __c, __rep),",
+        "1 => crate::g::acme_thing_v1_0_0::i::Api::view_dropped(__a, __c, __rep),",
+    ] {
+        assert!(out.rust.contains(want), "`{want}` missing:\n{}", out.rust);
+    }
+    assert!(
+        out.bound.contains(&"i.buf.new".to_string()),
+        "{:?}",
+        out.bound
+    );
+    assert!(
+        out.bound.contains(&"i.buf.read".to_string()),
+        "{:?}",
+        out.bound
+    );
+    // a list given to a method is checked against the limit in both hosts
+    let lists = must(&RESOURCE.replace("len: func() -> u32;", "put: func(xs: list<u8>);"));
+    parses(&lists);
+    assert!(
+        lists.rust.contains("rt::len_ok(xs.len(), self.2"),
+        "{}",
+        lists.rust
+    );
+}
+
+#[test]
+fn a_world_without_resources_generates_no_handle_code_but_the_table() {
+    let out = must(BASIC);
+    parses(&out);
+    assert!(!out.rust.contains("mlua::UserData"), "{}", out.rust);
+    assert!(!out.rust.contains("AllApi"), "{}", out.rust);
+    // the table is what every host keeps, so the unload is always there
+    assert!(
+        out.rust.contains("pub fn drain_handles<A: Api>("),
+        "{}",
+        out.rust
+    );
+}
+
+#[test]
+fn what_a_resource_cannot_be_is_refused_with_the_wit_name() {
+    let cases = [
+        (
+            "resource r { constructor(); make: static func() -> r; }",
+            "acme:thing@1.0.0/i.[static]r.make: a resource's static function is not supported",
+        ),
+        (
+            "resource r { len: func() -> u32; }",
+            "acme:thing@1.0.0/i: the resource `r` has no constructor",
+        ),
+        (
+            "resource r { constructor(); }\n  f: func(x: borrow<r>);",
+            "acme:thing@1.0.0/i.f, parameter `x`: a handle is not supported",
+        ),
+        (
+            "resource r { constructor(); }\n  f: func() -> r;",
+            "acme:thing@1.0.0/i.f, result: a handle is not supported",
+        ),
+        (
+            "resource r { constructor(); other: func() -> r; }",
+            "acme:thing@1.0.0/i.[method]r.other, result: a handle is not supported",
+        ),
+    ];
+    for (body, named) in cases {
+        let wit = format!(
+            "package acme:thing@1.0.0;\ninterface i {{\n  {body}\n}}\nworld w {{ import i; }}\n"
+        );
+        match gen_wit(&wit) {
+            Ok(_) => panic!("{body} must be refused"),
+            Err(e) => assert!(
+                e.to_string().contains(named),
+                "{body}: the error `{e}` does not name `{named}`"
+            ),
+        }
+    }
+    // a resource of an exported interface is the guest's own, which is not supported
+    let e = gen_wit(
+        "package acme:thing@1.0.0;\ninterface e { resource r { constructor(); } }\nworld w { export e; }\n",
+    )
+    .map(|_| ())
+    .expect_err("an exported resource");
+    assert!(
+        e.to_string()
+            .contains("acme:thing@1.0.0/e: the resource `r` is in an exported interface"),
+        "{e}"
+    );
 }

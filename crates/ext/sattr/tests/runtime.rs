@@ -15,6 +15,7 @@ use common::{LIMITS, editor, user};
 use sattr::editor::Editor;
 use sattr::generated::WasmApi;
 use sattr::generated::drgnx_api_v0_1_0::entry::AnsweredHow;
+use sattr::generated::rt::HandleTable;
 use sattr::luau::LuauHost;
 use sattr::wasm::bindings::drgnx::api::{
     ask::Host as AskHost,
@@ -38,6 +39,7 @@ fn wasm_api(api: &Arc<Mutex<Editor>>, extension: &str, origin: Origin) -> WasmAp
             origin,
         })),
         LIMITS.max_list,
+        Arc::new(Mutex::new(HandleTable::new(LIMITS.handles))),
     )
 }
 

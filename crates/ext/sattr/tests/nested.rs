@@ -66,7 +66,8 @@ fn lua(max: usize) -> (mlua::Lua, Arc<Mutex<Fake>>) {
     let lua = mlua::Lua::new();
     let api = Arc::new(Mutex::new(Fake::default()));
     let caller = Arc::new(RwLock::new(C));
-    g::install_luau(&lua, &api, &caller, max).expect("installs");
+    let handles = Arc::new(Mutex::new(g::rt::HandleTable::new(16)));
+    g::install_luau(&lua, &api, &caller, &handles, max).expect("installs");
     (lua, api)
 }
 
@@ -173,7 +174,12 @@ fn the_component_host_checks_nested_lists_a_guest_sends() {
         Host, Kind as WKind, Point as WPoint, Row as WRow, Span as WSpan, Table as WTable,
     };
     let api = Arc::new(Mutex::new(Fake::default()));
-    let mut w = g::WasmApi(api.clone(), Arc::new(RwLock::new(C)), 2);
+    let mut w = g::WasmApi(
+        api.clone(),
+        Arc::new(RwLock::new(C)),
+        2,
+        Arc::new(Mutex::new(g::rt::HandleTable::new(16))),
+    );
     let wrow = |tags: usize| WRow {
         name: "r".into(),
         tags: (0..tags).map(|i| i.to_string()).collect(),
@@ -285,7 +291,12 @@ fn an_exported_list_of_lists_is_checked_both_ways() {
 fn the_component_host_converts_and_bounds_a_guest_list_of_lists() {
     use b::acme::nest::i::Host;
     let api = Arc::new(Mutex::new(Fake::default()));
-    let mut w = g::WasmApi(api, Arc::new(RwLock::new(C)), 4);
+    let mut w = g::WasmApi(
+        api,
+        Arc::new(RwLock::new(C)),
+        4,
+        Arc::new(Mutex::new(g::rt::HandleTable::new(16))),
+    );
     assert_eq!(
         Host::grid(&mut w, vec![vec![1, 2], vec![3]]).expect("within the limit"),
         vec![vec![1, 2], vec![3]]
@@ -300,7 +311,12 @@ fn the_component_host_converts_and_bounds_a_guest_list_of_lists() {
 fn a_list_of_lists_of_records_converts_in_both_hosts() {
     use b::acme::nest::i::{Host, Kind as WKind, Point as WPoint, Row as WRow, Span as WSpan};
     let api = Arc::new(Mutex::new(Fake::default()));
-    let mut w = g::WasmApi(api.clone(), Arc::new(RwLock::new(C)), 8);
+    let mut w = g::WasmApi(
+        api.clone(),
+        Arc::new(RwLock::new(C)),
+        8,
+        Arc::new(Mutex::new(g::rt::HandleTable::new(16))),
+    );
     let wrow = WRow {
         name: "r".into(),
         tags: vec!["t".into()],
