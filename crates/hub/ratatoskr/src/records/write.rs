@@ -1010,4 +1010,59 @@ mod tests {
             "the hand edit stays: {text}"
         );
     }
+    /// A task of a plan file the import adopted is set done through `plans/write`: its status and its ticks in the file.
+    #[tokio::test]
+    async fn an_imported_plans_task_is_set_done_through_plans_write() {
+        let f = fix();
+        let user = user(&f);
+        let rel = "docs/plans/drgnx/doors.md";
+        let p = f.root.join(rel);
+        std::fs::write(
+            &p,
+            "# Doors plan\n\n### Task 1: first\n\n- [ ] a\n- [ ] b\n\n### Task 2: second\n\n- [ ] c\n",
+        )
+        .unwrap();
+        f.import(None, false).await;
+        let plan: String =
+            f.db.read(|c| {
+                Ok(c.query_row(
+                    "select id from entity where kind = 'plan' and title = 'Doors plan' and retired_tx is null",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        let change: WriteParams = serde_json::from_value(json!({"plan": plan, "tasks": [
+            {"number": "1", "status": "done",
+             "steps": [{"done": true, "text": "a"}, {"done": true, "text": "b"}]}]}))
+        .unwrap();
+        crate::runner::effects::write_plan_as(&f.db, &user.meta, &change, &user.scope)
+            .await
+            .unwrap();
+        f.sync(&p).await;
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            text.contains("- [x] a") && text.contains("- [x] b"),
+            "{text}"
+        );
+        assert!(text.contains("- [ ] c"), "task 2 is untouched: {text}");
+        let status = |n: &'static str| {
+            let db = f.db.clone();
+            async move {
+                db.read(move |c| {
+                    Ok(c.query_row(
+                        "select status from entity where kind = 'task' and retired_tx is null \
+                         and json_extract(data, '$.number') = ?1 and json_extract(data, '$.records.file') like '%/doors.md'",
+                        [n],
+                        |r| r.get::<_, String>(0),
+                    )?)
+                })
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(status("1").await, "done");
+        assert_ne!(status("2").await, "done");
+    }
 }

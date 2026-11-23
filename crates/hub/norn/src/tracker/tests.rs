@@ -424,6 +424,48 @@ fn parsed_and_board_are_refused() {
 }
 
 #[test]
+fn a_task_of_an_imported_plan_file_changes_only_through_plans_write() {
+    let mut fx = Fx::new();
+    let pa = fx.a;
+    let import = TxMeta::new("hub", Class::System, "records");
+    fx.write(import, |tx| {
+        entity::create(
+            tx,
+            EntityNew {
+                id: "task:aa-00001".into(),
+                kind: "task".into(),
+                project: Some(pa),
+                title: Some("1 first".into()),
+                status: Some("open".into()),
+                body: None,
+                priority: None,
+                assignee: None,
+                data: json!({"number": "1", "records": {"file": "/w/alpha/docs/plans/x/p.md"}}),
+                origin: Origin::Imported,
+                source: Some("records:/w/alpha/docs/plans/x/p.md".into()),
+            },
+        )
+    });
+    // the user too: the file's view would put the old status back
+    let t = no(fx.run(
+        &fx.user(pa),
+        TaskOp::Update {
+            id: "task:aa-00001".into(),
+            ver: 1,
+            title: None,
+            body: None,
+            priority: None,
+            acceptance: None,
+            status: Some("done".into()),
+        },
+    ));
+    assert!(
+        t.starts_with("this comes from /w/alpha/docs/plans/x/p.md"),
+        "{t}"
+    );
+}
+
+#[test]
 fn job_tasks_are_refused() {
     let mut fx = Fx::new();
     let a = fx.agent("s1");

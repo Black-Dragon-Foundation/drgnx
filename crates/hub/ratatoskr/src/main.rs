@@ -87,6 +87,7 @@ fn main() -> ExitCode {
         Command::Graph(g) => return code(ratatoskr::graph_cli::run(&Env::process(), g)),
         // The same: one call to the running hub.
         Command::Outside(o) => return code(ratatoskr::outside_cli::run(&Env::process(), o)),
+        Command::Door(d) => return code(ratatoskr::door_cli::run(&Env::process(), d)),
         // Its own current-thread runtime for the download; never started but by this command.
         Command::Browser(b) => return code(ratatoskr::browser::run(&Env::process(), b)),
         // No runtime either: the job commands are one call each to the running hub.
