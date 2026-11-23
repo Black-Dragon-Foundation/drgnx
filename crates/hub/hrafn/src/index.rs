@@ -1,11 +1,11 @@
 //! The index: tier 1 (chunks, FTS rows and symbols, rebuilt for the files whose blob changed) and the store side of
-//! tier 2 (which content keys a model still lacks, their vectors, and the keys kept for a branch switch back).
+//! tier 2 (which content keys a fingerprint's cache still lacks, and the store's live key set, reported to the cache).
 //!
-//! Vectors are keyed by content ([`crate::chunk_key`]), so a file that comes back to an earlier content finds its
-//! vectors still there. Each vector row's `last_used` is a logical clock (one more than the store's highest), moved
-//! on write and whenever tier 1 writes a chunk that refers to the key; unreferenced keys are kept up to twice the live
-//! set, the least recently referenced going first. A path has a vector too ([`crate::path_key`], `vec.kind` 1): tier 1
-//! keeps the base's `path_key` rows with its file rows, so a move embeds the new path's key and no chunk.
+//! Vectors are keyed by content ([`crate::chunk_key`]) and live in the machine-wide cache ([`VectorCache`], one file per
+//! fingerprint), so a file that comes back to an earlier content, or another repo with the same text, finds its vector
+//! there; the store keeps keys only. A path has a vector too ([`crate::path_key`], the cache's `path_vec`): tier 1
+//! keeps the base's `path_key` rows with its file rows, so a move embeds the new path's key and no chunk. After a
+//! refresh the hub reports the store's live key set to each cache ([`hold`]), which keeps it from the collection.
 
 use crate::cache::VectorCache;
 use crate::chunk::{BUDGET, CHUNKER_VERSION, PARSE_VERSION, chunk_file_refs, embed_text_and_key};
@@ -75,32 +75,20 @@ pub(crate) fn known_blobs(c: &Connection) -> urdr::Result<HashMap<String, String
     Ok(rows)
 }
 
-fn next_used(c: &Connection) -> urdr::Result<i64> {
-    Ok(
-        c.query_row("select coalesce(max(last_used), 0) + 1 from vec", [], |r| {
-            r.get(0)
-        })?,
-    )
-}
-
 fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-fn count(c: &Connection, sql: &str, model: &str) -> urdr::Result<u32> {
-    let n: i64 = c.query_row(sql, [model], |r| r.get(0))?;
-    Ok(u32::try_from(n).unwrap_or(u32::MAX))
-}
-
+/// The distinct embeddable chunk keys the attached cache (`vc`) has no vector for.
 const MISSING_KEYS: &str =
     "select count(distinct c.key) from chunk c where c.embed = 1 and not exists
-     (select 1 from vec v where v.model = ?1 and v.kind = 0 and v.key = c.key)";
+     (select 1 from vc.chunk_vec v where v.key = c.key)";
 
 /// The base's `path_key` rows made the set its file rows name: each path whose content wants vectors (`generated = 0`,
 /// which a `no-embed` rule sets too) and each of its directories (`dir/`). A path's key is made once, when its row
-/// comes; a path vector already stored for it is marked used, so `collect` keeps it.
+/// comes; the cache learns of it at the next [`hold`].
 fn sync_path_keys(c: &Connection) -> urdr::Result<()> {
     let mut want: HashSet<String> = HashSet::new();
     {
@@ -125,13 +113,9 @@ fn sync_path_keys(c: &Connection) -> urdr::Result<()> {
     for p in have.difference(&want) {
         delete.execute([p])?;
     }
-    let used = next_used(c)?;
     let mut insert = c.prepare("insert into path_key(path, key) values (?1, ?2)")?;
-    let mut touch = c.prepare("update vec set last_used = ?1 where kind = 1 and key = ?2")?;
     for p in want.difference(&have) {
-        let key = path_key(p);
-        insert.execute(params![p, key.as_slice()])?;
-        touch.execute(params![used, key.as_slice()])?;
+        insert.execute(params![p, path_key(p).as_slice()])?;
     }
     Ok(())
 }
@@ -233,8 +217,8 @@ pub fn built_refs(l: &Listed, bytes: &[u8]) -> (Vec<ChunkIn>, Vec<SymbolIn>, Vec
 
 /// Tier 1: rows rebuilt only for the files of `listed` whose blob changed (all of them after a chunker change), and
 /// dropped for the files no longer listed; one transaction per batch of files. `read` gives a listed file's bytes
-/// (the hub's reads go through `eitri`); a file that cannot be read any more is dropped like a gone one. `models` are
-/// the `(model, dims)` that tier 2 fills, for `keys_missing`.
+/// (the hub's reads go through `eitri`); a file that cannot be read any more is dropped like a gone one. `caches` are
+/// those of the fingerprints tier 2 fills, for `keys_missing`.
 ///
 /// Every write is by content: a file's base row is replaced, its `(path, blob)` is chunked only when no row (a
 /// worktree's) has its content already, and the pair the row named before is swept only when no worktree still names
@@ -408,13 +392,20 @@ async fn refresh_files(
             .await?;
         store.meta_set(META_LANGS, &stamp).await?;
     }
-    if !caches.is_empty() {
-        unimplemented!("keys missing from the cache")
+    for cache in caches {
+        let n: i64 = store
+            .attach_cache(cache.path(), |c| {
+                Ok(c.query_row(MISSING_KEYS, [], |r| r.get(0))?)
+            })
+            .await?;
+        out.keys_missing = out
+            .keys_missing
+            .saturating_add(u32::try_from(n).unwrap_or(u32::MAX));
     }
     Ok(out)
 }
 
-/// Up to `limit` keys MODEL lacks, with the text to embed: [`missing_with`], with directories when
+/// Up to `limit` keys CACHE lacks, with the text to embed: [`missing_with`], with directories when
 /// [`crate::query::DIR_WEIGHT`] gives them a part in the score.
 pub async fn missing(
     store: &CodeStore,
@@ -432,15 +423,45 @@ pub async fn hold(
     root: &std::path::Path,
     now: i64,
 ) -> Result<(), StoreError> {
-    unimplemented!(
-        "{} {} {} {now}",
-        store.holder_id(),
-        cache.fp_hex(),
-        root.display()
-    )
+    let id = store.holder_id();
+    let held_of = id.clone();
+    let sets = store
+        .attach_cache(cache.path(), move |c| {
+            let keys = |sql: &str, p: &[&dyn rusqlite::ToSql]| -> urdr::Result<HashSet<[u8; 32]>> {
+                let mut st = c.prepare(sql)?;
+                let rows = st.query_map(p, |r| r.get::<_, Vec<u8>>(0))?;
+                let mut out = HashSet::new();
+                for k in rows {
+                    if let Ok(k) = <[u8; 32]>::try_from(k?.as_slice()) {
+                        out.insert(k);
+                    }
+                }
+                Ok(out)
+            };
+            let held = "select key from vc.held where holder = ?1 and kind = ?2";
+            Ok([
+                (
+                    KeyKind::Chunk,
+                    keys("select distinct key from chunk where embed = 1", &[])?,
+                    keys(held, &[&held_of, &KeyKind::Chunk.as_i64()])?,
+                ),
+                (
+                    KeyKind::Path,
+                    keys("select key from path_key", &[])?,
+                    keys(held, &[&held_of, &KeyKind::Path.as_i64()])?,
+                ),
+            ])
+        })
+        .await?;
+    for (kind, live, held) in sets {
+        let added: Vec<[u8; 32]> = live.difference(&held).copied().collect();
+        let removed: Vec<[u8; 32]> = held.difference(&live).copied().collect();
+        cache.hold(&id, root, kind, &added, &removed, now).await?;
+    }
+    Ok(())
 }
 
-/// Up to `limit` keys MODEL lacks, with the text to embed: the chunk keys in chunk order, each file's path key after its
+/// Up to `limit` keys CACHE lacks, with the text to embed: the chunk keys in chunk order, each file's path key after its
 /// chunks' (and, with DIRS, its directories' keys after it), then the path keys of files whose chunks have vectors.
 pub async fn missing_with(
     store: &CodeStore,
@@ -448,22 +469,17 @@ pub async fn missing_with(
     limit: u32,
     dirs: bool,
 ) -> Result<Vec<(KeyKind, [u8; 32], String)>, StoreError> {
-    let model = cache.fp_hex().to_string();
-    if !model.is_empty() {
-        unimplemented!("keys the cache lacks");
-    }
     let limit = limit as usize;
-    Ok(store
-        .handle()
-        .read(move |c| {
+    store
+        .attach_cache(cache.path(), move |c| {
             let mut q = c.prepare(
                 "select c.key, c.embed_text, c.path from chunk c
                  where c.id in (select min(id) from chunk where embed = 1 group by key)
-                   and not exists (select 1 from vec v where v.model = ?1 and v.kind = 0 and v.key = c.key)
-                 order by c.id limit ?2",
+                   and not exists (select 1 from vc.chunk_vec v where v.key = c.key)
+                 order by c.id limit ?1",
             )?;
             let chunks = q
-                .query_map(params![model, limit as i64], |r| {
+                .query_map(params![limit as i64], |r| {
                     Ok((
                         r.get::<_, Vec<u8>>(0)?,
                         r.get::<_, String>(1)?,
@@ -472,12 +488,12 @@ pub async fn missing_with(
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
             let mut lacks = c.prepare(
-                "select p.key from path_key p where p.path = ?2
-                   and not exists (select 1 from vec v where v.model = ?1 and v.kind = 1 and v.key = p.key)",
+                "select p.key from path_key p where p.path = ?1
+                   and not exists (select 1 from vc.path_vec v where v.key = p.key)",
             )?;
             let mut out: Vec<(KeyKind, [u8; 32], String)> = Vec::new();
             let mut offered: HashSet<String> = HashSet::new();
-            // PATH's key, and with DIRS its directories', when MODEL lacks them
+            // PATH's key, and with DIRS its directories', when the cache lacks them
             let mut path_rows = |path: &str,
                                  out: &mut Vec<(KeyKind, [u8; 32], String)>|
              -> urdr::Result<()> {
@@ -489,9 +505,7 @@ pub async fn missing_with(
                     if out.len() >= limit || !offered.insert(p.clone()) {
                         continue;
                     }
-                    let key: Option<Vec<u8>> = lacks
-                        .query_row(params![model, p], |r| r.get(0))
-                        .optional()?;
+                    let key: Option<Vec<u8>> = lacks.query_row([&p], |r| r.get(0)).optional()?;
                     if let Some(k) = key.and_then(|k| <[u8; 32]>::try_from(k.as_slice()).ok()) {
                         let text = path_text(&p);
                         out.push((KeyKind::Path, k, text));
@@ -515,11 +529,11 @@ pub async fn missing_with(
                 // the path keys of files whose chunks are embedded (a move, a copy, a file without chunks)
                 let mut rest = c.prepare(
                     "select p.path, p.key from path_key p
-                     where (?2 or substr(p.path, -1) != '/')
-                       and not exists (select 1 from vec v where v.model = ?1 and v.kind = 1 and v.key = p.key)
+                     where (?1 or substr(p.path, -1) != '/')
+                       and not exists (select 1 from vc.path_vec v where v.key = p.key)
                      order by p.path",
                 )?;
-                let rows = rest.query_map(params![model, dirs], |r| {
+                let rows = rest.query_map(params![dirs], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
                 })?;
                 for row in rows {
@@ -538,92 +552,12 @@ pub async fn missing_with(
             }
             Ok(out)
         })
-        .await?)
-}
-
-/// MODEL's vectors for content keys. Each is stored quantized (`urdr::graph::search::vec::quantize`): `vec` holds the
-/// sign bits (`dims / 8` bytes, rounded up) and then the int8 values, `scale` their scale, and `bits` is 8.
-/// MODEL is the fingerprint's hex and DIMS its dims: a row of another length is an error, and nothing of the batch is
-/// written. KIND says what the keys are of: chunk texts or paths.
-pub async fn put_vectors(
-    store: &CodeStore,
-    model: &str,
-    dims: u32,
-    kind: KeyKind,
-    rows: &[([u8; 32], Vec<f32>)],
-) -> Result<(), StoreError> {
-    if let Some((_, v)) = rows.iter().find(|(_, v)| v.len() != dims as usize) {
-        return Err(StoreError::Io(io::Error::other(format!(
-            "a vector of {} dims, the fingerprint says {dims}",
-            v.len()
-        ))));
-    }
-    let model = model.to_string();
-    let rows: Vec<_> = rows
-        .iter()
-        .map(|(key, v)| {
-            let (bits, ints, scale) = urdr::graph::search::vec::quantize(v);
-            let mut blob = bits;
-            blob.extend(ints.iter().map(|&i| i as u8));
-            (*key, v.len() as u32, blob, scale)
-        })
-        .collect();
-    Ok(store
-        .handle()
-        .write(move |c| {
-            let used = next_used(c)?;
-            for (key, dims, blob, scale) in &rows {
-                c.execute(
-                    "insert or replace into vec(model, kind, dims, key, bits, vec, scale, last_used)
-                     values (?1, ?2, ?3, ?4, 8, ?5, ?6, ?7)",
-                    params![model, kind.as_i64(), dims, key.as_slice(), blob, scale, used],
-                )?;
-            }
-            Ok(())
-        })
-        .await?)
-}
-
-/// Drops MODEL's unreferenced keys beyond twice the live set, least recently referenced first, each kind on its own
-/// (a chunk key is live while a chunk names it, a path key while `path_key` does). How many went.
-pub async fn collect(store: &CodeStore, model: &str) -> Result<u32, StoreError> {
-    let model = model.to_string();
-    Ok(store
-        .handle()
-        .write(move |c| {
-            let mut n = 0;
-            for (kind, live, named) in [
-                (
-                    KeyKind::Chunk,
-                    "select count(distinct key) from chunk where embed = 1",
-                    "select 1 from chunk c where c.key = v.key",
-                ),
-                (
-                    KeyKind::Path,
-                    "select count(*) from path_key",
-                    "select 1 from path_key p where p.key = v.key",
-                ),
-            ] {
-                let live: i64 = c.query_row(live, [], |r| r.get(0))?;
-                n += c.execute(
-                    &format!(
-                        "delete from vec where model = ?1 and kind = ?3 and key in (
-                           select v.key from vec v
-                           where v.model = ?1 and v.kind = ?3 and not exists ({named})
-                           order by v.last_used desc limit -1 offset ?2)"
-                    ),
-                    params![model, live * 2, kind.as_i64()],
-                )?;
-            }
-            Ok(u32::try_from(n).unwrap_or(u32::MAX))
-        })
-        .await?)
+        .await
 }
 
 /// One batch of base writes in one transaction, each with its transition of every tree first (so the old content a
 /// tree now names is not swept). The paths whose content was to be reused but is gone: nothing was written for them.
 fn write_base(c: &Connection, pending: &[Pending], rebuild: bool) -> urdr::Result<Vec<String>> {
-    let used = next_used(c)?;
     let mut missed = Vec::new();
     for p in pending {
         match p {
@@ -645,12 +579,6 @@ fn write_base(c: &Connection, pending: &[Pending], rebuild: bool) -> urdr::Resul
                     Some((&b.chunks, &b.symbols, &b.refs)),
                     rebuild || b.force,
                 )?;
-                for ch in &b.chunks {
-                    c.execute(
-                        "update vec set last_used = ?1 where kind = 0 and key = ?2",
-                        params![used, ch.key.as_slice()],
-                    )?;
-                }
             }
         }
     }
@@ -695,50 +623,52 @@ pub async fn reset(store: &CodeStore) -> Result<(), StoreError> {
 
 /// The queries `lag` asks on every answer: one pass over the chunks that is a pass over an index (the chunk rows hold
 /// their text, so a scan of the table reads the whole store: 100 ms of every query at 50,000 chunks). They count the
-/// base's content only (a chunk the base's row of its path names), probing `file` by its key per chunk.
+/// base's content only (a chunk the base's row of its path names), probing `file` by its key per chunk, and the
+/// attached cache's `chunk_vec` by its key.
 pub const LAG_TOTAL_SQL: &str = "select count(*) from chunk c where c.embed = 1
      and exists (select 1 from file f where f.tree = 0 and f.path = c.path and f.blob = c.blob)";
 pub const LAG_BEHIND_SQL: &str = "select count(*) from chunk c where c.embed = 1
      and exists (select 1 from file f where f.tree = 0 and f.path = c.path and f.blob = c.blob)
-     and not exists (select 1 from vec v where v.model = ?1 and v.kind = 0 and v.key = c.key)";
+     and not exists (select 1 from vc.chunk_vec v where v.key = c.key)";
 pub const LAG_FILES_SQL: &str = "select count(distinct c.path) from chunk c where c.embed = 1
      and exists (select 1 from file f where f.tree = 0 and f.path = c.path and f.blob = c.blob)
-     and not exists (select 1 from vec v where v.model = ?1 and v.kind = 0 and v.key = c.key)";
-/// A worktree view's lag as the base's plus a delta over the tree's rows only (?2 the tree, ?1 the model): its rows'
-/// chunks are added and the base chunks of the paths it shadows taken away. The columns are the delta of the total,
-/// of the chunks behind and of the files behind; then the tree's row count.
+     and not exists (select 1 from vc.chunk_vec v where v.key = c.key)";
+/// A worktree view's lag as the base's plus a delta over the tree's rows only (?1 the tree; the vectors are the
+/// attached cache's): its rows' chunks are added and the base chunks of the paths it shadows taken away. The columns
+/// are the delta of the total, of the chunks behind and of the files behind; then the tree's row count.
 pub const LAG_TREE_SQL: &str = "select coalesce(sum(n.sign * n.total), 0), coalesce(sum(n.sign * n.behind), 0),
        coalesce(sum(n.sign * (n.behind > 0)), 0),
-       (select count(*) from file where tree = ?2)
+       (select count(*) from file where tree = ?1)
      from (
        select 1 as sign,
          (select count(*) from chunk c where c.path = t.path and c.blob = t.blob and c.embed = 1) as total,
          (select count(*) from chunk c where c.path = t.path and c.blob = t.blob and c.embed = 1
-            and not exists (select 1 from vec v where v.model = ?1 and v.kind = 0 and v.key = c.key)) as behind
-       from file t where t.tree = ?2 and t.blob is not null
+            and not exists (select 1 from vc.chunk_vec v where v.key = c.key)) as behind
+       from file t where t.tree = ?1 and t.blob is not null
        union all
        select -1,
          (select count(*) from chunk c where c.path = b.path and c.blob = b.blob and c.embed = 1),
          (select count(*) from chunk c where c.path = b.path and c.blob = b.blob and c.embed = 1
-            and not exists (select 1 from vec v where v.model = ?1 and v.kind = 0 and v.key = c.key))
-       from file t join file b on b.tree = 0 and b.path = t.path where t.tree = ?2) n";
+            and not exists (select 1 from vc.chunk_vec v where v.key = c.key))
+       from file t join file b on b.tree = 0 and b.path = t.path where t.tree = ?1) n";
 
-/// How far behind VIEW's index is for MODEL (none: no model fills tier 2, so nothing is behind on vectors). A
-/// worktree's view is the base's lag plus the delta of its rows, both read through indexes. The counts are kept until
-/// the store changes (`memo.rs`): a query between two index writes counts nothing again.
+/// How far behind VIEW's index is for CACHE's fingerprint (none: no model fills tier 2, so nothing is behind on
+/// vectors). A worktree's view is the base's lag plus the delta of its rows, both read through indexes. The counts are
+/// kept until the store or the cache changes (`memo.rs`): a query between two writes counts nothing again.
 pub async fn lag(
     store: &CodeStore,
     cache: Option<&VectorCache>,
     view: View,
 ) -> Result<Lag, StoreError> {
     let model = cache.map(|c| c.fp_hex().to_string());
-    if model.is_some() {
-        unimplemented!("the lag against the cache");
-    }
     let memo = store.memo();
+    let (attached, path) = (store.attached(), cache.map(|c| c.path().to_path_buf()));
     Ok(store
         .handle()
         .read(move |c| {
+            if let Some(p) = &path {
+                crate::store::ensure_vc(c, &attached, p)?;
+            }
             let mut m = memo::lock(&memo);
             let m = m.at(c)?;
             let key = (model.clone(), view);
@@ -765,31 +695,40 @@ pub async fn lag(
         .await?)
 }
 
+/// The count SQL answers, as a `u32`.
+fn count(c: &Connection, sql: &str) -> urdr::Result<u32> {
+    let n: i64 = c.query_row(sql, [], |r| r.get(0))?;
+    Ok(u32::try_from(n).unwrap_or(u32::MAX))
+}
+
+/// With MODEL, its cache is attached as `vc`.
 fn lag_counts(c: &Connection, model: Option<&str>, view: View) -> urdr::Result<memo::Counts> {
     let (mut chunks_behind, mut files_behind) = match model {
         None => (0, 0),
-        Some(m) => {
-            let chunks = count(c, LAG_BEHIND_SQL, m)?;
+        Some(_) => {
+            let chunks = count(c, LAG_BEHIND_SQL)?;
             // the files are counted only when something is behind
             (
                 chunks,
                 if chunks == 0 {
                     0
                 } else {
-                    count(c, LAG_FILES_SQL, m)?
+                    count(c, LAG_FILES_SQL)?
                 },
             )
         }
     };
-    let total: i64 = c.query_row(LAG_TOTAL_SQL, [], |r| r.get(0))?;
-    let mut chunks_total = u32::try_from(total).unwrap_or(u32::MAX);
+    let mut chunks_total = count(c, LAG_TOTAL_SQL)?;
     let mut differing_files = None;
     if let View::Tree(t) = view {
-        let m = model.unwrap_or_default();
-        let (dt, db, df, rows): (i64, i64, i64, i64) =
-            c.query_row(LAG_TREE_SQL, params![m, t.0], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })?;
+        // with no model nothing is behind: the vectors are an empty table (no cache need be attached)
+        let sql = match model {
+            Some(_) => LAG_TREE_SQL.to_string(),
+            None => LAG_TREE_SQL.replace("vc.chunk_vec", "(select x'' as key where 0)"),
+        };
+        let (dt, db, df, rows): (i64, i64, i64, i64) = c.query_row(&sql, [t.0], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?;
         let add = |n: u32, d: i64| u32::try_from((i64::from(n) + d).max(0)).unwrap_or(u32::MAX);
         chunks_total = add(chunks_total, dt);
         if model.is_some() {
