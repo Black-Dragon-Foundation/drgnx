@@ -18,4 +18,4 @@ secrets.env
 
 # Rust build output (runtime/)
 target/
-crates/hub/fuzz/target/
+crates/hub/hrista/target/

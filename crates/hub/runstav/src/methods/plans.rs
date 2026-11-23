@@ -120,6 +120,9 @@ pub struct WriteParams {
     /// The version the writer read (`plans/get`): a later change to the same records refuses the write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_version: Option<u64>,
+    /// A new plan's view file, relative to the project root: `docs/plans/<repo>/<name>.md` (an agent's new plan needs it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<Bounded<String, 512>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -339,6 +342,9 @@ pub struct Effects {
 fn check_write(p: &WriteParams) -> Result<(), Error> {
     if p.plan.is_none() && (p.title.is_none() || p.project.is_none()) {
         return Err(invalid("title", "a new plan needs a title and a project"));
+    }
+    if p.plan.is_some() && p.path.is_some() {
+        return Err(invalid("path", "a plan that exists has its path already"));
     }
     Ok(())
 }

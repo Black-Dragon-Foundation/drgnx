@@ -1,0 +1,5 @@
+{"run": {"id": 171, "created_at": "2026-11-22T10:00:00Z", "head_sha": "bbbb"},
+ "jobs": [
+  {"id": 1711, "name": "Runtime / build (Fedora 45)", "conclusion": "success", "labels": ["ubuntu-24.04"], "started_at": "2026-11-22T10:01:00Z", "completed_at": "2026-11-22T10:15:00Z"},
+  {"id": 1712, "name": "CI gate", "conclusion": "success", "labels": ["ubuntu-24.04"], "started_at": "2026-11-22T10:19:30Z", "completed_at": "2026-11-22T10:20:00Z"}
+ ]}

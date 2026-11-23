@@ -771,12 +771,12 @@ pub fn fuzz_absolute_head(buf: &[u8]) -> Option<Vec<u8>> {
 /// One client: its head, the checks, the upstream, the splice.
 async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: Slot) {
     let mut buf = vec![0u8; sh.max_head];
-    let (head, len) =
-        match drgnx_clock::timeout(sh.head_timeout, read_head(&mut client, &mut buf)).await {
-            Ok(r) => r,
-            // too slow is refused like too large
-            Err(_) => (Head::TooLarge, 0),
-        };
+    let (head, len) = match stund::timeout(sh.head_timeout, read_head(&mut client, &mut buf)).await
+    {
+        Ok(r) => r,
+        // too slow is refused like too large
+        Err(_) => (Head::TooLarge, 0),
+    };
     let end = match head {
         Head::Done(end) => end,
         Head::Socks | Head::Gone => return,
@@ -908,7 +908,7 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
     }
     // both ways as they are; each side's EOF is passed on as a half-close
     let last = Arc::new(AtomicU64::new(0));
-    let began = drgnx_clock::now();
+    let began = stund::now();
     let mut client = Active::new(client, last.clone(), began);
     let mut upstream = Active::new(upstream, last.clone(), began);
     let copy = tokio::io::copy_bidirectional(&mut client, &mut upstream);
@@ -917,9 +917,9 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
         let idle_at = began + Duration::from_millis(last.load(Ordering::Relaxed)) + sh.idle_timeout;
         tokio::select! {
             _ = &mut copy => return,
-            () = drgnx_clock::sleep(idle_at.saturating_sub(drgnx_clock::now())) => {
+            () = stund::sleep(idle_at.saturating_sub(stund::now())) => {
                 // no byte since `idle_at - idle_timeout`: end it (the place goes back when this returns)
-                if drgnx_clock::now() >= began + Duration::from_millis(last.load(Ordering::Relaxed)) + sh.idle_timeout {
+                if stund::now() >= began + Duration::from_millis(last.load(Ordering::Relaxed)) + sh.idle_timeout {
                     return;
                 }
             }
@@ -927,7 +927,7 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
     }
 }
 
-/// A stream that notes, in `last` (milliseconds since `began`, on `drgnx_clock`'s reading), when a byte last moved through it.
+/// A stream that notes, in `last` (milliseconds since `began`, on `stund`'s reading), when a byte last moved through it.
 struct Active<T> {
     inner: T,
     last: Arc<AtomicU64>,
@@ -940,8 +940,8 @@ impl<T> Active<T> {
     }
 
     fn touch(&self) {
-        let ms = u64::try_from(drgnx_clock::now().saturating_sub(self.began).as_millis())
-            .unwrap_or(u64::MAX);
+        let ms =
+            u64::try_from(stund::now().saturating_sub(self.began).as_millis()).unwrap_or(u64::MAX);
         self.last.fetch_max(ms, Ordering::Relaxed);
     }
 }
@@ -1870,7 +1870,7 @@ mod tests {
     /// the timeout, and refused at it.
     #[tokio::test]
     async fn slow_head_is_refused_only_after_the_head_timeout() {
-        let clock = drgnx_clock::Manual::default();
+        let clock = stund::Manual::default();
         let _on = clock.on_this_thread();
         let cfg = ProxyConfig {
             head_timeout: Duration::from_millis(300),
@@ -1934,7 +1934,7 @@ mod tests {
     /// is open at 499 ms and ended at 500, and the busy one's bytes move its limit.
     #[tokio::test]
     async fn an_idle_tunnel_is_ended_and_an_active_one_is_not() {
-        let clock = drgnx_clock::Manual::default();
+        let clock = stund::Manual::default();
         let _on = clock.on_this_thread();
         let up = echo().await;
         let cfg = ProxyConfig {

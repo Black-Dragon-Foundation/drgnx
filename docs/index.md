@@ -28,9 +28,9 @@ One Cargo workspace:
 
 | Path | What it holds |
 |---|---|
-| `crates/core` | text and models: the row and patch format (`drgnx-rows`), the line model (`hlidskjalf`), the settings data reader (`huginn`) |
-| `crates/ui` | drawing and the native shell: the compositor library (`glitnir`), the Wayland and macOS shell (`nhshell`), the view model (`sja`), the workbench model (`smidja`), a recording test compositor (`recorder`) |
-| `crates/hub` | the hub (`drgnx-ratatoskr`) and its services: the sandbox (`gleipnir`), code search (`hrafn`), the model gateway (`bifrost`), the MCP server (`mimir`), the ACP client (`hermod`), the runners (`sleipnir`), storage (`urdr`), and the rest |
+| `crates/core` | text and models: the row and patch format (`rodd`), the line model (`hlidskjalf`), the settings data reader (`huginn`) |
+| `crates/ui` | drawing and the native shell: the compositor library (`glitnir`), the Wayland and macOS shell (`skel`), the view model (`sja`), the workbench model (`smidja`), a recording test compositor (`recorder`) |
+| `crates/hub` | the hub (`ratatoskr`) and its services: the sandbox (`gleipnir`), code search (`hrafn`), the model gateway (`bifrost`), the MCP server (`mimir`), the ACP client (`hermod`), the runners (`sleipnir`), storage (`urdr`), and the rest |
 | `crates/ext` | the extension API (WIT) and its hosts (to come) |
 | `crates/std` | the standards (to come) |
 | `app/` | the editor binary |
@@ -38,6 +38,9 @@ One Cargo workspace:
 
 Developer notes for the hub's crates are in [`develop/`](develop/runtime.md), carried over from the earlier drgnx;
 some of them still describe that version's Emacs side, and they are revised as the new editor replaces it.
+
+User guides: [agents outside drgnx](guide/outside-agents.md) (Claude Code, Codex… joining the work, and binding them
+to a role).
 
 ## Licences
 

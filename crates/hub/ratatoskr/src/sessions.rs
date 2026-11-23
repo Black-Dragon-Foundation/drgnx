@@ -1,0 +1,1873 @@
+//! MCP hosting (docs/develop/hub.md, "Sessions and their sockets"; design §5.8, K3): the coordination tools
+//! (`norn::tools`) on a socket per session, and on the main socket for an outside agent's bridge.
+//!
+//! - **The socket is the identity.** `mcp/session` mints `mcp.sock` in the session's directory
+//!   (`runstav::paths::session_dir`, Gleipnir 13b's: one directory per session, beside its agent `hub.sock` when it
+//!   has one). Whoever connects to it is that session's agent: [`Row::identity`], never a tool argument or an
+//!   environment variable.
+//! - **Its tools** (call 16): the tracker and graph tools (21 tools in all) unless the session's task
+//!   (`data.tracker_tools`) or else its profile (`tools.tracker` of `mcp/session`) turns them off (16); the profile
+//!   is the identity's too, for grants by `profile:NAME`.  Both are kept in the row.
+//! - **Recorded before bound** (design §3.3): the row is in `runtime.db` (`msession`) before the socket exists; a
+//!   bind that fails takes the row back.
+//! - **A connection:** the peer uid checked (as on every socket), at most [`MAX_CONNECTIONS`] at once (the next is
+//!   closed and logged), no challenge: the first byte is MCP (`mimir::serve`).
+//! - **Owners:** a session belongs to a pid and its start time.  It is closed when that process is gone (a zombie
+//!   counts as gone; a later process with the pid is another one) at each [`TICK`], and at start the rows of live
+//!   owners are bound again (a bridge redials the same path) and the others dropped with their directories.
+//! - **Closing:** the socket, the connections, the directory (unless the session's agent `hub.sock` is still in it,
+//!   which 13b's stop removes) and the row.  A stop unbinds the sockets and keeps the rows.
+//! - **The gateway's socket** (Task 22): `gateway/register` with a session's `sid` binds `gateway.sock` in its
+//!   directory (0600, once per session; [`Sessions::gateway_socket`]); it closes with the session, its tokens with it
+//!   ([`crate::gateway`]).
+//! - **Outside agents:** `mcp/attach` on the main socket ([`outside`]): `ext:KIND:PID-HASH` from the bridge's parent
+//!   process ([`crate::peer`]); the connection then carries MCP ([`Sessions::serve_outside`]).
+
+use crate::conn::peer_allowed;
+use crate::front::Front;
+use crate::hello::Session;
+use crate::peer;
+use mimir::{Limits, ServerInfo, Tool};
+use norn::tools::{Coord, Ctx, Identity};
+use runstav::methods::hub::McpStatus;
+use runstav::methods::mcp::{SessionAnswer, SessionParams};
+use runstav::paths::{self, Env};
+use runstav::wire::{Error, ErrorCode};
+use std::collections::{BTreeMap, BTreeSet};
+use std::io;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::UnixListener;
+use tokio_util::sync::CancellationToken;
+
+/// The connections one session socket serves at once.
+pub const MAX_CONNECTIONS: usize = 4;
+
+/// How often the owners are looked at.
+pub const TICK: Duration = Duration::from_secs(1);
+
+/// A minted session id: this many lowercase hex digits.
+const SID_HEX: usize = 12;
+
+/// The coordination tools, shared by every connection.
+pub type ToolList = Arc<[Box<dyn Tool<Ctx>>]>;
+
+/// A tool on a session's socket: before its call, the hub's `before-tool` hooks ([`norn::tools::Hub::before_tool`]:
+/// they may refuse it, or change its arguments, which its schema then checks again); once its call ends, the hub
+/// reads what it wrote ([`norn::tools::Hub::after_tool`]), then it answers.
+struct AfterTool(Box<dyn Tool<Ctx>>);
+
+impl Tool<Ctx> for AfterTool {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+    fn description(&self) -> &str {
+        self.0.description()
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        self.0.input_schema()
+    }
+    fn output_schema(&self) -> Option<serde_json::Value> {
+        self.0.output_schema()
+    }
+    fn check(&self, args: &serde_json::Value) -> Result<(), mimir::ArgsError> {
+        self.0.check(args)
+    }
+    fn call<'a>(
+        &'a self,
+        ctx: &'a Ctx,
+        args: serde_json::Value,
+    ) -> mimir::BoxFuture<'a, mimir::ToolResult> {
+        Box::pin(async move {
+            // while recording, the call as the agent made it goes into its session's stream (an outside agent's MCP
+            // calls never cross the ACP pipe), a call a hook refuses too: the replayer makes it again and the
+            // replayed hub's hooks decide again
+            let recorded = crate::recording::is_recording().then(|| args.clone());
+            let note = |r: &mimir::ToolResult| {
+                if let (Some(args), Identity::Session { sid, .. }) = (&recorded, &ctx.1) {
+                    crate::recording::mcp(sid, self.0.name(), args, r);
+                }
+            };
+            let mut args = args;
+            let stages = match &ctx.1 {
+                Identity::Session { sid, .. } => Some(crate::stages::Stages::new(
+                    "tool call",
+                    format!("{sid} {}", self.0.name()),
+                )),
+                _ => None,
+            };
+            let at = |stage| {
+                if let Some(s) = &stages {
+                    s.at(stage);
+                }
+            };
+            if let Identity::Session { sid, .. } = &ctx.1 {
+                let asked = args.clone();
+                match ctx
+                    .0
+                    .hub()
+                    .before_tool(sid, "drgnx", self.0.name(), args)
+                    .await
+                {
+                    Ok(a) => args = a,
+                    Err(text) => {
+                        let r = mimir::ToolResult::Err(text);
+                        note(&r);
+                        return r;
+                    }
+                }
+                if args != asked
+                    && let Err(e) = self.0.check(&args)
+                {
+                    let r = mimir::ToolResult::Err(format!(
+                        "drgnx refused {}: a hook's change does not fit its arguments: {e}",
+                        self.0.name()
+                    ));
+                    note(&r);
+                    return r;
+                }
+            }
+            at("the before-tool hooks");
+            let r = self.0.call(ctx, args).await;
+            at("the call");
+            note(&r);
+            if let Identity::Session { sid, .. } = &ctx.1 {
+                ctx.0.hub().after_tool(sid, self.0.name()).await;
+                at("its writes linked (after-tool)");
+            }
+            r
+        })
+    }
+}
+
+/// LIST, each tool behind [`AfterTool`].
+fn after_each(list: Vec<Box<dyn Tool<Ctx>>>) -> ToolList {
+    list.into_iter()
+        .map(|t| Box::new(AfterTool(t)) as Box<dyn Tool<Ctx>>)
+        .collect::<Vec<_>>()
+        .into()
+}
+
+/// A session as `runtime.db` keeps it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Row {
+    pub sid: String,
+    pub agent: String,
+    pub job: Option<String>,
+    pub task: Option<String>,
+    pub cwd: Option<String>,
+    pub owner: u32,
+    /// `draugr::start_time` of the owner when the session was minted.
+    pub owner_start: u64,
+    pub at: f64,
+    /// The drgnx profile the agent runs as (grants by `profile:NAME`).
+    pub profile: Option<String>,
+    /// The profile's tracker tools on or off (`None`: the profile says nothing).
+    pub tracker: Option<bool>,
+    /// The session also has a `search.sock` (the MCP `search` tool, pinned to its `cwd`).
+    pub search: bool,
+    /// The session started with enabled abilities and has a `plugins.sock`: the key of that plugin set
+    /// ([`crate::plugins::Plugins::set_key`]).
+    pub plugins: Option<String>,
+}
+
+impl Row {
+    /// Who the socket's tools act as.  A session minted without a `cwd` has `/`, which the report tools refuse as too
+    /// wide.
+    pub fn identity(&self) -> Identity {
+        Identity::Session {
+            agent: self.agent.clone(),
+            sid: self.sid.clone(),
+            profile: self.profile.clone(),
+            job: self.job.clone(),
+            task: self.task.clone(),
+            home: PathBuf::from(self.cwd.as_deref().unwrap_or("/")),
+        }
+    }
+
+    /// The entity id of the session's task: a tracker task's own id, a job task's `task:JOB#N` (its `task` that, or
+    /// `N` with the job).
+    pub fn task_entity(&self) -> Option<String> {
+        let task = self.task.as_deref()?;
+        if task.starts_with("task:") {
+            Some(task.to_owned())
+        } else if task.contains('#') {
+            Some(norn::write::tasks::entity_id(task))
+        } else {
+            let job = self.job.as_deref()?;
+            Some(norn::write::tasks::entity_id(&format!("{job}#{task}")))
+        }
+    }
+}
+
+/// `msession.tools` of TRACKER (the profile's setting), SEARCH (the session has a `search.sock`) and PLUGINS (the
+/// session has a `plugins.sock`: its plugin set's key).
+fn tools_text(tracker: Option<bool>, search: bool, plugins: Option<&str>) -> Option<String> {
+    let mut v = serde_json::Map::new();
+    if let Some(t) = tracker {
+        v.insert("tracker".into(), serde_json::json!(t));
+    }
+    if search {
+        v.insert("search".into(), serde_json::json!(true));
+    }
+    if let Some(p) = plugins {
+        v.insert("plugins".into(), serde_json::json!(p));
+    }
+    (!v.is_empty()).then(|| serde_json::Value::Object(v).to_string())
+}
+
+/// What a session's `msession.tools` TEXT says.
+type ToolsOf = (Option<bool>, bool, Option<String>);
+
+/// TEXT of `msession.tools` as the profile's tracker setting (anything else: none), whether the session has a
+/// `search.sock`, and its plugin set's key when it has a `plugins.sock`.
+fn tools_of(text: Option<String>) -> ToolsOf {
+    let Some(v) = text.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else {
+        return (None, false, None);
+    };
+    (
+        v.get("tracker").and_then(serde_json::Value::as_bool),
+        v.get("search").and_then(serde_json::Value::as_bool) == Some(true),
+        v.get("plugins")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+    )
+}
+
+/// Where sessions live: the hub's environment and main socket (for `session_dir`) and `runtime.db`.
+struct Store {
+    env: Env,
+    socket: PathBuf,
+    db: urdr::Handle,
+}
+
+/// The servers a session has (name, tool count) and the ones it should have and has not (name, why).
+pub type Served = (Vec<(String, Option<usize>)>, Vec<(String, String)>);
+
+/// A session whose socket is bound.
+struct Live {
+    row: Row,
+    dir: PathBuf,
+    path: PathBuf,
+    /// Ends its accept loop and its connections (and the gateway socket's).
+    cancel: CancellationToken,
+    /// How many tools its `mcp.sock` serves.
+    tools: usize,
+    /// Its `mcp.sock`'s tools, as each connection serves them (a change is told to the connected agents).
+    tools_tx: tokio::sync::watch::Sender<ToolList>,
+    /// It has the debugger's tools: they came with the session or when its project began to debug, and stay until it
+    /// ends (an agent mid-investigation never loses them between two calls).
+    debug: bool,
+    /// Its `gateway.sock`, once a registration asked for it.
+    gateway: Option<PathBuf>,
+    /// Its `search.sock`, when the row has one.
+    search: Option<PathBuf>,
+    /// Its `plugins.sock`, when the row has one and its columns are known.
+    plugins: Option<PathBuf>,
+    /// The plugin set it started with (empty: none), and whether the set that runs for it now differs.
+    started_set: String,
+    changed: Arc<AtomicBool>,
+}
+
+/// The front's MCP hosting.
+pub struct Sessions {
+    uid: u32,
+    tools: Arc<Coord>,
+    /// Every tool: an unbound outside bridge's.
+    list: ToolList,
+    /// A bound outside bridge's: every tool and the plan and record tools (`norn::tools::OUTSIDE_TOOLS`).
+    outside_list: ToolList,
+    /// A session's, made when first served, by [`set_index`]: with or without the tracker tools, and the debugger's.
+    by_sets: [OnceLock<ToolList>; 4],
+    store: OnceLock<Store>,
+    live: Mutex<BTreeMap<String, Live>>,
+    /// Sessions made managers (Task 25): their socket also serves the manager tools.
+    managers: Mutex<BTreeSet<String>>,
+    /// A manager's list, without the debugger's tools and with them.
+    manager_list: [OnceLock<ToolList>; 2],
+    /// Codex sessions whose hooks subscribe to a kind: their socket also serves `before_tool`, which Codex's managed
+    /// hook calls ([`crate::agents::before_tool_tool`]).
+    before_tool: Mutex<BTreeSet<String>>,
+    /// Chats in a project: their socket also serves the pair tools (`read_file`, `edit_file`, `write_file`).
+    project_chats: Mutex<BTreeSet<String>>,
+    /// A project chat's list, by [`set_index`].
+    pair_sets: [OnceLock<ToolList>; 4],
+    /// Outside bridges connected now.
+    outside: Arc<AtomicUsize>,
+    /// The hub ends: every outside bridge's connection closes ([`Sessions::end_outside`]).
+    outside_end: CancellationToken,
+    /// One open or close at a time: a row and its socket change together.
+    serial: tokio::sync::Mutex<()>,
+    /// The front (for the `drgnx-agents-mcp` setting and the questions a `search.sock` answers), once bound.
+    front: OnceLock<std::sync::Weak<Front>>,
+    /// The tools of a `search.sock`.
+    search_tools: OnceLock<Arc<[Box<dyn Tool<crate::search::mcp::SearchCtx>>]>>,
+    /// The columns a session's abilities run as (`bridge` says them before the session opens).
+    whos: Mutex<BTreeMap<String, norn::matrix::Who>>,
+}
+
+/// An `mcp/session` (or the front's work before it) slower than this, in real time, logs how long each stage took.
+pub const SLOW_OPEN: Duration = Duration::from_secs(1);
+
+/// The stages of one `mcp/session`, timed in real time; logged (a warning) when it ends, by any path, after more than
+/// [`SLOW_OPEN`]: where a late answer spent its time is then in the hub's log.  One that is still running after
+/// [`SLOW_OPEN`] says so at that time, with the last stage it finished: a request that never ends leaves its place.
+struct Stages {
+    start: std::time::Instant,
+    last: std::time::Instant,
+    done: Vec<(&'static str, u128)>,
+    /// What the late notice reads: the last stage finished, and whether the open has ended.
+    place: Arc<StagePlace>,
+}
+
+/// Where an `mcp/session` is: shared with the task that tells of one that runs late.
+#[derive(Default)]
+struct StagePlace {
+    after: Mutex<&'static str>,
+    ended: std::sync::atomic::AtomicBool,
+}
+
+impl StagePlace {
+    /// The late notice's text, or none when the open ended.
+    fn late(&self) -> Option<String> {
+        (!self.ended.load(Ordering::SeqCst)).then(|| {
+            let after = *self.after.lock().unwrap_or_else(|e| e.into_inner());
+            format!(
+                "mcp/session has run over {} ms and waits after the stage {:?} (the next one: {})",
+                SLOW_OPEN.as_millis(),
+                after,
+                next_stage(after)
+            )
+        })
+    }
+}
+
+/// The stage that follows STAGE in `open_with`.
+fn next_stage(stage: &str) -> &'static str {
+    match stage {
+        "" => "the owner's start time",
+        "owner" => "the serial lock",
+        "serial lock" => "the session's directory",
+        "directory" => "the row in runtime.db",
+        "runtime.db" => "the socket's bind",
+        "bind" => "the tool list",
+        "tools" => "the listener",
+        _ => "the end",
+    }
+}
+
+impl Stages {
+    /// DB: runtime.db's handle, whose thread's current request a late notice names (the open's steps queue behind it).
+    fn new(db: Option<urdr::Handle>) -> Stages {
+        let now = crate::clock::real_now();
+        let place = Arc::new(StagePlace::default());
+        let p = place.clone();
+        crate::clock::spawn("sessions:slow-open", async move {
+            let _ = crate::clock::real_timeout(SLOW_OPEN, std::future::pending::<()>()).await;
+            if let Some(text) = p.late() {
+                let store = match db.as_ref().and_then(urdr::Handle::running) {
+                    Some((at, age)) => format!(
+                        "; runtime.db's thread runs the request from {at} for {} ms",
+                        age.as_millis()
+                    ),
+                    None => "; runtime.db's thread is idle".to_owned(),
+                };
+                let queued = db.as_ref().map_or(0, urdr::Handle::queued);
+                tracing::warn!("{text}{store}, {queued} queued");
+            }
+        });
+        Stages {
+            start: now,
+            last: now,
+            done: Vec::new(),
+            place,
+        }
+    }
+
+    /// Stage WHAT ended now.
+    fn mark(&mut self, what: &'static str) {
+        let now = crate::clock::real_now();
+        self.done.push((what, (now - self.last).as_millis()));
+        self.last = now;
+        *self.place.after.lock().unwrap_or_else(|e| e.into_inner()) = what;
+    }
+}
+
+impl Drop for Stages {
+    fn drop(&mut self) {
+        self.place.ended.store(true, Ordering::SeqCst);
+        let total = self.start.elapsed();
+        if total > SLOW_OPEN {
+            let stages: Vec<String> = self
+                .done
+                .iter()
+                .map(|(w, ms)| format!("{w} {ms} ms"))
+                .collect();
+            tracing::warn!(
+                ms = total.as_millis() as u64,
+                "mcp/session took {} ms: {}",
+                total.as_millis(),
+                stages.join(", ")
+            );
+        }
+    }
+}
+
+/// Counts one connection while it lives.
+struct Counted(Arc<AtomicUsize>);
+
+impl Counted {
+    fn new(n: &Arc<AtomicUsize>) -> Counted {
+        n.fetch_add(1, Ordering::SeqCst);
+        Counted(n.clone())
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn error(code: ErrorCode, message: impl Into<String>, path: Option<&str>) -> Error {
+    Error {
+        code,
+        message: message.into(),
+        path: path.map(str::to_owned),
+    }
+}
+
+fn internal(message: impl Into<String>) -> Error {
+    error(ErrorCode::Internal, message, None)
+}
+
+fn invalid(path: &str, message: impl Into<String>) -> Error {
+    error(ErrorCode::InvalidParams, message, Some(path))
+}
+
+/// Seconds since the epoch.
+fn now() -> f64 {
+    crate::clock::wall_secs()
+}
+
+/// PID's start time while it runs (a zombie has ended), else `None`.
+pub fn owner_start(pid: i32) -> Option<u64> {
+    if pid <= 0 || !draugr::alive(pid) || peer::zombie(pid) {
+        return None;
+    }
+    draugr::start_time(pid).ok()
+}
+
+/// Whether ROW's owner still runs: its pid, with the start time the row recorded (a reused pid is another process).
+pub fn owner_alive(row: &Row) -> bool {
+    i32::try_from(row.owner)
+        .ok()
+        .and_then(owner_start)
+        .is_some_and(|start| start == row.owner_start)
+}
+
+/// PATH bound as a session socket: a stale one removed first, then mode 0600 (its directory is 0700 already).
+pub fn bind_socket(path: &Path) -> io::Result<UnixListener> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let listener = UnixListener::bind(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(listener)
+}
+
+/// A session's directory gone with what is in it, unless its agent `hub.sock` is still there (13b's: the stop
+/// removes it).
+fn remove_dir(dir: &Path) {
+    if std::fs::symlink_metadata(dir.join(paths::SESSION_HUB_SOCKET)).is_ok() {
+        return;
+    }
+    match std::fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => {
+            tracing::warn!("cannot remove {}: {e}", dir.display());
+        }
+        _ => {}
+    }
+}
+
+fn remove_socket(path: &Path) {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => {
+            tracing::warn!("cannot remove {}: {e}", path.display());
+        }
+        _ => {}
+    }
+}
+
+async fn insert(db: &urdr::Handle, row: &Row) -> urdr::Result<()> {
+    let r = row.clone();
+    db.write(move |c| {
+        c.execute(
+            "insert into msession(sid, agent, job, task, cwd, owner, owner_start, at, profile, tools) \
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            (
+                r.sid,
+                r.agent,
+                r.job,
+                r.task,
+                r.cwd,
+                i64::from(r.owner),
+                i64::try_from(r.owner_start).unwrap_or(i64::MAX),
+                r.at,
+                r.profile,
+                tools_text(r.tracker, r.search, r.plugins.as_deref()),
+            ),
+        )?;
+        Ok(())
+    })
+    .await
+}
+
+async fn delete(db: &urdr::Handle, sid: &str) {
+    let s = sid.to_owned();
+    if let Err(e) = db
+        .write(move |c| Ok(c.execute("delete from msession where sid = ?1", [s])?))
+        .await
+    {
+        tracing::warn!(sid, "cannot remove a session from runtime.db: {e}");
+    }
+}
+
+async fn rows(db: &urdr::Handle) -> urdr::Result<Vec<Row>> {
+    db.read(|c| {
+        let mut st = c.prepare(
+            "select sid, agent, job, task, cwd, owner, owner_start, at, profile, tools from msession order by at",
+        )?;
+        let rows = st
+            .query_map([], |r| {
+                let (tracker, search, plugins) = tools_of(r.get(9)?);
+                Ok(Row {
+                    sid: r.get(0)?,
+                    agent: r.get(1)?,
+                    job: r.get(2)?,
+                    task: r.get(3)?,
+                    cwd: r.get(4)?,
+                    owner: u32::try_from(r.get::<_, i64>(5)?).unwrap_or(0),
+                    owner_start: u64::try_from(r.get::<_, i64>(6)?).unwrap_or(0),
+                    at: r.get(7)?,
+                    profile: r.get(8)?,
+                    tracker,
+                    search,
+                    plugins,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+    .await
+}
+
+/// The index of SETS in a list cache: the tracker tools (1) and the debugger's (2).
+fn set_index(sets: norn::tools::ToolSets) -> usize {
+    usize::from(sets.tracker) + 2 * usize::from(sets.debug)
+}
+
+/// Whether a session in CWD works on ROOT's project: one is inside the other (a worktree of the project, or the
+/// project inside a session's folder).
+fn related(cwd: &Path, root: &Path) -> bool {
+    cwd.starts_with(root) || root.starts_with(cwd)
+}
+
+/// The tools a connection of a socket is served.
+type Tools<C> = Arc<[Box<dyn Tool<C>>]>;
+
+/// LIST as the tools of every connection of a socket (for [`accept`]).
+fn fixed<C: 'static>(
+    list: Tools<C>,
+) -> impl Fn() -> std::future::Ready<Tools<C>> + Send + Sync + 'static {
+    move || std::future::ready(list.clone())
+}
+
+/// Accept on a session's socket until CANCEL: each connection serves the tools LIST makes for it (when it connects)
+/// with CTX.
+async fn accept<C, F, Fut>(
+    listener: UnixListener,
+    sid: String,
+    ctx: Arc<C>,
+    cancel: CancellationToken,
+    uid: u32,
+    list: F,
+    live: Option<tokio::sync::watch::Receiver<Tools<C>>>,
+) where
+    C: Send + Sync + 'static,
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Tools<C>> + Send,
+{
+    let list = Arc::new(list);
+    let open = Arc::new(AtomicUsize::new(0));
+    loop {
+        let stream = tokio::select! {
+            () = cancel.cancelled() => return,
+            a = listener.accept() => match a {
+                Ok((s, _)) => s,
+                Err(e) => {
+                    // out of descriptors, for example: never a hot loop
+                    tracing::warn!(sid, "accept failed: {e}");
+                    crate::clock::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
+            },
+        };
+        match stream.peer_cred() {
+            Ok(c) if peer_allowed(c.uid(), uid) => {}
+            Ok(c) => {
+                tracing::warn!(
+                    sid,
+                    peer_pid = c.pid(),
+                    peer_uid = c.uid(),
+                    "refused a connection from another uid"
+                );
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!(sid, "refused a connection whose peer cannot be read: {e}");
+                continue;
+            }
+        }
+        if open.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
+            tracing::warn!(
+                sid,
+                "closed a connection to a session's mcp.sock: it serves at most {MAX_CONNECTIONS} at once"
+            );
+            continue;
+        }
+        let counted = Counted::new(&open);
+        let (ctx, list, cancel, sid, live) = (
+            ctx.clone(),
+            list.clone(),
+            cancel.clone(),
+            sid.clone(),
+            live.clone(),
+        );
+        crate::clock::spawn("sessions:mcp-connection", async move {
+            let _counted = counted;
+            let (r, w) = stream.into_split();
+            let served = async {
+                match live {
+                    // the session's list as it is now, and each change after it, told to the agent
+                    Some(rx) => {
+                        mimir::serve_live(ctx, rx, ServerInfo::default(), r, w, Limits::default())
+                            .await
+                    }
+                    None => {
+                        let tools = list().await;
+                        mimir::serve(ctx, tools, ServerInfo::default(), r, w, Limits::default())
+                            .await
+                    }
+                }
+            };
+            tokio::select! {
+                () = cancel.cancelled() => {}
+                end = served => {
+                    tracing::debug!(sid, ?end, "an MCP connection ended");
+                }
+            }
+        });
+    }
+}
+
+impl Sessions {
+    /// No session yet, and none until [`Sessions::open_store`] gives it `runtime.db`.
+    pub fn new(uid: u32, tools: Arc<Coord>, list: ToolList, outside_list: ToolList) -> Sessions {
+        Sessions {
+            uid,
+            tools,
+            list,
+            outside_list,
+            by_sets: Default::default(),
+            store: OnceLock::new(),
+            live: Mutex::new(BTreeMap::new()),
+            outside: Arc::new(AtomicUsize::new(0)),
+            outside_end: CancellationToken::new(),
+            serial: tokio::sync::Mutex::new(()),
+            managers: Mutex::new(BTreeSet::new()),
+            manager_list: Default::default(),
+            before_tool: Mutex::new(BTreeSet::new()),
+            project_chats: Mutex::new(BTreeSet::new()),
+            pair_sets: Default::default(),
+            front: OnceLock::new(),
+            search_tools: OnceLock::new(),
+            whos: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// The columns session SID's abilities run as: said before the session opens, kept until it closes.
+    pub fn note_who(&self, sid: &str, who: norn::matrix::Who) {
+        self.whos
+            .lock()
+            .expect("sessions")
+            .insert(sid.to_owned(), who);
+    }
+
+    /// The key of the plugin set that runs for session SID now, when its columns are known and it has abilities.
+    fn wants_plugins(&self, sid: &str) -> Option<String> {
+        let front = self.front.get().and_then(std::sync::Weak::upgrade)?;
+        self.whos.lock().expect("sessions").get(sid)?;
+        let set = front
+            .core
+            .plugins
+            .abilities_for(crate::abilities::project_of(&front, sid).as_deref());
+        (!set.is_empty()).then(|| crate::plugins::Plugins::set_key(&set))
+    }
+
+    /// Session SID's `plugins.sock`, while it is bound.
+    pub fn plugins_socket_of(&self, sid: &str) -> Option<PathBuf> {
+        self.live
+            .lock()
+            .expect("sessions")
+            .get(sid)
+            .and_then(|l| l.plugins.clone())
+    }
+
+    /// Whether the plugins that run for session SID now differ from those it started with.
+    pub fn plugins_changed(&self, sid: &str) -> bool {
+        self.plugins_flag(sid).load(Ordering::SeqCst)
+    }
+
+    /// The flag [`Sessions::plugins_changed`] reads, for the session's snapshot (a fresh one for no such session).
+    pub fn plugins_flag(&self, sid: &str) -> Arc<AtomicBool> {
+        self.live
+            .lock()
+            .expect("sessions")
+            .get(sid)
+            .map_or_else(|| Arc::new(AtomicBool::new(false)), |l| l.changed.clone())
+    }
+
+    /// The plugins may have moved (an approval, a switch): every live session's flag is read again.
+    pub fn plugins_refresh(&self) {
+        let Some(front) = self.front.get().and_then(std::sync::Weak::upgrade) else {
+            return;
+        };
+        for (sid, live) in self.live.lock().expect("sessions").iter() {
+            let set = front
+                .core
+                .plugins
+                .abilities_for(crate::abilities::project_of(&front, sid).as_deref());
+            let now = crate::plugins::Plugins::set_key(&set);
+            live.changed
+                .store(now != live.started_set, Ordering::SeqCst);
+        }
+    }
+
+    /// The front, once it is in its `Arc`: a session gets a `search.sock` when `drgnx-agents-mcp` holds `search`, and
+    /// the socket's questions go to the front's search.
+    pub fn bind_search(&self, front: &Arc<Front>) {
+        let _ = self.front.set(Arc::downgrade(front));
+    }
+
+    /// Whether a session started now with working folder CWD gets a `search.sock`: the setting holds `search` and the
+    /// folder is one (a root `/` is no project).
+    fn wants_search(&self, cwd: Option<&str>) -> bool {
+        let Some(front) = self.front.get().and_then(std::sync::Weak::upgrade) else {
+            return false;
+        };
+        cwd.is_some_and(|c| c != "/")
+            && front
+                .settings
+                .current()
+                .loaded
+                .values
+                .agents_mcp
+                .iter()
+                .any(|s| s == "search")
+    }
+
+    /// Session SID's `search.sock`, while it is bound.
+    pub fn search_socket_of(&self, sid: &str) -> Option<PathBuf> {
+        self.live
+            .lock()
+            .expect("sessions")
+            .get(sid)
+            .and_then(|l| l.search.clone())
+    }
+
+    /// Session SID is a manager: its next socket serves the manager tools too (an open socket is closed and opened
+    /// again by the caller).
+    pub fn mark_manager(&self, sid: &str) {
+        self.managers
+            .lock()
+            .expect("sessions")
+            .insert(sid.to_owned());
+    }
+
+    /// Session SID is a Codex session with hooks: its next socket serves `before_tool` too.  Never behind the hook
+    /// wrapper of the other tools: it runs the hooks itself, and never hooks itself.
+    pub fn mark_before_tool(&self, sid: &str) {
+        self.before_tool
+            .lock()
+            .expect("sessions")
+            .insert(sid.to_owned());
+    }
+
+    /// Session SID is a chat in a project: its next socket serves the pair tools too.
+    pub fn mark_project_chat(&self, sid: &str) {
+        self.project_chats
+            .lock()
+            .expect("sessions")
+            .insert(sid.to_owned());
+    }
+
+    /// Sessions are kept in DB, their directories made for the hub's main SOCKET under ENV (once; at start).
+    pub fn open_store(&self, env: Env, socket: PathBuf, db: urdr::Handle) {
+        if self.store.set(Store { env, socket, db }).is_err() {
+            tracing::warn!("the sessions' store was given twice: the first is kept");
+        }
+    }
+
+    fn store(&self) -> Result<&Store, Error> {
+        self.store
+            .get()
+            .ok_or_else(|| internal("runtime.db is not open: no session sockets"))
+    }
+
+    /// `status`'s `mcp`.
+    pub fn status(&self) -> McpStatus {
+        McpStatus {
+            sessions: self.live.lock().expect("sessions").len() as u64,
+            outside: self.outside.load(Ordering::SeqCst) as u64,
+        }
+    }
+
+    /// `mcp/session`.
+    pub async fn open(&self, p: SessionParams) -> Result<SessionAnswer, Error> {
+        self.open_with(p, bind_socket).await
+    }
+
+    /// [`Sessions::open`] with the socket bound by BIND (the tests look between the row and the bind).
+    pub async fn open_with<B>(&self, p: SessionParams, bind: B) -> Result<SessionAnswer, Error>
+    where
+        B: FnOnce(&Path) -> io::Result<UnixListener>,
+    {
+        let store = self.store()?;
+        let agent = p.agent.as_str().to_owned();
+        if agent.trim().eq_ignore_ascii_case("user") || !norn::tools::identity::plain_id(&agent) {
+            return Err(invalid(
+                "agent",
+                format!(
+                    "not an agent's id (letters, digits and . _ : - only, at most 64; never user): {agent:?}"
+                ),
+            ));
+        }
+        let owner = i32::try_from(p.owner)
+            .ok()
+            .filter(|o| *o > 0)
+            .ok_or_else(|| invalid("owner", "not a process id"))?;
+        let mut stages = Stages::new(Some(store.db.clone()));
+        let owner_start = owner_start(owner)
+            .ok_or_else(|| invalid("owner", format!("process {owner} is not running")))?;
+        stages.mark("owner");
+        let _one = self.serial.lock().await;
+        stages.mark("serial lock");
+        let sid = match &p.sid {
+            Some(s) => s.as_str().to_owned(),
+            None => runstav::proof::nonce().map_err(|e| internal(format!("no session id: {e}")))?
+                [..SID_HEX]
+                .to_owned(),
+        };
+        let taken = self.live.lock().expect("sessions").contains_key(&sid);
+        if taken {
+            return Err(invalid(
+                "sid",
+                format!("session {sid} has its mcp.sock already"),
+            ));
+        }
+        let dir = paths::make_session_dir(&store.env, &store.socket, &sid)
+            .map_err(|e| internal(format!("session {sid}'s directory: {e}")))?;
+        stages.mark("directory");
+        let search = self.wants_search(p.cwd.as_ref().map(|c| c.as_str()));
+        let row = Row {
+            sid: sid.clone(),
+            agent,
+            job: p.job.map(|j| j.as_str().to_owned()),
+            task: p.task.map(|t| t.as_str().to_owned()),
+            cwd: p.cwd.map(|c| c.as_str().to_owned()),
+            owner: owner as u32,
+            owner_start,
+            at: now(),
+            profile: p.profile.map(|n| n.as_str().to_owned()),
+            tracker: p.tools.map(|t| t.tracker),
+            search,
+            plugins: self.wants_plugins(&sid),
+        };
+        // recorded before bound: a hub that dies in between leaves a row whose socket the next start binds
+        insert(&store.db, &row)
+            .await
+            .map_err(|e| internal(format!("cannot record session {sid} in runtime.db: {e}")))?;
+        stages.mark("runtime.db");
+        let path = dir.join(paths::SESSION_MCP_SOCKET);
+        let listener = match bind(&path) {
+            Ok(l) => l,
+            Err(e) => {
+                delete(&store.db, &sid).await;
+                if p.sid.is_none() {
+                    remove_dir(&dir);
+                }
+                return Err(internal(format!("cannot bind {}: {e}", path.display())));
+            }
+        };
+        stages.mark("bind");
+        let debug = self.debug_wanted(row.cwd.as_deref());
+        let list = self.list_for(&row, debug).await;
+        stages.mark("tools");
+        self.listen(row, dir, path.clone(), listener, list, debug);
+        stages.mark("listen");
+        Ok(SessionAnswer {
+            sid,
+            socket: path.to_string_lossy().into_owned(),
+        })
+    }
+
+    /// Whether a session in CWD gets the debugger's tools: its project has a launch configuration (`.vscode/launch.json`
+    /// in CWD or a folder above), a live debug session or a recorded run.
+    fn debug_wanted(&self, cwd: Option<&str>) -> bool {
+        let Some(cwd) = cwd.map(Path::new) else {
+            return false;
+        };
+        if cwd
+            .ancestors()
+            .any(|d| d.join(".vscode").join("launch.json").is_file())
+        {
+            return true;
+        }
+        let Some(front) = self.front.get().and_then(std::sync::Weak::upgrade) else {
+            return false;
+        };
+        front
+            .debug
+            .debugged_roots(&front)
+            .iter()
+            .any(|r| related(cwd, Path::new(r)))
+    }
+
+    /// ROOTS debug now (a session started or ended there): the running sessions working on them that lack the
+    /// debugger's tools get them, told to their agents at once (no restart). Tools are never taken back mid-session.
+    pub async fn debug_seen(&self, roots: Vec<String>) {
+        let _one = self.serial.lock().await;
+        let rows: Vec<Row> =
+            self.live
+                .lock()
+                .expect("sessions")
+                .values()
+                .filter(|l| {
+                    !l.debug
+                        && l.row.cwd.as_deref().is_some_and(|c| {
+                            roots.iter().any(|r| related(Path::new(c), Path::new(r)))
+                        })
+                })
+                .map(|l| l.row.clone())
+                .collect();
+        for row in rows {
+            let list = self.list_for(&row, true).await;
+            if let Some(l) = self.live.lock().expect("sessions").get_mut(&row.sid) {
+                l.debug = true;
+                l.tools = list.len();
+                l.tools_tx.send_replace(list);
+                tracing::info!(
+                    sid = row.sid,
+                    "the debugger's tools came to a running session"
+                );
+            }
+        }
+    }
+
+    /// The tools ROW's socket serves (call 16): the tracker tools as its task says, else as its profile says, else on;
+    /// the debugger's when DEBUG.
+    async fn list_for(&self, row: &Row, debug: bool) -> ToolList {
+        let task = match row.task_entity() {
+            Some(id) => crate::graph::task_tools(&self.tools, id).await,
+            None => None,
+        };
+        let sets = norn::tools::ToolSets {
+            debug,
+            ..crate::graph::tool_sets(task, row.tracker)
+        };
+        let manager = self.managers.lock().expect("sessions").contains(&row.sid);
+        let hooked = self
+            .before_tool
+            .lock()
+            .expect("sessions")
+            .contains(&row.sid);
+        let chat = self
+            .project_chats
+            .lock()
+            .expect("sessions")
+            .contains(&row.sid);
+        if hooked && let Some(front) = self.front.get().cloned() {
+            let mut all = if manager {
+                norn::tools::tools_for(norn::tools::ToolSets {
+                    debug,
+                    ..norn::tools::ToolSets::default()
+                })
+            } else {
+                norn::tools::tools_for(sets)
+            };
+            if manager {
+                all.extend(norn::tools::manager_tools());
+            }
+            // a hooked Codex chat in a project keeps the pair tools its edits go through
+            if chat {
+                all.extend(norn::tools::pair_tools());
+            }
+            let mut list: Vec<Box<dyn Tool<Ctx>>> = all
+                .into_iter()
+                .map(|t| Box::new(AfterTool(t)) as Box<dyn Tool<Ctx>>)
+                .collect();
+            list.push(Box::new(crate::agents::before_tool_tool::BeforeTool {
+                front,
+            }));
+            return list.into();
+        }
+        if manager {
+            return self.manager_list[usize::from(debug)]
+                .get_or_init(|| {
+                    let mut all = norn::tools::tools_for(norn::tools::ToolSets {
+                        debug,
+                        ..norn::tools::ToolSets::default()
+                    });
+                    all.extend(norn::tools::manager_tools());
+                    after_each(all)
+                })
+                .clone();
+        }
+        if chat {
+            return self.pair_sets[set_index(sets)]
+                .get_or_init(|| {
+                    let mut all = norn::tools::tools_for(sets);
+                    all.extend(norn::tools::pair_tools());
+                    after_each(all)
+                })
+                .clone();
+        }
+        self.by_sets[set_index(sets)]
+            .get_or_init(|| after_each(norn::tools::tools_for(sets)))
+            .clone()
+    }
+
+    /// Serve ROW's socket PATH (in DIR) from LISTENER, with the tools LIST.
+    fn listen(
+        &self,
+        row: Row,
+        dir: PathBuf,
+        path: PathBuf,
+        listener: UnixListener,
+        list: ToolList,
+        debug: bool,
+    ) {
+        let cancel = CancellationToken::new();
+        let tools = list.len();
+        let (tools_tx, tools_rx) = tokio::sync::watch::channel(list.clone());
+        let ctx: Arc<Ctx> = Arc::new((self.tools.clone(), row.identity()));
+        tokio::spawn(accept(
+            listener,
+            row.sid.clone(),
+            ctx,
+            cancel.clone(),
+            self.uid,
+            fixed(list),
+            Some(tools_rx),
+        ));
+        let search = self.listen_search(&row, &dir, &cancel);
+        let plugins = self.listen_plugins(&row, &dir, &cancel);
+        tracing::info!(
+            sid = row.sid,
+            agent = row.agent,
+            owner = row.owner,
+            "the coordination tools on {}",
+            path.display()
+        );
+        self.live.lock().expect("sessions").insert(
+            row.sid.clone(),
+            Live {
+                started_set: row.plugins.clone().unwrap_or_default(),
+                row,
+                dir,
+                path,
+                cancel,
+                tools,
+                tools_tx,
+                debug,
+                gateway: None,
+                search,
+                plugins,
+                changed: Arc::new(AtomicBool::new(false)),
+            },
+        );
+    }
+
+    /// ROW's `plugins.sock` in DIR, when the row has one and its columns are known: the abilities of the plugins that
+    /// run for it, each connection offered the set as it is then.
+    fn listen_plugins(&self, row: &Row, dir: &Path, cancel: &CancellationToken) -> Option<PathBuf> {
+        row.plugins.as_ref()?;
+        let front = self.front.get()?.upgrade()?;
+        let who = self.whos.lock().expect("sessions").get(&row.sid)?.clone();
+        let path = dir.join(paths::SESSION_PLUGINS_SOCKET);
+        let listener = match bind_socket(&path) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(sid = row.sid, "cannot bind {}: {e}", path.display());
+                return None;
+            }
+        };
+        let ctx = Arc::new(crate::abilities::AbilityCtx::new(
+            &front,
+            &row.sid,
+            who.clone(),
+        ));
+        let (weak, sid) = (Arc::downgrade(&front), row.sid.clone());
+        let list = move || {
+            let (weak, sid, who) = (weak.clone(), sid.clone(), who.clone());
+            async move {
+                match weak.upgrade() {
+                    Some(f) => crate::abilities::offered(&f, &sid, &who).await,
+                    None => Vec::<Box<dyn Tool<crate::abilities::AbilityCtx>>>::new().into(),
+                }
+            }
+        };
+        crate::clock::spawn(
+            "sessions:plugins",
+            accept(
+                listener,
+                row.sid.clone(),
+                ctx,
+                cancel.child_token(),
+                self.uid,
+                list,
+                None,
+            ),
+        );
+        tracing::info!(
+            sid = row.sid,
+            "the plugins' abilities on {}",
+            path.display()
+        );
+        Some(path)
+    }
+
+    /// ROW's `search.sock` in DIR, when the row has one: the `search` tool pinned to the row's working folder.
+    fn listen_search(&self, row: &Row, dir: &Path, cancel: &CancellationToken) -> Option<PathBuf> {
+        let (true, Some(cwd)) = (row.search, row.cwd.as_deref()) else {
+            return None;
+        };
+        let front = self.front.get()?.clone();
+        let path = dir.join(paths::SESSION_SEARCH_SOCKET);
+        let listener = match bind_socket(&path) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(sid = row.sid, "cannot bind {}: {e}", path.display());
+                return None;
+            }
+        };
+        let ctx = Arc::new(crate::search::mcp::SearchCtx {
+            root: PathBuf::from(cwd),
+            backend: Arc::new(crate::search::mcp::HubBackend(front)),
+            session: Some(row.sid.clone()),
+        });
+        let list = self
+            .search_tools
+            .get_or_init(crate::search::mcp::tools)
+            .clone();
+        crate::clock::spawn(
+            "sessions:search",
+            accept(
+                listener,
+                row.sid.clone(),
+                ctx,
+                cancel.child_token(),
+                self.uid,
+                fixed(list),
+                None,
+            ),
+        );
+        tracing::info!(sid = row.sid, "the search tool on {}", path.display());
+        Some(path)
+    }
+
+    /// Session SID's `mcp.sock`, while it is bound.
+    pub fn socket_of(&self, sid: &str) -> Option<PathBuf> {
+        self.live
+            .lock()
+            .expect("sessions")
+            .get(sid)
+            .map(|l| l.path.clone())
+    }
+
+    /// The MCP servers the hub serves session SID, with each one's tool count where it is fixed (the plugins' abilities
+    /// are offered per connection: no count), and the servers it should serve and does not (name, why).
+    pub fn served(&self, sid: &str) -> Served {
+        let live = self.live.lock().expect("sessions");
+        let Some(l) = live.get(sid) else {
+            return (
+                Vec::new(),
+                vec![(
+                    "drgnx".into(),
+                    "the coordination tools are not bound: the session has none of the hub's tools"
+                        .into(),
+                )],
+            );
+        };
+        let mut up = vec![("drgnx".to_owned(), Some(l.tools))];
+        if l.search.is_some() {
+            up.push((
+                "drgnx-search".into(),
+                self.search_tools.get().map(|t| t.len()),
+            ));
+        }
+        if l.plugins.is_some() {
+            up.push(("drgnx-plugins".into(), None));
+        }
+        (up, Vec::new())
+    }
+
+    /// Whether session SID's socket is bound now.
+    pub fn is_live(&self, sid: &str) -> bool {
+        self.live.lock().expect("sessions").contains_key(sid)
+    }
+
+    /// Session SID's `gateway.sock`: bound (0600) and handed to SERVE with a token that ends with the session, the
+    /// first time; its path every time.  No such session is `invalid-params` (path `sid`).
+    pub fn gateway_socket(
+        &self,
+        sid: &str,
+        serve: impl FnOnce(UnixListener, CancellationToken),
+    ) -> Result<PathBuf, Error> {
+        let mut live = self.live.lock().expect("sessions");
+        let Some(l) = live.get_mut(sid) else {
+            return Err(invalid(
+                "sid",
+                format!("no session {sid} in this hub: mcp/session opens one"),
+            ));
+        };
+        if let Some(path) = &l.gateway {
+            return Ok(path.clone());
+        }
+        let path = l.dir.join(paths::SESSION_GATEWAY_SOCKET);
+        let listener = bind_socket(&path)
+            .map_err(|e| internal(format!("cannot bind {}: {e}", path.display())))?;
+        serve(listener, l.cancel.child_token());
+        tracing::info!(sid, "the gateway on {}", path.display());
+        l.gateway = Some(path.clone());
+        Ok(path)
+    }
+
+    /// `mcp/session-close`: false when there is no such session.
+    pub async fn close(&self, sid: &str) -> Result<bool, Error> {
+        let store = self.store()?;
+        let _one = self.serial.lock().await;
+        Ok(self.end(store, sid, "closed").await)
+    }
+
+    /// SID's socket, connections, directory and row gone (WHY logged); false when it was not live.  The caller holds
+    /// `serial`.
+    async fn end(&self, store: &Store, sid: &str, why: &str) -> bool {
+        let live = self.live.lock().expect("sessions").remove(sid);
+        self.before_tool.lock().expect("sessions").remove(sid);
+        self.project_chats.lock().expect("sessions").remove(sid);
+        let Some(live) = live else {
+            return false;
+        };
+        self.whos.lock().expect("sessions").remove(sid);
+        // its sockets and directory are removed off the hub's workers (a removal that waits on the disk holds none)
+        let socks: Vec<PathBuf> = std::iter::once(live.path.clone())
+            .chain(live.gateway.clone())
+            .chain(live.search.clone())
+            .chain(live.plugins.clone())
+            .collect();
+        let dir = live.dir.clone();
+        let _ = crate::clock::blocking(move || {
+            socks.iter().for_each(|s| remove_socket(s));
+            remove_dir(&dir);
+        })
+        .await;
+        delete(&store.db, sid).await;
+        tracing::info!(
+            sid,
+            agent = live.row.agent,
+            "a session's mcp.sock is gone: {why}"
+        );
+        // its extension suggestions lose its quote (a card no session stands behind is withdrawn)
+        norn::tools::extensions::session_ended(&self.tools, sid).await;
+        // its connections last: a client that sees its connection close finds the socket, directory and row gone
+        live.cancel.cancel();
+        true
+    }
+
+    /// Close the sessions whose owner is gone (each tick).
+    pub async fn prune(&self) {
+        // the owners are looked up in /proc off the hub's workers, and outside the lock
+        let rows: Vec<(String, Row)> = self
+            .live
+            .lock()
+            .expect("sessions")
+            .iter()
+            .map(|(sid, l)| (sid.clone(), l.row.clone()))
+            .collect();
+        let gone: Vec<String> = crate::clock::blocking(move || {
+            rows.into_iter()
+                .filter(|(_, row)| !owner_alive(row))
+                .map(|(sid, _)| sid)
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
+        self.close_all(&gone, "its owner is gone").await;
+    }
+
+    /// Close the sessions OWNER owns, as if it had died (`__test_owner_gone`): how many.
+    pub async fn owner_gone(&self, owner: u32) -> usize {
+        let theirs: Vec<String> = self
+            .live
+            .lock()
+            .expect("sessions")
+            .iter()
+            .filter(|(_, l)| l.row.owner == owner)
+            .map(|(sid, _)| sid.clone())
+            .collect();
+        self.close_all(&theirs, "its owner is gone (test hook)")
+            .await
+    }
+
+    async fn close_all(&self, sids: &[String], why: &str) -> usize {
+        let Ok(store) = self.store() else { return 0 };
+        let _one = self.serial.lock().await;
+        let mut n = 0;
+        for sid in sids {
+            n += usize::from(self.end(store, sid, why).await);
+        }
+        n
+    }
+
+    /// At start, after the reaper and before serving: the rows of live owners bound again at their paths, the others
+    /// dropped with their directories.
+    pub async fn restore(&self) {
+        let Ok(store) = self.store() else { return };
+        let all = match rows(&store.db).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("cannot read runtime.db's sessions: {e}");
+                return;
+            }
+        };
+        let _one = self.serial.lock().await;
+        for row in all {
+            if !owner_alive(&row) {
+                if let Ok(dir) = paths::session_dir(&store.env, &store.socket, &row.sid) {
+                    remove_dir(&dir);
+                }
+                delete(&store.db, &row.sid).await;
+                tracing::info!(
+                    sid = row.sid,
+                    owner = row.owner,
+                    "dropped a session whose owner is gone"
+                );
+                continue;
+            }
+            let bound =
+                paths::make_session_dir(&store.env, &store.socket, &row.sid).and_then(|dir| {
+                    let path = dir.join(paths::SESSION_MCP_SOCKET);
+                    bind_socket(&path).map(|l| (dir, path, l))
+                });
+            match bound {
+                Ok((dir, path, listener)) => {
+                    let debug = self.debug_wanted(row.cwd.as_deref());
+                    let list = self.list_for(&row, debug).await;
+                    self.listen(row, dir, path, listener, list, debug)
+                }
+                Err(e) => {
+                    tracing::warn!(sid = row.sid, "cannot bind a session's mcp.sock again: {e}");
+                    delete(&store.db, &row.sid).await;
+                }
+            }
+        }
+    }
+
+    /// At the stop, under the lock: every socket unbound and its connections ended.  Rows and directories stay: the
+    /// next start binds them again.
+    pub fn unbind_all(&self) {
+        for live in self.live.lock().expect("sessions").values() {
+            live.cancel.cancel();
+            remove_socket(&live.path);
+            if let Some(g) = &live.gateway {
+                remove_socket(g);
+            }
+            if let Some(s) = &live.search {
+                remove_socket(s);
+            }
+            if let Some(s) = &live.plugins {
+                remove_socket(s);
+            }
+        }
+    }
+
+    /// An outside bridge's connection, after `mcp/attach`'s answer: the tools as WHO until it closes, or until the
+    /// hub ends ([`Sessions::end_outside`]): then R and W are dropped, so the bridge reads its end of file.
+    /// BOUND holds the bridge's place among the attached ones ([`crate::outside::Bound`]) while it is served.
+    pub async fn serve_outside<R, W>(
+        &self,
+        who: Identity,
+        bound: Option<crate::outside::BoundGuard>,
+        r: R,
+        w: W,
+    ) where
+        R: AsyncRead + Unpin,
+        W: AsyncWrite + Unpin,
+    {
+        let _counted = Counted::new(&self.outside);
+        let _bound = bound;
+        let id = who.id().unwrap_or_default().to_owned();
+        tracing::info!(identity = id, "an outside agent's bridge attached");
+        let list = self.outside_list_for(&who);
+        let ctx: Arc<Ctx> = Arc::new((self.tools.clone(), who));
+        let serve = mimir::serve(ctx, list, ServerInfo::default(), r, w, Limits::default());
+        tokio::select! {
+            end = serve => tracing::info!(identity = id, ?end, "an outside agent's bridge ended"),
+            () = self.outside_end.cancelled() => {
+                tracing::info!(identity = id, "closed an outside agent's bridge: the hub ends");
+            }
+        }
+    }
+
+    /// The tools an outside bridge WHO is served: a bound one's (its role as read at `mcp/attach`) has the plan and
+    /// record tools; the hub reads the binding again at each of their calls.
+    pub(crate) fn outside_list_for(&self, who: &Identity) -> ToolList {
+        if who.outside_role().is_some() {
+            self.outside_list.clone()
+        } else {
+            self.list.clone()
+        }
+    }
+
+    /// The tools' shared state (tests call a tool as a connection would).
+    #[cfg(test)]
+    pub(crate) fn coord(&self) -> Arc<Coord> {
+        self.tools.clone()
+    }
+
+    /// The hub ends: every outside bridge's connection is closed, now and whenever one is handed on later.
+    pub fn end_outside(&self) {
+        self.outside_end.cancel();
+    }
+}
+
+/// `mcp/attach {kind}` on connection S: the identity of the agent that started the bridge (the peer's parent),
+/// `ext:KIND:PID-HASH`, its home the folder S's hello named.  Never from a claim.
+pub fn outside(s: &Session, kind: &str) -> Result<Identity, Error> {
+    let pid = s
+        .peer_pid
+        .ok_or_else(|| internal("the bridge's process cannot be read from its connection"))?;
+    let parent = peer::parent_of(pid)
+        .map_err(|e| internal(format!("the bridge's parent process cannot be read: {e}")))?;
+    if parent.pid <= 1 {
+        return Err(error(
+            ErrorCode::NotAllowed,
+            "an outside agent needs a parent process",
+            None,
+        ));
+    }
+    Identity::outside(kind, parent.pid, parent.start, s.cwd.clone()).map_err(|e| invalid("kind", e))
+}
+
+/// Close the sessions of gone owners each [`TICK`], for as long as the hub serves.
+pub async fn watch(front: Arc<Front>) {
+    let mut every = crate::clock::interval(TICK);
+    loop {
+        every.tick().await;
+        front.mcp.prune().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::WorkDb;
+    use runstav::proof::Cap;
+    use serde_json::{Value, json};
+
+    struct Hub {
+        dir: tempfile::TempDir,
+        front: Front,
+        env: Env,
+        socket: PathBuf,
+        db: urdr::Handle,
+        _store: urdr::Store,
+    }
+
+    fn hub() -> Hub {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("hub-x.sock");
+        let (store, db) = crate::runtime_db::open(dir.path()).unwrap();
+        let front = front(dir.path(), &socket);
+        let env = Env::new(&[("TMPDIR", dir.path().to_str().unwrap())], front.uid);
+        front
+            .mcp
+            .open_store(env.clone(), socket.clone(), db.clone());
+        Hub {
+            dir,
+            front,
+            env,
+            socket,
+            db,
+            _store: store,
+        }
+    }
+
+    fn front(dir: &Path, socket: &Path) -> Front {
+        Front::new(
+            Cap::generate().unwrap(),
+            socket.to_path_buf(),
+            WorkDb::spawn(dir.join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(dir.join("work.db")),
+        )
+    }
+
+    fn params(v: Value) -> SessionParams {
+        runstav::decode::typed::<SessionParams>(&v).unwrap().0
+    }
+
+    fn me() -> u32 {
+        std::process::id()
+    }
+
+    fn mode(p: &Path) -> u32 {
+        std::fs::metadata(p).unwrap().permissions().mode() & 0o777
+    }
+
+    fn count(db: &Path, sql: &str) -> i64 {
+        urdr::open_readonly(db)
+            .unwrap()
+            .query_row(sql, [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_row_is_written_before_the_bind() {
+        let h = hub();
+        let db = h.dir.path().join("runtime.db");
+        let at_bind = Arc::new(Mutex::new(None));
+        let (seen, file) = (at_bind.clone(), db.clone());
+        let a = h
+            .front
+            .mcp
+            .open_with(
+                params(json!({"agent": "s-0000000a", "job": "j1", "cwd": "/w", "owner": me()})),
+                move |path| {
+                    let n = count(
+                        &file,
+                        "select count(*) from msession where agent = 's-0000000a'",
+                    );
+                    *seen.lock().unwrap() = Some(n);
+                    bind_socket(path)
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            *at_bind.lock().unwrap(),
+            Some(1),
+            "the row is there when the socket is bound"
+        );
+        assert!(
+            a.sid.len() == SID_HEX
+                && a.sid
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "{}",
+            a.sid
+        );
+        let path = PathBuf::from(&a.socket);
+        assert_eq!(path.file_name().unwrap(), paths::SESSION_MCP_SOCKET);
+        assert_eq!(
+            path.parent().unwrap(),
+            paths::session_dir(&h.env, &h.socket, &a.sid).unwrap()
+        );
+        assert_eq!((mode(path.parent().unwrap()), mode(&path)), (0o700, 0o600));
+        assert_eq!(h.front.mcp.status().sessions, 1);
+        // a bind that fails takes its row (and the directory it made) back
+        let e = h
+            .front
+            .mcp
+            .open_with(params(json!({"agent": "s-b", "owner": me()})), |_| {
+                Err(io::Error::other("no"))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Internal);
+        assert_eq!(count(&db, "select count(*) from msession"), 1);
+        assert_eq!(h.front.mcp.status().sessions, 1);
+        // what the socket's tools act as is the row's
+        {
+            let live = h.front.mcp.live.lock().unwrap();
+            assert_eq!(
+                live[&a.sid].row.identity(),
+                Identity::Session {
+                    agent: "s-0000000a".into(),
+                    sid: a.sid.clone(),
+                    profile: None,
+                    job: Some("j1".into()),
+                    task: None,
+                    home: PathBuf::from("/w"),
+                }
+            );
+        }
+        // a profile and its tool sets are kept with the row, and the profile is the identity's
+        let p = h
+            .front
+            .mcp
+            .open(params(
+                json!({"agent": "s-c", "owner": me(), "job": "j2", "task": "3",
+                                "profile": "p1", "tools": {"tracker": false}}),
+            ))
+            .await
+            .unwrap();
+        let kept = rows(&h.db).await.unwrap();
+        let row = kept.iter().find(|r| r.sid == p.sid).unwrap();
+        assert_eq!(
+            (row.profile.as_deref(), row.tracker),
+            (Some("p1"), Some(false))
+        );
+        assert_eq!(row.task_entity().as_deref(), Some("task:j2#3"));
+        assert!(matches!(
+            row.identity(),
+            Identity::Session { profile: Some(ref n), .. } if n == "p1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_bad_agent_or_owner_is_refused_before_anything_is_made() {
+        let h = hub();
+        for (v, at) in [
+            (json!({"agent": "user", "owner": me()}), "agent"),
+            (json!({"agent": "a]b", "owner": me()}), "agent"),
+            (json!({"agent": "s-1", "owner": 0}), "owner"),
+            (
+                json!({"agent": "s-1", "owner": u64::from(u32::MAX) + 1}),
+                "owner",
+            ),
+        ] {
+            let e = h.front.mcp.open(params(v.clone())).await.unwrap_err();
+            assert_eq!(
+                (e.code, e.path.as_deref()),
+                (ErrorCode::InvalidParams, Some(at)),
+                "{v}"
+            );
+        }
+        assert_eq!(
+            count(
+                &h.dir.path().join("runtime.db"),
+                "select count(*) from msession"
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn a_reused_owner_pid_is_gone() {
+        let row = |owner, owner_start| Row {
+            sid: "s".into(),
+            agent: "a".into(),
+            job: None,
+            task: None,
+            cwd: None,
+            owner,
+            owner_start,
+            at: 0.0,
+            profile: None,
+            tracker: None,
+            search: false,
+            plugins: None,
+        };
+        let start = draugr::start_time(me() as i32).unwrap();
+        assert!(owner_alive(&row(me(), start)));
+        assert!(
+            !owner_alive(&row(me(), start + 1)),
+            "the same pid with another start time is another process"
+        );
+        assert!(!owner_alive(&row(0, start)));
+        // a process that ended: a zombie until it is reaped, then nothing; gone either way
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let start = draugr::start_time(pid as i32).unwrap();
+        assert!(owner_alive(&row(pid, start)));
+        child.kill().unwrap();
+        // Wait for the child to have ended without reaping it (WNOWAIT): from then on it is a zombie.
+        // SAFETY: waitid(2) on our own child, with a zeroed `siginfo_t` for it to fill in.
+        let waited = unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        assert_eq!(waited, 0, "{}", std::io::Error::last_os_error());
+        assert!(peer::zombie(pid as i32), "ended, not reaped");
+        assert!(!owner_alive(&row(pid, start)), "a zombie is gone");
+        child.wait().unwrap();
+        assert!(!owner_alive(&row(pid, start)));
+    }
+
+    #[tokio::test]
+    async fn mcp_sock_goes_beside_an_existing_hub_sock() {
+        let h = hub();
+        let dir = paths::make_session_dir(&h.env, &h.socket, "s1").unwrap();
+        let _agent =
+            std::os::unix::net::UnixListener::bind(dir.join(paths::SESSION_HUB_SOCKET)).unwrap();
+        let a = h
+            .front
+            .mcp
+            .open(params(json!({"agent": "s-1", "sid": "s1", "owner": me()})))
+            .await
+            .unwrap();
+        assert_eq!(
+            (a.sid.as_str(), PathBuf::from(&a.socket)),
+            ("s1", dir.join(paths::SESSION_MCP_SOCKET))
+        );
+        // one socket per session
+        let e = h
+            .front
+            .mcp
+            .open(params(json!({"agent": "s-1", "sid": "s1", "owner": me()})))
+            .await
+            .unwrap_err();
+        assert_eq!(e.path.as_deref(), Some("sid"));
+        assert!(h.front.mcp.close("s1").await.unwrap());
+        assert!(!dir.join(paths::SESSION_MCP_SOCKET).exists());
+        assert!(
+            dir.join(paths::SESSION_HUB_SOCKET).exists(),
+            "the agent socket's directory stays"
+        );
+        assert!(!h.front.mcp.close("s1").await.unwrap());
+        // a session of its own: its directory goes with it
+        let b = h
+            .front
+            .mcp
+            .open(params(json!({"agent": "s-2", "owner": me()})))
+            .await
+            .unwrap();
+        let bdir = PathBuf::from(&b.socket).parent().unwrap().to_path_buf();
+        assert!(h.front.mcp.close(&b.sid).await.unwrap());
+        assert!(!bdir.exists());
+        assert_eq!(
+            count(
+                &h.dir.path().join("runtime.db"),
+                "select count(*) from msession"
+            ),
+            0
+        );
+    }
+
+    // [D] LINE-P3-P9-INTERPLAY-1: a project chat's mark goes with its session, as the before-tool mark does
+    #[tokio::test]
+    async fn a_closed_sessions_marks_go_with_it() {
+        let h = hub();
+        let a = h
+            .front
+            .mcp
+            .open(params(json!({"agent": "s-1", "owner": me()})))
+            .await
+            .unwrap();
+        h.front.mcp.mark_project_chat(&a.sid);
+        h.front.mcp.mark_before_tool(&a.sid);
+        assert!(h.front.mcp.close(&a.sid).await.unwrap());
+        assert!(!h.front.mcp.project_chats.lock().unwrap().contains(&a.sid));
+        assert!(!h.front.mcp.before_tool.lock().unwrap().contains(&a.sid));
+    }
+
+    #[tokio::test]
+    async fn a_restart_binds_live_owners_again_and_drops_the_rest() {
+        let h = hub();
+        let a = h
+            .front
+            .mcp
+            .open(params(json!({"agent": "s-1", "owner": me()})))
+            .await
+            .unwrap();
+        // a session whose owner was another process with this pid
+        let gone = Row {
+            sid: "0123456789ab".into(),
+            agent: "s-2".into(),
+            job: None,
+            task: None,
+            cwd: None,
+            owner: me(),
+            owner_start: draugr::start_time(me() as i32).unwrap() + 1,
+            at: 1.0,
+            profile: None,
+            tracker: None,
+            search: false,
+            plugins: None,
+        };
+        insert(&h.db, &gone).await.unwrap();
+        let gone_dir = paths::make_session_dir(&h.env, &h.socket, &gone.sid).unwrap();
+        // the stop
+        h.front.mcp.unbind_all();
+        assert!(!Path::new(&a.socket).exists());
+        // the next start
+        let next = front(h.dir.path(), &h.socket);
+        next.mcp
+            .open_store(h.env.clone(), h.socket.clone(), h.db.clone());
+        next.mcp.restore().await;
+        assert_eq!(next.mcp.status().sessions, 1);
+        assert!(Path::new(&a.socket).exists(), "bound again at its path");
+        assert!(!gone_dir.exists());
+        let sids: Vec<String> = rows(&h.db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.sid)
+            .collect();
+        assert_eq!(sids, std::slice::from_ref(&a.sid));
+        // the socket answers MCP at once (no challenge)
+        let c = tokio::net::UnixStream::connect(&a.socket).await.unwrap();
+        let (r, mut w) = c.into_split();
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        w.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")
+            .await
+            .unwrap();
+        let mut line = String::new();
+        tokio::io::BufReader::new(r)
+            .read_line(&mut line)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v, json!({"jsonrpc": "2.0", "id": 1, "result": {}}));
+    }
+}
+
+#[cfg(test)]
+mod stage_tests {
+    use super::*;
+
+    /// An `mcp/session` that runs late says where it waits: after the last stage it finished, and which one is next;
+    /// one that ended says nothing.
+    #[tokio::test]
+    async fn a_late_open_names_the_stage_it_waits_in() {
+        let mut st = Stages::new(None);
+        assert!(st.place.late().unwrap().contains("the owner's start time"));
+        st.mark("owner");
+        st.mark("serial lock");
+        st.mark("directory");
+        st.mark("runtime.db");
+        let text = st.place.late().unwrap();
+        assert!(
+            text.contains("\"runtime.db\"") && text.contains("the socket's bind"),
+            "{text}"
+        );
+        let place = st.place.clone();
+        drop(st);
+        assert!(place.late().is_none(), "an open that ended says nothing");
+    }
+}

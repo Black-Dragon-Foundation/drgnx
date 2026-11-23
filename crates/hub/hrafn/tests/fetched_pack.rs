@@ -4,7 +4,7 @@
 //!
 //! The worker here runs in-process on two pipes (`serve` is the same code the `ratatoskr hrafn-parse` process runs), on the
 //! C# grammar the pack job built, under an extension no built-in language has. The process, the sandbox and the broken
-//! grammars are `drgnx-ratatoskr`'s `hrafn_parse*` tests. One test, because the installed set is the process's.
+//! grammars are `ratatoskr`'s `hrafn_parse*` tests. One test, because the installed set is the process's.
 //!
 //! test-pattern: pure (D).
 

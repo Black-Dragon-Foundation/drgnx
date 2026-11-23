@@ -1,0 +1,5 @@
+{"run": {"id": 103, "created_at": "2026-11-22T10:00:00Z", "head_sha": "bbbb"},
+ "jobs": [
+  {"id": 1031, "name": "Runtime / build (Fedora 45)", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "   Compiling ratatoskr v0.1.0 (/__w/drgnx/drgnx/crates/hub/ratatoskr)\n   Compiling ratatoskr v0.1.0 (/__w/drgnx/drgnx/crates/hub/ratatoskr)\n   Compiling ratatoskr v0.1.0 (/__w/drgnx/drgnx/crates/hub/ratatoskr)\n   Compiling ratatoskr v0.1.0 (/__w/drgnx/drgnx/crates/hub/ratatoskr)\n"}
+ ]}

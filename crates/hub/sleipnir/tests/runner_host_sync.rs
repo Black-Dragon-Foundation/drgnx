@@ -66,7 +66,7 @@ fn repo(dir: &Path) -> String {
 
 fn marker_script(at: &Path, marker: &Path, name: &str) {
     fs::create_dir_all(at.parent().unwrap()).unwrap();
-    drgnx_exe::write(
+    hlaup::write(
         at,
         format!("#!/bin/sh\necho {name} >> '{}'\n", marker.display()),
     )
@@ -418,7 +418,7 @@ fn origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent() {
     assert!(!body.is_empty());
     let bin = w.join("bin");
     fs::create_dir_all(&bin).unwrap();
-    drgnx_exe::write(&bin.join("ssh"), FAKE_SSH).unwrap();
+    hlaup::write(&bin.join("ssh"), FAKE_SSH).unwrap();
     let path = format!(
         "{}:{}",
         bin.display(),

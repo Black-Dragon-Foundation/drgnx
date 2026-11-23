@@ -1,0 +1,182 @@
+//! `ratatoskr`: drgnx's agent runtime (docs/develop/hub.md).  The tokio runtime is built by hand, after the command
+//! line is read (the commands that only talk to a hub never build one): multi-thread, two workers.  The same binary
+//! answers to any name (`rtsk`), with one exception: started as `gleipnir-trace` (the link Gleipnir puts beside the
+//! inner helper for per-step tracing, `gleipnir::TRACE_INSIDE`) it is that wrapper and nothing else.
+
+use ratatoskr::cli::{self, Command, Supervisor};
+use ratatoskr::{Exit, doctor, idle, server, supervise, version};
+use runstav::paths::Env;
+use std::os::unix::process::CommandExt;
+use std::process::ExitCode;
+use std::time::Duration;
+
+fn code(c: i32) -> ExitCode {
+    ExitCode::from(u8::try_from(c).unwrap_or(1))
+}
+
+/// The pack-built grammars the lock names, for everything that parses code. A grammar that is not built reads as
+/// text; the first miss of each pack is logged. `DRGNX_PACK_LOCK` (a test run's libraries) is left as it is.
+fn install_grammars(env: &Env) {
+    if std::env::var_os("DRGNX_PACK_LOCK").is_none() {
+        let _ = skald::registry::install_from(
+            &runstav::paths::config_dir(env).join("drgnx.lock.eld"),
+            &runstav::paths::data_dir(env).join("grammars"),
+        );
+    }
+    hrafn::chunk::on_missing(|pack, why| {
+        tracing::warn!("pack {pack} not built ({why}): its files read as text");
+    });
+}
+
+fn main() -> ExitCode {
+    // the per-step wrapper of a traced shell step: before anything else, with no runtime and no thread
+    let argv0 = std::env::args_os().next().unwrap_or_default();
+    if std::path::Path::new(&argv0).file_name()
+        == Some(std::ffi::OsStr::new(gleipnir::trace::WRAPPER_NAME))
+    {
+        return code(gleipnir::trace::wrapper_main(std::env::args_os().collect()));
+    }
+    let command = match cli::parse(std::env::args_os().skip(1)) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("ratatoskr: {e}\n{}", cli::USAGE);
+            return ExitCode::from(Exit::Usage as u8);
+        }
+    };
+    install_grammars(&Env::process());
+    match command {
+        Command::Version { json: true } => println!("{}", version::json()),
+        Command::Version { json: false } => println!("{}", version::text()),
+        Command::Methods { markdown: false } => {
+            print!("{}", runstav::registry::methods_json_text())
+        }
+        Command::Methods { markdown: true } => {
+            print!("{}", runstav::registry::markdown_table())
+        }
+        Command::Ensure { timeout } => return code(supervise::ensure(&Env::process(), timeout)),
+        Command::Stop { timeout } => return code(supervise::stop(&Env::process(), timeout)),
+        Command::Status { json } => return code(doctor::status(&Env::process(), json)),
+        Command::Doctor { json } => return code(doctor::doctor(&Env::process(), json)),
+        Command::SandboxCheck(args) => return code(ratatoskr::sandbox::check_command(args)),
+        Command::Restart => return code(doctor::restart(&Env::process())),
+        // Before any thread or runtime exists: the helper asserts it is single-threaded. Not Linux: it exits 125 with
+        // "the inner helper is Linux only" (Android: no backend; apps get no user namespaces; fails closed).
+        Command::SandboxInner { args } => {
+            return code(gleipnir::inner::inner_main(args.into_iter()));
+        }
+        // The relay builds its own single-threaded runtime; it refuses to start under another parent than its
+        // `--parent-pid`.
+        Command::Relay { args } => return code(gleipnir::net::relay::main(args.into_iter())),
+        // No runtime: threads per started Chromium. It refuses to run outside the browser layer.
+        Command::BrowserHost { args } => return code(ratatoskr::browser::host_main(args)),
+        // Its own single-threaded runtime; it reads no environment variable but, outside, the data dir's.
+        Command::McpBridge(args) => return ExitCode::from(ratatoskr::bridge::main(args)),
+        // No runtime: the migration and the copy run on this thread, and refuse while a hub holds the store.
+        Command::Store(cli::StoreCommand::MigrateCheck { db, scratch, json }) => {
+            return code(ratatoskr::store_cli::migrate_check(
+                &Env::process(),
+                &db,
+                &scratch,
+                json,
+            ));
+        }
+        Command::Store(cli::StoreCommand::RestorePre7 { yes }) => {
+            return code(ratatoskr::store_cli::restore_pre7(&Env::process(), yes));
+        }
+        // No runtime: a blocking client of the running hub (started first when none runs).
+        Command::Graph(g) => return code(ratatoskr::graph_cli::run(&Env::process(), g)),
+        // The same: one call to the running hub.
+        Command::Outside(o) => return code(ratatoskr::outside_cli::run(&Env::process(), o)),
+        // Its own current-thread runtime for the download; never started but by this command.
+        Command::Browser(b) => return code(ratatoskr::browser::run(&Env::process(), b)),
+        // No runtime either: the job commands are one call each to the running hub.
+        Command::Job(j) => return code(ratatoskr::job_cli::run(&Env::process(), j)),
+        Command::Machines(m) => {
+            return code(ratatoskr::machines_cli::run(&Env::process(), &m));
+        }
+        Command::Runner(r) => return code(ratatoskr::runner_cli::run(&Env::process(), r)),
+        Command::Packs(p) => return code(ratatoskr::packs_cli::run(p)),
+        Command::Plugins(p) => return code(ratatoskr::plugins_cli::run(&Env::process(), p)),
+        // Hrafn from a terminal (and `search mcp`, which builds a runtime of its own).
+        Command::Search(s) => return code(ratatoskr::search_cli::run(&Env::process(), s)),
+        // Hrafn's embed worker: threads of its own (stdin, the CPU path's pool), never a tokio runtime.
+        // A fetched pack's grammar in its own process: stdin and stdout are the whole interface.
+        Command::HrafnParse {
+            lib,
+            grammar,
+            sha256,
+        } => {
+            return code(hrafn::chunk::worker::serve(
+                &lib,
+                &grammar,
+                &sha256,
+                &mut std::io::stdin().lock(),
+                &mut std::io::stdout().lock(),
+            ));
+        }
+        Command::EmbedWorker(args) => return code(ratatoskr::search::worker::run(args)),
+        // No hub, no runtime: the lint reads files.
+        Command::Recording(r) => return code(ratatoskr::recording_cli::run(&r)),
+        // Test builds only: one command under the sandbox, judged by its --result file.
+        #[cfg(feature = "test-hooks")]
+        Command::SandboxRun(args) => return code(ratatoskr::sandbox::run(args)),
+        // Test builds only: the mock language server for the lsp-command debug rows.
+        #[cfg(feature = "test-hooks")]
+        Command::DebugLspMock { mode, arg } => {
+            return code(ratatoskr::debug::lsp_mock::main(&mode, arg.as_deref()));
+        }
+        // Test builds only: the mock debug adapter on stdio.
+        #[cfg(feature = "test-hooks")]
+        Command::DebugMock { script } => return ratatoskr::debug::mock_main(&script),
+        Command::Serve(args) => {
+            // the fetched packs' grammars: workers under the sandbox, started on first use
+            ratatoskr::parse_worker::install_hub(&Env::process());
+            let supervisor = args.supervisor;
+            let mut builder = tokio::runtime::Builder::new_multi_thread();
+            builder.worker_threads(2).enable_all();
+            // the virtual clock's look at the workers: a parked worker holds no deferred wake
+            #[cfg(feature = "test-hooks")]
+            builder
+                .on_thread_park(ratatoskr::clock::worker_parks)
+                .on_thread_unpark(ratatoskr::clock::worker_unparks);
+            let runtime = match builder.build() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("ratatoskr: cannot start: no async runtime: {e}");
+                    return ExitCode::from(Exit::CannotStart as u8);
+                }
+            };
+            let exit = runtime.block_on(server::run(args));
+            runtime.shutdown_timeout(Duration::from_secs(1));
+            return match (exit, supervisor) {
+                // nothing supervises this hub: run the binary at the path resolved at start again
+                (Exit::Restart, Supervisor::SelfDetached) => reexec(),
+                // launchd restarts on every non-zero exit, so only 75 and a crash may reach it
+                (Exit::CannotStart | Exit::Usage | Exit::AnotherHub, Supervisor::Launchd) => {
+                    eprintln!(
+                        "ratatoskr: exit {} mapped to 0 for launchd (the reason is in the hub's log)",
+                        exit as u8
+                    );
+                    ExitCode::SUCCESS
+                }
+                _ => ExitCode::from(exit as u8),
+            };
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Replace this process with the binary at the path resolved at start, the same arguments.  The lock was kept open
+/// across this call and goes with the exec (every descriptor is close-on-exec); only a failed exec returns.
+fn reexec() -> ExitCode {
+    let Some(exe) = idle::start_exe() else {
+        eprintln!("ratatoskr: cannot restart: no resolved executable path");
+        return ExitCode::from(Exit::CannotStart as u8);
+    };
+    let err = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .env(ratatoskr::lock::RESTARTED, "1")
+        .exec();
+    eprintln!("ratatoskr: cannot execute {} again: {err}", exe.display());
+    ExitCode::from(Exit::CannotStart as u8)
+}

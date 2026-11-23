@@ -1,0 +1,11 @@
+{"run": {"id": 151, "created_at": "2026-11-22T10:00:00Z", "head_sha": "bbbb"},
+ "jobs": [
+  {"id": 1511, "name": "Runtime / tests 1/2 (Fedora 45)", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "2026-11-22T10:10:00.0000000Z     Starting 3164 tests across 183 binaries (3163 tests skipped)\n"},
+  {"id": 1512, "name": "Runtime / tests 2/2 (Fedora 45)", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "2026-11-22T10:10:00.0000000Z     Starting 3163 tests across 183 binaries (3164 tests skipped)\n"},
+  {"id": 1513, "name": "Runtime / conformance 1/2 (macOS 27)", "conclusion": "success", "labels": ["xcode-27"],
+   "log": "2026-11-22T10:20:00.0000000Z 320 passed, 35 skipped, 0 failed\n2026-11-22T10:21:00.0000000Z 47 passed, 0 failed, 0 skipped\n"}
+ ],
+ "artifacts": {"escape-report-macos": {"escape-macos.json": [
+   {"row": "a", "status": "pass"}, {"row": "b", "status": "skip", "reason": "Landlock ABI 8 below 9"}]}}}

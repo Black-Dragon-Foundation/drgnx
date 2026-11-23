@@ -181,6 +181,142 @@ pub fn parse(text: &str) -> PlanDoc {
     }
 }
 
+/// A task of a new plan.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NewTask {
+    pub number: String,
+    pub title: String,
+    pub body: String,
+    pub steps: Vec<(bool, String)>,
+    /// Task numbers it waits on.
+    pub depends: Vec<String>,
+    pub role: Option<String>,
+    pub model: Option<String>,
+    pub interfaces: Option<String>,
+}
+
+/// A new plan's text: its title and TASKS, which `parse` reads back as the same tasks.
+pub fn new_text(title: &str, tasks: &[NewTask]) -> String {
+    let mut out = format!("# {title}\n");
+    for t in tasks {
+        out.push_str(&format!("\n### Task {}: {}\n\n", t.number, t.title));
+        let mut labels = Vec::new();
+        if let Some(r) = &t.role {
+            labels.push(format!("**Role:** {r}\n"));
+        }
+        if let Some(m) = &t.model {
+            labels.push(format!("**Model:** {m}\n"));
+        }
+        if !t.depends.is_empty() {
+            let d: Vec<String> = t.depends.iter().map(|n| format!("Task {n}")).collect();
+            labels.push(format!("**Depends:** {}\n", d.join(", ")));
+        }
+        if !labels.is_empty() {
+            out.extend(labels);
+            out.push('\n');
+        }
+        if !t.body.trim().is_empty() {
+            out.push_str(t.body.trim_end_matches('\n'));
+            out.push_str("\n\n");
+        }
+        if let Some(i) = &t.interfaces {
+            out.push_str(&format!("**Interfaces:**\n{}\n\n", i.trim_matches('\n')));
+        }
+        for (done, text) in &t.steps {
+            out.push_str(&format!("- [{}] {}\n", if *done { "x" } else { " " }, text));
+        }
+    }
+    out
+}
+
+/// What `plans/write` changes in a task of a plan that has a view file.
+#[derive(Debug, Clone, Default)]
+pub struct TaskRewrite<'a> {
+    pub title: Option<&'a str>,
+    /// The prose under the heading: it replaces the task's prose paragraphs; the `**Label:**` paragraphs (role,
+    /// depends, files, interfaces…) and the steps stay unless STEPS says otherwise.
+    pub body: Option<&'a str>,
+    /// The task's steps: they replace its step paragraphs.
+    pub steps: Option<&'a [(bool, String)]>,
+}
+
+/// Paragraphs of BODY (runs of lines up to and including a blank line), each with its blank line.
+fn paragraphs(body: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for line in body.split_inclusive('\n') {
+        cur.push_str(line);
+        if line.trim().is_empty() {
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// RAW, the text of one task piece (its heading, its body and the sections after it), with E applied; a task piece that
+/// does not parse as one task is returned as it is.
+pub fn rewrite_task(raw: &str, e: &TaskRewrite) -> String {
+    let mut doc = parse(raw);
+    let [t] = doc.tasks.as_mut_slice() else {
+        return raw.to_string();
+    };
+    if let Some(title) = e.title {
+        let hashes = "#".repeat(usize::from(t.level.max(1)));
+        let eol = if t.heading.ends_with("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        t.heading = format!("{hashes} Task {}: {title}{eol}", t.number);
+    }
+    if e.body.is_some() || e.steps.is_some() {
+        let mut labels = String::new();
+        let mut prose = String::new();
+        let mut steps = String::new();
+        for p in paragraphs(&t.body) {
+            let first = p.lines().next().unwrap_or("");
+            if p.trim().is_empty() {
+                continue;
+            } else if is_step(first) {
+                steps.push_str(&p);
+            } else if is_label(first) {
+                labels.push_str(&p);
+            } else {
+                prose.push_str(&p);
+            }
+        }
+        if let Some(b) = e.body {
+            prose = b.trim_matches('\n').to_string();
+            prose.push_str("\n\n");
+        }
+        if let Some(list) = e.steps {
+            steps = list
+                .iter()
+                .map(|(d, x)| format!("- [{}] {x}\n", if *d { "x" } else { " " }))
+                .collect();
+            steps.push('\n');
+        }
+        let mut body = String::from("\n");
+        for chunk in [labels, prose, steps] {
+            if chunk.is_empty() {
+                continue;
+            }
+            body.push_str(&chunk);
+            if !chunk.ends_with("\n\n") {
+                body.push('\n');
+            }
+        }
+        // the blank lines before the next heading stay as they were
+        let tail = t.body.len() - t.body.trim_end_matches('\n').len();
+        let body = body.trim_end_matches('\n').to_string() + &"\n".repeat(tail.max(1));
+        t.set_body(&body);
+    }
+    render(&doc)
+}
+
 pub fn render(doc: &PlanDoc) -> String {
     let mut out = String::new();
     let mut push = |s: &Section| {

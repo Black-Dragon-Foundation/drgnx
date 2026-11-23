@@ -119,6 +119,9 @@ pub fn status_of(kind: &str, role: &str, body: &str) -> Option<String> {
             let word = rest.split_whitespace().next()?;
             crate::org::is_default_keyword(word).then(|| normalize(word))
         }
+        ("spec" | "decision", "head") => crate::spec::parse(body)
+            .status
+            .map(|w| crate::import::spec_status(&w)),
         ("task", "task") => {
             let steps: Vec<bool> = body.lines().filter_map(is_step_line).collect();
             Some(if !steps.is_empty() && steps.iter().all(|d| *d) {
@@ -209,6 +212,19 @@ pub fn with_status(kind: &str, role: &str, body: &str, status: &str) -> Option<S
             let kw = org_keyword(status);
             let sp = if title.is_empty() { "" } else { " " };
             Some(format!("{} {kw}{sp}{title}{rest}", &first[..stars]))
+        }
+        ("spec" | "decision", "head") => {
+            // a head with no status line of its own (front matter, or none) is left alone
+            if !crate::spec::has_status_line(body) {
+                return None;
+            }
+            let word = match (status, kind) {
+                ("done", "spec") => "approved",
+                ("done", _) => "accepted",
+                ("dropped", _) => "superseded",
+                _ => "proposed",
+            };
+            Some(crate::spec::with_status(body, word))
         }
         ("task", "task") => {
             let done = status == "done";

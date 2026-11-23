@@ -4,10 +4,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use drgnx_rows::faces::FaceId;
-use drgnx_rows::fit::Measure;
-use drgnx_rows::svg::Palette;
-use drgnx_rows::{Op, Row};
+use rodd::faces::FaceId;
+use rodd::fit::Measure;
+use rodd::svg::Palette;
+use rodd::{Op, Row};
 use serde::Deserialize;
 use vegvisir::layout::Layout;
 use vegvisir::render::{self, Env, Index, Outline, Scene};
@@ -18,7 +18,7 @@ struct Cols;
 
 impl Measure for Cols {
     fn advance(&self, _role: &str, ch: char) -> Option<f32> {
-        Some(8.0 * drgnx_rows::fit_tty::char_width(ch, &[]) as f32)
+        Some(8.0 * rodd::fit_tty::char_width(ch, &[]) as f32)
     }
     fn fallback(&self, _role: &str) -> f32 {
         8.0
@@ -44,13 +44,13 @@ fn frame() -> (BTreeMap<ItemId, Item>, Vec<Edge>, Layout) {
 }
 
 /// The kit's env of a graphical display at scale 1 (no glyphs of its own, no icons).
-fn kit() -> drgnx_rows::kit::KitEnv<'static> {
-    drgnx_rows::kit::KitEnv {
+fn kit() -> rodd::kit::KitEnv<'static> {
+    rodd::kit::KitEnv {
         scale: 1.0,
         tty: false,
         glyphs: &[],
         ascii: false,
-        density: drgnx_rows::kit::Density::Comfortable,
+        density: rodd::kit::Density::Comfortable,
         icons: None,
     }
 }
@@ -228,14 +228,14 @@ fn width_change_replaces_only_rows_whose_fit_changed() {
     };
     let same = render::rows(&s, &Index::of(&s), &wider, &Cols).rows;
     assert!(
-        drgnx_rows::diff(&before, &same).is_empty(),
+        rodd::diff(&before, &same).is_empty(),
         "the layout's units hold the width"
     );
     let mut narrow = layout.clone();
     narrow.at.get_mut(&ItemId("agent:a2".into())).unwrap().w = 40;
     let s = scene(&items, &edges, &narrow, &new);
     let after = render::rows(&s, &Index::of(&s), &env, &Cols).rows;
-    match drgnx_rows::diff(&before, &after).as_slice() {
+    match rodd::diff(&before, &after).as_slice() {
         [Op::Replace(rows)] => {
             let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
             assert_eq!(
@@ -276,7 +276,7 @@ fn tty_outline_rows() {
         assert!(!lines.is_empty());
         for l in &lines {
             assert!(
-                drgnx_rows::fit_tty::width(l, &[]) <= cols as usize,
+                rodd::fit_tty::width(l, &[]) <= cols as usize,
                 "{l:?} in {cols}"
             );
         }

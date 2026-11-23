@@ -100,7 +100,7 @@ fn serve(stream: UnixStream) {
 fn wrapper(dir: &Path) -> PathBuf {
     let path = dir.join("scripted-hub.sh");
     let exe = std::env::current_exe().unwrap();
-    drgnx_exe::write(
+    hlaup::write(
         &path,
         format!(
             "#!/bin/sh\nRTSK_SCRIPTED_HUB=1 exec '{}' --exact scripted_hub --nocapture\n",

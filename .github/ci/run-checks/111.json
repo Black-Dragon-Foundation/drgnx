@@ -1,0 +1,5 @@
+{"run": {"id": 111, "created_at": "2026-11-22T10:00:00Z", "head_sha": "bbbb"},
+ "jobs": [
+  {"id": 1111, "name": "Runtime / build (ubuntu-24.04)", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "cache-primary-key: cargo-Linux-X64-x64-build-mt1-rustc-1.100.0-L1-5eed00000002\nCache restored from key: cargo-Linux-X64-x64-build-mt1-rustc-1.99.1-L1-5eed00000001\n   Compiling dep-001 v1.0.0\n"}
+ ]}

@@ -1,7 +1,8 @@
-# Every push to main or a ci/* branch and every pull request: the Rust workspace (runtime.yml, called as the `runtime`
-# job), shellcheck, and the leak scan. The `gate` job ("CI gate") is the check branch protection requires. A pull
-# request or a ci/* push runs only the jobs its change can affect (the `changes` job, .github/ci/paths.txt); a manual
-# run can name jobs, and its gate is then "CI gate (partial)". docs/develop/ci.md
+# Every push to main (the cache run), every pull request and every manual run (ci/* branches run by dispatch): the Rust
+# workspace (runtime.yml, called as the `runtime` job), shellcheck, and the leak scan. The `gate` job ("CI gate") is the
+# check branch protection requires. A pull request or a narrowed dispatch runs only the jobs its change can affect (the
+# `changes` job, .github/ci/paths.txt); a manual run can name jobs, and its gate is then "CI gate (partial)".
+# docs/develop/ci.md
 name: CI
 
 on:
@@ -99,6 +100,8 @@ jobs:
     permissions:
       contents: read
       packages: read      # its prebuilt images (images.yml)
+      actions: write      # its `cache-prune` job deletes the ref's superseded caches (the only job that asks for it, and
+                          # it never runs on a pull request: runtime.yml's top-level permissions stay contents: read)
     uses: ./.github/workflows/runtime.yml
     with:
       fuzz_minutes: ${{ inputs.fuzz_minutes }}
@@ -114,20 +117,48 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: shellcheck
-        run: shellcheck --severity=warning .githooks/pre-commit test/container/nidhogg.sh test/container/zig.sh .github/ci/changes.sh .github/ci/cargo-prune.sh .github/ci/commit-times.sh .github/ci/ghcr.sh .github/ci/bwrap/build.sh .github/ci/browser-vm.sh test/container/image-tag.sh test/container/image.sh test/container/rust-packages.sh
+        run: shellcheck --severity=warning .githooks/pre-commit test/container/nidhogg.sh test/container/zig.sh .github/ci/changes.sh .github/ci/cargo-prune.sh .github/ci/commit-times.sh .github/ci/ghcr.sh .github/ci/bwrap/build.sh .github/ci/browser-vm.sh test/container/image-tag.sh test/container/image.sh test/container/rust-packages.sh .github/ci/run-checks.sh .github/ci/runtime-skips.sh .github/ci/gate-needs.sh .github/ci/cache-key.sh .github/ci/cache-policy.sh .github/ci/cache-prune.sh .github/ci/assets.sh
       - name: The path filter's rules and table (changes.sh --self-test)
         if: ${{ !cancelled() }}
         run: bash .github/ci/changes.sh .github/ci/paths.txt --self-test
+      - name: The run checks against their fixtures (run-checks.sh --self-test)
+        if: ${{ !cancelled() }}
+        run: bash .github/ci/run-checks.sh --self-test
+      - name: The runtime gate's allowed skips (runtime-skips.sh --self-test)
+        if: ${{ !cancelled() }}
+        run: bash .github/ci/runtime-skips.sh --self-test
+      - name: The runtime gate's needs and the job table (gate-needs.sh --self-test, --check)
+        if: ${{ !cancelled() }}
+        run: |
+          bash .github/ci/gate-needs.sh --self-test
+          bash .github/ci/gate-needs.sh --check .github/workflows/runtime.yml .github/ci/runtime-jobs.txt
+      - name: The cache keys, the save policy and the prune rule (cache-key.sh, cache-policy.sh, cache-prune.sh --self-test)
+        if: ${{ !cancelled() }}
+        run: |
+          bash .github/ci/cache-key.sh --self-test
+          bash .github/ci/cache-policy.sh --self-test
+          bash .github/ci/cache-prune.sh --self-test
+      - name: The prebuilt assets' tag and unpacking (assets.sh --self-test)
+        if: ${{ !cancelled() }}
+        run: bash .github/ci/assets.sh --self-test
+      # one cache layer: cargo's target and registry. A per-unit compiler cache back in a workflow or action is a second
+      # layer that wrote one entry per compiled unit and pushed the repository's 10 GB (the CI flow redesign). The word
+      # is spelled with a bracket here, so this step does not find itself.
+      - name: No per-unit compiler cache
+        if: ${{ !cancelled() }}
+        run: |
+          if grep -rn 'sccach[e]' .github docs/develop/ci.md; then echo "::error::the per-unit compiler cache is out: one cache layer (.github/actions/cargo-target)"; exit 1; fi
       - name: Leak scan (the pre-commit hook's patterns over every tracked file)
         if: ${{ !cancelled() }}
         run: .githooks/pre-commit --all
 
   # The one check branch protection requires of this workflow: every job above succeeded, or was skipped because the
   # change cannot affect it (the changes job's outputs), or is the images job on a fork's pull request. It always runs,
-  # and a failed, cancelled or other skipped job fails it. A narrowed run's is "CI gate (partial)", which no rule
-  # requires (docs/develop/ci.md, "Gates").
+  # and a failed, cancelled or other skipped job fails it. A narrowed run's is "CI gate (partial)", and main's push,
+  # which only builds and saves the caches (main moves only to a head whose pull request run passed), is
+  # "CI gate (cache run)": no rule requires either (docs/develop/ci.md, "Gates").
   gate:
-    name: ${{ needs.changes.outputs.partial == 'true' && 'CI gate (partial)' || 'CI gate' }}
+    name: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'CI gate (cache run)' || (needs.changes.outputs.partial == 'true' && 'CI gate (partial)' || 'CI gate') }}
     if: always()
     needs: [changes, images, runtime, scripts]
     runs-on: ubuntu-24.04

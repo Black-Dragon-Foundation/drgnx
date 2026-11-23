@@ -294,7 +294,7 @@ fn filtered_names_conversion_attributes() {
 /// A marker script: appends its name to `marker` and passes stdin through (a clean or smudge filter must answer).
 fn marker_script(dir: &Path, name: &str, marker: &Path) -> PathBuf {
     let p = dir.join(name);
-    drgnx_exe::write(
+    hlaup::write(
         &p,
         format!("#!/bin/sh\necho {name} >> '{}'\ncat\n", marker.display()),
     )

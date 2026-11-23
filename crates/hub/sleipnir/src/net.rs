@@ -50,7 +50,7 @@ pub fn allow_list(text: &str) -> Result<Vec<Target>, String> {
 pub fn proxy_config(allow: Vec<Target>) -> ProxyConfig {
     ProxyConfig {
         allow,
-        max_conns: 2 * drgnx_px::frame::MAX_STREAMS,
+        max_conns: 2 * ferja::frame::MAX_STREAMS,
         ..ProxyConfig::default()
     }
 }

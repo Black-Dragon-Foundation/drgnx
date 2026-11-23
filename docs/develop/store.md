@@ -1,4 +1,4 @@
-# The store (Urdr): `work.db` schema 15
+# The store (Urdr): `work.db` schema 16
 
 `work.db` holds one knowledge graph across projects: entities and immutable links with transaction-time history,
 written by Ratatoskr only. The graph layer is the generic `urdr::graph` (kinds, link names and policy are the
@@ -203,7 +203,7 @@ one `ReadPool::with` call (one connection, given back before the next level), ne
 
 ## Vectors (Task 12b)
 
-Entity vectors are made by the hub (`drgnx-ratatoskr/src/embed.rs`), through the gateway, never by the store itself.
+Entity vectors are made by the hub (`ratatoskr/src/embed.rs`), through the gateway, never by the store itself.
 
 - **Provider.** The first provider of kind `tei` with the `embed` cap in the settings' provider table. Texts (`title`, a blank
   line, `body`, at most 8000 characters) go to the gateway's own loopback listener as the editor's
@@ -286,7 +286,7 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
 
 ### The nightly copy and compaction (Task 17)
 
-- **Schedule.** `drgnx_ratatoskr::backup_timer` (pure `due(now, last_ok, since_attempt)`, the clock injected): a copy
+- **Schedule.** `ratatoskr::backup_timer` (pure `due(now, last_ok, since_attempt)`, the clock injected): a copy
   is due when the local time is 03:00 or later, no good copy was made today, and the last try is over an hour old (a
   failure is retried hourly, not every tick). The hub's 2 s schema tick asks it, so a hub that was off at 03:00 copies
   at its first tick after it is ready and has run five minutes (`SETTLE`: the copy is a request on the store's writer, which a shutdown waits out, so a hub stopped in its first minutes never waits for one; a `test-hooks` hub with `DRGNX_TEST_BACKUP_SETTLE_SECS=N` counts as settled after N seconds, for the live row). At start the newest `work-*.db` seeds the record, so a restart does not copy
@@ -409,7 +409,7 @@ one exception is exactly `HOME/org/board.org` (`Verdict::Board`; `board.org.bak`
   paths (`HOME` itself) lists them (`Contains`): `~/org`, the user's file and folder entries, and the names a glob
   matches at that moment. The code indexer (Hrafn, in the hub) has one door, `files::list`
   (`crates/hub/hrafn/src/files.rs`), the one place every indexed path passes, with the hub's deny check as its
-  `allow` closure (the opt-ins ignored): a root it denies is refused before its `.drgnx/search.eld` is read, and every
+  `allow` closure (the opt-ins ignored): a root it denies is refused before its `.drgnx/search.toml` is read, and every
   listed file it denies is dropped before anything reads it.
 - **Import and export** (doors 2 and 5): `may_import` and `may_export` are the hub's filters for `graph/import` and
   `graph/export` (`check_record` over the record's source, id and `data`; an unreadable source string is denied).
@@ -497,6 +497,10 @@ arguments.
     target?}` (a host only for `browser.web`, a target, required, only for `browser.private`), `access` `matrix`,
     `card` the card it answered. It opens no store access. `matrix_grants_for(conn, action, session, plan, now)`
     lists the active ones for a session or its plan.
+  - `create_matrix_change(tx, session, change, expires, card)`: the user's yes to a bound outside agent's
+    `graph.change` card: `who` `{session: "ext:…"}`, `what` `{matrix: "graph.change", change: {method, record,
+    digest}}` (`grants::Change`), with `expires`. The gate lets one call of exactly that change through and spends the
+    card (`cards::matrix_card_spend`).
   - `revoke(tx, id)` sets `revoked`; false when there was no active grant.
   - `list(conn, &caller, &Filter { who, active }, now)`: the user sees every grant; an agent or ext caller only the
     grants whose `who` is its own (others would name other projects).
@@ -640,11 +644,11 @@ result. What the rule answers for the file it finds:
 
 | The file | The answer |
 |---|---|
-| missing (or empty) | made at schema 7 and moved to 15: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
-| schema 6 | migrated (below), then moved to 8 and on to 15, then `Ready { 15 }` |
-| schema 7 to 14 | moved one schema at a time to 15 (next sections), then `Ready { 15 }` |
-| schema 15 | `Ready { 15 }` |
-| above 15 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
+| missing (or empty) | made at schema 7 and moved to 16: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
+| schema 6 | migrated (below), then moved to 8 and on to 16, then `Ready { 16 }` |
+| schema 7 to 15 | moved one schema at a time to 16 (next sections), then `Ready { 16 }` |
+| schema 16 | `Ready { 16 }` |
+| above 16 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
 | below 6 | `NotReady`: "work.db is schema N; open it once with drgnx 6 first, or remove it (installs are disposable)" |
 | a migration that failed | `Failed { reason }`, never tried again in this process (call 18) |
 
@@ -697,7 +701,7 @@ looked at again at the next tick; nothing was done.
 per table, links per old → new kind, denied counts, entities without a project, retyped and duplicate rows, the
 transactions and the time. Never a path of the user's content, a title or a body.
 
-**Commands** (`ratatoskr store`, `drgnx-ratatoskr/src/store_cli.rs`):
+**Commands** (`ratatoskr store`, `ratatoskr/src/store_cli.rs`):
 
 - `store migrate-check --db FILE --scratch DIR [--json]` migrates FILE, a copy, in place with the same code, its
   pre-migration copy in DIR, and prints the report. It refuses the configured live `work.db` (by path or inode)
@@ -760,7 +764,7 @@ so older files and fresh ones arrive at 10 too; a crash leaves 9): it builds the
 for), drops the old table and sets `schema = 10`. A table that already has the key (a file made from today's DDL) only
 gets the number. A second move does nothing. Tests: `rebuild_keeps_every_row_and_its_model`,
 `a_second_model_sits_beside_the_first`, `a_table_with_the_key_is_left_alone`, `a_failed_move_changes_nothing`, and
-`tests/entity_vec_schema8.rs` (a schema-8 file through the real opening rule). A file of schema 15 or above is
+`tests/entity_vec_schema8.rs` (a schema-8 file through the real opening rule). A file of schema 16 or above is
 read-only.
 
 ## Schema 11: forecast samples (agent system part 5)
@@ -809,10 +813,25 @@ importer's plan tasks were in neither `node` nor `jtask`, and the editor's Work 
 `drgnx-work-nodes` showed none. Tests: `migrate15_lists_the_importers_tasks_as_nodes` (a populated schema-14 file) and
 `a_failed_move_leaves_schema_14`.
 
+## Schema 16: `entity_vec.model` is a fingerprint (Hrafn redesign, MP-17's identity part)
+
+Until schema 16 the `model` of an `entity_vec` row was a label: a model id, or a server's name (`tei:tei`,
+`ollama:<provider>:<model>`), which says nothing of the weights, the pooling or the prompt that made the vector. It is now
+the model's fingerprint (`hrafn_embed::fingerprint::Fingerprint::hex()`, 64 lowercase hex characters), which
+`urdr::graph::search::Embedder::model()` returns. `norn::migrate16` moves a schema-15 file to 16 in one `BEGIN
+IMMEDIATE` transaction (a crash leaves 15): it deletes every row whose `model` is not 64 hex characters (a label, an
+empty name, none), then sets `schema = 16`; rows keyed by a fingerprint stay as they are. The work graph embeds the
+entities that lost their vector again, at its next round, with whichever embedder answers first. Entity vectors never use
+the shared vector cache, vector packs or any remote vector source (design MP-17: work-graph text can include material near
+the personal-notes deny-list); they are made by the embed role's chain and kept in this table only. A file of schema 16
+is `Ready { 16 }` and one above it is read-only. Tests: `tests/entity_vec_fingerprint.rs`
+(`migrate16_drops_label_rows_keeps_hex_rows`, through the real opening rule) and, in ratatoskr,
+`search_prefer::entity_round_writes_fingerprint_hex`.
+
 ## Parsed entities (Task 15a)
 
 The tracker scan reads plans, specs, ledgers and git; what it finds reaches the graph through two front methods
-(`norn/src/parsed.rs`, `drgnx-ratatoskr/src/graph.rs`; class `user`, hub.md's table). Each is one request of the
+(`norn/src/parsed.rs`, `ratatoskr/src/graph.rs`; class `user`, hub.md's table). Each is one request of the
 graph writer, with the deny-list in force when the writer runs it: the list is read inside the writer's closure,
 after the git resolution, so a revoke or deny entry applied meanwhile (whose `apply` the writer runs first, or
 after) is never undone by a write that checked the older list.
@@ -852,7 +871,7 @@ already collected by a put writes nothing either. A denied repository or task is
 ## The store's methods (Task 15b)
 
 Every other `graph/*` method and `tasks/*` are the front's, class `user` only (hub.md's table;
-`drgnx-ratatoskr/src/graph.rs`). Writes go through the front's writer as the user's tx (`actor user`, class `user`,
+`ratatoskr/src/graph.rs`). Writes go through the front's writer as the user's tx (`actor user`, class `user`,
 tool the method's name); another class is `not-allowed` at the registry, and `graph/grants` refuses one again itself.
 
 - **Reads:** `graph/entity {id, as_of?, include?: [links|notes|history]}` → `{entity, by: {created, updated},

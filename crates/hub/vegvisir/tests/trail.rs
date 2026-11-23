@@ -1,10 +1,10 @@
 //! The trail and the Timeline as rows (`vegvisir::trail`): what a new conclusion or step dirties, every order of
 //! their arrival, the env's time zone. Pure ([A], [D]).
 
-use drgnx_rows::faces::FaceId;
-use drgnx_rows::fit::Measure;
-use drgnx_rows::svg::Palette;
-use drgnx_rows::{Op, Row};
+use rodd::faces::FaceId;
+use rodd::fit::Measure;
+use rodd::svg::Palette;
+use rodd::{Op, Row};
 use vegvisir::render::Env;
 use vegvisir::trail::{self, Conclusion, Detail, Lane, SegKind, Step, TrailFilter, Window, Zone};
 
@@ -12,7 +12,7 @@ struct Cols;
 
 impl Measure for Cols {
     fn advance(&self, _role: &str, ch: char) -> Option<f32> {
-        Some(8.0 * drgnx_rows::fit_tty::char_width(ch, &[]) as f32)
+        Some(8.0 * rodd::fit_tty::char_width(ch, &[]) as f32)
     }
     fn fallback(&self, _role: &str) -> f32 {
         8.0
@@ -70,7 +70,7 @@ fn a_conclusion_dirties_only_its_steps() {
     let before = trail::trail_rows(&steps, &[], &env(&p), Zone(0));
     assert_eq!(before.len(), 4, "{before:?}");
     let after = trail::trail_rows(&steps, &[conclusion(1, 3, &[2])], &env(&p), Zone(0));
-    let ops = drgnx_rows::diff(&before, &after);
+    let ops = rodd::diff(&before, &after);
     let replaced: Vec<&str> = ops
         .iter()
         .flat_map(|o| match o {
@@ -126,7 +126,7 @@ fn timeline_lane_redraws_only_on_its_range() {
     let mut b2 = b.clone();
     b2.push(step(4, 1050.0));
     let inside = timeline(&[lane("a", a.clone()), lane("b", b2)], &p);
-    match drgnx_rows::diff(&before, &inside).as_slice() {
+    match rodd::diff(&before, &inside).as_slice() {
         [Op::Replace(rows)] => assert_eq!(
             rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
             ["lane:b"]
@@ -136,7 +136,7 @@ fn timeline_lane_redraws_only_on_its_range() {
     let mut b3 = b;
     b3.push(step(5, 1500.0));
     let past = timeline(&[lane("a", a), lane("b", b3)], &p);
-    match drgnx_rows::diff(&before, &past).as_slice() {
+    match rodd::diff(&before, &past).as_slice() {
         [Op::Replace(rows)] => assert_eq!(
             rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
             ["axis", "lane:a", "lane:b"]
@@ -437,7 +437,7 @@ fn every_order_steps_and_conclusions_converge() {
                 concs.push(all_concs[i - 3].clone());
             }
             let now = trail::trail_rows(&steps, &concs, &env(&p), Zone(0));
-            let ops = drgnx_rows::diff(&held, &now);
+            let ops = rodd::diff(&held, &now);
             held = apply(held, &ops);
             assert_eq!(held, now, "order {order:?}");
         }

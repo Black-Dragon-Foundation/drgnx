@@ -76,6 +76,7 @@ pub fn tools_for(sets: ToolSets) -> Vec<Box<dyn Tool<Ctx>>> {
     all.extend(super::jobs::tools());
     all.extend(super::reports::tools());
     all.extend(super::plan::tools());
+    all.extend(super::records::rw_tools());
     all.extend(super::procedure::tools());
     if sets.tracker {
         all.extend(tools());
@@ -136,7 +137,11 @@ impl<T: RichTool> Tool<Ctx> for Rich<T> {
     }
 
     fn input_schema(&self) -> Value {
-        typed::<T::Args>().schema()
+        let mut schema = typed::<T::Args>().schema();
+        if let Some(props) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+            props.insert("links".into(), json!({"type": "boolean"}));
+        }
+        schema
     }
 
     fn output_schema(&self) -> Option<Value> {
@@ -150,13 +155,23 @@ impl<T: RichTool> Tool<Ctx> for Rich<T> {
                 message: NO_IDENTITY_ARG.into(),
             });
         }
-        typed::<T::Args>().check(args)
+        let mut rest = args.clone();
+        take_links(&mut rest).map_err(|message| ArgsError {
+            path: "links".into(),
+            message,
+        })?;
+        typed::<T::Args>().check(&rest)
     }
 
     fn call<'a>(&'a self, ctx: &'a Ctx, args: Value) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
+            let mut args = args;
+            let links = match take_links(&mut args) {
+                Ok(l) => l,
+                Err(text) => return ToolResult::Err(text),
+            };
             match run_checked(&self.0, &ctx.0, &ctx.1, args).await {
-                Ok(a) => finish(&ctx.0, &ctx.1, a).await,
+                Ok(a) => finish(&ctx.0, &ctx.1, a, links).await,
                 Err(text) => ToolResult::Err(text),
             }
         })
@@ -196,8 +211,18 @@ async fn unread(coord: &Coord, who: &Identity) -> u32 {
         .unwrap_or(0)
 }
 
+/// Whether the caller asked for `resource_link` items (`links: true`), with the key taken out of ARGS so the typed
+/// decode never sees it.  They are opt-in: the rows are already in the answer's text and `structuredContent`.
+fn take_links(args: &mut Value) -> Result<bool, String> {
+    match args.as_object_mut().and_then(|o| o.remove("links")) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(b)) => Ok(b),
+        Some(_) => Err("links is true or false".into()),
+    }
+}
+
 /// An answer with its notices: `_meta["dev.drgnx/notices"]`, and a last text line only when there are some.
-async fn finish(coord: &Coord, who: &Identity, a: Answer) -> ToolResult {
+async fn finish(coord: &Coord, who: &Identity, a: Answer, links: bool) -> ToolResult {
     let n = unread(coord, who).await;
     let mut text = a.text;
     if n > 0 {
@@ -206,6 +231,7 @@ async fn finish(coord: &Coord, who: &Identity, a: Answer) -> ToolResult {
     let content = a
         .links
         .iter()
+        .filter(|_| links)
         .take(LIST_MAX)
         .map(|id| json!({"type": "resource_link", "uri": format!("drgnx://entity/{id}"), "name": id}))
         .collect();
@@ -550,6 +576,8 @@ struct TaskReadArgs {
     limit: Option<i64>,
     /// find, ready, mine: the `next_cursor` of the page before
     cursor: Option<String>,
+    /// find: task (default), plan, spec or decision
+    kind: Option<String>,
     /// Full bodies and links
     detail: Option<bool>,
 }
@@ -591,6 +619,7 @@ async fn task_read(coord: &Coord, who: &Identity, a: TaskReadArgs) -> Result<Ans
         }
         "find" => {
             let q = FindQ {
+                kind: FindKind::of(a.kind.as_deref())?,
                 query: a.query,
                 status: a.status,
                 assignee: a.assignee,
@@ -739,7 +768,40 @@ fn get(
     }))
 }
 
+/// The kind of record `find` looks for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FindKind {
+    Task,
+    Plan,
+    Spec,
+    Decision,
+}
+
+impl FindKind {
+    fn of(word: Option<&str>) -> Result<FindKind, String> {
+        match word {
+            None | Some("task") => Ok(FindKind::Task),
+            Some("plan") => Ok(FindKind::Plan),
+            Some("spec") => Ok(FindKind::Spec),
+            Some("decision") => Ok(FindKind::Decision),
+            Some(other) => Err(format!(
+                "kind is task, plan, spec or decision, not {other:?}"
+            )),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            FindKind::Task => "task",
+            FindKind::Plan => "plan",
+            FindKind::Spec => "spec",
+            FindKind::Decision => "decision",
+        }
+    }
+}
+
 struct FindQ {
+    kind: FindKind,
     query: Option<String>,
     status: Option<String>,
     assignee: Option<String>,
@@ -784,17 +846,18 @@ fn find(
             .collect(),
         None => {
             let mut stmt = c.prepare(
-                "select n from entity where kind = 'task' and retired_tx is null \
+                "select n from entity where kind = ?1 and retired_tx is null \
                  order by coalesce(priority, 1000000), n",
             )?;
-            stmt.query_map([], |r| r.get(0))?
+            stmt.query_map([q.kind.name()], |r| r.get(0))?
                 .collect::<Result<_, _>>()?
         }
     };
     let mut rows = Vec::new();
     let mut seen_rows = 0;
     for n in ns {
-        let Some(e) = entity::by_n(c, n)?.filter(|e| e.retired_tx.is_none() && e.kind == "task")
+        let Some(e) =
+            entity::by_n(c, n)?.filter(|e| e.retired_tx.is_none() && e.kind == q.kind.name())
         else {
             continue;
         };

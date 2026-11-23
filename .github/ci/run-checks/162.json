@@ -1,0 +1,9 @@
+{"run": {"id": 162, "created_at": "2026-11-22T10:00:00Z", "head_sha": "bbbb"},
+ "jobs": [
+  {"id": 1621, "name": "Runtime / tests 1/2 (Fedora 45)", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "shard-stats: step_seconds=300 peak_bytes=4294967296\n"},
+  {"id": 1622, "name": "Runtime / tests 2/2 (Fedora 45)", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "shard-stats: step_seconds=310 peak_bytes=13958643712\n"},
+  {"id": 1623, "name": "Runtime / build (Fedora 45)", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "no stats here\n"}
+ ]}

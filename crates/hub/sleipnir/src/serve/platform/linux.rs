@@ -113,7 +113,7 @@ impl LinuxPlatform {
             "amd64"
         };
         let dir = self.exe.parent().unwrap_or(Path::new("."));
-        let bin = drgnx_px::image::binary_for(dir, arch);
+        let bin = ferja::image::binary_for(dir, arch);
         let px = fs::read(&bin).map_err(|e| {
             format!(
                 "drgnx could not build its proxy image: {}: {e}",
@@ -121,10 +121,10 @@ impl LinuxPlatform {
             )
         })?;
         let env: Vec<_> = std::env::vars_os().collect();
-        drgnx_px::image::ensure_image(
+        ferja::image::ensure_image(
             Path::new("podman"),
             &env,
-            &drgnx_px::image::image_tar(&px),
+            &ferja::image::image_tar(&px),
             PX_IMAGE_LIMIT,
         )
         .map_err(|e| format!("drgnx could not build its proxy image: {e}"))
@@ -224,11 +224,11 @@ impl Platform for LinuxPlatform {
             return Err(why);
         }
         // the job's own copy of the bundle's drgnx-key: each container relabels its mounts (`Z`); the container runs it,
-        // so its write descriptor is kept out of the runner's other forks (drgnx-exe)
+        // so its write descriptor is kept out of the runner's other forks (hlaup)
         let own_copy = |name: &str| -> Result<PathBuf, String> {
             let from = self.exe.with_file_name(name);
             let to = dir.join(name);
-            drgnx_exe::copy(&from, &to)
+            hlaup::copy(&from, &to)
                 .map(|_| to)
                 .map_err(|e| format!("{name} from the bundle ({}): {e}", from.display()))
         };

@@ -34,6 +34,7 @@ pub mod matrix;
 pub mod mcp;
 pub mod notebook;
 pub mod orch;
+pub mod outside;
 pub mod pair;
 pub mod past;
 pub mod plans;
@@ -284,6 +285,11 @@ params! {
     RecordsStatus(records::ByPath),
     RecordsConflict(exec::ById),
     RecordsResolve(records::ResolveParams),
+    RecordsWrite(records::RecordWrite),
+    RecordsRead(records::RecordRead),
+    OutsideBind(outside::BindParams),
+    OutsideUnbind(outside::UnbindParams),
+    OutsideBindings(Empty),
     MachinesReport(work::MachineReport),
     MachinesMove(work::MoveParams),
     CommentsAdd(comments::AddParams),
@@ -404,6 +410,7 @@ params! {
     SearchStatus(search::RootParams),
     SearchIndex(search::IndexParams),
     SearchEmbedders(Empty),
+    SearchEmbedRetry(Empty),
     SearchModelDownload(search::DownloadParams),
     SearchTyping(Empty),
     GitLetters(git::LettersParams),
@@ -442,6 +449,7 @@ params! {
     SearchSymbolAt(search::SymbolAtParams),
     SearchSymbols(search::SymbolsParams),
     SearchOutline(search::OutlineParams),
+    SearchWhy(search::WhyParams),
     SearchMap(search::MapParams),
     SearchUsages(search::UsagesParams),
     SearchGrepReplace(search::GrepReplaceParams),
@@ -569,6 +577,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(debug_origin::methods());
     v.extend(debug_heap::methods());
     v.extend(notebook::methods());
+    v.extend(outside::methods());
     v
 }
 

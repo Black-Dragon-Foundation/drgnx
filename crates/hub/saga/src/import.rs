@@ -1,5 +1,5 @@
 //! The importer's half in `saga`: a parsed record file as graph operations.  Pure: the hub applies them
-//! (`drgnx-ratatoskr::records`, entities with `Origin::Imported`).
+//! (`ratatoskr::records`, entities with `Origin::Imported`).
 //!
 //! A file becomes an ordered list of pieces; each piece is one entity whose `body` is the piece's raw text, so
 //! concatenating the bodies in `seq` order is the file again, byte for byte ([`crate::view::render`]).  Ids are
@@ -168,8 +168,22 @@ impl Out {
         status: Option<String>,
         body: String,
     ) {
+        let key = piece_key(role, t.as_deref(), &body);
+        self.push_keyed(kind, role, key, t, status, body);
+    }
+
+    /// As [`Out::push`], with the piece's KEY named (made unique here).
+    fn push_keyed(
+        &mut self,
+        kind: &'static str,
+        role: &'static str,
+        key: String,
+        t: Option<String>,
+        status: Option<String>,
+        body: String,
+    ) {
         let seq = self.ops.len() as u32;
-        let key = self.unique(piece_key(role, t.as_deref(), &body));
+        let key = self.unique(key);
         self.ops.push(GraphOp {
             id: format!("{kind}:rec-{}-{}", self.h, hash(&key)),
             kind,
@@ -304,7 +318,21 @@ pub fn ops(doc: &AnyDoc, source: &std::path::Path) -> Vec<GraphOp> {
                 "decision"
             };
             let st = d.status.as_deref().map(spec_status);
-            o.push(kind, "head", d.title.clone(), st, d.text.clone());
+            o.push(kind, "head", d.title.clone(), st, d.head.clone());
+            for (sec, key) in d
+                .sections
+                .iter()
+                .zip(crate::spec::section_keys(&d.sections))
+            {
+                o.push_keyed(
+                    "note",
+                    "section",
+                    key,
+                    Some(sec.title.clone()),
+                    None,
+                    format!("{}{}", sec.heading, sec.body),
+                );
+            }
         }
     }
     o.ops
@@ -312,7 +340,7 @@ pub fn ops(doc: &AnyDoc, source: &std::path::Path) -> Vec<GraphOp> {
 
 /// A spec's or ADR's status word as one of `status::STATUSES`: approved and accepted are done, proposed and draft
 /// are open, superseded and rejected are dropped.
-fn spec_status(raw: &str) -> String {
+pub fn spec_status(raw: &str) -> String {
     let t = raw.trim().to_lowercase();
     if ["approved", "accepted", "adopted", "final"]
         .iter()

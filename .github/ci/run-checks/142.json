@@ -1,0 +1,13 @@
+{"run": {"id": 142, "created_at": "2026-11-22T10:00:00Z", "head_sha": "bbbb"},
+ "jobs": [
+  {"id": 1421, "name": "Runtime / Prebuilt image (Fedora 45 job)", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "2026-11-22T10:00:01.0000000Z rust=ghcr.io/o/drgnx-test-rust@sha256:1111111111111111111111111111111111111111111111111111111111111111\n"},
+  {"id": 1422, "name": "Runtime / build (Fedora 45)", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "2026-11-22T10:00:02.0000000Z ##[command]/usr/bin/docker --config ../_temp/.docker_x pull ghcr.io/o/drgnx-test-rust@sha256:1111111111111111111111111111111111111111111111111111111111111111\n2026-11-22T10:00:03.0000000Z rustc 1.100.0 (0ef1bc386 2026-11-09)\n   Compiling dep-001 v1.0.0\n"},
+  {"id": 1423, "name": "Runtime / tests 1/2 (Fedora 45)", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "2026-11-22T10:00:02.0000000Z ##[command]/usr/bin/docker --config ../_temp/.docker_y pull ghcr.io/o/drgnx-test-rust@sha256:1111111111111111111111111111111111111111111111111111111111111111\n2026-11-22T10:00:03.0000000Z toolchain.txt: rustc 1.100.0 (0ef1bc386 2026-11-09)\n"},
+  {"id": 1424, "name": "Runtime / MSRV 1.95 builds", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "2026-11-22T10:00:03.0000000Z rustc 1.95.0 (59807616e 2026-04-14)\n   Compiling dep-001 v1.0.0\n"},
+  {"id": 1425, "name": "Runtime / cargo deny (advisories, licenses, bans, sources)", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "advisories ok\n"}
+ ]}

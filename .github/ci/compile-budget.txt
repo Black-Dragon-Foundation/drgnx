@@ -1,0 +1,43 @@
+# What each CI job may compile (.github/ci/run-checks.sh compiles and cache; docs/develop/ci.md, "Checking a run").
+# A row: a glob over the job's name as the API gives it (a called workflow's jobs as `Runtime / …`), the most times
+# the log may say `Compiling ratatoskr v`, and the most `Compiling ` lines in all, or `any`. The first row that
+# matches wins, and a job no row matches fails the check, so a new job comes with its row. `any` marks a build job,
+# whose target cache `cache` reads; `0 0` a consumer, which runs what a build job made and compiles nothing.
+
+# jobs that compile nothing
+CI gate*                                        0 0
+What the change can affect                      0 0
+Shell scripts and leak scan                     0 0
+Test images / *                                 0 0
+Runtime / Prebuilt image *                      0 0
+Runtime / Runtime gate                          0 0
+Runtime / cargo deny *                          0 0
+Runtime / fuzz (shard *                         0 0
+
+# one build each, its own toolchain or target
+Runtime / MSRV 1.95 builds                      1 any
+Runtime / Android type-check                    1 any
+Runtime / fuzz targets (build)                  1 any
+Runtime / fake runner fleet                     1 any
+
+# the old layout's Fedora job, until Wave 3 replaces it (the escape legs and the agent containers, which build for
+# themselves too until Wave 4, keep their consumer rows below: check 2 fails them, as it should; `cache` reads any job's
+# cache-primary-key). Its pack grammars come from its own hub build (Wave 2), so its hub count is one lower than it was.
+Runtime / fmt, clippy, tests, conformance, perf (Fedora 45)   4 any
+
+# the build jobs, one per platform and profile: Fedora's builds clippy, the test archive and the rows' bins
+Runtime / build*(Fedora 45)*                    3 any
+Runtime / build*(ubuntu-24.04)*                 2 any
+Runtime / build*(ubuntu-24.04-arm)*             2 any
+Runtime / build*(macOS 27)*                     2 any
+Runtime / release*                              1 any
+
+# the consumers: they download a build job's artifacts
+Runtime / tests*(Fedora 45)*                    0 0
+Runtime / rows*(Fedora 45)*                     0 0
+Runtime / live debug adapters*                  0 0
+Runtime / perf*                                 0 0
+Runtime / escape suite on the runner *          0 0
+Runtime / agent core container rows*            0 0
+Runtime / tests (macOS 27)                      0 0
+Runtime / conformance */2 (macOS 27)            0 0

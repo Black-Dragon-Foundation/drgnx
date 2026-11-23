@@ -1498,8 +1498,8 @@ dependencies = [
 name = "domr"
 version = "0.1.0"
 dependencies = [
- "drgnx-exe",
  "getrandom 0.4.3",
+ "hlaup",
  "hmac",
  "libc",
  "rcgen",
@@ -1521,11 +1521,11 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 name = "draugr"
 version = "0.1.0"
 dependencies = [
- "drgnx-clock",
- "drgnx-exe",
  "eitri",
+ "hlaup",
  "libc",
  "skuld",
+ "stund",
  "tempfile",
  "tokio",
 ]
@@ -1535,156 +1535,11 @@ name = "drgnx"
 version = "0.1.0"
 
 [[package]]
-name = "drgnx-clock"
+name = "drgnx-budget"
 version = "0.1.0"
 dependencies = [
- "drgnx-clock",
- "skuld",
- "tokio",
-]
-
-[[package]]
-name = "drgnx-exe"
-version = "0.1.0"
-dependencies = [
- "libc",
- "tempfile",
-]
-
-[[package]]
-name = "drgnx-px"
-version = "0.1.0"
-dependencies = [
- "drgnx-exe",
- "gleipnir",
- "libc",
  "serde",
  "serde_json",
- "sha2 0.11.1",
- "skuld",
- "tempfile",
- "tokio",
- "zeroize",
-]
-
-[[package]]
-name = "drgnx-ratatoskr"
-version = "0.1.0"
-dependencies = [
- "aws-credential-types",
- "aws-sigv4",
- "base64 0.23.1",
- "bifrost",
- "brokkr",
- "bytes",
- "draugr",
- "drgnx-clock",
- "drgnx-exe",
- "drgnx-px",
- "drgnx-rows",
- "drgnx-term",
- "eitri",
- "fastwebsockets",
- "flate2",
- "forseti",
- "getrandom 0.4.3",
- "gleipnir",
- "heimdall",
- "hermod",
- "hmac",
- "hrafn",
- "hrafn-embed",
- "http",
- "http-body-util",
- "huginn",
- "hyper",
- "hyper-util",
- "jsonc-parser",
- "lexopt",
- "libc",
- "memchr",
- "mimir",
- "minni",
- "norn",
- "notify",
- "openssh",
- "proptest",
- "pulldown-cmark",
- "quick-xml 0.42.0",
- "rcgen",
- "regex",
- "ring",
- "rmcp",
- "runstav",
- "rusqlite",
- "rustix",
- "rustls",
- "rustls-platform-verifier",
- "saga",
- "secrecy",
- "security-framework",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "sha2 0.11.1",
- "similar",
- "skald",
- "skuld",
- "sleipnir",
- "subtle",
- "tar",
- "tempfile",
- "tokio",
- "tokio-rustls",
- "tokio-util",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "tree-sitter",
- "urdr",
- "vegvisir",
- "verdandi",
- "vor",
- "vordr",
- "xxhash-rust",
- "zbus",
- "zeroize",
- "zeromq",
- "zip",
- "zstd",
-]
-
-[[package]]
-name = "drgnx-rows"
-version = "0.1.0"
-dependencies = [
- "read-fonts",
- "schemars 1.2.3",
- "serde",
- "serde_json",
- "skrifa",
- "unicode-segmentation",
- "unicode-width",
-]
-
-[[package]]
-name = "drgnx-term"
-version = "0.1.0"
-dependencies = [
- "base64 0.23.1",
- "drgnx-rows",
- "ghostty-vt-sys",
- "icy_sixel",
- "image",
- "libc",
- "png 0.18.1",
- "rustix",
- "serde",
- "serde_json",
- "skuld",
- "tempfile",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1936,6 +1791,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
 dependencies = [
  "simd-adler32",
+]
+
+[[package]]
+name = "ferja"
+version = "0.1.0"
+dependencies = [
+ "gleipnir",
+ "hlaup",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "skuld",
+ "tempfile",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -3150,7 +3021,6 @@ dependencies = [
 name = "gleipnir"
 version = "0.1.0"
 dependencies = [
- "drgnx-clock",
  "eitri",
  "insta",
  "landlock",
@@ -3161,6 +3031,7 @@ dependencies = [
  "serde",
  "serde_json",
  "skuld",
+ "stund",
  "tempfile",
  "tokio",
 ]
@@ -3170,8 +3041,8 @@ name = "gleipnir-escape"
 version = "0.1.0"
 dependencies = [
  "draugr",
- "drgnx-exe",
  "gleipnir",
+ "hlaup",
  "libc",
  "rustix",
  "serde",
@@ -3190,6 +3061,26 @@ dependencies = [
  "png 0.18.1",
  "sja",
  "smidja",
+]
+
+[[package]]
+name = "glugg"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "ghostty-vt-sys",
+ "icy_sixel",
+ "image",
+ "libc",
+ "png 0.18.1",
+ "rodd",
+ "rustix",
+ "serde",
+ "serde_json",
+ "skuld",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3357,6 +3248,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "hlaup"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "hlidskjalf"
 version = "0.1.0"
 dependencies = [
@@ -3377,9 +3276,9 @@ name = "hrafn"
 version = "0.1.0"
 dependencies = [
  "ast-grep-core",
- "drgnx-exe",
  "eitri",
  "gix",
+ "hlaup",
  "inotify",
  "libc",
  "notify",
@@ -3392,6 +3291,7 @@ dependencies = [
  "skuld",
  "tempfile",
  "tokio",
+ "toml_edit",
  "tree-sitter",
  "tree-sitter-elisp",
  "urdr",
@@ -4499,43 +4399,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nh-recorder"
-version = "0.1.0"
-dependencies = [
- "calloop",
- "png 0.17.16",
- "serde",
- "serde_json",
- "smithay",
- "wayland-backend",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-wlr",
- "wayland-scanner",
- "xkbcommon 0.8.0",
-]
-
-[[package]]
-name = "nhshell"
-version = "0.1.0"
-dependencies = [
- "glitnir",
- "libc",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "objc2-quartz-core",
- "resvg",
- "rustix",
- "wayland-backend",
- "wayland-client",
- "wayland-cursor",
- "wayland-protocols",
- "wayland-scanner",
- "xkbcommon 0.9.0",
-]
-
-[[package]]
 name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4584,12 +4447,12 @@ version = "0.1.0"
 dependencies = [
  "brokkr",
  "draugr",
- "drgnx-exe",
- "drgnx-ratatoskr",
+ "hlaup",
  "huginn",
  "insta",
  "mimir",
  "proptest",
+ "ratatoskr",
  "regex",
  "runstav",
  "schemars 1.2.3",
@@ -5656,6 +5519,95 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratatoskr"
+version = "0.1.0"
+dependencies = [
+ "aws-credential-types",
+ "aws-sigv4",
+ "base64 0.23.1",
+ "bifrost",
+ "brokkr",
+ "bytes",
+ "draugr",
+ "eitri",
+ "fastwebsockets",
+ "ferja",
+ "flate2",
+ "forseti",
+ "getrandom 0.4.3",
+ "gix-ignore",
+ "gleipnir",
+ "glugg",
+ "heimdall",
+ "hermod",
+ "hlaup",
+ "hmac",
+ "hrafn",
+ "hrafn-embed",
+ "http",
+ "http-body-util",
+ "huginn",
+ "hyper",
+ "hyper-util",
+ "jsonc-parser",
+ "lexopt",
+ "libc",
+ "memchr",
+ "mimir",
+ "minni",
+ "norn",
+ "notify",
+ "openssh",
+ "proptest",
+ "pulldown-cmark",
+ "quick-xml 0.42.0",
+ "rcgen",
+ "regex",
+ "ring",
+ "rmcp",
+ "rodd",
+ "runstav",
+ "rusqlite",
+ "rustix",
+ "rustls",
+ "rustls-platform-verifier",
+ "saga",
+ "secrecy",
+ "security-framework",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2 0.11.1",
+ "similar",
+ "skald",
+ "skuld",
+ "sleipnir",
+ "stund",
+ "subtle",
+ "tar",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "toml_edit",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "tree-sitter",
+ "urdr",
+ "vegvisir",
+ "verdandi",
+ "vor",
+ "vordr",
+ "xxhash-rust",
+ "zbus",
+ "zeroize",
+ "zeromq",
+ "zip",
+ "zstd",
+]
+
+[[package]]
 name = "raw-cpuid"
 version = "11.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5870,6 +5822,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ritari"
+version = "0.1.0"
+dependencies = [
+ "calloop",
+ "png 0.17.16",
+ "serde",
+ "serde_json",
+ "smithay",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
+ "wayland-scanner",
+ "xkbcommon 0.8.0",
+]
+
+[[package]]
 name = "rmcp"
 version = "3.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5891,6 +5860,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rodd"
+version = "0.1.0"
+dependencies = [
+ "read-fonts",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "skrifa",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "roxmltree"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5900,10 +5882,10 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 name = "runstav"
 version = "0.1.0"
 dependencies = [
- "drgnx-rows",
  "getrandom 0.4.3",
  "hmac",
  "proptest",
+ "rodd",
  "rustix",
  "schemars 1.2.3",
  "secrecy",
@@ -6602,6 +6584,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "skel"
+version = "0.1.0"
+dependencies = [
+ "glitnir",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-quartz-core",
+ "resvg",
+ "rustix",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-cursor",
+ "wayland-protocols",
+ "wayland-scanner",
+ "xkbcommon 0.9.0",
+]
+
+[[package]]
 name = "skrifa"
 version = "0.49.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6632,10 +6634,10 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 name = "sleipnir"
 version = "0.1.0"
 dependencies = [
- "drgnx-exe",
- "drgnx-px",
+ "ferja",
  "forseti",
  "gleipnir",
+ "hlaup",
  "libc",
  "proptest",
  "rustix",
@@ -6830,6 +6832,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "stund"
+version = "0.1.0"
+dependencies = [
+ "skuld",
+ "stund",
+ "tokio",
 ]
 
 [[package]]
@@ -7211,6 +7222,7 @@ dependencies = [
  "indexmap 2.14.2",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 
@@ -7222,6 +7234,12 @@ checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
  "winnow",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.1.3+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
 name = "tower-service"
@@ -7624,8 +7642,8 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 name = "vegvisir"
 version = "0.1.0"
 dependencies = [
- "drgnx-rows",
  "proptest",
+ "rodd",
  "serde",
  "serde_json",
  "skuld",
@@ -8765,6 +8783,13 @@ name = "xmlwriter"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
+dependencies = [
+ "drgnx-budget",
+]
 
 [[package]]
 name = "xxhash-rust"

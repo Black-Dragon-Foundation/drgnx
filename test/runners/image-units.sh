@@ -5,7 +5,7 @@
 #   bash test/runners/image-units.sh
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-img=$(cd "$here/../../crates/hub/drgnx-ratatoskr/src/runners/cloud/image" && pwd)
+img=$(cd "$here/../../crates/hub/ratatoskr/src/runners/cloud/image" && pwd)
 boot=$img/drgnx-first-boot
 tmp=$(mktemp -d)
 trap 'rm -r "$tmp"' EXIT

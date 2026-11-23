@@ -120,12 +120,12 @@ tests before TEST down to the one that makes it fail ([check.md](check.md#the-or
 ### Running the whole suite locally
 
 A full `bin/drgnx test` is green only with two binaries, which CI builds and a local checkout does not have: Ratatoskr
-(`DRGNX_RATATOSKR_BIN`, built with `--features drgnx-ratatoskr/test-hooks`) and huginn's `dump` example
+(`DRGNX_RATATOSKR_BIN`, built with `--features ratatoskr/test-hooks`) and huginn's `dump` example
 (`DRGNX_HUGINN_DUMP`). `test/no-skip.eld` lists the tests that must run, and in a full run a listed test that skipped is
 a failure, so without the binaries about 175 hub-client, agents-mirror, ai-gateway, agent-pair-hub and work tests, and
 `drgnx-huginn/differential-fresh-seed`, fail with nothing but "skipped" as the reason (the huginn one prints no
-per-test line). Build both (`cargo build -p drgnx-ratatoskr -p huginn --examples --bins --features
-drgnx-ratatoskr/test-hooks` in `runtime/`), set the two variables, and run `bin/drgnx test` (or `--container`, which
+per-test line). Build both (`cargo build -p ratatoskr -p huginn --examples --bins --features
+ratatoskr/test-hooks` in `runtime/`), set the two variables, and run `bin/drgnx test` (or `--container`, which
 mounts them). A run narrowed by `DRGNX_TEST_SELECTOR` does not hold the list. The selector is read as a Lisp string:
 `DRGNX_TEST_SELECTOR='"a\\|b"'`, quotes included.
 
@@ -138,8 +138,8 @@ Ratatoskr fails the row (`drgnx-test-no-hub`) instead of skipping it.
 
 `bin/drgnx test --ui`, `--scenario` and `--tty` (and `--container --ui` / `--scenario` / `--tty`, on the host before the container starts) give every contributor the same
 hub: `test_hub` fetches libghostty-vt's pinned tarballs when they are missing (`crates/hub/ghostty-vt-sys/fetch.sh`,
-as `install.sh` sets the terminal's engine up; Zig 0.17 builds it), builds `cargo build --locked -p drgnx-ratatoskr -p
-domr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks` (cargo builds nothing when the binaries are current) and
+as `install.sh` sets the terminal's engine up; Zig 0.17 builds it), builds `cargo build --locked -p ratatoskr -p
+domr -p glugg --bins --features ratatoskr/test-hooks` (cargo builds nothing when the binaries are current) and
 sets `DRGNX_RATATOSKR_BIN` to `target/debug/ratatoskr`, with `ratatoskr-mock` (the gateway tests' provider) and
 `drgnx-term` (the terminal rows' worker) beside it. `--container` mounts that directory, so both siblings are seen inside.
 

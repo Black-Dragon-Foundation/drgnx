@@ -149,7 +149,7 @@ conformance data). Rules:
     (an outside agent), actor `agent:SID` / `ext:KIND:PID-HASH`, its session, profile and job, tool `mcp:<name>`;
   - an editor method (`cards/settle`, `messages/*`, `events/add`, `review/mark`) from the user's connection: actor
     `user`, class `user`, tool `proto:<method>`; a seam method (`coord/*`) and a service connection's write actor
-    `hub`, class `system` (`drgnx-ratatoskr/src/coord.rs`, `tx_meta`);
+    `hub`, class `system` (`ratatoskr/src/coord.rs`, `tx_meta`);
   - the gateway's `spend` rows and the rate card of a held report: actor `hub`, class `system`.
 
   The rows of the kept tables a write made (`event`, `message`, `card`, `review_mark`, `agent`, `job`; `spend` from
@@ -227,7 +227,7 @@ work.db has one writer: the hub (Ratatoskr). Every write below is a transaction 
 
 | Writes | Through | Who calls | `tx` actor |
 |---|---|---|---|
-| a card settled, a message sent or marked, an event, a review mark and its event | the front's `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark` (`drgnx-ratatoskr/src/coord.rs` on `norn::write`) | the editor (a user connection) | `user` |
+| a card settled, a message sent or marked, an event, a review mark and its event | the front's `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark` (`ratatoskr/src/coord.rs` on `norn::write`) | the editor (a user connection) | `user` |
 | jobs, tasks, leases, decisions, agents, cards, held counts, the daily prune | `coord/job-create`, `coord/job-set`, `coord/task-status`, `coord/leases`, `coord/decide`, `coord/agent`, `coord/card-create`, `coord/card-set`, `coord/held`, `coord/prune` (user class), and the hub's own runner and timers on `norn::write` | a user connection; the hub itself | `hub` (class `system`) |
 | what the coordination tools write | `norn::tools` on the same `CoordDb` (`Front.tools`) | agents, through the MCP hosting | `agent:SID` (or the outside agent's `ext:…`) |
 
@@ -365,7 +365,7 @@ identity of its own (below). Messages are addressed to a session's id (or its na
 | `record_decision {kind, subject, task?, paths?, reason, replaces?, seen_version}` | current inside its own task, else proposed |
 | `claim_task`, `update_task`, `complete_task` `{task, …, seen_version}` | the lease and the status; `update_task` takes `running`, `needs-input`, `in-review` (and `failed` outside a job), nothing else |
 | `task_status {job?}` | the job's tasks |
-| `work_status` | the work tracker's plans, read from the graph (UTF-8 JSON; counts as `[done, all]`) |
+| `work_status` | the work tracker's plans, paged: `{plans: [{id, title, path, status, tasks, steps}], next_cursor?}` (counts as `[done, all]`; `status`, `limit` 1-50 (20), `cursor`, `path_prefix`; default the plans not done) |
 | `escalate {subject, text, seen_version}` | a message to `user`, queued (the Work space's What needs you shows it) |
 
 A held write answers `HELD: the decision log moved on — read these changes, then retry with seen_version N.` and
@@ -409,14 +409,58 @@ never from an argument or an environment variable:
   session").
   `hello`'s `name` is a label the user sees, never who the agent is.
 
-**What an outside agent may write:** only its own events and messages, within the report limit.
-- `claim_task`, `update_task`, `complete_task` and `record_decision` answer `jobs are drgnx's: report your work with
-  report_edit`.
+**What an outside agent may write:** unbound, only its own events and messages, within the report limit. Bound by
+the user (below), also plans, specs and decision records in its project, as the matrix allows.
+- `claim_task`, `update_task` and `complete_task` answer `T is for drgnx's own job agents: the user starts jobs;
+  report your work with report_edit and report_test`, bound or not; `report_submit` answers `report_submit ends a
+  drgnx job's task: …`. Jobs are started by the user and run by drgnx's own agents.
+- Unbound, `plan_read`, `plan_write`, `records_read`, `records_write` and `record_decision` answer `T needs the user's
+  binding for KIND agents in this folder (ratatoskr outside bind --kind KIND --root DIR --role worker); until then
+  report with report_edit and note_add` (`norn::tools::identity::outside_refusal`; DIR is the bridge's folder).
 - `escalate` answers `ask the user with ask_user`.
 - `send_message` counts against the same limit as the reports.
 - A `task` that names a job's task (`JOB#N`) is refused in `hello` and `ask_user`.
 - Its events and messages carry no job and no task, even when `DRGNX_JOB` or `DRGNX_TASK` leaked into its
   environment. `list_agents` and recipient lookup ignore a leaked job too.
+
+**Binding an outside agent** (`norn::bindings`, `ratatoskr/src/outside.rs`). An outside agent's rights come
+only from the user's binding: `ratatoskr outside bind --kind KIND --root DIR --role manager|worker|chat` (the
+methods `outside/bind`, `outside/unbind`, `outside/bindings`, user class only; their handlers refuse any other
+caller too, because the tools' `Hub::exec` checks no registry class). DIR is resolved to its project's top-level (a
+linked worktree's main repository, `norn::project::resolve`); `/`, the home folder and a folder in no repository are
+refused. A binding is a graph entity of kind `binding`, id `binding:KIND-<12 hex of sha1 of the root>`, data `{kind,
+root, role}`; the guard keeps the kind the user's, and `bindings::role_for` counts it only when every tx that wrote it
+(created, updated, each field) is of class `user`, so a write slipped past the guard is ignored.
+- **Attach.** `mcp/attach` resolves the bridge's folder to its project and reads the role (`outside::attach`). A
+  bridge in a project goes into the hub's `Bound` table (by id, each bridge with its guard's ticket; its guard leaves
+  when the connection ends). A bound bridge is served the plan and record tools as well
+  (`Sessions::outside_list_for`); the role read here only picks that list.
+- **The folder is checked** (`outside::folder_check`): the bridge process (the connection's peer pid) must work in
+  the folder its hello named, both as truenames (symlinks resolved). The hub reads that process's working directory
+  (`peer::cwd_of`: `/proc/PID/cwd` on Linux and Android, `proc_pidinfo(PROC_PIDVNODEPATHINFO)` on macOS). A mismatch
+  at attach gives no role; at a later call it refuses with both folders named (`this outside agent's bridge works in
+  A, not in B, the folder its hello named: …`). Where the system has no such read (`Unsupported`) the claimed folder
+  is kept. So `mcp-bridge --cwd DIR` binds only when DIR is the bridge's own folder. The kind stays the bridge's claim.
+- **Every call reads the binding again** (`outside::actor_for`): an `ext:` id no attached bridge holds, whose bridge
+  left its folder, or whose binding is gone, is refused (`this outside agent is not bound here`, or the folder
+  refusal), never taken for a worker. An unbind reaches a live bridge at its next call.
+- **Who it is to the matrix** (`outside::who_for`): its role's column and the agent column `ext:KIND`, its project,
+  no plan, and whether it acts on its own record ([The matrix in the hub](#the-matrix-in-the-hub-drgnx-ratatoskrsrcmatrix_gaters)).
+- **What it reaches:** through the tools' `exec` only `plans/get`, `plans/write`, `records/read` and
+  `records/write` (`outside::OUTSIDE_METHODS`; any other method answers `M is not open to an outside agent`). Its
+  scope is its project (`outside::scope_of`): records of that project, records of no project whose file lies under its
+  root, and records of no project it wrote itself. The scope is checked before the matrix, so a record outside it
+  makes no card.
+- **Its writes** are txs with actor its `ext:KIND:PID-HASH`, class `ext`, session the same id (`coord::tx_meta`), so
+  `graph revert --tx` undoes them and its own records are the ones whose `created_tx` it wrote
+  (`outside::own_record`).
+- **`record_decision`** of a bound agent takes no `task`, must name its sources and an origin of `from-brief` or
+  `needs-user`, replaces only a decision it recorded itself, and asks the matrix's `graph.change` on its own record
+  (`Hub::gate`); its decision is always proposed.
+- An id that is its pid alone (`ext:KIND:PID`, no start time) owns no record, so a later process given that pid
+  inherits nothing; `outside/bind` refuses a binding entity another writer made (it would never count).
+- Two bridges of one process share an id: the latest attach still connected is the one the table answers (its folder
+  and its process are the ones checked).
 
 **Text.**
 - Questions and message texts (`ask_user`, `send_message`, `escalate`'s subject and text) are trimmed and cut to
@@ -482,7 +526,9 @@ from an argument or an environment variable (`DRGNX_AGENT` is never read):
 - `Identity::Session {agent, job, task, home}`: a session's own `mcp.sock` (hub.md, "Sessions and their sockets"). Its
   job and task are what `DRGNX_JOB` and `DRGNX_TASK` were; `home` is the folder the session started in, the Lisp
   server's `default-directory`.
-- `Identity::Outside {id, kind, home}`: an outside bridge. `Identity::outside(KIND, PID, START, HOME)` makes
+- `Identity::Outside {id, kind, home, role}`: an outside bridge; `role` is the user's binding as `mcp/attach` read it
+  (`None`: unbound; `with_role`, `outside_role`), and the hub reads the binding again at every call that needs it.
+  `Identity::outside(KIND, PID, START, HOME)` makes
   `ext:KIND:PID-HASH` from the bridge's peer process, as the Lisp did for itself: PID the agent's process, HASH 6 hex
   of sha1 over its start time to the second (`ext:KIND:PID` without one; `hello` then says so in `note`). An outside
   agent has no job and no task. With no `home` (a bridge that named no folder), `hello` and `report_edit` answer "No
@@ -512,7 +558,9 @@ is `HELD: …` with the decisions since (`changes`, newest first). A recipient i
 or a hub session named by id or name (asked last); an outside agent's `send_message` counts as a report.
 `read.rs` has `read_inbox` (its rows are as they were read, then marked `read`), `ack`, `read_decisions` (the caller's
 `seen:ID` is written only when it changed), `task_status` and `work_status`: the work tracker's plans from the `node`
-and `edge` tables, read-only, sorted by path, with the counts of `drgnx-work-counts`. The size of `tools/list` is
+and `edge` tables, read-only, sorted by path, with the counts of `drgnx-work-counts`; a page holds 20 plans by default
+(`limit` up to 50, `cursor` `o:N`), the plans not done unless `status` says otherwise (a status word or `all`), and a plan
+without a path or title has `null` there. The size of `tools/list` is
 measured by `tools_schema::the_tool_list_fits_the_budget` against the 24,000-byte (about 6k-token) budget for the 16
 tools and 36,000 bytes (about 9k tokens) for the 21 with the tracker set.
 
@@ -522,7 +570,8 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
   kept in `Coord::projects()`. Writes register a new project; reads use only one the store knows. It is never an
   argument.
 - **Answers** are text plus `structuredContent` (`Authored` text: `{text, by, class, tx, project, trust}`), a
-  `resource_link` (`drgnx://entity/ID`) per entity named, and `_meta["dev.drgnx/notices"] = n`, with a last text line
+  `resource_link` (`drgnx://entity/ID`) per entity named only when the call has `links: true` (the rows are already in
+  the text and `structuredContent`), and `_meta["dev.drgnx/notices"] = n`, with a last text line
   `notices: n (read_inbox)` only when n > 0. Untrusted text, the caller's own included, is fenced in the text. Lists
   hold 50 rows and a `next_cursor` (`o:N`).
 - `task_write` and `note_add` take an optional `req`; a repeat returns the first answer. A caller without a project
@@ -539,7 +588,8 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
   names there are; the text is the pack's as the job's approval froze it (`orchestration.md`, "The rule pack").
 - `hello` keeps its first text item and adds a second one and `structuredContent.brief`; `record_decision` takes
   `about: [id]`.
-- `task_read find` ranks by words (FTS) and says `vectors: "behind N"` while entities in the caller's scope (its
+- `task_read find` takes `kind` (`task`, the default, `plan`, `spec` or `decision`; a spec or decision of no project
+  shows as a stub to an agent: `records_read` reads it in full) and ranks by words (FTS) and says `vectors: "behind N"` while entities in the caller's scope (its
   project and the projects granted to it) lack a vector; the vector half
   waits for the embedder (Task 12b).
 
@@ -557,7 +607,7 @@ re-lists them through `mimir::serve_live`: the agent gets `notifications/tools/l
 session ends, so an agent mid-investigation never loses one between two calls. They take no identity: the session's
 is passed to the hub's `Hub::debug`, which gates each call by the matrix's `debug.*` rows ([debugging.md](debugging.md#debugging-with-an-agent-spec-195)).
 
-### Plugin abilities (`drgnx-ratatoskr/src/abilities.rs`)
+### Plugin abilities (`ratatoskr/src/abilities.rs`)
 
 Abilities are served apart from the hub's own tools: `Sessions` binds `plugins.sock` (`SESSION_PLUGINS_SOCKET`) in the
 session's directory when the session opens with an approved, enabled plugin that has an ability and its columns are
@@ -584,7 +634,11 @@ server's checks. That includes an agent, a command an agent ran, and any process
 - open `work.db` and write to it directly;
 - start a coordination server with any other agent's id in `DRGNX_AGENT` (`ext:…` ones included; never `user`, which
   the server refuses, but the store itself can be written directly), or with a `DRGNX_AGENT_KIND` of its choice, and
-  write as that identity.
+  write as that identity;
+- start an outside bridge with another `--kind`, or start one in a bound folder: the hub checks the bridge's parent
+  process and that the bridge works in the folder it names (on Linux and macOS), but any process can change into a
+  folder it can read, and the kind is never verified, so the user's binding for that kind and folder is a convention
+  among cooperating agents, not authentication.
 
 `DRGNX_AGENT` is trusted as it is set, and an outside agent's `ext:KIND:PID-HASH` identity and its limits stop a
 confused or runaway agent. They do not stop a same-uid process that sets up its own environment. The checks above
@@ -631,7 +685,7 @@ A peer message is text for the agent and nothing else: permission requests are a
 while its decision log is behind; reviewers are never gated (they read). A task's prompt asks for `read_decisions`
 first.
 
-### Delivery in Ratatoskr (`drgnx-ratatoskr/src/agents/deliver.rs`, Task 24)
+### Delivery in Ratatoskr (`ratatoskr/src/agents/deliver.rs`, Task 24)
 
 The same rules, run by the hub for the sessions it holds: `deliver::run` makes a pass whenever a write may have added a
 message (`Signals::deliver`) and every second. A queued message goes to its recipient session (its id or its name)
@@ -689,7 +743,7 @@ exit 2). A proposal with a budget lists in its data the profiles of its routes w
 without a `price`, and warns (the proposal card, `warnings` in the summary): the gateway cannot count what they spend.
 A notification to the hub (`coord/notify`) carries no id and gets no answer: the sender has hung up by then.
 
-### Plan runs in the hub (`drgnx-ratatoskr/src/runner`)
+### Plan runs in the hub (`ratatoskr/src/runner`)
 
 The hub serves `job/{propose,start-task,approve,order,block,unblock,stop,status}` itself, with
 the job summary shapes the Work space and `bin/drgnx job` read, and `job/{card,reply,
@@ -800,7 +854,8 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
   needs `task.done` (never for a worker). An agent reaches its own project's plans, reports and tasks only (its
   session's project: the plan run's, else the one its folder is in): `plans/get`, `plans/write`, `reports/get` and the
   manager's `report_read` refuse another project's records, and a new plan lands in the agent's project (naming
-  another is refused); a record of no project, such as a job's tasks, belongs to its job: only that job's sessions and their manager reach it (else the session that wrote it). `job/propose` takes the
+  another is refused; `path` names a new plan's view file under `docs/plans/<repo>/`, which an agent's new plan needs, see
+  `records.md`, "Writing specs and decisions"); a record of no project, such as a job's tasks, belongs to its job: only that job's sessions and their manager reach it (else the session that wrote it). `job/propose` takes the
   entity id too: the plan's tasks (numbers must start with digits), roles and dependencies become the job. A task's
   `body` is its section of the brief, before its steps and interfaces; a task's `profile` is the profile it runs on
   (the job's `data.profiles` entry for it, as a reassignment would be; none: its role's route). A plan an agent
@@ -871,7 +926,7 @@ the user's — a `replaces` of the other side for a contradiction; the proposal 
 decision; for work against a decision, the task back to an agent told which files to revert (A), or the decision
 replaced and the review going on (B) — and the log's delivery tells every agent of the job.
 
-In the hub the rules are `runner::clash` (`crates/hub/drgnx-ratatoskr/src/runner/clash.rs`), pure functions over
+In the hub the rules are `runner::clash` (`crates/hub/ratatoskr/src/runner/clash.rs`), pure functions over
 the run's state: `scan(&RunState, &[Decision], &DiffIndex) -> Vec<Clash>` returns the clashes whose key is not in
 `RunState::carded` (the runner remembers each key it cards); `user_wins(&[Decision])` lists the agent decisions a
 user's decision replaces at once (no card). `DiffIndex` is task id → path → `FileDiff { hash, ranges }`, built from
@@ -1013,7 +1068,7 @@ limit (`amount` in a `Unit`).
 Tests: `cargo test -p norn matrix` (the Balanced table cell by cell, the browser rows in every preset, the Ask cap
 in every layer, combination, overrides, narrowing as a property test and for the browser rows, units, time presets).
 
-### The matrix in the hub (`drgnx-ratatoskr/src/matrix_gate.rs`)
+### The matrix in the hub (`ratatoskr/src/matrix_gate.rs`)
 
 `MatrixGate::check(tx, who, action, ctx, now)` is the one door: it builds the layers (the active preset, the
 `agents-matrix` setting decoded by `settings/matrix.rs`, the project's layer, the plan's) and answers `Allow`,
@@ -1070,7 +1125,39 @@ and its arguments, with their hash), and the manager's pending answer is keyed o
 subscription is the budget gate's (Task 20), not the matrix's.
 Methods: `matrix/get`, `matrix/check` (no card), `presence/set`.
 
-### Plan runs: git, the merge gate, trial merges (`drgnx-ratatoskr/src/runner/git.rs`)
+**Outside agents.** A ctx whose session is `ext:…` (`matrix_gate::is_outside`; only `outside::who_for` builds one,
+from an attached, bound bridge) is an outside agent's. `effective_for` gives it:
+- with no role (unbound): Never at every action, whatever any layer says;
+- else its role's and its kind's (`ext:KIND`) cells from every layer, as for a session (an agent column only
+  tightens), then `norn::matrix::outside_effective`: every row of `OUTSIDE_NEVER` (task done, the pushes and merge,
+  starting or steering agents, spending, containers and keys, machines, `settings.change`, and the two rows no one
+  gets) is Never, and on a record it did not create (`ActionCtx.own_record` false) `graph.change` is at most Ask.
+No delegation is ever read for it. An Ask's card keeps `own_record` in its data, and `recheck` reads it back, so the
+cap holds at execution. The plan and record writes check the scope first, then `graph.change` (`effects::may_change`
+with the write's own-record answer), then `task.done` for a status of done or an approval (Never for an outside
+agent).
+
+**An outside agent's change, asked and answered.** Its `graph.change` carries the call itself (`ActionCtx.change`,
+`norn::grants::Change`: the method — `plans/write`, `records/write` or `record_decision` —, the record id or a new
+record's path, and the SHA-1 of the call's arguments as JSON). Its card's data holds `change` and `once_window`, and
+its title is `ID wants METHOD on RECORD`; so another call is another card.
+- `cards/settle` `allow` on such a card (`graph::settle_change`, the user's tx: the guard refuses a grant from anyone
+  else) writes a change grant (`grants::create_matrix_change`: access `matrix`, `who` the agent's session, `what`
+  `{matrix: "graph.change", change}`, `card`, `expires` now + `once_window`) and messages the agent to make the same
+  call again. Any other choice writes no grant and messages it that the call is refused.
+- `check` with the verdict Ask looks for a live change grant of the session naming the same change whose card is not
+  spent (`matrix_gate::change_grant`); it spends the card in the same tx (`cards::matrix_card_spend` sets
+  `data.spent` to the tx) and allows. A second call, another change, or one after the window makes a new card.
+- Before a new card, `check` looks for a settled card with the same data (less `once_window`) the user did not allow
+  whose `settled_at` + its `once_window` is still ahead (`cards::matrix_card_declined`): the call is then Never (`the
+  user refused this change (card N)`), with no card. A no lasts that window, as a yes does; after it the same call
+  makes a new card (the way back from a mistaken no).
+- Only the user's `cards/settle` answers such a card (the method is user-class; `settle_with` refuses any other
+  caller too, so no agent can refuse another's change).
+- A Never verdict (a cap, a cell) is decided before any grant, so a yes never opens one. The card is spent when the
+  gate allows, even when a later check of the same write (`task.done`) refuses it.
+
+### Plan runs: git, the merge gate, trial merges (`ratatoskr/src/runner/git.rs`)
 
 `HubGit` is the hub's `RunGit`. Every git call is async with a deadline and none runs on the runner's tick.
 

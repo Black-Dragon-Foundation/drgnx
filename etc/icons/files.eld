@@ -1,4 +1,4 @@
-;; The file-kind icons, read by the hub (the Explorer's rows, runtime/crates/drgnx-ratatoskr/src/view/icons.rs) and by
+;; The file-kind icons, read by the hub (the Explorer's rows, runtime/crates/ratatoskr/src/view/icons.rs) and by
 ;; Lisp (`drgnx-look-file-name-icon-name': Buffers, Quick Open), so both name the same icon for a name.  Plain data, one
 ;; plist (`drgnx-file-read'):
 ;;   :names       (ICON NAME...): a file called NAME exactly (any case), tried first: build files, notes without an

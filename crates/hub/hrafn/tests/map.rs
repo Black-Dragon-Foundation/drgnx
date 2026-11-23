@@ -56,6 +56,7 @@ fn listed(path: &str, text: &str) -> Listed {
         class,
         lang,
         generated: false,
+        embed: true,
         size: text.len() as u64,
     }
 }

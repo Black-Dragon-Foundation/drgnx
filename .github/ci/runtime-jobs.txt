@@ -1,0 +1,28 @@
+# runtime.yml's jobs (docs/develop/ci.md, "Gates"): which ids of .github/ci/paths.txt run each, its role, and when the
+# `Runtime gate` may see it skipped (.github/ci/runtime-skips.sh; .github/ci/gate-needs.sh --check holds the workflow to
+# this table). A row: the job id, its rt ids (comma-separated; - for none: it always runs), its role and its skip-when
+# tokens.
+#   build     compiles, and saves its cache; it runs on main's push (the cache run)
+#   consumer  runs what a build job made: it needs that job, its if: begins with ${{ !cancelled(), so it runs and fails
+#             when the build failed, and main's push skips it
+#   check     anything else (its own toolchain or target, a policy)
+#   post      runs after whichever jobs ran (cache-prune): it needs the builds for its order, and brings none of them in
+# Tokens: pr (a pull request), cache-run (a push to main), schedule (the daily run), no-save (a run that never saves a
+# cache: not a push or dispatch on main, ci/* or scratch/drgnx-mac-rounds), dispatch-only:ID (only a manual run that
+# names ID). A new job comes with its row, in the same commit.
+images             rt-linux,rt-macos  build     schedule
+linux              rt-linux       build     schedule
+msrv               rt-msrv        check     schedule
+escape-host        rt-escape      build     schedule
+debug-live         rt-linux       build     schedule
+agent-containers   rt-containers  build     schedule
+fleet              rt-fleet       check     dispatch-only:rt-fleet
+android            rt-android     check     schedule
+deny               rt-deny        check
+fuzz-build         rt-fuzz        build     pr
+fuzz               rt-fuzz        consumer  pr cache-run
+macos              rt-macos       build     schedule
+macos-conformance  rt-macos       build     schedule
+macos-perf         rt-macos       build     schedule
+cache-prune        -              post      no-save
+gate               -              check

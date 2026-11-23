@@ -435,7 +435,7 @@ fn a_gone_agents_late_root_reply_never_reaches_the_next() {
     ));
 }
 
-/// The browser side of real runs (drgnx-ratatoskr's tests/browser_real.rs, Fedora's Chromium as the full browser and
+/// The browser side of real runs (ratatoskr's tests/browser_real.rs, Fedora's Chromium as the full browser and
 /// as its headless shell): the router's first command is the one the broker sent there, and everything the browser
 /// said goes through a router as well-formed output (the agent side is not recorded, so its answers are not checked).
 #[test]

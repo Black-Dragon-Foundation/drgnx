@@ -1,9 +1,9 @@
 //! The Schedule's bars and rows (`vegvisir::schedule`): the states of the timeline spec's §4, the target states on
 //! specs and plans only, By machine, and the rows' parts.
 
-use drgnx_rows::faces::FaceId;
-use drgnx_rows::fit::Measure;
-use drgnx_rows::svg::Palette;
+use rodd::faces::FaceId;
+use rodd::fit::Measure;
+use rodd::svg::Palette;
 use vegvisir::render::Env;
 use vegvisir::schedule::{self, BarFacts, SchedRow, ScheduleState};
 use vegvisir::trail::{Window, Zone};

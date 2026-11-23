@@ -954,7 +954,7 @@ git's and the disk's time, so they are reported, never failed: the workload `sea
 release hub, and the hub's ignored test
 `git_scope_lists_at_a_checkouts_size` (`view/search/tests.rs`) builds that repository and prints each scope's p50 and
 p95; run it optimized, alone on the perf island:
-`cargo test --release -p drgnx-ratatoskr --lib -- git_scope_lists_at_a_checkouts_size --ignored --nocapture`.
+`cargo test --release -p ratatoskr --lib -- git_scope_lists_at_a_checkouts_size --ignored --nocapture`.
 
 A workload's wait (`drgnx-perf--wait`) returns when its condition first held, not when its poll saw it: the condition
 is also tried after each hub batch and each timer. The poll (50 ms) can see a change up to 50 ms late: a timer it runs
@@ -1050,7 +1050,7 @@ desktop's pinned island (`perf-exclusive.sh` as the outer wrapper, `DRGNX_PERF_C
 
 | Row | Where | Budget |
 |---|---|---|
-| tier 1 of a drgnx checkout; one saved file searchable | `drgnx-ratatoskr/tests/timing.rs` (`tier1_of_a_checkout_and_one_saved_file`) | 60 s; 1 s (the references cost about 12 % of a full tier 1, paired on the island; the row prints the store's growth from them) |
+| tier 1 of a drgnx checkout; one saved file searchable | `ratatoskr/tests/timing.rs` (`tier1_of_a_checkout_and_one_saved_file`) | 60 s; 1 s (the references cost about 12 % of a full tier 1, paired on the island; the row prints the store's growth from them) |
 | `search/query` p95, 50,000 and 100,000 synthetic chunks, vectors on | the same file (`query_p95_at_50k_chunks`, `…_100k_…`) | 100 ms; 200 ms |
 | the agent tools at 50,000 synthetic chunks with references (each function calls 4 others, drawn Zipf-like): repo map cold (graph built) and warm p95, usages p95, symbols p95, outline p95, graph cache | the same file (`agent_tools_at_50k_chunks`) | 1,000 ms, 150 ms; 50 ms; 20 ms; 10 ms; 64 MB |
 | built-in embedding tokens/s (GPU), VRAM at 4,096 tokens | `hrafn-embed/tests/timing.rs` (`bench_tokens_per_s`) | 20,000; 800 MB |
@@ -1146,54 +1146,54 @@ The rows are provisional: they report and never fail until `DRGNX_PERF_LANDED` n
 that judges them. Run them pinned, alone on the perf island:
 `DRGNX_PERF_WORKLOADS='extensions-open extensions-search extensions-scroll extensions-details extensions-progress activate-live activate-live-new install-overhead refresh-job list-packages-compare' perf-exclusive.sh env DRGNX_PERF_CPUS=4 bin/drgnx test --container --perf`.
 
-The hub's side is a Rust bench, `crates/hub/drgnx-ratatoskr/benches/extensions.rs`: `catalog-load` (parse and merge
+The hub's side is a Rust bench, `crates/hub/ratatoskr/benches/extensions.rs`: `catalog-load` (parse and merge
 7,150 rows) at most 100 ms and 15 MB, and `extensions/search` at most 3 ms at the 95th percentile. The 15 MB is what
 the hub's cache keeps (the parsed file and the index): live bytes counted by the bench's own global allocator, not
 resident memory, which a warm process's arenas hide. It is `#[ignore]`d, and a test whose budget is missed fails;
 run it once, optimized and alone on a pinned host:
-`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench extensions -- --ignored --nocapture --test-threads 1`.
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p ratatoskr --bench extensions -- --ignored --nocapture --test-threads 1`.
 
-The Run and Debug view's hub rows are the bench `crates/hub/drgnx-ratatoskr/benches/debug_view.rs`:
+The Run and Debug view's hub rows are the bench `crates/hub/ratatoskr/benches/debug_view.rs`:
 `debug-step-variables` (the hub's half of a step: lines, model, model diff and rows built again with 300 variables, ten
 changed; with the editor's half within 30 ms at the 95th percentile) and `debug-hub-memory` (a 100,000-element list
 open to its two chunk levels with one page fetched, its lines, model and rows: at most 64 MB more heap, counted by the
 bench's own allocator) and `debug-hub-memory-pages` (every one of its 1,000 pages opened in turn, as `debug/expand`
 does: the view keeps the last `PAGE_CAP` = 64 open and lets the rest go; at most 64 MB). Ignored like the others:
-`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_view -- --ignored --nocapture --test-threads 1`.
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p ratatoskr --bench debug_view -- --ignored --nocapture --test-threads 1`.
 
-Recorded runs' hub rows are the bench `crates/hub/drgnx-ratatoskr/benches/debug_record.rs`: `debug-launch-snapshot`
+Recorded runs' hub rows are the bench `crates/hub/ratatoskr/benches/debug_record.rs`: `debug-launch-snapshot`
 (the launch snapshot of a 5,000-file project with nothing changed, at most 150 ms at the 95th percentile) and
 `debug-capture` (a stop's capture cut to 64 KB, appended to the run file and flushed, at most 1 ms at the 95th
 percentile). It is `#[ignore]`d and measures and prints; run it optimized and alone on a pinned host:
-`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_record -- --ignored --nocapture --test-threads 1`.
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p ratatoskr --bench debug_record -- --ignored --nocapture --test-threads 1`.
 
-The budget event's hub rows are the bench `crates/hub/drgnx-ratatoskr/benches/budget_event.rs`: 30 agents spending ten times
+The budget event's hub rows are the bench `crates/hub/ratatoskr/benches/budget_event.rs`: 30 agents spending ten times
 a second under 3 runs and a plan; a scope has at most one `budget` event a second (`budget-event`, 1) and one flush costs
 at most 4 ms at the 95th percentile (`budget-event-patch`). Run:
-`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench budget_event -- --ignored --nocapture --test-threads 1`.
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p ratatoskr --bench budget_event -- --ignored --nocapture --test-threads 1`.
 
 The budget tree's hub row is the same bench's second test, `budget_tree`: 500 scopes, the first page of 200 nodes built
 (`tree_scopes` and `node`) within 20 ms (`budget-tree-open`, `:first-page`).
 
-The joint plan forecast's rows are the ignored test `forecast_plan_perf` in `drgnx-ratatoskr` (`forecast.rs`): 12 plans of 20 tasks drawn
+The joint plan forecast's rows are the ignored test `forecast_plan_perf` in `ratatoskr` (`forecast.rs`): 12 plans of 20 tasks drawn
 together, the first call within 300 ms (`forecast-plan-miss`) and the cached repeats within 5 ms at the 95th percentile
-(`forecast-plan-hit`): `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --lib -- --ignored --nocapture forecast_plan_perf`.
+(`forecast-plan-hit`): `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p ratatoskr --lib -- --ignored --nocapture forecast_plan_perf`.
 
-Inline values' hub row is the bench `crates/hub/drgnx-ratatoskr/benches/debug_inline.rs`: `debug-inline`, a stop's
+Inline values' hub row is the bench `crates/hub/ratatoskr/benches/debug_inline.rs`: `debug-inline`, a stop's
 values for a 2,000-line Python file stopped in a 200-line function with 42 variables, the parse cached (at most 8 ms at
 the 95th percentile; the first parse is printed too). It is `#[ignore]`d and measures and prints:
-`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_inline -- --ignored --nocapture --test-threads 1`.
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p ratatoskr --bench debug_inline -- --ignored --nocapture --test-threads 1`.
 
 `debug-fork-start` (a what-if fork's tree restored, its Gleipnir sandbox and adapter started and its program run to
 its first stop: at most 2 s at the 95th percentile on Linux) is the live row `debug::tests_fork_live::debug_fork_start`,
 ten Python traces in a row. It needs the adapter image with bwrap (`ctr.sh --sandbox`), is `#[ignore]`d as a timing
 test, and measures and prints.
 
-Past sessions' warm scan is the bench `crates/hub/drgnx-ratatoskr/benches/past_scan.rs`: `past-scan`, 5,000 Claude
+Past sessions' warm scan is the bench `crates/hub/ratatoskr/benches/past_scan.rs`: `past-scan`, 5,000 Claude
 session files over 100 project folders, one full scan and then 200 scans with nothing changed, each measured in its
 thread's CPU time (`getrusage(RUSAGE_THREAD)`); p95 must stay under 4 ms, and no file may be opened. The files are a day old, as most of a real folder is: a folder with a file changed within the hour is read in full every walk (5,000 stats cost about 12 ms of CPU), a cold one only when its mtime moves or every 30th walk. It is `#[ignore]`d
 and measures and prints; run it optimized and alone on a pinned host:
-`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench past_scan -- --ignored --nocapture --test-threads 1`.
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p ratatoskr --bench past_scan -- --ignored --nocapture --test-threads 1`.
 
 Tests: `test/unit/perf-extensions-test.el` (every row has a budget and a fixture, the comparison measures both sides).
 

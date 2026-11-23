@@ -153,7 +153,7 @@ pub fn tree(root: &Path) -> BTreeMap<Vec<u8>, String> {
 /// A script at `at` that appends `name` to `marker` when anything runs it.
 pub fn marker_script(at: &Path, marker: &Path, name: &str) {
     fs::create_dir_all(at.parent().unwrap()).unwrap();
-    drgnx_exe::write(
+    hlaup::write(
         at,
         format!("#!/bin/sh\necho {name} >> '{}'\n", marker.display()),
     )

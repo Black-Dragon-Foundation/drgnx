@@ -8,8 +8,8 @@
 //!
 //! test-pattern: pure (D).
 
-use hrafn::chunk::{BUDGET, CHUNKER_VERSION, chunk_file};
-use hrafn::{classify, vec_key};
+use hrafn::chunk::{BUDGET, chunk_file, embed_text_and_key};
+use hrafn::{chunk_key, classify};
 use std::fmt::Write;
 use std::path::PathBuf;
 
@@ -44,7 +44,8 @@ fn render(files: &[&str], dir: PathBuf) -> String {
         let (chunks, symbols) = chunk_file(name, lang, false, &text, BUDGET);
         writeln!(out, "# {name} {}", lang.as_str()).unwrap();
         for c in &chunks {
-            let key: String = vec_key(CHUNKER_VERSION, &c.embed_text)
+            let key: String = embed_text_and_key(c)
+                .1
                 .iter()
                 .map(|b| format!("{b:02x}"))
                 .collect();
@@ -85,6 +86,55 @@ fn compare(golden_name: &str, now: String) {
 #[test]
 fn old_languages_chunk_as_before() {
     compare("chunks.golden", render(FILES, fixtures().join("golden")));
+}
+
+/// Pattern D (Hrafn redesign Task 8). No golden fixture's chunk, put under a path of directories, carries its path or
+/// file name in what is embedded: the header (title, section, `defines:`, `part i/n`) is path-free, and the text sent
+/// is the chunk's `embed_text`, hashed into its key.
+#[test]
+fn embed_text_has_no_path() {
+    for (files, dir) in [
+        (FILES, fixtures().join("golden")),
+        (LANG_FILES, fixtures().join("langs")),
+    ] {
+        for name in files {
+            let text = std::fs::read_to_string(dir.join(name)).unwrap();
+            let path = format!("deep/nested/{name}");
+            let (lang, _) = classify(&path, text.as_bytes());
+            let (chunks, _) = chunk_file(&path, lang, false, &text, BUDGET);
+            assert!(!chunks.is_empty(), "{path}");
+            let (elsewhere, _) = chunk_file(&format!("other/{name}"), lang, false, &text, BUDGET);
+            let texts = |cs: &[hrafn::chunk::Chunk]| -> Vec<String> {
+                cs.iter().map(|c| c.embed_text.clone()).collect()
+            };
+            assert_eq!(
+                texts(&chunks),
+                texts(&elsewhere),
+                "{name}: the path changed the text"
+            );
+            for c in &chunks {
+                let (sent, key) = embed_text_and_key(c);
+                assert_eq!(sent, c.embed_text);
+                assert_eq!(key, chunk_key(sent));
+                assert!(
+                    c.embed_text.starts_with(&c.header),
+                    "{path}: {:?}",
+                    c.embed_text
+                );
+                // (a header may quote the file's own text, a section heading naming the file, but never its path)
+                assert!(
+                    !c.header.contains("deep/nested"),
+                    "{path}: the header {:?}",
+                    c.header
+                );
+                // a file whose own text never names it: nothing embedded does
+                if !text.contains(*name) {
+                    assert!(!c.embed_text.contains(*name), "{path}");
+                }
+                assert_eq!(c.fts.path, path, "the FTS path column keeps it");
+            }
+        }
+    }
 }
 
 #[test]

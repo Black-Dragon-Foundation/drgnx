@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# skel's checks: fmt, clippy, tests, licence policy, vendor drift, and the release build.
+# Usage: check.sh [--container DISTRO] [--test NAME] [--full] [--relock] [--tsan] [--target TRIPLE]   Exit 0 ok,
+# 1 "check.sh: FAIL <check>", 2 usage, 3 the TSan lane or the --target toolchain is unavailable.
+# Cargo runs --locked: from crates.io (network), or offline from vendor/ when the release's vendor tarball is unpacked.
+# --full adds the slow checks (vendor drift, when a vendor/ is there, and the LTO release build with its exports); a
+# task's author check runs without it, integration builds and gates with it.
+# Without --container the host's cargo runs (CI, macOS).  With it, podman runs a memory-capped container (2 GiB) from the
+# check image (fedora-45: nidhogg-check:fedora-45-HASH, built once from deps/fedora-45.check by ci/image.sh local; the
+# run prints "image: REF (local|built)" and installs nothing; NIDHOGG_CRATES_IMAGE names another).  Another distro
+# installs cargo, clippy, rustfmt and the -devel packages per run (the package cache under $NIDHOGG_BUILD_PKG_CACHE
+# when set).  CARGO_HOME and CARGO_TARGET_DIR live under $NHSHELL_CARGO_DIR (default $T/nhshell-cargo).  The
+# crate directory is only written by --relock, which regenerates Cargo.lock (needs the network).
+# --tsan runs only the named tests (all without --test) under ThreadSanitizer: a nightly toolchain (rustup, installed
+# once into $NHSHELL_CARGO_DIR/rustup and tsan-home, so the stable lanes keep their cargo) with -Zbuild-std, whose std
+# dependencies are vendored together with the crate's (network).  Where that cannot be had it exits 3 and says why;
+# a data race the sanitizer finds fails the lane.  Its target directory is separate (target/tsan).
+# NH_RECORDER (a built nidhogg/test/recorder) is passed to the T1 tests (tests/*.rs); in a container it is mounted.
+set -u
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+DISTRO="" TEST="" INNER=0 REVENDOR=0 FULL=0 TSAN=0 TARGET=""
+usage() { echo "usage: check.sh [--container DISTRO] [--test NAME] [--full] [--relock] [--tsan] [--target TRIPLE]" >&2; exit 2; }
+while [ $# -gt 0 ]; do
+  case $1 in
+    --container) [ $# -ge 2 ] || usage; DISTRO=$2; shift 2 ;;
+    --test) [ $# -ge 2 ] || usage; TEST=$2; shift 2 ;;
+    --relock) REVENDOR=1; shift ;;
+    --full) FULL=1; shift ;;
+    --tsan) TSAN=1; shift ;;
+    --target) [ $# -ge 2 ] || usage; TARGET=$2; shift 2 ;;
+    --inner) INNER=1; shift ;;
+    *) usage ;;
+  esac
+done
+if [ -n "$DISTRO" ] && [ "$INNER" = 0 ]; then
+  command -v podman >/dev/null 2>&1 || { echo "check.sh: podman not found (podman only; no docker)" >&2; exit 1; }
+  CARGO_DIR=${NHSHELL_CARGO_DIR:-${T:+$T/nhshell-cargo}}
+  [ -n "$CARGO_DIR" ] || { echo "check.sh: set NHSHELL_CARGO_DIR (or T)" >&2; exit 2; }
+  mkdir -p "$CARGO_DIR"
+  EXTRA=()
+  if [ -n "${NIDHOGG_BUILD_PKG_CACHE:-}" ]; then
+    mkdir -p "$NIDHOGG_BUILD_PKG_CACHE/dnf"
+    EXTRA=(-v "$NIDHOGG_BUILD_PKG_CACHE/dnf:/var/cache/libdnf5:Z")
+  fi
+  # the T1 tests' recorder (nh-recorder): the binary read-only (shared label: other containers use it too)
+  if [ -n "${NH_RECORDER:-}" ]; then
+    [ -x "$NH_RECORDER" ] || { echo "check.sh: NH_RECORDER is not an executable: $NH_RECORDER" >&2; exit 2; }
+    EXTRA+=(-v "$NH_RECORDER:/nh-recorder:ro,z" -e NH_RECORDER=/nh-recorder)
+  fi
+  # nidhogg/ is mounted whole: the crate depends on ../glitnir.  Read-only, except for --relock.
+  NH=$(cd "$HERE/.." && pwd)
+  MODE=ro; [ "$REVENDOR" = 1 ] && MODE=rw
+  TSAN_PKGS="" MEM=2g
+  [ "$TSAN" = 0 ] || { TSAN_PKGS=" rustup"; MEM=4g; }
+  NAME=nhshell-check-$$
+  cleanup() { podman rm -f "$NAME" >/dev/null 2>&1 || true; }
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  inner="bash /nh/shell/check.sh --inner${TEST:+ --test $(printf %q "$TEST")}$([ "$REVENDOR" = 1 ] && echo ' --relock')$([ "$FULL" = 1 ] && echo ' --full')$([ "$TSAN" = 1 ] && echo ' --tsan')${TARGET:+ --target $TARGET}"
+  IMAGE=${NIDHOGG_CRATES_IMAGE:-}
+  if [ -z "$IMAGE" ] && [ "$DISTRO" = fedora-45 ]; then
+    # the check image (deps/fedora-45.check), built here once: no package manager runs
+    IMAGE=$(bash "$HERE/../ci/image.sh" local check-fedora-45) || { echo "check.sh: the check image failed" >&2; exit 1; }
+  else
+    # nothing to install in an image that has them (NIDHOGG_CRATES_IMAGE, CI's nidhogg-build-fedora-45)
+    pk="cargo rust clippy rustfmt gcc binutils diffutils pkgconf-pkg-config openssl-devel cmake wayland-devel libxkbcommon-devel xkeyboard-config libX11-common pixman-devel${TSAN_PKGS:-}"
+    inner="{ rpm -q --quiet --whatprovides $pk 2>/dev/null || dnf -y --setopt=install_weak_deps=False ${NIDHOGG_BUILD_PKG_CACHE:+--setopt=keepcache=1 }install $pk >/dev/null; } && { command -v cargo-deny >/dev/null || dnf -y install cargo-deny >/dev/null 2>&1 || true; } && $inner"
+    IMAGE=${IMAGE:-registry.fedoraproject.org/fedora:${DISTRO#fedora-}}
+  fi
+  podman run --rm --name "$NAME" --memory "$MEM" --memory-swap "$MEM" \
+    -v "$NH:/nh:$MODE,Z" -v "$CARGO_DIR:/cargo:Z" "${EXTRA[@]}" \
+    -e CARGO_HOME=/cargo/crates -e CARGO_TARGET_DIR=/cargo/target -e CARGO_BUILD_JOBS=2 \
+    "$IMAGE" bash -euo pipefail -c "$inner" &
+  pid=$!
+  wait "$pid"
+  exit $?
+fi
+
+# --- the checks (host, or inside the container) ---------------------------------------------------------------
+command -v cargo >/dev/null 2>&1 || { echo "check.sh: cargo not found (use --container fedora-45)" >&2; exit 1; }
+cd "$HERE" || exit 1
+: "${CARGO_TARGET_DIR:=$(mktemp -d)}"
+export CARGO_TARGET_DIR
+[ -n "${CARGO_HOME:-}" ] && PATH="$CARGO_HOME/bin:$PATH"
+fail() { echo "check.sh: FAIL $1" >&2; exit 1; }
+
+# The TSan lane (see the header).  Everything it needs besides the Fedora packages is cached under /cargo.
+tsan_lane() {
+  unavailable() { echo "check.sh: TSan lane unavailable: $1" >&2; exit 3; }
+  local home=${CARGO_HOME%/*}/tsan-home vend=${CARGO_HOME%/*}/tsan-vendor
+  export RUSTUP_HOME=${CARGO_HOME%/*}/rustup
+  command -v rustup-init >/dev/null 2>&1 || unavailable "rustup-init is not installed"
+  if [ ! -x "$home/bin/cargo" ]; then
+    CARGO_HOME=$home rustup-init -y --no-modify-path --profile minimal --default-toolchain nightly -c rust-src >/dev/null 2>&1 \
+      || unavailable "no nightly toolchain with rust-src (rustup failed)"
+  fi
+  export PATH="$home/bin:$PATH"
+  local std host
+  std=$(rustc --print sysroot)/lib/rustlib/src/rust/library/Cargo.toml
+  [ -f "$std" ] || unavailable "std's sources are not in the toolchain ($std)"
+  host=$(rustc -vV | sed -n 's/^host: //p')
+  if [ ! -f "$vend/.done" ]; then
+    # the crate's dependencies and std's, from crates.io, in one directory source
+    local work=$CARGO_TARGET_DIR/tsan-vendor-src
+    rm -rf "$work" "$vend" && mkdir -p "$work/shell" "$work/glitnir"
+    for f in Cargo.toml Cargo.lock src include; do [ -e "$f" ] && cp -r "$f" "$work/shell/"; done
+    cp -r ../glitnir/Cargo.toml ../glitnir/Cargo.lock ../glitnir/build.rs ../glitnir/src ../glitnir/include "$work/glitnir/"
+    ( cd "$work/shell" && CARGO_HOME=$home cargo vendor --sync "$std" "$vend" >/dev/null 2>"$work/vendor.log" ) \
+      || unavailable "could not vendor std's dependencies: $(tail -n 1 "$work/vendor.log")"
+    touch "$vend/.done"
+  fi
+  export CARGO_TARGET_DIR=$CARGO_TARGET_DIR/tsan
+  local cfg=(--config "source.crates-io.replace-with='tsan-vendor'" --config "source.tsan-vendor.directory='$vend'")
+  local filters=()
+  if [ -n "$TEST" ]; then
+    IFS='|' read -ra parts <<< "${TEST//\\/}"
+    for p in "${parts[@]}"; do [ -n "$p" ] && filters+=("$p"); done
+  fi
+  # rustix goes through libc here: its raw syscalls map and unmap the shm buffers behind TSan's back, so a buffer
+  # at an address another library's mapping (libxkbcommon's Compose file) had used reads as racing with that mmap
+  export RUSTFLAGS="-Zsanitizer=thread --cfg rustix_use_libc"
+  cargo test --offline -Zbuild-std --target "$host" "${cfg[@]}" --no-run >"$CARGO_TARGET_DIR.build.log" 2>&1 \
+    || unavailable "the sanitized build failed: $(grep -m1 -E '^error' "$CARGO_TARGET_DIR.build.log")"
+  # --tests: rustdoc does not get RUSTFLAGS, so a doc test would mix sanitizer settings
+  TSAN_OPTIONS=halt_on_error=1 cargo test --offline -Zbuild-std --target "$host" "${cfg[@]}" --tests -- "${filters[@]}" || fail tsan
+  echo "check.sh: tsan ok"
+  exit 0
+}
+[ "$TSAN" = 0 ] || tsan_lane
+
+# --target TRIPLE: clippy for another platform's backend (aarch64-apple-darwin: --no-default-features --features
+# macos), the library and its unit tests (the integration tests drive the Wayland recorder), with ci/target-std.sh's
+# toolchain; nothing links or runs, so objc2-exception-helper's build script is told to skip its clang step (DOCS_RS).
+# The unit tests run on the target (CI's macOS lane).
+if [ -n "$TARGET" ]; then
+  . ../ci/target-std.sh
+  target_std "$TARGET" || exit 3
+  feats=(--no-default-features)
+  # macOS: also with the test hooks the glue's test-hooks turns on (the GUI rows' build), which only CI built before
+  extra=("")
+  case $TARGET in *-apple-darwin) feats+=(--features macos); extra+=(--features=test-hooks) ;; esac
+  for prof in dev test; do
+    for x in "${extra[@]}"; do
+      DOCS_RS=1 cargo clippy --lib --profile "$prof" --locked --target "$TARGET" "${feats[@]}" $x -- -D warnings ||
+        fail "clippy ($TARGET, $prof${x:+, test-hooks})"
+    done
+  done
+  echo "check.sh: $TARGET ok (clippy; its tests run on the target)"
+  exit 0
+fi
+
+if [ "$REVENDOR" = 1 ]; then
+  # Regenerate Cargo.lock from crates.io (the one pin; the glue's lock is then the shell's plus nhglue, and the vendor
+  # tarball is built from the locks at release).
+  work=$CARGO_TARGET_DIR/relock
+  rm -rf "$work" && mkdir -p "$work/shell" "$work/glitnir"
+  for f in Cargo.toml src include; do [ -e "$f" ] && cp -r "$f" "$work/shell/"; done
+  cp -r ../glitnir/Cargo.toml ../glitnir/Cargo.lock ../glitnir/build.rs ../glitnir/src ../glitnir/include "$work/glitnir/"
+  ( cd "$work/shell" && cargo generate-lockfile ) || fail relock
+  cp "$work/shell/Cargo.lock" Cargo.lock
+  echo "check.sh: relocked"
+  exit 0
+fi
+
+cargo fmt --check                                                   || fail fmt
+# the SVG route (feature svg) is pure Rust: its code and tests run here too, though only Naglfar links it
+cargo clippy --all-targets --locked --features svg -- -D warnings   || fail clippy
+# NAME may list several filters separated by '|' or '\|' (cargo's filter is a substring, not a regexp)
+filters=()
+if [ -n "$TEST" ]; then
+  IFS='|' read -ra parts <<< "${TEST//\\/}"
+  for p in "${parts[@]}"; do [ -n "$p" ] && filters+=("$p"); done
+fi
+cargo test --locked --features svg -- "${filters[@]}"                || fail test
+# the filters also select glitnir's own tests (pool policy and the like) when a task names them
+if [ -n "$TEST" ]; then (cd ../glitnir && cargo test --locked -- "${filters[@]}") || fail test-glitnir; fi
+if command -v cargo-deny >/dev/null 2>&1; then
+  cargo deny check licenses bans sources                            || fail deny
+else
+  echo "check.sh: cargo-deny not on PATH, skipping the licence check"
+fi
+[ "$FULL" = 1 ] || { echo "check.sh: ok (without --full: no vendor drift, no release build)"; exit 0; }
+# vendor drift, when the release's vendor tarball is unpacked (vendor/): it is the lock's packages and nothing else
+# (ci/vendor.sh check, offline).  Without one the crates came from crates.io and there is nothing to compare; the
+# release builds the tarball from the locks (ci/vendor.sh make), which fails on a lock that would change.
+if [ -d vendor ]; then
+  bash ../ci/vendor.sh check .. shell                               || fail vendor-drift
+else
+  echo "check.sh: no vendor/ here, the crates came from crates.io: vendor drift not checked"
+fi
+# the release build (an rlib; the archive Emacs links, with this crate's exports, is nidhogg/glue's: its check.sh --full)
+cargo build --release --locked                                      || fail build
+echo "check.sh: ok"

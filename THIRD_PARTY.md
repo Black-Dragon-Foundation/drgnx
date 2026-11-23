@@ -22,7 +22,7 @@ Entries:
 - URL: https://github.com/zed-industries/zed
 - Commit: 347f171a3fd00a3b672382d78348b37bd969d17c (2026-10-24)
 - Licence: Apache-2.0 (`LICENSES/third-party/LICENSE-APACHE`); the adapted file is `GPL-3.0-or-later AND Apache-2.0`
-- Files: `crates/ui/nhshell/src/wayland/serial.rs` (the input serial tracker, copied with small changes noted in its
+- Files: `crates/ui/skel/src/wayland/serial.rs` (the input serial tracker, copied with small changes noted in its
   header)
 
 ## https://github.com/zed-industries/zed@347f171a3fd00a3b672382d78348b37bd969d17c crates/gpui_linux/src/linux/wayland/clipboard.rs
@@ -30,14 +30,14 @@ Entries:
 - URL: https://github.com/zed-industries/zed
 - Commit: 347f171a3fd00a3b672382d78348b37bd969d17c (2026-10-24)
 - Licence: Apache-2.0 (`LICENSES/third-party/LICENSE-APACHE`); the adapted file is `GPL-3.0-or-later AND Apache-2.0`
-- Files: `crates/ui/nhshell/src/wayland/clipboard.rs` (the offers' MIME tracking, reading a `receive` pipe and writing a
+- Files: `crates/ui/skel/src/wayland/clipboard.rs` (the offers' MIME tracking, reading a `receive` pipe and writing a
   `send` descriptor; the calloop parts rewritten for the reader thread, the changes noted in its header)
 ## https://codeberg.org/dnkl/foot@cb2771788998f6a6288e2de8273c55a8214551e0 ime.c
 
 - URL: https://codeberg.org/dnkl/foot
 - Commit: cb2771788998f6a6288e2de8273c55a8214551e0 (2026-09-18)
 - Licence: MIT (`LICENSES/third-party/LICENSE-MIT-foot`); the adapted file is `GPL-3.0-or-later AND MIT`
-- Files: `crates/ui/nhshell/src/wayland/text_input.rs` (foot's text-input-v3 logic: pending state applied on `done`, the
+- Files: `crates/ui/skel/src/wayland/text_input.rs` (foot's text-input-v3 logic: pending state applied on `done`, the
   commit-serial check, enable on enter and disable on leave; rewritten in Rust)
 
 ## https://github.com/zed-industries/zed@347f171a3fd00a3b672382d78348b37bd969d17c crates/gpui_linux/src/linux/wayland/cursor.rs
@@ -45,7 +45,7 @@ Entries:
 - URL: https://github.com/zed-industries/zed
 - Commit: 347f171a3fd00a3b672382d78348b37bd969d17c (2026-10-24)
 - Licence: Apache-2.0 (`LICENSES/third-party/LICENSE-APACHE`); the adapted file is `GPL-3.0-or-later AND Apache-2.0`
-- Files: `crates/ui/nhshell/src/wayland/cursor_theme.rs` (loading an Xcursor theme through `wayland-cursor` and showing
+- Files: `crates/ui/skel/src/wayland/cursor_theme.rs` (loading an Xcursor theme through `wayland-cursor` and showing
   one cursor image on a pointer surface; sizes, names and the reload rules are Nidhogg's, noted in its header)
 
 Crates locked for the cursor theme (`Cargo.lock`; fetched from crates.io, vendored unmodified in the release's vendor tarball; MIT, accepted by `deny.toml`): `wayland-cursor` 0.31.14 and `xcursor` 0.3.11, from crates.io.

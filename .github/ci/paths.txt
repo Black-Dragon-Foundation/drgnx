@@ -12,7 +12,7 @@ list runtime: rt-linux rt-msrv rt-escape rt-containers rt-android rt-deny rt-fuz
 .githooks/*                   ALL
 .gitignore                    ALL
 # the Rust workspace and the data its tests read
-crates/hub/fuzz/*             rt-fuzz
+crates/hub/hrista/*             rt-fuzz
 crates/*                      ALL
 app/*                         ALL
 xtask/*                       ALL
@@ -44,7 +44,7 @@ test some/new/place.txt                     | -        | -                | ALL 
 test SECURITY.md                            | -        | -                | -     | false
 test SECURITY.md,LICENSES/GPL-3.0.txt       | -        | -                | -     | false
 test docs/develop/hub.md                    | -        | -                | ALL   | false
-test crates/hub/fuzz/fuzz_targets/line.rs      | -        | -                | rt-fuzz | false
+test crates/hub/hrista/fuzz_targets/line.rs      | -        | -                | rt-fuzz | false
 # narrowed dispatches: what the change needs and the run leaves out makes the run partial
 test crates/core/huginn/src/lib.rs       | rt-linux | -                | rt-linux | true
 test SECURITY.md                            | rt-linux | -                | rt-linux | false

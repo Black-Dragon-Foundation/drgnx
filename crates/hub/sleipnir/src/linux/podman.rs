@@ -1174,15 +1174,12 @@ mod tests {
         let needles = [concat!("sock", "create"), concat!("key", ".sock")];
         let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let mut files = vec![];
-        for c in ["sleipnir", "drgnx-ratatoskr", "drgnx-px", "gleipnir"] {
+        for c in ["sleipnir", "ratatoskr", "ferja", "gleipnir"] {
             walk(&crates.join(c).join("src"), &mut files);
             walk(&crates.join(c).join("tests"), &mut files);
         }
         assert!(files.len() > 20, "the sources: {}", files.len());
-        let local_key_server = [
-            "drgnx-ratatoskr/src/exec/keys.rs",
-            "drgnx-ratatoskr/src/exec/tests.rs",
-        ];
+        let local_key_server = ["ratatoskr/src/exec/keys.rs", "ratatoskr/src/exec/tests.rs"];
         let mut hits = vec![];
         for f in files {
             let text = std::fs::read_to_string(&f).unwrap();
@@ -2021,7 +2018,7 @@ mod tests {
     fn podman_info_that_fails_refuses_the_job() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("podman");
-        drgnx_exe::write(&p, "#!/bin/sh\necho 'no session' >&2; exit 125\n").unwrap();
+        hlaup::write(&p, "#!/bin/sh\necho 'no session' >&2; exit 125\n").unwrap();
         let e = check_limits(&p, &[], Duration::from_secs(10)).unwrap_err();
         assert!(e.contains("no session") && e.contains("refused"), "{e}");
     }

@@ -117,7 +117,7 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   `agents-here-follow` (RET), `agents-here-panel` (`o`, `drgnx-agent-panel-open` with the hub's session id) and
   `agents-here-quit` (`q`). The list is plain text drawn once per call; teardown kills it.
   **The hub's view model:** the subscription names the view `agents-here` and first sends `view/env` for its one class, `data`
-  (the rows are data, never drawn). The hub builds the model and the rows (`drgnx-ratatoskr`'s
+  (the rows are data, never drawn). The hub builds the model and the rows (`ratatoskr`'s
   `work/presence/here.rs`): a node `a:SESSION` per agent (its newest entry; fields `session`, `ordinal`, `mode`,
   `file`, `line`; the list `agents` in ordinal order) and `p:PATH`, of kind `file` or `folder`, per file an agent is
   pending, writing or editing and per folder above it up to the root (fields `path`, `ordinals`; the list `paths`);

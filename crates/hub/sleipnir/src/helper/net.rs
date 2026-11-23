@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use drgnx_px::owner::{AnswerFuture, KeyAnswer, KeySource};
+use ferja::owner::{AnswerFuture, KeyAnswer, KeySource};
 
 use super::keys::{self, KeyStore};
 
@@ -89,7 +89,7 @@ pub struct Relay {
 /// How the relay's end goes: the job's container, then the sidecar (podman records the job's dependency on it).
 async fn take_down(
     container: Option<&str>,
-    sidecar: drgnx_px::owner::Sidecar,
+    sidecar: ferja::owner::Sidecar,
     name: &str,
 ) -> Option<i32> {
     if let Some(c) = container {
@@ -117,7 +117,7 @@ impl Relay {
         container: Option<String>,
         keys: Option<Arc<dyn KeySource>>,
     ) -> Result<Relay, String> {
-        use drgnx_px::owner;
+        use ferja::owner;
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -148,7 +148,7 @@ impl Relay {
                     eprintln!("sleipnir job-helper: the relay reports {e:?}");
                 }
             });
-            let log = drgnx_px::shell::Log::default();
+            let log = ferja::shell::Log::default();
             let drained = log.clone();
             tokio::spawn(async move { drained.drain_to(tokio::io::stderr()).await });
             let mut channel = match keys {
@@ -159,7 +159,7 @@ impl Relay {
                     k,
                     events_tx,
                     owner::BEAT,
-                    drgnx_px::shell::STALL,
+                    ferja::shell::STALL,
                     log,
                 )),
                 None => tokio::spawn(owner::run(
@@ -168,7 +168,7 @@ impl Relay {
                     streams_tx,
                     events_tx,
                     owner::BEAT,
-                    drgnx_px::shell::STALL,
+                    ferja::shell::STALL,
                     log,
                 )),
             };

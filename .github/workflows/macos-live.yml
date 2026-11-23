@@ -33,21 +33,29 @@ jobs:
     timeout-minutes: 330
     permissions:
       contents: read
+      packages: read      # the prebuilt assets (drgnx-assets)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none
           persist-credentials: false
+      - id: assets
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: echo "ref=$(bash .github/ci/ghcr.sh ref drgnx-assets "$(bash .github/ci/assets.sh tag)")" | tee -a "$GITHUB_OUTPUT"
       - id: setup
         uses: ./.github/actions/macos-runtime
+        with:
+          assets: ${{ steps.assets.outputs.ref }}
       - name: dependencies' debug info is line tables only (as the tests job)
         run: |
           mkdir -p "${CARGO_HOME:-$HOME/.cargo}"
           printf '[profile.dev.package."*"]\ndebug = "line-tables-only"\n' >> "${CARGO_HOME:-$HOME/.cargo}/config.toml"
       - name: The tests job's build
         run: |
-          cargo test --locked --manifest-path Cargo.toml --workspace --exclude nhshell --exclude nh-recorder --features drgnx-ratatoskr/test-hooks \
+          cargo test --locked --manifest-path Cargo.toml --workspace --exclude skel --exclude ritari --features ratatoskr/test-hooks \
             --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/test-bins.json"
           jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null)
                  | [.target.name, (.target.kind | join(",")), .executable] | @tsv' "$RUNNER_TEMP/test-bins.json" > "$RUNNER_TEMP/test-bins.tsv"
@@ -60,7 +68,7 @@ jobs:
       - name: How to run a test
         run: |
           echo "test binaries (name, kind, path): $RUNNER_TEMP/test-bins.tsv"
-          echo "e.g.: cd crates/hub/drgnx-term && \$(awk -F'\t' '\$1==\"logging\"{print \$3}' $RUNNER_TEMP/test-bins.tsv) --exact logging::pty_bytes_never_logged --nocapture"
+          echo "e.g.: cd crates/hub/glugg && \$(awk -F'\t' '\$1==\"logging\"{print \$3}' $RUNNER_TEMP/test-bins.tsv) --exact logging::pty_bytes_never_logged --nocapture"
       - name: No credentials before the session
         env:
           ACTIONS_RUNTIME_TOKEN: ""

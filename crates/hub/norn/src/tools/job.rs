@@ -239,7 +239,8 @@ async fn send_text(
 
 // ---- record_decision ----
 
-#[derive(Deserialize, JsonSchema)]
+/// Serialized only for the digest of a bound outside agent's change (`grants::Change`).
+#[derive(Deserialize, Serialize, JsonSchema)]
 struct RecordDecisionArgs {
     /// build, wait, wont-build or replaces
     kind: String,
@@ -297,7 +298,12 @@ async fn record_decision(
     who: &Identity,
     args: RecordDecisionArgs,
 ) -> Result<String, String> {
-    who.not_outside("record_decision")?;
+    // a bound outside agent records proposed decisions with their sources, under the matrix (MP-3); an unbound one
+    // is told how to be bound
+    let bound = who.outside_role().is_some();
+    if !bound {
+        who.not_outside("record_decision")?;
+    }
     let me = who.me()?.to_owned();
     if let Some(o) = args.origin.as_deref()
         && !matches!(o, "from-brief" | "own" | "needs-user")
@@ -306,8 +312,60 @@ async fn record_decision(
             "origin is from-brief, own or needs-user, not {o:?}"
         ));
     }
+    if bound {
+        match args.origin.as_deref() {
+            Some("from-brief" | "needs-user") => {}
+            _ => {
+                return Err(
+                    "an outside agent's decision names its origin: from-brief or needs-user (the user decides it)"
+                        .into(),
+                );
+            }
+        }
+        if args.sources.as_ref().is_none_or(Vec::is_empty) {
+            return Err(
+                "an outside agent's decision names its sources (the files or records it rests on)"
+                    .into(),
+            );
+        }
+        // a job's task is drgnx's: a decision in one would be current, and an outside agent's is always proposed
+        if let Some(t) = &args.task {
+            who.not_outside(&format!("task {t}"))?;
+        }
+    }
     if let Some(s) = &args.sources {
         crate::write::work::check_sources(s).map_err(|e| e.to_string())?;
+    }
+    if bound {
+        // it replaces only a decision it recorded itself (another's is the user's or its author's to replace), so
+        // what it writes is its own record
+        if let Some(n) = args.replaces {
+            let author: Option<String> = coord
+                .db()
+                .read(move |c| {
+                    Ok(
+                        c.query_row("select author from decision where n = ?1", [n], |r| {
+                            r.get(0)
+                        })
+                        .ok(),
+                    )
+                })
+                .await
+                .map_err(err)?;
+            if author.as_deref() != Some(me.as_str()) {
+                return Err(format!(
+                    "an outside agent replaces only its own decisions: #{n} is not yours (record a new one)"
+                ));
+            }
+        }
+        let record = args
+            .replaces
+            .map_or_else(|| "a new decision".to_owned(), |n| format!("decision #{n}"));
+        let change = crate::grants::Change::of("record_decision", &record, &args);
+        coord
+            .hub()
+            .gate(&me, crate::matrix::Action::GraphChange, true, change)
+            .await?;
     }
     let sources = args.sources.clone().filter(|s| !s.is_empty());
     // the step is the hub's stamp (the MCP call's own timeline step), never the agent's claim: `args.step` is ignored

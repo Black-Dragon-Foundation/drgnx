@@ -15,10 +15,9 @@ sed 's/#.*//' "$list" | awk 'NF' | while read -r id repo rev name sha; do
   f=$dir/$id/$name
   if [ -f "$f" ] && [ "$(sum "$f")" = "$sha" ]; then echo "models: $id/$name kept"; continue; fi
   mkdir -p "$(dirname "$f")"
-  # HTTP/1.1, resumed: Hugging Face's CDN ends a long HTTP/2 transfer with a stream CANCEL now and then (curl exit 92;
-  # all four Mac jobs of one run at once, the cache cold), so a cut transfer goes on from where it stopped, a few times
-  curl -fsSL --http1.1 --retry 4 --retry-all-errors --retry-delay 3 -C - -o "$f.part" \
-    "https://huggingface.co/$repo/resolve/$rev/$name"
+  # HTTP/1.1, retried: Hugging Face's CDN ended a long HTTP/2 transfer with CANCEL (curl 92) on all four Mac jobs of PR 5's
+  # round 5. CI takes the files from the prebuilt assets (assets.sh) and only a fork's run gets here
+  curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 3 -o "$f.part" "https://huggingface.co/$repo/resolve/$rev/$name"
   got=$(sum "$f.part")
   if [ "$got" != "$sha" ]; then
     echo "models: $id/$name has sha256 $got, not $sha" >&2; rm -f "$f.part"; exit 1

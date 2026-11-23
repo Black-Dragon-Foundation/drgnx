@@ -6,9 +6,9 @@
 //! Row keys: `axis`, `sched:ITEM` (an item of the List), `machine:NAME` (a machine's heading when grouped by machine),
 //! `machine:` (the tasks not placed yet), `none`.
 
-use drgnx_rows::faces::FaceId;
-use drgnx_rows::fit::Measure;
-use drgnx_rows::{Row, RowBuilder};
+use rodd::faces::FaceId;
+use rodd::fit::Measure;
+use rodd::{Row, RowBuilder};
 use serde_json::Value;
 
 use crate::render::Env;
@@ -479,7 +479,7 @@ pub fn schedule_rows(
         } else {
             FaceId::WorkLabel.name()
         };
-        let label = drgnx_rows::fit::fit_in(m, Some(face), &text, 130.0 + drgnx_rows::fit::SLACK);
+        let label = rodd::fit::fit_in(m, Some(face), &text, 130.0 + rodd::fit::SLACK);
         b.push(&label, Some(face));
         let end = b.pos();
         b.prop(0, end, "drgnx-work-id", Value::from(r.item.clone()));

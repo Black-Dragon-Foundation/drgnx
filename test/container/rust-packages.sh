@@ -5,7 +5,7 @@
 # draugr's pdeathsig test run it); diffutils for the rows that compare with cmp; curl, tar and xz for nidhogg.sh (curl
 # for .github/ci/models.sh too); the Vulkan loader and Mesa's drivers for llvmpipe, the software adapter Hrafn's GPU
 # tests run the real shaders on; vttest for the terminal worker's vttest goldens (drgnx-term tests/vttest.rs); the
-# Wayland client, xkbcommon and pixman headers that nhshell and nh-recorder link (crates/ui; pixman: Smithay's pixman renderer).
+# Wayland client, xkbcommon and pixman headers that skel and ritari link (crates/ui; pixman: Smithay's pixman renderer).
 # Containerfile.rust runs it into the prebuilt image; a job without that image (a change to its inputs not yet on
 # main) runs it itself.  docs/develop/ci.md, "Prebuilt images"
 # Rust is the version in rust-version beside this script (the one place CI names it: .github/ci/rust.sh), never

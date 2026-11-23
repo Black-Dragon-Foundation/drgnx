@@ -1,5 +1,5 @@
 //! A model stream as the hub writes it, loaded by Sjá: the file is the same JSON as drgnx's
-//! `runtime/crates/drgnx-ratatoskr/tests/fixtures/grep-append.json` (written by the hub's test of the same name).
+//! `runtime/crates/ratatoskr/tests/fixtures/grep-append.json` (written by the hub's test of the same name).
 //! A list that grew by appending arrives as a `splice` at its end, which Sjá applies with no new op.
 
 mod common;

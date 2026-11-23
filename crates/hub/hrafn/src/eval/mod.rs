@@ -18,7 +18,7 @@ pub use metrics::{
     summarize_yield,
 };
 
-use crate::query::{Answer, Hit, Query, Scope};
+use crate::query::{Answer, DIR_WEIGHT, Hit, PATH_WEIGHT, Query, Scope};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -51,6 +51,8 @@ pub fn run(rows: &[EvalRow], answer: &dyn Fn(&Query) -> Answer) -> Report {
             text: r.query.clone(),
             scope: Scope::All,
             k: K,
+            path_weight: PATH_WEIGHT,
+            dir_weight: DIR_WEIGHT,
         };
         let a = answer(&q);
         scores.insert(
@@ -93,6 +95,8 @@ pub fn exact_symbol_floor(
             text: name.clone(),
             scope: Scope::All,
             k: 1,
+            path_weight: PATH_WEIGHT,
+            dir_weight: DIR_WEIGHT,
         };
         let first: Option<Hit> = answer(&q).hits.into_iter().next();
         if first

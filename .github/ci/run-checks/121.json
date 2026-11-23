@@ -1,0 +1,6 @@
+{"run": {"id": 121, "created_at": "2026-11-22T10:00:00Z", "head_sha": "bbbb"},
+ "jobs": [
+  {"id": 1211, "name": "Runtime / build (ubuntu-24.04)", "conclusion": "failure", "labels": ["ubuntu-24.04"], "log": "error[E0425]: cannot find value\n"},
+  {"id": 1212, "name": "Runtime / escape suite on the runner (ubuntu-24.04)", "conclusion": "skipped", "labels": ["ubuntu-24.04"]},
+  {"id": 1213, "name": "CI gate", "conclusion": "success", "labels": ["ubuntu-24.04"], "log": "runtime: success\n"}
+ ]}

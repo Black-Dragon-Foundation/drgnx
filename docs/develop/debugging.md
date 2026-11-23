@@ -61,7 +61,7 @@ TCP socket, and the mock's own (`tests/mock.rs`); the waits use tokio's paused c
 
 ## Sessions in the hub
 
-`crates/drgnx-ratatoskr/src/debug/session.rs` runs one session as one task that owns the adapter's connection and its
+`crates/ratatoskr/src/debug/session.rs` runs one session as one task that owns the adapter's connection and its
 process; the hub holds a `Handle` and reads `Update`s in order. Its waits read the hub's clock.
 
 - **Launch** (spec §3.3 step 4): `initialize` (drgnx declares paging, types, `runInTerminal`, `startDebugging`,
@@ -1072,7 +1072,7 @@ A partner agent debugs beside the user through six norn tools (`norn/src/tools/d
 configuration, a live session or a recorded run; [coordination.md](coordination.md)), mid-session too;
 each is a thin `CoordTool` whose call reaches the hub as `Hub::debug(sid, op, args)` with the caller's session (an
 outside agent is refused: "the debugger's tools are for agents drgnx runs"). The hub's half is
-`drgnx-ratatoskr/src/debug/agent.rs`: `tool` finds the session, maps the op to its matrix row (`action_of`), gates it
+`ratatoskr/src/debug/agent.rs`: `tool` finds the session, maps the op to its matrix row (`action_of`), gates it
 with the manager's `gate` (an Ask makes a card and the call answers "X needs the user's yes (card N)"; Never answers
 its reason), then dispatches:
 

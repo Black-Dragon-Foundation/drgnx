@@ -1,6 +1,6 @@
 # Fixture fonts
 
-The fonts the hub's fitter (`runtime/crates/drgnx-rows`, `fit`) and the GUI fit rows (`test/ui/rows-fit-gui-test.el`)
+The fonts the hub's fitter (`runtime/crates/rodd`, `fit`) and the GUI fit rows (`test/ui/rows-fit-gui-test.el`)
 measure, so both read the same files. Each is under the SIL Open Font License 1.1 (its licence file is beside it).
 
 | File | Font | Version | Why |

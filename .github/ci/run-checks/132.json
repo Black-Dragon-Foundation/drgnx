@@ -1,0 +1,9 @@
+{"run": {"id": 132, "created_at": "2026-11-22T10:00:00Z", "head_sha": "bbbb"},
+ "jobs": [
+  {"id": 1321, "name": "Runtime / build (macOS 27)", "conclusion": "success", "labels": ["xcode-27"], "started_at": "2026-11-22T10:01:00Z", "completed_at": "2026-11-22T10:20:00Z"},
+  {"id": 1322, "name": "Runtime / release (macOS 27)", "conclusion": "success", "labels": ["xcode-27"], "started_at": "2026-11-22T10:01:00Z", "completed_at": "2026-11-22T10:20:00Z"},
+  {"id": 1323, "name": "Runtime / tests (macOS 27)", "conclusion": "success", "labels": ["xcode-27"], "started_at": "2026-11-22T10:20:00Z", "completed_at": "2026-11-22T10:40:00Z"},
+  {"id": 1324, "name": "Runtime / conformance 1/2 (macOS 27)", "conclusion": "success", "labels": ["xcode-27"], "started_at": "2026-11-22T10:20:00Z", "completed_at": "2026-11-22T10:40:00Z"},
+  {"id": 1325, "name": "Runtime / conformance 2/2 (macOS 27)", "conclusion": "success", "labels": ["xcode-27"], "started_at": "2026-11-22T10:21:00Z", "completed_at": "2026-11-22T10:40:00Z"},
+  {"id": 1326, "name": "Runtime / perf (macOS 27)", "conclusion": "failure", "labels": ["xcode-27"], "started_at": "2026-11-22T10:21:00Z", "completed_at": "2026-11-22T10:30:00Z"}
+ ]}
