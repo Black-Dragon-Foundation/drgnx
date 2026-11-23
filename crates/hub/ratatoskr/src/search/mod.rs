@@ -6,6 +6,7 @@ pub mod caches;
 pub mod context;
 pub mod download;
 pub mod engine;
+pub mod engine_doctor;
 pub mod engine_install;
 pub mod host;
 pub mod manage;
@@ -93,6 +94,12 @@ pub trait DocEmbedder: Send + Sync {
     /// entry says so.
     fn trusted(&self) -> bool {
         true
+    }
+
+    /// The most texts one request to it carries; the built-in model's eight unless it says more (the engine's batch
+    /// keeps a GPU fed: one pass of the chain costs a store read and a write however many keys it carries).
+    fn max_batch(&self) -> usize {
+        project::REQUEST_KEYS as usize
     }
 
     /// Vectors for TEXTS, in order. OVERRIDING (`search/index` with `now`) lets the built-in worker run on battery.

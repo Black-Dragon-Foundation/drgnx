@@ -1674,6 +1674,8 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   sizes past their limits. `llama-server` is made executable, the folder becomes `bin/`, the archive goes, and only then
   is `.installed` written (the asset's sum), so a half install is never taken for one. Nothing is fetched on an idle path:
   the engine with no download is a source that is not there, and the chain goes on without it.
+  From a terminal: `ratatoskr search download qwen3-embedding-0.6b-q8_0 --consent-bytes N` sends that call (N is the sum;
+  a wrong N is refused with the right one named).
 
 ### The local engine
 
@@ -1758,7 +1760,8 @@ hub's clock) without one, and started again, once, when it dies inside a request
   refuses is refused before anything is listed; inside an allowed root every file is checked again. Tier 2 is a chain of
   sources per fingerprint (`search/sources.rs`, below): a server whose own address accepts no connection (the default TEI
   at 127.0.0.1:8080 when it is not running) has no fingerprint in that pass, gets no request and does not make tier 2
-  `Failed`, so tier 2 ends `Idle` once the others are done, and the server is asked again at the next change. Between
+  `Failed`, so tier 2 ends `Idle` once the others are done, and the server is asked again at the next change, or every 30 s (`PROBE_POLL`) while no source answers at all (an engine or a
+  model whose install has just finished is found that way). Between
   requests it waits while typing holds (3 s from the last `note_typing`). Its state (`Stopped`, `Idle`, `Running`,
   `Typing`, `Battery`, `Paused`, `Failed`) and the vectors written are published for `search/status`. Its embedders are
   `DocEmbedder`s (the built-in model's worker and each server that answers), each wrapped in a `DocSource`; the

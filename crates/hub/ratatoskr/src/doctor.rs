@@ -4,6 +4,7 @@
 //! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, gateway: {port, registrations, providers, keys_held,
 //! warnings, keys_refused?}?, store: {schema, writer, failed, denied_in}?, watch: {max_user_watches?, projects: [{root, watched, error?}]}?,
 //! socket_dir: {path, mode, ok}, sqlite,
+//! engine (`null` without an installed engine; else {asset, missing_libs, devices, backend, gpu, why_not}),
 //! job_agents, exe_mode (`private-table`, `lock` or `direct`: how a file written and run is kept from ETXTBSY), sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}}`.  `store` is the running hub's
 //! work.db: a failed move to schema 7, and the copies that still hold what its deny-list kept out; and from files
 //! (also with no hub, when work.db exists) `wal_bytes`, `last_backup`, `backup_ok`, `backup_age_s`, `deny_list:
@@ -71,6 +72,27 @@ fn socket_dir(socket: &Path, uid: u32) -> Value {
     }
 }
 
+/// The local engine section: where it is installed and what the check found (libraries, device, why no GPU); `null`
+/// when no engine is installed for this machine.
+fn engine_section(env: &Env) -> Value {
+    let Some(asset) = hrafn_embed::engine_here() else {
+        return Value::Null;
+    };
+    let dir = crate::search::engine_install::dir_for(&paths::cache_dir(env), asset);
+    let Some(exe) = crate::search::engine_install::installed(asset, &dir) else {
+        return Value::Null;
+    };
+    let mut v = crate::search::engine_doctor::check(
+        &exe,
+        asset.backend,
+        Path::new("ldd"),
+        &crate::search::engine_doctor::Host::read(),
+    )
+    .json();
+    v["asset"] = json!(asset.id());
+    v
+}
+
 /// The job sandbox section: what the check found. `in_use` is true: every session starts in it
 /// (`agents::launch`), so where the check fails no session starts.
 fn sandbox_section(c: &Check) -> Value {
@@ -132,6 +154,7 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
         "job_agents": JOB_AGENTS,
         "exe_mode": hlaup::mode().name(),
         "sandbox": sandbox_section(sandbox),
+        "engine": engine_section(env),
         "packs": packs_section(env),
         "debug_adapters": debug_adapters_section(env),
     });
@@ -874,6 +897,9 @@ fn text(v: &Value, sandbox: &Check) -> String {
         "\nnetworked container jobs: {}",
         t(&v["container_net"])
     ));
+    if v["engine"].is_object() {
+        out.push_str(&crate::search::engine_doctor::lines_of(&v["engine"]));
+    }
     out.push_str(&watch_lines(&v["watch"]));
     out.push_str(&pack_lines(&v["packs"]));
     out.push_str(&debug_adapter_lines(&v["debug_adapters"]));

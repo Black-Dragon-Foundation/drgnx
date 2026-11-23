@@ -525,6 +525,38 @@ async fn worktree_maps_to_the_main_store() {
     assert!(f.state.path().join(format!("code/{main_id}.db")).exists());
 }
 
+/// Pattern D. A worktree whose main checkout holds nothing but its `.git` (the worktree mounted alone, with the repo's
+/// git dir beside it) is its own project: the worktree's files are indexed, not the empty main checkout's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worktree_without_its_main_checkout_is_its_own_root() {
+    let f = fixture(&lisp_files(2));
+    let wt = f.home.path().join("src/proj-alone");
+    git(
+        &f.root,
+        &["worktree", "add", "-q", "-b", "alone", wt.to_str().unwrap()],
+    );
+    for e in std::fs::read_dir(&f.root).unwrap().flatten() {
+        if e.file_name() != ".git" {
+            let p = e.path();
+            if p.is_dir() {
+                std::fs::remove_dir_all(p).unwrap();
+            } else {
+                std::fs::remove_file(p).unwrap();
+            }
+        }
+    }
+    let (root, _) = project_id(&wt).unwrap();
+    assert_eq!(root, std::fs::canonicalize(&wt).unwrap());
+    let mut s = project_spec(&f, vec![], Path::new("/nonexistent"));
+    s.root = root;
+    let p = Project::open(s).await.unwrap();
+    p.refresh_now().await.unwrap();
+    assert!(
+        p.lag(None).await.unwrap().chunks_total > 0,
+        "the worktree's files are indexed"
+    );
+}
+
 /// Pattern D. Storage §5.6: a root under `~/org` is refused before anything is listed; a root that holds `~/org`
 /// (HOME itself) indexes around it, and a canary there never reaches what tier 2 would embed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

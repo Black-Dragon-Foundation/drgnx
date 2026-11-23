@@ -10,9 +10,10 @@
 
 use hrafn::{KeyKind, QuantRow, VectorCache};
 use hrafn_embed::fingerprint::{Identity, builtin_record};
+use ratatoskr::clock;
 use ratatoskr::search::caches::Caches;
 use ratatoskr::search::manage::{self, PauseWhy, RootState};
-use ratatoskr::search::project::{Project, ProjectSpec, Tier2, store_path};
+use ratatoskr::search::project::{PROBE_POLL, Project, ProjectSpec, Tier2, store_path};
 use ratatoskr::search::sources::{Item, Source, SourceKind};
 use ratatoskr::search::{EMBED_TEXT_VERSION, TEST_TINY};
 use std::path::{Path, PathBuf};
@@ -39,6 +40,8 @@ struct Gated {
     /// Requests begun.
     calls: tokio::sync::watch::Sender<usize>,
     hold: Option<Arc<Semaphore>>,
+    /// Whether the probe answers (a source that is down fails it).
+    up: std::sync::atomic::AtomicBool,
 }
 
 impl Gated {
@@ -49,7 +52,11 @@ impl Gated {
             texts: Mutex::new(Vec::new()),
             calls: tokio::sync::watch::channel(0).0,
             hold,
+            up: std::sync::atomic::AtomicBool::new(true),
         })
+    }
+    fn set_up(&self, up: bool) {
+        self.up.store(up, std::sync::atomic::Ordering::SeqCst);
     }
     fn texts(&self) -> Vec<String> {
         self.texts.lock().unwrap().clone()
@@ -100,7 +107,13 @@ impl Source for Gated {
         })
     }
     fn probe(&self) -> BoxFuture<'_, Result<Identity, EmbedError>> {
-        Box::pin(async move { Ok(self.ident.clone()) })
+        Box::pin(async move {
+            if self.up.load(std::sync::atomic::Ordering::SeqCst) {
+                Ok(self.ident.clone())
+            } else {
+                Err(EmbedError("down".into()))
+            }
+        })
     }
 }
 
@@ -581,6 +594,7 @@ async fn load_pauses_until_the_machine_is_quiet() {
     p.resume().await.unwrap();
     until(&p, "done", |t| *t == Tier2::Idle).await;
     assert!(!local.texts().is_empty());
+    until(&p, "idle", |t| *t == Tier2::Idle).await;
     assert_eq!(p.state(), RootState::Idle);
 }
 
@@ -687,4 +701,63 @@ async fn status_names_why_it_waits() {
     assert_eq!(p.state().why(), Some(PauseWhy::User));
     p.resume().await.unwrap();
     assert_eq!(p.state(), RootState::Paused(PauseWhy::NoEmbedder));
+}
+
+/// F on the hub's virtual clock and runtime (as `search_index.rs`'s), one F at a time; this process's clock is virtual
+/// from here on.
+fn on_hub_runtime<F: std::future::Future>(f: F) -> F::Output {
+    use std::sync::{OnceLock, PoisonError};
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    static ONE: Mutex<()> = Mutex::new(());
+    let _one = ONE.lock().unwrap_or_else(PoisonError::into_inner);
+    clock::install_virtual();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .on_thread_park(clock::worker_parks)
+            .on_thread_unpark(clock::worker_unparks)
+            .build()
+            .unwrap()
+    })
+    .block_on(f)
+}
+
+/// Pattern C (the first real run, Wave 10). An index that waits because no source answers its probe goes on when one
+/// answers again, with no call to wake it: a remote source can come back unannounced, so tier 2 asks again at
+/// [`PROBE_POLL`] (an install's end wakes it at once instead: the projects are reopened). The hub clock moves only by
+/// `advance`: before `PROBE_POLL` the index still waits, after it the vectors are written.
+#[test]
+fn no_embedder_waits_then_resumes_when_one_answers() {
+    on_hub_runtime(async {
+        let (home, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let root = repo(home.path(), "a", 5, false);
+        let id = ident("main");
+        let e = Gated::new(SourceKind::Embed, &id, None);
+        e.set_up(false);
+        let permits = Arc::new(Semaphore::new(1000));
+        let p = open(
+            home.path(),
+            state.path(),
+            &root,
+            vec![e.clone()],
+            &no_power(),
+            &permits,
+        )
+        .await;
+        p.start_tier2();
+        until(&p, "settled", |t| *t != Tier2::Stopped).await;
+        assert_eq!(p.state(), RootState::Paused(PauseWhy::NoEmbedder));
+        assert!(missing(&p, &id).await > 0);
+        e.set_up(true);
+        clock::advance(Duration::from_secs(1)).await;
+        assert!(
+            missing(&p, &id).await > 0,
+            "it went on before the probe was due"
+        );
+        clock::advance(PROBE_POLL).await;
+        until(&p, "idle", |t| *t == Tier2::Idle).await;
+        assert_eq!(missing(&p, &id).await, 0);
+        assert_eq!(p.state(), RootState::Idle);
+    })
 }

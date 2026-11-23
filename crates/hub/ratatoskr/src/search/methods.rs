@@ -72,6 +72,27 @@ const MAX_USER_WATCHES: &str = "/proc/sys/fs/inotify/max_user_watches";
 
 type Projects = Arc<tokio::sync::Mutex<HashMap<String, Open>>>;
 
+/// An install has finished: the open projects are dropped (their embedders are formed again) and each root is opened
+/// again at once, so tier 2 starts with the new engine or model rather than at the next call that names the root.
+async fn reopen(projects: &Projects, front: Option<Weak<Front>>) {
+    let roots: Vec<PathBuf> = {
+        let mut open = projects.lock().await;
+        let roots = open
+            .values()
+            .map(|o| o.project.root().to_path_buf())
+            .collect();
+        open.clear();
+        roots
+    };
+    let Some(front) = front.and_then(|f| f.upgrade()) else {
+        return;
+    };
+    for root in roots {
+        // a root that cannot be opened now is opened (and its error told) by the call that names it
+        let _ = front.search.project(&front, &root).await;
+    }
+}
+
 /// Hrafn's state in the hub: the built-in model's worker, the open projects, the model download.
 #[derive(Default)]
 pub struct Hub {
@@ -1431,6 +1452,7 @@ impl Hub {
         }
         super::store_consent(&dirs.runtime, &consent).await;
         let (progress_state, projects) = (self.download.clone(), self.projects.clone());
+        let front_weak = self.front.get().cloned();
         let root = super::models_root(&dirs.env);
         clock::spawn("search:download", async move {
             let progress = {
@@ -1447,7 +1469,7 @@ impl Hub {
                 d.failed = result.as_ref().err().map(|e| format!("{e:?}"));
             }
             if result.is_ok() {
-                projects.lock().await.clear();
+                reopen(&projects, front_weak).await;
             }
         });
         Ok(w::Started { started: true })
@@ -1513,6 +1535,7 @@ impl Hub {
         };
         super::store_engine_consent(&dirs.runtime, &consent).await;
         let (state, projects) = (self.download.clone(), self.projects.clone());
+        let front_weak = self.front.get().cloned();
         let models = super::models_root(&dirs.env);
         let engine_dir = super::engine_install::dir_for(&paths::cache_dir(&dirs.env), asset);
         clock::spawn("search:download", async move {
@@ -1542,7 +1565,7 @@ impl Hub {
                 d.failed = result.as_ref().err().map(|e| format!("{e:?}"));
             }
             if result.is_ok() {
-                projects.lock().await.clear();
+                reopen(&projects, front_weak).await;
             }
         });
         Ok(w::Started { started: true })

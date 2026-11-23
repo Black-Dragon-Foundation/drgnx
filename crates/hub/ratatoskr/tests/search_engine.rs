@@ -307,3 +307,13 @@ fn batches_sorted_by_length() {
         e.close().await;
     });
 }
+
+/// Pattern C. The engine takes more texts a request than the built-in model: a pass of the chain costs a store read
+/// and a write whatever its size, so eight keys a pass left the GPU idle between requests (the first real run).
+#[test]
+fn the_engine_takes_a_wide_batch() {
+    let rig = Rig::new(&[]);
+    let batch = ratatoskr::search::DocEmbedder::max_batch(&rig.engine());
+    assert_eq!(batch, ratatoskr::search::engine::ENGINE_BATCH);
+    assert!(batch >= 32, "{batch}");
+}

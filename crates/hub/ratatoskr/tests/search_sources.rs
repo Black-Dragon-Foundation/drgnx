@@ -581,6 +581,40 @@ async fn open_files_first() {
     assert!(first[0].contains("f13-run"), "{first:?}");
 }
 
+/// Pattern D. The chain reads the next window while the last is filled and from a cursor: every key is embedded once,
+/// none is left, and the next window is not the same keys again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_read_ahead_embed_each_key_once() {
+    let (_h, _s, p) = project(40).await;
+    let id = ident("main");
+    let main = Fake::embedder("main", &id);
+    let mut slots = vec![slot(&p, &id, &[&main]).await];
+    let mut reads = 0;
+    let order = vec!["core/f13.el".to_string()];
+    for _ in 0..200 {
+        if !run_pass(&mut slots, p.store(), &order, t0(), &mut reads)
+            .await
+            .unwrap()
+            .filled
+        {
+            break;
+        }
+    }
+    let texts: Vec<String> = main.embeds().into_iter().flatten().collect();
+    let mut once = texts.clone();
+    once.sort();
+    once.dedup();
+    assert_eq!(once.len(), texts.len(), "a text was embedded twice");
+    let cache = p.cache(&id).await.unwrap();
+    assert!(
+        hrafn::missing(p.store(), &cache, 1000)
+            .await
+            .unwrap()
+            .is_empty(),
+        "nothing is left"
+    );
+}
+
 /// Pattern D (MP-15). On battery the local sources wait and the remote ones do not; `index now` lets the local ones
 /// run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -679,4 +713,56 @@ async fn remote_down_falls_through_to_local_engine() {
     let desk = status.iter().find(|e| e.id == "desk").unwrap();
     assert_eq!(desk.state, "down", "{status:?}");
     assert!(c.next_due(t0()).is_some(), "it waits its backoff");
+}
+
+/// An embedder that takes WIDE texts a request and records the size of each.
+struct Wide {
+    ident: Identity,
+    sizes: Mutex<Vec<usize>>,
+}
+
+impl DocEmbedder for Wide {
+    fn identity(&self) -> Option<Identity> {
+        Some(self.ident.clone())
+    }
+    fn probe(&self) -> BoxFuture<'_, Result<Identity, EmbedError>> {
+        Box::pin(async move { Ok(self.ident.clone()) })
+    }
+    fn max_batch(&self) -> usize {
+        32
+    }
+    fn embed_docs<'a>(
+        &'a self,
+        texts: &'a [String],
+        _overriding: bool,
+    ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
+        self.sizes.lock().unwrap().push(texts.len());
+        Box::pin(async move { Ok(vec![vec![0.5; DIMS]; texts.len()]) })
+    }
+}
+
+/// Pattern C. A source's own batch size carries through its adapter: the chain sends the keys of a pass in requests
+/// of that size, not of the built-in model's eight.
+#[tokio::test]
+async fn a_wide_embedder_gets_wide_requests() {
+    let id = ident("main");
+    let wide = Arc::new(Wide {
+        ident: id.clone(),
+        sizes: Mutex::new(Vec::new()),
+    });
+    let source = Arc::new(DocSource::new(wide.clone()));
+    assert_eq!(source.max_batch(), 32);
+    let state = tempfile::tempdir().unwrap();
+    let cache = Caches::shared(state.path()).get(&id).await.unwrap();
+    let mut c = SourceChain::new(id.fp, vec![source as Arc<dyn Source>]);
+    assert_eq!(c.batch(), 32);
+    let out = c.fill(&cache, &items(0..40), t0()).await;
+    assert_eq!(
+        out,
+        FillOutcome::Filled {
+            n: 40,
+            from: "embed".into()
+        }
+    );
+    assert_eq!(*wide.sizes.lock().unwrap(), [32, 8]);
 }

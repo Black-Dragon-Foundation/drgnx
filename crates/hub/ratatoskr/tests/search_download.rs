@@ -607,3 +607,102 @@ fn no_download_on_an_idle_path() {
         "no engine folder"
     );
 }
+
+/// Pattern C. An install's end reopens the open projects at once: the download drops them (their embedders are
+/// formed again) and nothing but the reopen starts them again, since no call names the root afterwards. The model
+/// is `test-tiny`, served by `ratatoskr-mock` from its fixtures; `search/list` reads the open flag without opening
+/// anything, so the root stays open for more samples than the drop and the reopen take.
+#[test]
+fn an_install_end_reopens_the_open_projects() {
+    let served =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../test/fixtures/test-tiny");
+    let tiny = &ratatoskr::search::TEST_TINY;
+    let mut mock = Command::new(support::mock_binary())
+        .arg("hf")
+        .arg("--dir")
+        .arg(&served)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(mock.stdout.take().unwrap()).lines();
+    let first = lines.next().unwrap().unwrap();
+    let port = first.strip_prefix("MOCK-HF-PORT ").unwrap().to_owned();
+    let _mock = Kill(mock);
+    let root = support::Root::new();
+    let conf = root.dir.path().join("h/c");
+    std::fs::create_dir_all(&conf).unwrap();
+    let file = conf.join("settings.el");
+    std::fs::write(
+        &file,
+        format!(
+            "(drgnx-settings\n :version 1\n (drgnx-search-model-mirror \"http://127.0.0.1:{port}\"))\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let proj = root.dir.path().join("h/proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("a.el"), "(defun a-thing ()\n  \"Do a thing.\")\n").unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["add", "-A"],
+        &["commit", "-q", "-m", "one"],
+    ] {
+        let st = Command::new("git")
+            .arg("-C")
+            .arg(&proj)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(st.success(), "git {args:?}");
+    }
+    let mut hub = support::Hub::start(&root, 1);
+    let socket = root.socket();
+    hub.wait_ready(&socket);
+    let mut c = support::Client::open(&socket);
+    c.hello(&socket);
+    let mut id = 1u64;
+    c.send(json!({"id": id, "method": "search/index", "params": {"root": proj}}));
+    assert_eq!(c.answer(id).0["result"]["started"], true);
+    let open = |c: &mut support::Client, id: &mut u64| {
+        *id += 1;
+        c.send(json!({"id": *id, "method": "search/list", "params": {}}));
+        c.answer(*id).0["result"]["roots"][0]["open"] == true
+    };
+    assert!(
+        open(&mut c, &mut id),
+        "the project is open before the install"
+    );
+    id += 1;
+    c.send(
+        json!({"id": id, "method": "search/model-download", "params": {
+        "model": tiny.id, "consent": {"bytes": download_bytes(tiny)}}}),
+    );
+    assert_eq!(c.answer(id).0["result"]["started"], true);
+    let models = model_dir(&root.dir.path().join("h/xk/drgnx/models"), tiny);
+    skuld::wait_until(
+        "the model is installed",
+        FAILED_AFTER.as_secs() * 10,
+        || (cache::state(tiny, &models) == ModelState::Ready).then_some(()),
+    );
+    let mut streak = 0;
+    skuld::wait_until(
+        "the project stays open after the install",
+        FAILED_AFTER.as_secs() * 10,
+        || {
+            streak = if open(&mut c, &mut id) { streak + 1 } else { 0 };
+            (streak >= 30).then_some(())
+        },
+    );
+}
+
+/// A mock process that ends with the test, however it ends.
+struct Kill(Child);
+
+impl Drop for Kill {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
