@@ -287,8 +287,11 @@ fn an_extension_cannot_shadow_a_prefix() {
         .expect_err("shadows C-x C-f");
     assert_eq!(e.kind(), villa::Kind::Refused);
     k.bind_by(&ext, "C-y", "ok", "").expect("a free key");
-    k.bind_by(&ext, "C-x C-f C-v", "longer", "")
-        .expect("a longer chord does not shadow");
+    // a chord that extends a bound one is refused too: the bound one is reached first, so it could never run
+    let e = k
+        .bind_by(&ext, "C-x C-f C-v", "longer", "")
+        .expect_err("extends C-x C-f");
+    assert_eq!(e.kind(), villa::Kind::Refused);
     assert_eq!(
         k.resolve(&chord("C-x C-f"), &KeyContext::new()),
         Resolution::Command("find-file".into())

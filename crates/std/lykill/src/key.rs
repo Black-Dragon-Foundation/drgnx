@@ -153,3 +153,49 @@ pub fn parse_chord(text: &str) -> villa::Result<Vec<KeyEvent>> {
     }
     Ok(out)
 }
+
+fn key_name(k: KeyCode) -> String {
+    match k {
+        KeyCode::Char(' ') => "SPC".into(),
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Named(n) => match n {
+            Named::Enter => "RET".into(),
+            Named::Tab => "TAB".into(),
+            Named::Escape => "ESC".into(),
+            Named::Backspace => "backspace".into(),
+            Named::Delete => "delete".into(),
+            Named::Up => "up".into(),
+            Named::Down => "down".into(),
+            Named::Left => "left".into(),
+            Named::Right => "right".into(),
+            Named::Home => "home".into(),
+            Named::End => "end".into(),
+            Named::PageUp => "pageup".into(),
+            Named::PageDown => "pagedown".into(),
+            Named::F(n) => format!("f{n}"),
+        },
+    }
+}
+
+/// A chord as text, in the Emacs spelling; [`parse_chord`] reads it back to the same keys.
+pub fn format_chord(chord: &[KeyEvent]) -> String {
+    chord
+        .iter()
+        .map(|k| {
+            let mut s = String::new();
+            for (on, m) in [
+                (k.ctrl, "C-"),
+                (k.alt, "M-"),
+                (k.shift, "S-"),
+                (k.sup, "s-"),
+            ] {
+                if on {
+                    s.push_str(m);
+                }
+            }
+            s.push_str(&key_name(k.key));
+            s
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}

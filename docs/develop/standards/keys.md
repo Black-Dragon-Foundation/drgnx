@@ -35,6 +35,24 @@ the editor's, and may not be the start of a chord that is bound (`C-x` over `C-x
 When a profile is layered after an extension's binding (`Keymap::layer`), the prefix check runs again: an extension binding that
 the profile makes a prefix is dropped, and the editor posts a notice naming the extension and the command.
 
+**Contexts.** The prefix checks (`bind_by`, `layer`) compare two bindings only when they have the same context: a binding for
+Rust files is not a prefix of one for Go files. An extension also may not bind a chord that *extends* a bound chord (A binds
+`C-y`, B asks for `C-y C-z`: `C-y` is reached first, so B's chord could never run); that is refused with `refused`, in
+the same context only.
+
+**The user rebinds a clash without touching the extension.** Every binding an extension asks for is kept as a `Wanted`
+(extension, command, chord, context, and what became of it: bound, refused, dropped, rebound or unbound). A refused or dropped
+one comes with a notice and the action "Bind to another key…": the user types a chord (a prompt is fine, the user asked for it)
+and `Keymap::rebind_by_user` writes it to the user's own level as an `Override` (extension command, the chord it asked for,
+the chord chosen), never to the extension. The user's level wins over every extension; the override is keyed by the command and
+the chord asked for, so it holds when the extension reloads (`unload_extension`, then its `keys.bind` meets the override and is
+accepted, not refused) and when it updates. `unbind_by_user` removes an extension's chord the same way. `Keymap::overrides()` and
+`set_overrides` are for the host to keep the user's level.
+
+**The shell's keys.** `KeyEvent::from_skel` turns skel's raw key event (a keysym and the modifier mask) into a `KeyEvent`: a
+character is itself with the case it produced; with `ctrl` or `alt` it is the plain letter, with `shift` as a modifier;
+a named key carries `shift`; a release or a bare modifier is none.
+
 **Enforced by:** the scan rule `no-raw-key-event` (a path into skel's key event types, or `Event::Key`, anywhere but
 `lykill`), and the layer rows that keep the UI crates off huginn. Owner: `lykill`. Conformance:
 `crates/std/lykill/tests/conformance.rs`.

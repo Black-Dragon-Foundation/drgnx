@@ -1126,3 +1126,64 @@ fn a_profile_layered_later_drops_an_extension_binding_that_would_shadow_it_and_s
         rows[0].text
     );
 }
+
+// Wave 7: a refused binding is kept and offered another key; the user's choice goes to the user's level, not the extension
+struct Types(&'static str);
+impl sattr::editor::ChordPrompt for Types {
+    fn chord(&self, _command: &str) -> Option<String> {
+        Some(self.0.to_string())
+    }
+}
+
+#[test]
+fn a_refused_binding_is_rebound_by_the_user_without_changing_the_extension() {
+    let (api, _ex) = editor();
+    let a = luau(&api, "aa");
+    let b = luau(&api, "bb");
+    run(
+        &a,
+        "assert(drgnx.commands.register({ id = 'yank', title = 'T', doc = 'D', args = {}, exposure = 'palette' }))
+         assert(drgnx.keys.bind('C-y', 'ext/aa/yank', '') == true)",
+    )
+    .expect("A binds");
+    let bind_clash = "assert(drgnx.commands.register({ id = 'zap', title = 'T', doc = 'D', args = {}, exposure = 'palette' }))
+         local v, e = drgnx.keys.bind('C-y C-z', 'ext/bb/zap', '')
+         assert(v == nil and e.kind == 'refused')";
+    run(&b, bind_clash).expect("B's clash is refused");
+    // the notice offers "Bind to another key…"
+    let (id, label) = {
+        let ed = saman::lock(&api);
+        assert_eq!(ed.notices.len(), 1);
+        let id = tidindi::NoticeId(1);
+        let n = ed.notices.get(id).expect("the notice");
+        (id, n.actions[0].label.clone())
+    };
+    assert_eq!(label, "Bind to another key…");
+    saman::lock(&api)
+        .run_notice_action(id, sattr::editor::REBIND_ACTION, &Types("C-c z"))
+        .expect("the user rebinds");
+    run(
+        &b,
+        "assert(drgnx.keys.resolve('C-c z', '') == 'ext/bb/zap')
+         assert(drgnx.keys.resolve('C-y C-z', '') == '')
+         assert(drgnx.keys.resolve('C-y', '') == 'ext/aa/yank')",
+    )
+    .expect("the command runs on the new chord");
+    assert!(saman::lock(&api).notices.is_empty(), "the notice is done");
+    // B reloads: the same request meets the override, and nothing is refused
+    saman::lock(&api).keymap.unload_extension("bb");
+    run(
+        &b,
+        "assert(drgnx.keys.bind('C-y C-z', 'ext/bb/zap', '') == true)
+         assert(drgnx.keys.resolve('C-c z', '') == 'ext/bb/zap')",
+    )
+    .expect("the override survives the reload");
+    assert!(
+        saman::lock(&api)
+            .keymap
+            .bindings()
+            .iter()
+            .all(|b| !matches!(&b.by, Some(Origin::Extension(e)) if e == "bb")),
+        "nothing of the extension's own is in force: the choice is the user's"
+    );
+}

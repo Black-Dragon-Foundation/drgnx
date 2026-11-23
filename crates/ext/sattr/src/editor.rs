@@ -53,6 +53,14 @@ pub struct Invocation {
     pub args: Value,
 }
 
+/// The action of a key-clash notice.
+pub const REBIND_ACTION: &str = "bind-another-key";
+
+/// What asks the user for a chord (the UI's prompt): the command it is for; none when they decline.
+pub trait ChordPrompt {
+    fn chord(&self, command: &str) -> Option<String>;
+}
+
 pub struct Editor {
     pub settings: skipan::Settings,
     pub registry: bod::Registry,
@@ -62,6 +70,8 @@ pub struct Editor {
     questions: Vec<Pending>,
     pub next_question: u64,
     owners: BTreeMap<u64, String>,
+    /// The notices that offer to rebind a wanted binding: the notice, its extension's command and the chord it asked for.
+    rebinds: BTreeMap<u64, (String, Vec<lykill::KeyEvent>)>,
     invocations: Arc<Mutex<Vec<Invocation>>>,
 }
 
@@ -167,25 +177,73 @@ impl Editor {
             questions: Vec::new(),
             next_question: 0,
             owners: BTreeMap::new(),
+            rebinds: BTreeMap::new(),
             invocations: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     /// Lay a key profile over the keymap (the user's, a later one). An extension's binding that would now shadow a
-    /// prefix is dropped, and the user is told in a notice.
+    /// prefix is dropped, and the user is told in a notice that offers another key.
     pub fn layer_profile(&mut self, profile: &lykill::Profile) {
         for d in self.keymap.layer(profile) {
-            self.notices.post(tidindi::Notice {
-                level: tidindi::Level::Warning,
-                title: "A key binding was dropped".to_string(),
-                body: format!(
-                    "The extension `{}` bound `{}`, which is the start of a chord in the profile `{}`.",
-                    d.extension, d.command, profile.name
-                ),
-                actions: Vec::new(),
-                key: None,
-            });
+            let body = format!(
+                "The extension `{}` bound `{}`, which is the start of a chord in the profile `{}`.",
+                d.extension, d.command, profile.name
+            );
+            self.offer_rebind(
+                "A key binding was dropped",
+                &d.extension,
+                &d.command,
+                d.chord,
+                body,
+            );
         }
+    }
+
+    /// A notice about a binding an extension wanted and did not get, with the action that lets the user choose another key.
+    fn offer_rebind(
+        &mut self,
+        title: &str,
+        extension: &str,
+        command: &str,
+        chord: Vec<lykill::KeyEvent>,
+        body: String,
+    ) {
+        let id = self.notices.post(tidindi::Notice {
+            level: tidindi::Level::Warning,
+            title: title.to_string(),
+            body,
+            actions: vec![tidindi::Action {
+                id: REBIND_ACTION.to_string(),
+                label: "Bind to another key…".to_string(),
+            }],
+            key: Some(tidindi::DedupTag(format!(
+                "key-clash:{extension}:{command}:{chord:?}"
+            ))),
+        });
+        self.rebinds.insert(id.0, (command.to_string(), chord));
+    }
+
+    /// The user invoked an action of a notice. `bind-another-key` asks CHORDS for a chord (a prompt is allowed: the user
+    /// asked for it) and writes the choice to the user's own level, never to the extension. The notice goes when it is done.
+    pub fn run_notice_action(
+        &mut self,
+        notice: tidindi::NoticeId,
+        action: &str,
+        chords: &dyn ChordPrompt,
+    ) -> villa::Result<()> {
+        if action != REBIND_ACTION {
+            return Err(villa::Error::not_found("The notice has no such action."));
+        }
+        let Some((command, from)) = self.rebinds.get(&notice.0).cloned() else {
+            return Err(villa::Error::not_found("The notice offers no rebinding."));
+        };
+        let Some(to) = chords.chord(&command) else {
+            return Ok(());
+        };
+        self.keymap.rebind_by_user(&command, &from, &to)?;
+        self.rebinds.remove(&notice.0);
+        self.notices.dismiss(notice)
     }
 
     /// The commands of extensions that were run, for the host to hand to each extension's `run`.
@@ -344,9 +402,29 @@ impl api::keys::Api for Editor {
             None => return Err(err(ErrorKind::NotFound, "There is no such command.")),
         }
         let by = bod::Origin::Extension(caller.extension.clone());
-        self.keymap
-            .bind_by(&by, &chord, &command, &context)
-            .map_err(fail)
+        match self.keymap.bind_by(&by, &chord, &command, &context) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // a refused binding is kept as a wanted one, and the user is offered another key for it
+                if e.kind() == villa::Kind::Refused
+                    && let Ok(from) = lykill::parse_chord(&chord)
+                {
+                    let body = format!(
+                        "The extension `{}` asked for `{chord}` for `{command}`: {}",
+                        caller.extension,
+                        e.message()
+                    );
+                    self.offer_rebind(
+                        "A key binding was refused",
+                        &caller.extension,
+                        &command,
+                        from,
+                        body,
+                    );
+                }
+                Err(fail(e))
+            }
+        }
     }
 
     fn resolve(
