@@ -519,6 +519,25 @@ fn write_plan(tx: &mut WTx<'_>, p: &WriteParams, scope: &Scope) -> Result<PlanWr
     let mut written: Vec<TaskId> = Vec::new();
     for w in &p.tasks.0 {
         let number = w.number.as_str();
+        if let Some(s) = w.status.as_ref().map(|s| s.as_str()) {
+            if !norn::tracker::STATUSES.contains(&s) {
+                return Err(CoordError::Refused(format!(
+                    "{s:?} is not a task status: one of {}",
+                    norn::tracker::STATUSES.join(", ")
+                )));
+            }
+            // superseded needs the task that replaced it: a `supersedes` link ending at this one
+            if s == "superseded" {
+                let old = task_by_number(tx.sql(), plan.n, number)?;
+                if !old.as_ref().is_some_and(|e| {
+                    norn::tracker::replaced_by_link(tx.sql(), e.n).unwrap_or(false)
+                }) {
+                    return Err(CoordError::Refused(format!(
+                        "task {number} is superseded by another task: link that task first (REPLACEMENT supersedes this one)"
+                    )));
+                }
+            }
+        }
         let mut data = serde_json::Map::new();
         data.insert("number".into(), json!(number));
         for (key, v) in [
@@ -526,6 +545,7 @@ fn write_plan(tx: &mut WTx<'_>, p: &WriteParams, scope: &Scope) -> Result<PlanWr
             ("role", w.role.as_ref().map(|r| r.as_str())),
             ("profile", w.profile.as_ref().map(|p| p.as_str())),
             ("body", w.body.as_ref().map(|b| b.as_str())),
+            ("status_reason", w.reason.as_ref().map(|r| r.as_str())),
         ] {
             if let Some(v) = v {
                 data.insert(key.into(), json!(v));
@@ -562,6 +582,16 @@ fn write_plan(tx: &mut WTx<'_>, p: &WriteParams, scope: &Scope) -> Result<PlanWr
                             steps: steps.as_deref(),
                         },
                     );
+                    // the status (and its reason) go into the task's status line now, as the next sync would
+                    let new = match w.status.as_ref().map(|s| s.as_str()) {
+                        Some(s) => saga::status::task_with_status(
+                            &new,
+                            s,
+                            w.reason.as_ref().map(|r| r.as_str()),
+                        )
+                        .unwrap_or(new),
+                        None => new,
+                    };
                     if new != old {
                         body = Some(Some(new));
                     }
@@ -697,6 +727,16 @@ pub async fn plans_write(f: &Front, c: &Caller, p: WriteParams) -> Result<PlanWr
     )
     .await?;
     may_finish(f, c, &p).await?;
+    if c.class == Class::Agent
+        && p.tasks
+            .0
+            .iter()
+            .any(|t| t.status.as_ref().is_some_and(|s| s.as_str() == "parked"))
+    {
+        return Err(refuse(
+            "parked is the user's own choice: agents never defer (set blocked, or add a note)",
+        ));
+    }
     if let (None, Some(rel)) = (&p.plan, &p.path) {
         let rel = rel.as_str().to_owned();
         let actor = crate::records::write::actor_for(
@@ -2361,5 +2401,59 @@ pub(crate) mod tests {
             store_in(&json!({"repo": gone.to_string_lossy()}), &|_| false),
             None
         );
+    }
+
+    /// A plan task's status is one of the tracker's; `superseded` needs a `supersedes` link ending at it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_plan_tasks_status_is_the_trackers_and_superseded_needs_its_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        db.write(meta(), move |tx| {
+            let first = WriteParams {
+                plan: None,
+                project: None,
+                title: Some(serde_json::from_value(json!("P")).unwrap()),
+                tasks: Bounded(vec![write_task("1", &[]), write_task("2", &[])]),
+                base_version: None,
+                path: None,
+            };
+            let w = write_plan(tx, &first, &Scope::Anyone)?;
+            let set = |number: &str, status: &str| WriteParams {
+                plan: Some(serde_json::from_value(json!(w.plan)).unwrap()),
+                project: None,
+                title: None,
+                tasks: Bounded(vec![
+                    serde_json::from_value(json!({"number": number, "status": status})).unwrap(),
+                ]),
+                base_version: None,
+                path: None,
+            };
+            let refused = write_plan(tx, &set("1", "wibble"), &Scope::Anyone).unwrap_err();
+            assert!(
+                refused.to_string().contains("not a task status"),
+                "{refused}"
+            );
+            let refused = write_plan(tx, &set("1", "superseded"), &Scope::Anyone).unwrap_err();
+            assert!(
+                refused.to_string().contains("link that task first"),
+                "{refused}"
+            );
+            let (old, new) = (&w.tasks[0].id, &w.tasks[1].id);
+            let (o, n) = (
+                entity::by_id(tx.sql(), old)?.unwrap().n,
+                entity::by_id(tx.sql(), new)?.unwrap().n,
+            );
+            link::add(tx, n, "supersedes", o, None, Origin::Recorded, None)?;
+            write_plan(tx, &set("1", "superseded"), &Scope::Anyone)?;
+            write_plan(tx, &set("2", "accepted"), &Scope::Anyone)?;
+            let v = load(tx.sql(), &w.plan)?.view;
+            assert_eq!(
+                (v.tasks[0].status.as_str(), v.tasks[1].status.as_str()),
+                ("superseded", "accepted")
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
     }
 }

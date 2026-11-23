@@ -206,7 +206,12 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
     let finished: Vec<String> = l
         .tasks
         .iter()
-        .filter(|t| matches!(t.row.status.as_deref(), Some("done" | "dropped")))
+        .filter(|t| {
+            matches!(
+                t.row.status.as_deref(),
+                Some("done" | "dropped" | "accepted" | "parked" | "superseded")
+            )
+        })
         .map(|t| t.row.id.clone())
         .collect();
     if l.open_cards

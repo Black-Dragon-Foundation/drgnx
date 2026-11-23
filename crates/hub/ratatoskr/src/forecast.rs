@@ -854,7 +854,7 @@ async fn fixed_of(
         .map(|w| {
             let done = matches!(
                 status.get(&w.n).cloned().flatten().as_deref(),
-                Some("done" | "dropped")
+                Some("done" | "dropped" | "accepted" | "parked" | "superseded")
             );
             (format!("{job}#{}", w.n), done)
         })

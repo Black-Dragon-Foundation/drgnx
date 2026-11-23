@@ -224,13 +224,12 @@ pub fn ops(doc: &AnyDoc, source: &std::path::Path) -> Vec<GraphOp> {
                     raw.push_str(&s.heading);
                     raw.push_str(&s.body);
                 }
-                let done = !t.steps.is_empty() && t.steps.iter().all(|s| s.done);
-                let st = if done { "done" } else { "open" };
+                let st = crate::status::status_of("task", "task", &raw);
                 o.push(
                     "task",
                     "task",
                     title(&format!("{} {}", t.number, t.title)),
-                    Some(st.into()),
+                    st,
                     raw,
                 );
                 let op = o.ops.last_mut().expect("just pushed");

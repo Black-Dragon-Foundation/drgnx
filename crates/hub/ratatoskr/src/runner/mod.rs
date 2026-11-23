@@ -2025,7 +2025,12 @@ pub async fn order(front: &Front, caller: &Caller, p: OrderParams) -> Result<Job
         .collect();
     let open: Vec<String> = ordered(&l.tasks, &data)
         .iter()
-        .filter(|t| !matches!(t.row.status.as_deref(), Some("done" | "dropped")))
+        .filter(|t| {
+            !matches!(
+                t.row.status.as_deref(),
+                Some("done" | "dropped" | "accepted" | "parked" | "superseded")
+            )
+        })
         .map(|t| t.row.id.clone())
         .collect();
     let at = open.iter().position(|x| *x == tid).unwrap_or(0) as i64;

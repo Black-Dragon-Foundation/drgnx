@@ -30,8 +30,8 @@ pub const USAGE: &str = "usage: ratatoskr card list [--open] [--json]\n\
     \x20      ratatoskr card settle CARD CHOICE [--json]\n\
     \x20      ratatoskr message send TO TEXT [--json]\n\
     \x20      ratatoskr message reply ID TEXT [--json]\n\
-    \x20      ratatoskr task status ID STATUS [--json]\n\
-    \x20      ratatoskr plan status PLAN TASK STATUS [--json]";
+    \x20      ratatoskr task status ID STATUS [--reason TEXT] [--json]\n\
+    \x20      ratatoskr plan status PLAN TASK STATUS [--reason TEXT] [--json]";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct DoorCommand {
@@ -59,11 +59,13 @@ pub enum Sub {
     TaskStatus {
         id: String,
         status: String,
+        reason: Option<String>,
     },
     PlanStatus {
         plan: String,
         task: String,
         status: String,
+        reason: Option<String>,
     },
 }
 
@@ -89,10 +91,14 @@ pub fn parse(group: &str, args: impl IntoIterator<Item = OsString>) -> Result<Do
     let e = |e: lexopt::Error| e.to_string();
     let (mut json, mut open) = (false, false);
     let mut words: Vec<String> = Vec::new();
+    let mut reason: Option<String> = None;
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
             Long("json") => json = true,
             Long("open") if group == "card" => open = true,
+            Long("reason") if group == "plan" || group == "task" => {
+                reason = Some(p.value().map_err(e)?.string().map_err(e)?)
+            }
             Word(v) => words.push(v.string().map_err(e)?),
             other => return Err(other.unexpected().to_string()),
         }
@@ -119,11 +125,13 @@ pub fn parse(group: &str, args: impl IntoIterator<Item = OsString>) -> Result<Do
         ("task", ["status", id, status]) => Sub::TaskStatus {
             id: (*id).into(),
             status: status_word(status)?,
+            reason: reason.take(),
         },
         ("plan", ["status", plan, task, status]) => Sub::PlanStatus {
             plan: (*plan).into(),
             task: (*task).into(),
             status: status_word(status)?,
+            reason: reason.take(),
         },
         _ => return Err(format!("{group}: not a command of this kind\n{USAGE}")),
     };
@@ -203,7 +211,7 @@ pub fn execute(sub: &Sub, hub: &mut Hub<'_>) -> Result<(String, Value, bool), St
             let a = hub("messages/send", p)?;
             Ok(sent(&a))
         }
-        Sub::TaskStatus { id, status } => {
+        Sub::TaskStatus { id, status, reason } => {
             let e = hub("graph/entity", json!({"id": id}))?;
             let Some(ver) = e["entity"]["ver"].as_i64() else {
                 return Err(format!("no task {id}"));
@@ -212,9 +220,22 @@ pub fn execute(sub: &Sub, hub: &mut Hub<'_>) -> Result<(String, Value, bool), St
                 "tasks/write",
                 json!({"op": "update", "id": id, "ver": ver, "status": status}),
             )?;
-            Ok(task_answer(id, status, a))
+            let done = task_answer(id, status, a);
+            // the reason is a note on the task, written after the status took
+            match reason {
+                Some(r) if done.2 => {
+                    hub("tasks/write", json!({"op": "note", "id": id, "note": r}))?;
+                    Ok(done)
+                }
+                _ => Ok(done),
+            }
         }
-        Sub::PlanStatus { plan, task, status } => {
+        Sub::PlanStatus {
+            plan,
+            task,
+            status,
+            reason,
+        } => {
             let view = hub("plans/get", json!({"plan": plan}))?;
             let Some(t) = view["tasks"]
                 .as_array()
@@ -225,6 +246,9 @@ pub fn execute(sub: &Sub, hub: &mut Hub<'_>) -> Result<(String, Value, bool), St
                 return Err(format!("{plan} has no task {task}"));
             };
             let mut w = json!({"number": task, "status": status});
+            if let Some(r) = reason {
+                w["reason"] = json!(r);
+            }
             // a task whose steps are all ticked is done in the file: done ticks them, so the two agree
             if status == "done" && t["steps"].as_array().is_some_and(|s| !s.is_empty()) {
                 w["steps"] = Value::Array(
@@ -477,6 +501,41 @@ mod tests {
         );
         let (r, _) = run_fake(&o.sub, vec![Ok(json!({"version": 1, "tasks": []}))]);
         assert_eq!(r.unwrap_err(), "plan:aa-1 has no task 1");
+    }
+
+    #[test]
+    fn plan_status_carries_its_reason_to_plans_write() {
+        let c = p(
+            "plan",
+            &["status", "plan:aa-1", "2", "parked", "--reason", "after B1"],
+        )
+        .unwrap();
+        let view = json!({"version": 3, "tasks": [{"number": "2", "steps": []}]});
+        let (r, seen) = run_fake(&c.sub, vec![Ok(view), Ok(json!({"plan": "plan:aa-1"}))]);
+        assert!(r.unwrap().2);
+        assert_eq!(
+            seen[1].1,
+            json!({"plan": "plan:aa-1", "base_version": 3, "tasks": [
+                {"number": "2", "status": "parked", "reason": "after B1"}]})
+        );
+        // a tracker task keeps it as a note, written after the status
+        let t = p("task", &["status", "task:aa-1", "parked", "--reason", "x"]).unwrap();
+        let (r, seen) = run_fake(
+            &t.sub,
+            vec![
+                Ok(json!({"entity": {"ver": 2}})),
+                Ok(json!({"id": "task:aa-1"})),
+                Ok(json!({})),
+            ],
+        );
+        assert!(r.unwrap().2);
+        assert_eq!(
+            seen[2],
+            (
+                "tasks/write".into(),
+                json!({"op": "note", "id": "task:aa-1", "note": "x"})
+            )
+        );
     }
 
     #[test]

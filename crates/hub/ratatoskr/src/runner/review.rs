@@ -1877,9 +1877,13 @@ pub async fn card_act(front: &Front, caller: &Caller, p: CardParams) -> Result<J
     let task = card.task.clone();
     if let Some(t) = &task
         && matches!(action.as_str(), "retry" | "drop" | "merge" | "accept")
-        && l.tasks
-            .iter()
-            .any(|x| x.row.id == *t && matches!(x.row.status.as_deref(), Some("done" | "dropped")))
+        && l.tasks.iter().any(|x| {
+            x.row.id == *t
+                && matches!(
+                    x.row.status.as_deref(),
+                    Some("done" | "dropped" | "accepted" | "parked" | "superseded")
+                )
+        })
     {
         return Err(invalid(format!("Task {t} is finished already")));
     }
