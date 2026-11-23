@@ -32,7 +32,7 @@ runtime/
 
 | Name | What it is |
 |---|---|
-| `drgnx-ratatoskr` (binary `ratatoskr`, symlink `rtsk`) | the runtime: the hub protocol's server |
+| `ratatoskr` (binary `ratatoskr`, symlink `rtsk`) | the runtime: the hub protocol's server |
 | `runstav` (formerly `drgnx-proto`) | the hub protocol's contract: wire types, strict lines, typed decode, proofs, paths ([below](#runstav-the-contract)) |
 | `urdr` | the SQLite store; self-contained, its public API names no drgnx type. `urdr::graph` is the generic graph store of `work.db` schema 7 (the one writer, entities and links with history, walks, search, the read pool, backup, export, excise; [store.md](store.md)): kinds, link names and policy are the caller's |
 | `draugr` (formerly `drgnx-proc`) | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-draugr)); passed fds, the pinned spawner and the git runner ([below](#draugr-passed-fds-and-git)) |
@@ -45,7 +45,7 @@ runtime/
 | `bifrost` | the gateway: admission, tokens, chain fallback, the SSE usage scanner, budget, the HTTP/1.1 upstream client over rustls; self-contained (certificate checks behind its default feature `platform-verifier`). Rust but for `ring`'s C and assembly, so its cross-checks stub the C compiler as urdr's do (below) |
 | `hrafn` | search and the indexer |
 | `hrafn-embed` | Hrafn's embedding side: the pinned model table, the model cache's checks and the built-in embedder; pure Rust, no C, builds for Android ("Hrafn" below) |
-| `huginn` | a reader for the data subset of Emacs Lisp: literal values with byte spans, never evaluated, every reader macro refused; settings files and a serde deserializer (feature `serde`); generic ([settings.md](settings.md#the-data-subset)). `drgnx-ratatoskr` reads `settings.el` and the shipped `runtime-defaults.el` with it ([hub.md](hub.md#settings)) |
+| `huginn` | a reader for the data subset of Emacs Lisp: literal values with byte spans, never evaluated, every reader macro refused; settings files and a serde deserializer (feature `serde`); generic ([settings.md](settings.md#the-data-subset)). `ratatoskr` reads `settings.el` and the shipped `runtime-defaults.el` with it ([hub.md](hub.md#settings)) |
 | `hermod` | an ACP client on `agent-client-protocol-schema`'s types and runstav's line codec (no SDK role framework): stamped updates, message ids, fork at a message, exactly-once exit; generic (agent system part 1, Task 1) |
 | `saga` | the org folder's record formats (plans, ledgers, DEFERRED, the build board, `board.org`) parsed and rendered back byte-exact, turned into graph operations; pure, `pulldown-cmark` for Markdown (agent system part 1, Tasks 5, 6, 14) |
 | `forseti` | the scheduler core: the job model, priority, admission, the memory cap and ladder, kill classes, expected times, placement and fairness; pure, `serde` only, shared by the hub, the runners and jobq ([forseti.md](forseti.md)) |
@@ -54,8 +54,8 @@ runtime/
 | `verdandi` | the edit history: `history.db` (records, documents, branches) on urdr's store, a Loro document per tracked file and branch, the operation log and its settle rule, span revert on element ids; no hub or editor type ([history.md](history.md)) |
 | `vor` | a Debug Adapter Protocol client: framing, requests matched to answers, events and reverse requests, types generated from the protocol's schema; generic, used by the hub's debug sessions ([debugging.md](debugging.md)) |
 | `vordr` | the orchestration gates' pure core: a job's log as rows with failure classes, facts, evidence, the rule pack; pure, `serde` only ([orchestration.md](orchestration.md)) |
-| `drgnx-clock` | the time source the crates' timers read: tokio's, or a virtual clock a test installs ([below](#virtual-clocks-drgnx-clock)); tokio only |
-| `drgnx-exe` | a file written or copied and then run, never busy (ETXTBSY): the writing on a thread with a private file table ([below](#files-written-and-then-run-drgnx-exe)); libc only |
+| `stund` | the time source the crates' timers read: tokio's, or a virtual clock a test installs ([below](#virtual-clocks-drgnx-clock)); tokio only |
+| `hlaup` | a file written or copied and then run, never busy (ETXTBSY): the writing on a thread with a private file table ([below](#files-written-and-then-run-drgnx-exe)); libc only |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
 | `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
 | `drgnx-px` | a networked container job's relay sidecar: the channel's frames, its pure state machine and writer order, the shell both ends run, the `drgnx-px` binary, and the owner's end on gleipnir's proxy; tokio current-thread, libc ([drgnx-px.md](drgnx-px.md)) |
@@ -95,8 +95,8 @@ Android stance. Rust's Android target is `target_os = "android"`, not `"linux"`,
 bwrap) `target_os = "linux"` alone with the Android stance (a stub, or "unsupported") in a comment. Every `cfg` chain
 ends in a fallback that returns `None` or `Unsupported`, never a missing item. Platform code sits in one module or
 function per crate. The type-check (`rustup target add aarch64-linux-android` first) is
-`cargo check --locked --manifest-path Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p heimdall -p drgnx-ratatoskr`.
-`drgnx-ratatoskr` depends on `urdr`, whose bundled SQLite is C, and compiling C for Android needs the NDK. A type-check
+`cargo check --locked --manifest-path Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p heimdall -p ratatoskr`.
+`ratatoskr` depends on `urdr`, whose bundled SQLite is C, and compiling C for Android needs the NDK. A type-check
 does not link, so without the NDK stub the C compiler and archiver: `CC_aarch64_linux_android=/usr/bin/true
 AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only the C object files are fake).
 
@@ -691,33 +691,33 @@ What a test does instead:
   one. It says what may not happen.
 
 Exempt: `#[ignore = "timing…"]` tests and `tests/timing.rs`, `skuld/src/wait.rs` (where these functions live) and the
-hub clock's module (`drgnx-ratatoskr/src/clock*`).
+hub clock's module (`ratatoskr/src/clock*`).
 
-## Files written and then run: drgnx-exe
+## Files written and then run: hlaup
 
 On Linux, running a file that any process holds open for writing fails with ETXTBSY ("Text file busy"). A child that
 another thread forks copies the whole file table, the write descriptor included, and holds it until its own `exec`; so
 a script written (or a binary copied) and then run at once fails now and then while other threads fork (every test
-binary's other tests do). A rename keeps the same file and does not help. `crates/drgnx-exe` is the one way the runtime does it: `drgnx_exe::write(path, contents)` (mode 0755),
-`drgnx_exe::copy(from, to)`, or any writing inside `drgnx_exe::private_fds(|| …)`: a thread of its own with its own
+binary's other tests do). A rename keeps the same file and does not help. `crates/hlaup` is the one way the runtime does it: `hlaup::write(path, contents)` (mode 0755),
+`hlaup::copy(from, to)`, or any writing inside `hlaup::private_fds(|| …)`: a thread of its own with its own
 file table (`unshare(CLONE_FILES)`), which no other fork copies. That table starts as a copy, so the thread closes every
 descriptor but 0, 1 and 2 first (a pipe another thread closes meanwhile still ends at once); the closure opens what it
 uses itself. Elsewhere than Linux the closure runs in place. Where `unshare` is refused (Docker's default seccomp profile answers
 EPERM; devcontainers and CI containers run under it) the crate falls back to a process-wide lock instead
-(`drgnx_exe::mode()` says which: `private-table`, `lock` or `direct`; `ratatoskr doctor` prints it as `exe_mode`; `DRGNX_EXE_MODE=lock` forces the lock where `unshare` works, to run a suite as Docker's default profile would): every
-write holds it shared while its descriptor is open, and every spawn wrapped in `drgnx_exe::spawn(|| cmd.spawn())` holds
+(`hlaup::mode()` says which: `private-table`, `lock` or `direct`; `ratatoskr doctor` prints it as `exe_mode`; `DRGNX_EXE_MODE=lock` forces the lock where `unshare` works, to run a suite as Docker's default profile would): every
+write holds it shared while its descriptor is open, and every spawn wrapped in `hlaup::spawn(|| cmd.spawn())` holds
 it exclusively from fork to exec, so no such child holds a write descriptor. draugr's spawn, which starts every job, is
 wrapped; a raw `Command::spawn` elsewhere is outside the lock, so in lock mode `write` and `copy` also wait, once their own descriptor is closed, until no process holds the file open for writing (`/proc/PID/fd` and `fdinfo`: a fork's copy, until its `exec`), at most 5 s: a file made here is never busy, whoever forked.
 The hub uses it for the browser it unpacks and the
 `drgnx-key` it copies into a container job's folder, the runner for its job's `drgnx-key` copy, domr for the hub copies
 and scripts its scenarios run, the escape harness for its probe's copy, and the tests for every stand-in script they run.
 
-## Virtual clocks: drgnx-clock
+## Virtual clocks: stund
 
-A timer in a crate (a kill's grace, a deadline, a debounce) waits through `drgnx_clock::sleep` and `drgnx_clock::timeout`,
+A timer in a crate (a kill's grace, a deadline, a debounce) waits through `stund::sleep` and `stund::timeout`,
 not through tokio or `std::thread`. With nothing installed they are tokio's own. A test installs a `Provider`: the hub's
-virtual clock (`drgnx_ratatoskr::clock`, moved by `__test_advance`) installs itself with `serve --test-clock`, and with the
-`test-hooks` feature `drgnx_clock::Manual` gives a crate's own test a clock it moves by hand (`advance`, `sleepers`) and
+virtual clock (`ratatoskr::clock`, moved by `__test_advance`) installs itself with `serve --test-clock`, and with the
+`test-hooks` feature `stund::Manual` gives a crate's own test a clock it moves by hand (`advance`, `sleepers`) and
 `Manual::scope(future)` runs the code under test on it: only that future's timers read it, so no other test of the process
 sees it (a task it spawns is wrapped in `scope` too). The test waits for the timer
 it expects (`skuld::wait_until_async` on `sleepers()`), then advances (draugr's kill grace is the exception for real
@@ -738,7 +738,7 @@ test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH`,
 run the editor's own CLIs, such as the personal-notes canary) and `DBUS_SESSION_BUS_ADDRESS` are inherited, and
 `DRGNX_RATATOSKR_LOG` and `DRGNX_RATATOSKR_STALL_FILE` (the stall watchdog's reports, hub.md) when set. Without it the hub logs `info` with a session's turn stages at `debug` (`HUB_LOG`:
 sending, the snapshot before the prompt, the prompt written, each update read and applied) and the long request paths'
-stages (target `drgnx_ratatoskr::stages`, `src/stages.rs`: `history/fork`'s source, step, tree, branch and conversation,
+stages (target `ratatoskr::stages`, `src/stages.rs`: `history/fork`'s source, step, tree, branch and conversation,
 the fork tree's git steps, a session launch's bridge, spawn, initialize and open, a tool call's hooks, call and
 after-tool, a debugger tool's gate and work; each line with the ms since the request began), so a failure's log tail
 (below) names the stage a session or request stopped at.
@@ -790,7 +790,7 @@ diagnostics left out), each request is sent on its connection (default `c`, capt
 line with its id within 3 s, is added to the failure (6000 characters of it at most). A row whose red comes only on
 another machine (the macOS lane) names there what the next run must show; the gate-run rows ask `job/status`,
 `exec/list` and `orch/evidence`; `runner/verdict-parsed` asks `status` (the writer's batches and last COMMIT) and
-`job/status`, and starts its hub with `DRGNX_RATATOSKR_LOG=info,drgnx_ratatoskr::runner::propose=debug`, so its log
+`job/status`, and starts its hub with `DRGNX_RATATOSKR_LOG=info,ratatoskr::runner::propose=debug`, so its log
 tail holds `job proposed`: each stage of `job/propose` (plan, pack, id, project, forecast, say, write, after) in
 milliseconds of the hub's clock and `commit_ms`, the last batch's COMMIT, beside the write's whole wait. Unit test
 `scenario::tests::on_failure_is_requests_with_ids`.
@@ -991,8 +991,8 @@ one was deleted, the others became `v1`.)
 | `security/` | `another-uid-is-refused` (`sudo`: as root in the Fedora 45 test image, or through passwordless sudo on macOS) |
 
 ```
-cargo build --locked --manifest-path Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
-cargo test  --locked --manifest-path Cargo.toml -p drgnx-ratatoskr --features test-hooks
+cargo build --locked --manifest-path Cargo.toml -p ratatoskr -p domr --features ratatoskr/test-hooks
+cargo test  --locked --manifest-path Cargo.toml -p ratatoskr --features test-hooks
 target/debug/domr --hub-bin target/debug/ratatoskr --scenarios test/conformance --only 'lifecycle/*'
 ```
 
@@ -1032,7 +1032,7 @@ Rows with `"requires": ["v1"]` (all of them) run against Ratatoskr:
 All rows run with one command:
 
 ```
-cargo build --locked --manifest-path Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
+cargo build --locked --manifest-path Cargo.toml -p ratatoskr -p domr --features ratatoskr/test-hooks
 target/debug/domr --hub-bin target/debug/ratatoskr --scenarios test/conformance
 ```
 
@@ -1049,7 +1049,7 @@ registry's test and the `class_matrix` step read.
 
 A test-hooks hub starts every agent session unsandboxed (`spawn_spec`'s test launch), so no other row runs the launch a
 user gets. `real-start/*` rows (`requires` `real-sandbox`) run against a **release** hub on a host whose sandbox starts:
-`cargo build --release -p drgnx-ratatoskr -p domr`, then `domr --hub-bin target/release/ratatoskr --scenarios
+`cargo build --release -p ratatoskr -p domr`, then `domr --hub-bin target/release/ratatoskr --scenarios
 test/conformance --only 'real-start/*' --require-all` (a Linux host with bwrap and user namespaces, a VM, or a podman
 container with `--security-opt unmask=ALL`). Against a test-hooks hub, or where `sandbox check` fails, they are
 excused skips that name the reason.
@@ -1068,7 +1068,7 @@ user namespaces, a kernel below ABI 9), the browser rows are excused skips. The 
 
 ### The real browser tests
 
-`drgnx-ratatoskr/tests/browser_real.rs` (`test-hooks`) runs the CDP broker against real browsers, one test per kind:
+`ratatoskr/tests/browser_real.rs` (`test-hooks`) runs the CDP broker against real browsers, one test per kind:
 Fedora's `chromium-headless` (the headless shell) and the full `chromium`. Each starts `ratatoskr browser-host
 --unconfined` with the real program, a broker over it, and `ratatoskr-mock cdp-drive` as the agent, which navigates a
 `data:` page and an `http-serve` page; a raw CDP client of the test then checks that `Target.exposeDevToolsProtocol` is
@@ -1120,7 +1120,7 @@ The writer-level group-commit number, with `secure_delete` on and off, is `urdr`
 (`cargo test -p urdr --bench group_commit --release -- --ignored --nocapture`).
 
 ```
-cargo build --locked --release --manifest-path Cargo.toml -p drgnx-ratatoskr -p domr
+cargo build --locked --release --manifest-path Cargo.toml -p ratatoskr -p domr
 target/release/domr --hub-bin target/release/ratatoskr --scenarios test/conformance \
     --only 'perf/*' --perf perf.json
 ```
@@ -1193,7 +1193,7 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 ### The code store
 
 `CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
-0600, migrations as data). Schema v6:
+0600, migrations as data). Schema v8 (the store keeps keys only: the vectors are in the machine-wide cache, below):
 
 | Table | Holds |
 |---|---|
@@ -1203,7 +1203,7 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 | `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
 | `symbol`, `symbol_fts` | defined names with kind, span and lines, signature (`sig`: the definition's lines up to the one that names it, cut before a `{`), `(path, blob)`, chunk and definer (`id` an explicit rowid, so it survives `VACUUM`); a trigram FTS over the names |
 | `ref` | the names a pair's content uses: `(path, blob, name)`, how often (`n`) and the first 8 lines it is used on; `ref_name` (`name, path, blob, n`) finds a name's users and their counts on the index alone (v6) |
-| `vec` | one quantized vector per `(model, key)` |
+| `path_key` | the base's paths that want vectors and their directories (`dir/`), each with its path vector's `key` (v7) |
 | `meta` | `urdr`'s table: the schema version, `chunker_version`, `parse_version`, `built_from` and the like |
 
 **Shared content.** Chunks, symbols and references belong to a `(path, blob)` pair, not to a tree: every `file` row
@@ -1213,8 +1213,9 @@ content: a row is set, the pair is chunked only when nothing stores it yet, and 
 `file_path_blob` index answers "is it still named". A query sees a row when the view's `file` row of its path names
 its blob (`blob_V(p) = r.blob`); every route applies that before its `limit`, the base view too, and joins `file` on
 `(tree, path)`. Schema 3 migrates a schema-2 store in place: `chunk` gains `blob` (ids kept), `symbol` is rebuilt
-with `id` set from its old rowid, `file` gets `tree = 0`; the FTS tables and `vec` are untouched, so nothing is
-re-chunked or re-embedded. A chunker change or `index::reset` drops every worktree's rows and marks the trees
+with `id` set from its old rowid, `file` gets `tree = 0`; the FTS tables are untouched, so nothing is
+re-chunked. Schema 8 drops the store's own `vec` table (v7 and before kept a store's vectors in it): every key is
+embedded again, into the cache. A chunker change or `index::reset` drops every worktree's rows and marks the trees
 `stale`.
 
 **Worktree overlays** (`hrafn::overlay`). A worktree T's rows are the paths where its admitted blob differs from the
@@ -1234,7 +1235,8 @@ transaction as each base change (a tree whose row equals the new base content lo
 naming the old content, a tombstone if there was none), so no tree reads a file for it; and tier 1 neither reads nor
 chunks a `(path, blob)` a worktree already stores.
 
-**Views.** `hrafn::search(store, query, view, qvec, now)` and `hrafn::lag(store, model, view)` take a `View`: `Base`,
+**Views.** `hrafn::search(store, query, view, qvec, now)` (`qvec`: the fingerprint's `VectorCache` and the query's
+vector) and `hrafn::lag(store, cache, view)` take a `View`: `Base`,
 or `Tree(id)`, the base with T's rows over it. A path resolves to one `file` row per view (T's over the base's: at
 most two primary-key probes), and a chunk or symbol is seen when that row names its blob; every route (the pinned,
 name, path, keyword and vector lists, and a hit's metadata) applies it before its `limit`, and the vector scan takes
@@ -1261,8 +1263,8 @@ answers from the root's view (`base: true` asks for the base) with `view: {workt
 `search/status` lists `trees` and the `watch` budget.
 
 **The base checkout** is the main checkout unless the project's `drgnx-search-base` names another checkout of it
-(a folder that is not one is warned about and ignored). Tier 1 lists, reads and diffs that checkout, `.drgnx/search.eld`
-is read there, and it is the watcher's main tree; the main checkout is then a worktree like any other. The store keeps
+(a folder that is not one is warned about and ignored). Tier 1 lists, reads and diffs that checkout, `.drgnx/search.toml`
+is read there at every listing, and it is the watcher's main tree; the main checkout is then a worktree like any other. The store keeps
 the base's folder in `meta.base_root`: a different one at open resets the index (the trees with it), so the base is
 built again and every tree re-seeds against it. The setting is part of the project's signature, so changing it opens
 the project again.
@@ -1272,13 +1274,65 @@ its new paths: `base_paths` is the one shared list, `delta(view)` reads only the
 query, n)` puts a basename that starts with the query first, then one that holds it, then a path that holds it. The
 ranked query of render offload Task 21 (`search/files`) builds on these.
 
-`vec_key(chunker, embed_text)` is sha256 over the length-prefixed chunker version and text. A chunk has one key; each
-model that embeds it adds a `vec` row, so a branch switch back embeds nothing.
+A vector's key is of its text alone: `KeyKind::key(text)` is sha256 over the length-prefixed version of the kind's text
+(`chunk::EMBED_TEXT_VERSION` for a chunk, `PATH_TEXT_VERSION` for a path) and the text. `chunk::embed_text_and_key` is
+the one place a chunk's text and key come from, and tier 2 sends that same text. The text carries no path, so a chunk
+has one key in any path, branch, clone or repo; each fingerprint that embeds it adds one row to its cache, so a branch
+switch back, a move, a copy or another clone embeds nothing.
 
 FTS5 has one tokenizer per table, and `tokenchars '-'` would hide `timer` in `drgnx-timer--fire` from the `body`
 column. So the `symbols` column holds names encoded by `encode_symbol`, which maps each ASCII punctuation character to a
 private-use character (a token character in `unicode61`): a whole name matches only the whole name, and `body`
 still splits it. Queries encode the same way.
+
+### The vector cache
+
+`hrafn::VectorCache` (`cache.rs`) holds the vectors of one embedding fingerprint for the whole machine:
+`<state>/vectors/<fingerprint-hex16>.db`, one SQLite file per fingerprint, mode 0600, WAL. A key is of its text alone,
+so one vector serves every repo, clone, branch and worktree that has the text.
+
+| Table | Holds |
+|---|---|
+| `chunk_vec`, `path_vec` | one quantized vector per key (`key, bits, vec, scale, last_used`): the sign bits, then the int8 values, and their scale (`urdr::graph::search::vec::quantize`) |
+| `holder` | the repo stores that hold keys: `id` (the store file's stem), the checkout `root`, `live`, `last_refresh` (ms) |
+| `held` | `(holder, kind, key)`: which holder holds which key |
+| `meta` | `urdr`'s table, with `fingerprint` (all 64 hex characters) and its `record` |
+
+- **The file is its fingerprint's.** Opening a file whose `meta.fingerprint` is another one is refused
+  (`StoreError::Mismatch`), by a writer and by a reader, before anything is written: two fingerprints with the same
+  first 16 hex characters never share a file.
+- **One writer.** `open_writer` takes an exclusive lock on `<db>.writer` (`File::try_lock`) and writes its PID there. A
+  second writer, in this process or another, is refused with `StoreError::Busy` ("the cache is written by hub PID
+  N"). Readers (`VectorCache::open`, and the repo stores, which attach the file read-only as `vc`) never wait on it.
+- `put(kind, dims, rows)` checks every row's length against the fingerprint's dims before it writes anything, and
+  quantizes; `put_quantized` writes rows already in the stored form (a vector pack's). `has` and `get` read by key.
+- **`last_used` is a logical clock**: one more than the largest in the file, set by a write and by a holder's taking
+  or dropping the key (see the collection, below).
+- **Read through the repo store.** `CodeStore::attach_cache(path, f)` runs F on the store's connection with the cache
+  attached read-only as `vc` (`file:…?mode=ro`; an attach is outside any transaction, so only reads attach), and
+  `missing`, `lag` and the vector route attach the cache they are given themselves. The scan
+  (`query::NEAREST_SQL`, `select key, vec from vc.chunk_vec`) reads the whole cache's sign bits and keeps the keys
+  that are this store's own (`REPO_KEYS_SQL`), so another repo's vector is never a hit and never takes a place in
+  the best `SCAN`; a vector of other dims has another length and is left out. The query memo's generation includes
+  the attached file and its `data_version`, so a commit of the cache's writer ends what a query keeps (the reference
+  graphs, which read no vector, stay).
+- **In the hub** (`search::caches`), `Caches::shared(state)` is the state's one set of caches in the process: `get(id)`
+  opens a fingerprint's writer on first use, and the projects' tier 2 fills it (`missing(store, &cache, n)`, then
+  `cache.put`); `search/query` picks the fingerprint (`prefer`) and passes its cache with the query's vector, and
+  `search/status` counts, per open cache, the vectors of this project's keys. `eval run --state DIR` writes its own
+  cache in `DIR/vectors/`, under a fingerprint of the source's name and dims.
+- **Holders (MP-21).** A cache's first open in the hub registers every repo store of the state (`<state>/code/*.db`,
+  by stem) as a live holder with no root, so a closed project's keys are kept before it next refreshes. After each
+  refresh, and when tier 2 first uses a fingerprint, `hrafn::hold(store, cache, root, now)` reports the store's live
+  key set (the distinct keys of its chunks that want vectors, and its `path_key` keys) as the diff against the cache's
+  `held` rows for it; the holder is live again, with its root and `last_refresh`. `release_gone(now, TREE_IDLE)` makes
+  a holder not live when its root is no folder and it has not refreshed for 14 days; a registered holder with no root
+  yet is never released.
+- **The collection (MP-7).** `collect(cap)` keeps every key a live holder holds; of the rest, both kinds together, the
+  most recently used are kept while their bytes (32 for the key and the stored vector's) fit the cap, and the others
+  go. The cap is `drgnx-search-cache-cap`, or `default_cap(live_bytes)`: twice the bytes live holders hold, at least
+  1 GiB. The hub sweeps at most once an hour (`CACHE_SWEEP`), from the projects' tree sweep: gone holders released,
+  then each open cache collected.
 
 ### The file list and coverage
 
@@ -1289,14 +1343,53 @@ skipped), and `allow` is the hub's deny-list check on the relative path. A path 
 
 - a component starts with a dot, or the basename looks like a key, certificate, secret or credential file;
 - it is inside a nested repository (an untracked clone or a submodule);
-- it has a NUL byte in its first 8,000 bytes;
-- the project's `include`/`exclude` globs (the editor sends `drgnx-search-{include,exclude,off}` per project) leave it out, or `off` is set.
+- it has a NUL byte in its first 8,000 bytes or is over 1 MiB;
+- the rules leave it out (below), or `drgnx-search-off` is set;
+- `.gitattributes` marks it `linguist-generated` or `linguist-vendored` (an ignore by default, not a mark).
 
-`.drgnx/search.eld` that is there but cannot be read (a directory, a link, empty, over 64 KiB) is an error that
-stops the listing, never the defaults. Each file gets a class (`code`, `test`, `docs`) and a language, from its extension, or
-from a `#!` line when it has none. A file is marked `generated` (listed, not dropped) by `.gitattributes`
-`linguist-generated`/`linguist-vendored`, by "generated" or "DO NOT EDIT" in its first five lines, or by a name like
-`*-autoloads.el`, `loaddefs.el`, `*.lock` or `*.min.*`.
+**Three layers of rules** (`hrafn::rules`), later wins:
+
+1. the built-in defaults;
+2. the repo's committed `.drgnx/search.toml`, so the team and CI index the same set;
+3. the user's own override for the project, `drgnx-search-rules` (settings.md).
+
+Each layer has three lists in gitignore syntax: `include` (when a layer has one, only matching paths are indexed; the
+latest layer with one decides), `ignore` (not indexed at all) and `no-embed` (listed, in keyword and symbol search, with
+its chunks written `embed = 0`, so `missing()` never offers them). A `!` line takes a path back; within a layer the last
+matching line wins; `#` starts a comment; a leading or inner `/` anchors a line to the root, otherwise it matches at
+any depth; a trailing `/` names a directory. The fixed refusals (dot paths, secret-looking names, nested
+repositories, the hub's deny-list) are no layer's to lift. `ratatoskr search why ROOT PATH` (`search/why`) names the
+layer, list and rule that decided a file.
+
+The defaults' `ignore` list, verbatim (`builtin_rules`):
+
+```
+**/fuzz/corpus/**  **/*fuzz*/corpus/**
+*.snap  **/golden/**  **/snapshots/**
+*.png  *.jpg  *.jpeg  *.gif  *.webp  *.bmp  *.tiff  *.ico  *.icns  *.svg
+LICENSE*  COPYING*  LICENSES/**  THIRD_PARTY*
+*.lock  package-lock.json  pnpm-lock.yaml  *.min.js  *.min.css
+vendor/**  third_party/**
+```
+
+**What gets indexed: `.drgnx/search.toml`.** Three keys, each a list of strings; the file is at most 64 KiB:
+
+```toml
+# keep generated bindings out, and the vendored copy of a library
+ignore = ["src/bindings/**", "!vendor/our-fork/**"]
+# keyword and symbol search find these, but they get no vectors
+no-embed = ["*.json", "data/**"]
+# only these (omit the key to index everything the other lists allow)
+# include = ["src/**", "docs/**"]
+```
+
+The file is read at every listing, not when the project opens: an edit takes effect at the next refresh, with no
+reopen, and a file a new line ignores loses its rows. A rule that moves a file between `index` and `no-embed` writes its
+chunks again with the new flag. A file that is there but cannot be read (a directory, a link, empty, not TOML, a key
+that is none of the three, over 64 KiB) is an error that stops the listing, never the defaults. Each file gets a class
+(`code`, `test`, `docs`) and a language, from its extension, or from a `#!` line when it has none. A file is marked
+`generated` (listed, not dropped) by "generated" or "DO NOT EDIT" in its first five lines, or by a name like
+`*-autoloads.el` or `loaddefs.el`.
 
 `files::list_with(…, &mut Snapshot)` is the same listing, reusing what the last one read: per path, the file's status
 when it was read (device, inode, size, modification and status-change times, through `eitri::stat_in` on the parent
@@ -1339,11 +1432,12 @@ the file list's `Git`, so the full listing runs on it too.
 
 `chunk::chunk_file(path, lang, generated, text, budget)` returns the file's chunks and symbols. A file's chunks put
 together give back the file, byte for byte (offsets are bytes). The budget is 1,800 non-whitespace characters
-(`BUDGET`); `CHUNKER_VERSION` is part of every vector's content key. A chunk's `line_start` is the line of its first
+(`BUDGET`). A chunk's `line_start` is the line of its first
 non-blank character (chunks are cut on the previous chunk's last newline, so the byte offset alone would name the line
-before), which is where a hit opens and what `reanchor` compares against. Version 2 is that rule: an index made by
-version 1 is chunked again at the next refresh, whether or not a file changed (and, the version being in every
-vector's key, embedded again).
+before), which is where a hit opens and what `reanchor` compares against. Version 2 is that rule; version 3 took the
+path out of the embedded text. An index made by an older version is chunked again at the next refresh, whether or not a
+file changed; a chunk is embedded again only when its text changed (the key is of the text and
+`EMBED_TEXT_VERSION`, 3, not of the chunker version).
 
 `chunk::chunk_file_refs` also returns the file's references (`chunk::Ref`: a name, how often, its first 8 lines),
 from the same parse, which tier 1 and the overlay write to `ref`. Tree-sitter languages run a tags query and keep the
@@ -1395,8 +1489,11 @@ them. Adjacent units merge greedily up to the budget and never across a section 
 column 0). A form over the budget splits at its child forms; every part's header repeats the signature, the first
 docstring line and "part i/n". A `defconst`, `defvar` or `defcustom` whose value is a literal list or vector and
 which is over the budget is one chunk that embeds only its first line and docstring (the FTS body keeps all of it).
-The header (path, title line, section, defined symbols and kinds) is in `embed_text` and the FTS `path` and `symbols`
-columns, never in `body`; a generated file gets `embed = false`.
+The header (title line, section, defined symbols and kinds) is in `embed_text` and the FTS `symbols` column, never in
+`body`; the path is only in the FTS `path` column (it has a vector of its own, below), and a chunk with no header lines
+embeds a newline and its body. The title is the first `;;;` line's text after `---`; without `---` a first word that is
+a file name (`name.el`, `name.el:`) is dropped, so no title carries the file's name. A generated file gets
+`embed = false`.
 
 The definer table (`chunk/definers.rs`) is closed: it names `defun`, `defvar`, `defcustom`, `defmacro`, `cl-defun`,
 `defconst`, `defvar-local`, `defface`, `defgroup`, `defsubst`, `cl-defmacro`, `defvar-keymap`, `defalias`,
@@ -1508,8 +1605,19 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   AVX2 + FMA, and chosen at run time; the build itself stays baseline. aarch64 uses baseline NEON, so `gemm` is built without
   its `f16` feature, whose kernels need FEAT_FP16 (an aarch64 build failed on them). No AVX-512: it ran slower
   here. `worst_submit` is zero on this path.
+- **The fingerprint (`fingerprint.rs`).** A vector's identity is a `Fingerprint`, the sha256 of a canonical
+  `FingerprintRecord`: the model id, the weights file's sha256 (a server's revision or digest when that is all it proves),
+  the quantisation, the pooling (`Cls`, `Mean`, `Last`, `Unknown`), whether the vectors are normalised, the dims (after any
+  cut), the token limit, the document prefix, the query template (`Instruct: {task}\nQuery:{query}`) and the embed-text
+  version. `canonical()` is `FP_RECORD_VERSION` followed by those fields in that order, each length-prefixed; a test pins one
+  record's hex, so a change of encoding is seen at once. The engine is not a field: llama.cpp on Vulkan or Metal, a TEI
+  server and the built-in forward pass make vectors of one record that agree closely and are interchangeable. A search
+  mixes only vectors of one fingerprint, and the `model` column of every stored vector is `Fingerprint::hex()` (64
+  characters; `hex16()` names a file or a log line). `Identity` pairs a fingerprint and its record with a **label** for the
+  screen (never a key). `builtin_record(spec, embed_text_version)` is a model-table row's record: CLS, normalised, the row's
+  dims, token limit and prefixes, and its pinned `.safetensors` sum.
 
-- **The download (`drgnx-ratatoskr/src/search/`).** `download` fetches exactly a table row's files into `<cache>/models`, from
+- **The download (`ratatoskr/src/search/`).** `download` fetches exactly a table row's files into `<cache>/models`, from
   `drgnx-search-model-mirror` or the Hugging Face host at `{base}/{repo}/resolve/{revision}/{file}`, and only with a `Consent`
   whose model and bytes match; the consent is kept in `runtime.db`'s `kv` (`search.consent`). The target of `resolve/` is a
   signed URL on another host, so redirects are followed by hand: at most 3, to https only (plain http only between loopback
@@ -1523,10 +1631,15 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
 
 - **Tier 1 (`hrafn::index::refresh`).** The file list against the store's blobs: rows (chunks, FTS, symbols) are rebuilt
   only for files whose blob changed, all of them after a chunker change, 64 files to a transaction; files gone from the
-  list leave the store. Vectors are keyed by content, so a branch switch back embeds nothing. `vec.last_used` is a
-  logical clock (one past the store's highest), moved when a vector is written and when tier 1 writes a chunk that
-  refers to its key; `collect` keeps unreferenced keys up to twice the live set, the least recently referenced going
-  first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8). A refresh writes
+  list leave the store. Vectors are keyed by content and live in the vector cache, so a branch switch back embeds
+  nothing. A path has a vector too (the cache's `path_vec`): after a refresh that changed files, `path_key` is made to
+  hold every base path whose content wants vectors and each of its directories (`dir/`), with `path_key(path)`, the key
+  of `path_text(path)` (the path, a newline, then its words split on `/ _ - .` and camelCase). `missing(store, cache,
+  limit)` gives `(kind, key, text)` of the keys the cache lacks: the chunk keys in chunk order, each file's path key
+  after its chunks', then the path keys of files whose chunks have vectors (a move or a copy embeds only these);
+  directories' keys only when `DIR_WEIGHT` is above 0 (`missing_with`'s `dirs`, which the eval sets). Tier 2 writes
+  them with `cache.put(kind, dims, rows)`. `refresh(store, listed, read, caches)` counts `keys_missing` over the caches
+  given, and the hub then reports the store's live key set to each (`hrafn::hold`). A refresh writes
   with a 64 MB page cache and then puts the store's cache size back and lets the pages go: a file's references land
   all over the name index, and at the default 2 MB that index was most of what references cost tier 1 (6.7 s against
   5.4 s on a drgnx checkout, on the desktop).
@@ -1551,7 +1664,7 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   the CPU path misses too, nothing embeds and only keyword and symbol results remain.
 - **Pacing (`hrafn_embed::pace`).** A batch's worst submit over 8 ms halves the token budget, under 4 ms doubles it, up to
   `TOKEN_CAP`; it starts at 2,048 and never stays below the chunk that leads the next batch.
-- **The embed worker (`ratatoskr embed-worker`, `drgnx-ratatoskr/src/search/worker.rs`).** A child process, the only one
+- **The embed worker (`ratatoskr embed-worker`, `ratatoskr/src/search/worker.rs`).** A child process, the only one
   that opens a GPU, started by `WorkerEmbedder` on demand: JSON lines in (`{"id", "kind": "doc"|"query", "texts"}`) and
   out (`{"id", "vectors"}` or `{"id", "error"}`), first `{"ready": {"device", "name", "why"}}`, and `{"fallback": {"from",
   "reason"}}` when a lost GPU sends the batch again on the CPU path. A query that arrives during a request is answered
@@ -1570,7 +1683,7 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   ends `Idle` once the others are done, and the server is asked again at the next change. Between requests it waits while typing holds (3 s from the last `note_typing`) and,
   on battery, until AC or `index_now`. Its state (`Stopped`, `Idle`, `Running`, `Typing`, `Battery`, `Failed`) and the
   vectors written are published for `search/status`. Its embedders are `DocEmbedder`s: the built-in model's worker and
-  each server that answers, every one filling its own model's `vec` rows.
+  each server that answers, every one filling its own fingerprint's cache (`Project::cache(id)`).
 - **The query (`hrafn::query`).** Lists from the routes, fused by RRF (k = 60): an exact one-identifier query pins its
   definitions first (non-test before test, then by kind); prefix and trigram name matches from the identifier-like
   tokens of a question add a list that is never pinned; a token that names a file adds a path list; `bm25(chunk_fts, 5,
@@ -1579,24 +1692,33 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   until 100 chunks are seen (the ranking is asked again for four times as many when the view hides most of it: still
   filtered before the limit, but only candidates are probed; joining every match first was 80 of 143 ms at 50,000
   chunks, where a common word matches 40,000); vectors are scanned by Hamming
-  distance over the sign bits and the nearest 200 re-ranked by their int8 values. A test or generated file keeps half
+  distance over the sign bits of the cache's chunk vectors whose keys are the store's own, and the nearest 200 keys
+  are re-ranked: each key is every place the view
+  sees its text (`KEY_CHUNKS_SQL`: one chunk per `(path, blob)`, at most 8, so a text in two files is two hits), and
+  each place scores `dot8(q, chunk) + PATH_WEIGHT · dot8(q, its path's vector) + DIR_WEIGHT · the best dot8(q, one of
+  its directories' vectors)`, the best 50 kept (`Query::path_weight` and `dir_weight`, `hrafn::query`'s constants
+  except in an eval that tunes them: both 0.1, the best mean chunk MRR@10 of the four sets' dev halves with Qwen3; a path or directory without a vector adds nothing; each is read once per query,
+  by a primary-key probe of the cache's `chunk_vec` or `path_vec`, `VEC_SQL` and `PATH_VEC_SQL`). A test or generated
+  file keeps half
   its score. Hits in files changed since indexing are looked for again by their first line, else their symbol (20 files,
   50 ms). The scope (`code`, which holds tests below it, `tests`, `docs`, `all`) filters by file class. Every answer has
   the lag line.
   A query reads indexes and small tables, never the `chunk` table (its rows hold their text): the lag's counts run on
   `chunk_embed`, name prefixes on `symbol_name_nc` (`like` ignores case, so the index has the same collation), path
-  tokens on `file`, and the vector scan reads `vec` alone, looking a chunk up only for a vector that can enter the best
-  200. Each is a plan test in `hrafn/tests/query.rs`. The lag's counts and the vectors' sign bits are kept between two
-  changes of the store (`hrafn/src/memo.rs`: the store thread's own changes and SQLite's `data_version` for another
-  connection's commits), so a query between two index writes reads neither again: at 100,000 chunks they were 38 and
+  tokens on `file`, and the vector scan reads the cache's `chunk_vec` alone, looking a key's chunks up only for a
+  vector that can enter the best 200. Each is a plan test in `hrafn/tests/query.rs`. The lag's counts and the vectors'
+  sign bits are kept between two changes of the store or the cache (`hrafn/src/memo.rs`: the store thread's own
+  changes, SQLite's `data_version` for another connection's commits, and the attached cache's file and
+  `data_version`), so a query between two index writes reads neither again: at 100,000 chunks they were 38 and
   28 ms of each query. `what_a_query_keeps_ends_at_the_next_write` pins that a write ends them. Store schema 2 adds the two indexes; schema 3 widens `chunk_embed` to `(embed, key, path, blob)` and the path list reads the base's `file` rows by primary key.
 - **The methods (`search/methods.rs`).** `Hub` (`Front::search`) opens a project on first use of its root and runs its
   driver (`Project::tick` every 500 ms on the hub clock, dropped with the project); `search/query` refreshes tier 1 when
   the files changed (the watcher's events, else a blob diff), picks the model (`search::prefer`), embeds the question
   with it and answers; `search/status`, `search/index`, `search/embedders`, `search/model-download` (consent checked
   against the model's size; the projects open again once it lands) and `search/typing` are the others. All are the
-  user's: an agent has no search method. A project's globs are `.drgnx/search.eld` (a file that does not read turns
-  its search off) and the editor's per-project `drgnx-search-{include,exclude,off}` (`overrides::PER_PROJECT`).
+  user's: an agent has no search method. A project's rules are `.drgnx/search.toml` (read at every listing; a file that does
+  not read is an error the listing reports) and the editor's per-project `drgnx-search-{rules,off}`
+  (`overrides::PER_PROJECT`); `search/why` says which layer decided a file.
 - **Servers on request (`search/servers.rs`).** `search/server-plan` shows what starting TEI or Ollama would run (it
   writes and runs nothing); `search/server-start` needs `confirm: true` and answers the provider entry for the settings'
   provider table (the hub writes no settings: the editor's writer adds it); `search/server-stop` stops it. TEI is a
@@ -1624,7 +1746,15 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   intervals per stratum, for three contexts of the same token estimate: `map` (the global map, tests and docs
   included), `map-around-search` (the top 5 hits' chunks, then the map focused on their files in what is left; the
   focus files themselves are not in a focused map, so the hits stand for them) and `search` (hits packed in rank order,
-  each with its `path:lines` line). It needs no hub.
+  each with its `path:lines` line). It needs no hub. `eval run … --source SRC` takes the vectors from a server instead
+  of the built-in model: `builtin` (the default), `tei:http://HOST:PORT`, `ollama:http://HOST:PORT:MODEL` or
+  `llama:http://HOST:PORT`, spoken to directly over HTTP (`embed_direct::Direct`: TEI's `/embed`, Ollama's `/api/embed`
+  with `truncate: false` and `num_ctx`, llama.cpp's `/v1/embeddings`; no hub, no gateway, no TLS). The vectors are
+  stored under the source's own text as their model id, so a server's vectors never mix with the built-in model's.
+  Documents go plain and questions carry `Instruct: <task>\nQuery:<q>` as the hub's do. `--query-source SRC` embeds the
+  questions with another source (the same model on another machine, for a parity check); with `--state DIR` the chunk
+  vectors already in DIR are reused and no document text is sent. The report JSON has `source` and
+  `embed_seconds_per_chunk`.
 - **The MCP tools (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets
   `search.sock` beside `mcp.sock` (recorded in the session's row, so it is bound again at a restart and closed with the
   session): the tools `search` (`query`, `scope`, `k`), `symbols` (`name`, `match`, `kind`, `path`, `scope`, `k`) and
@@ -1634,15 +1764,43 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   terminal clients of the `search/*` methods.
 - **Servers as embedders (`embed.rs`, `Gate::embedders`).** The providers of kind `tei` and `ollama` with the `embed`
   capability embed through the hub's own gateway listener (`/p/ID/embed`, `/p/ID/api/embed`), so each request is in
-  `spend`. An Ollama provider needs the model the `embed` role names for it, and its model name is
-  `ollama:<provider>:<model>` (TEI's is `tei:<provider>`). A query to a server carries `Instruct: <task>\nQuery:<q>`;
-  documents go plain. `search::prefer` picks the model a query uses: an answering server with at least 95 % of the live
-  chunks covered, else the built-in model (unless `drgnx-search-builtin` is nil), else an answering server whatever it
-  covers. `embed::answered_family` is the doctor's probe of which address family answers; `localhost` of a local
+  `spend`. An Ollama provider needs the model the `embed` role names for it. **A server's model is its fingerprint**, not
+  a label: `DocEmbedder::probe` asks what the server is now and answers an `Identity`. TEI: `GET /info` (`model_id`,
+  `model_sha`, `model_dtype`, pooling, `max_input_length`) and one embed of `embed::PROBE_TEXT` for the dims
+  (`record_from_tei`). Ollama: `POST /api/show` and the `/api/tags` digest, plus the same probe embed
+  (`record_from_ollama`); every Ollama embed sets `truncate: false` and `options.num_ctx` to the record's token limit, so
+  a long chunk is an error, never a quietly cut vector. The probes go through the gateway too (`/info`, `/api/show` and
+  `/api/tags` are among the paths an editor token reaches), so they are in `spend`; the probe embed is made once per
+  answer of `/info` or `/api/show` (an unchanged answer reuses its dims). A server whose answer changes between probes
+  (another model under the same URL) is another fingerprint: tier 2 probes before each batch, writes it under the new
+  hex, into that fingerprint's cache file, and the old one's file stays (`search_fingerprint::swapped_server_model_is_a_new_fingerprint_and_old_vectors_stay`).
+  A server that has not answered a probe has no fingerprint and embeds nothing; the entity chain knows it as
+  `unprobed:<provider>`, which no vector is ever stored under. `VectorCache::put(kind, dims, rows)` refuses a
+  row whose length is not `dims`, and tier 2 then publishes `Tier2::Failed("<label>: N dims, the fingerprint says D")` and
+  writes nothing of that batch. The hub reuses a probe for 10 s in the calls that only need the fingerprint (a query,
+  `Hub::project`'s signature, which is the joined fingerprints, so a changed probe reopens the project). A query to a
+  server carries `Instruct: <task>\nQuery:<q>`; documents go plain. `search::prefer(builtin, servers)` works on
+  fingerprints and picks the model a query uses: an answering server with at least 95 % of the live chunks covered, else
+  the built-in model (unless `drgnx-search-builtin` is nil), else an answering server whatever it covers. The answers
+  carry the fingerprint as `model` and the model's name as `label`; clients print the label. `embed::answered_family` is the doctor's probe of which address family answers; `localhost` of a local
   server's URL is used as `127.0.0.1`. The hub never starts a server. The entity embedder (`embed::run`) fills with the
   first embedder in line that answers, a server before the built-in model, and each model keeps its own vector
   (`entity_vec` is keyed `(n, model)`), so a server that comes back finds its vectors still there.
-  `ratatoskr-mock embed` is the test stand-in for TEI and Ollama (`tests/search_prefer.rs`).
+  `ratatoskr-mock embed` is the test stand-in for TEI, Ollama and llama.cpp (`tests/search_prefer.rs`,
+  `tests/search_eval_sources.rs`).
+- **The embed chain (`embed::Chain`, `embed::Driver`, `embed::Shared`).** The entity embedder's embedders are a chain in
+  the user's order (the `embed` role's steps, `embed::ordered`): the chain is never reordered or extended, and the
+  built-in model goes last only when no step names it and `drgnx-search-builtin` is on. A batch goes to the first
+  embedder that answers; one that fails is passed over for that batch (fall-through), and the rest of the chain
+  answers. A failing embedder backs off on the hub's clock (`embed::backoff`, `BACKOFF`): 1 minute after its first
+  failure in a row, 5 after the second, 30 after the third, then every 6 hours. When the wait is over it is asked again
+  with one text (`Chain::probes_due`), and an answer (`Chain::answered`) resets the backoff, so the preferred embedder
+  takes over again. While every embedder is down a round does no record work. A change of state is one log line, and
+  the Notices row `embed-chain` follows the chain (`embed::notice_text`: which embedder is not answering and what takes
+  its place, or that search falls back to text). It is cleared when everything answers. `search/embed-retry` (Retry now)
+  probes every backing-off embedder at the hub's next tick (`Chain::retry_now`), and `search/embedders` lists the chain
+  as `chain` (`ChainEntry`: model, label, `answering` or `backing-off`, when it is asked again, why it failed). The hub
+  never starts a provider, in any of this.
 
 Tests read the real models from a read-only volume (`DRGNX_TEST_MODELS`) and **fail** when it's unset; they never skip.
 `tests/fixtures/<model>.json` holds what CI can't make: reference vectors for token-id lists of 1, 2, 128, 129, 130, 1,023
@@ -1664,7 +1822,7 @@ release.
 Users get the binary from install.sh and `drgnx update`; both call `drgnx runtime` (bin/drgnx, plain bash):
 
 - `drgnx runtime build [--install] [--prefix DIR]`: `cargo build --release --locked -j N --manifest-path
-  Cargo.toml -p drgnx-ratatoskr`, with **no** `test-hooks` feature. The cargo is the one in `<data>/cargo`
+  Cargo.toml -p ratatoskr`, with **no** `test-hooks` feature. The cargo is the one in `<data>/cargo`
   (install.sh records it, with `RUSTUP_HOME`/`CARGO_HOME` lines for a private rustup), else `cargo` on `PATH`; neither:
   exit 1, "no Rust toolchain: run install.sh again". `CARGO_TARGET_DIR` is `<cache>/ratatoskr-target`, `CARGO_HOME`
   `<cache>/cargo` unless the record sets it, `DRGNX_BUILD_COMMIT` is the checkout's HEAD (plus `-dirty`) and
@@ -1688,13 +1846,13 @@ for real.
 
 ## Fuzzing
 
-`crates/hub/fuzz/` is a cargo-fuzz crate with its own `[workspace]` (the product workspace excludes it). It builds on
+`crates/hub/hrista/` is a cargo-fuzz crate with its own `[workspace]` (the product workspace excludes it). It builds on
 nightly only: the pin is `nightly-2026-10-15`, set by the CI job and by local runs, never by a `rust-toolchain.toml`
 (a toolchain file would make a plain `cargo` there install a nightly). cargo-fuzz needs a C++ compiler for libFuzzer
 (`g++`: CI's `fuzz-build` job runs on the Ubuntu runner, which has it; 60 s a target on a push to `main` or `ci/*`, 10 minutes a target
 daily, `fuzz_minutes` on demand: [ci.md](ci.md)). CI builds every target once (`cargo fuzz build`, the build `cargo fuzz
 run` makes) and passes each of the four shards its targets' binaries as an artifact (`fuzz-bins-N`, one day); a shard
-runs each binary as `cargo fuzz run` does (`-artifact_prefix=crates/hub/fuzz/artifacts/<target>/`, the corpus directory,
+runs each binary as `cargo fuzz run` does (`-artifact_prefix=crates/hub/hrista/artifacts/<target>/`, the corpus directory,
 `ASAN_OPTIONS=detect_odr_violation=0`).
 
 | Target | What it feeds |
@@ -1730,9 +1888,9 @@ runs each binary as `cargo fuzz run` does (`-artifact_prefix=crates/hub/fuzz/art
 | `hook_rules` | JSON through `norn::hooks::parse_rules` (`drgnx-agents-hook-rules`): no panic, and a list that is taken has unique ids of 1 to 32 `[a-z0-9-]` and a reason on every rule |
 | `drgnx_context` | JSON as an agent's `_drgnx/context` notification and `_drgnx/before_tool` request through the hub's checks (size, own session, schema with unknown fields refused): no panic, a breakdown that is taken respects its bounds and round-trips, one from another session is never taken |
 | `cdp_envelope` | bytes as one browser connection through heimdall: NUL-split under a limit the first byte picks, each message's first byte choosing the agent, the browser or the agent's close; every envelope parses or is refused without a panic, whatever goes to the browser is a command with an id and no NUL, and no refused method from the agent reaches it; the same bytes through the frame decoder whole and in two pieces give the same frames |
-| `px_frames` | bytes, cut into chunks of a size the first byte picks, through the relay's frame decoder (`drgnx_px::frame::Decoder`): no panic, never more than one frame's bytes held, and the frames it returns re-encode to exactly the bytes it consumed; seed corpus `crates/hub/fuzz/corpus/<target>` (hand-made frames and op sequences: a session, the control frames, a key stream, unknown kinds, partial frames) ([drgnx-px.md](drgnx-px.md)) |
-| `px_owner` | bytes as the relay sidecar's output into the owner's end (`drgnx_px::owner::run`), its input a sink: no panic, and it ends at the output's end (a partial frame included), by a violation or with the ids used up, never a stall; seed corpus `crates/hub/fuzz/corpus/<target>` (hand-made frames and op sequences: a session, the control frames, a key stream, unknown kinds, partial frames) ([drgnx-px.md](drgnx-px.md)) |
-| `px_mux` | bytes as a sequence of both ends' inputs into the relay's `Mux` and `Pending` (opens, bytes within the credit, ends, resets, drains, each writer taking a frame, each reader stepping one, frames injected as the peer's): no panic, every `Deliver` within what the end credited and never more than the window queued, and no `FIN` before its stream's last `DATA` or `OPEN` out of id order; seed corpus `crates/hub/fuzz/corpus/<target>` (hand-made frames and op sequences: a session, the control frames, a key stream, unknown kinds, partial frames) ([drgnx-px.md](drgnx-px.md)) |
+| `px_frames` | bytes, cut into chunks of a size the first byte picks, through the relay's frame decoder (`ferja::frame::Decoder`): no panic, never more than one frame's bytes held, and the frames it returns re-encode to exactly the bytes it consumed; seed corpus `crates/hub/hrista/corpus/<target>` (hand-made frames and op sequences: a session, the control frames, a key stream, unknown kinds, partial frames) ([drgnx-px.md](drgnx-px.md)) |
+| `px_owner` | bytes as the relay sidecar's output into the owner's end (`ferja::owner::run`), its input a sink: no panic, and it ends at the output's end (a partial frame included), by a violation or with the ids used up, never a stall; seed corpus `crates/hub/hrista/corpus/<target>` (hand-made frames and op sequences: a session, the control frames, a key stream, unknown kinds, partial frames) ([drgnx-px.md](drgnx-px.md)) |
+| `px_mux` | bytes as a sequence of both ends' inputs into the relay's `Mux` and `Pending` (opens, bytes within the credit, ends, resets, drains, each writer taking a frame, each reader stepping one, frames injected as the peer's): no panic, every `Deliver` within what the end credited and never more than the window queued, and no `FIN` before its stream's last `DATA` or `OPEN` out of id order; seed corpus `crates/hub/hrista/corpus/<target>` (hand-made frames and op sequences: a session, the control frames, a key stream, unknown kinds, partial frames) ([drgnx-px.md](drgnx-px.md)) |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and
 `jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send), the unit tables (gleipnir's targets) and, for
@@ -1751,10 +1909,10 @@ directory):
 export RUSTUP_HOME=/path/to/scratch/rustup CARGO_HOME=/path/to/scratch/cargo
 rustup toolchain install nightly-2026-10-15 --profile minimal
 cargo install cargo-fuzz --locked
-cp -r crates/hub/fuzz/corpus /path/to/scratch/corpus
-cargo +nightly-2026-10-15 fuzz run line_codec --fuzz-dir crates/hub/fuzz /path/to/scratch/corpus/line_codec \
+cp -r crates/hub/hrista/corpus /path/to/scratch/corpus
+cargo +nightly-2026-10-15 fuzz run line_codec --fuzz-dir crates/hub/hrista /path/to/scratch/corpus/line_codec \
   -- -max_total_time=60 -rss_limit_mb=2048
 ```
 
-A crash is written to `crates/hub/fuzz/artifacts/<target>/` (ignored by git). Commit the input as a regression test in
+A crash is written to `crates/hub/hrista/artifacts/<target>/` (ignored by git). Commit the input as a regression test in
 `runstav` (or the crate that owns the parser) before fixing it.

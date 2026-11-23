@@ -3,9 +3,9 @@
 # crates/ext (the extension API and hosts), crates/std (the standards); app/ is the editor binary. Members write
 # `x.workspace = true`. The fuzz crates and the plugin fixtures and template are their own workspaces.
 [workspace]
-members = ["app", "crates/core/*", "crates/hub/*", "crates/ui/*"]
+members = ["app", "crates/core/*", "crates/hub/*", "crates/std/*", "crates/ui/*", "xtask"]
 exclude = [
-    "crates/hub/fuzz",
+    "crates/hub/hrista",
     "crates/hub/plugins",
     "crates/hub/protocol",
     "crates/ui/glitnir-fuzz",
@@ -42,7 +42,9 @@ memchr = "2.8"
 serde_ignored = "0.1"
 hmac = "0.13"
 sha2 = "0.11"
-sha1 = "0.11"              # the socket name is sha1(data-dir)[0:8] (design 3.1); one addition to section 17
+# Hrafn's `.drgnx/search.toml` (read as data; already in the lock through proc-macro-crate)
+toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
+sha1 = "0.11"             # the socket name is sha1(data-dir)[0:8] (design 3.1); one addition to section 17
 subtle = "2.6"
 getrandom = "0.4"
 # Jupyter kernels (language packs Task 11b): the pure-Rust ZeroMQ client; only the features used (no async-std, no async-dispatcher)
@@ -100,11 +102,11 @@ insta = { version = "1.49", features = ["json"] }
 proptest = "1.12"
 tempfile = "3"
 rmcp = { version = "3.9", default-features = false }   # dev only (mimir's interop test); a member names its features
-# drgnx-rows' fitter (render offload, Call 1): the advances of the font file Emacs names, unshaped and unhinted; TTC
+# rodd' fitter (render offload, Call 1): the advances of the font file Emacs names, unshaped and unhinted; TTC
 # and variable fonts. 0.x breaks often: pinned, moved on purpose. skrifa's own read-fonts requirement is this one
 skrifa = { version = "=0.49.0", default-features = false, features = ["std"] }
 read-fonts = { version = "=0.46.0", default-features = false, features = ["std"] }
-# the terminal fitter's widths (drgnx-rows), adjusted by the editor's char-width-table; already in the lock
+# the terminal fitter's widths (rodd), adjusted by the editor's char-width-table; already in the lock
 unicode-width = "0.2"
 unicode-segmentation = "1.13"
 # hrafn-embed, pure Rust: a tokeniser with no C regex engine (default-features alone does not compile), and the model file

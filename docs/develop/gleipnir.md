@@ -73,7 +73,7 @@ this returns.
 
 ### Ratatoskr's side
 
-`drgnx-ratatoskr/src/sandbox.rs`:
+`ratatoskr/src/sandbox.rs`:
 
 - `context(env)` is the `Context`, every path taken to its true name on disk (a link resolved; a path that does
   not exist keeps the true name of its deepest existing ancestor):
@@ -171,7 +171,7 @@ this returns.
 - `ratatoskr sandbox check` and the doctor's `sandbox` section run [the check](#the-check); `sandbox::run_probe`
   spawns its probe, and `sandbox::check_blocking` gives it a runtime of its own. On the reduced tier both add
   `sandbox_settings::REDUCED_CANNOT_PIN` (the text line, and `pins_note` in the JSON; null elsewhere).
-- Your settings files (`drgnx-ratatoskr/src/sandbox_settings.rs`, unified settings design §13), for phase 6's job
+- Your settings files (`ratatoskr/src/sandbox_settings.rs`, unified settings design §13), for phase 6's job
   spec builder, which does not exist yet: it will add the first to its `Context.closed` and the second to its
   spec's `binds`:
   - **The closed list.** `closed_config_targets(config_dir, user_lisp_files)` is the true path of `settings.el`,
@@ -226,7 +226,7 @@ seen inside.
 | `tmp` | path or absent | the temporary directory; required by the reduced tier, which has no private `/tmp` |
 | `layers` | `{landlock_min_abi}` | the lowest Landlock ABI the run accepts; seccomp is not a field (always on) |
 | `extra_tcp_ports` | ports | TCP ports besides the relay's (Landlock's port rule, never counted as isolation); the full tier only, the reduced tier grants none |
-| `rlimits` | `{address_space, data, cpu_seconds, open_files}` (each a number or absent) or absent | caps on the program, set by the inner helper just before it execs it (so the relay and the browser host it started are not held), soft and hard alike, so the program cannot raise them: `RLIMIT_AS` (bytes), `RLIMIT_DATA` (bytes), `RLIMIT_CPU` (seconds; the kernel kills the program with `SIGXCPU`), `RLIMIT_NOFILE`; `RLIMIT_CORE` is 0 whenever the field is present. A cap of 0 is refused (`Malformed`), and macOS refuses the field: it has no helper to set the caps, and one that is not enforced is not offered. Tests: `drgnx-ratatoskr`'s `sandbox_inner` (the limits read back, an allocation over the cap stopped, a spinning program killed, a cap the kernel refuses is exit 125) and the escape rows `rlimits-cap-the-program` (both tiers) |
+| `rlimits` | `{address_space, data, cpu_seconds, open_files}` (each a number or absent) or absent | caps on the program, set by the inner helper just before it execs it (so the relay and the browser host it started are not held), soft and hard alike, so the program cannot raise them: `RLIMIT_AS` (bytes), `RLIMIT_DATA` (bytes), `RLIMIT_CPU` (seconds; the kernel kills the program with `SIGXCPU`), `RLIMIT_NOFILE`; `RLIMIT_CORE` is 0 whenever the field is present. A cap of 0 is refused (`Malformed`), and macOS refuses the field: it has no helper to set the caps, and one that is not enforced is not offered. Tests: `ratatoskr`'s `sandbox_inner` (the limits read back, an allocation over the cap stopped, a spinning program killed, a cap the kernel refuses is exit 125) and the escape rows `rlimits-cap-the-program` (both tiers) |
 | `trace` | `"off"` (the default, left out of the JSON), `{"per_step": {"socket"}}` or `{"tree": {"socket"}}` | seeing the files the program's shell steps open ([sandbox.md](sandbox.md#seeing-the-files-a-shell-step-opens)); the socket must be one of `sockets`; `per_step` needs the full tier, and macOS refuses both (`Malformed`) |
 | `browser` | `{program, own_dir, web_port, local_ports, extra_read, host_args}` or absent | the agent browser's host, forked by the inner helper under a layer of its own ([The inner helper](#the-inner-helper), step 6b). `program` is the Chromium binary, `own_dir` its dir (`/tmp/drgnx-browser`), `web_port` the web relay's port, `local_ports` the agent's servers it may reach, `extra_read` more read roots of its layer, `host_args` the browser host's own flags (never a secret). The full tier only in phase 1 (rule 12) |
 
@@ -571,7 +571,7 @@ roots then. `prepare(inner, helper, inner_args, command)` gives the program (the
 
 Tests: `inner::tests` (the arguments, the thread check in a threaded process, the status lines, the sealed memfd,
 `read_status` on EOF, in pieces and at its deadline, the test-hook fields), `backend::linux::reduced::tests`, and
-`crates/hub/drgnx-ratatoskr/tests/sandbox_inner.rs`, which runs the built `ratatoskr` as the helper without
+`crates/hub/ratatoskr/tests/sandbox_inner.rs`, which runs the built `ratatoskr` as the helper without
 bwrap: the layers reported, exactly the spec's environment, no fd above 2, `NoNewPrivs` and one more seccomp filter,
 a floor refusal, the relay ready before the program (and three relay failures), an unsealed spec, the new session,
 a seccomp or Landlock install that an outer filter makes fail, and the reduced run end to end (ABI 9). With ABI 9,

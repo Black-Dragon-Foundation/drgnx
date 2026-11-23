@@ -1,5 +1,5 @@
 ;;; components.eld --- the UI kit's components: one definition, two renderers  -*- mode: lisp-data -*-
-;; The one definition of drgnx's components.  The hub expands it in Rust (drgnx-rows, from generated tables) and
+;; The one definition of drgnx's components.  The hub expands it in Rust (rodd, from generated tables) and
 ;; core/drgnx-ui-kit.el in Lisp, for Lisp-drawn chrome only; a conformance test keeps the two equal.  See
 ;; docs/develop/core.md ("The UI kit") and docs/develop/design-system.md.
 ;;

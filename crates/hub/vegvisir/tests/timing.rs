@@ -117,8 +117,8 @@ fn layout_200_items_within_2_ms() {
 /// The Timeline's and the Schedule's budgets (the timeline spec's §12): their rows on a 1000-px env.
 mod timeline_schedule {
     use super::p95;
-    use drgnx_rows::fit::Measure;
-    use drgnx_rows::svg::Palette;
+    use rodd::fit::Measure;
+    use rodd::svg::Palette;
     use std::time::Instant;
     use vegvisir::render::Env;
     use vegvisir::schedule::{self, BarFacts, SchedRow};
@@ -220,7 +220,7 @@ mod timeline_schedule {
         out
     }
 
-    fn timeline(l: &[Lane], e: &Env, win: &Window, now: f64) -> Vec<drgnx_rows::Row> {
+    fn timeline(l: &[Lane], e: &Env, win: &Window, now: f64) -> Vec<rodd::Row> {
         trail::timeline_rows(
             l,
             e,
@@ -234,7 +234,7 @@ mod timeline_schedule {
         )
     }
 
-    fn sched_rows(r: &[SchedRow], e: &Env, win: &Window, now: f64) -> Vec<drgnx_rows::Row> {
+    fn sched_rows(r: &[SchedRow], e: &Env, win: &Window, now: f64) -> Vec<rodd::Row> {
         schedule::schedule_rows(
             r,
             e,
@@ -340,7 +340,7 @@ mod timeline_schedule {
             let now = 2_000.0 + 5.0 * f64::from(i);
             let t = Instant::now();
             let after = sched_rows(&r, &e, &win, now);
-            let ops = drgnx_rows::diff(&before, &after);
+            let ops = rodd::diff(&before, &after);
             us.push(t.elapsed().as_micros());
             assert!(!ops.is_empty());
             before = after;

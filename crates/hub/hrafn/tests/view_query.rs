@@ -5,13 +5,19 @@
 
 use hrafn::query::{Query, Scope, search};
 use hrafn::{
-    Class, CodeStore, DoorKind, FileRow, Lang, Listed, TreeId, View, lag, put_vectors, refresh,
+    Class, CodeStore, DoorKind, FileRow, Lang, Listed, TreeId, VectorCache, View, lag, refresh,
 };
 use std::collections::HashMap;
 use std::io;
 
-const MODEL: &str = "m";
+/// The fingerprint every vector here is of.
+const FP: &str = "7ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee5";
 const DIMS: usize = 4;
+
+/// The vector cache of [`FP`] under DIR.
+fn cache(dir: &tempfile::TempDir) -> VectorCache {
+    VectorCache::open_writer(&dir.path().join("vectors"), FP, "{}").unwrap()
+}
 
 /// The base's files: path and text.
 const BASE: &[(&str, &str)] = &[
@@ -29,6 +35,7 @@ fn listed(path: &str, text: &str) -> Listed {
         class: Class::Code,
         lang: Lang::Rust,
         generated: false,
+        embed: true,
         size: text.len() as u64,
     }
 }
@@ -70,18 +77,21 @@ async fn put(s: &CodeStore, tree: TreeId, path: &str, text: &str) {
         hrafn::chunk::chunk_file(path, Lang::Rust, false, text, hrafn::chunk::BUDGET);
     let chunks: Vec<hrafn::ChunkIn> = chunks
         .into_iter()
-        .map(|c| hrafn::ChunkIn {
-            start: c.start,
-            end: c.end,
-            line_start: c.line_start,
-            line_end: c.line_end,
-            symbol: c.symbol,
-            key: hrafn::vec_key(hrafn::chunk::CHUNKER_VERSION, &c.embed_text),
-            embed: c.embed,
-            embed_text: c.embed_text,
-            symbols: c.fts.symbols,
-            doc: c.fts.doc,
-            body: c.fts.body,
+        .map(|c| {
+            let (_, key) = hrafn::chunk::embed_text_and_key(&c);
+            hrafn::ChunkIn {
+                start: c.start,
+                end: c.end,
+                line_start: c.line_start,
+                line_end: c.line_end,
+                symbol: c.symbol,
+                key,
+                embed: c.embed,
+                embed_text: c.embed_text,
+                symbols: c.fts.symbols,
+                doc: c.fts.doc,
+                body: c.fts.body,
+            }
         })
         .collect();
     let symbols: Vec<hrafn::SymbolIn> = symbols
@@ -124,6 +134,8 @@ fn q(text: &str) -> Query {
         text: text.into(),
         scope: Scope::All,
         k: 10,
+        path_weight: hrafn::query::PATH_WEIGHT,
+        dir_weight: hrafn::query::DIR_WEIGHT,
     }
 }
 
@@ -269,35 +281,33 @@ fn ranks_basename_prefix_first() {
 /// visible chunk of a key, and there is none); in the base, T's content gives no hit.
 #[tokio::test]
 async fn vector_hit_resolves_to_a_visible_chunk() {
-    let (_d, s, t, _t2) = store().await;
+    let (d, s, t, _t2) = store().await;
+    let c = cache(&d);
     put(&s, t, "src/p.rs", "fn tree_only_fn() {\n    yak();\n}\n").await;
-    let keys: Vec<([u8; 32], Vec<f32>)> = hrafn::missing(&s, MODEL, 100)
+    let keys: Vec<([u8; 32], Vec<f32>)> = hrafn::missing(&s, &c, 100)
         .await
         .unwrap()
         .into_iter()
+        .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
         .enumerate()
-        .map(|(i, (k, _))| {
+        .map(|(i, (_, k, _))| {
             let mut v = vec![0.0; DIMS];
             v[i % DIMS] = 1.0;
             (k, v)
         })
         .collect();
-    put_vectors(&s, MODEL, &keys).await.unwrap();
-    for (_, v) in &keys {
-        let base = search(
-            &s,
-            &q("unrelated words"),
-            View::Base,
-            Some((MODEL, v)),
-            &NONE,
-        )
+    c.put(hrafn::KeyKind::Chunk, DIMS as u32, &keys)
         .await
         .unwrap();
+    for (_, v) in &keys {
+        let base = search(&s, &q("unrelated words"), View::Base, Some((&c, v)), &NONE)
+            .await
+            .unwrap();
         let tree = search(
             &s,
             &q("unrelated words"),
             View::Tree(t),
-            Some((MODEL, v)),
+            Some((&c, v)),
             &NONE,
         )
         .await
@@ -336,16 +346,20 @@ async fn reanchor_reads_the_tree_root() {
 /// chunks and leaves out the base chunks it shadows, and says how many files differ.
 #[tokio::test]
 async fn view_lag_counts_the_views_content() {
-    let (_d, s, t, _t2) = store().await;
+    let (d, s, t, _t2) = store().await;
+    let c = cache(&d);
     // every base chunk embedded
-    let keys: Vec<([u8; 32], Vec<f32>)> = hrafn::missing(&s, MODEL, 100)
+    let keys: Vec<([u8; 32], Vec<f32>)> = hrafn::missing(&s, &c, 100)
         .await
         .unwrap()
         .into_iter()
-        .map(|(k, _)| (k, vec![1.0; DIMS]))
+        .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
+        .map(|(_, k, _)| (k, vec![1.0; DIMS]))
         .collect();
-    put_vectors(&s, MODEL, &keys).await.unwrap();
-    let base_total = lag(&s, Some(MODEL), View::Base).await.unwrap().chunks_total;
+    c.put(hrafn::KeyKind::Chunk, DIMS as u32, &keys)
+        .await
+        .unwrap();
+    let base_total = lag(&s, Some(&c), View::Base).await.unwrap().chunks_total;
     put(
         &s,
         t,
@@ -354,13 +368,13 @@ async fn view_lag_counts_the_views_content() {
     )
     .await;
     tombstone(&s, t, "src/q.rs").await;
-    let b = lag(&s, Some(MODEL), View::Base).await.unwrap();
+    let b = lag(&s, Some(&c), View::Base).await.unwrap();
     assert_eq!(
         (b.chunks_total, b.chunks_behind, b.files_behind),
         (base_total, 0, 0)
     );
     assert_eq!(b.differing_files, None);
-    let l = lag(&s, Some(MODEL), View::Tree(t)).await.unwrap();
+    let l = lag(&s, Some(&c), View::Tree(t)).await.unwrap();
     assert_eq!(l.files_behind, 1, "{l:?}");
     assert!(l.chunks_behind >= 1, "{l:?}");
     assert_eq!(l.differing_files, Some(2));
@@ -398,8 +412,11 @@ async fn plan_of(s: &CodeStore, sql: &'static str, binds: usize) -> String {
 /// `file` is reached by its primary key `(tree, path)`.
 #[tokio::test]
 async fn overlay_predicates_use_indexes() {
-    let (_d, s, t, _t2) = store().await;
+    let (d, s, t, _t2) = store().await;
     put(&s, t, "src/new.rs", "fn brand_new_fn() {}\n").await;
+    // the lag's SQL reads the vectors of the cache attached as `vc` (it stays attached on the store's connection)
+    let c = cache(&d);
+    s.attach_cache(c.path(), |_| Ok(())).await.unwrap();
     let routes = [
         hrafn::query::PINNED_SQL,
         hrafn::query::NAME_EXACT_SQL,
@@ -408,7 +425,7 @@ async fn overlay_predicates_use_indexes() {
         hrafn::query::PATH_ANY_SQL,
         hrafn::query::PATH_NAME_SQL,
         hrafn::query::VISIBLE_SQL,
-        hrafn::query::FIRST_CHUNK_SQL,
+        hrafn::query::KEY_CHUNKS_SQL,
         hrafn::query::META_SQL,
         hrafn::refs::REFS_SQL,
         hrafn::index::LAG_TOTAL_SQL,

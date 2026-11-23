@@ -3,8 +3,7 @@
 
 use mimir::BoxFuture;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize, Serializer};
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 
 use super::guard::{CoordTool, guarded};
 use super::job::{DecisionOut, decisions_out, err, json_text};
@@ -309,44 +308,9 @@ struct Node {
     path: Option<String>,
     status: Option<String>,
     parent: Option<String>,
-    data: Data,
 }
 
-/// What a node's `data` holds that the status reads.  A `data` the node-data schema refuses reads as empty
-/// (`drgnx-work-db-decode`): a wrong type for one of its fields, or not an object.
-#[derive(Default)]
-struct Data {
-    branch: Option<String>,
-    merged: bool,
-}
-
-/// The node-data schema's fields by type (`drgnx-records-node-data`).
-const DATA_STRINGS: [&str; 5] = ["sha", "repo", "name", "branch", "worktree"];
-const DATA_INTEGERS: [&str; 2] = ["date", "seq"];
-const DATA_BOOLEANS: [&str; 5] = ["range-stale", "merged", "gone", "stale", "truncated"];
-
-fn decode_data(text: Option<String>) -> Data {
-    let Some(Value::Object(o)) = text.and_then(|t| serde_json::from_str(&t).ok()) else {
-        return Data::default();
-    };
-    let fits = |names: &[&str], ok: fn(&Value) -> bool| {
-        names
-            .iter()
-            .all(|k| o.get(*k).is_none_or(|v| v.is_null() || ok(v)))
-    };
-    if !(fits(&DATA_STRINGS, Value::is_string)
-        && fits(&DATA_INTEGERS, |v| v.is_i64() || v.is_u64())
-        && fits(&DATA_BOOLEANS, Value::is_boolean))
-    {
-        return Data::default();
-    }
-    Data {
-        branch: o.get("branch").and_then(Value::as_str).map(str::to_owned),
-        merged: o.get("merged").and_then(Value::as_bool).unwrap_or(false),
-    }
-}
-
-const NODE_SELECT: &str = "select id, kind, title, path, status, parent, data from node";
+const NODE_SELECT: &str = "select id, kind, title, path, status, parent from node";
 
 /// The row closure for [`NODE_SELECT`] (a macro: `urdr` does not export SQLite's row type).
 macro_rules! node_row {
@@ -359,7 +323,6 @@ macro_rules! node_row {
                 path: r.get(3)?,
                 status: r.get(4)?,
                 parent: r.get(5)?,
-                data: decode_data(r.get(6)?),
             })
         }
     };
@@ -399,44 +362,26 @@ fn done_of<'a>(nodes: impl Iterator<Item = &'a Node>, done: impl Fn(&Node) -> bo
     nodes.fold((0, 0), |(d, n), x| (d + usize::from(done(x)), n + 1))
 }
 
-/// A string, or the empty object where the Lisp has nil (`json-serialize` writes nil as `{}`).
-fn nil_object<S: Serializer>(v: &Option<String>, s: S) -> Result<S::Ok, S::Error> {
-    match v {
-        Some(v) => s.serialize_str(v),
-        None => {
-            use serde::ser::SerializeMap;
-            s.serialize_map(Some(0))?.end()
-        }
-    }
-}
-
 /// `(DONE, ALL)`, which the row writes as `[done, all]`.
 type Pair = (usize, usize);
 
-/// A plan's row (`drgnx-work--json-row`, keys in its order).
+/// A plan's compact row: what a list of plans needs, nothing a read of the plan adds.
 #[derive(Serialize)]
-struct PlanRow {
+struct WorkRow {
     id: String,
-    #[serde(serialize_with = "nil_object")]
     title: Option<String>,
-    #[serde(serialize_with = "nil_object")]
     path: Option<String>,
-    spec: Option<String>,
-    branch: Option<String>,
-    merged: bool,
+    status: Option<String>,
     tasks: Pair,
     steps: Pair,
-    todos: Pair,
-    commits: usize,
 }
 
-/// `drgnx-work-counts` of PLAN, as the row's `tasks`, `steps`, `todos` and `commits`.
-fn counts(tx: &Tx, plan: &str) -> Result<(Pair, Pair, Pair, usize), CoordError> {
+/// `drgnx-work-counts` of PLAN, as the row's `tasks` and `steps`.
+fn counts(tx: &Tx, plan: &str) -> Result<(Pair, Pair), CoordError> {
     let kids = children(tx, plan)?;
     let is = |n: &Node, kind: &str| n.kind.as_deref() == Some(kind);
     let is_done = |n: &Node| n.status.as_deref() == Some("done");
     let task_nodes: Vec<&Node> = kids.iter().filter(|n| is(n, "task")).collect();
-    let todo_nodes: Vec<&Node> = kids.iter().filter(|n| is(n, "todo")).collect();
     let mut task_kids = Vec::new();
     for t in &task_nodes {
         task_kids.extend(children(tx, &t.id)?);
@@ -450,32 +395,50 @@ fn counts(tx: &Tx, plan: &str) -> Result<(Pair, Pair, Pair, usize), CoordError> 
     let steps = done_of(task_kids.iter().filter(|n| is(n, "step")), |n| {
         is_done(n) || n.parent.as_deref().is_some_and(|p| done_tasks.contains(&p))
     });
-    let mut todo_kids = Vec::new();
-    for t in &todo_nodes {
-        todo_kids.extend(children(tx, &t.id)?);
-    }
-    let mut commits: Vec<&str> = Vec::new();
-    for n in kids.iter().chain(&task_kids).chain(&todo_kids) {
-        if is(n, "commit") && !commits.contains(&n.id.as_str()) {
-            commits.push(&n.id);
-        }
-    }
-    Ok((
-        done_of(task_nodes.iter().copied(), is_done),
-        steps,
-        done_of(todo_nodes.iter().copied(), is_done),
-        commits.len(),
-    ))
+    Ok((done_of(task_nodes.iter().copied(), is_done), steps))
 }
 
-/// One row per plan, sorted by path (`drgnx-work--status-rows`).
-fn status_rows(tx: &Tx) -> Result<Vec<PlanRow>, CoordError> {
+/// The most plans a page of `work_status` holds.
+const WORK_PAGE_MAX: u32 = 50;
+const WORK_PAGE: u32 = 20;
+
+#[derive(Deserialize, JsonSchema)]
+struct WorkStatusArgs {
+    /// A plan status (`open`, `done`...) or `all`; default every plan not done
+    status: Option<String>,
+    /// At most this many plans (1 to 50, default 20)
+    limit: Option<u32>,
+    /// The `next_cursor` of the page before
+    cursor: Option<String>,
+    /// Only plans whose path starts with this
+    path_prefix: Option<String>,
+}
+
+/// A page of plans, sorted by path, and the cursor of the next one (`drgnx-work--status-rows`, filtered).
+fn status_rows(
+    tx: &Tx,
+    a: &WorkStatusArgs,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<WorkRow>, Option<String>), CoordError> {
     let mut plans: Vec<Node> = {
         // `node` is a view (no rowid): plans with the same path (or none) keep id order
         let mut st = tx.prepare(&format!("{NODE_SELECT} where kind = 'plan' order by id"))?;
         let rows = st.query_map([], node_row!())?;
         rows.collect::<Result<_, _>>()?
     };
+    plans.retain(|p| match a.status.as_deref() {
+        None => p.status.as_deref() != Some("done"),
+        Some("all") => true,
+        Some(s) => p.status.as_deref() == Some(s),
+    });
+    if let Some(prefix) = &a.path_prefix {
+        plans.retain(|p| {
+            p.path
+                .as_deref()
+                .is_some_and(|x| x.starts_with(prefix.as_str()))
+        });
+    }
     // `string<` reads a missing path as the symbol `nil`; the sort is stable
     plans.sort_by(|a, b| {
         a.path
@@ -483,46 +446,51 @@ fn status_rows(tx: &Tx) -> Result<Vec<PlanRow>, CoordError> {
             .unwrap_or("nil")
             .cmp(b.path.as_deref().unwrap_or("nil"))
     });
+    let more = plans.len() > offset + limit;
     let mut rows = Vec::new();
-    for p in plans {
-        let spec: Option<String> = opt(tx.query_row(
-            "select dst from edge where src = ?1 and kind = 'derives' order by dst limit 1",
-            [&p.id],
-            |r| r.get(0),
-        ))?;
-        let (done_tasks, steps, todos, commits) = counts(tx, &p.id)?;
-        rows.push(PlanRow {
+    for p in plans.into_iter().skip(offset).take(limit) {
+        let (tasks, steps) = counts(tx, &p.id)?;
+        rows.push(WorkRow {
             id: p.id,
             title: p.title,
             path: p.path,
-            spec,
-            branch: p.data.branch,
-            merged: p.data.merged,
-            tasks: done_tasks,
+            status: p.status,
+            tasks,
             steps,
-            todos,
-            commits,
         });
     }
-    Ok(rows)
+    Ok((rows, more.then(|| format!("o:{}", offset + limit))))
 }
 
 struct WorkStatus;
 
 impl CoordTool for WorkStatus {
-    type Args = NoArgs;
+    type Args = WorkStatusArgs;
     const NAME: &'static str = "work_status";
-    const DESCRIPTION: &'static str = "The work tracker's plans: what `drgnx work status --json' gives, one object per plan (tasks, steps, todos as [done, all], commits, branch, merged)";
+    const DESCRIPTION: &'static str = "The work tracker's plans, paged: id, title, path, status and tasks and steps as [done, all]; default the plans not done (status: a word or all; limit, cursor, path_prefix)";
 
     fn run<'a>(
         &'a self,
         coord: &'a Coord,
         _: &'a Identity,
-        _: NoArgs,
+        args: WorkStatusArgs,
     ) -> BoxFuture<'a, Result<String, String>> {
         Box::pin(async move {
-            let rows = coord.db().read(status_rows).await.map_err(err)?;
-            Ok(json_text(&rows))
+            let limit = args.limit.unwrap_or(WORK_PAGE);
+            if !(1..=WORK_PAGE_MAX).contains(&limit) {
+                return Err(format!("limit takes 1 to {WORK_PAGE_MAX}, not {limit}"));
+            }
+            let offset = super::tracker::offset_of(&args.cursor)?;
+            let (rows, next) = coord
+                .db()
+                .read(move |tx| status_rows(tx, &args, offset, limit as usize))
+                .await
+                .map_err(err)?;
+            let mut out = serde_json::json!({ "plans": rows });
+            if let Some(n) = next {
+                out["next_cursor"] = serde_json::json!(n);
+            }
+            Ok(json_text(&out))
         })
     }
 }

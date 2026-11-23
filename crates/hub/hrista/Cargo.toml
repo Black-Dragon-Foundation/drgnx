@@ -1,0 +1,279 @@
+# cargo-fuzz targets for the parsers of phase 1 (docs/develop/runtime.md, "Fuzzing").  Its own workspace: the product
+# workspace excludes it, and it builds on the pinned nightly only.
+[package]
+name = "drgnx-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bytes = "1"
+tokio-util = { version = "0.7", features = ["codec"] }
+serde_json = { version = "1", features = ["raw_value"] }
+runstav = { path = "../runstav" }
+ratatoskr = { path = "../ratatoskr", features = ["fuzzing"] }
+saga = { path = "../saga" }
+heimdall = { path = "../heimdall" }
+gleipnir = { path = "../gleipnir", features = ["fuzzing"] }
+huginn = { path = "../../core/huginn" }
+mimir = { path = "../mimir", features = ["fuzzing"] }
+# no platform verifier: the targets make no TLS connection, and it is the one optional piece with a system dependency
+bifrost = { path = "../bifrost", default-features = false }
+http = "1"
+norn = { path = "../norn" }
+brokkr = { path = "../brokkr" }
+urdr = { path = "../urdr", features = ["test-hooks"] }
+ferja = { path = "../ferja" }
+tokio = { version = "1.54", features = ["rt", "io-util", "time", "sync"] }
+
+[workspace]
+
+[[bin]]
+name = "line_codec"
+path = "fuzz_targets/line_codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request_prelude"
+path = "fuzz_targets/request_prelude.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hello"
+path = "fuzz_targets/hello.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "connect_head"
+path = "fuzz_targets/connect_head.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "absolute_head"
+path = "fuzz_targets/absolute_head.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "host_target"
+path = "fuzz_targets/host_target.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sbpl_quote"
+path = "fuzz_targets/sbpl_quote.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bwrap_version"
+path = "fuzz_targets/bwrap_version.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "inner_spec"
+path = "fuzz_targets/inner_spec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "huginn_read"
+path = "fuzz_targets/huginn_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcp_message"
+path = "fuzz_targets/mcp_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jsonrpc_parse"
+path = "fuzz_targets/jsonrpc_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text_one_line"
+path = "fuzz_targets/text_one_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "put_parsed"
+path = "fuzz_targets/put_parsed.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "task_write_args"
+path = "fuzz_targets/task_write_args.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "graph_read_args"
+path = "fuzz_targets/graph_read_args.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "trust_fence"
+path = "fuzz_targets/trust_fence.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sqlro_sql"
+path = "fuzz_targets/sqlro_sql.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sse_usage"
+path = "fuzz_targets/sse_usage.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "provider_merge"
+path = "fuzz_targets/provider_merge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gateway_admit"
+path = "fuzz_targets/gateway_admit.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bridge_line"
+path = "fuzz_targets/bridge_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "container_req"
+path = "fuzz_targets/container_req.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "acp_update"
+path = "fuzz_targets/acp_update.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "report_submit"
+path = "fuzz_targets/report_submit.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "saga_plan"
+path = "fuzz_targets/saga_plan.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "saga_deferred"
+path = "fuzz_targets/saga_deferred.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "saga_org"
+path = "fuzz_targets/saga_org.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cdp_envelope"
+path = "fuzz_targets/cdp_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "px_frames"
+path = "fuzz_targets/px_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "plugin_manifest"
+path = "fuzz_targets/plugin_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "px_owner"
+path = "fuzz_targets/px_owner.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hook_rules"
+path = "fuzz_targets/hook_rules.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "px_mux"
+path = "fuzz_targets/px_mux.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "drgnx_context"
+path = "fuzz_targets/drgnx_context.rs"
+test = false
+doc = false
+bench = false

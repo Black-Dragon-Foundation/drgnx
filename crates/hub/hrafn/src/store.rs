@@ -1,11 +1,13 @@
-//! The code store: files, chunks, FTS columns, symbols and content-keyed vectors in one SQLite file, opened through
-//! `urdr` (one owning thread, WAL, migrations as data).
+//! The code store: files, chunks, FTS columns, symbols and the content keys of chunks and paths in one SQLite file,
+//! opened through `urdr` (one owning thread, WAL, migrations as data). The vectors of those keys are in the machine-wide
+//! vector cache (`cache.rs`), which the store's connection attaches read-only as `vc`.
 
 use crate::schema::{MIGRATIONS, encode_symbol};
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 use urdr::{Handle, Mode, Store, StoreSpec};
 
 #[derive(Debug)]
@@ -14,6 +16,10 @@ pub enum StoreError {
     Sqlite(rusqlite::Error),
     /// A read of a checkout or its git, for the overlay.
     Io(std::io::Error),
+    /// The vector cache has a writer already (`cache::VectorCache::open_writer`): who.
+    Busy(String),
+    /// The vector cache's file is of another fingerprint than the one asked for.
+    Mismatch(String),
 }
 
 impl fmt::Display for StoreError {
@@ -22,6 +28,8 @@ impl fmt::Display for StoreError {
             StoreError::Store(e) => write!(f, "code store: {e}"),
             StoreError::Sqlite(e) => write!(f, "code store: {e}"),
             StoreError::Io(e) => write!(f, "code store: {e}"),
+            StoreError::Busy(why) => write!(f, "vector cache: {why}"),
+            StoreError::Mismatch(why) => write!(f, "vector cache: {why}"),
         }
     }
 }
@@ -60,7 +68,7 @@ pub struct FileRow {
 }
 
 /// A chunk to write. `symbols` is the raw symbol text: it is encoded (see [`encode_symbol`]) on its way into the FTS
-/// column. `key` is [`vec_key`] of the chunker version and `embed_text`.
+/// column. `key` is [`chunk_key`] of `embed_text`.
 #[derive(Clone, Debug)]
 pub struct ChunkIn {
     pub start: u32,
@@ -99,27 +107,72 @@ pub struct RefIn {
     pub lines: Vec<u32>,
 }
 
-/// One row of `vec`: a quantized vector of one model for one content key.
-#[derive(Clone, Debug)]
-pub struct VecRow {
-    pub model: String,
-    pub dims: u32,
-    pub key: [u8; 32],
-    pub bits: u8,
-    pub vec: Vec<u8>,
-    pub scale: f32,
-    pub last_used: i64,
+/// What a vector embeds: a chunk's text, or a path's (the cache's `chunk_vec` and `path_vec`, `held.kind` 0 and 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum KeyKind {
+    Chunk,
+    Path,
 }
 
-/// The key of a chunk's content: sha256 over length-prefixed fields (the chunker version, then the text), so a key
-/// plus its row names the model, dims, chunker and text.
-pub fn vec_key(chunker: u32, embed_text: &str) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(4u64.to_be_bytes());
-    h.update(chunker.to_be_bytes());
-    h.update((embed_text.len() as u64).to_be_bytes());
-    h.update(embed_text.as_bytes());
-    h.finalize().into()
+impl KeyKind {
+    /// Its number in `held.kind`.
+    pub fn as_i64(self) -> i64 {
+        match self {
+            KeyKind::Chunk => 0,
+            KeyKind::Path => 1,
+        }
+    }
+
+    /// The key of TEXT as this kind's text: sha256 over length-prefixed fields, the version of the kind's text
+    /// ([`crate::chunk::EMBED_TEXT_VERSION`], [`PATH_TEXT_VERSION`]) and then the text itself. Nothing else goes in: one
+    /// text is one key in any path, branch, clone or repo.
+    pub fn key(self, text: &str) -> [u8; 32] {
+        let version = match self {
+            KeyKind::Chunk => crate::chunk::EMBED_TEXT_VERSION,
+            KeyKind::Path => PATH_TEXT_VERSION,
+        };
+        let mut h = Sha256::new();
+        h.update(4u64.to_be_bytes());
+        h.update(version.to_be_bytes());
+        h.update((text.len() as u64).to_be_bytes());
+        h.update(text.as_bytes());
+        h.finalize().into()
+    }
+}
+
+/// The version of [`path_text`], hashed into every path key.
+pub const PATH_TEXT_VERSION: u32 = 1;
+
+/// The key of a chunk's embedded text (`chunk::embed_text_and_key` is how tier 1 gets it).
+pub fn chunk_key(embed_text: &str) -> [u8; 32] {
+    KeyKind::Chunk.key(embed_text)
+}
+
+/// What a path vector embeds: the whole path, a newline, then its words, split on `/ _ - .` and camelCase boundaries.
+pub fn path_text(path: &str) -> String {
+    let mut words: Vec<String> = Vec::new();
+    for part in path.split(['/', '_', '-', '.']).filter(|p| !p.is_empty()) {
+        let cs: Vec<char> = part.chars().collect();
+        let mut word = String::new();
+        for (i, &ch) in cs.iter().enumerate() {
+            // a word starts at an upper-case letter after a lower-case one or a digit (`queueTest`), and at the last
+            // upper-case letter of a run that a lower-case one follows (`HTTPServer`)
+            let cut = i > 0
+                && ch.is_uppercase()
+                && (!cs[i - 1].is_uppercase() || cs.get(i + 1).is_some_and(|n| n.is_lowercase()));
+            if cut && !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            word.push(ch);
+        }
+        words.push(word);
+    }
+    format!("{path}\n{}", words.join(" "))
+}
+
+/// The key of PATH's vector: [`KeyKind::Path`]'s key of its [`path_text`].
+pub fn path_key(path: &str) -> [u8; 32] {
+    KeyKind::Path.key(&path_text(path))
 }
 
 /// TREE's blob of PATH: none when TREE has no row, `Some(None)` for a tombstone.
@@ -327,10 +380,44 @@ pub(crate) fn write_version(
     write_chunks(c, &f.path, blob, chunks, symbols, refs).map(Some)
 }
 
+/// The vector cache the store's connection has attached as `vc` (none yet), shared with the closures that run on the
+/// store thread.
+pub(crate) type Attached = Arc<Mutex<Option<PathBuf>>>;
+
 pub struct CodeStore {
     store: Option<Store>,
     handle: Handle,
     memo: crate::memo::Shared,
+    path: PathBuf,
+    attached: Attached,
+}
+
+/// `file:PATH?mode=ro`, with what a SQLite URI treats specially percent-encoded.
+fn ro_uri(path: &Path) -> String {
+    let mut out = String::from("file:");
+    for c in path.to_string_lossy().chars() {
+        match c {
+            '%' | '?' | '#' => out.push_str(&format!("%{:02X}", c as u32)),
+            _ => out.push(c),
+        }
+    }
+    out.push_str("?mode=ro");
+    out
+}
+
+/// The vector cache at PATH attached read-only as `vc` on the store's connection C, unless it is already (another one
+/// is detached first). Outside a transaction only: a read closure's.
+pub(crate) fn ensure_vc(c: &Connection, attached: &Attached, path: &Path) -> rusqlite::Result<()> {
+    let mut a = attached.lock().unwrap_or_else(PoisonError::into_inner);
+    if a.as_deref() == Some(path) {
+        return Ok(());
+    }
+    if a.take().is_some() {
+        c.execute_batch("detach database vc")?;
+    }
+    c.execute("attach database ?1 as vc", [ro_uri(path)])?;
+    *a = Some(path.to_path_buf());
+    Ok(())
 }
 
 impl CodeStore {
@@ -349,7 +436,45 @@ impl CodeStore {
             store: Some(store),
             handle,
             memo: Default::default(),
+            path: path.to_path_buf(),
+            attached: Default::default(),
         })
+    }
+
+    /// The store's file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The store's name as a holder of the vector cache's keys: its file's stem (`<id>` of `<state>/code/<id>.db`).
+    pub fn holder_id(&self) -> String {
+        self.path
+            .file_stem()
+            .map_or_else(String::new, |s| s.to_string_lossy().into_owned())
+    }
+
+    /// F run on the store's connection with the vector cache at PATH attached read-only as `vc`, so the vector route
+    /// and the lag are one connection's SQL over both files. Every function that reads vectors attaches the cache it
+    /// is given itself; this is for SQL of the caller's own. (In the same closure: another read may attach another
+    /// cache before a later one.)
+    pub async fn attach_cache<R: Send + 'static>(
+        &self,
+        path: &Path,
+        f: impl FnOnce(&rusqlite::Connection) -> urdr::Result<R> + Send + 'static,
+    ) -> Result<R, StoreError> {
+        let (attached, path) = (self.attached.clone(), path.to_path_buf());
+        Ok(self
+            .handle
+            .read(move |c| {
+                ensure_vc(c, &attached, &path)?;
+                f(c)
+            })
+            .await?)
+    }
+
+    /// Which cache is attached now (see [`ensure_vc`]).
+    pub(crate) fn attached(&self) -> Attached {
+        self.attached.clone()
     }
 
     /// The `urdr` handle, for reads and writes this API does not cover yet (closures run on the store thread).
@@ -389,29 +514,6 @@ impl CodeStore {
         Ok(self
             .handle
             .write(move |c| remove_file_row(c, 0, &path))
-            .await?)
-    }
-
-    /// Insert or replace a vector.
-    pub async fn put_vec(&self, v: VecRow) -> Result<(), StoreError> {
-        Ok(self
-            .handle
-            .write(move |c| {
-                c.execute(
-                    "insert or replace into vec(model, dims, key, bits, vec, scale, last_used)
-                     values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![
-                        v.model,
-                        v.dims,
-                        v.key.as_slice(),
-                        v.bits,
-                        v.vec,
-                        v.scale,
-                        v.last_used
-                    ],
-                )?;
-                Ok(())
-            })
             .await?)
     }
 

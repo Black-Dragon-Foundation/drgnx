@@ -27,7 +27,7 @@ table also holds how each kind of group runs (`:kinds`) and which files key its 
 | `docs/`, `README.md` only | the docs checks (`docs:test/unit/config-doc-test.el`, `…settings-doc-test.el`) and nothing else |
 | `SECURITY.md`, `LICENSE*` | none |
 | `test/affected.eld`, `core/drgnx-affected.el` | `lisp:test/unit/affected-test.el` (and `rules` for the Lisp): nothing else reads the table or the tool |
-| `core/`, `modules/` Lisp | `lisp:<test file>` for each unit test file that names the file's feature, plus `rules` and `rust:drgnx-ratatoskr` with its dependents (the doctor and the launch rows read `core/` and `modules/`) |
+| `core/`, `modules/` Lisp | `lisp:<test file>` for each unit test file that names the file's feature, plus `rules` and `rust:ratatoskr` with its dependents (the doctor and the launch rows read `core/` and `modules/`) |
 | `wb/`, `themes/`, `keys/`, `init/`, `modules/ui/`, `etc/icons/` | the same Lisp groups, plus `ui` and `scenario` |
 | `crates/hub/<c>/` | `rust:<c>` and every crate that depends on it, `rust-rules`; `domr` when the hub or the harness is among them |
 | `runtime/Cargo.*`, `crates/hub/protocol/` | `rust-workspace`, `domr`, `rust-rules` |
@@ -44,7 +44,7 @@ every `domr:`).
 
 **The hub is built with `test-hooks` wherever a group builds it** (`rust-workspace`, `rust-rules`, `domr`), as CI's
 Runtime job does. Cargo keeps one `target/debug/ratatoskr` whatever the features, so a plain `cargo test -p
-drgnx-ratatoskr --test …` overwrites the binary that test binaries built before it then start, and their hub-backed
+ratatoskr --test …` overwrites the binary that test binaries built before it then start, and their hub-backed
 rows fail with "sandbox run exists only in a test-hooks build". Built with the hooks, the conformance rows also run
 against the hub CI runs them against.
 
@@ -70,8 +70,8 @@ wrapper's words come before every group's command.
 
 ### One Rust test file
 
-A crate with many `tests/*.rs` files (`drgnx-ratatoskr`, `hrafn`, `verdandi`, `vegvisir`, `norn`, `skald`, `saga`,
-`hrafn-embed`, `drgnx-term`, `drgnx-rows`) builds them as **one** test binary, `it`, so the crate's lib links once and
+A crate with many `tests/*.rs` files (`ratatoskr`, `hrafn`, `verdandi`, `vegvisir`, `norn`, `skald`, `saga`,
+`hrafn-embed`, `drgnx-term`, `rodd`) builds them as **one** test binary, `it`, so the crate's lib links once and
 not once per file: its `Cargo.toml` sets `autotests = false`, and `tests/main.rs` has a `mod <file>;` line per file (the
 files stay where they are; shared helpers are `use crate::support;`, not `mod support;`). One file's rows:
 `cargo test -p hrafn --test it graph::` (a test is `<file>::<name>`, so `--exact` takes `graph::<name>`).
@@ -79,11 +79,11 @@ files stay where they are; shared helpers are `use crate::support;`, not `mod su
 A file that must run in a process of its own stays a `[[test]]` of its own, with the reason in `Cargo.toml` (a
 process-wide registry or clock it installs, the environment it sets, timing rows that must have the machine to
 themselves, real-sandbox and real-sshd lanes the workflows run by name): `cargo test -p hrafn --test door_no_git`.
-drgnx-ratatoskr has three more such binaries, each a root in `tests/groups/` that names its files with
+ratatoskr has three more such binaries, each a root in `tests/groups/` that names its files with
 `#[path = "../<file>.rs"] mod <file>;`: `timing` (the four timing files), `sandbox` (the real-sandbox lane:
 `browser_sandboxed`, `launch_sandboxed`, `sandbox_inner`, `sandbox_run`, `hrafn_parse_sandbox`) and `fleet`
 (`fleet_keys`, `fleet_registry`, `fleet_runners`, `fleet_sync`, `term_scope`; `required-features = ["fleet"]` as before):
-`cargo test -p drgnx-ratatoskr --test sandbox launch_sandboxed::`. `fleet_link`, `fleet_cloud` (both set
+`cargo test -p ratatoskr --test sandbox launch_sandboxed::`. `fleet_link`, `fleet_cloud` (both set
 `SSH_AUTH_SOCK`) and `fleet_drills` (sets `HOME`) stay their own binaries, as do `browser_real`, `macos`, `mac_runner`
 and `search_index`. **A new file** is a `mod` line in `tests/main.rs`
 (or, for a process of its own, a `[[test]]` plus its name in `APART` there): the test
@@ -98,7 +98,7 @@ saying where the kernel is, when it is missing. The kernel is the hash-pinned se
 (every wheel checked, `--no-deps`, compiled for Python 3.15). The adapter image has it at `/opt/nb-kernel`, made with `python3.15`
 by `test/container/nb-kernel.sh` (its `ENV` sets the variable), and the rows run there only (`ci.md`, "The debug adapters"). The
 GUI test image has the same venv, made by the same step, for the notebook scenes' kernel. Run them in the image with
-`cargo test -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --lib -- --ignored --test-threads 1 notebook::kernel::tests_live`.
+`cargo test -p ratatoskr --features ratatoskr/test-hooks --lib -- --ignored --test-threads 1 notebook::kernel::tests_live`.
 **ipykernel aborts in its own teardown (SIGABRT) about one run in five**, after an orderly shutdown and after doing everything asked
 of it, so the rows assert that the kernel ended by itself within the grace (not killed), not that its exit code is 0; they print the
 exit status whenever it is not 0 (`--nocapture`, or the failing run's output), so a pattern shows. The unit tests of the kernel module run under nextest (a

@@ -3,6 +3,7 @@
 //! Git is behind the [`Git`] trait (`GitCli` under the `host` feature), file bytes are read through `eitri` (pinned
 //! fds, bounded, never following a link), and the hub's deny-list check is the `allow` closure.
 
+use crate::rules::{Decision, Layer, List, RuleSet, Rules, Verdict, builtin_rules};
 use std::collections::HashSet;
 use std::io;
 use std::os::fd::AsFd;
@@ -10,8 +11,8 @@ use std::path::Path;
 
 /// Files over this size are not indexed.
 pub const MAX_FILE_BYTES: u64 = 1 << 20;
-/// A `.drgnx/search.eld` over this size cannot be read.
-const SEARCH_ELD_MAX: u64 = 64 * 1024;
+/// A `.drgnx/search.toml` over this size cannot be read.
+const SEARCH_TOML_MAX: u64 = 64 * 1024;
 /// A file with a NUL byte among its first this-many bytes is binary.
 const BINARY_PROBE: usize = 8000;
 /// Generated-file markers are looked for in this many first lines.
@@ -102,12 +103,11 @@ impl Lang {
     }
 }
 
-/// The project's `drgnx-search-*` settings and `.drgnx/search.eld`, as the hub resolved them. A config can only
-/// narrow the list.
+/// The project's user layer (`drgnx-search-rules`) and `drgnx-search-off`, as the hub resolved them. The repo's layer is
+/// `.drgnx/search.toml`, read at every listing ([`read_repo`]).
 #[derive(Clone, Debug, Default)]
 pub struct Config {
-    pub include: Vec<String>,
-    pub exclude: Vec<String>,
+    pub user: RuleSet,
     pub off: bool,
 }
 
@@ -119,6 +119,8 @@ pub struct Listed {
     pub class: Class,
     pub lang: Lang,
     pub generated: bool,
+    /// False under a `no-embed` rule: its chunks are written with no vectors wanted.
+    pub embed: bool,
     pub size: u64,
 }
 
@@ -444,7 +446,7 @@ pub(crate) mod cli {
 /// A `drgnx-search-config` glob as tokens: `*` and `?` stay within one path component, `**/` is any number of
 /// directories, `**` anything; a glob without `/` matches at any depth, a trailing `/` means everything below.
 #[derive(Clone, Copy, Debug)]
-enum Tok {
+pub(crate) enum Tok {
     Lit(char),
     Star,
     One,
@@ -464,7 +466,7 @@ fn glob_tokens(glob: &str) -> Vec<Tok> {
 }
 
 /// GLOB's tokens as written: no depth rule and no trailing-slash rule.
-fn tokens(glob: &str) -> Vec<Tok> {
+pub(crate) fn tokens(glob: &str) -> Vec<Tok> {
     let cs: Vec<char> = glob.chars().collect();
     let mut out = Vec::new();
     let mut i = 0;
@@ -496,7 +498,7 @@ fn tokens(glob: &str) -> Vec<Tok> {
     out
 }
 
-fn tok_match(toks: &[Tok], text: &[char]) -> bool {
+pub(crate) fn tok_match(toks: &[Tok], text: &[char]) -> bool {
     let Some((first, rest)) = toks.split_first() else {
         return text.is_empty();
     };
@@ -538,12 +540,7 @@ impl Glob {
     }
 }
 
-fn glob_matches(globs: &[Vec<Tok>], path: &str) -> bool {
-    let text: Vec<char> = path.chars().collect();
-    globs.iter().any(|g| tok_match(g, &text))
-}
-
-fn dot_path(path: &str) -> bool {
+pub(crate) fn dot_path(path: &str) -> bool {
     path.split('/').any(|c| c.starts_with('.'))
 }
 
@@ -761,58 +758,83 @@ fn generated_by_marker(bytes: &[u8]) -> bool {
         })
 }
 
-/// `.drgnx/search.eld` is there but cannot be read: an error, never the defaults.
-fn check_search_eld(root_fd: &eitri::Pinned) -> io::Result<()> {
+/// The repo's layer: `.drgnx/search.toml` of the checkout ROOT_FD pins. No file is an empty layer; one that is there but
+/// cannot be read (not a regular file, empty, over 64 KiB, not TOML of the three lists) is an error, never the defaults.
+pub(crate) fn read_repo_fd(root_fd: &eitri::Pinned) -> io::Result<RuleSet> {
+    let bad = |why: String| io::Error::other(format!(".drgnx/search.toml cannot be read: {why}"));
     let dir = match eitri::open_beneath(root_fd.fd.as_fd(), Path::new(".drgnx"), eitri::Kind::Dir) {
         Ok(d) => d,
-        Err(eitri::FsError::Io(e)) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => {
-            return Err(io::Error::other(format!(
-                ".drgnx/search.eld cannot be read: {e}"
-            )));
+        Err(eitri::FsError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
+            return Ok(RuleSet::default());
         }
+        Err(e) => return Err(bad(e.to_string())),
     };
-    match eitri::read_regular(dir.fd.as_fd(), Path::new("search.eld"), SEARCH_ELD_MAX) {
-        Ok(b) if b.is_empty() => Err(io::Error::other(
-            ".drgnx/search.eld cannot be read: it is empty",
-        )),
-        Ok(_) => Ok(()),
-        Err(eitri::FsError::Io(e)) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(io::Error::other(format!(
-            ".drgnx/search.eld cannot be read: {e}"
-        ))),
-    }
-}
-
-/// What a path alone decides about indexing it: the configuration's globs, the hub's deny-list, dot paths, names of
-/// secrets and nested repositories. The overlay applies the same rules to a worktree's paths (the base's `Config`).
-pub(crate) struct Rules {
-    off: bool,
-    include: Vec<Vec<Tok>>,
-    exclude: Vec<Vec<Tok>>,
-    nested: Vec<String>,
-}
-
-impl Rules {
-    /// The rules of CONFIG in a checkout whose nested repositories are NESTED (as `Git::nested` gives them).
-    pub(crate) fn new(config: &Config, nested: &[String]) -> Rules {
-        Rules {
-            off: config.off,
-            include: config.include.iter().map(|g| glob_tokens(g)).collect(),
-            exclude: config.exclude.iter().map(|g| glob_tokens(g)).collect(),
-            nested: nested.iter().map(|n| format!("{n}/")).collect(),
+    let bytes = match eitri::read_regular(dir.fd.as_fd(), Path::new("search.toml"), SEARCH_TOML_MAX)
+    {
+        Ok(b) => b,
+        Err(eitri::FsError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
+            return Ok(RuleSet::default());
         }
+        Err(e) => return Err(bad(e.to_string())),
+    };
+    if bytes.is_empty() {
+        return Err(bad("it is empty".into()));
     }
+    let text = String::from_utf8(bytes).map_err(|_| bad("it is not UTF-8".into()))?;
+    crate::rules::parse_toml(&text).map_err(bad)
+}
 
-    pub(crate) fn admits(&self, path: &str, allow: &dyn Fn(&str) -> bool) -> bool {
-        !(self.off
-            || path.contains('\n') // `hash-object --stdin-paths` is line-based
-            || dot_path(path)
-            || sensitive_name(path)
-            || self.nested.iter().any(|p| path.starts_with(p))
-            || (!self.include.is_empty() && !glob_matches(&self.include, path))
-            || glob_matches(&self.exclude, path)
-            || !allow(path))
+/// [`read_repo_fd`] for the checkout at ROOT.
+pub fn read_repo(root: &Path) -> io::Result<RuleSet> {
+    let root_fd = eitri::open_path(root, eitri::Kind::Dir)
+        .map_err(|e| io::Error::other(format!("project root: {e}")))?;
+    read_repo_fd(&root_fd)
+}
+
+/// What the rules say of PATH of the checkout ROOT, and why: the three layers, then `.gitattributes` (a file it marks
+/// `linguist-generated` or `linguist-vendored` is ignored by default), then what a read refuses (not a regular file,
+/// over 1 MiB, binary).
+pub fn why(
+    root: &Path,
+    git: &dyn Git,
+    config: &Config,
+    allow: &dyn Fn(&str) -> bool,
+    path: &str,
+) -> io::Result<Decision> {
+    let root_fd = eitri::open_path(root, eitri::Kind::Dir)
+        .map_err(|e| io::Error::other(format!("project root: {e}")))?;
+    let repo = read_repo_fd(&root_fd)?;
+    let rules = Rules::new(&builtin_rules(), &repo, &config.user, &git.nested(root)?);
+    let d = if config.off {
+        refusal("search is off for this project")
+    } else {
+        rules.decide(path, allow)
+    };
+    if d.verdict == Verdict::Ignored {
+        return Ok(d);
+    }
+    if !git.generated(root, &[path.to_string()])?.is_empty() {
+        return Ok(Decision {
+            verdict: Verdict::Ignored,
+            layer: Layer::Builtin,
+            rule: Some(".gitattributes linguist-generated or linguist-vendored".into()),
+            list: List::Ignore,
+        });
+    }
+    if read_admitted(&root_fd, path).is_none() {
+        return Ok(refusal(
+            "not a regular file of at most 1 MiB without NUL bytes",
+        ));
+    }
+    Ok(d)
+}
+
+fn refusal(why: &str) -> Decision {
+    Decision {
+        verdict: Verdict::Ignored,
+        layer: Layer::Builtin,
+        rule: Some(why.into()),
+        list: List::Default,
     }
 }
 
@@ -823,12 +845,12 @@ pub(crate) fn read_admitted(root_fd: &eitri::Pinned, path: &str) -> Option<Vec<u
     (!bytes[..bytes.len().min(BINARY_PROBE)].contains(&0)).then_some(bytes)
 }
 
-/// The listed row of an admitted file: its BLOB, BYTES and whether `.gitattributes` marks it generated (ATTR).
-pub(crate) fn listed(path: String, blob: String, bytes: &[u8], attr: bool) -> Listed {
-    Read::of(&path, blob, bytes).row(path, attr)
+/// The listed row of an admitted file: its BLOB, BYTES and whether its chunks are embedded (EMBED).
+pub(crate) fn listed(path: String, blob: String, bytes: &[u8], embed: bool) -> Listed {
+    Read::of(&path, blob, bytes).row(path, embed)
 }
 
-/// What a file's content gives its listed row: everything but the `.gitattributes` mark.
+/// What a file's content gives its listed row: everything but the rules' say on vectors.
 #[derive(Clone)]
 struct Read {
     blob: String,
@@ -854,10 +876,11 @@ impl Read {
         }
     }
 
-    fn row(self, path: String, attr: bool) -> Listed {
+    fn row(self, path: String, embed: bool) -> Listed {
         Listed {
             class: class_of(&path, self.lang),
-            generated: self.marked || attr || generated_by_name(&path),
+            generated: self.marked || generated_by_name(&path),
+            embed,
             lang: self.lang,
             size: self.size,
             blob: self.blob,
@@ -881,7 +904,8 @@ pub struct Snapshot {
 }
 
 /// The files of the project at `root` that Hrafn indexes, sorted by path. `allow` is the hub's deny-list check on a
-/// path relative to `root`; `config` can only narrow the list.
+/// path relative to `root`; the rules (`crate::rules`: the built-in defaults, the checkout's `.drgnx/search.toml` and
+/// `config`'s user layer) decide the rest.
 pub fn list(
     root: &Path,
     git: &dyn Git,
@@ -909,11 +933,11 @@ pub fn list_with(
         .as_nanos() as i128;
     let root_fd = eitri::open_path(root, eitri::Kind::Dir)
         .map_err(|e| io::Error::other(format!("project root: {e}")))?;
-    check_search_eld(&root_fd)?;
+    let repo = read_repo_fd(&root_fd)?;
     if config.off {
         return Ok(vec![]);
     }
-    let rules = Rules::new(config, &git.nested(root)?);
+    let rules = Rules::new(&builtin_rules(), &repo, &config.user, &git.nested(root)?);
     let paths = git.ls_files(root)?;
     // a file's status: its directory pinned once for the files in it (ls-files lists them together), then one
     // `fstatat` each
@@ -945,9 +969,26 @@ pub fn list_with(
     type Cand = (String, Option<eitri::Meta>, Result<Read, Vec<u8>>);
     let mut cands: Vec<Cand> = Vec::new();
     let mut seen = HashSet::new();
+    // what the rules let in, and whether each is embedded; then what `.gitattributes` marks generated or vendored goes
+    let mut admitted: Vec<(String, bool)> = Vec::new();
     for path in paths {
-        if !seen.insert(path.clone()) || !rules.admits(&path, allow) {
+        if !seen.insert(path.clone()) {
             continue;
+        }
+        match rules.decide(&path, allow).verdict {
+            Verdict::Ignored => {}
+            v => admitted.push((path, v == Verdict::Index)),
+        }
+    }
+    let names: Vec<String> = admitted.iter().map(|a| a.0.clone()).collect();
+    let attr: HashSet<String> = git.generated(root, &names)?.into_iter().collect();
+    let mut embedded: HashSet<String> = HashSet::new();
+    for (path, embed) in admitted {
+        if attr.contains(&path) {
+            continue;
+        }
+        if embed {
+            embedded.insert(path.clone());
         }
         let meta = stat(&path);
         let kept = match (meta, was.remove(&path)) {
@@ -974,8 +1015,6 @@ pub fn list_with(
         .map(|c| c.0.clone())
         .collect();
     let mut blobs = git.blobs(root, &fresh)?.into_iter();
-    let all: Vec<String> = cands.iter().map(|c| c.0.clone()).collect();
-    let attr: HashSet<String> = git.generated(root, &all)?.into_iter().collect();
     let mut out = Vec::with_capacity(cands.len());
     for (path, meta, read) in cands {
         let read = match read {
@@ -990,8 +1029,8 @@ pub fn list_with(
         if let Some(m) = meta {
             snap.files.insert(path.clone(), (m, Some(read.clone())));
         }
-        let generated = attr.contains(&path);
-        out.push(read.row(path, generated));
+        let embed = embedded.contains(&path);
+        out.push(read.row(path, embed));
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)

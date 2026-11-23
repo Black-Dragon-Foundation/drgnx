@@ -133,3 +133,48 @@ proptest! {
         prop_assert_eq!(plan::render(&plan::parse(&text)), text);
     }
 }
+
+#[test]
+fn new_text_parses_back_to_its_tasks() {
+    use saga::plan::{NewTask, new_text};
+    let tasks = vec![
+        NewTask {
+            number: "1".into(),
+            title: "first".into(),
+            body: "Do the first thing.\n".into(),
+            steps: vec![(false, "write it".into()), (true, "check it".into())],
+            role: Some("implement".into()),
+            model: Some("opus".into()),
+            interfaces: Some("fn a()".into()),
+            ..Default::default()
+        },
+        NewTask {
+            number: "2".into(),
+            title: "second".into(),
+            depends: vec!["1".into()],
+            ..Default::default()
+        },
+    ];
+    let text = new_text("A new plan", &tasks);
+    let d = plan::parse(&text);
+    assert_eq!(d.title, "A new plan");
+    assert_eq!(numbers(&d), ["1", "2"]);
+    assert_eq!(d.tasks[0].title, "first");
+    assert_eq!(d.tasks[0].steps.len(), 2);
+    assert!(d.tasks[0].steps[1].done);
+    assert_eq!(d.tasks[0].model.as_deref(), Some("opus"));
+    assert_eq!(d.tasks[0].interfaces.as_deref(), Some("fn a()"));
+    assert!(d.tasks[0].body.contains("Do the first thing."));
+    assert_eq!(plan::render(&d), text);
+    // the importer reads the same fields
+    let ops = saga::import::ops(
+        &saga::import::AnyDoc::Plan(d),
+        std::path::Path::new("/p/docs/plans/r/a.md"),
+    );
+    let t1 = ops[1].task.as_ref().unwrap();
+    assert_eq!(
+        (t1.number.as_str(), t1.role.as_deref()),
+        ("1", Some("implement"))
+    );
+    assert_eq!(ops[2].task.as_ref().unwrap().deps, ["1"]);
+}

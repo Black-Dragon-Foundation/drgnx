@@ -13,7 +13,7 @@ cargo check --workspace
 cargo test --workspace
 ```
 
-On Linux the native shell (`crates/ui/nhshell`) and the test compositor (`crates/ui/recorder`) link the system's
+On Linux the native shell (`crates/ui/skel`) and the test compositor (`crates/ui/ritari`) link the system's
 Wayland client library and libxkbcommon: install their development packages first (`wayland-devel` and
 `libxkbcommon-devel` on Fedora, `libwayland-dev` and `libxkbcommon-dev` on Debian and Ubuntu). The terminal engine
 (`crates/hub/ghostty-vt-sys`) builds libghostty-vt with Zig from pinned tarballs: run
@@ -24,7 +24,7 @@ The layout:
 | Path | What it holds |
 |---|---|
 | `crates/core` | text and models (the row format, the line model, the settings data reader) |
-| `crates/ui` | drawing, the native shell, views and the kit (Glitnir, nhshell, Sjá, Smidja) |
+| `crates/ui` | drawing, the native shell, views and the kit (Glitnir, skel, Sjá, Smidja) |
 | `crates/hub` | the hub and its services (Ratatoskr, the sandbox, code search, the gateway, the MCP server, …) |
 | `crates/ext` | the extension API (WIT) and its hosts |
 | `crates/std` | the standards: one crate per cross-cutting rule |

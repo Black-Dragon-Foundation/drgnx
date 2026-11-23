@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# The link drills (drgnx-ratatoskr's tests/fleet_drills.rs), each row N times, on a fake fleet of 2 runners whose sshd
+# The link drills (ratatoskr's tests/fleet_drills.rs), each row N times, on a fake fleet of 2 runners whose sshd
 # allows 3 sessions per connection. Run it through the heavy slot like fleet.sh (`$HEAVY drills.sh --container ...`).
 #   drills.sh [--times N] [--timing] [FILTER]     N defaults to 5, FILTER to drill::
 # DRGNX_FLEET_TEST_BIN is the fleet_drills test binary, with the test-hooks `sleipnir` and `drgnx-key` beside its deps/
 # (as fleet.sh test takes it):
-#   cargo test -p drgnx-ratatoskr --features fleet,test-hooks --test fleet_drills --no-run
+#   cargo test -p ratatoskr --features fleet,test-hooks --test fleet_drills --no-run
 #   cargo build -p sleipnir --features test-hooks --bin sleipnir --bin drgnx-key
 # The fleet throughput row (a timing row) runs only with --timing. Rows run one at a time, round by round (every row
 # once, then again), each run in its own log under .claude/tmp/drills/. Prints `ROW RUN ok|FAILED` per run, then

@@ -45,11 +45,22 @@ All four satisfy `render(parse(t)) == t`. A 1600-row register parses in well und
 ## Adopting and keeping in step
 
 `ratatoskr graph import-records --root DIR [--only specs|plans|ledgers|decisions|deferred|build-board|board]
-[--dry-run]` (method `records/import`; `records/status` lists the files and their conflicted records). The importer
+[--path FILE] [--dry-run]` (method `records/import`; `records/status` lists the files and their conflicted records). The importer
 finds `docs/specs/**/*.md`, `docs/plans/**/*.md` (ledgers end in `.ledger.md`), `docs/decisions/**/*.md`,
 `docs/adr/**/*.md`, `DEFERRED.md` and `BUILD-BOARD.md` under DIR; `board.org` only with `--only board`. A spec a
 plan's `**Spec:**` line names (`.md` or `.org`, anywhere) is read too, by its plain path (`a/../b` as `b`), unless the
 privacy deny-list refuses it: a file under `~/org` is read only when the user opted it in (`personal-notes-allow.json`).
+
+- **One file.** `--path FILE` imports only that file: it must lie under DIR (compared as written and as canonical
+  paths), be one the importer would find (same kinds) and not be ignored or denied; only it is backed up, imported
+  and synced, and nothing is forgotten (as with `--only`). Refusals: `FILE is not under ROOT`, `FILE is not a record
+  file (…)`, `FILE is ignored by .drgnx/records.toml`. `--only` takes all seven kinds.
+- **The ignore list.** `archive/` is skipped by default. A root-level `.drgnx/records.toml` adds lines
+  (`ignore = ["docs/specs/old/**", "!docs/specs/old/keep.md"]`) in gitignore syntax, relative to DIR: the last match
+  wins, `!` re-includes, and a file under an ignored folder stays ignored (so `!archive/` imports the archive). The
+  default comes first, then the file's lines. The file is at most 64 KiB; an unknown key, a non-string entry or bad
+  TOML fails the import before anything is written, with an error naming the file. A file already adopted that the
+  list now ignores is forgotten at the next full import, like a deleted one (its pieces are retired).
 
 - **Backup first.** Before anything is imported, every file is copied to `<state>/hub/records-backup/<date>/` (a
   second import on the same day gets `<date>-2`, never overwriting); a file outside DIR (a spec a plan names elsewhere)
@@ -65,9 +76,12 @@ privacy deny-list refuses it: a file under `~/org` is read only when the user op
   (`plan`), one `task` per task (heading, body and the sections after it) and its tail; a ledger a head and one
   `note` per section; DEFERRED prose pieces (a head first) and one `todo` per row of every four-cell register table (`#`/`id` first, `status`/`state` last) and per `### <ID> — title` entry (role `entry`, status the first word of its `- **Status:**` bullet); the board a `note` per text or table block;
   `board.org` a head and one `task` per headline; a spec (`docs/specs/**`) or a decision record (`docs/decisions/**`,
-  `docs/adr/**`) is one `spec` or `decision` piece, the whole file (`saga::spec`: title from the first `# ` heading,
-  status from a `**Status:**` line or MADR front matter, `approved`/`accepted` read as `done`, headings kept as
-  anchors). Each piece has a **key**, what it is in its file and unique there (`head`, `rest`, `row 12`, `entry
+  `docs/adr/**`) is a head (`spec` or `decision`, key `head`: the title, the status line and the text before the first
+  level-2 heading outside code fences) and one `note` piece per `## ` section (key `section <slug>`, a repeated slug
+  ` #2`; deeper headings stay in their section; `saga::spec`: title from the first `# ` heading, status from a
+  `**Status:**` line or MADR front matter, `approved`/`accepted` read as `done`, headings kept as anchors; a head's
+  graph status reaches its status line at the next sync: `done` is `approved` or `accepted`, `dropped` `superseded`,
+  anything else `proposed`; a head with no status line is left alone). Each piece has a **key**, what it is in its file and unique there (`head`, `rest`, `row 12`, `entry
   R6-KI-3`, `task 5`, `section Done`; a repeated key gets ` #2`), and its id is `<kind>:rec-<hash of the path>-<hash
   of the key>`: importing twice changes nothing (the second report says 0 operations and adds no `tx` row), a row
   added in the middle leaves every other piece's id alone, and pieces that disappeared from the file are retired.
@@ -110,6 +124,39 @@ privacy deny-list refuses it: a file under `~/org` is read only when the user op
   now `matrix`); the user may.
 - **Never committed.** The hub runs no git on view files. The files stay modified in the work tree; committing them
   is the user's.
+
+## Writing specs and decisions
+
+`records/write` (tool `records_write`) and `records/read` (`records_read`) take a spec or decision by section. A read
+answers the head, every section (`key`, `id`, `heading`, `body`, `conflict`), the links and the `version` (the highest
+`updated_tx` of the file's live pieces). A write is `{record?, kind, project?, path?, title?, status?, sections:
+[{key?, heading, body, after?}], remove?: [key], base_version}`:
+
+- **New record:** `path`, `title` and a project (an agent's is its own) are needed and `base_version` is 0. `path` is
+  exactly `docs/specs/<repo>/<name>.md` (or `docs/decisions/…`; `docs/plans/…` for a plan) under the project root: plain
+  components of letters, digits, `.`, `_`, `-`; `.md` in lower case; no link on the way, no nested `.git`, not there yet.
+  The hub creates the file with `create_new` from `saga::spec::new_text`, imports it as the caller and marks it adopted,
+  in one transaction. A failed import removes the file.
+- **Existing record:** `base_version` must equal the file's current version, else `held: the record changed since
+  version B (now V); read it again` and nothing is written. A section with a `key` is replaced; one without is new,
+  after `after` or last; `remove` drops sections; an unknown key, a heading with a line break or a leading `#`, or a
+  body holding a level-2 heading outside a fence is refused. The change is one transaction as the caller; the next
+  sync writes the file, merges a hand edit of another section and flags a section changed in both places.
+- **Agents:** the matrix's `graph.change` is needed. An agent's record starts `proposed`; moving it to approved
+  (`done`, `approved`, `accepted`) also needs `task.done`, which a worker never has. A text that sets a user-only field
+  (`matrix: …`) is refused. An agent reaches the records of files under its own project root only: a piece of no
+  project (an imported or `records/write` record keeps `project` null) is its project's when its `data.records.file`
+  lies under that root (`effects::Scope::allows_ent`). The scope is checked before the matrix, so a record outside it
+  makes no card. Every session has `records_read` and `records_write`.
+- **Outside agents** (bound by the user: [coordination.md](coordination.md), "Binding an outside agent") write as
+  their own `ext:…` actor. Rewriting a record whose pieces they did not all create is `graph.change` at most Ask: a
+  card, and nothing is written until the user answers; they never approve one.
+- **A plan's view file:** `plans/write` takes the same `path` for a new plan (`docs/plans/<repo>/<name>.md`; an agent's new
+  plan needs it). On a plan that has a view file, a task's title, body and steps change its piece too (the body
+  keeps its `**Label:**` paragraphs and replaces its prose; the steps replace its steps), so the file shows it at the next
+  sync and a hand edit of another task in the file is kept.
+- **Known limit:** an agent that edits a record file directly (file tools) is read by the sync as a hand edit, outside
+  the matrix. Agents are told to write through `records_write` and `plan_write`.
 
 ## Comment anchors
 

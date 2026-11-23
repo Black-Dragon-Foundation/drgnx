@@ -2,6 +2,7 @@
 //! Each `tests/<name>.rs` is a module below, so the lib links once, not once per file. A file that needs a
 //! process of its own is a `[[test]]` of its own in Cargo.toml, with the reason there, and is named in `APART`.
 
+mod cache;
 mod chunk_cpp;
 mod chunk_csharp;
 mod chunk_elisp;
@@ -19,6 +20,7 @@ mod overlay;
 mod query;
 mod rank;
 mod refs;
+mod rules;
 mod shared_content;
 mod store;
 mod structural;

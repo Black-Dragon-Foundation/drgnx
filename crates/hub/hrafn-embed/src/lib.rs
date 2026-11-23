@@ -9,6 +9,7 @@
 pub mod cache;
 mod cpu;
 pub mod device;
+pub mod fingerprint;
 mod gpu;
 mod local;
 pub mod models;

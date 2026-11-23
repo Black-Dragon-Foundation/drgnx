@@ -222,7 +222,7 @@ kind (3 200 cases).
 
 ## The hook points
 
-`drgnx-ratatoskr/src/hook_points.rs` runs the engine where the hub sees a step. Before a tool call is there; after an
+`ratatoskr/src/hook_points.rs` runs the engine where the hub sees a step. Before a tool call is there; after an
 edit, before a commit and at review use its row.
 
 - **Sites** (`At`): `Seam` (`Session::seam_hooks`, from `permission_request`), `HubServer` (`at_hub_server`: the
@@ -313,7 +313,7 @@ by the `wat` crate (a dev-dependency only) for a disabled proposal and for 1 001
 
 ## Plugins in the hub
 
-`drgnx_ratatoskr::plugins` (`crates/hub/drgnx-ratatoskr/src/plugins.rs`) is the hub's side: which plugins are
+`ratatoskr::plugins` (`crates/hub/ratatoskr/src/plugins.rs`) is the hub's side: which plugins are
 installed, which the user approved and with which files, which run for a project, and the I/O the host's calls get.
 It runs nothing; it hands the host the plugins it would run.
 

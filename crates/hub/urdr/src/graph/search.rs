@@ -283,7 +283,7 @@ pub struct EmbedError(pub String);
 pub trait Embedder: Send + Sync {
     fn embed<'a>(&'a self, texts: &'a [String])
     -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>>;
-    fn model(&self) -> &str;
+    fn model(&self) -> String;
 }
 
 /// Store entity N's vector V of MODEL (replacing any it had).

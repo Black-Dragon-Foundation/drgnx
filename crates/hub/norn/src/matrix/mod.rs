@@ -92,6 +92,49 @@ pub(crate) fn always_never(a: Action) -> bool {
     matches!(a, Action::Unsandboxed | Action::UserPrivate)
 }
 
+/// The rows an outside agent (Claude Code, Codex… that the user bound: `crate::bindings`) never gets, whatever any
+/// layer says (MP-2): the design's never-rows (a task done, a push), whatever starts work or spends (jobs stay
+/// drgnx's), `settings.change` (so an agent cannot widen its own rights), and the rows no one gets.
+pub const OUTSIDE_NEVER: [Action; 15] = [
+    Action::TaskDone,
+    Action::PushCi,
+    Action::PushMain,
+    Action::MergeIntegration,
+    Action::AgentsStart,
+    Action::AgentsModel,
+    Action::AgentsControl,
+    Action::Spend,
+    Action::SpendOver,
+    Action::JobContainer,
+    Action::JobKeys,
+    Action::Machines,
+    Action::SettingsChange,
+    Action::Unsandboxed,
+    Action::UserPrivate,
+];
+
+/// An outside agent's cells: E with every [`OUTSIDE_NEVER`] row Never, and, on a record it did not create
+/// (`!own_record`), `graph.change` at most Ask (an Allow becomes Ask with its limit kept; Never stays Never).
+pub fn outside_effective(e: &Effective, own_record: bool) -> Effective {
+    let mut out = e.clone();
+    for a in OUTSIDE_NEVER {
+        out.cells.insert(a, NEVER);
+    }
+    if !own_record {
+        let c = out.cell(Action::GraphChange);
+        if c.verdict == Verdict::Allow {
+            out.cells.insert(
+                Action::GraphChange,
+                Cell {
+                    verdict: Verdict::Ask,
+                    limit: c.limit,
+                },
+            );
+        }
+    }
+    out
+}
+
 /// The rows capped at Ask: an Allow in any layer, column or override reads as Ask, so the user always sees the card.
 pub(crate) fn always_ask(a: Action) -> bool {
     matches!(a, Action::BrowserPrivate)

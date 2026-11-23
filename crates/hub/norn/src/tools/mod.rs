@@ -50,11 +50,14 @@ pub enum Identity {
         task: Option<String>,
         home: PathBuf,
     },
-    /// An outside bridge: `id` is `ext:KIND:PID-HASH`.
+    /// An outside bridge: `id` is `ext:KIND:PID-HASH`.  `role` is the user's binding for its kind and root as the
+    /// hub read it at `mcp/attach` (none: unbound); it picks the tool list only, the hub reads the binding again at
+    /// every call.
     Outside {
         id: String,
         kind: String,
         home: Option<PathBuf>,
+        role: Option<crate::matrix::Role>,
     },
     /// Read-only: writes answer "no agent identity".
     None,
@@ -122,6 +125,20 @@ pub trait Hub: Send + Sync {
         _params: serde_json::Value,
     ) -> BoxFuture<'_, Result<serde_json::Value, String>> {
         Box::pin(async { Err("jobs are the hub's: none here".to_string()) })
+    }
+
+    /// The matrix's verdict for the bound outside agent ACTOR (`ext:KIND:PID-HASH`) doing ACTION, on a record it
+    /// created itself when OWN_RECORD: `Ok` when allowed, else the refusal's text (an Ask names its card).  CHANGE is
+    /// the call asked about: the user's yes to its card lets exactly that call through once.  The hub reads the binding
+    /// again at each call.  The default (no hub): refused.
+    fn gate(
+        &self,
+        _actor: &str,
+        _action: crate::matrix::Action,
+        _own_record: bool,
+        _change: crate::grants::Change,
+    ) -> BoxFuture<'_, Result<(), String>> {
+        Box::pin(async { Err("the matrix is the hub's: none here".to_string()) })
     }
 
     /// A manager tool OP (`agent_start`, …) called as the session SID with ARGS: the answer's text, or the refusal's.
@@ -325,7 +342,7 @@ pub fn tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
 /// The agent core's tools every worker gets (agent system part 1): jobs (Task 15), the structured report and the
 /// plan tools (Task 21), view proposals (Task 14b).  The job tools are in [`tools_for`] (Task 15); the others answer
 /// "not yet" and are not served until their tasks fill them.
-pub const CORE_TOOLS: [&str; 9] = [
+pub const CORE_TOOLS: [&str; 11] = [
     "job_start",
     "job_result",
     "job_log",
@@ -335,7 +352,13 @@ pub const CORE_TOOLS: [&str; 9] = [
     "plan_write",
     "record_conflict_read",
     "record_conflict_resolve",
+    "records_read",
+    "records_write",
 ];
+
+/// What a bound outside agent gets on top of [`tools`] (MP-3): the plans and the records, under the matrix and the
+/// outside caps (`crate::matrix::OUTSIDE_NEVER`).
+pub const OUTSIDE_TOOLS: [&str; 4] = ["plan_read", "plan_write", "records_read", "records_write"];
 
 /// The manager's tools, served on a manager session's socket only (Task 25), each checked by the hub's matrix with
 /// the manager's column.

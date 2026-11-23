@@ -172,7 +172,7 @@ async fn a_term_ignoring_group_is_killed_only_after_the_grace() {
     let pgid = g.pgid;
     let recs = vec![g.record()];
     let spy = std::sync::Arc::new(Spy::real());
-    let clock = drgnx_clock::Manual::default();
+    let clock = stund::Manual::default();
     let reaping = tokio::spawn(clock.scope({
         let spy = spy.clone();
         async move { reap(&recs, &*spy).await }

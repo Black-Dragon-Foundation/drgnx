@@ -366,9 +366,9 @@ header doc)` returns NAME:
   the pre-flight for a flow that ends in a write: it reads the file fresh and signals `drgnx-config-refused` when it
   has a mistake or is newer, so call it before the flow's first side effect (Import, Save Layout As…, a settings page
   that asks questions first) and a refusal changes nothing.
-- A project file is untrusted data: it is read, never evaluated. `search-project` (`.drgnx/search.eld`, in
-  `core/drgnx-settings-runtime.el`) is the first: Hrafn, in the hub, reads the file itself as data and fails closed (a file
-  that does not read turns the project's search off) rather than fall back to the defaults the layer applies.
+- A project file is untrusted data: it is read, never evaluated. The repo's search rules (`.drgnx/search.toml`) are the
+  example: Hrafn, in the hub, reads the file itself as data at every listing and fails closed (a file that does not
+  read stops the listing) rather than fall back to the defaults.
 - `:last-good` (t) applies the last good copy on a mistake. `:max-bytes` (1 MiB) caps reads and writes.
 - `:on-mistake` is a string saying what happens instead of using the file when it is not the last good copy or the
   defaults ("drgnx sync stops until it is fixed; nothing is changed"). The mistake notice and the reference's "On a
@@ -3912,7 +3912,7 @@ bindings). The file's header comment is its schema. Lisp reads it once (`drgnx-u
 
 ### The expansion (`drgnx-ui-kit-expand`, `drgnx-ui-kit-string`)
 
-The hub expands components into rows (`drgnx_rows::kit`, `docs/develop/hub.md`, "The kit"); Lisp expands the same
+The hub expands components into rows (`rodd::kit`, `docs/develop/hub.md`, "The kit"); Lisp expands the same
 file the same way, for Lisp-drawn chrome only (header, mode and tab lines, the title row, settings, the start page).
 The rule both follow: a pad is `floor(logical × scale + 0.5 + 1e-9)` device px per part, a size made of parts (a tree
 row's start pad and its indents) the sum of the rounded parts (`drgnx-px`); on a terminal a pad is `:tty :pad`
@@ -3920,7 +3920,7 @@ characters and `:tty :indent` per level, and a glyph takes its terminal form; th
 (none where it has none) and the state's face under it, over the component; an action puts `drgnx-action` and
 `mouse-face` (`drgnx-hover`) over the component and its `:hit` padding. The conformance fixture
 (`test/fixtures/kit/cases.json`, `expected.json`) holds each component at scales 1, 1.25, 1.75 and 2 and on a
-terminal (UTF-8 and ASCII); the hub's test writes `expected.json` (`DRGNX_KIT_BLESS=1 cargo test -p drgnx-rows --test it
+terminal (UTF-8 and ASCII); the hub's test writes `expected.json` (`DRGNX_KIT_BLESS=1 cargo test -p rodd --test it
 kit_conformance::`, read it before committing) and `drgnx-ui-kit/conformance` checks Lisp against it.
 `a11y::every_glyph_has_a_label` reads the same fixture: a clickable span with no word in it, and a row of glyphs with
 no word, must carry a `help-echo` label. A status dot without its word is labelled with it; a range bar without the

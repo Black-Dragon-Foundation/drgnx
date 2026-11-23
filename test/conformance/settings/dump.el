@@ -1,6 +1,6 @@
 ;;; dump.el --- the editor's side of the hub's settings conformance -*- lexical-binding: t -*-
 ;; What the editor reads of settings/runtime-defaults.el and of providers-settings.el, and which settings it declares
-;; `:runtime', as JSON for the hub's tests (crates/hub/drgnx-ratatoskr/src/settings/conformance.rs).  Batch, in
+;; `:runtime', as JSON for the hub's tests (crates/hub/ratatoskr/src/settings/conformance.rs).  Batch, in
 ;; a Nidhogg container (the f45 dev image), from the checkout:
 ;;
 ;;   emacs --batch -Q -L core -L wb -L harness -L modules/tools -L modules/editor -L modules/ui \

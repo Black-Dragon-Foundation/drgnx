@@ -16,7 +16,7 @@ fixture = []
 [dependencies]
 serde.workspace = true
 # the rows the hub sends the editor (render): the row type, the fitter, the SVG writer
-drgnx-rows = { path = "../../core/drgnx-rows", version = "0.1.0" }
+rodd = { path = "../../core/rodd", version = "0.1.0" }
 # the rows' text properties (render)
 serde_json.workspace = true
 

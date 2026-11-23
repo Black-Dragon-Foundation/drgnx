@@ -168,6 +168,12 @@ pub struct Notice {
     /// The command that acts on it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// More commands that act on it, each a button after the command's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+    /// The notice ID is over: the editor takes it away (the other fields are not shown).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear: bool,
 }
 
 macro_rules! event {

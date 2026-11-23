@@ -196,7 +196,8 @@ mod tests {
             .await
             .unwrap();
         let (at, age) = h.running().expect("the job runs");
-        assert!(at.starts_with("crates/hub/urdr/src/thread.rs:"), "{at}");
+        // the request came from this file (`file!()` is the path `Location` reports, wherever the crate sits)
+        assert!(at.starts_with(concat!(file!(), ":")), "{at}");
         assert!(age < std::time::Duration::from_secs(60));
         release.send(()).unwrap();
         job.await.unwrap().unwrap();

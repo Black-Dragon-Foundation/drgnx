@@ -1,0 +1,56 @@
+[package]
+name = "glugg"
+description = "drgnx's terminal worker: one PTY and one libghostty-vt terminal per process, its screen sent as rodd patches"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+autotests = false  # tests/main.rs is the one binary of every tests/*.rs
+
+[lib]
+name = "glugg"
+path = "src/lib.rs"
+
+[[bin]]
+name = "drgnx-term"
+path = "src/main.rs"
+
+[features]
+# The engine. Off (Android until its link row passes), the crate builds its pure parts (the frame clock, the row keys,
+# the wire) and the binary refuses to start (docs/develop/terminal.md, "Building the engine").
+default = ["ghostty"]
+ghostty = ["ghostty-vt-sys/ghostty"]
+
+[dependencies]
+ghostty-vt-sys = { path = "../ghostty-vt-sys", version = "0.1.0", default-features = false }
+rodd = { path = "../../core/rodd", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+rustix = { workspace = true, features = ["pty", "termios", "event", "process", "fs", "net"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+libc.workspace = true
+# images (docs/develop/terminal.md, "Images"): kitty PNG decode and the canvases, sixel, iTerm2
+png = "0.18"
+icy_sixel = "0.7"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+base64 = "0.23"
+
+[dev-dependencies]
+skuld = { path = "../skuld", version = "0.1.0" }  # bounded waits in the tests
+tempfile.workspace = true
+
+
+# every tests/*.rs not named below, as modules of one binary: `cargo test -p glugg --test it <file>::`
+[[test]]
+name = "it"
+path = "tests/main.rs"
+
+# a process of its own: it reads the loop's trace events through a subscriber of its own, and tracing's per-callsite
+# interest is the process's. Beside the other files' loops (libtest's threads, as the macOS job runs `it`), a
+# callsite first hit on another thread while this subscriber was being registered kept the interest it had without it
+# ("program output" never reached the capture)
+[[test]]
+name = "logging"
+path = "tests/logging.rs"

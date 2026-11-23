@@ -44,7 +44,7 @@ The macOS row (`aarch64-apple-darwin`, a cross-compile from Linux and the real l
 
 ## The worker
 
-`drgnx-term` (crate `crates/hub/drgnx-term`) runs one terminal: the PTY master, the program on it, the engine's
+`drgnx-term` (crate `crates/hub/glugg`) runs one terminal: the PTY master, the program on it, the engine's
 `Terminal` and `RenderState`, and the key and mouse encoders. The engine's objects are not thread-safe, so the worker
 has **one thread**: a poll loop over the PTY, its socket and the socket's listener (`src/run.rs`). libghostty stays out
 of the hub's binary, and an engine crash ends one terminal, never the hub or Emacs.
@@ -67,7 +67,7 @@ until it ends (it may span writes) and writes it without 40. A request for 40 al
 env_epoch}`, `env`, `key {key, mods, text, unshifted}`, `text`, `paste`, `focus {in}`, `mouse {kind, button, col, row,
 mods}`, `resize {cols, rows, cell_px}`, `ack {version}`, `resync {model?}`, `config {config: [[name, value]…]}` and
 `close {signal}`. The worker sends `hello {proto, pid, shell_pid}` on every connection, `patch {patch}` (a whole
-[`drgnx-rows` patch](hub.md#rows)), `model {model}` (a whole `view-model` event: Find's matches, "The editor's side"),
+[`rodd` patch](hub.md#rows)), `model {model}` (a whole `view-model` event: Find's matches, "The editor's side"),
 `title`, `cwd`, `bell`, `notify`, `progress`, `clipboard-write`, `prompt` (OSC 133) and `exit {code, signal}`. A new
 connection replaces the last (a restarted hub); until it attaches nothing is drawn,
 and its attach starts with a reset. The hub going away never ends the program.
@@ -131,7 +131,7 @@ typed**, only counts; a malformed message from the hub is logged by its position
 
 ### The worker's tests
 
-`cargo test -p drgnx-term` (through the cargo wrapper, in a container): `tests/worker.rs` drives the worker with a fake
+`cargo test -p glugg` (through the cargo wrapper, in a container): `tests/worker.rs` drives the worker with a fake
 clock (frames, flood and backfill, the in-flight patch, mode 2026, row keys through scrolls, resizes and eviction, the
 kitty, DECCKM, paste and mouse encodings, styles and wide cells); `tests/logging.rs` checks the log.
 
@@ -171,7 +171,7 @@ worker, never in the golden.
 ## The hub's methods
 
 The editor talks to its terminals through the hub (`runstav/src/methods/term.rs`, routed by
-`drgnx-ratatoskr/src/term/methods.rs`); ids are values, never object keys.
+`ratatoskr/src/term/methods.rs`); ids are values, never object keys.
 
 | Method | Params | Answer |
 |---|---|---|
@@ -212,14 +212,14 @@ scrollback, list, close, exit), `runstav`'s `term_protocol_uses_no_ids_as_object
 fake runner:
 
 ```
-cargo test -p drgnx-ratatoskr --features fleet --test fleet --no-run && cargo build -p drgnx-term
+cargo test -p ratatoskr --features fleet --test fleet --no-run && cargo build -p glugg
 test/runners/fleet.sh up --runners 1
 test/runners/fleet.sh host <the term_scope binary> worker_survives_hub_restart_under_kill_mode_mixed
 ```
 
 ## Lifetime
 
-A terminal's worker outlives the hub that started it (`crates/hub/drgnx-ratatoskr/src/term/`, the worker's
+A terminal's worker outlives the hub that started it (`crates/hub/ratatoskr/src/term/`, the worker's
 `src/{scope,registry,child}.rs`).
 
 **Spawn:** with a user systemd, the worker runs in a scope of its own, `systemd-run --user --scope --unit
@@ -236,7 +236,7 @@ when it was detached (`detached_at`, ms since the epoch). It is written by a ren
 screen text is written anywhere: the screen and scrollback live in the worker's memory.
 
 **Trust:** the boundary is the user's uid, as for tmux. `<state>/term/` is made `0700` (narrowed when found wider,
-refused when another user's: nothing in it is adopted), each socket is `0600` (`drgnx_term::run::listen`), and the
+refused when another user's: nothing in it is adopted), each socket is `0600` (`glugg::run::listen`), and the
 worker checks every connection's peer uid (`SO_PEERCRED` on Linux, `getpeereid` on macOS), dropping another user's
 unread.
 
@@ -268,7 +268,7 @@ hub, so no hub or Emacs needs to run. A new worker counts from its start until i
 **Program running:** the worker answers `status` from the shell's OSC 133 marks (C: a command's output started, D: it
 ended), else from whether the shell has a child: Linux `/proc/<pid>/task/<pid>/children`, macOS `proc_listchildpids`.
 
-**Tests:** `cargo test -p drgnx-ratatoskr --lib term::` (fake workers on the socket: adoption by pid and start time,
+**Tests:** `cargo test -p ratatoskr --lib term::` (fake workers on the socket: adoption by pid and start time,
 the protocol versions, orphaned at once and detached after the grace with `term/detached`, an attached terminal not
 offered, a detached one surviving a hub restart, a clean exit that keeps some), `drgnx-term`'s `tests/running.rs`
 (both ways of telling a program runs; the socket's mode and another uid's connection dropped, the latter as root, as in
@@ -340,7 +340,7 @@ on every push (`docs/develop/ci.md`).
 
 One image model, kitty's, in the engine: libghostty-vt keeps kitty images and placements, scrolls, clips and deletes
 them, plays their animations and bounds their memory. It knows no other protocol, so the worker folds the other two
-into it (`crates/hub/drgnx-term/src/image.rs`, `gallery.rs`):
+into it (`crates/hub/glugg/src/image.rs`, `gallery.rs`):
 
 - **Cut out.** `Cutter` reads the program's output for a sixel (`DCS P1;P2;P3 q`, no intermediates: `DCS $ q`
   DECRQSS and `DCS + q` XTGETTCAP go to the engine untouched) and iTerm2's `OSC 1337 ; File=` (with `MultipartFile`,

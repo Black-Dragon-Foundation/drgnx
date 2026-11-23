@@ -47,7 +47,7 @@ jobs:
           printf '[profile.dev.package."*"]\ndebug = "line-tables-only"\n' >> "${CARGO_HOME:-$HOME/.cargo}/config.toml"
       - name: The tests job's build
         run: |
-          cargo test --locked --manifest-path Cargo.toml --workspace --exclude nhshell --exclude nh-recorder --features drgnx-ratatoskr/test-hooks \
+          cargo test --locked --manifest-path Cargo.toml --workspace --exclude skel --exclude ritari --features ratatoskr/test-hooks \
             --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/test-bins.json"
           jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null)
                  | [.target.name, (.target.kind | join(",")), .executable] | @tsv' "$RUNNER_TEMP/test-bins.json" > "$RUNNER_TEMP/test-bins.tsv"
@@ -60,7 +60,7 @@ jobs:
       - name: How to run a test
         run: |
           echo "test binaries (name, kind, path): $RUNNER_TEMP/test-bins.tsv"
-          echo "e.g.: cd crates/hub/drgnx-term && \$(awk -F'\t' '\$1==\"logging\"{print \$3}' $RUNNER_TEMP/test-bins.tsv) --exact logging::pty_bytes_never_logged --nocapture"
+          echo "e.g.: cd crates/hub/glugg && \$(awk -F'\t' '\$1==\"logging\"{print \$3}' $RUNNER_TEMP/test-bins.tsv) --exact logging::pty_bytes_never_logged --nocapture"
       - name: No credentials before the session
         env:
           ACTIONS_RUNTIME_TOKEN: ""

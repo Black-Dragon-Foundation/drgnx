@@ -135,7 +135,7 @@ check_compiles() {
     n=$((n + 1))
     row=$(budget_of "$name") || { fail="$fail; $name: no row in compile-budget.txt"; continue; }
     log=$(log_file "$id") || { fail="$fail; $name: no log"; continue; }
-    hub=$(grep -c 'Compiling drgnx-ratatoskr v' "$log")
+    hub=$(grep -c 'Compiling ratatoskr v' "$log")
     all=$(grep -cE "$COMPILING" "$log")
     total=$((total + hub)) mh=${row% *} ml=${row#* }
     [ "$hub" -le "$mh" ] || fail="$fail; $name: the hub ×$hub (budget $mh)"
@@ -456,9 +456,9 @@ GH
   GH="$ST/gh"
   # cargo metadata of a target with 100 third-party packages (dep-001 … dep-100) and two workspace members
   jq -n '[range(1; 101) | "dep-\(. | tostring | if length == 1 then "00" + . elif length == 2 then "0" + . else . end)"] as $d
-         | {workspace_members: ["ws#drgnx-ratatoskr@0.1.0", "ws#ws-b@0.1.0"],
-            packages: ([$d[] | {id: "reg#\(.)@1.0.0", name: .}] + [{id: "ws#drgnx-ratatoskr@0.1.0", name: "drgnx-ratatoskr"}, {id: "ws#ws-b@0.1.0", name: "ws-b"}]),
-            resolve: {nodes: ([$d[] | {id: "reg#\(.)@1.0.0"}] + [{id: "ws#drgnx-ratatoskr@0.1.0"}, {id: "ws#ws-b@0.1.0"}])}}' > "$ST/metadata.json"
+         | {workspace_members: ["ws#ratatoskr@0.1.0", "ws#ws-b@0.1.0"],
+            packages: ([$d[] | {id: "reg#\(.)@1.0.0", name: .}] + [{id: "ws#ratatoskr@0.1.0", name: "ratatoskr"}, {id: "ws#ws-b@0.1.0", name: "ws-b"}]),
+            resolve: {nodes: ([$d[] | {id: "reg#\(.)@1.0.0"}] + [{id: "ws#ratatoskr@0.1.0"}, {id: "ws#ws-b@0.1.0"}])}}' > "$ST/metadata.json"
   echo 1.100.0 > "$ST/rust-version"
   export CHECKS_METADATA="$ST/metadata.json"
   RUST_VERSION_FILE="$ST/rust-version"

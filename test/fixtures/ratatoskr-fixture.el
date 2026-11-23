@@ -15,7 +15,7 @@
   "A hub test found no Ratatoskr: skip it, or fail it with DRGNX_TEST_HUB_REQUIRED=1 (set for the GUI suite by
 `drgnx-ui-run-ui-session-tests'), where a skip would hide a row that never ran."
   (if (equal (getenv "DRGNX_TEST_HUB_REQUIRED") "1")
-      (ert-fail "DRGNX_TEST_HUB_REQUIRED=1 and no Ratatoskr: build it (cargo build -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks) or set DRGNX_RATATOSKR_BIN")
+      (ert-fail "DRGNX_TEST_HUB_REQUIRED=1 and no Ratatoskr: build it (cargo build -p ratatoskr -p domr --features ratatoskr/test-hooks) or set DRGNX_RATATOSKR_BIN")
     (ert-skip "DRGNX_RATATOSKR_BIN is not set")))
 
 (defvar drgnx-test-gate-hub-args)        ; delivery-gate-fixture.el, which a `:gated' test loads

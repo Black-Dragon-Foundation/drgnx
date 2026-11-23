@@ -5,7 +5,7 @@ before a push) as gates on the plan runner, on facts it recorded itself: the job
 rows it parsed. An agent's report is never evidence, and a gate reads its policy from the line's base, never from the
 tip it judges.
 
-The pure parts live in the `vordr` crate (no I/O, `serde` only); the hub's side is in `drgnx-ratatoskr`.
+The pure parts live in the `vordr` crate (no I/O, `serde` only); the hub's side is in `ratatoskr`.
 
 ## Rows and failure classes
 

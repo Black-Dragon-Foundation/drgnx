@@ -23,6 +23,7 @@ regex.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true
 tree-sitter.workspace = true
+toml_edit.workspace = true  # `.drgnx/search.toml` (files::read_repo)
 skald = { path = "../skald", version = "0.1.0" }  # the packs' manifests: the chunker's rules (chunk::registry)
 ast-grep-core.workspace = true
 tree-sitter-elisp.workspace = true
@@ -36,7 +37,7 @@ libc = { workspace = true, optional = true }
 notify = { workspace = true, optional = true }
 
 [dev-dependencies]
-drgnx-exe = { path = "../drgnx-exe", version = "0.1.0" }  # stand-in scripts written and run, never busy (ETXTBSY)
+hlaup = { path = "../hlaup", version = "0.1.0" }  # stand-in scripts written and run, never busy (ETXTBSY)
 skuld = { path = "../skuld", version = "0.1.0" }  # every order of the settle core
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }

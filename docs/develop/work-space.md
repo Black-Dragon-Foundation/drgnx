@@ -189,7 +189,7 @@ machines are not injected.
 ### The rows (`vegvisir::render`)
 
 The map's rows are built in the hub (`docs/develop/hub.md`, "Rows") from a layout, the items and edges it shows, the
-view's env and a `drgnx_rows::fit::Measure`; no I/O, no clock (a job chip's elapsed time takes `Scene::now`).
+view's env and a `rodd::fit::Measure`; no I/O, no clock (a job chip's elapsed time takes `Scene::now`).
 `render::Index::of` sorts once per layout (each row's items by x, the rows by y with each band above its row, each
 layer's first row, each layer's count); `render::rows` only reads it. One row per text line:
 
@@ -214,7 +214,7 @@ Edge strokes are a width or a dash per kind, never colour alone (design §5.2 as
 2 px solid, neutral off the chain; reads 1.5 px dotted in the agent's colour; runs on 1 px dash-dot; based on 1 px short
 dashes; overlap 2 px dashed in the warning colour; read versus edit 1 px dotted. The selection's
 chain (`Scene::chain`) draws in the accent, an edit on it in its agent's colour, one px wider and on top. The SVG comes
-from `drgnx_rows::svg` in palette roles only (`edge`, `edit`, `accent`, `warn`, `chip-bg`, `chip-fg`, `agent-1..6`);
+from `rodd::svg` in palette roles only (`edge`, `edit`, `accent`, `warn`, `chip-bg`, `chip-fg`, `agent-1..6`);
 an image's id is its content hash and the env epoch, so the same strokes are the same image across draws (sent once)
 and a theme change draws them all again.
 - On a terminal, a layout that does not fit, or the user's `O`: `notice` (the layout did not fit), then
@@ -254,7 +254,7 @@ navigation is gone, the links from this crate (a layout metric moved); a frame t
 
 ## The hub's facts
 
-The hub's code for the Work space lives in `crates/hub/drgnx-ratatoskr/src/work/`. The pure parts take no clock and
+The hub's code for the Work space lives in `crates/hub/ratatoskr/src/work/`. The pure parts take no clock and
 no I/O, so tests run them in every order or directly.
 
 ### Worktree bases

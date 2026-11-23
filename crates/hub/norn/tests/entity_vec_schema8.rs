@@ -19,7 +19,7 @@ const SHIPPED: &str = concat!(
     create table entity_vec (n integer primary key, bits blob, vec blob, scale real, model text);
     insert",
     " into entity_vec(n, bits, vec, scale, model) values
-      (1, x'01', x'0102', 0.5, 'gte-modernbert-base'),
+      (1, x'01', x'0102', 0.5, '00000000000000000000000000000000000000000000000000000000000000a1'),
       (2, x'02', x'0304', 0.25, 'tei-model'),
       (3, x'03', x'0506', 1.0, null);
     drop table step_detail;
@@ -38,6 +38,10 @@ const SHIPPED: &str = concat!(
     alter table step drop column slots_total;
     update kv set value = '8' where key = 'schema';"
 );
+
+/// Two fingerprints (64 hex characters), as `entity_vec.model` holds them since schema 16.
+const HEX_A: &str = "00000000000000000000000000000000000000000000000000000000000000a1";
+const HEX_B: &str = "00000000000000000000000000000000000000000000000000000000000000b2";
 
 fn meta() -> TxMeta {
     TxMeta::new("hub", Class::System, "test")
@@ -68,17 +72,15 @@ async fn a_schema_8_file_keeps_its_rows_and_gains_the_second_model() {
         .unwrap();
 
     let db = CoordDb::spawn(&file);
+    // schema 16 keys the vectors by fingerprint: the row of a fingerprint survives the open, the rows of a label (and of
+    // no model) are dropped for the work graph to embed again (`entity_vec_fingerprint.rs`)
     assert_eq!(
         rows(&db).await,
-        vec![
-            (1, "gte-modernbert-base".into(), vec![1, 2]),
-            (2, "tei-model".into(), vec![3, 4]),
-            (3, String::new(), vec![5, 6]),
-        ],
-        "every old row survives the open"
+        vec![(1, HEX_A.into(), vec![1, 2])],
+        "the fingerprint row survives the open"
     );
     db.write(meta(), |tx| {
-        vec_put(tx, 1, "granite", &[0.6, 0.8])?;
+        vec_put(tx, 1, HEX_B, &[0.6, 0.8])?;
         Ok(())
     })
     .await
@@ -91,7 +93,7 @@ async fn a_schema_8_file_keeps_its_rows_and_gains_the_second_model() {
         .collect();
     assert_eq!(
         models,
-        ["granite", "gte-modernbert-base"],
+        [HEX_A, HEX_B],
         "the second model's vector sits beside the first"
     );
 }

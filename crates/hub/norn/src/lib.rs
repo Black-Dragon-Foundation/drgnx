@@ -10,6 +10,7 @@
 //!   [`options`] (settings history: kind `option`, its ids, the settings deny-list, the `options` grant's rule).
 //! - [`hooks`]: the hook engine, which combines rules' and plugins' verdicts under the matrix (narrowing only).
 
+pub mod bindings;
 pub mod deny;
 pub mod forecast;
 pub mod grants;
@@ -22,6 +23,7 @@ pub mod migrate12;
 pub mod migrate13;
 pub mod migrate14;
 pub mod migrate15;
+pub mod migrate16;
 pub mod migrate7;
 pub mod migrate8;
 pub mod migrate9;

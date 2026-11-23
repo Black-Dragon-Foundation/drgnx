@@ -15,18 +15,34 @@ fn ops_of(kind: &str, text: &str) -> Vec<GraphOp> {
     ops(&parse(kind, text).unwrap(), Path::new("/p/DEFERRED.md"))
 }
 
-#[test]
-fn a_spec_is_one_record_with_its_title_status_and_anchors() {
-    let text = "# The menu bar: design\n\n**Status:** approved\n\n## 1. What you see\n\nText.\n\n## 2. Data\n";
-    let o = ops(
+const SPEC: &str = "# The menu bar: design\n\n**Status:** approved\n\nIntro.\n\n## 1. What you see\n\nText.\n\n### Deeper\n\nstays.\n\n## 2. Data\n\nRows.\n";
+
+fn spec_ops(text: &str) -> Vec<GraphOp> {
+    ops(
         &parse("spec", text).unwrap(),
         Path::new("/p/docs/specs/a.md"),
+    )
+}
+
+#[test]
+fn a_spec_is_a_head_and_its_sections() {
+    let text = "# The menu bar: design\n\n**Status:** approved\n\n## 1. What you see\n\nText.\n\n## 2. Data\n\n## 3. Last\n";
+    let o = spec_ops(text);
+    assert_eq!(o.len(), 4);
+    assert_eq!(
+        (o[0].kind, o[0].role, o[0].key.as_str()),
+        ("spec", "head", "head")
     );
-    assert_eq!(o.len(), 1);
-    assert_eq!(o[0].kind, "spec");
     assert_eq!(o[0].title.as_deref(), Some("The menu bar: design"));
     assert_eq!(o[0].status.as_deref(), Some("done"));
-    assert_eq!(o[0].body, text);
+    assert!(o[0].body.starts_with("# The menu bar"));
+    assert!(!o[0].body.contains("## "));
+    for sec in &o[1..] {
+        assert_eq!((sec.kind, sec.role), ("note", "section"));
+    }
+    assert_eq!(o[1].key, "section 1-what-you-see");
+    assert_eq!(o[1].title.as_deref(), Some("1. What you see"));
+    assert_eq!(o.iter().map(|x| x.body.as_str()).collect::<String>(), text);
     let d = parse(
         "decision",
         "---\nstatus: accepted\n---\n# 0003 Use podman\n",
@@ -39,8 +55,248 @@ fn a_spec_is_one_record_with_its_title_status_and_anchors() {
     let anchors = saga::spec::parse(text).anchors;
     assert_eq!(
         anchors.iter().map(|a| a.0.as_str()).collect::<Vec<_>>(),
-        ["The menu bar: design", "1. What you see", "2. Data"]
+        [
+            "The menu bar: design",
+            "1. What you see",
+            "2. Data",
+            "3. Last"
+        ]
     );
+}
+
+#[test]
+fn section_keys_are_slugs_and_repeats_get_hash_2() {
+    let o = spec_ops("# T\n\n## Goals\n\na\n\n## Goals\n\nb\n\n## Goals\n");
+    let keys: Vec<&str> = o.iter().map(|x| x.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            "head",
+            "section goals",
+            "section goals #2",
+            "section goals #3"
+        ]
+    );
+}
+
+#[test]
+fn adding_a_section_keeps_every_other_id() {
+    let before = spec_ops(SPEC);
+    let after = spec_ops(&SPEC.replace("## 2. Data", "## 1b. New\n\nnew.\n\n## 2. Data"));
+    let id = |v: &[GraphOp], key: &str| v.iter().find(|o| o.key == key).map(|o| o.id.clone());
+    for key in ["head", "section 1-what-you-see", "section 2-data"] {
+        assert!(id(&before, key).is_some());
+        assert_eq!(id(&before, key), id(&after, key), "{key}");
+    }
+    assert!(id(&after, "section 1b-new").is_some());
+}
+
+#[test]
+fn deeper_headings_stay_in_their_section() {
+    let o = spec_ops(SPEC);
+    assert_eq!(o.len(), 3);
+    assert!(o[1].body.contains("### Deeper"));
+}
+
+#[test]
+fn a_fenced_heading_is_not_a_section() {
+    let o = spec_ops("# T\n\n```\n## not\n```\n\n## Real\n");
+    assert_eq!(o.len(), 2);
+    assert!(o[0].body.contains("## not"));
+}
+
+#[test]
+fn a_heading_with_no_letters_slugs_to_section() {
+    assert_eq!(saga::spec::slug("!!!"), "section");
+    assert_eq!(saga::spec::slug("  Why? (and how) "), "why-and-how");
+    assert_eq!(saga::spec::slug("1. What you see"), "1-what-you-see");
+    let o = spec_ops("# T\n\n## !!!\n");
+    assert_eq!(o[1].key, "section section");
+}
+
+#[test]
+fn a_decision_record_is_pieced_the_same() {
+    let text = include_str!("fixtures/decision-a.md");
+    let d = parse("decision", text).unwrap();
+    let o = ops(&d, Path::new("/p/docs/decisions/a.md"));
+    assert_eq!(o.len(), 3);
+    assert_eq!(
+        (o[0].kind, o[0].status.as_deref()),
+        ("decision", Some("done"))
+    );
+    assert_eq!(o[1].key, "section context");
+    assert_eq!(o.iter().map(|x| x.body.as_str()).collect::<String>(), text);
+}
+
+#[test]
+fn with_status_rewrites_or_inserts_the_status_line() {
+    use saga::spec::with_status;
+    assert_eq!(
+        with_status("# T\n\n**Status:** proposed\n\nx\n", "approved"),
+        "# T\n\n**Status:** approved\n\nx\n"
+    );
+    assert_eq!(
+        with_status("# T\n\nbody\n", "proposed"),
+        "# T\n\n**Status:** proposed\n\nbody\n"
+    );
+    // the graph's words reach the file's
+    let st = saga::status::with_status;
+    assert_eq!(
+        st("spec", "head", "# T\n\n**Status:** proposed\n", "done").as_deref(),
+        Some("# T\n\n**Status:** approved\n")
+    );
+    assert_eq!(
+        st("decision", "head", "# T\n\n**Status:** proposed\n", "done").as_deref(),
+        Some("# T\n\n**Status:** accepted\n")
+    );
+    assert_eq!(
+        st("spec", "head", "# T\n\n**Status:** approved\n", "dropped").as_deref(),
+        Some("# T\n\n**Status:** superseded\n")
+    );
+    // already says it: nothing to change; no status line: left alone
+    assert_eq!(
+        st("spec", "head", "# T\n\n**Status:** approved\n", "done"),
+        None
+    );
+    assert_eq!(st("spec", "head", "# T\n", "done"), None);
+}
+
+#[test]
+fn render_of_parse_holds_for_specs() {
+    for t in [
+        SPEC,
+        include_str!("fixtures/spec-a.md"),
+        "",
+        "no heading\n",
+        "## A\n",
+        "# T\n## A\ntext",
+    ] {
+        let d = saga::spec::parse(t);
+        assert_eq!(saga::spec::render(&d), t);
+    }
+}
+
+#[test]
+fn edit_replaces_inserts_after_and_removes() {
+    use saga::spec::{SectionEdit, SpecEdits, edit};
+    let e = SpecEdits {
+        status: Some("proposed".into()),
+        sections: vec![
+            SectionEdit {
+                key: Some("section 2-data".into()),
+                heading: "2. Data (rewritten)".into(),
+                body: "New rows.\n".into(),
+                after: None,
+            },
+            SectionEdit {
+                key: None,
+                heading: "Inserted".into(),
+                body: "after one.\n".into(),
+                after: Some("section 1-what-you-see".into()),
+            },
+            SectionEdit {
+                key: None,
+                heading: "Last".into(),
+                body: "at the end.\n".into(),
+                after: None,
+            },
+        ],
+        ..Default::default()
+    };
+    let out = edit(SPEC, &e).unwrap();
+    let d = saga::spec::parse(&out);
+    let titles: Vec<&str> = d.sections.iter().map(|s| s.title.as_str()).collect();
+    assert_eq!(
+        titles,
+        ["1. What you see", "Inserted", "2. Data (rewritten)", "Last"]
+    );
+    assert!(d.head.contains("**Status:** proposed"));
+    assert!(d.sections[2].body.contains("New rows."));
+    assert!(
+        d.sections[0].body.contains("### Deeper"),
+        "the section's own text is kept"
+    );
+    let gone = edit(
+        SPEC,
+        &SpecEdits {
+            remove: vec!["section 2-data".into()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(saga::spec::parse(&gone).sections.len(), 1);
+    for bad in [
+        SpecEdits {
+            remove: vec!["section nope".into()],
+            ..Default::default()
+        },
+        SpecEdits {
+            sections: vec![SectionEdit {
+                key: Some("section nope".into()),
+                heading: "x".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        SpecEdits {
+            sections: vec![SectionEdit {
+                heading: "x".into(),
+                after: Some("section nope".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        SpecEdits {
+            sections: vec![SectionEdit {
+                heading: "two\nlines".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        SpecEdits {
+            sections: vec![SectionEdit {
+                heading: "# hash".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    ] {
+        assert!(edit(SPEC, &bad).is_err(), "{bad:?}");
+    }
+}
+
+#[test]
+fn edit_refuses_a_body_with_a_level_2_heading() {
+    use saga::spec::{SectionEdit, SpecEdits, edit};
+    let with = |body: &str| SpecEdits {
+        sections: vec![SectionEdit {
+            heading: "x".into(),
+            body: body.into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert!(edit(SPEC, &with("text\n\n## sneaky\n")).is_err());
+    // inside a fence, or deeper, it is text
+    assert!(edit(SPEC, &with("```\n## fenced\n```\n\n### deeper\n")).is_ok());
+}
+
+#[test]
+fn new_text_is_a_spec_that_reads_back() {
+    let t = saga::spec::new_text(
+        "Menus",
+        "proposed",
+        &[
+            ("Goals".into(), "Be small.\n".into()),
+            ("Data".into(), "Rows.\n".into()),
+        ],
+    );
+    let d = saga::spec::parse(&t);
+    assert_eq!(d.title.as_deref(), Some("Menus"));
+    assert_eq!(d.status.as_deref(), Some("proposed"));
+    assert_eq!(d.sections.len(), 2);
+    assert_eq!(d.sections[1].title, "Data");
+    assert_eq!(saga::spec::render(&d), t);
 }
 
 #[test]

@@ -72,6 +72,7 @@ pub struct Hit {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Lag {
+    /// The fingerprint (64 hex characters) of the model these vectors belong to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     pub chunks_total: u32,
@@ -86,9 +87,12 @@ pub struct Lag {
 pub struct QueryAnswer {
     pub hits: Vec<Hit>,
     pub lag: Lag,
-    /// The model whose vectors took part; none when the answer is keyword, symbol and path results only.
+    /// The fingerprint of the model whose vectors took part; none when the answer is keyword, symbol and path results only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// That model as the user reads it (`granite-embedding-small-english-r2`); what a client prints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// Why there are no vectors, or what else the reader should know.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice: Option<String>,
@@ -189,7 +193,11 @@ pub struct SearchWatch {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ModelCount {
+    /// The fingerprint (64 hex characters).
     pub model: String,
+    /// The model as the user reads it, when an embedder of this hub states that fingerprint now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub vectors: u64,
 }
 
@@ -215,6 +223,10 @@ pub struct Started {
 #[serde(deny_unknown_fields)]
 pub struct BuiltinInfo {
     pub model: String,
+    /// The model's fingerprint (64 hex characters): what its vectors are keyed by.
+    pub fingerprint: String,
+    /// The model as the user reads it.
+    pub label: String,
     /// `missing`, `partial`, `downloading`, `ready` or `corrupt`.
     pub state: String,
     /// What the download is, in bytes.
@@ -234,7 +246,11 @@ pub struct BuiltinInfo {
 pub struct ServerInfo {
     pub kind: String,
     pub url: String,
-    pub model: String,
+    /// The fingerprint its model proved at the last probe; none while it has not answered one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    /// Its model as the user reads it (the server's model id), or the provider's id while it has not answered.
+    pub label: String,
     pub answering: bool,
     /// The address family that answered the probe: `ipv4` or `ipv6`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -246,9 +262,31 @@ pub struct ServerInfo {
 pub struct EmbeddersAnswer {
     pub builtin: BuiltinInfo,
     pub servers: Vec<ServerInfo>,
-    /// The model a query uses when every project is fully indexed: a server that answers, else the built-in model.
+    /// The fingerprint of the model a query uses when every project is fully indexed: a server that answers, else the
+    /// built-in model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefer: Option<String>,
+    /// The entity embedder's chain in the user's order (the embed role), each entry's live state; empty until its first
+    /// step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chain: Vec<ChainEntry>,
+}
+
+/// One embedder of the chain and how it stands.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChainEntry {
+    pub model: String,
+    /// As the user reads it: `TEI at 127.0.0.1:8080`, `the built-in model`.
+    pub label: String,
+    /// `answering` or `backing-off`.
+    pub state: String,
+    /// While backing off: when it is asked again, in seconds since the epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<u64>,
+    /// While backing off: why it failed last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 /// The user agreed to the download of this size.
@@ -1173,6 +1211,54 @@ pub struct OutlineAnswer {
     pub fresh: Fresh,
 }
 
+/// `search/why`: which layer and rule decide whether a file is indexed.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WhyParams {
+    pub root: AbsPath,
+    /// Relative to ROOT, inside it.
+    pub path: String,
+}
+
+/// What the rules do with a file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum WhyVerdict {
+    Index,
+    NoEmbed,
+    Ignored,
+}
+
+/// The layer that decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum WhyLayer {
+    Builtin,
+    Repo,
+    User,
+}
+
+/// The list of that layer that decided (`default`: none did).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum WhyList {
+    Include,
+    Ignore,
+    NoEmbed,
+    Default,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WhyAnswer {
+    pub verdict: WhyVerdict,
+    pub layer: WhyLayer,
+    pub list: WhyList,
+    /// The rule line that matched (`!` and all); none when no line did (the allowlist, or no rule at all).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+}
+
 /// What a repo map ranks: code only, or tests and docs too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -1509,6 +1595,11 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "start or rebuild a project's index; now overrides the battery gate",
         ),
         method!(
+            "search/embed-retry", SearchEmbedRetry(Empty) -> bool,
+            classes: [User], writes: false,
+            doc: "Retry now: every embedder of the chain that backs off is asked again at the hub's next tick",
+        ),
+        method!(
             "search/embedders", SearchEmbedders(Empty) -> EmbeddersAnswer,
             classes: [User], writes: false,
             doc: "the built-in model's state and device, the servers that can embed and which answer, and the model a query prefers",
@@ -1547,6 +1638,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/outline", SearchOutline(OutlineParams) -> OutlineAnswer,
             classes: [User], writes: false,
             doc: "one indexed file's definitions in file order with their lines, signatures and nesting, from the index alone; an error for a file the view does not index",
+        ),
+        method!(
+            "search/why", SearchWhy(WhyParams) -> WhyAnswer,
+            classes: [User], writes: false,
+            doc: "why a file is or is not indexed: the verdict (index, no-embed, ignored) with the layer (built-in, repo, user), the list and the rule line that decided it",
         ),
         method!(
             "search/map", SearchMap(MapParams) -> MapAnswer,

@@ -65,6 +65,8 @@ struct Fixture {
     store: CodeStore,
     tree: TreeId,
     config: Config,
+    /// The base's `.drgnx/search.toml` (none in these fixtures).
+    repo: hrafn::rules::RuleSet,
     allow: fn(&str) -> bool,
 }
 
@@ -95,6 +97,7 @@ impl Fixture {
             store,
             tree,
             config,
+            repo: Default::default(),
             allow,
         };
         f.refresh_base().await;
@@ -131,6 +134,7 @@ impl Fixture {
             root: &self.t,
             door,
             config: &self.config,
+            repo: &self.repo,
             allow: &self.allow,
         }
     }
@@ -482,6 +486,7 @@ async fn crash_mid_seed_reseeds() {
         store,
         tree,
         config,
+        repo,
         allow,
     } = f;
     let path = _dir.path().join("code.db");
@@ -494,6 +499,7 @@ async fn crash_mid_seed_reseeds() {
         store,
         tree,
         config,
+        repo,
         allow,
     };
     assert_eq!(f.state().await, TreeState::Seeding);
@@ -513,7 +519,10 @@ async fn excluded_file_absent_in_every_view() {
             ("skip/x.txt", "skip\n"),
         ],
         Config {
-            exclude: vec!["skip/**".into()],
+            user: hrafn::rules::RuleSet {
+                ignore: vec!["skip/**".into()],
+                ..Default::default()
+            },
             ..Config::default()
         },
         |p| p != "deny.txt",

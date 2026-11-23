@@ -20,7 +20,7 @@ pub const PROTO_MIN: u32 = 1;
 /// The records layout: 2 is JSON (design 4.5).
 pub const RECORDS: u32 = 2;
 /// The work.db schema this code knows (the hub makes it, or migrates an older file to it at start).
-pub const SCHEMA: u32 = 15;
+pub const SCHEMA: u32 = 16;
 
 /// What a connection proved (design 4.2): `user` a valid `hello` proof, `agent` the agent socket it came in on,
 /// `service` nothing.
@@ -518,7 +518,7 @@ mod tests {
     ];
 
     /// The agent core's methods that write (agent system part 1, Task 0), besides `agents/*` and `job/*`.
-    const CORE_WRITES: [&str; 14] = [
+    const CORE_WRITES: [&str; 17] = [
         "agents/move",
         "agents/role",
         "exec/bump",
@@ -533,6 +533,10 @@ mod tests {
         "budget/raise",
         "records/import",
         "records/resolve",
+        "records/write",
+        // the user's bindings of outside agents
+        "outside/bind",
+        "outside/unbind",
         "work/target/set",
     ];
 

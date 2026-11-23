@@ -3,6 +3,7 @@
 //! process of its own is a `[[test]]` of its own in Cargo.toml, with the reason there, and is named in `APART`.
 
 mod canary;
+mod entity_vec_fingerprint;
 mod entity_vec_schema8;
 mod parity;
 mod parsed;

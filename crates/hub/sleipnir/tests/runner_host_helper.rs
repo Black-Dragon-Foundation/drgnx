@@ -370,12 +370,12 @@ mod relay_keys {
         let dir = std::env::var_os("DRGNX_TEST_PX_DIR")
             .map(PathBuf::from)
             .expect("DRGNX_TEST_PX_DIR: the folder of drgnx-px-<arch>-linux-musl");
-        let px = fs::read(drgnx_px::image::binary_for(&dir, "amd64")).unwrap();
+        let px = fs::read(ferja::image::binary_for(&dir, "amd64")).unwrap();
         let env: Vec<_> = std::env::vars_os().collect();
-        drgnx_px::image::ensure_image(
+        ferja::image::ensure_image(
             Path::new("podman"),
             &env,
-            &drgnx_px::image::image_tar(&px),
+            &ferja::image::image_tar(&px),
             Duration::from_secs(120),
         )
         .unwrap()
@@ -445,7 +445,7 @@ mod relay_keys {
     /// it: the job joins its sidecar, no key socket, no label override.
     fn job_argv(id: &str, dir: &Path, cmd: &str) -> Vec<String> {
         let key_copy = dir.join("drgnx-key");
-        drgnx_exe::copy(&drgnx_key_bin(), &key_copy).unwrap();
+        hlaup::copy(&drgnx_key_bin(), &key_copy).unwrap();
         let src = dir.join("src");
         fs::create_dir_all(&src).unwrap();
         let req = ContainerReq {
@@ -477,7 +477,7 @@ mod relay_keys {
     /// `podman run` of `drgnx-key ARGS…` in the base image on NETWORK (`container:<sidecar>`, or `none`).
     fn key_cmd(dir: &Path, network: &str, args: &[&str]) -> std::process::Output {
         let key_copy = dir.join("drgnx-key-cmd");
-        drgnx_exe::copy(&drgnx_key_bin(), &key_copy).unwrap();
+        hlaup::copy(&drgnx_key_bin(), &key_copy).unwrap();
         let mut c = Command::new("podman");
         c.args(["run", "--rm", "--pull=never", "--userns=keep-id"])
             .arg(format!("--network={network}"))
@@ -652,7 +652,7 @@ mod relay_keys {
             .map(PathBuf::from)
             .unwrap();
         let px_copy = a.dir.join("px-copy");
-        drgnx_exe::copy(&drgnx_px::image::binary_for(&dir, "amd64"), &px_copy).unwrap();
+        hlaup::copy(&ferja::image::binary_for(&dir, "amd64"), &px_copy).unwrap();
         let net = format!("--network=container:{}", sidecar_of("rk5"));
         let out = Command::new("podman")
             .args([

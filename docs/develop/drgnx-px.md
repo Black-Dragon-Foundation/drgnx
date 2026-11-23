@@ -1,6 +1,6 @@
 # drgnx-px: the relay sidecar
 
-`drgnx-px` (`crates/hub/drgnx-px`) relays a networked container job's TCP connections to its owner's proxy. The
+`drgnx-px` (`crates/hub/ferja`) relays a networked container job's TCP connections to its owner's proxy. The
 job reaches nothing but the sidecar; the sidecar holds no policy, no resolver and no TLS. It carries each connection
 as a stream of frames over its own stdin and stdout, which `podman run -i` joins to the owner (the hub locally, the
 job helper on a runner), and the owner hands each stream to the job's proxy.
@@ -24,7 +24,7 @@ u32 stream id (big-endian; the high bit is 0) | u8 kind | u32 payload length (bi
 | `BEAT` 6 | owner → sidecar | 0 | none |
 | `EVENT` 7 | sidecar → owner | 0 | JSON `{"foreign_source":"<ip>"}` |
 
-Limits (`drgnx_px::frame`): `MAX_DATA` 16384, `MAX_CONTROL` 4096 bytes of JSON, `WINDOW` 262144 bytes of credit per
+Limits (`ferja::frame`): `MAX_DATA` 16384, `MAX_CONTROL` 4096 bytes of JSON, `WINDOW` 262144 bytes of credit per
 stream and direction, `MAX_STREAMS` 64.
 
 The decoder (`frame::Decoder`) joins frames split across reads and holds at most one frame's bytes. It judges what a
@@ -185,7 +185,7 @@ The owner's end runs where the job's proxy is (the hub, or a runner's job helper
   stdout), waits up to 10 s for the exit, runs `podman rm -f name`, kills what still runs, and answers the exit code
   (a signal `n` as `128 + n`; none when it did not exit in time).
 
-## The hub's networked jobs (`drgnx-ratatoskr/src/exec/net.rs`)
+## The hub's networked jobs (`ratatoskr/src/exec/net.rs`)
 
 `net::prepare_net` starts a networked container job's relay before the job, under Q8 (design §5.2): the sidecar's
 image (`image::ensure_image` from `drgnx-px-<arch>-linux-musl` in `Hooks::px_dir`, the hub binary's folder), then
@@ -233,7 +233,7 @@ picks the machine's rootless connection from `podman system connection list --fo
 `tests/small_pipes.rs` and two of `tests/sidecar.rs` need `--features test-hooks`:
 
 ```
-cargo test -p drgnx-px --features test-hooks
+cargo test -p ferja --features test-hooks
 ```
 
 ## The sidecar's image

@@ -1,4 +1,4 @@
-use hrafn::{ChunkIn, CodeStore, FileRow, SymbolIn, VecRow, encode_symbol, vec_key};
+use hrafn::{ChunkIn, CodeStore, FileRow, KeyKind, SymbolIn, chunk_key, encode_symbol};
 
 fn chunk(text: &str, symbols: &str, body: &str) -> ChunkIn {
     ChunkIn {
@@ -7,7 +7,7 @@ fn chunk(text: &str, symbols: &str, body: &str) -> ChunkIn {
         line_start: 1,
         line_end: 1,
         symbol: None,
-        key: vec_key(1, text),
+        key: chunk_key(text),
         embed: true,
         embed_text: text.into(),
         symbols: symbols.into(),
@@ -39,7 +39,7 @@ fn file(path: &str) -> FileRow {
 async fn open_creates_v1() {
     let dir = tempfile::tempdir().unwrap();
     let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("6"));
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("8"));
     for t in [
         "tree",
         "file",
@@ -47,7 +47,7 @@ async fn open_creates_v1() {
         "chunk_fts",
         "symbol",
         "symbol_fts",
-        "vec",
+        "path_key",
         "meta",
     ] {
         let n = s
@@ -83,7 +83,7 @@ async fn reopen_is_idempotent() {
         .unwrap();
     let s = CodeStore::open(&p).unwrap();
     assert_eq!(count(&s, "select count(*) from file").await, 1);
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("6"));
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("8"));
     assert_eq!(
         s.meta_get("chunker_version").await.unwrap().as_deref(),
         Some("1")
@@ -91,39 +91,12 @@ async fn reopen_is_idempotent() {
 }
 
 #[test]
-fn vec_key_changes_with_each_field() {
-    let a = vec_key(1, "text");
-    assert_eq!(a, vec_key(1, "text"));
-    assert_ne!(a, vec_key(2, "text"));
-    assert_ne!(a, vec_key(1, "text2"));
-}
-
-#[tokio::test]
-async fn two_models_share_a_key() {
-    let dir = tempfile::tempdir().unwrap();
-    let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
-    s.put_file(file("a.el")).await.unwrap();
-    let c = chunk("(defun a ())", "a", "defun a");
-    let key = c.key;
-    s.replace_chunks("a.el", "b", vec![c], vec![])
-        .await
-        .unwrap();
-    for model in ["m1", "m2"] {
-        s.put_vec(VecRow {
-            model: model.into(),
-            dims: 4,
-            key,
-            bits: 8,
-            vec: vec![1, 2, 3, 4],
-            scale: 1.0,
-            last_used: 1,
-        })
-        .await
-        .unwrap();
-    }
-    assert_eq!(count(&s, "select count(*) from vec").await, 2);
-    assert_eq!(count(&s, "select count(distinct key) from vec").await, 1);
-    assert_eq!(count(&s, "select count(*) from chunk").await, 1);
+fn keys_change_with_the_text_and_its_kind() {
+    let a = chunk_key("text");
+    assert_eq!(a, chunk_key("text"));
+    assert_eq!(a, KeyKind::Chunk.key("text"));
+    assert_ne!(a, chunk_key("text2"));
+    assert_ne!(a, KeyKind::Path.key("text"), "another version, another key");
 }
 
 #[tokio::test]

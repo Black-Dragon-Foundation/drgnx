@@ -1,4 +1,4 @@
-;; skrifa's advance sums per string, written by `cargo test -p drgnx-rows fit_sums` when missing (test/ui/rows-fit-gui-test.el reads it)
+;; skrifa's advance sums per string, written by `cargo test -p rodd fit_sums` when missing (test/ui/rows-fit-gui-test.el reads it)
 (
  (:family "Inter" :px 11 :text "The quick brown fox jumps over the lazy d" :fractional 221.665 :per-glyph 224)
  (:family "Inter" :px 11 :text "0123456789 0123456789 0123456789 0123456" :fractional 250.314 :per-glyph 253)

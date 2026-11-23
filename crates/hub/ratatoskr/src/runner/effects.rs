@@ -1,0 +1,2365 @@
+//! Plans in the graph and what decisions did (Task 21): `plans/get`, `plans/write` (under `graph.change` for an
+//! agent's `plan_write`), `reports/get`, and `decisions/effects` (a decision's commits and the later hunks that
+//! overlap its lines, computed from git and labelled `computed`); commits linked to the decisions their session
+//! recorded since the branch's previous commit; the fallback `drgnx-report` block.
+//!
+//! A plan in the graph is a `plan` entity whose tasks are `task` entities under it (`parent_of`), each with
+//! `data.{number, model, interfaces, steps, role, profile, body}`; a task waits on the tasks that `block` it.  Git runs
+//! in blocking tasks (never on the tick).
+
+use crate::coord::{Writer, fail};
+use crate::dispatch::Caller;
+use crate::front::Front;
+use crate::runner::plan::{self, Plan};
+use crate::runner::{internal, invalid, now};
+use norn::store::{CoordError, Tx, WTx};
+use runstav::methods::plans::{
+    ByPlan, CheckRun, DecisionRef, Effects, EffectsParams, Hunk, PlanStep, PlanTask, PlanView,
+    PlanWritten, Report, ReportSubmit, Reports, ReportsParams, TaskId, WriteParams,
+};
+use runstav::registry::Class;
+use runstav::wire::{Error, ErrorCode};
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use urdr::graph::entity::{self, Changes, Ent, EntityNew, Origin};
+use urdr::graph::link;
+use urdr::graph::schema::SENTINEL;
+
+fn refuse(msg: impl Into<String>) -> Error {
+    Error {
+        code: ErrorCode::NotAllowed,
+        message: msg.into(),
+        path: None,
+    }
+}
+
+// ---- who may reach what -----------------------------------------------------------------------------------------
+
+/// What a caller may reach in the graph.  The user and the hub reach everything; an agent reaches its own project's
+/// records only (its session's project: the plan run's, else the one its folder is in), so a worker in project A
+/// can neither read nor change project B's plans, reports or proposals (a record of no project is its job's: only that job's sessions and their manager reach it).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Scope {
+    Anyone,
+    Project {
+        /// The project entity id (none: the session's folder is in no project).
+        id: Option<String>,
+        /// The project's git top-level (none: not known).
+        root: Option<PathBuf>,
+        /// The jobs whose records the caller may reach: its own job, and its workers' jobs for a manager.
+        jobs: Vec<String>,
+        /// The sessions whose records the caller may reach: itself and its workers.
+        sessions: Vec<String>,
+    },
+}
+
+impl Scope {
+    /// Whether a record of PROJECT (an entity id) is the caller's.
+    pub(crate) fn allows_project(&self, project: Option<&str>) -> Result<(), CoordError> {
+        match self {
+            // a record of no project (a job's tasks, which the hub writes) is nobody's in particular
+            Scope::Project { id, .. } if project.is_some() && id.as_deref() != project => Err(CoordError::Refused(
+                "that belongs to another project: an agent reaches its own project's records only".into(),
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// Whether the record E is the caller's: of its project; or, with no project, a job task (or a report on one)
+    /// of one of its jobs; or else written by one of its sessions.  Nothing else is an agent's to read or change.
+    pub(crate) fn allows_ent(&self, conn: &Tx, e: &Ent) -> Result<(), CoordError> {
+        let Scope::Project { jobs, sessions, .. } = self else {
+            return Ok(());
+        };
+        if let Some(n) = e.project {
+            let owner = live(conn, n)?.map(|p| p.id);
+            return self.allows_project(owner.as_deref());
+        }
+        // a piece of a records file (imported or written through `records/write`: no project) is the project's whose
+        // root holds the file
+        if let Some(file) = e
+            .data
+            .get("records")
+            .and_then(|r| r.get("file"))
+            .and_then(Value::as_str)
+        {
+            return self.allows_path(Path::new(file));
+        }
+        let mut job = str_of(e, "job");
+        if job.is_none() && e.kind == "report" {
+            for t in dsts(conn, e.n, "report_of")? {
+                job = job.or(live(conn, t)?.and_then(|t| str_of(&t, "job")));
+            }
+        }
+        let mine = match job {
+            Some(j) => jobs.contains(&j),
+            None => {
+                let by: Option<String> = conn
+                    .query_row(
+                        "select session from tx where id = ?1",
+                        [e.created_tx],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(None);
+                by.is_some_and(|s| {
+                    sessions
+                        .iter()
+                        .any(|m| s == *m || s == format!("session:{m}"))
+                })
+            }
+        };
+        if mine {
+            Ok(())
+        } else {
+            Err(CoordError::Refused(
+                "that belongs to another job or run: an agent reaches its own records only".into(),
+            ))
+        }
+    }
+
+    /// Whether PATH (a file a record is about) lies in the caller's project.
+    pub(crate) fn allows_path(&self, path: &Path) -> Result<(), CoordError> {
+        match self {
+            Scope::Project { root, .. } if !root.as_deref().is_some_and(|r| path.starts_with(r)) => {
+                Err(CoordError::Refused(
+                    "that is about a file outside your project: an agent reaches its own project's records only"
+                        .into(),
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+/// The scope of session SID.
+pub(crate) async fn scope_of_session(f: &Front, sid: &str) -> Result<Scope, Error> {
+    let me = f.core.agents.find(sid)?;
+    let cwd = me.cwd().to_path_buf();
+    let mut jobs: Vec<String> = me.job_id().map(str::to_owned).into_iter().collect();
+    let mut sessions = vec![sid.to_owned()];
+    for s in f.core.agents.live_sessions() {
+        if s.parent() == Some(sid) {
+            sessions.push(s.id.clone());
+            jobs.extend(s.job_id().map(str::to_owned));
+        }
+    }
+    let found = crate::graph::project_of(&cwd).await.map_err(internal)?;
+    let from_run = f.core.runs.scope_of(sid).and_then(|(_, project)| project);
+    Ok(Scope::Project {
+        id: from_run.or_else(|| found.as_ref().map(|p| p.id.clone())),
+        root: found.map(|p| p.root),
+        jobs,
+        sessions,
+    })
+}
+
+/// The scope of caller C: everything for the user and the hub, the session's project for an agent.
+pub(crate) async fn scope_of(f: &Front, c: &Caller) -> Result<Scope, Error> {
+    if c.class != Class::Agent {
+        return Ok(Scope::Anyone);
+    }
+    match &c.sid {
+        Some(sid) if crate::outside::is_ext(sid) => crate::outside::scope_of(f, sid).await,
+        Some(sid) => scope_of_session(f, sid).await,
+        None => Err(refuse("an agent call without a session reaches no project")),
+    }
+}
+
+// ---- reading a plan ---------------------------------------------------------------------------------------------
+
+/// A plan as the graph has it, with what the job needs beyond the view.
+struct Loaded {
+    view: PlanView,
+    /// By task number: the role, the profile and the body a task names.
+    roles: BTreeMap<String, String>,
+    profiles: BTreeMap<String, String>,
+    bodies: BTreeMap<String, String>,
+    repo: Option<String>,
+}
+
+fn srcs(conn: &Tx, dst: i64, kind: &str) -> Result<Vec<i64>, CoordError> {
+    let mut st = conn
+        .prepare("select src from link where dst = ?1 and kind = ?2 and tx_to = ?3 order by id")?;
+    let rows = st.query_map((dst, kind, SENTINEL), |r| r.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+fn dsts(conn: &Tx, src: i64, kind: &str) -> Result<Vec<i64>, CoordError> {
+    let mut st = conn
+        .prepare("select dst from link where src = ?1 and kind = ?2 and tx_to = ?3 order by id")?;
+    let rows = st.query_map((src, kind, SENTINEL), |r| r.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+fn live(conn: &Tx, n: i64) -> Result<Option<Ent>, CoordError> {
+    Ok(entity::by_n(conn, n)?.filter(|e| e.retired_tx.is_none()))
+}
+
+fn str_of(e: &Ent, key: &str) -> Option<String> {
+    e.data.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+/// The version of a plan: the latest change to it or to one of its tasks.
+fn version(conn: &Tx, plan: i64) -> Result<u64, CoordError> {
+    let v: i64 = conn.query_row(
+        "select coalesce(max(updated_tx), 0) from entity where n = ?1 or n in \
+         (select dst from link where src = ?1 and kind = 'parent_of' and tx_to = ?2)",
+        (plan, SENTINEL),
+        |r| r.get(0),
+    )?;
+    Ok(v as u64)
+}
+
+pub(crate) fn reports_of(conn: &Tx, task: i64) -> Result<Vec<Ent>, CoordError> {
+    let mut out = Vec::new();
+    for n in srcs(conn, task, "report_of")? {
+        out.extend(live(conn, n)?.filter(|e| e.kind == "report"));
+    }
+    out.sort_by_key(|a| std::cmp::Reverse(a.n));
+    Ok(out)
+}
+
+fn load(conn: &Tx, id: &str) -> Result<Loaded, CoordError> {
+    let plan = entity::by_id(conn, id)?
+        .filter(|e| e.kind == "plan" && e.retired_tx.is_none())
+        .ok_or_else(|| CoordError::Refused(format!("no plan {id}")))?;
+    let project = match plan.project {
+        Some(p) => live(conn, p)?,
+        None => None,
+    };
+    let mut ents = Vec::new();
+    for n in dsts(conn, plan.n, "parent_of")? {
+        ents.extend(live(conn, n)?.filter(|e| e.kind == "task"));
+    }
+    let number = |e: &Ent| str_of(e, "number").unwrap_or_else(|| e.id.clone());
+    let (mut roles, mut profiles, mut bodies) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+    let mut tasks = Vec::new();
+    for e in &ents {
+        let mut deps = Vec::new();
+        for d in srcs(conn, e.n, "blocks")? {
+            deps.extend(live(conn, d)?.map(|d| number(&d)));
+        }
+        let steps = e
+            .data
+            .get("steps")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .map(|s| PlanStep {
+                        done: s.get("done").and_then(Value::as_bool).unwrap_or(false),
+                        text: s.get("text").and_then(Value::as_str).unwrap_or("").into(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let reports = reports_of(conn, e.n)?;
+        // the latest report that names interfaces (`report.data.interfaces`, the field Task 22's briefs read)
+        let report_interfaces = reports
+            .iter()
+            .find_map(|r| str_of(r, "interfaces").filter(|s| !s.trim().is_empty()));
+        for (key, map) in [
+            ("role", &mut roles),
+            ("profile", &mut profiles),
+            ("body", &mut bodies),
+        ] {
+            if let Some(v) = str_of(e, key) {
+                map.insert(number(e), v);
+            }
+        }
+        tasks.push(PlanTask {
+            id: e.id.clone(),
+            number: number(e),
+            title: e.title.clone().unwrap_or_default(),
+            status: e.status.clone().unwrap_or_else(|| "open".into()),
+            model: str_of(e, "model"),
+            deps,
+            interfaces: str_of(e, "interfaces"),
+            steps,
+            reports: reports.iter().map(|r| r.id.clone()).collect(),
+            report_interfaces,
+        });
+    }
+    Ok(Loaded {
+        view: PlanView {
+            id: plan.id.clone(),
+            title: plan.title.clone().unwrap_or_default(),
+            status: plan.status.clone(),
+            project: project.as_ref().map(|p| p.id.clone()),
+            version: version(conn, plan.n)?,
+            tasks,
+        },
+        roles,
+        profiles,
+        bodies,
+        repo: plan
+            .data
+            .get("repo")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| project.as_ref().and_then(|p| str_of(p, "path"))),
+    })
+}
+
+pub async fn plans_get(f: &Front, c: &Caller, p: ByPlan) -> Result<PlanView, Error> {
+    let id = p.plan.as_str().to_owned();
+    let scope = scope_of(f, c).await?;
+    f.writer
+        .db
+        .read(move |c| {
+            let view = load(c, &id)?.view;
+            if let Some(plan) = entity::by_id(c, &id)? {
+                scope.allows_ent(c, &plan)?;
+            }
+            Ok(view)
+        })
+        .await
+        .map_err(fail)
+}
+
+/// The plan entity ID as a job's plan (`job/propose` with a plan in the graph): its text stands in for the file, so
+/// the job keeps the title, the tasks with their roles and dependencies, and the repository.  The file path of the
+/// pair is the entity id.
+pub async fn plan_for_job(front: &Front, id: &str) -> Result<(PathBuf, Plan), Error> {
+    let key = id.to_owned();
+    let loaded = front
+        .writer
+        .db
+        .read(move |c| load(c, &key))
+        .await
+        .map_err(fail)?;
+    let num = |s: &str| -> Result<i64, Error> {
+        let digits: String = s.chars().take_while(char::is_ascii_digit).collect();
+        digits
+            .parse()
+            .map_err(|_| invalid(format!("task {s:?} has no number a job can run")))
+    };
+    let mut tasks = Vec::new();
+    for t in &loaded.view.tasks {
+        // the task's own prose first, then its steps and interfaces
+        let mut body = loaded
+            .bodies
+            .get(&t.number)
+            .map(|b| format!("{}\n\n", b.trim()))
+            .unwrap_or_default();
+        for s in &t.steps {
+            body.push_str(&format!(
+                "- [{}] {}\n",
+                if s.done { "x" } else { " " },
+                s.text
+            ));
+        }
+        if let Some(i) = &t.interfaces {
+            body.push_str(&format!("\nInterfaces: {i}\n"));
+        }
+        tasks.push(plan::PlanTask {
+            n: num(&t.number)?,
+            title: t.title.clone(),
+            role: loaded
+                .roles
+                .get(&t.number)
+                .cloned()
+                .unwrap_or_else(|| "implement".into()),
+            deps: t.deps.iter().map(|d| num(d)).collect::<Result<_, _>>()?,
+            body: body.trim().to_owned(),
+            profile: loaded.profiles.get(&t.number).cloned(),
+            model: t.model.clone(),
+        });
+    }
+    let hash = format!("{}:{}", loaded.view.id, loaded.view.version);
+    Ok((
+        PathBuf::from(id),
+        Plan {
+            title: loaded.view.title,
+            repo: loaded
+                .repo
+                .map(|r| if r.ends_with('/') { r } else { format!("{r}/") }),
+            tasks,
+            wont_build: Vec::new(),
+            pack: None,
+            hash,
+        },
+    ))
+}
+
+// ---- writing a plan ---------------------------------------------------------------------------------------------
+
+/// Whether the agent C may change the graph: the matrix's `graph.change` for C's session as it is (its role, agent
+/// and provider; a chat's is Never), the worker column for an agent the hub does not hold.  For an outside agent
+/// ([`crate::outside::who_for`]: its binding read now, no plan) OWN says whether the records changed are ones it
+/// created itself; on another's its `graph.change` is Ask at most.  CHANGE is the call itself: the user's yes to its
+/// card lets exactly it through once (`matrix_gate::change_grant`).
+pub(crate) async fn may_change(
+    f: &Front,
+    c: &Caller,
+    plan: Option<String>,
+    own: bool,
+    change: norn::grants::Change,
+) -> Result<(), Error> {
+    use crate::matrix_gate::{ActionCtx, Gate};
+    if c.class != Class::Agent {
+        return Ok(());
+    }
+    let (who, base) = crate::outside::who_for(f, c).await?;
+    let ctx = if crate::matrix_gate::is_outside(&base) {
+        ActionCtx {
+            own_record: own,
+            change: Some(change),
+            ..base
+        }
+    } else {
+        ActionCtx {
+            plan: plan.or(base.plan.clone()),
+            ..base
+        }
+    };
+    match f
+        .core
+        .matrix
+        .decide(
+            &f.settings,
+            &f.writer,
+            who,
+            norn::matrix::Action::GraphChange,
+            ctx,
+        )
+        .await
+    {
+        Gate::Allow => Ok(()),
+        Gate::Ask(card) => Err(refuse(format!(
+            "the matrix asks the user first (card {card}); write the plan again once it is settled"
+        ))),
+        Gate::Never(why) => Err(refuse(why)),
+    }
+}
+
+fn task_by_number(conn: &Tx, plan: i64, number: &str) -> Result<Option<Ent>, CoordError> {
+    for n in dsts(conn, plan, "parent_of")? {
+        if let Some(e) = live(conn, n)?.filter(|e| e.kind == "task")
+            && str_of(&e, "number").as_deref() == Some(number)
+        {
+            return Ok(Some(e));
+        }
+    }
+    Ok(None)
+}
+
+fn write_plan(tx: &mut WTx<'_>, p: &WriteParams, scope: &Scope) -> Result<PlanWritten, CoordError> {
+    let plan = match &p.plan {
+        Some(id) => {
+            let e = entity::by_id(tx.sql(), id.as_str())?
+                .filter(|e| e.kind == "plan" && e.retired_tx.is_none())
+                .ok_or_else(|| CoordError::Refused(format!("no plan {}", id.as_str())))?;
+            scope.allows_ent(tx.sql(), &e)?;
+            if let Some(base) = p.base_version {
+                let now = version(tx.sql(), e.n)?;
+                if now > base {
+                    return Err(CoordError::Refused(format!(
+                        "held: the plan changed since version {base} (now {now}); read it again"
+                    )));
+                }
+            }
+            if let Some(t) = &p.title {
+                entity::update(
+                    tx,
+                    e.n,
+                    None,
+                    Changes {
+                        title: Some(Some(t.as_str().to_owned())),
+                        ..Changes::default()
+                    },
+                )?;
+            }
+            e
+        }
+        None => {
+            // a new plan of an agent is in its own project (once that is in the graph); naming another is refused
+            let named = p.project.as_ref().map(|i| i.as_str().to_owned());
+            if named.is_some() {
+                scope.allows_project(named.as_deref())?;
+            }
+            let own = match scope {
+                Scope::Project { id, .. } => id.clone(),
+                Scope::Anyone => None,
+            };
+            let project = match named.as_ref().or(own.as_ref()) {
+                Some(id) => {
+                    let found = entity::by_id(tx.sql(), id)?
+                        .filter(|e| e.kind == "project" && e.retired_tx.is_none());
+                    match (found, &named) {
+                        (Some(e), _) => Some(e.n),
+                        (None, Some(_)) => {
+                            return Err(CoordError::Refused(format!("no project {id}")));
+                        }
+                        (None, None) => None,
+                    }
+                }
+                None => None,
+            };
+            let title = p.title.as_ref().map(|t| t.as_str().to_owned());
+            let id = norn::tracker::new_id(tx, "plan", project)?;
+            entity::create(
+                tx,
+                EntityNew {
+                    id,
+                    kind: "plan".into(),
+                    project,
+                    title,
+                    status: Some("open".into()),
+                    body: None,
+                    priority: None,
+                    assignee: None,
+                    data: json!({}),
+                    origin: Origin::Recorded,
+                    source: None,
+                },
+            )?
+        }
+    };
+    let mut written: Vec<TaskId> = Vec::new();
+    for w in &p.tasks.0 {
+        let number = w.number.as_str();
+        let mut data = serde_json::Map::new();
+        data.insert("number".into(), json!(number));
+        for (key, v) in [
+            ("model", w.model.as_ref().map(|m| m.as_str())),
+            ("role", w.role.as_ref().map(|r| r.as_str())),
+            ("profile", w.profile.as_ref().map(|p| p.as_str())),
+            ("body", w.body.as_ref().map(|b| b.as_str())),
+        ] {
+            if let Some(v) = v {
+                data.insert(key.into(), json!(v));
+            }
+        }
+        if let Some(i) = &w.interfaces {
+            data.insert("interfaces".into(), json!(i.as_str()));
+        }
+        if let Some(s) = &w.steps {
+            let steps: Vec<Value> =
+                s.0.iter()
+                    .map(|s| json!({"done": s.done, "text": s.text.as_str()}))
+                    .collect();
+            data.insert("steps".into(), json!(steps));
+        }
+        let task = match task_by_number(tx.sql(), plan.n, number)? {
+            Some(e) => {
+                scope.allows_ent(tx.sql(), &e)?;
+                // a task of a plan with a view file: its text in the file changes too, at the next sync
+                let (mut title, mut body) =
+                    (w.title.as_ref().map(|t| Some(t.as_str().to_owned())), None);
+                if e.data.get("records").is_some() {
+                    let steps: Option<Vec<(bool, String)>> = w.steps.as_ref().map(|s| {
+                        s.0.iter()
+                            .map(|s| (s.done, s.text.as_str().to_owned()))
+                            .collect()
+                    });
+                    let old = e.body.clone().unwrap_or_default();
+                    let new = saga::plan::rewrite_task(
+                        &old,
+                        &saga::plan::TaskRewrite {
+                            title: w.title.as_ref().map(|t| t.as_str()),
+                            body: w.body.as_ref().map(|b| b.as_str()),
+                            steps: steps.as_deref(),
+                        },
+                    );
+                    if new != old {
+                        body = Some(Some(new));
+                    }
+                    // a record's task title is its number and its heading text
+                    title = w
+                        .title
+                        .as_ref()
+                        .map(|t| Some(format!("{number} {}", t.as_str())));
+                }
+                entity::update(
+                    tx,
+                    e.n,
+                    None,
+                    Changes {
+                        title,
+                        body,
+                        status: w.status.as_ref().map(|s| Some(s.as_str().to_owned())),
+                        data_patch: Some(Value::Object(data)),
+                        ..Changes::default()
+                    },
+                )?;
+                e
+            }
+            None => {
+                let id = norn::tracker::new_id(tx, "task", plan.project)?;
+                let e = entity::create(
+                    tx,
+                    EntityNew {
+                        id,
+                        kind: "task".into(),
+                        project: plan.project,
+                        title: Some(
+                            w.title
+                                .as_ref()
+                                .map_or_else(|| number.to_owned(), |t| t.as_str().to_owned()),
+                        ),
+                        status: Some(
+                            w.status
+                                .as_ref()
+                                .map_or_else(|| "open".to_owned(), |s| s.as_str().to_owned()),
+                        ),
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: Value::Object(data),
+                        origin: Origin::Recorded,
+                        source: None,
+                    },
+                )?;
+                link::add(tx, plan.n, "parent_of", e.n, None, Origin::Recorded, None)?;
+                e
+            }
+        };
+        written.push(TaskId {
+            number: number.to_owned(),
+            id: task.id,
+        });
+    }
+    // `blocks` after every task exists, so a task may wait on one written in the same call
+    for w in &p.tasks.0 {
+        let Some(deps) = &w.blocks else { continue };
+        let task = task_by_number(tx.sql(), plan.n, w.number.as_str())?
+            .ok_or_else(|| CoordError::Refused(format!("no task {}", w.number.as_str())))?;
+        for old in srcs(tx.sql(), task.n, "blocks")? {
+            link::retire(tx, old, "blocks", task.n)?;
+        }
+        for d in &deps.0 {
+            let dep = task_by_number(tx.sql(), plan.n, d.as_str())?.ok_or_else(|| {
+                CoordError::Refused(format!(
+                    "task {} waits on {}, which the plan does not have",
+                    w.number.as_str(),
+                    d.as_str()
+                ))
+            })?;
+            if dep.n == task.n {
+                return Err(CoordError::Refused(format!(
+                    "task {} cannot wait on itself",
+                    w.number.as_str()
+                )));
+            }
+            link::add(tx, dep.n, "blocks", task.n, None, Origin::Recorded, None)?;
+        }
+    }
+    Ok(PlanWritten {
+        plan: plan.id,
+        tx: tx.id() as u64,
+        tasks: written,
+    })
+}
+
+/// The view `plans/get` gives of PLAN (tests).
+#[cfg(test)]
+pub(crate) fn load_view(conn: &Tx, plan: &str) -> Result<PlanView, CoordError> {
+    Ok(load(conn, plan)?.view)
+}
+
+/// `plans/write` as META, with no matrix checks (tests).
+#[cfg(test)]
+pub(crate) async fn write_plan_as(
+    db: &norn::store::CoordDb,
+    meta: &urdr::graph::TxMeta,
+    p: &WriteParams,
+    scope: &Scope,
+) -> Result<PlanWritten, Error> {
+    let (p, scope) = (p.clone(), scope.clone());
+    db.write(meta.clone(), move |tx| write_plan(tx, &p, &scope))
+        .await
+        .map_err(fail)
+}
+
+pub async fn plans_write(f: &Front, c: &Caller, p: WriteParams) -> Result<PlanWritten, Error> {
+    if p.plan.is_none() && p.path.is_none() && c.class == Class::Agent {
+        return Err(refuse(
+            "an agent's new plan names its view file: path docs/plans/<repo>/<name>.md",
+        ));
+    }
+    // the scope first: a plan outside the caller's project is refused before the matrix is asked (no card)
+    let scope = scope_of(f, c).await?;
+    let own = own_of_plan(f, c, &p, &scope).await?;
+    let record = p
+        .plan
+        .as_ref()
+        .map(|i| i.as_str())
+        .or(p.path.as_ref().map(|r| r.as_str()))
+        .unwrap_or_default();
+    let change = norn::grants::Change::of("plans/write", record, &p);
+    may_change(
+        f,
+        c,
+        p.plan.as_ref().map(|i| i.as_str().to_owned()),
+        own,
+        change,
+    )
+    .await?;
+    may_finish(f, c, &p).await?;
+    if let (None, Some(rel)) = (&p.plan, &p.path) {
+        let rel = rel.as_str().to_owned();
+        let actor = crate::records::write::actor_for(
+            f,
+            c,
+            scope,
+            p.project.as_ref().map(|i| i.as_str()),
+            "plans/write",
+        )
+        .await?;
+        return crate::records::write::create_plan_core(
+            &f.writer.db,
+            &f.core.records,
+            &actor,
+            &p,
+            &rel,
+        )
+        .await;
+    }
+    f.writer
+        .write(c, "plans/write", move |tx| write_plan(tx, &p, &scope))
+        .await
+        .map_err(fail)
+}
+
+/// Whether the plan write P is in SCOPE (refused when not), and whether it changes only records C created itself:
+/// the plan and the tasks it names, by their `created_tx`'s actor.  A new plan is the caller's own; only an outside
+/// agent's answer is read ([`may_change`]).
+async fn own_of_plan(f: &Front, c: &Caller, p: &WriteParams, scope: &Scope) -> Result<bool, Error> {
+    let Some(plan) = &p.plan else {
+        scope
+            .allows_project(p.project.as_ref().map(|i| i.as_str()))
+            .map_err(fail)?;
+        return Ok(true);
+    };
+    let ext = c
+        .sid
+        .as_deref()
+        .filter(|s| crate::outside::is_ext(s))
+        .map(str::to_owned);
+    let (plan, scope) = (plan.as_str().to_owned(), scope.clone());
+    let numbers: Vec<String> = p
+        .tasks
+        .0
+        .iter()
+        .map(|t| t.number.as_str().to_owned())
+        .collect();
+    f.writer
+        .db
+        .read(move |conn| {
+            let Some(e) = live_by_id(conn, &plan)? else {
+                // refused before the matrix is asked: a plan that is not there makes no card
+                return Err(CoordError::Refused(format!("no plan {plan}")));
+            };
+            scope.allows_ent(conn, &e)?;
+            let Some(actor) = ext else { return Ok(true) };
+            let mut ns = vec![e.n];
+            for n in &numbers {
+                if let Some(t) = task_by_number(conn, e.n, n)? {
+                    ns.push(t.n);
+                }
+            }
+            crate::outside::own_record(conn, &ns, &actor)
+        })
+        .await
+        .map_err(fail)
+}
+
+fn live_by_id(conn: &Tx, id: &str) -> Result<Option<Ent>, CoordError> {
+    Ok(entity::by_id(conn, id)?.filter(|e| e.retired_tx.is_none()))
+}
+
+/// A task an agent marks `done` is the matrix's `task.done` (never for a worker), not just `graph.change`: the
+/// status is the same fact the review and the user's own close write.
+async fn may_finish(f: &Front, c: &Caller, p: &WriteParams) -> Result<(), Error> {
+    if c.class != Class::Agent
+        || !p
+            .tasks
+            .0
+            .iter()
+            .any(|t| t.status.as_ref().is_some_and(|s| s.as_str() == "done"))
+    {
+        return Ok(());
+    }
+    matrix_allows_done(
+        f,
+        c,
+        p.plan.as_ref().map(|i| i.as_str().to_owned()),
+        "marking a task done asks the user first",
+        "write the plan again once it is settled",
+    )
+    .await
+}
+
+/// Whether the matrix lets the agent C approve a record (`task.done`, the same fact as closing a task): `Ok`, or why
+/// not.  Never asked of the user or the hub.
+pub(crate) async fn may_approve(f: &Front, c: &Caller) -> Result<(), Error> {
+    if c.class != Class::Agent {
+        return Ok(());
+    }
+    matrix_allows_done(
+        f,
+        c,
+        None,
+        "approving a record asks the user first",
+        "write the record again once it is settled",
+    )
+    .await
+}
+
+async fn matrix_allows_done(
+    f: &Front,
+    c: &Caller,
+    plan: Option<String>,
+    asks: &str,
+    again: &str,
+) -> Result<(), Error> {
+    use crate::matrix_gate::{ActionCtx, Gate};
+    let (who, base) = crate::outside::who_for(f, c).await?;
+    let ctx = if crate::matrix_gate::is_outside(&base) {
+        base
+    } else {
+        ActionCtx {
+            plan: plan.or(base.plan.clone()),
+            ..base
+        }
+    };
+    match f
+        .core
+        .matrix
+        .decide(
+            &f.settings,
+            &f.writer,
+            who,
+            norn::matrix::Action::TaskDone,
+            ctx,
+        )
+        .await
+    {
+        Gate::Allow => Ok(()),
+        Gate::Ask(card) => Err(refuse(format!("{asks} (card {card}); {again}"))),
+        Gate::Never(why) => Err(refuse(why)),
+    }
+}
+
+// ---- reports ----------------------------------------------------------------------------------------------------
+
+pub(crate) fn report_of(conn: &Tx, e: &Ent) -> Result<Report, CoordError> {
+    let task = dsts(conn, e.n, "report_of")?
+        .into_iter()
+        .find_map(|n| live(conn, n).ok().flatten())
+        .map(|t| t.id)
+        .or_else(|| str_of(e, "task"))
+        .unwrap_or_default();
+    let list = |k: &str| -> Vec<String> {
+        e.data
+            .get(k)
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let typed = |k: &str| e.data.get(k).cloned().unwrap_or(Value::Null);
+    Ok(Report {
+        id: e.id.clone(),
+        task,
+        session: str_of(e, "session"),
+        agent: str_of(e, "agent"),
+        at: e.data.get("at").and_then(Value::as_f64).unwrap_or(0.0),
+        tip: str_of(e, "tip").unwrap_or_default(),
+        commits: list("commits"),
+        checks: serde_json::from_value::<Vec<CheckRun>>(typed("checks")).unwrap_or_default(),
+        decisions: serde_json::from_value::<Vec<DecisionRef>>(typed("decisions"))
+            .unwrap_or_default(),
+        differences: str_of(e, "differences"),
+        interfaces: str_of(e, "interfaces"),
+        followups: list("followups"),
+        unrecorded: list("unrecorded"),
+    })
+}
+
+pub async fn reports_get(f: &Front, c: &Caller, p: ReportsParams) -> Result<Reports, Error> {
+    let scope = scope_of(f, c).await?;
+    reports_get_in(f, scope, p).await
+}
+
+/// `reports/get` for a caller whose reach is SCOPE: a report or task of another project is refused.
+pub(crate) async fn reports_get_in(
+    f: &Front,
+    scope: Scope,
+    p: ReportsParams,
+) -> Result<Reports, Error> {
+    f.writer
+        .db
+        .read(move |c| {
+            let ents = match (&p.task, &p.id) {
+                (Some(t), _) => {
+                    let t = entity::by_id(c, t.as_str())?
+                        .ok_or_else(|| CoordError::Refused(format!("no task {}", t.as_str())))?;
+                    scope.allows_ent(c, &t)?;
+                    reports_of(c, t.n)?
+                }
+                (_, Some(id)) => vec![
+                    entity::by_id(c, id.as_str())?
+                        .filter(|e| e.kind == "report" && e.retired_tx.is_none())
+                        .ok_or_else(|| CoordError::Refused(format!("no report {}", id.as_str())))?,
+                ],
+                _ => Vec::new(),
+            };
+            for e in &ents {
+                scope.allows_ent(c, e)?;
+            }
+            let reports = ents
+                .iter()
+                .map(|e| report_of(c, e))
+                .collect::<Result<_, _>>()?;
+            Ok(Reports { reports })
+        })
+        .await
+        .map_err(fail)
+}
+
+/// The task entity of a session's `task` and `job` (a `task:` id, `JOB#N`, or `N` with the job).
+fn task_entity(task: &str, job: Option<&str>) -> Option<String> {
+    if task.starts_with("task:") {
+        Some(task.to_owned())
+    } else if task.contains('#') {
+        Some(norn::write::tasks::entity_id(task))
+    } else {
+        Some(norn::write::tasks::entity_id(&format!("{}#{task}", job?)))
+    }
+}
+
+/// The last fenced `drgnx-report` block of TEXT as a report; `None` when there is no block.  A block that is not a
+/// valid report is an error (the schema is the tool's).
+pub fn fallback_block(text: &str) -> Option<Result<ReportSubmit, String>> {
+    let start = text.rfind("```drgnx-report")?;
+    let rest = &text[start + "```drgnx-report".len()..];
+    let body = rest.split("```").next().unwrap_or(rest);
+    Some(serde_json::from_str::<ReportSubmit>(body.trim()).map_err(|e| e.to_string()))
+}
+
+/// A session that has no drgnx tools ended its turn with a `drgnx-report` block in MESSAGE: validate it and submit it
+/// as that session's agent (the same filing as `report_submit`).  Nothing happens without a block, without a task, or
+/// when the task is already in review or done.  Answers the report's id.
+pub async fn submit_fallback(
+    writer: &Writer,
+    session: &str,
+    task: Option<&str>,
+    job: Option<&str>,
+    message: &str,
+) -> Option<Result<String, String>> {
+    let report = fallback_block(message)?;
+    let task = task_entity(task?, job)?;
+    let report = match report {
+        Ok(r) => r,
+        Err(e) => {
+            return Some(Err(format!(
+                "the drgnx-report block is not a valid report: {e}"
+            )));
+        }
+    };
+    let caller = crate::runner::service();
+    let sid = session.to_owned();
+    let out = writer
+        .write(&caller, "reports/fallback", move |tx| {
+            let status = entity::by_id(tx.sql(), &task)?.and_then(|e| e.status);
+            if matches!(status.as_deref(), Some("in-review" | "done")) {
+                return Ok(None);
+            }
+            norn::write::reports::file(tx, &task, &sid, Some(&sid), &report, now()).map(Some)
+        })
+        .await;
+    match out {
+        Ok(Some(filed)) => {
+            writer.signals.events_soon();
+            Some(Ok(filed.report))
+        }
+        Ok(None) => None,
+        Err(e) => Some(Err(e.to_string())),
+    }
+}
+
+/// A conclusion an agent without drgnx's tools put in a fenced `drgnx-conclusion` block: `{kind, text, sources}`.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+pub struct ConclusionBlock {
+    /// `finding` or `decision`.
+    pub kind: String,
+    pub text: String,
+    #[serde(default)]
+    pub sources: Vec<norn::write::work::Source>,
+}
+
+/// The last fenced `drgnx-conclusion` block of TEXT; `None` when there is none, or it is not a valid conclusion
+/// (unknown kind, no text, a bad or too long source list): a malformed block is ignored, never half-recorded.
+pub fn conclusion_block(text: &str) -> Option<ConclusionBlock> {
+    let start = text.rfind("```drgnx-conclusion")?;
+    let rest = &text[start + "```drgnx-conclusion".len()..];
+    let body = rest.split("```").next().unwrap_or(rest);
+    let block: ConclusionBlock = serde_json::from_str(body.trim()).ok()?;
+    let ok = matches!(block.kind.as_str(), "finding" | "decision")
+        && !block.text.trim().is_empty()
+        && norn::write::work::check_sources(&block.sources).is_ok();
+    ok.then_some(block)
+}
+
+/// A session without drgnx's tools ended its turn with a `drgnx-conclusion` block in MESSAGE: record it as that
+/// session's finding (a note about its task) or decision, labelled `from-text`.  Nothing happens without a valid block
+/// or a task.  Answers the new entity's id.
+pub async fn record_conclusion_fallback(
+    writer: &Writer,
+    session: &str,
+    task: Option<&str>,
+    job: Option<&str>,
+    message: &str,
+) -> Option<Result<String, String>> {
+    let block = conclusion_block(message)?;
+    let task = task_entity(task?, job)?;
+    let caller = crate::runner::service();
+    let sid = session.to_owned();
+    let out = writer
+        .write(&caller, "conclusions/fallback", move |tx| {
+            let Some(task_ent) = entity::by_id(tx.sql(), &task)? else {
+                return Ok(None);
+            };
+            let sources = (!block.sources.is_empty()).then(|| json!(block.sources));
+            if block.kind == "decision" {
+                let d = norn::write::decisions::Decide {
+                    kind: "build".into(),
+                    subject: runstav::text::one_line(&block.text, 80, false),
+                    task: Some(task.clone()),
+                    reason: Some(block.text.clone()),
+                    author: format!("agent:{sid}"),
+                    ..Default::default()
+                };
+                let norn::write::decisions::DecideResult::Ok { n, .. } =
+                    norn::write::decisions::decide(tx, d, now())?
+                else {
+                    return Ok(None);
+                };
+                let id = format!("decision:{n}");
+                if let Some(e) = entity::by_id(tx.sql(), &id)? {
+                    let patch = json!({"origin": "from-text", "session": sid, "sources": sources});
+                    entity::update(
+                        tx,
+                        e.n,
+                        None,
+                        Changes {
+                            data_patch: Some(patch),
+                            ..Changes::default()
+                        },
+                    )?;
+                }
+                return Ok(Some(id));
+            }
+            let id = norn::tracker::new_id(tx, "note", task_ent.project)?;
+            let mut data = json!({"kind": "finding", "origin": "from-text", "session": sid});
+            if let Some(s) = sources {
+                data["sources"] = s;
+            }
+            let note = entity::create(
+                tx,
+                EntityNew {
+                    id: id.clone(),
+                    kind: "note".into(),
+                    project: task_ent.project,
+                    title: Some(runstav::text::one_line(&block.text, 80, false)),
+                    status: None,
+                    body: Some(block.text.clone()),
+                    priority: None,
+                    assignee: None,
+                    data,
+                    origin: Origin::Recorded,
+                    source: None,
+                },
+            )?;
+            link::add(
+                tx,
+                note.n,
+                "about",
+                task_ent.n,
+                None,
+                Origin::Recorded,
+                None,
+            )?;
+            Ok(Some(id))
+        })
+        .await;
+    match out {
+        Ok(Some(id)) => {
+            writer.signals.events_soon();
+            Some(Ok(id))
+        }
+        Ok(None) => None,
+        Err(e) => Some(Err(e.to_string())),
+    }
+}
+
+// ---- commits and decisions --------------------------------------------------------------------------------------
+
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+    }
+}
+
+/// The commits of REPO's HEAD that BASE does not have, oldest first, merge commits left out (the hub's own are never
+/// linked), each with its subject.
+fn commits_since(repo: &Path, base: &str) -> Vec<(String, String)> {
+    let range = format!("{base}..HEAD");
+    git(
+        repo,
+        &[
+            "log",
+            "--reverse",
+            "--no-merges",
+            "--format=%H%x09%s",
+            &range,
+        ],
+    )
+    .map(|o| {
+        o.lines()
+            .filter_map(|l| {
+                let (sha, subject) = l.split_once('\t')?;
+                Some((sha.to_owned(), subject.to_owned()))
+            })
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Make each of COMMITS (sha, subject; oldest first) an entity and link it (`implements`) to every decision SESSION
+/// recorded that no commit implements yet; a commit already known is left as it is.  Decisions recorded before the
+/// session's next commit belong to that commit (the brief asks for one commit per decision); none: unlinked.
+pub fn link_commits_in(
+    tx: &mut WTx<'_>,
+    session: &str,
+    repo: &Path,
+    commits: &[(String, String)],
+) -> Result<Vec<String>, CoordError> {
+    let mut made = Vec::new();
+    for (sha, subject) in commits {
+        let id = format!("commit:{sha}");
+        if entity::by_id(tx.sql(), &id)?.is_some() {
+            continue;
+        }
+        let project = tx.meta().project;
+        let c = entity::create(
+            tx,
+            EntityNew {
+                id: id.clone(),
+                kind: "commit".into(),
+                project,
+                title: Some(subject.clone()),
+                status: None,
+                body: None,
+                priority: None,
+                assignee: None,
+                data: {
+                    let mut d =
+                        json!({"sha": sha, "repo": repo.to_string_lossy(), "session": session});
+                    // the run's store keeps the commit once the task's tree is removed
+                    if let Some(store) = store_beside(repo) {
+                        d["store"] = json!(store.to_string_lossy());
+                    }
+                    d
+                },
+                origin: Origin::Recorded,
+                source: None,
+            },
+        )?;
+        let open: Vec<i64> = {
+            let mut st = tx.sql().prepare(
+                "select n from entity where kind = 'decision' and retired_tx is null \
+                 and json_extract(data, '$.session') = ?1 \
+                 and n not in (select dst from link where kind = 'implements' and tx_to = ?2) order by n",
+            )?;
+            let rows = st.query_map((session, SENTINEL), |r| r.get(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        for d in open {
+            link::add(tx, c.n, "implements", d, None, Origin::Recorded, None)?;
+        }
+        made.push(id);
+    }
+    Ok(made)
+}
+
+/// The run store beside a task's tree (`<root>/<run>/<task>` has `<root>/<run>.git`), when there is one.
+fn store_beside(tree: &Path) -> Option<PathBuf> {
+    let run = tree.parent()?;
+    let name = run.file_name()?.to_string_lossy().into_owned();
+    Some(run.with_file_name(format!("{name}.git"))).filter(|s| s.is_dir())
+}
+
+/// The folder to read a commit's history in, from its entity's DATA: the run's trusted store when it has one, else
+/// the recorded repository while it is there and TOUCHED does not name it (plain git never runs where a sandboxed
+/// agent worked).
+pub(crate) fn store_in(data: &Value, touched: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
+    let dir = |key: &str| {
+        data.get(key)
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+    };
+    dir("store").or_else(|| dir("repo").filter(|r| !touched(r)))
+}
+
+/// [`store_in`] with the hub's touched-folder ledger.
+pub(crate) async fn store_of(f: &Front, data: &Value) -> Option<PathBuf> {
+    let repo = data
+        .get("repo")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)?;
+    let touched = f.core.runs.git().is_touched(&repo).await.unwrap_or(true);
+    store_in(data, &|_| touched)
+}
+
+/// The commit SESSION's earliest step with a recorded head saw: where its own commits start (a hint; git may not know
+/// it, and then nothing links).
+fn session_base(conn: &Tx, session: &str) -> Result<Option<String>, CoordError> {
+    match conn.query_row(
+        "select head from step where session = ?1 and head is not null order by seq limit 1",
+        [format!("session:{session}")],
+        |r| r.get(0),
+    ) {
+        Ok(h) => Ok(Some(h)),
+        Err(urdr::SqliteError::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// After a tool step of SESSION in CWD: link the commits gained since the job branch (a task's tree), or since the
+/// session's first recorded head (a session with no job task: a chat).  Best effort; git runs in a blocking task.
+/// PLAIN_GIT says plain git may run in CWD (no sandboxed agent worked there: [`crate::runner::RunGit::is_touched`]);
+/// where it may not, nothing is linked.
+pub async fn link_new_commits(
+    writer: &Writer,
+    session: &str,
+    task: Option<&str>,
+    cwd: &Path,
+    plain_git: bool,
+) {
+    if !plain_git {
+        return;
+    }
+    let job = task.and_then(|t| t.strip_prefix("task:").unwrap_or(t).split_once('#'));
+    let base = match job {
+        Some((job, _)) => format!("job/{job}"),
+        None => {
+            let sid = session.to_owned();
+            match writer.db.read(move |c| session_base(c, &sid)).await {
+                Ok(Some(b)) => b,
+                _ => return,
+            }
+        }
+    };
+    let dir = cwd.to_path_buf();
+    let commits = crate::clock::blocking(move || commits_since(&dir, &base))
+        .await
+        .unwrap_or_default();
+    if commits.is_empty() {
+        return;
+    }
+    let (sid, dir) = (session.to_owned(), cwd.to_path_buf());
+    let caller = crate::runner::service();
+    if let Err(e) = writer
+        .write(&caller, "commits/link", move |tx| {
+            link_commits_in(tx, &sid, &dir, &commits)
+        })
+        .await
+    {
+        tracing::warn!(session, "commits not linked: {e}");
+    }
+}
+
+/// One changed range of a commit: the path, and the old and new line ranges (first, last).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Range {
+    pub path: String,
+    pub old: (u64, u64),
+    pub new: (u64, u64),
+}
+
+fn span(start: u64, len: u64) -> (u64, u64) {
+    (start, start + len.max(1) - 1)
+}
+
+/// The ranges COMMIT changed (`git diff-tree -U0`, renames off).
+pub fn hunks_of(repo: &Path, commit: &str) -> Vec<Range> {
+    let Ok(out) = git(
+        repo,
+        &[
+            "diff-tree",
+            "--root",
+            "-p",
+            "-U0",
+            "--no-color",
+            "--no-renames",
+            "--no-commit-id",
+            "-r",
+            commit,
+        ],
+    ) else {
+        return Vec::new();
+    };
+    let (mut path, mut ranges) = (String::new(), Vec::new());
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix("+++ b/") {
+            path = p.to_owned();
+        } else if line.starts_with("--- /dev/null") || line.starts_with("--- a/") {
+            // the old side's name; the new side names the path
+        } else if let Some(h) = line.strip_prefix("@@ -") {
+            let mut it = h.split(' ');
+            let (Some(old), Some(new)) = (it.next(), it.next()) else {
+                continue;
+            };
+            let pair = |s: &str| -> Option<(u64, u64)> {
+                let s = s.trim_start_matches('+');
+                let (a, b) = s.split_once(',').unwrap_or((s, "1"));
+                Some((a.parse().ok()?, b.parse().ok()?))
+            };
+            if let (Some((os, ol)), Some((ns, nl))) = (pair(old), pair(new)) {
+                ranges.push(Range {
+                    path: path.clone(),
+                    old: span(os, ol),
+                    new: span(ns, nl),
+                });
+            }
+        }
+    }
+    ranges
+}
+
+fn overlap(a: (u64, u64), b: (u64, u64)) -> bool {
+    a.0 <= b.1 && b.0 <= a.1
+}
+
+/// The later changes that touched lines COMMITS changed: for each commit, every commit after it on HEAD whose old
+/// side overlaps the commit's new side, as the lines of the commit's change that were touched again.  Computed from
+/// git; line numbers are not followed through the commits between (an approximation, labelled `computed`).
+pub fn later_hunks(repo: &Path, commits: &[String]) -> Vec<Hunk> {
+    let mut out: Vec<Hunk> = Vec::new();
+    for c in commits {
+        let mine = hunks_of(repo, c);
+        if mine.is_empty() {
+            continue;
+        }
+        let range = format!("{c}..HEAD");
+        let Ok(later) = git(repo, &["rev-list", "--reverse", "--no-merges", &range]) else {
+            continue;
+        };
+        for l in later.lines().filter(|l| !commits.iter().any(|x| x == l)) {
+            for h in hunks_of(repo, l) {
+                for m in mine.iter().filter(|m| m.path == h.path) {
+                    if overlap(h.old, m.new) {
+                        let hunk = Hunk {
+                            commit: l.to_owned(),
+                            path: h.path.clone(),
+                            lines: (h.old.0.max(m.new.0), h.old.1.min(m.new.1)),
+                        };
+                        if !out.contains(&hunk) {
+                            out.push(hunk);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+pub async fn decision_effects(f: &Front, _: &Caller, p: EffectsParams) -> Result<Effects, Error> {
+    let raw = p.decision.as_str().to_owned();
+    let id = if raw.starts_with("decision:") {
+        raw
+    } else {
+        format!("decision:{}", raw.trim_start_matches('#'))
+    };
+    let key = id.clone();
+    let commits: Vec<(String, Value)> = f
+        .writer
+        .db
+        .read(move |c| {
+            let d = entity::by_id(c, &key)?
+                .filter(|e| e.kind == "decision" && e.retired_tx.is_none())
+                .ok_or_else(|| CoordError::Refused(format!("no decision {key}")))?;
+            let mut out = Vec::new();
+            for n in srcs(c, d.n, "implements")? {
+                if let Some(e) = live(c, n)?.filter(|e| e.kind == "commit") {
+                    out.push((
+                        str_of(&e, "sha")
+                            .unwrap_or_else(|| e.id.trim_start_matches("commit:").into()),
+                        e.data.clone(),
+                    ));
+                }
+            }
+            Ok(out)
+        })
+        .await
+        .map_err(fail)?;
+    let shas: Vec<String> = commits.iter().map(|(s, _)| s.clone()).collect();
+    let mut repo = None;
+    for (_, data) in &commits {
+        if let Some(r) = store_of(f, data).await {
+            repo = Some(r);
+            break;
+        }
+    }
+    let later_hunks = match repo {
+        Some(repo) => {
+            let shas = shas.clone();
+            crate::clock::blocking(move || later_hunks(&repo, &shas))
+                .await
+                .map_err(|e| internal(e.to_string()))?
+        }
+        None => Vec::new(),
+    };
+    Ok(Effects {
+        decision: id,
+        commits: shas,
+        later_hunks,
+        label: "computed".into(),
+    })
+}
+
+/// What depends on a decision, computed from git: the decisions (by number) and the later commits that touched lines
+/// its commits changed, again and again until nothing more does.  Labelled `computed`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dependents {
+    pub decisions: Vec<i64>,
+    pub commits: Vec<String>,
+    pub label: &'static str,
+}
+
+/// The fixed point behind [`dependents`], reading history in STORE.
+pub(crate) fn dependents_in(conn: &Tx, store: &Path, n: i64) -> Result<Dependents, CoordError> {
+    let mut seen: Vec<String> = Vec::new();
+    if let Some(d) = entity::by_id(conn, &format!("decision:{n}"))? {
+        for c in srcs(conn, d.n, "implements")? {
+            if let Some(e) = live(conn, c)?.filter(|e| e.kind == "commit") {
+                seen.push(
+                    str_of(&e, "sha").unwrap_or_else(|| e.id.trim_start_matches("commit:").into()),
+                );
+            }
+        }
+    }
+    let mut frontier = seen.clone();
+    let (mut decisions, mut commits) = (std::collections::BTreeSet::new(), Vec::new());
+    while !frontier.is_empty() {
+        let mut next = Vec::new();
+        for h in later_hunks(store, &frontier) {
+            if !seen.contains(&h.commit) {
+                seen.push(h.commit.clone());
+                commits.push(h.commit.clone());
+                next.push(h.commit);
+            }
+        }
+        for sha in &next {
+            let Some(c) = entity::by_id(conn, &format!("commit:{sha}"))? else {
+                continue;
+            };
+            for d in dsts(conn, c.n, "implements")? {
+                if let Some(e) = live(conn, d)?
+                    .filter(|e| e.kind == "decision" && e.status.as_deref() != Some("withdrawn"))
+                    && let Some(m) = e.id.strip_prefix("decision:").and_then(|m| m.parse().ok())
+                    && m != n
+                {
+                    decisions.insert(m);
+                }
+            }
+        }
+        frontier = next;
+    }
+    Ok(Dependents {
+        decisions: decisions.into_iter().collect(),
+        commits,
+        label: "computed",
+    })
+}
+
+/// Decision N's dependents (see [`Dependents`]), read in the run's trusted store, else the untouched repository.  No
+/// store to read: none.  Git runs inside the store reader's thread, never on the tick.
+pub async fn dependents(f: &Front, n: i64) -> Result<Dependents, Error> {
+    let key = format!("decision:{n}");
+    let datas: Vec<Value> = f
+        .writer
+        .db
+        .read(move |c| {
+            let mut out = Vec::new();
+            if let Some(d) = entity::by_id(c, &key)? {
+                for s in srcs(c, d.n, "implements")? {
+                    if let Some(e) = live(c, s)?.filter(|e| e.kind == "commit") {
+                        out.push(e.data.clone());
+                    }
+                }
+            }
+            Ok(out)
+        })
+        .await
+        .map_err(fail)?;
+    let mut store = None;
+    for data in &datas {
+        if let Some(s) = store_of(f, data).await {
+            store = Some(s);
+            break;
+        }
+    }
+    let Some(store) = store else {
+        return Ok(Dependents {
+            decisions: Vec::new(),
+            commits: Vec::new(),
+            label: "computed",
+        });
+    };
+    f.writer
+        .db
+        .read(move |c| dependents_in(c, &store, n))
+        .await
+        .map_err(fail)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use norn::store::CoordDb;
+    use norn::write::decisions::{Decide, decide};
+    use runstav::methods::plans::TaskWrite;
+    use runstav::types::Bounded;
+
+    fn sh(dir: &Path, args: &[&str]) {
+        let ok = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+
+    fn repo() -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        sh(d.path(), &["init", "-q", "-b", "main"]);
+        d
+    }
+
+    fn commit(dir: &Path, file: &str, text: &str, msg: &str) -> String {
+        std::fs::write(dir.join(file), text).unwrap();
+        sh(dir, &["add", "."]);
+        sh(dir, &["commit", "-q", "-m", msg]);
+        git(dir, &["rev-parse", "HEAD"]).unwrap().trim().to_owned()
+    }
+
+    fn lines(n: usize) -> String {
+        (1..=n).map(|i| format!("line {i}\n")).collect()
+    }
+
+    #[test]
+    fn effects_finds_overlapping_later_hunks() {
+        let d = repo();
+        let c1 = commit(d.path(), "a.txt", &lines(10), "base");
+        let c2 = commit(
+            d.path(),
+            "a.txt",
+            &lines(10).replace("line 3", "THREE"),
+            "decision",
+        );
+        let c3 = commit(
+            d.path(),
+            "a.txt",
+            &lines(10)
+                .replace("line 3", "THREE")
+                .replace("line 9", "NINE"),
+            "far away",
+        );
+        let c4 = commit(
+            d.path(),
+            "a.txt",
+            &lines(10)
+                .replace("line 3", "again")
+                .replace("line 9", "NINE"),
+            "same lines",
+        );
+        let found = later_hunks(d.path(), std::slice::from_ref(&c2));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].commit, c4);
+        assert_eq!(found[0].path, "a.txt");
+        assert_eq!(found[0].lines, (3, 3));
+        assert!(!found.iter().any(|h| h.commit == c3 || h.commit == c1));
+    }
+
+    fn meta() -> urdr::graph::TxMeta {
+        urdr::graph::TxMeta::new("t", urdr::graph::Class::System, "test")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn commit_links_to_the_turns_decision() {
+        let d = repo();
+        commit(d.path(), "a.txt", "x\n", "base");
+        sh(d.path(), &["branch", "job/j"]);
+        let first = commit(d.path(), "a.txt", "y\n", "first");
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        let commits = commits_since(d.path(), "job/j");
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].0, first);
+        let (repo_dir, c2) = (d.path().to_path_buf(), commits.clone());
+        let (made, again, linked) = db
+            .write(meta(), move |tx| {
+                // a decision this session recorded, one another session recorded
+                for (author, session) in [("a1", "s1"), ("a2", "s2")] {
+                    let r = decide(
+                        tx,
+                        Decide {
+                            kind: "build".into(),
+                            subject: format!("by {author}"),
+                            author: author.into(),
+                            ..Decide::default()
+                        },
+                        10.0,
+                    )?;
+                    let norn::write::decisions::DecideResult::Ok { n, .. } = r else {
+                        panic!("{r:?}")
+                    };
+                    let e = entity::by_id(tx.sql(), &format!("decision:{n}"))?.unwrap();
+                    entity::update(
+                        tx,
+                        e.n,
+                        None,
+                        Changes {
+                            data_patch: Some(json!({"session": session})),
+                            ..Changes::default()
+                        },
+                    )?;
+                }
+                let made = link_commits_in(tx, "s1", &repo_dir, &c2)?;
+                let again = link_commits_in(tx, "s1", &repo_dir, &c2)?;
+                let mut st = tx.sql().prepare(
+                    "select d.title from link l join entity d on d.n = l.dst join entity c on c.n = l.src \
+                     where l.kind = 'implements' and c.kind = 'commit' and l.tx_to = ?1",
+                )?;
+                let linked: Vec<String> = st
+                    .query_map([SENTINEL], |r| r.get(0))?
+                    .collect::<Result<_, _>>()?;
+                Ok((made, again, linked))
+            })
+            .await
+            .unwrap();
+        assert_eq!(made, vec![format!("commit:{first}")]);
+        assert!(again.is_empty());
+        assert_eq!(linked, vec!["by a1".to_owned()]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn new_commits_are_not_read_in_a_touched_tree() {
+        let d = repo();
+        commit(d.path(), "a.txt", "x\n", "base");
+        sh(d.path(), &["branch", "job/j"]);
+        commit(d.path(), "a.txt", "y\n", "first");
+        let dir = tempfile::tempdir().unwrap();
+        let w = Writer {
+            db: CoordDb::spawn(dir.path().join("work.db")),
+            signals: Default::default(),
+        };
+        let commits = || {
+            w.db.read(|c| {
+                Ok(c.query_row(
+                    "select count(*) from entity where kind = 'commit'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+        };
+        // a decision of the session, so a linked commit has something to implement
+        w.db.write(meta(), |tx| {
+            decide(
+                tx,
+                Decide {
+                    kind: "build".into(),
+                    subject: "s".into(),
+                    author: "a".into(),
+                    ..Decide::default()
+                },
+                1.0,
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        link_new_commits(&w, "s1", Some("task:j#1"), d.path(), false).await;
+        assert_eq!(
+            commits().await.unwrap(),
+            0,
+            "plain git ran in a touched tree"
+        );
+        link_new_commits(&w, "s1", Some("task:j#1"), d.path(), true).await;
+        assert_eq!(commits().await.unwrap(), 1);
+    }
+
+    fn write_task(number: &str, blocks: &[&str]) -> TaskWrite {
+        serde_json::from_value(json!({"number": number, "title": format!("task {number}"),
+            "blocks": blocks}))
+        .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_plan_round_trips_and_reports_feed_its_interfaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        let p = WriteParams {
+            plan: None,
+            project: None,
+            title: Some(serde_json::from_value(json!("P")).unwrap()),
+            tasks: Bounded(vec![write_task("1", &[]), write_task("2", &["1"])]),
+            base_version: None,
+            path: None,
+        };
+        let p2 = p.clone();
+        let (w, deps, ri, status, stale) = db
+            .write(meta(), move |tx| {
+                let w = write_plan(tx, &p2, &Scope::Anyone)?;
+                let deps = load(tx.sql(), &w.plan)?.view.tasks[1].deps.clone();
+                // task 1 reports its interfaces; plan_read shows them beside task 1
+                let r: ReportSubmit =
+                    serde_json::from_value(json!({"tip": "abc", "interfaces": "fn x()"})).unwrap();
+                norn::write::reports::file(tx, &w.tasks[0].id, "a1", Some("s1"), &r, 5.0)?;
+                let view = load(tx.sql(), &w.plan)?.view;
+                let stale = WriteParams {
+                    plan: Some(serde_json::from_value(json!(w.plan)).unwrap()),
+                    tasks: Bounded(vec![write_task("1", &[])]),
+                    base_version: Some(0),
+                    ..p2.clone()
+                };
+                let stale = write_plan(tx, &stale, &Scope::Anyone).is_err();
+                Ok((
+                    w.clone(),
+                    deps,
+                    view.tasks[0].report_interfaces.clone(),
+                    view.tasks[0].status.clone(),
+                    stale,
+                ))
+            })
+            .await
+            .unwrap();
+        assert_eq!(w.tasks.len(), 2);
+        assert_eq!(deps, vec!["1".to_owned()]);
+        assert_eq!(ri.as_deref(), Some("fn x()"));
+        assert_eq!(status, "in-review");
+        assert!(stale);
+    }
+
+    pub(crate) fn front_in(dir: &Path) -> Front {
+        Front::new(
+            runstav::proof::Cap::generate().unwrap(),
+            dir.join("hub-x.sock"),
+            crate::store::WorkDb::spawn(dir.join("work.db")).unwrap(),
+            CoordDb::spawn(dir.join("work.db")),
+        )
+    }
+
+    /// A plan of TASKS (`TaskWrite`s as JSON), written as the user; its id.
+    async fn written(f: &Front, tasks: Value) -> String {
+        let p: WriteParams = serde_json::from_value(json!({"title": "P", "tasks": tasks})).unwrap();
+        f.writer
+            .write(&crate::runner::user(), "plans/write", move |tx| {
+                write_plan(tx, &p, &Scope::Anyone)
+            })
+            .await
+            .unwrap()
+            .plan
+    }
+
+    /// Pure (D): a temp store.  A graph task's role, profile and body reach the job's plan.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_graph_task_keeps_its_role_profile_and_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front_in(dir.path());
+        let plan = written(
+            &f,
+            json!([{"number": "1", "title": "look", "role": "review", "profile": "opus",
+                    "model": "claude-opus-5-5", "body": "Read the settings code."}]),
+        )
+        .await;
+        let (_, read) = plan_for_job(&f, &plan).await.unwrap();
+        let t = &read.tasks[0];
+        assert_eq!(t.role, "review");
+        assert_eq!(t.profile.as_deref(), Some("opus"));
+        assert_eq!(t.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(t.body, "Read the settings code.");
+    }
+
+    /// Pure (D): a temp store.  With a body and steps, the body comes first.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_body_comes_first_then_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front_in(dir.path());
+        let plan = written(
+            &f,
+            json!([{"number": "1", "body": "Do it.", "steps": [{"done": false, "text": "write"}]}]),
+        )
+        .await;
+        let (_, read) = plan_for_job(&f, &plan).await.unwrap();
+        assert_eq!(read.tasks[0].body, "Do it.\n\n- [ ] write");
+    }
+
+    /// Pure (D): a temp store.  A task that names none of them reads as it always did.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_task_without_them_reads_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front_in(dir.path());
+        let plan = written(
+            &f,
+            json!([{"number": "1", "steps": [{"done": true, "text": "write"}], "interfaces": "fn a()"}]),
+        )
+        .await;
+        let (_, read) = plan_for_job(&f, &plan).await.unwrap();
+        let t = &read.tasks[0];
+        assert_eq!(t.role, "implement");
+        assert_eq!((t.profile.as_deref(), t.model.as_deref()), (None, None));
+        assert_eq!(t.body, "- [x] write\n\nInterfaces: fn a()");
+    }
+
+    fn project_entity(tx: &mut WTx<'_>, id: &str) -> Result<(), CoordError> {
+        entity::create(
+            tx,
+            EntityNew {
+                id: id.into(),
+                kind: "project".into(),
+                project: None,
+                title: Some(id.into()),
+                status: None,
+                body: None,
+                priority: None,
+                assignee: None,
+                data: json!({}),
+                origin: Origin::Recorded,
+                source: None,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// S4: an agent in project A neither reads, changes nor creates plans of project B.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_agent_reaches_its_own_projects_plans_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        db.write(meta(), move |tx| {
+            project_entity(tx, "project:a")?;
+            project_entity(tx, "project:b")?;
+            let plan_in = |project: &str| WriteParams {
+                plan: None,
+                project: Some(serde_json::from_value(json!(project)).unwrap()),
+                title: Some(serde_json::from_value(json!("P")).unwrap()),
+                tasks: Bounded(vec![write_task("1", &[])]),
+                base_version: None,
+                path: None,
+            };
+            let theirs = write_plan(tx, &plan_in("project:b"), &Scope::Anyone)?;
+            let mine = Scope::Project {
+                id: Some("project:a".into()),
+                root: None,
+                jobs: Vec::new(),
+                sessions: Vec::new(),
+            };
+            // reads
+            let view = load(tx.sql(), &theirs.plan)?.view;
+            assert!(mine.allows_project(view.project.as_deref()).is_err());
+            assert!(
+                Scope::Anyone
+                    .allows_project(view.project.as_deref())
+                    .is_ok()
+            );
+            // changes, `done` included
+            let change = WriteParams {
+                plan: Some(serde_json::from_value(json!(theirs.plan)).unwrap()),
+                project: None,
+                title: None,
+                tasks: Bounded(vec![
+                    serde_json::from_value(json!({"number": "1", "status": "done"})).unwrap(),
+                ]),
+                base_version: None,
+                path: None,
+            };
+            assert!(write_plan(tx, &change, &mine).is_err());
+            assert_eq!(
+                load(tx.sql(), &theirs.plan)?.view.tasks[0].status,
+                "open",
+                "the refused write changed nothing"
+            );
+            // creating one in B is refused; with no project it lands in A
+            assert!(write_plan(tx, &plan_in("project:b"), &mine).is_err());
+            let none = WriteParams {
+                project: None,
+                ..plan_in("project:a")
+            };
+            let own = write_plan(tx, &none, &mine)?;
+            assert_eq!(
+                load(tx.sql(), &own.plan)?.view.project.as_deref(),
+                Some("project:a")
+            );
+            // an agent in no project reaches no project's plan
+            let nowhere = Scope::Project {
+                id: None,
+                root: None,
+                jobs: Vec::new(),
+                sessions: Vec::new(),
+            };
+            assert!(write_plan(tx, &change, &nowhere).is_err());
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    /// A record of no project is its job's (or its writer's): another job's task is refused.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_agent_reaches_its_own_jobs_tasks_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        db.write(meta(), move |tx| {
+            let mut task = |id: &str, job: &str| {
+                entity::create(
+                    tx,
+                    EntityNew {
+                        id: id.into(),
+                        kind: "task".into(),
+                        project: None,
+                        title: Some(id.into()),
+                        status: Some("ready".into()),
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: json!({"job": job}),
+                        origin: Origin::Recorded,
+                        source: None,
+                    },
+                )
+            };
+            let (t1, t2) = (task("task:j1-1", "j1")?, task("task:j2-1", "j2")?);
+            let scope = |jobs: &[&str]| Scope::Project {
+                id: None,
+                root: None,
+                jobs: jobs.iter().map(|j| (*j).to_owned()).collect(),
+                sessions: Vec::new(),
+            };
+            assert!(scope(&["j1"]).allows_ent(tx.sql(), &t1).is_ok());
+            assert!(scope(&["j1"]).allows_ent(tx.sql(), &t2).is_err());
+            assert!(
+                scope(&["j1", "j2"]).allows_ent(tx.sql(), &t2).is_ok(),
+                "a manager reaches its workers' jobs"
+            );
+            assert!(scope(&[]).allows_ent(tx.sql(), &t1).is_err());
+            assert!(Scope::Anyone.allows_ent(tx.sql(), &t2).is_ok());
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    /// S4: a proposal is about a file; an agent reaches those under its own project's root.
+    #[test]
+    fn an_agent_reaches_proposals_about_its_own_projects_files_only() {
+        let mine = Scope::Project {
+            id: Some("project:a".into()),
+            root: Some("/work/a".into()),
+            jobs: Vec::new(),
+            sessions: Vec::new(),
+        };
+        assert!(mine.allows_path(Path::new("/work/a/docs/x.md")).is_ok());
+        assert!(mine.allows_path(Path::new("/work/b/docs/x.md")).is_err());
+        assert!(mine.allows_path(Path::new("/work/ab/x.md")).is_err());
+        let nowhere = Scope::Project {
+            id: None,
+            root: None,
+            jobs: Vec::new(),
+            sessions: Vec::new(),
+        };
+        assert!(nowhere.allows_path(Path::new("/work/a/x.md")).is_err());
+        assert!(Scope::Anyone.allows_path(Path::new("/work/b/x.md")).is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_fallback_report_block_is_submitted() {
+        let msg = "done.\n```drgnx-report\n{\"tip\": \"abc\", \"interfaces\": \"fn y()\"}\n```\n";
+        let r = fallback_block(msg).unwrap().unwrap();
+        assert_eq!(r.tip.as_str(), "abc");
+        assert!(fallback_block("no block").is_none());
+        assert!(
+            fallback_block("```drgnx-report\n{\"tip\": 1}\n```")
+                .unwrap()
+                .is_err()
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        let job = norn::write::jobs::NewJob {
+            id: "J".into(),
+            title: "j".into(),
+            plan: None,
+            repo: None,
+            tasks: vec![norn::write::jobs::NewTask {
+                n: 1,
+                title: "t".into(),
+                role: None,
+                deps: vec![],
+            }],
+            data: None,
+        };
+        db.write(meta(), move |tx| {
+            norn::write::jobs::job_create(tx, job, 1.0)
+        })
+        .await
+        .unwrap();
+        let w = Writer {
+            db: db.clone(),
+            signals: Default::default(),
+        };
+        let id = submit_fallback(&w, "s1", Some("1"), Some("J"), msg)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(id.starts_with("report:"));
+        let (iface, status) = db
+            .read(move |c| {
+                let e = entity::by_id(c, &id)?.unwrap();
+                let t = entity::by_id(c, "task:J#1")?.unwrap();
+                Ok((str_of(&e, "interfaces"), t.status))
+            })
+            .await
+            .unwrap();
+        assert_eq!(iface.as_deref(), Some("fn y()"));
+        assert_eq!(status.as_deref(), Some("in-review"));
+        // a second block for a task in review is ignored
+        assert!(
+            submit_fallback(&w, "s1", Some("1"), Some("J"), msg)
+                .await
+                .is_none()
+        );
+    }
+
+    /// Pattern D (the parse) and B (the write is the gate): a finding from text is a note about the task, labelled.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn conclusion_block_parses_and_labels_from_text() {
+        let msg = "ok\n```drgnx-conclusion\n{\"kind\": \"finding\", \"text\": \"x is y\", \"sources\": [{\"path\": \"a.rs\", \"lines\": [1, 4]}, {\"url\": \"https://example.test\"}]}\n```\n";
+        let b = conclusion_block(msg).unwrap();
+        assert_eq!((b.kind.as_str(), b.sources.len()), ("finding", 2));
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        let job = norn::write::jobs::NewJob {
+            id: "J".into(),
+            title: "j".into(),
+            plan: None,
+            repo: None,
+            tasks: vec![norn::write::jobs::NewTask {
+                n: 1,
+                title: "t".into(),
+                role: None,
+                deps: vec![],
+            }],
+            data: None,
+        };
+        db.write(meta(), move |tx| {
+            norn::write::jobs::job_create(tx, job, 1.0)
+        })
+        .await
+        .unwrap();
+        let w = Writer {
+            db: db.clone(),
+            signals: Default::default(),
+        };
+        let id = record_conclusion_fallback(&w, "s1", Some("1"), Some("J"), msg)
+            .await
+            .unwrap()
+            .unwrap();
+        let (origin, path, about) = db
+            .read(move |c| {
+                let e = entity::by_id(c, &id)?.unwrap();
+                let about: i64 = c.query_row(
+                    "select count(*) from link l join entity t on t.n = l.dst where l.src = ?1 and l.kind = 'about' and t.id = 'task:J#1'",
+                    [e.n],
+                    |r| r.get(0),
+                )?;
+                Ok((
+                    str_of(&e, "origin"),
+                    e.data.pointer("/sources/0/path").and_then(Value::as_str).map(str::to_owned),
+                    about,
+                ))
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            (origin.as_deref(), path.as_deref(), about),
+            (Some("from-text"), Some("a.rs"), 1)
+        );
+    }
+
+    #[test]
+    fn a_malformed_block_is_ignored() {
+        for bad in [
+            "```drgnx-conclusion\nnot json\n```",
+            "```drgnx-conclusion\n{\"kind\": \"opinion\", \"text\": \"t\"}\n```",
+            "```drgnx-conclusion\n{\"kind\": \"finding\", \"text\": \"  \"}\n```",
+            "```drgnx-conclusion\n{\"kind\": \"finding\", \"text\": \"t\", \"sources\": [{\"nope\": 1}]}\n```",
+            "no block at all",
+        ] {
+            assert!(conclusion_block(bad).is_none(), "{bad}");
+        }
+        let many: Vec<_> = (0..13).map(|i| json!({"path": format!("f{i}")})).collect();
+        let over = format!(
+            "```drgnx-conclusion\n{}\n```",
+            json!({"kind": "finding", "text": "t", "sources": many})
+        );
+        assert!(conclusion_block(&over).is_none());
+    }
+
+    // ---- dependents and the store (pattern D: a temp git repo and an in-memory store, no hub) ----
+
+    /// A repo with a decision (d1..d4 as `decision:N`) implemented by each commit, in order: c1 changes line 3, c2
+    /// lines 3 and 4, c3 line 4, c4 line 9.
+    async fn chain() -> (tempfile::TempDir, tempfile::TempDir, CoordDb, Vec<String>) {
+        let d = repo();
+        commit(d.path(), "a.txt", &lines(10), "base");
+        let text = |edits: &[(&str, &str)]| {
+            edits
+                .iter()
+                .fold(lines(10), |t, (from, to)| t.replace(from, to))
+        };
+        let c1 = commit(d.path(), "a.txt", &text(&[("line 3", "A3")]), "c1");
+        let c2 = commit(
+            d.path(),
+            "a.txt",
+            &text(&[("line 3", "B3"), ("line 4", "B4")]),
+            "c2",
+        );
+        let c3 = commit(
+            d.path(),
+            "a.txt",
+            &text(&[("line 3", "B3"), ("line 4", "C4")]),
+            "c3",
+        );
+        let c4 = commit(
+            d.path(),
+            "a.txt",
+            &text(&[("line 3", "B3"), ("line 4", "C4"), ("line 9", "N9")]),
+            "c4",
+        );
+        let shas = vec![c1, c2, c3, c4];
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        let (repo_dir, s2) = (d.path().to_path_buf(), shas.clone());
+        db.write(meta(), move |tx| {
+            for (i, sha) in s2.iter().enumerate() {
+                let r = decide(
+                    tx,
+                    Decide {
+                        kind: "build".into(),
+                        subject: format!("d{}", i + 1),
+                        author: "user".into(),
+                        ..Decide::default()
+                    },
+                    1.0,
+                )?;
+                let norn::write::decisions::DecideResult::Ok { n, .. } = r else {
+                    panic!("{r:?}")
+                };
+                let dec = entity::by_id(tx.sql(), &format!("decision:{n}"))?.unwrap();
+                let project = tx.meta().project;
+                let c = entity::create(
+                    tx,
+                    EntityNew {
+                        id: format!("commit:{sha}"),
+                        kind: "commit".into(),
+                        project,
+                        title: Some(format!("c{}", i + 1)),
+                        status: None,
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: json!({"sha": sha, "repo": repo_dir.to_string_lossy()}),
+                        origin: Origin::Recorded,
+                        source: None,
+                    },
+                )?;
+                link::add(tx, c.n, "implements", dec.n, None, Origin::Recorded, None)?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+        (d, dir, db, shas)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dependents_follows_a_chain_of_three() {
+        let (d, _dir, db, shas) = chain().await;
+        let repo_dir = d.path().to_path_buf();
+        let got = db
+            .read(move |c| dependents_in(c, &repo_dir, 1))
+            .await
+            .unwrap();
+        // d1's c1 was touched again by c2 (d2), and c2's lines by c3 (d3): a chain, not one step
+        assert_eq!(got.decisions, [2, 3]);
+        assert_eq!(got.commits, [shas[1].clone(), shas[2].clone()]);
+        assert_eq!(got.label, "computed");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dependents_ignores_a_commit_on_other_lines() {
+        let (d, _dir, db, _shas) = chain().await;
+        let repo_dir = d.path().to_path_buf();
+        let got = db
+            .read(move |c| dependents_in(c, &repo_dir, 1))
+            .await
+            .unwrap();
+        // d4's commit changed line 9 only
+        assert!(!got.decisions.contains(&4), "{got:?}");
+        let none = db
+            .read({
+                let repo_dir = d.path().to_path_buf();
+                move |c| dependents_in(c, &repo_dir, 4)
+            })
+            .await
+            .unwrap();
+        assert!(
+            none.decisions.is_empty() && none.commits.is_empty(),
+            "{none:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plain_session_commits_are_linked() {
+        let d = repo();
+        let base = commit(d.path(), "a.txt", "x\n", "base");
+        let first = commit(d.path(), "a.txt", "y\n", "first");
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        let repo_dir = d.path().to_path_buf();
+        let b2 = base.clone();
+        let (found_base, linked) = db
+            .write(meta(), move |tx| {
+                // two steps of a chat session (no job task): the earlier one saw the tree at BASE
+                for head in [Some(b2.as_str()), Some("not-a-commit"), None] {
+                    let id = norn::write::steps::open(
+                        tx,
+                        norn::write::steps::StepNew {
+                            session: "session:s1".into(),
+                            task: None,
+                            plan: None,
+                            project: None,
+                            agent: None,
+                            provider: None,
+                            class: norn::write::steps::StepClass::Tool,
+                            start: 1.0,
+                            tool: None,
+                            tool_kind: None,
+                            message_id: None,
+                            turn_id: None,
+                            snapshot: None,
+                            log_version: None,
+                            acp: None,
+                            machine: None,
+                            slots: None,
+                        },
+                    )?;
+                    if let Some(h) = head {
+                        norn::write::steps::set_head(tx, id, h)?;
+                    }
+                }
+                let r = decide(
+                    tx,
+                    Decide {
+                        kind: "build".into(),
+                        subject: "chat decision".into(),
+                        author: "user".into(),
+                        ..Decide::default()
+                    },
+                    1.0,
+                )?;
+                let norn::write::decisions::DecideResult::Ok { n, .. } = r else {
+                    panic!("{r:?}")
+                };
+                let e = entity::by_id(tx.sql(), &format!("decision:{n}"))?.unwrap();
+                entity::update(
+                    tx,
+                    e.n,
+                    None,
+                    Changes {
+                        data_patch: Some(json!({"session": "s1"})),
+                        ..Changes::default()
+                    },
+                )?;
+                let base = session_base(tx.sql(), "s1")?;
+                let commits = commits_since(&repo_dir, base.as_deref().unwrap_or("HEAD"));
+                link_commits_in(tx, "s1", &repo_dir, &commits)?;
+                let mut st = tx.sql().prepare(
+                    "select d.title from link l join entity d on d.n = l.dst join entity c on c.n = l.src \
+                     where l.kind = 'implements' and c.kind = 'commit' and l.tx_to = ?1",
+                )?;
+                let linked: Vec<String> = st
+                    .query_map([SENTINEL], |r| r.get(0))?
+                    .collect::<Result<_, _>>()?;
+                Ok((base, linked))
+            })
+            .await
+            .unwrap();
+        assert_eq!(found_base.as_deref(), Some(base.as_str()));
+        assert_eq!(linked, vec!["chat decision".to_owned()]);
+        let _ = first;
+    }
+
+    #[test]
+    fn effects_survive_a_removed_tree() {
+        let store = repo();
+        commit(store.path(), "a.txt", &lines(10), "base");
+        let c1 = commit(
+            store.path(),
+            "a.txt",
+            &lines(10).replace("line 3", "x"),
+            "d",
+        );
+        let c2 = commit(
+            store.path(),
+            "a.txt",
+            &lines(10).replace("line 3", "y"),
+            "later",
+        );
+        // the task's tree is gone; the run's store has the commits
+        let gone = store.path().join("no-such-tree");
+        let data = json!({"sha": c1, "repo": gone.to_string_lossy(), "store": store.path().to_string_lossy()});
+        let found = store_in(&data, &|_| false).expect("the store is used");
+        assert_eq!(found, store.path());
+        let hunks = later_hunks(&found, std::slice::from_ref(&c1));
+        assert_eq!(hunks.len(), 1, "{hunks:?}");
+        assert_eq!(hunks[0].commit, c2);
+        // the tree itself is used only while it is there and untouched
+        let live = json!({"repo": store.path().to_string_lossy()});
+        assert_eq!(store_in(&live, &|_| false).as_deref(), Some(store.path()));
+        assert_eq!(store_in(&live, &|_| true), None);
+        assert_eq!(
+            store_in(&json!({"repo": gone.to_string_lossy()}), &|_| false),
+            None
+        );
+    }
+}
