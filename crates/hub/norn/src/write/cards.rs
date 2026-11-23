@@ -315,9 +315,14 @@ pub fn matrix_card(tx: &mut WTx<'_>, ask: MatrixAsk, now: f64) -> Result<i64, Co
     )
 }
 
-/// The newest settled `matrix` card asking exactly ASK's question that the user did not allow: its id.  The question
-/// is the card's data less `once_window` (how long a yes would have lasted is the setting's, not the question's).
-pub fn matrix_card_declined(tx: &mut WTx<'_>, ask: &MatrixAsk) -> Result<Option<i64>, CoordError> {
+/// The newest settled `matrix` card asking exactly ASK's question that the user did not allow within its window, at
+/// NOW: its id.  The question is the card's data less `once_window`; a no lasts that card's `once_window` seconds
+/// (default [`DEFAULT_DECLINE_WINDOW`]) from its settle, as a yes does, and the same call then asks again.
+pub fn matrix_card_declined(
+    tx: &mut WTx<'_>,
+    ask: &MatrixAsk,
+    now: f64,
+) -> Result<Option<i64>, CoordError> {
     let question = |d: &Value| {
         let mut d = d.clone();
         if let Some(o) = d.as_object_mut() {
@@ -327,23 +332,32 @@ pub fn matrix_card_declined(tx: &mut WTx<'_>, ask: &MatrixAsk) -> Result<Option<
     };
     let want = question(&ask.data);
     let mut st = tx.sql().prepare(
-        "select id, data from card where kind = 'matrix' and state = 'settled' \
+        "select id, data, settled_at from card where kind = 'matrix' and state = 'settled' \
          and coalesce(choice, '') <> 'allow' and data like '%\"change\"%' order by id desc",
     )?;
     let rows = st.query_map([], |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<f64>>(2)?,
+        ))
     })?;
     for row in rows {
-        let (id, data) = row?;
+        let (id, data, at) = row?;
         let d: Value = data
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or(Value::Null);
-        if question(&d) == want {
+        let window = d["once_window"].as_f64().unwrap_or(DEFAULT_DECLINE_WINDOW);
+        let live = at.is_some_and(|at| at + window > now);
+        if live && question(&d) == want {
             return Ok(Some(id));
         }
     }
     Ok(None)
 }
+
+/// How long a no lasts when its card names no window (the once window's default, seconds).
+pub const DEFAULT_DECLINE_WINDOW: f64 = 600.0;
 
 /// Whether matrix card ID, settled `allow`, has already let its change through (`data.spent`).
 pub fn matrix_card_spent(conn: &urdr::Connection, id: i64) -> Result<bool, CoordError> {
@@ -491,11 +505,22 @@ mod tests {
         let yes = matrix_card(&mut tx, ask("b", 600), 3.0).unwrap();
         assert!(card_settle(&mut tx, yes, "allow", 4.0).unwrap());
         assert_eq!(
-            matrix_card_declined(&mut tx, &ask("a", 900)).unwrap(),
+            matrix_card_declined(&mut tx, &ask("a", 900), 10.0).unwrap(),
             Some(no)
         );
-        assert_eq!(matrix_card_declined(&mut tx, &ask("b", 600)).unwrap(), None);
-        assert_eq!(matrix_card_declined(&mut tx, &ask("c", 600)).unwrap(), None);
+        assert_eq!(
+            matrix_card_declined(&mut tx, &ask("b", 600), 10.0).unwrap(),
+            None
+        );
+        assert_eq!(
+            matrix_card_declined(&mut tx, &ask("c", 600), 10.0).unwrap(),
+            None
+        );
+        // a no lasts its card's window (600 s from its settle at 2.0)
+        assert_eq!(
+            matrix_card_declined(&mut tx, &ask("a", 600), 603.0).unwrap(),
+            None
+        );
     }
 
     /// Pure (D): withdrawing takes an open card out of the open ones once, with its event; a settled card stays.

@@ -612,12 +612,13 @@ impl MatrixGate {
                     data,
                     job: None,
                 };
-                // an outside agent's change the user said no to stays refused (a different change asks again)
+                // an outside agent's change the user said no to stays refused for the card's once window (a
+                // different change asks again; after the window the same one does)
                 if ask.data.get("change").is_some()
-                    && let Some(card) = norn::write::cards::matrix_card_declined(tx, &ask)?
+                    && let Some(card) = norn::write::cards::matrix_card_declined(tx, &ask, now)?
                 {
                     return Ok(Gate::Never(format!(
-                        "the user refused this change (card {card}); do not retry it"
+                        "the user refused this change (card {card}); do not retry it now"
                     )));
                 }
                 Gate::Ask(matrix_card(tx, ask, now)?)
