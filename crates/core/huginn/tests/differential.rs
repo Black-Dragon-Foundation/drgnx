@@ -34,7 +34,7 @@ fn committed_corpus_matches() {
     for file in &accept {
         let name = file.file_name().unwrap().to_string_lossy().into_owned();
         let bytes = fs::read(file).unwrap();
-        let Ok(json) = fs::read_to_string(file.with_extension("json")) else {
+        let Ok(json) = eitri::read_string(&file.with_extension("json"), 1 << 24) else {
             failures.push(format!("{name}: no .json dump beside it"));
             continue;
         };
@@ -89,8 +89,8 @@ fn committed_corpus_matches() {
 #[test]
 fn random_seeded_matches() {
     let eld = fs::read(fixtures().join("random-seeded.eld")).expect("random-seeded.eld");
-    let dumps =
-        fs::read_to_string(fixtures().join("random-seeded.dump")).expect("random-seeded.dump");
+    let dumps = eitri::read_string(&fixtures().join("random-seeded.dump"), 1 << 24)
+        .expect("random-seeded.dump");
     let expected: Vec<Value> = dumps
         .lines()
         .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{l}: {e}")))

@@ -142,6 +142,13 @@ pub struct Model {
     generation: u64,
 }
 
+fn compile(re: &str) -> villa::Result<Regex> {
+    Regex::new(re).map_err(|e| {
+        villa::Error::invalid(format!("The pattern `{re}` is not a valid expression."))
+            .with_detail(e.to_string())
+    })
+}
+
 impl Model {
     /// A model of the text in PARTS; built on a thread of its own when BACKGROUND.
     pub fn build(parts: &[&[u8]], multibyte: bool, tab_width: u16, background: bool) -> Model {
@@ -191,33 +198,36 @@ impl Model {
             let text: Vec<u8> = parts.concat();
             let (mb, tw, ws) = (self.multibyte, self.tab_width, self.widths.clone());
             let (re, hre) = (self.section_re.clone(), self.heading_re.clone());
-            let h = std::thread::spawn(move || {
+            let h = saman::spawn_thread("hlidskjalf-build", move || {
                 let idx = LineIndex::new(index::parse_with(&[&text], mb, tw, true, &ws));
                 let found = re.map_or_else(Vec::new, |re| sections::scan(&re, &text, 1, mb));
                 let heads = hre.map_or_else(Vec::new, |re| sections::scan(&re, &text, 1, mb));
                 (idx, found, heads)
             });
-            self.idx = None;
-            self.sections.clear();
-            self.headings.clear();
-            self.building = Some((h, Vec::new()));
-        } else {
-            self.building = None;
-            self.idx = Some(LineIndex::new(index::parse_with(
-                parts,
-                self.multibyte,
-                self.tab_width,
-                true,
-                &self.widths,
-            )));
-            let text = parts.concat();
-            let scan = |re: &Option<Regex>| match re {
-                Some(re) => sections::scan(re, &text, 1, self.multibyte),
-                None => Vec::new(),
-            };
-            self.sections = scan(&self.section_re);
-            self.headings = scan(&self.heading_re);
+            // no thread to be had: the lines are built here, as when no background build was asked for
+            if let Ok(h) = h {
+                self.idx = None;
+                self.sections.clear();
+                self.headings.clear();
+                self.building = Some((h, Vec::new()));
+                return;
+            }
         }
+        self.building = None;
+        self.idx = Some(LineIndex::new(index::parse_with(
+            parts,
+            self.multibyte,
+            self.tab_width,
+            true,
+            &self.widths,
+        )));
+        let text = parts.concat();
+        let scan = |re: &Option<Regex>| match re {
+            Some(re) => sections::scan(re, &text, 1, self.multibyte),
+            None => Vec::new(),
+        };
+        self.sections = scan(&self.section_re);
+        self.headings = scan(&self.heading_re);
     }
 
     pub fn set_text_kind(&mut self, multibyte: bool, tab_width: u16) {
@@ -387,9 +397,9 @@ impl Model {
     /// The MARK sections' expression (Rust regex syntax; `None`: none are looked for).  The sections are found again
     /// when the lines are next built, which the caller asks for (the text is the host's).  An expression that does not
     /// compile changes nothing.
-    pub fn set_section_regex(&mut self, re: Option<&str>) -> Result<(), String> {
+    pub fn set_section_regex(&mut self, re: Option<&str>) -> villa::Result<()> {
         self.section_re = match re {
-            Some(r) => Some(Regex::new(r).map_err(|e| e.to_string())?),
+            Some(r) => Some(compile(r)?),
             None => None,
         };
         self.sections.clear();
@@ -405,9 +415,9 @@ impl Model {
         &mut self,
         indent: bool,
         heading_re: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> villa::Result<()> {
         let re = match heading_re {
-            Some(r) => Some(Regex::new(r).map_err(|e| e.to_string())?),
+            Some(r) => Some(compile(r)?),
             None => None,
         };
         self.indent_folds = indent;

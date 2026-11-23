@@ -32,6 +32,8 @@ mal-gen = { clean = true }
 sattr = { clean = true }
 kvardi = { clean = true }
 mot = { clean = true }
+huginn = { clean = true }
+hlidskjalf = { clean = true }
 
 [[standard]]
 id = "errors"

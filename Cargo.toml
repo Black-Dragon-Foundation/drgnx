@@ -142,6 +142,8 @@ raun = { path = "crates/std/raun", version = "0.1.0" }
 saman = { path = "crates/std/saman", version = "0.1.0" }
 hulda = { path = "crates/std/hulda", version = "0.1.0" }
 stund = { path = "crates/hub/stund", version = "0.1.0" }
+eitri = { path = "crates/hub/eitri", version = "0.1.0" }
+draugr = { path = "crates/hub/draugr", version = "0.1.0" }
 bod = { path = "crates/std/bod", version = "0.1.0" }
 kvardi = { path = "crates/std/kvardi", version = "0.1.0" }
 mal = { path = "crates/ext/mal", version = "0.1.0" }

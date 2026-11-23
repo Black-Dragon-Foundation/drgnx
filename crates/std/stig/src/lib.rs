@@ -124,6 +124,17 @@ pub fn reset_for_test() {
     *FOR_TEST.write().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
+/// The name of the variable that holds the system's runtime directory (`XDG_RUNTIME_DIR`): where a Wayland compositor
+/// puts its socket, for a child process to be pointed at another one. Not drgnx's own [`runtime`] folder.
+pub const SYSTEM_RUNTIME_VAR: &str = "XDG_RUNTIME_DIR";
+
+/// The system's runtime directory (see [`SYSTEM_RUNTIME_VAR`]), when the environment gives an absolute one.
+pub fn system_runtime_dir() -> Option<PathBuf> {
+    std::env::var_os(SYSTEM_RUNTIME_VAR)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+}
+
 pub fn profile() -> Profile {
     current().profile
 }
