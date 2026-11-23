@@ -62,6 +62,14 @@ privacy deny-list refuses it: a file under `~/org` is read only when the user op
   TOML fails the import before anything is written, with an error naming the file. A file already adopted that the
   list now ignores is forgotten at the next full import, like a deleted one (its pieces are retired).
 
+- **Forgetting moved files.** `ratatoskr graph forget --root DIR [--missing] [--path FILE]... [--dry-run] [--yes]` retires
+  what the scan-era (parsed) sources under DIR still hold when their files are gone: `--missing` takes every source whose
+  file no longer exists, `--path` names one (even a present one; a path the store holds nothing of is reported). It lists
+  the sources (a dry run stops there), asks unless `--yes` (without a terminal it needs `--yes`), then calls
+  `graph/put-parsed {gone}`, 1000 sources a call: the plan, its tasks and steps are retired with their history, a file
+  that is still there is untouched, and a file that comes back is read again by the scan. The listing is the files the
+  store recorded and the sources of live entities under DIR (`graph/sql`).
+
 - **Backup first.** Before anything is imported, every file is copied to `<state>/hub/records-backup/<date>/` (a
   second import on the same day gets `<date>-2`, never overwriting); a file outside DIR (a spec a plan names elsewhere)
   goes under `outside/<its absolute path>`. Every target is checked before the first copy: one outside the backup

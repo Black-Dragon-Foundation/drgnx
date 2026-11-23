@@ -43,6 +43,7 @@ pub const USAGE: &str = "usage: ratatoskr graph export [--project P --out DIR] [
     \x20      ratatoskr graph sql 'SELECT …' [--json]\n\
     \x20      ratatoskr graph compact [--dry-run] [--json]\n\
     \x20      ratatoskr graph proposed accept|reject TX... [--json]\n\
+    \x20      ratatoskr graph forget --root DIR [--missing] [--path FILE]... [--dry-run] [--yes] [--json]\n\
     \x20      ratatoskr graph import-records --root DIR [--only specs|plans|ledgers|decisions|deferred|build-board|board] [--path FILE] [--dry-run] [--json]";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -93,6 +94,14 @@ pub enum Sub {
         only: Option<String>,
         path: Option<PathBuf>,
         dry_run: bool,
+    },
+    /// Retires what files the scan once read held, when the files are gone (moved or deleted) or named.
+    Forget {
+        root: PathBuf,
+        missing: bool,
+        paths: Vec<PathBuf>,
+        dry_run: bool,
+        yes: bool,
     },
 }
 
@@ -311,6 +320,28 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
             };
             Sub::Grants(g)
         }
+        "forget" => {
+            known(&["root", "missing", "path", "dry-run", "yes"])?;
+            no_words(0)?;
+            let paths: Vec<PathBuf> = opts
+                .iter()
+                .filter(|(k, _)| k == "path")
+                .filter_map(|(_, v)| v.clone())
+                .map(PathBuf::from)
+                .collect();
+            if !flag("missing") && paths.is_empty() {
+                return Err(
+                    "graph forget needs --missing, or --path FILE for each source to forget".into(),
+                );
+            }
+            Sub::Forget {
+                root: PathBuf::from(get("root").ok_or("graph forget needs --root DIR")?),
+                missing: flag("missing"),
+                paths,
+                dry_run: flag("dry-run"),
+                yes: flag("yes"),
+            }
+        }
         "sql" => {
             known(&[])?;
             no_words(1)?;
@@ -422,6 +453,8 @@ impl GraphCommand {
                 }
                 ("records/import", p)
             }
+            // the first of its calls: the sources the store holds under ROOT (the second is [`forget_call`])
+            Sub::Forget { root, .. } => ("graph/sql", forget_listing(&absolute(root, cwd))),
             Sub::Backup => ("graph/backup", json!({})),
             Sub::Revert {
                 tx,
@@ -501,6 +534,155 @@ impl GraphCommand {
             }
         })
     }
+}
+
+/// `graph/put-parsed {gone}` takes at most this many sources a call.
+const FORGET_BATCH: usize = 1000;
+
+/// The `graph/sql` call listing the source files the store holds under ROOT: the files the scan recorded, and the
+/// sources of live entities (a path under ROOT, `/` ended, so `/a/b` never takes `/a/bc`).
+pub fn forget_listing(root: &str) -> Value {
+    let prefix = format!("{}/", root.trim_end_matches('/'));
+    json!({
+        "sql": "select path from parsed_file where substr(path, 1, length(?1)) = ?1 \
+                union select source from entity where retired_tx is null and substr(source, 1, length(?1)) = ?1 \
+                order by 1",
+        "params": [prefix],
+        "rows": 10000,
+    })
+}
+
+/// Which of KNOWN (the listing's paths) to forget: the ones EXISTS says are gone when MISSING, and the ones named in
+/// PATHS.  Also the PATHS the store holds nothing of.
+pub fn forget_pick(
+    known: &[String],
+    paths: &[String],
+    missing: bool,
+    exists: &dyn Fn(&str) -> bool,
+) -> (Vec<String>, Vec<String>) {
+    let picked = known
+        .iter()
+        .filter(|k| (missing && !exists(k)) || paths.contains(k))
+        .cloned()
+        .collect();
+    let unknown = paths
+        .iter()
+        .filter(|p| !known.contains(p))
+        .cloned()
+        .collect();
+    (picked, unknown)
+}
+
+/// The `graph/put-parsed` calls retiring PICKED, a batch each.
+pub fn forget_call(picked: &[String]) -> Vec<Value> {
+    picked
+        .chunks(FORGET_BATCH)
+        .map(|c| json!({"gone": c.iter().map(|p| json!({"kind": "file", "path": p})).collect::<Vec<_>>()}))
+        .collect()
+}
+
+/// `graph forget`: list, pick, say what it will do, ask, then retire.  The exit code.
+fn forget_run(env: &Env, cmd: &GraphCommand) -> i32 {
+    let Sub::Forget {
+        missing,
+        paths,
+        dry_run,
+        yes,
+        ..
+    } = &cmd.sub
+    else {
+        return 2;
+    };
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let (_, listing) = match cmd.request(&cwd, 0.0) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("ratatoskr graph: {e}");
+            return 2;
+        }
+    };
+    let hub = crate::supervise::ensure_quiet(env, ENSURE_TIMEOUT);
+    if hub != 0 {
+        return hub;
+    }
+    let mut client = match Client::user(env, Duration::from_secs(5)) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("ratatoskr graph: {e}");
+            return 1;
+        }
+    };
+    let rows = match client.call("graph/sql", listing, LONG) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("ratatoskr graph: {e}");
+            return 1;
+        }
+    };
+    let known: Vec<String> = rows["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r[0].as_str().map(str::to_owned))
+        .collect();
+    let named: Vec<String> = paths.iter().map(|p| absolute(p, &cwd)).collect();
+    let (picked, unknown) = forget_pick(&known, &named, *missing, &|p| Path::new(p).exists());
+    for u in &unknown {
+        eprintln!("not in the store: {u}");
+    }
+    if cmd.json && *dry_run {
+        println!(
+            "{}",
+            json!({"dry_run": true, "gone": picked, "unknown": unknown})
+        );
+        return 0;
+    }
+    if picked.is_empty() {
+        println!("nothing to forget");
+        return 0;
+    }
+    for p in &picked {
+        println!("{} {p}", if *dry_run { "would forget" } else { "forget" });
+    }
+    if *dry_run {
+        return 0;
+    }
+    let stdin = std::io::stdin();
+    match confirm(*yes, stdin.is_terminal()) {
+        Confirm::Go => {}
+        Confirm::Refuse => {
+            eprintln!(
+                "ratatoskr graph forget: it retires what these files held; run it in a terminal to confirm, or pass --yes"
+            );
+            return 2;
+        }
+        Confirm::Ask => {
+            let q = format!(
+                "Forget {} sources: what they hold is retired (history is kept)?",
+                picked.len()
+            );
+            if !ask(&q, &mut stdin.lock(), &mut std::io::stderr()) {
+                eprintln!("nothing changed");
+                return 1;
+            }
+        }
+    }
+    let mut code = 0;
+    for call in forget_call(&picked) {
+        match client.call("graph/put-parsed", call, LONG) {
+            Ok(a) if cmd.json => println!("{a}"),
+            Ok(a) => {
+                let (text, ok) = render(&cmd.sub, &a);
+                print!("{text}");
+                code |= i32::from(!ok);
+            }
+            Err(e) => {
+                eprintln!("ratatoskr graph: {e}");
+                return 1;
+            }
+        }
+    }
+    code
 }
 
 /// What an excise does before it asks the hub.
@@ -594,6 +776,16 @@ pub fn render(sub: &Sub, a: &Value) -> (String, bool) {
             }
             if let Some(b) = a["backup"].as_str() {
                 out.push_str(&format!("backup {b}\n"));
+            }
+        }
+        Sub::Forget { .. } => {
+            out.push_str(&format!(
+                "forgot: {} entities retired, their history kept\n",
+                n(&a["retired"])
+            ));
+            for r in a["refused"].as_array().into_iter().flatten() {
+                ok = false;
+                out.push_str(&format!("refused: {r}\n"));
             }
         }
         Sub::Backup => {
@@ -759,6 +951,9 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
         }
     };
     let now = crate::clock::wall_secs();
+    if matches!(cmd.sub, Sub::Forget { .. }) {
+        return forget_run(env, &cmd);
+    }
     let (method, params) = match cmd.request(&cwd, now) {
         Ok(r) => r,
         Err(e) => {
@@ -981,6 +1176,156 @@ mod tests {
             m(&["import", "dump"]),
             ("graph/import", json!({"dir": "/w/dump"}))
         );
+    }
+
+    #[test]
+    fn forget_parses_and_lists_the_stores_sources_under_the_root() {
+        let c = p(&[
+            "forget",
+            "--root",
+            "org",
+            "--missing",
+            "--dry-run",
+            "--path",
+            "a.md",
+            "--path",
+            "b.md",
+        ])
+        .unwrap();
+        assert_eq!(
+            c.sub,
+            Sub::Forget {
+                root: "org".into(),
+                missing: true,
+                paths: vec!["a.md".into(), "b.md".into()],
+                dry_run: true,
+                yes: false
+            }
+        );
+        let (m, params) = c.request(Path::new("/w"), 0.0).unwrap();
+        assert_eq!(m, "graph/sql");
+        assert_eq!(params["params"], json!(["/w/org/"]));
+        for bad in [
+            &["forget", "--root", "x"][..],
+            &["forget", "--missing"],
+            &["forget", "--root", "x", "--missing", "y"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?} should not parse");
+        }
+        // a path is picked when it is missing, or named; a named one the store never held is reported
+        let known: Vec<String> = ["/o/a.md", "/o/b.md", "/o/c.md"].map(String::from).into();
+        let here = |p: &str| p == "/o/b.md";
+        let (picked, unknown) =
+            forget_pick(&known, &["/o/c.md".into(), "/o/z.md".into()], true, &here);
+        assert_eq!(
+            (picked, unknown),
+            (
+                vec!["/o/a.md".to_owned(), "/o/c.md".to_owned()],
+                vec!["/o/z.md".to_owned()]
+            )
+        );
+        let (picked, _) = forget_pick(&known, &[], false, &here);
+        assert!(picked.is_empty());
+        // at most 1000 sources a call
+        let many: Vec<String> = (0..2001).map(|i| format!("/o/{i}.md")).collect();
+        let calls = forget_call(&many);
+        assert_eq!(
+            calls
+                .iter()
+                .map(|c| c["gone"].as_array().unwrap().len())
+                .collect::<Vec<_>>(),
+            [1000, 1000, 1]
+        );
+        assert_eq!(
+            calls[0]["gone"][0],
+            json!({"kind": "file", "path": "/o/0.md"})
+        );
+    }
+
+    /// A plan whose file moved is retired with its tasks and steps (history kept); one whose file is there is not.
+    #[test]
+    fn forgetting_a_moved_plan_retires_it_and_leaves_a_present_one() {
+        use norn::parsed::{self, PutParsed};
+        use urdr::graph::guard::Guard;
+        use urdr::graph::schema::GRAPH_DDL;
+        use urdr::graph::{Class, Tx, TxMeta};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+        let (moved, kept) = (
+            format!("{root}/docs/plans/moved.md"),
+            format!("{root}/docs/plans/kept.md"),
+        );
+        std::fs::create_dir_all(dir.path().join("docs/plans")).unwrap();
+        std::fs::write(&kept, "# K\n").unwrap();
+        let mut c = urdr::Connection::open_in_memory().unwrap();
+        c.execute_batch(GRAPH_DDL).unwrap();
+        c.execute_batch(
+            "create table parsed_file (path text primary key, mtime real); create table kv (key text primary key, value text);",
+        )
+        .unwrap();
+        fn put(
+            c: &mut urdr::Connection,
+            deny: &norn::deny::DenyList,
+            req: Value,
+        ) -> parsed::PutAnswer {
+            let mut g = Guard::default();
+            norn::grants::register(&mut g);
+            let req: PutParsed = serde_json::from_value(req).unwrap();
+            let mut tx = Tx::for_test(
+                c,
+                TxMeta::new("scan:/w", Class::System, "scan"),
+                std::sync::Arc::new(g),
+            );
+            let a = parsed::put(&mut tx, deny, req).unwrap();
+            tx.commit_for_test().unwrap();
+            a
+        }
+        let deny = norn::deny::DenyList::load(&dir.path().join("home"), &dir.path().join("config"));
+        let source = |p: &str| {
+            json!({"source": {"kind": "file", "path": p}, "mtime": 1.0, "entities": [
+                {"id": format!("plan:{p}"), "kind": "plan", "title": "P", "status": "open", "data": {"path": p}},
+                {"id": format!("task:{p}#1"), "kind": "task", "title": "one", "status": "open",
+                 "data": {"path": p, "parent": format!("plan:{p}"), "ord": 1}}]})
+        };
+        put(
+            &mut c,
+            &deny,
+            json!({"sources": [source(&moved), source(&kept)]}),
+        );
+        // the listing the command sends, run as the hub would
+        let listing = forget_listing(&root);
+        let rows: Vec<String> = {
+            let mut st = c.prepare(listing["sql"].as_str().unwrap()).unwrap();
+            st.query_map([listing["params"][0].as_str().unwrap()], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(rows, [kept.clone(), moved.clone()]);
+        let (picked, _) = forget_pick(&rows, &[], true, &|p| Path::new(p).exists());
+        assert_eq!(picked, std::slice::from_ref(&moved));
+        for call in forget_call(&picked) {
+            let a = put(&mut c, &deny, call);
+            assert_eq!(a.retired, 2);
+        }
+        let live = |c: &urdr::Connection, path: &str| -> i64 {
+            c.query_row(
+                "select count(*) from entity where source = ?1 and retired_tx is null",
+                [path],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!((live(&c, &moved), live(&c, &kept)), (0, 2));
+        // retired, not deleted: the rows and their versions are still there
+        let all: i64 = c
+            .query_row(
+                "select count(*) from entity where source = ?1",
+                [&moved],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(all, 2);
     }
 
     #[test]
