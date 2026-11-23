@@ -1,6 +1,6 @@
 # What each CI job may compile (.github/ci/run-checks.sh compiles and cache; docs/develop/ci.md, "Checking a run").
 # A row: a glob over the job's name as the API gives it (a called workflow's jobs as `Runtime / …`), the most times
-# the log may say `Compiling drgnx-ratatoskr v`, and the most `Compiling ` lines in all, or `any`. The first row that
+# the log may say `Compiling ratatoskr v`, and the most `Compiling ` lines in all, or `any`. The first row that
 # matches wins, and a job no row matches fails the check, so a new job comes with its row. `any` marks a build job,
 # whose target cache `cache` reads; `0 0` a consumer, which runs what a build job made and compiles nothing.
 

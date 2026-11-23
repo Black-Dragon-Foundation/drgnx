@@ -54,7 +54,7 @@ mod git {
     }
 
     fn script(at: &Path, body: &str) {
-        drgnx_exe::write(at, body).unwrap();
+        hlaup::write(at, body).unwrap();
     }
 
     // [D] pure (real git behind a recording fake; no clock, no other process waited on)

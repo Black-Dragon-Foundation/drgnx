@@ -149,7 +149,7 @@ conformance data). Rules:
     (an outside agent), actor `agent:SID` / `ext:KIND:PID-HASH`, its session, profile and job, tool `mcp:<name>`;
   - an editor method (`cards/settle`, `messages/*`, `events/add`, `review/mark`) from the user's connection: actor
     `user`, class `user`, tool `proto:<method>`; a seam method (`coord/*`) and a service connection's write actor
-    `hub`, class `system` (`drgnx-ratatoskr/src/coord.rs`, `tx_meta`);
+    `hub`, class `system` (`ratatoskr/src/coord.rs`, `tx_meta`);
   - the gateway's `spend` rows and the rate card of a held report: actor `hub`, class `system`.
 
   The rows of the kept tables a write made (`event`, `message`, `card`, `review_mark`, `agent`, `job`; `spend` from
@@ -227,7 +227,7 @@ work.db has one writer: the hub (Ratatoskr). Every write below is a transaction 
 
 | Writes | Through | Who calls | `tx` actor |
 |---|---|---|---|
-| a card settled, a message sent or marked, an event, a review mark and its event | the front's `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark` (`drgnx-ratatoskr/src/coord.rs` on `norn::write`) | the editor (a user connection) | `user` |
+| a card settled, a message sent or marked, an event, a review mark and its event | the front's `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark` (`ratatoskr/src/coord.rs` on `norn::write`) | the editor (a user connection) | `user` |
 | jobs, tasks, leases, decisions, agents, cards, held counts, the daily prune | `coord/job-create`, `coord/job-set`, `coord/task-status`, `coord/leases`, `coord/decide`, `coord/agent`, `coord/card-create`, `coord/card-set`, `coord/held`, `coord/prune` (user class), and the hub's own runner and timers on `norn::write` | a user connection; the hub itself | `hub` (class `system`) |
 | what the coordination tools write | `norn::tools` on the same `CoordDb` (`Front.tools`) | agents, through the MCP hosting | `agent:SID` (or the outside agent's `ext:…`) |
 
@@ -423,7 +423,7 @@ the user (below), also plans, specs and decision records in its project, as the 
 - Its events and messages carry no job and no task, even when `DRGNX_JOB` or `DRGNX_TASK` leaked into its
   environment. `list_agents` and recipient lookup ignore a leaked job too.
 
-**Binding an outside agent** (`norn::bindings`, `drgnx-ratatoskr/src/outside.rs`). An outside agent's rights come
+**Binding an outside agent** (`norn::bindings`, `ratatoskr/src/outside.rs`). An outside agent's rights come
 only from the user's binding: `ratatoskr outside bind --kind KIND --root DIR --role manager|worker|chat` (the
 methods `outside/bind`, `outside/unbind`, `outside/bindings`, user class only; their handlers refuse any other
 caller too, because the tools' `Hub::exec` checks no registry class). DIR is resolved to its project's top-level (a
@@ -607,7 +607,7 @@ re-lists them through `mimir::serve_live`: the agent gets `notifications/tools/l
 session ends, so an agent mid-investigation never loses one between two calls. They take no identity: the session's
 is passed to the hub's `Hub::debug`, which gates each call by the matrix's `debug.*` rows ([debugging.md](debugging.md#debugging-with-an-agent-spec-195)).
 
-### Plugin abilities (`drgnx-ratatoskr/src/abilities.rs`)
+### Plugin abilities (`ratatoskr/src/abilities.rs`)
 
 Abilities are served apart from the hub's own tools: `Sessions` binds `plugins.sock` (`SESSION_PLUGINS_SOCKET`) in the
 session's directory when the session opens with an approved, enabled plugin that has an ability and its columns are
@@ -685,7 +685,7 @@ A peer message is text for the agent and nothing else: permission requests are a
 while its decision log is behind; reviewers are never gated (they read). A task's prompt asks for `read_decisions`
 first.
 
-### Delivery in Ratatoskr (`drgnx-ratatoskr/src/agents/deliver.rs`, Task 24)
+### Delivery in Ratatoskr (`ratatoskr/src/agents/deliver.rs`, Task 24)
 
 The same rules, run by the hub for the sessions it holds: `deliver::run` makes a pass whenever a write may have added a
 message (`Signals::deliver`) and every second. A queued message goes to its recipient session (its id or its name)
@@ -743,7 +743,7 @@ exit 2). A proposal with a budget lists in its data the profiles of its routes w
 without a `price`, and warns (the proposal card, `warnings` in the summary): the gateway cannot count what they spend.
 A notification to the hub (`coord/notify`) carries no id and gets no answer: the sender has hung up by then.
 
-### Plan runs in the hub (`drgnx-ratatoskr/src/runner`)
+### Plan runs in the hub (`ratatoskr/src/runner`)
 
 The hub serves `job/{propose,start-task,approve,order,block,unblock,stop,status}` itself, with
 the job summary shapes the Work space and `bin/drgnx job` read, and `job/{card,reply,
@@ -926,7 +926,7 @@ the user's — a `replaces` of the other side for a contradiction; the proposal 
 decision; for work against a decision, the task back to an agent told which files to revert (A), or the decision
 replaced and the review going on (B) — and the log's delivery tells every agent of the job.
 
-In the hub the rules are `runner::clash` (`crates/hub/drgnx-ratatoskr/src/runner/clash.rs`), pure functions over
+In the hub the rules are `runner::clash` (`crates/hub/ratatoskr/src/runner/clash.rs`), pure functions over
 the run's state: `scan(&RunState, &[Decision], &DiffIndex) -> Vec<Clash>` returns the clashes whose key is not in
 `RunState::carded` (the runner remembers each key it cards); `user_wins(&[Decision])` lists the agent decisions a
 user's decision replaces at once (no card). `DiffIndex` is task id → path → `FileDiff { hash, ranges }`, built from
@@ -1068,7 +1068,7 @@ limit (`amount` in a `Unit`).
 Tests: `cargo test -p norn matrix` (the Balanced table cell by cell, the browser rows in every preset, the Ask cap
 in every layer, combination, overrides, narrowing as a property test and for the browser rows, units, time presets).
 
-### The matrix in the hub (`drgnx-ratatoskr/src/matrix_gate.rs`)
+### The matrix in the hub (`ratatoskr/src/matrix_gate.rs`)
 
 `MatrixGate::check(tx, who, action, ctx, now)` is the one door: it builds the layers (the active preset, the
 `agents-matrix` setting decoded by `settings/matrix.rs`, the project's layer, the plan's) and answers `Allow`,
@@ -1157,7 +1157,7 @@ its title is `ID wants METHOD on RECORD`; so another call is another card.
 - A Never verdict (a cap, a cell) is decided before any grant, so a yes never opens one. The card is spent when the
   gate allows, even when a later check of the same write (`task.done`) refuses it.
 
-### Plan runs: git, the merge gate, trial merges (`drgnx-ratatoskr/src/runner/git.rs`)
+### Plan runs: git, the merge gate, trial merges (`ratatoskr/src/runner/git.rs`)
 
 `HubGit` is the hub's `RunGit`. Every git call is async with a deadline and none runs on the runner's tick.
 

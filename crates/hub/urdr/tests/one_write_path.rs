@@ -92,7 +92,7 @@ fn no_other_code_writes_graph_tables() {
         // must go through the graph's writer.
         let in_tests = canon
             .components()
-            .any(|c| c.as_os_str() == "tests" || c.as_os_str() == "fuzz")
+            .any(|c| c.as_os_str() == "tests" || c.as_os_str() == "hrista")
             || canon.file_name().is_some_and(|n| n == "tests.rs");
         if in_graph || in_tests {
             continue;

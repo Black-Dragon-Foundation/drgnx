@@ -244,7 +244,7 @@ naming what keeps the size up.
 
 ## The hub
 
-`drgnx-ratatoskr/src/history/` is the hub side: capture, the editor's methods and the watcher feed. One `Hub` per
+`ratatoskr/src/history/` is the hub side: capture, the editor's methods and the watcher feed. One `Hub` per
 project (its git common folder), `history.db` under `<state>/hub/history/<project>/`. Its methods are synchronous and run
 git; the front calls them in blocking tasks.
 
@@ -465,7 +465,7 @@ recorded in (`history/revert/preview {decision}`). Things the rows fix as they a
   needs the user's message too.
 
 `cargo test -p verdandi --test timing -- --ignored --nocapture` prints the cost of the "undone by" scan (a file with 1,000
-later deletes); it is a measurement, not a gate. `cargo test -p drgnx-ratatoskr --lib write_tree_before_cost -- --ignored
+later deletes); it is a measurement, not a gate. `cargo test -p ratatoskr --lib write_tree_before_cost -- --ignored
 --nocapture` prints what the tree taken before an agent's write costs per write, for 100, 1,000 and 10,000 files.
 
 `cargo test -p verdandi`: `tests/store.rs`, `tests/docs.rs`, `tests/log.rs`, `tests/revert.rs` and the property in

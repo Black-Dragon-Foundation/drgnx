@@ -91,12 +91,12 @@ fleet.sh up --runners 2 --no-linger-on 2
 DRGNX_FLEET_TEST_BIN=target/debug/deps/fleet_serve-HASH fleet.sh test --test-threads=1 serve::
 ```
 
-The hub's transport rows (`drgnx-ratatoskr`'s `tests/fleet_link.rs`) and its runner rows (`tests/fleet_runners.rs`)
+The hub's transport rows (`ratatoskr`'s `tests/fleet_link.rs`) and its runner rows (`tests/fleet_runners.rs`)
 are gated the same way, by the `fleet` feature:
 
 ```
-cargo test -p drgnx-ratatoskr --features fleet --test fleet_link --no-run      # in the dev container
-cargo test -p drgnx-ratatoskr --features fleet --test fleet --no-run   # fleet_runners:: and fleet_registry::, fleet_sync::, fleet_keys::, term_scope:: are rows of it too
+cargo test -p ratatoskr --features fleet --test fleet_link --no-run      # in the dev container
+cargo test -p ratatoskr --features fleet --test fleet --no-run   # fleet_runners:: and fleet_registry::, fleet_sync::, fleet_keys::, term_scope:: are rows of it too
 ```
 
 `test` copies the `sleipnir` binary beside the test's `deps/` into the share and tells the rows where the share is
@@ -115,7 +115,7 @@ the next request is never heard.
 
 ## The link drills
 
-`drgnx-ratatoskr`'s `tests/fleet_drills.rs` holds the drills: rows that break the hub's link to a runner mid-job (a
+`ratatoskr`'s `tests/fleet_drills.rs` holds the drills: rows that break the hub's link to a runner mid-job (a
 master told `-O stop`, the connection frozen 3 minutes under a keyed job with a network grant, `serve` stopped 5
 minutes, the hub restarted with and without the editor, a changed host key, linger turned off between two `hello`s) or
 let the runner's own guards stop a job (disk below the floor, the memory ladder), and four jobs over one link's three
@@ -125,9 +125,9 @@ runner's own log and attempt record, no key bytes on the runner, the job's proxy
 `drgnx-px-<arch>-linux-musl` too, for the networked job):
 
 ```
-cargo test -p drgnx-ratatoskr --features fleet,test-hooks --test fleet_drills --no-run   # in the dev container
+cargo test -p ratatoskr --features fleet,test-hooks --test fleet_drills --no-run   # in the dev container
 cargo build -p sleipnir --features sleipnir/test-hooks --bin sleipnir --bin drgnx-key
-cargo build -p drgnx-px --bin drgnx-px --target x86_64-unknown-linux-musl --target-dir target/fwd
+cargo build -p ferja --bin drgnx-px --target x86_64-unknown-linux-musl --target-dir target/fwd
 cp target/fwd/x86_64-unknown-linux-musl/debug/drgnx-px target/debug/drgnx-px-x86_64-linux-musl
 DRGNX_FLEET_TEST_BIN=<the binary> $HEAVY test/runners/drills.sh --container [--times N] [--timing] [FILTER]
 ```
@@ -157,11 +157,11 @@ principal from its user-data (IMDSv2: `drgnx-ca: …` and `drgnx-principal: …`
 keys on its console the way cloud-init's `write-ssh-key-fingerprints` does: the fingerprints through
 `logger -s -t cloud-init`, then the keys. A container has no serial port and systemd as its PID 1 sends nothing to
 `podman logs`, so the console is the file `/run/fleet-console`, which the mock reads (`podman exec … cat`) and serves as
-`GetConsoleOutput`. The rows are `drgnx-ratatoskr`'s `tests/fleet_cloud.rs` (features `fleet,test-hooks`):
+`GetConsoleOutput`. The rows are `ratatoskr`'s `tests/fleet_cloud.rs` (features `fleet,test-hooks`):
 
 ```
 cargo build -p domr --bin ratatoskr-mock                                                  # in the dev container
-cargo test -p drgnx-ratatoskr --features fleet,test-hooks --test fleet_cloud --no-run
+cargo test -p ratatoskr --features fleet,test-hooks --test fleet_cloud --no-run
 fleet.sh up --runners 0 --cloud target/debug/ratatoskr-mock
 DRGNX_FLEET_TEST_BIN=target/debug/deps/fleet_cloud-HASH fleet.sh test --test-threads=1
 ```

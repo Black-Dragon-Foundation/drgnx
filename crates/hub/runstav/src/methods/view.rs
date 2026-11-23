@@ -11,9 +11,7 @@ use crate::wire::Error;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use drgnx_rows::{
-    Colour, CursorShape, ImageId, Op, Patch, Row, RowHeight, Style, StyleId, TermMeta,
-};
+pub use rodd::{Colour, CursorShape, ImageId, Op, Patch, Row, RowHeight, Style, StyleId, TermMeta};
 
 /// The longest view id, in bytes.
 pub const VIEW_MAX: usize = 64;
@@ -56,7 +54,7 @@ pub struct ViewEnv {
     /// Where the editor draws a row's tail after its text (`drgnx-wb-row-tail`: the Explorer's, the Buffers panel's),
     /// `[mark, control]` px (a terminal's: columns) from the window's right edge: the start of its git mark and of its
     /// control. The rows a view gives a tail keep their text short of what it always draws
-    /// (`drgnx_rows::fit_row::Room::tail`). None: the view's rows get no tail.
+    /// (`rodd::fit_row::Room::tail`). None: the view's rows get no tail.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tail: Option<(u32, u32)>,
     /// What the editor draws right after a row's name, before its tail: the Explorer's who-is-here badge
@@ -82,17 +80,17 @@ pub struct ViewEnv {
     pub hc: bool,
     /// `[name, glyph]`: the kit's glyphs (those `etc/ui/components.eld` names) as `drgnx-face-glyph` draws them on the
     /// class's frame, ASCII on a terminal that is not UTF-8; a name missing here is drawn in its Unicode form
-    /// (`drgnx_rows::kit`).
+    /// (`rodd::kit`).
     #[serde(default)]
     pub glyphs: Vec<(String, String)>,
     /// The class's frame is a terminal that is not UTF-8 (`drgnx-ui-ascii-frame-p`): a glyph the hub takes from its own
-    /// table (a tab's icon, `drgnx_rows::kit::ALL_GLYPHS`) is drawn in its ASCII form.
+    /// table (a tab's icon, `rodd::kit::ALL_GLYPHS`) is drawn in its ASCII form.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ascii: bool,
     /// The user's density (`drgnx-look-density`): the kit's sizes that follow it (a tree level's indent). None:
     /// comfortable. A change is a new epoch, as a scale change is.
     #[serde(default)]
-    pub density: drgnx_rows::kit::Density,
+    pub density: rodd::kit::Density,
     /// The first env of a new buffer for this (view, class): a pair the hub already holds for the connection (no
     /// `view/close` came) is dropped and starts again, so the new buffer gets the rows whole.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -108,10 +106,10 @@ pub struct ViewEnv {
 }
 
 impl ViewEnv {
-    /// What the kit's expansion reads of this env (`drgnx_rows::kit`): its scale, whether it is a terminal, its
+    /// What the kit's expansion reads of this env (`rodd::kit`): its scale, whether it is a terminal, its
     /// glyphs and the density; no icons (a view that draws them builds its own).
-    pub fn kit(&self) -> drgnx_rows::kit::KitEnv<'_> {
-        drgnx_rows::kit::KitEnv {
+    pub fn kit(&self) -> rodd::kit::KitEnv<'_> {
+        rodd::kit::KitEnv {
             scale: self.scale,
             tty: self.display == Display::Tty,
             glyphs: &self.glyphs,

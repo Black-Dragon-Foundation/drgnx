@@ -43,13 +43,13 @@ pub enum ReapOutcome {
 pub trait Signaller: Sync {
     fn kill(&self, target: i32, sig: i32) -> io::Result<()>;
 
-    /// The wait between two probes of a signalled group: on the installed clock (`drgnx_clock`), so a test that
+    /// The wait between two probes of a signalled group: on the installed clock (`stund`), so a test that
     /// watches signals decides when a grace has passed.  A signaller of real processes waits in real time.
     fn pause(
         &self,
         d: Duration,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
-        Box::pin(drgnx_clock::sleep(d))
+        Box::pin(stund::sleep(d))
     }
 }
 

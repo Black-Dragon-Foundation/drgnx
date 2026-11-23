@@ -1,5 +1,5 @@
 //! The Work map's rows, built in the hub (`docs/develop/work-space.md`, "Rows"): from a [`Layout`], the items and
-//! edges it shows, a view's env and a [`Measure`], the rows the editor only inserts (`drgnx-rows`). Card lines with
+//! edges it shows, a view's env and a [`Measure`], the rows the editor only inserts (`rodd`). Card lines with
 //! their segments fitted to the card's width, the layer labels, stops at the cards' columns, the rows' heights; on a
 //! terminal, or a layout that does not fit, the outline.
 //!
@@ -12,17 +12,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use drgnx_rows::fit::{self, Measure};
-use drgnx_rows::fit_tty;
-use drgnx_rows::svg::{Palette, Svg};
-use drgnx_rows::{ImageId, Row, RowBuilder};
+use rodd::fit::{self, Measure};
+use rodd::fit_tty;
+use rodd::svg::{Palette, Svg};
+use rodd::{ImageId, Row, RowBuilder};
 use serde_json::Value;
 
 use crate::layout::{Form, Layout};
 use crate::model::{Fields, JobFact, State};
 use crate::{Edge, EdgeKind, Item, ItemId, Kind};
-use drgnx_rows::faces::FaceId;
-use drgnx_rows::kit::{self, ChipFill, Comp, Tone};
+use rodd::faces::FaceId;
+use rodd::kit::{self, ChipFill, Comp, Tone};
 
 /// The layer labels' margin, logical px.
 pub const MARGIN: u32 = 84;
@@ -1348,7 +1348,7 @@ pub fn strip(
     extra: &[String],
     env: &Env,
     m: &dyn Measure,
-    kit: &drgnx_rows::kit::KitEnv,
+    kit: &rodd::kit::KitEnv,
 ) -> (Row, Vec<(ImageId, String)>) {
     let entries: Vec<String> = crate::nav::strip_entries(needs, s.items)
         .into_iter()

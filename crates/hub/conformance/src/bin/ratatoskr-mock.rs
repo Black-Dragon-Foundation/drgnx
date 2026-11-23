@@ -944,7 +944,7 @@ fn embed_vector(text: &str, dims: usize) -> Vec<f64> {
         .collect()
 }
 
-/// The text the hub's fingerprint probe embeds to learn a server's dimensions (`drgnx-ratatoskr`'s `embed::PROBE_TEXT`).
+/// The text the hub's fingerprint probe embeds to learn a server's dimensions (`ratatoskr`'s `embed::PROBE_TEXT`).
 const EMBED_PROBE_TEXT: &str = "drgnx fingerprint probe";
 
 /// The model the server stands in for now: `(model id, dims, dims of every text but the probe's)`. With

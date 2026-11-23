@@ -49583,7 +49583,7 @@
         "description": "`view/env`: how VIEW looks in display class CLASS, measured in the view's buffer. EPOCH is the editor's number for\nthis env (the hub echoes it on every patch); a new epoch makes the next patch a reset.",
         "properties": {
           "ascii": {
-            "description": "The class's frame is a terminal that is not UTF-8 (`drgnx-ui-ascii-frame-p`): a glyph the hub takes from its own\ntable (a tab's icon, `drgnx_rows::kit::ALL_GLYPHS`) is drawn in its ASCII form.",
+            "description": "The class's frame is a terminal that is not UTF-8 (`drgnx-ui-ascii-frame-p`): a glyph the hub takes from its own\ntable (a tab's icon, `rodd::kit::ALL_GLYPHS`) is drawn in its ASCII form.",
             "type": "boolean"
           },
           "attach": {
@@ -49721,7 +49721,7 @@
           },
           "glyphs": {
             "default": [],
-            "description": "`[name, glyph]`: the kit's glyphs (those `etc/ui/components.eld` names) as `drgnx-face-glyph` draws them on the\nclass's frame, ASCII on a terminal that is not UTF-8; a name missing here is drawn in its Unicode form\n(`drgnx_rows::kit`).",
+            "description": "`[name, glyph]`: the kit's glyphs (those `etc/ui/components.eld` names) as `drgnx-face-glyph` draws them on the\nclass's frame, ASCII on a terminal that is not UTF-8; a name missing here is drawn in its Unicode form\n(`rodd::kit`).",
             "items": {
               "maxItems": 2,
               "minItems": 2,
@@ -49777,7 +49777,7 @@
             "type": "number"
           },
           "tail": {
-            "description": "Where the editor draws a row's tail after its text (`drgnx-wb-row-tail`: the Explorer's, the Buffers panel's),\n`[mark, control]` px (a terminal's: columns) from the window's right edge: the start of its git mark and of its\ncontrol. The rows a view gives a tail keep their text short of what it always draws\n(`drgnx_rows::fit_row::Room::tail`). None: the view's rows get no tail.",
+            "description": "Where the editor draws a row's tail after its text (`drgnx-wb-row-tail`: the Explorer's, the Buffers panel's),\n`[mark, control]` px (a terminal's: columns) from the window's right edge: the start of its git mark and of its\ncontrol. The rows a view gives a tail keep their text short of what it always draws\n(`rodd::fit_row::Room::tail`). None: the view's rows get no tail.",
             "maxItems": 2,
             "minItems": 2,
             "prefixItems": [

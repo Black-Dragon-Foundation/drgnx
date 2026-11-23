@@ -7,7 +7,7 @@
 //!
 //! Exempt:
 //! - a test that is `#[ignore = "timing: …"]` (a timing test, run by the timing lane) and `tests/timing.rs`;
-//! - `skuld`'s own `wait_until` (`skuld/src/wait.rs`) and the hub clock's module (`drgnx-ratatoskr/src/clock*`);
+//! - `skuld`'s own `wait_until` (`skuld/src/wait.rs`) and the hub clock's module (`ratatoskr/src/clock*`);
 //! - `tokio::time::sleep` inside a paused tokio test (`#[tokio::test(start_paused = true)]`, or a body that calls
 //!   `tokio::time::pause()`): the sleep is virtual there;
 //! - `Instant::now` inside a paused test, in a file that imports tokio's `Instant`, unless written
@@ -468,7 +468,7 @@ fn marker_problems(rel: &str, src: &str) -> Vec<String> {
 fn exempt(rel: &str) -> bool {
     rel.ends_with("skuld/src/wait.rs")
         || rel.ends_with("/tests/timing.rs")
-        || rel.contains("drgnx-ratatoskr/src/clock")
+        || rel.contains("ratatoskr/src/clock")
 }
 
 /// Every banned call in test code across `crates/core/*/{src,tests}` and `crates/hub/*/{src,tests}` of the workspace
@@ -551,7 +551,7 @@ fn no_real_time_in_test_code() {
 ///
 /// 38, reviewed 2026-11-22: d716ee404 added four vegvisir performance budgets (activity_open, schedule_open,
 /// schedule_zoom, now_line_patch) without lowering the count, and moving the urdr and gleipnir rows onto the virtual
-/// clock needs a clock injected into their crates.  Three more rows are drgnx-ratatoskr's perf-lane budgets
+/// clock needs a clock injected into their crates.  Three more rows are ratatoskr's perf-lane budgets
 /// (forecast_plan_perf, forecast_remaining_perf, density_200mb_log), found once `no_real_time_in_test_code` really
 /// scanned and listed instead of exempted.  The rule stands: this only goes down.
 const TIMING_ROWS_AT_MOST: usize = 38;

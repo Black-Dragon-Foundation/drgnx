@@ -385,7 +385,7 @@ mod tests {
             PathBuf::from(std::env::var("SLEIPNIR_BIN").expect("SLEIPNIR_BIN: a built sleipnir"));
         let staged = root.join("bin/b1/sleipnir");
         std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
-        drgnx_exe::copy(&exe, &staged).unwrap();
+        hlaup::copy(&exe, &staged).unwrap();
         let shim = crate::darwin::brew::ensure_shim(&root, &staged).unwrap();
         let spec = sandbox::spec(&sandbox::Job {
             dir: &dir,
@@ -565,7 +565,7 @@ mod tests {
         let root = dir.path().canonicalize().unwrap();
         let bin = tempfile::tempdir().unwrap();
         let mise = bin.path().join("mise");
-        drgnx_exe::write(
+        hlaup::write(
             &mise,
             "#!/bin/sh\n\
              echo \"$PWD|$MISE_DATA_DIR|$CARGO_HOME|$RUSTUP_HOME|$*\" >> \"$MISE_DATA_DIR.log\"\n\

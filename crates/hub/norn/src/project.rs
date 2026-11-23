@@ -608,7 +608,7 @@ pub(crate) mod tests {
         let d = tempfile::tempdir().unwrap();
         let dir = repo(d.path(), "r", Some(1_000_000_000));
         let slow = d.path().join("slow-git");
-        drgnx_exe::write(&slow, "#!/bin/sh\nsleep 5\n").unwrap();
+        hlaup::write(&slow, "#!/bin/sh\nsleep 5\n").unwrap();
         // the error names the 300 ms bound it gave up at: the first call, not the sleep's 5 s
         let r = resolve_by(&dir, |d, a| git_at(&slow, d, a, Duration::from_millis(300)));
         let e = r.expect_err("a git that does not answer is an error");
@@ -618,7 +618,7 @@ pub(crate) mod tests {
         );
         // a git that answers "no" is still no project
         let no = d.path().join("no-git");
-        drgnx_exe::write(&no, "#!/bin/sh\nexit 128\n").unwrap();
+        hlaup::write(&no, "#!/bin/sh\nexit 128\n").unwrap();
         assert_eq!(
             resolve_by(&dir, |d, a| git_at(&no, d, a, Duration::from_secs(5))),
             Ok(None)

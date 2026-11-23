@@ -238,8 +238,8 @@ fn start_with(spec: Spec, after_move: impl FnOnce(&mut Moved)) -> io::Result<Chi
                 child_fds(&pairs, &expect)
             });
         }
-        // under drgnx-exe's lock where unshare is refused: a file written meanwhile is never held open by this fork
-        let r = drgnx_exe::spawn(|| cmd.spawn());
+        // under hlaup's lock where unshare is refused: a file written meanwhile is never held open by this fork
+        let r = hlaup::spawn(|| cmd.spawn());
         drop(moved);
         match r {
             Err(e) if guarded && tries < 4 && e.raw_os_error() == Some(libc::EBUSY) => {

@@ -57,9 +57,8 @@ pub struct Root {
 
 /// A scenario hub's log level when the caller sets none: info, and a session's turn stages at debug (sending, the
 /// snapshot before it, the prompt written, each update read and applied), and the stages of the long request paths
-/// (`drgnx_ratatoskr::stages`: a fork, a session's launch, a tool call), so a failure's log tail names the stage.
-pub const HUB_LOG: &str =
-    "info,drgnx_ratatoskr::agents::session=debug,drgnx_ratatoskr::stages=debug";
+/// (`ratatoskr::stages`: a fork, a session's launch, a tool call), so a failure's log tail names the stage.
+pub const HUB_LOG: &str = "info,ratatoskr::agents::session=debug,ratatoskr::stages=debug";
 
 impl Root {
     pub fn new() -> Result<Arc<Root>, String> {
@@ -552,8 +551,8 @@ impl Conn {
     pub fn open_as_other_uid(path: &Path, dir: &Path) -> Result<Conn, String> {
         let me = std::env::current_exe().map_err(|e| e.to_string())?;
         let copy = dir.join("connect-as");
-        // run at once: copied through drgnx-exe, never held open for writing by another thread's fork
-        drgnx_exe::copy(&me, &copy)
+        // run at once: copied through hlaup, never held open for writing by another thread's fork
+        hlaup::copy(&me, &copy)
             .map_err(|e| format!("cannot copy the harness for connect-as: {e}"))?;
         std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| e.to_string())?;

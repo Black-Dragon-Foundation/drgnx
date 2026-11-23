@@ -37,7 +37,7 @@ ignore = [
   "RUSTSEC-2026-0580", # heapless: the treiber stack pool; not reached
   "RUSTSEC-2026-0581", # heapless: Deque::make_contiguous; not reached
   "RUSTSEC-2026-0582", # heapless: IndexMap::insert at u16::MAX; not reached
-  # cgmath 0.18.0 comes only through Smithay 0.7.0 (its renderer's Matrix3/Vector2/Vector3), in nh-recorder, the test
+  # cgmath 0.18.0 comes only through Smithay 0.7.0 (its renderer's Matrix3/Vector2/Vector3), in ritari, the test
   # compositor (not shipped). Smithay 0.7.0 is the newest release and never calls swap_columns. Reviewed 2026-11-22;
   # review again at the next Smithay release.
   "RUSTSEC-2026-0196", # cgmath: unmaintained; no code defect

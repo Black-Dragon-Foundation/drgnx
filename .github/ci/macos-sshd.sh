@@ -1,5 +1,5 @@
 #!/bin/bash
-# The macOS lane's localhost sshd for `drgnx-ratatoskr`'s `macos::the_generated_config_against_a_localhost_sshd`
+# The macOS lane's localhost sshd for `ratatoskr`'s `macos::the_generated_config_against_a_localhost_sshd`
 # (docs/develop/ci.md, "macOS"): Remote Login on, a throwaway key that may log in to the runner user, and one
 # `Host` entry in ~/.ssh/config that names it. `up` prints the host name the row takes as DRGNX_TEST_SSHD_HOST;
 # `down` takes everything back (a runner is thrown away after the job, so this is only for a self-hosted Mac).

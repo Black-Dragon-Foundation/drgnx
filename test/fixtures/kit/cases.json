@@ -1,5 +1,5 @@
 {
-  "doc": "The kit's conformance fixture: each comp expanded at each env, by the hub (drgnx_rows::kit, tests/kit_conformance.rs) and by core/drgnx-ui-kit.el (drgnx-ui-kit/conformance), must equal expected.json's entry ENV/COMP. Rust writes expected.json with DRGNX_KIT_BLESS=1. A tty env draws glyphs in their ASCII form when ascii is true; an env without a density is comfortable.",
+  "doc": "The kit's conformance fixture: each comp expanded at each env, by the hub (rodd::kit, tests/kit_conformance.rs) and by core/drgnx-ui-kit.el (drgnx-ui-kit/conformance), must equal expected.json's entry ENV/COMP. Rust writes expected.json with DRGNX_KIT_BLESS=1. A tty env draws glyphs in their ASCII form when ascii is true; an env without a density is comfortable.",
   "envs": [
     {"name": "1", "scale": 1.0, "tty": false, "ascii": false},
     {"name": "1.25", "scale": 1.25, "tty": false, "ascii": false},

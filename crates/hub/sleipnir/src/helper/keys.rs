@@ -12,7 +12,7 @@
 //!   job-exec reads that record as `infra: key not delivered`. Each answered read is a line in `D/key-use` (the name
 //!   and the time, never the value), which `serve` sends up as `key-use` frames.
 //! - An `ok` answer is built in a [`Locked`] buffer and written to the channel from there; the relay's own copies of
-//!   it (one frame) are zeroed once written (`drgnx_px::shell`).
+//!   it (one frame) are zeroed once written (`ferja::shell`).
 //!
 //! The same store and relay serve a keyed job that stays on the hub's machine.
 

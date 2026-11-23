@@ -20,7 +20,7 @@ if [ "$arch" != "$(uname -m)" ]; then
   export "CARGO_TARGET_${l}_UNKNOWN_LINUX_MUSL_LINKER=rust-lld"
 fi
 CARGO_TARGET_DIR=$target/bundle-build cargo build --release --locked --target "$triple" --manifest-path "$manifest" \
-  -p sleipnir -p drgnx-px --bins
+  -p sleipnir -p ferja --bins
 dir=$target/bundle/$arch
 mkdir -p "$dir"
 for b in sleipnir drgnx-key drgnx-px; do

@@ -1,5 +1,5 @@
 //! The importer's half in `saga`: a parsed record file as graph operations.  Pure: the hub applies them
-//! (`drgnx-ratatoskr::records`, entities with `Origin::Imported`).
+//! (`ratatoskr::records`, entities with `Origin::Imported`).
 //!
 //! A file becomes an ordered list of pieces; each piece is one entity whose `body` is the piece's raw text, so
 //! concatenating the bodies in `seq` order is the file again, byte for byte ([`crate::view::render`]).  Ids are

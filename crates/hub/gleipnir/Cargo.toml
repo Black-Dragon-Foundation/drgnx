@@ -8,7 +8,7 @@ license.workspace = true
 publish = false
 
 [features]
-# InnerSpec's `landlock_omit` and `abi_cap` (the escape rows); turned on only by drgnx-ratatoskr's own `test-hooks`.
+# InnerSpec's `landlock_omit` and `abi_cap` (the escape rows); turned on only by ratatoskr's own `test-hooks`.
 test-hooks = []
 # Exposes `net::proxy::start_for_tests` (the upstream connector) to the escape fixture, and nothing else: unlike
 # `test-hooks` it changes no spec or sandbox, so feature unification with a release `ratatoskr` costs nothing.
@@ -21,7 +21,7 @@ eitri = { path = "../eitri", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-drgnx-clock = { path = "../drgnx-clock", version = "0.1.0" }  # the proxy's head and idle timeouts wait on the installed clock
+stund = { path = "../stund", version = "0.1.0" }  # the proxy's head and idle timeouts wait on the installed clock
 rustix.workspace = true
 libc.workspace = true
 
@@ -31,7 +31,7 @@ landlock.workspace = true
 seccompiler.workspace = true
 
 [dev-dependencies]
-drgnx-clock = { path = "../drgnx-clock", version = "0.1.0", features = ["test-hooks"] }
+stund = { path = "../stund", version = "0.1.0", features = ["test-hooks"] }
 skuld = { path = "../skuld", version = "0.1.0" }
 insta.workspace = true
 proptest.workspace = true

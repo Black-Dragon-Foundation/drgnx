@@ -140,7 +140,7 @@ fn serve(a: &Args) -> Result<(), String> {
                     store: store.clone(),
                     dir: a.dir.clone(),
                     wait: a.key_wait,
-                }) as Arc<dyn drgnx_px::owner::KeySource>
+                }) as Arc<dyn ferja::owner::KeySource>
             });
             Some(net::Relay::start(
                 &a.dir,

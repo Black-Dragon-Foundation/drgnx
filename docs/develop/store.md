@@ -203,7 +203,7 @@ one `ReadPool::with` call (one connection, given back before the next level), ne
 
 ## Vectors (Task 12b)
 
-Entity vectors are made by the hub (`drgnx-ratatoskr/src/embed.rs`), through the gateway, never by the store itself.
+Entity vectors are made by the hub (`ratatoskr/src/embed.rs`), through the gateway, never by the store itself.
 
 - **Provider.** The first provider of kind `tei` with the `embed` cap in the settings' provider table. Texts (`title`, a blank
   line, `body`, at most 8000 characters) go to the gateway's own loopback listener as the editor's
@@ -286,7 +286,7 @@ schema table, before its own code), `Deadline`, `TooManyStatements`, or `Sql(tex
 
 ### The nightly copy and compaction (Task 17)
 
-- **Schedule.** `drgnx_ratatoskr::backup_timer` (pure `due(now, last_ok, since_attempt)`, the clock injected): a copy
+- **Schedule.** `ratatoskr::backup_timer` (pure `due(now, last_ok, since_attempt)`, the clock injected): a copy
   is due when the local time is 03:00 or later, no good copy was made today, and the last try is over an hour old (a
   failure is retried hourly, not every tick). The hub's 2 s schema tick asks it, so a hub that was off at 03:00 copies
   at its first tick after it is ready and has run five minutes (`SETTLE`: the copy is a request on the store's writer, which a shutdown waits out, so a hub stopped in its first minutes never waits for one; a `test-hooks` hub with `DRGNX_TEST_BACKUP_SETTLE_SECS=N` counts as settled after N seconds, for the live row). At start the newest `work-*.db` seeds the record, so a restart does not copy
@@ -701,7 +701,7 @@ looked at again at the next tick; nothing was done.
 per table, links per old → new kind, denied counts, entities without a project, retyped and duplicate rows, the
 transactions and the time. Never a path of the user's content, a title or a body.
 
-**Commands** (`ratatoskr store`, `drgnx-ratatoskr/src/store_cli.rs`):
+**Commands** (`ratatoskr store`, `ratatoskr/src/store_cli.rs`):
 
 - `store migrate-check --db FILE --scratch DIR [--json]` migrates FILE, a copy, in place with the same code, its
   pre-migration copy in DIR, and prints the report. It refuses the configured live `work.db` (by path or inode)
@@ -825,13 +825,13 @@ entities that lost their vector again, at its next round, with whichever embedde
 the shared vector cache, vector packs or any remote vector source (design MP-17: work-graph text can include material near
 the personal-notes deny-list); they are made by the embed role's chain and kept in this table only. A file of schema 16
 is `Ready { 16 }` and one above it is read-only. Tests: `tests/entity_vec_fingerprint.rs`
-(`migrate16_drops_label_rows_keeps_hex_rows`, through the real opening rule) and, in drgnx-ratatoskr,
+(`migrate16_drops_label_rows_keeps_hex_rows`, through the real opening rule) and, in ratatoskr,
 `search_prefer::entity_round_writes_fingerprint_hex`.
 
 ## Parsed entities (Task 15a)
 
 The tracker scan reads plans, specs, ledgers and git; what it finds reaches the graph through two front methods
-(`norn/src/parsed.rs`, `drgnx-ratatoskr/src/graph.rs`; class `user`, hub.md's table). Each is one request of the
+(`norn/src/parsed.rs`, `ratatoskr/src/graph.rs`; class `user`, hub.md's table). Each is one request of the
 graph writer, with the deny-list in force when the writer runs it: the list is read inside the writer's closure,
 after the git resolution, so a revoke or deny entry applied meanwhile (whose `apply` the writer runs first, or
 after) is never undone by a write that checked the older list.
@@ -871,7 +871,7 @@ already collected by a put writes nothing either. A denied repository or task is
 ## The store's methods (Task 15b)
 
 Every other `graph/*` method and `tasks/*` are the front's, class `user` only (hub.md's table;
-`drgnx-ratatoskr/src/graph.rs`). Writes go through the front's writer as the user's tx (`actor user`, class `user`,
+`ratatoskr/src/graph.rs`). Writes go through the front's writer as the user's tx (`actor user`, class `user`,
 tool the method's name); another class is `not-allowed` at the registry, and `graph/grants` refuses one again itself.
 
 - **Reads:** `graph/entity {id, as_of?, include?: [links|notes|history]}` → `{entity, by: {created, updated},

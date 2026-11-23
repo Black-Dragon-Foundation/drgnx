@@ -4,12 +4,12 @@
 //!
 //! Row keys: `step:ID`, `conc:N:LINE` (a conclusion's card, two lines), `axis`, `lane:AGENT`, `none`.
 
-use drgnx_rows::fit::Measure;
-use drgnx_rows::{Row, RowBuilder};
+use rodd::fit::Measure;
+use rodd::{Row, RowBuilder};
 use serde_json::Value;
 
 use crate::render::Env;
-use drgnx_rows::faces::FaceId;
+use rodd::faces::FaceId;
 
 /// A time zone as the editor's offset from UTC, in seconds (`view/env`'s `tz`: `+HHMM`, as `%z` prints it).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -118,13 +118,13 @@ fn put_icon(
     b: &mut RowBuilder,
     env: &Env,
     kind: &str,
-    images: &mut std::collections::BTreeMap<drgnx_rows::ImageId, String>,
+    images: &mut std::collections::BTreeMap<rodd::ImageId, String>,
 ) {
     let px = (16.0 * env.scale.max(1.0)).round() as u32;
     let svg = icon_name(kind).and_then(|n| crate::icons::svg(n, env.palette.colour("chip-fg"), px));
     match svg {
         Some(svg) => {
-            let id = drgnx_rows::ImageId::of(svg.as_bytes(), env.epoch);
+            let id = rodd::ImageId::of(svg.as_bytes(), env.epoch);
             images.entry(id).or_insert(svg);
             b.image(id, icon(kind));
         }
@@ -275,10 +275,7 @@ fn build(
     env: &Env,
     zone: Zone,
     now: Option<f64>,
-) -> (
-    Vec<Row>,
-    std::collections::BTreeMap<drgnx_rows::ImageId, String>,
-) {
+) -> (Vec<Row>, std::collections::BTreeMap<rodd::ImageId, String>) {
     let mut images = std::collections::BTreeMap::new();
     let mut steps: Vec<&Step> = steps.iter().collect();
     steps.sort_by_key(|s| (s.seq, s.id));
@@ -356,7 +353,7 @@ fn build(
 fn conclusion_rows(
     c: &Conclusion,
     env: &Env,
-    images: &mut std::collections::BTreeMap<drgnx_rows::ImageId, String>,
+    images: &mut std::collections::BTreeMap<rodd::ImageId, String>,
     new: bool,
 ) -> Vec<Row> {
     let n = c.rests_on.len();
@@ -735,11 +732,11 @@ pub fn timeline_rows(
     let now = now_line.and_then(|n| now_col(win, cols, n));
     for lane in lanes {
         let mut b = RowBuilder::new(format!("lane:{}", lane.id));
-        let label = drgnx_rows::fit::fit_in(
+        let label = rodd::fit::fit_in(
             m,
             Some(FaceId::WorkLabel.name()),
             &lane.label,
-            130.0 + drgnx_rows::fit::SLACK,
+            130.0 + rodd::fit::SLACK,
         );
         b.push(&label, Some(FaceId::WorkLabel.name()));
         let end = b.pos();
@@ -834,7 +831,7 @@ pub fn trail_rows_with_images(
     env: &Env,
     zone: Zone,
     now: Option<f64>,
-) -> (Vec<Row>, Vec<(drgnx_rows::ImageId, String)>) {
+) -> (Vec<Row>, Vec<(rodd::ImageId, String)>) {
     let (rows, images) = build(steps, concs, env, zone, now);
     (rows, images.into_iter().collect())
 }

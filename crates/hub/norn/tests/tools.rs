@@ -520,7 +520,7 @@ async fn hello_cwd_must_be_inside_home() {
 }
 
 fn script(path: &Path, body: &str) {
-    drgnx_exe::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    hlaup::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
 }
 
 /// git for the fixture itself: no overrides, `HOME` in the temporary root.

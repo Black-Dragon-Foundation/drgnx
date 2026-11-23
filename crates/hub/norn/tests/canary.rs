@@ -1,7 +1,7 @@
 //! The personal-notes canary over the Rust-only doors (Urdr Task 19; storage §5.6): `graph/put-parsed` with crafted
 //! payloads (door 1, without the Lisp scan in front of it), the 6 → 7 migration (door 2,
 //! `test/fixtures/work-db-6-canary.sql`), `graph/import` of a tampered export (door 2), `graph/export` (door 5) and
-//! the hub's entity embedder (door 4, `drgnx_ratatoskr::embed::fill`, a dev-dependency) over everything stored, and
+//! the hub's entity embedder (door 4, `ratatoskr::embed::fill`, a dev-dependency) over everything stored, and
 //! the edit history's `history.db` (door 6: a file the deny-list names is never registered, so it is never a document).
 //! The Lisp scan and indexer are the row `privacy/personal-notes-canary`'s.
 //!
@@ -491,9 +491,9 @@ async fn rust_doors_never_store_the_canary() {
     // Door 4, the embedder: a round over every stale entity sends none of the canaries, nor the record the user's deny
     // file kept out after it was stored (it stays in the store, unsent), and the allowed ones are sent.
     let recorder = Recorder::default();
-    let out = drgnx_ratatoskr::embed::fill(&ran.db, &recorder, &fx.deny()).await;
+    let out = ratatoskr::embed::fill(&ran.db, &recorder, &fx.deny()).await;
     assert!(
-        matches!(out, drgnx_ratatoskr::embed::Outcome::Filled { embedded, denied: 1 } if embedded >= 4),
+        matches!(out, ratatoskr::embed::Outcome::Filled { embedded, denied: 1 } if embedded >= 4),
         "door 4: {out:?}"
     );
     let sent = recorder.sent.lock().unwrap().join("\n");
@@ -566,7 +566,7 @@ async fn the_hub_never_writes_org() {
 /// history watches.
 #[test]
 fn history_db_is_the_sixth_door() {
-    use drgnx_ratatoskr::history::{Hub, Tree};
+    use ratatoskr::history::{Hub, Tree};
 
     let fx = Fx::new();
     let git = |args: &[&str]| {

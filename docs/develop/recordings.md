@@ -332,19 +332,19 @@ milliseconds, the look moves off the reader thread.
 - `crates/hub/bifrost/src/engine.rs`: the `Tap` trait (`Gateway::set_tap`): `begin(Sent)` per sent attempt (the
   body and the client's body key-scrubbed, the headers without the sensitive ones), then `head`, each `chunk` and
   `end(End::{Complete, Dropped, ClientLeft { chunk }})`. The exchange is ended before the upstream body is dropped.
-- `crates/hub/drgnx-ratatoskr/src/recording.rs`: `DRGNX_RECORD` / `DRGNX_REPLAY` at start, the `Recorder` (the
+- `crates/hub/ratatoskr/src/recording.rs`: `DRGNX_RECORD` / `DRGNX_REPLAY` at start, the `Recorder` (the
   run's clock, `seq`, one writer thread, the scrubber), the replayer's start and the provider substitution (every
   provider's base becomes `http://127.0.0.1:PORT/p/ID` on the replayer, keyless); the ACP tap (`acp_tap`: the
   connection's number, the manifest's entry, the lines, the exit and the effects), `mcp` and the profile
   substitution (`replayed_profile`).
 - `crates/hub/hermod/src/types.rs`, `conn.rs`: `LineTap`, `Dir`, `ConnOpts::tap`.
-- `crates/hub/drgnx-ratatoskr/src/agents/session.rs` (`launch` gives every connection its tap; `prepare` takes
+- `crates/hub/ratatoskr/src/agents/session.rs` (`launch` gives every connection its tap; `prepare` takes
   the replayed profile), `agents/probe.rs` (a probe's connection is tapped too), `sessions.rs` (`AfterTool` notes
   each MCP call).
 - `crates/hub/conformance/src/bin/ratatoskr-mock.rs`: `llm --replay DIR [--speed N] [--misses FILE] [--parent PID]`;
   `crates/hub/conformance/src/mock_acp/replay.rs`: `acp --replay DIR --as KIND [--speed N] [--misses FILE] [--roots
   JSON] [--strict]`.
-- `crates/hub/drgnx-ratatoskr/src/recording_cli.rs` (`ratatoskr recording lint`), `core/drgnx-record.el` and
+- `crates/hub/ratatoskr/src/recording_cli.rs` (`ratatoskr recording lint`), `core/drgnx-record.el` and
   `bin/drgnx` (`cmd_record`, `cmd_replay`): the commands.
 
 ## Tests
@@ -371,7 +371,7 @@ milliseconds, the look moves off the reader thread.
 - `cargo test -p hermod --test conn` (pattern C): `a_tap_sees_both_directions_in_order`.
 - `cargo test -p runstav --lib recording::` (pattern D) also has `normalize_ignores_the_bridge_binary_and_the_socket_dir`
   (one message under two builds, runtime dirs and roots: one text).
-- `cargo test -p drgnx-ratatoskr --lib` (pattern D): `recording::tests::strict_reaches_the_replayed_agents_command`
+- `cargo test -p ratatoskr --lib` (pattern D): `recording::tests::strict_reaches_the_replayed_agents_command`
   (`DRGNX_REPLAY_STRICT=1` puts `--strict` on the replayer's command), `the_replayer_needs_the_recording_and_scratch_dirs`,
   `agents::launch::tests::a_replayed_launch_sees_the_recording_and_its_scratch_dir`, `recording_cli::tests`.
 - `cargo test -p domr --test replay_strict` (pattern C: the test is the hub): `strict_fails_a_replay_that_left_recorded_lines_unused`,

@@ -12,7 +12,7 @@ dnf -y install python3 python3-pip golang nodejs lldb clang gdb curl unzip strac
 printf 'debugpy==1.8.22 --hash=sha256:a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947\n' > /tmp/req.txt \
     && python3 -m pip install --no-cache-dir --require-hashes -r /tmp/req.txt && rm /tmp/req.txt
 
-# ipykernel for the live notebook rows (drgnx-ratatoskr's notebook::kernel::tests_live): the venv at /opt/nb-kernel, by the
+# ipykernel for the live notebook rows (ratatoskr's notebook::kernel::tests_live): the venv at /opt/nb-kernel, by the
 # install step the GUI test image runs too (nb-kernel.sh, next to this script). This image is the only place the rows run
 # (docs/develop/ci.md, "The debug adapters").
 bash "$(dirname "$0")/nb-kernel.sh"

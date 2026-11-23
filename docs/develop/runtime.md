@@ -32,7 +32,7 @@ runtime/
 
 | Name | What it is |
 |---|---|
-| `drgnx-ratatoskr` (binary `ratatoskr`, symlink `rtsk`) | the runtime: the hub protocol's server |
+| `ratatoskr` (binary `ratatoskr`, symlink `rtsk`) | the runtime: the hub protocol's server |
 | `runstav` (formerly `drgnx-proto`) | the hub protocol's contract: wire types, strict lines, typed decode, proofs, paths ([below](#runstav-the-contract)) |
 | `urdr` | the SQLite store; self-contained, its public API names no drgnx type. `urdr::graph` is the generic graph store of `work.db` schema 7 (the one writer, entities and links with history, walks, search, the read pool, backup, export, excise; [store.md](store.md)): kinds, link names and policy are the caller's |
 | `draugr` (formerly `drgnx-proc`) | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-draugr)); passed fds, the pinned spawner and the git runner ([below](#draugr-passed-fds-and-git)) |
@@ -45,7 +45,7 @@ runtime/
 | `bifrost` | the gateway: admission, tokens, chain fallback, the SSE usage scanner, budget, the HTTP/1.1 upstream client over rustls; self-contained (certificate checks behind its default feature `platform-verifier`). Rust but for `ring`'s C and assembly, so its cross-checks stub the C compiler as urdr's do (below) |
 | `hrafn` | search and the indexer |
 | `hrafn-embed` | Hrafn's embedding side: the pinned model table, the model cache's checks and the built-in embedder; pure Rust, no C, builds for Android ("Hrafn" below) |
-| `huginn` | a reader for the data subset of Emacs Lisp: literal values with byte spans, never evaluated, every reader macro refused; settings files and a serde deserializer (feature `serde`); generic ([settings.md](settings.md#the-data-subset)). `drgnx-ratatoskr` reads `settings.el` and the shipped `runtime-defaults.el` with it ([hub.md](hub.md#settings)) |
+| `huginn` | a reader for the data subset of Emacs Lisp: literal values with byte spans, never evaluated, every reader macro refused; settings files and a serde deserializer (feature `serde`); generic ([settings.md](settings.md#the-data-subset)). `ratatoskr` reads `settings.el` and the shipped `runtime-defaults.el` with it ([hub.md](hub.md#settings)) |
 | `hermod` | an ACP client on `agent-client-protocol-schema`'s types and runstav's line codec (no SDK role framework): stamped updates, message ids, fork at a message, exactly-once exit; generic (agent system part 1, Task 1) |
 | `saga` | the org folder's record formats (plans, ledgers, DEFERRED, the build board, `board.org`) parsed and rendered back byte-exact, turned into graph operations; pure, `pulldown-cmark` for Markdown (agent system part 1, Tasks 5, 6, 14) |
 | `forseti` | the scheduler core: the job model, priority, admission, the memory cap and ladder, kill classes, expected times, placement and fairness; pure, `serde` only, shared by the hub, the runners and jobq ([forseti.md](forseti.md)) |
@@ -54,8 +54,8 @@ runtime/
 | `verdandi` | the edit history: `history.db` (records, documents, branches) on urdr's store, a Loro document per tracked file and branch, the operation log and its settle rule, span revert on element ids; no hub or editor type ([history.md](history.md)) |
 | `vor` | a Debug Adapter Protocol client: framing, requests matched to answers, events and reverse requests, types generated from the protocol's schema; generic, used by the hub's debug sessions ([debugging.md](debugging.md)) |
 | `vordr` | the orchestration gates' pure core: a job's log as rows with failure classes, facts, evidence, the rule pack; pure, `serde` only ([orchestration.md](orchestration.md)) |
-| `drgnx-clock` | the time source the crates' timers read: tokio's, or a virtual clock a test installs ([below](#virtual-clocks-drgnx-clock)); tokio only |
-| `drgnx-exe` | a file written or copied and then run, never busy (ETXTBSY): the writing on a thread with a private file table ([below](#files-written-and-then-run-drgnx-exe)); libc only |
+| `stund` | the time source the crates' timers read: tokio's, or a virtual clock a test installs ([below](#virtual-clocks-drgnx-clock)); tokio only |
+| `hlaup` | a file written or copied and then run, never busy (ETXTBSY): the writing on a thread with a private file table ([below](#files-written-and-then-run-drgnx-exe)); libc only |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
 | `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
 | `drgnx-px` | a networked container job's relay sidecar: the channel's frames, its pure state machine and writer order, the shell both ends run, the `drgnx-px` binary, and the owner's end on gleipnir's proxy; tokio current-thread, libc ([drgnx-px.md](drgnx-px.md)) |
@@ -95,8 +95,8 @@ Android stance. Rust's Android target is `target_os = "android"`, not `"linux"`,
 bwrap) `target_os = "linux"` alone with the Android stance (a stub, or "unsupported") in a comment. Every `cfg` chain
 ends in a fallback that returns `None` or `Unsupported`, never a missing item. Platform code sits in one module or
 function per crate. The type-check (`rustup target add aarch64-linux-android` first) is
-`cargo check --locked --manifest-path Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p heimdall -p drgnx-ratatoskr`.
-`drgnx-ratatoskr` depends on `urdr`, whose bundled SQLite is C, and compiling C for Android needs the NDK. A type-check
+`cargo check --locked --manifest-path Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p heimdall -p ratatoskr`.
+`ratatoskr` depends on `urdr`, whose bundled SQLite is C, and compiling C for Android needs the NDK. A type-check
 does not link, so without the NDK stub the C compiler and archiver: `CC_aarch64_linux_android=/usr/bin/true
 AR_aarch64_linux_android=/usr/bin/true` (the Rust is still checked in full; only the C object files are fake).
 
@@ -691,33 +691,33 @@ What a test does instead:
   one. It says what may not happen.
 
 Exempt: `#[ignore = "timing…"]` tests and `tests/timing.rs`, `skuld/src/wait.rs` (where these functions live) and the
-hub clock's module (`drgnx-ratatoskr/src/clock*`).
+hub clock's module (`ratatoskr/src/clock*`).
 
-## Files written and then run: drgnx-exe
+## Files written and then run: hlaup
 
 On Linux, running a file that any process holds open for writing fails with ETXTBSY ("Text file busy"). A child that
 another thread forks copies the whole file table, the write descriptor included, and holds it until its own `exec`; so
 a script written (or a binary copied) and then run at once fails now and then while other threads fork (every test
-binary's other tests do). A rename keeps the same file and does not help. `crates/drgnx-exe` is the one way the runtime does it: `drgnx_exe::write(path, contents)` (mode 0755),
-`drgnx_exe::copy(from, to)`, or any writing inside `drgnx_exe::private_fds(|| …)`: a thread of its own with its own
+binary's other tests do). A rename keeps the same file and does not help. `crates/hlaup` is the one way the runtime does it: `hlaup::write(path, contents)` (mode 0755),
+`hlaup::copy(from, to)`, or any writing inside `hlaup::private_fds(|| …)`: a thread of its own with its own
 file table (`unshare(CLONE_FILES)`), which no other fork copies. That table starts as a copy, so the thread closes every
 descriptor but 0, 1 and 2 first (a pipe another thread closes meanwhile still ends at once); the closure opens what it
 uses itself. Elsewhere than Linux the closure runs in place. Where `unshare` is refused (Docker's default seccomp profile answers
 EPERM; devcontainers and CI containers run under it) the crate falls back to a process-wide lock instead
-(`drgnx_exe::mode()` says which: `private-table`, `lock` or `direct`; `ratatoskr doctor` prints it as `exe_mode`; `DRGNX_EXE_MODE=lock` forces the lock where `unshare` works, to run a suite as Docker's default profile would): every
-write holds it shared while its descriptor is open, and every spawn wrapped in `drgnx_exe::spawn(|| cmd.spawn())` holds
+(`hlaup::mode()` says which: `private-table`, `lock` or `direct`; `ratatoskr doctor` prints it as `exe_mode`; `DRGNX_EXE_MODE=lock` forces the lock where `unshare` works, to run a suite as Docker's default profile would): every
+write holds it shared while its descriptor is open, and every spawn wrapped in `hlaup::spawn(|| cmd.spawn())` holds
 it exclusively from fork to exec, so no such child holds a write descriptor. draugr's spawn, which starts every job, is
 wrapped; a raw `Command::spawn` elsewhere is outside the lock, so in lock mode `write` and `copy` also wait, once their own descriptor is closed, until no process holds the file open for writing (`/proc/PID/fd` and `fdinfo`: a fork's copy, until its `exec`), at most 5 s: a file made here is never busy, whoever forked.
 The hub uses it for the browser it unpacks and the
 `drgnx-key` it copies into a container job's folder, the runner for its job's `drgnx-key` copy, domr for the hub copies
 and scripts its scenarios run, the escape harness for its probe's copy, and the tests for every stand-in script they run.
 
-## Virtual clocks: drgnx-clock
+## Virtual clocks: stund
 
-A timer in a crate (a kill's grace, a deadline, a debounce) waits through `drgnx_clock::sleep` and `drgnx_clock::timeout`,
+A timer in a crate (a kill's grace, a deadline, a debounce) waits through `stund::sleep` and `stund::timeout`,
 not through tokio or `std::thread`. With nothing installed they are tokio's own. A test installs a `Provider`: the hub's
-virtual clock (`drgnx_ratatoskr::clock`, moved by `__test_advance`) installs itself with `serve --test-clock`, and with the
-`test-hooks` feature `drgnx_clock::Manual` gives a crate's own test a clock it moves by hand (`advance`, `sleepers`) and
+virtual clock (`ratatoskr::clock`, moved by `__test_advance`) installs itself with `serve --test-clock`, and with the
+`test-hooks` feature `stund::Manual` gives a crate's own test a clock it moves by hand (`advance`, `sleepers`) and
 `Manual::scope(future)` runs the code under test on it: only that future's timers read it, so no other test of the process
 sees it (a task it spawns is wrapped in `scope` too). The test waits for the timer
 it expects (`skuld::wait_until_async` on `sleepers()`), then advances (draugr's kill grace is the exception for real
@@ -738,7 +738,7 @@ test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH`,
 run the editor's own CLIs, such as the personal-notes canary) and `DBUS_SESSION_BUS_ADDRESS` are inherited, and
 `DRGNX_RATATOSKR_LOG` and `DRGNX_RATATOSKR_STALL_FILE` (the stall watchdog's reports, hub.md) when set. Without it the hub logs `info` with a session's turn stages at `debug` (`HUB_LOG`:
 sending, the snapshot before the prompt, the prompt written, each update read and applied) and the long request paths'
-stages (target `drgnx_ratatoskr::stages`, `src/stages.rs`: `history/fork`'s source, step, tree, branch and conversation,
+stages (target `ratatoskr::stages`, `src/stages.rs`: `history/fork`'s source, step, tree, branch and conversation,
 the fork tree's git steps, a session launch's bridge, spawn, initialize and open, a tool call's hooks, call and
 after-tool, a debugger tool's gate and work; each line with the ms since the request began), so a failure's log tail
 (below) names the stage a session or request stopped at.
@@ -790,7 +790,7 @@ diagnostics left out), each request is sent on its connection (default `c`, capt
 line with its id within 3 s, is added to the failure (6000 characters of it at most). A row whose red comes only on
 another machine (the macOS lane) names there what the next run must show; the gate-run rows ask `job/status`,
 `exec/list` and `orch/evidence`; `runner/verdict-parsed` asks `status` (the writer's batches and last COMMIT) and
-`job/status`, and starts its hub with `DRGNX_RATATOSKR_LOG=info,drgnx_ratatoskr::runner::propose=debug`, so its log
+`job/status`, and starts its hub with `DRGNX_RATATOSKR_LOG=info,ratatoskr::runner::propose=debug`, so its log
 tail holds `job proposed`: each stage of `job/propose` (plan, pack, id, project, forecast, say, write, after) in
 milliseconds of the hub's clock and `commit_ms`, the last batch's COMMIT, beside the write's whole wait. Unit test
 `scenario::tests::on_failure_is_requests_with_ids`.
@@ -991,8 +991,8 @@ one was deleted, the others became `v1`.)
 | `security/` | `another-uid-is-refused` (`sudo`: as root in the Fedora 45 test image, or through passwordless sudo on macOS) |
 
 ```
-cargo build --locked --manifest-path Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
-cargo test  --locked --manifest-path Cargo.toml -p drgnx-ratatoskr --features test-hooks
+cargo build --locked --manifest-path Cargo.toml -p ratatoskr -p domr --features ratatoskr/test-hooks
+cargo test  --locked --manifest-path Cargo.toml -p ratatoskr --features test-hooks
 target/debug/domr --hub-bin target/debug/ratatoskr --scenarios test/conformance --only 'lifecycle/*'
 ```
 
@@ -1032,7 +1032,7 @@ Rows with `"requires": ["v1"]` (all of them) run against Ratatoskr:
 All rows run with one command:
 
 ```
-cargo build --locked --manifest-path Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
+cargo build --locked --manifest-path Cargo.toml -p ratatoskr -p domr --features ratatoskr/test-hooks
 target/debug/domr --hub-bin target/debug/ratatoskr --scenarios test/conformance
 ```
 
@@ -1049,7 +1049,7 @@ registry's test and the `class_matrix` step read.
 
 A test-hooks hub starts every agent session unsandboxed (`spawn_spec`'s test launch), so no other row runs the launch a
 user gets. `real-start/*` rows (`requires` `real-sandbox`) run against a **release** hub on a host whose sandbox starts:
-`cargo build --release -p drgnx-ratatoskr -p domr`, then `domr --hub-bin target/release/ratatoskr --scenarios
+`cargo build --release -p ratatoskr -p domr`, then `domr --hub-bin target/release/ratatoskr --scenarios
 test/conformance --only 'real-start/*' --require-all` (a Linux host with bwrap and user namespaces, a VM, or a podman
 container with `--security-opt unmask=ALL`). Against a test-hooks hub, or where `sandbox check` fails, they are
 excused skips that name the reason.
@@ -1068,7 +1068,7 @@ user namespaces, a kernel below ABI 9), the browser rows are excused skips. The 
 
 ### The real browser tests
 
-`drgnx-ratatoskr/tests/browser_real.rs` (`test-hooks`) runs the CDP broker against real browsers, one test per kind:
+`ratatoskr/tests/browser_real.rs` (`test-hooks`) runs the CDP broker against real browsers, one test per kind:
 Fedora's `chromium-headless` (the headless shell) and the full `chromium`. Each starts `ratatoskr browser-host
 --unconfined` with the real program, a broker over it, and `ratatoskr-mock cdp-drive` as the agent, which navigates a
 `data:` page and an `http-serve` page; a raw CDP client of the test then checks that `Target.exposeDevToolsProtocol` is
@@ -1120,7 +1120,7 @@ The writer-level group-commit number, with `secure_delete` on and off, is `urdr`
 (`cargo test -p urdr --bench group_commit --release -- --ignored --nocapture`).
 
 ```
-cargo build --locked --release --manifest-path Cargo.toml -p drgnx-ratatoskr -p domr
+cargo build --locked --release --manifest-path Cargo.toml -p ratatoskr -p domr
 target/release/domr --hub-bin target/release/ratatoskr --scenarios test/conformance \
     --only 'perf/*' --perf perf.json
 ```
@@ -1617,7 +1617,7 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   screen (never a key). `builtin_record(spec, embed_text_version)` is a model-table row's record: CLS, normalised, the row's
   dims, token limit and prefixes, and its pinned `.safetensors` sum.
 
-- **The download (`drgnx-ratatoskr/src/search/`).** `download` fetches exactly a table row's files into `<cache>/models`, from
+- **The download (`ratatoskr/src/search/`).** `download` fetches exactly a table row's files into `<cache>/models`, from
   `drgnx-search-model-mirror` or the Hugging Face host at `{base}/{repo}/resolve/{revision}/{file}`, and only with a `Consent`
   whose model and bytes match; the consent is kept in `runtime.db`'s `kv` (`search.consent`). The target of `resolve/` is a
   signed URL on another host, so redirects are followed by hand: at most 3, to https only (plain http only between loopback
@@ -1664,7 +1664,7 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   the CPU path misses too, nothing embeds and only keyword and symbol results remain.
 - **Pacing (`hrafn_embed::pace`).** A batch's worst submit over 8 ms halves the token budget, under 4 ms doubles it, up to
   `TOKEN_CAP`; it starts at 2,048 and never stays below the chunk that leads the next batch.
-- **The embed worker (`ratatoskr embed-worker`, `drgnx-ratatoskr/src/search/worker.rs`).** A child process, the only one
+- **The embed worker (`ratatoskr embed-worker`, `ratatoskr/src/search/worker.rs`).** A child process, the only one
   that opens a GPU, started by `WorkerEmbedder` on demand: JSON lines in (`{"id", "kind": "doc"|"query", "texts"}`) and
   out (`{"id", "vectors"}` or `{"id", "error"}`), first `{"ready": {"device", "name", "why"}}`, and `{"fallback": {"from",
   "reason"}}` when a lost GPU sends the batch again on the CPU path. A query that arrives during a request is answered
@@ -1822,7 +1822,7 @@ release.
 Users get the binary from install.sh and `drgnx update`; both call `drgnx runtime` (bin/drgnx, plain bash):
 
 - `drgnx runtime build [--install] [--prefix DIR]`: `cargo build --release --locked -j N --manifest-path
-  Cargo.toml -p drgnx-ratatoskr`, with **no** `test-hooks` feature. The cargo is the one in `<data>/cargo`
+  Cargo.toml -p ratatoskr`, with **no** `test-hooks` feature. The cargo is the one in `<data>/cargo`
   (install.sh records it, with `RUSTUP_HOME`/`CARGO_HOME` lines for a private rustup), else `cargo` on `PATH`; neither:
   exit 1, "no Rust toolchain: run install.sh again". `CARGO_TARGET_DIR` is `<cache>/ratatoskr-target`, `CARGO_HOME`
   `<cache>/cargo` unless the record sets it, `DRGNX_BUILD_COMMIT` is the checkout's HEAD (plus `-dirty`) and
@@ -1846,13 +1846,13 @@ for real.
 
 ## Fuzzing
 
-`crates/hub/fuzz/` is a cargo-fuzz crate with its own `[workspace]` (the product workspace excludes it). It builds on
+`crates/hub/hrista/` is a cargo-fuzz crate with its own `[workspace]` (the product workspace excludes it). It builds on
 nightly only: the pin is `nightly-2026-10-15`, set by the CI job and by local runs, never by a `rust-toolchain.toml`
 (a toolchain file would make a plain `cargo` there install a nightly). cargo-fuzz needs a C++ compiler for libFuzzer
 (`g++`: CI's `fuzz-build` job runs on the Ubuntu runner, which has it; 60 s a target on a push to `main` or `ci/*`, 10 minutes a target
 daily, `fuzz_minutes` on demand: [ci.md](ci.md)). CI builds every target once (`cargo fuzz build`, the build `cargo fuzz
 run` makes) and passes each of the four shards its targets' binaries as an artifact (`fuzz-bins-N`, one day); a shard
-runs each binary as `cargo fuzz run` does (`-artifact_prefix=crates/hub/fuzz/artifacts/<target>/`, the corpus directory,
+runs each binary as `cargo fuzz run` does (`-artifact_prefix=crates/hub/hrista/artifacts/<target>/`, the corpus directory,
 `ASAN_OPTIONS=detect_odr_violation=0`).
 
 | Target | What it feeds |
@@ -1888,9 +1888,9 @@ runs each binary as `cargo fuzz run` does (`-artifact_prefix=crates/hub/fuzz/art
 | `hook_rules` | JSON through `norn::hooks::parse_rules` (`drgnx-agents-hook-rules`): no panic, and a list that is taken has unique ids of 1 to 32 `[a-z0-9-]` and a reason on every rule |
 | `drgnx_context` | JSON as an agent's `_drgnx/context` notification and `_drgnx/before_tool` request through the hub's checks (size, own session, schema with unknown fields refused): no panic, a breakdown that is taken respects its bounds and round-trips, one from another session is never taken |
 | `cdp_envelope` | bytes as one browser connection through heimdall: NUL-split under a limit the first byte picks, each message's first byte choosing the agent, the browser or the agent's close; every envelope parses or is refused without a panic, whatever goes to the browser is a command with an id and no NUL, and no refused method from the agent reaches it; the same bytes through the frame decoder whole and in two pieces give the same frames |
-| `px_frames` | bytes, cut into chunks of a size the first byte picks, through the relay's frame decoder (`drgnx_px::frame::Decoder`): no panic, never more than one frame's bytes held, and the frames it returns re-encode to exactly the bytes it consumed; seed corpus `crates/hub/fuzz/corpus/<target>` (hand-made frames and op sequences: a session, the control frames, a key stream, unknown kinds, partial frames) ([drgnx-px.md](drgnx-px.md)) |
-| `px_owner` | bytes as the relay sidecar's output into the owner's end (`drgnx_px::owner::run`), its input a sink: no panic, and it ends at the output's end (a partial frame included), by a violation or with the ids used up, never a stall; seed corpus `crates/hub/fuzz/corpus/<target>` (hand-made frames and op sequences: a session, the control frames, a key stream, unknown kinds, partial frames) ([drgnx-px.md](drgnx-px.md)) |
-| `px_mux` | bytes as a sequence of both ends' inputs into the relay's `Mux` and `Pending` (opens, bytes within the credit, ends, resets, drains, each writer taking a frame, each reader stepping one, frames injected as the peer's): no panic, every `Deliver` within what the end credited and never more than the window queued, and no `FIN` before its stream's last `DATA` or `OPEN` out of id order; seed corpus `crates/hub/fuzz/corpus/<target>` (hand-made frames and op sequences: a session, the control frames, a key stream, unknown kinds, partial frames) ([drgnx-px.md](drgnx-px.md)) |
+| `px_frames` | bytes, cut into chunks of a size the first byte picks, through the relay's frame decoder (`ferja::frame::Decoder`): no panic, never more than one frame's bytes held, and the frames it returns re-encode to exactly the bytes it consumed; seed corpus `crates/hub/hrista/corpus/<target>` (hand-made frames and op sequences: a session, the control frames, a key stream, unknown kinds, partial frames) ([drgnx-px.md](drgnx-px.md)) |
+| `px_owner` | bytes as the relay sidecar's output into the owner's end (`ferja::owner::run`), its input a sink: no panic, and it ends at the output's end (a partial frame included), by a violation or with the ids used up, never a stall; seed corpus `crates/hub/hrista/corpus/<target>` (hand-made frames and op sequences: a session, the control frames, a key stream, unknown kinds, partial frames) ([drgnx-px.md](drgnx-px.md)) |
+| `px_mux` | bytes as a sequence of both ends' inputs into the relay's `Mux` and `Pending` (opens, bytes within the credit, ends, resets, drains, each writer taking a frame, each reader stepping one, frames injected as the peer's): no panic, every `Deliver` within what the end credited and never more than the window queued, and no `FIN` before its stream's last `DATA` or `OPEN` out of id order; seed corpus `crates/hub/hrista/corpus/<target>` (hand-made frames and op sequences: a session, the control frames, a key stream, unknown kinds, partial frames) ([drgnx-px.md](drgnx-px.md)) |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and
 `jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send), the unit tables (gleipnir's targets) and, for
@@ -1909,10 +1909,10 @@ directory):
 export RUSTUP_HOME=/path/to/scratch/rustup CARGO_HOME=/path/to/scratch/cargo
 rustup toolchain install nightly-2026-10-15 --profile minimal
 cargo install cargo-fuzz --locked
-cp -r crates/hub/fuzz/corpus /path/to/scratch/corpus
-cargo +nightly-2026-10-15 fuzz run line_codec --fuzz-dir crates/hub/fuzz /path/to/scratch/corpus/line_codec \
+cp -r crates/hub/hrista/corpus /path/to/scratch/corpus
+cargo +nightly-2026-10-15 fuzz run line_codec --fuzz-dir crates/hub/hrista /path/to/scratch/corpus/line_codec \
   -- -max_total_time=60 -rss_limit_mb=2048
 ```
 
-A crash is written to `crates/hub/fuzz/artifacts/<target>/` (ignored by git). Commit the input as a regression test in
+A crash is written to `crates/hub/hrista/artifacts/<target>/` (ignored by git). Commit the input as a regression test in
 `runstav` (or the crate that owns the parser) before fixing it.

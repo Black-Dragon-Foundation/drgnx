@@ -19,7 +19,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   and never a provider key (`drgnx-hub-ensure` unsets every provider's `:key-env` for the start). Keys come over the
   socket instead (`gateway/keys`, below). Its `PATH` is the starting Emacs's, until an Emacs that read the user's
   login shell (`core/drgnx-shell-env.el`, at start and Shell: Reload Environment) finds `PATH`
-  changed and sends `env/set`. The front serves `env/set` itself (`drgnx-ratatoskr/src/shell_env.rs`): the variables
+  changed and sends `env/set`. The front serves `env/set` itself (`ratatoskr/src/shell_env.rs`): the variables
   are an overlay in the hub's memory (`ShellEnv`), and every process the hub starts next (agent sessions, jobs, podman,
   git for plan runs) takes its environment from the process's with the overlay applied, so `PATH` is the login
   shell's directories, then the hub's own that the shell's do not name. The hub's own environment is never changed.
@@ -33,7 +33,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   proved itself), also to a hub that restarted. The hub is never restarted for that: a restart would end its durable
   sessions. Rust ignores SIGPIPE in its own processes, so a write to a connection an agent closed is an error and never
   the hub's end.
-- **Ratatoskr** (`crates/hub/drgnx-ratatoskr`, binary `ratatoskr`; [runtime.md](runtime.md)), the hub: the only
+- **Ratatoskr** (`crates/hub/ratatoskr`, binary `ratatoskr`; [runtime.md](runtime.md)), the hub: the only
   server, the only writer of `work.db` and the owner of every agent session and job.
   `ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]`,
   `ensure`, `stop`, `status`, `doctor --json`, `restart` ([below](#starting-stopping-and-restarting-ratatoskr)) and
@@ -73,7 +73,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   the newest 7 kept, written by tracing-appender's non-blocking worker). Warnings and errors also go to stderr, behind
   `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
   string (`info`, the default, with Loro's crates `loro_internal` and `loro` at `warn`: loro-internal logs nine info
-  lines for every block it encodes; `warn,drgnx_ratatoskr::conn=debug`; a string given is taken as it is). The cap, keys and params are never logged. The
+  lines for every block it encodes; `warn,ratatoskr::conn=debug`; a string given is taken as it is). The cap, keys and params are never logged. The
   stall watchdog (`stall.rs`) watches the runtime's two async workers: a task beats every 50 ms, and a plain thread
   warns `the runtime stalled` when a beat is later than the threshold or a named task's poll has run that long, with
   every poll in progress (thread, task name, how long) and, on Linux, each worker's kernel state, wait channel and
@@ -94,7 +94,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   job until the hub gets SIGUSR1, with one write queued behind it, so a test sees the end close its connections first
   and then write that queue, or a second SIGTERM abandon it; only SIGUSR1 releases the job, never the runtime's end),
   and `--agent-socket SID[:JOB]`, which is refused without `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent, so a hub a test starts through `ensure` ends with the test.
-- **The gateway** (`drgnx-ratatoskr/src/gateway.rs`, forwarding by `bifrost`) runs inside the hub: never in the
+- **The gateway** (`ratatoskr/src/gateway.rs`, forwarding by `bifrost`) runs inside the hub: never in the
   editing Emacs, so streaming cannot touch the keystroke budget. Besides the 127.0.0.1 port it listens on **per-session
   Unix sockets** (`gateway.sock` in the session's private directory beside `mcp.sock` and `hub.sock`, for agents in a
   sandbox without the host's loopback). Same path allowlist and token check as the port; the socket is mode 0600 and a
@@ -264,7 +264,7 @@ Built only with the `test-hooks` feature; a release build has none of them.
 
 ### The hub clock
 
-Every timer of the hub and every reading of its time go through `drgnx-ratatoskr/src/clock.rs`: `clock::now()` (a
+Every timer of the hub and every reading of its time go through `ratatoskr/src/clock.rs`: `clock::now()` (a
 `tokio::time::Instant`), `wall()` and `wall_secs()` (the time of day), `sleep`, `timeout`, `interval` (a late tick
 moves the next ones), and `spawn(origin, future)`, which names a task (`"module:what"`). In a release build each is
 tokio's or std's, inlined. `real_now()` is real time on every clock, for a blocking thread's limit on something outside
@@ -504,7 +504,7 @@ the ping probe within its second (a busy one: thirty agents streaming) still cou
 so `drgnx-hub-ensure` does not fail on a hub that is there. It also sets `DRGNX_HUB_PARENT_PID` to its own pid, which a hub
 inherits: a hub whose parent is gone exits (checked each second), so an interrupted run leaves none behind.
 
-**Ratatoskr's socket** (`crates/hub/drgnx-ratatoskr`: `lock.rs`, `conn.rs`, `server.rs`) keeps the same path,
+**Ratatoskr's socket** (`crates/hub/ratatoskr`: `lock.rs`, `conn.rs`, `server.rs`) keeps the same path,
 lines and limits, with these differences:
 - **The lock is a file**, `hub-HASH.sock.lock`, under an exclusive `flock` held for the hub's life. The kernel drops
   the lock with the process, so a crashed Ratatoskr leaves no stale lock. The file holds `"PID START_TIME\n"` for
@@ -572,7 +572,7 @@ that copy is gone too. `a_drain_reads_what_the_socket_holds_before_the_reactor_s
 
 ### hello and versions
 
-Ratatoskr's `hello` (protocol v1, `crates/hub/drgnx-ratatoskr/src/hello.rs`) closes SB-T12-6: a hello line is
+Ratatoskr's `hello` (protocol v1, `crates/hub/ratatoskr/src/hello.rs`) closes SB-T12-6: a hello line is
 worth nothing on another connection, because each connection's challenge differs.
 
 1. On accept the hub sends `{"event":"challenge","data":{"nonce":HUB_NONCE}}`, 32 lowercase hex from 16 random bytes.
@@ -662,7 +662,7 @@ gateway's methods, `gateway/{register,unregister,keys,set-budget}` and `spend`, 
 ## Every method is the hub's
 
 Ratatoskr serves every method of the registry itself: there is no second process behind it, so nothing is
-forwarded and no child Emacs is started. `Front::line` (`crates/hub/drgnx-ratatoskr/src/front.rs`) routes the
+forwarded and no child Emacs is started. `Front::line` (`crates/hub/ratatoskr/src/front.rs`) routes the
 decoded params with one `match` over `Params` that has no catch-all arm: the front's own methods (above), then the
 agent core's, the store's and the coordination writes, each listed by name. A method added to the registry without a
 handler does not compile, and `runstav::registry::tests::every_method_is_served` checks that every method has a
@@ -684,7 +684,7 @@ through the request line, its parsed JSON and a plain string before the secret t
 is no claim of zeroisation.
 
 **The front's writes.** The front writes work.db's coordination and job tables itself, through norn's writer
-(`crates/hub/drgnx-ratatoskr/src/coord.rs`; [coordination.md](coordination.md#who-writes-what)): the editor's
+(`crates/hub/ratatoskr/src/coord.rs`; [coordination.md](coordination.md#who-writes-what)): the editor's
 `cards/settle`, `messages/send`, `messages/mark`, `events/add` and `review/mark`, and the `coord/*` methods. Each is
 decoded by the registry, written in one transaction and answered typed. A work.db that is not ready (below schema 6, or a migration that failed) is `internal` with the
 opening rule's text (the writer looks at the file once more first); a newer one is `schema`; a busy one `internal` "work.db is busy; retry" (a
@@ -1221,7 +1221,7 @@ on). Each method's shape: [store.md](store.md#the-stores-methods-task-15b).
 ## Settings history
 
 The front also records the history of your settings (unified settings design §12; the code is
-`crates/hub/norn/src/write/options.rs`, served from `drgnx-ratatoskr/src/graph.rs`). The settings files stay the
+`crates/hub/norn/src/write/options.rs`, served from `ratatoskr/src/graph.rs`). The settings files stay the
 truth: the hub never writes one, and nothing it records applies a value.
 
 - **`settings/record {changes: [{id, value, file, line?}], tool, req, reverts?}` → `{tx}`** (user class). The editor sends it after each write of a settings file, and after it reads
@@ -1250,7 +1250,7 @@ truth: the hub never writes one, and nothing it records applies a value.
 
 The tools `settings_get` and `settings_change` (`crates/hub/norn/src/tools/settings.rs`; design §13) are every
 agent's. The hub never writes a settings file: it asks the editor, through two events to the subscribers (every
-subscriber is a user's connection; none is no editor; `drgnx-ratatoskr/src/settings/agents.rs`), and the editor
+subscriber is a user's connection; none is no editor; `ratatoskr/src/settings/agents.rs`), and the editor
 answers with two methods.
 
 - **`settings_change {scope, name, value, reason}`**: `scope` is `global`, `private` or `shared`; the id is
@@ -1268,7 +1268,7 @@ answers with two methods.
   or no answer in time). Without a grant: an `access` card whose `data.setting` holds the request and whose choices
   are `once`, `session` and `refuse` (an open card of the same session and change is the same card); the tool answers
   `{card: N}`.
-- **The card** (`cards/settle`, `drgnx-ratatoskr/src/graph.rs`): `once` and `session` (the user's only: the backend's
+- **The card** (`cards/settle`, `ratatoskr/src/graph.rs`): `once` and `session` (the user's only: the backend's
   connection only refuses) check the request again and make, in the settle's tx, an `options` grant of the card's one
   setting for its session (`session`: a day; `once`: 60 s, revoked as soon as the change is proposed, and bound to the
   card: it covers only the tx whose request key is `settings-card:CARD`, the hub's proposal of the card's value, so
@@ -1928,7 +1928,7 @@ socket's path there must fit 103 bytes. The agent's side, the bridge, is in
 
 ## Sessions
 
-The hub holds agent sessions itself (`drgnx-ratatoskr/src/agents/`; agent system part 1, Task 8a). It is each
+The hub holds agent sessions itself (`ratatoskr/src/agents/`; agent system part 1, Task 8a). It is each
 session's ACP client (`hermod`): `agents/start` takes a profile (settings: `drgnx-agents-profiles`), starts the
 agent, runs `initialize` (with `fs` read and write offered, never `terminal`) and `session/new`, and answers the id
 and name. The session is recorded in `runtime.db` (`asession`, migration 5) and in the graph as a `session` entity
@@ -2574,7 +2574,7 @@ turn delays the restart, an idle session does not.
 ## Rows
 
 A hub-fed view gets finished rows from the hub and only inserts them (`wb/drgnx-view.el`'s inserter). The format,
-its builder, the fitter and the SVG writer are in the crate `drgnx-rows` (no I/O, no clock, no platform dependency:
+its builder, the fitter and the SVG writer are in the crate `rodd` (no I/O, no clock, no platform dependency:
 it builds for Android too).
 
 - **A row** `{key, text, runs: [[start, end, face]], props: [[start, end, name, value]], stops: [[pos, px]], images:
@@ -2585,12 +2585,12 @@ it builds for Android too).
   has: `(space :width (W))`) in its run's face. Empty lists are left out. Runs may
   overlap: the editor adds them in order, each below those before it (a card's box face under its text's faces).
 - **Faces by `FaceId`.** Rust never spells a drgnx face as a string: it writes `FaceId::TextMuted.name()` (or a
-  family's `FaceId::AGENT[i].name()`), from the generated `drgnx_rows::faces` (`bin/drgnx design`; see
+  family's `FaceId::AGENT[i].name()`), from the generated `rodd::faces` (`bin/drgnx design`; see
   `docs/develop/design-system.md`, "Generated code"), so a renamed or removed face is a compile error. `RowBuilder`
   keeps its `&str` API. The lint `drgnx-lint/rust-faces-through-the-enum` (`test/unit/lint-kit-test.el`) counts the
   face literals and family `format!`s left per file against `drgnx-lint-kit--rust-face-literals-not-yet`, which only
   falls; the standard faces (`default`, `bold`, `error`, …) are left as words.
-- **The kit.** A view builds a kit component (`etc/ui/components.eld`) with `drgnx_rows::kit`: a `Comp` (JSON
+- **The kit.** A view builds a kit component (`etc/ui/components.eld`) with `rodd::kit`: a `Comp` (JSON
   `{"c": "row", "kind": "tree", "depth": 2, "twisty": true, "text": …, "state": "selected", "action": {"kind", "args"}}`)
   and a `KitEnv` (`ViewEnv::kit()`: the env's scale, whether it is a terminal, its `glyphs`, `ascii` and `density`) go through
   `kit::expand(&mut builder, &kit_env, &comp)` (inline, onto the row being built) or `kit::expand_rows(&kit_env, key,
@@ -2617,7 +2617,7 @@ it builds for Android too).
   class) from version `base` to `version`. `ops` apply in order: `{reset: [row]}` (the view is exactly these rows),
   `{insert: {after: key | null, rows}}`, `{replace: [row]}` (each by its key), `{remove: [key]}`. `images` carries the
   images the rows name that the editor may not hold yet.
-- **Styles and terminal state** (a terminal's view; `drgnx_rows::style`). A patch may carry `styles: [[id, {fg, bg,
+- **Styles and terminal state** (a terminal's view; `rodd::style`). A patch may carry `styles: [[id, {fg, bg,
   ul_color, bold, faint, italic, underline, strike, inverse, blink}]]`, each style sent once and kept by the editor
   until the next reset (a reset carries every style its rows name). A run names a style as the face `s:<id>`
   (`Face::Style`). A colour is `{ansi: 0..15}`, `{rgb: "#rrggbb"}` (program data, the 256-colour cube included, never
@@ -2701,11 +2701,11 @@ All of it is in memory only.
   foreground is the face `drgnx-term-color-N` itself (it inherits `ansi-color-*` and resets the background), so a
   remap or a theme shows on rows already inserted; the other attributes, program colours and ansi backgrounds become
   one anonymous face per distinct style, from a per-buffer LRU of 4,096 (`drgnx-view-patch-style-face-max`).
-- **SVG images** (lanes, band tiles, chips) are drawn with `drgnx_rows::svg`, which takes palette roles, never colour
+- **SVG images** (lanes, band tiles, chips) are drawn with `rodd::svg`, which takes palette roles, never colour
   literals: each colour comes from the env's `palette` (the theme's faces, read through `core/drgnx-color.el`'s
   callers), a role the palette lacks is drawn in `currentColor`, and a palette value that is not a `#hex` or a
   colour name is never written. An image's id is its content hash and the epoch it was drawn at, so a theme change
-  never reuses an old tile. `drgnx_rows::image::ImageSet` keeps a (view, class)'s images and picks the ones a patch
+  never reuses an old tile. `rodd::image::ImageSet` keeps a (view, class)'s images and picks the ones a patch
   carries.
 
 ### The native view model (`view-model`)
@@ -2770,7 +2770,7 @@ mark leaves. Unit: `outline_follows_the_users_choice`, `open_huddle_is_on_the_st
 
 ### Fitting: text to a pixel width
 
-A builder fits each label to its segment's width with `drgnx_rows::fit` (the terminal: `fit_tty`, in columns). The
+A builder fits each label to its segment's width with `rodd::fit` (the terminal: `fit_tty`, in columns). The
 hub sums the advances of the font file Emacs uses for the role (`view/env`'s `fonts`), read with skrifa, and trims
 with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an estimate: no shaping, kerning or hinting.
 
@@ -2790,7 +2790,7 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   ends of its box (`pad`: half what the box adds to the probe as drawn, so a frame that scales boxes is counted),
   which a run adds at each end. Until the answer comes a face
   measures as `ui`, and the rows are built again when it does.
-- **No row wider than its window.** The hub fits every row it publishes (`drgnx_rows::fit_row`, in `Store::publish`
+- **No row wider than its window.** The hub fits every row it publishes (`rodd::fit_row`, in `Store::publish`
   and `publish_splice`), whatever its builder did: each segment (the text before the first stop, between two stops,
   after the last) is measured as drawn, each char in the font of the topmost run whose face sets one (a face that sets
   only colours draws in the font of the faces under it), images at their SVG's width, spaces at theirs, boxes'
@@ -2820,11 +2820,11 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   own placing) the first char's advance stands; the row's fit corrects it.
 
 - **Measured against Emacs.** `test/ui/rows-fit-gui-test.el` compares the sums (`test/fixtures/rows-fit-sums.eld`,
-  written by `drgnx-rows`' `fit_sums`) with `string-pixel-width` for 40-char Latin, digit and punctuation strings in
+  written by `rodd`' `fit_sums`) with `string-pixel-width` for 40-char Latin, digit and punctuation strings in
   Inter and JetBrains Mono at 11 to 16 px. The rounding with the smaller largest error is `fit::ROUNDING`: each
   advance rounded to whole pixels (largest error 4.0 px; the fractional sum's was 16.4 px, as Emacs places glyphs on
   whole pixels). The error must stay within the slack.
-- **No I/O in the crate.** `drgnx-rows` measures through the `Measure` trait over bytes handed in, so the builders
+- **No I/O in the crate.** `rodd` measures through the `Measure` trait over bytes handed in, so the builders
   (vegvisir too) stay testable in every order. The hub's `view/fonts.rs` reads each file once when a `view/env`
   names it (at most 64 files, none over 64 MiB), and drops it when no env names it.
 - **The editor's advances win.** Every char measured is asked of the editor once per (role, char) in `view-glyphs`;
@@ -2863,7 +2863,7 @@ and `prefer`, a fingerprint. The MCP and CLI clients print the label where they 
 
 ### Text search as rows (`search/run`)
 
-The Search view's results are a row stream under the rules above (`crates/hub/drgnx-ratatoskr/src/view/search/`:
+The Search view's results are a row stream under the rules above (`crates/hub/ratatoskr/src/view/search/`:
 `mod.rs` the runs, `rows.rs` the rows and the model, `run.rs` the match ids, the carried unticks and the files'
 snapshots; the search itself is `hrafn::grep`).
 
@@ -3019,7 +3019,7 @@ snapshots; the search itself is `hrafn::grep`).
 
 ### Search writes (`search/edits`, `search/apply`, `search/undo`)
 
-The Search view's one write path (`crates/hub/drgnx-ratatoskr/src/view/search/edits.rs`, `apply.rs`): Replace All,
+The Search view's one write path (`crates/hub/ratatoskr/src/view/search/edits.rs`, `apply.rs`): Replace All,
 Replace This, Undo Replace and Symbol mode's rename go through it, so a write never lands behind an open buffer.
 
 - `search/edits {view, ids?, off?, replace?, edits?, root?}` makes the edit set: the matches of the view's search (all
@@ -3078,7 +3078,7 @@ Replace This, Undo Replace and Symbol mode's rename go through it, so a write ne
 
 ### Recent and saved searches (`search/recent`, `search/saved/*`)
 
-The Search view's history, per project root (`crates/hub/drgnx-ratatoskr/src/search/saved.rs`). A search is a
+The Search view's history, per project root (`crates/hub/ratatoskr/src/search/saved.rs`). A search is a
 `SearchSpec`: `query` (`{mode: "text", text, case?, word?, regexp?}`, `{mode: "symbol", name, case?}` or `{mode:
 "meaning", question}`), `replace?`, `scope?` (`{kind, base?, changed_lines?}`; the open files of File and Open are
 never kept), `include?`, `exclude?`.
@@ -3151,7 +3151,7 @@ Explorer listing that its watch relisted (a name made or removed outside Emacs) 
 
 ### Ranked file names as rows (`search/files`)
 
-Quick Open's and Find's candidates are a row stream too (`crates/hub/drgnx-ratatoskr/src/view/files.rs`; the list
+Quick Open's and Find's candidates are a row stream too (`crates/hub/ratatoskr/src/view/files.rs`; the list
 and the ranking are `hrafn::rank`).
 
 - `search/files {view, root, query, n?, ignore?, name?, exclude?}` stops the view's earlier query and answers
@@ -3180,7 +3180,7 @@ and the ranking are `hrafn::rank`).
 
 ### The Explorer's listing as a tree (`explorer/subscribe`)
 
-The Explorer's folders, listed by the hub as a model and rows (`crates/hub/drgnx-ratatoskr/src/view/explorer.rs`).
+The Explorer's folders, listed by the hub as a model and rows (`crates/hub/ratatoskr/src/view/explorer.rs`).
 
 - `explorer/subscribe {view, roots, expanded?, compact?, indent?, exclude?, only?, window?, around?}` stops the view's earlier listing and answers `{listing}`. A
   thread then reads each root (1 to 16 existing folders) and, inside it, each folder of `expanded` (at most 10000, no
@@ -3246,7 +3246,7 @@ The Explorer's folders, listed by the hub as a model and rows (`crates/hub/drgnx
 
 ### The Buffers panel's rows (`buffers/set`)
 
-The Open list's rows, built by the hub from what the editor says is open (`crates/hub/drgnx-ratatoskr/src/view/buffers.rs`;
+The Open list's rows, built by the hub from what the editor says is open (`crates/hub/ratatoskr/src/view/buffers.rs`;
 the editor's side is `wb/drgnx-buffers.el`).
 
 - `buffers/set {view, ops}` applies OPS in order to the (connection, view)'s open buffers and answers `true`; every class
@@ -3269,7 +3269,7 @@ the editor's side is `wb/drgnx-buffers.el`).
 ### The Source Control view (`scm/*`, `git/*`)
 
 The side bar's Source Control rows: the repositories of the workspace, each one's changes and its commit graph, built
-by the hub (`crates/hub/drgnx-ratatoskr/src/view/scm.rs` and `view/scm/`; the methods are
+by the hub (`crates/hub/ratatoskr/src/view/scm.rs` and `view/scm/`; the methods are
 `runstav::methods::scm`; the editor's side is `modules/tools/drgnx-scm.el`). Git runs in the hub, never in Emacs.
 
 - `scm/subscribe {view, roots, active?, view_as}` starts the view: the hub finds the repositories under ROOTS on a
@@ -3310,7 +3310,7 @@ never a fixed time; the GUI scenario is `drgnx-scenario/scm-stage-and-commit-by-
 ### The Outline panel's rows (`outline/set`)
 
 The Outline section's rows: the definitions of the file in the editor, built by the hub with Hrafn's parse
-(`hrafn::symbols::outline_text`; `crates/hub/drgnx-ratatoskr/src/view/outline.rs`; the editor's side is
+(`hrafn::symbols::outline_text`; `crates/hub/ratatoskr/src/view/outline.rs`; the editor's side is
 `wb/drgnx-outline.el`).
 
 - `outline/set {view, file?, folded?}` says the (connection, view) shows FILE now (absolute, at most 4096 bytes; none:
@@ -3496,7 +3496,7 @@ A note queued for the agent is a row there too (`c:q:N`, "queued N  text   (e ed
 `drgnx-agent-panel-queued` N, which the edit and drop commands read at point). The composer is not a row: it is a
 buffer of its own in the window under the transcript.
 
-The transcript of an agent session, as rows the panel only inserts (`crates/hub/drgnx-ratatoskr/src/view/panel.rs`;
+The transcript of an agent session, as rows the panel only inserts (`crates/hub/ratatoskr/src/view/panel.rs`;
 the rows themselves are `agents/session/rows.rs`, pure).
 
 - **The view.** An editor that shows session SID's panel sends `view/env` for the view `agent-panel/SID`; the hub sends
@@ -3598,7 +3598,7 @@ A path that leaves `root` is refused (`file`). The editor's agent line asks it o
 ## Sessions and their sockets
 
 Under Ratatoskr the coordination tools (`norn::tools`, served by `mimir`) run in the hub itself, with no server
-process per connection (`crates/hub/drgnx-ratatoskr/src/sessions.rs`). Two doors lead to them, and neither takes
+process per connection (`crates/hub/ratatoskr/src/sessions.rs`). Two doors lead to them, and neither takes
 an identity from the agent: not from a tool's arguments, and never from `DRGNX_AGENT` (the hub's own is ignored).
 
 - **A session's socket (`mcp/session`, user).** `{agent, sid?, job?, task?, cwd?, owner}` answers `{sid, socket}`.
@@ -3647,7 +3647,7 @@ A sandboxed session whose network cell is provider-only or provider-and-packages
 makes: the hub never grants `Open`) has no network but its sandbox's relay port, 3128, whose other end is
 `proxy.sock` in its session directory (`runstav::paths::SESSION_PROXY_SOCKET`; the spec sets
 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` to it, [gleipnir.md](gleipnir.md)). The hub serves that socket
-(`crates/hub/drgnx-ratatoskr/src/agents/net.rs`):
+(`crates/hub/ratatoskr/src/agents/net.rs`):
 
 - **One proxy per session**, Gleipnir's CONNECT-only allowlist proxy (`gleipnir::net::proxy`, as a container job's),
   held in `agents::net::SessionNet`. `launch()` binds it after the session's MCP bridge and the prepared sandbox spec
@@ -3686,7 +3686,7 @@ Rows: `test/conformance/sandbox-net/`. The real launch: `tests/launch_sandboxed.
 
 A session with the agent browser reaches the web only through its web relay port, 3130, whose other end is `web.sock`
 in its session directory (`runstav::paths::SESSION_WEB_SOCKET`). The hub serves it with **a web proxy of its own per
-session** (`crates/hub/drgnx-ratatoskr/src/browser/web.rs`): a `gleipnir::net::proxy` under the web policy
+session** (`crates/hub/ratatoskr/src/browser/web.rs`): a `gleipnir::net::proxy` under the web policy
 (`Policy::Web`, [gleipnir.md](gleipnir.md), "The web policy"), separate from the session's provider proxy, with its own
 connection cap (64), so one session's flood never takes another's places. `browser::web::start_web(sid, dir, ctx, who,
 front)` binds it (a stale file replaced, 0600), reads the state below, and only then listens; the
@@ -3787,7 +3787,7 @@ At `prepare`, the session's `browser` cell decides (`agents/session.rs`, `sandbo
 ## The MCP bridge
 
 An agent speaks MCP over stdio; `ratatoskr mcp-bridge` is that stdio server, and it copies lines to the hub
-(`crates/hub/drgnx-ratatoskr/src/bridge.rs`; the state machine is `mimir::bridge`). Claude Code never respawns a
+(`crates/hub/ratatoskr/src/bridge.rs`; the state machine is `mimir::bridge`). Claude Code never respawns a
 stdio server that died (anthropics/claude-code#82746), so the bridge outlives the hub instead (design §5.8).
 
 - **Inside: `mcp-bridge --socket PATH`.** PATH is a session's `mcp.sock` (`mcp/session`). It must be a socket when
@@ -3822,7 +3822,7 @@ Test hooks: `--bridge-backoff-ms N` and `--bridge-give-up-ms N` shorten the timi
 
 ## Registrations
 
-The gateway runs in Ratatoskr (`crates/hub/drgnx-ratatoskr/src/gateway.rs`, forwarding by
+The gateway runs in Ratatoskr (`crates/hub/ratatoskr/src/gateway.rs`, forwarding by
 [`bifrost`](runtime.md#bifrost-the-gateway)): the front serves `gateway/register`, `gateway/unregister`,
 `gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held` and `spend`
 itself; nothing is forwarded.
@@ -3988,7 +3988,7 @@ Ratatoskr reads `<config>/settings.el` itself, and the shipped `settings/runtime
 time (`include_str!`): the hub and the editor are built from one checkout, so with no editor connected the hub still
 has every preset and built-in profile (unified settings design §11.1; amends runtime design §5.9). Both are read as
 data with `huginn` ([settings.md](settings.md#the-data-subset)): never loaded, never written. The code is
-`crates/hub/drgnx-ratatoskr/src/settings/` (`mod.rs`: the runtime settings and `Settings`; `load.rs`: the checks,
+`crates/hub/ratatoskr/src/settings/` (`mod.rs`: the runtime settings and `Settings`; `load.rs`: the checks,
 reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
 
 - **Only the runtime settings.** `settings::RUNTIME` lists them with their Rust type and fallback: the
@@ -4047,7 +4047,7 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
 
 ## Jobs (`exec/*`)
 
-`drgnx-ratatoskr/src/exec/` (Task 11): `Runner::{start, get, list, stop, log_slice, log_tail}` (`exec/log`'s slice
+`ratatoskr/src/exec/` (Task 11): `Runner::{start, get, list, stop, log_slice, log_tail}` (`exec/log`'s slice
 reads lines only up to the last it answers; its `tail_bytes` form seeks to the file's end; both replace bytes that are
 not UTF-8). A job's folder
 `<state>/hub/exec/<id>/` holds `meta.json`, `log`, `exit` (written by the wrapper shell through a rename), `why`
@@ -4144,7 +4144,7 @@ the map's `JobFact.why`; the Detail of a job's agent says "Runs on r1 · why: �
 
 ## Runners: the transport
 
-`drgnx-ratatoskr/src/runners/` reaches the user's other machines (runners) over the user's own OpenSSH
+`ratatoskr/src/runners/` reaches the user's other machines (runners) over the user's own OpenSSH
 (`docs/guide/runners.md`, "How drgnx reaches your machines"). A runner is a `RunnerCfg {name, host, linger, cloud,
 remote}`: the registry's name (letters, digits, `_`, `-`, at most 32 bytes), the host as the user's ssh knows it, a
 cloud machine's agent, certificate and pinned host key (`CloudSsh`), and the argv of its three sessions (`Remote`).
@@ -4799,7 +4799,7 @@ refusal with its list, the hub's own machine, a removal that leaves nothing of o
 
 ## Extensions
 
-`extensions/*` (`drgnx-ratatoskr/src/extensions/`) serve the Extensions view's list from memory. The hub never installs
+`extensions/*` (`ratatoskr/src/extensions/`) serve the Extensions view's list from memory. The hub never installs
 and never reaches the network here: the refresh job (`drgnx extensions refresh`) writes
 `<cache>/extensions/catalog.json` (docs/develop/extensions.md), `drgnx sync` writes the lock, and the hub reads them.
 
@@ -5305,7 +5305,7 @@ breaks; hence the model in the key and a recent window. Keep the p90 of each pai
 ratios against a calibrated p90 say only how the last factor did, and the factor would swing. The factor can be below
 1, so the caller holds a scaled p90 at its p50 or above.
 
-**Prices and the hub's side** (`drgnx_ratatoskr::forecast`). Tokens are priced at today's rates, not at the sample's own
+**Prices and the hub's side** (`ratatoskr::forecast`). Tokens are priced at today's rates, not at the sample's own
 cost. `rates_for` takes the rates of a profile from the setting `drgnx-agents-model-prices` (US dollars per million
 tokens, shipped dated `2026-11-01`; a cache price left out is the input price): the row with the longest key that is a
 prefix of the profile's model id; else, for a gateway profile, the provider's `:price (IN . OUT)` with every cache token
