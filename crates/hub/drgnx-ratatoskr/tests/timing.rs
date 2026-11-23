@@ -5,7 +5,9 @@
 //!
 //! The embedding rows (tokens per second, one question's embedding, VRAM, the stall) are `hrafn-embed/tests/timing.rs`.
 
-use hrafn::{Class, CodeStore, Lang, Listed, Query, Scope, missing, put_vectors, refresh, search};
+use hrafn::{
+    Class, CodeStore, KeyKind, Lang, Listed, Query, Scope, missing, put_vectors, refresh, search,
+};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -94,6 +96,7 @@ fn listed(path: String, text: &str) -> Listed {
         class: Class::Code,
         lang: Lang::Rust,
         generated: false,
+        embed: true,
         size: text.len() as u64,
     }
 }
@@ -138,22 +141,33 @@ async fn synthetic(dir: &Path, chunks: usize, refs: bool) -> CodeStore {
         .await
         .unwrap();
     }
-    let mut seed = 1u64;
+    embed_all(&store, &mut 1).await;
+    store
+}
+
+/// A vector for every key the store lacks, chunks and paths, each from the running SEED.
+async fn embed_all(store: &CodeStore, seed: &mut u64) {
     loop {
-        let keys = missing(&store, MODEL, 5_000).await.unwrap();
+        let keys = missing(store, MODEL, 5_000).await.unwrap();
         if keys.is_empty() {
             break;
         }
-        let rows: Vec<([u8; 32], Vec<f32>)> = keys
-            .into_iter()
-            .map(|(k, _)| {
-                seed += 1;
-                (k, vector(seed))
-            })
-            .collect();
-        put_vectors(&store, MODEL, &rows).await.unwrap();
+        for kind in [KeyKind::Chunk, KeyKind::Path] {
+            let rows: Vec<([u8; 32], Vec<f32>)> = keys
+                .iter()
+                .filter(|(k, _, _)| *k == kind)
+                .map(|(_, key, _)| {
+                    *seed += 1;
+                    (*key, vector(*seed))
+                })
+                .collect();
+            if !rows.is_empty() {
+                put_vectors(store, MODEL, DIMS as u32, kind, &rows)
+                    .await
+                    .unwrap();
+            }
+        }
     }
-    store
 }
 
 const QUESTIONS: [&str; 10] = [
@@ -183,6 +197,8 @@ async fn ask(store: &CodeStore, view: hrafn::View, vectors: bool, rounds: usize)
                 text: (*text).to_string(),
                 scope: Scope::Code,
                 k: 10,
+                path_weight: hrafn::query::PATH_WEIGHT,
+                dir_weight: hrafn::query::DIR_WEIGHT,
             };
             let v = vector(10_000 + i as u64);
             let started = Instant::now();
@@ -433,18 +449,21 @@ async fn worktree_search_p95() {
                 hrafn::chunk::chunk_file(&path, Lang::Rust, false, &text, hrafn::chunk::BUDGET);
             let chunks = chunks
                 .into_iter()
-                .map(|c| hrafn::ChunkIn {
-                    start: c.start,
-                    end: c.end,
-                    line_start: c.line_start,
-                    line_end: c.line_end,
-                    symbol: c.symbol,
-                    key: hrafn::vec_key(hrafn::chunk::CHUNKER_VERSION, &c.embed_text),
-                    embed: c.embed,
-                    embed_text: c.embed_text,
-                    symbols: c.fts.symbols,
-                    doc: c.fts.doc,
-                    body: c.fts.body,
+                .map(|c| {
+                    let (_, key) = hrafn::chunk::embed_text_and_key(&c);
+                    hrafn::ChunkIn {
+                        start: c.start,
+                        end: c.end,
+                        line_start: c.line_start,
+                        line_end: c.line_end,
+                        symbol: c.symbol,
+                        key,
+                        embed: c.embed,
+                        embed_text: c.embed_text,
+                        symbols: c.fts.symbols,
+                        doc: c.fts.doc,
+                        body: c.fts.body,
+                    }
                 })
                 .collect();
             let symbols = symbols
@@ -478,21 +497,7 @@ async fn worktree_search_p95() {
         }
         trees.push(t);
     }
-    let mut seed = 1_000_000u64;
-    loop {
-        let keys = missing(&store, MODEL, 5_000).await.unwrap();
-        if keys.is_empty() {
-            break;
-        }
-        let rows: Vec<([u8; 32], Vec<f32>)> = keys
-            .into_iter()
-            .map(|(k, _)| {
-                seed += 1;
-                (k, vector(seed))
-            })
-            .collect();
-        put_vectors(&store, MODEL, &rows).await.unwrap();
-    }
+    embed_all(&store, &mut 1_000_000).await;
     println!("50,000 chunks and 10 trees built in {:?}", built.elapsed());
     let base = ask(&store, hrafn::View::Base, true, 6).await;
     let tree = ask(&store, hrafn::View::Tree(trees[7]), true, 6).await;
@@ -577,6 +582,7 @@ async fn tier1_of_a_checkout_and_one_saved_file() {
                 class,
                 lang,
                 generated: false,
+                embed: true,
                 size: b.len() as u64,
             }
         })
@@ -634,6 +640,8 @@ async fn tier1_of_a_checkout_and_one_saved_file() {
             text: "drgnx-bench-brand-new-symbol".into(),
             scope: Scope::Code,
             k: 5,
+            path_weight: hrafn::query::PATH_WEIGHT,
+            dir_weight: hrafn::query::DIR_WEIGHT,
         },
         hrafn::View::Base,
         None,

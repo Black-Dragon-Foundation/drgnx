@@ -4,8 +4,8 @@
 //!
 //! test-pattern: pure (D).
 
-use hrafn::chunk::{BUDGET, CHUNKER_VERSION, chunk_file, chunk_file_refs};
-use hrafn::{Lang, classify, vec_key};
+use hrafn::chunk::{BUDGET, chunk_file, chunk_file_refs, embed_text_and_key};
+use hrafn::{Lang, classify};
 use std::fmt::Write;
 use std::path::PathBuf;
 
@@ -90,7 +90,8 @@ fn csharp_chunks_and_their_vector_keys_stay_as_designed() {
     let (chunks, symbols) = chunk_file("Cache.cs", Lang::Csharp, false, &text, BUDGET);
     let mut out = String::new();
     for c in &chunks {
-        let key: String = vec_key(CHUNKER_VERSION, &c.embed_text)
+        let key: String = embed_text_and_key(c)
+            .1
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();

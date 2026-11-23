@@ -1193,7 +1193,7 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 ### The code store
 
 `CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
-0600, migrations as data). Schema v6:
+0600, migrations as data). Schema v7:
 
 | Table | Holds |
 |---|---|
@@ -1203,7 +1203,8 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 | `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
 | `symbol`, `symbol_fts` | defined names with kind, span and lines, signature (`sig`: the definition's lines up to the one that names it, cut before a `{`), `(path, blob)`, chunk and definer (`id` an explicit rowid, so it survives `VACUUM`); a trigram FTS over the names |
 | `ref` | the names a pair's content uses: `(path, blob, name)`, how often (`n`) and the first 8 lines it is used on; `ref_name` (`name, path, blob, n`) finds a name's users and their counts on the index alone (v6) |
-| `vec` | one quantized vector per `(model, key)` |
+| `vec` | one quantized vector per `(model, kind, key)`: `kind` 0 a chunk's text, 1 a path's (v7; the rows before it are chunks') |
+| `path_key` | the base's paths that want vectors and their directories (`dir/`), each with its path vector's `key` (v7) |
 | `meta` | `urdr`'s table: the schema version, `chunker_version`, `parse_version`, `built_from` and the like |
 
 **Shared content.** Chunks, symbols and references belong to a `(path, blob)` pair, not to a tree: every `file` row
@@ -1261,8 +1262,8 @@ answers from the root's view (`base: true` asks for the base) with `view: {workt
 `search/status` lists `trees` and the `watch` budget.
 
 **The base checkout** is the main checkout unless the project's `drgnx-search-base` names another checkout of it
-(a folder that is not one is warned about and ignored). Tier 1 lists, reads and diffs that checkout, `.drgnx/search.eld`
-is read there, and it is the watcher's main tree; the main checkout is then a worktree like any other. The store keeps
+(a folder that is not one is warned about and ignored). Tier 1 lists, reads and diffs that checkout, `.drgnx/search.toml`
+is read there at every listing, and it is the watcher's main tree; the main checkout is then a worktree like any other. The store keeps
 the base's folder in `meta.base_root`: a different one at open resets the index (the trees with it), so the base is
 built again and every tree re-seeds against it. The setting is part of the project's signature, so changing it opens
 the project again.
@@ -1272,8 +1273,11 @@ its new paths: `base_paths` is the one shared list, `delta(view)` reads only the
 query, n)` puts a basename that starts with the query first, then one that holds it, then a path that holds it. The
 ranked query of render offload Task 21 (`search/files`) builds on these.
 
-`vec_key(chunker, embed_text)` is sha256 over the length-prefixed chunker version and text. A chunk has one key; each
-model that embeds it adds a `vec` row, so a branch switch back embeds nothing.
+A vector's key is of its text alone: `KeyKind::key(text)` is sha256 over the length-prefixed version of the kind's text
+(`chunk::EMBED_TEXT_VERSION` for a chunk, `PATH_TEXT_VERSION` for a path) and the text. `chunk::embed_text_and_key` is
+the one place a chunk's text and key come from, and tier 2 sends that same text. The text carries no path, so a chunk
+has one key in any path, branch, clone or repo; each model that embeds it adds a `vec` row, so a branch switch back, a
+move or a copy embeds nothing.
 
 FTS5 has one tokenizer per table, and `tokenchars '-'` would hide `timer` in `drgnx-timer--fire` from the `body`
 column. So the `symbols` column holds names encoded by `encode_symbol`, which maps each ASCII punctuation character to a
@@ -1289,14 +1293,53 @@ skipped), and `allow` is the hub's deny-list check on the relative path. A path 
 
 - a component starts with a dot, or the basename looks like a key, certificate, secret or credential file;
 - it is inside a nested repository (an untracked clone or a submodule);
-- it has a NUL byte in its first 8,000 bytes;
-- the project's `include`/`exclude` globs (the editor sends `drgnx-search-{include,exclude,off}` per project) leave it out, or `off` is set.
+- it has a NUL byte in its first 8,000 bytes or is over 1 MiB;
+- the rules leave it out (below), or `drgnx-search-off` is set;
+- `.gitattributes` marks it `linguist-generated` or `linguist-vendored` (an ignore by default, not a mark).
 
-`.drgnx/search.eld` that is there but cannot be read (a directory, a link, empty, over 64 KiB) is an error that
-stops the listing, never the defaults. Each file gets a class (`code`, `test`, `docs`) and a language, from its extension, or
-from a `#!` line when it has none. A file is marked `generated` (listed, not dropped) by `.gitattributes`
-`linguist-generated`/`linguist-vendored`, by "generated" or "DO NOT EDIT" in its first five lines, or by a name like
-`*-autoloads.el`, `loaddefs.el`, `*.lock` or `*.min.*`.
+**Three layers of rules** (`hrafn::rules`), later wins:
+
+1. the built-in defaults;
+2. the repo's committed `.drgnx/search.toml`, so the team and CI index the same set;
+3. the user's own override for the project, `drgnx-search-rules` (settings.md).
+
+Each layer has three lists in gitignore syntax: `include` (when a layer has one, only matching paths are indexed; the
+latest layer with one decides), `ignore` (not indexed at all) and `no-embed` (listed, in keyword and symbol search, with
+its chunks written `embed = 0`, so `missing()` never offers them). A `!` line takes a path back; within a layer the last
+matching line wins; `#` starts a comment; a leading or inner `/` anchors a line to the root, otherwise it matches at
+any depth; a trailing `/` names a directory. The fixed refusals (dot paths, secret-looking names, nested
+repositories, the hub's deny-list) are no layer's to lift. `ratatoskr search why ROOT PATH` (`search/why`) names the
+layer, list and rule that decided a file.
+
+The defaults' `ignore` list, verbatim (`builtin_rules`):
+
+```
+**/fuzz/corpus/**  **/*fuzz*/corpus/**
+*.snap  **/golden/**  **/snapshots/**
+*.png  *.jpg  *.jpeg  *.gif  *.webp  *.bmp  *.tiff  *.ico  *.icns  *.svg
+LICENSE*  COPYING*  LICENSES/**  THIRD_PARTY*
+*.lock  package-lock.json  pnpm-lock.yaml  *.min.js  *.min.css
+vendor/**  third_party/**
+```
+
+**What gets indexed: `.drgnx/search.toml`.** Three keys, each a list of strings; the file is at most 64 KiB:
+
+```toml
+# keep generated bindings out, and the vendored copy of a library
+ignore = ["src/bindings/**", "!vendor/our-fork/**"]
+# keyword and symbol search find these, but they get no vectors
+no-embed = ["*.json", "data/**"]
+# only these (omit the key to index everything the other lists allow)
+# include = ["src/**", "docs/**"]
+```
+
+The file is read at every listing, not when the project opens: an edit takes effect at the next refresh, with no
+reopen, and a file a new line ignores loses its rows. A rule that moves a file between `index` and `no-embed` writes its
+chunks again with the new flag. A file that is there but cannot be read (a directory, a link, empty, not TOML, a key
+that is none of the three, over 64 KiB) is an error that stops the listing, never the defaults. Each file gets a class
+(`code`, `test`, `docs`) and a language, from its extension, or from a `#!` line when it has none. A file is marked
+`generated` (listed, not dropped) by "generated" or "DO NOT EDIT" in its first five lines, or by a name like
+`*-autoloads.el` or `loaddefs.el`.
 
 `files::list_with(…, &mut Snapshot)` is the same listing, reusing what the last one read: per path, the file's status
 when it was read (device, inode, size, modification and status-change times, through `eitri::stat_in` on the parent
@@ -1339,11 +1382,12 @@ the file list's `Git`, so the full listing runs on it too.
 
 `chunk::chunk_file(path, lang, generated, text, budget)` returns the file's chunks and symbols. A file's chunks put
 together give back the file, byte for byte (offsets are bytes). The budget is 1,800 non-whitespace characters
-(`BUDGET`); `CHUNKER_VERSION` is part of every vector's content key. A chunk's `line_start` is the line of its first
+(`BUDGET`). A chunk's `line_start` is the line of its first
 non-blank character (chunks are cut on the previous chunk's last newline, so the byte offset alone would name the line
-before), which is where a hit opens and what `reanchor` compares against. Version 2 is that rule: an index made by
-version 1 is chunked again at the next refresh, whether or not a file changed (and, the version being in every
-vector's key, embedded again).
+before), which is where a hit opens and what `reanchor` compares against. Version 2 is that rule; version 3 took the
+path out of the embedded text. An index made by an older version is chunked again at the next refresh, whether or not a
+file changed; a chunk is embedded again only when its text changed (the key is of the text and
+`EMBED_TEXT_VERSION`, 3, not of the chunker version).
 
 `chunk::chunk_file_refs` also returns the file's references (`chunk::Ref`: a name, how often, its first 8 lines),
 from the same parse, which tier 1 and the overlay write to `ref`. Tree-sitter languages run a tags query and keep the
@@ -1395,8 +1439,11 @@ them. Adjacent units merge greedily up to the budget and never across a section 
 column 0). A form over the budget splits at its child forms; every part's header repeats the signature, the first
 docstring line and "part i/n". A `defconst`, `defvar` or `defcustom` whose value is a literal list or vector and
 which is over the budget is one chunk that embeds only its first line and docstring (the FTS body keeps all of it).
-The header (path, title line, section, defined symbols and kinds) is in `embed_text` and the FTS `path` and `symbols`
-columns, never in `body`; a generated file gets `embed = false`.
+The header (title line, section, defined symbols and kinds) is in `embed_text` and the FTS `symbols` column, never in
+`body`; the path is only in the FTS `path` column (it has a vector of its own, below), and a chunk with no header lines
+embeds a newline and its body. The title is the first `;;;` line's text after `---`; without `---` a first word that is
+a file name (`name.el`, `name.el:`) is dropped, so no title carries the file's name. A generated file gets
+`embed = false`.
 
 The definer table (`chunk/definers.rs`) is closed: it names `defun`, `defvar`, `defcustom`, `defmacro`, `cl-defun`,
 `defconst`, `defvar-local`, `defface`, `defgroup`, `defsubst`, `cl-defmacro`, `defvar-keymap`, `defalias`,
@@ -1508,6 +1555,17 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   AVX2 + FMA, and chosen at run time; the build itself stays baseline. aarch64 uses baseline NEON, so `gemm` is built without
   its `f16` feature, whose kernels need FEAT_FP16 (an aarch64 build failed on them). No AVX-512: it ran slower
   here. `worst_submit` is zero on this path.
+- **The fingerprint (`fingerprint.rs`).** A vector's identity is a `Fingerprint`, the sha256 of a canonical
+  `FingerprintRecord`: the model id, the weights file's sha256 (a server's revision or digest when that is all it proves),
+  the quantisation, the pooling (`Cls`, `Mean`, `Last`, `Unknown`), whether the vectors are normalised, the dims (after any
+  cut), the token limit, the document prefix, the query template (`Instruct: {task}\nQuery:{query}`) and the embed-text
+  version. `canonical()` is `FP_RECORD_VERSION` followed by those fields in that order, each length-prefixed; a test pins one
+  record's hex, so a change of encoding is seen at once. The engine is not a field: llama.cpp on Vulkan or Metal, a TEI
+  server and the built-in forward pass make vectors of one record that agree closely and are interchangeable. A search
+  mixes only vectors of one fingerprint, and the `model` column of every stored vector is `Fingerprint::hex()` (64
+  characters; `hex16()` names a file or a log line). `Identity` pairs a fingerprint and its record with a **label** for the
+  screen (never a key). `builtin_record(spec, embed_text_version)` is a model-table row's record: CLS, normalised, the row's
+  dims, token limit and prefixes, and its pinned `.safetensors` sum.
 
 - **The download (`drgnx-ratatoskr/src/search/`).** `download` fetches exactly a table row's files into `<cache>/models`, from
   `drgnx-search-model-mirror` or the Hugging Face host at `{base}/{repo}/resolve/{revision}/{file}`, and only with a `Consent`
@@ -1523,10 +1581,16 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
 
 - **Tier 1 (`hrafn::index::refresh`).** The file list against the store's blobs: rows (chunks, FTS, symbols) are rebuilt
   only for files whose blob changed, all of them after a chunker change, 64 files to a transaction; files gone from the
-  list leave the store. Vectors are keyed by content, so a branch switch back embeds nothing. `vec.last_used` is a
+  list leave the store. Vectors are keyed by content, so a branch switch back embeds nothing. A path has a vector too
+  (`vec.kind` 1, schema 7; a chunk's is 0): after a refresh that changed files, `path_key` is made to hold every base
+  path whose content wants vectors and each of its directories (`dir/`), with `path_key(path)`, the key of
+  `path_text(path)` (the path, a newline, then its words split on `/ _ - .` and camelCase). `missing(store, model,
+  limit)` gives `(kind, key, text)`: the chunk keys in chunk order, each file's path key after its chunks', then the
+  path keys of files whose chunks have vectors (a move or a copy embeds only these); directories' keys only when
+  `DIR_WEIGHT` is above 0 (`missing_with`'s `dirs`, which the eval sets). `put_vectors` takes the kind. `vec.last_used` is a
   logical clock (one past the store's highest), moved when a vector is written and when tier 1 writes a chunk that
-  refers to its key; `collect` keeps unreferenced keys up to twice the live set, the least recently referenced going
-  first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8). A refresh writes
+  refers to its key (a path's when its `path_key` row comes); `collect` keeps unreferenced keys up to twice the live set,
+  each kind on its own, the least recently referenced going first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8). A refresh writes
   with a 64 MB page cache and then puts the store's cache size back and lets the pages go: a file's references land
   all over the name index, and at the default 2 MB that index was most of what references cost tier 1 (6.7 s against
   5.4 s on a drgnx checkout, on the desktop).
@@ -1579,14 +1643,19 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   until 100 chunks are seen (the ranking is asked again for four times as many when the view hides most of it: still
   filtered before the limit, but only candidates are probed; joining every match first was 80 of 143 ms at 50,000
   chunks, where a common word matches 40,000); vectors are scanned by Hamming
-  distance over the sign bits and the nearest 200 re-ranked by their int8 values. A test or generated file keeps half
+  distance over the chunk vectors' sign bits, and the nearest 200 keys are re-ranked: each key is every place the view
+  sees its text (`KEY_CHUNKS_SQL`: one chunk per `(path, blob)`, at most 8, so a text in two files is two hits), and
+  each place scores `dot8(q, chunk) + PATH_WEIGHT · dot8(q, its path's vector) + DIR_WEIGHT · the best dot8(q, one of
+  its directories' vectors)`, the best 50 kept (`Query::path_weight` and `dir_weight`, `hrafn::query`'s constants
+  except in an eval that tunes them: both 0.1, the best mean chunk MRR@10 of the four sets' dev halves with Qwen3; a path or directory without a vector adds nothing; each is read once per query,
+  by `VEC_SQL`'s primary-key probe of `vec`). A test or generated file keeps half
   its score. Hits in files changed since indexing are looked for again by their first line, else their symbol (20 files,
   50 ms). The scope (`code`, which holds tests below it, `tests`, `docs`, `all`) filters by file class. Every answer has
   the lag line.
   A query reads indexes and small tables, never the `chunk` table (its rows hold their text): the lag's counts run on
   `chunk_embed`, name prefixes on `symbol_name_nc` (`like` ignores case, so the index has the same collation), path
-  tokens on `file`, and the vector scan reads `vec` alone, looking a chunk up only for a vector that can enter the best
-  200. Each is a plan test in `hrafn/tests/query.rs`. The lag's counts and the vectors' sign bits are kept between two
+  tokens on `file`, and the vector scan reads `vec` alone, looking a key's chunks up only for a vector that can enter
+  the best 200. Each is a plan test in `hrafn/tests/query.rs`. The lag's counts and the vectors' sign bits are kept between two
   changes of the store (`hrafn/src/memo.rs`: the store thread's own changes and SQLite's `data_version` for another
   connection's commits), so a query between two index writes reads neither again: at 100,000 chunks they were 38 and
   28 ms of each query. `what_a_query_keeps_ends_at_the_next_write` pins that a write ends them. Store schema 2 adds the two indexes; schema 3 widens `chunk_embed` to `(embed, key, path, blob)` and the path list reads the base's `file` rows by primary key.
@@ -1595,8 +1664,9 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   the files changed (the watcher's events, else a blob diff), picks the model (`search::prefer`), embeds the question
   with it and answers; `search/status`, `search/index`, `search/embedders`, `search/model-download` (consent checked
   against the model's size; the projects open again once it lands) and `search/typing` are the others. All are the
-  user's: an agent has no search method. A project's globs are `.drgnx/search.eld` (a file that does not read turns
-  its search off) and the editor's per-project `drgnx-search-{include,exclude,off}` (`overrides::PER_PROJECT`).
+  user's: an agent has no search method. A project's rules are `.drgnx/search.toml` (read at every listing; a file that does
+  not read is an error the listing reports) and the editor's per-project `drgnx-search-{rules,off}`
+  (`overrides::PER_PROJECT`); `search/why` says which layer decided a file.
 - **Servers on request (`search/servers.rs`).** `search/server-plan` shows what starting TEI or Ollama would run (it
   writes and runs nothing); `search/server-start` needs `confirm: true` and answers the provider entry for the settings'
   provider table (the hub writes no settings: the editor's writer adds it); `search/server-stop` stops it. TEI is a
@@ -1624,7 +1694,15 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   intervals per stratum, for three contexts of the same token estimate: `map` (the global map, tests and docs
   included), `map-around-search` (the top 5 hits' chunks, then the map focused on their files in what is left; the
   focus files themselves are not in a focused map, so the hits stand for them) and `search` (hits packed in rank order,
-  each with its `path:lines` line). It needs no hub.
+  each with its `path:lines` line). It needs no hub. `eval run … --source SRC` takes the vectors from a server instead
+  of the built-in model: `builtin` (the default), `tei:http://HOST:PORT`, `ollama:http://HOST:PORT:MODEL` or
+  `llama:http://HOST:PORT`, spoken to directly over HTTP (`embed_direct::Direct`: TEI's `/embed`, Ollama's `/api/embed`
+  with `truncate: false` and `num_ctx`, llama.cpp's `/v1/embeddings`; no hub, no gateway, no TLS). The vectors are
+  stored under the source's own text as their model id, so a server's vectors never mix with the built-in model's.
+  Documents go plain and questions carry `Instruct: <task>\nQuery:<q>` as the hub's do. `--query-source SRC` embeds the
+  questions with another source (the same model on another machine, for a parity check); with `--state DIR` the chunk
+  vectors already in DIR are reused and no document text is sent. The report JSON has `source` and
+  `embed_seconds_per_chunk`.
 - **The MCP tools (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets
   `search.sock` beside `mcp.sock` (recorded in the session's row, so it is bound again at a restart and closed with the
   session): the tools `search` (`query`, `scope`, `k`), `symbols` (`name`, `match`, `kind`, `path`, `scope`, `k`) and
@@ -1634,15 +1712,43 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   terminal clients of the `search/*` methods.
 - **Servers as embedders (`embed.rs`, `Gate::embedders`).** The providers of kind `tei` and `ollama` with the `embed`
   capability embed through the hub's own gateway listener (`/p/ID/embed`, `/p/ID/api/embed`), so each request is in
-  `spend`. An Ollama provider needs the model the `embed` role names for it, and its model name is
-  `ollama:<provider>:<model>` (TEI's is `tei:<provider>`). A query to a server carries `Instruct: <task>\nQuery:<q>`;
-  documents go plain. `search::prefer` picks the model a query uses: an answering server with at least 95 % of the live
-  chunks covered, else the built-in model (unless `drgnx-search-builtin` is nil), else an answering server whatever it
-  covers. `embed::answered_family` is the doctor's probe of which address family answers; `localhost` of a local
+  `spend`. An Ollama provider needs the model the `embed` role names for it. **A server's model is its fingerprint**, not
+  a label: `DocEmbedder::probe` asks what the server is now and answers an `Identity`. TEI: `GET /info` (`model_id`,
+  `model_sha`, `model_dtype`, pooling, `max_input_length`) and one embed of `embed::PROBE_TEXT` for the dims
+  (`record_from_tei`). Ollama: `POST /api/show` and the `/api/tags` digest, plus the same probe embed
+  (`record_from_ollama`); every Ollama embed sets `truncate: false` and `options.num_ctx` to the record's token limit, so
+  a long chunk is an error, never a quietly cut vector. The probes go through the gateway too (`/info`, `/api/show` and
+  `/api/tags` are among the paths an editor token reaches), so they are in `spend`; the probe embed is made once per
+  answer of `/info` or `/api/show` (an unchanged answer reuses its dims). A server whose answer changes between probes
+  (another model under the same URL) is another fingerprint: tier 2 probes before each batch, writes it under the new
+  hex, and the rows under the old one stay (`search_fingerprint::swapped_server_model_is_a_new_fingerprint_and_old_vectors_stay`).
+  A server that has not answered a probe has no fingerprint and embeds nothing; the entity chain knows it as
+  `unprobed:<provider>`, which no vector is ever stored under. `hrafn::put_vectors(store, model, dims, rows)` refuses a
+  row whose length is not `dims`, and tier 2 then publishes `Tier2::Failed("<label>: N dims, the fingerprint says D")` and
+  writes nothing of that batch. The hub reuses a probe for 10 s in the calls that only need the fingerprint (a query,
+  `Hub::project`'s signature, which is the joined fingerprints, so a changed probe reopens the project). A query to a
+  server carries `Instruct: <task>\nQuery:<q>`; documents go plain. `search::prefer(builtin, servers)` works on
+  fingerprints and picks the model a query uses: an answering server with at least 95 % of the live chunks covered, else
+  the built-in model (unless `drgnx-search-builtin` is nil), else an answering server whatever it covers. The answers
+  carry the fingerprint as `model` and the model's name as `label`; clients print the label. `embed::answered_family` is the doctor's probe of which address family answers; `localhost` of a local
   server's URL is used as `127.0.0.1`. The hub never starts a server. The entity embedder (`embed::run`) fills with the
   first embedder in line that answers, a server before the built-in model, and each model keeps its own vector
   (`entity_vec` is keyed `(n, model)`), so a server that comes back finds its vectors still there.
-  `ratatoskr-mock embed` is the test stand-in for TEI and Ollama (`tests/search_prefer.rs`).
+  `ratatoskr-mock embed` is the test stand-in for TEI, Ollama and llama.cpp (`tests/search_prefer.rs`,
+  `tests/search_eval_sources.rs`).
+- **The embed chain (`embed::Chain`, `embed::Driver`, `embed::Shared`).** The entity embedder's embedders are a chain in
+  the user's order (the `embed` role's steps, `embed::ordered`): the chain is never reordered or extended, and the
+  built-in model goes last only when no step names it and `drgnx-search-builtin` is on. A batch goes to the first
+  embedder that answers; one that fails is passed over for that batch (fall-through), and the rest of the chain
+  answers. A failing embedder backs off on the hub's clock (`embed::backoff`, `BACKOFF`): 1 minute after its first
+  failure in a row, 5 after the second, 30 after the third, then every 6 hours. When the wait is over it is asked again
+  with one text (`Chain::probes_due`), and an answer (`Chain::answered`) resets the backoff, so the preferred embedder
+  takes over again. While every embedder is down a round does no record work. A change of state is one log line, and
+  the Notices row `embed-chain` follows the chain (`embed::notice_text`: which embedder is not answering and what takes
+  its place, or that search falls back to text). It is cleared when everything answers. `search/embed-retry` (Retry now)
+  probes every backing-off embedder at the hub's next tick (`Chain::retry_now`), and `search/embedders` lists the chain
+  as `chain` (`ChainEntry`: model, label, `answering` or `backing-off`, when it is asked again, why it failed). The hub
+  never starts a provider, in any of this.
 
 Tests read the real models from a read-only volume (`DRGNX_TEST_MODELS`) and **fail** when it's unset; they never skip.
 `tests/fixtures/<model>.json` holds what CI can't make: reference vectors for token-id lists of 1, 2, 128, 129, 130, 1,023

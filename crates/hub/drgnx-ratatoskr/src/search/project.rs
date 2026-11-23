@@ -121,7 +121,8 @@ pub struct ProjectSpec {
     /// HOME and the config directory, for the deny-list.
     pub home: PathBuf,
     pub config_dir: PathBuf,
-    /// The project's `drgnx-search-*` settings and `.drgnx/search.eld`, as the hub resolved them.
+    /// The project's user layer (`drgnx-search-rules`) and `drgnx-search-off`, as the hub resolved them. The repo's
+    /// layer (`.drgnx/search.toml`) is read at every listing, not here.
     pub config: Config,
     /// Tier 2's embedders (the built-in model's worker, and the servers that answer): each fills its own model's
     /// vectors.
@@ -187,7 +188,7 @@ pub enum Tier2 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Status {
     pub tier2: Tier2,
-    /// Vectors tier 2 has written since the project opened.
+    /// Chunk vectors tier 2 has written since the project opened (the path vectors that go with them not counted).
     pub embedded: u64,
 }
 
@@ -1108,12 +1109,15 @@ impl Inner {
         let root = PathBuf::from(&row.root);
         let door = hrafn::door(row.door);
         let allow = |p: &str| self.deny.check(&root.join(p)) == Verdict::Allowed;
+        // the repo's rules are read for every run, so an edit of `.drgnx/search.toml` takes effect at once
+        let repo = hrafn::files::read_repo(&self.base)?;
         let cx = hrafn::overlay::Cx {
             store: &self.store,
             tree: t,
             root: &root,
             door: &*door,
             config: &self.config,
+            repo: &repo,
             allow: &allow,
         };
         let s = match job {
@@ -1203,9 +1207,11 @@ impl Inner {
     }
 
     fn models(&self) -> Vec<(String, usize)> {
+        // the fingerprints the embedders have proved so far (an embedder not probed yet has none)
         self.embedders
             .iter()
-            .map(|e| (e.model().to_string(), e.dims()))
+            .filter_map(|e| e.identity())
+            .map(|i| (i.fp.hex(), i.record.dims as usize))
             .collect()
     }
 
@@ -1276,11 +1282,14 @@ impl Inner {
             let overriding = self.gates().await;
             let mut sent = false;
             for e in &self.embedders {
-                // a server that is not running is no failure of tier 2: it is asked again at the next change
-                if !e.answers().await {
+                // a server that is not running is no failure of tier 2: it is asked again at the next change. The
+                // probe says which model it is now: a swapped server is another fingerprint, and the batch goes
+                // under that one (the rows under the old one stay).
+                let Ok(id) = e.probe().await else {
                     continue;
-                }
-                let keys = match hrafn::missing(&self.store, e.model(), REQUEST_KEYS).await {
+                };
+                let (model, dims) = (id.fp.hex(), id.record.dims);
+                let keys = match hrafn::missing(&self.store, &model, REQUEST_KEYS).await {
                     Ok(k) => k,
                     Err(err) => {
                         self.publish(Tier2::Failed(err.to_string()));
@@ -1291,16 +1300,50 @@ impl Inner {
                     continue;
                 }
                 self.publish(Tier2::Running);
-                let texts: Vec<String> = keys.iter().map(|(_, t)| t.clone()).collect();
+                // the texts exactly as `missing` gives them: each is the text its key was made of
+                let texts: Vec<String> = keys.iter().map(|(_, _, t)| t.clone()).collect();
                 match e.embed_docs(&texts, overriding).await {
                     Ok(vectors) if vectors.len() == keys.len() => {
-                        let rows: Vec<([u8; 32], Vec<f32>)> =
-                            keys.iter().map(|(k, _)| *k).zip(vectors).collect();
-                        if let Err(err) = hrafn::put_vectors(&self.store, e.model(), &rows).await {
-                            self.publish(Tier2::Failed(err.to_string()));
+                        // the fingerprint says how long a vector is: another length writes nothing of the batch
+                        if let Some(v) = vectors.iter().find(|v| v.len() != dims as usize) {
+                            self.publish(Tier2::Failed(format!(
+                                "{}: {} dims, the fingerprint says {dims}",
+                                id.label,
+                                v.len()
+                            )));
                             continue;
                         }
-                        self.status.send_modify(|s| s.embedded += rows.len() as u64);
+                        let (chunks, paths): (Vec<_>, Vec<_>) = keys
+                            .iter()
+                            .zip(vectors)
+                            .partition(|((kind, _, _), _)| *kind == hrafn::KeyKind::Chunk);
+                        let mut failed = None;
+                        for (kind, rows) in [
+                            (hrafn::KeyKind::Chunk, chunks),
+                            (hrafn::KeyKind::Path, paths),
+                        ] {
+                            let rows: Vec<([u8; 32], Vec<f32>)> =
+                                rows.into_iter().map(|((_, k, _), v)| (*k, v)).collect();
+                            if rows.is_empty() {
+                                continue;
+                            }
+                            if let Err(err) =
+                                hrafn::put_vectors(&self.store, &model, dims, kind, &rows).await
+                            {
+                                failed = Some(err.to_string());
+                                break;
+                            }
+                        }
+                        if let Some(err) = failed {
+                            self.publish(Tier2::Failed(err));
+                            continue;
+                        }
+                        // the chunks embedded (what `keys_missing` and the lag count); a path's vector rides along
+                        let chunks = keys
+                            .iter()
+                            .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
+                            .count();
+                        self.status.send_modify(|s| s.embedded += chunks as u64);
                         sent = true;
                     }
                     Ok(vectors) => self.publish(Tier2::Failed(format!(
@@ -1316,7 +1359,9 @@ impl Inner {
                     g.overriding = false;
                 }
                 for e in &self.embedders {
-                    let _ = hrafn::collect(&self.store, e.model()).await;
+                    if let Some(i) = e.identity() {
+                        let _ = hrafn::collect(&self.store, &i.fp.hex()).await;
+                    }
                 }
                 if !matches!(self.status.borrow().tier2, Tier2::Failed(_)) {
                     self.publish(Tier2::Idle);
@@ -1334,8 +1379,8 @@ impl Inner {
             self.wake.notified().await;
             for e in &self.embedders {
                 // a store error is the pass's to report
-                if e.answers().await
-                    && !matches!(hrafn::missing(&self.store, e.model(), 1).await, Ok(k) if k.is_empty())
+                if let Ok(id) = e.probe().await
+                    && !matches!(hrafn::missing(&self.store, &id.fp.hex(), 1).await, Ok(k) if k.is_empty())
                 {
                     return;
                 }

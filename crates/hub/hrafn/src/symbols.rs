@@ -129,7 +129,7 @@ impl fmt::Display for SymbolsError {
             SymbolsError::BadRegex(e) => write!(f, "not a regular expression: {e}"),
             SymbolsError::NotIndexed => f.write_str(
                 "not in the index: no such file in this view, or search leaves it out (dot paths, secret-like names, \
-                 .drgnx/search.eld excludes, files over 1 MiB, binary files)",
+                 the default and `.drgnx/search.toml` ignore rules, files over 1 MiB, binary files)",
             ),
         }
     }

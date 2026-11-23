@@ -174,8 +174,7 @@ pub const RUNTIME: &[RuntimeSetting] = &[
         OnError::Strict,
     ),
     setting("drgnx-search-builtin", "bool", OnError::Strict),
-    setting("drgnx-search-include", "Vec<String>", OnError::Strict),
-    setting("drgnx-search-exclude", "Vec<String>", OnError::Strict),
+    setting("drgnx-search-rules", "SearchRules", OnError::Strict),
     setting("drgnx-search-off", "bool", OnError::Strict),
     setting("drgnx-search-base", "Option<String>", OnError::Strict),
     setting("drgnx-search-ignore-rules", "String", OnError::Strict),
@@ -187,6 +186,23 @@ pub const RUNTIME: &[RuntimeSetting] = &[
         OnError::Strict,
     ),
 ];
+
+/// `drgnx-search-rules`: the alist `((include GLOB…) (ignore GLOB…) (no-embed GLOB…))` as a layer; any other key is
+/// refused.
+pub(crate) fn search_rules(
+    pairs: Vec<(String, Vec<String>)>,
+) -> Result<hrafn::rules::RuleSet, String> {
+    let mut out = hrafn::rules::RuleSet::default();
+    for (key, globs) in pairs {
+        match key.as_str() {
+            "include" => out.include = globs,
+            "ignore" => out.ignore = globs,
+            "no-embed" => out.no_embed = globs,
+            other => return Err(format!("{other:?} is not include, ignore or no-embed")),
+        }
+    }
+    Ok(out)
+}
 
 /// The names of [`RUNTIME`].
 pub const RUNTIME_NAMES: [&str; RUNTIME.len()] = {
@@ -280,10 +296,9 @@ pub struct RuntimeValues {
     pub search_model_mirror: Option<String>,
     /// Whether the built-in embedding model indexes (the floor under any server).
     pub search_builtin: bool,
-    /// A project's search globs: only these files (none: all), not these, and search off. Per project
-    /// ([`overrides::PER_PROJECT`]).
-    pub search_include: Vec<String>,
-    pub search_exclude: Vec<String>,
+    /// A project's own rules for what is indexed (the user layer: `include`, `ignore`, `no-embed`), and search off.
+    /// Per project ([`overrides::PER_PROJECT`]).
+    pub search_rules: hrafn::rules::RuleSet,
     pub search_off: bool,
     /// The checkout a project's search base is built from (none: the main checkout). Per project.
     pub search_base: Option<String>,
@@ -563,8 +578,10 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         }
         "drgnx-search-model-mirror" => values.search_model_mirror = de(node)?,
         "drgnx-search-builtin" => values.search_builtin = de(node)?,
-        "drgnx-search-include" => values.search_include = de(node)?,
-        "drgnx-search-exclude" => values.search_exclude = de(node)?,
+        "drgnx-search-rules" => {
+            let profiles::Alist(pairs) = de::<profiles::Alist<Vec<String>>>(node)?;
+            values.search_rules = search_rules(pairs).map_err(|why| Bad::at(node, None, why))?;
+        }
         "drgnx-search-off" => values.search_off = de(node)?,
         "drgnx-search-base" => values.search_base = de(node)?,
         "drgnx-search-ignore-rules" => {

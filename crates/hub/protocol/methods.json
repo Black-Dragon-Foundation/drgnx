@@ -3037,6 +3037,17 @@
         "additionalProperties": false,
         "description": "A message for the user from the hub itself (the notices' shape).",
         "properties": {
+          "actions": {
+            "description": "More commands that act on it, each a button after the command's.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "clear": {
+            "description": "The notice ID is over: the editor takes it away (the other fields are not shown).",
+            "type": "boolean"
+          },
           "command": {
             "description": "The command that acts on it.",
             "type": [
@@ -41003,6 +41014,25 @@
       "classes": [
         "user"
       ],
+      "doc": "Retry now: every embedder of the chain that backs off is asked again at the hub's next tick",
+      "name": "search/embed-retry",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the built-in model's state and device, the servers that can embed and which answer, and the model a query prefers",
       "name": "search/embedders",
       "params": {
@@ -41046,6 +41076,14 @@
                   "null"
                 ]
               },
+              "fingerprint": {
+                "description": "The model's fingerprint (64 hex characters): what its vectors are keyed by.",
+                "type": "string"
+              },
+              "label": {
+                "description": "The model as the user reads it.",
+                "type": "string"
+              },
               "model": {
                 "type": "string"
               },
@@ -41056,9 +41094,50 @@
             },
             "required": [
               "model",
+              "fingerprint",
+              "label",
               "state",
               "bytes",
               "downloaded"
+            ],
+            "type": "object"
+          },
+          "ChainEntry": {
+            "additionalProperties": false,
+            "description": "One embedder of the chain and how it stands.",
+            "properties": {
+              "label": {
+                "description": "As the user reads it: `TEI at 127.0.0.1:8080`, `the built-in model`.",
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "state": {
+                "description": "`answering` or `backing-off`.",
+                "type": "string"
+              },
+              "until": {
+                "description": "While backing off: when it is asked again, in seconds since the epoch.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "why": {
+                "description": "While backing off: why it failed last.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "model",
+              "label",
+              "state"
             ],
             "type": "object"
           },
@@ -41098,10 +41177,18 @@
                   "null"
                 ]
               },
+              "fingerprint": {
+                "description": "The fingerprint its model proved at the last probe; none while it has not answered one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "kind": {
                 "type": "string"
               },
-              "model": {
+              "label": {
+                "description": "Its model as the user reads it (the server's model id), or the provider's id while it has not answered.",
                 "type": "string"
               },
               "url": {
@@ -41111,7 +41198,7 @@
             "required": [
               "kind",
               "url",
-              "model",
+              "label",
               "answering"
             ],
             "type": "object"
@@ -41123,8 +41210,15 @@
           "builtin": {
             "$ref": "#/$defs/BuiltinInfo"
           },
+          "chain": {
+            "description": "The entity embedder's chain in the user's order (the embed role), each entry's live state; empty until its first\nstep.",
+            "items": {
+              "$ref": "#/$defs/ChainEntry"
+            },
+            "type": "array"
+          },
           "prefer": {
-            "description": "The model a query uses when every project is fully indexed: a server that answers, else the built-in model.",
+            "description": "The fingerprint of the model a query uses when every project is fully indexed: a server that answers, else the\nbuilt-in model.",
             "type": [
               "string",
               "null"
@@ -42856,6 +42950,7 @@
                 "type": "integer"
               },
               "model": {
+                "description": "The fingerprint (64 hex characters) of the model these vectors belong to.",
                 "type": [
                   "string",
                   "null"
@@ -42909,6 +43004,13 @@
             },
             "type": "array"
           },
+          "label": {
+            "description": "That model as the user reads it (`granite-embedding-small-english-r2`); what a client prints.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "lag": {
             "$ref": "#/$defs/Lag"
           },
@@ -42917,7 +43019,7 @@
             "type": "string"
           },
           "model": {
-            "description": "The model whose vectors took part; none when the answer is keyword, symbol and path results only.",
+            "description": "The fingerprint of the model whose vectors took part; none when the answer is keyword, symbol and path results only.",
             "type": [
               "string",
               "null"
@@ -44732,6 +44834,7 @@
                 "type": "integer"
               },
               "model": {
+                "description": "The fingerprint (64 hex characters) of the model these vectors belong to.",
                 "type": [
                   "string",
                   "null"
@@ -44750,7 +44853,15 @@
           "ModelCount": {
             "additionalProperties": false,
             "properties": {
+              "label": {
+                "description": "The model as the user reads it, when an embedder of this hub states that fingerprint now.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "model": {
+                "description": "The fingerprint (64 hex characters).",
                 "type": "string"
               },
               "vectors": {
@@ -45638,6 +45749,101 @@
           "fresh"
         ],
         "title": "UsagesAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "why a file is or is not indexed: the verdict (index, no-embed, ignored) with the layer (built-in, repo, user), the list and the rule line that decided it",
+      "name": "search/why",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/why`: which layer and rule decide whether a file is indexed.",
+        "properties": {
+          "path": {
+            "description": "Relative to ROOT, inside it.",
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "path"
+        ],
+        "title": "WhyParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "WhyLayer": {
+            "description": "The layer that decided.",
+            "enum": [
+              "builtin",
+              "repo",
+              "user"
+            ],
+            "type": "string"
+          },
+          "WhyList": {
+            "description": "The list of that layer that decided (`default`: none did).",
+            "enum": [
+              "include",
+              "ignore",
+              "no-embed",
+              "default"
+            ],
+            "type": "string"
+          },
+          "WhyVerdict": {
+            "description": "What the rules do with a file.",
+            "enum": [
+              "index",
+              "no-embed",
+              "ignored"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "layer": {
+            "$ref": "#/$defs/WhyLayer"
+          },
+          "list": {
+            "$ref": "#/$defs/WhyList"
+          },
+          "rule": {
+            "description": "The rule line that matched (`!` and all); none when no line did (the allowlist, or no rule at all).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verdict": {
+            "$ref": "#/$defs/WhyVerdict"
+          }
+        },
+        "required": [
+          "verdict",
+          "layer",
+          "list"
+        ],
+        "title": "WhyAnswer",
         "type": "object"
       },
       "writes": false
@@ -50661,5 +50867,5 @@
   "proto": 1,
   "proto_min": 1,
   "records": 2,
-  "schema": 15
+  "schema": 16
 }

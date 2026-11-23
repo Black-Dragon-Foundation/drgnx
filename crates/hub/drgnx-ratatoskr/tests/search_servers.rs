@@ -328,6 +328,18 @@ fn hub_never_calls_start() {
         let a = ok(&mut c, i as u64 + 1, m, p);
         assert!(a.get("error").is_none(), "{m}: {a}");
     }
+    // the built-in model is named by its fingerprint (64 hex) and shown by its label
+    let a = ok(&mut c, 21, "search/embedders", json!({}));
+    let builtin = &a["result"]["builtin"];
+    assert_eq!(
+        builtin["fingerprint"].as_str().map(str::len),
+        Some(64),
+        "{a}"
+    );
+    assert_eq!(
+        builtin["label"], "granite-embedding-small-english-r2",
+        "{a}"
+    );
     let a = ok(
         &mut c,
         20,

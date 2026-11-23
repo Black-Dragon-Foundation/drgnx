@@ -902,9 +902,6 @@ async fn watch_schema(front: Arc<Front>) {
     let mut every = crate::clock::interval(SCHEMA_TICK);
     every.tick().await;
     let mut privacy = norn::privacy::Watch::default();
-    let embed = Arc::new(std::sync::Mutex::new(crate::embed::Timer::new(
-        crate::clock::now(),
-    )));
     loop {
         every.tick().await;
         // the graph writer first: it runs its opening rule again while not ready, and on a replaced file
@@ -942,83 +939,108 @@ async fn watch_schema(front: Arc<Front>) {
             front.writer.signals.notify_soon();
         }
         nightly_backup(&front);
-        embed_idle(&front, &embed);
+        embed_idle(&front);
         front.writer.signals.events_soon();
     }
 }
 
-/// The entity embedder (`embed`): a round after a quiet minute, when the store is ready and a `tei` provider is in the
-/// table.  It never starts the provider; the round runs on its own task.
-fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Timer>>) {
+/// The id of the embedder's Notices row.
+const EMBED_NOTICE: &str = "embed-chain";
+
+/// The entity embedder (`embed`, Task 192): the embed role's chain in the user's order ([`crate::embed::ordered`]),
+/// stepped on its own task when the store is ready and [`crate::embed::Driver::wants`] it, one step at a time.  A step
+/// probes the down embedders whose backoff is over and runs a round after a quiet minute while one answers.  Each
+/// change of state is one log line, and the Notices row follows the chain.  It never starts a provider.
+fn embed_idle(front: &Arc<Front>) {
     let Some(g) = front.tools.graph() else { return };
     let st = g.writer.status();
     if !matches!(st.last_open, Some(urdr::graph::OpenOutcome::Ready { .. })) {
         return;
     }
-    let now = crate::clock::now();
-    let (due, probe) = {
-        let mut t = timer
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // only writes that put text: the Lisp backend's 60 s housekeeping (leases, events) never does
-        let due = t.due(st.texts, now);
-        (due, t.probing())
+    let shared = front.search.embed.clone();
+    // a step still running (a round, a probe) keeps the next one away
+    let Ok(guard) = shared.driver.clone().try_lock_owned() else {
+        return;
     };
-    if !due {
+    let now = crate::clock::now();
+    let retry = shared.retry.load(std::sync::atomic::Ordering::SeqCst);
+    if guard.as_ref().is_some_and(|d| !d.wants(now, retry)) {
         return;
     }
+    shared
+        .retry
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     let current = front.settings.current();
-    let chain = crate::settings::providers::role_chain(
+    let steps = crate::settings::providers::role_chain(
         &current.loaded.values.ai_roles,
         &crate::settings::defaults().roles,
         "embed",
     );
-    // servers first (when one answers it is preferred), then the built-in model, unless the setting turned it off
-    let mut embedders: Vec<Arc<dyn urdr::graph::search::Embedder>> = front
-        .gate
-        .embedders(&chain)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|e| Arc::new(e) as Arc<dyn urdr::graph::search::Embedder>)
-        .collect();
-    if current.loaded.values.search_builtin
-        && let Some(b) = front.search.builtin()
-    {
-        embedders.push(b);
-    }
-    if embedders.is_empty() {
-        timer
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .finish(false, now);
-        return;
-    }
-    let (front, timer, deny) = (
+    let providers = front.gate.embedders(&steps).unwrap_or_default();
+    let builtin = front
+        .search
+        .builtin()
+        .map(|b| b as Arc<dyn urdr::graph::search::Embedder>);
+    let search_builtin = current.loaded.values.search_builtin;
+    let (front, deny) = (
         front.clone(),
-        timer.clone(),
         g.deny
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone(),
     );
     crate::clock::spawn("server:embed", async move {
-        let each: Vec<&dyn urdr::graph::search::Embedder> =
-            embedders.iter().map(|e| e.as_ref()).collect();
-        let out = crate::embed::run(&front.writer.db, &each, &deny, probe).await;
-        let stopped = matches!(out, crate::embed::Outcome::Stopped { .. });
-        match &out {
-            crate::embed::Outcome::Stopped { embedded, why } => {
-                tracing::info!(embedded, "the embedder stopped: {why}");
-            }
-            crate::embed::Outcome::Filled { embedded, denied } => {
-                tracing::info!(embedded, denied, "entity vectors made");
-            }
-            crate::embed::Outcome::Nothing => {}
+        // a server's vectors are keyed by the fingerprint it proves: each provider states its model before the chain
+        // is built, and one that does not answer stays `unprobed:<provider>` (it embeds nothing)
+        for p in &providers {
+            let _ = crate::search::DocEmbedder::probe(p).await;
         }
-        timer
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .finish(stopped, crate::clock::now());
+        let entries = crate::embed::ordered(&steps, providers, builtin, search_builtin);
+        let mut guard = guard;
+        let driver = guard.get_or_insert_with(|| crate::embed::Driver::new(now));
+        if retry {
+            driver.retry_now(now);
+        }
+        let each: Vec<&dyn urdr::graph::search::Embedder> =
+            entries.iter().map(|(_, e)| e.as_ref()).collect();
+        let labels: Vec<crate::embed::Label> = entries.iter().map(|(l, _)| l.clone()).collect();
+        let step = driver
+            .step(&front.writer.db, &each, &deny, st.texts, now)
+            .await;
+        for c in &step.changes {
+            match c {
+                crate::embed::Change::Down { model, why } => {
+                    tracing::warn!(model, "the embedder is down, backing off: {why}");
+                }
+                crate::embed::Change::Up { model } => {
+                    tracing::info!(model, "the embedder answers again");
+                }
+            }
+        }
+        if let Some(crate::embed::Outcome::Filled { embedded, denied }) = &step.outcome {
+            tracing::info!(embedded, denied, "entity vectors made");
+        }
+        let chain = driver.chain();
+        if let Ok(mut view) = shared.view.lock() {
+            *view = labels
+                .iter()
+                .filter_map(|l| {
+                    let h = chain.entries().iter().find(|(m, _)| *m == l.model)?;
+                    Some((l.clone(), h.1.clone()))
+                })
+                .collect();
+        }
+        if !step.changes.is_empty() {
+            let notice = match crate::embed::notice_text(chain, &labels) {
+                Some(text) => serde_json::json!({
+                    "source": "hub", "severity": "warn", "id": EMBED_NOTICE, "life": "condition",
+                    "text": text, "command": "search-embed-settings", "actions": ["search-embed-retry"]}),
+                None => serde_json::json!({
+                    "source": "hub", "severity": "info", "id": EMBED_NOTICE, "life": "condition",
+                    "text": "Embeddings: the chain answers", "clear": true}),
+            };
+            front.broadcast("notice", notice);
+        }
     });
 }
 

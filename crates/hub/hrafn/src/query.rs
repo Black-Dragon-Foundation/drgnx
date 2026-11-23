@@ -7,8 +7,9 @@
 //!   list. Identifier tokens are exact phrases on the `symbols` column and their parts a phrase on `doc` and `body`;
 //!   the other words are OR'ed over `doc` and `body`; `bm25(chunk_fts, 5, 5, 2, 1)` ranks them on the FTS index,
 //!   and the view's predicate is applied to the ranked candidates until the list is full.
-//! - **Vectors** (when the caller gives the query's vector and its model) are scanned by Hamming distance over the sign
-//!   bits, and the nearest [`SCAN`] re-ranked by their int8 values.
+//! - **Vectors** (when the caller gives the query's vector and its model) are scanned by Hamming distance over the chunk
+//!   vectors' sign bits, and the nearest [`SCAN`] keys' places re-ranked by their int8 values plus their path's vector
+//!   (`Query::path_weight`) and their directories' (`Query::dir_weight`).
 //! - **Fusion** is RRF with k = 60. A chunk of a test file or a generated file keeps [`DEMOTE`] of its score.
 //! - **Re-anchoring.** The hits' files are read as they are now (the caller's `now`, at most [`REANCHOR_FILES`] files
 //!   and [`REANCHOR_BUDGET`] in all); a chunk that is no longer at its lines is looked for by its first line, else by
@@ -17,9 +18,9 @@
 use crate::index::{Lag, lag};
 use crate::memo::{self, Memo, Signs};
 use crate::schema::encode_symbol;
-use crate::store::{CodeStore, StoreError};
+use crate::store::{CodeStore, KeyKind, StoreError, path_key};
 use crate::tree::View;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -97,11 +98,21 @@ impl Scope {
     }
 }
 
+/// The weight of a chunk's path vector in its vector score. The dev halves of the four eval sets set it with
+/// [`DIR_WEIGHT`] (Qwen3-Embedding-0.6B Q8; mean chunk MRR@10 over the grid {0.1, 0.2, 0.3, 0.5} × {0, 0.1}: 0.338 at
+/// (0.1, 0.1), the best; 0.330 at the best without directories, (0.3, 0)).
+pub const PATH_WEIGHT: f32 = 0.1;
+/// The weight of the best of its directories' vectors; 0: directories are not embedded.
+pub const DIR_WEIGHT: f32 = 0.1;
+
 #[derive(Clone, Debug)]
 pub struct Query {
     pub text: String,
     pub scope: Scope,
     pub k: u32,
+    /// [`PATH_WEIGHT`] and [`DIR_WEIGHT`], except in an eval that tunes them.
+    pub path_weight: f32,
+    pub dir_weight: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -354,42 +365,67 @@ fn paths(c: &Connection, token: &str, view: View) -> rusqlite::Result<Vec<i64>> 
     }
 }
 
-/// The vectors the scan reads: MODEL's, and nothing else. The chunk of a key is looked up (`FIRST_CHUNK_SQL`) only for
-/// a vector that can enter the best SCAN, not for each of them: a lookup per vector was 160 ms of the 180 at 50,000
-/// chunks. (A join of `chunk` with `vec` and `c.id in (select min(id) … group by key)` made SQLite probe a list once
-/// per vector: 37 s for 16,000 chunks.)
-pub const NEAREST_SQL: &str = "select key, dims, vec from vec where model = ?1";
+/// The vectors the scan reads: MODEL's chunk vectors, and nothing else. A key's chunks are looked up
+/// ([`KEY_CHUNKS_SQL`]) only for a vector that can enter the best SCAN, not for each of them: a lookup per vector was
+/// 160 ms of the 180 at 50,000 chunks. (A join of `chunk` with `vec` and `c.id in (select min(id) … group by key)` made
+/// SQLite probe a list once per vector: 37 s for 16,000 chunks.)
+pub const NEAREST_SQL: &str = "select key, dims, vec from vec where model = ?1 and kind = 0";
 
-/// The first visible chunk of a content key (none: the vector is kept for a file that is gone, or only a worktree
-/// has the content).
-pub const FIRST_CHUNK_SQL: &str = concat!(
-    "select min(c.id) from chunk c cross join ",
+/// The visible chunks of a content key (?1), in the view ?2: one per `(path, blob)` that holds the text, its first, at
+/// most 8 (none: the vector is kept for a file that is gone, or only another worktree has the content). A text in two
+/// files is two hits, each scored with its own path.
+pub const KEY_CHUNKS_SQL: &str = concat!(
+    "select min(c.id), c.path from chunk c cross join ",
     seen_through!("c", "?2"),
-    " where c.key = ?1 and c.embed = 1 and f.blob = c.blob"
+    " where c.key = ?1 and c.embed = 1 and f.blob = c.blob group by c.path, c.blob order by 1 limit 8"
 );
 
-/// The nearest chunks of MODEL to the query vector V: Hamming over the sign bits, then the int8 dot product. The sign
-/// bits are read from the store once per change of it (`memo.rs`).
+/// MODEL's (?1) vector of kind ?2 (`store::KeyKind`) for key ?3: one primary-key probe of `vec`.
+pub const VEC_SQL: &str = "select vec, scale from vec where model = ?1 and kind = ?2 and key = ?3";
+
+/// The int8 dot product of the query's values QINTS with the stored vector BLOB (sign bits first, BYTES of them),
+/// dequantised by the vector's own scale.
+fn dot8(blob: &[u8], bytes: usize, qints: &[i8], scale: f64) -> f64 {
+    let dot: i64 = blob
+        .get(bytes..)
+        .unwrap_or_default()
+        .iter()
+        .zip(qints)
+        .map(|(a, b)| i64::from(*a as i8) * i64::from(*b))
+        .sum();
+    dot as f64 * scale
+}
+
+/// The nearest chunks of MODEL to the query vector V: Hamming over the chunk vectors' sign bits for the best SCAN
+/// keys, each key resolved to every place the view sees its text, then each place scored by
+/// `dot8(q, chunk) + PATH_WEIGHT · dot8(q, its path) + DIR_WEIGHT · the best dot8(q, a directory of it)` (the weights
+/// are the query's; a path without a vector adds nothing) and the best RERANKED kept. The sign bits are read from the
+/// store once per change of it (`memo.rs`); a path's and its directories' terms once per query.
 fn nearest(
     c: &Connection,
     memo: &mut Memo,
     model: &str,
     v: &[f32],
     view: View,
+    (path_weight, dir_weight): (f32, f32),
 ) -> rusqlite::Result<Vec<i64>> {
     let (qbits, qints, _) = urdr::graph::search::vec::quantize(v);
-    let mut heap: BinaryHeap<(u32, i64)> = BinaryHeap::with_capacity(SCAN + 1);
+    let bytes = qbits.len();
+    // (distance, first chunk id, the key's index): a key enters the SCAN by its nearest bits
+    let mut heap: BinaryHeap<(u32, i64, usize)> = BinaryHeap::with_capacity(SCAN + 1);
+    let mut places: HashMap<usize, Vec<(i64, String)>> = HashMap::new();
+    let candidates: Vec<(usize, [u8; 32])>;
     {
         let memo = memo.at(c)?;
         if !memo
             .signs
             .as_ref()
-            .is_some_and(|s| s.model == model && s.dims == v.len() && s.bytes == qbits.len())
+            .is_some_and(|s| s.model == model && s.dims == v.len() && s.bytes == bytes)
         {
-            memo.signs = Some(signs(c, model, v.len(), qbits.len())?);
+            memo.signs = Some(signs(c, model, v.len(), bytes)?);
         }
         let signs = memo.signs.as_ref().expect("filled above");
-        let mut first = c.prepare(FIRST_CHUNK_SQL)?;
+        let mut located = c.prepare(KEY_CHUNKS_SQL)?;
         for (i, key) in signs.keys.iter().enumerate() {
             let d: u32 = signs
                 .get(i)
@@ -401,36 +437,81 @@ fn nearest(
             if full && heap.peek().is_some_and(|w| d > w.0) {
                 continue;
             }
-            let Some(id) = first.query_row(params![&key[..], view.tree()], |r| {
-                r.get::<_, Option<i64>>(0)
-            })?
-            else {
+            let at: Vec<(i64, String)> = located
+                .query_map(params![&key[..], view.tree()], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?
+                .collect::<Result<_, _>>()?;
+            let Some(&(id, _)) = at.first() else {
                 continue;
             };
             if !full {
-                heap.push((d, id));
-            } else if heap.peek().is_some_and(|w| (d, id) < *w) {
-                heap.pop();
-                heap.push((d, id));
+                heap.push((d, id, i));
+                places.insert(i, at);
+            } else if heap.peek().is_some_and(|w| (d, id, i) < *w) {
+                if let Some((_, _, out)) = heap.pop() {
+                    places.remove(&out);
+                }
+                heap.push((d, id, i));
+                places.insert(i, at);
             }
         }
+        candidates = heap
+            .into_iter()
+            .map(|(_, _, i)| (i, signs.keys[i]))
+            .collect();
     }
-    let mut scored: Vec<(i64, i64)> = Vec::with_capacity(heap.len());
-    for (_, id) in heap {
-        let (blob, scale): (Vec<u8>, f64) = c.query_row(
-            "select v.vec, v.scale from chunk c join vec v on v.key = c.key and v.model = ?1 where c.id = ?2",
-            params![model, id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        let dot: i64 = blob[qbits.len()..]
-            .iter()
-            .zip(&qints)
-            .map(|(a, b)| i64::from(*a as i8) * i64::from(*b))
-            .sum();
-        // the scale is the vector's own; ranking by the dot of the dequantised values
-        scored.push((id, (dot as f64 * scale * 1e6) as i64));
+    let mut vec_of = c.prepare(VEC_SQL)?;
+    let mut dot_of = |kind: KeyKind, key: &[u8; 32]| -> rusqlite::Result<Option<f64>> {
+        let row: Option<(Vec<u8>, f64)> = vec_of
+            .query_row(params![model, kind.as_i64(), &key[..]], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?;
+        Ok(row.map(|(blob, scale)| dot8(&blob, bytes, &qints, scale)))
+    };
+    let mut path_terms: HashMap<String, f64> = HashMap::new();
+    let mut dir_terms: HashMap<String, f64> = HashMap::new();
+    let mut scored: Vec<(i64, f64)> = Vec::new();
+    for (i, key) in candidates {
+        let Some(chunk) = dot_of(KeyKind::Chunk, &key)? else {
+            continue;
+        };
+        for (id, path) in places.remove(&i).unwrap_or_default() {
+            let mut score = chunk;
+            if path_weight != 0.0 {
+                let p = match path_terms.get(&path) {
+                    Some(p) => *p,
+                    None => {
+                        let p = dot_of(KeyKind::Path, &path_key(&path))?.unwrap_or(0.0);
+                        path_terms.insert(path.clone(), p);
+                        p
+                    }
+                };
+                score += f64::from(path_weight) * p;
+            }
+            if dir_weight != 0.0 {
+                let mut best: Option<f64> = None;
+                for (j, _) in path.match_indices('/') {
+                    let dir = &path[..=j];
+                    let d = match dir_terms.get(dir) {
+                        Some(d) => *d,
+                        None => {
+                            let d = dot_of(KeyKind::Path, &path_key(dir))?.unwrap_or(f64::MIN);
+                            dir_terms.insert(dir.to_string(), d);
+                            d
+                        }
+                    };
+                    if d > f64::MIN {
+                        best = Some(best.map_or(d, |b| b.max(d)));
+                    }
+                }
+                score += f64::from(dir_weight) * best.unwrap_or(0.0);
+            }
+            scored.push((id, score));
+        }
     }
-    scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
     scored.truncate(RERANKED);
     Ok(scored.into_iter().map(|s| s.0).collect())
 }
@@ -506,6 +587,7 @@ fn lists(
     text: &str,
     qvec: Option<(&str, &[f32])>,
     view: View,
+    weights: (f32, f32),
 ) -> rusqlite::Result<Lists> {
     let tokens: Vec<String> = text.split_whitespace().map(str::to_string).collect();
     let mut out = Lists::default();
@@ -538,7 +620,7 @@ fn lists(
     }
     if let Some((model, v)) = qvec {
         out.ranked
-            .push(("vector", nearest(c, memo, model, v, view)?));
+            .push(("vector", nearest(c, memo, model, v, view, weights)?));
     }
     Ok(out)
 }
@@ -577,8 +659,11 @@ fn meta(c: &Connection, id: i64, view: View) -> rusqlite::Result<Option<Meta>> {
     })
 }
 
-/// The chunk's own text: what follows the header.
+/// The chunk's own text: what follows the header (a chunk with no header lines starts with the newline that ends it).
 fn body(embed_text: &str) -> &str {
+    if let Some(b) = embed_text.strip_prefix('\n') {
+        return b;
+    }
     embed_text.split_once("\n\n").map_or(embed_text, |(_, b)| b)
 }
 
@@ -640,6 +725,7 @@ pub async fn search(
     now: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Answer, StoreError> {
     let (text, scope, k) = (q.text.clone(), q.scope, q.k.max(1) as usize);
+    let weights = (q.path_weight, q.dir_weight);
     let owned = qvec.map(|(m, v)| (m.to_string(), v.to_vec()));
     let memo = store.memo();
     let (mut hits, texts) = store
@@ -651,6 +737,7 @@ pub async fn search(
                 &text,
                 owned.as_ref().map(|(m, v)| (m.as_str(), v.as_slice())),
                 view,
+                weights,
             )?;
             let mut score: HashMap<i64, f64> = HashMap::new();
             let mut routes: HashMap<i64, Vec<&'static str>> = HashMap::new();
@@ -755,7 +842,7 @@ pub async fn search(
 mod tests {
     use super::*;
     use crate::door::DoorKind;
-    use crate::store::{ChunkIn, FileRow, SymbolIn, vec_key};
+    use crate::store::{ChunkIn, FileRow, SymbolIn, chunk_key};
 
     /// N chunks of PATH, each defining one symbol `needle`.
     fn needles(path: &str, n: usize) -> (Vec<ChunkIn>, Vec<SymbolIn>) {
@@ -768,7 +855,7 @@ mod tests {
                     line_start: i as u32 + 1,
                     line_end: i as u32 + 1,
                     symbol: Some("needle".into()),
-                    key: vec_key(1, &text),
+                    key: chunk_key(&text),
                     embed: true,
                     embed_text: text,
                     symbols: "needle".into(),
@@ -854,7 +941,7 @@ mod tests {
                 line_start: i as u32 + 1,
                 line_end: i as u32 + 1,
                 symbol: None,
-                key: vec_key(1, &text),
+                key: chunk_key(&text),
                 embed: true,
                 embed_text: text,
                 symbols: String::new(),

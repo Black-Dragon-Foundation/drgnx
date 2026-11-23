@@ -60,7 +60,7 @@ pub struct FileRow {
 }
 
 /// A chunk to write. `symbols` is the raw symbol text: it is encoded (see [`encode_symbol`]) on its way into the FTS
-/// column. `key` is [`vec_key`] of the chunker version and `embed_text`.
+/// column. `key` is [`chunk_key`] of `embed_text`.
 #[derive(Clone, Debug)]
 pub struct ChunkIn {
     pub start: u32,
@@ -111,15 +111,72 @@ pub struct VecRow {
     pub last_used: i64,
 }
 
-/// The key of a chunk's content: sha256 over length-prefixed fields (the chunker version, then the text), so a key
-/// plus its row names the model, dims, chunker and text.
-pub fn vec_key(chunker: u32, embed_text: &str) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(4u64.to_be_bytes());
-    h.update(chunker.to_be_bytes());
-    h.update((embed_text.len() as u64).to_be_bytes());
-    h.update(embed_text.as_bytes());
-    h.finalize().into()
+/// What a vector embeds: a chunk's text, or a path's (`vec.kind` 0 and 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum KeyKind {
+    Chunk,
+    Path,
+}
+
+impl KeyKind {
+    /// Its number in `vec.kind`.
+    pub fn as_i64(self) -> i64 {
+        match self {
+            KeyKind::Chunk => 0,
+            KeyKind::Path => 1,
+        }
+    }
+
+    /// The key of TEXT as this kind's text: sha256 over length-prefixed fields, the version of the kind's text
+    /// ([`crate::chunk::EMBED_TEXT_VERSION`], [`PATH_TEXT_VERSION`]) and then the text itself. Nothing else goes in: one
+    /// text is one key in any path, branch, clone or repo.
+    pub fn key(self, text: &str) -> [u8; 32] {
+        let version = match self {
+            KeyKind::Chunk => crate::chunk::EMBED_TEXT_VERSION,
+            KeyKind::Path => PATH_TEXT_VERSION,
+        };
+        let mut h = Sha256::new();
+        h.update(4u64.to_be_bytes());
+        h.update(version.to_be_bytes());
+        h.update((text.len() as u64).to_be_bytes());
+        h.update(text.as_bytes());
+        h.finalize().into()
+    }
+}
+
+/// The version of [`path_text`], hashed into every path key.
+pub const PATH_TEXT_VERSION: u32 = 1;
+
+/// The key of a chunk's embedded text (`chunk::embed_text_and_key` is how tier 1 gets it).
+pub fn chunk_key(embed_text: &str) -> [u8; 32] {
+    KeyKind::Chunk.key(embed_text)
+}
+
+/// What a path vector embeds: the whole path, a newline, then its words, split on `/ _ - .` and camelCase boundaries.
+pub fn path_text(path: &str) -> String {
+    let mut words: Vec<String> = Vec::new();
+    for part in path.split(['/', '_', '-', '.']).filter(|p| !p.is_empty()) {
+        let cs: Vec<char> = part.chars().collect();
+        let mut word = String::new();
+        for (i, &ch) in cs.iter().enumerate() {
+            // a word starts at an upper-case letter after a lower-case one or a digit (`queueTest`), and at the last
+            // upper-case letter of a run that a lower-case one follows (`HTTPServer`)
+            let cut = i > 0
+                && ch.is_uppercase()
+                && (!cs[i - 1].is_uppercase() || cs.get(i + 1).is_some_and(|n| n.is_lowercase()));
+            if cut && !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            word.push(ch);
+        }
+        words.push(word);
+    }
+    format!("{path}\n{}", words.join(" "))
+}
+
+/// The key of PATH's vector: [`KeyKind::Path`]'s key of its [`path_text`].
+pub fn path_key(path: &str) -> [u8; 32] {
+    KeyKind::Path.key(&path_text(path))
 }
 
 /// TREE's blob of PATH: none when TREE has no row, `Some(None)` for a tombstone.

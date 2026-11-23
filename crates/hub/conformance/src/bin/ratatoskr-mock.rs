@@ -37,10 +37,13 @@
 //!   `PLAYWRIGHT_MCP_CDP_ENDPOINT` names, and for each URL calls `browser_navigate` and `browser_snapshot` and prints
 //!   `TITLE <the page's title>`, or `ERROR <url>: <why>` (exit 1 when any failed).
 //!
-//! - `embed [--dims N] [--log FILE] [--parent PID]` prints `MOCK-EMBED-PORT N` and serves, on 127.0.0.1 only, TEI's `POST
+//! - `embed [--dims N] [--model-file FILE] [--log FILE] [--parent PID]` prints `MOCK-EMBED-PORT N` and serves, on 127.0.0.1 only, TEI's `POST
 //!   /embed {"inputs"}` (a list of vectors) and Ollama's `POST /api/embed {"model", "input"}` (`{"model", "embeddings",
-//!   "prompt_eval_count"}`, the words of the inputs). A vector is made from its text's bytes, so equal texts give equal
-//!   vectors. The log is JSONL like `llm`'s.
+//!   "prompt_eval_count"}`, the words of the inputs) and llama.cpp's `POST /v1/embeddings {"input"}`. A vector is made from its text's bytes, so equal texts give equal
+//!   vectors. The log is JSONL like `llm`'s. It also answers what a fingerprint needs: TEI's `GET /info`, Ollama's
+//!   `POST /api/show` and `GET /api/tags`, about the model in FILE (`MODEL [DIMS [EMBED_DIMS]]`, read at every request, so
+//!   a test swaps the model under one URL; EMBED_DIMS is what every text but the hub's probe text gets, for a server that
+//!   lies about its dimensions).
 //!
 //! `llm` and `embed` end when `--parent` is gone.
 
@@ -941,12 +944,46 @@ fn embed_vector(text: &str, dims: usize) -> Vec<f64> {
         .collect()
 }
 
+/// The text the hub's fingerprint probe embeds to learn a server's dimensions (`drgnx-ratatoskr`'s `embed::PROBE_TEXT`).
+const EMBED_PROBE_TEXT: &str = "drgnx fingerprint probe";
+
+/// The model the server stands in for now: `(model id, dims, dims of every text but the probe's)`. With
+/// `--model-file F` the file is read at each request, `MODEL [DIMS [EMBED_DIMS]]`, so a test swaps the model under the
+/// same URL by rewriting it; else `mock/embed-1` with `--dims`.
+fn embed_model(file: &Option<String>, dims: usize) -> (String, usize, usize) {
+    let text = file
+        .as_ref()
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .unwrap_or_default();
+    let mut words = text.split_whitespace();
+    let model = words.next().unwrap_or("mock/embed-1").to_owned();
+    let dims = words.next().and_then(|w| w.parse().ok()).unwrap_or(dims);
+    let embed_dims = words.next().and_then(|w| w.parse().ok()).unwrap_or(dims);
+    (model, dims, embed_dims)
+}
+
 /// One request of the embedding server: TEI's `POST /embed {"inputs": [...]}` answers a list of vectors, Ollama's
 /// `POST /api/embed {"model", "input": TEXT|[TEXT...]}` answers `{"model", "embeddings", "prompt_eval_count"}` (the
-/// words of the inputs, which the gateway counts as input tokens). Anything else is 404.
-fn embed_serve(mut sock: TcpStream, dims: usize, log: &Option<Mutex<File>>) {
+/// words of the inputs, which the gateway counts as input tokens), llama.cpp's `POST /v1/embeddings {"input"}` answers
+/// `{"data": [{"index", "embedding"}]}`. Anything else is 404.
+fn embed_serve(
+    mut sock: TcpStream,
+    dims: usize,
+    model_file: &Option<String>,
+    log: &Option<Mutex<File>>,
+) {
     let Some(req) = read_request(&mut sock) else {
         return;
+    };
+    let (model, dims, embed_dims) = embed_model(model_file, dims);
+    // the one text the hub's probe sends: it always gets the model's real dims; with `embed_dims` set, any other text
+    // gets that many (a server that lies about its dimensions)
+    let dims_of = |inputs: &[String]| {
+        if inputs.len() == 1 && inputs[0] == EMBED_PROBE_TEXT {
+            dims
+        } else {
+            embed_dims
+        }
     };
     let body = String::from_utf8_lossy(&req.body).into_owned();
     log_line(
@@ -967,22 +1004,58 @@ fn embed_serve(mut sock: TcpStream, dims: usize, log: &Option<Mutex<File>>) {
     let answer = match req.path.as_str() {
         "/embed" => {
             let inputs = texts(&parsed["inputs"]);
+            let d = dims_of(&inputs);
             Some(json!(
                 inputs
                     .iter()
-                    .map(|t| embed_vector(t, dims))
+                    .map(|t| embed_vector(t, d))
                     .collect::<Vec<_>>()
             ))
         }
         "/api/embed" => {
             let inputs = texts(&parsed["input"]);
+            let d = dims_of(&inputs);
             let words: usize = inputs.iter().map(|t| t.split_whitespace().count()).sum();
             Some(json!({
                 "model": parsed["model"],
-                "embeddings": inputs.iter().map(|t| embed_vector(t, dims)).collect::<Vec<_>>(),
+                "embeddings": inputs.iter().map(|t| embed_vector(t, d)).collect::<Vec<_>>(),
                 "prompt_eval_count": words,
             }))
         }
+        "/v1/embeddings" => {
+            let inputs = texts(&parsed["input"]);
+            let d = dims_of(&inputs);
+            Some(json!({
+                "object": "list",
+                "data": inputs.iter().enumerate().map(|(i, t)| json!({
+                    "object": "embedding", "index": i, "embedding": embed_vector(t, d),
+                })).collect::<Vec<_>>(),
+            }))
+        }
+        // TEI's `GET /info`: the model, its revision and dtype, pooling and the longest input
+        "/info" => Some(json!({
+            "model_id": model,
+            "model_sha": format!("rev-{model}"),
+            "model_dtype": "float16",
+            "model_type": {"embedding": {"pooling": "last-token"}},
+            "max_input_length": 8192,
+            "max_client_batch_size": 32,
+            "version": "mock",
+        })),
+        // Ollama's `POST /api/show`: the model's details (the family is the model of the file) and its pooling
+        "/api/show" => Some(json!({
+            "details": {"family": model, "parameter_size": "0.6B", "quantization_level": "Q8_0"},
+            "model_info": {
+                "general.architecture": "mockarch",
+                "mockarch.context_length": 4096,
+                "mockarch.pooling_type": 3,
+            },
+            "template": "{{ .Prompt }}",
+        })),
+        // Ollama's `GET /api/tags`: one model, named as the file names it, with a digest of its own
+        "/api/tags" => Some(json!({
+            "models": [{"name": model, "model": model, "digest": format!("digest-of-{model}")}],
+        })),
         _ => None,
     };
     let (status, text) = match answer {
@@ -1014,13 +1087,14 @@ fn embed(args: &[String]) {
             }
         });
     }
+    let model_file = Arc::new(flag(args, "--model-file", 1).map(|f| f[0].clone()));
     let log = Arc::new(open_log(args));
     let listener =
         TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| die(&format!("cannot listen: {e}")));
     announce("MOCK-EMBED-PORT", &listener);
     for sock in listener.incoming().flatten() {
-        let log = log.clone();
-        std::thread::spawn(move || embed_serve(sock, dims, &log));
+        let (log, model_file) = (log.clone(), model_file.clone());
+        std::thread::spawn(move || embed_serve(sock, dims, &model_file, &log));
     }
 }
 

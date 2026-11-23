@@ -70,19 +70,34 @@ fn heading_in(text: &str, a: usize, b: usize) -> Option<String> {
     found
 }
 
-/// The file's title: its first line when that is a `;;;` line, with the file name and the dashes dropped.
+/// The file's title: its first line when that is a `;;;` line, with the file name and the dashes dropped. Without the
+/// `---`, a first word that is a file name (`name.el`, `name.el:`) is dropped: a title never carries the file's name
+/// (MP-22; the path has a vector of its own), and it reads the same wherever the file is.
 fn title_of(text: &str) -> Option<String> {
     let line = text.lines().next()?;
     if !line.starts_with(";;;") {
         return None;
     }
     let t = line.trim_start_matches(';').trim();
-    let t = t.split_once("---").map_or(t, |(_, rest)| rest.trim());
+    let t = match t.split_once("---") {
+        Some((_, rest)) => rest.trim(),
+        None => match t.split_once(char::is_whitespace) {
+            Some((first, rest)) if names_a_file(first) => rest.trim(),
+            None if names_a_file(t) => "",
+            _ => t,
+        },
+    };
     let t = t
         .strip_suffix("-*- lexical-binding: t; -*-")
         .unwrap_or(t)
         .trim();
     (!t.is_empty()).then(|| t.to_string())
+}
+
+/// Whether WORD is a Lisp file's name (`name.el`, or `name.el:`).
+fn names_a_file(word: &str) -> bool {
+    let w = word.strip_suffix(':').unwrap_or(word);
+    w.len() > 3 && w.ends_with(".el")
 }
 
 /// The child forms an oversized form may be cut before: its atoms after the head, name, arguments and docstring.

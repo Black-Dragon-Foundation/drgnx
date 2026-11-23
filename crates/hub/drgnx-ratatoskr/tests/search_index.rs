@@ -36,6 +36,13 @@ fn exe() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ratatoskr"))
 }
 
+/// What the built-in model's vectors are keyed by: its fingerprint (`vec.model` is never the model's name).
+fn model_hex() -> String {
+    drgnx_ratatoskr::search::builtin_identity(hrafn_embed::default_model())
+        .fp
+        .hex()
+}
+
 fn model_dir() -> PathBuf {
     PathBuf::from(
         std::env::var("DRGNX_TEST_MODELS").expect("DRGNX_TEST_MODELS names the model volume"),
@@ -580,7 +587,7 @@ async fn denied_root_refused_and_canary_never_embedded() {
     };
     assert_eq!(leaked, 0);
     let pending = hrafn::missing(p.store(), MODEL, 1000).await.unwrap();
-    assert!(pending.iter().all(|(_, t)| !t.contains(&canary)));
+    assert!(pending.iter().all(|(_, _, t)| !t.contains(&canary)));
 }
 
 /// Pattern B: tier 2 holds while typing holds, and only between requests. The clock moves by 250 ms advances;
@@ -617,17 +624,18 @@ fn typing_holds_tier2_between_requests() {
             );
         }
         clock::advance(Duration::from_millis(250)).await;
-        // one request of 8 keys, then tier 2 waits for its next permit
-        let after_one = status_until(&p, "the first request", |s| s.embedded == 8).await;
+        // one request of 8 keys (4 one-chunk files: each chunk's key, then its path's), then tier 2 waits for its
+        // next permit
+        let after_one = status_until(&p, "the first request", |s| s.embedded == 4).await;
         assert_eq!(after_one.tier2, Tier2::Running);
 
         p.note_typing();
         permits.add_permits(1);
         let again = status_until(&p, "typing again", |s| s.tier2 == Tier2::Typing).await;
-        assert_eq!(again.embedded, 8, "held between requests, never inside one");
+        assert_eq!(again.embedded, 4, "held between requests, never inside one");
         assert_eq!(
-            p.lag(Some(MODEL)).await.unwrap().chunks_behind as u64,
-            total - 8
+            p.lag(Some(&model_hex())).await.unwrap().chunks_behind as u64,
+            total - 4
         );
 
         permits.add_permits(100);
@@ -636,7 +644,7 @@ fn typing_holds_tier2_between_requests() {
         }
         let done = status_until(&p, "idle", |s| s.tier2 == Tier2::Idle).await;
         assert_eq!(done.embedded, total);
-        assert_eq!(p.lag(Some(MODEL)).await.unwrap().chunks_behind, 0);
+        assert_eq!(p.lag(Some(&model_hex())).await.unwrap().chunks_behind, 0);
     })
 }
 
@@ -1062,6 +1070,32 @@ async fn base_names(p: &Project) -> Vec<String> {
         })
         .await
         .unwrap()
+}
+
+/// Pattern D. The repo's rules are read at every tier-1 listing, not when the project opens: no reopen, and a file a
+/// new line ignores loses its rows at the next refresh; take the line away and the rows come back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn editing_search_toml_takes_effect_at_the_next_refresh() {
+    let f = fixture(&lisp_files(3));
+    let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
+        .await
+        .unwrap();
+    assert_eq!(p.refresh_now().await.unwrap().files_changed, 3);
+    assert!(base_names(&p).await.contains(&"f1-run".to_string()));
+    let toml = f.root.join(".drgnx/search.toml");
+    std::fs::create_dir_all(toml.parent().unwrap()).unwrap();
+    std::fs::write(&toml, "ignore = [\"core/f1.el\"]\n").unwrap();
+    assert_eq!(p.refresh_now().await.unwrap().files_changed, 1);
+    let n = base_names(&p).await;
+    assert!(!n.contains(&"f1-run".to_string()), "{n:?}");
+    assert!(n.contains(&"f0-run".to_string()) && n.contains(&"f2-run".to_string()));
+    // a file that cannot be read is an error the listing reports, not the defaults
+    std::fs::write(&toml, "ignore = [\n").unwrap();
+    let e = p.refresh_now().await.unwrap_err();
+    assert!(e.to_string().contains("search.toml cannot be read"), "{e}");
+    std::fs::remove_file(&toml).unwrap();
+    assert_eq!(p.refresh_now().await.unwrap().files_changed, 1);
+    assert!(base_names(&p).await.contains(&"f1-run".to_string()));
 }
 
 /// Pattern D. The base-checkout setting (H16 overlay design §6.5): with another checkout as the base, tier 1 builds

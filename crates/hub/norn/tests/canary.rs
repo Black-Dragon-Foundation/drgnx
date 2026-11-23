@@ -155,8 +155,8 @@ impl Embedder for Recorder {
         Box::pin(async move { Ok(vec![vec![1.0, 0.0, 0.5, 0.25]; n]) })
     }
 
-    fn model(&self) -> &str {
-        "canary"
+    fn model(&self) -> String {
+        "canary".to_owned()
     }
 }
 

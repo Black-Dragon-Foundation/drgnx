@@ -5,7 +5,7 @@
 //! test-pattern: pure (D): the store thread answers in order, nothing here has a clock or a timeout.
 
 use hrafn::query::{Query, Scope, search};
-use hrafn::{ChunkIn, CodeStore, DoorKind, FileRow, MIGRATIONS, SymbolIn, View, vec_key};
+use hrafn::{ChunkIn, CodeStore, DoorKind, FileRow, MIGRATIONS, SymbolIn, View, chunk_key};
 use rusqlite::params;
 
 fn chunk(text: &str, symbols: &str, body: &str) -> ChunkIn {
@@ -15,7 +15,7 @@ fn chunk(text: &str, symbols: &str, body: &str) -> ChunkIn {
         line_start: 1,
         line_end: 1,
         symbol: None,
-        key: vec_key(1, text),
+        key: chunk_key(text),
         embed: true,
         embed_text: text.into(),
         symbols: symbols.into(),
@@ -126,7 +126,7 @@ async fn v2_store_migrates_keeping_rows_and_vectors() {
             ("b.el", "(defvar drgnx-other)", "drgnx-other", "gamma"),
         ];
         for (i, (p, text, s, body)) in chunks.iter().enumerate() {
-            let key = vec_key(1, text);
+            let key = chunk_key(text);
             c.execute(
                 "insert into chunk(path, start, end, line_start, line_end, symbol, key, embed, embed_text)
                  values (?1, 0, 5, ?2, ?2, ?3, ?4, 1, ?5)",
@@ -162,7 +162,8 @@ async fn v2_store_migrates_keeping_rows_and_vectors() {
     std::thread::spawn(move || store.shutdown()).join().unwrap();
 
     let s = CodeStore::open(&path).unwrap();
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("6"));
+    // (V7 gives `vec` its kind, every old row a chunk's, and adds `path_key`)
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("7"));
     // the references come with the next parse (`PARSE_VERSION`); the migration only makes the table
     assert!(rows(s.handle(), "select path from ref").await.is_empty());
     for (q, b) in KEPT.iter().zip(&before) {
@@ -187,6 +188,8 @@ async fn v2_store_migrates_keeping_rows_and_vectors() {
             text: "drgnx-timer-fire".into(),
             scope: Scope::All,
             k: 5,
+            path_weight: hrafn::query::PATH_WEIGHT,
+            dir_weight: hrafn::query::DIR_WEIGHT,
         },
         hrafn::View::Base,
         None,
@@ -202,6 +205,8 @@ async fn v2_store_migrates_keeping_rows_and_vectors() {
             text: "gamma".into(),
             scope: Scope::All,
             k: 5,
+            path_weight: hrafn::query::PATH_WEIGHT,
+            dir_weight: hrafn::query::DIR_WEIGHT,
         },
         hrafn::View::Base,
         None,

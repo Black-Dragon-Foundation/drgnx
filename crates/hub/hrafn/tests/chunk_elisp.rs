@@ -155,13 +155,58 @@ fn drgnx_module_define_is_a_definer() {
     assert_eq!(syms[1].kind, "setting");
 }
 
+/// Pattern D (Hrafn redesign Task 8, MP-22). A Lisp file's first line gives a title only when it says more than the
+/// file's name: `name.el --- Title` keeps `Title`; a line that is the name (with or without the cookie) gives none. The
+/// title does not depend on where the file is, so the same text under another path or name is the same header.
+#[test]
+fn elisp_title_never_carries_the_file_name() {
+    let body = "\n(defun t-one ()\n  \"One.\"\n  1)\n";
+    let cases = [
+        (
+            ";;; foo.el --- Timers for all  -*- lexical-binding: t; -*-",
+            Some("Timers for all"),
+        ),
+        (";;; foo.el --- Timers for all", Some("Timers for all")),
+        (";;; foo.el -*- lexical-binding: t; -*-", None),
+        (";;; foo.el", None),
+        (";;; foo.el: the foo things", Some("the foo things")),
+    ];
+    for (first, title) in cases {
+        let text = format!("{first}\n{body}");
+        let mut headers = Vec::new();
+        for path in ["core/foo.el", "moved/elsewhere/bar.el"] {
+            let (cs, _) = chunk_file(path, Lang::Elisp, false, &text, BUDGET);
+            for c in &cs {
+                // the title is the first line; a `;;;` first line is also the file's first section heading, which
+                // is the file's own text (the same wherever it is), not its name
+                let line = c.header.lines().next().unwrap_or_default();
+                match title {
+                    Some(t) => assert_eq!(line, t, "{path} {first:?}: {:?}", c.header),
+                    None => assert!(
+                        line.starts_with("section: ") || line.starts_with("defines: "),
+                        "{path} {first:?}: no title: {:?}",
+                        c.header
+                    ),
+                }
+            }
+            headers.push(cs.iter().map(|c| c.embed_text.clone()).collect::<Vec<_>>());
+        }
+        assert_eq!(
+            headers[0], headers[1],
+            "{first:?}: the path changed the text"
+        );
+    }
+}
+
 #[test]
 fn header_not_in_body() {
     let (text, _) = fixture("basic.el");
     let (cs, _) = chunks(&text, 300);
     for c in &cs {
         assert_eq!(c.fts.body, text[c.start as usize..c.end as usize]);
-        assert!(c.embed_text.starts_with("core/sample.el\n"));
+        // the title first; the path is not in the embedded text (Hrafn redesign Task 8)
+        assert!(c.embed_text.starts_with("A sample for the chunker"));
+        assert!(!c.embed_text.contains("core/sample.el"));
         assert!(c.header.contains("A sample for the chunker"));
         assert_eq!(c.fts.path, "core/sample.el");
         assert!(!c.fts.body.starts_with("core/sample.el"));

@@ -5,9 +5,9 @@
 //!
 //! test-pattern: pure (D).
 
-use hrafn::chunk::{BUDGET, CHUNKER_VERSION, chunk_file_refs};
+use hrafn::chunk::{BUDGET, chunk_file_refs, embed_text_and_key};
 use hrafn::notebook::{Kind, NotANotebook, Notebook, split_lines};
-use hrafn::{Lang, classify, vec_key};
+use hrafn::{Lang, classify};
 use serde_json::Value;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -371,7 +371,8 @@ fn notebook_chunks_and_their_vector_keys_stay_as_designed() {
         chunk_file_refs("work/cache.ipynb", Lang::Notebook, false, &text, BUDGET);
     let mut out = String::new();
     for c in &chunks {
-        let key: String = vec_key(CHUNKER_VERSION, &c.embed_text)
+        let key: String = embed_text_and_key(c)
+            .1
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();

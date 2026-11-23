@@ -634,6 +634,10 @@ mod tests {
             ),
             ("/p/llama/v1/embeddings", "llama", "/v1/embeddings"),
             ("/p/tei/embed", "tei", "/embed"),
+            // what the hub's fingerprint probe asks (Hrafn redesign, Task 4)
+            ("/p/tei/info", "tei", "/info"),
+            ("/p/ollama/api/show", "ollama", "/api/show"),
+            ("/p/ollama/api/tags", "ollama", "/api/tags"),
         ] {
             let a = route(path).unwrap();
             assert_eq!(a.route, to(id, rest), "{path}");

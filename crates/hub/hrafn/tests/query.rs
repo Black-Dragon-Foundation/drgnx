@@ -4,7 +4,7 @@
 //! test-pattern: pure (D): the store thread answers in order, nothing here has a clock or a timeout.
 
 use hrafn::query::{Query, Scope, search};
-use hrafn::{Class, CodeStore, Lang, Listed, collect, lag, put_vectors, refresh};
+use hrafn::{Class, CodeStore, KeyKind, Lang, Listed, collect, lag, put_vectors, refresh};
 use std::collections::HashMap;
 use std::io;
 
@@ -106,6 +106,7 @@ async fn indexed() -> (
             class: f.class,
             lang: f.lang,
             generated: f.generated,
+            embed: true,
             size: f.text.len() as u64,
         })
         .collect();
@@ -132,6 +133,8 @@ fn q(text: &str, scope: Scope) -> Query {
         text: text.into(),
         scope,
         k: 10,
+        path_weight: hrafn::query::PATH_WEIGHT,
+        dir_weight: hrafn::query::DIR_WEIGHT,
     }
 }
 
@@ -319,12 +322,18 @@ async fn vector_route_and_lag_line() {
     // one chunk, the hub's, gets a vector; nothing else does
     let hub = want
         .iter()
-        .find(|(_, t)| t.contains("drgnx-hub-call"))
+        .find(|(k, _, t)| *k == KeyKind::Chunk && t.contains("drgnx-hub-call"))
         .unwrap()
-        .0;
-    put_vectors(&store, MODEL, &[(hub, vec![1.0, 0.0, 0.0, 0.0])])
-        .await
-        .unwrap();
+        .1;
+    put_vectors(
+        &store,
+        MODEL,
+        4,
+        KeyKind::Chunk,
+        &[(hub, vec![1.0, 0.0, 0.0, 0.0])],
+    )
+    .await
+    .unwrap();
     let a = search(
         &store,
         &q("completely unrelated words", Scope::All),
@@ -358,10 +367,17 @@ async fn vector_route_and_lag_line() {
 async fn what_a_query_keeps_ends_at_the_next_write() {
     let (dir, store, texts) = indexed().await;
     let want = hrafn::missing(&store, MODEL, 100).await.unwrap();
-    let key = |name: &str| want.iter().find(|(_, t)| t.contains(name)).unwrap().0;
+    let key = |name: &str| {
+        want.iter()
+            .find(|(k, _, t)| *k == KeyKind::Chunk && t.contains(name))
+            .unwrap()
+            .1
+    };
     put_vectors(
         &store,
         MODEL,
+        4,
+        KeyKind::Chunk,
         &[(key("drgnx-hub-call"), vec![1.0, 0.0, 0.0, 0.0])],
     )
     .await
@@ -386,6 +402,8 @@ async fn what_a_query_keeps_ends_at_the_next_write() {
     put_vectors(
         &store,
         MODEL,
+        4,
+        KeyKind::Chunk,
         &[(key("drgnx-ai-embed"), vec![0.0, 1.0, 0.0, 0.0])],
     )
     .await
@@ -438,6 +456,185 @@ async fn the_vector_scan_reads_no_chunk_per_vector() {
     let plan = plan_of(&store, hrafn::query::NEAREST_SQL, 1).await;
     assert!(!plan.contains("SUBQUERY"), "{plan}");
     assert!(!plan.contains("chunk"), "{plan}");
+}
+
+/// Pattern D (Hrafn redesign Task 9, the plan test extended to `path_key`). The vector route's own reads, the scan and
+/// the re-rank's vectors (a chunk's and its path's, by key), touch `vec` alone: no `chunk`, `symbol`, `file` or
+/// `path_key` row; a candidate's chunks are found by the key's index, never by a scan.
+#[tokio::test]
+async fn vector_route_reads_no_chunk_rows() {
+    let (_dir, store, _texts) = indexed().await;
+    for sql in [hrafn::query::NEAREST_SQL, hrafn::query::VEC_SQL] {
+        let plan = plan_of(&store, sql, 1).await;
+        // every table step is of `vec` (a plan names a table by its alias, so the step itself is read)
+        for l in plan.lines().map(str::trim_start) {
+            if l.starts_with("SEARCH") || l.starts_with("SCAN") {
+                let table = l.split_whitespace().nth(1).unwrap_or_default();
+                assert_eq!(table, "vec", "{plan}\n{sql}");
+            }
+        }
+        assert!(plan.contains("vec"), "{plan}");
+    }
+    let plan = plan_of(&store, hrafn::query::KEY_CHUNKS_SQL, 2).await;
+    assert!(plan.contains("SEARCH c "), "{plan}");
+    assert!(
+        !plan.lines().any(|l| l.trim_start().starts_with("SCAN")),
+        "{plan}"
+    );
+}
+
+/// Embeds every key the fixture's store lacks: a chunk's vector from CHUNK, a path's from PATH (by its path). How many
+/// files' path keys it embedded.
+async fn embed_with(
+    store: &CodeStore,
+    chunk: &dyn Fn(&str) -> Vec<f32>,
+    path: &dyn Fn(&str) -> Vec<f32>,
+) -> usize {
+    let want = hrafn::missing(store, MODEL, 1000).await.unwrap();
+    let mut paths = 0;
+    for kind in [KeyKind::Chunk, KeyKind::Path] {
+        let rows: Vec<([u8; 32], Vec<f32>)> = want
+            .iter()
+            .filter(|(k, _, _)| *k == kind)
+            .map(|(_, key, text)| {
+                let v = match kind {
+                    KeyKind::Chunk => chunk(text),
+                    KeyKind::Path => path(text.lines().next().unwrap_or_default()),
+                };
+                (*key, v)
+            })
+            .collect();
+        if kind == KeyKind::Path {
+            // the files' path keys (directories', `dir/`, come too while DIR_WEIGHT is above 0)
+            paths = want
+                .iter()
+                .filter(|(k, _, t)| {
+                    *k == kind && !t.lines().next().unwrap_or_default().ends_with('/')
+                })
+                .count();
+        }
+        if !rows.is_empty() {
+            put_vectors(store, MODEL, DIMS as u32, kind, &rows)
+                .await
+                .unwrap();
+        }
+    }
+    paths
+}
+
+/// Pattern D (Hrafn redesign Task 9). Every chunk has one vector, so the chunk term ties them all; the question is
+/// near one file's path only: that file's chunk comes first, through the vector route alone. With the path's weight at
+/// 0 the tie stands, and the hub's file is not first.
+#[tokio::test]
+async fn path_vector_lifts_the_file_named_by_the_query() {
+    let (_dir, store, texts) = indexed().await;
+    let paths = embed_with(&store, &|_| vec![1.0, 0.0, 0.0, 0.0], &|p| {
+        if p == "core/drgnx-hub.el" {
+            vec![0.0, 1.0, 0.0, 0.0]
+        } else {
+            vec![0.0, 0.0, 1.0, 0.0]
+        }
+    })
+    .await;
+    let wanted = fixture().iter().filter(|f| !f.generated).count();
+    assert_eq!(paths, wanted, "one path key per file that has vectors");
+    let qv: [f32; 4] = [0.6, 0.8, 0.0, 0.0];
+    let now = unchanged(texts);
+    let ask = |w: f32| {
+        let q = Query {
+            path_weight: w,
+            ..q("completely unrelated words", Scope::All)
+        };
+        let now = &now;
+        let store = &store;
+        async move {
+            search(store, &q, hrafn::View::Base, Some((MODEL, &qv)), now)
+                .await
+                .unwrap()
+        }
+    };
+    let a = ask(hrafn::query::PATH_WEIGHT).await;
+    assert_eq!(a.hits[0].path, "core/drgnx-hub.el", "{:?}", a.hits);
+    assert_eq!(a.hits[0].routes, ["vector"]);
+    let flat = ask(0.0).await;
+    assert_ne!(flat.hits[0].path, "core/drgnx-hub.el", "{:?}", flat.hits);
+}
+
+/// Pattern D (Hrafn redesign Task 9). One text in two files is one key and one vector, and two hits: the key resolves
+/// to every file that holds it.
+#[tokio::test]
+async fn one_key_in_two_files_is_two_hits() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = CodeStore::open(&dir.path().join("code.db")).unwrap();
+    let same = ";;; util.el --- shared helpers\n\n(defun util-clamp (x)\n  \"Clamp X.\"\n  x)\n";
+    let other = ";;; other.el --- something else\n\n(defun other-thing ()\n  \"Other.\"\n  nil)\n";
+    let files = [
+        ("lib/a/util.el", same),
+        ("lib/b/util.el", same),
+        ("other.el", other),
+    ];
+    let listed: Vec<Listed> = files
+        .iter()
+        .map(|(p, t)| Listed {
+            path: (*p).into(),
+            blob: format!("blob-{}", t.len()),
+            class: Class::Code,
+            lang: Lang::Elisp,
+            generated: false,
+            embed: true,
+            size: t.len() as u64,
+        })
+        .collect();
+    let by_path: HashMap<&str, &str> = files.iter().copied().collect();
+    refresh(
+        &store,
+        &listed,
+        &|p: &str| {
+            by_path
+                .get(p)
+                .map(|t| t.as_bytes().to_vec())
+                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+        },
+        &[(MODEL, DIMS)],
+    )
+    .await
+    .unwrap();
+    let want = hrafn::missing(&store, MODEL, 100).await.unwrap();
+    let chunks: Vec<_> = want
+        .iter()
+        .filter(|(k, _, _)| *k == KeyKind::Chunk)
+        .collect();
+    assert_eq!(chunks.len(), 2, "one key for the shared text: {chunks:?}");
+    embed_with(
+        &store,
+        &|t| {
+            if t.contains("util-clamp") {
+                vec![1.0, 0.0, 0.0, 0.0]
+            } else {
+                vec![0.0, 1.0, 0.0, 0.0]
+            }
+        },
+        &|_| vec![0.0, 0.0, 0.0, 1.0],
+    )
+    .await;
+    let a = search(
+        &store,
+        &q("completely unrelated words", Scope::All),
+        hrafn::View::Base,
+        Some((MODEL, &[1.0, 0.0, 0.0, 0.0])),
+        &|p: &str| by_path.get(p).map(|t| t.to_string()),
+    )
+    .await
+    .unwrap();
+    let mut first_two: Vec<&str> = a.hits.iter().take(2).map(|h| h.path.as_str()).collect();
+    first_two.sort();
+    assert_eq!(
+        first_two,
+        ["lib/a/util.el", "lib/b/util.el"],
+        "{:?}",
+        a.hits
+    );
+    assert!(a.hits.iter().take(2).all(|h| h.routes == ["vector"]));
 }
 
 /// Pattern D. The lag every answer carries is counted on an index: a scan of the chunk table reads every chunk's text
@@ -508,6 +705,7 @@ async fn an_unchanged_file_moves_no_hit() {
         class: Class::Code,
         lang: Lang::Rust,
         generated: false,
+        embed: true,
         size: text.len() as u64,
     }];
     refresh(

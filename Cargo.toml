@@ -42,7 +42,9 @@ memchr = "2.8"
 serde_ignored = "0.1"
 hmac = "0.13"
 sha2 = "0.11"
-sha1 = "0.11"              # the socket name is sha1(data-dir)[0:8] (design 3.1); one addition to section 17
+# Hrafn's `.drgnx/search.toml` (read as data; already in the lock through proc-macro-crate)
+toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
+sha1 = "0.11"             # the socket name is sha1(data-dir)[0:8] (design 3.1); one addition to section 17
 subtle = "2.6"
 getrandom = "0.4"
 # Jupyter kernels (language packs Task 11b): the pure-Rust ZeroMQ client; only the features used (no async-std, no async-dispatcher)

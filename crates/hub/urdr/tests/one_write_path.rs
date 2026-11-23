@@ -88,12 +88,13 @@ fn no_other_code_writes_graph_tables() {
     for file in files {
         let canon = file.canonicalize().unwrap_or(file.clone());
         let in_graph = graph.canonicalize().is_ok_and(|g| canon.starts_with(g));
-        // test code seeds its own databases (a test file, a `tests` dir, a fuzz target); the rule is on shipped code
-        let test_file = canon
+        // Test fixtures (unit test modules, `tests/`, the fuzz harness) seed tables on purpose: only product code
+        // must go through the graph's writer.
+        let in_tests = canon
             .components()
-            .any(|c| c.as_os_str() == "tests" || c.as_os_str() == "fuzz_targets")
+            .any(|c| c.as_os_str() == "tests" || c.as_os_str() == "fuzz")
             || canon.file_name().is_some_and(|n| n == "tests.rs");
-        if in_graph || test_file {
+        if in_graph || in_tests {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(&file) else {

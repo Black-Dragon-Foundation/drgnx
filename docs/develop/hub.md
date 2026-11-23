@@ -606,8 +606,8 @@ the same directory.
 
 **The store at start.** Before it serves anything the hub opens `<data>/work.db` with the graph writer and
 `norn::migrate7`'s opening rule ([store.md](store.md#migration-from-schema-6-task-11)), and waits for its answer: a
-missing file is made at schema 15, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
-migrated in one transaction, so the first request sees schema 15. A newer file (above 15) makes the hub read-only; a
+missing file is made at schema 16, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
+migrated in one transaction, so the first request sees schema 16. A newer file (above 16) makes the hub read-only; a
 file below 6, or a migration that failed, leaves the writer not ready (writes answer its text) and the hub serves
 the rest. A failed migration is not tried again until the hub restarts. The coordination writer
 (`norn::store::CoordDb`) and the coordination tools' graph store run on the same file.
@@ -1211,7 +1211,7 @@ as the peer `agent:<session>` on the user's branch). Both user only; `history/hu
 
 ## The store
 
-The front serves the store (`work.db`, schema 15) itself: `graph/*` (reads and walks, history, revert, excise, grants,
+The front serves the store (`work.db`, schema 16) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
 for the editor), all class `user`. `cards/settle` of an `access` card makes a grant (or refuses) and of a `close`
 card closes the task (or rejects), in the settle's tx. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
@@ -1623,7 +1623,8 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/buffer` | user | `{large?: boolean, mirror?: boolean, path: AbsPath, text?: string, tick?: natnum, version?: natnum, view: string}` | `boolean` | no |
 | `search/edit-doc` | user | `{context?: natnum, max?: natnum, view: string}` | `{lines: [EditLine], over?: boolean, skipped?: [EditSkip], total: natnum}` | no |
 | `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], lines?: [{eol?: boolean, line: natnum, line_id: string, new?: [string], old: string, path: AbsPath}], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
-| `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
+| `search/embed-retry` | user | `{}` | `boolean` | no |
+| `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, chain?: [ChainEntry], prefer?: string, servers: [ServerInfo]}` | no |
 | `search/files` | user | `{exclude?: [string], ignore?: "index" \| "real", n?: natnum, name?: boolean, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
 | `search/fold` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
@@ -1656,6 +1657,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/typing` | user | `{}` | `{}` | no |
 | `search/undo` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
 | `search/usages` | user | `{base?: boolean, k?: natnum, name: string, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code"}` | `{defined: [SymbolHit], fresh: Fresh, usages: [Usage]}` | no |
+| `search/why` | user | `{path: string, root: AbsPath}` | `{layer: "builtin" \| "repo" \| "user", list: "include" \| "ignore" \| "no-embed" \| "default", rule?: string, verdict: "index" \| "no-embed" \| "ignored"}` | no |
 | `settings/confirm` | user | `{error?: string, ok: boolean, tx: natnum}` | `{state: "accepted" \| "reverted" \| "blocked"}` | yes |
 | `settings/explained` | user | `{req: natnum, settings: [JsonObject]}` | `boolean` | no |
 | `settings/record` | user | `{changes: [{file: string, id: string, line?: natnum, value?: Text}], req: string, reverts?: natnum, tool: string}` | `{tx: integer}` | yes |
@@ -2845,6 +2847,15 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
 - **The terminal** counts columns with Unicode's widths, overridden by the editor's `char-width-table` ranges
   (`tty_widths`).
 
+### Models in the search answers: fingerprints and labels
+
+Hrafn's vectors are keyed by the model's fingerprint (64 hex characters; `runtime.md`, "The fingerprint"), never by a
+name. The answers say both: `search/query`'s `model` is the fingerprint of the model whose vectors took part and `label`
+its name (`granite-embedding-small-english-r2`, a server's model id); `lag.model` and `search/status`'s `models[].model`
+are fingerprints (`models[].label` is set when an embedder of this hub states that fingerprint now); `search/embedders`
+gives `builtin.fingerprint` and `builtin.label`, each server's `fingerprint` (none until it answers a probe) and `label`,
+and `prefer`, a fingerprint. The MCP and CLI clients print the label where they printed the model.
+
 ### Text search as rows (`search/run`)
 
 The Search view's results are a row stream under the rules above (`crates/hub/drgnx-ratatoskr/src/view/search/`:
@@ -3149,8 +3160,8 @@ and the ranking are `hrafn::rank`).
   repository, listed as its folder, is left out); elsewhere a walk that follows no link, skips `.git` folders and
   applies every `.gitignore` it meets (a deeper file decides first, the last matching line of a file wins, `!` keeps,
   a trailing `/` names folders, a leading or inner `/` anchors to the file's folder). No file is read: binary, large
-  and linked files are names like any other. The exclude globs of `.drgnx/search.eld` and `drgnx-search-exclude`
-  apply, and `ignore` as for `search/run` (dot paths and secret-looking names out under `index`, listed under `real`).
+  and linked files are names like any other. The `ignore` globs of `.drgnx/search.toml` and `drgnx-search-rules`
+  apply (not the built-in defaults: a licence text is still found by name), and `ignore` as for `search/run` (dot paths and secret-looking names out under `index`, listed under `real`).
 - **The ranking.** Every word of `query` (case-insensitive) is in the path; a basename that starts with the first
   word and holds them all first, then a basename that holds them all, then a path that does; shorter, then by path,
   among equals. A query checks its cancel flag every 4096 names.
@@ -4001,7 +4012,7 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   `RUNTIME_NAMES` and `value` JSON of the setting's runtime type (alists are objects, keys sorted; `drgnx-ai-roles` a
   list of `{role, chain: [{provider, model}]}`; at most 64 KiB). A call replaces the whole set of that project (none:
   global); an empty list clears it (the project still counts as having sent). A project's set holds only the settings
-  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`, `drgnx-search-include`, `drgnx-search-exclude`, `drgnx-search-off`, and the user's own `drgnx-agents-plugins`, `drgnx-agents-hook-rules`, `drgnx-agents-hook-rules-off`: see "Plugins"); every other runtime setting is
+  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`, `drgnx-search-rules`, `drgnx-search-off`, and the user's own `drgnx-agents-plugins`, `drgnx-agents-hook-rules`, `drgnx-agents-hook-rules-off`: see "Plugins"); every other runtime setting is
   global and security-bearing (profiles and their commands, providers and their URLs,
   `drgnx-agents-allow-unsandboxed`), so a project never changes it. A name that is not a runtime setting, a global one
   in a project's set, or a value that does not fit is `invalid-params` at `overrides[N].name` or

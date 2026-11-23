@@ -21,6 +21,7 @@ pub mod overlay;
 pub mod query;
 pub mod rank;
 pub mod refs;
+pub mod rules;
 pub mod schema;
 pub mod store;
 pub mod structural;
@@ -35,7 +36,7 @@ pub use door::{GixDoor, door};
 pub use files::{Change, Class, Commit, Config, Git, Lang, Listed, classify, list};
 #[cfg(feature = "host")]
 pub use files::{GitCli, ignored_dirs, is_ignored_dir};
-pub use index::{Lag, Refresh, collect, lag, missing, put_vectors, refresh, reset};
+pub use index::{Lag, Refresh, collect, lag, missing, missing_with, put_vectors, refresh, reset};
 pub use query::{Answer, Hit, Query, Scope, search};
 pub use watch::{
     AddError, MAIN_TREE, ProjectWatch, Router, TreeSpec, Watch, WatchEvent, WatchState,
@@ -44,5 +45,8 @@ pub use watch::{
 pub use watch::{Adder, HostWatch, Walker};
 
 pub use schema::{MIGRATIONS, encode_symbol};
-pub use store::{ChunkIn, CodeStore, FileRow, RefIn, StoreError, SymbolIn, VecRow, vec_key};
+pub use store::{
+    ChunkIn, CodeStore, FileRow, KeyKind, PATH_TEXT_VERSION, RefIn, StoreError, SymbolIn, VecRow,
+    chunk_key, path_key, path_text,
+};
 pub use tree::{TreeId, TreeRow, TreeState, View};

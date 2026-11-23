@@ -4,7 +4,10 @@
 //! test-pattern: the store tests and the git ones are pure (D): no clock and no timing; the store thread answers in
 //! order and `git` runs to its exit. `fresh::git_event_waits_for_index_lock` is every-order (A) over the settle core.
 
-use hrafn::{Class, CodeStore, Lang, Listed, Refresh, collect, lag, missing, put_vectors, refresh};
+use hrafn::{
+    Class, CodeStore, KeyKind, Lang, Listed, Refresh, collect, lag, missing, missing_with,
+    path_key, path_text, put_vectors, refresh,
+};
 use std::collections::HashMap;
 use std::io;
 use std::sync::Mutex;
@@ -20,6 +23,7 @@ fn el(path: &str, blob: &str) -> Listed {
         class: Class::Code,
         lang: Lang::Elisp,
         generated: false,
+        embed: true,
         size: 1,
     }
 }
@@ -74,10 +78,13 @@ async fn run(s: &CodeStore, tree: &Tree, listed: &[Listed]) -> Refresh {
         .unwrap()
 }
 
-/// A unit vector per key, made from the key's first bytes: the store does not care what it holds.
-fn vectors(keys: &[([u8; 32], String)]) -> Vec<([u8; 32], Vec<f32>)> {
+type Missing = Vec<(KeyKind, [u8; 32], String)>;
+
+/// A unit vector per key of KIND, made from the key's first bytes: the store does not care what it holds.
+fn vectors(keys: &Missing, kind: KeyKind) -> Vec<([u8; 32], Vec<f32>)> {
     keys.iter()
-        .map(|(k, _)| {
+        .filter(|(k, _, _)| *k == kind)
+        .map(|(_, k, _)| {
             let v: Vec<f32> = k[..DIMS].iter().map(|b| f32::from(*b) + 1.0).collect();
             let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
             (*k, v.into_iter().map(|x| x / n).collect())
@@ -85,11 +92,208 @@ fn vectors(keys: &[([u8; 32], String)]) -> Vec<([u8; 32], Vec<f32>)> {
         .collect()
 }
 
-/// Embeds everything tier 2 would: what `missing` gives goes back through `put_vectors`.
+/// Embeds everything tier 2 would: what `missing` gives goes back through `put_vectors`, each kind on its own. How
+/// many chunk keys it embedded.
 async fn embed_all(s: &CodeStore) -> usize {
     let keys = missing(s, MODEL, 1000).await.unwrap();
-    put_vectors(s, MODEL, &vectors(&keys)).await.unwrap();
-    keys.len()
+    for kind in [KeyKind::Chunk, KeyKind::Path] {
+        let rows = vectors(&keys, kind);
+        if !rows.is_empty() {
+            put_vectors(s, MODEL, DIMS as u32, kind, &rows)
+                .await
+                .unwrap();
+        }
+    }
+    keys.iter().filter(|(k, _, _)| *k == KeyKind::Chunk).count()
+}
+
+/// The chunk keys tier 2 is offered (the path keys left out).
+async fn chunk_keys(s: &CodeStore) -> Missing {
+    missing(s, MODEL, 1000)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|(k, _, _)| *k == KeyKind::Chunk)
+        .collect()
+}
+
+/// The files and directories whose path keys tier 2 is offered: the first line of each path text.
+fn offered_paths(keys: &Missing) -> Vec<String> {
+    keys.iter()
+        .filter(|(k, _, _)| *k == KeyKind::Path)
+        .map(|(_, _, t)| t.lines().next().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// A row whose length is not the fingerprint's dims is an error, and nothing of the batch is written.
+#[tokio::test]
+async fn wrong_dims_are_refused_on_write() {
+    let (_d, s) = store().await;
+    let tree = Tree::new(&[("a.el", "(defun a () 1)\n"), ("b.el", "(defun b () 2)\n")]);
+    run(&s, &tree, &[el("a.el", "a1"), el("b.el", "b1")]).await;
+    let keys = chunk_keys(&s).await;
+    assert!(keys.len() >= 2);
+    let mut rows = vectors(&keys, KeyKind::Chunk);
+    rows[1].1.push(0.5); // one row of 5 in a batch of 4
+    let err = put_vectors(&s, MODEL, DIMS as u32, KeyKind::Chunk, &rows)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("5 dims") && err.to_string().contains("4"),
+        "{err}"
+    );
+    assert_eq!(
+        chunk_keys(&s).await.len(),
+        keys.len(),
+        "nothing of the batch was written"
+    );
+    put_vectors(
+        &s,
+        MODEL,
+        DIMS as u32,
+        KeyKind::Chunk,
+        &vectors(&keys, KeyKind::Chunk),
+    )
+    .await
+    .unwrap();
+    assert!(chunk_keys(&s).await.is_empty());
+}
+
+/// The `(key, embed_text)` of PATH's chunks, in order.
+async fn keys_of(s: &CodeStore, path: &str) -> Vec<([u8; 32], String)> {
+    let path = path.to_string();
+    s.handle()
+        .read(move |c| {
+            let mut q =
+                c.prepare("select key, embed_text from chunk where path = ?1 order by id")?;
+            let rows = q
+                .query_map([&path], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows
+                .into_iter()
+                .map(|(k, t)| (<[u8; 32]>::try_from(k.as_slice()).unwrap(), t))
+                .collect())
+        })
+        .await
+        .unwrap()
+}
+
+/// Pattern D (Hrafn redesign Task 8). One text under two paths is one chunk key, made of the text alone: tier 2 is
+/// offered it once.
+#[tokio::test]
+async fn same_text_two_paths_one_key() {
+    let (_d, s) = store().await;
+    let text = ";;; shared.el --- A helper both crates carry\n\n(defun shared-help ()\n  \"Help.\"\n  1)\n";
+    let tree = Tree::new(&[("a/shared.el", text), ("b/lisp/copy.el", text)]);
+    run(
+        &s,
+        &tree,
+        &[el("a/shared.el", "same"), el("b/lisp/copy.el", "same")],
+    )
+    .await;
+    let (a, b) = (
+        keys_of(&s, "a/shared.el").await,
+        keys_of(&s, "b/lisp/copy.el").await,
+    );
+    assert!(!a.is_empty());
+    assert_eq!(a, b, "the same chunks, keys and texts under both paths");
+    for (key, t) in &a {
+        assert_eq!(*key, hrafn::chunk_key(t), "a key is its text's");
+    }
+    assert_eq!(chunk_keys(&s).await.len(), a.len(), "each key offered once");
+}
+
+/// Pattern D (Hrafn redesign Task 8). The path is no longer in a chunk's embedded text, but the FTS `path` column and
+/// the path route still have it.
+#[tokio::test]
+async fn fts_path_column_still_holds_the_path() {
+    let (_d, s) = store().await;
+    let tree = Tree::new(&[("core/drgnx-walrus.el", A)]);
+    run(&s, &tree, &[el("core/drgnx-walrus.el", "w1")]).await;
+    let hits: i64 = s
+        .handle()
+        .read(|c| {
+            Ok(c.query_row(
+                "select count(*) from chunk_fts where chunk_fts match 'path : \"drgnx walrus\"'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    let chunks = keys_of(&s, "core/drgnx-walrus.el").await;
+    assert_eq!(
+        hits as usize,
+        chunks.len(),
+        "every chunk's FTS row has the path"
+    );
+    for (_, t) in &chunks {
+        assert!(!t.contains("walrus") && !t.contains("core/"), "{t:?}");
+    }
+    let a = hrafn::search(
+        &s,
+        &hrafn::Query {
+            text: "drgnx-walrus.el".into(),
+            scope: hrafn::Scope::All,
+            k: 5,
+            path_weight: hrafn::query::PATH_WEIGHT,
+            dir_weight: hrafn::query::DIR_WEIGHT,
+        },
+        hrafn::View::Base,
+        None,
+        &|_: &str| None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(a.hits[0].path, "core/drgnx-walrus.el", "{:?}", a.hits);
+    assert!(a.hits[0].routes.contains(&"path"), "{:?}", a.hits[0].routes);
+}
+
+/// Pattern D (Hrafn redesign Task 9). The directories' keys are offered only when their weight counts: with none, no
+/// directory is embedded; with them, each directory once, after its file's key. Every path key is its path text's.
+#[tokio::test]
+async fn dir_weight_zero_embeds_no_directories() {
+    let (_d, s) = store().await;
+    let tree = Tree::new(&[("core/sub/a.el", A), ("b.el", B)]);
+    run(&s, &tree, &[el("core/sub/a.el", "a1"), el("b.el", "b1")]).await;
+    let without = missing_with(&s, MODEL, 1000, false).await.unwrap();
+    let mut files = offered_paths(&without);
+    files.sort();
+    assert_eq!(files, ["b.el", "core/sub/a.el"]);
+    let with = missing_with(&s, MODEL, 1000, true).await.unwrap();
+    let mut all = offered_paths(&with);
+    all.sort();
+    assert_eq!(all, ["b.el", "core/", "core/sub/", "core/sub/a.el"]);
+    for (kind, key, text) in &with {
+        if *kind == KeyKind::Path {
+            let p = text.lines().next().unwrap();
+            assert_eq!(*text, path_text(p));
+            assert_eq!(*key, path_key(p));
+        }
+    }
+    // a limit is the batch's size, path keys counted: two files' chunk keys and path keys do not fit in two
+    let two = missing_with(&s, MODEL, 2, true).await.unwrap();
+    assert_eq!(two.len(), 2, "{two:?}");
+    if hrafn::query::DIR_WEIGHT <= 0.0 {
+        assert_eq!(missing(&s, MODEL, 1000).await.unwrap(), without);
+    }
+}
+
+/// Pattern D (Hrafn redesign Task 9). A path's text keeps the path whole and adds its words: split on `/ _ - .` and
+/// at camelCase boundaries.
+#[test]
+fn path_text_is_the_path_and_its_words() {
+    assert_eq!(
+        path_text("crates/hub/hrafn-embed/src/QueueTest_v2.rs"),
+        "crates/hub/hrafn-embed/src/QueueTest_v2.rs\ncrates hub hrafn embed src Queue Test v2 rs"
+    );
+    assert_eq!(
+        path_text("HTTPServer.java"),
+        "HTTPServer.java\nHTTP Server java"
+    );
+    assert_eq!(path_text("core/"), "core/\ncore");
+    assert_ne!(path_key("a/b.el"), path_key("a/c.el"));
+    assert_ne!(path_key("a/b.el"), hrafn::chunk_key(&path_text("a/b.el")));
 }
 
 async fn ids_of(s: &CodeStore, path: &str) -> Vec<i64> {
@@ -106,9 +310,10 @@ async fn ids_of(s: &CodeStore, path: &str) -> Vec<i64> {
         .unwrap()
 }
 
+/// The chunk vectors stored (the path vectors left out).
 async fn vec_rows(s: &CodeStore) -> i64 {
     s.handle()
-        .read(|c| Ok(c.query_row("select count(*) from vec", [], |r| r.get(0))?))
+        .read(|c| Ok(c.query_row("select count(*) from vec where kind = 0", [], |r| r.get(0))?))
         .await
         .unwrap()
 }
@@ -328,12 +533,99 @@ mod fresh {
         assert!(r.keys_missing > 0);
     }
 
+    /// Sixty Lisp files: half with a `name.el --- Title` first line, half with only the file name and the cookie.
+    fn sixty() -> Vec<(String, String)> {
+        (0..60)
+            .map(|i| {
+                let first = if i % 2 == 0 {
+                    format!(";;; f{i}.el --- Helpers number {i}  -*- lexical-binding: t; -*-")
+                } else {
+                    format!(";;; f{i}.el -*- lexical-binding: t; -*-")
+                };
+                (
+                    format!("lisp/f{i}.el"),
+                    format!("{first}\n\n(defun f{i}-run ()\n  \"Run helper {i}.\"\n  {i})\n"),
+                )
+            })
+            .collect()
+    }
+
+    /// A repository of [`sixty`] files, indexed with every key embedded, then 50 of them moved by `git mv` (half into
+    /// another directory under their name, half renamed too) and indexed again. The new paths.
+    async fn moved() -> (tempfile::TempDir, tempfile::TempDir, CodeStore, Vec<String>) {
+        let files = sixty();
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        let d = {
+            let dir = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+            git(dir.path(), &["init", "-q"]);
+            for (p, c) in &refs {
+                let f = dir.path().join(p);
+                std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+                std::fs::write(f, c).unwrap();
+            }
+            git(dir.path(), &["add", "-A"]);
+            git(dir.path(), &["commit", "-q", "-m", "one"]);
+            dir
+        };
+        let (sd, s) = store().await;
+        index(&s, d.path(), &listed(d.path(), &Config::default())).await;
+        assert!(embed_all(&s).await >= 60);
+        assert!(missing(&s, MODEL, 1000).await.unwrap().is_empty());
+        std::fs::create_dir_all(d.path().join("moved")).unwrap();
+        let mut new = Vec::new();
+        for i in 0..50 {
+            let to = if i % 2 == 0 {
+                format!("moved/f{i}.el")
+            } else {
+                format!("moved/renamed{i}.el")
+            };
+            git(d.path(), &["mv", &format!("lisp/f{i}.el"), &to]);
+            new.push(to);
+        }
+        git(d.path(), &["commit", "-q", "-m", "move"]);
+        let r = index(&s, d.path(), &listed(d.path(), &Config::default())).await;
+        assert!(r.files_changed >= 50, "{r:?}");
+        (d, sd, s, new)
+    }
+
+    /// Pattern D (Hrafn redesign Task 8). 50 files moved: every chunk keeps its key, so no chunk is embedded again.
+    #[tokio::test]
+    async fn a_move_embeds_no_chunk() {
+        let (_d, _sd, s, _new) = moved().await;
+        assert_eq!(chunk_keys(&s).await.len(), 0);
+        let behind = lag(&s, Some(MODEL), hrafn::View::Base)
+            .await
+            .unwrap()
+            .chunks_behind;
+        assert_eq!(behind, 0, "and the lag counts no chunk behind");
+    }
+
+    /// Pattern D (Hrafn redesign Task 9). 50 files moved: tier 2 is offered exactly one path key per new path, and
+    /// nothing else (no chunk, no path that did not change).
+    #[tokio::test]
+    async fn a_move_embeds_one_path_key_per_new_path() {
+        let (_d, _sd, s, new) = moved().await;
+        let keys = missing_with(&s, MODEL, 1000, false).await.unwrap();
+        let mut offered = offered_paths(&keys);
+        offered.sort();
+        let mut want = new.clone();
+        want.sort();
+        assert_eq!(offered, want);
+        assert_eq!(keys.len(), 50, "path keys only");
+    }
+
     /// Pattern D.
     #[tokio::test]
     async fn excluded_only_commit_is_not_stale() {
         let d = repo(&[("a.el", A), ("notes.txt", "one\n")]);
         let config = Config {
-            exclude: vec!["*.txt".into()],
+            user: hrafn::rules::RuleSet {
+                ignore: vec!["*.txt".into()],
+                ..Default::default()
+            },
             ..Config::default()
         };
         let (_s, s) = store().await;
