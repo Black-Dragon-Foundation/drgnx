@@ -42,6 +42,60 @@ const COLOUR_FNS: &[&str] = &[
     "from_rgba8",
 ];
 
+/// Types whose constructors make a colour from numbers (`Rgba::new(…)`).
+const COLOUR_TYPES: &[&str] = &["Rgba", "Rgb", "Argb", "Colour", "Color"];
+
+/// A name that says it holds a colour.
+fn names_colour(name: &str) -> bool {
+    let l = name.to_ascii_lowercase();
+    ["colour", "color", "rgb"].iter().any(|w| l.contains(w))
+}
+
+/// An integer literal written as `0xRRGGBB` or `0xRRGGBBAA`.
+fn is_hex_colour_int(e: &Expr) -> bool {
+    match e {
+        Expr::Lit(l) => match &l.lit {
+            syn::Lit::Int(i) => {
+                let t = i.to_string().replace('_', "");
+                t.strip_prefix("0x")
+                    .or_else(|| t.strip_prefix("0X"))
+                    .is_some_and(|h| {
+                        matches!(h.chars().take_while(char::is_ascii_hexdigit).count(), 6 | 8)
+                    })
+            }
+            _ => false,
+        },
+        Expr::Paren(p) => is_hex_colour_int(&p.expr),
+        Expr::Group(g) => is_hex_colour_int(&g.expr),
+        Expr::Cast(c) => is_hex_colour_int(&c.expr),
+        _ => false,
+    }
+}
+
+/// Whether E is a value whose name contains `scale`: a path, a field or a method, through parentheses, casts, references
+/// and a sign.
+fn names_scale(e: &Expr) -> bool {
+    let has = |n: &str| n.to_ascii_lowercase().contains("scale");
+    match e {
+        Expr::Path(p) => p
+            .path
+            .segments
+            .last()
+            .is_some_and(|s| has(&s.ident.to_string())),
+        Expr::Field(f) => match &f.member {
+            syn::Member::Named(n) => has(&n.to_string()),
+            syn::Member::Unnamed(_) => false,
+        },
+        Expr::MethodCall(m) => has(&m.method.to_string()),
+        Expr::Paren(p) => names_scale(&p.expr),
+        Expr::Group(g) => names_scale(&g.expr),
+        Expr::Cast(c) => names_scale(&c.expr),
+        Expr::Reference(r) => names_scale(&r.expr),
+        Expr::Unary(u) => names_scale(&u.expr),
+        _ => false,
+    }
+}
+
 pub fn scan(file: &syn::File, rules: &Rules) -> Vec<Hit> {
     let mut aliases = Aliases::default();
     aliases.collect(file);
@@ -193,6 +247,21 @@ impl Scanner<'_> {
             rule: rule.to_string(),
             message,
         });
+    }
+
+    /// A hex number given to something named for a colour (`const BG_COLOUR: u32 = 0x1e1f25`, `Style { color: 0xff8800 }`).
+    fn check_named_colour(&mut self, name: &str, value: &Expr) {
+        if names_colour(name)
+            && is_hex_colour_int(value)
+            && let Some(id) = self.rule("no-colour-literal")
+        {
+            self.hit(
+                value.span(),
+                &id,
+                "no-colour-literal",
+                format!("`{name}` is a colour given as a hex number: colours come from the kit's tokens (themes/)"),
+            );
+        }
     }
 
     fn rule(&self, rule: &str) -> Option<String> {
@@ -496,21 +565,61 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
     fn visit_expr_call(&mut self, c: &'ast syn::ExprCall) {
         if let Expr::Path(p) = &*c.func
             && let Some(id) = self.rule("no-colour-literal")
-            && p.path
-                .segments
-                .last()
-                .is_some_and(|s| COLOUR_FNS.contains(&s.ident.to_string().as_str()))
-            && c.args.iter().all(|a| matches!(a, Expr::Lit(_)))
+        {
+            let segs = &p.path.segments;
+            let last = segs.last().map(|s| s.ident.to_string()).unwrap_or_default();
+            let ty = segs.len().checked_sub(2).and_then(|i| segs.iter().nth(i));
+            let of_colour_type =
+                ty.is_some_and(|t| COLOUR_TYPES.contains(&t.ident.to_string().as_str()));
+            let made = COLOUR_FNS.contains(&last.as_str()) || of_colour_type;
+            let literal_numbers =
+                !c.args.is_empty() && c.args.iter().all(|a| matches!(a, Expr::Lit(_)));
+            let hex_colour =
+                (names_colour(&last) || of_colour_type) && c.args.iter().any(is_hex_colour_int);
+            if (made && literal_numbers) || hex_colour {
+                self.hit(
+                    p.path.span(),
+                    &id,
+                    "no-colour-literal",
+                    "a colour made from literal numbers: colours come from the kit's tokens (themes/)"
+                        .into(),
+                );
+            }
+        }
+        visit::visit_expr_call(self, c);
+    }
+
+    fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
+        if names_colour(&m.method.to_string())
+            && m.args.iter().any(is_hex_colour_int)
+            && let Some(id) = self.rule("no-colour-literal")
         {
             self.hit(
-                p.path.span(),
+                m.method.span(),
                 &id,
                 "no-colour-literal",
-                "a colour made from literal numbers: colours come from the kit's tokens (themes/)"
+                "a hex number used as a colour: colours come from the kit's tokens (themes/)"
                     .into(),
             );
         }
-        visit::visit_expr_call(self, c);
+        visit::visit_expr_method_call(self, m);
+    }
+
+    fn visit_field_value(&mut self, f: &'ast syn::FieldValue) {
+        if let syn::Member::Named(n) = &f.member {
+            self.check_named_colour(&n.to_string(), &f.expr);
+        }
+        visit::visit_field_value(self, f);
+    }
+
+    fn visit_item_const(&mut self, c: &'ast syn::ItemConst) {
+        self.check_named_colour(&c.ident.to_string(), &c.expr);
+        visit::visit_item_const(self, c);
+    }
+
+    fn visit_item_static(&mut self, s: &'ast syn::ItemStatic) {
+        self.check_named_colour(&s.ident.to_string(), &s.expr);
+        visit::visit_item_static(self, s);
     }
 
     fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
@@ -535,6 +644,11 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
     }
 
     fn visit_local(&mut self, l: &'ast syn::Local) {
+        if let syn::Pat::Ident(i) = &l.pat
+            && let Some(init) = &l.init
+        {
+            self.check_named_colour(&i.ident.to_string(), &init.expr);
+        }
         if matches!(l.pat, syn::Pat::Wild(_))
             && l.init.is_some()
             && let Some(id) = self.rule("no-let-underscore-result")
@@ -576,6 +690,18 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
     }
 
     fn visit_expr(&mut self, e: &'ast Expr) {
+        if let Expr::Binary(b) = e
+            && matches!(b.op, syn::BinOp::Mul(_) | syn::BinOp::MulAssign(_))
+            && (names_scale(&b.left) || names_scale(&b.right))
+            && let Some(id) = self.rule("no-raw-scale-mul")
+        {
+            self.hit(
+                b.op.span(),
+                &id,
+                "no-raw-scale-mul",
+                "a length multiplied by a scale by hand: logical lengths become pixels only through kvardi's `Lp::to_px`".into(),
+            );
+        }
         if self.rules.ui
             && let Some(id) = self.rule("no-blocking-recv-on-ui")
         {

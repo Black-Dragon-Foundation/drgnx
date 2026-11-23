@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/ui/lp_into_glitnir.rs:4:70
+  |
+4 |     let rect = glitnir::geom::Rect::at(kvardi::Px(0), kvardi::Px(0), w, kvardi::Px(5));
+  |                -----------------------                               ^ expected `Px`, found `Lp`
+  |                |
+  |                arguments to this function are incorrect
+  |
+note: associated function defined here
+ --> $WORKSPACE/crates/ui/glitnir/src/geom.rs
+  |
+  |     pub const fn at(x: Px, y: Px, w: Px, h: Px) -> Self {
+  |                  ^^

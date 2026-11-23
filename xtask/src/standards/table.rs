@@ -20,6 +20,7 @@ pub const SCAN_RULES: &[&str] = &[
     "no-hand-luau-binding",
     "no-raw-key-event",
     "no-colour-literal",
+    "no-raw-scale-mul",
     "command-has-doc",
 ];
 

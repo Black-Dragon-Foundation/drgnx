@@ -143,6 +143,7 @@ saman = { path = "crates/std/saman", version = "0.1.0" }
 hulda = { path = "crates/std/hulda", version = "0.1.0" }
 stund = { path = "crates/hub/stund", version = "0.1.0" }
 bod = { path = "crates/std/bod", version = "0.1.0" }
+kvardi = { path = "crates/std/kvardi", version = "0.1.0" }
 mal = { path = "crates/ext/mal", version = "0.1.0" }
 mal-gen = { path = "crates/ext/mal-gen", version = "0.1.0" }
 # the commands registry's link-time registration (bod's `command!`)
@@ -153,6 +154,9 @@ mlua = { version = "0.12", features = ["luau"] }
 wit-parser = "=0.254.2"
 # sattr's tests wrap a core module into a component (a real guest that calls the API's imports)
 wit-component = "=0.254.2"
+
+# kvardi's compile-fail test: Glitnir takes pixels, never a logical length
+trybuild = "1"
 
 # The standards' clippy lints (standards.toml's `lints`, and the two disallowed-* lints its `clippy` rows feed), denied
 # for every crate that has `[lints] workspace = true`: a clean crate must (cargo xtask standards checks it). Each is

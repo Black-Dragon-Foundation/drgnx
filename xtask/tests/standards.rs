@@ -294,9 +294,10 @@ fn colour_literal_fails() {
     let (code, out) = run(ws.path(), &[]);
     assert_eq!(code, 1, "{out}");
     let hits = lines(&out, "crates/bad/src/colour.rs", "[kit/no-colour-literal]");
-    // the hex string and `rgb(1, 2, 3)`; not "#hashtag"
+    // the hex string and `rgb(1, 2, 3)`; not "#hashtag"; then the hex numbers used as colours: a const named for a colour,
+    // `paint(0xff8800aa)` is not (it names no colour), `Rgba::new(1, 2, 3, 4)`, a field named `color`; not a mask or `0x0f0f`
     let at: Vec<&str> = hits.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
-    assert_eq!(at, ["1", "5"], "{out}");
+    assert_eq!(at, ["1", "5", "8", "13", "15", "18"], "{out}");
     assert!(
         !out.lines()
             .any(|l| l.starts_with("crates/villa/") && l.contains("no-colour-literal")),
@@ -339,6 +340,26 @@ fn command_without_a_doc_fails() {
     assert!(
         !out.lines()
             .any(|l| l.starts_with("crates/villa/") && l.contains("command-has-doc")),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_hand_made_scale_multiplication_fails() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    // `x * scale`, `… * s.scale_factor`, `s.zoom_scale() * 2.0`, `d *= scale` and `scale as f32 * x`; not `x * 2.0`
+    let hits = lines(
+        &out,
+        "crates/bad/src/scale.rs",
+        "[scale-zoom/no-raw-scale-mul]",
+    );
+    let at: Vec<&str> = hits.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
+    assert_eq!(at, ["2", "3", "4", "6", "7"], "{out}");
+    assert!(
+        !out.lines()
+            .any(|l| l.starts_with("crates/villa/") && l.contains("no-raw-scale-mul")),
         "{out}"
     );
 }

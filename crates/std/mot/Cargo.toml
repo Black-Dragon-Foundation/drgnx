@@ -1,0 +1,28 @@
+[package]
+name = "mot"
+description = "The UI kit's token table: every colour and metric as a token, themes as data, and a live theme switch (the ui-kit standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+build = "build.rs"
+
+[dependencies]
+villa.workspace = true
+kvardi.workspace = true
+skipan = { path = "../skipan", version = "0.1.0" }
+eitri = { path = "../../hub/eitri", version = "0.1.0" }
+serde_json.workspace = true
+
+# the generator reads themes/tokens.eld (build.rs), as sattr's does the WIT
+[build-dependencies]
+villa.workspace = true
+annall.workspace = true
+eitri = { path = "../../hub/eitri", version = "0.1.0" }
+
+[dev-dependencies]
+raun.workspace = true
+
+[lints]
+workspace = true

@@ -30,6 +30,8 @@ tidindi = { clean = true }
 mal = { clean = true }
 mal-gen = { clean = true }
 sattr = { clean = true }
+kvardi = { clean = true }
+mot = { clean = true }
 
 [[standard]]
 id = "errors"
@@ -143,6 +145,18 @@ owner = "sattr"
 scan = ["no-hand-luau-binding"]
 conformance = "crates/ext/sattr/tests/conformance.rs"
 
+[[standard]]
+id = "scale-zoom"
+owner = "kvardi"
+scan = ["no-raw-scale-mul"]
+conformance = "crates/std/kvardi/tests/conformance.rs"
+
+[[standard]]
+id = "ui-kit"
+owner = "mot"
+scan = ["no-colour-literal"]
+conformance = "crates/std/mot/tests/conformance.rs"
+
 # The layers: a crate may not depend on these, directly or through other workspace crates (cargo metadata).
 [[layer]]
 crate = "drgnx"
@@ -153,13 +167,14 @@ may_not_depend = ["glitnir"]
 crate = "glitnir"
 may_not_depend = ["huginn"]
 
+# The view crates draw in logical units and never call Glitnir (scale-zoom): only the compositor takes pixels.
 [[layer]]
 crate = "sja"
-may_not_depend = ["huginn"]
+may_not_depend = ["huginn", "glitnir"]
 
 [[layer]]
 crate = "smidja"
-may_not_depend = ["huginn"]
+may_not_depend = ["huginn", "glitnir"]
 
 [[layer]]
 crate = "skel"

@@ -1,0 +1,15 @@
+[package]
+name = "kvardi"
+description = "Scale and zoom: logical and physical units, four zoom levels, one rounding rule, and a scale per display (the scale-zoom standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dev-dependencies]
+glitnir = { path = "../../ui/glitnir", version = "0.1.0", default-features = false }
+trybuild.workspace = true
+
+[lints]
+workspace = true

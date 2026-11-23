@@ -20,6 +20,10 @@ Here so far (each name is Old Norse):
 - `saman` (*saman*, together): the lock that survives a panic, one executor, cancellation, the UI queue and its
   watchdog ([concurrency](../../docs/develop/standards/concurrency.md)).
 - `hulda` (*hulða*, concealment): `Secret<T>` and `Redact` ([data hygiene](../../docs/develop/standards/data-hygiene.md)).
+- `kvardi` (*kvarði*, a measuring rod): logical and physical units, four zoom levels, one rounding rule and a scale per
+  display ([scale and zoom](../../docs/develop/standards/scale-zoom.md)).
+- `mot` (*mót*, a mould): the UI kit's token table, themes as data and the live theme switch
+  ([the UI kit](../../docs/develop/standards/ui-kit.md)).
 - `vag` (*vág*, the scales): the resource budgets' measuring crate. PSS over a process tree, per-thread wakeups
   (context-switch deltas from `/proc/PID/task/*/status`), and JSON reports that compare to an earlier build. Its front
   end is `cargo xtask measure` (`xtask/README.md`). Linux only.

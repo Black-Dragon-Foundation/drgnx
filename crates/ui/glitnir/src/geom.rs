@@ -1,4 +1,7 @@
-//! Geometry: device-pixel rectangles and the logical/device unit types.
+//! Geometry: device-pixel rectangles. Lengths are physical pixels ([`kvardi::Px`]); a logical length reaches Glitnir
+//! only through `kvardi::Lp::to_px` (the scale-zoom standard).
+
+pub use kvardi::Px;
 
 /// A rectangle in device pixels; empty when `w <= 0` or `h <= 0`.  Layout equals `GlitnirRect`.
 #[repr(C)]
@@ -13,6 +16,11 @@ pub struct Rect {
 impl Rect {
     pub const fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
         Self { x, y, w, h }
+    }
+
+    /// A rectangle from pixels: the typed way in, which a logical length cannot take.
+    pub const fn at(x: Px, y: Px, w: Px, h: Px) -> Self {
+        Self::new(x.0, y.0, w.0, h.0)
     }
 
     pub const fn is_empty(&self) -> bool {
@@ -68,29 +76,12 @@ impl Rect {
     }
 }
 
-/// A length in logical (scale-independent) units.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub struct Logical(pub f64);
-
-/// A length in device pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Device(pub i32);
-
-impl Logical {
-    /// Device pixels at `scale`, rounded to the nearest pixel (ties away from zero).
-    pub fn to_device(self, scale: f64) -> Device {
-        Device((self.0 * scale).round() as i32)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn logical_to_device_rounds() {
-        assert_eq!(Logical(10.0).to_device(1.5), Device(15));
-        assert_eq!(Logical(3.0).to_device(1.25), Device(4));
-        assert_eq!(Logical(0.4).to_device(1.0), Device(0));
+    fn a_rect_from_pixels() {
+        assert_eq!(Rect::at(Px(1), Px(2), Px(3), Px(4)), Rect::new(1, 2, 3, 4));
     }
 }
