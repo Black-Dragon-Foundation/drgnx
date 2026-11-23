@@ -12,6 +12,7 @@ pub mod project;
 pub mod saved;
 pub mod scope;
 pub mod servers;
+pub mod sources;
 pub mod worker;
 
 pub use download::{Consent, DownloadError, download};

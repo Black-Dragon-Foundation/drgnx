@@ -188,6 +188,27 @@ fn server_partial_coverage_uses_builtin() {
     assert_eq!(prefer(Some((&b, &builtin)), &empty), Some(SERVER_FP));
 }
 
+/// Pattern D (Hrafn redesign Task 15). A query uses the main fingerprint once it covers 95 % of the chunks, and the
+/// built-in one until then, whichever of them is filling: the first of several main fingerprints that qualifies wins.
+#[test]
+fn query_uses_main_at_95_percent_else_builtin() {
+    let b = builtin_fp();
+    let builtin = lag(&b, 200, 0);
+    let (other, third) = (Fingerprint([8; 32]), Fingerprint([9; 32]));
+    let at = |behind: u32| [(SERVER_FP, lag(&SERVER_FP, 200, behind), true)];
+    assert_eq!(prefer(Some((&b, &builtin)), &at(11)), Some(b), "94.5 %");
+    assert_eq!(
+        prefer(Some((&b, &builtin)), &at(10)),
+        Some(SERVER_FP),
+        "95 %"
+    );
+    let two = [
+        (other, lag(&other, 200, 40), true),
+        (third, lag(&third, 200, 4), true),
+    ];
+    assert_eq!(prefer(Some((&b, &builtin)), &two), Some(third));
+}
+
 /// Pattern D. With the built-in model off (`drgnx-search-builtin` nil) or not downloaded, an answering server is used
 /// whatever it covers, and with none answering there is no vector model.
 #[test]

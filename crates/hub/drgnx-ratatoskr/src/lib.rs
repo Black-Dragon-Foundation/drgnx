@@ -77,6 +77,7 @@ pub mod bridge;
 pub mod brief;
 pub mod browser;
 pub mod budget;
+pub mod chain;
 pub mod cli;
 pub mod client;
 pub mod clock;

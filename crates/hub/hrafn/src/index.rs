@@ -415,6 +415,16 @@ pub async fn missing(
     missing_with(store, cache, limit, crate::query::DIR_WEIGHT > 0.0).await
 }
 
+/// [`missing`], the chunks of the paths in ORDER first (see [`missing_ordered`]).
+pub async fn missing_first(
+    store: &CodeStore,
+    cache: &VectorCache,
+    limit: u32,
+    order: &[String],
+) -> Result<Vec<(KeyKind, [u8; 32], String)>, StoreError> {
+    missing_ordered(store, cache, limit, crate::query::DIR_WEIGHT > 0.0, order).await
+}
+
 /// STORE's live key set (the distinct keys of its chunks that want vectors, and its `path_key` rows) reported to CACHE
 /// as the diff against what the cache last recorded for it, with ROOT its checkout and NOW (milliseconds) the time.
 pub async fn hold(
@@ -469,24 +479,69 @@ pub async fn missing_with(
     limit: u32,
     dirs: bool,
 ) -> Result<Vec<(KeyKind, [u8; 32], String)>, StoreError> {
+    missing_ordered(store, cache, limit, dirs, &[]).await
+}
+
+/// [`missing_with`], the chunks of the paths in ORDER (open and recently edited files first, then by recency) before
+/// the rest, which come in chunk order (MP-14).
+pub async fn missing_ordered(
+    store: &CodeStore,
+    cache: &VectorCache,
+    limit: u32,
+    dirs: bool,
+    order: &[String],
+) -> Result<Vec<(KeyKind, [u8; 32], String)>, StoreError> {
     let limit = limit as usize;
+    let order: Vec<String> = order.to_vec();
+    let order: Vec<String> = Vec::new(); // STUB (red run): the order is ignored
     store
         .attach_cache(cache.path(), move |c| {
+            type Row = (Vec<u8>, String, String);
+            let mut chunks: Vec<Row> = Vec::new();
+            if !order.is_empty() {
+                let mut by_path = c.prepare(
+                    "select c.key, c.embed_text, c.path from chunk c
+                     where c.path = ?1
+                       and c.id in (select min(id) from chunk where embed = 1 group by key)
+                       and not exists (select 1 from vc.chunk_vec v where v.key = c.key)
+                     order by c.id",
+                )?;
+                for p in &order {
+                    if chunks.len() >= limit {
+                        break;
+                    }
+                    let rows = by_path
+                        .query_map(params![p], |r| {
+                            Ok((
+                                r.get::<_, Vec<u8>>(0)?,
+                                r.get::<_, String>(1)?,
+                                r.get::<_, String>(2)?,
+                            ))
+                        })?
+                        .collect::<Result<Vec<Row>, _>>()?;
+                    chunks.extend(rows);
+                }
+                chunks.truncate(limit);
+            }
             let mut q = c.prepare(
                 "select c.key, c.embed_text, c.path from chunk c
                  where c.id in (select min(id) from chunk where embed = 1 group by key)
                    and not exists (select 1 from vc.chunk_vec v where v.key = c.key)
                  order by c.id limit ?1",
             )?;
-            let chunks = q
-                .query_map(params![limit as i64], |r| {
+            let first = chunks.len();
+            let rest = q
+                .query_map(params![(limit + first) as i64], |r| {
                     Ok((
                         r.get::<_, Vec<u8>>(0)?,
                         r.get::<_, String>(1)?,
                         r.get::<_, String>(2)?,
                     ))
                 })?
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<Row>, _>>()?;
+            let seen: HashSet<Vec<u8>> = chunks.iter().map(|(k, _, _)| k.clone()).collect();
+            chunks.extend(rest.into_iter().filter(|(k, _, _)| !seen.contains(k)));
+            chunks.truncate(limit);
             let mut lacks = c.prepare(
                 "select p.key from path_key p where p.path = ?1
                    and not exists (select 1 from vc.path_vec v where v.key = p.key)",

@@ -531,6 +531,45 @@ async fn dir_weight_zero_embeds_no_directories() {
     }
 }
 
+/// Pattern D (Hrafn redesign Task 15, MP-14). The chunks of the paths named in the order come first, in that order; the
+/// rest follow in chunk order, and nothing is offered twice.
+#[tokio::test]
+async fn missing_ordered_puts_the_named_paths_first() {
+    let s = store().await;
+    let tree = Tree::new(&[("core/sub/a.el", A), ("b.el", B)]);
+    run(&s, &tree, &[el("core/sub/a.el", "a1"), el("b.el", "b1")]).await;
+    let first_chunk = |keys: &[(KeyKind, [u8; 32], String)]| {
+        keys.iter()
+            .find(|(k, _, _)| *k == KeyKind::Chunk)
+            .map(|(_, _, t)| t.clone())
+            .unwrap()
+    };
+    let b_first = hrafn::missing_ordered(&s, &s.c, 1000, false, &["b.el".to_string()])
+        .await
+        .unwrap();
+    let a_first = hrafn::missing_ordered(&s, &s.c, 1000, false, &["core/sub/a.el".to_string()])
+        .await
+        .unwrap();
+    assert!(first_chunk(&b_first).contains("b-var"), "{b_first:?}");
+    assert!(first_chunk(&a_first).contains("a-one"), "{a_first:?}");
+    // the same keys either way, none twice
+    let keys = |v: &[(KeyKind, [u8; 32], String)]| {
+        let mut k: Vec<_> = v.iter().map(|(kind, key, _)| (*kind as u8, *key)).collect();
+        k.sort();
+        k
+    };
+    assert_eq!(keys(&b_first), keys(&a_first));
+    let mut once = keys(&b_first);
+    once.dedup();
+    assert_eq!(once.len(), b_first.len(), "no key twice");
+    // a limit counts the ordered ones first
+    let one = hrafn::missing_ordered(&s, &s.c, 1, false, &["b.el".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(one.len(), 1);
+    assert!(first_chunk(&one).contains("b-var"), "{one:?}");
+}
+
 /// Pattern D (Hrafn redesign Task 9). A path's text keeps the path whole and adds its words: split on `/ _ - .` and
 /// at camelCase boundaries.
 #[test]
