@@ -119,6 +119,12 @@ pub enum SearchCommand {
         root: Option<PathBuf>,
         all: bool,
     },
+    /// `download MODEL --consent-bytes N`: the consent to a model's (or the local engine's) download and the download
+    /// itself (`search/model-download`); N must be the bytes the hub names.
+    Download {
+        model: String,
+        bytes: u64,
+    },
     /// ROOT's index removed (`search/delete`); asks first unless YES.
     Delete {
         root: PathBuf,
@@ -195,6 +201,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
     }
     if ![
         "index", "query", "mcp", "symbols", "outline", "why", "map", "usages", "export", "import",
+        "download",
     ]
     .contains(&name.as_str())
     {
@@ -204,6 +211,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
     let (mut mode, mut kinds, mut glob, mut docs) = (None, Vec::new(), None, true);
     let (mut budget, mut focus, mut names) = (None, Vec::new(), Vec::new());
     let (mut out, mut branch, mut all_trees, mut keep_all) = (None, None, false, false);
+    let mut consent: Option<u64> = None;
     let asks = matches!(name.as_str(), "query" | "symbols" | "usages");
     let mut words: Vec<String> = Vec::new();
     while let Some(arg) = p.next().map_err(e)? {
@@ -216,6 +224,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
             Long("all-trees") if name == "export" => all_trees = true,
             Long("keep-all") if name == "import" => keep_all = true,
+            Long("consent-bytes") if name == "download" => {
+                consent = Some(p.value().map_err(e)?.parse().map_err(e)?);
+            }
             Long("rebuild") if name == "index" => rebuild = true,
             Long("now") if name == "index" => now = true,
             Long("json") if asks || name == "outline" || name == "why" || name == "map" => {
@@ -370,6 +381,15 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
                 branch,
                 all_trees,
             }
+        }
+        "download" => {
+            let model = words.next().ok_or("search download needs a model id")?;
+            let bytes =
+                consent.ok_or("search download needs --consent-bytes N (the download's size)")?;
+            if let Some(extra) = words.next() {
+                return Err(format!("search download: unexpected argument {extra:?}"));
+            }
+            SearchCommand::Download { model, bytes }
         }
         "import" => {
             let file = words.next().ok_or("search import needs a pack file")?;
@@ -669,6 +689,10 @@ fn text(
             render_roots(&serde_json::from_value::<w::ManageAnswer>(a)?.roots)
         }
         "search/status" => render_status(&serde_json::from_value(a)?),
+        "search/model-download" => {
+            "the download started (or one is already running); `search status` shows the models\n"
+                .into()
+        }
         "search/delete" => {
             let d: w::DeleteAnswer = serde_json::from_value(a)?;
             format!(
@@ -721,6 +745,11 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
             };
             (verb.method(), p, false)
         }
+        SearchCommand::Download { model, bytes } => (
+            "search/model-download",
+            json!({"model": model, "consent": {"bytes": bytes}}),
+            false,
+        ),
         SearchCommand::Delete { root, yes } => {
             use std::io::IsTerminal as _;
             let root = absolute(&cwd, root);
@@ -1013,6 +1042,27 @@ mod tests {
             )),
             "indexed: no rule applies\n"
         );
+    }
+
+    #[test]
+    fn download_parses() {
+        assert_eq!(
+            p(&[
+                "download",
+                "qwen3-embedding-0.6b-q8_0",
+                "--consent-bytes",
+                "7"
+            ])
+            .unwrap(),
+            SearchCommand::Download {
+                model: "qwen3-embedding-0.6b-q8_0".into(),
+                bytes: 7
+            }
+        );
+        assert!(p(&["download", "m"]).is_err());
+        assert!(p(&["download", "--consent-bytes", "7"]).is_err());
+        assert!(p(&["download", "m", "--consent-bytes", "x"]).is_err());
+        assert!(p(&["download", "m", "n", "--consent-bytes", "7"]).is_err());
     }
 
     #[test]
