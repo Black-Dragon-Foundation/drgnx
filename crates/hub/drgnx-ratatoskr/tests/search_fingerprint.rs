@@ -245,18 +245,12 @@ impl Fixture {
         what: &str,
         f: impl Fn(&[(String, i64)]) -> bool,
     ) -> Vec<(String, i64)> {
-        let mut seen = Vec::new();
-        for _ in 0..600 {
-            seen = self.vec_models().await;
-            if f(&seen) {
-                return seen;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-        panic!(
-            "never reached: {what} (vec rows {seen:?}, tier 2 {:?})",
-            self.project.status().borrow()
-        );
+        let f = &f;
+        skuld::wait_until_async(what, 30, || async move {
+            let seen = self.vec_models().await;
+            f(&seen).then_some(seen)
+        })
+        .await
     }
 }
 
@@ -334,15 +328,14 @@ async fn sent_text_hashes_to_its_key() {
     let id = e.identity().expect("it has probed");
     let store = f.project.store();
     let cache = f.project.cache(&id).await.unwrap();
-    let mut done = false;
-    for _ in 0..600 {
-        if hrafn::missing(store, &cache, 1).await.unwrap().is_empty() {
-            done = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    assert!(done, "tier 2 never embedded every key");
+    skuld::wait_until_async("tier 2 embedding every key", 30, || async {
+        hrafn::missing(store, &cache, 1)
+            .await
+            .unwrap()
+            .is_empty()
+            .then_some(())
+    })
+    .await;
     let written = f.written();
     assert!(
         written.iter().any(|(k, _)| *k == 1),
