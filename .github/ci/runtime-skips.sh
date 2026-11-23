@@ -11,7 +11,9 @@
 #
 # A job may be skipped when one of its skip-when tokens (runtime-jobs.txt) matches this run: `pr` a pull request,
 # `cache-run` a push to main (main's push only builds and saves the caches, so every `consumer` has it too),
-# `schedule` the daily run, `dispatch-only:ID` any run but a dispatch whose ONLY names ID.  Or when ONLY is not empty,
+# `schedule` the daily run, `no-save` a run that never saves a cache (not a push or a dispatch on main, ci/* or
+# scratch/drgnx-mac-rounds: cache-policy.sh), `dispatch-only:ID` any run but a dispatch whose ONLY names ID.  A `post`
+# job (cache-prune) runs after whichever jobs ran, so it brings none of its `needs` in.  Or when ONLY is not empty,
 # names none of the job's ids, and no job that runs needs it (gate-needs.sh reads the `needs:`; a consumer asked for
 # alone brings its build).  The job `gate` is never listed.  The table and the workflow must name the same jobs, and
 # the tokens must be known: anything else exits 2, so the gate fails.  bash 3.2-safe.
@@ -30,13 +32,14 @@ skips() {
     NF == 0 { next }
     {
       id = $1; order[++n] = id; ids[id] = $2; role[id] = $3; intable[id] = 1
-      if (role[id] != "build" && role[id] != "consumer" && role[id] != "check") { print "runtime-skips.sh: " id ": role " role[id] > "/dev/stderr"; bad = 1 }
+      if (role[id] != "build" && role[id] != "consumer" && role[id] != "check" && role[id] != "post") { print "runtime-skips.sh: " id ": role " role[id] > "/dev/stderr"; bad = 1 }
       tok[id] = 0
       for (i = 4; i <= NF; i++) {
         t = $i
         if (t == "pr") { if (ev == "pull_request") tok[id] = 1 }
         else if (t == "cache-run") { if (ev == "push" && ref == "refs/heads/main") tok[id] = 1 }
         else if (t == "schedule") { if (ev == "schedule") tok[id] = 1 }
+        else if (t == "no-save") { if (!((ev == "push" || ev == "workflow_dispatch") && (ref == "refs/heads/main" || ref ~ /^refs\/heads\/ci\// || ref == "refs/heads/scratch/drgnx-mac-rounds"))) tok[id] = 1 }
         else if (t ~ /^dispatch-only:/) { x = t; sub(/^dispatch-only:/, "", x); if (!(ev == "workflow_dispatch" && index(only, " " x " "))) tok[id] = 1 }
         else { print "runtime-skips.sh: " id ": no skip-when token " t > "/dev/stderr"; bad = 1 }
       }
@@ -56,7 +59,7 @@ skips() {
         more = 0
         for (k = 1; k <= n; k++) {
           j = order[k]
-          if (!needed[j]) continue
+          if (!needed[j] || role[j] == "post") continue
           m = split(need[j], a, " ")
           for (i = 1; i <= m; i++) if (!needed[a[i]]) { needed[a[i]] = 1; more = 1 }
         }
@@ -98,8 +101,11 @@ jobs:
   fuzz:
     needs: fuzz-build
     runs-on: ubuntu-24.04
+  cache-prune:
+    needs: [fedora-build, x64-build, msrv, fuzz-build]
+    runs-on: ubuntu-24.04
   gate:
-    needs: [images, fedora-build, x64-build, escape-host, agent-containers, msrv, fleet, deny, fuzz-build, fuzz]
+    needs: [images, fedora-build, x64-build, escape-host, agent-containers, msrv, fleet, deny, fuzz-build, fuzz, cache-prune]
     runs-on: ubuntu-24.04
 YML
   cat > "$d/t.txt" <<'TBL'
@@ -113,6 +119,7 @@ fleet             rt-fleet       check     dispatch-only:rt-fleet
 deny              rt-deny        check
 fuzz-build        rt-fuzz        build     pr
 fuzz              rt-fuzz        consumer  pr cache-run
+cache-prune       -              post      no-save
 gate              -              check
 TBL
   # expect "SKIPS" ENV...
@@ -125,12 +132,16 @@ TBL
   # a consumer asked for alone brings its build: not x64-build, not agent-containers
   expect "images fedora-build escape-host msrv fleet deny fuzz-build fuzz" EVENT=workflow_dispatch REF=refs/heads/ci/flow ONLY=rt-containers
   expect "images fedora-build x64-build escape-host agent-containers fleet fuzz-build fuzz" EVENT=workflow_dispatch REF=refs/heads/ci/flow ONLY="rt-msrv rt-deny"
-  expect "fleet fuzz-build fuzz" EVENT=pull_request REF=refs/pull/5/merge ONLY=
-  expect "images fedora-build agent-containers msrv fleet deny fuzz-build fuzz" EVENT=pull_request REF=refs/pull/5/merge ONLY="rt-escape"
+  expect "fleet fuzz-build fuzz cache-prune" EVENT=pull_request REF=refs/pull/5/merge ONLY=
+  expect "images fedora-build agent-containers msrv fleet deny fuzz-build fuzz cache-prune" EVENT=pull_request REF=refs/pull/5/merge ONLY="rt-escape"
   # main's push is the cache run: the consumers and the fuzz shards, never a build
   expect "escape-host agent-containers fleet fuzz" EVENT=push REF=refs/heads/main ONLY=
   expect "fleet" EVENT=push REF=refs/heads/ci/flow ONLY=
-  expect "images fedora-build x64-build escape-host agent-containers msrv fleet" EVENT=schedule REF=refs/heads/main ONLY=
+  expect "images fedora-build x64-build escape-host agent-containers msrv fleet cache-prune" EVENT=schedule REF=refs/heads/main ONLY=
+  # the prune job (role post) is not a reason to run the builds it follows, and a run that cannot save skips it
+  expect "images fedora-build x64-build escape-host agent-containers msrv fleet fuzz-build fuzz" EVENT=workflow_dispatch REF=refs/heads/ci/flow ONLY=rt-deny
+  expect "images fedora-build x64-build escape-host agent-containers msrv fleet fuzz-build fuzz cache-prune" EVENT=workflow_dispatch REF=refs/heads/line/x ONLY=rt-deny
+  expect "images fedora-build x64-build escape-host agent-containers msrv fleet fuzz-build fuzz" EVENT=workflow_dispatch REF=refs/heads/scratch/drgnx-mac-rounds ONLY=rt-deny
   expect "images fedora-build x64-build escape-host agent-containers msrv deny fuzz-build fuzz" EVENT=workflow_dispatch REF=refs/heads/ci/flow ONLY=rt-fleet
   # a table and a workflow that disagree, or an unknown token: exit 2
   printf 'stray rt-x check\n' >> "$d/t.txt"

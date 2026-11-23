@@ -20,6 +20,11 @@ Runtime / Android type-check                    1 any
 Runtime / fuzz targets (build)                  1 any
 Runtime / fake runner fleet                     1 any
 
+# the old layout's Fedora job, until Wave 3 replaces it (the escape legs and the agent containers, which build for
+# themselves too until Wave 4, keep their consumer rows below: check 2 fails them, as it should; `cache` reads any job's
+# cache-primary-key). Its pack grammars come from its own hub build (Wave 2), so its hub count is one lower than it was.
+Runtime / fmt, clippy, tests, conformance, perf (Fedora 45)   4 any
+
 # the build jobs, one per platform and profile: Fedora's builds clippy, the test archive and the rows' bins
 Runtime / build*(Fedora 45)*                    3 any
 Runtime / build*(ubuntu-24.04)*                 2 any

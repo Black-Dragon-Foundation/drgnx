@@ -11,8 +11,8 @@
 # none for `-`); and the table's roles and skip-when tokens are ones runtime-skips.sh knows, no build skipped on the
 # cache run.  The workflow is read line by line: jobs at two spaces under `jobs:`, `needs:` and `if:` at four, `needs`
 # a word, a `[a, b]` list or a `- a` list below it, `if` on one line.
-# The table: `<job id> <rt ids, comma-separated, or -> <build|consumer|check> <skip-when tokens: pr cache-run schedule
-# dispatch-only:ID>`, `#` comments.  bash 3.2-safe.  Exit 0 agree, 1 disagree or a failed self-test, 2 usage.
+# The table: `<job id> <rt ids, comma-separated, or -> <build|consumer|check|post> <skip-when tokens: pr cache-run
+# schedule no-save dispatch-only:ID>`, `#` comments.  bash 3.2-safe.  Exit 0 agree, 1 disagree or a failed self-test, 2 usage.
 set -u
 
 usage() { echo "usage: gate-needs.sh jobs WORKFLOW | --check WORKFLOW TABLE | --self-test" >&2; exit 2; }
@@ -64,9 +64,9 @@ check() {
   builds=$(printf '%s\n' "$rows" | awk '$3 == "build" { print $1 }' | tr '\n' ' ')
   while read -r id ids role tok; do
     [ -n "$id" ] || continue
-    case $role in build|consumer|check) ;; *) fail="$fail; $id: role $role is not build, consumer or check" ;; esac
+    case $role in build|consumer|check|post) ;; *) fail="$fail; $id: role $role is not build, consumer, check or post" ;; esac
     for t in $tok; do
-      case $t in pr|cache-run|schedule|dispatch-only:rt-*) ;; *) fail="$fail; $id: no skip-when token $t" ;; esac
+      case $t in pr|cache-run|schedule|no-save|dispatch-only:rt-*) ;; *) fail="$fail; $id: no skip-when token $t" ;; esac
       [ "$role:$t" != build:cache-run ] || fail="$fail; $id: a build job is never skipped on the cache run"
     done
     has "$id" "$wids" || continue
