@@ -33,14 +33,22 @@ jobs:
     timeout-minutes: 330
     permissions:
       contents: read
+      packages: read      # the prebuilt assets (drgnx-assets)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none
           persist-credentials: false
+      - id: assets
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: echo "ref=$(bash .github/ci/ghcr.sh ref drgnx-assets "$(bash .github/ci/assets.sh tag)")" | tee -a "$GITHUB_OUTPUT"
       - id: setup
         uses: ./.github/actions/macos-runtime
+        with:
+          assets: ${{ steps.assets.outputs.ref }}
       - name: dependencies' debug info is line tables only (as the tests job)
         run: |
           mkdir -p "${CARGO_HOME:-$HOME/.cargo}"

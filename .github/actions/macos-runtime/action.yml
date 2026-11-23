@@ -1,17 +1,29 @@
 # What every macOS job of runtime.yml needs before its own steps (the tests, the conformance shards, the perf
-# baseline run as separate jobs so each fits its limit): the image's rustup with clippy, the cargo caches (the one
-# `macos-dev` entry, through .github/actions/cargo-target: the `tests` job saves it), the
-# git draugr trusts, the model files, the plugin fixtures, Zig and libghostty-vt's tarballs, vttest and, with
-# `nidhogg: true`, Nidhogg (DRGNX_EMACS). docs/develop/ci.md
+# baseline run as separate jobs so each fits its limit): the prebuilt assets (the model files, the libghostty-vt, Zig
+# and Nidhogg tarballs: one pull of `drgnx-assets` by digest, .github/ci/assets.sh), the image's rustup with clippy, the
+# cargo caches (the one `macos-dev` entry, through .github/actions/cargo-target: the `tests` job saves it), the git
+# draugr trusts, the plugin fixtures, Zig, vttest and, with `nidhogg: true`, Nidhogg (DRGNX_EMACS). No step downloads
+# from Hugging Face or the tarballs' sites when the assets are there: PR 5's round 5 lost all four Mac jobs to a
+# cancelled Hugging Face transfer. docs/develop/ci.md
 name: macOS runtime setup
 description: The toolchain, caches and test inputs of runtime.yml's macOS jobs
 inputs:
   nidhogg:
     description: "true: install Nidhogg 31.1 (writes DRGNX_EMACS to the environment)"
     default: "false"
+  assets:
+    description: "The `drgnx-assets` image by digest (runtime.yml's images job; empty: the setup downloads what it needs)"
+    default: ""
 runs:
   using: composite
   steps:
+    - name: the prebuilt assets (models, libghostty-vt, Zig and Nidhogg tarballs)
+      shell: bash
+      env:
+        TOKEN: ${{ github.token }}
+        ACTOR: ${{ github.actor }}
+        ASSETS_REF: ${{ inputs.assets }}
+      run: /bin/bash .github/ci/assets.sh use "$ASSETS_REF"
     # the image's rustup (as the Linux runner jobs), not Homebrew's rust: no formula download and install per run
     - shell: bash
       run: bash .github/ci/rust.sh --component clippy
@@ -28,35 +40,18 @@ runs:
         xcode-select -p
         sudo xcode-select -s /Library/Developer/CommandLineTools
         xcode-select -p
-    # the model files, as the Fedora 45 job (one cache for both)
-    - id: models
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ../test-models
-        key: models-${{ hashFiles('.github/ci/models.txt') }}
-        enableCrossOsArchive: true
+    # the model files, as the Fedora 45 job: from the assets, each file's sum checked (a missing one is fetched)
     - name: the model files (DRGNX_TEST_MODELS)
       id: models-fetch
       shell: bash
       run: |
         /bin/bash .github/ci/models.sh ../test-models
         echo "DRGNX_TEST_MODELS=$(cd ../test-models && pwd)" >> "$GITHUB_ENV"
-    - id: models-policy
-      uses: ./.github/actions/cache-policy
-      with:
-        build-outcome: ${{ steps.models-fetch.outcome }}
-        exact-hit: ${{ steps.models.outputs.cache-hit }}
-    - if: ${{ steps.models-policy.outputs.save == 'true' }}
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ../test-models
-        key: ${{ steps.models.outputs.cache-primary-key }}
-        enableCrossOsArchive: true
     # the plugin tests and rows load WASM components built for wasm32-wasip2
     - name: wasm32-wasip2 and the plugin fixtures
       shell: bash
       run: bash .github/ci/wasm-target.sh
-    # the terminal engine is built from source with a pinned Zig (test/container/zig.sh)
+    # the terminal engine is built from source with a pinned Zig (test/container/zig.sh, from ZIG_DOWNLOADS)
     - name: Zig
       shell: bash
       run: /bin/bash test/container/zig.sh macos
@@ -67,30 +62,9 @@ runs:
     - name: vttest (the terminal's conformance rows)
       shell: bash
       run: brew install vttest
-    # the pinned release tarball, kept by the hash of nidhogg.sh (which holds the version and the checksums; the
-    # tarball is checked against them on every use); the writer runs (cache-policy) save it once per pin and ref, every run
-    # restores it
-    - id: nidhogg-tarball
-      if: ${{ inputs.nidhogg == 'true' }}
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ${{ runner.temp }}/nidhogg-downloads
-        key: nidhogg-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('test/container/nidhogg.sh') }}
+    # the pinned release tarball comes from NIDHOGG_DOWNLOADS (the assets); the script checks it against the pinned sums
     - name: Nidhogg 31.1 (writes DRGNX_EMACS to the environment)
       id: nidhogg
       if: ${{ inputs.nidhogg == 'true' }}
       shell: bash
-      env:
-        NIDHOGG_DOWNLOADS: ${{ runner.temp }}/nidhogg-downloads
       run: /bin/bash test/container/nidhogg.sh macos
-    - id: nidhogg-policy
-      if: ${{ inputs.nidhogg == 'true' }}
-      uses: ./.github/actions/cache-policy
-      with:
-        build-outcome: ${{ steps.nidhogg.outcome }}
-        exact-hit: ${{ steps.nidhogg-tarball.outputs.cache-hit }}
-    - if: ${{ inputs.nidhogg == 'true' && steps.nidhogg-policy.outputs.save == 'true' }}
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ${{ runner.temp }}/nidhogg-downloads
-        key: ${{ steps.nidhogg-tarball.outputs.cache-primary-key }}

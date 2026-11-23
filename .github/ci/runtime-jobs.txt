@@ -10,7 +10,7 @@
 # Tokens: pr (a pull request), cache-run (a push to main), schedule (the daily run), no-save (a run that never saves a
 # cache: not a push or dispatch on main, ci/* or scratch/drgnx-mac-rounds), dispatch-only:ID (only a manual run that
 # names ID). A new job comes with its row, in the same commit.
-images             rt-linux       build     schedule
+images             rt-linux,rt-macos  build     schedule
 linux              rt-linux       build     schedule
 msrv               rt-msrv        check     schedule
 escape-host        rt-escape      build     schedule

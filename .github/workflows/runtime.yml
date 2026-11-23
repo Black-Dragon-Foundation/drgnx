@@ -68,10 +68,13 @@ jobs:
   # job's container is named before its steps run, so this job looks it up, by the tag of this checkout's inputs
   # (test/container/image-tag.sh). ci.yml's `images` job built and pushed any missing tag before this workflow ran; the
   # output is empty when GHCR still has none (a fork's pull request), and the job then installs what the image holds
-  # itself. (The escape legs look their bubblewrap up in their own step.)
+  # itself. (The escape legs look their bubblewrap up in their own step.) The same lookup finds the prebuilt assets
+  # (`drgnx-assets`: the model files, the libghostty-vt and Zig tarballs, the macOS Nidhogg tarball, .github/ci/assets.sh)
+  # for the jobs that unpack them (the Fedora job, the live debug adapters and the macOS jobs): none of them downloads
+  # from Hugging Face or the tarballs' sites, whose transfers cancelled on every Mac job of PR 5's round 5.
   images:
     name: Prebuilt image (Fedora 45 job)
-    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ')) }}
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ') || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -79,6 +82,7 @@ jobs:
       packages: read
     outputs:
       rust: ${{ steps.ref.outputs.rust }}
+      assets: ${{ steps.ref.outputs.assets }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -87,6 +91,7 @@ jobs:
           sparse-checkout: |
             .github/ci
             test/container
+            crates/hub/ghostty-vt-sys
       - id: ref
         env:
           TOKEN: ${{ github.token }}
@@ -94,6 +99,8 @@ jobs:
         run: |
           rust="$(bash .github/ci/ghcr.sh ref drgnx-test-rust "$(bash test/container/image-tag.sh test/container/Containerfile.rust)")"
           echo "rust=$rust" | tee -a "$GITHUB_OUTPUT"
+          assets="$(bash .github/ci/ghcr.sh ref drgnx-assets "$(bash .github/ci/assets.sh tag)")"
+          echo "assets=$assets" | tee -a "$GITHUB_OUTPUT"
 
   linux:
     name: fmt, clippy, tests, conformance, perf (Fedora 45)
@@ -138,9 +145,25 @@ jobs:
         if: ${{ env.PREBUILT == '' }}
         working-directory: ${{ github.workspace }}
         run: bash test/container/zig.sh linux
+      # The prebuilt assets (`drgnx-assets`, by digest): the pinned model files the tests run the built-in model from
+      # (they fail without DRGNX_TEST_MODELS), beside the checkout, not in it (the tests that list a checkout would find
+      # them), and the libghostty-vt tarballs (build.rs never downloads). models.sh checks each file's sum and fetches
+      # only what is missing (a fork's run, with no GHCR token for the image)
+      - name: the prebuilt assets (models, libghostty-vt tarballs)
+        working-directory: ${{ github.workspace }}
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: bash .github/ci/assets.sh use "${{ needs.images.outputs.assets }}"
       - name: libghostty-vt's pinned tarballs (build.rs never downloads)
         working-directory: ${{ github.workspace }}
         run: bash crates/hub/ghostty-vt-sys/fetch.sh
+      - name: the model files (DRGNX_TEST_MODELS)
+        id: models-fetch
+        working-directory: ${{ github.workspace }}
+        run: |
+          bash .github/ci/models.sh ../test-models
+          echo "DRGNX_TEST_MODELS=$(cd ../test-models && pwd)" >> "$GITHUB_ENV"
       - uses: ./.github/actions/cargo-target
         with:
           job: fedora45
@@ -148,36 +171,6 @@ jobs:
       - run: cargo fmt --check
       - if: ${{ !cancelled() }}
         run: cargo clippy --locked --workspace --all-targets --features ratatoskr/test-hooks,ferja/test-hooks -- -D warnings
-      # The pinned model files the tests run the built-in model from (they fail without DRGNX_TEST_MODELS), beside the
-      # checkout, not in it (the tests that list a checkout would find them): one cache for Linux and macOS, kept by
-      # the list's hash; models.sh checks each restored file's sum and fetches what is missing from Hugging Face at its
-      # pinned revision. Saved by the writer runs only (cache-policy), never by a pull request (950 MB a fetch).
-      - id: models
-        if: ${{ !cancelled() }}
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ../test-models
-          key: models-${{ hashFiles('.github/ci/models.txt') }}
-          enableCrossOsArchive: true
-      - name: the model files (DRGNX_TEST_MODELS)
-        id: models-fetch
-        if: ${{ !cancelled() }}
-        working-directory: ${{ github.workspace }}
-        run: |
-          bash .github/ci/models.sh ../test-models
-          echo "DRGNX_TEST_MODELS=$(cd ../test-models && pwd)" >> "$GITHUB_ENV"
-      - id: models-policy
-        if: ${{ !cancelled() }}
-        uses: ./.github/actions/cache-policy
-        with:
-          build-outcome: ${{ steps.models-fetch.outcome }}
-          exact-hit: ${{ steps.models.outputs.cache-hit }}
-      - if: ${{ !cancelled() && steps.models-policy.outputs.save == 'true' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ../test-models
-          key: ${{ steps.models.outputs.cache-primary-key }}
-          enableCrossOsArchive: true
       # the plugin tests load WASM components built for wasm32-wasip2 (Fedora's packaged Rust has no wasip2 standard
       # library and cannot use an upstream one: wasm-target.sh installs the same rustc version with rustup-init, checked
       # by its SHA-256, for the fixtures alone and sets DRGNX_WASM_CARGO): built first, so a missing target or a broken
@@ -965,8 +958,12 @@ jobs:
   # between them. docs/develop/ci.md
   macos:
     name: tests (macOS 27)
-    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
+    needs: images
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
     runs-on: xcode-27
+    permissions:
+      contents: read
+      packages: read      # the prebuilt assets (drgnx-assets)
     # 90 until the build-once redesign (docs: the CI flow redesign, 2026-11-22). The test build alone took 17 minutes
     # with a warm compiler cache from a run of the same commit, and was cut at 45 after 43 without it (the pull
     # request's run)
@@ -979,6 +976,8 @@ jobs:
           filter: blob:none       # without old file contents
           persist-credentials: false
       - uses: ./.github/actions/macos-runtime
+        with:
+          assets: ${{ needs.images.outputs.assets }}
       # The dependencies' debug info is line tables only: file and line in a backtrace, without each crate's full
       # DWARF, which is a large part of a cold build's compile and link time. The workspace's crates keep full debug
       # info, so a debugger session on a Mac still steps through drgnx's code (the test profile inherits the dev one's)
@@ -1210,8 +1209,12 @@ jobs:
   # its own debug build; the Seatbelt escape rows and clippy on darwin with the first half.
   macos-conformance:
     name: conformance ${{ matrix.shard }}/2 (macOS 27)
-    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
+    needs: images
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
     runs-on: xcode-27
+    permissions:
+      contents: read
+      packages: read      # the prebuilt assets (drgnx-assets)
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -1227,6 +1230,7 @@ jobs:
       - uses: ./.github/actions/macos-runtime
         with:
           nidhogg: "true"
+          assets: ${{ needs.images.outputs.assets }}
       # as the tests job: the dependencies' debug info is line tables only, the workspace's crates keep theirs
       - name: dependencies' debug info is line tables only
         run: |
@@ -1293,8 +1297,12 @@ jobs:
   # The perf baseline on a release build (a recorded baseline, no budgets, as on Linux)
   macos-perf:
     name: perf (macOS 27)
-    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
+    needs: images
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
     runs-on: xcode-27
+    permissions:
+      contents: read
+      packages: read      # the prebuilt assets (drgnx-assets)
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1306,6 +1314,7 @@ jobs:
       - uses: ./.github/actions/macos-runtime
         with:
           nidhogg: "true"
+          assets: ${{ needs.images.outputs.assets }}
       - name: perf baseline (release build)
         id: perf
         run: |

@@ -13,7 +13,7 @@ for section in source deps; do
   file=$(awk -v s="[$section]" '$0 == s {on=1; next} /^\[/ {on=0} on && $1 == "file" {gsub(/"/, "", $3); print $3}' "$here/pin.toml")
   sha=$(awk -v s="[$section]" '$0 == s {on=1; next} /^\[/ {on=0} on && $1 == "sha256" {gsub(/"/, "", $3); print $3}' "$here/pin.toml")
   if [ -f "$dir/$file" ] && [ "$(sha256_of "$dir/$file")" = "$sha" ]; then continue; fi
-  curl -fsSL -o "$dir/$file.new" "https://release.files.ghostty.org/libghostty-vt/$version/$file"
+  curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 3 -o "$dir/$file.new" "https://release.files.ghostty.org/libghostty-vt/$version/$file"
   got=$(sha256_of "$dir/$file.new")
   [ "$got" = "$sha" ] || { rm -f "$dir/$file.new"; echo "fetch.sh: $file is not the pinned file (sha256 $got, expected $sha)" >&2; exit 1; }
   if command -v minisign >/dev/null 2>&1; then
