@@ -4,6 +4,7 @@
 //! timing, sandbox and fleet files are modules of three more binaries (`tests/groups/<name>.rs`), also in `APART`.
 
 mod debug_lsp_command;
+mod embed_serve;
 mod gated;
 mod gated_exit;
 mod hrafn_parse;
@@ -15,6 +16,7 @@ mod search_cache;
 mod search_download;
 mod search_eval_sources;
 mod search_fingerprint;
+mod search_manage;
 mod search_modes_rows;
 mod search_packs;
 mod search_prefer;

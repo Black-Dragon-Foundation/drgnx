@@ -18,6 +18,17 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
+/// The hub methods an MCP tool may call: reading the index, and `search/list` and `search/status`. Pausing, resuming,
+/// stopping and deleting an index are the user's (Hrafn redesign §11A): no tool names them, and both backends refuse
+/// any method not listed here.
+pub const MCP_METHODS: &[&str] = &[];
+
+/// Whether an MCP tool may call METHOD.
+pub fn mcp_may_call(method: &str) -> bool {
+    let _ = method;
+    unimplemented!("Wave 9 stub")
+}
+
 /// Where a question goes: the hub itself, or (for `search mcp`) the hub's socket.
 pub trait Backend: Send + Sync {
     fn query<'a>(

@@ -226,6 +226,8 @@ pub enum Tier2 {
     Typing,
     /// Waiting on battery.
     Battery,
+    /// Paused by the user (`search/pause`) until `search/resume`.
+    Paused,
     /// An embedder failed; tier 2 waits for the next change.
     Failed(String),
 }
@@ -692,6 +694,28 @@ impl Project {
             .lock()
             .map(|c| c.clone())
             .unwrap_or_default()
+    }
+
+    /// `search/pause`: the batch in flight finishes, then tier 2 holds until [`resume`](Self::resume); kept in the
+    /// store, so a restart or a file change does not undo it.
+    pub async fn pause(&self) -> Result<(), ProjectError> {
+        unimplemented!("Wave 9 stub")
+    }
+
+    /// `search/resume`: tier 2 goes on with the keys still missing (a pause or a stop lifted).
+    pub async fn resume(&self) -> Result<(), ProjectError> {
+        unimplemented!("Wave 9 stub")
+    }
+
+    /// `search/stop`: the running build is cancelled now; what it finished stays. The watcher stays on: the next change
+    /// or `search/index` goes on from there.
+    pub async fn stop(&self) -> Result<(), ProjectError> {
+        unimplemented!("Wave 9 stub")
+    }
+
+    /// The root's state as the user sees it: the user's pause or stop first, then what tier 2 waits for.
+    pub fn state(&self) -> super::manage::RootState {
+        unimplemented!("Wave 9 stub")
     }
 
     /// Starts tier 2 (once).

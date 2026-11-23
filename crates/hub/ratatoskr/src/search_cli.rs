@@ -104,6 +104,57 @@ pub enum SearchCommand {
     },
     /// `eval gen|run|compare` (`crate::eval_cli`): needs no hub.
     Eval(crate::eval_cli::EvalCommand),
+    /// Every root's index (`search/list`).
+    List {
+        json: bool,
+    },
+    /// One root's index (`search/status`), the working folder's without ROOT.
+    Status {
+        root: Option<PathBuf>,
+        json: bool,
+    },
+    /// `pause`, `resume` or `stop` of ROOT's index, or of every root's with `--all`.
+    Manage {
+        verb: Verb,
+        root: Option<PathBuf>,
+        all: bool,
+    },
+    /// ROOT's index removed (`search/delete`); asks first unless YES.
+    Delete {
+        root: PathBuf,
+        yes: bool,
+    },
+}
+
+/// What `search pause|resume|stop` does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verb {
+    Pause,
+    Resume,
+    Stop,
+}
+
+impl Verb {
+    pub fn method(self) -> &'static str {
+        match self {
+            Verb::Pause => "search/pause",
+            Verb::Resume => "search/resume",
+            Verb::Stop => "search/stop",
+        }
+    }
+}
+
+/// Whether `search delete ROOT` goes on: with YES at once; else the question on OUT and a `y` answer from INPUT, which
+/// only a terminal (TTY) can give.
+pub fn confirm_delete(
+    root: &str,
+    yes: bool,
+    tty: bool,
+    input: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> bool {
+    let _ = (root, yes, tty, input, out);
+    unimplemented!("Wave 9 stub")
 }
 
 /// The arguments after `search`.
@@ -521,6 +572,10 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
             return serve_mcp(env, root);
         }
         SearchCommand::Eval(_) => unreachable!("handled above"),
+        SearchCommand::List { .. }
+        | SearchCommand::Status { .. }
+        | SearchCommand::Manage { .. }
+        | SearchCommand::Delete { .. } => unimplemented!("Wave 9 stub"),
         SearchCommand::Export {
             root,
             out,
@@ -843,6 +898,118 @@ mod tests {
         assert!(p(&["import", "/f", "--out", "/x"]).is_err());
         assert!(p(&["export", "/r", "--branch", "a", "--all-trees"]).is_err());
         assert!(p(&["import", "/f", "/r", "extra"]).is_err());
+    }
+
+    /// Task 23b. `delete` asks unless `--yes`, and only a terminal's `y` goes on; the other verbs take ROOT or `--all`.
+    #[test]
+    fn delete_asks_without_yes() {
+        assert_eq!(
+            p(&["delete", "/r"]).unwrap(),
+            SearchCommand::Delete {
+                root: "/r".into(),
+                yes: false
+            }
+        );
+        assert_eq!(
+            p(&["delete", "/r", "--yes"]).unwrap(),
+            SearchCommand::Delete {
+                root: "/r".into(),
+                yes: true
+            }
+        );
+        assert!(p(&["delete"]).is_err());
+        assert!(p(&["delete", "--all"]).is_err(), "one root at a time");
+        let ask = |yes: bool, tty: bool, answer: &str| {
+            let mut out = Vec::new();
+            let ok = confirm_delete("/r", yes, tty, &mut answer.as_bytes(), &mut out);
+            (ok, String::from_utf8(out).unwrap())
+        };
+        let (ok, question) = ask(false, true, "y\n");
+        assert!(
+            ok && question.contains("/r") && question.contains("[y/N]"),
+            "{question}"
+        );
+        assert!(!ask(false, true, "\n").0, "the default is no");
+        assert!(!ask(false, true, "no\n").0);
+        let (ok, said) = ask(false, false, "y\n");
+        assert!(
+            !ok && said.contains("--yes"),
+            "no terminal: refused, {said}"
+        );
+        assert_eq!(
+            ask(true, false, ""),
+            (true, String::new()),
+            "--yes asks nothing"
+        );
+        assert_eq!(
+            p(&["pause", "--all"]).unwrap(),
+            SearchCommand::Manage {
+                verb: Verb::Pause,
+                root: None,
+                all: true
+            }
+        );
+        assert_eq!(
+            p(&["stop", "/r"]).unwrap(),
+            SearchCommand::Manage {
+                verb: Verb::Stop,
+                root: Some("/r".into()),
+                all: false
+            }
+        );
+        assert!(p(&["resume"]).is_err(), "ROOT or --all");
+        assert!(p(&["pause", "/r", "--all"]).is_err(), "not both");
+        assert_eq!(p(&["list"]).unwrap(), SearchCommand::List { json: false });
+        assert_eq!(
+            p(&["status", "/r", "--json"]).unwrap(),
+            SearchCommand::Status {
+                root: Some("/r".into()),
+                json: true
+            }
+        );
+    }
+
+    /// Task 23b. No MCP tool pauses, resumes, stops or deletes, and neither backend calls those methods for one: an
+    /// agent gets the index's list and status only.
+    #[test]
+    fn mcp_has_no_pause_stop_or_delete() {
+        use crate::search::mcp::{Backend, HubBackend, mcp_may_call, tools};
+        let all = tools();
+        let names: Vec<&str> = all.iter().map(|t| t.name()).collect();
+        for verb in ["pause", "resume", "stop", "delete"] {
+            assert!(names.iter().all(|n| !n.contains(verb)), "{names:?}");
+            assert!(!mcp_may_call(&format!("search/{verb}")), "{verb}");
+        }
+        for ok in [
+            "search/list",
+            "search/status",
+            "search/symbols",
+            "search/usages",
+        ] {
+            assert!(mcp_may_call(ok), "{ok}");
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let client = ClientBackend {
+            env: Env::new(&[("HOME", "/nonexistent")], 1),
+        };
+        let hub = HubBackend(std::sync::Weak::new());
+        for method in [
+            "search/pause",
+            "search/resume",
+            "search/stop",
+            "search/delete",
+        ] {
+            for (who, got) in [
+                ("client", rt.block_on(client.call(method, json!({})))),
+                ("hub", rt.block_on(hub.call(method, json!({})))),
+            ] {
+                let e = got.expect_err(method);
+                assert!(e.contains("not for an MCP tool"), "{who} {method}: {e}");
+            }
+        }
     }
 
     #[test]

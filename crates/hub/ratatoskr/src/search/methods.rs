@@ -1680,6 +1680,7 @@ fn tier2_name(t: &Tier2) -> &'static str {
         Tier2::Running => "running",
         Tier2::Typing => "typing",
         Tier2::Battery => "battery",
+        Tier2::Paused => "paused",
         Tier2::Failed(_) => "failed",
     }
 }

@@ -637,3 +637,45 @@ async fn battery_holds_local_not_remote() {
     .unwrap();
     assert!(out.filled && !builtin.embeds().is_empty(), "{out:?}");
 }
+
+/// Pattern D (Task 23). A `vectors` remote that does not answer is marked down (Task 14's backoff) and the same keys go
+/// to the local engine in the same fill; the remote is not asked again before its wait is over.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_down_falls_through_to_local_engine() {
+    use ratatoskr::search::remote::{MemPins, RemoteSpec, RemoteVectors};
+    let dead = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let remote = Arc::new(RemoteVectors::new(RemoteSpec {
+        id: "desk".into(),
+        url: format!("http://127.0.0.1:{dead}"),
+        token: Some("t".into()),
+        trusted: false,
+        pins: Arc::new(MemPins::default()),
+    }));
+    let state = tempfile::tempdir().unwrap();
+    let id = ident("engine");
+    let cache = Caches::shared(state.path()).get(&id).await.unwrap();
+    let engine = Arc::new(Fake::new(
+        "llama",
+        SourceKind::LocalEngine,
+        Some(id.clone()),
+    ));
+    let mut c = SourceChain::new(id.fp, vec![remote.clone(), engine.clone()]);
+    let out = c.fill(&cache, &items(0..3), t0()).await;
+    assert_eq!(
+        out,
+        FillOutcome::Filled {
+            n: 3,
+            from: "llama".into()
+        }
+    );
+    assert_eq!(engine.embeds().len(), 1, "the same batch, at once");
+    assert!(has_all(&cache, 0..3).await);
+    let status = c.status();
+    let desk = status.iter().find(|e| e.id == "desk").unwrap();
+    assert_eq!(desk.state, "down", "{status:?}");
+    assert!(c.next_due(t0()).is_some(), "it waits its backoff");
+}
