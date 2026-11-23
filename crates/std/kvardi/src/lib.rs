@@ -22,9 +22,70 @@ pub const MAX_ZOOM: f32 = 5.0;
 #[derive(Clone, Copy, PartialEq, PartialOrd, Debug, Default)]
 pub struct Lp(pub f32);
 
-/// A length in physical pixels: what Glitnir draws in.
+/// A length in physical pixels: what Glitnir draws in. It adds, subtracts and scales by whole numbers with its own
+/// kind and with plain `i32`s (a count of pixels), never with an [`Lp`]: a logical length reaches pixels only through
+/// [`Lp::to_px`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+#[repr(transparent)]
 pub struct Px(pub i32);
+
+impl Px {
+    pub const ZERO: Px = Px(0);
+
+    pub const fn abs(self) -> Px {
+        Px(self.0.abs())
+    }
+}
+
+macro_rules! px_ops {
+    ($($tr:ident $m:ident $op:tt, $tra:ident $ma:ident $opa:tt);* $(;)?) => {$(
+        impl std::ops::$tr for Px {
+            type Output = Px;
+            fn $m(self, o: Px) -> Px { Px(self.0 $op o.0) }
+        }
+        impl std::ops::$tr<i32> for Px {
+            type Output = Px;
+            fn $m(self, o: i32) -> Px { Px(self.0 $op o) }
+        }
+        impl std::ops::$tra for Px {
+            fn $ma(&mut self, o: Px) { self.0 $opa o.0 }
+        }
+        impl std::ops::$tra<i32> for Px {
+            fn $ma(&mut self, o: i32) { self.0 $opa o }
+        }
+    )*};
+}
+px_ops! {
+    Add add +, AddAssign add_assign +=;
+    Sub sub -, SubAssign sub_assign -=;
+    Mul mul *, MulAssign mul_assign *=;
+    Div div /, DivAssign div_assign /=;
+}
+
+impl std::ops::Neg for Px {
+    type Output = Px;
+    fn neg(self) -> Px {
+        Px(-self.0)
+    }
+}
+
+impl PartialEq<i32> for Px {
+    fn eq(&self, o: &i32) -> bool {
+        self.0 == *o
+    }
+}
+
+impl PartialOrd<i32> for Px {
+    fn partial_cmp(&self, o: &i32) -> Option<std::cmp::Ordering> {
+        self.0.partial_cmp(o)
+    }
+}
+
+impl From<Px> for i32 {
+    fn from(p: Px) -> i32 {
+        p.0
+    }
+}
 
 impl From<i32> for Px {
     fn from(v: i32) -> Px {
