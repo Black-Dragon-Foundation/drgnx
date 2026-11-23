@@ -2857,7 +2857,9 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
 Hrafn's vectors are keyed by the model's fingerprint (64 hex characters; `runtime.md`, "The fingerprint"), never by a
 name. The answers say both: `search/query`'s `model` is the fingerprint of the model whose vectors took part and `label`
 its name (`granite-embedding-small-english-r2`, a server's model id); `lag.model` and `search/status`'s `models[].model`
-are fingerprints (`models[].label` is set when an embedder of this hub states that fingerprint now); `search/embedders`
+are fingerprints (`models[].label` is set when an embedder of this hub states that fingerprint now); `search/status`'s
+`sources[]` is each fingerprint's chain of sources as tier 2's last pass left it (`model`, and `entries[]` of `id`,
+`kind`, `state` and, when down, `why`; runtime.md, "The source chain"); `search/embedders`
 gives `builtin.fingerprint` and `builtin.label`, each server's `fingerprint` (none until it answers a probe) and `label`,
 and `prefer`, a fingerprint. The MCP and CLI clients print the label where they printed the model.
 

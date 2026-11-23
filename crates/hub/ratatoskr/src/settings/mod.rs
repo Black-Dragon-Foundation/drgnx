@@ -178,6 +178,7 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting("drgnx-search-off", "bool", OnError::Strict),
     setting("drgnx-search-base", "Option<String>", OnError::Strict),
     setting("drgnx-search-cache-cap", "Option<u64>", OnError::Strict),
+    setting("drgnx-search-battery-engine", "bool", OnError::Strict),
     setting("drgnx-search-ignore-rules", "String", OnError::Strict),
     setting("drgnx-agents-plugins", "Vec<String>", OnError::Strict),
     setting("drgnx-agents-hook-rules", "Vec<HookRule>", OnError::Strict),
@@ -305,6 +306,8 @@ pub struct RuntimeValues {
     pub search_base: Option<String>,
     /// The bytes of vectors no repo holds that each vector cache keeps (none: twice the held bytes, at least 1 GiB).
     pub search_cache_cap: Option<u64>,
+    /// Whether the local sources (the built-in model, the local engine) embed on battery (default: they wait for AC).
+    pub search_battery_engine: bool,
     /// Which files Quick Open, Find and the text search list: `index` (the index's filters) or `real`
     /// ([`crate::view::files::ignore_of`]).
     pub search_ignore_rules: String,
@@ -588,6 +591,7 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-search-off" => values.search_off = de(node)?,
         "drgnx-search-base" => values.search_base = de(node)?,
         "drgnx-search-cache-cap" => values.search_cache_cap = de(node)?,
+        "drgnx-search-battery-engine" => values.search_battery_engine = de(node)?,
         "drgnx-search-ignore-rules" => {
             let v: String = de(node)?;
             if !["index", "real"].contains(&v.as_str()) {

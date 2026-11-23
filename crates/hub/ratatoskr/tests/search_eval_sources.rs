@@ -205,6 +205,23 @@ fn server_source_embeds_every_chunk() {
     let seen = tei.texts();
     let (asked, docs): (Vec<&String>, Vec<&String>) =
         seen.iter().partition(|t| t.starts_with("Instruct: "));
+    // a path's vector rides along with its chunks (Wave 4): its text is `hrafn::path_text` of a listed path, so it is
+    // told from a chunk's text by what it is, never by count
+    let path_texts: BTreeSet<String> = ["greet.py", "math_ops.py"]
+        .iter()
+        .map(|p| hrafn::path_text(p))
+        .collect();
+    let (paths, docs): (Vec<&String>, Vec<&String>) =
+        docs.into_iter().partition(|t| path_texts.contains(*t));
+    assert_eq!(
+        paths.iter().collect::<BTreeSet<_>>().len(),
+        paths.len(),
+        "no path twice: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|t| t.starts_with("greet.py\n")),
+        "the path vectors are embedded too: {paths:?}"
+    );
     assert_eq!(docs.len(), chunks, "every chunk once: {docs:?}");
     assert_eq!(
         docs.iter().collect::<BTreeSet<_>>().len(),

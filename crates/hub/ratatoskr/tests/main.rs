@@ -19,6 +19,7 @@ mod search_modes_rows;
 mod search_prefer;
 mod search_query;
 mod search_servers;
+mod search_sources;
 mod search_tools;
 mod server;
 mod support;

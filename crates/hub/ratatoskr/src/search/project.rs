@@ -11,13 +11,18 @@
 //!   of quiet, a save after 30 s); without watches, [`Project::fresh_for_query`] diffs the blobs at query time.
 //! - **The vectors** are in the state's machine-wide caches ([`Caches`], one file per fingerprint): the store holds
 //!   keys only, and every refresh reports its live key set to the cache of each fingerprint the embedders proved.
-//! - **Tier 2.** Requests of [`REQUEST_KEYS`] missing keys to each embedder that answers (a server that is not running
-//!   gets none, and is no failure, until the next change wakes tier 2). Between requests it waits while typing
-//!   holds ([`TYPING_HOLD`] from the last [`Project::note_typing`]) and, on battery, until AC or
-//!   [`Project::index_now`]. Idle, it stays idle until a wake finds a key missing. What it does is published as a
+//! - **Tier 2** is a chain of sources per fingerprint ([`super::sources`]): requests of at most a source's `max_batch`
+//!   missing keys ([`REQUEST_KEYS`] for the built-in model and servers), open and recently edited files first, then by
+//!   git recency. Each embedder states its model by a probe (a server that is not running is no failure: it is
+//!   asked again at the next change); the ones that state the same fingerprint are one chain, with a backoff per
+//!   source. The built-in model's chain runs only while the main chains have nothing to fill. Between requests tier 2
+//!   waits while typing holds ([`TYPING_HOLD`] from the last [`Project::note_typing`]); on battery the local sources
+//!   (the built-in model) wait until AC, [`Project::index_now`] or `drgnx-search-battery-engine`, and remote ones go on.
+//!   Idle, it stays idle until a wake finds a key missing or a down source is due. What it does is published as a
 //!   [`Status`].
 
 use super::caches::Caches;
+use super::sources::{ChainEntry, DocSource, Slot, Source, SourceChain, run_pass_with};
 use super::{DocEmbedder, power};
 use crate::clock;
 use hrafn::fresh::{Due, Fresh, Settle};
@@ -40,6 +45,10 @@ use tokio::sync::{Notify, watch};
 
 /// Keys in one tier-2 request: about 0.25 s on the Radeon, 7 s on the CPU path.
 pub const REQUEST_KEYS: u32 = 8;
+/// Paths of the order of work (open and edited files, then git recency) a batch looks through.
+pub const ORDER_PATHS: usize = 500;
+/// Recently edited files remembered for the order of work.
+pub const RECENT_PATHS: usize = 64;
 /// How long tier 2 holds after the last keystroke.
 pub const TYPING_HOLD: Duration = Duration::from_secs(3);
 /// How often tier 2 looks at the power supply again while it waits on battery.
@@ -111,6 +120,36 @@ pub fn project_id(root: &Path) -> io::Result<(PathBuf, String)> {
     let sum = Sha256::digest(real.as_os_str().as_bytes());
     let id: String = sum.iter().take(8).map(|b| format!("{b:02x}")).collect();
     Ok((real, id))
+}
+
+/// The files of ROOT by git recency: those changed by the newest commits first, each once (blocking: runs git).
+fn git_recency(root: &Path) -> io::Result<Vec<String>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "-c",
+            "core.quotepath=off",
+            "log",
+            "--name-only",
+            "--no-renames",
+            "--format=",
+            "-n",
+            "300",
+        ])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()?;
+    if !out.status.success() {
+        return Ok(Vec::new());
+    }
+    let mut seen = HashSet::new();
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter(|l| seen.insert(l.to_string()))
+        .take(ORDER_PATHS)
+        .map(str::to_owned)
+        .collect())
 }
 
 /// `<state>/code/<id>.db`.
@@ -245,7 +284,16 @@ struct Inner {
     held: Mutex<HashSet<String>>,
     deny: DenyList,
     config: Config,
-    embedders: Vec<Arc<dyn DocEmbedder>>,
+    /// Tier 2's sources: the spec's embedders, and what [`Project::add_sources`] added.
+    sources: Mutex<Vec<Arc<dyn Source>>>,
+    /// `drgnx-search-battery-engine`: the local sources run on battery.
+    battery_engine: std::sync::atomic::AtomicBool,
+    /// Open files, edited files (newest first) and the git recency of the paths, for the order of work (MP-14).
+    open_paths: Mutex<Vec<String>>,
+    recent_paths: Mutex<Vec<String>>,
+    recency: Mutex<Option<Vec<String>>>,
+    /// Each fingerprint's chain as the last pass left it, for `search/status`.
+    chains: Mutex<Vec<(String, Vec<ChainEntry>)>>,
     power_root: PathBuf,
     gate: Mutex<Gate>,
     wake: Notify,
@@ -355,7 +403,17 @@ impl Project {
                 held: Mutex::new(HashSet::new()),
                 deny,
                 config: spec.config,
-                embedders: spec.embedders,
+                sources: Mutex::new(
+                    spec.embedders
+                        .into_iter()
+                        .map(|e| Arc::new(DocSource::new(e)) as Arc<dyn Source>)
+                        .collect(),
+                ),
+                battery_engine: false.into(),
+                open_paths: Mutex::new(Vec::new()),
+                recent_paths: Mutex::new(Vec::new()),
+                recency: Mutex::new(None),
+                chains: Mutex::new(Vec::new()),
                 power_root: spec.power_root,
                 gate: Mutex::new(Gate::default()),
                 wake: Notify::new(),
@@ -600,6 +658,42 @@ impl Project {
         self.inner.wake.notify_one();
     }
 
+    /// More sources for tier 2 (a lookup source, an engine): before [`start_tier2`](Self::start_tier2).
+    pub fn add_sources(&self, more: Vec<Arc<dyn Source>>) {
+        if let Ok(mut s) = self.inner.sources.lock() {
+            s.extend(more);
+        }
+    }
+
+    /// `drgnx-search-battery-engine` as it is now: the local sources run on battery. Applies at the next pass.
+    pub fn set_battery_engine(&self, on: bool) {
+        let was = self
+            .inner
+            .battery_engine
+            .swap(on, std::sync::atomic::Ordering::Relaxed);
+        if was != on {
+            self.inner.wake.notify_one();
+        }
+    }
+
+    /// The files open in the editor and the ones edited lately: tier 2 embeds their chunks first (MP-14); the rest
+    /// follow by git recency. A history version of a file also makes it a recently edited one.
+    pub fn order_hint(&self, open: &[String], recent: &[String]) {
+        if let Ok(mut o) = self.inner.open_paths.lock() {
+            *o = open.to_vec();
+        }
+        self.inner.note_recent(recent.iter().rev());
+    }
+
+    /// Each fingerprint's (hex) chain of sources as the last pass left it.
+    pub fn chains(&self) -> Vec<(String, Vec<ChainEntry>)> {
+        self.inner
+            .chains
+            .lock()
+            .map(|c| c.clone())
+            .unwrap_or_default()
+    }
+
     /// Starts tier 2 (once).
     pub fn start_tier2(&self) {
         let Ok(mut t) = self.tier2.lock() else { return };
@@ -801,6 +895,8 @@ impl Project {
                     }
                 }
                 let Some(inner) = weak.upgrade() else { return };
+                // an edited file is embedded before the rest (MP-14)
+                inner.note_recent(hints.values().flatten());
                 if let Err(e) = inner.hints(hints, HashSet::new(), lagged).await {
                     tracing::warn!("search: the history feed of {}: {e}", inner.root.display());
                 }
@@ -1238,10 +1334,15 @@ impl Inner {
         )
     }
 
-    /// The caches of the fingerprints the embedders have proved so far (an embedder not probed yet has none).
+    /// Tier 2's sources now.
+    fn sources(&self) -> Vec<Arc<dyn Source>> {
+        self.sources.lock().map(|s| s.clone()).unwrap_or_default()
+    }
+
+    /// The caches of the fingerprints the sources have proved so far (a source not probed yet has none).
     async fn models(&self) -> Result<Vec<Arc<VectorCache>>, ProjectError> {
         let mut out: Vec<Arc<VectorCache>> = Vec::new();
-        for id in self.embedders.iter().filter_map(|e| e.identity()) {
+        for id in self.sources().iter().filter_map(|e| e.identity()) {
             let c = self.caches.get(&id).await?;
             if !out.iter().any(|o| o.fp_hex() == c.fp_hex()) {
                 out.push(c);
@@ -1252,6 +1353,10 @@ impl Inner {
 
     async fn refresh(&self) -> Result<Refresh, ProjectError> {
         let listed = self.list()?;
+        // the files' git recency is read again for the next batch
+        if let Ok(mut r) = self.recency.lock() {
+            *r = None;
+        }
         let root = eitri::open_path(&self.base, eitri::Kind::Dir)
             .map_err(|e| io::Error::other(e.to_string()))?;
         let read = |p: &str| {
@@ -1304,8 +1409,9 @@ impl Inner {
         });
     }
 
-    /// Waits until the gates let a request go; whether it goes as `index now`.
-    async fn gates(&self) -> bool {
+    /// Waits until typing lets a request go; whether it goes as `index now`, and whether the local sources wait for AC
+    /// (on battery, unless `index now` or `drgnx-search-battery-engine`; remote sources are never held by battery).
+    async fn gates(&self) -> (bool, bool) {
         loop {
             let (typing, overriding) = match self.gate.lock() {
                 Ok(g) => (g.hold_until.is_some_and(|t| t > clock::now()), g.overriding),
@@ -1316,23 +1422,100 @@ impl Inner {
                 self.wake.notified().await;
                 continue;
             }
-            if !overriding && power::on_battery(&self.power_root) {
-                self.publish(Tier2::Battery);
-                tokio::select! {
-                    () = self.wake.notified() => {}
-                    () = clock::sleep(POWER_POLL) => {}
-                }
-                continue;
-            }
-            return overriding;
+            let battery = !overriding
+                && !self
+                    .battery_engine
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                && power::on_battery(&self.power_root);
+            return (overriding, battery);
         }
     }
 
+    /// The paths to embed first: open files, then recently edited ones, then the rest by git recency (MP-14).
+    async fn order(&self) -> Vec<String> {
+        let cached = self.recency.lock().ok().and_then(|r| r.clone());
+        let recency = match cached {
+            Some(r) => r,
+            None => {
+                let base = self.base.clone();
+                let r = clock::blocking(move || git_recency(&base))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or_default();
+                if let Ok(mut c) = self.recency.lock() {
+                    *c = Some(r.clone());
+                }
+                r
+            }
+        };
+        let mut seen = HashSet::new();
+        let take = |v: &Mutex<Vec<String>>| v.lock().map(|v| v.clone()).unwrap_or_default();
+        take(&self.open_paths)
+            .into_iter()
+            .chain(take(&self.recent_paths))
+            .chain(recency)
+            .filter(|p| seen.insert(p.clone()))
+            .take(ORDER_PATHS)
+            .collect()
+    }
+
+    /// Remembers the paths a history version names as the most recently edited.
+    fn note_recent<'a>(&self, paths: impl Iterator<Item = &'a String>) {
+        if let Ok(mut r) = self.recent_paths.lock() {
+            for p in paths {
+                r.retain(|o| o != p);
+                r.insert(0, p.clone());
+            }
+            r.truncate(RECENT_PATHS);
+        }
+    }
+
+    /// One chain per fingerprint the sources state now (a source that does not answer its probe is no failure: it is
+    /// asked again at the next change). A swapped server states another fingerprint and gets another chain; the rows
+    /// under the old one stay. A fingerprint's chain keeps its backoff from pass to pass.
+    async fn slots(&self, old: Vec<Slot>, battery: bool, overriding: bool) -> Vec<Slot> {
+        let mut groups: Vec<(Identity, Vec<Arc<dyn Source>>)> = Vec::new();
+        for s in self.sources() {
+            let Ok(id) = s.probe().await else {
+                continue;
+            };
+            match groups.iter_mut().find(|(g, _)| g.fp == id.fp) {
+                Some((_, v)) => v.push(s),
+                None => groups.push((id, vec![s])),
+            }
+        }
+        let mut old = old;
+        let mut slots = Vec::new();
+        for (id, sources) in groups {
+            let cache = match self.cache_held(&id).await {
+                Ok(c) => c,
+                Err(err) => {
+                    self.publish(Tier2::Failed(err.to_string()));
+                    continue;
+                }
+            };
+            let mut slot = match old.iter().position(|s| s.chain.fingerprint() == id.fp) {
+                Some(i) => {
+                    let mut s = old.swap_remove(i);
+                    s.chain.sync(sources);
+                    s.cache = cache;
+                    s
+                }
+                None => Slot::new(SourceChain::new(id.fp, sources), cache),
+            };
+            slot.chain.set_gates(battery, overriding);
+            slots.push(slot);
+        }
+        slots
+    }
+
     async fn tier2(self: Arc<Self>) {
-        if self.embedders.is_empty() {
+        if self.sources().is_empty() {
             self.publish(Tier2::Idle);
             return;
         }
+        let mut slots: Vec<Slot> = Vec::new();
         loop {
             #[cfg(feature = "test-hooks")]
             if let Some(p) = &self.permits {
@@ -1341,85 +1524,52 @@ impl Inner {
                     Err(_) => return,
                 }
             }
-            let overriding = self.gates().await;
             let mut sent = false;
-            for e in &self.embedders {
-                // a server that is not running is no failure of tier 2: it is asked again at the next change. The
-                // probe says which model it is now: a swapped server is another fingerprint, and the batch goes
-                // under that one (the rows under the old one stay).
-                let Ok(id) = e.probe().await else {
-                    continue;
-                };
-                let dims = id.record.dims;
-                let cache = match self.cache_held(&id).await {
-                    Ok(c) => c,
-                    Err(err) => {
-                        self.publish(Tier2::Failed(err.to_string()));
-                        continue;
-                    }
-                };
-                let keys = match hrafn::missing(&self.store, &cache, REQUEST_KEYS).await {
-                    Ok(k) => k,
-                    Err(err) => {
-                        self.publish(Tier2::Failed(err.to_string()));
-                        continue;
-                    }
-                };
-                if keys.is_empty() {
-                    continue;
+            loop {
+                let (overriding, battery) = self.gates().await;
+                slots = self.slots(slots, battery, overriding).await;
+                if let Ok(mut v) = self.chains.lock() {
+                    *v = slots
+                        .iter()
+                        .map(|s| (s.chain.fingerprint().hex(), s.chain.status()))
+                        .collect();
                 }
-                self.publish(Tier2::Running);
-                // the texts exactly as `missing` gives them: each is the text its key was made of
-                let texts: Vec<String> = keys.iter().map(|(_, _, t)| t.clone()).collect();
-                match e.embed_docs(&texts, overriding).await {
-                    Ok(vectors) if vectors.len() == keys.len() => {
-                        // the fingerprint says how long a vector is: another length writes nothing of the batch
-                        if let Some(v) = vectors.iter().find(|v| v.len() != dims as usize) {
-                            self.publish(Tier2::Failed(format!(
-                                "{}: {} dims, the fingerprint says {dims}",
-                                id.label,
-                                v.len()
-                            )));
-                            continue;
-                        }
-                        let (chunks, paths): (Vec<_>, Vec<_>) = keys
-                            .iter()
-                            .zip(vectors)
-                            .partition(|((kind, _, _), _)| *kind == hrafn::KeyKind::Chunk);
-                        let mut failed = None;
-                        for (kind, rows) in [
-                            (hrafn::KeyKind::Chunk, chunks),
-                            (hrafn::KeyKind::Path, paths),
-                        ] {
-                            let rows: Vec<([u8; 32], Vec<f32>)> =
-                                rows.into_iter().map(|((_, k, _), v)| (*k, v)).collect();
-                            if rows.is_empty() {
-                                continue;
-                            }
-                            if let Err(err) = cache.put(kind, dims, &rows).await {
-                                failed = Some(err.to_string());
-                                break;
-                            }
-                        }
-                        if let Some(err) = failed {
-                            self.publish(Tier2::Failed(err));
-                            continue;
-                        }
-                        // the chunks embedded (what `keys_missing` and the lag count); a path's vector rides along
-                        let chunks = keys
-                            .iter()
-                            .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
-                            .count();
-                        self.status.send_modify(|s| s.embedded += chunks as u64);
+                let order = self.order().await;
+                let mut reads = 0;
+                let running = || self.publish(Tier2::Running);
+                match run_pass_with(
+                    &mut slots,
+                    &self.store,
+                    &order,
+                    clock::now(),
+                    &mut reads,
+                    &running,
+                )
+                .await
+                {
+                    Ok(out) if out.filled => {
+                        self.publish(Tier2::Running);
+                        // the chunks filled (what `keys_missing` and the lag count); a path's vector rides along
+                        self.status.send_modify(|s| s.embedded += out.chunks as u64);
                         sent = true;
                     }
-                    Ok(vectors) => self.publish(Tier2::Failed(format!(
-                        "{} vectors for {} texts",
-                        vectors.len(),
-                        keys.len()
-                    ))),
-                    Err(err) => self.publish(Tier2::Failed(err.0)),
+                    Ok(out) if out.held => {
+                        // only the battery keeps a local source from the work: wait for AC, `index now` or a change
+                        self.publish(Tier2::Battery);
+                        tokio::select! {
+                            () = self.wake.notified() => {}
+                            () = clock::sleep(POWER_POLL) => {}
+                        }
+                        continue;
+                    }
+                    Ok(out) => {
+                        if let Some(why) = out.down {
+                            self.publish(Tier2::Failed(why));
+                        }
+                    }
+                    Err(err) => self.publish(Tier2::Failed(err.to_string())),
                 }
+                break;
             }
             if !sent {
                 if let Ok(mut g) = self.gate.lock() {
@@ -1429,18 +1579,29 @@ impl Inner {
                 if !matches!(self.status.borrow().tier2, Tier2::Failed(_)) {
                     self.publish(Tier2::Idle);
                 }
-                self.until_missing().await;
+                let now = clock::now();
+                let due = slots.iter().filter_map(|s| s.chain.next_due(now)).min();
+                self.until_missing(due).await;
             }
         }
     }
 
-    /// Waits until a wake finds a key missing for an embedder that answers. A wake is only a hint: `Notify` keeps one
-    /// sent while tier 2 was not waiting (a refresh, `index now` read before its wake), so one that finds nothing to
-    /// do leaves tier 2 where it is, idle, and ends an `index now`, rather than taking it back to its gates.
-    async fn until_missing(&self) {
+    /// Waits until a wake finds a key missing for a source that answers, or until DUE (a source that is down is
+    /// asked again when its backoff is over). A wake is only a hint: `Notify` keeps one sent while tier 2 was not
+    /// waiting (a refresh, `index now` read before its wake), so one that finds nothing to do leaves tier 2 where it
+    /// is, idle, and ends an `index now`, rather than taking it back to its gates.
+    async fn until_missing(&self, due: Option<Duration>) {
         loop {
-            self.wake.notified().await;
-            for e in &self.embedders {
+            match due {
+                Some(d) => {
+                    tokio::select! {
+                        () = self.wake.notified() => {}
+                        () = clock::sleep(d) => return,
+                    }
+                }
+                None => self.wake.notified().await,
+            }
+            for e in self.sources() {
                 // a store error is the pass's to report
                 if let Ok(id) = e.probe().await
                     && let Ok(cache) = self.cache_held(&id).await

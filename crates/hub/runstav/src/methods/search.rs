@@ -148,6 +148,8 @@ pub struct StatusAnswer {
     pub lag: Lag,
     /// Models that have vectors here: the model, and how many.
     pub models: Vec<ModelCount>,
+    /// Where each fingerprint's vectors come from here: its chain of sources as the last pass of tier 2 left it.
+    pub sources: Vec<ChainStatus>,
     pub worker: WorkerStatus,
     /// `stopped`, `idle`, `running`, `typing`, `battery` or `failed`.
     pub tier2: String,
@@ -156,6 +158,30 @@ pub struct StatusAnswer {
     /// The project's worktree overlays.
     pub trees: Vec<TreeInfo>,
     pub watch: SearchWatch,
+}
+
+/// One fingerprint's chain of sources, in the order they are asked.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChainStatus {
+    /// The fingerprint (64 hex characters).
+    pub model: String,
+    pub entries: Vec<SourceEntry>,
+}
+
+/// One source of a chain.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SourceEntry {
+    /// A provider id, or `cache` or `builtin`.
+    pub id: String,
+    /// `cache`, `lookup`, `embed`, `engine` or `builtin`.
+    pub kind: String,
+    /// `answering`, `down`, `held` (battery) or `no text` (a remote not allowed text).
+    pub state: String,
+    /// Why it is down.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 /// One worktree overlay.

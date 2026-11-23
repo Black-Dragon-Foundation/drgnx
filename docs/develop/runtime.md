@@ -1677,13 +1677,35 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   inside a request is started again and the request sent again, once.
 - **A project (`search/project.rs`).** The store is `<state>/code/<id>.db`, `id` the first 16 hex characters of the
   sha256 of the main checkout's real path, so a linked worktree shares its main checkout's store. A root the deny-list
-  refuses is refused before anything is listed; inside an allowed root every file is checked again. Tier 2 sends requests
-  of 8 missing keys to each embedder that answers: a server whose own address accepts no connection (the default TEI
-  at 127.0.0.1:8080 when it is not running) gets no request in that pass and does not make tier 2 `Failed`, so tier 2
-  ends `Idle` once the others are done, and the server is asked again at the next change. Between requests it waits while typing holds (3 s from the last `note_typing`) and,
-  on battery, until AC or `index_now`. Its state (`Stopped`, `Idle`, `Running`, `Typing`, `Battery`, `Failed`) and the
-  vectors written are published for `search/status`. Its embedders are `DocEmbedder`s: the built-in model's worker and
-  each server that answers, every one filling its own fingerprint's cache (`Project::cache(id)`).
+  refuses is refused before anything is listed; inside an allowed root every file is checked again. Tier 2 is a chain of
+  sources per fingerprint (`search/sources.rs`, below): a server whose own address accepts no connection (the default TEI
+  at 127.0.0.1:8080 when it is not running) has no fingerprint in that pass, gets no request and does not make tier 2
+  `Failed`, so tier 2 ends `Idle` once the others are done, and the server is asked again at the next change. Between
+  requests it waits while typing holds (3 s from the last `note_typing`). Its state (`Stopped`, `Idle`, `Running`,
+  `Typing`, `Battery`, `Failed`) and the vectors written are published for `search/status`. Its embedders are
+  `DocEmbedder`s (the built-in model's worker and each server that answers), each wrapped in a `DocSource`; the
+  sources that state one fingerprint are one chain, filling that fingerprint's cache (`Project::cache(id)`).
+- **The source chain (`search/sources.rs`, `chain.rs`).** Per batch of at most the chain's `max_batch` missing keys (8
+  for the built-in model and for servers):
+  1. The cache is asked first (a vector that arrived since the keys were read: an import, another repo).
+  2. Lookup sources (`SourceKind::Lookup`) get the keys, never a text; the vectors they hold go into the cache.
+  3. The keys still missing go, as the texts their keys were made of, to the first source that may be sent text and
+     answers: an `Embed` source only when it is on this machine (`embed::is_loopback`; a remote needs `trusted`,
+     which Task 23's provider entry adds), the local engine, the built-in model. A source that fails is marked down and
+     the **same** batch goes to the next. Each source has its own backoff (`chain::Chain`, shared with the entity
+     embedder: 1, 5, 30 minutes, then 6 hours, on the hub's clock); a source whose wait is over is asked again with
+     the next batch, and tier 2 wakes when one is due. While every source is down and none is due,
+     `SourceChain::step` reads no store rows.
+  A `Guarded` wrapper refuses `embed` for a source that may not be sent text, so a lookup-only source never sees one
+  whatever the chain does. `Project::add_sources` adds sources before tier 2 starts (Waves 7 to 9 add the engine and
+  the remotes). Entity vectors build no chain (MP-17).
+  **Order of work (MP-14).** `missing_first(store, cache, n, order)` takes the chunks of `order`'s paths first (open
+  files from `Project::order_hint`, files the history feed names as edited, then the paths of the newest 300 commits,
+  at most 500 paths), then the rest in chunk order. **The built-in model's chain** (its own fingerprint, its own
+  vectors) steps only in a pass where no main chain filled anything (MP-15). **Battery:** the local sources (built-in,
+  local engine) wait unless `index now` or `drgnx-search-battery-engine` is on; remote sources are never held, and
+  `Tier2::Battery` shows only when a local source is all there is. `search/status` has `sources`: per fingerprint the
+  chain's entries (`cache`, then each source with `answering`, `down` and why, `held` or `no text`).
 - **The query (`hrafn::query`).** Lists from the routes, fused by RRF (k = 60): an exact one-identifier query pins its
   definitions first (non-test before test, then by kind); prefix and trigram name matches from the identifier-like
   tokens of a question add a list that is never pinned; a token that names a file adds a path list; `bm25(chunk_fts, 5,

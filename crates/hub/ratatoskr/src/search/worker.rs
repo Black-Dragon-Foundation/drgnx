@@ -840,6 +840,14 @@ impl super::DocEmbedder for WorkerEmbedder {
         })
     }
 
+    fn source_id(&self) -> String {
+        "builtin".into()
+    }
+
+    fn source_kind(&self) -> super::sources::SourceKind {
+        super::sources::SourceKind::Builtin
+    }
+
     fn embed_docs<'a>(
         &'a self,
         texts: &'a [String],
