@@ -26,6 +26,9 @@ r.find_source("buffer.save")?;             // file and line of the definition
 - An agent runs only a command exposed to agents (`Exposure::Agent`); those are `bod::tool_specs`, plain descriptions
   (name, text, JSON schema) that the agent runtime turns into its own tool type. `bod` depends on no hub crate.
 
+**Owned ids.** A command's id is a `String`: an extension's commands are registered in the same registry as `ext/<extension>/<id>`,
+with their arguments and exposure, so they list, and run, like any other.
+
 **Who may run a command.** A call carries who started it (`Cx::origin`: the user, an agent, an extension) and, when it
 comes through an extension, which one (`Cx::via`). An agent runs only `Exposure::Agent` commands. A call through an
 extension runs only `Exposure::Extension` commands (which the palette and the tools do not list). The origin that started

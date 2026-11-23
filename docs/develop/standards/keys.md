@@ -29,6 +29,9 @@ so a test moves it by hand).
 **Reserved keys.** `lykill::RESERVED` (cancel `C-g`, `M-x`, the palette's `ctrl+shift+p` and `f1`) cannot be bound, or
 started a chord with, by an extension: `Keymap::bind_by` refuses an extension origin with `Refused`.
 
+**An extension's bindings** (the API's `keys.bind`) name its own commands (`ext/<extension>/…`) or commands exposed to extensions, never
+the editor's, and may not be the start of a chord that is bound (`C-x` over `C-x C-f`).
+
 **Enforced by:** the scan rule `no-raw-key-event` (a path into skel's key event types, or `Event::Key`, anywhere but
 `lykill`), and the layer rows that keep the UI crates off huginn. Owner: `lykill`. Conformance:
 `crates/std/lykill/tests/conformance.rs`.

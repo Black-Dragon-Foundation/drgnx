@@ -5,8 +5,9 @@
 //! --match 'api-v*'`). `--base REF` names another ref, for tests only. The comparison is of the API's surface: the
 //! package name, every interface and function (with its kind and types), every type definition, and every item of the
 //! world, imports and exports, functions and types and inline interfaces included; never comments. A removed or changed
-//! item needs a breaking bump; an added one, and a case added at the end of an enum, a field of a record, a flag or a
-//! case of a variant, an additive bump:
+//! item needs a breaking bump, and so does an added case, field or flag (types match exactly where a guest meets the
+//! host) and a function added to an interface the extension exports or an export added to the world (old guests lack
+//! it); a function added to an interface the host provides, a new interface, type or import needs an additive bump:
 //! - from 1.0 on, a breaking change bumps the major version and an additive one the minor version;
 //! - below 1.0, as cargo reads it, a breaking change bumps the minor version and an additive one the patch version.
 //!
@@ -24,7 +25,8 @@ use wit_parser::{
 const WIT_PATH: &str = "crates/ext/mal/drgnx.wit";
 
 /// One item of the surface: its head (what it is, and its types) and its members (the cases of an enum, the fields of a
-/// record, the flags, the cases of a variant): members may be added at the end without breaking anyone.
+/// record, the flags, the cases of a variant): a type must match exactly where a guest meets the host, so any change to
+/// them is a break.
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct Item {
     head: String,
@@ -42,6 +44,8 @@ fn plain(head: String) -> Item {
 struct Surface {
     version: (u64, u64, u64),
     items: BTreeMap<String, Item>,
+    /// the interfaces the world exports: an extension provides them, so they cannot grow
+    exported: Vec<String>,
 }
 
 fn ty(r: &Resolve, t: &Type) -> String {
@@ -163,6 +167,7 @@ fn surface(src: &str) -> Result<Surface, String> {
     let v = name.version.as_ref().ok_or("the package has no version")?;
     let version = (v.major, v.minor, v.patch);
     let mut items = BTreeMap::new();
+    let mut exported = Vec::new();
     // the package's own name: renaming it breaks everyone
     items.insert(
         "package".to_string(),
@@ -197,6 +202,9 @@ fn surface(src: &str) -> Result<Surface, String> {
                 let at = format!("world {} {dir} {label}", w.name);
                 match item {
                     WorldItem::Interface { id, .. } => {
+                        if dir == "export" {
+                            exported.push(label.clone());
+                        }
                         items.insert(at.clone(), plain(String::new()));
                         // an inline interface has no page of its own: its functions and types belong to the world
                         let i = &r.interfaces[*id];
@@ -222,7 +230,11 @@ fn surface(src: &str) -> Result<Surface, String> {
             }
         }
     }
-    Ok(Surface { version, items })
+    Ok(Surface {
+        version,
+        items,
+        exported,
+    })
 }
 
 /// What the change between two surfaces is.
@@ -233,17 +245,21 @@ enum Change {
     Breaking,
 }
 
-/// How an item went from OLD to NEW: unchanged, grown at the end, or otherwise changed.
-fn grew(old: &Item, new: &Item) -> Option<bool> {
-    if old == new {
-        return Some(false);
+/// What adding KEY does. In the component model a type must match exactly where a guest and the host meet, so a case,
+/// field or flag added to an enum, record, flags or variant breaks every old guest. A function added to an interface the
+/// extension exports (`entry`), or an export added to the world, breaks it too: old guests do not provide it. A function
+/// added to an interface the host provides, a new interface, a new type, and a new import are additive.
+fn adding(new: &Surface, key: &str) -> Change {
+    if let Some(rest) = key.strip_prefix("function ")
+        && let Some((iface, _)) = rest.split_once('.')
+        && new.exported.iter().any(|e| e == iface)
+    {
+        return Change::Breaking;
     }
-    // an enum, record, flags or variant that keeps what it had and gains more at the end
-    let keeps = old.head == new.head
-        && !old.members.is_empty()
-        && new.members.len() > old.members.len()
-        && new.members.starts_with(&old.members);
-    keeps.then_some(true)
+    if key.starts_with("world ") && key.contains(" export ") {
+        return Change::Breaking;
+    }
+    Change::Additive
 }
 
 fn change(old: &Surface, new: &Surface) -> (Change, Vec<String>) {
@@ -252,15 +268,17 @@ fn change(old: &Surface, new: &Surface) -> (Change, Vec<String>) {
     for (k, v) in &old.items {
         match new.items.get(k) {
             None => breaking.push(format!("removed: {k}")),
-            Some(n) => match grew(v, n) {
-                Some(false) => {}
-                Some(true) => additive.push(format!("grew: {k}")),
-                None => breaking.push(format!("changed: {k}: `{v:?}` -> `{n:?}`")),
-            },
+            Some(n) if n != v => breaking.push(format!("changed: {k}: `{v:?}` -> `{n:?}`")),
+            Some(_) => {}
         }
     }
     for k in new.items.keys().filter(|k| !old.items.contains_key(*k)) {
-        additive.push(format!("added: {k}"));
+        match adding(new, k) {
+            Change::Breaking => {
+                breaking.push(format!("added (and breaking: guests provide it): {k}"));
+            }
+            _ => additive.push(format!("added: {k}")),
+        }
     }
     if !breaking.is_empty() {
         breaking.extend(additive);
@@ -439,29 +457,44 @@ mod tests {
     }
 
     #[test]
-    fn an_added_enum_case_or_record_field_is_additive_and_needs_a_bump() {
-        let old = "package acme:api@1.0.0;\ninterface i {\n  enum k { a, b }\n  record r { x: u8 }\n  f: func();\n}\nworld w { import i; }\n";
-        let enum_grown = old.replace("enum k { a, b }", "enum k { a, b, c }");
-        let record_grown = old.replace("record r { x: u8 }", "record r { x: u8, y: string }");
-        for grown in [&enum_grown, &record_grown] {
-            let same = grown.clone();
-            let e = check(old, &same).expect_err("a bump is needed");
-            assert!(e.contains("minor bump"), "{e}");
-            let bumped = grown.replace("@1.0.0", "@1.1.0");
-            check(old, &bumped).expect("a minor bump covers a case or a field added at the end");
-        }
-        // a case inserted before the others, a field's type changed, a record emptied: breaking
-        for broken in [
+    fn an_added_case_field_or_flag_breaks_old_guests() {
+        let old = "package acme:api@1.0.0;\ninterface i {\n  enum k { a, b }\n  record r { x: u8 }\n  flags fl { p }\n  variant v { one, two }\n  f: func();\n}\nworld w { import i; }\n";
+        for grown in [
+            old.replace("enum k { a, b }", "enum k { a, b, c }"),
+            old.replace("record r { x: u8 }", "record r { x: u8, y: string }"),
+            old.replace("flags fl { p }", "flags fl { p, q }"),
+            old.replace("variant v { one, two }", "variant v { one, two, three }"),
             old.replace("enum k { a, b }", "enum k { c, a, b }"),
-            old.replace("x: u8", "x: u16"),
-            old.replace("record r { x: u8 }", "record r { y: u8 }"),
         ] {
-            let bumped = broken.replace("@1.0.0", "@1.1.0");
-            assert!(
-                check(old, &bumped)
-                    .expect_err("a major bump is needed")
-                    .contains("major bump")
-            );
+            let e = check(old, &grown.replace("@1.0.0", "@1.1.0"))
+                .expect_err("a minor bump is not enough");
+            assert!(e.contains("major bump"), "{e}");
+            check(old, &grown.replace("@1.0.0", "@2.0.0")).expect("a major bump covers it");
+        }
+    }
+
+    #[test]
+    fn only_what_the_host_provides_can_grow_additively() {
+        let old = "package acme:api@1.0.0;\ninterface host { f: func(); }\ninterface entry { init: func(); }\nworld w { import host; export entry; }\n";
+        // a function added to the interface the host provides, a new interface, a new type: additive
+        for added in [
+            old.replace("f: func();", "f: func(); g: func();"),
+            old.replace("world w {", "interface more { h: func(); }\nworld w {"),
+            old.replace("f: func();", "enum e { a } f: func();"),
+            old.replace("import host;", "import host; import log: func(s: string);"),
+        ] {
+            let e = check(old, &added).expect_err("a bump is needed");
+            assert!(e.contains("minor bump"), "{e}");
+            check(old, &added.replace("@1.0.0", "@1.1.0")).expect("a minor bump covers it");
+        }
+        // a function added to the interface the extension exports, or an export added to the world: breaking
+        for added in [
+            old.replace("init: func();", "init: func(); more: func();"),
+            old.replace("export entry;", "export entry; export other: func();"),
+        ] {
+            let e = check(old, &added.replace("@1.0.0", "@1.1.0")).expect_err("old guests lack it");
+            assert!(e.contains("major bump"), "{e}");
+            check(old, &added.replace("@1.0.0", "@2.0.0")).expect("a major bump covers it");
         }
     }
 
@@ -481,8 +514,8 @@ mod tests {
             );
         }
         let added = old.replace("world w {", "world w { export i2: func();");
-        let e = check(old, &added).expect_err("an added world item needs a bump");
-        assert!(e.contains("minor bump"), "{e}");
+        let e = check(old, &added).expect_err("an added export breaks old guests");
+        assert!(e.contains("major bump"), "{e}");
         // an inline interface's function
         let inline =
             "package acme:api@1.0.0;\nworld w { import there: interface { g: func(); } }\n";
