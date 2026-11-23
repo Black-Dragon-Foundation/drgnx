@@ -110,3 +110,19 @@ fn read_file_never_follows_a_link_and_is_bounded() {
     fs::write(&bad, [0xff, 0xfe]).unwrap();
     assert!(matches!(eitri::read_string(&bad, 100), Err(FsError::Io(_))));
 }
+
+/// An eitri error is a villa error whose kind says what a caller does next, and keeps the eitri error as its source.
+#[test]
+fn an_fs_error_is_a_villa_error_with_a_kind() {
+    use villa::Kind;
+    let kind = |e: FsError| villa::Error::from(e).kind();
+    assert_eq!(kind(FsError::Link { path: "/x".into() }), Kind::Refused);
+    assert_eq!(kind(FsError::Escapes), Kind::Refused);
+    assert_eq!(kind(FsError::NotRegular), Kind::Invalid);
+    assert_eq!(kind(FsError::TooLarge { cap: 1 }), Kind::Invalid);
+    assert_eq!(kind(FsError::Unsupported("old kernel")), Kind::Unavailable);
+    let gone = std::io::Error::from(std::io::ErrorKind::NotFound);
+    assert_eq!(kind(FsError::Io(gone)), Kind::NotFound);
+    let e = villa::Error::from(FsError::TooLarge { cap: 7 });
+    assert!(format!("{e:?}").contains("TooLarge"), "{e:?}");
+}

@@ -9,6 +9,9 @@ publish = false
 links = "ghostty-vt"
 build = "build.rs"
 
+[dependencies]
+villa.workspace = true
+
 [features]
 # The engine. Off, the crate is empty and build.rs runs nothing: a target without a working Zig link (Android, until its
 # row passes) builds the consumers with default features off (docs/develop/terminal.md, "Building the engine")
@@ -19,3 +22,17 @@ no-simd = []
 
 [build-dependencies]
 sha2.workspace = true
+villa.workspace = true
+annall.workspace = true
+eitri.workspace = true
+draugr.workspace = true
+stig.workspace = true
+
+[dev-dependencies]
+draugr.workspace = true
+eitri.workspace = true
+stig.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

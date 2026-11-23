@@ -32,6 +32,8 @@ mal-gen = { clean = true }
 sattr = { clean = true }
 kvardi = { clean = true }
 mot = { clean = true }
+ghostty-vt-sys = { clean = true }
+skuld = { clean = true }
 minni = { clean = true }
 saga = { clean = true }
 forseti = { clean = true }

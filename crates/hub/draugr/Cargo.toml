@@ -11,6 +11,7 @@ publish = false
 eitri = { path = "../eitri", version = "0.1.0" }
 tokio.workspace = true
 libc.workspace = true
+saman.workspace = true  # `run`: a blocking caller's runtime
 stund = { path = "../stund", version = "0.1.0" }  # the grace and the probes wait on the installed clock
 hlaup = { path = "../hlaup", version = "0.1.0" }  # every spawn goes through its lock where unshare is refused (ETXTBSY)
 

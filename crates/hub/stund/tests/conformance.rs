@@ -59,7 +59,7 @@ fn a_blocking_sleep_ends_when_the_virtual_clock_moves() {
             stund::sleep_blocking(Duration::from_secs(60));
         });
         // not due until the clock moves, however long it has really waited
-        std::thread::sleep(Duration::from_millis(50));
+        stund::real::sleep_blocking(Duration::from_millis(50));
         assert!(!t.is_finished());
         clock.advance(Duration::from_secs(60));
         t.join().expect("the sleeper returns");
@@ -71,4 +71,44 @@ fn a_blocking_sleep_waits_for_real_with_no_clock() {
     let start = std::time::Instant::now();
     stund::sleep_blocking(Duration::from_millis(30));
     assert!(start.elapsed() >= Duration::from_millis(30));
+}
+
+/// `wall` is the system's time of day when no clock says otherwise, and a clock that does says it.
+#[test]
+fn the_time_of_day_is_the_systems_unless_a_clock_says_otherwise() {
+    let since_epoch = stund::wall().duration_since(std::time::UNIX_EPOCH).unwrap();
+    assert!(
+        since_epoch > Duration::from_secs(1_700_000_000),
+        "{since_epoch:?}"
+    );
+
+    struct Fixed;
+    impl stund::Provider for Fixed {
+        fn sleep(&self, _: Duration) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
+            Box::pin(std::future::pending())
+        }
+        fn now(&self) -> Duration {
+            Duration::ZERO
+        }
+        fn wall(&self) -> std::time::SystemTime {
+            std::time::UNIX_EPOCH + Duration::from_secs(1_000)
+        }
+    }
+    let _on = stund::on_this_thread(std::sync::Arc::new(Fixed));
+    assert_eq!(
+        stund::wall(),
+        std::time::UNIX_EPOCH + Duration::from_secs(1_000)
+    );
+}
+
+/// `real` is the system's monotonic clock whatever clock is installed: it moves with real time only.
+#[test]
+fn the_real_clock_ignores_the_installed_one() {
+    let clock = stund::Manual::default();
+    let _on = clock.on_this_thread();
+    let a = stund::real::instant();
+    clock.advance(Duration::from_secs(3600));
+    stund::real::sleep_blocking(Duration::from_millis(5));
+    let spent = a.elapsed();
+    assert!(spent >= Duration::from_millis(5) && spent < Duration::from_secs(60));
 }

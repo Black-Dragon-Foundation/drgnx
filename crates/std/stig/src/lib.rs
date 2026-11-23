@@ -124,6 +124,10 @@ pub fn reset_for_test() {
     *FOR_TEST.write().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
+/// The name of the variable a child process needs to find its own home (a toolchain, a compiler cache). It is passed
+/// through to the child by name and never read here: the editor's own directories come from the functions below.
+pub const HOME_VAR: &str = "HOME";
+
 pub fn profile() -> Profile {
     current().profile
 }

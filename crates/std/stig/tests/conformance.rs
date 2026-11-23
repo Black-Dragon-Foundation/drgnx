@@ -71,3 +71,9 @@ fn init_for_test_roots_every_dir() {
     }
     stig::reset_for_test();
 }
+
+/// `HOME_VAR` names the one variable a child gets to find its home; reading it is still stig's alone.
+#[test]
+fn the_home_variable_is_named_for_children() {
+    assert_eq!(stig::HOME_VAR, "HOME");
+}

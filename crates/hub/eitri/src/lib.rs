@@ -100,3 +100,21 @@ impl From<rustix::io::Errno> for FsError {
         FsError::Io(e.into())
     }
 }
+
+impl From<FsError> for villa::Error {
+    /// A link, an escape and an untrusted program are `refused`; a file that is not the kind wanted or is too large
+    /// is `invalid`; no way to open without links is `unavailable`; an io error is villa's own conversion of it.
+    /// The user's sentence names the file's trouble, the error underneath is the source.
+    fn from(e: FsError) -> villa::Error {
+        match e {
+            FsError::Io(e) => villa::Error::from(e),
+            FsError::Link { .. } | FsError::Escapes | FsError::Untrusted { .. } => {
+                villa::Error::refused(e.to_string()).with_source(e)
+            }
+            FsError::NotRegular | FsError::NotDir | FsError::TooLarge { .. } => {
+                villa::Error::invalid(e.to_string()).with_source(e)
+            }
+            FsError::Unsupported(_) => villa::Error::unavailable(e.to_string()).with_source(e),
+        }
+    }
+}

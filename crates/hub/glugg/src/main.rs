@@ -36,7 +36,7 @@ fn serve() -> Result<glugg::run::Exit, String> {
         .with_writer(std::io::stderr)
         .with_max_level(level)
         .init();
-    ghostty_vt_sys::ghostty_vt_check()?;
+    ghostty_vt_sys::ghostty_vt_check().map_err(|e| e.to_string())?;
 
     let mut args = std::env::args().skip(1);
     let mut opts = worker::Opts::default();

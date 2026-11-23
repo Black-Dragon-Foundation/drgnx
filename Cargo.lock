@@ -1546,6 +1546,7 @@ dependencies = [
  "eitri",
  "hlaup",
  "libc",
+ "saman",
  "skuld",
  "stund",
  "tempfile",
@@ -1604,6 +1605,7 @@ dependencies = [
  "proptest",
  "rustix",
  "tempfile",
+ "villa",
 ]
 
 [[package]]
@@ -2236,7 +2238,13 @@ dependencies = [
 name = "ghostty-vt-sys"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "draugr",
+ "eitri",
  "sha2 0.11.1",
+ "stig",
+ "tracing",
+ "villa",
 ]
 
 [[package]]
@@ -6827,8 +6835,14 @@ dependencies = [
 name = "skuld"
 version = "0.1.0"
 dependencies = [
+ "draugr",
+ "eitri",
  "proptest",
+ "saman",
+ "stig",
+ "stund",
  "tokio",
+ "villa",
 ]
 
 [[package]]
