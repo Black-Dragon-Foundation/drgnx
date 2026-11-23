@@ -10,6 +10,7 @@
 //! queued.
 
 use crate::Exit;
+use crate::agent_core::arm;
 use crate::conn::Outbox;
 use crate::coord::{self, Signals, ToolHub, Writer};
 use crate::dispatch::{self, Call, ErrorAnswerOrDrop, Refusals};
@@ -577,8 +578,10 @@ impl Front {
                 Ok(json!(true))
             }
             Params::BrowserCheck(_) => {
-                self.refresh_settings().await;
-                Ok(json!(crate::browser::check::run(self).await))
+                arm!({
+                    self.refresh_settings().await;
+                    Ok(json!(crate::browser::check::run(self).await))
+                })
             }
             Params::Restart(_) => {
                 restart = true;
@@ -736,48 +739,88 @@ impl Front {
             | Params::TermAttach(_)) => {
                 crate::term::methods::serve(&self.core.terms, s.conn, p).await
             }
-            Params::OrchEvidence(p) => crate::orch::evidence::list(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
+            Params::OrchEvidence(p) => {
+                arm!(
+                    crate::orch::evidence::list(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
             Params::ViewEnv(p) => crate::view::env(self, &caller, p).map(|b| json!(b)),
             Params::ViewResync(p) => crate::view::resync(self, &caller, p).map(|b| json!(b)),
             Params::ViewAck(p) => crate::view::ack(self, &caller, p).map(|b| json!(b)),
             Params::ViewGlyphs(p) => crate::view::glyphs(self, &caller, p).map(|b| json!(b)),
             Params::ViewMeasured(p) => crate::view::measured(self, &caller, p).map(|b| json!(b)),
             Params::ViewClose(p) => crate::view::close(self, &caller, p).map(|b| json!(b)),
-            Params::ViewWindow(p) => crate::view::window(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
+            Params::ViewWindow(p) => {
+                arm!(
+                    crate::view::window(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
             Params::BuffersSet(p) => crate::view::buffers::set(self, &caller, p).map(|b| json!(b)),
-            Params::OutlineSet(p) => crate::view::outline::set(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
-            Params::MinimapWatch(p) => crate::view::minimap::watch(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
-            Params::MinimapBucket(p) => crate::view::minimap::bucket(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
-            Params::FoldsSave(p) => crate::editor::anchors::save(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
-            Params::FoldsLoad(p) => crate::editor::anchors::load(self, &caller, p)
-                .await
-                .map(|r| json!(r)),
-            Params::OutlineScopes(p) => crate::view::outline::scopes(self, p)
-                .await
-                .map(|r| json!(r)),
+            Params::OutlineSet(p) => {
+                arm!(
+                    crate::view::outline::set(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
+            Params::MinimapWatch(p) => {
+                arm!(
+                    crate::view::minimap::watch(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
+            Params::MinimapBucket(p) => {
+                arm!(
+                    crate::view::minimap::bucket(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
+            Params::FoldsSave(p) => {
+                arm!(
+                    crate::editor::anchors::save(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
+            Params::FoldsLoad(p) => {
+                arm!(
+                    crate::editor::anchors::load(self, &caller, p)
+                        .await
+                        .map(|r| json!(r))
+                )
+            }
+            Params::OutlineScopes(p) => {
+                arm!(
+                    crate::view::outline::scopes(self, p)
+                        .await
+                        .map(|r| json!(r))
+                )
+            }
             Params::AgentsPanelLook(p) => {
                 crate::view::panel::look(self, &caller, p).map(|b| json!(b))
             }
             Params::GitLetters(p) => crate::view::git::letters(self, &caller, p).map(|b| json!(b)),
             // the Budgets page: the meters and the scope tree (view::budgets)
-            Params::BudgetsPageSubscribe(p) => crate::view::budgets::subscribe(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
-            Params::BudgetsPageSet(p) => crate::view::budgets::set(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
+            Params::BudgetsPageSubscribe(p) => {
+                arm!(
+                    crate::view::budgets::subscribe(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
+            Params::BudgetsPageSet(p) => {
+                arm!(
+                    crate::view::budgets::set(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
             Params::BudgetsPageClose(p) => {
                 crate::view::budgets::close(self, &caller, p).map(|b| json!(b))
             }
@@ -792,36 +835,56 @@ impl Front {
                 crate::view::agents_side::close(self, &caller, p).map(|b| json!(b))
             }
             // the Changes view: what the agents changed, by task (view::changes)
-            Params::ChangesSubscribe(p) => crate::view::changes::subscribe(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
-            Params::ChangesSet(p) => crate::view::changes::set(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
+            Params::ChangesSubscribe(p) => {
+                arm!(
+                    crate::view::changes::subscribe(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
+            Params::ChangesSet(p) => {
+                arm!(
+                    crate::view::changes::set(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
             Params::ChangesClose(p) => {
                 crate::view::changes::close(self, &caller, p).map(|b| json!(b))
             }
             // the comment threads of a record (view::doc_comments)
             Params::DocCommentsSubscribe(p) => {
-                crate::view::doc_comments::subscribe(self, &caller, p)
-                    .await
-                    .map(|b| json!(b))
+                arm!(
+                    crate::view::doc_comments::subscribe(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
             }
-            Params::DocCommentsSet(p) => crate::view::doc_comments::set(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
+            Params::DocCommentsSet(p) => {
+                arm!(
+                    crate::view::doc_comments::set(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
             Params::DocCommentsClose(p) => {
                 crate::view::doc_comments::close(self, &caller, p).map(|b| json!(b))
             }
             // the review screen: one change, its effects and reasons (view::review_screen)
             Params::ReviewScreenSubscribe(p) => {
-                crate::view::review_screen::subscribe(self, &caller, p)
-                    .await
-                    .map(|b| json!(b))
+                arm!(
+                    crate::view::review_screen::subscribe(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
             }
-            Params::ReviewScreenSet(p) => crate::view::review_screen::set(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
+            Params::ReviewScreenSet(p) => {
+                arm!(
+                    crate::view::review_screen::set(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
             Params::ReviewScreenClose(p) => {
                 crate::view::review_screen::close(self, &caller, p).map(|b| json!(b))
             }
@@ -831,26 +894,46 @@ impl Front {
             }
             Params::ScmSet(p) => crate::view::scm::set(self, &caller, p).map(|b| json!(b)),
             Params::ScmClose(p) => crate::view::scm::close(self, &caller, p).map(|b| json!(b)),
-            Params::GitStage(p) => crate::view::scm::stage(self, p).await.map(|b| json!(b)),
-            Params::GitUnstage(p) => crate::view::scm::unstage(self, p).await.map(|b| json!(b)),
-            Params::GitDiscard(p) => crate::view::scm::discard(self, p).await.map(|b| json!(b)),
-            Params::GitCommit(p) => crate::view::scm::commit(self, p).await.map(|r| json!(r)),
-            Params::GitUndoCommit(p) => crate::view::scm::undo_commit(self, p)
-                .await
-                .map(|b| json!(b)),
+            Params::GitStage(p) => arm!(crate::view::scm::stage(self, p).await.map(|b| json!(b))),
+            Params::GitUnstage(p) => {
+                arm!(crate::view::scm::unstage(self, p).await.map(|b| json!(b)))
+            }
+            Params::GitDiscard(p) => {
+                arm!(crate::view::scm::discard(self, p).await.map(|b| json!(b)))
+            }
+            Params::GitCommit(p) => arm!(crate::view::scm::commit(self, p).await.map(|r| json!(r))),
+            Params::GitUndoCommit(p) => {
+                arm!(
+                    crate::view::scm::undo_commit(self, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
             Params::GitRemote(p) => crate::view::scm::remote(self, &caller, p).map(|r| json!(r)),
             Params::GitRemoteStop(p) => crate::view::scm::remote_stop(self, p).map(|b| json!(b)),
-            Params::GitBranches(p) => crate::view::scm::branches(p).await.map(|r| json!(r)),
-            Params::GitCheckout(p) => crate::view::scm::checkout(self, p).await.map(|b| json!(b)),
-            Params::GitStash(p) => crate::view::scm::stash(self, p).await.map(|b| json!(b)),
-            Params::GitDeleteBranch(p) => crate::view::scm::delete_branch(self, p)
-                .await
-                .map(|b| json!(b)),
+            Params::GitBranches(p) => {
+                arm!(crate::view::scm::branches(p).await.map(|r| json!(r)))
+            }
+            Params::GitCheckout(p) => {
+                arm!(crate::view::scm::checkout(self, p).await.map(|b| json!(b)))
+            }
+            Params::GitStash(p) => arm!(crate::view::scm::stash(self, p).await.map(|b| json!(b))),
+            Params::GitDeleteBranch(p) => {
+                arm!(
+                    crate::view::scm::delete_branch(self, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
             // the Search view's search streaming rows to it (`search/run`, `search/grep-*`)
             Params::SearchRun(p) => crate::view::search::run(self, &caller, p).map(|r| json!(r)),
-            Params::SearchBuffer(p) => crate::view::search::buffer(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
+            Params::SearchBuffer(p) => {
+                arm!(
+                    crate::view::search::buffer(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
             Params::SearchFiles(p) => crate::view::files::start(self, &caller, p).map(|r| json!(r)),
             Params::SearchGrepReplace(p) => {
                 crate::view::search::replace(self, &caller, p).map(|b| json!(b))
@@ -858,36 +941,60 @@ impl Front {
             Params::SearchGrepLook(p) => {
                 crate::view::search::look(self, &caller, p).map(|b| json!(b))
             }
-            Params::SearchGroup(p) => crate::view::search::group(self, &caller, p)
-                .await
-                .map(|b| json!(b)),
+            Params::SearchGroup(p) => {
+                arm!(
+                    crate::view::search::group(self, &caller, p)
+                        .await
+                        .map(|b| json!(b))
+                )
+            }
             Params::SearchFold(p) => crate::view::search::fold(self, &caller, p).map(|b| json!(b)),
             Params::SearchGrepSkipped(p) => {
                 crate::view::search::skipped(self, &caller, p).map(|b| json!(b))
             }
             // the Search view's writes: edit sets, change sets, their apply and undo
-            Params::SearchEdits(p) => crate::view::search::edits(self, &caller, p)
-                .await
-                .map(|r| json!(r)),
-            Params::SearchEditDoc(p) => crate::view::search::edit_doc(self, &caller, p)
-                .await
-                .map(|r| json!(r)),
+            Params::SearchEdits(p) => {
+                arm!(
+                    crate::view::search::edits(self, &caller, p)
+                        .await
+                        .map(|r| json!(r))
+                )
+            }
+            Params::SearchEditDoc(p) => {
+                arm!(
+                    crate::view::search::edit_doc(self, &caller, p)
+                        .await
+                        .map(|r| json!(r))
+                )
+            }
             // Ask an Agent: the brief, the session it goes to, and how far it is
-            Params::SearchHandoff(p) => crate::view::search::handoff(self, &caller, p)
-                .await
-                .map(|r| json!(r)),
+            Params::SearchHandoff(p) => {
+                arm!(
+                    crate::view::search::handoff(self, &caller, p)
+                        .await
+                        .map(|r| json!(r))
+                )
+            }
             Params::SearchHandoffContext(p) => {
                 crate::view::search::handoff_context(self, &caller, p).map(|r| json!(r))
             }
             Params::SearchHandoffMark(p) => {
                 crate::view::search::handoff_mark(self, &caller, p).map(|b| json!(b))
             }
-            Params::SearchHandoffState(p) => crate::view::search::handoff_state(self, &caller, p)
-                .await
-                .map(|r| json!(r)),
-            Params::SearchPreview(p) => crate::view::search::preview(self, &caller, p)
-                .await
-                .map(|r| json!(r)),
+            Params::SearchHandoffState(p) => {
+                arm!(
+                    crate::view::search::handoff_state(self, &caller, p)
+                        .await
+                        .map(|r| json!(r))
+                )
+            }
+            Params::SearchPreview(p) => {
+                arm!(
+                    crate::view::search::preview(self, &caller, p)
+                        .await
+                        .map(|r| json!(r))
+                )
+            }
             Params::SearchApply(p) => {
                 crate::view::search::apply_change(self, &caller, p).map(|b| json!(b))
             }
@@ -1057,9 +1164,11 @@ impl Front {
             | Params::WorkFlowSubscribe(_)
             | Params::WorkFiles(_)
             | Params::WorkHunks(_)
-            | Params::WorkFileAt(_)) => crate::agent_core::serve(self, &caller, p)
-                .await
-                .unwrap_or_else(|_| unserved(method)),
+            | Params::WorkFileAt(_)) => arm!(
+                crate::agent_core::serve(self, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            ),
             // Hrafn's (`search/*`)
             p @ (Params::SearchQuery(_)
             | Params::SearchStatus(_)
@@ -1081,9 +1190,11 @@ impl Front {
             | Params::SearchScopeBases(_)
             | Params::SearchExport(_)
             | Params::SearchImport(_)
-            | Params::SearchTyping(_)) => crate::search::methods::serve(self, &caller, p)
-                .await
-                .unwrap_or_else(|_| unserved(method)),
+            | Params::SearchTyping(_)) => arm!(
+                crate::search::methods::serve(self, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            ),
             // debugging (`debug/*`)
             p @ (Params::DebugConfigs(_)
             | Params::DebugStart(_)
@@ -1099,9 +1210,11 @@ impl Front {
             | Params::DebugReadMemory(_)
             | Params::DebugWriteMemory(_)
             | Params::DebugBreakpoints(_)
-            | Params::DebugRunToCursor(_)) => crate::debug::wire::serve(self, &caller, p)
-                .await
-                .unwrap_or_else(|_| unserved(method)),
+            | Params::DebugRunToCursor(_)) => arm!(
+                crate::debug::wire::serve(self, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            ),
             // the Run and Debug view (`debug/view`, `debug/expand`, `debug/watch`, `debug/set-value`, `debug/evaluate`)
             p @ (Params::DebugView(_)
             | Params::DebugExpand(_)
@@ -1109,14 +1222,16 @@ impl Front {
             | Params::DebugSetValue(_)
             | Params::DebugDataBreakpoint(_)
             | Params::DebugEvaluate(_)
-            | Params::DebugChildren(_)) => crate::view::debug::serve(self, &caller, p)
-                .await
-                .unwrap_or_else(|_| unserved(method)),
+            | Params::DebugChildren(_)) => arm!(
+                crate::view::debug::serve(self, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            ),
             // what-if forks (`debug/fork*`, `debug/compare`)
             p @ (Params::DebugFork(_)
             | Params::DebugForkRun(_)
             | Params::DebugForkDrop(_)
-            | Params::DebugCompare(_)) => crate::debug::fork_wire::serve(self, p).await,
+            | Params::DebugCompare(_)) => arm!(crate::debug::fork_wire::serve(self, p).await),
             // recorded runs and probes (`debug/run*`, `debug/probe/op`)
             p @ (Params::DebugProbeOp(_)
             | Params::DebugRunsList(_)
@@ -1124,20 +1239,26 @@ impl Front {
             | Params::DebugRunStop(_)
             | Params::DebugRunPin(_)
             | Params::DebugRunExport(_)
-            | Params::DebugRunImport(_)) => crate::debug::runs_wire::serve(self, &caller, p)
-                .await
-                .unwrap_or_else(|_| unserved(method)),
+            | Params::DebugRunImport(_)) => arm!(
+                crate::debug::runs_wire::serve(self, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            ),
             // bisect over the edit history (`debug/bisect*`)
             p @ (Params::DebugBisect(_)
             | Params::DebugBisectCancel(_)
             | Params::DebugBisectNarrow(_)
-            | Params::DebugBisectStates(_)) => crate::debug::bisect_wire::serve(self, &caller, p)
-                .await
-                .unwrap_or_else(|_| unserved(method)),
+            | Params::DebugBisectStates(_)) => arm!(
+                crate::debug::bisect_wire::serve(self, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            ),
             // where a value came from (`debug/origin`)
-            p @ Params::DebugOrigin(_) => crate::debug::origin_wire::serve(self, &caller, p)
-                .await
-                .unwrap_or_else(|_| unserved(method)),
+            p @ Params::DebugOrigin(_) => arm!(
+                crate::debug::origin_wire::serve(self, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            ),
             // the Jupyter notebooks (`notebook/*`)
             p @ (Params::NotebookOpen(_)
             | Params::NotebookSync(_)
@@ -1155,14 +1276,18 @@ impl Front {
             | Params::NotebookLog(_)
             | Params::NotebookFocus(_)
             | Params::NotebookClear(_)
-            | Params::NotebookClose(_)) => crate::notebook::rpc::serve(self, &caller, p)
-                .await
-                .unwrap_or_else(|_| unserved(method)),
-            // the heap graph (`debug/heap`, `debug/heap/close`)
-            p @ (Params::DebugHeap(_) | Params::DebugHeapClose(_)) => {
-                crate::debug::heap_wire::serve(self, &caller, p)
+            | Params::NotebookClose(_)) => arm!(
+                crate::notebook::rpc::serve(self, &caller, p)
                     .await
                     .unwrap_or_else(|_| unserved(method))
+            ),
+            // the heap graph (`debug/heap`, `debug/heap/close`)
+            p @ (Params::DebugHeap(_) | Params::DebugHeapClose(_)) => {
+                arm!(
+                    crate::debug::heap_wire::serve(self, &caller, p)
+                        .await
+                        .unwrap_or_else(|_| unserved(method))
+                )
             }
             // the Extensions view's catalog (`extensions/*`)
             p @ (Params::ExtensionsSearch(_)
@@ -1171,9 +1296,11 @@ impl Front {
             | Params::ExtensionsList(_)
             | Params::ExtensionsModules(_)
             | Params::ExtensionsRecommended(_)) => {
-                crate::extensions::methods::serve(self, &caller, p)
-                    .await
-                    .unwrap_or_else(|_| unserved(method))
+                arm!(
+                    crate::extensions::methods::serve(self, &caller, p)
+                        .await
+                        .unwrap_or_else(|_| unserved(method))
+                )
             }
             // the graph store's (`graph/*`, `tasks/*`); a settled card too (an access card becomes a grant)
             p @ (Params::GraphPutParsed(_)
@@ -1199,9 +1326,11 @@ impl Front {
             | Params::TasksReady(_)
             | Params::TasksFind(_)
             | Params::TasksWrite(_)) => {
-                crate::graph::serve(&self.writer, &self.tools, self.dirs.get(), &caller, p)
-                    .await
-                    .unwrap_or_else(|_| unserved(method))
+                arm!(
+                    crate::graph::serve(&self.writer, &self.tools, self.dirs.get(), &caller, p)
+                        .await
+                        .unwrap_or_else(|_| unserved(method))
+                )
             }
             // the coordination writes
             p @ (Params::MessagesSend(_)
@@ -1217,9 +1346,11 @@ impl Front {
             | Params::CoordCardCreate(_)
             | Params::CoordCardSet(_)
             | Params::CoordHeld(_)
-            | Params::CoordPrune(_)) => coord::serve(&self.writer, &caller, p)
-                .await
-                .unwrap_or_else(|_| unserved(method)),
+            | Params::CoordPrune(_)) => arm!(
+                coord::serve(&self.writer, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            ),
         };
         if let (Some(card), Ok(_)) = (settled, &result) {
             self.core.agents.card_settled(card).await;
@@ -1538,6 +1669,57 @@ mod tests {
         for name in ["ping", "agents/list", "graph/backup", "coord/prune"] {
             assert!(tried.contains(&name), "{name} not tried: {tried:?}");
         }
+    }
+
+    /// The stack the guard below serves every method on.  A hub's tokio workers have 2 MiB, and a debug build gives
+    /// each `.await` in a dispatcher's `match` a stack slot of its own (the slots do not overlap): the agent core's
+    /// router once had 700 KB of frame, and a request nested under the connection's task overflowed the worker.  A
+    /// dispatcher that builds its arms' futures in its own frame again outgrows this stack and fails here, not in a
+    /// user's hub.
+    const DISPATCH_STACK: usize = 512 * 1024;
+
+    /// Every method with empty params is served by the front on a thread with a deliberately small stack
+    /// ([`DISPATCH_STACK`]): each dispatcher on the way (the front's, the agent core's, the search, debug, graph and
+    /// coordination servers) runs with its whole frame on it.
+    #[test]
+    fn every_method_is_served_within_a_small_stack() {
+        std::thread::Builder::new()
+            .name("small-stack".into())
+            .stack_size(DISPATCH_STACK)
+            .spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(async {
+                    let dir = tempfile::tempdir().unwrap();
+                    let f = front(dir.path());
+                    let mut s = Session::new(f.next_conn(), Socket::Main);
+                    s.class = Class::User;
+                    let out = Arc::new(Outbox::new(s.conn));
+                    let mut tried = Vec::new();
+                    for m in registry::registry() {
+                        if ["shutdown", "restart"].contains(&m.name)
+                            || (m.decode)(&json!({})).is_err()
+                        {
+                            continue;
+                        }
+                        tried.push(m.name);
+                        let line = json!({"id": 1, "method": m.name, "params": {}}).to_string();
+                        tokio::time::timeout(Duration::from_secs(10), f.line(&mut s, &out, &line))
+                            .await
+                            .unwrap_or_else(|_| panic!("{} was not answered within 10 s", m.name));
+                        let _ = answers(&out);
+                    }
+                    // the dispatchers on the way: the front's, the agent core's, the store's, the coordination writes
+                    for name in ["ping", "agents/list", "graph/backup", "coord/prune"] {
+                        assert!(tried.contains(&name), "{name} not tried: {tried:?}");
+                    }
+                });
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

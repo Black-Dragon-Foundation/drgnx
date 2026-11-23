@@ -95,6 +95,30 @@ fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
     r.map(|v| json!(v))
 }
 
+pub(crate) type Served<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>>;
+
+/// The future MK makes, on the heap.  Never inlined: the arm's future (10 KB and more) is built in this frame, which is
+/// gone before the arm is awaited.  Built in [`serve`]'s own frame, a debug build gives every arm's future a stack
+/// slot of its own (the slots do not overlap), 700 KB for the match: a hub with a request on a 2 MB worker stack
+/// (every request under `--test-sequencer`, which serves it inside the connection's own task) overflowed it.
+#[inline(never)]
+pub(crate) fn boxed<'a, F, Fut>(mk: F) -> Served<'a>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<Value, Error>> + Send + 'a,
+{
+    Box::pin(mk())
+}
+
+/// An arm that awaits: its future is made in [`boxed`], not in [`serve`]'s frame.
+macro_rules! arm {
+    ($e:expr) => {
+        $crate::agent_core::boxed(move || async move { $e }).await
+    };
+}
+pub(crate) use arm;
+
 /// P served by the agent core, or handed back (not one of its methods).
 pub async fn serve(
     front: &Front,
@@ -107,19 +131,19 @@ pub async fn serve(
     };
     let (f, c) = (front, caller);
     Ok(match p {
-        Params::AgentsList(p) => answer(agents::session::list(f, c, p).await),
-        Params::AgentsStart(p) => answer(agents::session::start(f, c, p).await),
-        Params::AgentsGet(p) => answer(agents::session::get(f, c, p).await),
-        Params::AgentsSend(p) => answer(agents::session::send(f, c, p).await),
-        Params::AgentsStop(p) => answer(agents::session::stop(f, c, p).await),
-        Params::AgentsKill(p) => answer(agents::session::kill(f, c, p).await),
-        Params::AgentsPermission(p) => answer(agents::session::permission(f, c, p).await),
-        Params::AgentsDo(p) => answer(agents::session::do_op(f, c, p).await),
-        Params::AgentsMove(p) => answer(agents::session::move_to(f, c, p).await),
-        Params::AgentsProbe(p) => answer(agents::probe::probe(f, c, p).await),
-        Params::MessagesRetract(p) => answer(agents::deliver::retract(f, c, p).await),
-        Params::AgentsRole(p) => answer(manager::role(f, c, p).await),
-        Params::AgentsSlice(p) => answer(manager::slice(f, c, p).await),
+        Params::AgentsList(p) => arm!(answer(agents::session::list(f, c, p).await)),
+        Params::AgentsStart(p) => arm!(answer(agents::session::start(f, c, p).await)),
+        Params::AgentsGet(p) => arm!(answer(agents::session::get(f, c, p).await)),
+        Params::AgentsSend(p) => arm!(answer(agents::session::send(f, c, p).await)),
+        Params::AgentsStop(p) => arm!(answer(agents::session::stop(f, c, p).await)),
+        Params::AgentsKill(p) => arm!(answer(agents::session::kill(f, c, p).await)),
+        Params::AgentsPermission(p) => arm!(answer(agents::session::permission(f, c, p).await)),
+        Params::AgentsDo(p) => arm!(answer(agents::session::do_op(f, c, p).await)),
+        Params::AgentsMove(p) => arm!(answer(agents::session::move_to(f, c, p).await)),
+        Params::AgentsProbe(p) => arm!(answer(agents::probe::probe(f, c, p).await)),
+        Params::MessagesRetract(p) => arm!(answer(agents::deliver::retract(f, c, p).await)),
+        Params::AgentsRole(p) => arm!(answer(manager::role(f, c, p).await)),
+        Params::AgentsSlice(p) => arm!(answer(manager::slice(f, c, p).await)),
         Params::AgentsEntriesSubscribe(p) => answer(agents::session::entries_subscribe(f, c, p)),
         Params::AgentsEntriesUnsubscribe(p) => {
             answer(agents::session::entries_unsubscribe(f, c, p))
@@ -128,153 +152,187 @@ pub async fn serve(
         Params::AgentsToolOutput(p) => answer(agents::session::tool_output(f, c, p)),
         Params::AgentsPause(p) => answer(agents::session::pause(f, c, p)),
         Params::AgentsBackgroundCancel(p) => {
-            answer(agents::session::panel::background_cancel(f, c, p).await)
+            arm!(answer(
+                agents::session::panel::background_cancel(f, c, p).await
+            ))
         }
         Params::AgentsBackgroundOutput(p) => {
             answer(agents::session::panel::background_output(f, c, p))
         }
-        Params::AgentsContextDrop(p) => answer(agents::session::panel::context_drop(f, c, p).await),
-        Params::AgentsContextPin(p) => answer(agents::session::panel::context_pin(f, c, p).await),
-        Params::AgentsConfig(p) => answer(agents::session::panel::config(f, c, p).await),
-        Params::AgentsExplain(p) => answer(agents::session::panel::explain(f, c, p).await),
-        Params::AgentsCompactPreview(p) => {
-            answer(agents::session::panel::compact_preview(f, c, p).await)
+        Params::AgentsContextDrop(p) => {
+            arm!(answer(agents::session::panel::context_drop(f, c, p).await))
         }
-        Params::AgentsHuddleStart(p) => answer(crate::runner::huddle::start(f, c, p).await),
-        Params::AgentsHuddleGet(p) => answer(crate::runner::huddle::get(f, c, p).await),
+        Params::AgentsContextPin(p) => {
+            arm!(answer(agents::session::panel::context_pin(f, c, p).await))
+        }
+        Params::AgentsConfig(p) => arm!(answer(agents::session::panel::config(f, c, p).await)),
+        Params::AgentsExplain(p) => arm!(answer(agents::session::panel::explain(f, c, p).await)),
+        Params::AgentsCompactPreview(p) => {
+            arm!(answer(
+                agents::session::panel::compact_preview(f, c, p).await
+            ))
+        }
+        Params::AgentsHuddleStart(p) => arm!(answer(crate::runner::huddle::start(f, c, p).await)),
+        Params::AgentsHuddleGet(p) => arm!(answer(crate::runner::huddle::get(f, c, p).await)),
         Params::AgentsGrants(p) => answer(f.core.agents.grants(c, p.id.as_str())),
         Params::AgentsGrantsRevoke(p) => {
-            answer(f.core.agents.revoke_grant(c, p.id.as_str(), &p.grant).await)
+            arm!(answer(
+                f.core.agents.revoke_grant(c, p.id.as_str(), &p.grant).await
+            ))
         }
         Params::AgentsWheelTake(p) => answer(agents::session::wheel_take(f, c, p)),
-        Params::AgentsWheelGive(p) => answer(agents::session::wheel_give(f, c, p).await),
+        Params::AgentsWheelGive(p) => arm!(answer(agents::session::wheel_give(f, c, p).await)),
         Params::AgentsWheelSaved(p) => answer(agents::session::wheel_saved(f, c, p)),
-        Params::AgentsPair(p) => answer(agents::session::pair(f, c, p).await),
+        Params::AgentsPair(p) => arm!(answer(agents::session::pair(f, c, p).await)),
         Params::AgentsFollow(p) => answer(crate::editor::follow(f, c, p)),
         Params::AgentsUnfollow(p) => answer(crate::editor::unfollow(f, c, p)),
-        Params::ExecStart(p) => answer(exec::start(f, c, p).await),
-        Params::ExecGet(p) => answer(exec::get(f, c, p).await),
-        Params::ExecList(p) => answer(exec::list(f, c, p).await),
-        Params::ExecStop(p) => answer(exec::stop(f, c, p).await),
-        Params::ExecLog(p) => answer(exec::log(f, c, p).await),
-        Params::ExecBump(p) => answer(exec::bump(f, c, p).await),
-        Params::JobPropose(p) => answer(runner::propose(f, c, p).await),
-        Params::JobStartTask(p) => answer(runner::start_task(f, c, p).await),
-        Params::JobApprove(p) => answer(runner::approve(f, c, p).await),
-        Params::JobOrder(p) => answer(runner::order(f, c, p).await),
-        Params::JobBlock(p) => answer(runner::block(f, c, p).await),
-        Params::JobUnblock(p) => answer(runner::unblock(f, c, p).await),
-        Params::JobStop(p) => answer(runner::stop(f, c, p).await),
-        Params::JobStatus(p) => answer(runner::status(f, c, p).await),
-        Params::JobCard(p) => answer(runner::card(f, c, p).await),
-        Params::JobReply(p) => answer(runner::reply(f, c, p).await),
-        Params::JobDismiss(p) => answer(runner::dismiss(f, c, p).await),
-        Params::JobReassign(p) => answer(runner::reassign(f, c, p).await),
-        Params::JobResume(p) => answer(runner::resume(f, c, p).await),
-        Params::MatrixGet(p) => answer(matrix_gate::get(f, c, p).await),
-        Params::MatrixCheck(p) => answer(matrix_gate::check_method(f, c, p).await),
-        Params::PresenceSet(p) => answer(matrix_gate::presence(f, c, p).await),
-        Params::PlansGet(p) => answer(runner::effects::plans_get(f, c, p).await),
-        Params::PlansWrite(p) => answer(runner::effects::plans_write(f, c, p).await),
-        Params::ReportsGet(p) => answer(runner::effects::reports_get(f, c, p).await),
-        Params::DecisionsEffects(p) => answer(runner::effects::decision_effects(f, c, p).await),
-        Params::BriefBuild(p) => answer(brief::build_method(f, c, p).await),
-        Params::BriefSet(p) => answer(brief::set(f, c, p).await),
-        Params::TimelineGet(p) => answer(timeline::get(f, c, p).await),
-        Params::BudgetGet(p) => answer(budget::get(f, c, p).await),
-        Params::BudgetTreePage(p) => answer(budget::tree(f, c, p).await),
-        Params::BudgetSet(p) => answer(budget::set(f, c, p).await),
-        Params::BudgetRaise(p) => answer(budget::raise(f, c, p).await),
-        Params::PaceGet(p) => answer(budget::pace(f, c, p).await),
-        Params::ForecastGet(p) => answer(forecast::get(f, c, p).await),
-        Params::ForecastPlan(p) => answer(forecast::plan(f, p).await),
-        Params::ForecastStart(p) => answer(forecast::start(f, c, p).await),
-        Params::ForecastSession(p) => answer(forecast::session(f, p).await),
-        Params::ForecastAccuracy(p) => answer(forecast::accuracy(f, p).await),
-        Params::SayStart(p) => answer(say::start(f, c, p).await),
-        Params::SayRevise(p) => answer(say::revise(f, c, p).await),
-        Params::SayEnd(p) => answer(say::end(f, c, p).await),
-        Params::RecordsImport(p) => answer(records::import(f, c, p).await),
-        Params::PastSubscribe(p) => answer(crate::agents::past::subscribe(f, c, p).await),
-        Params::PastSearch(p) => answer(crate::agents::past::search(f, c, p).await),
-        Params::PastOpen(p) => answer(crate::agents::past::open(f, c, p).await),
-        Params::PastResume(p) => answer(crate::agents::past::resume(f, c, p).await),
-        Params::PastStatus(p) => answer(crate::agents::past::status(f, c, p).await),
-        Params::PastRescan(p) => answer(crate::agents::past::rescan(f, c, p).await),
-        Params::RecordsStatus(p) => answer(records::status(f, c, p).await),
-        Params::RecordsConflict(p) => answer(records::conflict(f, c, p).await),
-        Params::RecordsResolve(p) => answer(records::resolve(f, c, p).await),
-        Params::RecordsWrite(p) => answer(records::write::records_write(f, c, p).await),
-        Params::RecordsRead(p) => answer(records::read::records_read(f, c, p).await),
-        Params::OutsideBind(p) => answer(crate::outside::bind(f, c, p).await),
-        Params::OutsideUnbind(p) => answer(crate::outside::unbind(f, c, p).await),
-        Params::OutsideBindings(p) => answer(crate::outside::list(f, c, p).await),
-        Params::MachinesReport(p) => answer(work::machines::report(f, c, p).await),
-        Params::MachinesMove(p) => answer(work::machines::move_to(f, c, p).await),
-        Params::CommentsAdd(p) => answer(work::comments::add(f, c, p).await),
-        Params::CommentsReply(p) => answer(work::comments::reply(f, c, p).await),
-        Params::CommentsList(p) => answer(work::comments::list(f, c, p).await),
-        Params::CommentsResolve(p) => answer(work::comments::resolve(f, c, p).await),
-        Params::MachinesList(p) => answer(work::machines::list(f, c, p).await),
-        Params::RunnersList(p) => answer(runners::methods::list(f, c, p).await),
-        Params::RunnersProbeHost(p) => answer(runners::methods::probe_host(f, c, p).await),
-        Params::RunnersAdd(p) => answer(runners::methods::add(f, c, p).await),
-        Params::RunnersCheck(p) => answer(runners::methods::check(f, c, p).await),
-        Params::RunnersBench(p) => answer(runners::methods::bench(f, c, p).await),
-        Params::RunnersSet(p) => answer(runners::methods::set(f, c, p).await),
-        Params::HistoryRegister(p) => answer(crate::history::wire::register(f, c, p).await),
-        Params::HistoryBatch(p) => answer(crate::history::wire::batch(f, c, p).await),
-        Params::HistoryResync(p) => answer(crate::history::wire::resync(f, c, p).await),
-        Params::HistoryUnregister(p) => answer(crate::history::wire::unregister(f, c, p).await),
-        Params::HistoryRevertPreview(p) => answer(crate::history::revert::preview(f, c, p).await),
-        Params::HistoryRevertApply(p) => answer(crate::history::revert::apply(f, c, p).await),
-        Params::HistoryFork(p) => answer(crate::history::branches::fork(f, c, p).await),
-        Params::HistoryForkDrop(p) => answer(crate::history::branches::drop_fork(f, c, p).await),
-        Params::HistoryCompare(p) => answer(crate::history::branches::compare(f, c, p).await),
-        Params::HistoryBlame(p) => answer(crate::history::views::blame(f, c, p).await),
-        Params::HistoryHunks(p) => answer(crate::history::views::hunks(f, c, p).await),
-        Params::GitBlame(p) => answer(crate::history::views::git_blame(f, c, p).await),
-        Params::GitBlameLine(p) => answer(crate::history::views::git_blame_line(f, c, p).await),
-        Params::HistoryEolFit(p) => answer(crate::history::views::eol_fit(f, c, p).await),
-        Params::HistoryLinePositions(p) => {
-            answer(crate::history::views::line_positions(f, c, p).await)
+        Params::ExecStart(p) => arm!(answer(exec::start(f, c, p).await)),
+        Params::ExecGet(p) => arm!(answer(exec::get(f, c, p).await)),
+        Params::ExecList(p) => arm!(answer(exec::list(f, c, p).await)),
+        Params::ExecStop(p) => arm!(answer(exec::stop(f, c, p).await)),
+        Params::ExecLog(p) => arm!(answer(exec::log(f, c, p).await)),
+        Params::ExecBump(p) => arm!(answer(exec::bump(f, c, p).await)),
+        Params::JobPropose(p) => arm!(answer(runner::propose(f, c, p).await)),
+        Params::JobStartTask(p) => arm!(answer(runner::start_task(f, c, p).await)),
+        Params::JobApprove(p) => arm!(answer(runner::approve(f, c, p).await)),
+        Params::JobOrder(p) => arm!(answer(runner::order(f, c, p).await)),
+        Params::JobBlock(p) => arm!(answer(runner::block(f, c, p).await)),
+        Params::JobUnblock(p) => arm!(answer(runner::unblock(f, c, p).await)),
+        Params::JobStop(p) => arm!(answer(runner::stop(f, c, p).await)),
+        Params::JobStatus(p) => arm!(answer(runner::status(f, c, p).await)),
+        Params::JobCard(p) => arm!(answer(runner::card(f, c, p).await)),
+        Params::JobReply(p) => arm!(answer(runner::reply(f, c, p).await)),
+        Params::JobDismiss(p) => arm!(answer(runner::dismiss(f, c, p).await)),
+        Params::JobReassign(p) => arm!(answer(runner::reassign(f, c, p).await)),
+        Params::JobResume(p) => arm!(answer(runner::resume(f, c, p).await)),
+        Params::MatrixGet(p) => arm!(answer(matrix_gate::get(f, c, p).await)),
+        Params::MatrixCheck(p) => arm!(answer(matrix_gate::check_method(f, c, p).await)),
+        Params::PresenceSet(p) => arm!(answer(matrix_gate::presence(f, c, p).await)),
+        Params::PlansGet(p) => arm!(answer(runner::effects::plans_get(f, c, p).await)),
+        Params::PlansWrite(p) => arm!(answer(runner::effects::plans_write(f, c, p).await)),
+        Params::ReportsGet(p) => arm!(answer(runner::effects::reports_get(f, c, p).await)),
+        Params::DecisionsEffects(p) => {
+            arm!(answer(runner::effects::decision_effects(f, c, p).await))
         }
-        Params::GitStageHunk(p) => answer(crate::history::views::stage_hunk(f, c, p).await),
-        Params::HistoryHunksHead(p) => answer(crate::history::views::hunks_head(f, c, p).await),
-        Params::HistoryTake(p) => answer(crate::history::branches::take(f, c, p).await),
-        Params::HistoryRedo(p) => answer(crate::history::branches::redo(f, c, p).await),
-        Params::HistoryOpHunks(p) => answer(crate::history::hunk::op_hunks(f, c, p).await),
-        Params::HistoryProvenance(p) => answer(crate::history::hunk::provenance(f, c, p).await),
-        Params::HistoryRevertHunk(p) => answer(crate::history::hunk::revert_hunk(f, c, p).await),
-        Params::RunnersUnbench(p) => answer(runners::methods::unbench(f, c, p).await),
-        Params::RunnersFeature(p) => answer(runners::methods::feature(f, c, p).await),
-        Params::RunnersRemove(p) => answer(runners::methods::remove(f, c, p).await),
-        Params::PluginsList(p) => answer(crate::plugins::list(f, c, p).await),
-        Params::PluginsApprove(p) => answer(crate::plugins::approve(f, c, p).await),
-        Params::PluginsDisable(p) => answer(crate::plugins::disable(f, c, p).await),
-        Params::RunnersKeys(p) => answer(runners::methods::keys(f, c, p).await),
-        Params::RunnersKeysHeld(p) => answer(runners::methods::keys_held(f, c, p).await),
-        Params::RunnersAudit(p) => answer(runners::methods::audit(f, c, p).await),
-        Params::WorkConclusions(p) => answer(work::conclusions::get(f, c, p).await),
-        Params::ReviewEffects(p) => answer(work::task_effects::effects(f, c, p).await),
-        Params::AgentsPresenceSubscribe(p) => answer(work::presence::subscribe(f, c, p).await),
-        Params::AgentsPresenceGet(p) => answer(work::presence::get(f, c, p).await),
-        Params::AgentsBufferWatch(p) => answer(crate::editor::watch(f, c, p).await),
+        Params::BriefBuild(p) => arm!(answer(brief::build_method(f, c, p).await)),
+        Params::BriefSet(p) => arm!(answer(brief::set(f, c, p).await)),
+        Params::TimelineGet(p) => arm!(answer(timeline::get(f, c, p).await)),
+        Params::BudgetGet(p) => arm!(answer(budget::get(f, c, p).await)),
+        Params::BudgetTreePage(p) => arm!(answer(budget::tree(f, c, p).await)),
+        Params::BudgetSet(p) => arm!(answer(budget::set(f, c, p).await)),
+        Params::BudgetRaise(p) => arm!(answer(budget::raise(f, c, p).await)),
+        Params::PaceGet(p) => arm!(answer(budget::pace(f, c, p).await)),
+        Params::ForecastGet(p) => arm!(answer(forecast::get(f, c, p).await)),
+        Params::ForecastPlan(p) => arm!(answer(forecast::plan(f, p).await)),
+        Params::ForecastStart(p) => arm!(answer(forecast::start(f, c, p).await)),
+        Params::ForecastSession(p) => arm!(answer(forecast::session(f, p).await)),
+        Params::ForecastAccuracy(p) => arm!(answer(forecast::accuracy(f, p).await)),
+        Params::SayStart(p) => arm!(answer(say::start(f, c, p).await)),
+        Params::SayRevise(p) => arm!(answer(say::revise(f, c, p).await)),
+        Params::SayEnd(p) => arm!(answer(say::end(f, c, p).await)),
+        Params::RecordsImport(p) => arm!(answer(records::import(f, c, p).await)),
+        Params::PastSubscribe(p) => arm!(answer(crate::agents::past::subscribe(f, c, p).await)),
+        Params::PastSearch(p) => arm!(answer(crate::agents::past::search(f, c, p).await)),
+        Params::PastOpen(p) => arm!(answer(crate::agents::past::open(f, c, p).await)),
+        Params::PastResume(p) => arm!(answer(crate::agents::past::resume(f, c, p).await)),
+        Params::PastStatus(p) => arm!(answer(crate::agents::past::status(f, c, p).await)),
+        Params::PastRescan(p) => arm!(answer(crate::agents::past::rescan(f, c, p).await)),
+        Params::RecordsStatus(p) => arm!(answer(records::status(f, c, p).await)),
+        Params::RecordsConflict(p) => arm!(answer(records::conflict(f, c, p).await)),
+        Params::RecordsResolve(p) => arm!(answer(records::resolve(f, c, p).await)),
+        Params::RecordsWrite(p) => arm!(answer(records::write::records_write(f, c, p).await)),
+        Params::RecordsRead(p) => arm!(answer(records::read::records_read(f, c, p).await)),
+        Params::OutsideBind(p) => arm!(answer(crate::outside::bind(f, c, p).await)),
+        Params::OutsideUnbind(p) => arm!(answer(crate::outside::unbind(f, c, p).await)),
+        Params::OutsideBindings(p) => arm!(answer(crate::outside::list(f, c, p).await)),
+        Params::MachinesReport(p) => arm!(answer(work::machines::report(f, c, p).await)),
+        Params::MachinesMove(p) => arm!(answer(work::machines::move_to(f, c, p).await)),
+        Params::CommentsAdd(p) => arm!(answer(work::comments::add(f, c, p).await)),
+        Params::CommentsReply(p) => arm!(answer(work::comments::reply(f, c, p).await)),
+        Params::CommentsList(p) => arm!(answer(work::comments::list(f, c, p).await)),
+        Params::CommentsResolve(p) => arm!(answer(work::comments::resolve(f, c, p).await)),
+        Params::MachinesList(p) => arm!(answer(work::machines::list(f, c, p).await)),
+        Params::RunnersList(p) => arm!(answer(runners::methods::list(f, c, p).await)),
+        Params::RunnersProbeHost(p) => arm!(answer(runners::methods::probe_host(f, c, p).await)),
+        Params::RunnersAdd(p) => arm!(answer(runners::methods::add(f, c, p).await)),
+        Params::RunnersCheck(p) => arm!(answer(runners::methods::check(f, c, p).await)),
+        Params::RunnersBench(p) => arm!(answer(runners::methods::bench(f, c, p).await)),
+        Params::RunnersSet(p) => arm!(answer(runners::methods::set(f, c, p).await)),
+        Params::HistoryRegister(p) => arm!(answer(crate::history::wire::register(f, c, p).await)),
+        Params::HistoryBatch(p) => arm!(answer(crate::history::wire::batch(f, c, p).await)),
+        Params::HistoryResync(p) => arm!(answer(crate::history::wire::resync(f, c, p).await)),
+        Params::HistoryUnregister(p) => {
+            arm!(answer(crate::history::wire::unregister(f, c, p).await))
+        }
+        Params::HistoryRevertPreview(p) => {
+            arm!(answer(crate::history::revert::preview(f, c, p).await))
+        }
+        Params::HistoryRevertApply(p) => {
+            arm!(answer(crate::history::revert::apply(f, c, p).await))
+        }
+        Params::HistoryFork(p) => arm!(answer(crate::history::branches::fork(f, c, p).await)),
+        Params::HistoryForkDrop(p) => {
+            arm!(answer(crate::history::branches::drop_fork(f, c, p).await))
+        }
+        Params::HistoryCompare(p) => arm!(answer(crate::history::branches::compare(f, c, p).await)),
+        Params::HistoryBlame(p) => arm!(answer(crate::history::views::blame(f, c, p).await)),
+        Params::HistoryHunks(p) => arm!(answer(crate::history::views::hunks(f, c, p).await)),
+        Params::GitBlame(p) => arm!(answer(crate::history::views::git_blame(f, c, p).await)),
+        Params::GitBlameLine(p) => {
+            arm!(answer(crate::history::views::git_blame_line(f, c, p).await))
+        }
+        Params::HistoryEolFit(p) => arm!(answer(crate::history::views::eol_fit(f, c, p).await)),
+        Params::HistoryLinePositions(p) => {
+            arm!(answer(crate::history::views::line_positions(f, c, p).await))
+        }
+        Params::GitStageHunk(p) => arm!(answer(crate::history::views::stage_hunk(f, c, p).await)),
+        Params::HistoryHunksHead(p) => {
+            arm!(answer(crate::history::views::hunks_head(f, c, p).await))
+        }
+        Params::HistoryTake(p) => arm!(answer(crate::history::branches::take(f, c, p).await)),
+        Params::HistoryRedo(p) => arm!(answer(crate::history::branches::redo(f, c, p).await)),
+        Params::HistoryOpHunks(p) => arm!(answer(crate::history::hunk::op_hunks(f, c, p).await)),
+        Params::HistoryProvenance(p) => {
+            arm!(answer(crate::history::hunk::provenance(f, c, p).await))
+        }
+        Params::HistoryRevertHunk(p) => {
+            arm!(answer(crate::history::hunk::revert_hunk(f, c, p).await))
+        }
+        Params::RunnersUnbench(p) => arm!(answer(runners::methods::unbench(f, c, p).await)),
+        Params::RunnersFeature(p) => arm!(answer(runners::methods::feature(f, c, p).await)),
+        Params::RunnersRemove(p) => arm!(answer(runners::methods::remove(f, c, p).await)),
+        Params::PluginsList(p) => arm!(answer(crate::plugins::list(f, c, p).await)),
+        Params::PluginsApprove(p) => arm!(answer(crate::plugins::approve(f, c, p).await)),
+        Params::PluginsDisable(p) => arm!(answer(crate::plugins::disable(f, c, p).await)),
+        Params::RunnersKeys(p) => arm!(answer(runners::methods::keys(f, c, p).await)),
+        Params::RunnersKeysHeld(p) => arm!(answer(runners::methods::keys_held(f, c, p).await)),
+        Params::RunnersAudit(p) => arm!(answer(runners::methods::audit(f, c, p).await)),
+        Params::WorkConclusions(p) => arm!(answer(work::conclusions::get(f, c, p).await)),
+        Params::ReviewEffects(p) => arm!(answer(work::task_effects::effects(f, c, p).await)),
+        Params::AgentsPresenceSubscribe(p) => {
+            arm!(answer(work::presence::subscribe(f, c, p).await))
+        }
+        Params::AgentsPresenceGet(p) => arm!(answer(work::presence::get(f, c, p).await)),
+        Params::AgentsBufferWatch(p) => arm!(answer(crate::editor::watch(f, c, p).await)),
         Params::AgentsBufferUnwatch(p) => answer(crate::editor::unwatch(f, c, p)),
-        Params::WorkMapSubscribe(p) => answer(work::map::subscribe(f, c, p).await),
+        Params::WorkMapSubscribe(p) => arm!(answer(work::map::subscribe(f, c, p).await)),
         Params::WorkMapSet(p) => answer(work::map::set(f, c, p)),
-        Params::WorkTargetSet(p) => answer(work::map::target_set(f, c, p).await),
+        Params::WorkTargetSet(p) => arm!(answer(work::map::target_set(f, c, p).await)),
         Params::WorkMapClose(p) => answer(work::map::close(f, c, p)),
-        Params::WorkTrailSubscribe(p) => answer(work::trail::subscribe(f, c, p).await),
+        Params::WorkTrailSubscribe(p) => arm!(answer(work::trail::subscribe(f, c, p).await)),
         Params::WorkTrailClose(p) => answer(work::trail::close(f, c, p)),
-        Params::WorkBoardSubscribe(p) => answer(work::trail::board_subscribe(f, c, p).await),
-        Params::WorkTrailSet(p) => answer(work::trail::set(f, c, p).await),
-        Params::WorkScheduleSubscribe(p) => answer(work::trail::schedule_subscribe(f, c, p).await),
-        Params::WorkScheduleSet(p) => answer(work::trail::schedule_set(f, c, p).await),
-        Params::WorkFlowSubscribe(p) => answer(work::trail::flow_subscribe(f, c, p).await),
-        Params::WorkFiles(p) => answer(work::edits::files(f, c, p).await),
-        Params::WorkHunks(p) => answer(work::edits::hunks(f, c, p).await),
-        Params::WorkFileAt(p) => answer(work::edits::file_at(f, c, p).await),
+        Params::WorkBoardSubscribe(p) => {
+            arm!(answer(work::trail::board_subscribe(f, c, p).await))
+        }
+        Params::WorkTrailSet(p) => arm!(answer(work::trail::set(f, c, p).await)),
+        Params::WorkScheduleSubscribe(p) => {
+            arm!(answer(work::trail::schedule_subscribe(f, c, p).await))
+        }
+        Params::WorkScheduleSet(p) => arm!(answer(work::trail::schedule_set(f, c, p).await)),
+        Params::WorkFlowSubscribe(p) => arm!(answer(work::trail::flow_subscribe(f, c, p).await)),
+        Params::WorkFiles(p) => arm!(answer(work::edits::files(f, c, p).await)),
+        Params::WorkHunks(p) => arm!(answer(work::edits::hunks(f, c, p).await)),
+        Params::WorkFileAt(p) => arm!(answer(work::edits::file_at(f, c, p).await)),
         other => return Err(Box::new(other)),
     })
 }
