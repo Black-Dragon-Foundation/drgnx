@@ -106,6 +106,18 @@ pub fn delivered<T, E>(sent: Result<T, E>, what: &str) -> bool {
     ok
 }
 
+/// FUT to its end on a new current-thread runtime: what `#[tokio::test]` gives a test, for a test that must not name the
+/// runtime builder itself. Never from a runtime thread nor the UI thread.
+pub fn block_on_current<F: Future>(fut: F) -> F::Output {
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt.block_on(fut),
+        Err(e) => panic!("no current-thread runtime: {e}"),
+    }
+}
+
 /// FUT as a task named NAME on the runtime the caller is running in (an [`Executor`] task, a `#[tokio::test]`, a
 /// server's accept loop): for code that has no [`Executor`] of its own to call. Panics outside a runtime, as tokio's
 /// own spawn does. Dropping the [`Task`] cancels it.

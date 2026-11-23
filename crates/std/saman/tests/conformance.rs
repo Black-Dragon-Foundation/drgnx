@@ -203,6 +203,9 @@ fn a_tuned_pool_runs_the_tuning_and_a_finished_task_says_so() {
     assert_eq!(ex.block_on(async { task.await.unwrap() }), 1);
     rx.recv_timeout(WAIT)
         .expect("the tuning reached the builder");
+    let mut quick = ex.spawn("quick", async {});
+    ex.block_on(async { (&mut quick).await.unwrap() });
+    assert!(quick.is_finished(), "a task that ended says so");
     let detached = ex.spawn("detached", async {});
     detached.detach("a test");
 }
@@ -213,4 +216,13 @@ fn a_send_to_a_gone_receiver_is_reported_not_raised() {
     assert!(saman::delivered(tx.send(1), "a test channel"));
     drop(rx);
     assert!(!saman::delivered(tx.send(2), "a test channel"));
+}
+
+#[test]
+fn a_current_thread_run_gives_the_futures_output() {
+    let out = saman::block_on_current(async {
+        tokio::task::yield_now().await;
+        41 + 1
+    });
+    assert_eq!(out, 42);
 }

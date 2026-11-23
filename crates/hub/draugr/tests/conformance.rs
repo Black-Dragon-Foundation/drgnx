@@ -20,32 +20,34 @@ fn spec(program: &str, args: &[&str], set: &[(&str, &OsStr)]) -> Spec {
     }
 }
 
-#[tokio::test]
-async fn spawn_env_is_explicit() {
-    let mut child = spawn(spec(
-        "/usr/bin/env",
-        &[],
-        &[("DRGNX_ONLY", OsStr::new("1"))],
-    ))
-    .await
-    .unwrap();
-    let mut out = String::new();
-    child
-        .take_stdout()
-        .unwrap()
-        .read_to_string(&mut out)
+#[test]
+fn spawn_env_is_explicit() {
+    saman::block_on_current(async {
+        let mut child = spawn(spec(
+            "/usr/bin/env",
+            &[],
+            &[("DRGNX_ONLY", OsStr::new("1"))],
+        ))
         .await
         .unwrap();
-    assert!(child.wait().await.unwrap().unwrap().success());
-    let names: BTreeSet<&str> = out
-        .lines()
-        .filter_map(|l| l.split_once('=').map(|(k, _)| k))
-        .collect();
-    let mut want = BTreeSet::from(["DRGNX_ONLY"]);
-    if std::env::var_os("PATH").is_some() {
-        want.insert("PATH");
-    }
-    assert_eq!(names, want, "{out}");
+        let mut out = String::new();
+        child
+            .take_stdout()
+            .unwrap()
+            .read_to_string(&mut out)
+            .await
+            .unwrap();
+        assert!(child.wait().await.unwrap().unwrap().success());
+        let names: BTreeSet<&str> = out
+            .lines()
+            .filter_map(|l| l.split_once('=').map(|(k, _)| k))
+            .collect();
+        let mut want = BTreeSet::from(["DRGNX_ONLY"]);
+        if std::env::var_os("PATH").is_some() {
+            want.insert("PATH");
+        }
+        assert_eq!(names, want, "{out}");
+    })
 }
 
 /// Whether PID is gone or a zombie (`/proc/PID/stat`'s state).
@@ -60,35 +62,37 @@ fn gone(pid: u32) -> bool {
     }
 }
 
-#[tokio::test]
-async fn spawn_deadline_kills_group() {
-    // the shell starts a grandchild in its group, says its pid, and waits on it
-    let mut child = spawn(spec("/bin/sh", &["-c", "sleep 300 & echo $!; wait"], &[]))
-        .await
-        .unwrap();
-    let mut lines = BufReader::new(child.take_stdout().unwrap()).lines();
-    let grandchild: u32 = lines
-        .next_line()
-        .await
-        .unwrap()
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    assert!(!gone(grandchild));
+#[test]
+fn spawn_deadline_kills_group() {
+    saman::block_on_current(async {
+        // the shell starts a grandchild in its group, says its pid, and waits on it
+        let mut child = spawn(spec("/bin/sh", &["-c", "sleep 300 & echo $!; wait"], &[]))
+            .await
+            .unwrap();
+        let mut lines = BufReader::new(child.take_stdout().unwrap()).lines();
+        let grandchild: u32 = lines
+            .next_line()
+            .await
+            .unwrap()
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(!gone(grandchild));
 
-    let status = child
-        .wait_deadline(Duration::from_millis(300))
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(!status.success(), "{status:?}");
-    // the grandchild went with the group: SIGKILL is delivered at once, the reparented zombie reaped soon after
-    for _ in 0..100 {
-        if gone(grandchild) {
-            return;
+        let status = child
+            .wait_deadline(Duration::from_millis(300))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!status.success(), "{status:?}");
+        // the grandchild went with the group: SIGKILL is delivered at once, the reparented zombie reaped soon after
+        for _ in 0..100 {
+            if gone(grandchild) {
+                return;
+            }
+            stund::sleep(Duration::from_millis(50)).await;
         }
-        stund::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("the grandchild {grandchild} outlived the deadline");
+        panic!("the grandchild {grandchild} outlived the deadline");
+    })
 }

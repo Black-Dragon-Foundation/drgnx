@@ -537,125 +537,133 @@ mod tests {
     }
 
     #[cfg(debug_assertions)]
-    #[tokio::test]
+    #[test]
     #[should_panic(expected = "a hub's listening socket was passed to a child")]
-    async fn a_hubs_listening_socket_is_never_passed() {
-        // kept open for the test binary's life, so its inode is never another file's
-        let (sock, _) = std::os::unix::net::UnixStream::pair().unwrap();
-        never_pass(&sock);
-        let fd = Arc::new(OwnedFd::from(sock.try_clone().unwrap()));
-        std::mem::forget(sock);
-        let mut spec = sh("exit 0", true);
-        spec.pass_fds.push(pass(&fd, 3));
-        assert!(spawn(spec).await.is_err());
+    fn a_hubs_listening_socket_is_never_passed() {
+        saman::block_on_current(async {
+            // kept open for the test binary's life, so its inode is never another file's
+            let (sock, _) = std::os::unix::net::UnixStream::pair().unwrap();
+            never_pass(&sock);
+            let fd = Arc::new(OwnedFd::from(sock.try_clone().unwrap()));
+            std::mem::forget(sock);
+            let mut spec = sh("exit 0", true);
+            spec.pass_fds.push(pass(&fd, 3));
+            assert!(spawn(spec).await.is_err());
+        })
     }
 
-    #[tokio::test]
-    async fn passed_fds_arrive_at_their_numbers() {
-        // Targets 3, 4, 5, listed out of order.
-        let pipes: Vec<_> = (0..3).map(|_| pipe()).collect();
-        let mut spec = sh(
-            "for n in 3 4 5; do echo fd$n > /dev/fd/$n; done; exit 0",
-            true,
-        );
-        for (i, target) in [(0, 5), (1, 3), (2, 4)] {
+    #[test]
+    fn passed_fds_arrive_at_their_numbers() {
+        saman::block_on_current(async {
+            // Targets 3, 4, 5, listed out of order.
+            let pipes: Vec<_> = (0..3).map(|_| pipe()).collect();
+            let mut spec = sh(
+                "for n in 3 4 5; do echo fd$n > /dev/fd/$n; done; exit 0",
+                true,
+            );
+            for (i, target) in [(0, 5), (1, 3), (2, 4)] {
+                spec.pass_fds.push(PassFd {
+                    fd: Arc::new(pipes[i].1.try_clone().unwrap()),
+                    target,
+                });
+            }
+            let reads: Vec<OwnedFd> = pipes.into_iter().map(|(r, _)| r).collect();
+            let mut child = spawn(spec).await.unwrap();
+            assert!(child.wait().await.unwrap().unwrap().success());
+            let got: Vec<_> = reads.into_iter().map(read_to_eof).collect();
+            assert_eq!(
+                got,
+                [
+                    Some("fd5\n".into()),
+                    Some("fd3\n".into()),
+                    Some("fd4\n".into())
+                ]
+            );
+
+            // Targets that are the sources' own numbers, rotated: a dup2 in list order would overwrite a source
+            // before it is moved.
+            let pipes: Vec<_> = (0..3).map(|_| pipe()).collect();
+            let nums: Vec<i32> = pipes.iter().map(|(_, w)| w.as_raw_fd()).collect();
+            let script = format!(
+                "for n in {} {} {}; do echo fd$n > /dev/fd/$n; done; exit 0",
+                nums[0], nums[1], nums[2]
+            );
+            let mut spec = sh(&script, true);
+            let (reads, writes): (Vec<OwnedFd>, Vec<OwnedFd>) = pipes.into_iter().unzip();
+            let writes: Vec<Arc<OwnedFd>> = writes.into_iter().map(Arc::new).collect();
+            for i in 0..3 {
+                spec.pass_fds.push(pass(&writes[i], nums[(i + 1) % 3]));
+            }
+            drop(writes);
+            let mut child = spawn(spec).await.unwrap();
+            assert!(child.wait().await.unwrap().unwrap().success());
+            let got: Vec<_> = reads.into_iter().map(read_to_eof).collect();
+            let want: Vec<_> = (0..3)
+                .map(|i| Some(format!("fd{}\n", nums[(i + 1) % 3])))
+                .collect();
+            assert_eq!(got, want);
+        })
+    }
+
+    #[test]
+    fn nothing_else_leaks() {
+        saman::block_on_current(async {
+            // The parent holds a descriptor without close-on-exec, above the targets.
+            let (_r, w) = pipe();
+            let leaky = unsafe { libc::fcntl(w.as_raw_fd(), libc::F_DUPFD, 100) };
+            assert!(leaky >= 100);
+            // SAFETY: fcntl just returned this descriptor.
+            let leaky = unsafe { OwnedFd::from_raw_fd(leaky) };
+            assert_eq!(
+                unsafe { libc::fcntl(leaky.as_raw_fd(), libc::F_SETFD, 0) },
+                0
+            );
+            assert_eq!(unsafe { libc::fcntl(leaky.as_raw_fd(), libc::F_GETFD) }, 0);
+            let pipes: Vec<_> = (0..3).map(|_| pipe()).collect();
+            // The shell's own descriptors, tested by `[ -e /dev/fd/N ]` (a stat; the shell opens nothing for it).
+            let mut spec = sh(
+                "i=0; while [ $i -lt 512 ]; do [ -e /dev/fd/$i ] && printf '%s ' $i; i=$((i+1)); done",
+                true,
+            );
+            for (i, (_, w)) in pipes.iter().enumerate() {
+                spec.pass_fds
+                    .push(pass(&Arc::new(w.try_clone().unwrap()), 3 + i as i32));
+            }
+            let mut child = spawn(spec).await.unwrap();
+            let mut out = String::new();
+            child
+                .take_stdout()
+                .unwrap()
+                .read_to_string(&mut out)
+                .await
+                .unwrap();
+            assert!(child.wait().await.unwrap().unwrap().success());
+            assert_eq!(
+                out.trim_end(),
+                "0 1 2 3 4 5",
+                "leaky fd {}",
+                leaky.as_raw_fd()
+            );
+        })
+    }
+
+    #[test]
+    fn spawn_drops_passed_fds() {
+        saman::block_on_current(async {
+            let (r, w) = pipe();
+            let mut spec = sh("exit 0", true);
             spec.pass_fds.push(PassFd {
-                fd: Arc::new(pipes[i].1.try_clone().unwrap()),
-                target,
+                fd: Arc::new(w),
+                target: 3,
             });
-        }
-        let reads: Vec<OwnedFd> = pipes.into_iter().map(|(r, _)| r).collect();
-        let mut child = spawn(spec).await.unwrap();
-        assert!(child.wait().await.unwrap().unwrap().success());
-        let got: Vec<_> = reads.into_iter().map(read_to_eof).collect();
-        assert_eq!(
-            got,
-            [
-                Some("fd5\n".into()),
-                Some("fd3\n".into()),
-                Some("fd4\n".into())
-            ]
-        );
-
-        // Targets that are the sources' own numbers, rotated: a dup2 in list order would overwrite a source
-        // before it is moved.
-        let pipes: Vec<_> = (0..3).map(|_| pipe()).collect();
-        let nums: Vec<i32> = pipes.iter().map(|(_, w)| w.as_raw_fd()).collect();
-        let script = format!(
-            "for n in {} {} {}; do echo fd$n > /dev/fd/$n; done; exit 0",
-            nums[0], nums[1], nums[2]
-        );
-        let mut spec = sh(&script, true);
-        let (reads, writes): (Vec<OwnedFd>, Vec<OwnedFd>) = pipes.into_iter().unzip();
-        let writes: Vec<Arc<OwnedFd>> = writes.into_iter().map(Arc::new).collect();
-        for i in 0..3 {
-            spec.pass_fds.push(pass(&writes[i], nums[(i + 1) % 3]));
-        }
-        drop(writes);
-        let mut child = spawn(spec).await.unwrap();
-        assert!(child.wait().await.unwrap().unwrap().success());
-        let got: Vec<_> = reads.into_iter().map(read_to_eof).collect();
-        let want: Vec<_> = (0..3)
-            .map(|i| Some(format!("fd{}\n", nums[(i + 1) % 3])))
-            .collect();
-        assert_eq!(got, want);
-    }
-
-    #[tokio::test]
-    async fn nothing_else_leaks() {
-        // The parent holds a descriptor without close-on-exec, above the targets.
-        let (_r, w) = pipe();
-        let leaky = unsafe { libc::fcntl(w.as_raw_fd(), libc::F_DUPFD, 100) };
-        assert!(leaky >= 100);
-        // SAFETY: fcntl just returned this descriptor.
-        let leaky = unsafe { OwnedFd::from_raw_fd(leaky) };
-        assert_eq!(
-            unsafe { libc::fcntl(leaky.as_raw_fd(), libc::F_SETFD, 0) },
-            0
-        );
-        assert_eq!(unsafe { libc::fcntl(leaky.as_raw_fd(), libc::F_GETFD) }, 0);
-        let pipes: Vec<_> = (0..3).map(|_| pipe()).collect();
-        // The shell's own descriptors, tested by `[ -e /dev/fd/N ]` (a stat; the shell opens nothing for it).
-        let mut spec = sh(
-            "i=0; while [ $i -lt 512 ]; do [ -e /dev/fd/$i ] && printf '%s ' $i; i=$((i+1)); done",
-            true,
-        );
-        for (i, (_, w)) in pipes.iter().enumerate() {
-            spec.pass_fds
-                .push(pass(&Arc::new(w.try_clone().unwrap()), 3 + i as i32));
-        }
-        let mut child = spawn(spec).await.unwrap();
-        let mut out = String::new();
-        child
-            .take_stdout()
-            .unwrap()
-            .read_to_string(&mut out)
-            .await
-            .unwrap();
-        assert!(child.wait().await.unwrap().unwrap().success());
-        assert_eq!(
-            out.trim_end(),
-            "0 1 2 3 4 5",
-            "leaky fd {}",
-            leaky.as_raw_fd()
-        );
-    }
-
-    #[tokio::test]
-    async fn spawn_drops_passed_fds() {
-        let (r, w) = pipe();
-        let mut spec = sh("exit 0", true);
-        spec.pass_fds.push(PassFd {
-            fd: Arc::new(w),
-            target: 3,
-        });
-        let mut child = spawn(spec).await.unwrap();
-        assert!(child.wait().await.unwrap().unwrap().success());
-        assert_eq!(
-            read_to_eof(r).as_deref(),
-            Some(""),
-            "a copy of the write end is still open"
-        );
+            let mut child = spawn(spec).await.unwrap();
+            assert!(child.wait().await.unwrap().unwrap().success());
+            assert_eq!(
+                read_to_eof(r).as_deref(),
+                Some(""),
+                "a copy of the write end is still open"
+            );
+        })
     }
 
     /// GL-T6-1: another thread closes a held number that is a target; std's exec-report socket may take it, and the
@@ -665,59 +673,64 @@ mod tests {
     /// Fd numbers are the process's: under `cargo test` the other tests' threads open files meanwhile and can take the
     /// numbers this test frees before std's report pipe does, so the guard never fires (the escape lane, 2026-11-22).
     /// The test therefore runs itself again as the only test of a process of its own (nextest gives each test one).
-    #[tokio::test]
-    async fn a_failed_exec_is_reported_when_a_held_number_was_closed() {
-        const NAME: &str = "spawn::tests::a_failed_exec_is_reported_when_a_held_number_was_closed";
-        if std::env::var_os("DRAUGR_TEST_ALONE").is_none() {
-            let out = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", NAME, "--test-threads", "1", "--nocapture"])
-                .env("DRAUGR_TEST_ALONE", "1")
-                .output()
-                .unwrap();
-            let text = format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
-            assert!(out.status.success(), "the test alone failed:\n{text}");
-            assert!(
-                text.contains("1 passed"),
-                "the test alone did not run:\n{text}"
-            );
-            return;
-        }
-        let (_r, w) = pipe();
-        let w = Arc::new(w);
-        let mut spec = sh("exit 0", true);
-        spec.program = "/nonexistent/glp-no-such-program".into();
-        // targets 3..=40, every filler gone: std opens /dev/null, two pipes for stdout and stderr, then its report pipe,
-        // on the lowest free numbers (the test process holds most of 3..22), so the report pipe's write end (the
-        // child's) lands on a target
-        spec.pass_fds = (3..=40).map(|t| pass(&w, t)).collect();
-        let before = GUARD_RETRIES.load(std::sync::atomic::Ordering::Relaxed);
-        let err = start_with(spec, |moved| moved.held.retain(|f| f.as_raw_fd() > 40))
-            .err()
-            .expect("a failed exec is an error");
-        // the guard stopped the first try (EBUSY), the second try held the numbers again and std reported the exec
-        assert!(
-            GUARD_RETRIES.load(std::sync::atomic::Ordering::Relaxed) > before,
-            "the guard never fired"
-        );
-        assert_eq!(err.raw_os_error(), Some(libc::ENOENT), "{err}");
-    }
-
-    #[tokio::test]
-    async fn bad_targets_are_refused() {
-        // 2_000_000: above any descriptor limit (Linux's nr_open is at most 2^20 by default), so the parent's
-        // F_DUPFD_CLOEXEC refuses it (EINVAL).
-        for targets in [vec![2], vec![-1], vec![3, 3], vec![2_000_000]] {
+    #[test]
+    fn a_failed_exec_is_reported_when_a_held_number_was_closed() {
+        saman::block_on_current(async {
+            const NAME: &str =
+                "spawn::tests::a_failed_exec_is_reported_when_a_held_number_was_closed";
+            if std::env::var_os("DRAUGR_TEST_ALONE").is_none() {
+                let out = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", NAME, "--test-threads", "1", "--nocapture"])
+                    .env("DRAUGR_TEST_ALONE", "1")
+                    .output()
+                    .unwrap();
+                let text = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                assert!(out.status.success(), "the test alone failed:\n{text}");
+                assert!(
+                    text.contains("1 passed"),
+                    "the test alone did not run:\n{text}"
+                );
+                return;
+            }
             let (_r, w) = pipe();
             let w = Arc::new(w);
             let mut spec = sh("exit 0", true);
-            spec.pass_fds = targets.iter().map(|&t| pass(&w, t)).collect();
-            let err = spawn(spec).await.err().expect("refused");
-            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{targets:?}");
-        }
+            spec.program = "/nonexistent/glp-no-such-program".into();
+            // targets 3..=40, every filler gone: std opens /dev/null, two pipes for stdout and stderr, then its report pipe,
+            // on the lowest free numbers (the test process holds most of 3..22), so the report pipe's write end (the
+            // child's) lands on a target
+            spec.pass_fds = (3..=40).map(|t| pass(&w, t)).collect();
+            let before = GUARD_RETRIES.load(std::sync::atomic::Ordering::Relaxed);
+            let err = start_with(spec, |moved| moved.held.retain(|f| f.as_raw_fd() > 40))
+                .err()
+                .expect("a failed exec is an error");
+            // the guard stopped the first try (EBUSY), the second try held the numbers again and std reported the exec
+            assert!(
+                GUARD_RETRIES.load(std::sync::atomic::Ordering::Relaxed) > before,
+                "the guard never fired"
+            );
+            assert_eq!(err.raw_os_error(), Some(libc::ENOENT), "{err}");
+        })
+    }
+
+    #[test]
+    fn bad_targets_are_refused() {
+        saman::block_on_current(async {
+            // 2_000_000: above any descriptor limit (Linux's nr_open is at most 2^20 by default), so the parent's
+            // F_DUPFD_CLOEXEC refuses it (EINVAL).
+            for targets in [vec![2], vec![-1], vec![3, 3], vec![2_000_000]] {
+                let (_r, w) = pipe();
+                let w = Arc::new(w);
+                let mut spec = sh("exit 0", true);
+                spec.pass_fds = targets.iter().map(|&t| pass(&w, t)).collect();
+                let err = spawn(spec).await.err().expect("refused");
+                assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{targets:?}");
+            }
+        })
     }
 
     // Linux only: PR_SET_PDEATHSIG is a Linux prctl (Android: the same kernel, but the test needs util-linux's
@@ -793,135 +806,149 @@ mod tests {
 
     /// GL-T6-3: a caller that stopped waiting leaves a child nobody owns; the spawner kills its whole group (a
     /// negative target), not only its leader.
-    #[tokio::test]
-    async fn a_cancelled_pinned_spawn_kills_the_group() {
-        use std::future::Future;
-        let stall = saman::lock(&SPAWNER_STALL);
-        let before = saman::lock(&CANCELLED).len();
-        // queue the job, then drop the caller before the spawner may start it
-        let mut fut = Box::pin(spawn_pinned(sh("sleep 30", true)));
-        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
-        assert!(
-            fut.as_mut().poll(&mut cx).is_pending(),
-            "the spawner was stalled"
-        );
-        drop(fut);
-        drop(stall);
-        let sent =
-            skuld::wait_until_async("the spawner killed the cancelled child", 10, || async {
-                let fresh: Vec<i32> = saman::lock(&CANCELLED)[before..].to_vec();
-                (!fresh.is_empty()).then_some(fresh)
-            })
-            .await;
-        assert!(
-            sent.iter().all(|&t| t < -1),
-            "the group is killed (a negative pid), not the leader alone: {sent:?}"
-        );
+    #[test]
+    fn a_cancelled_pinned_spawn_kills_the_group() {
+        saman::block_on_current(async {
+            use std::future::Future;
+            let stall = saman::lock(&SPAWNER_STALL);
+            let before = saman::lock(&CANCELLED).len();
+            // queue the job, then drop the caller before the spawner may start it
+            let mut fut = Box::pin(spawn_pinned(sh("sleep 30", true)));
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(
+                fut.as_mut().poll(&mut cx).is_pending(),
+                "the spawner was stalled"
+            );
+            drop(fut);
+            drop(stall);
+            let sent =
+                skuld::wait_until_async("the spawner killed the cancelled child", 10, || async {
+                    let fresh: Vec<i32> = saman::lock(&CANCELLED)[before..].to_vec();
+                    (!fresh.is_empty()).then_some(fresh)
+                })
+                .await;
+            assert!(
+                sent.iter().all(|&t| t < -1),
+                "the group is killed (a negative pid), not the leader alone: {sent:?}"
+            );
+        })
     }
 
-    #[tokio::test]
-    async fn pinned_spawn_passes_fds_too() {
-        let (r, w) = pipe();
-        let mut spec = sh("echo pinned >&3", true);
-        spec.pass_fds.push(PassFd {
-            fd: Arc::new(w),
-            target: 3,
-        });
-        let mut child = spawn_pinned(spec).await.unwrap();
-        assert!(child.wait().await.unwrap().unwrap().success());
-        assert_eq!(read_to_eof(r).as_deref(), Some("pinned\n"));
+    #[test]
+    fn pinned_spawn_passes_fds_too() {
+        saman::block_on_current(async {
+            let (r, w) = pipe();
+            let mut spec = sh("echo pinned >&3", true);
+            spec.pass_fds.push(PassFd {
+                fd: Arc::new(w),
+                target: 3,
+            });
+            let mut child = spawn_pinned(spec).await.unwrap();
+            assert!(child.wait().await.unwrap().unwrap().success());
+            assert_eq!(read_to_eof(r).as_deref(), Some("pinned\n"));
+        })
     }
 
-    #[tokio::test]
-    async fn own_process_group_and_sigpipe_ignored() {
-        // The shell sends itself SIGPIPE and lives to say so only if it started with SIGPIPE ignored. (Reading the
-        // disposition back is not portable: macOS's /bin/sh, bash 3.2, leaves a signal ignored at entry out of `trap`.)
-        let mut child = spawn(sh("kill -s PIPE $$; echo alive; read x; exit 0", false))
-            .await
-            .unwrap();
-        let pid = child.id();
-        let mut lines = BufReader::new(child.take_stdout().unwrap()).lines();
-        let first = lines.next_line().await.unwrap();
-        assert_eq!(first.as_deref(), Some("alive"), "the child died of SIGPIPE");
-        // While the child waits on its stdin: it leads its own group, not ours.
-        assert_eq!(unsafe { libc::getpgid(pid) }, pid);
-        assert_ne!(pid, unsafe { libc::getpgrp() });
-        drop(child.take_stdin());
-        assert!(child.wait().await.unwrap().unwrap().success());
+    #[test]
+    fn own_process_group_and_sigpipe_ignored() {
+        saman::block_on_current(async {
+            // The shell sends itself SIGPIPE and lives to say so only if it started with SIGPIPE ignored. (Reading the
+            // disposition back is not portable: macOS's /bin/sh, bash 3.2, leaves a signal ignored at entry out of `trap`.)
+            let mut child = spawn(sh("kill -s PIPE $$; echo alive; read x; exit 0", false))
+                .await
+                .unwrap();
+            let pid = child.id();
+            let mut lines = BufReader::new(child.take_stdout().unwrap()).lines();
+            let first = lines.next_line().await.unwrap();
+            assert_eq!(first.as_deref(), Some("alive"), "the child died of SIGPIPE");
+            // While the child waits on its stdin: it leads its own group, not ours.
+            assert_eq!(unsafe { libc::getpgid(pid) }, pid);
+            assert_ne!(pid, unsafe { libc::getpgrp() });
+            drop(child.take_stdin());
+            assert!(child.wait().await.unwrap().unwrap().success());
+        })
     }
 
     /// A parent started as a background job (`nohup`, a script's `&`) has SIGINT and SIGQUIT ignored, and a child
     /// inherits that: a shell then cannot trap SIGINT and a kernel's interrupt would do nothing. The child gets both
     /// at their defaults.
-    #[tokio::test]
-    async fn a_child_gets_sigint_and_sigquit_at_their_defaults_whatever_the_parent_ignores() {
-        // SAFETY: signal(2) on our own disposition, restored right after the spawn (the child has forked by then).
-        let (int, quit) = unsafe {
-            (
-                libc::signal(libc::SIGINT, libc::SIG_IGN),
-                libc::signal(libc::SIGQUIT, libc::SIG_IGN),
-            )
-        };
-        let child = spawn(sh(
+    #[test]
+    fn a_child_gets_sigint_and_sigquit_at_their_defaults_whatever_the_parent_ignores() {
+        saman::block_on_current(async {
+            // SAFETY: signal(2) on our own disposition, restored right after the spawn (the child has forked by then).
+            let (int, quit) = unsafe {
+                (
+                    libc::signal(libc::SIGINT, libc::SIG_IGN),
+                    libc::signal(libc::SIGQUIT, libc::SIG_IGN),
+                )
+            };
+            let child = spawn(sh(
             "trap 'echo got-int' INT; trap 'echo got-quit' QUIT; kill -INT $$; kill -QUIT $$; echo done",
             true,
         ))
         .await;
-        // SAFETY: as above
-        unsafe {
-            libc::signal(libc::SIGINT, int);
-            libc::signal(libc::SIGQUIT, quit);
-        }
-        let mut child = child.unwrap();
-        let mut lines = BufReader::new(child.take_stdout().unwrap()).lines();
-        let mut said = Vec::new();
-        while let Some(l) = lines.next_line().await.unwrap() {
-            said.push(l);
-        }
-        assert_eq!(said, ["got-int", "got-quit", "done"]);
+            // SAFETY: as above
+            unsafe {
+                libc::signal(libc::SIGINT, int);
+                libc::signal(libc::SIGQUIT, quit);
+            }
+            let mut child = child.unwrap();
+            let mut lines = BufReader::new(child.take_stdout().unwrap()).lines();
+            let mut said = Vec::new();
+            while let Some(l) = lines.next_line().await.unwrap() {
+                said.push(l);
+            }
+            assert_eq!(said, ["got-int", "got-quit", "done"]);
+        })
     }
 
     /// `new_session`: the child leads a session of its own (so it can never take this process's terminal, and the
     /// reduced-tier helper's own `setsid()` is not refused), and its pid is still its process group's, so the
     /// group can be killed as one.
-    #[tokio::test]
-    async fn new_session_leads_a_session_and_its_group() {
-        for new_session in [false, true] {
-            let mut spec = sh("read x; exit 0", false);
-            spec.new_session = new_session;
-            let mut child = spawn_pinned(spec).await.unwrap();
-            let pid = child.id();
-            // SAFETY: plain queries about our own child.
-            let (pgid, sid) = unsafe { (libc::getpgid(pid), libc::getsid(pid)) };
-            drop(child.take_stdin());
-            assert!(child.wait().await.unwrap().unwrap().success());
-            assert_eq!(pgid, pid, "new_session {new_session}: leads its group");
-            if new_session {
-                assert_eq!(sid, pid, "leads a session of its own");
-            } else {
-                assert_eq!(sid, unsafe { libc::getsid(0) }, "stays in ours");
+    #[test]
+    fn new_session_leads_a_session_and_its_group() {
+        saman::block_on_current(async {
+            for new_session in [false, true] {
+                let mut spec = sh("read x; exit 0", false);
+                spec.new_session = new_session;
+                let mut child = spawn_pinned(spec).await.unwrap();
+                let pid = child.id();
+                // SAFETY: plain queries about our own child.
+                let (pgid, sid) = unsafe { (libc::getpgid(pid), libc::getsid(pid)) };
+                drop(child.take_stdin());
+                assert!(child.wait().await.unwrap().unwrap().success());
+                assert_eq!(pgid, pid, "new_session {new_session}: leads its group");
+                if new_session {
+                    assert_eq!(sid, pid, "leads a session of its own");
+                } else {
+                    assert_eq!(sid, unsafe { libc::getsid(0) }, "stays in ours");
+                }
             }
-        }
+        })
     }
 
-    #[tokio::test]
-    async fn exit_reported_once() {
-        let mut child = spawn(sh("exit 3", true)).await.unwrap();
-        assert_eq!(child.wait().await.unwrap().unwrap().code(), Some(3));
-        assert!(child.wait().await.unwrap().is_none());
+    #[test]
+    fn exit_reported_once() {
+        saman::block_on_current(async {
+            let mut child = spawn(sh("exit 3", true)).await.unwrap();
+            assert_eq!(child.wait().await.unwrap().unwrap().code(), Some(3));
+            assert!(child.wait().await.unwrap().is_none());
+        })
     }
 
-    #[tokio::test]
-    async fn stderr_tail_keeps_the_last_8000_characters() {
-        let mut child = spawn(sh(
-            "head -c 9000 /dev/zero | tr '\\0' a >&2; printf b >&2",
-            true,
-        ))
-        .await
-        .unwrap();
-        assert!(child.wait().await.unwrap().unwrap().success());
-        let tail = child.stderr_tail();
-        assert_eq!(tail.chars().count(), STDERR_TAIL_CHARS);
-        assert!(tail.ends_with("ab"), "{}", &tail[tail.len() - 10..]);
+    #[test]
+    fn stderr_tail_keeps_the_last_8000_characters() {
+        saman::block_on_current(async {
+            let mut child = spawn(sh(
+                "head -c 9000 /dev/zero | tr '\\0' a >&2; printf b >&2",
+                true,
+            ))
+            .await
+            .unwrap();
+            assert!(child.wait().await.unwrap().unwrap().success());
+            let tail = child.stderr_tail();
+            assert_eq!(tail.chars().count(), STDERR_TAIL_CHARS);
+            assert!(tail.ends_with("ab"), "{}", &tail[tail.len() - 10..]);
+        })
     }
 }
