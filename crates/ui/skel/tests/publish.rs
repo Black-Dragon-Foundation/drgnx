@@ -9,7 +9,8 @@ use glitnir::geom::Rect;
 use skel::api::*;
 use skel::event::*;
 use skel::wayland::WaylandShell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 const BG: u32 = 0xff20_4060;
 
@@ -27,7 +28,7 @@ fn until(shell: &mut WaylandShell, what: &str, f: impl Fn(&mut WaylandShell) -> 
             return;
         }
         assert!(Instant::now() < deadline, "never: {what}");
-        std::thread::sleep(Duration::from_millis(10));
+        stund::sleep_blocking(Duration::from_millis(10));
     }
 }
 
@@ -95,7 +96,7 @@ fn buffer_commits(rec: &Recorder, seq: u64, id: u64, n: usize) -> Vec<String> {
         if all.len() >= n || Instant::now() > deadline {
             return all;
         }
-        std::thread::sleep(Duration::from_millis(10));
+        stund::sleep_blocking(Duration::from_millis(10));
     }
 }
 
@@ -118,6 +119,7 @@ fn shows(rec: &Recorder, b: &Backing) {
 
 mod publish {
     use super::*;
+    use kvardi::Px;
 
     #[test]
     fn patch_copies_only_damage() {
@@ -126,7 +128,10 @@ mod publish {
         let mut b = Backing::new(200, 100);
         let id = window(&mut shell, &mut b);
         assert_eq!(shell.publish_copied(), 200 * 100 * 4, "no front yet: all");
-        let rects = [Rect::new(0, 0, 10, 10), Rect::new(50, 50, 20, 5)];
+        let rects = [
+            Rect::new(Px(0), Px(0), Px(10), Px(10)),
+            Rect::new(Px(50), Px(50), Px(20), Px(5)),
+        ];
         for r in rects {
             b.fill(r, 0xff00_ff00);
         }
@@ -148,11 +153,11 @@ mod publish {
         let mut b = Backing::new(200, 100);
         let id = window(&mut shell, &mut b);
         shown(&mut shell, &rec, id);
-        b.fill(Rect::new(0, 0, 20, 10), 0xff11_2233);
+        b.fill(Rect::new(Px(0), Px(0), Px(20), Px(10)), 0xff11_2233);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         assert!(shell.present_tree(id).unwrap());
         shell.flush().unwrap();
-        b.fill(Rect::new(40, 0, 20, 10), 0xff33_2211);
+        b.fill(Rect::new(Px(40), Px(0), Px(20), Px(10)), 0xff33_2211);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         assert!(!shell.present_tree(id).unwrap(), "the pacer waits");
         let before = shell.presenter_stats().unwrap();
@@ -201,7 +206,7 @@ mod publish {
             before.presented, before.published,
             "the first picture: {before:?}"
         );
-        b.fill(Rect::new(0, 0, 20, 10), 0xff11_2233);
+        b.fill(Rect::new(Px(0), Px(0), Px(20), Px(10)), 0xff11_2233);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         assert!(
             !shell.present_tree(id).unwrap(),
@@ -269,7 +274,7 @@ mod publish {
         let mut shell = rec.open();
         let mut b = Backing::new(200, 100);
         let id = window(&mut shell, &mut b);
-        b.fill(Rect::new(0, 0, 20, 10), 0xff11_2233);
+        b.fill(Rect::new(Px(0), Px(0), Px(20), Px(10)), 0xff11_2233);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         assert!(!shell.present_tree(id).unwrap(), "the pacer waits");
         let s = shell.presenter_stats().unwrap();
@@ -318,7 +323,7 @@ mod publish {
             !shell.present_tree(id).unwrap(),
             "the ack waits for a newer packet"
         );
-        b.fill(Rect::new(0, 0, 20, 10), 0xff11_2233);
+        b.fill(Rect::new(Px(0), Px(0), Px(20), Px(10)), 0xff11_2233);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         assert!(shell.present_tree(id).unwrap());
         shell.flush().unwrap();
@@ -367,15 +372,15 @@ mod publish {
             shell.flush().unwrap();
             shown(&mut shell, &rec, id);
         }
-        b.fill(Rect::new(80, 40, 10, 10), 0xff11_2233);
+        b.fill(Rect::new(Px(80), Px(40), Px(10), Px(10)), 0xff11_2233);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         assert!(shell.present_tree(id).unwrap());
         shell.flush().unwrap();
         let seq = next_seq(&rec);
         let rects = [
-            Rect::new(0, 0, 20, 10),
-            Rect::new(100, 20, 30, 10),
-            Rect::new(150, 80, 40, 15),
+            Rect::new(Px(0), Px(0), Px(20), Px(10)),
+            Rect::new(Px(100), Px(20), Px(30), Px(10)),
+            Rect::new(Px(150), Px(80), Px(40), Px(15)),
         ];
         for (i, r) in rects.iter().enumerate() {
             b.fill(*r, 0xff00_0080 + i as u32);
@@ -410,9 +415,9 @@ mod publish {
         let id = window(&mut shell, &mut b);
         let now = skel::wayland::publish::now_ns();
         // two keys while the first picture waits for its callback: the earlier one is what the next commit shows
-        b.fill(Rect::new(0, 0, 10, 10), 0xff00_00ff);
+        b.fill(Rect::new(Px(0), Px(0), Px(10), Px(10)), 0xff00_00ff);
         assert!(publish(&mut shell, id, &[(&b, id)], now - 10_000_000_000));
-        b.fill(Rect::new(20, 0, 10, 10), 0xff00_00ff);
+        b.fill(Rect::new(Px(20), Px(0), Px(10), Px(10)), 0xff00_00ff);
         assert!(publish(&mut shell, id, &[(&b, id)], now));
         // (the first configure's content ack posted a FRAME_READY still queued: wait for the callback itself)
         sync(&shell);
@@ -427,7 +432,7 @@ mod publish {
         );
         // the key was shown: the next commit carries none
         shown(&mut shell, &rec, id);
-        b.fill(Rect::new(40, 0, 10, 10), 0xff00_00ff);
+        b.fill(Rect::new(Px(40), Px(0), Px(10), Px(10)), 0xff00_00ff);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         assert!(shell.present_tree(id).unwrap());
         let after = glitnir::stats::summary(b.g, false);
@@ -443,7 +448,7 @@ mod publish {
         let mut b = Backing::new(200, 100);
         let id = window(&mut shell, &mut b);
         shown(&mut shell, &rec, id);
-        b.fill(Rect::new(0, 0, 50, 50), 0xff80_8000);
+        b.fill(Rect::new(Px(0), Px(0), Px(50), Px(50)), 0xff80_8000);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         let r =
             rec.control(r#"{"cmd":"configure","surface":"focused","size":[300,150],"states":[]}"#);
@@ -489,7 +494,7 @@ mod publish {
         let mut b = Backing::new(200, 100);
         let id = window(&mut shell, &mut b);
         shown(&mut shell, &rec, id);
-        let small = Rect::new(10, 10, 8, 8);
+        let small = Rect::new(Px(10), Px(10), Px(8), Px(8));
         b.fill(small, 0xff12_3456);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         assert_eq!(shell.publish_copied() as u64, small.area() * 4);
@@ -497,10 +502,10 @@ mod publish {
         shell.flush().unwrap();
         shown(&mut shell, &rec, id);
         // the front's quiet period (2 s) is time itself: a sleep never ends before it has passed
-        std::thread::sleep(Duration::from_millis(2100));
+        stund::sleep_blocking(Duration::from_millis(2100));
         shell.dispatch_main().unwrap();
         assert_eq!(shell.presenter_stats().unwrap().front_trims, 1);
-        b.fill(Rect::new(30, 30, 8, 8), 0xff65_4321);
+        b.fill(Rect::new(Px(30), Px(30), Px(8), Px(8)), 0xff65_4321);
         let seq = next_seq(&rec);
         assert!(publish(&mut shell, id, &[(&b, id)], 0));
         assert_eq!(shell.publish_copied(), 200 * 100 * 4, "the whole surface");
@@ -513,6 +518,7 @@ mod publish {
 
 mod tree_snapshot {
     use super::*;
+    use kvardi::Px;
 
     const GREEN: u32 = 0xff00_ff00;
     /// Half-covering blue, premultiplied.
@@ -617,7 +623,7 @@ mod tree_snapshot {
         shown(&mut shell, &rec, id);
         rec.wait_window(&shell, a, |n| n.contains("\"position\":[10,10]"));
 
-        let input = [Rect::new(2, 2, 20, 10)];
+        let input = [Rect::new(Px(2), Px(2), Px(20), Px(10))];
         shell
             .set_child_place(a, Some((30, 20)), Some(&input))
             .unwrap();
@@ -681,7 +687,7 @@ mod tree_snapshot {
         let mut shell = rec.open();
         let mut root = Backing::new(200, 100);
         let id = window(&mut shell, &mut root);
-        let card = Rect::new(20, 20, 80, 60);
+        let card = Rect::new(Px(20), Px(20), Px(80), Px(60));
         root.fill(card, GREEN);
         let layer = 7;
         glitnir::scene::with(root.g, |s| {

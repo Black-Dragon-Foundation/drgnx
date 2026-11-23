@@ -91,7 +91,7 @@ impl ThemeCursor {
         } else {
             self.size
         };
-        let px = size * scale;
+        let px = crate::units::device_px(size as i32, f64::from(scale)) as u32;
         if self.loaded.as_ref().is_none_or(|(_, loaded)| *loaded != px) {
             let name = if self.name.is_empty() {
                 DEFAULT_NAME

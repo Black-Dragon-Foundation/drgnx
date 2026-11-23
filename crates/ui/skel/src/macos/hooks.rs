@@ -13,7 +13,8 @@ use objc2_app_kit::{
     NSAlert, NSAppearanceCustomization, NSModalResponseContinue, NSWindowOcclusionState,
 };
 use objc2_foundation::{NSException, NSRect, NSSize, NSString};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 /// The id the test windows' delegates report as: no host window has it, so their events change nothing.
 const TEST_WINDOW: WindowId = WindowId::MAX;
@@ -630,9 +631,7 @@ impl MacShell {
             // the window's focus and transition notifications since the start, oldest first
             "test-key-log" => Ok(format!(
                 "({})",
-                super::super::runloop::KEY_LOG
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                saman::lock(&super::super::runloop::KEY_LOG)
                     .join(" ")
             )),
             "test-ax-activate" => {
@@ -668,9 +667,7 @@ impl MacShell {
             "test-drag-log" => Ok(DRAG_LOG.with(|l| l.borrow().clone())),
             // its own hook: Lisp reads one object from an answer (rounds 9 and 10 read the drag log only)
             "test-drag-start-log" => Ok({
-                let l = super::super::dnd::START_LOG
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                let l = saman::lock(&super::super::dnd::START_LOG)
                     .clone();
                 if l.is_empty() { "nil".to_owned() } else { l }
             }),
@@ -749,7 +746,7 @@ impl MacShell {
                 if r != NSModalResponseContinue {
                     break;
                 }
-                std::thread::sleep(Duration::from_millis(5));
+                stund::sleep_blocking(Duration::from_millis(5));
             }
             // SAFETY: the session begun above, ended once.
             unsafe { app.endModalSession(session) };
@@ -1103,16 +1100,17 @@ fn kq_layer_misses(pty: bool, nested: bool, n: u64) -> Option<u64> {
         let outer = libc::kqueue();
         reg(inner, rd);
         reg(outer, inner);
-        let writer = std::thread::spawn(move || {
+        let writer = saman::spawn_thread("skel-thread", move || {
             let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
             for _ in 0..n {
                 x ^= x << 13;
                 x ^= x >> 7;
                 x ^= x << 17;
-                std::thread::sleep(Duration::from_micros(x % 3000));
+                stund::sleep_blocking(Duration::from_micros(x % 3000));
                 libc::write(wr, b"x".as_ptr().cast(), 1);
             }
-        });
+        })
+        .unwrap();
         let (mut got, mut misses) = (0u64, 0u64);
         let end = Instant::now() + Duration::from_secs(30);
         let mut evs = [std::mem::zeroed::<libc::kevent>(); 8];
@@ -1129,7 +1127,7 @@ fn kq_layer_misses(pty: bool, nested: bool, n: u64) -> Option<u64> {
             }
             got += drain(rd);
         }
-        let _ = writer.join();
+        let _thread_panic_seen_elsewhere = writer.join();
         for fd in [inner, outer, rd, wr] {
             libc::close(fd);
         }

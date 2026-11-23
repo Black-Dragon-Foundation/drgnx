@@ -215,7 +215,7 @@ pub type Rings = BTreeMap<u64, Ring>;
 static STATS: Mutex<Rings> = Mutex::new(BTreeMap::new());
 
 fn rings() -> MutexGuard<'static, Rings> {
-    STATS.lock().unwrap_or_else(|p| p.into_inner())
+    saman::lock(&STATS)
 }
 
 /// Append one entry to ROOT's ring (allocated on the first record).  Any thread may record.
@@ -272,12 +272,13 @@ mod tests {
     }
 
     fn seed() -> u64 {
-        let s = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(1)
-            | 1;
-        eprintln!("stats test seed {s}");
+        let s = {
+            use std::hash::{BuildHasher, Hasher};
+            std::collections::hash_map::RandomState::new()
+                .build_hasher()
+                .finish()
+        } | 1;
+        annall::cli_err(&format!("stats test seed {s}")).unwrap_or_default();
         s
     }
 
@@ -325,14 +326,15 @@ mod tests {
         // the host holds the global state; a compose thread records and reads its summary meanwhile
         let held = crate::state();
         let (tx, rx) = std::sync::mpsc::channel();
-        let compose = std::thread::spawn(move || {
+        let compose = saman::spawn_thread("glitnir-test", move || {
             crate::mark_compose_thread();
             let mut rng = Rng(seed());
             for _ in 0..10 {
                 record(root, random_entry(&mut rng));
             }
             tx.send(summary(root, false).count).unwrap();
-        });
+        })
+        .unwrap();
         let got = rx.recv_timeout(std::time::Duration::from_secs(10));
         drop(held);
         compose.join().unwrap();

@@ -6,7 +6,6 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use wayland_client::protocol::{
     wl_buffer, wl_callback, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface,
@@ -25,7 +24,7 @@ use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_ba
 pub mod extra;
 
 pub struct Recorder {
-    child: Child,
+    child: raun::proc::TestChild,
     pub dir: PathBuf,
     socket: String,
 }
@@ -41,27 +40,31 @@ impl Recorder {
         let profile_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("profiles")
             .join(format!("{profile}.json"));
-        let mut child = // NH_RECORDER_BIN measures another build (the release binary) with the same tests
-        Command::new(std::env::var_os("NH_RECORDER_BIN").unwrap_or(env!("CARGO_BIN_EXE_nh-recorder").into()))
-            .args(["--socket", &socket, "--control"])
-            .arg(dir.join("control"))
-            .arg("--profile")
-            .arg(&profile_path)
-            .args(extra)
-            .env("XDG_RUNTIME_DIR", &dir)
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("spawn nh-recorder");
-        let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
-        assert_eq!(line, "READY\n");
+        // NH_RECORDER_BIN measures another build (the release binary) with the same tests
+        let bin =
+            std::env::var_os("NH_RECORDER_BIN").unwrap_or(env!("CARGO_BIN_EXE_nh-recorder").into());
+        let control = dir.join("control");
+        let mut args: Vec<&std::ffi::OsStr> = vec![
+            "--socket".as_ref(),
+            socket.as_ref(),
+            "--control".as_ref(),
+            control.as_ref(),
+            "--profile".as_ref(),
+            profile_path.as_ref(),
+        ];
+        args.extend(extra.iter().map(|a| std::ffi::OsStr::new(*a)));
+        let mut child = raun::proc::TestChild::start(
+            Path::new(&bin),
+            &args,
+            &[(stig::SYSTEM_RUNTIME_VAR, dir.as_os_str())],
+        )
+        .expect("spawn nh-recorder");
+        assert_eq!(child.read_line().unwrap(), "READY\n");
         Recorder { child, dir, socket }
     }
 
     pub fn pid(&self) -> u32 {
-        self.child.id()
+        self.child.pid() as u32
     }
 
     pub fn control_path(&self) -> PathBuf {
@@ -95,9 +98,8 @@ pub fn send(path: &Path, req: Value) -> Value {
 
 impl Drop for Recorder {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.dir);
+        self.child.kill();
+        let _scratch_dir_may_be_gone = std::fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -354,7 +356,7 @@ pub struct Env {
     pub client: Client,
     pub registry: wl_registry::WlRegistry,
     _conn: Connection,
-    pools: u32,
+    pools: Vec<std::sync::Arc<std::fs::File>>,
     /// The ARGB value `buffer` fills new buffers with (0 = left as the empty file).
     pub fill: u32,
 }
@@ -381,7 +383,7 @@ impl Env {
             client: Client::default(),
             registry,
             _conn: conn,
-            pools: 0,
+            pools: Vec::new(),
             fill: 0,
         };
         env.roundtrip();
@@ -405,15 +407,8 @@ impl Env {
     /// A shm buffer of `w` x `h` ARGB pixels.
     pub fn buffer(&mut self, w: i32, h: i32) -> wl_buffer::WlBuffer {
         let shm: wl_shm::WlShm = self.bind("wl_shm", 1);
-        static POOLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        self.pools = POOLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(self.rec.dir.join(format!("pool{}", self.pools)))
-            .unwrap();
+        // an anonymous file in the recorder's directory: the pool the client shares with it
+        let mut file = tempfile::tempfile_in(&self.rec.dir).unwrap();
         let size = (w * h * 4) as u64;
         file.set_len(size).unwrap();
         if self.fill != 0 {
@@ -422,12 +417,13 @@ impl Env {
             file.write_all(&bytes).unwrap();
         }
         let pool = shm.create_pool(file.as_fd(), size as i32, &self.qh, ());
+        self.pools.push(std::sync::Arc::new(file));
         pool.create_buffer(0, w, h, w * 4, wl_shm::Format::Argb8888, &self.qh, ())
     }
 
     /// The file behind the buffer `buffer` made last: writing to it changes the buffer's pixels.
-    pub fn pool_path(&self) -> PathBuf {
-        self.rec.dir.join(format!("pool{}", self.pools))
+    pub fn pool_file(&self) -> std::sync::Arc<std::fs::File> {
+        self.pools.last().expect("a buffer was made").clone()
     }
 
     pub fn surface(&mut self) -> wl_surface::WlSurface {

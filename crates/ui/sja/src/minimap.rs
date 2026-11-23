@@ -94,7 +94,7 @@ struct File {
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
 
 fn with_store<R>(f: impl FnOnce(&mut Store) -> R) -> R {
-    let mut g = STORE.lock().unwrap_or_else(|p| p.into_inner());
+    let mut g = saman::lock(&STORE);
     f(g.get_or_insert_with(Store::default))
 }
 

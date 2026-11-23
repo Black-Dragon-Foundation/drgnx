@@ -338,7 +338,7 @@ pub struct Rect {
 
 /// What an edge or a requested rectangle belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EdgeKey {
+pub enum WindowEdge {
     Region(Region),
     Group(GroupId),
     /// The left place's Nth section window (its header band, §6.1).
@@ -418,7 +418,7 @@ pub struct OsWindow {
     pub scale: f32,
     pub tty: bool,
     /// Actual device-px edges sent back after a realisation (`set_edges`).
-    pub edges: Vec<(EdgeKey, Rect)>,
+    pub edges: Vec<(WindowEdge, Rect)>,
     /// Zen: the rail and the status bar are hidden too.
     pub chrome_hidden: bool,
     pub left: Left,
@@ -472,21 +472,17 @@ pub struct StripShown(pub(crate) std::sync::Mutex<BTreeMap<GroupId, usize>>);
 
 impl StripShown {
     pub(crate) fn get(&self, g: GroupId) -> usize {
-        self.0.lock().map_or(0, |m| m.get(&g).copied().unwrap_or(0))
+        saman::lock(&self.0).get(&g).copied().unwrap_or(0)
     }
 
     pub(crate) fn set(&self, g: GroupId, first: usize) {
-        if let Ok(mut m) = self.0.lock() {
-            m.insert(g, first);
-        }
+        saman::lock(&self.0).insert(g, first);
     }
 }
 
 impl Clone for StripShown {
     fn clone(&self) -> Self {
-        StripShown(std::sync::Mutex::new(
-            self.0.lock().map(|m| m.clone()).unwrap_or_default(),
-        ))
+        StripShown(std::sync::Mutex::new(saman::lock(&self.0).clone()))
     }
 }
 

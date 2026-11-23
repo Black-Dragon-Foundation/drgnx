@@ -176,7 +176,7 @@ mod tests {
             offset_y: 12.0,
             spread_px: spread,
             shadow_opacity: 0.35,
-            shadow_argb: 0xff00_0000,
+            shadow_argb: mot::Theme::builtin()[0].colour(mot::Token::Gap).to_argb(),
             border_px: 0.0,
             border_argb: 0,
             ring_px: 0.0,
@@ -258,7 +258,7 @@ mod tests {
     fn a_ring_lies_just_outside_the_layer() {
         let c = Chrome {
             ring_px: 2.0,
-            ring_argb: 0x7300_0000,
+            ring_argb: mot::Theme::builtin()[0].colour(mot::Token::Focus).to_argb(),
             ..chrome(6.0, 0.0, 0.0)
         };
         let r = ring(&c, 100, 40).unwrap();

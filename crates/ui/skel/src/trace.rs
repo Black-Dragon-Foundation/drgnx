@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use stund::Instant;
 
 /// The startup trace keeps this many events: the first ones, a window's life up to its first draws.
 const NOTES: usize = 64;
@@ -131,7 +131,7 @@ pub fn pumps_text() -> String {
 }
 
 fn with<R>(f: impl FnOnce(&mut Trace) -> R) -> Option<R> {
-    cfg!(feature = "test-hooks").then(|| f(&mut TRACE.lock().unwrap_or_else(|p| p.into_inner())))
+    cfg!(feature = "test-hooks").then(|| f(&mut saman::lock(&TRACE)))
 }
 
 /// Add `what` (made only while the trace has room) to the startup trace.
@@ -173,10 +173,10 @@ pub fn startup_text() -> String {
     with(|t| {
         let mut s = String::from("(");
         for n in &t.notes {
-            let _ = write!(s, "{:?} ", n);
+            let _string_write_cannot_fail = write!(s, "{:?} ", n);
         }
         for (w, (r, to)) in &t.waits {
-            let _ = write!(s, "(wait {w} :rounds {r} :timeouts {to}) ");
+            let _string_write_cannot_fail = write!(s, "(wait {w} :rounds {r} :timeouts {to}) ");
         }
         s.truncate(s.trim_end().len());
         s.push(')');

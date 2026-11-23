@@ -13,6 +13,10 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+stund.workspace = true
+saman.workspace = true
+annall.workspace = true
+eitri.workspace = true
 # The unit types: a length reaches this crate as `kvardi::Px` (the scale-zoom standard)
 kvardi = { path = "../../std/kvardi", version = "0.1.0" }
 # The image decoders (feature `images`, README "Image decoders"): exact pins, no default features (gif: only
@@ -27,6 +31,13 @@ sja = { path = "../sja", version = "0.1.0" }
 hlidskjalf = { path = "../../core/hlidskjalf", version = "0.1.0" }
 # Smiðja, the workbench model (README "Smiðja"): carried here for the same reason
 smidja = { path = "../smidja", version = "0.1.0" }
+
+[build-dependencies]
+villa.workspace = true
+annall.workspace = true
+
+[dev-dependencies]
+mot = { path = "../../std/mot", version = "0.1.0" }
 
 [features]
 default = ["images"]
@@ -45,3 +56,6 @@ panic = "unwind"
 lto = true
 codegen-units = 1
 debug = 1
+
+[lints]
+workspace = true

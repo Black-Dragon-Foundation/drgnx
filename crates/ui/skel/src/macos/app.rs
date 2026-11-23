@@ -32,6 +32,7 @@ use crate::scope::{Scope, ScopeStats, Taken};
 use crate::vars::Settings;
 use crate::wait::{self, Change, Reg, WaitOps, Woke};
 use glitnir::geom::Rect;
+use kvardi::Px;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -608,7 +609,7 @@ fn layer_damage(g: u64, w: i32, h: i32) -> Vec<Rect> {
         Some((rects, _)) => rects,
         None => glitnir::damage::with(g, |d| d.commit().to_vec()),
     };
-    let all = Rect::new(0, 0, w, h);
+    let all = Rect::new(Px(0), Px(0), Px(w), Px(h));
     rects
         .iter()
         .map(|r| r.intersect(&all))
@@ -872,7 +873,7 @@ impl ShellBackend for MacShell {
                     let f = n.window.frame();
                     let from =
                         objc2_foundation::NSPoint::new(f.origin.x, f.origin.y + f.size.height);
-                    let _ = win.window.cascadeTopLeftFromPoint(from);
+                    let _outcome_not_needed = win.window.cascadeTopLeftFromPoint(from);
                 }
             }
             Place::Shell => {}

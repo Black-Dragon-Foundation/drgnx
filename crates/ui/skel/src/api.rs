@@ -11,7 +11,7 @@ use glitnir::motion::MotionSpec;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::Thread;
-use std::time::Instant;
+use stund::Instant;
 
 pub type WindowId = u64;
 
@@ -249,8 +249,7 @@ pub trait ShellBackend {
     /// While `on`, leave the host thread's events (configures, the main queue's syncs) unread, as from a compositor
     /// whose answer is late; off, they are read at the next drain, in the order they came.  For tests
     /// (`nhwl--hold-configures`); `Unsupported` where the backend has no such queue.
-    fn hold_main(&mut self, on: bool) -> ShellResult {
-        let _ = on;
+    fn hold_main(&mut self, _on: bool) -> ShellResult {
         Err(ShellError::Unsupported)
     }
     /// Why the connection ended: a protocol error's text, `INTERFACE@ID: error CODE: MESSAGE`; empty while it lives
@@ -261,8 +260,7 @@ pub trait ShellBackend {
     /// Reconnect in place when the display goes (`on`; off at open).  With it on, a hangup posts `RECONNECTING`
     /// instead of `DISCONNECTED`; a protocol error still posts `DISCONNECTED`.  `Unsupported` when the connection
     /// cannot be made again (an inherited socket).
-    fn set_reconnect(&mut self, on: bool) -> ShellResult {
-        let _ = on;
+    fn set_reconnect(&mut self, _on: bool) -> ShellResult {
         Err(ShellError::Unsupported)
     }
     /// Up; reconnecting from the moment the host takes `RECONNECTING` until `reconnect` succeeds; lost once the host
@@ -275,8 +273,7 @@ pub trait ShellBackend {
     /// buffers are back, and `RECONNECTED` is posted), `Timeout` while the display is not there yet (call again
     /// later), `Disconnected` when the new display failed (a protocol error, a required global missing).  `Ok` when
     /// the connection is up; `State` while `RECONNECTING` waits to be taken.
-    fn reconnect(&mut self, timeout_ms: u32) -> ShellResult {
-        let _ = timeout_ms;
+    fn reconnect(&mut self, _timeout_ms: u32) -> ShellResult {
         Err(ShellError::Unsupported)
     }
 
@@ -296,9 +293,8 @@ pub trait ShellBackend {
         &mut self,
         desc: &WindowDesc,
         session_name: Option<&str>,
-        place: Place,
+        _place: Place,
     ) -> ShellResult<WindowId> {
-        let _ = place;
         self.window_new_named(desc, session_name)
     }
     /// The window and its dependents go, and the id with them.  A child whose hide leg runs (`set_motion`) finishes its
@@ -313,8 +309,7 @@ pub trait ShellBackend {
     fn set_min_size(&mut self, window: WindowId, w: i32, h: i32) -> ShellResult;
     /// Place the top-level `window` with its frame's top-left at (`x`, `y`) logical pixels from the main screen's
     /// top-left, as NS places a frame (`set-frame-position`).  `Unsupported` where clients have no position (Wayland).
-    fn move_to(&mut self, window: WindowId, x: i32, y: i32) -> ShellResult {
-        let _ = (window, x, y);
+    fn move_to(&mut self, _window: WindowId, _x: i32, _y: i32) -> ShellResult {
         Err(ShellError::Unsupported)
     }
     fn set_fullscreen(&mut self, window: WindowId, on: bool) -> ShellResult;
@@ -369,8 +364,7 @@ pub trait ShellBackend {
     /// The workbench's strips are on (`on`) or off for a decorated top-level (design §6.7): on macOS its content then
     /// runs under a transparent title bar with no title text, so the strips' title row sits in the title area beside
     /// the traffic lights.  Nothing where the title row replaces the client-side strip itself (Wayland).
-    fn set_title_area(&mut self, window: WindowId, on: bool) -> ShellResult {
-        let _ = (window, on);
+    fn set_title_area(&mut self, _window: WindowId, _on: bool) -> ShellResult {
         Ok(())
     }
     /// The window's opacity, a multiplier of its pixels' alpha (`u32::MAX` is opaque).  The window owes a commit
@@ -384,8 +378,7 @@ pub trait ShellBackend {
     /// `title` (`desc.flags` as a new one's), `NHSHELL_KIND_CHILD` a child of `desc.parent` at (`desc.x`, `desc.y`).
     /// Its children come along.  `Unsupported` where a window keeps its role (a Wayland surface): the host makes the
     /// window again.
-    fn reparent(&mut self, window: WindowId, desc: &ChildDesc, title: &str) -> ShellResult {
-        let _ = (window, desc, title);
+    fn reparent(&mut self, _window: WindowId, _desc: &ChildDesc, _title: &str) -> ShellResult {
         Err(ShellError::Unsupported)
     }
     /// Move a child (applied with its parent's next commit) or a popup (its anchor rectangle's origin).
@@ -585,8 +578,7 @@ pub trait ShellBackend {
     /// reached the compositor, and every event it sent before its answer has been handled (its records are queued).
     /// `Timeout` when no answer comes within `timeout`; `Unsupported` for a backend without one.
     #[doc(hidden)]
-    fn reader_roundtrip(&self, timeout: std::time::Duration) -> ShellResult {
-        let _ = timeout;
+    fn reader_roundtrip(&self, _timeout: std::time::Duration) -> ShellResult {
         Err(ShellError::Unsupported)
     }
 
@@ -612,21 +604,18 @@ pub trait ShellBackend {
     /// Post a `Timer` record at `CLOCK_MONOTONIC` nanoseconds `at_ns` (`None`: never), replacing the deadline set
     /// before: the host's own deadlines (the glue's minimap timers) end its wait as an event does.  `Unsupported` for
     /// a backend without one.
-    fn set_timer(&mut self, at_ns: Option<u64>) -> ShellResult {
-        let _ = at_ns;
+    fn set_timer(&mut self, _at_ns: Option<u64>) -> ShellResult {
         Err(ShellError::Unsupported)
     }
 
     /// A platform call by name with one text argument (`nhmac--call`): what Lisp asks of a platform that has no
     /// shared call for it.  `Arg` for a name the backend does not know; `Unsupported` for a backend with none.
-    fn app_call(&mut self, kind: &str, arg: &str) -> ShellResult {
-        let _ = (kind, arg);
+    fn app_call(&mut self, _kind: &str, _arg: &str) -> ShellResult {
         Err(ShellError::Unsupported)
     }
     /// A platform query by name (`nhmac--query`); the answer is text (a Lisp reader's form, by the kind's contract).
     /// It may run a modal session.
-    fn app_query(&mut self, kind: &str, arg: &str) -> ShellResult<String> {
-        let _ = (kind, arg);
+    fn app_query(&mut self, _kind: &str, _arg: &str) -> ShellResult<String> {
         Err(ShellError::Unsupported)
     }
 
@@ -635,11 +624,10 @@ pub trait ShellBackend {
     /// host waits in its own select.
     fn wait(
         &mut self,
-        want: &std::collections::BTreeSet<crate::wait::Reg>,
-        timeout: Option<std::time::Duration>,
-        out: &mut Vec<crate::wait::Reg>,
+        _want: &std::collections::BTreeSet<crate::wait::Reg>,
+        _timeout: Option<std::time::Duration>,
+        _out: &mut Vec<crate::wait::Reg>,
     ) -> ShellResult {
-        let _ = (want, timeout, out);
         Err(ShellError::Unsupported)
     }
 }
@@ -671,7 +659,7 @@ impl ThreadDone {
     /// Called by the thread as the last thing it does.
     pub fn set(&self) {
         self.done.store(true, Ordering::Release);
-        let waiter = self.waiter.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let waiter = saman::lock(&self.waiter).take();
         if let Some(t) = waiter {
             t.unpark();
         }
@@ -684,7 +672,7 @@ impl ThreadDone {
 
     /// Wait until `set`, at most until `deadline`; whether it was set.
     pub fn wait(&self, deadline: Instant) -> bool {
-        *self.waiter.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::thread::current());
+        *saman::lock(&self.waiter) = Some(std::thread::current());
         loop {
             if self.done.load(Ordering::Acquire) {
                 return true;

@@ -15,6 +15,7 @@
 //! contents needs the contents set to nil first (NS `:11311-11312`): [`Ring::commit`] says when.
 
 use glitnir::geom::Rect;
+use kvardi::Px;
 
 /// How many rectangles a slot keeps of what it owes; past it, their bounding box.
 pub const OWED_RECTS: usize = 32;
@@ -32,7 +33,7 @@ impl Fill {
     /// The bytes the copy moves for a `w` x `h` surface of 4-byte pixels.
     pub fn bytes(&self, w: i32, h: i32) -> u64 {
         match self {
-            Fill::All => Rect::new(0, 0, w, h).area() * 4,
+            Fill::All => Rect::new(Px(0), Px(0), Px(w), Px(h)).area() * 4,
             Fill::Rects(r) => r.iter().map(|r| r.area() * 4).sum(),
         }
     }
@@ -62,7 +63,7 @@ pub struct Ring {
 
 /// `rects` clipped to `w` x `h` and cut so that none overlaps another (no pixel is copied twice).
 pub fn disjoint(rects: &[Rect], w: i32, h: i32) -> Vec<Rect> {
-    let all = Rect::new(0, 0, w, h);
+    let all = Rect::new(Px(0), Px(0), Px(w), Px(h));
     let mut out: Vec<Rect> = Vec::new();
     for r in rects {
         let mut parts = vec![r.intersect(&all)];
@@ -81,10 +82,10 @@ fn subtract(a: Rect, b: Rect) -> impl Iterator<Item = Rect> {
         [a, Rect::default(), Rect::default(), Rect::default()]
     } else {
         [
-            Rect::new(a.x, a.y, a.w, i.y - a.y),
-            Rect::new(a.x, i.y + i.h, a.w, a.y + a.h - (i.y + i.h)),
-            Rect::new(a.x, i.y, i.x - a.x, i.h),
-            Rect::new(i.x + i.w, i.y, a.x + a.w - (i.x + i.w), i.h),
+            Rect::new(Px(a.x), Px(a.y), Px(a.w), Px(i.y - a.y)),
+            Rect::new(Px(a.x), Px(i.y + i.h), Px(a.w), Px(a.y + a.h - (i.y + i.h))),
+            Rect::new(Px(a.x), Px(i.y), Px(i.x - a.x), Px(i.h)),
+            Rect::new(Px(i.x + i.w), Px(i.y), Px(a.x + a.w - (i.x + i.w)), Px(i.h)),
         ]
     };
     parts.into_iter().filter(|r| !r.is_empty())
@@ -179,7 +180,7 @@ impl Ring {
         rects.extend_from_slice(damage);
         let out = disjoint(&rects, w, h);
         let area: u64 = out.iter().map(Rect::area).sum();
-        if area >= Rect::new(0, 0, w, h).area() {
+        if area >= Rect::new(Px(0), Px(0), Px(w), Px(h)).area() {
             Fill::All
         } else {
             Fill::Rects(out)
@@ -298,12 +299,13 @@ impl Pacer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kvardi::Px;
 
     const W: i32 = 100;
     const H: i32 = 50;
 
     fn r(x: i32, y: i32, w: i32, h: i32) -> Rect {
-        Rect::new(x, y, w, h)
+        Rect::new(Px(x), Px(y), Px(w), Px(h))
     }
 
     fn pk(slot: usize, busy: bool) -> Pick {

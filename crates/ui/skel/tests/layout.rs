@@ -10,10 +10,12 @@ use glitnir::ease::Curve;
 use glitnir::geom::Rect;
 use glitnir::layout::{Item, ItemKind, LayoutLeg};
 use glitnir::scene::LayerDesc;
+use kvardi::Px;
 use skel::api::*;
 use skel::event::*;
 use skel::wayland::WaylandShell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 /// One frame at 120 Hz.
 const STEP: u64 = 8_333_333;
@@ -25,10 +27,10 @@ const NEW: u32 = 0xff00_ff00;
 const CARD: u32 = 0xffff_ffff;
 const BG: u32 = 0xff20_2020;
 /// The window's text area in the 200x100 root, the glue's key for it, and two places of a card in it.
-const R: Rect = Rect::new(20, 10, 160, 80);
+const R: Rect = Rect::new(Px(20), Px(10), Px(160), Px(80));
 const KEY: u64 = 7;
-const A: Rect = Rect::new(30, 20, 40, 20);
-const B: Rect = Rect::new(120, 60, 40, 20);
+const A: Rect = Rect::new(Px(30), Px(20), Px(40), Px(20));
+const B: Rect = Rect::new(Px(120), Px(60), Px(40), Px(20));
 /// A pixel of the background away from both places.
 const AWAY: (usize, usize) = (100, 25);
 
@@ -160,7 +162,7 @@ impl Tree {
                 return;
             }
             assert!(Instant::now() < deadline, "never: {what}");
-            std::thread::sleep(Duration::from_millis(1));
+            stund::sleep_blocking(Duration::from_millis(1));
         }
     }
 
@@ -235,7 +237,11 @@ impl Tree {
         let snap = self.rec.snapshot();
         for y in R.y..R.y + R.h {
             for x in R.x..R.x + R.w {
-                let want = if card.contains(x, y) { CARD } else { NEW };
+                let want = if card.contains(Px(x), Px(y)) {
+                    CARD
+                } else {
+                    NEW
+                };
                 let p = Recorder::snapshot_pixel(&snap, x as usize, y as usize);
                 assert_eq!(p, want, "pixel ({x}, {y})");
             }

@@ -5,6 +5,7 @@
 use super::*;
 use crate::geom::Rect;
 use crate::shadow::{ShadowCache, ShadowSpec, ShadowTiles, step_for};
+use kvardi::Px as DevPx;
 use std::sync::{Arc, OnceLock};
 
 struct Rng(u64);
@@ -35,12 +36,13 @@ impl Rng {
 }
 
 fn seed(what: &str) -> u64 {
-    let s = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(1)
-        | 1;
-    eprintln!("{what} test seed {s}");
+    let s = {
+        use std::hash::{BuildHasher, Hasher};
+        std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+    } | 1;
+    annall::cli_err(&format!("{what} test seed {s}")).unwrap_or_default();
     s
 }
 
@@ -154,7 +156,10 @@ fn baseline_and_avx2_identical() {
             assert_eq!(kernels().name, k.name, "AVX2 is here, so it is the choice");
             tables.push(k);
         }
-        None => eprintln!("no AVX2 build on this machine: the baseline against the reference only"),
+        None => annall::cli_err(
+            "no AVX2 build on this machine: the baseline against the reference only",
+        )
+        .unwrap_or_default(),
     }
     for _ in 0..300 {
         let job = Job::random(&mut r, 70, 6);
@@ -427,7 +432,7 @@ fn ring_leaves_straight_edges_untouched() {
     let mut rng = Rng(seed("ring"));
     let k = kernels();
     let (w, h, stride) = (90usize, 60usize, 97usize);
-    let colour = 0xff20_4060;
+    let colour = crate::testkit::argb(mot::Token::Sel);
     for (r, b) in [(12u32, 2u32), (8, 1), (16, 3), (5, 5), (4, 7), (40, 2)] {
         let before: Vec<u32> = (0..stride * (h + 2)).map(|_| rng.premul()).collect();
         let mut px = before.clone();
@@ -587,7 +592,7 @@ fn spec(radius: f32, blur: f32, scale: f64) -> ShadowSpec {
         radius,
         blur,
         spread: 0.0,
-        colour: 0xff00_0000,
+        colour: crate::testkit::argb(mot::Token::Gap),
         scale,
     }
 }
@@ -634,10 +639,11 @@ fn shadow_tile_within_2_of_255() {
             let t = ShadowTiles::build(w, h, &spec(r, 2.0 * sigma, 1.0), 8, step);
             by_step.push((step, max_error(c, &t)));
         }
-        eprintln!(
+        annall::cli_err(&format!(
             "{w}x{h} r{r} σ{sigma}: as cached (1/{}) {err:.2}/255; by resolution {by_step:.2?}",
             tiles.step()
-        );
+        ))
+        .unwrap_or_default();
         assert!(err <= 2.0, "{w}x{h} r{r} σ{sigma}: {err:.2}/255 > 2/255");
         // DP-5: the coarsest resolution that passes
         if let Some(&(step, coarser)) = by_step.iter().find(|(s, _)| *s == 2 * tiles.step()) {
@@ -654,7 +660,10 @@ fn four_samples_fail_the_gate() {
     for (c, &(w, h, r, sigma)) in CASES.iter().enumerate() {
         let t = ShadowTiles::build(w, h, &spec(r, 2.0 * sigma, 1.0), 4, step_for(sigma));
         let err = max_error(c, &t);
-        eprintln!("{w}x{h} r{r} σ{sigma}: 4 samples: max error {err:.2}/255");
+        annall::cli_err(&format!(
+            "{w}x{h} r{r} σ{sigma}: 4 samples: max error {err:.2}/255"
+        ))
+        .unwrap_or_default();
         assert!(
             err > 2.0,
             "{w}x{h} r{r} σ{sigma}: 4 samples pass ({err:.2}/255)"
@@ -722,7 +731,7 @@ fn random_image(r: &mut Rng, h: usize, stride: usize) -> Vec<u32> {
 }
 
 fn full(w: usize, h: usize) -> Rect {
-    Rect::new(0, 0, w as i32, h as i32)
+    Rect::new(DevPx(0), DevPx(0), DevPx(w as i32), DevPx(h as i32))
 }
 
 #[test]
@@ -788,7 +797,7 @@ fn scale_half_matches_reference() {
 #[test]
 fn scale_avx2_equals_baseline() {
     let Some(avx) = avx2() else {
-        eprintln!("no AVX2 build on this machine");
+        annall::cli_err("no AVX2 build on this machine").unwrap_or_default();
         return;
     };
     let mut r = Rng(seed("scale-avx2"));
@@ -798,10 +807,10 @@ fn scale_avx2_equals_baseline() {
         let src = random_image(&mut r, h, ss);
         let s = [0.5, 0.96, 1.0, 1.04, 1.7, 0.03][r.below(6)] + r.below(100) as f32 / 1000.0;
         let clip = Rect::new(
-            r.below(5) as i32 - 2,
-            r.below(5) as i32 - 2,
-            1 + r.below(w + 3) as i32,
-            1 + r.below(h + 3) as i32,
+            DevPx(r.below(5) as i32 - 2),
+            DevPx(r.below(5) as i32 - 2),
+            DevPx(1 + r.below(w + 3) as i32),
+            DevPx(1 + r.below(h + 3) as i32),
         );
         let mut a = vec![0x5555_5555; ds * h];
         let mut b = a.clone();

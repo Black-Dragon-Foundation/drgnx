@@ -81,3 +81,35 @@ fn replace_file_keeps_old_on_failure() {
         0o640
     );
 }
+
+/// `read_file` and `read_string` read a regular file by its absolute path, refuse a link in any component, a file
+/// over the cap and text that is not UTF-8.
+#[test]
+fn read_file_never_follows_a_link_and_is_bounded() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let secret = outside.path().join("secret");
+    fs::write(&secret, b"hidden").unwrap();
+    let at = root.path().join("a.txt");
+    fs::write(&at, "héllo").unwrap();
+
+    assert_eq!(eitri::read_string(&at, 100).unwrap(), "héllo");
+    assert_eq!(eitri::read_file(&at, 100).unwrap(), "héllo".as_bytes());
+    assert!(matches!(
+        eitri::read_file(&at, 2),
+        Err(FsError::TooLarge { cap: 2 })
+    ));
+
+    symlink(&secret, root.path().join("link")).unwrap();
+    assert!(eitri::read_file(&root.path().join("link"), 100).is_err());
+    symlink(outside.path(), root.path().join("ldir")).unwrap();
+    let r = eitri::read_file(&root.path().join("ldir/secret"), 100);
+    assert!(matches!(r, Err(FsError::Link { .. })), "{r:?}");
+
+    let bad = root.path().join("bad");
+    fs::write(&bad, [0xff, 0xfe]).unwrap();
+    match eitri::read_string(&bad, 100) {
+        Err(FsError::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::InvalidData),
+        other => panic!("{other:?}"),
+    }
+}

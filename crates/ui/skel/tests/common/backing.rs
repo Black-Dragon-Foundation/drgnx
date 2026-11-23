@@ -4,6 +4,7 @@
 
 use glitnir::geom::Rect;
 use glitnir::scene::LayerDesc;
+use kvardi::Px;
 use skel::api::*;
 use skel::wayland::WaylandShell;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -63,7 +64,7 @@ impl Backing {
             id: self.g,
             parent: 0,
             kind: 1,
-            rect: Rect::new(0, 0, self.w, self.h),
+            rect: Rect::new(Px(0), Px(0), Px(self.w), Px(self.h)),
             scale: self.scale,
             visible: 1,
         };
@@ -83,7 +84,7 @@ impl Backing {
 
     /// Paint all of it.
     pub fn fill_all(&mut self, argb: u32) {
-        self.fill(Rect::new(0, 0, self.w, self.h), argb);
+        self.fill(Rect::new(Px(0), Px(0), Px(self.w), Px(self.h)), argb);
     }
 
     pub fn pixel(&self, x: i32, y: i32) -> u32 {

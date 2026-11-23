@@ -21,7 +21,8 @@ use crate::wayland::registry::Globals;
 use rustix::event::{PollFlags, Timespec};
 use rustix::fd::OwnedFd;
 use std::sync::{Arc, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_client::protocol::wl_data_device_manager::WlDataDeviceManager;
@@ -217,7 +218,7 @@ impl Selections {
 }
 
 pub fn lock(shared: &Shared) -> MutexGuard<'_, Selections> {
-    shared.selections.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(&shared.selections)
 }
 
 /// The slot of `kind` (`NHSHELL_SEL_*`).

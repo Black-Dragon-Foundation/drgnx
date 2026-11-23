@@ -41,7 +41,8 @@ pub fn connect(display: Option<&CStr>) -> ShellResult<Connection> {
     let path = if name.is_absolute() {
         name.to_path_buf()
     } else {
-        PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").ok_or(ShellError::Unsupported)?)
+        stig::system_runtime_dir()
+            .ok_or(ShellError::Unsupported)?
             .join(name)
     };
     let stream = UnixStream::connect(path).map_err(|_| ShellError::Unsupported)?;
@@ -65,7 +66,7 @@ pub fn socket_path(display: Option<&CStr>) -> Option<PathBuf> {
     if name.is_absolute() {
         Some(name.to_path_buf())
     } else {
-        Some(PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?).join(name))
+        Some(stig::system_runtime_dir()?.join(name))
     }
 }
 
@@ -141,8 +142,8 @@ unsafe extern "C" fn log_line(fmt: *const c_char, args: *mut c_void) {
     };
     let line = &buf[..n.min(buf.len() - 1)];
     // never unwind into libwayland
-    let _ = std::panic::catch_unwind(|| {
-        let _ = std::io::Write::write_all(&mut std::io::stderr(), line);
+    let _panic_stays_here = std::panic::catch_unwind(|| {
+        annall::cli_err(String::from_utf8_lossy(line).trim_end_matches('\n')).unwrap_or_default();
         if let Some(e) = parse_logged(&String::from_utf8_lossy(line)) {
             let mut kept = relock(&LOGGED);
             if kept.len() == LOGGED_KEPT {
@@ -195,12 +196,12 @@ impl Wake {
 
     pub fn signal(&self) {
         // Fails only when the counter would overflow, and then the descriptor is readable already.
-        let _ = rustix::io::write(&self.0, &1u64.to_ne_bytes());
+        let _wake_is_best_effort = rustix::io::write(&self.0, &1u64.to_ne_bytes());
     }
 
     pub fn drain(&self) {
         let mut buf = [0u8; 8];
-        let _ = rustix::io::read(&self.0, &mut buf);
+        let _wake_is_best_effort = rustix::io::read(&self.0, &mut buf);
     }
 
     pub fn raw(&self) -> i32 {
@@ -262,7 +263,7 @@ pub struct Shared {
 
 fn relock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     // A panic elsewhere never leaves these records half-written, so a poisoned lock is still usable.
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }
 
 impl Shared {

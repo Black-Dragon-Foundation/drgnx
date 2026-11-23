@@ -1,11 +1,12 @@
-//! The live theme switch: the `ui.theme` setting names the theme, and a change redraws.
+//! The live theme switch: the `ui.theme` setting names the theme, and a change redraws. It lives here, not in `mot`, so
+//! that the token table (`mot`) needs no settings and can sit under glitnir, skel, sja and smidja.
 
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
-use skipan::{Changed, Kind, Settings};
+use mot::Theme;
 
-use crate::Theme;
+use crate::{Changed, Kind, Settings};
 
 /// The setting that names the theme.
 pub const THEME_KEY: &str = "ui.theme";

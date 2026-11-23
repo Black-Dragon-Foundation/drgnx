@@ -14,11 +14,11 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 struct Recorder {
-    child: Child,
+    child: raun::proc::TestChild,
     dir: PathBuf,
 }
 
@@ -36,20 +36,21 @@ impl Recorder {
             std::env::temp_dir().join(format!("nhshell-textinput-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let profile = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ritari/profiles/sway.json");
-        let mut child = Command::new(bin)
-            .args(["--socket", "wl", "--control"])
-            .arg(dir.join("control"))
-            .arg("--profile")
-            .arg(&profile)
-            .env("XDG_RUNTIME_DIR", &dir)
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("spawn nh-recorder");
-        let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
-        assert_eq!(line, "READY\n");
+        let control = dir.join("control");
+        let mut child = raun::proc::TestChild::start(
+            Path::new(&bin),
+            &[
+                "--socket".as_ref(),
+                "wl".as_ref(),
+                "--control".as_ref(),
+                control.as_ref(),
+                "--profile".as_ref(),
+                profile.as_ref(),
+            ],
+            &[(stig::SYSTEM_RUNTIME_VAR, dir.as_os_str())],
+        )
+        .expect("spawn nh-recorder");
+        assert_eq!(child.read_line().unwrap(), "READY\n");
         Recorder { child, dir }
     }
 
@@ -69,7 +70,7 @@ impl Recorder {
             if line.contains("\"ok\":true") || Instant::now() > deadline {
                 return line;
             }
-            std::thread::sleep(Duration::from_millis(5));
+            stund::sleep_blocking(Duration::from_millis(5));
         }
     }
 
@@ -92,16 +93,15 @@ impl Recorder {
                 assert!(log.matches(&needle).count() >= n, "{req} x{n}: {log}");
                 return log;
             }
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         }
     }
 }
 
 impl Drop for Recorder {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.dir);
+        self.child.kill();
+        let _scratch_dir_may_be_gone = std::fs::remove_dir_all(&self.dir);
     }
 }
 

@@ -11,12 +11,13 @@ fn wait_for_a_popup_answers_with_its_id() {
     let mut env = Env::new("sway", &[]);
     let (_top, xs, _t) = env.toplevel(200, 200);
     let path = env.rec.control_path();
-    let asker = std::thread::spawn(move || {
+    let asker = saman::spawn_thread("ritari-test", move || {
         send(
             &path,
             json!({"cmd": "wait", "for": "popup", "before": [], "timeout_ms": 5000}),
         )
-    });
+    })
+    .unwrap();
     let wm: XdgWmBase = env.bind("xdg_wm_base", 6);
     let positioner = wm.create_positioner(&env.qh, ());
     positioner.set_size(50, 40);

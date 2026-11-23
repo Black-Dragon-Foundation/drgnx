@@ -8,11 +8,12 @@
 use crate::committed::Committed;
 use crate::geom::Rect;
 use crate::region::Region;
+use kvardi::Px;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Whole-frame damage: contains every rectangle a frame can have.
-pub const ALL: Rect = Rect::new(0, 0, i32::MAX, i32::MAX);
+pub const ALL: Rect = Rect::new(Px(0), Px(0), Px(i32::MAX), Px(i32::MAX));
 
 /// The pending damage of one frame, the last damage taken and the last committed (each borrowed by the caller until
 /// the next take, or the next commit), the windows scrolled since the damage was last taken, and how far each own
@@ -111,7 +112,7 @@ impl Damage {
                 continue;
             }
             moved.extend(crate::compose::subtract(*r, area));
-            moved.push(inside.translate(0, dy).intersect(&area));
+            moved.push(inside.translate(Px(0), Px(dy)).intersect(&area));
         }
         self.rebuild(moved.into_iter().filter(|r| !r.is_empty()).collect());
         self.add(exposed);
@@ -241,15 +242,16 @@ pub fn forget(frame: u64) {
 mod tests {
     use super::*;
     use crate::rng::XorShift;
+    use kvardi::Px;
 
     const N: i32 = 64;
 
     fn rand_rect(g: &mut XorShift) -> Rect {
         Rect::new(
-            g.below(N as u32 + 8) as i32 - 4,
-            g.below(N as u32 + 8) as i32 - 4,
-            g.below(24) as i32 - 3,
-            g.below(24) as i32 - 3,
+            Px(g.below(N as u32 + 8) as i32 - 4),
+            Px(g.below(N as u32 + 8) as i32 - 4),
+            Px(g.below(24) as i32 - 3),
+            Px(g.below(24) as i32 - 3),
         )
     }
 
@@ -276,7 +278,7 @@ mod tests {
                 for y in r.y..r.y + r.h.max(0) {
                     for x in r.x..r.x + r.w.max(0) {
                         assert!(
-                            out.iter().any(|o| o.contains(x, y)),
+                            out.iter().any(|o| o.contains(Px(x), Px(y))),
                             "seed {seed}: pixel {x},{y} lost"
                         );
                     }
@@ -294,29 +296,29 @@ mod tests {
     #[test]
     fn whole_frame_damage_absorbs_the_rest() {
         let mut d = Damage::default();
-        d.add(Rect::new(5, 5, 10, 10));
+        d.add(Rect::new(Px(5), Px(5), Px(10), Px(10)));
         d.add(ALL);
-        d.add(Rect::new(100, 200, 30, 4));
+        d.add(Rect::new(Px(100), Px(200), Px(30), Px(4)));
         assert_eq!(d.take(), &[ALL]);
     }
 
     #[test]
     fn a_frame_cleared_whole_reads_back_as_one_rect() {
         let mut d = Damage::default();
-        d.add(Rect::new(0, 0, 800, 600));
+        d.add(Rect::new(Px(0), Px(0), Px(800), Px(600)));
         for y in 0..30 {
-            d.add(Rect::new(8, y * 20, 600, 20));
+            d.add(Rect::new(Px(8), Px(y * 20), Px(600), Px(20)));
         }
-        assert_eq!(d.take(), &[Rect::new(0, 0, 800, 600)]);
+        assert_eq!(d.take(), &[Rect::new(Px(0), Px(0), Px(800), Px(600))]);
     }
 
     #[test]
     fn take_empties_the_damage() {
         let mut d = Damage::default();
-        d.add(Rect::new(1, 2, 3, 4));
-        d.add(Rect::new(0, 0, 0, 9));
+        d.add(Rect::new(Px(1), Px(2), Px(3), Px(4)));
+        d.add(Rect::new(Px(0), Px(0), Px(0), Px(9)));
         assert!(!d.is_empty());
-        assert_eq!(d.take(), &[Rect::new(1, 2, 3, 4)]);
+        assert_eq!(d.take(), &[Rect::new(Px(1), Px(2), Px(3), Px(4))]);
         assert!(d.is_empty());
         assert!(d.take().is_empty());
     }
@@ -324,28 +326,31 @@ mod tests {
     #[test]
     fn scroll_damages_the_area_and_the_exposed_strip() {
         let mut d = Damage::default();
-        d.scroll(Rect::new(0, 20, 400, 300), Rect::new(0, 280, 400, 40));
+        d.scroll(
+            Rect::new(Px(0), Px(20), Px(400), Px(300)),
+            Rect::new(Px(0), Px(280), Px(400), Px(40)),
+        );
         let out = d.take().to_vec();
-        assert!(out.contains(&Rect::new(0, 20, 400, 300)));
+        assert!(out.contains(&Rect::new(Px(0), Px(20), Px(400), Px(300))));
         assert!(
             out.iter()
-                .any(|o| o.contains(0, 319) && o.contains(399, 300))
+                .any(|o| o.contains(Px(0), Px(319)) && o.contains(Px(399), Px(300)))
         );
     }
 
     #[test]
     fn commit_takes_the_damage_and_keeps_it_until_the_next_commit() {
         let f = 7101;
-        with(f, |d| d.add(Rect::new(0, 0, 8, 2)));
+        with(f, |d| d.add(Rect::new(Px(0), Px(0), Px(8), Px(2))));
         let (p, n) = commit(f);
         assert_eq!(n, 1);
         // a debug take between two commits leaves the committed rectangles alone
-        with(f, |d| d.add(Rect::new(40, 40, 1, 1)));
+        with(f, |d| d.add(Rect::new(Px(40), Px(40), Px(1), Px(1))));
         assert_eq!(take(f).1, 1);
         // SAFETY: valid until F's next commit or forget.
         assert_eq!(
             unsafe { std::slice::from_raw_parts(p, n) },
-            &[Rect::new(0, 0, 8, 2)]
+            &[Rect::new(Px(0), Px(0), Px(8), Px(2))]
         );
         assert_eq!(commit(f).1, 0);
         forget(f);
@@ -359,12 +364,12 @@ mod tests {
     #[test]
     fn frames_are_separate_and_forgotten() {
         let (a, b) = (7001, 7002);
-        with(a, |d| d.add(Rect::new(0, 0, 4, 4)));
-        with(b, |d| d.add(Rect::new(9, 9, 1, 1)));
+        with(a, |d| d.add(Rect::new(Px(0), Px(0), Px(4), Px(4))));
+        with(b, |d| d.add(Rect::new(Px(9), Px(9), Px(1), Px(1))));
         let (p, n) = take(a);
         assert_eq!(n, 1);
         // SAFETY: valid until A's next take or forget; nothing else touches A here.
-        assert_eq!(unsafe { *p }, Rect::new(0, 0, 4, 4));
+        assert_eq!(unsafe { *p }, Rect::new(Px(0), Px(0), Px(4), Px(4)));
         assert_eq!(take(a).1, 0);
         forget(b);
         assert_eq!(take(b), (std::ptr::null(), 0));

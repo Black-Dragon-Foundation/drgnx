@@ -34,7 +34,8 @@ use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 use wayland_client::backend::WaylandError;
 use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::{Connection, Dispatch, QueueHandle};
@@ -227,7 +228,7 @@ impl WaylandShell {
         let path = self.socket_path.clone().ok_or(Step::Failed)?;
         // the old reader's last act was posting RECONNECTING: it has finished or is about to
         if let Some(t) = self.reader.take() {
-            let _ = t.join();
+            let _thread_panic_seen_elsewhere = t.join();
         }
         match conn::connect_again(&path) {
             Ok(stream) => self.switch_to(stream),
@@ -243,7 +244,8 @@ impl WaylandShell {
         let conn = Connection::from_socket(stream).map_err(|_| Step::Failed)?;
         // the descriptor the host shuts down when it abandons the shell follows the connection
         if let Some(d) = &mut self.socket_dup {
-            let _ = rustix::io::dup3(conn.backend().poll_fd(), d, rustix::io::DupFlags::CLOEXEC);
+            let _wake_is_best_effort =
+                rustix::io::dup3(conn.backend().poll_fd(), d, rustix::io::DupFlags::CLOEXEC);
         }
         let queue = conn.new_event_queue::<MainState>();
         let mqh = queue.handle();
@@ -362,7 +364,7 @@ impl WaylandShell {
         let presenter_was_on = self.reconnect.take().is_some_and(|r| r.presenter_was_on);
         self.remake_windows()?;
         if presenter_was_on {
-            let _ = self.set_presenter_thread_impl(true);
+            let _outcome_not_needed = self.set_presenter_thread_impl(true);
         }
         self.shared.post(Record::new(ShellEvent::Reconnected, 0, 0));
         self.shared.wake.signal();
@@ -403,7 +405,7 @@ impl WaylandShell {
         tops.sort_unstable();
         for id in tops {
             // only a missing core global fails, and `bind_globals` checked those
-            let _ = self.toplevel_again(id, names.get(&id).map(String::as_str));
+            let _outcome_not_needed = self.toplevel_again(id, names.get(&id).map(String::as_str));
         }
         self.children_again();
         let m = &mut self.main;

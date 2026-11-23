@@ -12,7 +12,8 @@ use crate::control::{err, write_reply};
 use crate::state::State;
 use serde_json::{json, Value};
 use std::os::unix::net::UnixStream;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 pub enum Cond {
     Popup {

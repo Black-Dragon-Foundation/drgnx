@@ -4,13 +4,13 @@
 //! device px, so a run's width equals `string-pixel-width`. A run never draws outside its clip: when its glyphs pass
 //! the clip's right edge it keeps those that end before the ellipsis's start, then draws the ellipsis.
 
-use crate::atlas::{AtlasKind, GlyphKey};
+use crate::atlas::{AtlasKind, GlyphId};
 use crate::geom::Rect;
 
 /// One shaped glyph: its key, its pen x from the run's origin (device px), its advance, and its atlas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlacedGlyph {
-    pub key: GlyphKey,
+    pub key: GlyphId,
     pub x: i32,
     pub adv: i32,
     pub kind: AtlasKind,
@@ -19,7 +19,7 @@ pub struct PlacedGlyph {
 /// The ellipsis a run ends with when it does not fit: its glyph and advance (shaped in the run's font).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ellipsis {
-    pub key: GlyphKey,
+    pub key: GlyphId,
     pub adv: i32,
     pub kind: AtlasKind,
 }

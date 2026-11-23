@@ -476,7 +476,7 @@ pub unsafe extern "C" fn glitnir_img_anim_free(anim: *mut c_void) {
         // SAFETY: per the contract, a Box<Anim> handed out by glitnir_img_decode.
         let state = unsafe { Box::from_raw(anim as *mut anim::Anim) };
         // dropping frees plain memory only; a panic cannot happen, but must not cross the boundary either
-        let _ = catch_unwind(AssertUnwindSafe(move || drop(state)));
+        let _panic_stays_here = catch_unwind(AssertUnwindSafe(move || drop(state)));
     }
 }
 

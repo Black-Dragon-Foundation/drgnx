@@ -170,7 +170,7 @@ impl SeatHandler for State {
                 let hotspot = with_states(&s, |st| {
                     st.data_map
                         .get::<Mutex<CursorImageAttributes>>()
-                        .map(|m| m.lock().unwrap().hotspot)
+                        .map(|m| saman::lock(m).hotspot)
                 });
                 json!({
                     "req": "set_cursor",
@@ -278,11 +278,11 @@ impl Dispatch<ZwpTextInputV3, Arc<TiData>> for State {
         use zwp_text_input_v3::Request as R;
         let entry = match request {
             R::Enable => {
-                *data.pending_enable.lock().unwrap() = Some(true);
+                *saman::lock(&data.pending_enable) = Some(true);
                 json!({"req": "text_input.enable"})
             }
             R::Disable => {
-                *data.pending_enable.lock().unwrap() = Some(false);
+                *saman::lock(&data.pending_enable) = Some(false);
                 json!({"req": "text_input.disable"})
             }
             R::SetSurroundingText {
@@ -306,7 +306,7 @@ impl Dispatch<ZwpTextInputV3, Arc<TiData>> for State {
             } => json!({"req": "text_input.set_cursor_rectangle", "rect": [x, y, width, height]}),
             R::Commit => {
                 let n = data.commits.fetch_add(1, Ordering::SeqCst) + 1;
-                if let Some(on) = data.pending_enable.lock().unwrap().take() {
+                if let Some(on) = saman::lock(&data.pending_enable).take() {
                     data.enabled.store(on, Ordering::SeqCst);
                 }
                 json!({"req": "text_input.commit", "serial": n})
@@ -327,7 +327,7 @@ impl Dispatch<ZwpTextInputV3, Arc<TiData>> for State {
 }
 
 /// The surface a `focus` command names.
-pub(crate) fn find_surface(state: &mut State, v: &Value) -> Result<WlSurface, String> {
+pub(crate) fn find_surface(state: &mut State, v: &Value) -> villa::Result<WlSurface> {
     state.surfaces.retain(|s| s.is_alive());
     state.toplevels.retain(|t| t.alive());
     match v {
@@ -338,14 +338,16 @@ pub(crate) fn find_surface(state: &mut State, v: &Value) -> Result<WlSurface, St
                 .iter()
                 .find(|s| crate::state::uid(s) == id)
                 .cloned()
-                .ok_or_else(|| "no such surface".to_string())
+                .ok_or_else(|| villa::Error::not_found("no such surface"))
         }
         Value::String(s) if s == "toplevel" => state
             .toplevels
             .last()
             .map(|t| t.wl_surface().clone())
-            .ok_or_else(|| "no toplevel".to_string()),
-        _ => Err("\"surface\" must be an id or \"toplevel\"".into()),
+            .ok_or_else(|| villa::Error::not_found("no toplevel")),
+        _ => Err(villa::Error::invalid(
+            "\"surface\" must be an id or \"toplevel\"",
+        )),
     }
 }
 
@@ -490,7 +492,7 @@ fn focus(state: &mut State, req: &Value) -> Value {
         Some(Value::Null) => None,
         Some(v) => match find_surface(state, v) {
             Ok(s) => Some(s),
-            Err(e) => return err(e),
+            Err(e) => return err(e.to_string()),
         },
         None => return err("\"surface\" is required"),
     };

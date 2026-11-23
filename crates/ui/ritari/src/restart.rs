@@ -50,9 +50,9 @@ impl Restart {
 }
 
 /// Bind the listening socket and serve it from the event loop.
-pub fn listen(state: &mut State) -> Result<(), String> {
-    let source =
-        ListeningSocketSource::with_name(&state.restart.socket).map_err(|e| e.to_string())?;
+pub fn listen(state: &mut State) -> villa::Result<()> {
+    let source = ListeningSocketSource::with_name(&state.restart.socket)
+        .map_err(|e| villa::Error::unavailable("The socket can't be bound.").with_source(e))?;
     let handle = state.handle.clone();
     let token = handle
         .insert_source(source, |stream, _, state| {
@@ -62,14 +62,16 @@ pub fn listen(state: &mut State) -> Result<(), String> {
                 state.note_client_pid(&client);
             }
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            villa::Error::unavailable("The socket can't be served.").with_detail(e.to_string())
+        })?;
     state.restart.token = Some(token);
     Ok(())
 }
 
 fn after(state: &State, ms: u64, f: impl FnOnce(&mut State) + 'static) {
     let mut f = Some(f);
-    let _ = state.handle.insert_source(
+    let _registered = state.handle.insert_source(
         Timer::from_duration(Duration::from_millis(ms)),
         move |_, _, state| {
             if let Some(f) = f.take() {
@@ -87,7 +89,7 @@ fn err(msg: impl Into<String>) -> Value {
 pub fn command(state: &mut State, cmd: &str, req: &Value) -> Value {
     match cmd {
         "connections" => {
-            let live = state.clients.lock().unwrap().len();
+            let live = saman::lock(&state.clients).len();
             json!({"ok": true, "accepted": state.restart.accepted, "live": live})
         }
         "restart_up" => {
@@ -96,7 +98,7 @@ pub fn command(state: &mut State, cmd: &str, req: &Value) -> Value {
             }
             match listen(state) {
                 Ok(()) => json!({"ok": true}),
-                Err(e) => err(e),
+                Err(e) => err(e.to_string()),
             }
         }
         _ => restart(state, req),
@@ -119,7 +121,7 @@ fn restart(state: &mut State, req: &Value) -> Value {
             }
             match Profile::load(&state.restart.profile_dir.join(format!("{name}.json"))) {
                 Ok(p) => p,
-                Err(e) => return err(e),
+                Err(e) => return err(format!("{e:?}")),
             }
         }
         None => state.restart.profile.clone().expect("configured at start"),
@@ -142,7 +144,7 @@ fn restart(state: &mut State, req: &Value) -> Value {
     match (mode, state.restart.token) {
         (_, None) => {}
         ("keep-socket", Some(token)) if down_ms > 0 => {
-            let _ = state.handle.disable(&token);
+            let _already_disabled = state.handle.disable(&token);
         }
         ("keep-socket", Some(_)) => {}
         (_, Some(token)) => {
@@ -153,12 +155,12 @@ fn restart(state: &mut State, req: &Value) -> Value {
     match mode {
         "keep-socket" if down_ms > 0 => after(state, down_ms, |state| {
             if let Some(token) = state.restart.token {
-                let _ = state.handle.enable(&token);
+                let _already_enabled = state.handle.enable(&token);
             }
         }),
         "rebind" => after(state, down_ms, |state| {
             if state.restart.token.is_none() {
-                let _ = listen(state);
+                let _still_down = listen(state);
             }
         }),
         _ => {}

@@ -12,7 +12,8 @@ use objc2_app_kit::{
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 #[repr(C)]
 #[derive(Clone, Copy)]

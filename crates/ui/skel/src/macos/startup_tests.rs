@@ -11,7 +11,7 @@ use super::*;
 fn startup_keeps_no_pool_past_its_call() {
     crate::with_pool(init);
     crate::with_pool(|| {
-        let _ = NSLocale::currentLocale().localeIdentifier();
+        let _identifier_only_to_open_the_pool = NSLocale::currentLocale().localeIdentifier();
     });
     crate::with_pool(init);
 }

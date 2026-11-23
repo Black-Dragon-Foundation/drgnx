@@ -81,9 +81,7 @@ static WIDTHS: Mutex<Option<Arc<Widths>>> = Mutex::new(None);
 
 /// The current character widths snapshot (all 1 until the host sends one).
 pub fn widths() -> Arc<Widths> {
-    WIDTHS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+    saman::lock(&WIDTHS)
         .get_or_insert_with(Default::default)
         .clone()
 }
@@ -91,7 +89,7 @@ pub fn widths() -> Arc<Widths> {
 /// Make RANGES (`(first, last, width)`, the characters whose width is not 1) the current widths; returns its
 /// generation.  Models built before keep theirs until they are built again.
 pub fn set_widths(ranges: Vec<(u32, u32, u8)>) -> u64 {
-    let mut w = WIDTHS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut w = saman::lock(&WIDTHS);
     let next = w.as_ref().map_or(0, |w| w.generation) + 1;
     *w = Some(Arc::new(Widths::new(next, ranges)));
     next
@@ -140,6 +138,13 @@ pub struct Model {
     pub edits: u64,
     /// Bumped by every change of the lines or of the hidden ones (what a drawing of the rows depends on).
     generation: u64,
+}
+
+fn compile(re: &str) -> villa::Result<Regex> {
+    Regex::new(re).map_err(|e| {
+        villa::Error::invalid(format!("The pattern `{re}` is not a valid expression."))
+            .with_detail(e.to_string())
+    })
 }
 
 impl Model {
@@ -191,33 +196,36 @@ impl Model {
             let text: Vec<u8> = parts.concat();
             let (mb, tw, ws) = (self.multibyte, self.tab_width, self.widths.clone());
             let (re, hre) = (self.section_re.clone(), self.heading_re.clone());
-            let h = std::thread::spawn(move || {
+            let h = saman::spawn_thread("hlidskjalf-build", move || {
                 let idx = LineIndex::new(index::parse_with(&[&text], mb, tw, true, &ws));
                 let found = re.map_or_else(Vec::new, |re| sections::scan(&re, &text, 1, mb));
                 let heads = hre.map_or_else(Vec::new, |re| sections::scan(&re, &text, 1, mb));
                 (idx, found, heads)
             });
-            self.idx = None;
-            self.sections.clear();
-            self.headings.clear();
-            self.building = Some((h, Vec::new()));
-        } else {
-            self.building = None;
-            self.idx = Some(LineIndex::new(index::parse_with(
-                parts,
-                self.multibyte,
-                self.tab_width,
-                true,
-                &self.widths,
-            )));
-            let text = parts.concat();
-            let scan = |re: &Option<Regex>| match re {
-                Some(re) => sections::scan(re, &text, 1, self.multibyte),
-                None => Vec::new(),
-            };
-            self.sections = scan(&self.section_re);
-            self.headings = scan(&self.heading_re);
+            // no thread to be had: the lines are built here, as when no background build was asked for
+            if let Ok(h) = h {
+                self.idx = None;
+                self.sections.clear();
+                self.headings.clear();
+                self.building = Some((h, Vec::new()));
+                return;
+            }
         }
+        self.building = None;
+        self.idx = Some(LineIndex::new(index::parse_with(
+            parts,
+            self.multibyte,
+            self.tab_width,
+            true,
+            &self.widths,
+        )));
+        let text = parts.concat();
+        let scan = |re: &Option<Regex>| match re {
+            Some(re) => sections::scan(re, &text, 1, self.multibyte),
+            None => Vec::new(),
+        };
+        self.sections = scan(&self.section_re);
+        self.headings = scan(&self.heading_re);
     }
 
     pub fn set_text_kind(&mut self, multibyte: bool, tab_width: u16) {
@@ -387,9 +395,9 @@ impl Model {
     /// The MARK sections' expression (Rust regex syntax; `None`: none are looked for).  The sections are found again
     /// when the lines are next built, which the caller asks for (the text is the host's).  An expression that does not
     /// compile changes nothing.
-    pub fn set_section_regex(&mut self, re: Option<&str>) -> Result<(), String> {
+    pub fn set_section_regex(&mut self, re: Option<&str>) -> villa::Result<()> {
         self.section_re = match re {
-            Some(r) => Some(Regex::new(r).map_err(|e| e.to_string())?),
+            Some(r) => Some(compile(r)?),
             None => None,
         };
         self.sections.clear();
@@ -405,9 +413,9 @@ impl Model {
         &mut self,
         indent: bool,
         heading_re: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> villa::Result<()> {
         let re = match heading_re {
-            Some(r) => Some(Regex::new(r).map_err(|e| e.to_string())?),
+            Some(r) => Some(compile(r)?),
             None => None,
         };
         self.indent_folds = indent;

@@ -13,6 +13,10 @@ match stund::timeout(Duration::from_secs(5), reply).await {
 }
 ```
 
+- Code with no executor (a polling loop, a test's thread) uses `stund::Instant` (`now()`, `elapsed()`, `+`/`-` with a
+  `Duration`, `checked_duration_since`) and `stund::sleep_blocking(d)`, which read and wait on the same installed
+  clock, so no code names `std::time::Instant` or `std::thread::sleep`. A calloop or smithay API that wants a
+  `std::time::Instant` is given a duration from `stund::Instant` instead (`Timer::from_duration`).
 - With no clock installed these are tokio's. A test's `raun::Sandbox` installs a virtual clock; every timer then waits
   on virtual time that `sb.advance(d)` moves, so no test depends on how fast the machine is.
 - Waiting for something outside the clock (a child's exit, a socket) is an event wait and stays real.

@@ -13,7 +13,6 @@ use wayland_client::{Connection, Dispatch, QueueHandle, delegate_noop};
 use wayland_protocols::xdg::shell::client::xdg_toplevel::XdgToplevel;
 
 #[allow(
-    clippy::all,
     dead_code,
     unused_imports,
     unused_unsafe,

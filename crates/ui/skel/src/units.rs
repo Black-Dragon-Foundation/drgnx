@@ -7,6 +7,24 @@
 //! conversion between the two goes through [`Scale`]; the macOS backend reads AppKit's factor only in
 //! `macos/scale.rs`.  The test `the_macos_backend_converts_only_here` holds both rules.
 
+/// LOGICAL logical pixels as device pixels at SCALE, through the one conversion (the scale-zoom standard).
+pub fn device_px(logical: i32, scale: f64) -> i32 {
+    kvardi::Lp(logical as f32)
+        .to_px(&kvardi::Scale {
+            output: scale as f32,
+            ..kvardi::Scale::default()
+        })
+        .0
+}
+
+/// A length of LOGICAL logical pixels in device pixels at SCALE, not rounded (a blur's sigma).
+pub fn device_len(logical: f32, scale: f64) -> f32 {
+    kvardi::Lp(logical).to_px_f32(&kvardi::Scale {
+        output: scale as f32,
+        ..kvardi::Scale::default()
+    })
+}
+
 /// A backing scale, in 120ths (the host's unit for it: 120 is 1x, 240 is 2x).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Scale(u32);
@@ -177,7 +195,7 @@ mod tests {
             if !name.ends_with(".rs") || name == "scale.rs" {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).unwrap();
+            let text = eitri::read_string(&path, 1 << 22).unwrap();
             for (n, line) in text.lines().enumerate() {
                 let code = line.split("//").next().unwrap_or("");
                 if code.contains("backingScaleFactor")

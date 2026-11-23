@@ -10,6 +10,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+pub mod proc;
+
 pub use stund::Manual as VirtualClock;
 
 /// One sandbox at a time per process: the paths and the clock are process-wide.

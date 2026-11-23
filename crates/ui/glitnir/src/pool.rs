@@ -9,6 +9,7 @@
 //! age `G - g + 1` (1 is the previous frame); 0 is a buffer that was never written.
 
 use crate::geom::Rect;
+use kvardi::Px;
 
 /// A quiet period after which idle buffers are released (2 s).
 pub const IDLE_NS: u64 = 2_000_000_000;
@@ -261,7 +262,7 @@ impl Ring {
 
     /// `r`, in the view's coordinates, in the buffer's.
     pub fn to_buffer(&self, r: Rect) -> Rect {
-        r.translate(0, self.offset)
+        r.translate(Px(0), Px(self.offset))
     }
 
     /// The row ranges, `start..end` (empty when `start == end`), more than `view_h / 2` rows above and below the view:
@@ -279,6 +280,7 @@ impl Ring {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kvardi::Px;
 
     const S: u64 = 1_000_000_000;
 
@@ -354,8 +356,10 @@ mod tests {
 
     #[test]
     fn many_rects_merge_to_the_bounding_box() {
-        let rs: Vec<Rect> = (0..40).map(|i| Rect::new(i, 0, 1, 1)).collect();
-        assert_eq!(merged(&rs), vec![Rect::new(0, 0, 40, 1)]);
+        let rs: Vec<Rect> = (0..40)
+            .map(|i| Rect::new(Px(i), Px(0), Px(1), Px(1)))
+            .collect();
+        assert_eq!(merged(&rs), vec![Rect::new(Px(0), Px(0), Px(40), Px(1))]);
     }
 
     #[test]
@@ -366,8 +370,8 @@ mod tests {
         assert_eq!(r.scroll(-30, 100), RingStep::Moved);
         assert_eq!(r.offset, 80);
         assert_eq!(
-            r.to_buffer(Rect::new(0, 70, 10, 30)),
-            Rect::new(0, 150, 10, 30)
+            r.to_buffer(Rect::new(Px(0), Px(70), Px(10), Px(30))),
+            Rect::new(Px(0), Px(150), Px(10), Px(30))
         );
         assert_eq!(r.scroll(-20, 100), RingStep::Moved);
         assert_eq!(r.offset, 100, "the view ends at the buffer's last row");

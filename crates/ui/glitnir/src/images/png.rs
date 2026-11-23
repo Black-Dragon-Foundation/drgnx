@@ -183,9 +183,9 @@ impl Convert<'_> {
                     }
                     d => {
                         // png_do_expand: low-depth gray and its key scale to 8 bits
-                        let scale = 255 / ((1u16 << d) - 1);
-                        let key = self.trns.map(|t| (t[0] & ((1 << d) - 1)) * scale);
-                        let v8 = v * scale;
+                        let expand = 255 / ((1u16 << d) - 1);
+                        let key = self.trns.map(|t| (t[0] & ((1 << d) - 1)) * expand);
+                        let v8 = v * expand;
                         (v8 as u8, if key == Some(v8) { 0 } else { 255 })
                     }
                 };

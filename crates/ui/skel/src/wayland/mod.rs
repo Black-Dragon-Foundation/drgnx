@@ -467,7 +467,7 @@ impl Drop for WaylandShell {
         self.shared.stop.store(true, Ordering::Release);
         self.shared.reader_wake.signal();
         if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
+            let _thread_panic_seen_elsewhere = reader.join();
         }
         for p in self.main.presents.values() {
             present::lock(p).release();

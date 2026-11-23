@@ -18,15 +18,15 @@ use crate::focus::{BottomRef, Dir, FocusTarget, Vis};
 use crate::intent::{How, OpenOpts, TabFields, Target};
 use crate::layout::{Dir4, MoveTarget, Side};
 use crate::model::{
-    Axis, EdgeKey, Focus, GroupId, Node, Origin, OverlayId, OverlayKind, PlaceState, Rect, Ref,
-    Refusal, Region, RightTab, SideFold, Source, TabId, Version, WinId, WinSize, Workbench,
+    Axis, Focus, GroupId, Node, Origin, OverlayId, OverlayKind, PlaceState, Rect, Ref, Refusal,
+    Region, RightTab, SideFold, Source, TabId, Version, WinId, WinSize, WindowEdge, Workbench,
 };
 use crate::multi::TearOut;
 use crate::persist::Resolved;
 use crate::preset::{CenterSpec, Preset, SideSpec};
-use crate::query::{Snapshot, Token};
+use crate::query::{QueryItem, Snapshot};
 use std::cell::RefCell;
-use std::time::Instant;
+use stund::Instant;
 
 pub const SMIDJA_OK: i32 = 0;
 pub const SMIDJA_E_PANIC: i32 = -1;
@@ -404,12 +404,12 @@ fn win_size(v: &Val) -> R<WinSize> {
     }
 }
 
-fn edge_key(v: &Val) -> R<EdgeKey> {
+fn edge_key(v: &Val) -> R<WindowEdge> {
     let (h, r) = form(v)?;
     match h.as_str() {
-        "region" => Ok(EdgeKey::Region(region(nth(r, 0))?)),
-        "group" => Ok(EdgeKey::Group(GroupId(int(nth(r, 0))? as u64))),
-        "section" => Ok(EdgeKey::Section(
+        "region" => Ok(WindowEdge::Region(region(nth(r, 0))?)),
+        "group" => Ok(WindowEdge::Group(GroupId(int(nth(r, 0))? as u64))),
+        "section" => Ok(WindowEdge::Section(
             u32::try_from(int(nth(r, 0))?).map_err(|_| Bad::Arg("section index".into()))?,
         )),
         x => bad(format!("region, group or section: {x}")),
@@ -716,15 +716,15 @@ fn bool_val(b: bool) -> Val {
     if b { sy("t") } else { Val::Nil }
 }
 
-fn tokens_val(toks: &[Token]) -> Val {
+fn tokens_val(toks: &[QueryItem]) -> Val {
     let mut stack: Vec<Vec<Val>> = vec![Vec::new()];
     for t in toks {
         match t {
-            Token::Int(i) => stack.last_mut().unwrap().push(Val::Int(*i)),
-            Token::Str(s) => stack.last_mut().unwrap().push(st(s)),
-            Token::Sym(s) => stack.last_mut().unwrap().push(sy(s)),
-            Token::Open => stack.push(Vec::new()),
-            Token::Close => {
+            QueryItem::Int(i) => stack.last_mut().unwrap().push(Val::Int(*i)),
+            QueryItem::Str(s) => stack.last_mut().unwrap().push(st(s)),
+            QueryItem::Sym(s) => stack.last_mut().unwrap().push(sy(s)),
+            QueryItem::Open => stack.push(Vec::new()),
+            QueryItem::Close => {
                 if stack.len() > 1 {
                     let l = stack.pop().unwrap();
                     stack.last_mut().unwrap().push(Val::List(l));

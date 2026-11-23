@@ -4,6 +4,7 @@
 //! the limit holds, so a region may cover more than was added but never less.
 
 use crate::geom::Rect;
+use kvardi::Px;
 
 /// The most rectangles a region keeps.
 pub const MAX_RECTS: usize = 32;
@@ -46,7 +47,7 @@ impl Region {
 
     pub fn translate(&mut self, dx: i32, dy: i32) {
         for r in &mut self.rects {
-            *r = r.translate(dx, dy);
+            *r = r.translate(Px(dx), Px(dy));
         }
     }
 
@@ -93,20 +94,21 @@ impl<'a> IntoIterator for &'a Region {
 mod tests {
     use super::*;
     use crate::rng::XorShift;
+    use kvardi::Px;
 
     const N: i32 = 64;
 
     fn rand_rect(g: &mut XorShift) -> Rect {
         Rect::new(
-            g.below(N as u32 + 8) as i32 - 4,
-            g.below(N as u32 + 8) as i32 - 4,
-            g.below(20) as i32 - 3,
-            g.below(20) as i32 - 3,
+            Px(g.below(N as u32 + 8) as i32 - 4),
+            Px(g.below(N as u32 + 8) as i32 - 4),
+            Px(g.below(20) as i32 - 3),
+            Px(g.below(20) as i32 - 3),
         )
     }
 
     fn covers(reg: &Region, x: i32, y: i32) -> bool {
-        reg.iter().any(|r| r.contains(x, y))
+        reg.iter().any(|r| r.contains(Px(x), Px(y)))
     }
 
     #[test]
@@ -120,7 +122,7 @@ mod tests {
                 reg.add(r);
                 for y in 0..N {
                     for x in 0..N {
-                        if r.contains(x, y) {
+                        if r.contains(Px(x), Px(y)) {
                             bitmap[(y * N + x) as usize] = true;
                         }
                     }
@@ -142,23 +144,26 @@ mod tests {
     fn merge_keeps_at_most_32() {
         let mut reg = Region::new();
         for i in 0..200 {
-            reg.add(Rect::new(i * 10, (i % 7) * 10, 4, 4));
+            reg.add(Rect::new(Px(i * 10), Px((i % 7) * 10), Px(4), Px(4)));
             assert!(reg.iter().count() <= MAX_RECTS);
         }
         let mut other = Region::new();
         for i in 0..40 {
-            other.add(Rect::new(i * 3, 500, 1, 1));
+            other.add(Rect::new(Px(i * 3), Px(500), Px(1), Px(1)));
         }
         reg.union(&other);
         assert!(reg.iter().count() <= MAX_RECTS);
         // The cheapest pair merges: two adjacent rects collapse before a distant one joins.
         let mut r = Region::new();
         for i in 0..32 {
-            r.add(Rect::new(i * 100, 0, 10, 10));
+            r.add(Rect::new(Px(i * 100), Px(0), Px(10), Px(10)));
         }
-        r.add(Rect::new(10, 0, 10, 10));
+        r.add(Rect::new(Px(10), Px(0), Px(10), Px(10)));
         assert_eq!(r.iter().count(), 32);
-        assert!(r.iter().any(|x| *x == Rect::new(0, 0, 20, 10)));
+        assert!(
+            r.iter()
+                .any(|x| *x == Rect::new(Px(0), Px(0), Px(20), Px(10)))
+        );
     }
 
     #[test]
@@ -175,7 +180,7 @@ mod tests {
             a.translate(dx, dy);
             let mut t = reg.clone();
             t.translate(dx, dy);
-            let b = t.clip(c.translate(dx, dy));
+            let b = t.clip(c.translate(Px(dx), Px(dy)));
             assert_eq!(a, b, "seed {seed}");
         }
     }
@@ -183,13 +188,13 @@ mod tests {
     #[test]
     fn empty_rects_are_ignored() {
         let mut reg = Region::new();
-        reg.add(Rect::new(0, 0, 0, 5));
-        reg.add(Rect::new(0, 0, 5, -1));
+        reg.add(Rect::new(Px(0), Px(0), Px(0), Px(5)));
+        reg.add(Rect::new(Px(0), Px(0), Px(5), Px(-1)));
         reg.add(Rect::default());
         assert!(reg.is_empty());
         assert_eq!(reg.area(), 0);
-        reg.add(Rect::new(1, 1, 2, 3));
+        reg.add(Rect::new(Px(1), Px(1), Px(2), Px(3)));
         assert_eq!(reg.area(), 6);
-        assert!(reg.clip(Rect::new(10, 10, 5, 5)).is_empty());
+        assert!(reg.clip(Rect::new(Px(10), Px(10), Px(5), Px(5))).is_empty());
     }
 }
