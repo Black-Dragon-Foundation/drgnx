@@ -570,10 +570,14 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
   kept in `Coord::projects()`. Writes register a new project; reads use only one the store knows. It is never an
   argument.
 - **Answers** are text plus `structuredContent` (`Authored` text: `{text, by, class, tx, project, trust}`), a
-  `resource_link` (`drgnx://entity/ID`) per entity named only when the call has `links: true` (the rows are already in
-  the text and `structuredContent`), and `_meta["dev.drgnx/notices"] = n`, with a last text line
-  `notices: n (read_inbox)` only when n > 0. Untrusted text, the caller's own included, is fenced in the text. Lists
-  hold 50 rows and a `next_cursor` (`o:N`).
+  `resource_link` (`drgnx://entity/ID`) per entity named only when the call has `links: true`, and `_meta["dev.drgnx/notices"] = n`, with a last text line
+  `notices: n (read_inbox)` only when n > 0. Lists hold 50 rows and a `next_cursor` (`o:N`). The rows of a list or
+  graph answer (`task_read` find, ready and mine; `graph_read` neighbors, path, history and who_touched) are only in
+  `structuredContent`, where every text field carries its `trust`; the text is the header ("3 tasks (rows in the
+  structured result)", with `; more: cursor o:50` on a full page), so an outside agent's context holds each row once
+  (Claude Code hands `structuredContent` to the model, checked 2026-11-23). These tools declare an `outputSchema`, which
+  `mimir` needs to send `structuredContent` at all. `task_read get` and the write answers keep their one task in the
+  text, and untrusted text there, the caller's own included, is fenced.
 - `task_write` and `note_add` take an optional `req`; a repeat returns the first answer. A caller without a project
   (a folder that is no git repository) writes nothing: `task_write create` and `note_add` are refused ("you have no
   project"). `access_request` makes (or

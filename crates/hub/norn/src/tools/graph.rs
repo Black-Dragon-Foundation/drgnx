@@ -175,12 +175,8 @@ async fn graph_read(coord: &Coord, who: &Identity, a: GraphReadArgs) -> Result<A
                         return Err(CoordError::Refused(format!("no such entity: {id}")));
                     }
                     let versions = urdr::graph::hist::history(c, n, since)?;
-                    let mut text = vec![format!("{} ({} versions)", e.id, versions.len())];
-                    for v in &versions {
-                        text.push(format!("ver {} tx {} by {} ({}): {}", v.ver, v.tx, v.actor, v.class.as_str(), v.fields.join(", ")));
-                    }
                     Ok(Answer {
-                        text: text.join("\n"),
+                        text: format!("{} versions (rows in the structured result)", versions.len()),
                         structured: json!({"id": e.id, "versions": versions, "truncated": null, "hidden": 0}),
                         links: vec![e.id],
                     })
@@ -209,19 +205,16 @@ async fn walk_answer(coord: &Coord, out: WalkOut) -> Result<Answer, String> {
         .db()
         .read(move |c| {
             let mut ids: HashMap<i64, String> = HashMap::new();
-            let (mut nodes, mut text, mut links) = (Vec::new(), Vec::new(), Vec::new());
+            let (mut nodes, mut links) = (Vec::new(), Vec::new());
             for n in &out.nodes {
                 ids.insert(n.n, n.id.clone());
                 let title = match entity::by_n(c, n.n)? {
                     Some(e) => authored(c, &e, "title")?,
                     None => None,
                 };
-                let shown = title.as_ref().map(|t| t.render()).unwrap_or_default();
-                text.push(format!("{} ({}) depth {} {shown}", n.id, n.kind, n.depth));
                 let mut o = json!({"id": n.id, "kind": n.kind, "depth": n.depth, "title": title, "seen": n.seen});
                 if let Some(h) = n.hot {
                     o["hot"] = json!(h);
-                    text.push(format!("  {} has {h} links: not expanded", n.id));
                 }
                 nodes.push(o);
                 links.push(n.id.clone());
@@ -231,16 +224,15 @@ async fn walk_answer(coord: &Coord, out: WalkOut) -> Result<Answer, String> {
                 .iter()
                 .filter_map(|e| Some(json!({"src": ids.get(&e.src)?, "kind": e.kind, "dst": ids.get(&e.dst)?})))
                 .collect();
-            for e in &edges {
-                text.push(format!("{} -{}-> {}", e["src"].as_str().unwrap_or(""), e["kind"].as_str().unwrap_or(""), e["dst"].as_str().unwrap_or("")));
-            }
-            text.push(format!(
-                "truncated: {}; hidden: {}",
+            let text = format!(
+                "{} nodes, {} links; truncated: {}; hidden: {} (rows in the structured result)",
+                nodes.len(),
+                edges.len(),
                 out.truncated.map_or("no".to_owned(), |t| json!(t).as_str().unwrap_or("").to_owned()),
                 out.hidden
-            ));
+            );
             Ok(Answer {
-                text: text.join("\n"),
+                text,
                 structured: json!({"nodes": nodes, "links": edges, "truncated": out.truncated, "hidden": out.hidden}),
                 links,
             })
@@ -321,23 +313,15 @@ fn who_touched(
             }
         }
     }
-    let mut text = vec![format!(
-        "{id}: {state}{}",
+    let text = format!(
+        "{id}: {state}{}; {} sessions touched it; hidden: {hidden} (rows in the structured result)",
         moved_to
             .as_ref()
-            .map_or(String::new(), |m| format!(" to {m}"))
-    )];
-    for t in &touched {
-        text.push(format!(
-            "{} (agent {}) tx {}",
-            t["session"].as_str().unwrap_or(""),
-            t["agent"].as_str().unwrap_or("?"),
-            t["tx"]
-        ));
-    }
-    text.push(format!("truncated: no; hidden: {hidden}"));
+            .map_or(String::new(), |m| format!(" to {m}")),
+        touched.len()
+    );
     Ok(Answer {
-        text: text.join("\n"),
+        text,
         structured: json!({"path": id, "state": state, "moved_to": moved_to, "touched": touched, "truncated": null, "hidden": hidden}),
         links: live.map(|e| e.id).into_iter().collect(),
     })

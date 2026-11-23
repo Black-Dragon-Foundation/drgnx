@@ -531,22 +531,30 @@ pub(super) fn page(rows: Vec<(Value, String)>, offset: usize, key: &str) -> Answ
         .iter()
         .filter_map(|(v, _)| v.get("id").and_then(Value::as_str).map(str::to_owned))
         .collect();
-    let mut text: Vec<String> = rows.iter().map(|(_, l)| l.clone()).collect();
-    if text.is_empty() {
-        text.push("nothing".into());
-    }
     let mut structured = json!({});
     structured[key] = Value::Array(rows.iter().map(|(v, _)| v.clone()).collect());
+    let mut next = None;
     if more {
-        let next = format!("o:{}", offset + LIST_MAX);
-        text.push(format!("more: cursor {next}"));
-        structured["next_cursor"] = json!(next);
+        let n = format!("o:{}", offset + LIST_MAX);
+        structured["next_cursor"] = json!(n);
+        next = Some(n);
     }
+    let text = header(key, rows.len(), next.as_deref());
     Answer {
-        text: text.join("\n"),
+        text,
         structured,
         links,
     }
+}
+
+/// The text of a list answer (MP-7 follow-up): how many rows and of what, where they are, and the cursor of the
+/// next page.  The rows themselves are only in `structuredContent`.
+pub(super) fn header(key: &str, n: usize, next: Option<&str>) -> String {
+    let mut text = format!("{n} {key} (rows in the structured result)");
+    if let Some(c) = next {
+        text.push_str(&format!("; more: cursor {c}"));
+    }
+    text
 }
 
 /// The 4th field of a requiring op: its value, or what is missing.
@@ -690,7 +698,7 @@ fn cap(mut a: Answer, limit: usize) -> Answer {
             rows.truncate(limit);
         }
         a.links.truncate(limit);
-        a.text = a.text.lines().take(limit).collect::<Vec<_>>().join("\n");
+        a.text = header("tasks", limit, None);
         if let Some(o) = a.structured.as_object_mut() {
             o.remove("next_cursor");
         }
