@@ -112,3 +112,21 @@ fn the_real_clock_ignores_the_installed_one() {
     let spent = a.elapsed();
     assert!(spent >= Duration::from_millis(5) && spent < Duration::from_secs(60));
 }
+
+#[test]
+fn next_due_is_the_wait_to_the_earliest_timer() {
+    let clock = stund::Manual::default();
+    let _on = clock.on_this_thread();
+    assert_eq!(clock.next_due(), None, "no timer waits");
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut late = pin!(stund::sleep(Duration::from_secs(9)));
+    let mut early = pin!(stund::sleep(Duration::from_secs(4)));
+    assert!(late.as_mut().poll(&mut cx).is_pending());
+    assert!(early.as_mut().poll(&mut cx).is_pending());
+    assert_eq!(clock.next_due(), Some(Duration::from_secs(4)));
+    clock.advance(Duration::from_secs(1));
+    assert_eq!(clock.next_due(), Some(Duration::from_secs(3)));
+    clock.advance(Duration::from_secs(3));
+    assert_eq!(early.as_mut().poll(&mut cx), Poll::Ready(()));
+    assert_eq!(clock.next_due(), Some(Duration::from_secs(5)));
+}

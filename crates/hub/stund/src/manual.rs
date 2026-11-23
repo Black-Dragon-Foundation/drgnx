@@ -50,6 +50,16 @@ impl Manual {
         self.state().sleepers.len()
     }
 
+    /// How long until the earliest waiting timer is due (zero when it is overdue), or `None` with no timer waiting: a
+    /// test that drives a runtime to its end advances by this whenever every task is idle.
+    pub fn next_due(&self) -> Option<Duration> {
+        let st = self.state();
+        st.sleepers
+            .keys()
+            .next()
+            .map(|(due, _)| due.saturating_sub(st.elapsed))
+    }
+
     /// Move the clock by D: every sleeper due by then is woken, in order of its deadline.
     pub fn advance(&self, d: Duration) {
         let woken: Vec<Waker> = {

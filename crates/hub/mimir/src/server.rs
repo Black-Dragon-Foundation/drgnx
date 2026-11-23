@@ -474,7 +474,9 @@ impl<Ctx: Send + Sync + 'static> Conn<Ctx> {
         }
         let structured_allowed = tool.output_schema().is_some();
         let (ctx, tools) = (self.ctx.clone(), self.tools.clone());
-        let run = tokio::spawn(async move { tools[i].call(&*ctx, args).await });
+        let run = saman::spawn("mimir-tool-call", async move {
+            tools[i].call(&*ctx, args).await
+        });
         match run.await {
             Ok(ToolResult::Ok { text, structured }) => {
                 let mut result = json!({"content": [{"type": "text", "text": text}]});
@@ -680,8 +682,8 @@ mod tests {
         let serving = serve(ctx.clone(), tools(), ServerInfo::default(), sr, sw, limits);
         let feeding = async move {
             // the server may end first (a line too long): the write then fails
-            let _ = cw.write_all(input.as_bytes()).await;
-            let _ = cw.shutdown().await;
+            cw.write_all(input.as_bytes()).await.unwrap_or_default();
+            cw.shutdown().await.unwrap_or_default();
         };
         let reading = async move {
             let mut out = String::new();
@@ -717,14 +719,17 @@ mod tests {
         let (sr, sw) = tokio::io::split(server);
         let (cr, mut cw) = tokio::io::split(client);
         let (tx, rx) = watch::channel(tools());
-        let serving = tokio::spawn(serve_live(
-            Arc::new(Calls::default()),
-            rx,
-            ServerInfo::default(),
-            sr,
-            sw,
-            Limits::default(),
-        ));
+        let serving = saman::spawn(
+            "mimir-serve-live",
+            serve_live(
+                Arc::new(Calls::default()),
+                rx,
+                ServerInfo::default(),
+                sr,
+                sw,
+                Limits::default(),
+            ),
+        );
         let mut lines = tokio::io::BufReader::new(cr).lines();
         let send = async |cw: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>, line: String| {
             cw.write_all(format!("{line}\n").as_bytes()).await.unwrap();
@@ -1169,8 +1174,8 @@ mod tests {
             Limits::default(),
         );
         let feeding = async move {
-            let _ = cw.write_all(input.as_bytes()).await;
-            let _ = cw.shutdown().await;
+            cw.write_all(input.as_bytes()).await.unwrap_or_default();
+            cw.shutdown().await.unwrap_or_default();
         };
         let reading = async move {
             let mut out = String::new();

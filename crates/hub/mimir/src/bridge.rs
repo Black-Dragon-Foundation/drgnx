@@ -25,11 +25,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use runstav::jsonrpc::{ErrorObject, INTERNAL_ERROR, INVALID_REQUEST, Id};
+use saman::Task;
 use serde_json::{Value, json};
+use stund::Instant;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
-use tokio::time::Instant;
 
 use crate::jsonrpc_glue as glue;
 use crate::server::Limits;
@@ -163,7 +163,10 @@ where
     O: AsyncWrite + Unpin,
 {
     let (tx, mut rx) = mpsc::channel(QUEUE);
-    let agent = tokio::spawn(read_agent(stdin, tx, opts.limits.max_in));
+    let agent = saman::spawn(
+        "mimir-agent-reader",
+        read_agent(stdin, tx, opts.limits.max_in),
+    );
     let now = Instant::now();
     let mut b = Bridge {
         conn: Arc::new(conn),
@@ -189,10 +192,9 @@ where
             break end;
         }
     };
-    agent.abort();
-    if let Some(live) = b.live.take() {
-        live.reader.abort();
-    }
+    // dropping a task cancels it
+    drop(agent);
+    drop(b.live.take());
     end
 }
 
@@ -475,7 +477,7 @@ fn tool_error(text: &str, modern: bool) -> Value {
 struct Live<W> {
     w: W,
     rx: mpsc::Receiver<String>,
-    reader: JoinHandle<()>,
+    reader: Task<()>,
 }
 
 /// An agent request sent on the live connection, waiting for its answer.
@@ -555,7 +557,7 @@ async fn dialed<T>(d: &mut Option<BoxFuture<'static, Result<T, Dial>>>) -> Resul
 
 async fn sleep_until(at: Option<Instant>) {
     match at {
-        Some(t) => tokio::time::sleep_until(t).await,
+        Some(t) => stund::sleep(t.saturating_duration_since(Instant::now())).await,
         None => std::future::pending().await,
     }
 }
@@ -659,7 +661,10 @@ impl<C: Connector, O: AsyncWrite + Unpin> Bridge<C, O> {
     /// A dial made it: replay what the agent said to the hub before, then what waited.
     async fn connected(&mut self, r: BufReader<C::R>, w: C::W) -> Result<(), BridgeEnd> {
         let (tx, rx) = mpsc::channel(QUEUE);
-        let reader = tokio::spawn(read_hub(r, tx, self.opts.limits.max_out));
+        let reader = saman::spawn(
+            "mimir-hub-reader",
+            read_hub(r, tx, self.opts.limits.max_out),
+        );
         self.live = Some(Live { w, rx, reader });
         self.next_dial = None;
         self.backoff = self.opts.backoff;
@@ -698,9 +703,7 @@ impl<C: Connector, O: AsyncWrite + Unpin> Bridge<C, O> {
 
     /// The socket closed (or a write to it failed): every request in flight is answered, never sent again.
     async fn dropped(&mut self) -> Result<(), BridgeEnd> {
-        if let Some(live) = self.live.take() {
-            live.reader.abort();
-        }
+        drop(self.live.take());
         self.ours.clear();
         let now = Instant::now();
         self.away_since = now;
@@ -892,7 +895,7 @@ impl<C: Connector, O: AsyncWrite + Unpin> Bridge<C, O> {
         bytes.extend_from_slice(line.as_bytes());
         bytes.push(b'\n');
         let w = &mut live.w;
-        let wrote = tokio::time::timeout(self.opts.wait, async {
+        let wrote = stund::timeout(self.opts.wait, async {
             w.write_all(&bytes).await?;
             w.flush().await?;
             io::Result::Ok(())
@@ -956,6 +959,7 @@ mod tests {
     use crate::tool::{Tool, ToolResult};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use stund::Manual;
     use tokio::io::{DuplexStream, ReadHalf, WriteHalf, duplex, split};
 
     /// What the fake hub's tools saw.
@@ -1046,7 +1050,7 @@ mod tests {
     struct HubState {
         up: bool,
         tools: Tools,
-        servers: Vec<JoinHandle<End>>,
+        servers: Vec<Task<End>>,
         dials: Vec<Instant>,
     }
 
@@ -1080,9 +1084,8 @@ mod tests {
 
         /// The hub goes away: every connection's server ends, so its socket closes.
         fn drop_all(&self) {
-            for s in self.hub.lock().expect("hub").servers.drain(..) {
-                s.abort();
-            }
+            // a dropped task is cancelled
+            self.hub.lock().expect("hub").servers.clear();
         }
 
         fn dials(&self) -> Vec<Instant> {
@@ -1102,7 +1105,6 @@ mod tests {
         type R = ReadHalf<DuplexStream>;
         type W = WriteHalf<DuplexStream>;
 
-        #[doc = "paused clock: only the paused tests of this module dial"]
         fn connect(&self) -> BoxFuture<'static, Result<(Self::R, Self::W), Dial>> {
             let (hub, ctx) = (self.hub.clone(), self.ctx.clone());
             Box::pin(async move {
@@ -1114,14 +1116,10 @@ mod tests {
                 let (bridge_end, hub_end) = duplex(1 << 16);
                 let (r, w) = split(hub_end);
                 let tools = h.tools.clone();
-                h.servers.push(tokio::spawn(serve(
-                    ctx,
-                    tools,
-                    ServerInfo::default(),
-                    r,
-                    w,
-                    Limits::default(),
-                )));
+                h.servers.push(saman::spawn(
+                    "fake-hub",
+                    serve(ctx, tools, ServerInfo::default(), r, w, Limits::default()),
+                ));
                 Ok(split(bridge_end))
             })
         }
@@ -1129,17 +1127,19 @@ mod tests {
 
     /// The agent's side of a running bridge.
     struct Agent {
+        clock: Manual,
         w: WriteHalf<DuplexStream>,
         r: BufReader<ReadHalf<DuplexStream>>,
-        bridge: JoinHandle<BridgeEnd>,
+        bridge: Task<BridgeEnd>,
     }
 
-    fn start(fake: &Fake, opts: BridgeOpts) -> Agent {
+    fn start(clock: &Manual, fake: &Fake, opts: BridgeOpts) -> Agent {
         let (agent_end, bridge_end) = duplex(1 << 20);
         let (stdin, stdout) = split(bridge_end);
-        let bridge = tokio::spawn(run(fake.clone(), stdin, stdout, opts));
+        let bridge = saman::spawn("bridge", run(fake.clone(), stdin, stdout, opts));
         let (r, w) = split(agent_end);
         Agent {
+            clock: clock.clone(),
             w,
             r: BufReader::new(r),
             bridge,
@@ -1155,7 +1155,9 @@ mod tests {
 
         async fn recv(&mut self) -> Value {
             let mut line = String::new();
-            let n = self.r.read_line(&mut line).await.expect("stdout");
+            let n = drive(&self.clock, self.r.read_line(&mut line))
+                .await
+                .expect("stdout");
             assert!(n > 0, "the bridge closed stdout");
             serde_json::from_str(&line).expect("a JSON line")
         }
@@ -1183,252 +1185,303 @@ mod tests {
         req(id, "tools/call", json!({"name": name, "arguments": {}}))
     }
 
-    /// Wait (in steps of 1 ms, on the paused clock) until F holds.
-    async fn until(what: &str, f: impl Fn() -> bool) {
-        for _ in 0..1_000_000 {
-            if f() {
-                return;
-            }
-            tokio::time::advance(Duration::from_millis(1)).await;
+    /// Rounds of `yield_now` that let every ready task run until none is: everything here is in memory on one
+    /// thread, so the chain of wake-ups behind one send is far shorter.
+    const IDLE_ROUNDS: usize = 100;
+
+    async fn idle() {
+        for _ in 0..IDLE_ROUNDS {
+            tokio::task::yield_now().await;
         }
-        panic!("never: {what}");
+    }
+
+    /// FUT to its end, the clock moved to its next timer whenever every task is idle (what tokio's paused clock does):
+    /// virtual time passes exactly as far as the bridge's waits need. Nothing idle and no timer waiting is a hang in
+    /// the code under test, so it fails the test.
+    async fn drive<T>(clock: &Manual, fut: impl Future<Output = T>) -> T {
+        let mut fut = std::pin::pin!(fut);
+        loop {
+            tokio::select! {
+                biased;
+                r = &mut fut => return r,
+                () = idle() => {}
+            }
+            let Some(due) = clock.next_due() else {
+                panic!("stuck: every task is idle and no timer waits");
+            };
+            clock.advance(due);
+        }
+    }
+
+    /// Wait (moving the clock as `drive` does) until F holds.
+    async fn until(clock: &Manual, what: &str, f: impl Fn() -> bool) {
+        drive(clock, async {
+            while !f() {
+                idle().await;
+            }
+        })
+        .await;
+        assert!(f(), "{what}");
+    }
+
+    /// BODY on a current-thread runtime with a clock of its own that only `drive` moves.
+    fn in_clock(body: impl AsyncFnOnce(Manual)) {
+        saman::block_on_current(async {
+            let clock = Manual::default();
+            let _on = clock.on_this_thread();
+            body(clock.clone()).await;
+        });
     }
 
     fn ms(d: Duration) -> u128 {
         d.as_millis()
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn replays_initialize_and_drops_its_answer() {
-        let fake = Fake::new();
-        let mut a = start(&fake, BridgeOpts::default());
-        a.handshake().await;
-        a.send(call(1, "echo")).await;
-        assert_eq!(a.recv().await["result"]["content"][0]["text"], "ok");
-        fake.drop_all();
-        until("the bridge redialed", || fake.dials().len() == 2).await;
-        // no handshake from the agent: the replayed one serves, and its answer never reaches the agent
-        a.send(call(2, "echo")).await;
-        let answer = a.recv().await;
-        assert_eq!(answer["id"], 2, "{answer}");
-        assert_eq!(answer["result"]["content"][0]["text"], "ok", "{answer}");
-        a.send(req(3, "ping", json!({}))).await;
-        assert_eq!(
-            a.recv().await,
-            json!({"jsonrpc": "2.0", "id": 3, "result": {}})
-        );
-        assert_eq!(fake.echoes(), 2);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_call_in_flight_at_the_drop_is_an_error_never_resent() {
-        let fake = Fake::new();
-        let mut a = start(&fake, BridgeOpts::default());
-        a.handshake().await;
-        a.send(call(1, "slow")).await;
-        until("the hub has the call", || fake.slows() == 1).await;
-        fake.drop_all();
-        assert_eq!(
-            a.recv().await,
-            json!({"jsonrpc": "2.0", "id": 1, "result": {
-                "content": [{"type": "text", "text": WENT_AWAY}],
-                "isError": true,
-            }})
-        );
-        until("the bridge redialed", || fake.dials().len() == 2).await;
-        a.send(call(2, "echo")).await;
-        assert_eq!(a.recv().await["id"], 2);
-        assert_eq!(fake.slows(), 1, "the call in flight was never sent again");
-        // another request in flight is -32603
-        a.send(req(3, "tools/call", json!({"name": "slow"}))).await;
-        until("the hub has the second call", || fake.slows() == 2).await;
-        // queued behind the call, which the hub never answers
-        a.send(req(4, "tools/list", json!({}))).await;
-        tokio::time::sleep(Duration::from_millis(1)).await;
-        fake.drop_all();
-        let mut answers = [a.recv().await, a.recv().await];
-        answers.sort_by_key(|x| x["id"].as_i64());
-        assert_eq!(answers[0]["result"]["isError"], true);
-        assert_eq!(
-            answers[1]["error"],
-            json!({"code": INTERNAL_ERROR, "message": WENT_AWAY_ERROR})
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_call_while_away_waits_then_errors() {
-        let fake = Fake::new();
-        let mut a = start(&fake, BridgeOpts::default());
-        a.handshake().await;
-        fake.set_up(false);
-        fake.drop_all();
-        until("the bridge tried again", || fake.dials().len() >= 2).await;
-        let t0 = Instant::now();
-        a.send(call(1, "echo")).await;
-        a.send(req(2, "resources/list", json!({}))).await;
-        assert_eq!(
-            a.recv().await,
-            json!({"jsonrpc": "2.0", "id": 1, "result": {
-                "content": [{"type": "text", "text": RESTARTING}],
-                "isError": true,
-            }})
-        );
-        assert_eq!(
-            a.recv().await,
-            json!({"jsonrpc": "2.0", "id": 2, "error": {"code": INTERNAL_ERROR, "message": RESTARTING_ERROR}})
-        );
-        let waited = t0.elapsed();
-        assert!((10_000..10_100).contains(&ms(waited)), "waited {waited:?}");
-        assert_eq!(fake.echoes(), 0);
-        // the hub back within the wait: the call goes through
-        let back = fake.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(3)).await;
-            back.set_up(true);
+    #[test]
+    fn replays_initialize_and_drops_its_answer() {
+        in_clock(async |clock| {
+            let fake = Fake::new();
+            let mut a = start(&clock, &fake, BridgeOpts::default());
+            a.handshake().await;
+            a.send(call(1, "echo")).await;
+            assert_eq!(a.recv().await["result"]["content"][0]["text"], "ok");
+            fake.drop_all();
+            until(&clock, "the bridge redialed", || fake.dials().len() == 2).await;
+            // no handshake from the agent: the replayed one serves, and its answer never reaches the agent
+            a.send(call(2, "echo")).await;
+            let answer = a.recv().await;
+            assert_eq!(answer["id"], 2, "{answer}");
+            assert_eq!(answer["result"]["content"][0]["text"], "ok", "{answer}");
+            a.send(req(3, "ping", json!({}))).await;
+            assert_eq!(
+                a.recv().await,
+                json!({"jsonrpc": "2.0", "id": 3, "result": {}})
+            );
+            assert_eq!(fake.echoes(), 2);
         });
-        a.send(call(3, "echo")).await;
-        let answer = a.recv().await;
-        assert_eq!(answer["id"], 3, "{answer}");
-        assert_eq!(answer["result"]["content"][0]["text"], "ok", "{answer}");
-        assert_eq!(fake.echoes(), 1);
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn tools_list_from_the_cache_while_away() {
-        let fake = Fake::new();
-        let mut a = start(&fake, BridgeOpts::default());
-        a.handshake().await;
-        a.send(req(1, "tools/list", json!({}))).await;
-        let listed = a.recv().await;
-        assert_eq!(listed["result"]["tools"].as_array().map(Vec::len), Some(2));
-        fake.set_up(false);
-        fake.drop_all();
-        until("the bridge tried again", || fake.dials().len() >= 2).await;
-        let t0 = Instant::now();
-        a.send(req(2, "tools/list", json!({}))).await;
-        let cached = a.recv().await;
-        assert_eq!(cached["id"], 2);
-        assert_eq!(cached["result"], listed["result"]);
-        a.send(req(3, "ping", json!({}))).await;
-        assert_eq!(
-            a.recv().await,
-            json!({"jsonrpc": "2.0", "id": 3, "result": {}})
-        );
-        assert!(ms(t0.elapsed()) < 100, "answered at once");
+    #[test]
+    fn a_call_in_flight_at_the_drop_is_an_error_never_resent() {
+        in_clock(async |clock| {
+            let fake = Fake::new();
+            let mut a = start(&clock, &fake, BridgeOpts::default());
+            a.handshake().await;
+            a.send(call(1, "slow")).await;
+            until(&clock, "the hub has the call", || fake.slows() == 1).await;
+            fake.drop_all();
+            assert_eq!(
+                a.recv().await,
+                json!({"jsonrpc": "2.0", "id": 1, "result": {
+                    "content": [{"type": "text", "text": WENT_AWAY}],
+                    "isError": true,
+                }})
+            );
+            until(&clock, "the bridge redialed", || fake.dials().len() == 2).await;
+            a.send(call(2, "echo")).await;
+            assert_eq!(a.recv().await["id"], 2);
+            assert_eq!(fake.slows(), 1, "the call in flight was never sent again");
+            // another request in flight is -32603
+            a.send(req(3, "tools/call", json!({"name": "slow"}))).await;
+            until(&clock, "the hub has the second call", || fake.slows() == 2).await;
+            // queued behind the call, which the hub never answers
+            a.send(req(4, "tools/list", json!({}))).await;
+            // let the bridge forward the line to the hub
+            idle().await;
+            fake.drop_all();
+            let mut answers = [a.recv().await, a.recv().await];
+            answers.sort_by_key(|x| x["id"].as_i64());
+            assert_eq!(answers[0]["result"]["isError"], true);
+            assert_eq!(
+                answers[1]["error"],
+                json!({"code": INTERNAL_ERROR, "message": WENT_AWAY_ERROR})
+            );
+        });
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn list_changed_after_a_reconnect_with_other_tools() {
-        let fake = Fake::new();
-        let mut a = start(&fake, BridgeOpts::default());
-        a.handshake().await;
-        a.send(req(1, "tools/list", json!({}))).await;
-        a.recv().await;
-        fake.set_tools(other_tools());
-        fake.drop_all();
-        assert_eq!(
-            a.recv().await,
-            json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
-        );
-        a.send(req(2, "tools/list", json!({}))).await;
-        let listed = a.recv().await;
-        assert_eq!(listed["result"]["tools"][1]["name"], "extra", "{listed}");
-        // the same list after the next reconnect: nothing said
-        fake.drop_all();
-        until("the bridge redialed", || fake.dials().len() == 3).await;
-        a.send(req(3, "ping", json!({}))).await;
-        assert_eq!(
-            a.recv().await,
-            json!({"jsonrpc": "2.0", "id": 3, "result": {}})
-        );
+    #[test]
+    fn a_call_while_away_waits_then_errors() {
+        in_clock(async |clock| {
+            let fake = Fake::new();
+            let mut a = start(&clock, &fake, BridgeOpts::default());
+            a.handshake().await;
+            fake.set_up(false);
+            fake.drop_all();
+            until(&clock, "the bridge tried again", || fake.dials().len() >= 2).await;
+            let t0 = Instant::now();
+            a.send(call(1, "echo")).await;
+            a.send(req(2, "resources/list", json!({}))).await;
+            assert_eq!(
+                a.recv().await,
+                json!({"jsonrpc": "2.0", "id": 1, "result": {
+                    "content": [{"type": "text", "text": RESTARTING}],
+                    "isError": true,
+                }})
+            );
+            assert_eq!(
+                a.recv().await,
+                json!({"jsonrpc": "2.0", "id": 2, "error": {"code": INTERNAL_ERROR, "message": RESTARTING_ERROR}})
+            );
+            assert_eq!(t0.elapsed(), Duration::from_secs(10), "the wait is exact");
+            assert_eq!(fake.echoes(), 0);
+            // the hub back within the wait: the call goes through
+            let back = fake.clone();
+            let _up_in_3_s = saman::spawn("hub-back", async move {
+                stund::sleep(Duration::from_secs(3)).await;
+                back.set_up(true);
+            });
+            a.send(call(3, "echo")).await;
+            let answer = a.recv().await;
+            assert_eq!(answer["id"], 3, "{answer}");
+            assert_eq!(answer["result"]["content"][0]["text"], "ok", "{answer}");
+            assert_eq!(fake.echoes(), 1);
+        });
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn backoff_doubles_to_5s_and_gives_up() {
-        assert_eq!(
-            next_backoff(Duration::from_secs(4), Duration::from_secs(5)),
-            Duration::from_secs(5)
-        );
-        let fake = Fake::new();
-        fake.set_up(false);
-        let t0 = Instant::now();
-        let a = start(&fake, BridgeOpts::default());
-        let end = a.bridge.await.expect("the bridge ends");
-        assert!(matches!(end, BridgeEnd::GaveUp(_)), "{end:?}");
-        assert_eq!(end.code(), 1);
-        // the paused clock jumps to each timer: within a millisecond of the schedule
-        let near = |got: u128, want: u128| got.abs_diff(want) <= 1;
-        assert!(near(ms(t0.elapsed()), 600_000), "{:?}", t0.elapsed());
-        let dials = fake.dials();
-        assert!(near(ms(dials[0] - t0), 0), "the first dial is at once");
-        let gaps: Vec<u128> = dials.windows(2).map(|w| ms(w[1] - w[0])).collect();
-        let want = [100, 200, 400, 800, 1600, 3200, 5000, 5000];
-        assert!(gaps.len() > want.len(), "{gaps:?}");
-        assert!(gaps.iter().zip(want).all(|(g, w)| near(*g, w)), "{gaps:?}");
-        assert!(gaps.iter().all(|g| *g <= 5001), "{gaps:?}");
-        let last = dials.last().expect("dials");
-        assert!(
-            near(ms(*last - t0), 600_000),
-            "the last dial is at the limit"
-        );
-        drop(a.w);
+    #[test]
+    fn tools_list_from_the_cache_while_away() {
+        in_clock(async |clock| {
+            let fake = Fake::new();
+            let mut a = start(&clock, &fake, BridgeOpts::default());
+            a.handshake().await;
+            a.send(req(1, "tools/list", json!({}))).await;
+            let listed = a.recv().await;
+            assert_eq!(listed["result"]["tools"].as_array().map(Vec::len), Some(2));
+            fake.set_up(false);
+            fake.drop_all();
+            until(&clock, "the bridge tried again", || fake.dials().len() >= 2).await;
+            let t0 = Instant::now();
+            a.send(req(2, "tools/list", json!({}))).await;
+            let cached = a.recv().await;
+            assert_eq!(cached["id"], 2);
+            assert_eq!(cached["result"], listed["result"]);
+            a.send(req(3, "ping", json!({}))).await;
+            assert_eq!(
+                a.recv().await,
+                json!({"jsonrpc": "2.0", "id": 3, "result": {}})
+            );
+            assert_eq!(t0.elapsed(), Duration::ZERO, "answered at once");
+        });
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn stdin_eof_ends_it() {
-        // a call in flight that the hub never answers
-        let fake = Fake::new();
-        let mut a = start(&fake, BridgeOpts::default());
-        a.handshake().await;
-        a.send(call(1, "slow")).await;
-        until("the hub has the call", || fake.slows() == 1).await;
-        a.w.shutdown().await.expect("close stdin");
-        let end = tokio::time::timeout(Duration::from_millis(1), &mut a.bridge)
-            .await
-            .expect("ends at once")
-            .expect("the bridge ends");
-        assert_eq!(end, BridgeEnd::StdinClosed);
-        assert_eq!(end.code(), 0);
-        // away, with a request waiting
-        let fake = Fake::new();
-        fake.set_up(false);
-        let mut a = start(&fake, BridgeOpts::default());
-        a.send(call(1, "echo")).await;
-        a.w.shutdown().await.expect("close stdin");
-        let end = tokio::time::timeout(Duration::from_millis(1), &mut a.bridge)
-            .await
-            .expect("ends at once")
-            .expect("the bridge ends");
-        assert_eq!(end, BridgeEnd::StdinClosed);
+    #[test]
+    fn list_changed_after_a_reconnect_with_other_tools() {
+        in_clock(async |clock| {
+            let fake = Fake::new();
+            let mut a = start(&clock, &fake, BridgeOpts::default());
+            a.handshake().await;
+            a.send(req(1, "tools/list", json!({}))).await;
+            a.recv().await;
+            fake.set_tools(other_tools());
+            fake.drop_all();
+            assert_eq!(
+                a.recv().await,
+                json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+            );
+            a.send(req(2, "tools/list", json!({}))).await;
+            let listed = a.recv().await;
+            assert_eq!(listed["result"]["tools"][1]["name"], "extra", "{listed}");
+            // the same list after the next reconnect: nothing said
+            fake.drop_all();
+            until(&clock, "the bridge redialed", || fake.dials().len() == 3).await;
+            a.send(req(3, "ping", json!({}))).await;
+            assert_eq!(
+                a.recv().await,
+                json!({"jsonrpc": "2.0", "id": 3, "result": {}})
+            );
+        });
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn a_line_over_the_limit_is_32600_on_its_id_and_the_bridge_goes_on() {
-        let fake = Fake::new();
-        let opts = BridgeOpts {
-            limits: Limits {
-                max_in: 200,
-                max_out: 1 << 20,
-            },
-            ..BridgeOpts::default()
-        };
-        let mut a = start(&fake, opts);
-        a.handshake().await;
-        let pad = "x".repeat(300);
-        a.send(json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "echo", "arguments": {"pad": pad}}}))
+    #[test]
+    fn backoff_doubles_to_5s_and_gives_up() {
+        in_clock(async |clock| {
+            assert_eq!(
+                next_backoff(Duration::from_secs(4), Duration::from_secs(5)),
+                Duration::from_secs(5)
+            );
+            let fake = Fake::new();
+            fake.set_up(false);
+            let t0 = Instant::now();
+            let mut a = start(&clock, &fake, BridgeOpts::default());
+            let end = drive(&clock, &mut a.bridge).await.expect("the bridge ends");
+            assert!(matches!(end, BridgeEnd::GaveUp(_)), "{end:?}");
+            assert_eq!(end.code(), 1);
+            // the clock jumps to each timer: the schedule is exact
+            assert_eq!(t0.elapsed(), Duration::from_secs(600));
+            let dials = fake.dials();
+            assert_eq!(dials[0] - t0, Duration::ZERO, "the first dial is at once");
+            let gaps: Vec<u128> = dials.windows(2).map(|w| ms(w[1] - w[0])).collect();
+            let want = [100, 200, 400, 800, 1600, 3200, 5000, 5000];
+            assert!(gaps.len() > want.len(), "{gaps:?}");
+            assert_eq!(gaps[..want.len()], want, "{gaps:?}");
+            assert!(gaps.iter().all(|g| *g <= 5000), "{gaps:?}");
+            let last = dials.last().expect("dials");
+            assert_eq!(
+                *last - t0,
+                Duration::from_secs(600),
+                "the last dial is at the limit"
+            );
+            drop(a.w);
+        });
+    }
+
+    #[test]
+    fn stdin_eof_ends_it() {
+        in_clock(async |clock| {
+            // a call in flight that the hub never answers
+            let fake = Fake::new();
+            let mut a = start(&clock, &fake, BridgeOpts::default());
+            a.handshake().await;
+            a.send(call(1, "slow")).await;
+            until(&clock, "the hub has the call", || fake.slows() == 1).await;
+            a.w.shutdown().await.expect("close stdin");
+            let before = clock.elapsed();
+            let end = drive(&clock, &mut a.bridge).await.expect("the bridge ends");
+            assert_eq!(clock.elapsed(), before, "ends at once");
+            assert_eq!(end, BridgeEnd::StdinClosed);
+            assert_eq!(end.code(), 0);
+            // away, with a request waiting
+            let fake = Fake::new();
+            fake.set_up(false);
+            let mut a = start(&clock, &fake, BridgeOpts::default());
+            a.send(call(1, "echo")).await;
+            a.w.shutdown().await.expect("close stdin");
+            let before = clock.elapsed();
+            let end = drive(&clock, &mut a.bridge).await.expect("the bridge ends");
+            assert_eq!(clock.elapsed(), before, "ends at once");
+            assert_eq!(end, BridgeEnd::StdinClosed);
+        });
+    }
+
+    #[test]
+    fn a_line_over_the_limit_is_32600_on_its_id_and_the_bridge_goes_on() {
+        in_clock(async |clock| {
+            let fake = Fake::new();
+            let opts = BridgeOpts {
+                limits: Limits {
+                    max_in: 200,
+                    max_out: 1 << 20,
+                },
+                ..BridgeOpts::default()
+            };
+            let mut a = start(&clock, &fake, opts);
+            a.handshake().await;
+            let pad = "x".repeat(300);
+            a.send(json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "echo", "arguments": {"pad": pad}}}))
             .await;
-        let answer = a.recv().await;
-        assert_eq!(answer["id"], 7, "{answer}");
-        assert_eq!(answer["error"]["code"], INVALID_REQUEST);
-        // a long notification has no id: dropped, and the next request is answered
-        a.send(json!({"jsonrpc": "2.0", "method": "notifications/x", "params": {"pad": pad}}))
-            .await;
-        a.send(req(8, "ping", json!({}))).await;
-        assert_eq!(
-            a.recv().await,
-            json!({"jsonrpc": "2.0", "id": 8, "result": {}})
-        );
-        assert_eq!(fake.echoes(), 0);
+            let answer = a.recv().await;
+            assert_eq!(answer["id"], 7, "{answer}");
+            assert_eq!(answer["error"]["code"], INVALID_REQUEST);
+            // a long notification has no id: dropped, and the next request is answered
+            a.send(json!({"jsonrpc": "2.0", "method": "notifications/x", "params": {"pad": pad}}))
+                .await;
+            a.send(req(8, "ping", json!({}))).await;
+            assert_eq!(
+                a.recv().await,
+                json!({"jsonrpc": "2.0", "id": 8, "result": {}})
+            );
+            assert_eq!(fake.echoes(), 0);
+        });
     }
 
     #[test]

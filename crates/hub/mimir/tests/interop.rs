@@ -60,14 +60,17 @@ async fn one(lifecycle: ClientLifecycleMode, version: ProtocolVersion, expect: P
     let (client, server) = tokio::net::UnixStream::pair().expect("a socket pair");
     let (sr, sw) = server.into_split();
     let tools: Vec<Box<dyn Tool<()>>> = vec![Box::new(Echo)];
-    let serving = tokio::spawn(mimir::serve(
-        Arc::new(()),
-        Arc::from(tools),
-        ServerInfo::default(),
-        sr,
-        sw,
-        Limits::default(),
-    ));
+    let serving = saman::spawn(
+        "interop-server",
+        mimir::serve(
+            Arc::new(()),
+            Arc::from(tools),
+            ServerInfo::default(),
+            sr,
+            sw,
+            Limits::default(),
+        ),
+    );
 
     let config = ClientConfig::new(
         ClientCapabilities::default(),
