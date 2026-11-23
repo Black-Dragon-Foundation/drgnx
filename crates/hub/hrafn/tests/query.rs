@@ -474,7 +474,7 @@ async fn the_vector_scan_plan_is_one_pass_over_the_vectors() {
     let text = plan_vc(&store, &c, hrafn::query::NEAREST_SQL, 0).await;
     assert!(!text.contains("LIST SUBQUERY"), "{text}");
     assert!(!text.contains("SCAN chunk "), "{text}");
-    assert!(text.contains("SCAN chunk_vec"), "{text}");
+    assert!(text.contains("SCAN vc.chunk_vec"), "{text}");
 }
 
 /// Pattern D. The scan touches the vectors and nothing else: a chunk is looked up only for a vector that enters the
@@ -501,12 +501,15 @@ async fn vector_route_reads_no_chunk_rows() {
         hrafn::query::VEC_SQL,
         hrafn::query::PATH_VEC_SQL,
     ] {
-        let plan = plan_vc(&store, &c, sql, 1).await;
+        let plan = plan_vc(&store, &c, sql, usize::from(sql.contains("?1"))).await;
         // every table step is of the cache's vectors (a plan names a table by its alias, so the step itself is read)
         for l in plan.lines().map(str::trim_start) {
             if l.starts_with("SEARCH") || l.starts_with("SCAN") {
                 let table = l.split_whitespace().nth(1).unwrap_or_default();
-                assert!(table == "chunk_vec" || table == "path_vec", "{plan}\n{sql}");
+                assert!(
+                    table == "vc.chunk_vec" || table == "vc.path_vec",
+                    "{plan}\n{sql}"
+                );
             }
         }
         assert!(plan.contains("_vec"), "{plan}");

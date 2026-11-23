@@ -412,8 +412,11 @@ async fn plan_of(s: &CodeStore, sql: &'static str, binds: usize) -> String {
 /// `file` is reached by its primary key `(tree, path)`.
 #[tokio::test]
 async fn overlay_predicates_use_indexes() {
-    let (_d, s, t, _t2) = store().await;
+    let (d, s, t, _t2) = store().await;
     put(&s, t, "src/new.rs", "fn brand_new_fn() {}\n").await;
+    // the lag's SQL reads the vectors of the cache attached as `vc` (it stays attached on the store's connection)
+    let c = cache(&d);
+    s.attach_cache(c.path(), |_| Ok(())).await.unwrap();
     let routes = [
         hrafn::query::PINNED_SQL,
         hrafn::query::NAME_EXACT_SQL,

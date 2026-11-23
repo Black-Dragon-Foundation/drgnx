@@ -39,7 +39,7 @@ fn file(path: &str) -> FileRow {
 async fn open_creates_v1() {
     let dir = tempfile::tempdir().unwrap();
     let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("7"));
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("8"));
     for t in [
         "tree",
         "file",
@@ -47,7 +47,6 @@ async fn open_creates_v1() {
         "chunk_fts",
         "symbol",
         "symbol_fts",
-        "vec",
         "path_key",
         "meta",
     ] {
@@ -84,7 +83,7 @@ async fn reopen_is_idempotent() {
         .unwrap();
     let s = CodeStore::open(&p).unwrap();
     assert_eq!(count(&s, "select count(*) from file").await, 1);
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("7"));
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("8"));
     assert_eq!(
         s.meta_get("chunker_version").await.unwrap().as_deref(),
         Some("1")
