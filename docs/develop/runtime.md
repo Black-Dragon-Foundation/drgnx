@@ -1321,6 +1321,18 @@ so one vector serves every repo, clone, branch and worktree that has the text.
   `cache.put`); `search/query` picks the fingerprint (`prefer`) and passes its cache with the query's vector, and
   `search/status` counts, per open cache, the vectors of this project's keys. `eval run --state DIR` writes its own
   cache in `DIR/vectors/`, under a fingerprint of the source's name and dims.
+- **Holders (MP-21).** A cache's first open in the hub registers every repo store of the state (`<state>/code/*.db`,
+  by stem) as a live holder with no root, so a closed project's keys are kept before it next refreshes. After each
+  refresh, and when tier 2 first uses a fingerprint, `hrafn::hold(store, cache, root, now)` reports the store's live
+  key set (the distinct keys of its chunks that want vectors, and its `path_key` keys) as the diff against the cache's
+  `held` rows for it; the holder is live again, with its root and `last_refresh`. `release_gone(now, TREE_IDLE)` makes
+  a holder not live when its root is no folder and it has not refreshed for 14 days; a registered holder with no root
+  yet is never released.
+- **The collection (MP-7).** `collect(cap)` keeps every key a live holder holds; of the rest, both kinds together, the
+  most recently used are kept while their bytes (32 for the key and the stored vector's) fit the cap, and the others
+  go. The cap is `drgnx-search-cache-cap`, or `default_cap(live_bytes)`: twice the bytes live holders hold, at least
+  1 GiB. The hub sweeps at most once an hour (`CACHE_SWEEP`), from the projects' tree sweep: gone holders released,
+  then each open cache collected.
 
 ### The file list and coverage
 

@@ -427,6 +427,10 @@ impl Hub {
     /// The project of ROOT, opened if it is not (and opened again when its embedders changed).
     pub async fn project(&self, front: &Front, root: &Path) -> Result<Arc<Project>, Error> {
         let dirs = self.dirs()?;
+        // `drgnx-search-cache-cap` as it is now, for the caches' next sweep (a change applies at once); held to the end,
+        // so a project opened below shares these caches
+        let caches = super::caches::Caches::shared(&paths::state_dir(&dirs.env));
+        caches.set_cap(front.settings.current().loaded.values.search_cache_cap);
         let given = root.to_path_buf();
         let (real, id) = crate::clock::blocking(move || project_id(&given))
             .await
