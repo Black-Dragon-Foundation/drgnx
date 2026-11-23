@@ -570,7 +570,7 @@ measured by `tools_schema::the_tool_list_fits_the_budget` against the 24,000-byt
 tools and 36,000 bytes (about 9k tokens) for the 21 with the tracker set.
 
 **The tracker and graph tools** (`tools/tracker.rs`, `tools/graph.rs`; storage §6.1, §6.4) are `RichTool`s behind the
-same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or the 16 above with `tracker: false`.
+same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 22 tools, or the 16 above with `tracker: false`.
 - **The caller** comes from the identity (`Caller::from_identity`) with the project of its folder, resolved once and
   kept in `Coord::projects()`. Writes register a new project; reads use only one the store knows. It is never an
   argument.
@@ -587,7 +587,10 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or th
   (a folder that is no git repository) writes nothing: `task_write create` and `note_add` are refused ("you have no
   project"). `access_request` makes (or
   finds) one open `access` card per session and target and answers `{requested: card}` for a known project and an
-  unknown one alike.
+  unknown one alike. `my_grants` (no arguments; `tools/graph.rs`) answers the caller's own active grants,
+  `{grants: [{id, who, what, access, ops, names, expires}]}`: `norn::grants::list` for the caller, so a grant applies
+  when its `who` is the caller's agent id, kind, session, project or profile (or any outside agent) and never another
+  agent's. The user's `graph grants show WHO [--project P] [--profile NAME]` reads the same set for an actor.
 - `extensions_suggest` (`tools/extensions.rs`) makes or joins the one open `extension` card of a catalog id
   (`Hub::extension_fact`); its title is built from the hub's facts, the agent's `why` only a quote in `data.why`
   (`[{session, text}]`, cleaned and cut to 280 characters); at most 3 a session. Each change goes to the editors as a

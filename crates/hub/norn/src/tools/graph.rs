@@ -1,4 +1,4 @@
-//! The graph tools — `graph_read`, `access_request` (Task 14; storage §6.1, §6.4).
+//! The graph tools — `graph_read`, `access_request` (Task 14; storage §6.1, §6.4) and `my_grants`.
 
 use std::collections::HashMap;
 
@@ -21,7 +21,7 @@ use crate::write::cards::{NewCard, card_create};
 
 /// This file's tools.
 pub fn tools() -> Vec<Box<dyn Tool<Ctx>>> {
-    vec![rich(GraphRead), rich(AccessRequest)]
+    vec![rich(GraphRead), rich(AccessRequest), rich(MyGrants)]
 }
 
 // ------------------------------------------------------------------------------------------------------ graph_read
@@ -427,6 +427,84 @@ async fn access_request(
     Ok(Answer {
         text: format!("requested: card {card}. The user decides; go on without it for now"),
         structured: json!({"requested": card}),
+        links: Vec::new(),
+    })
+}
+
+// ------------------------------------------------------------------------------------------------------- my_grants
+
+#[derive(Deserialize, JsonSchema)]
+struct MyGrantsArgs {}
+
+struct MyGrants;
+
+impl RichTool for MyGrants {
+    type Args = MyGrantsArgs;
+    const NAME: &'static str = "my_grants";
+    const DESCRIPTION: &'static str = "The user's grants that apply to you now: what each lets you do (read a project, write tasks with these operations, change settings), where, and until when. Only yours; never another agent's";
+
+    fn run<'a>(
+        &'a self,
+        coord: &'a Coord,
+        who: &'a Identity,
+        _: MyGrantsArgs,
+    ) -> BoxFuture<'a, Result<Answer, String>> {
+        Box::pin(my_grants(coord, who))
+    }
+}
+
+async fn my_grants(coord: &Coord, who: &Identity) -> Result<Answer, String> {
+    let caller = caller_of(coord, who, false).await?;
+    let now = coord.now();
+    let filter = crate::grants::Filter {
+        who: None,
+        active: Some(true),
+    };
+    let grants = coord
+        .db()
+        .read(move |c| Ok(crate::grants::list(c, &caller, &filter, now)?))
+        .await
+        .map_err(err)?;
+    let rows: Vec<Value> = grants
+        .iter()
+        .map(|g| {
+            json!({
+                "id": g.id, "who": g.who.to_string(), "what": g.what.to_string(), "access": g.access.as_str(),
+                "ops": g.ops, "names": g.names, "expires": g.expires,
+            })
+        })
+        .collect();
+    let text = if grants.is_empty() {
+        "no grants apply to you".to_owned()
+    } else {
+        let lines: Vec<String> = grants
+            .iter()
+            .map(|g| {
+                let until = g
+                    .expires
+                    .map_or("no expiry".to_owned(), |t| format!("until {t:.0}"));
+                let ops = g
+                    .ops
+                    .as_ref()
+                    .map_or(String::new(), |o| format!(" [{}]", o.join(", ")));
+                format!(
+                    "{} {} on {}{ops}, {until} ({})",
+                    g.access.as_str(),
+                    g.who,
+                    g.what,
+                    g.id
+                )
+            })
+            .collect();
+        format!(
+            "{} grants apply to you:\n{}",
+            grants.len(),
+            lines.join("\n")
+        )
+    };
+    Ok(Answer {
+        text,
+        structured: json!({"grants": rows}),
         links: Vec::new(),
     })
 }
