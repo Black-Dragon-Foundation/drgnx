@@ -1,0 +1,33 @@
+# Whether this run may save a cache: .github/ci/cache-policy.sh over the run's event, ref and repository. One rule for
+# the target caches (cargo-target), the registry, the models, the Nidhogg tarball and the fuzz corpus: a push or a
+# manual run on main, ci/* or scratch/drgnx-mac-rounds, whose build passed and whose exact key is not saved yet; a pull
+# request or a fork never. docs/develop/ci.md, "What is cached"
+name: cache policy
+description: Whether this run saves a cache (save=true|false)
+inputs:
+  build-outcome:
+    description: The outcome of the step that made what would be saved (success, failure, skipped)
+    default: success
+  exact-hit:
+    description: "true: the cache was restored by its exact key"
+    default: "false"
+outputs:
+  save:
+    description: "true: save the cache"
+    value: ${{ steps.policy.outputs.save }}
+  why:
+    description: The rule's reason, for the log
+    value: ${{ steps.policy.outputs.why }}
+runs:
+  using: composite
+  steps:
+    - id: policy
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        REF: ${{ github.ref }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        REPO: ${{ github.repository }}
+        EXACT_HIT: ${{ inputs.exact-hit }}
+        BUILD_OUTCOME: ${{ inputs.build-outcome }}
+      run: bash "${{ github.workspace }}/.github/ci/cache-policy.sh" | tee -a "$GITHUB_OUTPUT"

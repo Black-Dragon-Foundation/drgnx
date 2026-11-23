@@ -1,5 +1,6 @@
 # What every macOS job of runtime.yml needs before its own steps (the tests, the conformance shards, the perf
-# baseline run as separate jobs so each fits its limit): sccache, the image's rustup with clippy, the cargo caches, the
+# baseline run as separate jobs so each fits its limit): the image's rustup with clippy, the cargo caches (the one
+# `macos-dev` entry, through .github/actions/cargo-target: the `tests` job saves it), the
 # git draugr trusts, the model files, the plugin fixtures, Zig and libghostty-vt's tarballs, vttest and, with
 # `nidhogg: true`, Nidhogg (DRGNX_EMACS). docs/develop/ci.md
 name: macOS runtime setup
@@ -8,43 +9,16 @@ inputs:
   nidhogg:
     description: "true: install Nidhogg 31.1 (writes DRGNX_EMACS to the environment)"
     default: "false"
-outputs:
-  registry-hit:
-    description: "true: the cargo registry cache was restored by its exact key"
-    value: ${{ steps.registry.outputs.cache-hit }}
-  registry-key:
-    description: the cargo registry cache's key, for the job that saves it
-    value: ${{ steps.registry.outputs.cache-primary-key }}
-  target-hit:
-    description: "true: target was restored by its exact key"
-    value: ${{ steps.cache.outputs.cache-hit }}
 runs:
   using: composite
   steps:
     # the image's rustup (as the Linux runner jobs), not Homebrew's rust: no formula download and install per run
-    - uses: ./.github/actions/sccache
     - shell: bash
       run: bash .github/ci/rust.sh --component clippy
-    - id: rv
-      shell: bash
-      run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
-    - id: registry
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+    - uses: ./.github/actions/cargo-target
       with:
-        path: |
-          ~/.cargo/registry/index
-          ~/.cargo/registry/cache
-        key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-        restore-keys: cargo-registry-${{ runner.os }}-
-    - id: cache
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: target
-        key: cargo-${{ runner.os }}-rustup-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/*/Cargo.toml', 'app/Cargo.toml') }}
-        restore-keys: cargo-${{ runner.os }}-rustup-mt1-${{ steps.rv.outputs.v }}-
-    - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
-      shell: bash
-      run: bash .github/ci/commit-times.sh target/.drgnx-built-from
+        job: macos-dev
+        mode: restore
     # draugr runs only the git of the developer dir xcode-select's link names, and refuses Xcode under the
     # admin-writable /Applications (on the runner even its git is the runner user's); the Command Line Tools, which
     # the image installs, pass. Before the tests: draugr's git tests and the escape rows run that git.
@@ -67,7 +41,12 @@ runs:
       run: |
         /bin/bash .github/ci/models.sh ../test-models
         echo "DRGNX_TEST_MODELS=$(cd ../test-models && pwd)" >> "$GITHUB_ENV"
-    - if: ${{ env.CACHE_SAVE == 'true' && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success' }}
+    - id: models-policy
+      uses: ./.github/actions/cache-policy
+      with:
+        build-outcome: ${{ steps.models-fetch.outcome }}
+        exact-hit: ${{ steps.models.outputs.cache-hit }}
+    - if: ${{ steps.models-policy.outputs.save == 'true' }}
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ../test-models
@@ -89,7 +68,8 @@ runs:
       shell: bash
       run: brew install vttest
     # the pinned release tarball, kept by the hash of nidhogg.sh (which holds the version and the checksums; the
-    # tarball is checked against them on every use); main saves it once per pin, every run restores it
+    # tarball is checked against them on every use); the writer runs (cache-policy) save it once per pin and ref, every run
+    # restores it
     - id: nidhogg-tarball
       if: ${{ inputs.nidhogg == 'true' }}
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -103,7 +83,13 @@ runs:
       env:
         NIDHOGG_DOWNLOADS: ${{ runner.temp }}/nidhogg-downloads
       run: /bin/bash test/container/nidhogg.sh macos
-    - if: ${{ inputs.nidhogg == 'true' && env.CACHE_SAVE == 'true' && steps.nidhogg.outcome == 'success' && steps.nidhogg-tarball.outputs.cache-hit != 'true' }}
+    - id: nidhogg-policy
+      if: ${{ inputs.nidhogg == 'true' }}
+      uses: ./.github/actions/cache-policy
+      with:
+        build-outcome: ${{ steps.nidhogg.outcome }}
+        exact-hit: ${{ steps.nidhogg-tarball.outputs.cache-hit }}
+    - if: ${{ inputs.nidhogg == 'true' && steps.nidhogg-policy.outputs.save == 'true' }}
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/nidhogg-downloads
