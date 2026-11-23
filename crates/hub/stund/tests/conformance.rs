@@ -68,7 +68,7 @@ fn a_blocking_sleep_ends_when_the_virtual_clock_moves() {
 
 #[test]
 fn a_blocking_sleep_waits_for_real_with_no_clock() {
-    let start = std::time::Instant::now();
+    let start = stund::real::instant();
     stund::sleep_blocking(Duration::from_millis(30));
     assert!(start.elapsed() >= Duration::from_millis(30));
 }
