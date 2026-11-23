@@ -79,7 +79,7 @@ async fn first_open_registers_every_repo_store() {
 
 /// Pattern D (MP-7). The sweep runs at most once per [`CACHE_SWEEP`]: the first is due at once, the next only an hour
 /// later. With a cap of 0 bytes it collects every vector no holder holds, in every open cache.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_sweep_is_hourly_and_collects_unheld_vectors() {
     let state = tempfile::tempdir().unwrap();
     let caches = Caches::shared(state.path());
