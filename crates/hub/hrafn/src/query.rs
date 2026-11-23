@@ -392,8 +392,8 @@ pub const VEC_SQL: &str = "select vec, scale from vc.chunk_vec where key = ?1";
 pub const PATH_VEC_SQL: &str = "select vec, scale from vc.path_vec where key = ?1";
 
 /// The int8 dot product of the query's values QINTS with the stored vector BLOB (sign bits first, BYTES of them),
-/// dequantised by the vector's own step (the stored `scale` column).
-fn dot8(blob: &[u8], bytes: usize, qints: &[i8], step: f64) -> f64 {
+/// dequantised by the vector's own scale.
+fn dot8(blob: &[u8], bytes: usize, qints: &[i8], scale: f64) -> f64 {
     let dot: i64 = blob
         .get(bytes..)
         .unwrap_or_default()
@@ -401,7 +401,7 @@ fn dot8(blob: &[u8], bytes: usize, qints: &[i8], step: f64) -> f64 {
         .zip(qints)
         .map(|(a, b)| i64::from(*a as i8) * i64::from(*b))
         .sum();
-    dot as f64 * step
+    dot as f64 * scale
 }
 
 /// The nearest chunks of MODEL to the query vector V: Hamming over the chunk vectors' sign bits for the best SCAN
@@ -478,7 +478,7 @@ fn nearest(
         let row: Option<(Vec<u8>, f64)> = st
             .query_row([&key[..]], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()?;
-        Ok(row.map(|(blob, step)| dot8(&blob, bytes, &qints, step)))
+        Ok(row.map(|(blob, scale)| dot8(&blob, bytes, &qints, scale)))
     };
     let mut path_terms: HashMap<String, f64> = HashMap::new();
     let mut dir_terms: HashMap<String, f64> = HashMap::new();
