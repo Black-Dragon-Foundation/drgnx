@@ -61,18 +61,29 @@ fn internal(msg: impl Into<String>) -> Error {
     }
 }
 
-/// An attached outside bridge: its id, kind, the project's top-level its folder is in, and that project's id.
+/// An attached outside bridge: its id, kind, the project's top-level its folder is in, that project's id, the folder
+/// its hello named and the bridge's own process (the connection's peer), whose working directory must be that folder
+/// ([`folder_check`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutsideActor {
     pub id: String,
     pub kind: String,
     pub root: PathBuf,
     pub project: Option<String>,
+    pub home: PathBuf,
+    pub peer: i32,
 }
 
-type Table = Arc<Mutex<HashMap<String, (OutsideActor, usize)>>>;
+#[derive(Default)]
+struct Bridges {
+    /// Agent id → its attached bridges, oldest first, each with its guard's ticket.
+    by_id: HashMap<String, Vec<(u64, OutsideActor)>>,
+    next: u64,
+}
 
-/// The outside bridges attached now, by id, each counted (one agent may run several bridges).
+type Table = Arc<Mutex<Bridges>>;
+
+/// The outside bridges attached now, by id (one agent may run several bridges).
 #[derive(Default)]
 pub struct Bound {
     live: Table,
@@ -82,41 +93,73 @@ pub struct Bound {
 pub struct BoundGuard {
     live: Table,
     id: String,
+    ticket: u64,
 }
 
 impl Drop for BoundGuard {
     fn drop(&mut self) {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((_, n)) = live.get_mut(&self.id) {
-            *n -= 1;
-            if *n == 0 {
-                live.remove(&self.id);
+        if let Some(list) = live.by_id.get_mut(&self.id) {
+            list.retain(|(t, _)| *t != self.ticket);
+            if list.is_empty() {
+                live.by_id.remove(&self.id);
             }
         }
     }
 }
 
 impl Bound {
-    /// A attaches (the latest bridge's folder is the agent's); the guard detaches it.
+    /// A attaches (the latest bridge still attached is the agent's); the guard detaches it.
     pub fn attach(&self, a: OutsideActor) -> BoundGuard {
         let id = a.id.clone();
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
-        let e = live.entry(id.clone()).or_insert_with(|| (a.clone(), 0));
-        e.0 = a;
-        e.1 += 1;
+        live.next += 1;
+        let ticket = live.next;
+        live.by_id.entry(id.clone()).or_default().push((ticket, a));
         BoundGuard {
             live: self.live.clone(),
             id,
+            ticket,
         }
     }
 
-    /// The attached bridge ID, if one is.
+    /// The attached bridge ID (its latest one still attached), if one is.
     pub fn get(&self, id: &str) -> Option<OutsideActor> {
         self.live
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .by_id
             .get(id)
-            .map(|(a, _)| a.clone())
+            .and_then(|l| l.last())
+            .map(|(_, a)| a.clone())
+    }
+}
+
+/// Whether the bridge process PEER works in HOME, the folder its hello named (both as truenames): `Err` names both
+/// folders.  Where the system cannot tell a process's folder (`Unsupported`), the claimed folder is kept.
+pub(crate) fn folder_check(peer: i32, home: &Path) -> Result<(), String> {
+    let real = match crate::peer::cwd_of(peer) {
+        Ok(p) => p,
+        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => return Ok(()),
+        Err(e) => {
+            return Err(format!(
+                "this outside agent's bridge (pid {peer}) has no folder the hub can read ({e}); its hello named {}",
+                home.display()
+            ));
+        }
+    };
+    // a folder that is gone (or a deleted one, `/proc`'s " (deleted)") has no truename: compared as it is, it differs
+    let truename = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let (claimed, actual) = (truename(home), truename(&real));
+    if claimed == actual {
+        Ok(())
+    } else {
+        Err(format!(
+            "this outside agent's bridge works in {}, not in {}, the folder its hello named: start the bridge in the \
+             project's folder",
+            actual.display(),
+            claimed.display()
+        ))
     }
 }
 
@@ -137,11 +180,20 @@ async fn role_now(f: &Front, kind: &str, root: &Path) -> Result<Option<norn::mat
         .map_err(fail)
 }
 
-/// An outside bridge WHO attaches: its folder's project (a worktree's main repository) and the role the user bound
-/// there.  A bridge in no project has no role and no place in [`Bound`].
-pub(crate) async fn attach(f: &Front, who: Identity) -> Attached {
+/// An outside bridge WHO attaches over a connection whose peer is the bridge process PEER: its folder's project (a
+/// worktree's main repository) and the role the user bound there.  A bridge in no project has no role and no place
+/// in [`Bound`]; one whose process does not work in the folder its hello named has no role ([`folder_check`]; every
+/// later call is refused with both folders named).
+pub(crate) async fn attach(f: &Front, who: Identity, peer: i32) -> Attached {
     let (Some(id), Some(kind), Some(home)) = (who.id(), who.outside_kind(), who.home()) else {
         return Attached { who, guard: None };
+    };
+    let in_folder = match folder_check(peer, home) {
+        Ok(()) => true,
+        Err(why) => {
+            tracing::warn!(identity = id, "an outside agent's folder: {why}");
+            false
+        }
     };
     let found = match crate::graph::project_of(home).await {
         Ok(Some(p)) => p,
@@ -156,9 +208,11 @@ pub(crate) async fn attach(f: &Front, who: Identity) -> Attached {
         kind: kind.to_owned(),
         root: found.root,
         project: Some(found.id),
+        home: home.to_path_buf(),
+        peer,
     };
     let role = match role_now(f, &actor.kind, &actor.root).await {
-        Ok(r) => r,
+        Ok(r) => r.filter(|_| in_folder),
         Err(e) => {
             tracing::warn!(identity = id, "an outside agent's binding: {}", e.message);
             None
@@ -171,13 +225,15 @@ pub(crate) async fn attach(f: &Front, who: Identity) -> Attached {
     }
 }
 
-/// The attached outside actor SID with its role as the binding says now: refused when no bridge holds SID or the
-/// user's binding for its kind and root is gone.
+/// The attached outside actor SID with its role as the binding says now: refused when no bridge holds SID, its
+/// bridge no longer works in the folder its hello named ([`folder_check`]), or the user's binding for its kind and
+/// root is gone.
 pub(crate) async fn actor_for(
     f: &Front,
     sid: &str,
 ) -> Result<(OutsideActor, norn::matrix::Role), Error> {
     let a = f.core.outside.get(sid).ok_or_else(|| refuse(NOT_BOUND))?;
+    folder_check(a.peer, &a.home).map_err(refuse)?;
     let role = role_now(f, &a.kind, &a.root)
         .await?
         .ok_or_else(|| refuse(NOT_BOUND))?;

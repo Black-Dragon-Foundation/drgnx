@@ -3783,7 +3783,9 @@ stdio server that died (anthropics/claude-code#82746), so the bridge outlives th
   main socket as every client does (its environment's data dir), checks the socket's directory first (the client's
   rule: the user's, 0700; otherwise it ends with exit 1 and the reason on stderr, never connecting), reads
   the challenge, says `hello {proto: 1, nonce, client: "mcp-bridge", cwd}` with no proof (the connection stays
-  `service`) and `mcp/attach {kind}`; the next byte is MCP. `cwd` is `--cwd`, else the bridge's working directory.
+  `service`) and `mcp/attach {kind}`; the next byte is MCP. `cwd` is `--cwd`, else the bridge's working directory. A binding counts
+  only when the bridge process works in that folder (`outside::folder_check`), so a `--cwd` other than the bridge's
+  own folder gets no rights.
   A refused `hello` or `mcp/attach` ends the bridge with exit 1; a hub that is not there yet is dialled again.
 - **When the hub goes away.** The bridge dials again after 0.1 s, doubling to 5 s between dials, and gives up after
   10 min without a connection (exit 1, "giving up" on stderr). On each reconnect it replays the agent's cached

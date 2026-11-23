@@ -610,7 +610,8 @@ impl Front {
             // with the role the user bound for its kind in its folder's project (none: unbound)
             Params::McpAttach(p) => match sessions::outside(s, p.kind.as_str()) {
                 Ok(who) => {
-                    let a = crate::outside::attach(self, who).await;
+                    // `outside` refused a connection with no peer pid
+                    let a = crate::outside::attach(self, who, s.peer_pid.unwrap_or(0)).await;
                     let identity = a.who.id().unwrap_or_default().to_owned();
                     s.attach = Some(a);
                     Ok(json!(AttachAnswer { identity }))

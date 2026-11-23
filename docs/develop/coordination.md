@@ -432,12 +432,18 @@ refused. A binding is a graph entity of kind `binding`, id `binding:KIND-<12 hex
 root, role}`; the guard keeps the kind the user's, and `bindings::role_for` counts it only when every tx that wrote it
 (created, updated, each field) is of class `user`, so a write slipped past the guard is ignored.
 - **Attach.** `mcp/attach` resolves the bridge's folder to its project and reads the role (`outside::attach`). A
-  bridge in a project goes into the hub's `Bound` table (by id, counted; its guard leaves when the connection ends).
-  A bound bridge is served the plan and record tools as well (`Sessions::outside_list_for`); the role read here only
-  picks that list.
-- **Every call reads the binding again** (`outside::actor_for`): an `ext:` id no attached bridge holds, or whose
-  binding is gone, is refused (`this outside agent is not bound here`), never taken for a worker. An unbind reaches a
-  live bridge at its next call.
+  bridge in a project goes into the hub's `Bound` table (by id, each bridge with its guard's ticket; its guard leaves
+  when the connection ends). A bound bridge is served the plan and record tools as well
+  (`Sessions::outside_list_for`); the role read here only picks that list.
+- **The folder is checked** (`outside::folder_check`): the bridge process (the connection's peer pid) must work in
+  the folder its hello named, both as truenames (symlinks resolved). The hub reads that process's working directory
+  (`peer::cwd_of`: `/proc/PID/cwd` on Linux and Android, `proc_pidinfo(PROC_PIDVNODEPATHINFO)` on macOS). A mismatch
+  at attach gives no role; at a later call it refuses with both folders named (`this outside agent's bridge works in
+  A, not in B, the folder its hello named: …`). Where the system has no such read (`Unsupported`) the claimed folder
+  is kept. So `mcp-bridge --cwd DIR` binds only when DIR is the bridge's own folder. The kind stays the bridge's claim.
+- **Every call reads the binding again** (`outside::actor_for`): an `ext:` id no attached bridge holds, whose bridge
+  left its folder, or whose binding is gone, is refused (`this outside agent is not bound here`, or the folder
+  refusal), never taken for a worker. An unbind reaches a live bridge at its next call.
 - **Who it is to the matrix** (`outside::who_for`): its role's column and the agent column `ext:KIND`, its project,
   no plan, and whether it acts on its own record ([The matrix in the hub](#the-matrix-in-the-hub-drgnx-ratatoskrsrcmatrix_gaters)).
 - **What it reaches:** through the tools' `exec` only `plans/get`, `plans/write`, `records/read` and
@@ -453,7 +459,8 @@ root, role}`; the guard keeps the kind the user's, and `bindings::role_for` coun
   (`Hub::gate`); its decision is always proposed.
 - An id that is its pid alone (`ext:KIND:PID`, no start time) owns no record, so a later process given that pid
   inherits nothing; `outside/bind` refuses a binding entity another writer made (it would never count).
-- Two bridges of one process share an id: the latest attach's folder is the one the table holds.
+- Two bridges of one process share an id: the latest attach still connected is the one the table answers (its folder
+  and its process are the ones checked).
 
 **Text.**
 - Questions and message texts (`ask_user`, `send_message`, `escalate`'s subject and text) are trimmed and cut to
@@ -628,9 +635,10 @@ server's checks. That includes an agent, a command an agent ran, and any process
 - start a coordination server with any other agent's id in `DRGNX_AGENT` (`ext:…` ones included; never `user`, which
   the server refuses, but the store itself can be written directly), or with a `DRGNX_AGENT_KIND` of its choice, and
   write as that identity;
-- start an outside bridge with another `--kind` and a hello `cwd` of another folder: the hub verifies only the
-  bridge's parent process, so the user's binding for that kind and folder is a convention among cooperating agents,
-  not authentication.
+- start an outside bridge with another `--kind`, or start one in a bound folder: the hub checks the bridge's parent
+  process and that the bridge works in the folder it names (on Linux and macOS), but any process can change into a
+  folder it can read, and the kind is never verified, so the user's binding for that kind and folder is a convention
+  among cooperating agents, not authentication.
 
 `DRGNX_AGENT` is trusted as it is set, and an outside agent's `ext:KIND:PID-HASH` identity and its limits stop a
 confused or runaway agent. They do not stop a same-uid process that sets up its own environment. The checks above

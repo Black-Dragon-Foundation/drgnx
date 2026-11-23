@@ -46,6 +46,18 @@ struct World {
     other: PathBuf,
     /// The id of `root`'s project (a new plan names it).
     mine: String,
+    /// The bridge processes the tests started (each a `sleep` in its folder): killed with the world.
+    kids: std::sync::Mutex<Vec<std::process::Child>>,
+}
+
+impl Drop for World {
+    fn drop(&mut self) {
+        for k in self.kids.get_mut().unwrap_or_else(|e| e.into_inner()) {
+            if let Err(e) = k.kill().and_then(|()| k.wait().map(drop)) {
+                eprintln!("a bridge process: {e}");
+            }
+        }
+    }
 }
 
 fn world() -> World {
@@ -63,6 +75,7 @@ fn world() -> World {
         root,
         other,
         mine,
+        kids: std::sync::Mutex::default(),
     }
 }
 
@@ -97,9 +110,31 @@ impl World {
 
     /// A claude bridge started in CWD, attached.
     async fn attach(&self, cwd: &Path) -> Attached {
+        let peer = self.bridge_in(cwd);
+        self.attach_as(cwd, peer).await
+    }
+
+    /// A claude bridge whose hello names CLAIMED, attached over a connection whose peer is PEER.
+    async fn attach_as(&self, claimed: &Path, peer: i32) -> Attached {
         let who =
-            Identity::outside("claude", 4242, Some(1_700_000_000.0), Some(cwd.into())).unwrap();
-        attach(&self.f, who).await
+            Identity::outside("claude", 4242, Some(1_700_000_000.0), Some(claimed.into())).unwrap();
+        attach(&self.f, who, peer).await
+    }
+
+    /// A process working in DIR (a bridge's stand-in, killed with the world): its pid.
+    fn bridge_in(&self, dir: &Path) -> i32 {
+        let kid = Command::new("sleep")
+            .arg("600")
+            .current_dir(dir)
+            .spawn()
+            .unwrap();
+        self.keep(kid)
+    }
+
+    fn keep(&self, kid: std::process::Child) -> i32 {
+        let pid = kid.id() as i32;
+        self.kids.lock().unwrap().push(kid);
+        pid
     }
 
     async fn exec(&self, id: &str, method: &'static str, p: Value) -> Result<Value, String> {
@@ -854,4 +889,265 @@ async fn bind_refuses_a_binding_another_writer_made() {
     assert!(e.message.contains("never counts"), "{}", e.message);
     let a = w.attach(&w.root).await;
     assert_eq!(a.who.outside_role(), None);
+}
+
+// ---- Task 14: the hub checks the folder a bridge claims ----
+
+/// The refusal names both folders: the one the hello claimed and the one the bridge works in.
+fn names_both(msg: &str, claimed: &Path, real: &Path) {
+    assert!(
+        msg.contains(&*claimed.to_string_lossy()) && msg.contains(&*real.to_string_lossy()),
+        "{msg}"
+    );
+}
+
+/// [Task 14] A hello that claims a bound folder the bridge does not work in gets no role, and its calls are refused
+/// with both folders named.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_claimed_folder_other_than_the_bridges_is_refused() {
+    let w = world();
+    w.bind("claude", &w.root, "worker").await;
+    let peer = w.bridge_in(&w.other);
+    let a = w.attach_as(&w.root, peer).await;
+    assert_eq!(a.who.outside_role(), None);
+    let id = a.who.id().unwrap().to_owned();
+    let e = who_for(&w.f, &agent(&id)).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotAllowed);
+    names_both(&e.message, &w.root, &w.other);
+    let e = w
+        .exec(&id, "plans/write", w.new_plan("docs/plans/org/mine.md"))
+        .await
+        .unwrap_err();
+    names_both(&e, &w.root, &w.other);
+    assert!(!w.root.join("docs/plans/org/mine.md").exists());
+}
+
+/// [Task 14] A claimed folder that is a symlink to the bridge's own folder is that folder.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_symlink_to_the_bridges_folder_is_accepted() {
+    let w = world();
+    w.bind("claude", &w.root, "worker").await;
+    let link = w.dir.path().join("link");
+    std::os::unix::fs::symlink(&w.root, &link).unwrap();
+    let peer = w.bridge_in(&w.root);
+    let a = w.attach_as(&link, peer).await;
+    assert_eq!(a.who.outside_role(), Some(Role::Worker));
+    let (who, _) = who_for(&w.f, &agent(a.who.id().unwrap())).await.unwrap();
+    assert_eq!(who.role, Some(Role::Worker));
+}
+
+/// [Task 14] A bridge that moves to another folder after its hello is refused at its next bound call.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bridge_that_changes_folder_is_refused_at_its_next_call() {
+    use std::io::{BufRead, Write};
+    let w = world();
+    w.bind("claude", &w.root, "worker").await;
+    // it moves when told, and says so once it has
+    let mut kid = Command::new("sh")
+        .args([
+            "-c",
+            r#"read go; cd "$1" && echo moved && exec sleep 600"#,
+            "sh",
+        ])
+        .arg(&w.other)
+        .current_dir(&w.root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (mut go, out) = (kid.stdin.take().unwrap(), kid.stdout.take().unwrap());
+    let peer = w.keep(kid);
+    let a = w.attach_as(&w.root, peer).await;
+    assert_eq!(a.who.outside_role(), Some(Role::Worker));
+    let id = a.who.id().unwrap().to_owned();
+    assert!(who_for(&w.f, &agent(&id)).await.is_ok());
+    writeln!(go, "go").unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(out).read_line(&mut line).unwrap();
+    assert_eq!(line.trim(), "moved");
+    let e = who_for(&w.f, &agent(&id)).await.unwrap_err();
+    names_both(&e.message, &w.root, &w.other);
+    let e = w
+        .exec(&id, "plans/write", w.new_plan("docs/plans/org/mine.md"))
+        .await
+        .unwrap_err();
+    names_both(&e, &w.root, &w.other);
+}
+
+// ---- Task 15: the user's yes lets the retry through ----
+
+/// The card an Ask's refusal names.
+fn card_in(text: &str) -> i64 {
+    let at = text
+        .find("(card ")
+        .unwrap_or_else(|| panic!("no card in {text:?}"));
+    text[at + 6..]
+        .split(')')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no card in {text:?}"))
+}
+
+impl World {
+    /// The user answers card N with CHOICE at NOW.
+    async fn settle_at(&self, n: i64, choice: &str, now: f64) {
+        crate::graph::settle(&self.f.writer, &user(), n, choice.into(), now)
+            .await
+            .unwrap();
+    }
+
+    async fn settle(&self, n: i64, choice: &str) {
+        self.settle_at(n, choice, crate::clock::wall_secs()).await;
+    }
+
+    async fn card_data(&self, n: i64) -> Value {
+        self.f
+            .writer
+            .db
+            .read(move |c| Ok(norn::write::cards::matrix_card_get(c, n)?.unwrap().data))
+            .await
+            .unwrap()
+    }
+
+    /// A bound worker agent attached in the project, and a plan of the user's there: (its id, the plan).
+    async fn agent_and_users_plan(&self) -> (Attached, String, String) {
+        let mine = self.project(&self.root).await;
+        let plan = self.user_plan(&mine, "docs/plans/org/users.md").await;
+        self.bind("claude", &self.root, "worker").await;
+        let a = self.attach(&self.root).await;
+        let id = a.who.id().unwrap().to_owned();
+        (a, id, plan)
+    }
+
+    /// PLAN's first task: (its title, its status).
+    async fn task_of(&self, plan: &str) -> (String, String) {
+        let plan = plan.to_owned();
+        self.f
+            .writer
+            .db
+            .read(move |c| {
+                let t = &crate::runner::effects::load_view(c, &plan)?.tasks[0];
+                Ok((t.title.clone(), t.status.clone()))
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn task_title(&self, plan: &str) -> String {
+        self.task_of(plan).await.0
+    }
+}
+
+fn retitle(plan: &str, title: &str) -> Value {
+    json!({"plan": plan, "tasks": [{"number": "1", "title": title}]})
+}
+
+/// [Task 15] The user's yes lets exactly that change through once: it lands, the card is spent, and the same call
+/// again asks again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_yes_lets_the_retry_through_once() {
+    let w = world();
+    let (_a, id, plan) = w.agent_and_users_plan().await;
+    let p = retitle(&plan, "changed");
+    let e = w.exec(&id, "plans/write", p.clone()).await.unwrap_err();
+    let n = card_in(&e);
+    assert_eq!(w.cards().await, 1);
+    w.settle(n, "allow").await;
+    let r = w.exec(&id, "plans/write", p.clone()).await;
+    assert!(r.is_ok(), "{r:?}");
+    assert!(w.task_title(&plan).await.contains("changed"));
+    assert!(w.card_data(n).await.get("spent").is_some());
+    let e = w.exec(&id, "plans/write", p).await.unwrap_err();
+    let m = card_in(&e);
+    assert_ne!(m, n, "a spent yes asks again with a new card");
+    assert_eq!(w.cards().await, 2);
+}
+
+/// [Task 15] A retry with other arguments is another change: it asks again, and the yes still covers the first.
+#[tokio::test(flavor = "multi_thread")]
+async fn changed_arguments_ask_again() {
+    let w = world();
+    let (_a, id, plan) = w.agent_and_users_plan().await;
+    let first = retitle(&plan, "changed");
+    let n = card_in(&w.exec(&id, "plans/write", first.clone()).await.unwrap_err());
+    w.settle(n, "allow").await;
+    let e = w
+        .exec(&id, "plans/write", retitle(&plan, "something else"))
+        .await
+        .unwrap_err();
+    assert_ne!(card_in(&e), n);
+    assert!(w.card_data(n).await.get("spent").is_none());
+    let r = w.exec(&id, "plans/write", first).await;
+    assert!(r.is_ok(), "{r:?}");
+}
+
+/// [Task 15] The user's no refuses the retry: no new card, nothing written.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_no_refuses_the_retry() {
+    let w = world();
+    let (_a, id, plan) = w.agent_and_users_plan().await;
+    let p = retitle(&plan, "changed");
+    let n = card_in(&w.exec(&id, "plans/write", p.clone()).await.unwrap_err());
+    w.settle(n, "deny").await;
+    let e = w.exec(&id, "plans/write", p).await.unwrap_err();
+    assert!(
+        e.contains("refused") && e.contains(&format!("card {n}")),
+        "{e}"
+    );
+    assert_eq!(w.cards().await, 1);
+    assert!(!w.task_title(&plan).await.contains("changed"));
+}
+
+/// [Task 15] A yes to a change never opens a Never cap: marking the user's task done stays refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_yes_never_opens_a_never_cap() {
+    let w = world();
+    let (_a, id, plan) = w.agent_and_users_plan().await;
+    let p = json!({"plan": plan, "tasks": [{"number": "1", "status": "done"}]});
+    let n = card_in(&w.exec(&id, "plans/write", p.clone()).await.unwrap_err());
+    w.settle(n, "allow").await;
+    let e = w.exec(&id, "plans/write", p).await.unwrap_err();
+    assert_eq!(e, "task.done is never allowed here");
+    assert_ne!(w.task_of(&plan).await.1, "done");
+}
+
+/// [Task 15] A yes lasts the card's window: after it the same change asks again; within it, it goes through.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_yes_ends_with_its_window() {
+    use crate::matrix_gate::Gate;
+    let w = world();
+    let (_a, id, plan) = w.agent_and_users_plan().await;
+    let (who, base) = who_for(&w.f, &agent(&id)).await.unwrap();
+    let ctx = crate::matrix_gate::ActionCtx {
+        change: Some(norn::grants::Change::of(
+            "plans/write",
+            &plan,
+            &retitle(&plan, "x"),
+        )),
+        ..base
+    };
+    let check = |now: f64| {
+        let (g, who, ctx) = (w.f.core.matrix.clone(), who.clone(), ctx.clone());
+        let c = agent(&id);
+        let f = w.f.clone();
+        async move {
+            f.writer
+                .write(&c, "test", move |tx| {
+                    g.check(tx, &who, norn::matrix::Action::GraphChange, &ctx, now)
+                })
+                .await
+                .unwrap()
+        }
+    };
+    let now = crate::clock::wall_secs();
+    let Gate::Ask(n) = check(now).await else {
+        panic!("the change asks first")
+    };
+    w.settle_at(n, "allow", now).await;
+    let window = crate::matrix_gate::DEFAULT_ONCE_WINDOW as f64;
+    let Gate::Ask(m) = check(now + window + 1.0).await else {
+        panic!("an ended yes asks again")
+    };
+    assert_ne!(m, n);
+    assert_eq!(check(now + 1.0).await, Gate::Allow);
 }
