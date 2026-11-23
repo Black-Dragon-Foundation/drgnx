@@ -3069,16 +3069,19 @@ dependencies = [
 name = "glitnir"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "eitri",
  "gif",
  "hlidskjalf",
- "hulda",
  "image-webp",
  "kvardi",
+ "mot",
  "png 0.18.1",
  "saman",
  "sja",
  "smidja",
  "stund",
+ "villa",
 ]
 
 [[package]]
@@ -6776,6 +6779,7 @@ version = "0.1.0"
 dependencies = [
  "annall",
  "libc",
+ "saman",
  "serde_core",
  "serde_json",
  "stund",
@@ -6912,6 +6916,7 @@ name = "smidja"
 version = "0.1.0"
 dependencies = [
  "kvardi",
+ "saman",
  "stund",
 ]
 

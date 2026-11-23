@@ -45,7 +45,7 @@ static CLOCK: Mutex<Clock> = Mutex::new(Clock {
 });
 
 fn clock() -> MutexGuard<'static, Clock> {
-    CLOCK.lock().unwrap_or_else(|p| p.into_inner())
+    saman::lock(&CLOCK)
 }
 
 /// Start at the real readings WALL_NS and MONO_NS, with nothing elapsed.
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn wall_and_monotonic_move_in_step() {
-        let _t = TURN.lock().unwrap();
+        let _t = saman::lock(&TURN);
         glitnir_tc_start(5_000, 100);
         assert_eq!((glitnir_tc_wall_ns(), glitnir_tc_mono_ns()), (5_000, 100));
         glitnir_tc_advance_to(350);
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn time_never_goes_back() {
-        let _t = TURN.lock().unwrap();
+        let _t = saman::lock(&TURN);
         glitnir_tc_start(0, 1_000);
         glitnir_tc_advance_to(2_000);
         glitnir_tc_advance_to(1_500);
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn a_wait_comes_due_at_its_deadline_and_not_before() {
-        let _t = TURN.lock().unwrap();
+        let _t = saman::lock(&TURN);
         glitnir_tc_start(0, 0);
         assert!(glitnir_tc_register(10, fake(1), fake(2)) >= FIRST_ID);
         assert_eq!(glitnir_tc_next_deadline(), 10);
@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn waits_come_due_in_deadline_order_then_in_order_of_arrival() {
-        let _t = TURN.lock().unwrap();
+        let _t = saman::lock(&TURN);
         glitnir_tc_start(0, 0);
         glitnir_tc_register(20, fake(1), fake(1));
         glitnir_tc_register(10, fake(2), fake(2));
@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn unregister_says_who_took_it() {
-        let _t = TURN.lock().unwrap();
+        let _t = saman::lock(&TURN);
         glitnir_tc_start(0, 0);
         let a = glitnir_tc_register(10, fake(1), fake(1));
         let b = glitnir_tc_register(10, fake(2), fake(2));
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn registering_off_or_past_the_deadline_queues_nothing() {
-        let _t = TURN.lock().unwrap();
+        let _t = saman::lock(&TURN);
         assert_eq!(glitnir_tc_register(10, fake(1), fake(1)), OFF);
         glitnir_tc_start(0, 100);
         assert_eq!(glitnir_tc_register(100, fake(1), fake(1)), DUE);
@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn stopping_hands_back_every_wait() {
-        let _t = TURN.lock().unwrap();
+        let _t = saman::lock(&TURN);
         glitnir_tc_start(0, 0);
         glitnir_tc_register(1_000, fake(1), fake(1));
         glitnir_tc_stop();

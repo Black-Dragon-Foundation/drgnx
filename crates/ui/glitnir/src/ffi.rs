@@ -233,7 +233,9 @@ pub unsafe extern "C" fn glitnir_decor_corners(
     scale: f64,
 ) -> i32 {
     ffi_guard(|| {
-        let px = |v: f64| (v.is_finite() && v >= 0.0).then(|| (v * scale).round() as u32);
+        let px = |v: f64| {
+            (v.is_finite() && v >= 0.0).then(|| kvardi::device_f64(v, scale).round() as u32)
+        };
         let (Some(r), Some(b)) = (px(radius), px(ring_w)) else {
             return GLITNIR_E_ARG;
         };
@@ -822,7 +824,7 @@ mod tests {
     }
 
     fn crate_file(rel: &str) -> String {
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)).unwrap()
+        eitri::read_string(&Path::new(env!("CARGO_MANIFEST_DIR")).join(rel), 1 << 24).unwrap()
     }
 
     #[test]
@@ -1137,7 +1139,12 @@ mod tests {
         );
         let mut texts: Vec<(String, String)> = files
             .iter()
-            .map(|p| (p.display().to_string(), std::fs::read_to_string(p).unwrap()))
+            .map(|p| {
+                (
+                    p.display().to_string(),
+                    eitri::read_string(p, 1 << 24).unwrap(),
+                )
+            })
             .collect();
         texts.push(("include/glitnir.h".into(), crate_file("include/glitnir.h")));
         for (name, text) in texts {

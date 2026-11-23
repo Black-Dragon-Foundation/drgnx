@@ -260,7 +260,7 @@ mod tests {
             points: points.into(),
             width_px: 1,
             radius_px: 6,
-            argb: 0xffff_ffff,
+            argb: crate::testkit::argb(mot::Token::OnAccent),
             ..Edge::default()
         }
     }

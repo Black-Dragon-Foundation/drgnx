@@ -231,9 +231,7 @@ pub fn take_hub_folds(key: u64, file: &str) -> bool {
     .flatten() else {
         return false;
     };
-    let mut taken = TAKEN
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut taken = saman::lock(&TAKEN);
     // a buffer its own parser folds (source 0) keeps those: the hub's would be the same ranges again
     if with_model(key, |m| m.has_folds_of(0)) != Some(false) {
         return false;

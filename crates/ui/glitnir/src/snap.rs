@@ -97,20 +97,23 @@ pub fn outward(r: Rect, scale120: u32) -> Rect {
     Rect::new(x0, y0, x1 - x0, y1 - y0)
 }
 
+/// A scale as the host's 120ths.
+pub(crate) fn s120_of(scale: f64) -> u32 {
+    kvardi::device_f64(120.0, scale).round() as u32
+}
+
 fn identity_scale(scale: f64) -> bool {
     !scale.is_finite() || scale <= 0.0 || scale.fract() == 0.0
 }
 
 /// One axis: the snapped start and length, in logical units.
 fn snap_span(pos: f64, len: f64, scale: f64) -> (f64, f64) {
-    if len * scale < 2.0 {
-        (
-            (pos * scale).round() / scale,
-            (len * scale).floor().max(1.0) / scale,
-        )
+    let dev = |v: f64| kvardi::device_f64(v, scale);
+    if dev(len) < 2.0 {
+        (dev(pos).round() / scale, dev(len).floor().max(1.0) / scale)
     } else {
-        let a = (pos * scale).round();
-        let b = ((pos + len) * scale).round();
+        let a = dev(pos).round();
+        let b = dev(pos + len).round();
         (a / scale, (b - a) / scale)
     }
 }
@@ -130,7 +133,7 @@ pub fn snap_line(w: f64, scale: f64) -> f64 {
     if identity_scale(scale) {
         return w;
     }
-    let px = w * scale;
+    let px = kvardi::device_f64(w, scale);
     if px < 2.0 {
         px.floor().max(1.0) / scale
     } else {

@@ -60,6 +60,12 @@ impl Scale {
     }
 }
 
+/// A logical length (in f64) as device pixels at SCALE, unrounded: the one place a length meets a scale for geometry
+/// that rounds by its own rules (Glitnir's edge snapping).
+pub fn device_f64(logical: f64, scale: f64) -> f64 {
+    logical * scale
+}
+
 /// Clamp a zoom level to the range the editor allows; a value that is not a number is 1.
 pub fn clamp_zoom(z: f32) -> f32 {
     if z.is_nan() {

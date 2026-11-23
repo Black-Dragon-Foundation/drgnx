@@ -8,7 +8,7 @@
 //! [`compose`] draws a list in order, source-over, into a premultiplied ARGB buffer (the CPU presenter); each primitive
 //! is clipped to the strip or band it belongs to, so nothing draws outside it. Naglfar draws the same list.
 
-use crate::atlas::{AtlasKind, Atlases, GlyphKey};
+use crate::atlas::{AtlasKind, Atlases, GlyphId};
 use crate::geom::Rect;
 use crate::text::TextRun;
 
@@ -60,7 +60,7 @@ pub enum Prim {
     Sprite {
         id: u64,
         at: (i32, i32),
-        key: GlyphKey,
+        key: GlyphId,
         tint: u32,
     },
     Text {

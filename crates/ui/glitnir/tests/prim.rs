@@ -28,8 +28,8 @@ fn at(px: &[u32], x: i32, y: i32) -> u32 {
     px[(y * W + x) as usize]
 }
 
-fn key(glyph: u32) -> GlyphKey {
-    GlyphKey {
+fn key(glyph: u32) -> GlyphId {
+    GlyphId {
         font: 1,
         glyph,
         size_px: 13,
@@ -47,6 +47,11 @@ fn block(cov: u8) -> Mask {
         data: MaskData::A8(vec![cov; 24]),
     }
 }
+
+/// Pixel patterns of the compositor's arithmetic tests: premultiplied half-alpha blue, and two shadow strengths.
+const HALF_ALPHA_BLUE_PREMULTIPLIED: u32 = 0x8000_0080;
+const FAINT_SHADOW: u32 = 0x4000_0000;
+const SOLID_SHADOW: u32 = 0xff00_0000;
 
 fn colour_block(argb: u32) -> Mask {
     Mask {
@@ -147,7 +152,7 @@ fn bgra_is_premultiplied_over_the_background() {
     let mut a = Atlases::default();
     // half-alpha blue, premultiplied: 0x80 alpha, 0x80 blue
     a.bgra
-        .get_or_insert(key(9), || Some(colour_block(0x8000_0080)))
+        .get_or_insert(key(9), || Some(colour_block(HALF_ALPHA_BLUE_PREMULTIPLIED)))
         .unwrap();
     let card = 0xff40_4040u32;
     let mut px = vec![card; (W * H) as usize];
@@ -224,7 +229,7 @@ fn gradient_quad_two_stops() {
 
 fn evict_case<T: Texel>(atlas: &mut Atlas<T>, mask: impl Fn() -> Mask) {
     // a mask that fills most of a page: one per page
-    let big = |i| GlyphKey {
+    let big = |i| GlyphId {
         font: 2,
         glyph: i,
         size_px: 600,
@@ -306,7 +311,7 @@ fn every_prim_has_a_stable_id() {
             blur: 8.0,
             offset: (0.0, 2.0),
             spread: 0.0,
-            argb: 0x4000_0000,
+            argb: FAINT_SHADOW,
         },
         Prim::Sprite {
             id: 5,
@@ -375,7 +380,7 @@ fn every_prim_clips_to_its_band() {
             blur: 6.0,
             offset: (0.0, 0.0),
             spread: 2.0,
-            argb: 0xff00_0000,
+            argb: SOLID_SHADOW,
         },
         Prim::Sprite {
             id: 5,

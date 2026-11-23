@@ -42,7 +42,7 @@ pub const MAX_OUTPUTS: usize = 4;
 
 /// An own output's rectangle: the window's R snapped outward at the root's SCALE (root device px).
 fn snapped(r: Rect, scale: f64) -> Rect {
-    let s120 = (scale * 120.0).round() as u32;
+    let s120 = crate::snap::s120_of(scale);
     crate::snap::stable_rect(crate::snap::outward(r, s120), 0, 0, s120)
 }
 
@@ -1216,9 +1216,9 @@ mod tests {
             offset_y: 12.0,
             spread_px: 0.0,
             shadow_opacity: 0.35,
-            shadow_argb: 0xff00_0000,
+            shadow_argb: crate::testkit::argb(mot::Token::Gap),
             border_px: 2.0,
-            border_argb: 0xff80_8080,
+            border_argb: crate::testkit::argb(mot::Token::Subtle),
             ring_px: 0.0,
             ring_argb: 0,
         }
@@ -1811,7 +1811,7 @@ mod tests {
         s.set_card(
             win,
             Some(Card {
-                fill_argb: 0xff20_2020,
+                fill_argb: crate::testkit::argb(mot::Token::Panel),
                 fill: vec![divider].into(),
                 ..Card::default()
             }),

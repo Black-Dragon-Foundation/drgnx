@@ -56,7 +56,7 @@ impl Source<'_> {
 
 /// What the image was made from; a change of any of these recomputes it all.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Key {
+struct BlurId {
     sigma: u32,
     scale: u64,
     region: Rect,
@@ -76,7 +76,7 @@ struct Scratch {
 /// The blurred image of what lies beneath one layer.
 #[derive(Debug, Default)]
 pub struct Backdrop {
-    key: Option<Key>,
+    key: Option<BlurId>,
     /// The source pixels the image holds: the region and its margin within the source, out to the grid of 4.
     area: Rect,
     /// Premultiplied, `area.w / 4` cells by `area.h / 4`.
@@ -138,7 +138,7 @@ impl Backdrop {
             self.invalidate();
             return None;
         }
-        let key = Key {
+        let key = BlurId {
             sigma: sigma_px.to_bits(),
             scale: scale.to_bits(),
             region,
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn avx2_equals_baseline() {
         let Some(wide) = avx2() else {
-            eprintln!("no AVX2 build on this machine");
+            annall::cli_err("no AVX2 build on this machine").unwrap_or_default();
             return;
         };
         for (sigma, seed) in [(3.0, 21), (10.0, 22), (20.5, 23), (64.0, 24)] {
@@ -812,10 +812,10 @@ mod tests {
             let (mut update_ms, mut sample_ms) = (Vec::new(), Vec::new());
             for _ in 0..41 {
                 b.invalidate();
-                let t = std::time::Instant::now();
+                let t = stund::Instant::now();
                 b.update(&src, w as usize, (w, h), region, sigma, 2.0, &[]);
                 update_ms.push(t.elapsed().as_secs_f64() * 1e3);
-                let t = std::time::Instant::now();
+                let t = stund::Instant::now();
                 for y in region.y..region.y + region.h {
                     b.sample_row(y, region.x, &mut row);
                     std::hint::black_box(&row);
@@ -824,7 +824,7 @@ mod tests {
             }
             update_ms.sort_by(f64::total_cmp);
             sample_ms.sort_by(f64::total_cmp);
-            println!(
+            annall::cli_out(&format!(
                 "{} {}x{} σ {sigma}: update {:.2} ms, fused sample {:.2} ms, cache {} kB",
                 kernels().name,
                 region.w,
@@ -832,7 +832,8 @@ mod tests {
                 update_ms[20],
                 sample_ms[20],
                 b.bytes() / 1024
-            );
+            ))
+            .unwrap_or_default();
         }
     }
 }

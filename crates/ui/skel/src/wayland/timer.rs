@@ -34,10 +34,7 @@ impl HostTimer {
         if self.thread.is_none() && at_ns.is_some() {
             let inner = Arc::clone(&self.inner);
             let shared = Arc::downgrade(shared);
-            self.thread = std::thread::Builder::new()
-                .name("nhshell-timer".into())
-                .spawn(move || run(&inner, &shared))
-                .ok();
+            self.thread = saman::spawn_thread("nhshell-timer", move || run(&inner, &shared)).ok();
         }
     }
 }

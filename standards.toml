@@ -36,6 +36,9 @@ huginn = { clean = true }
 hlidskjalf = { clean = true }
 ritari = { clean = true }
 skel = { clean = true }
+glitnir = { clean = true }
+sja = { clean = true }
+smidja = { clean = true }
 
 [[standard]]
 id = "errors"

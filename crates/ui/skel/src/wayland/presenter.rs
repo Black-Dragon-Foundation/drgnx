@@ -410,7 +410,7 @@ pub(crate) fn spawn(
     link: Arc<Link>,
     mail: Arc<Mailbox>,
     stage: Stage,
-) -> std::io::Result<JoinHandle<Option<Stage>>> {
+) -> villa::Result<JoinHandle<Option<Stage>>> {
     link.stop.store(false, Ordering::Release);
     // the thread before this one (a reconnect starts a new one): neither its id nor its turns are this one's
     link.tid.store(0, Ordering::Release);
@@ -427,25 +427,23 @@ pub(crate) fn spawn(
         libc::pthread_sigmask(libc::SIG_SETMASK, &all, &mut old);
         old
     };
-    let spawned = std::thread::Builder::new()
-        .name("nh-present".into())
-        .spawn(move || {
-            PRESENTER_THREAD.set(true);
-            glitnir::mark_compose_thread();
-            // SAFETY: gettid has no preconditions.
-            link.tid.store(unsafe { libc::gettid() }, Ordering::Release);
-            let out = catch_unwind(AssertUnwindSafe(|| run(&link, &mail, stage)));
-            if out.is_err()
-                && let Some(w) = link.wire()
-            {
-                // a panic is a bug: presenting stops, and the host hears DISCONNECTED once
-                w.shared.close();
-            }
-            let stage = out.ok();
-            drop(link);
-            finished.set();
-            stage
-        });
+    let spawned = saman::spawn_thread("nh-present", move || {
+        PRESENTER_THREAD.set(true);
+        glitnir::mark_compose_thread();
+        // SAFETY: gettid has no preconditions.
+        link.tid.store(unsafe { libc::gettid() }, Ordering::Release);
+        let out = catch_unwind(AssertUnwindSafe(|| run(&link, &mail, stage)));
+        if out.is_err()
+            && let Some(w) = link.wire()
+        {
+            // a panic is a bug: presenting stops, and the host hears DISCONNECTED once
+            w.shared.close();
+        }
+        let stage = out.ok();
+        drop(link);
+        finished.set();
+        stage
+    });
     if spawned.is_err() {
         // no thread: nothing to wait for
         done.set();

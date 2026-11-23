@@ -45,7 +45,7 @@ use crate::shadow::{ShadowCache, ShadowSpec, ShadowTiles};
 use crate::stats::StatsEntry;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use stund::Instant;
 
 /// One layer's pixels, borrowed for one call.  Layout equals `GlitnirSource`.
 #[repr(C)]
@@ -1563,7 +1563,7 @@ pub fn compose_committed_with(
     let start = Instant::now();
     #[cfg(test)]
     if let Some(g) = &k.gate {
-        let _ = g.recv_timeout(std::time::Duration::from_secs(5));
+        let _gate_timed_out_or_opened = g.recv_timeout(std::time::Duration::from_secs(5));
     }
     let shadows = k.shadows.get_or_insert_with(ShadowCache::new);
     let layers = compose_layers(
@@ -1588,7 +1588,7 @@ pub fn compose_committed_with(
 static PROCESS: Mutex<Composer> = Mutex::new(Composer::new());
 
 fn process() -> MutexGuard<'static, Composer> {
-    PROCESS.lock().unwrap_or_else(|p| p.into_inner())
+    saman::lock(&PROCESS)
 }
 
 /// Compose ROOT's committed scene (`glitnir_compose`) with the C ABI's composer.  `GLITNIR_E_STATE` when ROOT has no
@@ -2010,9 +2010,9 @@ mod tests {
                 blur_px: 6.0,
                 offset_y: 3.0,
                 shadow_opacity: 0.4,
-                shadow_argb: 0xff00_0000,
+                shadow_argb: crate::testkit::argb(mot::Token::Gap),
                 border_px: 2.0,
-                border_argb: 0xff40_80c0,
+                border_argb: crate::testkit::argb(mot::Token::AccentFill),
                 ring_px: 0.0,
                 ring_argb: 0,
                 ..Chrome::default()
@@ -2072,7 +2072,7 @@ mod tests {
         let ring = Chrome {
             radius_px: 6.0,
             ring_px: 1.0,
-            ring_argb: 0x7300_0000,
+            ring_argb: crate::testkit::argb_alpha(mot::Token::Gap, 0x73),
             ..Chrome::default()
         };
         s.set_chrome(20, Some(ring)).unwrap();
@@ -2438,7 +2438,7 @@ mod tests {
         let (_, snap) = crate::damage::commit_snapshot(root).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let (release, gate) = std::sync::mpsc::channel();
-        let a = std::thread::spawn(move || {
+        let a = saman::spawn_thread("glitnir-test", move || {
             crate::mark_compose_thread();
             let root_px = Buf::new(w, h, 0xfff0_f0f0);
             let popup = Buf::new(pop.w, pop.h, 0xff20_2428);
@@ -2454,10 +2454,11 @@ mod tests {
                 &[Rect::new(0, 0, w, h)],
                 &sources,
             )
-        });
+        })
+        .unwrap();
         rx.recv().unwrap();
         // A is inside its compose; the host goes on drawing into the same root
-        std::thread::sleep(Duration::from_millis(5));
+        stund::sleep_blocking(Duration::from_millis(5));
         let t0 = Instant::now();
         for i in 0..1000 {
             crate::damage::with(root, |d| d.add(Rect::new(i % 640, i / 640, 1, 1)));
@@ -2515,7 +2516,7 @@ mod tests {
             radius_px: 8.0,
             blur_px: 6.0,
             shadow_opacity: 0.5,
-            shadow_argb: 0xff00_0000,
+            shadow_argb: crate::testkit::argb(mot::Token::Gap),
             ..Chrome::default()
         };
         let s = kid_scene(rect, Some(chrome));
@@ -2684,9 +2685,9 @@ mod tests {
                 offset_y: 12.0,
                 spread_px: 0.0,
                 shadow_opacity: 0.35,
-                shadow_argb: 0xff00_0000,
+                shadow_argb: crate::testkit::argb(mot::Token::Gap),
                 border_px: 2.0,
-                border_argb: 0xff60_6060,
+                border_argb: crate::testkit::argb(mot::Token::BorderStrong),
                 ring_px: 0.0,
                 ring_argb: 0,
             }),
@@ -2717,9 +2718,10 @@ mod tests {
         let mut ms: Vec<f64> = (0..31).map(|_| once()).collect();
         ms.sort_by(f64::total_cmp);
         let (median, max) = (ms[ms.len() / 2], ms[ms.len() - 1]);
-        eprintln!(
+        annall::cli_err(&format!(
             "compose bench (baseline): median {median:.3} ms, max {max:.3} ms over {damage:?}"
-        );
+        ))
+        .unwrap_or_default();
         assert!(median <= 2.0, "median {median:.3} ms > 2 ms");
     }
 
@@ -2951,7 +2953,7 @@ mod tests {
                 blur_px: 6.0,
                 offset_y: 2.0,
                 shadow_opacity: 0.45,
-                shadow_argb: 0xff00_0000,
+                shadow_argb: crate::testkit::argb(mot::Token::Gap),
                 ..radius(r)
             }
         }
@@ -3040,7 +3042,7 @@ mod tests {
                     blur_px: 6.0,
                     offset_y: 3.0,
                     shadow_opacity: 0.4,
-                    shadow_argb: 0xff00_0000,
+                    shadow_argb: crate::testkit::argb(mot::Token::Gap),
                     ..Chrome::default()
                 };
                 let card = Card {
@@ -3190,7 +3192,7 @@ mod tests {
             s.set_card(
                 WIN,
                 Some(Card {
-                    ring_argb: 0xff80_9010,
+                    ring_argb: crate::testkit::argb(mot::Token::Warn),
                     ..rich(2, &[])
                 }),
             )
@@ -3268,7 +3270,7 @@ mod tests {
                 let soft = Chrome {
                     blur_px: 12.0,
                     shadow_opacity: 0.6,
-                    shadow_argb: 0xff00_0000,
+                    shadow_argb: crate::testkit::argb(mot::Token::Gap),
                     ..radius(8.0)
                 };
                 let build = |r: f32, keep: &[Rect]| {
@@ -3486,7 +3488,7 @@ mod tests {
                     shadow_opacity: if g.below(2) == 0 { 0.0 } else { 0.45 },
                     blur_px: g.below(8) as f32,
                     offset_y: g.below(3) as f32,
-                    shadow_argb: 0xff00_0000,
+                    shadow_argb: crate::testkit::argb(mot::Token::Gap),
                     ..radius(r as f32)
                 };
                 let r = 2 + g.below(14);
@@ -3866,8 +3868,8 @@ mod tests {
         /// ring and what lies outside the rounded path change.
         #[test]
         fn carve_only_outside_the_path() {
-            for scale in [1.0, 2.0] {
-                let (r, w) = (6 * scale as i32, scale as i32);
+            for dpr in [1.0, 2.0] {
+                let (r, w) = (6 * dpr as i32, dpr as i32);
                 let b = Rect::new(20, 10, 60, 40);
                 let mut front = Buf::new(120, 80, FRONT);
                 // a tint row across the inside, from the ring's inner edge, and a chip at the inner top-left
@@ -3876,8 +3878,8 @@ mod tests {
                         front.px[(y * 120 + x) as usize] = TINT;
                     }
                 }
-                let s = blocked(ALL, &[ring(b, r as u32, w as u32)], scale);
-                let out = compose_all(&s, &front, scale);
+                let s = blocked(ALL, &[ring(b, r as u32, w as u32)], dpr);
+                let out = compose_all(&s, &front, dpr);
                 let rf = r as f64;
                 for y in b.y..b.y + b.h {
                     for x in b.x..b.x + b.w {
@@ -3904,7 +3906,7 @@ mod tests {
                             assert_eq!(
                                 out.at(x, y),
                                 front.at(x, y),
-                                "scale {scale}: inside the path at {x},{y}"
+                                "dpr {dpr}: inside the path at {x},{y}"
                             );
                         }
                     }
@@ -3941,7 +3943,7 @@ mod tests {
             let band = Band {
                 rect: Rect::new(80, 2, 40, 4),
                 fill_argb: 0,
-                line_argb: 0xff_00_00_ff,
+                line_argb: crate::testkit::argb(mot::Token::Accent),
             };
             let spec = TileSpec {
                 width: 40,
@@ -3959,7 +3961,7 @@ mod tests {
                 rect: Rect::new(80, 0, 40, 80),
                 reveal_px: reveal,
                 left: false,
-                fill_argb: 0xff_20_20_20,
+                fill_argb: crate::testkit::argb(mot::Token::Panel),
                 tiles: [TileAt {
                     y: 0,
                     h: 8,
@@ -3970,7 +3972,7 @@ mod tests {
                 // a nesting shade below the tile, inset 4 px
                 shades: [Band {
                     rect: Rect::new(84, 60, 36, 10),
-                    fill_argb: 0xff_40_40_40,
+                    fill_argb: crate::testkit::argb(mot::Token::Hover),
                     line_argb: 0,
                 }]
                 .into(),
@@ -3984,7 +3986,7 @@ mod tests {
                         .map(|i| if i % 10 < 5 { 0xff_ff_00_00 } else { 0 })
                         .collect::<Vec<u32>>()
                         .into(),
-                    back_argb: 0xff_10_10_10,
+                    back_argb: crate::testkit::argb(mot::Token::Editor),
                 }]
                 .into(),
             }
@@ -4002,24 +4004,48 @@ mod tests {
             let out = compose_all(&s, &Buf::new(120, 80, FRONT), 1.0);
             assert_eq!(out.at(79, 0), FRONT, "the text beside it");
             assert_eq!(out.at(85, 0), 0xff_ff_ff_ff, "row 0's bar (10 columns)");
-            assert_eq!(out.at(95, 0), 0xff_20_20_20, "past it, the surface");
+            assert_eq!(
+                out.at(95, 0),
+                crate::testkit::argb(mot::Token::Panel),
+                "past it, the surface"
+            );
             assert_eq!(out.at(81, 7), 0xff_ff_ff_ff, "row 3's bar");
-            assert_eq!(out.at(100, 2), 0xff_00_00_ff, "the band's top line");
-            assert_eq!(out.at(119, 4), 0xff_00_00_ff, "the band's right line");
+            assert_eq!(
+                out.at(100, 2),
+                crate::testkit::argb(mot::Token::Accent),
+                "the band's top line"
+            );
+            assert_eq!(
+                out.at(119, 4),
+                crate::testkit::argb(mot::Token::Accent),
+                "the band's right line"
+            );
             assert_eq!(
                 out.at(100, 40),
-                0xff_20_20_20,
+                crate::testkit::argb(mot::Token::Panel),
                 "below the tile, the surface"
             );
-            assert_eq!(out.at(100, 65), 0xff_40_40_40, "a shade");
-            assert_eq!(out.at(82, 65), 0xff_20_20_20, "left of its inset");
+            assert_eq!(
+                out.at(100, 65),
+                crate::testkit::argb(mot::Token::Hover),
+                "a shade"
+            );
+            assert_eq!(
+                out.at(82, 65),
+                crate::testkit::argb(mot::Token::Panel),
+                "left of its inset"
+            );
             assert_eq!(out.at(92, 41), 0xff_ff_00_00, "a label's sprite");
             assert_eq!(
                 out.at(97, 41),
-                0xff_10_10_10,
+                crate::testkit::argb(mot::Token::Editor),
                 "its backing, where the sprite is clear"
             );
-            assert_eq!(out.at(97, 45), 0xff_20_20_20, "below it, the surface");
+            assert_eq!(
+                out.at(97, 45),
+                crate::testkit::argb(mot::Token::Panel),
+                "below it, the surface"
+            );
             // half revealed: only the outer 20 px show
             let (mut s, mut f) = (Scene::default(), Frames::new());
             s.upsert(&desc(ROOT, 0, 1, ALL, 1.0, true)).unwrap();
@@ -4029,7 +4055,11 @@ mod tests {
             let out = compose_all(&s, &Buf::new(120, 80, FRONT), 1.0);
             assert_eq!(out.at(85, 0), FRONT, "not yet revealed");
             assert_eq!(out.at(99, 0), FRONT);
-            assert_eq!(out.at(100, 0), 0xff_20_20_20, "the revealed part");
+            assert_eq!(
+                out.at(100, 0),
+                crate::testkit::argb(mot::Token::Panel),
+                "the revealed part"
+            );
             assert_eq!(out.at(105, 6), 0xff_ff_ff_ff, "row 3's bar reaches it");
         }
 

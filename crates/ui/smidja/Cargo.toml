@@ -13,7 +13,11 @@ crate-type = ["rlib"]
 # the model does no I/O and knows nothing of Emacs or of drawing (README, "Crate rules"): std, the time source and the unit types
 [dependencies]
 stund.workspace = true
+saman.workspace = true
 kvardi.workspace = true
 
 [profile.test]
 opt-level = 1
+
+[lints]
+workspace = true

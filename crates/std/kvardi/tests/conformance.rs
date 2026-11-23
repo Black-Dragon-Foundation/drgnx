@@ -193,3 +193,9 @@ fn a_length_in_device_pixels_unrounded() {
     assert_eq!(Lp(3.0).to_px(&s), Px(5), "the rounded one is a pixel count");
     assert_eq!(Lp(2.0).to_px_f32(&Scale::default()), 2.0);
 }
+
+#[test]
+fn a_length_in_f64_device_pixels() {
+    assert_eq!(kvardi::device_f64(3.0, 1.5), 4.5);
+    assert_eq!(kvardi::device_f64(0.0, 2.0), 0.0);
+}

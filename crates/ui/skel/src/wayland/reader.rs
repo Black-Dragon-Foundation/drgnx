@@ -304,7 +304,7 @@ pub fn spawn(
     conn: Connection,
     queue: EventQueue<ReaderState>,
     mut state: ReaderState,
-) -> std::io::Result<JoinHandle<()>> {
+) -> villa::Result<JoinHandle<()>> {
     // events dispatched during setup may have posted records before the loop could wake the host
     state.wake_host();
     let shared = state.shared.clone();
@@ -317,37 +317,35 @@ pub fn spawn(
         libc::pthread_sigmask(libc::SIG_SETMASK, &all, &mut old);
         old
     };
-    let spawned = std::thread::Builder::new()
-        .name("nhshell-reader".into())
-        .spawn(move || {
-            READER_THREAD.set(true);
-            let outcome = catch_unwind(AssertUnwindSafe(move || {
-                let waker = Waker::from(Arc::new(ReaderWaker {
-                    shared: Arc::downgrade(&state.shared),
-                    me: std::thread::current().id(),
-                }));
-                let mut reader = Reader {
-                    conn,
-                    queue,
-                    state,
-                    waker,
-                };
-                match reader.run() {
-                    Ok(()) => End::Stopped,
-                    Err(Lost) if reader.reconnectable() => {
-                        reader.post_reconnecting();
-                        End::Reconnecting
-                    }
-                    Err(Lost) => End::Lost,
-                }
-                // the reader, its queue and its clone of the connection go here, before `reader_done`
+    let spawned = saman::spawn_thread("nhshell-reader", move || {
+        READER_THREAD.set(true);
+        let outcome = catch_unwind(AssertUnwindSafe(move || {
+            let waker = Waker::from(Arc::new(ReaderWaker {
+                shared: Arc::downgrade(&state.shared),
+                me: std::thread::current().id(),
             }));
-            // a lost connection or a panic: the host hears DISCONNECTED once
-            if !matches!(outcome, Ok(End::Stopped | End::Reconnecting)) {
-                shared.close();
+            let mut reader = Reader {
+                conn,
+                queue,
+                state,
+                waker,
+            };
+            match reader.run() {
+                Ok(()) => End::Stopped,
+                Err(Lost) if reader.reconnectable() => {
+                    reader.post_reconnecting();
+                    End::Reconnecting
+                }
+                Err(Lost) => End::Lost,
             }
-            shared.reader_done.set();
-        });
+            // the reader, its queue and its clone of the connection go here, before `reader_done`
+        }));
+        // a lost connection or a panic: the host hears DISCONNECTED once
+        if !matches!(outcome, Ok(End::Stopped | End::Reconnecting)) {
+            shared.close();
+        }
+        shared.reader_done.set();
+    });
     // SAFETY: restores the mask saved above.
     unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &old, std::ptr::null_mut()) };
     spawned

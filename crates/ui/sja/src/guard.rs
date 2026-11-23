@@ -142,25 +142,24 @@ pub struct Slot {
 
 impl Slot {
     pub fn broken(&self) -> bool {
-        self.breaker.lock().map(|b| b.1).unwrap_or(true)
+        saman::lock(&self.breaker).1
     }
 
     /// A panic happened in a call on this view: drop its model, clear the poison, count it toward the breaker.
     fn panicked(&self) {
         self.panics.fetch_add(1, Ordering::Relaxed);
-        let mut v = self.view.lock().unwrap_or_else(|e| e.into_inner());
+        let mut v = saman::lock(&self.view);
         v.model = None;
         v.queue.lose();
         drop(v);
         self.view.clear_poison();
         self.bytes.store(0, Ordering::Relaxed);
         let now = now_ms();
-        if let Ok(mut b) = self.breaker.lock() {
-            b.0.retain(|t| now.saturating_sub(*t) < BREAKER_MS);
-            b.0.push(now);
-            if b.0.len() >= 2 {
-                b.1 = true;
-            }
+        let mut b = saman::lock(&self.breaker);
+        b.0.retain(|t| now.saturating_sub(*t) < BREAKER_MS);
+        b.0.push(now);
+        if b.0.len() >= 2 {
+            b.1 = true;
         }
     }
 }
