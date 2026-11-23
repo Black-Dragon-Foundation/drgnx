@@ -77,12 +77,16 @@ fn snapshot_peak_memory_stays_under_50_mb() {
         .rec
         .control(json!({"cmd": "snapshot", "path": png, "format": "png"}));
     assert_eq!(reply["ok"], true, "{reply}");
-    let status = std::fs::read_to_string(format!("/proc/{}/status", env.rec.pid())).unwrap();
+    let status = eitri::read_string(
+        std::path::Path::new(&format!("/proc/{}/status", env.rec.pid())),
+        1 << 16,
+    )
+    .unwrap();
     let kb: u64 = status
         .lines()
         .find_map(|l| l.strip_prefix("VmHWM:"))
         .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
         .expect("VmHWM");
-    eprintln!("nh-recorder VmHWM after two snapshots: {kb} kB");
+    annall::cli_err(&format!("nh-recorder VmHWM after two snapshots: {kb} kB")).unwrap_or_default();
     assert!(kb <= 50 * 1024, "VmHWM {kb} kB");
 }

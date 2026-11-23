@@ -57,3 +57,38 @@ fn a_dropped_sandbox_leaves_nothing_installed() {
     let sb = raun::Sandbox::new();
     assert_eq!(sb.clock().elapsed(), Duration::ZERO);
 }
+
+#[test]
+fn a_test_child_talks_on_stdout_and_goes_with_its_group() {
+    use std::ffi::OsStr;
+    let mut child = raun::proc::TestChild::start(
+        std::path::Path::new("/bin/sh"),
+        &[
+            OsStr::new("-c"),
+            OsStr::new("echo READY; echo $MARK; sleep 60 & wait"),
+        ],
+        &[("MARK", OsStr::new("given"))],
+    )
+    .expect("starts");
+    assert_eq!(child.read_line().unwrap(), "READY\n");
+    // exactly the environment the test gave
+    assert_eq!(child.read_line().unwrap(), "given\n");
+    let pid = child.pid();
+    assert!(draugr::alive(pid));
+    drop(child);
+    assert!(!draugr::alive(pid), "the child and its group were ended");
+}
+
+#[test]
+fn a_test_child_that_quits_gives_its_status() {
+    use std::ffi::OsStr;
+    let mut child = raun::proc::TestChild::start(
+        std::path::Path::new("/bin/sh"),
+        &[OsStr::new("-c"), OsStr::new("echo bye; exit 3")],
+        &[],
+    )
+    .expect("starts");
+    assert_eq!(child.read_line().unwrap(), "bye\n");
+    assert_eq!(child.wait().unwrap().code(), Some(3));
+    assert!(child.wait().is_err(), "the status is given once");
+}

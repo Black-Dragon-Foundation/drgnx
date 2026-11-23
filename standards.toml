@@ -34,6 +34,7 @@ kvardi = { clean = true }
 mot = { clean = true }
 huginn = { clean = true }
 hlidskjalf = { clean = true }
+ritari = { clean = true }
 
 [[standard]]
 id = "errors"

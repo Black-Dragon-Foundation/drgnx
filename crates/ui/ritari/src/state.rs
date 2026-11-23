@@ -59,7 +59,8 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Clock {
@@ -96,10 +97,22 @@ pub struct Profile {
     pub capped: BTreeMap<String, String>,
 }
 
+/// The largest profile file read.
+const PROFILE_CAP: u64 = 1 << 20;
+
 impl Profile {
-    pub fn load(path: &Path) -> Result<Profile, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+    pub fn load(path: &Path) -> villa::Result<Profile> {
+        let at = || format!("reading the profile {}", path.display());
+        let text = eitri::read_string(path, PROFILE_CAP).map_err(|e| {
+            villa::Error::invalid("The profile can't be read.")
+                .with_detail(at())
+                .with_source(e)
+        })?;
+        serde_json::from_str(&text).map_err(|e| {
+            villa::Error::invalid("The profile is not valid.")
+                .with_detail(at())
+                .with_source(e)
+        })
     }
 }
 
@@ -118,7 +131,7 @@ pub struct ClientState {
 impl ClientData for ClientState {
     fn initialized(&self, _: ClientId) {}
     fn disconnected(&self, _: ClientId, _: DisconnectReason) {
-        self.registry.lock().unwrap().retain(|c| c.id != self.id);
+        saman::lock(&self.registry).retain(|c| c.id != self.id);
     }
 }
 
@@ -274,7 +287,7 @@ pub fn objects_of(dh: &DisplayHandle, surface: &WlSurface, interface: &str) -> V
     };
     let handle = dh.backend_handle();
     let mut all = Vec::new();
-    let _ = handle.with_all_objects_for(client.id(), |id| all.push(id));
+    let _client_gone = handle.with_all_objects_for(client.id(), |id| all.push(id));
     all.retain(|id| {
         handle
             .object_info(id.clone())
@@ -406,10 +419,11 @@ impl State {
         let mut outputs = Vec::new();
         for (name, &want) in &profile.globals {
             let Some(max) = max_version(name) else {
-                eprintln!(
+                annall::cli_err(&format!(
                     "nh-recorder: profile {}: global {name} is not served yet, skipped",
                     profile.name
-                );
+                ))
+                .unwrap_or_default();
                 continue;
             };
             let v = if name == "wl_output" {
@@ -577,10 +591,7 @@ impl State {
         ) else {
             return;
         };
-        if let Some(c) = self
-            .clients
-            .lock()
-            .unwrap()
+        if let Some(c) = saman::lock(&self.clients)
             .iter_mut()
             .find(|c| c.id == data.id)
         {
@@ -592,10 +603,7 @@ impl State {
     pub fn new_client_data(&mut self) -> ClientState {
         let id = self.next_client;
         self.next_client += 1;
-        self.clients
-            .lock()
-            .unwrap()
-            .push(ClientInfo { id, pid: None });
+        saman::lock(&self.clients).push(ClientInfo { id, pid: None });
         ClientState {
             compositor: CompositorClientState::default(),
             id,
@@ -662,7 +670,7 @@ impl CompositorHandler for State {
                     .data_map
                     .insert_if_missing_threadsafe(|| Mutex::new(CommitRequest::default()));
                 if let Some(slot) = states.data_map.get::<Mutex<CommitRequest>>() {
-                    *slot.lock().unwrap() = request;
+                    *saman::lock(slot) = request;
                 }
             })
         });
@@ -717,7 +725,7 @@ impl CompositorHandler for State {
                         .data_map
                         .get::<XdgToplevelSurfaceData>()
                         .map(|d| {
-                            let d = d.lock().unwrap();
+                            let d = saman::lock(d);
                             (d.title.clone(), d.app_id.clone())
                         })
                         .unwrap_or_default()
@@ -742,7 +750,7 @@ impl CompositorHandler for State {
                 let request = states
                     .data_map
                     .get::<Mutex<CommitRequest>>()
-                    .map(|m| std::mem::take(&mut *m.lock().unwrap()))
+                    .map(|m| std::mem::take(&mut *saman::lock(m)))
                     .unwrap_or_default();
                 (
                     buffer,

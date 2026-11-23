@@ -3071,11 +3071,14 @@ version = "0.1.0"
 dependencies = [
  "gif",
  "hlidskjalf",
+ "hulda",
  "image-webp",
  "kvardi",
  "png 0.18.1",
+ "saman",
  "sja",
  "smidja",
+ "stund",
 ]
 
 [[package]]
@@ -5751,11 +5754,14 @@ dependencies = [
 name = "raun"
 version = "0.1.0"
 dependencies = [
+ "draugr",
  "eitri",
  "saman",
  "stig",
  "stund",
  "tempfile",
+ "tracing",
+ "villa",
 ]
 
 [[package]]
@@ -5976,11 +5982,20 @@ dependencies = [
 name = "ritari"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "calloop",
+ "eitri",
  "png 0.17.16",
+ "raun",
+ "saman",
  "serde",
  "serde_json",
  "smithay",
+ "stig",
+ "stund",
+ "tempfile",
+ "tracing",
+ "villa",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
@@ -6759,9 +6774,11 @@ dependencies = [
 name = "sja"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "libc",
  "serde_core",
  "serde_json",
+ "stund",
 ]
 
 [[package]]
@@ -6785,6 +6802,8 @@ dependencies = [
 name = "skel"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "eitri",
  "glitnir",
  "libc",
  "objc2",
@@ -6793,6 +6812,10 @@ dependencies = [
  "objc2-quartz-core",
  "resvg",
  "rustix",
+ "saman",
+ "stig",
+ "stund",
+ "villa",
  "wayland-backend",
  "wayland-client",
  "wayland-cursor",
@@ -6884,6 +6907,10 @@ dependencies = [
 [[package]]
 name = "smidja"
 version = "0.1.0"
+dependencies = [
+ "kvardi",
+ "stund",
+]
 
 [[package]]
 name = "smithay"

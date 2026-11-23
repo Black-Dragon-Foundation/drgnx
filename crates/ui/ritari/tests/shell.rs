@@ -131,7 +131,8 @@ fn shell_ping_reports_pong() {
     let mut env = Env::new("sway", &[]);
     let _top = env.toplevel(200, 100);
     let path = env.rec.control_path();
-    let asker = std::thread::spawn(move || send(&path, json!({"cmd": "ping"})));
+    let asker =
+        saman::spawn_thread("ritari-test", move || send(&path, json!({"cmd": "ping"}))).unwrap();
     env.queue.blocking_dispatch(&mut env.client).unwrap(); // the ping; the handler answers with the pong
     env.roundtrip();
     let reply = asker.join().unwrap();

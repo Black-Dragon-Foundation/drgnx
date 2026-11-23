@@ -52,7 +52,7 @@ pub fn touch(state: &mut State, req: &Value) -> Value {
             let named = req.get("surface").unwrap_or(&toplevel);
             let surface = match crate::dnd::surface_of(state, Some(named)) {
                 Ok(s) => s,
-                Err(e) => return err(e),
+                Err(e) => return err(e.to_string()),
             };
             state.touch.surface = Some(surface.clone());
             let s = SERIAL_COUNTER.next_serial();

@@ -5,7 +5,8 @@ use serde_json::{json, Value};
 use std::io::Read;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 use wayland_client::protocol::{
     wl_data_device::WlDataDevice,
     wl_data_device_manager::{DndAction, WlDataDeviceManager},
@@ -61,7 +62,7 @@ fn wait_for(env: &mut Env, done: impl Fn(&Env) -> bool) {
     while !done(env) {
         assert!(Instant::now() < end, "timed out waiting for the client");
         env.roundtrip();
-        std::thread::sleep(Duration::from_millis(5));
+        stund::sleep_blocking(Duration::from_millis(5));
     }
 }
 
@@ -194,7 +195,10 @@ fn foreign_target_reads_and_finishes() {
         .rec
         .control(json!({"cmd": "drag_target", "accept": "text/plain", "action": "copy"})));
     let path = r.env.rec.control_path();
-    let drop = std::thread::spawn(move || send(&path, json!({"cmd": "drag_drop", "finish": true})));
+    let drop = saman::spawn_thread("ritari-test", move || {
+        send(&path, json!({"cmd": "drag_drop", "finish": true}))
+    })
+    .unwrap();
     wait_for(&mut r.env, |e| {
         e.client.ev.source_events.contains(&"finished".to_string())
     });
@@ -398,14 +402,10 @@ fn pinch_begin_update_end() {
 // --- bell, idle inhibit, export, sessions, restart -------------------------------------------------------------
 
 /// The client side of xdg session management, generated from the XML the recorder serves.
-#[allow(
-    clippy::all,
-    dead_code,
-    unused_imports,
-    non_camel_case_types,
-    missing_docs
-)]
+#[allow(dead_code, unused_imports, non_camel_case_types, missing_docs)]
 mod session_client {
+    // the generated code names it as `super::wayland_client`
+    #[allow(clippy::single_component_path_imports)]
     use wayland_client;
     use wayland_client::protocol::*;
     use wayland_protocols::xdg::shell::client::*;
@@ -471,7 +471,7 @@ impl Dispatch<ZxdgExportedV2, Arc<Mutex<Option<String>>>> for common::Client {
         let zxdg_exported_v2::Event::Handle { handle: h } = e else {
             return;
         };
-        *handle.lock().unwrap() = Some(h);
+        *saman::lock(handle) = Some(h);
     }
 }
 
@@ -489,7 +489,7 @@ impl Dispatch<XdgSessionV1, Heard> for common::Client {
             xdg_session_v1::Event::Restored => "restored".to_string(),
             xdg_session_v1::Event::Replaced => "replaced".to_string(),
         };
-        heard.lock().unwrap().push(text);
+        saman::lock(heard).push(text);
     }
 }
 
@@ -503,7 +503,7 @@ impl Dispatch<XdgToplevelSessionV1, Heard> for common::Client {
         _: &QueueHandle<Self>,
     ) {
         let xdg_toplevel_session_v1::Event::Restored = e;
-        heard.lock().unwrap().push("restored".to_string());
+        saman::lock(heard).push("restored".to_string());
     }
 }
 
@@ -518,7 +518,7 @@ fn get_session(env: &mut Env, reason: Reason, id: Option<&str>) -> (XdgSessionV1
 
 /// The id a new session was created with.
 fn created_id(heard: &Heard) -> String {
-    let all = heard.lock().unwrap();
+    let all = saman::lock(heard);
     all.iter()
         .find_map(|l| l.strip_prefix("created ").map(String::from))
         .unwrap_or_else(|| panic!("no created event: {all:?}"))
@@ -591,7 +591,7 @@ fn export_returns_a_handle() {
     let handle = Arc::new(Mutex::new(None));
     let _exported = exporter.export_toplevel(&surface, &env.qh, handle.clone());
     env.roundtrip();
-    assert_eq!(handle.lock().unwrap().as_deref(), Some("rec-1"));
+    assert_eq!(saman::lock(&handle).as_deref(), Some("rec-1"));
     let id = surface.id().protocol_id();
     let list = ok(env.rec.control(json!({"cmd": "exports"})));
     assert_eq!(list["exports"], json!([{"surface": id, "handle": "rec-1"}]));
@@ -609,12 +609,12 @@ fn session_restore_before_first_commit() {
     // another client takes the session over: the first one is told, and the toplevel comes back at its size
     let mut second = first.join();
     let (taken, new_heard) = get_session(&mut second, Reason::Recover, Some(&id));
-    assert_eq!(*new_heard.lock().unwrap(), ["restored"]);
+    assert_eq!(*saman::lock(&new_heard), ["restored"]);
     second.client.configures.clear();
     let ts = session_toplevel(&mut second, &taken, "main", true, 300, 200);
     first.roundtrip();
-    assert_eq!(old_heard.lock().unwrap().last().unwrap(), "replaced");
-    assert_eq!(*ts.lock().unwrap(), ["restored"]);
+    assert_eq!(saman::lock(&old_heard).last().unwrap(), "replaced");
+    assert_eq!(*saman::lock(&ts), ["restored"]);
     let (w, h, _) = second.client.configures.first().cloned().unwrap();
     assert_eq!((w, h), (300, 200));
     let log = ok(second.rec.control(json!({"cmd": "session_log"})));
@@ -635,7 +635,7 @@ fn session_restore_before_first_commit() {
         gets.iter().all(|e| e["pid"] == std::process::id()),
         "{gets:?}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
+    let _scratch_dir_may_be_gone = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -669,7 +669,7 @@ fn session_restore_gives_back_a_viewport_size() {
     session_toplevel(&mut second, &taken, "main", true, 300, 200);
     let (w, h, _) = second.client.configures.first().cloned().unwrap();
     assert_eq!((w, h), (300, 200));
-    let _ = std::fs::remove_dir_all(&dir);
+    let _scratch_dir_may_be_gone = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -691,7 +691,7 @@ fn wait_until_gone(path: &std::path::Path) {
     let end = Instant::now() + Duration::from_secs(5);
     while path.exists() {
         assert!(Instant::now() < end, "the recorder did not quit");
-        std::thread::sleep(Duration::from_millis(10));
+        stund::sleep_blocking(Duration::from_millis(10));
     }
 }
 
@@ -712,13 +712,13 @@ fn session_persists_across_instances() {
     };
     let mut env = Env::new("mutter", &args);
     let (session, heard) = get_session(&mut env, Reason::Recover, Some(&id));
-    assert_eq!(*heard.lock().unwrap(), ["restored"]);
+    assert_eq!(*saman::lock(&heard), ["restored"]);
     env.client.configures.clear();
     let ts = session_toplevel(&mut env, &session, "main", true, 320, 240);
-    assert_eq!(*ts.lock().unwrap(), ["restored"]);
+    assert_eq!(*saman::lock(&ts), ["restored"]);
     let (w, h, _) = env.client.configures.first().cloned().unwrap();
     assert_eq!((w, h), (320, 240));
-    let _ = std::fs::remove_dir_all(&dir);
+    let _scratch_dir_may_be_gone = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -727,22 +727,21 @@ fn quit_frees_the_socket_name() {
     std::fs::create_dir_all(&dir).unwrap();
     let profile = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("profiles/sway.json");
     let start = || {
-        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_nh-recorder"))
-            .args(["--socket", "nh-quit-sock", "--control"])
-            .arg(dir.join("control"))
-            .arg("--profile")
-            .arg(&profile)
-            .env("XDG_RUNTIME_DIR", &dir)
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut line = String::new();
-        std::io::BufRead::read_line(
-            &mut std::io::BufReader::new(child.stdout.take().unwrap()),
-            &mut line,
+        let control = dir.join("control");
+        let mut child = raun::proc::TestChild::start(
+            std::path::Path::new(env!("CARGO_BIN_EXE_nh-recorder")),
+            &[
+                "--socket".as_ref(),
+                "nh-quit-sock".as_ref(),
+                "--control".as_ref(),
+                control.as_ref(),
+                "--profile".as_ref(),
+                profile.as_ref(),
+            ],
+            &[(stig::SYSTEM_RUNTIME_VAR, dir.as_os_str())],
         )
         .unwrap();
-        assert_eq!(line, "READY\n");
+        assert_eq!(child.read_line().unwrap(), "READY\n");
         child
     };
     let mut a = start();
@@ -752,9 +751,8 @@ fn quit_frees_the_socket_name() {
     assert!(!dir.join("nh-quit-sock.lock").exists());
     let mut b = start();
     assert!(UnixStream::connect(dir.join("nh-quit-sock")).is_ok());
-    let _ = b.kill();
-    let _ = b.wait();
-    let _ = std::fs::remove_dir_all(&dir);
+    b.kill();
+    let _scratch_dir_may_be_gone = std::fs::remove_dir_all(&dir);
 }
 
 // --- restart in place ---------------------------------------------------------------------------------------
@@ -803,7 +801,7 @@ fn connections_counted() {
 #[test]
 fn restart_keep_socket_queues_connections() {
     let mut env = Env::new("sway", &[]);
-    let _ = env.toplevel(100, 100);
+    let _first_window = env.toplevel(100, 100);
     let started = Instant::now();
     restart(&env, "keep-socket", 400);
     // the connect succeeds at once; the registry answer comes after the recorder listens again
@@ -853,7 +851,7 @@ fn restart_rebind_frees_and_reuses_the_name() {
     let end = Instant::now() + Duration::from_secs(5);
     while !socket_path(&env).exists() {
         assert!(Instant::now() < end, "the name was not bound again");
-        std::thread::sleep(Duration::from_millis(10));
+        stund::sleep_blocking(Duration::from_millis(10));
     }
     assert!(list_globals(&env).names.contains_key("wl_compositor"));
 }
@@ -862,7 +860,7 @@ fn restart_rebind_frees_and_reuses_the_name() {
 fn restart_gone_refuses_until_up() {
     let env = Env::new("sway", &[]);
     restart(&env, "gone", 0);
-    std::thread::sleep(Duration::from_millis(200));
+    stund::sleep_blocking(Duration::from_millis(200));
     assert!(UnixStream::connect(socket_path(&env)).is_err());
     ok(env.rec.control(json!({"cmd": "restart_up"})));
     assert!(list_globals(&env).names.contains_key("wl_compositor"));
@@ -899,15 +897,15 @@ fn restart_resets_state_but_keeps_the_session_store() {
     // the store survived: a new client recovers the session and gets its toplevel back at its size
     let mut again = env.join();
     let (taken, heard) = get_session(&mut again, Reason::Recover, Some(&id));
-    assert_eq!(*heard.lock().unwrap(), ["restored"]);
+    assert_eq!(*saman::lock(&heard), ["restored"]);
     again.client.configures.clear();
     let ts = session_toplevel(&mut again, &taken, "main", true, 300, 200);
-    assert_eq!(*ts.lock().unwrap(), ["restored"]);
+    assert_eq!(*saman::lock(&ts), ["restored"]);
     assert_eq!(
         again.client.configures.first().map(|c| (c.0, c.1)),
         Some((300, 200))
     );
-    let _ = std::fs::remove_dir_all(&dir);
+    let _scratch_dir_may_be_gone = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

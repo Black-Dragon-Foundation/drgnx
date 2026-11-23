@@ -81,9 +81,7 @@ static WIDTHS: Mutex<Option<Arc<Widths>>> = Mutex::new(None);
 
 /// The current character widths snapshot (all 1 until the host sends one).
 pub fn widths() -> Arc<Widths> {
-    WIDTHS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+    saman::lock(&WIDTHS)
         .get_or_insert_with(Default::default)
         .clone()
 }
@@ -91,7 +89,7 @@ pub fn widths() -> Arc<Widths> {
 /// Make RANGES (`(first, last, width)`, the characters whose width is not 1) the current widths; returns its
 /// generation.  Models built before keep theirs until they are built again.
 pub fn set_widths(ranges: Vec<(u32, u32, u8)>) -> u64 {
-    let mut w = WIDTHS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut w = saman::lock(&WIDTHS);
     let next = w.as_ref().map_or(0, |w| w.generation) + 1;
     *w = Some(Arc::new(Widths::new(next, ranges)));
     next

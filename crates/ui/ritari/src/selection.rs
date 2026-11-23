@@ -95,10 +95,15 @@ pub fn send(state: &mut State, ty: SelectionTarget, mime_type: String, fd: Owned
     let Some(text) = offer.types.get(&mime_type).cloned() else {
         return;
     };
-    std::thread::spawn(move || {
+    let writer = saman::spawn_thread("ritari-offer-writer", move || {
         let mut file = std::fs::File::from(fd);
-        let _ = file.write_all(text.as_bytes());
+        if let Err(e) = file.write_all(text.as_bytes()) {
+            tracing::debug!("the reader of an offer went away: {e}");
+        }
     });
+    if let Err(e) = writer {
+        annall::log_error(&e);
+    }
 }
 
 /// `offer`: `{"cmd":"offer","kind":"clipboard"|"primary","types":{"MIME":"TEXT"},"silent":false}`.
@@ -221,18 +226,19 @@ pub fn read(state: &mut State, req: &Value, reply_to: &UnixStream) -> Option<Val
         Ok(tok) => token.set(Some(tok)),
         Err(e) => return Some(err(e.to_string())),
     }
-    let _ = state
-        .handle
-        .insert_source(Timer::from_duration(READ_DEADLINE), move |_, _, state| {
-            let mut job = job.borrow_mut();
-            if !job.done {
-                finish(state, &mut job, false);
-                if let Some(tok) = token.take() {
-                    state.handle.remove(tok);
+    let _registered =
+        state
+            .handle
+            .insert_source(Timer::from_duration(READ_DEADLINE), move |_, _, state| {
+                let mut job = job.borrow_mut();
+                if !job.done {
+                    finish(state, &mut job, false);
+                    if let Some(tok) = token.take() {
+                        state.handle.remove(tok);
+                    }
                 }
-            }
-            TimeoutAction::Drop
-        });
+                TimeoutAction::Drop
+            });
     None
 }
 

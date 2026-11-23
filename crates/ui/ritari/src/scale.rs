@@ -38,7 +38,7 @@ pub fn scale(state: &mut State, req: &Value) -> Value {
     if let Some(v) = req.get("surface") {
         let surface = match crate::input::find_surface(state, v) {
             Ok(s) => s,
-            Err(e) => return err(e),
+            Err(e) => return err(e.to_string()),
         };
         let ceil = (n as u32).div_ceil(120) as i32;
         with_states(&surface, |s| {
@@ -148,7 +148,7 @@ pub fn output(state: &mut State, req: &Value) -> Value {
             };
             let surface = match crate::input::find_surface(state, v) {
                 Ok(s) => s,
-                Err(e) => return err(e),
+                Err(e) => return err(e.to_string()),
             };
             if op == "enter" {
                 state.outputs[i].0.enter(&surface);

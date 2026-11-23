@@ -72,7 +72,7 @@ fn models() -> Models {
         !HELD.get(),
         "with_model re-entered on the same thread: the models' lock is held here already"
     );
-    let g = MODELS.lock().unwrap_or_else(|e| e.into_inner());
+    let g = saman::lock(&MODELS);
     HELD.set(true);
     Models(g)
 }
