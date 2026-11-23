@@ -472,9 +472,12 @@ impl Hub {
             .collect::<Vec<_>>()
             .join(",");
         let mut open = self.projects.lock().await;
+        // `drgnx-search-battery-engine` as it is now: a change counts from the next pass of tier 2
+        let battery_engine = front.settings.current().loaded.values.search_battery_engine;
         if let Some(o) = open.get(&id)
             && o.sig == sig
         {
+            o.project.set_battery_engine(battery_engine);
             return Ok(o.project.clone());
         }
         let config = self
@@ -533,6 +536,7 @@ impl Hub {
             rows.retain(|(_, w)| w.strong_count() > 0);
             rows.push((real.clone(), Arc::downgrade(&state)));
         }
+        project.set_battery_engine(battery_engine);
         project.start_tier2();
         let weak = Arc::downgrade(&project);
         clock::spawn("search:driver", async move {
@@ -1135,6 +1139,22 @@ impl Hub {
             coverage_errors,
             lag: wire_lag(&lag),
             models,
+            sources: p
+                .chains()
+                .into_iter()
+                .map(|(model, entries)| w::ChainStatus {
+                    model,
+                    entries: entries
+                        .into_iter()
+                        .map(|e| w::SourceEntry {
+                            id: e.id,
+                            kind: e.kind.to_string(),
+                            state: e.state.to_string(),
+                            why: e.why,
+                        })
+                        .collect(),
+                })
+                .collect(),
             worker: worker_status(builtin.as_deref()),
             tier2: tier2_name(&st.tier2).to_string(),
             embedded: st.embedded,

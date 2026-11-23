@@ -44759,6 +44759,27 @@
       },
       "result": {
         "$defs": {
+          "ChainStatus": {
+            "additionalProperties": false,
+            "description": "One fingerprint's chain of sources, in the order they are asked.",
+            "properties": {
+              "entries": {
+                "items": {
+                  "$ref": "#/$defs/SourceEntry"
+                },
+                "type": "array"
+              },
+              "model": {
+                "description": "The fingerprint (64 hex characters).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "model",
+              "entries"
+            ],
+            "type": "object"
+          },
           "ClassCount": {
             "additionalProperties": false,
             "description": "Files and chunks of one class.",
@@ -44917,6 +44938,37 @@
             ],
             "type": "object"
           },
+          "SourceEntry": {
+            "additionalProperties": false,
+            "description": "One source of a chain.",
+            "properties": {
+              "id": {
+                "description": "A provider id, or `cache` or `builtin`.",
+                "type": "string"
+              },
+              "kind": {
+                "description": "`cache`, `lookup`, `embed`, `engine` or `builtin`.",
+                "type": "string"
+              },
+              "state": {
+                "description": "`answering`, `down`, `held` (battery) or `no text` (a remote not allowed text).",
+                "type": "string"
+              },
+              "why": {
+                "description": "Why it is down.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "state"
+            ],
+            "type": "object"
+          },
           "TreeInfo": {
             "additionalProperties": false,
             "description": "One worktree overlay.",
@@ -45036,6 +45088,13 @@
             },
             "type": "array"
           },
+          "sources": {
+            "description": "Where each fingerprint's vectors come from here: its chain of sources as the last pass of tier 2 left it.",
+            "items": {
+              "$ref": "#/$defs/ChainStatus"
+            },
+            "type": "array"
+          },
           "tier2": {
             "description": "`stopped`, `idle`, `running`, `typing`, `battery` or `failed`.",
             "type": "string"
@@ -45061,6 +45120,7 @@
           "coverage_errors",
           "lag",
           "models",
+          "sources",
           "worker",
           "tier2",
           "embedded",

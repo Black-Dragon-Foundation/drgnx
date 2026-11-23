@@ -74,6 +74,22 @@ pub trait DocEmbedder: Send + Sync {
     /// changed answers another fingerprint, and the next write goes under that one.
     fn probe(&self) -> BoxFuture<'_, Result<Identity, EmbedError>>;
 
+    /// The id its source goes by in a chain and its status: a provider's id, `builtin` for the worker.
+    fn source_id(&self) -> String {
+        "embed".into()
+    }
+
+    /// What kind of source it is in a chain ([`sources::SourceKind`]).
+    fn source_kind(&self) -> sources::SourceKind {
+        sources::SourceKind::Embed
+    }
+
+    /// Whether it may be sent document text: the built-in model and a server on this machine; a remote only when its
+    /// entry says so.
+    fn trusted(&self) -> bool {
+        true
+    }
+
     /// Vectors for TEXTS, in order. OVERRIDING (`search/index` with `now`) lets the built-in worker run on battery.
     fn embed_docs<'a>(
         &'a self,

@@ -78,8 +78,18 @@ pub struct ProviderEmbedder {
 
 /// Whether the URL BASE names this machine (`localhost`, 127.x or ::1): the only providers that receive document text
 /// unless their entry says `trusted` (Task 23).
-pub fn is_loopback(_base: &str) -> bool {
-    false
+pub fn is_loopback(base: &str) -> bool {
+    let Ok(uri) = base.parse::<bifrost::Uri>() else {
+        return false;
+    };
+    let Some(host) = uri.host() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// The text a probe embeds to learn a server's dimensions (the mock server answers it with the model's real dims).
@@ -465,6 +475,15 @@ impl crate::search::DocEmbedder for ProviderEmbedder {
 
     fn probe(&self) -> BoxFuture<'_, Result<Identity, EmbedError>> {
         Box::pin(self.probe_identity())
+    }
+
+    fn source_id(&self) -> String {
+        self.provider.clone()
+    }
+
+    /// A server on this machine only, until its entry can say `trusted` (Task 23).
+    fn trusted(&self) -> bool {
+        is_loopback(&self.base)
     }
 
     fn embed_docs<'a>(

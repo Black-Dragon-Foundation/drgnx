@@ -309,8 +309,16 @@ async fn failure_falls_through_same_batch() {
         }
     );
     let texts: Vec<String> = ["text0", "text1", "text2"].map(String::from).to_vec();
-    assert_eq!(e1.embeds(), [texts.clone()], "asked once, and it failed");
-    assert_eq!(e2.embeds(), [texts], "the same batch, the same order");
+    assert_eq!(
+        e1.embeds(),
+        std::slice::from_ref(&texts),
+        "asked once, and it failed"
+    );
+    assert_eq!(
+        e2.embeds(),
+        std::slice::from_ref(&texts),
+        "the same batch, the same order"
+    );
     assert!(has_all(&cache, 0..3).await);
 }
 
