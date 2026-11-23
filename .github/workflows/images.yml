@@ -68,7 +68,7 @@ jobs:
           fi
           printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin
           podman build --pull=always --label "org.opencontainers.image.source=$SOURCE" \
-            -t "$image:$tag" -f "$FILE" "$(dirname "$FILE")"
+            -t "$image:$tag" -f "$FILE" "$(bash test/container/image-tag.sh --context "$FILE")"
           podman push "$image:$tag"
 
   # Everything a job would download at setup, once per input hash (.github/ci/assets.sh): the pinned model files, the

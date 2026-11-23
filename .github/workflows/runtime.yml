@@ -141,10 +141,11 @@ jobs:
         if: ${{ env.PREBUILT == '' }}
         working-directory: ${{ github.workspace }}
         run: sh test/container/rust-packages.sh
-      - name: Zig (in the prebuilt image already; the terminal engine's build tool)
+      # Rust, cargo-nextest, cargo-deny and Zig: .github/ci/mise.toml (the image has them installed, on PATH)
+      - name: Tools of mise.toml (in the prebuilt image already)
         if: ${{ env.PREBUILT == '' }}
         working-directory: ${{ github.workspace }}
-        run: bash test/container/zig.sh linux
+        run: bash .github/ci/mise.sh
       # The prebuilt assets (`drgnx-assets`, by digest): the pinned model files the tests run the built-in model from
       # (they fail without DRGNX_TEST_MODELS), beside the checkout, not in it (the tests that list a checkout would find
       # them), and the libghostty-vt tarballs (build.rs never downloads). models.sh checks each file's sum and fetches
@@ -168,23 +169,18 @@ jobs:
         with:
           job: fedora45
           mode: restore
+          cargo-home: /opt/cargo
       - run: cargo fmt --check
       - if: ${{ !cancelled() }}
         run: cargo clippy --locked --workspace --all-targets --features ratatoskr/test-hooks,ferja/test-hooks -- -D warnings
-      # the plugin tests load WASM components built for wasm32-wasip2 (Fedora's packaged Rust has no wasip2 standard
-      # library and cannot use an upstream one: wasm-target.sh installs the same rustc version with rustup-init, checked
-      # by its SHA-256, for the fixtures alone and sets DRGNX_WASM_CARGO): built first, so a missing target or a broken
-      # fixture is named here, before the tests
-      - name: wasm32-wasip2 and the plugin fixtures
+      # the plugin tests load WASM components built for wasm32-wasip2 (a target of mise.toml's Rust): built first, so a
+      # broken fixture is named here, before the tests
+      - name: the plugin fixtures (wasm32-wasip2)
         if: ${{ !cancelled() }}
         working-directory: ${{ github.workspace }}
         run: bash .github/ci/wasm-target.sh
-      # cargo-nextest runs the workspace's tests, each in a process of its own (the same tests by name as libtest's runner,
-      # the ignored ones still ignored), with no retries; it runs no doc tests, so they have their own step
-      - name: cargo-nextest 0.9.151 (checksum verified)
-        if: ${{ !cancelled() }}
-        working-directory: ${{ github.workspace }}
-        run: bash .github/ci/nextest.sh
+      # cargo-nextest (mise.toml) runs the workspace's tests, each in a process of its own (the same tests by name as
+      # libtest's runner, the ignored ones still ignored), with no retries; it runs no doc tests, so they have their own step
       # the test-hooks binary and the harness for the steps below, first: the pack grammars below are built with this
       # hub (no second `cargo run` build of it)
       # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM;
@@ -302,6 +298,7 @@ jobs:
           mode: save
           build-outcome: ${{ steps.build.outcome }}
           status: ${{ job.status }}
+          cargo-home: /opt/cargo
 
   msrv:
     name: MSRV 1.95 builds
@@ -315,25 +312,25 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
-      # the toolchain first: its `rustc -V` names the cache's key
-      - run: rustup toolchain install 1.95.0 --profile minimal
+      # the tools first: mise.msrv.toml's Rust (MSRV_TOOLCHAIN) and its `rustc -V` name the cache's key; Zig is mise's too
+      - uses: ./.github/actions/mise
+        with:
+          env: msrv
       - uses: ./.github/actions/cargo-target
         with:
           job: msrv195
           mode: restore
-          toolchain: 1.95.0
-      - name: Zig and libghostty-vt's pinned tarballs (the terminal engine's build)
-        run: |
-          sudo bash test/container/zig.sh linux
-          bash crates/hub/ghostty-vt-sys/fetch.sh
+          toolchain: ${{ env.MSRV_TOOLCHAIN }}
+      - name: libghostty-vt's pinned tarballs (the terminal engine's build)
+        run: bash crates/hub/ghostty-vt-sys/fetch.sh
       - name: the Wayland client, xkbcommon and pixman headers (skel and ritari link them)
         run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libwayland-dev libxkbcommon-dev libpixman-1-dev
       - id: build
-        run: cargo +1.95.0 build --locked --manifest-path Cargo.toml
+        run: cargo "+$MSRV_TOOLCHAIN" build --locked --manifest-path Cargo.toml
       - if: ${{ !cancelled() }}
         uses: ./.github/actions/cargo-target
         env:
-          RUSTUP_TOOLCHAIN: 1.95.0
+          RUSTUP_TOOLCHAIN: ${{ env.MSRV_TOOLCHAIN }}
         with:
           job: msrv195
           mode: save
@@ -409,7 +406,7 @@ jobs:
           uname -r
           sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone || true
           /usr/bin/bwrap --unshare-all --ro-bind / / true && echo "bwrap: user namespaces work" || echo "bwrap: refused (exit $?)"
-      - run: bash .github/ci/rust.sh
+      - uses: ./.github/actions/mise
       # one cache for the job's builds (the escape suite's and the agent core's tests), saved at its end. One entry an
       # architecture, shared by its 24.04 and 26.04 legs and saved by the 24.04 one (the oldest glibc, as the build-once
       # design's x64-build): four entries of 2.7 GB each would not fit the repository's 10 GB beside the others
@@ -432,7 +429,6 @@ jobs:
         env:
           DRGNX_REQUIRE_NETNS: "1"
         run: |
-          sudo bash test/container/zig.sh linux
           bash crates/hub/ghostty-vt-sys/fetch.sh
           cargo test --locked --no-fail-fast --manifest-path Cargo.toml -p ghostty-vt-sys --test link_rows builds_offline -- --exact
       - id: build
@@ -586,10 +582,10 @@ jobs:
         if: ${{ env.PREBUILT == '' }}
         working-directory: ${{ github.workspace }}
         run: sh test/container/rust-packages.sh
-      - name: Zig (in the prebuilt image already; the terminal engine's build tool)
+      - name: Tools of mise.toml (in the prebuilt image already)
         if: ${{ env.PREBUILT == '' }}
         working-directory: ${{ github.workspace }}
-        run: bash test/container/zig.sh linux
+        run: bash .github/ci/mise.sh
       - name: libghostty-vt's pinned tarballs (build.rs never downloads)
         working-directory: ${{ github.workspace }}
         run: bash crates/hub/ghostty-vt-sys/fetch.sh
@@ -616,7 +612,7 @@ jobs:
           filter: blob:none       # without old file contents
           persist-credentials: false
       - run: podman --version
-      - run: bash .github/ci/rust.sh
+      - uses: ./.github/actions/mise
       - uses: ./.github/actions/cargo-target
         with:
           job: agent-containers
@@ -628,7 +624,6 @@ jobs:
         run: |
           cargo build --locked --manifest-path Cargo.toml -p ratatoskr -p domr --features ratatoskr/test-hooks
           cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --bin drgnx-key
-          rustup target add x86_64-unknown-linux-musl
           cargo build --locked --manifest-path Cargo.toml -p ferja --bin drgnx-px --target x86_64-unknown-linux-musl --target-dir target/fwd
           cp target/fwd/x86_64-unknown-linux-musl/debug/drgnx-px target/debug/drgnx-px-x86_64-linux-musl
           cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --bin drgnx-key --target x86_64-unknown-linux-musl --target-dir target/fwd
@@ -659,7 +654,6 @@ jobs:
       - name: runner bundles, and the bundle in a musl image
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
-          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
           bash xtask/runner-bundle.sh --arch x86_64
           bash xtask/runner-bundle.sh --arch aarch64
           podman pull -q docker.io/library/alpine:3.22
@@ -698,7 +692,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - run: podman --version
-      - run: bash .github/ci/rust.sh
+      - uses: ./.github/actions/mise
       - name: runners up
         run: bash test/runners/fleet.sh up --runners 2
       - name: the spike's checks in every runner
@@ -726,7 +720,7 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
-      - run: bash .github/ci/rust.sh --target aarch64-linux-android --component clippy
+      - uses: ./.github/actions/mise
       - uses: ./.github/actions/cargo-target
         with:
           job: android
@@ -763,15 +757,8 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
-      - name: cargo-deny 0.20.2 (checksum verified)
-        run: |
-          url=https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
-          sha256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
-          curl -fsSL -o "$RUNNER_TEMP/cargo-deny.tgz" "$url"
-          echo "$sha256  $RUNNER_TEMP/cargo-deny.tgz" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/cargo-deny.tgz" -C "$RUNNER_TEMP" --strip-components=1 cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-      - run: bash .github/ci/rust.sh   # cargo-deny reads the workspace with cargo metadata
+      # cargo-deny (mise.toml) reads the workspace with cargo metadata, so the Rust is mise's too
+      - uses: ./.github/actions/mise
       - run: cargo-deny --manifest-path Cargo.toml check
 
   # libFuzzer targets on the pinned nightly (the ledger's: nightly-2026-10-15, cargo-fuzz 0.13.2). The ubuntu runner has
@@ -785,7 +772,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      NIGHTLY: nightly-2026-10-15
       # its runner shut down 2 of 2 push runs mid-build (PR 5), read as running out of memory: two compile jobs
       CARGO_BUILD_JOBS: "2"
     steps:
@@ -793,12 +779,15 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-      - run: rustup toolchain install "$NIGHTLY" --profile minimal
-      # the key names the nightly (its `rustc -V`) and the cargo-fuzz version (the step below), so a bump is a new cache;
-      # the entry holds the built cargo-fuzz and its own registry. A shallow checkout: no commit times
+      # the nightly (NIGHTLY) and cargo-fuzz: mise.fuzz.toml
+      - uses: ./.github/actions/mise
+        with:
+          env: fuzz
+      # the key names the nightly (its `rustc -V`), so a bump is a new cache; the entry holds the target and its own
+      # registry. A shallow checkout: no commit times
       - uses: ./.github/actions/cargo-target
         with:
-          job: fuzz-cargo-fuzz-0.13.2
+          job: fuzz
           mode: restore
           toolchain: ${{ env.NIGHTLY }}
           lock: crates/hub/hrista/Cargo.lock
@@ -806,12 +795,8 @@ jobs:
           registry: "false"
           commit-times: "false"
           paths: |
-            ~/.cargo/bin/cargo-fuzz
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-      - name: cargo-fuzz 0.13.2
-        id: tool
-        run: test -x ~/.cargo/bin/cargo-fuzz || cargo "+$NIGHTLY" install cargo-fuzz --version 0.13.2 --locked
       # every target (release, debug assertions, AddressSanitizer: cargo-fuzz's defaults, as `cargo fuzz run` builds),
       # then each shard's binaries and list in a directory of its own (the shard's artifact)
       - name: Build every target
@@ -854,7 +839,7 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: ${{ env.NIGHTLY }}
         with:
-          job: fuzz-cargo-fuzz-0.13.2
+          job: fuzz
           mode: save
           build-outcome: ${{ steps.build.outcome }}
           status: ${{ job.status }}
@@ -863,7 +848,6 @@ jobs:
           registry: "false"
           commit-times: "false"
           paths: |
-            ~/.cargo/bin/cargo-fuzz
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
 
@@ -1189,7 +1173,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           arch=$(uname -m); [ "$arch" = arm64 ] && arch=aarch64
-          rustup target add "$arch-unknown-linux-musl"
           l=$(printf '%s' "$arch-unknown-linux-musl" | tr 'a-z-' 'A-Z_')
           env "CARGO_TARGET_${l}_LINKER=rust-lld" "CARGO_TARGET_${l}_RUSTFLAGS=-C link-self-contained=yes" \
             cargo build --locked --manifest-path Cargo.toml -p ferja --bin drgnx-px --target "$arch-unknown-linux-musl"

@@ -39,6 +39,9 @@ inputs:
   registry:
     description: "false: the registry is in `paths` (the fuzz entry), not a cache of its own"
     default: "true"
+  cargo-home:
+    description: "Cargo's home, whose registry is cached (the Fedora image's is /opt/cargo, where mise put it)"
+    default: "~/.cargo"
   commit-times:
     description: "false: no commit-times.sh and no built-from marker (a shallow checkout)"
     default: "true"
@@ -69,8 +72,8 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
-          ~/.cargo/registry/index
-          ~/.cargo/registry/cache
+          ${{ inputs.cargo-home }}/registry/index
+          ${{ inputs.cargo-home }}/registry/cache
         key: cargo-registry-${{ runner.os }}-${{ hashFiles(inputs.lock) }}
         restore-keys: cargo-registry-${{ runner.os }}-
     - id: target
@@ -158,6 +161,6 @@ runs:
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
-          ~/.cargo/registry/index
-          ~/.cargo/registry/cache
+          ${{ inputs.cargo-home }}/registry/index
+          ${{ inputs.cargo-home }}/registry/cache
         key: ${{ steps.state.outputs.registry-key }}

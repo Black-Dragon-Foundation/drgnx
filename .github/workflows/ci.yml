@@ -117,7 +117,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: shellcheck
-        run: shellcheck --severity=warning .githooks/pre-commit test/container/nidhogg.sh test/container/zig.sh .github/ci/changes.sh .github/ci/cargo-prune.sh .github/ci/commit-times.sh .github/ci/ghcr.sh .github/ci/bwrap/build.sh .github/ci/browser-vm.sh test/container/image-tag.sh test/container/image.sh test/container/rust-packages.sh .github/ci/run-checks.sh .github/ci/runtime-skips.sh .github/ci/gate-needs.sh .github/ci/cache-key.sh .github/ci/cache-policy.sh .github/ci/cache-prune.sh .github/ci/assets.sh
+        run: shellcheck --severity=warning .githooks/pre-commit test/container/nidhogg.sh .github/ci/changes.sh .github/ci/cargo-prune.sh .github/ci/commit-times.sh .github/ci/ghcr.sh .github/ci/bwrap/build.sh .github/ci/browser-vm.sh test/container/image-tag.sh test/container/image.sh test/container/rust-packages.sh .github/ci/run-checks.sh .github/ci/runtime-skips.sh .github/ci/gate-needs.sh .github/ci/cache-key.sh .github/ci/cache-policy.sh .github/ci/cache-prune.sh .github/ci/assets.sh .github/ci/mise.sh
       - name: The path filter's rules and table (changes.sh --self-test)
         if: ${{ !cancelled() }}
         run: bash .github/ci/changes.sh .github/ci/paths.txt --self-test
@@ -141,6 +141,11 @@ jobs:
       - name: The prebuilt assets' tag and unpacking (assets.sh --self-test)
         if: ${{ !cancelled() }}
         run: bash .github/ci/assets.sh --self-test
+      - name: The tools' pins agree (mise.sh --check, --self-test)
+        if: ${{ !cancelled() }}
+        run: |
+          bash .github/ci/mise.sh --self-test
+          bash .github/ci/mise.sh --check
       # one cache layer: cargo's target and registry. A per-unit compiler cache back in a workflow or action is a second
       # layer that wrote one entry per compiled unit and pushed the repository's 10 GB (the CI flow redesign). The word
       # is spelled with a bracket here, so this step does not find itself.

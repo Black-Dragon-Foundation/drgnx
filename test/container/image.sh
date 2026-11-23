@@ -43,6 +43,6 @@ fi
 
 bargs=()
 [ "$rt" != podman ] || bargs=(--memory "${DRGNX_TEST_BUILD_MEMORY:-3g}" --memory-swap "${DRGNX_TEST_BUILD_MEMORY:-3g}")
-"$rt" build ${bargs[@]+"${bargs[@]}"} -q -t "$image" "$@" -f "$file" "$(dirname "$file")" >/dev/null
+"$rt" build ${bargs[@]+"${bargs[@]}"} -q -t "$image" "$@" -f "$file" "$(bash "$here/image-tag.sh" --context "$file")" >/dev/null
 echo "image: $image (built)" >&2
 echo "$image"

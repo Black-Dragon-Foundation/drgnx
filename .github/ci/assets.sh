@@ -2,15 +2,16 @@
 # The prebuilt assets of CI (docs/develop/ci.md, "Prebuilt images"): everything a job would download at setup, fetched
 # once per input hash by `Test images` (images.yml) into a one-layer image on GHCR, and unpacked by the jobs in one step.
 # The files are the same on every platform: the pinned model files (models.txt), the libghostty-vt tarballs (pin.toml),
-# Zig's tarballs (zig.sh's pins) and the macOS Nidhogg tarball (nidhogg.sh's pin). A job that cannot pull the image (a
-# fork's pull request, GHCR down) downloads them itself with the same scripts, which retry over HTTP/1.1.
+# and the macOS Nidhogg tarball (nidhogg.sh's pin): data, not tools (the tools are mise's, .github/ci/mise.toml). A job
+# that cannot pull the image (a fork's pull request, GHCR down) downloads them itself with the same scripts, which retry
+# over HTTP/1.1.
 #
 #   assets.sh tag                  the image's tag: a hash of the files that hold the pins
 #   assets.sh build DIR            downloads and checks everything into DIR/assets/ and packs DIR/assets.tar (the image's one file)
 #   assets.sh use REF              pulls REF (ghcr.io/…/drgnx-assets@sha256:…; empty: nothing to do) and puts the files where
 #                                  the setup scripts look: ../test-models (models.sh keeps files whose sums match),
-#                                  crates/hub/ghostty-vt-sys/tarballs (fetch.sh), and ZIG_DOWNLOADS / NIDHOGG_DOWNLOADS
-#                                  (zig.sh, nidhogg.sh) in $GITHUB_ENV. Always exits 0 when the files can still be downloaded.
+#                                  crates/hub/ghostty-vt-sys/tarballs (fetch.sh), and NIDHOGG_DOWNLOADS (nidhogg.sh) in
+#                                  $GITHUB_ENV. Always exits 0 when the files can still be downloaded.
 #   assets.sh --self-test
 #
 # Environment: TOKEN and ACTOR (a token that reads the organisation's packages: ghcr.sh), ASSETS_TAR (use: a local tar
@@ -26,7 +27,7 @@ hash_of() { sha256 | cut -c1-16; }
 
 # the files that hold the pins: an edit of any is a new tag
 pin_files() {
-  printf '%s\n' ".github/ci/models.txt" "crates/hub/ghostty-vt-sys/pin.toml" "test/container/zig.sh" "test/container/nidhogg.sh"
+  printf '%s\n' ".github/ci/models.txt" "crates/hub/ghostty-vt-sys/pin.toml" "test/container/nidhogg.sh"
 }
 
 tag() {
@@ -40,22 +41,12 @@ curl_get() { curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 3 -
 pin() { sed -n "s/^$2=\\(.*\\)$/\\1/p" "$ROOT/$1" | head -n 1; }
 
 build() {
-  local dir=$1 a zv zurl ver nurl asset sum f arch_os want got
+  local dir=$1 a ver nurl asset f want got
   a=$dir/assets
   mkdir -p "$a/models" "$a/ghostty" "$a/downloads"
   bash "$HERE/models.sh" "$a/models"
   bash "$ROOT/crates/hub/ghostty-vt-sys/fetch.sh" "$a/ghostty"
-  # Zig for the Linux runners and the Apple Silicon Macs (the sums are zig.sh's own; zig.sh checks the signature on use)
-  zv=$(pin test/container/zig.sh ZIG_VERSION); zurl=$(pin test/container/zig.sh ZIG_URL)
-  for arch_os in x86_64-linux aarch64-linux aarch64-macos; do
-    want=$(sed -n "s/^ *$arch_os) *sha=\\([0-9a-f]*\\).*/\\1/p" "$ROOT/test/container/zig.sh")
-    [ -n "$want" ] || { echo "assets.sh: zig.sh has no sum for $arch_os" >&2; return 1; }
-    f=zig-$arch_os-$zv.tar.xz
-    curl_get "$a/downloads/$f" "$zurl/$zv/$f"
-    curl_get "$a/downloads/$f.minisig" "$zurl/$zv/$f.minisig"
-    got=$(sha256 "$a/downloads/$f" | cut -d' ' -f1)
-    [ "$got" = "$want" ] || { echo "assets.sh: $f is not the pinned file ($got, not $want)" >&2; return 1; }
-  done
+  # (Zig and the other tools are mise's: .github/ci/mise.toml, not data)
   # Nidhogg for the Macs (the Linux jobs have it in their image)
   ver=$(pin test/container/nidhogg.sh NIDHOGG_VERSION); nurl=$(pin test/container/nidhogg.sh NIDHOGG_URL)
   asset=macos-arm64
@@ -90,9 +81,9 @@ use() {
   if [ -d "$dest/models" ]; then mkdir -p "$ROOT/../test-models"; cp -R "$dest/models/." "$ROOT/../test-models/"; fi
   if [ -d "$dest/ghostty" ]; then mkdir -p "$ROOT/crates/hub/ghostty-vt-sys/tarballs"; cp "$dest"/ghostty/* "$ROOT/crates/hub/ghostty-vt-sys/tarballs/"; fi
   if [ -n "${GITHUB_ENV:-}" ]; then
-    { echo "ZIG_DOWNLOADS=$dest/downloads"; echo "NIDHOGG_DOWNLOADS=$dest/downloads"; } >> "$GITHUB_ENV"
+    echo "NIDHOGG_DOWNLOADS=$dest/downloads" >> "$GITHUB_ENV"
   fi
-  echo "assets.sh: the prebuilt assets are in $dest (models, libghostty-vt tarballs, Zig, Nidhogg)"
+  echo "assets.sh: the prebuilt assets are in $dest (models, libghostty-vt and Nidhogg tarballs)"
 }
 
 if [ "${1:-}" = --self-test ]; then
@@ -112,7 +103,6 @@ if [ "${1:-}" = --self-test ]; then
   ( cd "$d/checkout" && ASSETS_TAR="$d/assets.tar" ASSETS_DIR="$d/unpacked" GITHUB_ENV="$d/env" bash .github/ci/assets.sh use "" >/dev/null ) || fail "use exited $?"
   [ -f "$d/test-models/m1/model.safetensors" ] || fail "the models are not beside the checkout"
   [ -f "$d/checkout/crates/hub/ghostty-vt-sys/tarballs/libghostty-vt-1.0.0.tar.gz" ] || fail "the ghostty tarball is not in the crate"
-  grep -q "^ZIG_DOWNLOADS=$d/unpacked/downloads$" "$d/env" || fail "ZIG_DOWNLOADS is not set: $(cat "$d/env")"
   grep -q "^NIDHOGG_DOWNLOADS=$d/unpacked/downloads$" "$d/env" || fail "NIDHOGG_DOWNLOADS is not set"
   # no reference and no tar: nothing to do, exit 0 (the setup downloads)
   ( cd "$d/checkout" && bash .github/ci/assets.sh use "" 2>&1 | grep -q 'no prebuilt assets' ) || fail "an empty ref is not a notice"

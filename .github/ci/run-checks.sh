@@ -16,7 +16,7 @@
 #   run-checks.sh coverage RUN BASE_RUN         7: the same test, row and escape-report counts as BASE_RUN
 #   run-checks.sh macos RUN...                  8: at most 6 macOS jobs over the runs (one push's), at most 4 at once
 #   run-checks.sh env RUN                       9: the Fedora jobs run the Prebuilt image's digest, and every `rustc -V`
-#                                                  (or toolchain.txt) line is test/container/rust-version's
+#                                                  (or toolchain.txt) line is .github/ci/mise.toml's Rust
 #   run-checks.sh shards RUN [--base BASE_RUN]  10: each Fedora test consumer's `shard-stats:` line (its test step's
 #                                                  seconds and peak memory; a warning above 12 GiB of the runner's 16)
 #   run-checks.sh all RUN [--base BASE_RUN] [--warm|--cold]   every check that applies to one run
@@ -39,7 +39,7 @@ ROOT=$(cd "$HERE/../.." && pwd)
 GH=${CHECKS_GH:-gh}
 REPO=${CHECKS_REPO:-${GITHUB_REPOSITORY:-Black-Dragon-Foundation/drgnx}}
 BUDGET=${CHECKS_BUDGET:-$HERE/compile-budget.txt}
-RUST_VERSION_FILE=${CHECKS_RUST_VERSION:-$ROOT/test/container/rust-version}
+RUST_VERSION_FILE=${CHECKS_RUST_VERSION:-$ROOT/.github/ci/mise.toml}
 GIB=1073741824
 COMPILING='Compiling [A-Za-z0-9_-]+ v[0-9]'
 RC=0
@@ -329,7 +329,7 @@ check_macos() {
 check_env() {
   local jf want id concl labels name log digest="" vers compiled fail="" n=0 fedora=0
   [ $# -eq 1 ] || usage
-  want=$(tr -d '[:space:]' < "$RUST_VERSION_FILE") || { say 9 FAIL "no $RUST_VERSION_FILE"; return; }
+  want=$(sed -n 's/^rust = {[^}]*version = "\([^"]*\)".*/\1/p' "$RUST_VERSION_FILE" 2>/dev/null | head -n 1); [ -n "$want" ] || { say 9 FAIL "no Rust version in $RUST_VERSION_FILE"; return; }
   jf=$(jobs_file "$1") || { say 9 FAIL "the jobs of run $1 could not be read"; return; }
   id=$(jq -r '[.[] | select((.name | contains("Prebuilt image")) and .conclusion != "skipped") | .id] | first // empty' "$jf")
   if [ -n "$id" ] && log=$(log_file "$id"); then
@@ -459,7 +459,7 @@ GH
          | {workspace_members: ["ws#ratatoskr@0.1.0", "ws#ws-b@0.1.0"],
             packages: ([$d[] | {id: "reg#\(.)@1.0.0", name: .}] + [{id: "ws#ratatoskr@0.1.0", name: "ratatoskr"}, {id: "ws#ws-b@0.1.0", name: "ws-b"}]),
             resolve: {nodes: ([$d[] | {id: "reg#\(.)@1.0.0"}] + [{id: "ws#ratatoskr@0.1.0"}, {id: "ws#ws-b@0.1.0"}])}}' > "$ST/metadata.json"
-  echo 1.100.0 > "$ST/rust-version"
+  printf '[tools]\nrust = { version = "1.100.0", profile = "minimal" }\n' > "$ST/rust-version"
   export CHECKS_METADATA="$ST/metadata.json"
   RUST_VERSION_FILE="$ST/rust-version"
   # expect VERDICT N ARGS...: `check N: VERDICT` and the matching exit status

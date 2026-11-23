@@ -65,7 +65,7 @@ jobs:
           fi
           sudo install -m 0755 "$RUNNER_TEMP/bwrap/bwrap" /usr/bin/bwrap
           /usr/bin/bwrap --version
-      - run: bash .github/ci/rust.sh
+      - uses: ./.github/actions/mise
       - name: build the launch rows (test hooks) and the binaries they run
         run: |
           cargo build --locked --manifest-path Cargo.toml -p domr --bin ratatoskr-mock

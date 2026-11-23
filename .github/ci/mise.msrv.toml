@@ -1,0 +1,7 @@
+# The MSRV job (MISE_ENV=msrv): the oldest supported compiler (kb: MSRV 1.95, for wasmtime 48 LTS) in place of
+# mise.toml's. The job builds with `cargo +$MSRV_TOOLCHAIN`. Nothing but the toolchain differs.
+[tools]
+rust = { version = "1.95.0", profile = "minimal" }
+
+[env]
+MSRV_TOOLCHAIN = "1.95.0"

@@ -1,0 +1,46 @@
+# The tools of a host job (the escape legs, MSRV, Android, the container rows, deny, fuzz, every macOS job): the tool
+# bundle of .github/ci/mise.toml. The bundle is one cache entry per OS, architecture and hash of the config
+# (mise.toml, mise.ENV.toml, mise.sh) holding mise, the tools it installed and rustup's toolchains; a hit leaves
+# `mise.sh` nothing to install, a miss installs them once (the writer runs then save the bundle: .github/ci/cache-policy.sh).
+# The Fedora jobs bake the same tools into their image (test/container/Containerfile.rust). docs/develop/ci.md, "The tools"
+name: mise tools
+description: Restore or install the tool bundle of .github/ci/mise.toml and put the tools on PATH
+inputs:
+  env:
+    description: "A MISE_ENV overlay: msrv or fuzz (empty: mise.toml alone)"
+    default: ""
+runs:
+  using: composite
+  steps:
+    - id: bundle
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.mise-data
+          ~/.rustup
+          ~/.cargo/bin
+          ~/.local/bin/mise
+        key: mise-${{ runner.os }}-${{ runner.arch }}-${{ inputs.env || 'default' }}-${{ hashFiles('.github/ci/mise*.toml', '.github/ci/mise.sh') }}
+    - id: install
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        BUNDLE_ENV: ${{ inputs.env }}
+      run: |
+        export MISE_DATA_DIR="$HOME/.mise-data"
+        echo "MISE_DATA_DIR=$MISE_DATA_DIR" >> "$GITHUB_ENV"
+        bash .github/ci/mise.sh $BUNDLE_ENV
+    - id: policy
+      uses: ./.github/actions/cache-policy
+      with:
+        build-outcome: ${{ steps.install.outcome }}
+        exact-hit: ${{ steps.bundle.outputs.cache-hit }}
+    - if: ${{ steps.policy.outputs.save == 'true' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.mise-data
+          ~/.rustup
+          ~/.cargo/bin
+          ~/.local/bin/mise
+        key: ${{ steps.bundle.outputs.cache-primary-key }}

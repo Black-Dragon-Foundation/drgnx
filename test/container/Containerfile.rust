@@ -1,7 +1,21 @@
-# The Rust runtime's Fedora 45 job (runtime.yml's `linux`) and the timing lane's Rust step: Fedora's Rust toolchain and
-# the tools its tests run (rust-packages.sh), and Nidhogg 31.1 (nidhogg.sh) for the conformance rows that start the
-# editor's CLIs.  CI pulls it by digest from `Test images`; without one the job runs the same two scripts itself.
+# The Rust runtime's Fedora 45 job (runtime.yml's `linux`) and the timing lane's Rust step: the system packages its
+# tests run (rust-packages.sh), the tools of .github/ci/mise.toml installed by mise (Rust with clippy, rustfmt and the
+# targets, cargo-nextest, cargo-deny, Zig: no per-tool install here), and Nidhogg 31.1 (nidhogg.sh) for the conformance
+# rows that start the editor's CLIs. CI pulls it by digest from `Test images`; without one the job runs the same
+# scripts itself. The build context is the repository's root (the mise files live in .github/ci).
+# context: ../..
 FROM registry.fedoraproject.org/fedora:45
-COPY rust-packages.sh rust-version nidhogg.sh zig.sh /tmp/
-RUN sh /tmp/rust-packages.sh && bash /tmp/nidhogg.sh fedora-45 && bash /tmp/zig.sh linux && rm /tmp/rust-packages.sh /tmp/rust-version /tmp/nidhogg.sh /tmp/zig.sh
+COPY test/container/rust-packages.sh test/container/nidhogg.sh /tmp/
+COPY .github/ci/mise.sh .github/ci/mise.toml .github/ci/mise.msrv.toml .github/ci/mise.fuzz.toml /opt/drgnx-ci/.github/ci/
+# mise, its tools and rustup live under /opt, not a home directory: a container job's HOME is not root's. The shims and
+# cargo's bin directory are on PATH; MISE_GLOBAL_CONFIG_FILE is the config the shims resolve their versions from.
+ENV MISE_BIN_DIR=/usr/local/bin \
+    MISE_DATA_DIR=/opt/mise \
+    MISE_RUSTUP_HOME=/opt/rustup \
+    MISE_CARGO_HOME=/opt/cargo \
+    RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/opt/cargo \
+    MISE_GLOBAL_CONFIG_FILE=/opt/drgnx-ci/.github/ci/mise.toml \
+    PATH=/opt/cargo/bin:/opt/mise/shims:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+RUN sh /tmp/rust-packages.sh && bash /tmp/nidhogg.sh fedora-45 && bash /opt/drgnx-ci/.github/ci/mise.sh --image && rm /tmp/rust-packages.sh /tmp/nidhogg.sh
 ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.5/bin/nidhogg

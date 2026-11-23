@@ -1,33 +1,13 @@
 #!/usr/bin/env bash
-# wasm-target.sh: the wasm32-wasip2 target for the plugin fixtures, then the fixtures and the template built for it.
+# wasm-target.sh: the plugin fixtures and the template, built for wasm32-wasip2.
 # The plugin tests load real WASM components (crates/hub/plugins/fixtures) that brokkr's test support builds at test time;
-# building them here, into the folders the test support builds into (target/plugin-fixtures), names a missing
-# target or a broken fixture in its own step, and leaves the tests' own build nothing to do (a minute of brokkr's lib
-# tests on a cold macOS runner).
-# With rustup (the macOS runner, the Ubuntu jobs): `rustup target add`. Without it (the Fedora container's packaged
-# Rust, which has wasm32-wasip1 but no wasip2 standard library, and cannot use an upstream one: the crates it builds
-# are tagged with its own rustc): rustup-init (checked against its published SHA-256) installs the same rustc version
-# with the target for the fixtures alone, and DRGNX_WASM_CARGO (GITHUB_ENV) tells the test support to build them with
-# it. Run from the repository root.
+# building them here, into the folders the test support builds into (target/plugin-fixtures), names a broken fixture in
+# its own step, and leaves the tests' own build nothing to do (a minute of brokkr's lib tests on a cold macOS runner).
+# The target is one of mise.toml's Rust targets (installed with the toolchain, in the image or the tool bundle); the
+# `target add` is a no-op there and a safety net for a toolchain that came from elsewhere. Run from the repository root.
 set -euo pipefail
-cargo=cargo
-if command -v rustup >/dev/null 2>&1; then
-  rustup target add wasm32-wasip2
-else
-  ver=$(rustc -V | cut -d' ' -f2)
-  host=$(uname -m)-unknown-linux-gnu
-  work=$(mktemp -d)
-  trap 'rm -rf "$work"' EXIT
-  base="https://static.rust-lang.org/rustup/dist/$host/rustup-init"
-  curl -fsSL "$base" -o "$work/rustup-init"
-  want=$(curl -fsSL "$base.sha256" | cut -d' ' -f1)
-  echo "$want  $work/rustup-init" | sha256sum -c -
-  chmod +x "$work/rustup-init"
-  "$work/rustup-init" -y --no-modify-path --profile minimal --default-toolchain "$ver" --target wasm32-wasip2
-  cargo="$HOME/.cargo/bin/cargo"
-  if [ -n "${GITHUB_ENV:-}" ]; then echo "DRGNX_WASM_CARGO=$cargo" >> "$GITHUB_ENV"; fi
-fi
-"$cargo" build --locked --release --target wasm32-wasip2 --manifest-path crates/hub/plugins/fixtures/Cargo.toml \
+rustup target add wasm32-wasip2
+cargo build --locked --release --target wasm32-wasip2 --manifest-path crates/hub/plugins/fixtures/Cargo.toml \
   --target-dir target/plugin-fixtures/build
-"$cargo" build --locked --release --target wasm32-wasip2 --manifest-path crates/hub/plugins/template/Cargo.toml \
+cargo build --locked --release --target wasm32-wasip2 --manifest-path crates/hub/plugins/template/Cargo.toml \
   --target-dir target/plugin-fixtures/template/build

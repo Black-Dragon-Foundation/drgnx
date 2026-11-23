@@ -24,9 +24,9 @@ runs:
         ACTOR: ${{ github.actor }}
         ASSETS_REF: ${{ inputs.assets }}
       run: /bin/bash .github/ci/assets.sh use "$ASSETS_REF"
-    # the image's rustup (as the Linux runner jobs), not Homebrew's rust: no formula download and install per run
-    - shell: bash
-      run: bash .github/ci/rust.sh --component clippy
+    # the tool bundle of .github/ci/mise.toml (Rust with clippy and the musl targets, nextest, Zig): one restore, no
+    # rustup-init, no Homebrew formula, no tarball download
+    - uses: ./.github/actions/mise
     - uses: ./.github/actions/cargo-target
       with:
         job: macos-dev
@@ -51,10 +51,7 @@ runs:
     - name: wasm32-wasip2 and the plugin fixtures
       shell: bash
       run: bash .github/ci/wasm-target.sh
-    # the terminal engine is built from source with a pinned Zig (test/container/zig.sh, from ZIG_DOWNLOADS)
-    - name: Zig
-      shell: bash
-      run: /bin/bash test/container/zig.sh macos
+    # the terminal engine is built from source with the Zig of mise.toml (above)
     - name: libghostty-vt's pinned tarballs (build.rs never downloads)
       shell: bash
       run: /bin/bash crates/hub/ghostty-vt-sys/fetch.sh

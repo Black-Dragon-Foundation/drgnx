@@ -1,0 +1,17 @@
+# The tools CI uses, one place (the user, 2026-11-23: "use mise in images to set up tooling, no manual configs").
+# `mise.sh` installs them (mise itself pinned by version and checksum there): into the Fedora image
+# (test/container/Containerfile.rust), and into the one tool bundle each host job and macOS job restores
+# (.github/actions/mise). Nothing else in a workflow or script names a tool's version. System packages (dnf, apt,
+# brew) and data (models, tarballs, wasm fixtures, grammars) stay outside mise. mise.msrv.toml and mise.fuzz.toml
+# override the Rust toolchain for those two jobs (MISE_ENV).
+#
+# A bump is an edit of this file; the image and bundle keys hash it. `rust-toolchain.toml`, if the repository has
+# one, must name the same channel (mise.sh --check, a step of `scripts`).
+[tools]
+# clippy and rustfmt: the lint jobs; the targets: the Android type-check, the static sidecars and runner bundles
+# (musl), the plugin fixtures (wasm32-wasip2: the Fedora job's old rustup-init detour is gone)
+rust = { version = "1.100.0", profile = "minimal", components = ["clippy", "rustfmt"], targets = ["aarch64-linux-android", "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "wasm32-wasip2"] }
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.151"
+"aqua:EmbarkStudios/cargo-deny" = "0.20.2"
+# the terminal engine's build tool (libghostty-vt is built from pinned sources)
+zig = "0.17.0"

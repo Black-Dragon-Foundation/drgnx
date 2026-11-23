@@ -8,9 +8,19 @@
 #   image-tag.sh test/container/Containerfile[.NAME]
 # Prints the tag; exit 1 when a source is missing, 2 on a usage error.  bash 3.2-safe.  docs/develop/ci.md
 set -eu -o pipefail
-[ $# = 1 ] && [ -f "$1" ] || { echo "usage: image-tag.sh CONTAINERFILE" >&2; exit 2; }
+#   image-tag.sh --context test/container/Containerfile[.NAME]   the build context directory (below)
+# A Containerfile that copies from elsewhere in the repository names its build context in a line `# context: PATH`
+# (relative to its own directory, `../..` for the repository's root): the COPY sources are read from there, and
+# `podman build` is given it (`--context`, as images.yml does).
+mode=tag
+if [ "${1:-}" = --context ]; then mode=context; shift; fi
+[ $# = 1 ] && [ -f "$1" ] || { echo "usage: image-tag.sh [--context] CONTAINERFILE" >&2; exit 2; }
 file=$1
-ctx=$(dirname "$file")
+base_dir=$(dirname "$file")
+ctx=$base_dir
+ctx_line=$(awk '$1 == "#" && $2 == "context:" { print $3; exit }' "$file")
+if [ -n "$ctx_line" ]; then ctx=$base_dir/$ctx_line; fi
+if [ "$mode" = context ]; then echo "$ctx"; exit 0; fi
 
 sum() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; }   # of stdin
 
@@ -34,8 +44,8 @@ base_file=$(awk '$1 == "#" && $2 == "base:" { print $4; exit }' "$file")
 manifest() {
   sum < "$file" | cut -c1-64
   if [ -n "$base_file" ]; then
-    [ -f "$ctx/$base_file" ] || { echo "image-tag.sh: $file names the base $base_file, which is not in $ctx" >&2; exit 1; }
-    echo "base $(bash "$0" "$ctx/$base_file")"
+    [ -f "$base_dir/$base_file" ] || { echo "image-tag.sh: $file names the base $base_file, which is not in $base_dir" >&2; exit 1; }
+    echo "base $(bash "$0" "$base_dir/$base_file")"
   fi
   sources | while IFS= read -r src; do
     if [ -d "$ctx/$src" ]; then

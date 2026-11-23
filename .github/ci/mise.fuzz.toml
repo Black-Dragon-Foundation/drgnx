@@ -1,0 +1,8 @@
+# The fuzz build (MISE_ENV=fuzz): the pinned nightly (libFuzzer and AddressSanitizer need one) and cargo-fuzz, in place
+# of mise.toml's Rust. The job builds with `cargo +$NIGHTLY fuzz`.
+[tools]
+rust = { version = "nightly-2026-10-15", profile = "minimal" }
+"cargo:cargo-fuzz" = "0.13.2"
+
+[env]
+NIGHTLY = "nightly-2026-10-15"
