@@ -317,7 +317,7 @@ fn palette() -> Palette {
     Palette(
         roles
             .iter()
-            .map(|r| ((*r).to_owned(), format!("probe-{r}")))
+            .map(|r| ((*r).to_owned(), format!("probe{}", r.replace('-', ""))))
             .collect(),
     )
 }
@@ -537,10 +537,7 @@ fn svg_has_no_colour_outside_the_palette() {
             }
         }
     }
-    assert!(
-        seen.contains("probe-accent"),
-        "the chain's accent: {seen:?}"
-    );
+    assert!(seen.contains("probeaccent"), "the chain's accent: {seen:?}");
     assert!(seen.len() >= 3, "{seen:?}");
 }
 
@@ -669,7 +666,7 @@ fn a_long_strip_entry_is_cut_and_the_row_is_ui_text() {
 fn a_chip_has_a_lucide_icon_image() {
     let (items, edges, layout) = frame();
     let new = BTreeSet::new();
-    let palette = Palette(vec![("chip-fg".into(), "probe-chip-fg".into())]);
+    let palette = Palette(vec![("chip-fg".into(), "probechipfg".into())]);
     let s = scene(&items, &edges, &layout, &new);
     let drawn = render::rows(&s, &Index::of(&s), &gui(&palette), &Cols);
     let ask = drawn
@@ -686,7 +683,7 @@ fn a_chip_has_a_lucide_icon_image() {
         .expect("its image");
     assert!(svg.contains("M22 17a2 2 0 0 1-2 2H6.828"), "{svg}");
     assert!(
-        svg.contains("stroke=\"probe-chip-fg\"") && svg.contains("stroke-width=\"1.6\""),
+        svg.contains("stroke=\"probechipfg\"") && svg.contains("stroke-width=\"1.6\""),
         "{svg}"
     );
     assert!(!ask.text.contains('❝'), "{:?}", ask.text);

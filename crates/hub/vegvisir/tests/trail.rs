@@ -524,7 +524,7 @@ fn timestamps_use_the_env_time_zone() {
 /// selected card's faces) with a lightbulb.
 #[test]
 fn trail_rows_are_ui_text_with_lucide_icons_and_a_finding_card() {
-    let p = Palette(vec![("chip-fg".into(), "probe-chip-fg".into())]);
+    let p = Palette(vec![("chip-fg".into(), "probechipfg".into())]);
     let steps = vec![step(1, 1000.0)];
     let (rows, images) =
         trail::trail_rows_with_images(&steps, &[conclusion(1, 1, &[1])], &env(&p), Zone(0), None);
@@ -543,7 +543,7 @@ fn trail_rows_are_ui_text_with_lucide_icons_and_a_finding_card() {
             .expect("its image")
     };
     assert!(
-        svg_of(s).contains("stroke=\"probe-chip-fg\""),
+        svg_of(s).contains("stroke=\"probechipfg\""),
         "{}",
         svg_of(s)
     );

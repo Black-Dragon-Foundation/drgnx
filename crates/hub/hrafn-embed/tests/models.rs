@@ -298,7 +298,7 @@ fn corrupt_file_refuses_load() {
     let path = dir.path().join("sub/data.bin");
     let mut body = fs::read(&path).unwrap();
     body[0] ^= 1;
-    eitri::replace_file(&path, body.as_bytes()).unwrap();
+    eitri::replace_file(&path, &body).unwrap();
     assert_eq!(
         cache::state(&spec, dir.path()),
         ModelState::Corrupt {

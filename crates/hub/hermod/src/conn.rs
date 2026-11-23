@@ -48,11 +48,11 @@ pub(crate) struct Shared {
 
 impl Shared {
     fn lock_v2(&self) -> std::sync::MutexGuard<'_, v2::V2> {
-        self.v2.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.v2)
     }
 
     fn lock_pending(&self) -> std::sync::MutexGuard<'_, HashMap<Id, oneshot::Sender<Answer>>> {
-        self.pending.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.pending)
     }
 }
 
@@ -515,11 +515,7 @@ impl Conn {
         self.remember(sid, cwd);
         self.note_mode(sid, mode);
         self.note_model(sid, model);
-        let mut opts = self
-            .shared
-            .mode_opts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut opts = saman::lock(&self.shared.mode_opts);
         match opt {
             Some(o) => opts.insert(sid.0.to_string(), o),
             None => opts.remove(&*sid.0),
@@ -529,33 +525,19 @@ impl Conn {
     /// The model session SID uses: the one the answer that opened it on this connection reported, then each
     /// `session/set_model` (or `model` config option) the agent accepted; `None` when it reported none.
     pub fn reported_model(&self, sid: &SessionId) -> Option<String> {
-        self.shared
-            .models
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&*sid.0)
-            .cloned()
+        saman::lock(&self.shared.models).get(&*sid.0).cloned()
     }
 
     /// The mode session SID is in, as the agent's answer that opened it on this connection (`session/new`,
     /// `session/load`, `session/resume` or `session/fork`) reported it; `None` when it reported none.
     pub fn reported_mode(&self, sid: &SessionId) -> Option<String> {
-        self.shared
-            .modes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&*sid.0)
-            .cloned()
+        saman::lock(&self.shared.modes).get(&*sid.0).cloned()
     }
 
     pub async fn close_session(&self, sid: &SessionId) -> Result<(), Error> {
         self.typed::<Value>("session/close", json!({"sessionId": sid}))
             .await?;
-        self.shared
-            .cwds
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&*sid.0);
+        saman::lock(&self.shared.cwds).remove(&*sid.0);
         self.note_mode(sid, None);
         Ok(())
     }
@@ -563,13 +545,7 @@ impl Conn {
     pub async fn set_mode(&self, sid: &SessionId, mode: &str) -> Result<(), Error> {
         if self.proto() == Proto::V2 {
             // v2 has no modes: the mode is a config option, the one the agent reported
-            let opt = self
-                .shared
-                .mode_opts
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(&*sid.0)
-                .cloned();
+            let opt = saman::lock(&self.shared.mode_opts).get(&*sid.0).cloned();
             return match opt {
                 Some(o) => self.set_config_option(sid, &o, mode).await,
                 None => Err(Error::Rpc {
@@ -745,16 +721,12 @@ impl Conn {
     }
 
     fn remember(&self, sid: &SessionId, cwd: &Path) {
-        self.shared
-            .cwds
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(sid.0.to_string(), cwd.to_path_buf());
+        saman::lock(&self.shared.cwds).insert(sid.0.to_string(), cwd.to_path_buf());
     }
 
     /// SID's reported MODE (none: forgotten, so an earlier answer's mode is never taken for this one's).
     fn note_mode(&self, sid: &SessionId, mode: Option<String>) {
-        let mut modes = self.shared.modes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut modes = saman::lock(&self.shared.modes);
         match mode {
             Some(m) => modes.insert(sid.0.to_string(), m),
             None => modes.remove(&*sid.0),
@@ -765,7 +737,7 @@ impl Conn {
 impl Conn {
     /// SID's reported MODEL (none: forgotten, as [`Conn::note_mode`] forgets a mode).
     fn note_model(&self, sid: &SessionId, model: Option<String>) {
-        let mut models = self.shared.models.lock().unwrap_or_else(|e| e.into_inner());
+        let mut models = saman::lock(&self.shared.models);
         match model {
             Some(m) => models.insert(sid.0.to_string(), m),
             None => models.remove(&*sid.0),

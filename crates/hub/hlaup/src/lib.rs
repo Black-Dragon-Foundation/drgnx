@@ -269,7 +269,7 @@ mod tests {
     fn starts_while_threads_fork(mode: Mode, make: impl Fn(&Path, &Path), wrapped: bool) {
         // one at a time: the other test's raw spawns are outside the lock, as any raw spawn is
         static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let _one = saman::lock(&ONE_AT_A_TIME);
         use std::sync::atomic::{AtomicBool, Ordering};
         let d = tempfile::tempdir().unwrap();
         let src = d.path().join("src");

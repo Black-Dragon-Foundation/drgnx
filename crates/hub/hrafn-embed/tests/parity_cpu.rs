@@ -62,7 +62,7 @@ fn embedder(
 ) -> MutexGuard<'static, LocalEmbedder> {
     let held =
         cell.get_or_init(|| Mutex::new(LocalEmbedder::load(spec(id), &dir(id), &CPU).unwrap()));
-    held.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(held)
 }
 
 fn gte() -> MutexGuard<'static, LocalEmbedder> {

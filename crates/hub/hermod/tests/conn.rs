@@ -293,10 +293,10 @@ struct Kept {
 
 impl LineTap for Kept {
     fn line(&self, dir: Dir, line: &str, at: std::time::Instant) {
-        self.lines.lock().unwrap().push((dir, line.to_owned(), at));
+        saman::lock(&self.lines).push((dir, line.to_owned(), at));
     }
     fn exit(&self, code: Option<i32>, _signal: Option<i32>, stderr: &str) {
-        self.exits.lock().unwrap().push((code, stderr.to_owned()));
+        saman::lock(&self.exits).push((code, stderr.to_owned()));
     }
 }
 
@@ -321,7 +321,7 @@ async fn a_tap_sees_both_directions_in_order() {
         panic!("exit")
     };
     assert_eq!(code, Some(0));
-    let lines = tap.lines.lock().unwrap().clone();
+    let lines = saman::lock(&tap.lines).clone();
     let seen: Vec<(Dir, String)> = lines
         .iter()
         .map(|(d, l, _)| {
@@ -347,7 +347,7 @@ async fn a_tap_sees_both_directions_in_order() {
         lines.windows(2).all(|w| w[0].2 <= w[1].2),
         "the instants never go back"
     );
-    let exits = tap.exits.lock().unwrap().clone();
+    let exits = saman::lock(&tap.exits).clone();
     assert!(
         matches!(&exits[..], [(Some(0), stderr)] if stderr.contains("tapped")),
         "{exits:?}"

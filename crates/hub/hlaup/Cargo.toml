@@ -16,6 +16,7 @@ libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+saman.workspace = true
 
 [lints]
 workspace = true

@@ -34,7 +34,7 @@ impl Spy {
         }
     }
     fn calls(&self) -> Vec<(i32, i32)> {
-        self.calls.lock().unwrap().clone()
+        saman::lock(&self.calls).clone()
     }
     /// The calls that were not probes.
     fn sent(&self) -> Vec<(i32, i32)> {
