@@ -270,7 +270,8 @@ async fn lookup_only_source_never_sees_text() {
     let state = tempfile::tempdir().unwrap();
     let id = ident("lookup-only");
     let cache = Caches::shared(state.path()).get(&id).await.unwrap();
-    let mut look = Fake::new("look", SourceKind::Lookup, None);
+    // it even states the model, so only the guard stands between it and the text
+    let mut look = Fake::new("look", SourceKind::Lookup, Some(id.clone()));
     look.may_text = true;
     let look = Arc::new(look);
     let mut c = chain(&id, &[&look]);
