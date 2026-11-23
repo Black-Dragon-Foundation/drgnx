@@ -33,7 +33,7 @@ pub(crate) fn run(conn: &Connection, migrations: &[(u32, &str)]) -> Result<()> {
     match applied {
         Ok(()) => Ok(conn.execute_batch("COMMIT")?),
         Err(e) => {
-            let _ = conn.execute_batch("ROLLBACK");
+            crate::thread::rollback(conn);
             Err(e)
         }
     }

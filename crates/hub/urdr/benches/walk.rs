@@ -2,8 +2,7 @@
 //! runs it under the perf lock: `cargo test -p urdr --features test-hooks --bench walk -- --ignored --nocapture`.
 #![cfg(feature = "test-hooks")]
 
-use std::time::Instant;
-
+use stund::Instant;
 use urdr::graph::ReadPool;
 use urdr::graph::link::Direction;
 use urdr::graph::walk::{Budget, PathQ, Scope, Seen, Walk, neighbors, path, synthetic};
@@ -18,22 +17,47 @@ impl Scope for All {
     }
 }
 
-#[tokio::test]
 #[ignore]
-async fn graph_b_walks() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("work.db");
-    synthetic(&file, 100_000, 1_000_000, 6).unwrap();
-    let pool = ReadPool::open(&file, 2);
-    for depth in 1..=3 {
+#[test]
+fn graph_b_walks() {
+    saman::block_on_current(async {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("work.db");
+        synthetic(&file, 100_000, 1_000_000, 6).unwrap();
+        let pool = ReadPool::open(&file, 2);
+        for depth in 1..=3 {
+            let t = Instant::now();
+            let o = neighbors(
+                &pool,
+                Walk {
+                    from: 1,
+                    kinds: vec![],
+                    direction: Direction::Both,
+                    depth,
+                    as_of: None,
+                },
+                &All,
+                Budget::default(),
+            )
+            .await
+            .unwrap();
+            annall::cli_out(&format!(
+                "neighbors depth {depth}: {} nodes, {:?}, {:?}",
+                o.nodes.len(),
+                o.truncated,
+                t.elapsed()
+            ))
+            .unwrap();
+        }
         let t = Instant::now();
-        let o = neighbors(
+        let o = path(
             &pool,
-            Walk {
+            PathQ {
                 from: 1,
-                kinds: vec![],
-                direction: Direction::Both,
-                depth,
+                to: 99_999,
+                // all six of graph B's kinds: a path past depth 3 must name them
+                kinds: (0..6).map(|k| format!("k{k}")).collect(),
+                max_depth: 8,
                 as_of: None,
             },
             &All,
@@ -41,33 +65,12 @@ async fn graph_b_walks() {
         )
         .await
         .unwrap();
-        println!(
-            "neighbors depth {depth}: {} nodes, {:?}, {:?}",
+        annall::cli_out(&format!(
+            "path: {} nodes, {:?}, {:?}",
             o.nodes.len(),
             o.truncated,
             t.elapsed()
-        );
-    }
-    let t = Instant::now();
-    let o = path(
-        &pool,
-        PathQ {
-            from: 1,
-            to: 99_999,
-            // all six of graph B's kinds: a path past depth 3 must name them
-            kinds: (0..6).map(|k| format!("k{k}")).collect(),
-            max_depth: 8,
-            as_of: None,
-        },
-        &All,
-        Budget::default(),
-    )
-    .await
-    .unwrap();
-    println!(
-        "path: {} nodes, {:?}, {:?}",
-        o.nodes.len(),
-        o.truncated,
-        t.elapsed()
-    );
+        ))
+        .unwrap();
+    })
 }

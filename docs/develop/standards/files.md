@@ -18,6 +18,8 @@ eitri::replace_file(&stig::state().join("session.json"), &bytes)?;
 
 - `eitri::rename_dir(from, to)` moves a directory, and `eitri::rename_file(from, to)` a file too large to rewrite (both
   parents opened with `open_path`; a link as `from`, even to a directory, is refused; both parents are synced).
+- `eitri::create_new(abs, mode)` makes an empty file with exactly `mode` for another program to fill (a database):
+  `true` when made, `false` when the name was taken (not touched, a link not followed).
 - A file read goes through `eitri::read_file(abs, cap)` / `eitri::read_string(abs, cap)` (an absolute path, at most
   `cap` bytes, regular files only, a link in any component refused: `/proc/self` is a link, so a process reads
   `/proc/<its pid>/…`). A test that needs a file other code will write to makes it with `tempfile`.

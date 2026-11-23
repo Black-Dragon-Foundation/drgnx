@@ -14,7 +14,9 @@ static HOOK: OnceLock<Hook> = OnceLock::new();
 
 /// HOOK, for every wait of this process from now on.  Once: a later call is ignored.
 pub fn set(hook: Hook) {
-    let _ = HOOK.set(hook);
+    if HOOK.set(hook).is_err() {
+        tracing::debug!("urdr wait hook already set; the later one is ignored");
+    }
 }
 
 /// The hook's guard for one wait (none without a hook), at the caller's line.

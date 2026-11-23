@@ -167,6 +167,37 @@ pub fn replace_file(abs: &Path, bytes: &[u8]) -> Result<(), FsError> {
     write_regular(dir, Path::new(name), bytes, mode)
 }
 
+/// Creates the empty regular file at the absolute path `abs` with exactly `mode` (the umask does not narrow it; the
+/// file is born with that mode, never widened first), for a file another program fills (a database). The parent is
+/// opened with `open_path` (a link in any component is refused); the file is made with `O_CREAT | O_EXCL | O_NOFOLLOW`.
+/// `Ok(true)` when it was made, `Ok(false)` when the name was taken already (whatever it is: it is not touched).
+/// `mode` above 0o777 is refused.
+pub fn create_new(abs: &Path, mode: u32) -> Result<bool, FsError> {
+    if mode & !0o777 != 0 {
+        return Err(invalid("a mode beyond 0o777"));
+    }
+    let (Some(parent), Some(name)) = (abs.parent(), abs.file_name()) else {
+        return Err(invalid("the path names no file"));
+    };
+    let parent = open_path(parent, Kind::Dir)?;
+    let dir = parent.fd.as_fd();
+    let flags = OFlags::WRONLY
+        | OFlags::CREATE
+        | OFlags::EXCL
+        | OFlags::NOFOLLOW
+        | OFlags::CLOEXEC
+        | OFlags::NOCTTY;
+    match openat(dir, name, flags, Mode::from_raw_mode(mode as RawMode)) {
+        Ok(fd) => {
+            // the umask may have narrowed the mode `openat` was given
+            rustix::fs::fchmod(&fd, Mode::from_raw_mode(mode as RawMode))?;
+            Ok(true)
+        }
+        Err(Errno::EXIST) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Renames the directory `from` to `to` (absolute paths, each parent opened with `open_path`, so a link in either is
 /// refused). `from` must be a directory itself: a link (even to a directory) is `Link`, anything else `NotDir`. As
 /// `rename(2)`, `to` is replaced when it is an empty directory; both parents are synced.

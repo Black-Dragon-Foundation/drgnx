@@ -33,28 +33,38 @@ fn several_writers_and_a_checkpointer_keep_the_wal_whole() {
     let mut all = Vec::new();
     for w in 0..WRITERS {
         let (path, go) = (path.clone(), go.clone());
-        all.push(std::thread::spawn(move || {
-            let c = open(&path);
-            go.wait();
-            for i in 0..ROWS {
-                c.execute(
-                    "insert into t values (?1, ?2, ?3)",
-                    (w as i64, i as i64, "x".repeat(2000)),
-                )
-                .unwrap();
-            }
-        }));
+        all.push(
+            saman::spawn_thread("urdr-test-writer", move || {
+                let c = open(&path);
+                go.wait();
+                for i in 0..ROWS {
+                    c.execute(
+                        "insert into t values (?1, ?2, ?3)",
+                        (w as i64, i as i64, "x".repeat(2000)),
+                    )
+                    .unwrap();
+                }
+            })
+            .unwrap(),
+        );
     }
     let checkpointer = {
         let (path, go) = (path.clone(), go.clone());
-        std::thread::spawn(move || {
+        saman::spawn_thread("urdr-test-checkpointer", move || {
             let c = open(&path);
             go.wait();
             for _ in 0..60 {
-                let _ = c.query_row("pragma wal_checkpoint(restart)", [], |_| Ok(()));
+                // BUSY while a writer holds the WAL is the point of the test: the checkpoint is tried again
+                if let Err(e) = c.query_row("pragma wal_checkpoint(restart)", [], |_| Ok(())) {
+                    assert!(
+                        urdr::is_busy(&urdr::Error::Sqlite(e)),
+                        "a checkpoint failed for another reason"
+                    );
+                }
                 std::thread::yield_now();
             }
         })
+        .unwrap()
     };
     for t in all {
         t.join().unwrap();
