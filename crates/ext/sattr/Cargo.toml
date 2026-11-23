@@ -12,6 +12,14 @@ build = "build.rs"
 villa.workspace = true
 mlua.workspace = true
 wasmtime.workspace = true
+serde_json.workspace = true
+saman.workspace = true
+stund.workspace = true
+bod.workspace = true
+skipan = { path = "../../std/skipan", version = "0.1.0" }
+lykill = { path = "../../std/lykill", version = "0.1.0" }
+tidindi = { path = "../../std/tidindi", version = "0.1.0" }
+spurn = { path = "../../std/spurn", version = "0.1.0" }
 
 [build-dependencies]
 villa.workspace = true
@@ -20,8 +28,10 @@ mal-gen.workspace = true
 eitri = { path = "../../hub/eitri", version = "0.1.0" }
 
 [dev-dependencies]
-saman.workspace = true
 mal.workspace = true
+wat.workspace = true
+raun.workspace = true
+tokio.workspace = true
 wit-parser.workspace = true
 
 [lints]

@@ -10,6 +10,7 @@ fn main() -> villa::Result<()> {
         state: "crate::wasm::State<A>".into(),
         api_field: "api".into(),
         global: "drgnx".into(),
+        caller: "crate::Caller".into(),
     };
     let out = mal_gen::generate(Path::new("../mal"), "extension", &o)?;
     let dir = std::env::var("OUT_DIR")

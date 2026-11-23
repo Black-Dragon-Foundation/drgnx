@@ -1,97 +1,50 @@
-//! The editor's side in the tests: one model that implements the generated `Api` once, for both hosts.
+//! The tests' setup: the real editor behind the API, on the standards' crates, shared by the hosts.
 
-use sattr::generated::drgnx_api_v0_1_0 as api;
+use std::sync::{Arc, Mutex};
 
-use api::types::ErrorKind;
+use bod::{ArgSpec, Command, CommandId, Exposure, Origin, SourceLoc, handler};
+use sattr::Limits;
+use sattr::editor::Editor;
+use serde_json::json;
 
-#[derive(Default)]
-pub struct Model {
-    pub log: Vec<String>,
-    pub panic_on_register: bool,
-    pub next_id: u64,
+pub const LIMITS: Limits = Limits {
+    steps: 1_000_000,
+    memory_bytes: 8 << 20,
+    ticks: 100,
+};
+
+/// An editor with a few settings and commands, behind the lock the hosts share.
+pub fn editor() -> (Arc<Mutex<Editor>>, Arc<saman::Executor>) {
+    let ex = Arc::new(saman::Executor::new(1).expect("a pool"));
+    let mut e = Editor::new(Arc::clone(&ex), None);
+    e.settings
+        .define("editor.theme", skipan::Kind::Str, json!("light"))
+        .expect("defines");
+    for (id, exposure) in [
+        ("buffer.save", Exposure::Palette),
+        ("agent.echo", Exposure::Agent),
+        ("ext.ping", Exposure::Extension),
+    ] {
+        e.registry
+            .register(
+                Command {
+                    id: CommandId(id),
+                    title: "A title",
+                    doc: "A doc.",
+                    args: ArgSpec::NONE,
+                    source: SourceLoc {
+                        file: file!(),
+                        line: line!(),
+                    },
+                    exposure,
+                },
+                handler(|_, _| Ok(json!("ran"))),
+            )
+            .expect("registers");
+    }
+    (Arc::new(Mutex::new(e)), ex)
 }
 
-impl api::types::Api for Model {}
-impl api::buffers::Api for Model {}
-impl api::views::Api for Model {}
-
-impl api::commands::Api for Model {
-    fn register(&mut self, id: String, _title: String, _doc: String) -> Result<(), ErrorKind> {
-        assert!(!self.panic_on_register, "a bug in the model");
-        self.log.push(format!("register {id}"));
-        Ok(())
-    }
-
-    fn run(&mut self, id: String, args: String) -> Result<String, ErrorKind> {
-        Ok(format!("ran {id} {args}"))
-    }
-
-    fn find_source(&mut self, id: String) -> Result<String, ErrorKind> {
-        if id == "known" {
-            Ok("a.rs:1".into())
-        } else {
-            Err(ErrorKind::NotFound)
-        }
-    }
-}
-
-impl api::keys::Api for Model {
-    fn bind(&mut self, chord: String, command: String, _context: String) -> Result<(), ErrorKind> {
-        self.log.push(format!("bind {chord} {command}"));
-        Ok(())
-    }
-
-    fn resolve(&mut self, _chord: String, _context: String) -> Result<String, ErrorKind> {
-        Ok("prefix".into())
-    }
-}
-
-impl api::settings::Api for Model {
-    fn get(&mut self, _key: String) -> Result<String, ErrorKind> {
-        Err(ErrorKind::NotFound)
-    }
-
-    fn set(
-        &mut self,
-        key: String,
-        _value: String,
-        at: api::settings::Level,
-    ) -> Result<(), ErrorKind> {
-        self.log.push(format!("set {key} at {}", at.as_str()));
-        Ok(())
-    }
-
-    fn provenance(&mut self, _key: String) -> Result<String, ErrorKind> {
-        Ok("built-in".into())
-    }
-}
-
-impl api::ask::Api for Model {
-    fn choose(
-        &mut self,
-        _title: String,
-        _body: String,
-        _choices: String,
-        default_choice: String,
-        timeout_ms: u32,
-    ) -> Result<String, ErrorKind> {
-        Ok(format!("{default_choice}:{timeout_ms}"))
-    }
-}
-
-impl api::notices::Api for Model {
-    fn post(
-        &mut self,
-        _at: api::notices::Level,
-        _title: String,
-        _body: String,
-        _key: String,
-    ) -> Result<u64, ErrorKind> {
-        Ok(self.next_id)
-    }
-
-    fn dismiss(&mut self, id: u64) -> Result<(), ErrorKind> {
-        self.log.push(format!("dismiss {id}"));
-        Ok(())
-    }
+pub fn user() -> Origin {
+    Origin::User
 }

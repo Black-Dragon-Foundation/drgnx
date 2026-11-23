@@ -39,25 +39,23 @@ interface keys {
   resolve: func(chord: string, context: string) -> result<string, error-kind>;
 }
 
-/// The settings stack (skipan); the levels, the least specific first.
+/// The settings stack (skipan). An extension sets the scoped levels only: the user's files and the built-in level are not
+/// its to change.
 interface settings {
   use types.{error-kind};
 
-  enum level {
-    built-in,
-    user,
-    machine,
-    project,
+  /// The levels that belong to one stream, language, document or pane.
+  enum scoped-level {
     %stream,
     language,
     document,
     pane,
   }
 
-  /// A setting's value as text.
+  /// A setting's value as JSON text.
   get: func(key: string) -> result<string, error-kind>;
-  /// Set a setting at a level.
-  set: func(key: string, value: string, at: level) -> result<_, error-kind>;
+  /// Set a setting, as JSON text, at a scoped level for the stream, language, document or pane named SCOPE-ID.
+  set: func(key: string, value: string, at: scoped-level, scope-id: string) -> result<_, error-kind>;
   /// Why the setting has its value: the level and, for a file, `file:line`.
   provenance: func(key: string) -> result<string, error-kind>;
 }
@@ -66,12 +64,14 @@ interface settings {
 interface ask {
   use types.{error-kind};
 
-  /// Ask; the answer is the chosen choice. A headless host answers the default at once, and so does a question
-  /// that times out (`timeout-ms` 0 waits for the user).
-  choose: func(title: string, body: string, choices: string, default-choice: string, timeout-ms: u32) -> result<string, error-kind>;
+  /// Ask: the call returns the question's id at once and never waits. The answer comes later, to `entry.answered`. The
+  /// timeout is in milliseconds, from 1 to 300000: an extension's question always has one; at its end the default is the
+  /// answer.
+  choose: func(title: string, body: string, choices: string, default-choice: string, timeout-ms: u32) -> result<u64, error-kind>;
 }
 
-/// Notices (tidindi): the same key updates a notice instead of adding one.
+/// Notices (tidindi): the same key updates a notice instead of adding one. Keys and ids belong to the extension that
+/// posted them: another extension's notice cannot be touched.
 interface notices {
   use types.{error-kind};
 
@@ -83,7 +83,7 @@ interface notices {
 
   /// Post a notice; the result is its id.
   post: func(at: level, title: string, body: string, key: string) -> result<u64, error-kind>;
-  /// Remove a notice by its id.
+  /// Remove one of the caller's own notices by its id.
   dismiss: func(id: u64) -> result<_, error-kind>;
 }
 
@@ -98,8 +98,10 @@ interface entry {
 
   /// Called once after instantiation: the extension registers its commands.
   init: func();
-  /// Run a command the extension registered, on a buffer.
-  run: func(name: string, buffer: u64) -> result<_, error-kind>;
+  /// Run a command the extension registered.
+  run: func(name: string) -> result<_, error-kind>;
+  /// An answer to a question the extension asked with `ask.choose`.
+  answered: func(question: u64, choice: string);
 }
 
 world extension {

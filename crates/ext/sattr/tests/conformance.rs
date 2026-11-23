@@ -5,9 +5,7 @@ mod common;
 
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
-use common::Model;
 use sattr::luau::LuauHost;
 use wit_parser::{Resolve, UnresolvedPackageGroup, WorldItem};
 
@@ -48,8 +46,8 @@ fn generated_luau_binds_every_function() {
         "the generator binds exactly the world's functions"
     );
 
-    let api = Arc::new(Mutex::new(Model::default()));
-    let h = LuauHost::new(&api, 1_000_000).expect("starts");
+    let (api, _ex) = common::editor();
+    let h = LuauHost::new(&api, "conf", common::LIMITS).expect("starts");
     for f in &wanted {
         let (iface, name) = f.split_once('.').expect("interface.function");
         let name = name.replace('-', "_");
@@ -58,10 +56,11 @@ fn generated_luau_binds_every_function() {
             format!("drgnx.{iface}.{name}"),
             format!("drgnx.api_v0_1_0.{iface}.{name}"),
         ] {
-            h.guarded(|lua| {
-                lua.load(format!("assert(type({path}) == 'function', '{path}')"))
-                    .exec()
-            })
+            h.exec(
+                common::user(),
+                "bound",
+                &format!("assert(type({path}) == 'function', '{path}')"),
+            )
             .unwrap_or_else(|e| panic!("{f}: {e:?}"));
         }
     }
@@ -69,10 +68,14 @@ fn generated_luau_binds_every_function() {
 
 #[test]
 fn the_exports_have_callers_in_both_hosts() {
-    assert_eq!(sattr::generated::EXPORTS, ["entry.init", "entry.run"]);
+    assert_eq!(
+        sattr::generated::EXPORTS,
+        ["entry.init", "entry.run", "entry.answered"]
+    );
     // the callers exist by name: this fails to compile when the generator skips one
     let _luau = sattr::generated::drgnx_api_v0_1_0::exports::entry::luau_init;
     let _luau_run = sattr::generated::drgnx_api_v0_1_0::exports::entry::luau_run;
+    let _luau_answered = sattr::generated::drgnx_api_v0_1_0::exports::entry::luau_answered;
 }
 
 #[test]

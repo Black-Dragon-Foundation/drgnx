@@ -83,8 +83,16 @@ pub mod rt {
         lua.create_string(s).map(mlua::Value::String)
     }
 
-    /// Run F on the API. A panic that poisoned the lock is recovered from (the next call works); a call from inside
-    /// a call (the lock is held) is an error, never a deadlock.
+    /// The caller the host has set for this call.
+    pub fn caller<C: Clone>(cell: &std::sync::RwLock<C>) -> C {
+        match cell.read() {
+            Ok(g) => g.clone(),
+            Err(p) => (**p.get_ref()).clone(),
+        }
+    }
+
+    /// Run F on the API. A call from inside a call (the lock is held) is an error, never a deadlock. A panic that poisoned
+    /// the lock fails the call, and every call after it: the API's state is not trusted again.
     pub fn with_api<A, R>(
         api: &std::sync::Mutex<A>,
         ctx: &str,
@@ -92,10 +100,10 @@ pub mod rt {
     ) -> mlua::Result<R> {
         match api.try_lock() {
             Ok(mut g) => Ok(f(&mut g)),
-            Err(std::sync::TryLockError::Poisoned(p)) => {
-                let mut g = p.into_inner();
-                Ok(f(&mut g))
-            }
+            Err(std::sync::TryLockError::Poisoned(_)) => Err(bad(
+                ctx,
+                "the API failed earlier (a panic in it); this extension is stopped",
+            )),
             Err(std::sync::TryLockError::WouldBlock) => Err(bad(
                 ctx,
                 "the API is busy: a call from inside a call is refused",
@@ -111,10 +119,9 @@ pub mod rt {
     ) -> wasmtime::Result<R> {
         match api.try_lock() {
             Ok(mut g) => Ok(f(&mut g)),
-            Err(std::sync::TryLockError::Poisoned(p)) => {
-                let mut g = p.into_inner();
-                Ok(f(&mut g))
-            }
+            Err(std::sync::TryLockError::Poisoned(_)) => Err(wasmtime::Error::msg(format!(
+                "{ctx}: the API failed earlier (a panic in it); this extension is stopped"
+            ))),
             Err(std::sync::TryLockError::WouldBlock) => Err(wasmtime::Error::msg(format!(
                 "{ctx}: the API is busy: a call from inside a call is refused"
             ))),

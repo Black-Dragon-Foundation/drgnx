@@ -4221,6 +4221,7 @@ dependencies = [
 name = "lykill"
 version = "0.1.0"
 dependencies = [
+ "bod",
  "eitri",
  "huginn",
  "raun",
@@ -6267,13 +6268,23 @@ name = "sattr"
 version = "0.1.0"
 dependencies = [
  "annall",
+ "bod",
  "eitri",
+ "lykill",
  "mal",
  "mal-gen",
  "mlua",
+ "raun",
  "saman",
+ "serde_json",
+ "skipan",
+ "spurn",
+ "stund",
+ "tidindi",
+ "tokio",
  "villa",
  "wasmtime",
+ "wat",
  "wit-parser",
 ]
 

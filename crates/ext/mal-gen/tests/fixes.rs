@@ -13,6 +13,7 @@ fn opts() -> Options {
         state: "crate::S<A>".into(),
         api_field: "field".into(),
         global: "script".into(),
+        caller: "crate::C".into(),
     }
 }
 
@@ -278,4 +279,50 @@ fn no_function_is_skipped() {
             "{f} has no Luau binding"
         );
     }
+}
+
+// the caller reaches every API method, from both hosts
+#[test]
+fn every_api_method_gets_the_caller() {
+    let out = must(BASIC);
+    // the trait: each method takes `&C` first
+    assert_eq!(
+        out.rust
+            .matches("fn f(&mut self, __caller: &crate::C")
+            .count(),
+        1,
+        "{}",
+        out.rust
+    );
+    assert_eq!(
+        out.rust
+            .matches("fn g(&mut self, __caller: &crate::C")
+            .count(),
+        1,
+        "{}",
+        out.rust
+    );
+    // Luau: the host's cell is installed, and each call reads it and passes it
+    assert!(
+        out.rust
+            .contains("caller: &std::sync::Arc<std::sync::RwLock<crate::C>>"),
+        "{}",
+        out.rust
+    );
+    assert!(out.rust.contains("::f(__m, &__c"), "{}", out.rust);
+    // the component host: `WasmApi` holds the cell, and a Host method passes the caller too
+    assert!(out.rust.contains("pub struct WasmApi<A>(pub std::sync::Arc<std::sync::Mutex<A>>, pub std::sync::Arc<std::sync::RwLock<crate::C>>)"), "{}", out.rust);
+    assert!(
+        out.rust.contains("let __c = rt::caller(&self.1);"),
+        "{}",
+        out.rust
+    );
+}
+
+// a poisoned lock fails the extension: nothing recovers it
+#[test]
+fn a_poisoned_lock_is_never_recovered() {
+    let out = must(BASIC);
+    assert!(!out.rust.contains("into_inner"), "{}", out.rust);
+    assert!(out.rust.contains("Poisoned(_)"), "{}", out.rust);
 }

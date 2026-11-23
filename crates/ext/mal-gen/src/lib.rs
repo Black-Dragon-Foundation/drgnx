@@ -35,6 +35,9 @@ pub struct Options {
     pub state: String,
     /// The state's field that holds the `WasmApi<A>` (`api`).
     pub api_field: String,
+    /// The type of who is calling (`crate::Caller`): `Clone`. Every `Api` method gets it first, as `&Caller`; the host
+    /// keeps it in an `Arc<RwLock<Caller>>` so it can change who a call is for.
+    pub caller: String,
     /// The Luau global the API is installed under (`drgnx`).
     pub global: String,
 }
@@ -694,8 +697,9 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
             }
             putln!(
                 tr,
-                "    fn {}(&mut self{sig}) -> {};",
+                "    fn {}(&mut self, __caller: &{}{sig}) -> {};",
                 ident(&f.wit, &label)?,
+                o.caller,
                 g.ret_ty(f.ret, false)?
             )?;
         }
@@ -731,11 +735,14 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
                 args.push(Gen::from_wasm(*t, &ident(n, &f.ctx)?));
             }
             let name = ident(&f.wit, &label)?;
-            let call = format!("{trait_path}::{name}(__m, {})", args.join(", "));
+            let call = format!(
+                "{trait_path}::{name}(__m, &__c{})",
+                args.iter().map(|a| format!(", {a}")).collect::<String>()
+            );
             let back = Gen::ret_from_ours(f.ret, "__r");
             putln!(
                 wasm,
-                "    fn {name}(&mut self{sig}) -> wasmtime::Result<{}> {{\n        rt::with_wasm(&*self.0, \"{}\", |__m| {call}).map(|__r| {back})\n    }}",
+                "    fn {name}(&mut self{sig}) -> wasmtime::Result<{}> {{\n        let __c = rt::caller(&self.1);\n        rt::with_wasm(&*self.0, \"{}\", |__m| {call}).map(|__r| {back})\n    }}",
                 g.ret_ty(f.ret, true)?,
                 f.ctx
             )?;
@@ -832,7 +839,8 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     )?;
     putln!(
         out,
-        "pub fn install_luau<A: Api + 'static>(lua: &mlua::Lua, api: &std::sync::Arc<std::sync::Mutex<A>>) -> mlua::Result<()> {{\n    let __d = lua.create_table()?;"
+        "pub fn install_luau<A: Api + 'static>(lua: &mlua::Lua, api: &std::sync::Arc<std::sync::Mutex<A>>, caller: &std::sync::Arc<std::sync::RwLock<{}>>) -> mlua::Result<()> {{\n    let __d = lua.create_table()?;",
+        o.caller
     )?;
     for p in keys.values() {
         putln!(
@@ -859,12 +867,13 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     )?;
     putln!(
         out,
-        "pub struct WasmApi<A>(pub std::sync::Arc<std::sync::Mutex<A>>);"
+        "pub struct WasmApi<A>(pub std::sync::Arc<std::sync::Mutex<A>>, pub std::sync::Arc<std::sync::RwLock<{}>>);",
+        o.caller
     )?;
     out.push_str(&wasm);
     putln!(
         out,
-        "pub fn wasm_link<A: Api + 'static>(__linker: &mut wasmtime::component::Linker<{}>) -> wasmtime::Result<()> {{\n{link}    Ok(())\n}}",
+        "pub fn wasm_link<A: Api + Send + 'static>(__linker: &mut wasmtime::component::Linker<{}>) -> wasmtime::Result<()> {{\n{link}    Ok(())\n}}",
         o.state
     )?;
     Ok(Output {
@@ -973,7 +982,7 @@ fn luau_fn(g: &Gen, trait_path: &str, f: &Func, label: &str) -> Result<String> {
     };
     putln!(
         s,
-        "        {{\n        let __api = std::sync::Arc::clone(api);\n        __t.set(\"{}\", lua.create_function(move |__lua, __args: mlua::MultiValue| -> mlua::Result<mlua::MultiValue> {{\n            let __a: Vec<mlua::Value> = __args.into_iter().collect();\n            rt::arity(\"{}\", &__a, {n})?;\n{decode}            let __r = rt::with_api(&*__api, \"{}\", |__m| {trait_path}::{name}(__m{}))?;\n            {encode}\n        }})?)?;\n        }}",
+        "        {{\n        let __api = std::sync::Arc::clone(api);\n        let __caller = std::sync::Arc::clone(caller);\n        __t.set(\"{}\", lua.create_function(move |__lua, __args: mlua::MultiValue| -> mlua::Result<mlua::MultiValue> {{\n            let __a: Vec<mlua::Value> = __args.into_iter().collect();\n            rt::arity(\"{}\", &__a, {n})?;\n{decode}            let __c = rt::caller(&__caller);\n            let __r = rt::with_api(&*__api, \"{}\", |__m| {trait_path}::{name}(__m, &__c{}))?;\n            {encode}\n        }})?)?;\n        }}",
         snake(&f.wit),
         f.ctx,
         f.ctx,
