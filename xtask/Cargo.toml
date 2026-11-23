@@ -8,7 +8,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-vag = { path = "../crates/std/vag" }
+vag = { path = "../crates/std/vag", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 syn.workspace = true

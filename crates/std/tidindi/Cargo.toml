@@ -10,7 +10,7 @@ publish = false
 [dependencies]
 villa.workspace = true
 saman.workspace = true
-rodd = { path = "../../core/rodd" }
+rodd = { path = "../../core/rodd", version = "0.1.0" }
 
 [lints]
 workspace = true

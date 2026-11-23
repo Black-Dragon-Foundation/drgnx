@@ -135,16 +135,16 @@ syn = { version = "2", features = ["full", "visit"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 toml = "0.9"
 # the standards' own crates (crates/std, docs/develop/standards/)
-villa = { path = "crates/std/villa" }
-annall = { path = "crates/std/annall" }
-stig = { path = "crates/std/stig" }
-raun = { path = "crates/std/raun" }
-saman = { path = "crates/std/saman" }
-hulda = { path = "crates/std/hulda" }
-stund = { path = "crates/hub/stund" }
-bod = { path = "crates/std/bod" }
-mal = { path = "crates/ext/mal" }
-mal-gen = { path = "crates/ext/mal-gen" }
+villa = { path = "crates/std/villa", version = "0.1.0" }
+annall = { path = "crates/std/annall", version = "0.1.0" }
+stig = { path = "crates/std/stig", version = "0.1.0" }
+raun = { path = "crates/std/raun", version = "0.1.0" }
+saman = { path = "crates/std/saman", version = "0.1.0" }
+hulda = { path = "crates/std/hulda", version = "0.1.0" }
+stund = { path = "crates/hub/stund", version = "0.1.0" }
+bod = { path = "crates/std/bod", version = "0.1.0" }
+mal = { path = "crates/ext/mal", version = "0.1.0" }
+mal-gen = { path = "crates/ext/mal-gen", version = "0.1.0" }
 # the commands registry's link-time registration (bod's `command!`)
 inventory = "0.3"
 # the extension API (sattr): Luau bound from the WIT by mal-gen; the WIT read by wit-parser (the version already in the
