@@ -477,6 +477,8 @@ params! {
     SearchServerPlan(search::ServerKindParams),
     SearchServerStart(search::ServerStartParams),
     SearchServerStop(search::ServerKindParams),
+    SearchExport(search::ExportParams),
+    SearchImport(search::ImportParams),
     RunnersList(Empty),
     RunnersProbeHost(runners::ProbeParams),
     RunnersAdd(runners::AddParams),

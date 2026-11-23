@@ -1630,6 +1630,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], lines?: [{eol?: boolean, line: natnum, line_id: string, new?: [string], old: string, path: AbsPath}], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
 | `search/embed-retry` | user | `{}` | `boolean` | no |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, chain?: [ChainEntry], prefer?: string, servers: [ServerInfo]}` | no |
+| `search/export` | user | `{all_trees?: boolean, branch?: string, out?: AbsPath, root: AbsPath}` | `{keys: natnum, path: AbsPath, sha256: string, warning: string}` | yes |
 | `search/files` | user | `{exclude?: [string], ignore?: "index" \| "real", n?: natnum, name?: boolean, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
 | `search/fold` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
@@ -1640,6 +1641,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/handoff-context` | user | `{hidden?: boolean, ids?: [string], off?: [string], view: string}` | `{hidden?: [string], rows: [HandoffContextRow], tokens: natnum, total: natnum}` | no |
 | `search/handoff-mark` | user | `{handoff: string, mark: {face: string, glyph: string, name: string}}` | `boolean` | no |
 | `search/handoff-state` | user | `{handoff: string}` | `HandoffState` | no |
+| `search/import` | user | `{file: AbsPath, keep_all?: boolean, root?: AbsPath}` | `ImportAnswer` | yes |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/map` | user | `{base?: boolean, budget?: natnum, focus?: [string], names?: [string], root: AbsPath, scope?: "code" \| "all"}` | `{files: [MapFile], files_total: natnum, fresh: Fresh, text: string, tokens: natnum}` | no |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
@@ -3150,6 +3152,21 @@ took (a commit stalled on its ref's fsync is still one burst; at most 2 s after 
 left or a commit waiting in an editor), and sends what changed; a lock file's events and reads (the hub's own
 `git status` runs with `GIT_OPTIONAL_LOCKS=0`) are not changes. An
 Explorer listing that its watch relisted (a name made or removed outside Emacs) also reads its repositories again.
+
+### Vector packs (`search/export`, `search/import`)
+
+The file format, the proof of possession and the warning are in [runtime.md](runtime.md#vector-packs).
+
+- `search/export {root, out?, branch?, all_trees?}` → `{path, sha256, keys, warning}`: the vectors of the keys the
+  folder's tree references (`branch`: the indexed checkout on that branch, else `invalid_params`; `all_trees`: every tree
+  of the repo's store; not both). Without `out` the pack is `<repo>/.drgnx/packs/<sha16>.vpack`; a place outside the
+  repo is the user's to name. `warning` says the file can recreate the code's text; a client shows it before the path
+  (`ratatoskr search export` does). `invalid_params` when the cache has no vector for the tree yet.
+- `search/import {file, root?, keep_all?}` → `{fingerprint, label, keys_in_pack, kept, skipped_unreferenced,
+  already_had}`: `root` opens that project and brings its index current first. Only keys a repo store on this machine
+  references are kept (every store file under the state's `code/` counts, open or not); `keep_all` keeps the whole
+  pack and also takes a fingerprint no source here serves. `invalid_params` for a file that is not a pack, a format
+  this build does not read, a fingerprint no source here can use (without `keep_all`) and a row of the wrong size.
 
 ### Ranked file names as rows (`search/files`)
 

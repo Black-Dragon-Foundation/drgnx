@@ -102,6 +102,13 @@ fn internal(message: impl ToString) -> Error {
     error(ErrorCode::Internal, message.to_string(), None)
 }
 
+fn pack_error(e: super::packs::PackError) -> Error {
+    match e {
+        super::packs::PackError::Refused(m) => error(ErrorCode::InvalidParams, m, None),
+        other => internal(other),
+    }
+}
+
 fn project_error(e: ProjectError) -> Error {
     match e {
         ProjectError::Denied(why) => error(
@@ -1399,6 +1406,145 @@ impl Hub {
         }
     }
 
+    /// The view of the tree checked out on BRANCH in P's store: a linked worktree's overlay, or the base when the main
+    /// checkout is on it.
+    async fn branch_view(p: &Project, branch: &str) -> Result<hrafn::View, Error> {
+        let trees = p.store().trees().await.map_err(internal)?;
+        if let Some(t) = trees.iter().find(|t| t.branch.as_deref() == Some(branch)) {
+            return Ok(hrafn::View::Tree(t.id));
+        }
+        let base = p.base_root().to_path_buf();
+        let current = clock::blocking(move || scope::bases(&base))
+            .await
+            .map_err(internal)?
+            .ok()
+            .and_then(|b| b.current);
+        if current.as_deref() == Some(branch) {
+            return Ok(hrafn::View::Base);
+        }
+        Err(error(
+            ErrorCode::InvalidParams,
+            format!("no indexed checkout is on branch {branch:?}"),
+            Some("branch"),
+        ))
+    }
+
+    /// `search/export`: the vectors of ROOT's tree (or BRANCH's, or every tree's) as a vector pack.
+    async fn export(&self, front: &Front, p: w::ExportParams) -> Result<w::ExportAnswer, Error> {
+        let all = p.all_trees == Some(true);
+        if all && p.branch.is_some() {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "a branch or all trees, not both",
+                Some("branch"),
+            ));
+        }
+        let root = PathBuf::from(p.root.as_str());
+        let (project, of) = self.view_of(front, &root, false).await?;
+        let scope = if all {
+            hrafn::ExportScope::AllTrees
+        } else if let Some(b) = &p.branch {
+            hrafn::ExportScope::View(Self::branch_view(&project, b).await?)
+        } else {
+            hrafn::ExportScope::View(of.view)
+        };
+        // without `out` the pack goes into the repo's own `.drgnx/packs/`, under a temporary name until its sha is known
+        let given = p.out.as_ref().map(|o| PathBuf::from(o.as_str()));
+        let write_to = match &given {
+            Some(o) => o.clone(),
+            None => {
+                let dir = project.base_root().join(".drgnx/packs");
+                let d = dir.clone();
+                clock::blocking(move || std::fs::create_dir_all(d))
+                    .await
+                    .map_err(internal)?
+                    .map_err(internal)?;
+                dir.join(format!("pending-{}.vpack", std::process::id()))
+            }
+        };
+        let created = clock::wall_secs() as i64;
+        let done = super::packs::export(
+            project.caches(),
+            project.store(),
+            scope,
+            &write_to,
+            created,
+            (None, None),
+        )
+        .await
+        .map_err(pack_error)?;
+        let mut path = done.path.clone();
+        if given.is_none() {
+            let to = write_to.with_file_name(format!("{}.vpack", &done.sha256[..16]));
+            let (from, dest) = (write_to.clone(), to.clone());
+            clock::blocking(move || std::fs::rename(from, dest))
+                .await
+                .map_err(internal)?
+                .map_err(internal)?;
+            path = to;
+        }
+        Ok(w::ExportAnswer {
+            path: runstav::types::AbsPath::new(path.to_string_lossy().into_owned())
+                .map_err(internal)?,
+            sha256: done.sha256,
+            keys: done.keys,
+            warning: super::packs::WARNING.to_string(),
+        })
+    }
+
+    /// `search/import`: FILE's vectors merged into the caches, for the keys a repo store of this machine references.
+    async fn import(&self, front: &Front, p: w::ImportParams) -> Result<w::ImportAnswer, Error> {
+        let dirs = self.dirs()?;
+        let caches = super::caches::Caches::shared(&paths::state_dir(&dirs.env));
+        if let Some(root) = &p.root {
+            let project = self.project(front, Path::new(root.as_str())).await?;
+            project.fresh_for_query().await.map_err(project_error)?;
+        }
+        // what this machine can make query vectors for: the servers that answer, and the built-in model
+        let mut known: Vec<Fingerprint> = Vec::new();
+        for s in self.servers(front) {
+            if let Some(id) = self.probed(&s).await {
+                known.push(id.fp);
+            }
+        }
+        if Self::builtin_on(front) {
+            known.push(super::builtin_identity(default_model()).fp);
+        }
+        let projects: Vec<Arc<Project>> = self
+            .projects
+            .lock()
+            .await
+            .values()
+            .map(|o| o.project.clone())
+            .collect();
+        let open: Vec<super::packs::HeldStore<'_>> = projects
+            .iter()
+            .map(|p| super::packs::HeldStore {
+                store: p.store(),
+                root: p.base_root(),
+            })
+            .collect();
+        let now_ms = (clock::wall_secs() * 1000.0) as i64;
+        let got = super::packs::import(
+            &caches,
+            Path::new(p.file.as_str()),
+            &open,
+            &known,
+            p.keep_all == Some(true),
+            now_ms,
+        )
+        .await
+        .map_err(pack_error)?;
+        Ok(w::ImportAnswer {
+            fingerprint: got.fingerprint,
+            label: got.label,
+            keys_in_pack: got.keys_in_pack,
+            kept: got.kept,
+            skipped_unreferenced: got.skipped_unreferenced,
+            already_had: got.already_had,
+        })
+    }
+
     async fn index(&self, front: &Front, i: w::IndexParams) -> Result<w::Started, Error> {
         let p = self.project(front, Path::new(i.root.as_str())).await?;
         if i.now == Some(true) {
@@ -1581,6 +1727,8 @@ pub async fn serve(
                         .map_err(|e| error(ErrorCode::InvalidParams, e.to_string(), Some("root")))
                 })
         }
+        Params::SearchExport(p) => hub.export(front, p).await.map(|a| json!(a)),
+        Params::SearchImport(p) => hub.import(front, p).await.map(|a| json!(a)),
         Params::SearchTyping(_) => {
             hub.typing().await;
             Ok(json!({}))

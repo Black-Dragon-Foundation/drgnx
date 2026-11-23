@@ -41810,6 +41810,100 @@
       "classes": [
         "user"
       ],
+      "doc": "write a vector pack: the vectors (no paths, no text) of the keys a repo's tree references, from the cache; the file is source-equivalent and the answer says so",
+      "name": "search/export",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A vector pack of a repo's vectors (`search/export`).",
+        "properties": {
+          "all_trees": {
+            "description": "Every key of every tree the repo's index has.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "branch": {
+            "description": "The tree of this branch instead of the folder's own.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "out": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where to write it. Without it the pack goes into the repo's `.drgnx/packs/`; a place outside the repo is the\nuser's to name."
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "ExportParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "keys": {
+            "description": "Vectors in it, chunk and path.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "sha256": {
+            "description": "The file's sha256, hex: its name among packs.",
+            "type": "string"
+          },
+          "warning": {
+            "description": "What a pack is: a file that can recreate the code's text. Shown before the path.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "keys",
+          "warning"
+        ],
+        "title": "ExportAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "rank a folder's file names for a query and send a hub-fed view the best as rows (view-patch); git's list in a repository, a walk that follows no link elsewhere; a newer query of the view stops the old one",
       "name": "search/files",
       "params": {
@@ -42610,6 +42704,100 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "merge a vector pack into the cache: only the keys a repo store here references (or all with keep_all); a model no source here can use is refused unless keep_all",
+      "name": "search/import",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A vector pack merged into the machine's cache (`search/import`).",
+        "properties": {
+          "file": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "keep_all": {
+            "description": "Keep the whole pack, for a repo opened later, and for a model no source here can use.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A project whose index is current before the keys are matched."
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "ImportParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "already_had": {
+            "description": "Referenced, and the cache had them.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fingerprint": {
+            "description": "The pack's fingerprint (64 hex characters) and its model.",
+            "type": "string"
+          },
+          "kept": {
+            "description": "Written to the cache now.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "keys_in_pack": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "label": {
+            "type": "string"
+          },
+          "skipped_unreferenced": {
+            "description": "No repo here references them.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fingerprint",
+          "label",
+          "keys_in_pack",
+          "kept",
+          "skipped_unreferenced",
+          "already_had"
+        ],
+        "title": "ImportAnswer",
+        "type": "object"
+      },
+      "writes": true
     },
     {
       "classes": [

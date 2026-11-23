@@ -115,13 +115,17 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
     let name = match p.next().map_err(e)? {
         Some(Word(v)) => v.string().map_err(e)?,
         Some(other) => return Err(other.unexpected().to_string()),
-        None => return Err("search needs a subcommand: index, query, mcp or eval".into()),
+        None => {
+            return Err(
+                "search needs a subcommand: index, query, mcp, export, import or eval".into(),
+            );
+        }
     };
     if name == "eval" {
         return crate::eval_cli::parse(p.raw_args().map_err(e)?.collect()).map(SearchCommand::Eval);
     }
     if ![
-        "index", "query", "mcp", "symbols", "outline", "why", "map", "usages",
+        "index", "query", "mcp", "symbols", "outline", "why", "map", "usages", "export", "import",
     ]
     .contains(&name.as_str())
     {
@@ -130,10 +134,19 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
     let (mut rebuild, mut now, mut json, mut scope, mut k) = (false, false, false, None, None);
     let (mut mode, mut kinds, mut glob, mut docs) = (None, Vec::new(), None, true);
     let (mut budget, mut focus, mut names) = (None, Vec::new(), Vec::new());
+    let (mut out, mut branch, mut all_trees, mut keep_all) = (None, None, false, false);
     let asks = matches!(name.as_str(), "query" | "symbols" | "usages");
     let mut words: Vec<String> = Vec::new();
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
+            Long("out") if name == "export" => {
+                out = Some(PathBuf::from(p.value().map_err(e)?));
+            }
+            Long("branch") if name == "export" => {
+                branch = Some(p.value().map_err(e)?.string().map_err(e)?)
+            }
+            Long("all-trees") if name == "export" => all_trees = true,
+            Long("keep-all") if name == "import" => keep_all = true,
             Long("rebuild") if name == "index" => rebuild = true,
             Long("now") if name == "index" => now = true,
             Long("json") if asks || name == "outline" || name == "why" || name == "map" => {
@@ -274,6 +287,33 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
                 json,
             }
         }
+        "export" => {
+            let root = words.next().ok_or("search export needs a project root")?;
+            if let Some(extra) = words.next() {
+                return Err(format!("search export: unexpected argument {extra:?}"));
+            }
+            if all_trees && branch.is_some() {
+                return Err("search export: --branch or --all-trees, not both".into());
+            }
+            SearchCommand::Export {
+                root: root.into(),
+                out,
+                branch,
+                all_trees,
+            }
+        }
+        "import" => {
+            let file = words.next().ok_or("search import needs a pack file")?;
+            let root = words.next();
+            if let Some(extra) = words.next() {
+                return Err(format!("search import: unexpected argument {extra:?}"));
+            }
+            SearchCommand::Import {
+                file: file.into(),
+                root: root.map(PathBuf::from),
+                keep_all,
+            }
+        }
         "usages" => {
             let root = words.next().ok_or("search usages needs a project root")?;
             let name = words.next().ok_or("search usages needs a name")?;
@@ -412,6 +452,32 @@ pub fn render_why(a: &w::WhyAnswer) -> String {
     format!("{what}\n")
 }
 
+/// `search/export`'s text answer: the warning first, then where the pack is.
+pub fn render_export(a: &w::ExportAnswer) -> String {
+    format!(
+        "{}\n\n{}\nsha256 {}, {} vectors\n",
+        a.warning,
+        a.path.as_str(),
+        a.sha256,
+        a.keys
+    )
+}
+
+/// `search/import`'s text answer: what was kept, and of which model.
+pub fn render_import(a: &w::ImportAnswer) -> String {
+    format!(
+        "{} (model {}, fingerprint {})\n",
+        crate::search::packs::summary(
+            a.keys_in_pack,
+            a.kept,
+            a.already_had,
+            a.skipped_unreferenced
+        ),
+        a.label,
+        &a.fingerprint[..16.min(a.fingerprint.len())]
+    )
+}
+
 /// METHOD's answer A as the MCP tool prints it (`search/index`'s as data); PARAMS are the call's.
 fn text(
     method: &str,
@@ -424,6 +490,8 @@ fn text(
         "search/outline" => render_outline(&serde_json::from_value(a)?),
         "search/why" => render_why(&serde_json::from_value(a)?),
         "search/map" => render_map(&serde_json::from_value(a)?),
+        "search/export" => render_export(&serde_json::from_value(a)?),
+        "search/import" => render_import(&serde_json::from_value(a)?),
         "search/usages" => render_usages(
             params["name"].as_str().unwrap_or_default(),
             &serde_json::from_value(a)?,
@@ -453,7 +521,38 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
             return serve_mcp(env, root);
         }
         SearchCommand::Eval(_) => unreachable!("handled above"),
-        SearchCommand::Export { .. } | SearchCommand::Import { .. } => unimplemented!(),
+        SearchCommand::Export {
+            root,
+            out,
+            branch,
+            all_trees,
+        } => {
+            let mut p = json!({"root": absolute(&cwd, root)});
+            if let Some(o) = out {
+                p["out"] = json!(absolute(&cwd, o));
+            }
+            if let Some(b) = branch {
+                p["branch"] = json!(b);
+            }
+            if *all_trees {
+                p["all_trees"] = json!(true);
+            }
+            ("search/export", p, false)
+        }
+        SearchCommand::Import {
+            file,
+            root,
+            keep_all,
+        } => {
+            let mut p = json!({"file": absolute(&cwd, file)});
+            if let Some(r) = root {
+                p["root"] = json!(absolute(&cwd, r));
+            }
+            if *keep_all {
+                p["keep_all"] = json!(true);
+            }
+            ("search/import", p, false)
+        }
         SearchCommand::Index { root, rebuild, now } => {
             let mut p = json!({"root": absolute(&cwd, root)});
             if *rebuild {

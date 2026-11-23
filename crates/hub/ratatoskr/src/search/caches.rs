@@ -91,6 +91,11 @@ impl Caches {
         &self.state
     }
 
+    /// The ids of the repo stores on disk (`<state>/code/*.db`), sorted.
+    pub fn stores(&self) -> Vec<String> {
+        repo_stores(&self.state)
+    }
+
     /// The identity (record and a label) of every cache file on disk, opened or not.
     pub fn stored(&self) -> Vec<Identity> {
         let Ok(rd) = std::fs::read_dir(&self.dir) else {

@@ -1603,6 +1603,61 @@ pub struct ScopeBases {
     pub detached: bool,
 }
 
+/// A vector pack of a repo's vectors (`search/export`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ExportParams {
+    pub root: AbsPath,
+    /// Where to write it. Without it the pack goes into the repo's `.drgnx/packs/`; a place outside the repo is the
+    /// user's to name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out: Option<AbsPath>,
+    /// The tree of this branch instead of the folder's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Every key of every tree the repo's index has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all_trees: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportAnswer {
+    pub path: AbsPath,
+    /// The file's sha256, hex: its name among packs.
+    pub sha256: String,
+    /// Vectors in it, chunk and path.
+    pub keys: u64,
+    /// What a pack is: a file that can recreate the code's text. Shown before the path.
+    pub warning: String,
+}
+
+/// A vector pack merged into the machine's cache (`search/import`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ImportParams {
+    pub file: AbsPath,
+    /// A project whose index is current before the keys are matched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<AbsPath>,
+    /// Keep the whole pack, for a repo opened later, and for a model no source here can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_all: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportAnswer {
+    /// The pack's fingerprint (64 hex characters) and its model.
+    pub fingerprint: String,
+    pub label: String,
+    pub keys_in_pack: u64,
+    /// Written to the cache now.
+    pub kept: u64,
+    /// No repo here references them.
+    pub skipped_unreferenced: u64,
+    /// Referenced, and the cache had them.
+    pub already_had: u64,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -1809,6 +1864,16 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/server-stop", SearchServerStop(ServerKindParams) -> ServerStopped,
             classes: [User], writes: false,
             doc: "stop the server a start began",
+        ),
+        method!(
+            "search/export", SearchExport(ExportParams) -> ExportAnswer,
+            classes: [User], writes: true,
+            doc: "write a vector pack: the vectors (no paths, no text) of the keys a repo's tree references, from the cache; the file is source-equivalent and the answer says so",
+        ),
+        method!(
+            "search/import", SearchImport(ImportParams) -> ImportAnswer,
+            classes: [User], writes: true,
+            doc: "merge a vector pack into the cache: only the keys a repo store here references (or all with keep_all); a model no source here can use is refused unless keep_all",
         ),
     ]
 }

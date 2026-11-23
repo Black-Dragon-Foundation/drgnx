@@ -1082,6 +1082,8 @@ impl Front {
             | Params::SearchSavedDelete(_)
             | Params::SearchSavedShare(_)
             | Params::SearchScopeBases(_)
+            | Params::SearchExport(_)
+            | Params::SearchImport(_)
             | Params::SearchTyping(_)) => crate::search::methods::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),

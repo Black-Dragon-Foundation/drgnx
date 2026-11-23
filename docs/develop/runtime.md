@@ -1334,6 +1334,45 @@ so one vector serves every repo, clone, branch and worktree that has the text.
   1 GiB. The hub sweeps at most once an hour (`CACHE_SWEEP`), from the projects' tree sweep: gone holders released,
   then each open cache collected.
 
+### Vector packs
+
+A **vector pack** (`hrafn::vector_pack`, written by `ratatoskr search export`, read by `search import`) is an index's
+vectors as one file, for a machine that has the code and not the GPU hours: build on the desktop, import on the laptop.
+(Not a language pack: those are `packs.md`.)
+
+> **A vector pack is source-equivalent.** Vectors leak content: inversion attacks recover most short inputs (Vec2Text
+> 92% exact on 32-token inputs; defences unreliable). A vector pack is treated as source-equivalent: this file can
+> recreate the code's text. Share it only where you would share the code. `search export` prints this before the path.
+
+- **Format (`PACK_FORMAT` = 1).** A SQLite file of two tables, nothing else. `meta(key, value)` is the header: `format`,
+  `record` (the fingerprint's record as JSON; the importer derives the fingerprint from it), `created_at`,
+  `tool_version`, and optionally `repo_url` and `commit` (for display only). `vec(kind, key, bits, vec, scale)` holds
+  one row per chunk (kind 0) or path (kind 1) vector, in the form the cache stores it. **No path, no chunk text, no file
+  list**: a key is a hash.
+- **Content-addressed.** Rows are written in key order in one transaction with a fixed page size and no journal, so the
+  same header and rows are the same bytes; `write_pack` returns the file's sha256, and the default file name is its first
+  16 hex characters (`<repo>/.drgnx/packs/<sha16>.vpack`). The time is in the header, so two exports at different
+  seconds are two packs.
+- **Strict reading.** `read_pack` refuses a file that is not a pack, a format other than 1, and any table, view,
+  trigger, column or header field the format does not define.
+- **Export** (`search/export {root, out?, branch?, all_trees?}`): the keys the folder's tree sees (the base's content
+  and a worktree's own files over it; `branch` names another indexed checkout's tree, `all_trees` every tree of the
+  repo's store), with the vectors the caches have for them, from the fingerprint that covers most of them. A pack goes
+  inside the repo (`.drgnx/packs/`) unless the user gives `out`; nothing publishes it. The answer is `{path, sha256,
+  keys, warning}`.
+- **Import** (`search/import {file, root?, keep_all?}`) runs in the hub, the only writer of the caches.
+  - It refuses a fingerprint no source or engine of this machine can make query vectors for (the servers that answer
+    and the built-in model), since its vectors would never be searched; `keep_all` takes it anyway.
+  - **Proof of possession (after Cursor §15 [P1]).** It keeps only the keys a repo store here references. Every open
+    project's store, and every other store file under `<state>/code/` (opened for the purpose: a closed repo still
+    counts, MP-21), first reports its live key set to the cache (`hrafn::hold`); a pack key is written only when a live
+    holder holds it. A pack cannot add vectors for code the importer does not have; with no repo here the answer is "0
+    of N keys kept: no repo here references them".
+  - `keep_all` keeps the whole pack, for a repo opened later. The answer counts `{keys_in_pack, kept,
+    skipped_unreferenced, already_had}`; a second import of one pack keeps nothing and says `already_had`.
+  - Every row is checked to be the fingerprint's size (sign bits plus one int8 per dimension) before it is written.
+- Signatures, automatic fetching and OCI distribution are not built (spec §12A): a pack is a file the user passes.
+
 ### The file list and coverage
 
 `files::list(root, git, config, allow)` is the one place a path enters the index. Git sits behind the `Git` trait

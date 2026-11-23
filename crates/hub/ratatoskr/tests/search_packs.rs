@@ -240,6 +240,9 @@ async fn import_keeps_only_referenced_keys() {
     assert_eq!(got.skipped_unreferenced, e.keys - wanted);
     assert_eq!(got.already_had, 0);
     assert_eq!(b.have(&only_x).await as u64, wanted);
+    // a second import of the pack adds nothing and says it had them
+    let again = import(&b, &pack, &open, &[tiny().fp], false).await.unwrap();
+    assert_eq!((again.kept, again.already_had), (0, wanted));
     // y's keys are not there: a repo holding y finds all of its keys missing
     let y_store = b.repo("y", &[Y]).await;
     let c = b.caches.get(&tiny()).await.unwrap();
@@ -248,8 +251,6 @@ async fn import_keeps_only_referenced_keys() {
         still.iter().any(|(k, _, _)| *k == KeyKind::Chunk),
         "y's chunk is not there"
     );
-    let again = import(&b, &pack, &open, &[tiny().fp], false).await.unwrap();
-    assert_eq!((again.kept, again.already_had), (0, wanted));
 }
 
 /// Pattern D. With `keep_all` the whole pack goes into the cache, referenced or not.
@@ -314,7 +315,9 @@ async fn closed_repo_on_disk_counts_as_possession() {
     let b = Machine::new();
     let closed = b.repo("closed", &[Y]).await;
     let wanted = key_count(&closed).await as u64;
-    closed.shutdown();
+    tokio::task::spawn_blocking(move || closed.shutdown())
+        .await
+        .unwrap();
     let got = import(&b, &pack, &[], &[tiny().fp], false).await.unwrap();
     assert_eq!(got.kept, wanted, "{got:?}");
     assert_eq!(got.skipped_unreferenced, e.keys - wanted);
