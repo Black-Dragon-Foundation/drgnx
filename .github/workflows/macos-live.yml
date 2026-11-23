@@ -1,0 +1,112 @@
+# A live session on a macOS runner, for fixing macOS failures test by test (there is no Mac to try them on): a push to
+# scratch/drgnx-mac-rounds whose head commit's message ends with `[drgnx-live]` builds the workspace's tests as the
+# `tests (macOS 27)` job does (runtime.yml: the same setup, caches read), packs the grammars, then opens an upterm SSH
+# session that only the pushing user's public SSH keys (their GitHub profile's) can enter. In the session: run a test
+# binary from target/debug/deps, or `git fetch origin <branch> && git checkout FETCH_HEAD && cargo test ...` for a newer
+# commit (the repository is public: no credentials). The job ends when the session does (`exit` in its shell), 30
+# minutes after the build when no one joined, or at the timeout. It takes one of the organisation's 5 macOS jobs.
+#
+# No secrets: the job's token reads contents only, no `secrets.*` is referenced, the checkout keeps no credentials, the
+# upterm action gets no token (upterm reads the user's public keys from github.com/USER.keys), the session's steps clear
+# the cache service's runtime token, and a guard fails the job when anything that looks like a credential is set in the
+# environment or in git's configuration before the session opens.
+name: macOS live session
+
+on:
+  push:
+    branches: ["scratch/drgnx-mac-rounds"]
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: macOS live session
+    # a push without the marker takes no runner
+    if: ${{ endsWith(github.event.head_commit.message, '[drgnx-live]') }}
+    runs-on: xcode-27
+    # the job's group: a newer [drgnx-live] push replaces the older session
+    concurrency:
+      group: drgnx-live-${{ github.ref }}
+      cancel-in-progress: true
+    # under GitHub's 6 hours for a job
+    timeout-minutes: 330
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0          # the whole history, for commit-times.sh
+          filter: blob:none
+          persist-credentials: false
+      - id: setup
+        uses: ./.github/actions/macos-runtime
+      - name: dependencies' debug info is line tables only (as the tests job)
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}"
+          printf '[profile.dev.package."*"]\ndebug = "line-tables-only"\n' >> "${CARGO_HOME:-$HOME/.cargo}/config.toml"
+      - name: The tests job's build
+        run: |
+          cargo test --locked --manifest-path Cargo.toml --workspace --exclude nhshell --exclude nh-recorder --features drgnx-ratatoskr/test-hooks \
+            --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/test-bins.json"
+          jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null)
+                 | [.target.name, (.target.kind | join(",")), .executable] | @tsv' "$RUNNER_TEMP/test-bins.json" > "$RUNNER_TEMP/test-bins.tsv"
+      - name: Pack grammars for the tests
+        run: |
+          line="$(RATATOSKR="$PWD/target/debug/ratatoskr" bash test/packs/hub-grammars.sh "$RUNNER_TEMP/hub-grammars" | grep '^export DRGNX_PACK_LOCK=')"
+          eval "$line"
+          echo "DRGNX_PACK_LOCK=$DRGNX_PACK_LOCK" >> "$GITHUB_ENV"
+          echo "DRGNX_PACK_GRAMMARS=$DRGNX_PACK_GRAMMARS" >> "$GITHUB_ENV"
+      - name: How to run a test
+        run: |
+          echo "test binaries (name, kind, path): $RUNNER_TEMP/test-bins.tsv"
+          echo "e.g.: cd crates/hub/drgnx-term && \$(awk -F'\t' '\$1==\"logging\"{print \$3}' $RUNNER_TEMP/test-bins.tsv) --exact logging::pty_bytes_never_logged --nocapture"
+      - name: No credentials before the session
+        env:
+          ACTIONS_RUNTIME_TOKEN: ""
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ""
+        run: |
+          bad=$(env | grep -E '^[^=]*(TOKEN|SECRET|PASSWORD|CREDENTIAL|_KEY)=.' | cut -d= -f1 || true)
+          if [ -n "$bad" ]; then echo "live: credential-like variables in the environment: $bad"; exit 1; fi
+          if git config --get-regexp '^http\..*extraheader' >/dev/null; then echo "live: git keeps credentials"; exit 1; fi
+          echo "live: no credentials"
+      # one line a host: its address and whether a TCP connection opens within 5 s; the job fails here, not in a
+      # session that never comes
+      - name: Reachability (the session's server, GitHub)
+        run: |
+          ok=1
+          for hp in uptermd.upterm.dev:22 github.com:443 api.github.com:443; do
+            h=${hp%:*} p=${hp#*:}
+            ip=$(dscacheutil -q host -a name "$h" | awk '/^ip_address:/ { print $2; exit }')
+            if [ -z "$ip" ]; then echo "reach: $h dns FAIL"; ok=0; continue; fi
+            if nc -z -G 5 "$h" "$p" >/dev/null 2>&1; then t=ok; else t=FAIL; ok=0; fi
+            echo "reach: $h dns $ip tcp/$p $t"
+          done
+          if [ "$ok" != 1 ]; then echo "::error title=live session::unreachable (the reach: lines above)"; exit 1; fi
+      # pinned by commit (action v2.7.0) and upterm itself by version; the actor's public keys only
+      - name: Session (upterm, the pushing user's keys only)
+        id: upterm
+        env:
+          ACTIONS_RUNTIME_TOKEN: ""
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ""
+        uses: owenthereal/action-upterm@b9dfa526f890bbd5162d781f8d9c69b97731d73d # v2.7.0
+        with:
+          limit-access-to-actor: 'true'
+          upterm-version: v0.40.0
+          detached: 'true'
+          wait-timeout-minutes: '30'
+      # the address as an artifact of a day, which the API serves while the job still runs (annotations, logs and the
+      # summary only once it ends); it is no way in without the user's key
+      - name: The session's address
+        env:
+          ADDR: ${{ steps.upterm.outputs.ssh-command }}
+          JOIN: ${{ steps.upterm.outputs.join-command }}
+        run: |
+          test -n "$ADDR" || { echo "::error title=live session::no address from the session step"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/live" && printf '%s\n%s\n' "$ADDR" "$JOIN" > "$RUNNER_TEMP/live/address.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: live-session
+          path: ${{ runner.temp }}/live/address.txt
+          retention-days: 1
+      # the session's post step waits for it to end
