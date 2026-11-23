@@ -55,6 +55,11 @@ fn a_theme_that_is_wrong_is_refused_with_the_reason() {
     refused(&ok.replace("(gap ", "(gapp "), "gapp");
     // a token left out: it is named
     refused(&ok.replace(" (row 26)\n", ""), "row");
+    // a colour token twice
+    refused(
+        &ok.replace("(gap \"#0a0b0d\")", "(gap \"#0a0b0d\") (gap \"#000000\")"),
+        "twice",
+    );
     // a token twice
     refused(
         &ok.replace(" (row 26)\n", " (row 26)\n (row 27)\n"),
