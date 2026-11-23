@@ -553,6 +553,8 @@ async fn next_of(
             Update::Ended(end) => {
                 t.sessions[i].ended = true;
                 if i == 0 {
+                    // why it ended (the adapter's stderr and the program's, when it failed): in a fork's error
+                    t.heard(&format!("[the session ended: {}]", end.reason));
                     return Ok(Next::Ended(end.exit_code));
                 }
             }

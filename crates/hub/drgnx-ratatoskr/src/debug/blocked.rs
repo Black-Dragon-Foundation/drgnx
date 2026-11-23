@@ -392,6 +392,13 @@ struct Pair {
     adapter: draugr::Child,
     debuggee: Arc<Mutex<Option<draugr::Child>>>,
     starter: Option<tokio::task::JoinHandle<()>>,
+    /// What the session's end says besides the adapter's stderr: why the program was not started, the end of its
+    /// stderr once it is gone.
+    notes: Arc<Mutex<Vec<String>>>,
+}
+
+fn note(notes: &Mutex<Vec<String>>, n: String) {
+    notes.lock().unwrap_or_else(|e| e.into_inner()).push(n);
 }
 
 impl Proc for Pair {
@@ -420,11 +427,22 @@ impl Proc for Pair {
             if let Some(mut d) = d {
                 Proc::signal(&mut d, Sig::Kill);
                 Proc::wait(&mut d).await;
+                let tail = d.stderr_tail();
+                if !tail.trim().is_empty() {
+                    note(
+                        &self.notes,
+                        format!("the program's stderr ends: {}", tail.trim()),
+                    );
+                }
             }
         })
     }
     fn stderr_tail(&self) -> String {
-        self.adapter.stderr_tail()
+        let mut s = self.adapter.stderr_tail();
+        for n in self.notes.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+            s.push_str(&format!("\n{n}"));
+        }
+        s
     }
 }
 
@@ -506,6 +524,7 @@ impl Launcher for Blocked {
                 adapter,
                 debuggee: slot.clone(),
                 starter: None,
+                notes: Arc::default(),
             };
             let connected =
                 match wait_owned(self.plan.port, adapter_pid, DEBUGGEE_LISTEN_WITHIN).await {
@@ -536,11 +555,13 @@ impl Launcher for Blocked {
                     }
                 };
                 let slot = slot.clone();
+                let notes = pair.notes.clone();
                 pair.starter = Some(crate::clock::spawn("debug:debuggee-start", async move {
                     match wait_owned(port, adapter_pid, DEBUGGEE_LISTEN_WITHIN).await {
                         Ok(()) => {}
                         Err(e) => {
                             tracing::debug!(target: "drgnx::debug", "the program was not started: {e}");
+                            note(&notes, format!("the program was not started: {e}"));
                             let _ = draugr::Signaller::kill(
                                 &draugr::RealSignaller,
                                 -adapter_pid,
@@ -553,6 +574,7 @@ impl Launcher for Blocked {
                         Ok(d) => *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(d),
                         Err(e) => {
                             tracing::debug!(target: "drgnx::debug", "the program did not start: {e}");
+                            note(&notes, format!("the program did not start: {e}"));
                             let _ = draugr::Signaller::kill(
                                 &draugr::RealSignaller,
                                 -adapter_pid,
