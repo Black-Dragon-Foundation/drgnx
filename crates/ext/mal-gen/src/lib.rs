@@ -363,29 +363,17 @@ impl Gen<'_> {
                 TypeDefKind::Enum(_) => Ty::Enum(*id),
                 TypeDefKind::List(inner) => {
                     let at = format!("{at}: a list");
-                    match self.scalar(inner, &at)? {
-                        Ty::List(_) => {
-                            return Err(fail(format!("{at} of lists is not supported")));
-                        }
-                        // a record in a list has no list in it: the codec stays one level deep
-                        Ty::Record(rid) if self.has_list(Ty::Record(rid)) => {
-                            return Err(fail(format!(
-                                "{at} of records that hold lists is not supported"
-                            )));
-                        }
-                        _ => {}
+                    if matches!(self.scalar(inner, &at)?, Ty::List(_)) {
+                        return Err(fail(format!("{at} of lists is not supported")));
                     }
                     Ty::List(*id)
                 }
                 TypeDefKind::Record(rec) => {
                     let name = self.r.types[*id].name.clone().unwrap_or_default();
+                    // every field is checked in its own position (a record inside a record is checked the same way)
                     for f in &rec.fields {
                         let at = format!("{at}: record `{name}`, field `{}`", f.name);
-                        if matches!(self.scalar(&f.ty, &at)?, Ty::Record(_)) {
-                            return Err(fail(format!(
-                                "{at}: a record inside a record is not supported"
-                            )));
-                        }
+                        self.scalar(&f.ty, &at)?;
                     }
                     Ty::Record(*id)
                 }
@@ -410,6 +398,23 @@ impl Gen<'_> {
         }
     }
 
+    /// The interfaces that own the enums and records T is made of, at any depth: each is declared where it is owned.
+    fn owners(&self, t: Ty) -> Result<Vec<InterfaceId>> {
+        let mut out = Vec::new();
+        match t {
+            Ty::Enum(id) => out.push(self.enum_owner(id)?.0),
+            Ty::Record(id) => {
+                out.push(self.enum_owner(id)?.0);
+                for (_, f) in self.record_fields(id)? {
+                    out.extend(self.owners(f)?);
+                }
+            }
+            Ty::List(id) => out.extend(self.owners(self.elem(id)?)?),
+            _ => {}
+        }
+        Ok(out)
+    }
+
     /// The element of a list.
     fn elem(&self, id: TypeId) -> Result<Ty> {
         let TypeDefKind::List(t) = &self.r.types[id].kind else {
@@ -418,13 +423,13 @@ impl Gen<'_> {
         self.scalar(t, "a list")
     }
 
-    /// Whether T is a list, or a record with a list in it.
+    /// Whether T is a list, or a record with a list in it, at any depth.
     fn has_list(&self, t: Ty) -> bool {
         match t {
             Ty::List(_) => true,
             Ty::Record(id) => self
                 .record_fields(id)
-                .is_ok_and(|fs| fs.iter().any(|(_, t)| matches!(t, Ty::List(_)))),
+                .is_ok_and(|fs| fs.iter().any(|(_, t)| self.has_list(*t))),
             _ => false,
         }
     }
@@ -453,7 +458,7 @@ impl Gen<'_> {
         }
     }
 
-    fn func(&self, iface_label: &str, f: &Function, exported: bool) -> Result<Func> {
+    fn func(&self, iface_label: &str, f: &Function) -> Result<Func> {
         let ctx = format!("{iface_label}.{}", f.name);
         if !matches!(f.kind, FunctionKind::Freestanding) {
             return Err(fail(format!("{ctx}: only plain functions are supported")));
@@ -480,17 +485,6 @@ impl Gen<'_> {
                 None => Ret::Plain(self.scalar(t, &at)?),
             },
         };
-        if exported
-            && params
-                .iter()
-                .map(|(_, t)| *t)
-                .chain(ret_tys(ret))
-                .any(|t| self.has_list(t))
-        {
-            return Err(fail(format!(
-                "{ctx}: lists are not supported in exported functions yet"
-            )));
-        }
         Ok(Func {
             wit: f.name.clone(),
             ctx,
@@ -499,14 +493,14 @@ impl Gen<'_> {
         })
     }
 
-    fn iface(&self, id: InterfaceId, exported: bool) -> Result<Iface> {
+    fn iface(&self, id: InterfaceId) -> Result<Iface> {
         let label = self.iface_label(id)?;
         let i = &self.r.interfaces[id];
         let p = self.pkg_of(id)?;
         let name = i.name.clone().unwrap_or_default();
         let mut funcs = Vec::new();
         for f in i.functions.values() {
-            funcs.push(self.func(&label, f, exported)?);
+            funcs.push(self.func(&label, f)?);
         }
         Ok(Iface {
             id,
@@ -676,21 +670,28 @@ impl Gen<'_> {
         }
     }
 
-    /// The statements that refuse a list longer than the host's limit in the parameter E of type T.
-    fn len_checks(&self, t: Ty, e: &str, ctx: &str) -> String {
+    /// The statements that refuse a list longer than the limit MAX in the value E of type T, at any depth: a list, and
+    /// the lists of its records, and of their records.
+    fn len_checks(&self, t: Ty, e: &str, ctx: &str, max: &str) -> String {
         match t {
-            Ty::List(_) => format!("rt::len_ok({e}.len(), self.2, \"{ctx}\")?;\n        "),
+            Ty::List(id) => {
+                let mut s = format!("rt::len_ok({e}.len(), {max}, \"{ctx}\")?;\n        ");
+                if let Ok(inner) = self.elem(id)
+                    && self.has_list(inner)
+                {
+                    s.push_str(&format!(
+                        "for __x in {e}.iter() {{ {}}}\n        ",
+                        self.len_checks(inner, "__x", ctx, max)
+                    ));
+                }
+                s
+            }
             Ty::Record(id) => self
                 .record_fields(id)
                 .unwrap_or_default()
                 .iter()
-                .filter(|(_, t)| matches!(t, Ty::List(_)))
-                .map(|(n, _)| {
-                    format!(
-                        "rt::len_ok({e}.{}.len(), self.2, \"{ctx}\")?;\n        ",
-                        bindgen_ident(n)
-                    )
-                })
+                .filter(|(_, t)| self.has_list(*t))
+                .map(|(n, t)| self.len_checks(*t, &format!("{e}.{}", bindgen_ident(n)), ctx, max))
                 .collect(),
             _ => String::new(),
         }
@@ -751,7 +752,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     let mut imports = Vec::new();
     for item in w.imports.values() {
         match item {
-            WorldItem::Interface { id, .. } => imports.push(g.iface(*id, false)?),
+            WorldItem::Interface { id, .. } => imports.push(g.iface(*id)?),
             WorldItem::Function(f) => {
                 return Err(fail(format!(
                     "{}: world-level functions are not supported",
@@ -764,7 +765,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     let mut exports = Vec::new();
     for item in w.exports.values() {
         match item {
-            WorldItem::Interface { id, .. } => exports.push(g.iface(*id, true)?),
+            WorldItem::Interface { id, .. } => exports.push(g.iface(*id)?),
             WorldItem::Function(f) => {
                 return Err(fail(format!(
                     "{}: world-level functions are not supported",
@@ -804,8 +805,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
         }
         for f in &i.funcs {
             for t in f.params.iter().map(|(_, t)| *t).chain(ret_tys(f.ret)) {
-                if let Ty::Enum(id) | Ty::Record(id) = t {
-                    let owner = g.enum_owner(id)?.0;
+                for owner in g.owners(t)? {
                     if !seen_ifaces.contains(&owner) {
                         seen_ifaces.push(owner);
                     }
@@ -899,7 +899,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
             for (n, t) in &f.params {
                 put!(sig, ", {}: {}", ident(n, &f.ctx)?, g.wasm_ty(*t)?)?;
                 args.push(g.conv(*t, &ident(n, &f.ctx)?));
-                checks.push_str(&g.len_checks(*t, &ident(n, &f.ctx)?, &f.ctx));
+                checks.push_str(&g.len_checks(*t, &ident(n, &f.ctx)?, &f.ctx, "self.2"));
             }
             let name = ident(&f.wit, &label)?;
             let call = format!(
@@ -1165,6 +1165,15 @@ fn export_fn(g: &Gen, f: &Func, acc: &str, ext_ty: &str) -> Result<String> {
     let mut sig = String::new();
     let mut enc = Vec::new();
     let mut wargs = Vec::new();
+    // a function with a list in it takes the host's limit: lists it sends are checked going out (Luau) and the lists
+    // the script or the guest returns are checked coming in
+    let needs_max = f
+        .params
+        .iter()
+        .map(|(_, t)| *t)
+        .chain(ret_tys(f.ret))
+        .any(|t| g.has_list(t));
+    let max = if needs_max { ", __max: usize" } else { "" };
     for (pn, t) in &f.params {
         let id = ident(pn, &f.ctx)?;
         let ty = match t {
@@ -1178,9 +1187,10 @@ fn export_fn(g: &Gen, f: &Func, acc: &str, ext_ty: &str) -> Result<String> {
             Ty::Enum(_) => format!("rt::enc_str(__lua, {id}.as_str())?"),
             other => g.enc(*other, &id, &ctx)?,
         });
+        // bindgen's exports take what they only read by reference: a list as a slice, a record as a reference
         wargs.push(match t {
-            Ty::Enum(_) => format!("{id}.into()"),
-            _ => id,
+            Ty::List(_) | Ty::Record(_) => format!("&{}", g.conv(*t, &id)),
+            _ => g.conv(*t, &id),
         });
     }
     let ret = g.ret_ty(f.ret, false)?;
@@ -1208,25 +1218,37 @@ fn export_fn(g: &Gen, f: &Func, acc: &str, ext_ty: &str) -> Result<String> {
     };
     putln!(
         s,
-        "pub fn luau_{name}(__lua: &mlua::Lua, __ext: &mlua::Table{sig}) -> mlua::Result<{ret}> {{\n    let __f: mlua::Function = __ext.get(\"{name}\")?;\n    let __args: mlua::MultiValue = [{}].into_iter().collect();\n    let __v: Vec<mlua::Value> = __f.call::<mlua::MultiValue>(__args)?.into_iter().collect();\n{interpret}\n}}",
+        "pub fn luau_{name}(__lua: &mlua::Lua, __ext: &mlua::Table{max}{sig}) -> mlua::Result<{ret}> {{\n    let __f: mlua::Function = __ext.get(\"{name}\")?;\n    let __args: mlua::MultiValue = [{}].into_iter().collect();\n    let __v: Vec<mlua::Value> = __f.call::<mlua::MultiValue>(__args)?.into_iter().collect();\n{interpret}\n}}",
         enc.join(", ")
     )?;
     let wret = g.ret_ty(f.ret, false)?;
     let conv = g.ret_from_ours(f.ret, "__r");
+    // what the guest returned: every list in it is checked against the limit before it is used
+    let result_checks = match f.ret {
+        Ret::Nothing => String::new(),
+        Ret::Plain(t) => g.len_checks(t, "__r", ctx, "__max"),
+        Ret::Result(Some(t), _) => {
+            let c = g.len_checks(t, "__v", ctx, "__max");
+            if c.is_empty() {
+                c
+            } else {
+                format!("if let Ok(__v) = &__r {{ {c}}}\n    ")
+            }
+        }
+        Ret::Result(None, _) => String::new(),
+    };
+    let call = format!(
+        "__ext.{acc}().call_{name}(__store{})?",
+        wargs.iter().map(|a| format!(", {a}")).collect::<String>()
+    );
     let body = if matches!(f.ret, Ret::Nothing) {
-        format!(
-            "__ext.{acc}().call_{name}(__store{})?;\n    Ok(())",
-            wargs.iter().map(|a| format!(", {a}")).collect::<String>()
-        )
+        format!("{call};\n    Ok(())")
     } else {
-        format!(
-            "let __r = __ext.{acc}().call_{name}(__store{})?;\n    Ok({conv})",
-            wargs.iter().map(|a| format!(", {a}")).collect::<String>()
-        )
+        format!("let __r = {call};\n    {result_checks}Ok({conv})")
     };
     putln!(
         s,
-        "pub fn wasm_{name}(__store: impl wasmtime::AsContextMut, __ext: &{}::{ext_ty}{sig}) -> wasmtime::Result<{wret}> {{\n    {body}\n}}",
+        "pub fn wasm_{name}(__store: impl wasmtime::AsContextMut, __ext: &{}::{ext_ty}{max}{sig}) -> wasmtime::Result<{wret}> {{\n    {body}\n}}",
         g.o.bindings
     )?;
     Ok(s)

@@ -1,0 +1,23 @@
+package acme:nest@1.0.0;
+
+// A test world for what the real API does not use yet: records in records, lists of records that hold lists, lists in
+// exported functions (tests/nested.rs generates it with mal-gen and runs both hosts' codecs).
+interface i {
+  enum kind { a, b }
+  record point { x: s32, y: s32 }
+  record span { start: point, finish: point, kind: kind }
+  record row { name: string, tags: list<string>, at: span }
+  record table { rows: list<row>, title: string }
+  put: func(t: table) -> result<list<row>, kind>;
+}
+
+interface e {
+  use i.{row, table, kind};
+  rows: func(t: table, names: list<string>) -> result<list<row>, kind>;
+  tags: func() -> list<string>;
+}
+
+world w {
+  import i;
+  export e;
+}

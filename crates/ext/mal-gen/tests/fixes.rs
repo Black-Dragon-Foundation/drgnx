@@ -103,8 +103,12 @@ fn unsupported_types_are_refused_with_the_wit_name() {
             "acme:thing@1.0.0/i.f, parameter `x`: a list of lists is not supported",
         ),
         (
-            "record r { a: list<u8> }\n  f: func(x: list<r>);",
-            "acme:thing@1.0.0/i.f, parameter `x`: a list of records that hold lists is not supported",
+            "record r { a: list<list<u8>> }\n  f: func(x: r);",
+            "acme:thing@1.0.0/i.f, parameter `x`: record `r`, field `a`: a list of lists is not supported",
+        ),
+        (
+            "record inner { a: list<u8> }\n  record outer { i: inner, x: char }\n  f: func(x: outer);",
+            "acme:thing@1.0.0/i.f, parameter `x`: record `outer`, field `x`",
         ),
         ("f: func(x: char);", "acme:thing@1.0.0/i.f, parameter `x`"),
         ("f: func() -> option<u8>;", "acme:thing@1.0.0/i.f, result"),
@@ -332,7 +336,7 @@ fn a_poisoned_lock_is_never_recovered() {
     assert!(out.rust.contains("Poisoned(_)"), "{}", out.rust);
 }
 
-// lists: scalars, strings and enums, as parameters, results and record fields; never in an exported function
+// lists: scalars, strings and enums, as parameters, results and record fields
 #[test]
 fn lists_are_supported_in_the_hosts_functions_and_checked_against_the_limit() {
     let out = must(
@@ -359,25 +363,11 @@ world w { import i; }
     ] {
         assert!(out.rust.contains(want), "`{want}` missing:\n{}", out.rust);
     }
-    // a list in an exported function is refused, with the WIT name
-    let e = gen_wit(
-        "package acme:thing@1.0.0;
-interface e { run: func(x: list<u8>); }
-world w { export e; }
-",
-    )
-    .err()
-    .expect("refused");
-    assert!(
-        e.to_string()
-            .contains("acme:thing@1.0.0/e.run: lists are not supported in exported functions"),
-        "{e}"
-    );
 }
 
-// a list of records: a codec one level deep, in every host
+// a list of records, in every host
 #[test]
-fn a_list_of_records_is_supported_when_the_records_hold_no_list() {
+fn a_list_of_records_is_supported() {
     let out = must(
         "package acme:thing@1.0.0;
 interface i {
@@ -398,4 +388,79 @@ world w { import i; }
     ] {
         assert!(out.rust.contains(want), "`{want}` missing:\n{}", out.rust);
     }
+}
+
+// Wave 7: records in records, lists of records that hold lists, lists in exported functions
+const NESTED: &str = "package acme:thing@1.0.0;
+interface i {
+  enum kind { a, b }
+  record point { x: s32, y: s32 }
+  record span { start: point, finish: point, kind: kind }
+  record row { name: string, tags: list<string>, at: span }
+  record table { rows: list<row>, title: string }
+  put: func(t: table) -> result<list<row>, kind>;
+  get: func() -> row;
+}
+interface e {
+  use i.{row, table, kind};
+  rows: func(t: table, names: list<string>) -> result<list<row>, kind>;
+  tags: func() -> list<string>;
+}
+world w { import i; export e; }
+";
+
+#[test]
+fn a_record_in_a_record_and_lists_in_records_in_lists_generate() {
+    let out = must(NESTED);
+    parses(&out);
+    // the inner records are structs of their own, converted field by field
+    for want in [
+        "pub struct Span",
+        "pub start: crate::g::acme_thing_v1_0_0::i::Point",
+        "pub at: crate::g::acme_thing_v1_0_0::i::Span",
+        "pub rows: Vec<crate::g::acme_thing_v1_0_0::i::Row>",
+        // a list inside a list's record is checked when the guest sends it: the outer length, then each row's tags
+        "for __x in t.rows.iter()",
+        "__x.tags.len()",
+    ] {
+        assert!(out.rust.contains(want), "`{want}` missing:\n{}", out.rust);
+    }
+}
+
+#[test]
+fn a_list_in_an_exported_function_takes_the_limit_and_checks_what_comes_back() {
+    let out = must(NESTED);
+    parses(&out);
+    // the exported functions with lists take the limit as a parameter, in both hosts
+    assert!(
+        out.rust
+            .contains("pub fn luau_rows(__lua: &mlua::Lua, __ext: &mlua::Table, __max: usize"),
+        "{}",
+        out.rust
+    );
+    assert!(out.rust.contains("pub fn wasm_tags("), "{}", out.rust);
+    assert!(out.rust.contains("__max: usize"), "{}", out.rust);
+    // what a guest returns is checked before it is used
+    assert!(
+        out.rust.contains("rt::len_ok(__r.len(), __max"),
+        "{}",
+        out.rust
+    );
+    assert!(out.rust.contains("if let Ok(__v) = &__r"), "{}", out.rust);
+    // an exported function with no list does not take it
+    let plain = must(BASIC);
+    assert!(!plain.rust.contains("__max: usize, "), "{}", plain.rust);
+}
+
+#[test]
+fn an_enum_in_a_list_from_another_interface_is_declared_where_it_is_owned() {
+    let out = must(
+        "package acme:thing@1.0.0;
+interface a { enum k { x, y } }
+interface b { use a.{k}; f: func(x: list<k>); }
+world w { import b; }
+",
+    );
+    parses(&out);
+    assert!(out.rust.contains("pub enum K"), "{}", out.rust);
 }
