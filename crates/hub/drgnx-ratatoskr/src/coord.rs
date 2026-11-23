@@ -735,6 +735,7 @@ impl Hub for ToolHub {
         actor: &str,
         action: norn::matrix::Action,
         own_record: bool,
+        change: norn::grants::Change,
     ) -> BoxFuture<'_, Result<(), String>> {
         let actor = actor.to_owned();
         Box::pin(async move {
@@ -752,7 +753,11 @@ impl Hub for ToolHub {
             let (who, base) = crate::outside::who_for(&front, &caller)
                 .await
                 .map_err(|e| e.message)?;
-            let ctx = ActionCtx { own_record, ..base };
+            let ctx = ActionCtx {
+                own_record,
+                change: Some(change),
+                ..base
+            };
             match front
                 .core
                 .matrix

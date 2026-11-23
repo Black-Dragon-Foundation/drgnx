@@ -239,7 +239,8 @@ async fn send_text(
 
 // ---- record_decision ----
 
-#[derive(Deserialize, JsonSchema)]
+/// Serialized only for the digest of a bound outside agent's change (`grants::Change`).
+#[derive(Deserialize, Serialize, JsonSchema)]
 struct RecordDecisionArgs {
     /// build, wait, wont-build or replaces
     kind: String,
@@ -259,6 +260,7 @@ struct RecordDecisionArgs {
     about: Option<Vec<String>>,
     /// Ignored
     #[allow(dead_code)]
+    #[serde(skip_serializing)]
     step: Option<i64>,
     /// Where it came from: from-brief, own or needs-user
     origin: Option<String>,
@@ -357,9 +359,13 @@ async fn record_decision(
                 ));
             }
         }
+        let record = args
+            .replaces
+            .map_or_else(|| "a new decision".to_owned(), |n| format!("decision #{n}"));
+        let change = crate::grants::Change::of("record_decision", &record, &args);
         coord
             .hub()
-            .gate(&me, crate::matrix::Action::GraphChange, true)
+            .gate(&me, crate::matrix::Action::GraphChange, true, change)
             .await?;
     }
     let sources = args.sources.clone().filter(|s| !s.is_empty());

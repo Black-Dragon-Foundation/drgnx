@@ -13,6 +13,11 @@
 //! `{"matrix": ACTION, "host"?: "H:P", "target"?: TARGET}` (a host only for `browser.web`, a target, required, only for
 //! `browser.private`), and `card` the card it answered. The matrix gate reads them ([`matrix_grants_for`]); they open
 //! no store access.
+//!
+//! A *change* grant ([`create_matrix_change`]) is the user's yes to a bound outside agent's `graph.change` card: `who`
+//! `{"session": "ext:…"}`, `what` `{"matrix": "graph.change", "change": {method, record, digest}}` (the one change the
+//! card asked about: [`Change`]), `card` and `expires`.  The gate lets one retry of exactly that change through and
+//! marks the card spent (`norn::write::cards::matrix_card_spend`), so a grant is used once.
 
 use std::fmt;
 
@@ -101,6 +106,40 @@ impl fmt::Display for Who {
     }
 }
 
+/// One change an outside agent asked to make: the hub method (or tool), the record it names (an id, or the path of a
+/// new one) and a digest of its arguments, so a yes covers exactly that call and nothing else.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Change {
+    pub method: String,
+    pub record: String,
+    pub digest: String,
+}
+
+impl Change {
+    /// METHOD on RECORD with ARGS (their JSON, hashed: SHA-1, hex).
+    pub fn of(method: &str, record: &str, args: &impl serde::Serialize) -> Change {
+        let bytes = serde_json::to_vec(args).unwrap_or_default();
+        let digest = Sha1::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        Change {
+            method: method.to_owned(),
+            record: record.to_owned(),
+            digest,
+        }
+    }
+
+    fn ok(&self) -> bool {
+        let short = |s: &str| !s.is_empty() && s.len() <= 300 && !s.chars().any(char::is_control);
+        short(&self.method)
+            && self.record.len() <= 300
+            && !self.record.chars().any(char::is_control)
+            && self.digest.len() == 40
+            && self.digest.chars().all(|c| c.is_ascii_hexdigit())
+    }
+}
+
 /// What it opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum What {
@@ -113,11 +152,12 @@ pub enum What {
     /// For `Options`: the private and shared settings of the agent's own project.
     OptionsProject,
     /// For `Matrix`: a browser row (its id), with the host a `browser.web` once grant names or the target a
-    /// `browser.private` grant names.
+    /// `browser.private` grant names; or `graph.change` with the one change it covers.
     Matrix {
         action: String,
         host: Option<String>,
         target: Option<Value>,
+        change: Option<Change>,
     },
 }
 
@@ -151,6 +191,7 @@ impl What {
                 action,
                 host,
                 target,
+                change,
             } => {
                 let mut o = json!({ "matrix": action });
                 if let Some(h) = host {
@@ -158,6 +199,9 @@ impl What {
                 }
                 if let Some(t) = target {
                     o["target"] = t.clone();
+                }
+                if let Some(c) = change {
+                    o["change"] = json!(c);
                 }
                 o
             }
@@ -176,7 +220,7 @@ impl What {
             && let Some(action) = o.get("matrix")
         {
             if o.keys()
-                .any(|k| !matches!(k.as_str(), "matrix" | "host" | "target"))
+                .any(|k| !matches!(k.as_str(), "matrix" | "host" | "target" | "change"))
             {
                 return None;
             }
@@ -185,10 +229,15 @@ impl What {
                 Some(h) => Some(h.as_str()?.to_owned()),
             };
             let target = o.get("target").filter(|t| !t.is_null()).cloned();
+            let change = match o.get("change") {
+                None | Some(Value::Null) => None,
+                Some(c) => Some(serde_json::from_value::<Change>(c.clone()).ok()?),
+            };
             return Some(What::Matrix {
                 action: action.as_str()?.to_owned(),
                 host,
                 target,
+                change,
             });
         }
         let o = v.as_object().filter(|o| o.len() == 1)?;
@@ -213,6 +262,7 @@ impl fmt::Display for What {
                 action,
                 host,
                 target,
+                change,
             } => {
                 write!(f, "matrix:{action}")?;
                 if let Some(h) = host {
@@ -220,6 +270,9 @@ impl fmt::Display for What {
                 }
                 if let Some(t) = target {
                     write!(f, " target {t}")?;
+                }
+                if let Some(c) = change {
+                    write!(f, " change {} {}", c.method, c.record)?;
                 }
                 Ok(())
             }
@@ -281,6 +334,8 @@ fn who_fits(access: Access, who: &Who) -> bool {
 
 /// The matrix rows a grant may name: the browser rows, whose cards offer a scope.
 const MATRIX_ROWS: [&str; 3] = ["browser", "browser.web", "browser.private"];
+/// The row a change grant names (an outside agent's change the user said yes to).
+const CHANGE_ROW: &str = "graph.change";
 
 /// Whether H is a `host:port` (a name or an address, a port 1 to 65535; a bracketed IPv6 literal too).
 fn host_port_ok(h: &str) -> bool {
@@ -292,17 +347,22 @@ fn host_port_ok(h: &str) -> bool {
 }
 
 /// Whether WHAT is a well-formed matrix grant's: a browser row, a host only for `browser.web` and a target (always)
-/// only for `browser.private`.
+/// only for `browser.private`; or `graph.change` with its change and nothing else.
 fn matrix_what_ok(what: &What) -> bool {
     let What::Matrix {
         action,
         host,
         target,
+        change,
     } = what
     else {
         return true;
     };
-    MATRIX_ROWS.contains(&action.as_str())
+    if action == CHANGE_ROW {
+        return host.is_none() && target.is_none() && change.as_ref().is_some_and(Change::ok);
+    }
+    change.is_none()
+        && MATRIX_ROWS.contains(&action.as_str())
         && host
             .as_deref()
             .is_none_or(|h| action == "browser.web" && host_port_ok(h))
@@ -543,7 +603,8 @@ fn create_with(
     }
     if !matrix_what_ok(&what) {
         return Err(refused(
-            "a matrix grant names browser, browser.web (a host:port at most) or browser.private (its target)",
+            "a matrix grant names browser, browser.web (a host:port at most), browser.private (its target) or \
+             graph.change (its change)",
         ));
     }
     if let Some(list) = &names
@@ -664,8 +725,36 @@ pub fn create_matrix(
         action: action.to_owned(),
         host,
         target,
+        change: None,
     };
     create_with(tx, who, what, Access::Matrix, None, expires, Some(card))
+}
+
+/// A new change grant: the user's yes to card CARD, an outside agent SESSION's `graph.change` Ask about CHANGE, until
+/// EXPIRES.  The gate lets one call of exactly CHANGE through and then marks the card spent.  The guard refuses it
+/// from any class but `User`.
+pub fn create_matrix_change(
+    tx: &mut Tx<'_>,
+    session: &str,
+    change: Change,
+    expires: f64,
+    card: i64,
+) -> Result<Grant, WriteError> {
+    let what = What::Matrix {
+        action: CHANGE_ROW.to_owned(),
+        host: None,
+        target: None,
+        change: Some(change),
+    };
+    create_with(
+        tx,
+        Who::Session(session.to_owned()),
+        what,
+        Access::Matrix,
+        None,
+        Some(expires),
+        Some(card),
+    )
 }
 
 /// The active, unexpired matrix grants of ACTION at NOW for SESSION or PLAN (a grant to either covers).

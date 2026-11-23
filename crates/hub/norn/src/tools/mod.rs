@@ -128,13 +128,15 @@ pub trait Hub: Send + Sync {
     }
 
     /// The matrix's verdict for the bound outside agent ACTOR (`ext:KIND:PID-HASH`) doing ACTION, on a record it
-    /// created itself when OWN_RECORD: `Ok` when allowed, else the refusal's text (an Ask names its card).  The hub
-    /// reads the binding again at each call.  The default (no hub): refused.
+    /// created itself when OWN_RECORD: `Ok` when allowed, else the refusal's text (an Ask names its card).  CHANGE is
+    /// the call asked about: the user's yes to its card lets exactly that call through once.  The hub reads the binding
+    /// again at each call.  The default (no hub): refused.
     fn gate(
         &self,
         _actor: &str,
         _action: crate::matrix::Action,
         _own_record: bool,
+        _change: crate::grants::Change,
     ) -> BoxFuture<'_, Result<(), String>> {
         Box::pin(async { Err("the matrix is the hub's: none here".to_string()) })
     }

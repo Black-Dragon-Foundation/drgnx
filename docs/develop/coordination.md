@@ -1137,6 +1137,22 @@ cap holds at execution. The plan and record writes check the scope first, then `
 with the write's own-record answer), then `task.done` for a status of done or an approval (Never for an outside
 agent).
 
+**An outside agent's change, asked and answered.** Its `graph.change` carries the call itself (`ActionCtx.change`,
+`norn::grants::Change`: the method — `plans/write`, `records/write` or `record_decision` —, the record id or a new
+record's path, and the SHA-1 of the call's arguments as JSON). Its card's data holds `change` and `once_window`, and
+its title is `ID wants METHOD on RECORD`; so another call is another card.
+- `cards/settle` `allow` on such a card (`graph::settle_change`, the user's tx: the guard refuses a grant from anyone
+  else) writes a change grant (`grants::create_matrix_change`: access `matrix`, `who` the agent's session, `what`
+  `{matrix: "graph.change", change}`, `card`, `expires` now + `once_window`) and messages the agent to make the same
+  call again. Any other choice writes no grant and messages it that the call is refused.
+- `check` with the verdict Ask looks for a live change grant of the session naming the same change whose card is not
+  spent (`matrix_gate::change_grant`); it spends the card in the same tx (`cards::matrix_card_spend` sets
+  `data.spent` to the tx) and allows. A second call, another change, or one after the window makes a new card.
+- Before a new card, `check` looks for a settled card with the same data the user did not allow
+  (`cards::matrix_card_declined`): the call is then Never (`the user refused this change (card N)`), with no card.
+- A Never verdict (a cap, a cell) is decided before any grant, so a yes never opens one. The card is spent when the
+  gate allows, even when a later check of the same write (`task.done`) refuses it.
+
 ### Plan runs: git, the merge gate, trial merges (`drgnx-ratatoskr/src/runner/git.rs`)
 
 `HubGit` is the hub's `RunGit`. Every git call is async with a deadline and none runs on the runner's tick.

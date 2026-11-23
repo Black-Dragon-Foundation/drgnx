@@ -1274,11 +1274,14 @@ impl Hub for GateHub {
         actor: &str,
         action: norn::matrix::Action,
         own_record: bool,
+        change: norn::grants::Change,
     ) -> BoxFuture<'_, Result<(), String>> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push(format!("gate {actor} {} own={own_record}", action.id()));
+        self.calls.lock().unwrap().push(format!(
+            "gate {actor} {} own={own_record} {} {}",
+            action.id(),
+            change.method,
+            change.record
+        ));
         let g = self.gate.clone();
         Box::pin(async move { g })
     }
@@ -1429,7 +1432,10 @@ async fn record_decision_of_a_bound_outside_agent_is_proposed_with_sources() {
     );
     assert_eq!(
         hub.calls(),
-        [format!("gate {} graph.change own=true", me.id().unwrap())]
+        [format!(
+            "gate {} graph.change own=true record_decision a new decision",
+            me.id().unwrap()
+        )]
     );
     // it replaces only its own decisions (review finding): another's, or a number nothing has, is refused before the
     // matrix is asked
@@ -1461,7 +1467,10 @@ async fn record_decision_of_a_bound_outside_agent_is_proposed_with_sources() {
     );
     assert_eq!(
         no.calls(),
-        [format!("gate {} graph.change own=true", me.id().unwrap())]
+        [format!(
+            "gate {} graph.change own=true record_decision decision #1",
+            me.id().unwrap()
+        )]
     );
     assert_eq!(w.count("select count(*) from decision"), 1);
 }

@@ -315,6 +315,44 @@ pub fn matrix_card(tx: &mut WTx<'_>, ask: MatrixAsk, now: f64) -> Result<i64, Co
     )
 }
 
+/// The newest settled `matrix` card asking exactly ASK's question (its data) that the user did not allow: its id.
+pub fn matrix_card_declined(tx: &mut WTx<'_>, ask: &MatrixAsk) -> Result<Option<i64>, CoordError> {
+    let data = ask.data.to_string();
+    match tx.sql().query_row(
+        "select id from card where kind = 'matrix' and state = 'settled' and data = ?1 \
+         and coalesce(choice, '') <> 'allow' order by id desc limit 1",
+        [&data],
+        |r| r.get(0),
+    ) {
+        Ok(id) => Ok(Some(id)),
+        Err(urdr::SqliteError::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Whether matrix card ID, settled `allow`, has already let its change through (`data.spent`).
+pub fn matrix_card_spent(conn: &urdr::Connection, id: i64) -> Result<bool, CoordError> {
+    Ok(matrix_card_get(conn, id)?.is_none_or(|c| c.data.get("spent").is_some()))
+}
+
+/// Mark matrix card ID spent: the change its yes covered went through once (`data.spent` is the tx).  False when it
+/// was spent already or is no settled matrix card.
+pub fn matrix_card_spend(tx: &mut WTx<'_>, id: i64) -> Result<bool, CoordError> {
+    let Some(c) = matrix_card_get(tx.sql(), id)? else {
+        return Ok(false);
+    };
+    if c.state != "settled" || c.data.get("spent").is_some() {
+        return Ok(false);
+    }
+    let mut data = c.data;
+    data["spent"] = json!(tx.id());
+    tx.sql().execute(
+        "update card set data = ?1 where id = ?2",
+        (data.to_string(), id),
+    )?;
+    Ok(true)
+}
+
 /// A `matrix` card as stored: its state, the user's choice (`allow` or `deny`) and the hub's record.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatrixCard {

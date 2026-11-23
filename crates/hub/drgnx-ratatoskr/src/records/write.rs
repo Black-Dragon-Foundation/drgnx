@@ -502,7 +502,14 @@ pub(crate) async fn records_write(
     let scope = crate::runner::effects::scope_of(f, c).await?;
     // the scope first: a record outside the caller's project is refused before the matrix is asked (no card)
     let own = own_of_record(f, c, &p, &scope).await?;
-    crate::runner::effects::may_change(f, c, None, own).await?;
+    let record = p
+        .record
+        .as_ref()
+        .map(|i| i.as_str())
+        .or(p.path.as_ref().map(|r| r.as_str()))
+        .unwrap_or_default();
+    let change = norn::grants::Change::of("records/write", record, &p);
+    crate::runner::effects::may_change(f, c, None, own, change).await?;
     let actor = actor_for(
         f,
         c,

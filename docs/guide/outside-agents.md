@@ -35,7 +35,11 @@ A bound agent also gets `plan_read`, `plan_write`, `records_read`, `records_writ
 proposals. It works in its own project only, and it follows the matrix like drgnx's own agents, with limits of its own:
 
 - Its own plans and records it changes as its role allows. Changing one it did not create (yours, or another agent's)
-  asks you first: a card in the Work space, and nothing is written until you answer.
+  asks you first: a card in the Work space ("ext:claude:… wants plans/write on plan:…"), and nothing is written until
+  you answer. Your yes lets that exact call through once: the agent is told, makes the same call again within the
+  card's window (10 minutes by default, `agents-browser-once-window`) and it lands. A call with other arguments is
+  another change and asks again; so does the same call after the window or after it went through once. Your no
+  refuses that call for good.
 - It never marks a task done, approves a record, pushes, merges, starts or steers agents, spends, or changes
   settings, whatever the matrix says for its role.
 - It never runs drgnx jobs: you start those, and drgnx's own agents run them.
@@ -47,8 +51,14 @@ When a bound tool is refused, the answer says why and what to do instead; an unb
 
 ## Known limits
 
-- After you answer a card for an outside agent's change to a record it did not create, its retry asks again with a
-  new card: such a change cannot go through yet.
+- The card names the tool and the record, not the whole change; read the record (or ask the agent) before you say
+  yes. A yes is used up by the retry even when the write is then refused for another reason (marking a task done,
+  say).
+- The binding counts only for a bridge that runs in the folder it names: on Linux and macOS drgnx reads the bridge
+  process's working directory and compares it with that folder (symlinks resolved), at the connection and at every
+  call, so a bridge started elsewhere, or one that moved, gets no rights and is told both folders. On other systems
+  the folder is taken as the bridge names it. The kind (`--kind`) is the bridge's word: drgnx cannot check it, so a
+  program running as you could start a bridge as another kind in a bound folder.
 - "Its own" records are those made by the same agent process; a new Claude Code session is a new process, so
   yesterday's plans count as another's.
 - Two MCP connections from one agent process share one identity; the folder of the latest one counts.

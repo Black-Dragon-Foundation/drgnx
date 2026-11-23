@@ -1551,6 +1551,63 @@ fn settle_browser(
     Ok(true)
 }
 
+/// The change an outside agent's matrix card (data D) asks about and the agent's id, when it is one.
+fn change_of_card(d: &Value) -> Option<(grants::Change, String)> {
+    let session = d["session"]
+        .as_str()
+        .filter(|s| crate::outside::is_ext(s))?;
+    let change = serde_json::from_value(d.get("change")?.clone()).ok()?;
+    Some((change, session.to_owned()))
+}
+
+/// An outside agent's change card CARD (data D) settled with CHOICE: `allow` writes, in this tx (the user's: the
+/// guard refuses a grant from anyone else), the grant of exactly that change until the card's `once_window` ends;
+/// the gate lets one retry of it through and spends the card ([`crate::matrix_gate`]).  Any other choice refuses that
+/// change for good.  The agent hears either.  False when the card was not open.
+fn settle_change(
+    tx: &mut WTx<'_>,
+    card: i64,
+    choice: &str,
+    now: f64,
+    d: &Value,
+) -> Result<bool, CoordError> {
+    let Some((change, session)) = change_of_card(d) else {
+        return cards::card_settle(tx, card, choice, now);
+    };
+    if !cards::card_settle(tx, card, choice, now)? {
+        return Ok(false);
+    }
+    let window = d["once_window"]
+        .as_f64()
+        .unwrap_or(crate::matrix_gate::DEFAULT_ONCE_WINDOW as f64);
+    let said = if choice == "allow" {
+        let g = grants::create_matrix_change(tx, &session, change.clone(), now + window, card)?;
+        format!(
+            "allowed (grant {}): make the same call again, unchanged, within {} seconds",
+            g.id, window
+        )
+    } else {
+        "refused: do not retry it".to_owned()
+    };
+    messages::send(
+        tx,
+        messages::Send {
+            job: None,
+            sender: None,
+            recipient: requester(&session),
+            text: format!(
+                "your {} on {} (card {card}): {said}",
+                change.method, change.record
+            ),
+            seen: None,
+            answers: None,
+            question: false,
+        },
+        now,
+    )?;
+    Ok(true)
+}
+
 /// `cards/settle` without the tools (`crate::coord`'s, the tests'): [`settle_with`] with none.
 pub async fn settle(
     w: &Writer,
@@ -1617,6 +1674,7 @@ pub async fn settle_with(
                 Some("matrix") if browser => {
                     settle_browser(tx, card, mapped.as_deref().unwrap_or("refuse"), now, &d)
                 }
+                Some("matrix") => settle_change(tx, card, &choice, now, &d),
                 _ => cards::card_settle(tx, card, &choice, now),
             }
         })

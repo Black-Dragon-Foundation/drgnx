@@ -387,12 +387,14 @@ pub async fn plan_for_job(front: &Front, id: &str) -> Result<(PathBuf, Plan), Er
 /// Whether the agent C may change the graph: the matrix's `graph.change` for C's session as it is (its role, agent
 /// and provider; a chat's is Never), the worker column for an agent the hub does not hold.  For an outside agent
 /// ([`crate::outside::who_for`]: its binding read now, no plan) OWN says whether the records changed are ones it
-/// created itself; on another's its `graph.change` is Ask at most.
+/// created itself; on another's its `graph.change` is Ask at most.  CHANGE is the call itself: the user's yes to its
+/// card lets exactly it through once (`matrix_gate::change_grant`).
 pub(crate) async fn may_change(
     f: &Front,
     c: &Caller,
     plan: Option<String>,
     own: bool,
+    change: norn::grants::Change,
 ) -> Result<(), Error> {
     use crate::matrix_gate::{ActionCtx, Gate};
     if c.class != Class::Agent {
@@ -402,6 +404,7 @@ pub(crate) async fn may_change(
     let ctx = if crate::matrix_gate::is_outside(&base) {
         ActionCtx {
             own_record: own,
+            change: Some(change),
             ..base
         }
     } else {
@@ -678,7 +681,21 @@ pub async fn plans_write(f: &Front, c: &Caller, p: WriteParams) -> Result<PlanWr
     // the scope first: a plan outside the caller's project is refused before the matrix is asked (no card)
     let scope = scope_of(f, c).await?;
     let own = own_of_plan(f, c, &p, &scope).await?;
-    may_change(f, c, p.plan.as_ref().map(|i| i.as_str().to_owned()), own).await?;
+    let record = p
+        .plan
+        .as_ref()
+        .map(|i| i.as_str())
+        .or(p.path.as_ref().map(|r| r.as_str()))
+        .unwrap_or_default();
+    let change = norn::grants::Change::of("plans/write", record, &p);
+    may_change(
+        f,
+        c,
+        p.plan.as_ref().map(|i| i.as_str().to_owned()),
+        own,
+        change,
+    )
+    .await?;
     may_finish(f, c, &p).await?;
     if let (None, Some(rel)) = (&p.plan, &p.path) {
         let rel = rel.as_str().to_owned();

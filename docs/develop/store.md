@@ -497,6 +497,10 @@ arguments.
     target?}` (a host only for `browser.web`, a target, required, only for `browser.private`), `access` `matrix`,
     `card` the card it answered. It opens no store access. `matrix_grants_for(conn, action, session, plan, now)`
     lists the active ones for a session or its plan.
+  - `create_matrix_change(tx, session, change, expires, card)`: the user's yes to a bound outside agent's
+    `graph.change` card: `who` `{session: "ext:…"}`, `what` `{matrix: "graph.change", change: {method, record,
+    digest}}` (`grants::Change`), with `expires`. The gate lets one call of exactly that change through and spends the
+    card (`cards::matrix_card_spend`).
   - `revoke(tx, id)` sets `revoked`; false when there was no active grant.
   - `list(conn, &caller, &Filter { who, active }, now)`: the user sees every grant; an agent or ext caller only the
     grants whose `who` is its own (others would name other projects).
