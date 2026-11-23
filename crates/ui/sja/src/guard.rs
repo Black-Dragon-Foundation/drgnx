@@ -81,8 +81,8 @@ fn install_hook() {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             if IN_GUARD.try_with(Cell::get).unwrap_or(0) > 0 {
-                use std::io::Write;
-                let _ = writeln!(std::io::stderr(), "sja: {info}");
+                // a panic caught by a guard is reported once on stderr; with stderr gone there is nowhere to say it
+                annall::cli_err(&format!("sja: {info}")).unwrap_or_default();
             } else {
                 previous(info);
             }
@@ -112,7 +112,7 @@ pub(crate) fn now_ms() -> u64 {
     if let Some(t) = TEST_NOW.with(Cell::get) {
         return t;
     }
-    use std::time::Instant;
+    use stund::Instant;
     static ORIGIN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     let origin = *ORIGIN.get_or_init(Instant::now);
     u64::try_from(origin.elapsed().as_millis()).unwrap_or(u64::MAX)

@@ -73,8 +73,8 @@ fn places_keep_layout_a_order() {
         foot: false,
     });
     let w = wb.window_new("m0", WinSize::Px { w: 1920, h: 1080 }, 1.0, false);
-    let names: Vec<Token> = wb.query(w, "places").unwrap();
-    let want: Vec<Token> = [
+    let names: Vec<QueryItem> = wb.query(w, "places").unwrap();
+    let want: Vec<QueryItem> = [
         "work",
         "files",
         "search",
@@ -86,7 +86,7 @@ fn places_keep_layout_a_order() {
         "keys",
     ]
     .iter()
-    .map(|x| Token::Str(x.to_string()))
+    .map(|x| QueryItem::Str(x.to_string()))
     .collect();
     assert_eq!(names, want);
     assert_eq!(

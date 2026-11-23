@@ -26,6 +26,16 @@ fn mid(r: Rect) -> (i32, i32) {
     (r.x + r.w / 2, r.y + r.h / 2)
 }
 
+/// LP logical pixels at SCALE, through the one conversion (the scale-zoom standard).
+fn px(lp: f32, scale: f32) -> i32 {
+    kvardi::Lp(lp)
+        .to_px(&kvardi::Scale {
+            output: scale,
+            ..kvardi::Scale::default()
+        })
+        .0
+}
+
 /// Two groups side by side (a.rs, b.rs in the first; c.rs in the second) and the bottom shown, at SCALE.
 fn scene(scale: f32) -> (Workbench, WinId, GroupId, GroupId, TabId) {
     let (mut wb, w) = wb_1920();
@@ -151,12 +161,12 @@ fn live_resize_is_one_realisation_per_frame_at_most() {
         );
         // the bottom's top edge: the region's size, logical px
         let b = card(&d, Region::Bottom as u64);
-        let by = b.y - (3.0 * scale) as i32;
+        let by = b.y - px(3.0, scale);
         let g = wb
             .drag_begin(w, &d, b.x + b.w / 2, by)
             .expect("the bottom's divider");
         assert_eq!(g.divider(), Some(Axis::Column));
-        let to = b.y - (100.0 * scale) as i32;
+        let to = b.y - px(100.0, scale);
         assert_eq!(
             g.end(&wb, &d, b.x + b.w / 2, to),
             Some(DropCommand::RegionResize {

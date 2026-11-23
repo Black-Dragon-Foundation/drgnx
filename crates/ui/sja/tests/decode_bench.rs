@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use sja::queue::{read_line, read_line_typed, read_line_value};
 use sja::wire::decode_value;
 use sja::{Status, View};
-use std::time::Instant;
+use stund::Instant;
 
 /// A Search model as the hub sends it: 500 files open, 20 matches each, as a `tree`.
 fn grep_line(files: usize, per: usize) -> String {
@@ -63,10 +63,11 @@ fn where_a_push_spends_its_time() {
         );
         view
     });
-    println!(
+    annall::cli_out(&format!(
         "DECODE-BENCH bytes {} parse {parse:.2} ms, typed ops {ops:.2} ms, read_line through Value {read:.2} ms, \
          typed read {typed:.2} ms ({:.2}x), apply {apply:.2} ms",
         line.len(),
         read / typed
-    );
+    ))
+    .expect("stdout");
 }

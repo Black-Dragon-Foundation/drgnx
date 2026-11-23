@@ -35,7 +35,7 @@ fn restore_all(text: &str) -> (Workbench, WinId) {
     let (mut wb, _) = wb_1920();
     let ids = wb.restore_begin(load(text).unwrap()).unwrap();
     for r in wb.pending_refs() {
-        let _ = wb.resolve(&r, Resolved::Now);
+        let _already_resolved = wb.resolve(&r, Resolved::Now);
     }
     wb.restore_tick();
     (wb, ids[0])

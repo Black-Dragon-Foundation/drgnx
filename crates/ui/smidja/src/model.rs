@@ -338,7 +338,7 @@ pub struct Rect {
 
 /// What an edge or a requested rectangle belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EdgeKey {
+pub enum WindowEdge {
     Region(Region),
     Group(GroupId),
     /// The left place's Nth section window (its header band, §6.1).
@@ -418,7 +418,7 @@ pub struct OsWindow {
     pub scale: f32,
     pub tty: bool,
     /// Actual device-px edges sent back after a realisation (`set_edges`).
-    pub edges: Vec<(EdgeKey, Rect)>,
+    pub edges: Vec<(WindowEdge, Rect)>,
     /// Zen: the rail and the status bar are hidden too.
     pub chrome_hidden: bool,
     pub left: Left,

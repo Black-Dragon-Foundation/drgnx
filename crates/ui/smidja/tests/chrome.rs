@@ -211,9 +211,9 @@ fn band_rects_equal_the_edges_sent() {
     let v = wb.realisation(w).unwrap().version;
     // Emacs laid the group out 3 px lower and 2 px narrower than asked, the left 4 px wider, its second section at 500
     let edges = vec![
-        (EdgeKey::Group(g), rect(328, 41, 1186, 1000)),
-        (EdgeKey::Region(Region::Left), rect(50, 38, 276, 1018)),
-        (EdgeKey::Section(1), rect(50, 500, 276, 556)),
+        (WindowEdge::Group(g), rect(328, 41, 1186, 1000)),
+        (WindowEdge::Region(Region::Left), rect(50, 38, 276, 1018)),
+        (WindowEdge::Section(1), rect(50, 500, 276, 556)),
     ];
     assert!(wb.set_edges(w, v, edges));
     let d = wb.chrome(w, &measure).unwrap();
