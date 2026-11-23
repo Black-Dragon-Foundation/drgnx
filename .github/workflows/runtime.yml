@@ -26,7 +26,7 @@ on:
   workflow_call:
     inputs:
       fuzz_minutes:
-        description: Minutes of fuzzing per target (empty means 1 minute on a push to main, none on a pull request)
+        description: Minutes of fuzzing per target (empty means 10 on a dispatch; none on a pull request or main's push)
         type: string
         default: ""
       only:
@@ -627,11 +627,12 @@ jobs:
   # native debuggers trace their debuggee, so the container has CAP_SYS_PTRACE), and tests_blocked_live asserts that
   # every TCP listener in the namespace is in its port block, which a shared runner's never are: a job container's
   # namespace is ours. No sccache here (its server listens on 4226, inside the namespace the second row inspects).
-  # The Python and JS fork rows (tests_fork_live) need bubblewrap and run in escape-host's sandbox lane.
+  # The Python and JS fork rows (tests_fork_live) need bubblewrap and run in escape-host's sandbox lane. It runs with
+  # rt-linux, whose image it takes (and whose test build it will take).
   debug-live:
     name: live debug adapters (Fedora 45, the adapter image's adapters)
     needs: images
-    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-escape ')) }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -897,8 +898,8 @@ jobs:
       - run: cargo-deny --manifest-path Cargo.toml check
 
   # libFuzzer targets on the pinned nightly (the ledger's: nightly-2026-10-15, cargo-fuzz 0.13.2). The ubuntu runner has
-  # g++ for libfuzzer-sys. 60 s a target on a push to main, 10 minutes a target nightly, `fuzz_minutes` when dispatched;
-  # a pull request runs none. A crash uploads its input. The targets are built once (`fuzz-build`: `cargo fuzz build`,
+  # g++ for libfuzzer-sys. 10 minutes a target nightly, `fuzz_minutes` when dispatched; a pull request runs none, and
+  # main's push (the cache run) only builds them. A crash uploads its input. The targets are built once (`fuzz-build`: `cargo fuzz build`,
   # the build `cargo fuzz run` makes) and the four shards of `cargo fuzz list`'s targets each download their own and
   # run them as `cargo fuzz run` does, so a nightly takes about 70 minutes, and a new target runs with no change here.
   fuzz-build:
@@ -983,10 +984,12 @@ jobs:
             crates/hub/fuzz/target
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
+  # A consumer of fuzz-build's artifacts: it runs (and fails) when that build failed. Not on a pull request, and not on
+  # main's push, which only builds and saves the caches (the daily run fuzzes main).
   fuzz:
     name: fuzz (shard ${{ matrix.shard }} of 4)
     needs: fuzz-build
-    if: ${{ github.event_name != 'pull_request' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-fuzz ')) }}
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && !(github.event_name == 'push' && github.ref == 'refs/heads/main') && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-fuzz ')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 355
     strategy:
@@ -1429,3 +1432,37 @@ jobs:
       - name: the CPU embedder's parity (release)
         if: ${{ !cancelled() }}
         run: cargo test --locked --no-fail-fast --release --manifest-path Cargo.toml -p hrafn-embed --test parity_cpu
+
+  # This workflow's gate: every job above succeeded, or is one this run may skip (.github/ci/runtime-skips.sh over the
+  # job table .github/ci/runtime-jobs.txt: a job the narrowed or path-filtered `only` leaves out and no running job
+  # needs, a pull request's fuzzing, main's push's consumers, the on-demand fleet). A called workflow whose jobs were
+  # skipped still reads as a success to its caller, so without this a skipped job would pass `CI gate`; with it, this
+  # job fails and ci.yml's `runtime` with it. `gate-needs.sh --check` (ci.yml's `scripts`) holds `needs` to every job.
+  gate:
+    name: Runtime gate
+    if: always()
+    needs: [images, linux, msrv, escape-host, debug-live, agent-containers, fleet, android, deny, fuzz-build, fuzz, macos, macos-conformance, macos-perf]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions
+            .github/ci
+            .github/workflows
+      - id: skips
+        name: The jobs this run may skip
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          allow=$(bash .github/ci/runtime-skips.sh)
+          echo "allow=$allow" | tee -a "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/gate
+        with:
+          needs: ${{ toJSON(needs) }}
+          allow-skipped: ${{ steps.skips.outputs.allow }}
