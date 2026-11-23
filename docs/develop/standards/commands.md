@@ -26,6 +26,12 @@ r.find_source("buffer.save")?;             // file and line of the definition
 - An agent runs only a command exposed to agents (`Exposure::Agent`); those are `bod::tool_specs`, plain descriptions
   (name, text, JSON schema) that the agent runtime turns into its own tool type. `bod` depends on no hub crate.
 
+**Who may run a command.** A call carries who started it (`Cx::origin`: the user, an agent, an extension) and, when it
+comes through an extension, which one (`Cx::via`). An agent runs only `Exposure::Agent` commands. A call through an
+extension runs only `Exposure::Extension` commands (which the palette and the tools do not list). The origin that started
+the chain stays: an agent that has an extension run a command must pass both doors, and no exposure does, so it is
+refused (the confused deputy).
+
 **Enforced by:** the scan rule `command-has-doc` (a `command!` with no `doc:`, or an empty one, is a finding), and the
 registry itself (a title and a doc are required at registration). Owner: `bod`. Conformance:
 `crates/std/bod/tests/conformance.rs`.

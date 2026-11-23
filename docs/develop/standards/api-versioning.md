@@ -6,12 +6,23 @@ change to the package needs the version bump it deserves.
 
 **Doing it right.**
 
-- Edit the WIT, then run the xtask's `wit-check`: it compares the file with the last tag's. A removed or changed item
+- Edit the WIT, then run the xtask's `wit-check`: it compares the file with the one at the last `api-v*` tag (no tag, nothing to
+  compare; a tag whose tree lacks the file fails). An added case, field or flag at the end of an enum, record, flags or variant
+  is additive. A removed or changed item
   needs a breaking bump, an added one an additive bump: from 1.0 the major and the minor version, below 1.0 (as cargo
   reads it) the minor and the patch version. Comments and docs are not the API.
 - The editor implements the generated `Api` trait once; both hosts call it.
 - Supported WIT: bool, the integers, floats, string, enum, and `result<T, enum>` or `result<_, enum>` as a result.
   `mal-gen` checks every position and refuses anything else with the WIT name.
+
+**Who is calling.** Every `Api` method gets the `Caller` first: the extension's id, and the origin of the request it is
+serving (an agent that has an extension act stays the agent). The editor (`sattr::editor::Editor`) decides on it:
+namespaced command ids, notice keys and ids owned per extension (and a cap of 20), settings through
+`set_by_extension`, no reserved keys, `commands.run` through the extension's door. Both hosts hold an extension to the
+same `Limits`: Luau a step budget and a memory limit; a component fuel, a memory limit (a `ResourceLimiter`) and an epoch
+deadline (the `wasm::ticker`). A panic that poisoned the API's lock stops the extension: no call after it succeeds.
+`settings.set` takes `scoped-level` (stream, language, document, pane) and a scope id; `ask.choose` returns a question id and
+the answer comes to `entry.answered`.
 
 **The Luau side** (one contract):
 

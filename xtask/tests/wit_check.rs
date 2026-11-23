@@ -55,7 +55,7 @@ fn repo() -> tempfile::TempDir {
     git(dir.path(), &["init", "-q"]);
     git(dir.path(), &["add", "."]);
     git(dir.path(), &["commit", "-q", "-m", "api"]);
-    git(dir.path(), &["tag", "v0.1.0"]);
+    git(dir.path(), &["tag", "api-v0.1.0"]);
     dir
 }
 
@@ -94,8 +94,23 @@ fn wit_check_passes_without_a_tag() {
 }
 
 #[test]
-fn the_real_wit_parses_and_matches_itself() {
-    let real = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/ext/mal/drgnx.wit");
-    let text = std::fs::read_to_string(real).unwrap();
-    assert!(text.contains("package drgnx:api@"));
+fn wit_check_ignores_other_tags_and_fails_when_the_baseline_lacks_the_file() {
+    // a tag that is not an API release tag is not a baseline: the check passes with nothing to compare
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("README"), "x").unwrap();
+    git(dir.path(), &["init", "-q"]);
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-q", "-m", "first"]);
+    git(dir.path(), &["tag", "v9.9.9"]);
+    let wit = dir.path().join("crates/ext/mal/drgnx.wit");
+    std::fs::create_dir_all(wit.parent().unwrap()).unwrap();
+    std::fs::write(&wit, V1).unwrap();
+    let (code, out) = check(dir.path());
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("no api-v* tag"), "{out}");
+    // an API tag on a tree without the file fails closed
+    git(dir.path(), &["tag", "api-v0.0.1"]);
+    let (code, out) = check(dir.path());
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("the baseline must hold the API file"), "{out}");
 }

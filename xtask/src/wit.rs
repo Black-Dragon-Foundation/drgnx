@@ -1,26 +1,47 @@
 //! `cargo xtask wit-check [--root DIR] [--base REF]`: the extension API's version rule (api-versioning,
 //! docs/develop/standards/api-versioning.md).
 //!
-//! `crates/ext/mal/drgnx.wit` is compared with the file at the last tag (`git describe --tags --abbrev=0`, or REF). The
-//! comparison is of the API's surface (interfaces, functions with their types, type definitions, the world's imports
-//! and exports), never of comments. A removed or changed item needs a breaking bump, an added one an additive bump:
+//! `crates/ext/mal/drgnx.wit` is compared with the file at the last API release tag (`git describe --tags --abbrev=0
+//! --match 'api-v*'`). `--base REF` names another ref, for tests only. The comparison is of the API's surface: the
+//! package name, every interface and function (with its kind and types), every type definition, and every item of the
+//! world, imports and exports, functions and types and inline interfaces included; never comments. A removed or changed
+//! item needs a breaking bump; an added one, and a case added at the end of an enum, a field of a record, a flag or a
+//! case of a variant, an additive bump:
 //! - from 1.0 on, a breaking change bumps the major version and an additive one the minor version;
 //! - below 1.0, as cargo reads it, a breaking change bumps the minor version and an additive one the patch version.
 //!
-//! Without an earlier tag, or a tag without the file, there is nothing to compare with and the check passes.
+//! No `api-v*` tag at all means there is no release to compare with, and the check passes. A tag whose tree has no API
+//! file fails: the baseline must be there.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use wit_parser::{Resolve, Type, TypeDefKind, TypeOwner, WorldItem};
+use wit_parser::{
+    FunctionKind, Handle, Resolve, Type, TypeDefKind, TypeOwner, WorldItem, WorldKey,
+};
 
 const WIT_PATH: &str = "crates/ext/mal/drgnx.wit";
+
+/// One item of the surface: its head (what it is, and its types) and its members (the cases of an enum, the fields of a
+/// record, the flags, the cases of a variant): members may be added at the end without breaking anyone.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct Item {
+    head: String,
+    members: Vec<String>,
+}
+
+fn plain(head: String) -> Item {
+    Item {
+        head,
+        members: Vec::new(),
+    }
+}
 
 /// The API's surface: each item's key and its rendering, and the package version.
 struct Surface {
     version: (u64, u64, u64),
-    items: BTreeMap<String, String>,
+    items: BTreeMap<String, Item>,
 }
 
 fn ty(r: &Resolve, t: &Type) -> String {
@@ -46,7 +67,7 @@ fn ty(r: &Resolve, t: &Type) -> String {
                     format!("{}.{n}", r.interfaces[i].name.clone().unwrap_or_default())
                 }
                 (Some(n), _) => n.clone(),
-                (None, _) => kind(r, &d.kind),
+                (None, _) => kind(r, &d.kind).head,
             }
         }
     }
@@ -56,55 +77,81 @@ fn opt(r: &Resolve, t: &Option<Type>) -> String {
     t.as_ref().map_or_else(|| "_".to_string(), |t| ty(r, t))
 }
 
-fn kind(r: &Resolve, k: &TypeDefKind) -> String {
+fn list(parts: Vec<String>) -> String {
+    parts.join(", ")
+}
+
+fn kind(r: &Resolve, k: &TypeDefKind) -> Item {
     match k {
-        TypeDefKind::Enum(e) => format!(
-            "enum {{{}}}",
-            e.cases
-                .iter()
-                .map(|c| c.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        TypeDefKind::Record(rec) => format!(
-            "record {{{}}}",
-            rec.fields
+        TypeDefKind::Enum(e) => Item {
+            head: "enum".into(),
+            members: e.cases.iter().map(|c| c.name.clone()).collect(),
+        },
+        TypeDefKind::Record(rec) => Item {
+            head: "record".into(),
+            members: rec
+                .fields
                 .iter()
                 .map(|f| format!("{}: {}", f.name, ty(r, &f.ty)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        TypeDefKind::Flags(f) => format!(
-            "flags {{{}}}",
-            f.flags
-                .iter()
-                .map(|f| f.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        TypeDefKind::Variant(v) => format!(
-            "variant {{{}}}",
-            v.cases
+                .collect(),
+        },
+        TypeDefKind::Flags(f) => Item {
+            head: "flags".into(),
+            members: f.flags.iter().map(|f| f.name.clone()).collect(),
+        },
+        TypeDefKind::Variant(v) => Item {
+            head: "variant".into(),
+            members: v
+                .cases
                 .iter()
                 .map(|c| format!("{}({})", c.name, opt(r, &c.ty)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        TypeDefKind::Tuple(t) => format!(
+                .collect(),
+        },
+        TypeDefKind::Tuple(t) => plain(format!(
             "tuple<{}>",
-            t.types
-                .iter()
-                .map(|t| ty(r, t))
-                .collect::<Vec<_>>()
-                .join(", ")
+            list(t.types.iter().map(|t| ty(r, t)).collect())
+        )),
+        TypeDefKind::Option(t) => plain(format!("option<{}>", ty(r, t))),
+        TypeDefKind::List(t) => plain(format!("list<{}>", ty(r, t))),
+        TypeDefKind::Result(res) => {
+            plain(format!("result<{}, {}>", opt(r, &res.ok), opt(r, &res.err)))
+        }
+        TypeDefKind::Type(t) => plain(format!("type {}", ty(r, t))),
+        TypeDefKind::Resource => plain("resource".into()),
+        TypeDefKind::Handle(Handle::Own(id)) => plain(format!("own {}", ty(r, &Type::Id(*id)))),
+        TypeDefKind::Handle(Handle::Borrow(id)) => {
+            plain(format!("borrow {}", ty(r, &Type::Id(*id))))
+        }
+        TypeDefKind::Future(t) => plain(format!("future<{}>", opt(r, t))),
+        TypeDefKind::Stream(t) => plain(format!("stream<{}>", opt(r, t))),
+        other => plain(
+            format!("{other:?}")
+                .split(['(', '{'])
+                .next()
+                .unwrap_or("other")
+                .to_string(),
         ),
-        TypeDefKind::Option(t) => format!("option<{}>", ty(r, t)),
-        TypeDefKind::List(t) => format!("list<{}>", ty(r, t)),
-        TypeDefKind::Result(res) => format!("result<{}, {}>", opt(r, &res.ok), opt(r, &res.err)),
-        TypeDefKind::Type(t) => format!("type {}", ty(r, t)),
-        TypeDefKind::Resource => "resource".into(),
-        _ => "other".into(),
     }
+}
+
+/// The kind of a function, by name: freestanding, a method, a constructor, async or not.
+fn fkind(k: &FunctionKind) -> String {
+    format!("{k:?}")
+        .split(['(', '{'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+fn signature(r: &Resolve, f: &wit_parser::Function) -> String {
+    let params = f
+        .params
+        .iter()
+        .map(|p| format!("{}: {}", p.name, ty(r, &p.ty)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{} ({params}) -> {}", fkind(&f.kind), opt(r, &f.result))
 }
 
 fn surface(src: &str) -> Result<Surface, String> {
@@ -116,23 +163,19 @@ fn surface(src: &str) -> Result<Surface, String> {
     let v = name.version.as_ref().ok_or("the package has no version")?;
     let version = (v.major, v.minor, v.patch);
     let mut items = BTreeMap::new();
+    // the package's own name: renaming it breaks everyone
+    items.insert(
+        "package".to_string(),
+        plain(format!("{}:{}", name.namespace, name.name)),
+    );
     for (_, i) in r.interfaces.iter() {
         let Some(iname) = &i.name else { continue };
         if i.package != Some(pkg) {
             continue;
         }
-        items.insert(format!("interface {iname}"), String::new());
+        items.insert(format!("interface {iname}"), plain(String::new()));
         for (fname, f) in &i.functions {
-            let params = f
-                .params
-                .iter()
-                .map(|p| format!("{}: {}", p.name, ty(&r, &p.ty)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            items.insert(
-                format!("function {iname}.{fname}"),
-                format!("({params}) -> {}", opt(&r, &f.result)),
-            );
+            items.insert(format!("function {iname}.{fname}"), plain(signature(&r, f)));
         }
         for (tname, id) in &i.types {
             items.insert(
@@ -146,16 +189,35 @@ fn surface(src: &str) -> Result<Surface, String> {
             continue;
         }
         for (dir, map) in [("import", &w.imports), ("export", &w.exports)] {
-            for item in map.values() {
-                if let WorldItem::Interface { id, .. } = item {
-                    items.insert(
-                        format!(
-                            "world {} {dir} {}",
-                            w.name,
-                            r.interfaces[*id].name.clone().unwrap_or_default()
-                        ),
-                        String::new(),
-                    );
+            for (key, item) in map {
+                let label = match key {
+                    WorldKey::Name(n) => n.clone(),
+                    WorldKey::Interface(id) => r.interfaces[*id].name.clone().unwrap_or_default(),
+                };
+                let at = format!("world {} {dir} {label}", w.name);
+                match item {
+                    WorldItem::Interface { id, .. } => {
+                        items.insert(at.clone(), plain(String::new()));
+                        // an inline interface has no page of its own: its functions and types belong to the world
+                        let i = &r.interfaces[*id];
+                        if i.name.is_none() {
+                            for (fname, f) in &i.functions {
+                                items.insert(format!("{at}.{fname}"), plain(signature(&r, f)));
+                            }
+                            for (tname, tid) in &i.types {
+                                items.insert(
+                                    format!("{at} type {tname}"),
+                                    kind(&r, &r.types[*tid].kind),
+                                );
+                            }
+                        }
+                    }
+                    WorldItem::Function(f) => {
+                        items.insert(format!("{at} function"), plain(signature(&r, f)));
+                    }
+                    WorldItem::Type { id, .. } => {
+                        items.insert(format!("{at} type"), kind(&r, &r.types[*id].kind));
+                    }
                 }
             }
         }
@@ -171,14 +233,30 @@ enum Change {
     Breaking,
 }
 
+/// How an item went from OLD to NEW: unchanged, grown at the end, or otherwise changed.
+fn grew(old: &Item, new: &Item) -> Option<bool> {
+    if old == new {
+        return Some(false);
+    }
+    // an enum, record, flags or variant that keeps what it had and gains more at the end
+    let keeps = old.head == new.head
+        && !old.members.is_empty()
+        && new.members.len() > old.members.len()
+        && new.members.starts_with(&old.members);
+    keeps.then_some(true)
+}
+
 fn change(old: &Surface, new: &Surface) -> (Change, Vec<String>) {
     let mut breaking = Vec::new();
     let mut additive = Vec::new();
     for (k, v) in &old.items {
         match new.items.get(k) {
             None => breaking.push(format!("removed: {k}")),
-            Some(n) if n != v => breaking.push(format!("changed: {k}: `{v}` -> `{n}`")),
-            Some(_) => {}
+            Some(n) => match grew(v, n) {
+                Some(false) => {}
+                Some(true) => additive.push(format!("grew: {k}")),
+                None => breaking.push(format!("changed: {k}: `{v:?}` -> `{n:?}`")),
+            },
         }
     }
     for k in new.items.keys().filter(|k| !old.items.contains_key(*k)) {
@@ -268,17 +346,21 @@ pub fn run(args: Vec<String>) -> Result<ExitCode, String> {
     surface(&new_src)?;
     let base = match base {
         Some(b) => b,
-        None => match git(&root, &["describe", "--tags", "--abbrev=0"]) {
+        None => match git(
+            &root,
+            &["describe", "--tags", "--abbrev=0", "--match", "api-v*"],
+        ) {
             Some(t) => t.trim().to_string(),
             None => {
-                println!("wit-check: no earlier tag: nothing to compare with");
+                println!("wit-check: no api-v* tag yet: nothing to compare with");
                 return Ok(ExitCode::SUCCESS);
             }
         },
     };
+    // a baseline that lacks the file is not "nothing to compare": it fails
     let Some(old_src) = git(&root, &["show", &format!("{base}:{WIT_PATH}")]) else {
-        println!("wit-check: {base} has no {WIT_PATH}: nothing to compare with");
-        return Ok(ExitCode::SUCCESS);
+        println!("wit-check: {base} has no {WIT_PATH}: the baseline must hold the API file");
+        return Ok(ExitCode::from(1));
     };
     match check(&old_src, &new_src) {
         Ok(()) => {
@@ -304,7 +386,7 @@ mod tests {
 
     #[test]
     fn wit_change_without_bump_fails() {
-        // a removed function, a changed signature and a changed enum: each breaks
+        // a removed function, a changed signature and a removed enum case: each breaks
         let old = wit("1.2.0", "");
         for broken in [
             "package acme:api@1.2.0;\ninterface i {\n  enum k { a, b }\n}\nworld w { import i; }\n",
@@ -354,6 +436,62 @@ mod tests {
                 .contains("minor bump")
         );
         check(&old, &broken_at("0.2.0")).expect("a minor bump");
+    }
+
+    #[test]
+    fn an_added_enum_case_or_record_field_is_additive_and_needs_a_bump() {
+        let old = "package acme:api@1.0.0;\ninterface i {\n  enum k { a, b }\n  record r { x: u8 }\n  f: func();\n}\nworld w { import i; }\n";
+        let enum_grown = old.replace("enum k { a, b }", "enum k { a, b, c }");
+        let record_grown = old.replace("record r { x: u8 }", "record r { x: u8, y: string }");
+        for grown in [&enum_grown, &record_grown] {
+            let same = grown.clone();
+            let e = check(old, &same).expect_err("a bump is needed");
+            assert!(e.contains("minor bump"), "{e}");
+            let bumped = grown.replace("@1.0.0", "@1.1.0");
+            check(old, &bumped).expect("a minor bump covers a case or a field added at the end");
+        }
+        // a case inserted before the others, a field's type changed, a record emptied: breaking
+        for broken in [
+            old.replace("enum k { a, b }", "enum k { c, a, b }"),
+            old.replace("x: u8", "x: u16"),
+            old.replace("record r { x: u8 }", "record r { y: u8 }"),
+        ] {
+            let bumped = broken.replace("@1.0.0", "@1.1.0");
+            assert!(
+                check(old, &bumped)
+                    .expect_err("a major bump is needed")
+                    .contains("major bump")
+            );
+        }
+    }
+
+    #[test]
+    fn world_items_and_the_package_name_are_the_api_too() {
+        let old = "package acme:api@1.0.0;\ninterface i {\n  f: func();\n}\nworld w { import i; import log: func(s: string); }\n";
+        // a world-level function changed, an import removed, the package renamed
+        for broken in [
+            old.replace("log: func(s: string)", "log: func(s: u8)"),
+            old.replace(" import i;", ""),
+            old.replace("acme:api", "acme:other"),
+        ] {
+            assert!(
+                check(old, &broken)
+                    .expect_err("breaks")
+                    .contains("major bump")
+            );
+        }
+        let added = old.replace("world w {", "world w { export i2: func();");
+        let e = check(old, &added).expect_err("an added world item needs a bump");
+        assert!(e.contains("minor bump"), "{e}");
+        // an inline interface's function
+        let inline =
+            "package acme:api@1.0.0;\nworld w { import there: interface { g: func(); } }\n";
+        let changed = inline.replace("g: func();", "g: func(x: u8);");
+        assert!(
+            check(inline, &changed)
+                .expect_err("breaks")
+                .contains("major bump")
+        );
     }
 
     #[test]

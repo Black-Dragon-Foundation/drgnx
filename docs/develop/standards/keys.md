@@ -26,6 +26,9 @@ binding wins; a command beats a prefix.
 A `Session` holds the chord typed so far; a prefix that waits longer than its timeout is dropped (on the `stund` clock,
 so a test moves it by hand).
 
+**Reserved keys.** `lykill::RESERVED` (cancel `C-g`, `M-x`, the palette's `ctrl+shift+p` and `f1`) cannot be bound, or
+started a chord with, by an extension: `Keymap::bind_by` refuses an extension origin with `Refused`.
+
 **Enforced by:** the scan rule `no-raw-key-event` (a path into skel's key event types, or `Event::Key`, anywhere but
 `lykill`), and the layer rows that keep the UI crates off huginn. Owner: `lykill`. Conformance:
 `crates/std/lykill/tests/conformance.rs`.

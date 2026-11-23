@@ -25,6 +25,10 @@ settings.set_scoped("editor.tab-width", json!(2), skipan::Level::Language, "rust
 - A bad entry is reported with its file and line and the rest of the file stands; a file that does not parse keeps its
   level as it was; a failed write changes nothing in memory.
 
+**Extensions** set values through `Settings::set_by_extension(extension, key, value, level, scope_id)`, which takes the
+scoped levels only: the user's levels (user, machine, project) and the built-in one are refused. The value is kept in
+memory, never written to a file, and its provenance names the extension.
+
 **Enforced by:** the layer rows (a UI crate may not depend on huginn: files are read through skipan), and the
 conformance test. Owner: `skipan`. Conformance: `crates/std/skipan/tests/conformance.rs`.
 
