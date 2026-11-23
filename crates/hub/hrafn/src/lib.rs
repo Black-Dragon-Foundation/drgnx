@@ -41,7 +41,8 @@ pub use files::{Change, Class, Commit, Config, Git, Lang, Listed, classify, list
 #[cfg(feature = "host")]
 pub use files::{GitCli, ignored_dirs, is_ignored_dir};
 pub use index::{
-    Lag, Refresh, hold, lag, missing, missing_first, missing_ordered, missing_with, refresh, reset,
+    Lag, Refresh, Window, hold, lag, missing, missing_first, missing_ordered, missing_window,
+    missing_with, refresh, reset,
 };
 pub use query::{Answer, Hit, Query, Scope, search};
 pub use watch::{

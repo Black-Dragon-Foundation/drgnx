@@ -570,6 +570,55 @@ async fn missing_ordered_puts_the_named_paths_first() {
     assert!(first_chunk(&one).contains("b-var"), "{one:?}");
 }
 
+/// Pattern D. A filler that keeps the last chunk id of a window reads the next window for the cost of the window: the
+/// scan of a window after the cursor does not grow with the vectors already in the cache (the scan from the start was
+/// 52 ms at the first batch and 550 ms at 7,000 vectors, and held the engine up).
+#[tokio::test]
+async fn a_window_after_the_cursor_costs_the_window_not_the_index() {
+    let s = store().await;
+    let texts: Vec<(String, String)> = (0..60)
+        .map(|i| (format!("f{i}.el"), format!("(defvar f{i}-var {i})\n")))
+        .collect();
+    let tree = Tree::new(
+        &texts
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect::<Vec<_>>(),
+    );
+    let listed: Vec<Listed> = texts.iter().map(|(p, _)| el(p, p)).collect();
+    run(&s, &tree, &listed).await;
+    let (mut after, mut steps, mut chunks) = (0, Vec::new(), 0);
+    loop {
+        let w = hrafn::missing_window(&s, &s.c, 4, false, &[], after)
+            .await
+            .unwrap();
+        if w.items.is_empty() {
+            break;
+        }
+        steps.push(w.steps);
+        chunks += w
+            .items
+            .iter()
+            .filter(|(k, _, _)| *k == KeyKind::Chunk)
+            .count();
+        after = w.last_id.unwrap_or(after);
+        for kind in [KeyKind::Chunk, KeyKind::Path] {
+            let rows = vectors(&w.items, kind);
+            if !rows.is_empty() {
+                s.c.put(kind, DIMS as u32, &rows).await.unwrap();
+            }
+        }
+    }
+    assert!(chunks >= 60, "every chunk was offered once: {chunks}");
+    assert!(steps.len() >= 10, "{steps:?}");
+    let (first, last) = (steps[0], *steps.last().unwrap());
+    assert!(first > 0, "the steps are counted: {steps:?}");
+    assert!(
+        last <= first * 3,
+        "the last window cost {last} steps, the first {first}: {steps:?}"
+    );
+}
+
 /// Pattern D (Hrafn redesign Task 9). A path's text keeps the path whole and adds its words: split on `/ _ - .` and
 /// at camelCase boundaries.
 #[test]

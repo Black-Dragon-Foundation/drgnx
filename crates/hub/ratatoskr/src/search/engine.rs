@@ -33,6 +33,8 @@ use urdr::graph::search::{BoxFuture, EmbedError, Embedder};
 
 /// How long the engine runs without a request before it is ended.
 pub const IDLE: Duration = Duration::from_secs(300);
+/// The texts one request to the engine carries (see [`super::DocEmbedder::max_batch`]).
+pub const ENGINE_BATCH: usize = 32;
 /// The context is a multiple of this.
 const CTX_STEP: u32 = 512;
 /// The least cosine of the self-check's vector to its reference.
@@ -664,6 +666,10 @@ impl super::DocEmbedder for LocalEngine {
 
     fn source_kind(&self) -> SourceKind {
         SourceKind::LocalEngine
+    }
+
+    fn max_batch(&self) -> usize {
+        ENGINE_BATCH
     }
 
     fn embed_docs<'a>(

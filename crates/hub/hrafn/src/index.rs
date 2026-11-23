@@ -491,6 +491,33 @@ pub async fn missing_ordered(
     dirs: bool,
     order: &[String],
 ) -> Result<Vec<(KeyKind, [u8; 32], String)>, StoreError> {
+    Ok(missing_window(store, cache, limit, dirs, order, 0)
+        .await?
+        .items)
+}
+
+/// What [`missing_window`] found.
+#[derive(Debug, Default)]
+pub struct Window {
+    /// The keys, as [`missing_ordered`] gives them.
+    pub items: Vec<(KeyKind, [u8; 32], String)>,
+    /// The id of the last chunk of the rest (not of ORDER's paths) among ITEMS: the next window starts after it.
+    pub last_id: Option<i64>,
+    /// The work the scan of the rest cost (SQLite's VM steps): a window after a cursor costs the window, not the index.
+    pub steps: u64,
+}
+
+/// [`missing_ordered`] with the rest of the chunks (those not of ORDER's paths) read from the chunk id AFTER on, so a
+/// filler that keeps `last_id` pays for its window and not for every chunk before it (the scan from the start grew
+/// with the index: 52 ms at the first batch, 550 ms at 7,000 vectors).
+pub async fn missing_window(
+    store: &CodeStore,
+    cache: &VectorCache,
+    limit: u32,
+    dirs: bool,
+    order: &[String],
+    after: i64,
+) -> Result<Window, StoreError> {
     let limit = limit as usize;
     let order: Vec<String> = order.to_vec();
     store
@@ -529,25 +556,38 @@ pub async fn missing_ordered(
                 chunks.truncate(limit);
             }
             let mut q = c.prepare(
-                "select c.key, c.embed_text, c.path from chunk c
-                 where c.embed = 1
+                // (`not indexed`: the chunks in id order from the cursor, stopping at the limit; the planner's
+                // choice, the `embed` index, reads every missing chunk and sorts them)
+                "select c.key, c.embed_text, c.path, c.id from chunk c not indexed
+                 where c.embed = 1 and c.id > ?2
                    and not exists (select 1 from vc.chunk_vec v where v.key = c.key)
                    and not exists (select 1 from chunk d where d.embed = 1 and d.key = c.key and d.id < c.id)
                  order by c.id limit ?1",
             )?;
             let first = chunks.len();
             let rest = q
-                .query_map(params![(limit + first) as i64], |r| {
+                .query_map(params![(limit + first) as i64, after], |r| {
                     Ok((
                         r.get::<_, Vec<u8>>(0)?,
                         r.get::<_, String>(1)?,
                         r.get::<_, String>(2)?,
+                        r.get::<_, i64>(3)?,
                     ))
                 })?
-                .collect::<Result<Vec<Row>, _>>()?;
+                .collect::<Result<Vec<_>, _>>()?;
+            let steps = u64::try_from(q.get_status(rusqlite::StatementStatus::VmStep)).unwrap_or(0);
             let seen: HashSet<Vec<u8>> = chunks.iter().map(|(k, _, _)| k.clone()).collect();
-            chunks.extend(rest.into_iter().filter(|(k, _, _)| !seen.contains(k)));
+            // the id of each chunk of the rest, by its place in CHUNKS
+            let mut ids: Vec<Option<i64>> = vec![None; first];
+            for (k, t, p, id) in rest {
+                if !seen.contains(&k) {
+                    chunks.push((k, t, p));
+                    ids.push(Some(id));
+                }
+            }
             chunks.truncate(limit);
+            ids.truncate(chunks.len());
+            let mut last_id: Option<i64> = None;
             let mut lacks = c.prepare(
                 "select p.key from path_key p where p.path = ?1
                    and not exists (select 1 from vc.path_vec v where v.key = p.key)",
@@ -580,6 +620,7 @@ pub async fn missing_ordered(
                 }
                 if let Ok(k) = <[u8; 32]>::try_from(k.as_slice()) {
                     out.push((KeyKind::Chunk, k, text.clone()));
+                    last_id = ids[i].or(last_id);
                 }
                 // a file's path key follows its last chunk key here
                 if chunks.get(i + 1).is_none_or(|(_, _, next)| next != path) {
@@ -611,7 +652,11 @@ pub async fn missing_ordered(
                     }
                 }
             }
-            Ok(out)
+            Ok(Window {
+                items: out,
+                last_id,
+                steps,
+            })
         })
         .await
 }

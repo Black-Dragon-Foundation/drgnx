@@ -169,6 +169,11 @@ pub struct SourceChain {
     hold_local: bool,
     overriding: bool,
     why: Option<String>,
+    /// The chunk id the next read of the store starts after: the keys before it were read already (see
+    /// [`hrafn::missing_window`]); none yet, or a fill that failed, means from the start.
+    cursor: i64,
+    /// The next window, read while the last one was in the source's hands, so the engine never waits on the store.
+    ahead: Option<Vec<Item>>,
 }
 
 impl SourceChain {
@@ -180,6 +185,8 @@ impl SourceChain {
             hold_local: false,
             overriding: false,
             why: None,
+            cursor: 0,
+            ahead: None,
         };
         c.sync(sources);
         c
@@ -501,16 +508,80 @@ impl SourceChain {
         on_work: &(dyn Fn() + Sync),
     ) -> Result<FillOutcome, StoreError> {
         if !self.ready(now) {
+            self.restart();
             return Ok(FillOutcome::AllDown);
         }
         *reads += 1;
-        let keys = hrafn::missing_first(store, cache, self.batch() as u32, order).await?;
+        let limit = self.batch() as u32;
+        let keys = match self.ahead.take() {
+            Some(keys) if !keys.is_empty() => keys,
+            _ => {
+                let w = window(store, cache, limit, order, self.cursor).await?;
+                if w.items.is_empty() && self.cursor > 0 {
+                    // the end of the store from the cursor on: what is left behind it (a vector dropped, a failed fill)
+                    self.cursor = 0;
+                    let w = window(store, cache, limit, order, 0).await?;
+                    self.cursor = w.last_id.unwrap_or(0);
+                    w.items
+                } else {
+                    self.cursor = w.last_id.unwrap_or(self.cursor);
+                    w.items
+                }
+            }
+        };
         if keys.is_empty() {
             return Ok(FillOutcome::Nothing);
         }
         on_work();
-        Ok(self.fill(cache, &keys, now).await)
+        // the next window is read while this one is filled
+        let cursor = self.cursor;
+        let (out, next) = tokio::join!(
+            self.fill(cache, &keys, now),
+            window(store, cache, limit, order, cursor)
+        );
+        match (&out, next) {
+            (FillOutcome::Filled { .. }, Ok(next)) => {
+                let taken: HashSet<(KeyKind, [u8; 32])> =
+                    keys.iter().map(|(k, key, _)| (*k, *key)).collect();
+                let items: Vec<Item> = next
+                    .items
+                    .into_iter()
+                    .filter(|(k, key, _)| !taken.contains(&(*k, *key)))
+                    .collect();
+                if !items.is_empty() {
+                    self.cursor = next.last_id.unwrap_or(self.cursor);
+                    self.ahead = Some(items);
+                }
+            }
+            _ => self.restart(),
+        }
+        Ok(out)
     }
+
+    /// The next read starts at the first chunk again.
+    fn restart(&mut self) {
+        self.cursor = 0;
+        self.ahead = None;
+    }
+}
+
+/// The window of keys the cache lacks after chunk id AFTER (the chunks of ORDER's paths first).
+async fn window(
+    store: &CodeStore,
+    cache: &VectorCache,
+    limit: u32,
+    order: &[String],
+    after: i64,
+) -> Result<hrafn::Window, StoreError> {
+    hrafn::missing_window(
+        store,
+        cache,
+        limit,
+        hrafn::query::DIR_WEIGHT > 0.0,
+        order,
+        after,
+    )
+    .await
 }
 
 /// A chain with the cache its vectors go to.
@@ -631,7 +702,7 @@ impl Source for DocSource {
     }
     /// Eight keys a request, as before the chain (the built-in model's batch; a server's number comes with Wave 9).
     fn max_batch(&self) -> usize {
-        REQUEST_KEYS as usize
+        self.inner.max_batch()
     }
     fn lookup<'a>(
         &'a self,
