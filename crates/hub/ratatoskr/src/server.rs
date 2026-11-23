@@ -570,6 +570,10 @@ pub async fn run(args: ServeArgs) -> Exit {
     // nothing more is served: the clients hear the end now, before any wait below that can hang
     front.end_connections().await;
     stage("the connections closed");
+    #[cfg(feature = "test-hooks")]
+    if let Some(ms) = args.test_slow_stop_ms {
+        crate::clock::sleep(Duration::from_millis(ms)).await;
+    }
     // the hub has stopped: `stop` is answered by this mark, while the lock stays held until the store's queue is
     // written (`ensure` waits for its release, so no second hub opens the store meanwhile)
     if let Err(e) = lock.mark_stopping() {

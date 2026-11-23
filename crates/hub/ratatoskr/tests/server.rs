@@ -684,13 +684,30 @@ fn stop_answers_when_the_hub_stopped_serving_and_its_store_finishes_under_the_lo
 #[test]
 fn a_stopping_hub_that_is_killed_leaves_ensure_nothing_to_wait_for() {
     // the stopping hub of the row above dies (SIGKILL) while its store is held: its lock went with it, so `ensure`
-    // starts a hub within its usual budget instead of waiting for a mark nobody holds
+    // starts a hub within its usual budget instead of waiting for a mark nobody holds.  The hub is stopped by its
+    // SIGTERM and the row waits for the stopping mark itself (`FAILED_AFTER` only bounds a failure), not for `stop`'s
+    // 2 s: how soon a hub stops is the row above's claim, and a loaded machine once took this row past it.  Its stop
+    // is slowed past those 2 s (`--test-slow-stop-ms`), so the row holds however long the stop takes.
     let root = Root::new();
     let socket = root.socket();
-    let mut hub = Hub::start_with(&root, 1, &["--test-ignore-shutdown", "--test-hold-store"]);
+    let lock = paths::lock_path(&socket);
+    let mut hub = Hub::start_with(
+        &root,
+        1,
+        &["--test-hold-store", "--test-slow-stop-ms", "2500"],
+    );
     hub.wait_ready(&socket);
-    let out = cli(&root, &["stop", "--timeout", "2"]);
-    assert_eq!(out.status.code(), Some(0), "{out:?} {}", hub.stderr_text());
+    unsafe { libc::kill(hub.pid() as i32, libc::SIGTERM) };
+    skuld::wait_until(
+        "the hub marks its lock stopping",
+        FAILED_AFTER.as_secs(),
+        || {
+            std::fs::read_to_string(&lock)
+                .ok()
+                .filter(|t| t.trim_end().ends_with(" stopping"))
+                .map(|_| ())
+        },
+    );
     unsafe { libc::kill(hub.pid() as i32, libc::SIGKILL) };
     hub.wait_exit();
     assert!(

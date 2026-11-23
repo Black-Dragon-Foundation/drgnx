@@ -249,6 +249,9 @@ pub struct ServeArgs {
     /// `--test-hold-store` (test-hooks only): at the hub's end, runtime.db's thread is held by a job until SIGUSR1, with
     /// a write queued behind it, so the end can be seen to close the connections first and then write that queue.
     pub test_hold_store: bool,
+    /// `--test-slow-stop-ms N` (test-hooks only): the hub's end waits N ms (its clock) before it marks its lock stopping,
+    /// a stop slowed as a loaded machine can slow it.
+    pub test_slow_stop_ms: Option<u64>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -323,6 +326,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                     }
                     #[cfg(feature = "test-hooks")]
                     Long("test-hold-store") => a.test_hold_store = true,
+                    #[cfg(feature = "test-hooks")]
+                    Long("test-slow-stop-ms") => {
+                        a.test_slow_stop_ms = Some(p.value().map_err(e)?.parse().map_err(e)?);
+                    }
                     other => return Err(other.unexpected().to_string()),
                 }
             }
@@ -1243,6 +1250,7 @@ mod tests {
         assert!(p(&["serve", "--test-clock"]).is_err());
         assert!(p(&["serve", "--test-sequencer"]).is_err());
         assert!(p(&["serve", "--test-hold-store"]).is_err());
+        assert!(p(&["serve", "--test-slow-stop-ms", "1"]).is_err());
     }
 
     #[cfg(feature = "test-hooks")]
@@ -1309,6 +1317,13 @@ mod tests {
             p(&["serve", "--test-hold-store"]),
             Ok(Command::Serve(ServeArgs {
                 test_hold_store: true,
+                ..ServeArgs::default()
+            }))
+        );
+        assert_eq!(
+            p(&["serve", "--test-slow-stop-ms", "2500"]),
+            Ok(Command::Serve(ServeArgs {
+                test_slow_stop_ms: Some(2500),
                 ..ServeArgs::default()
             }))
         );

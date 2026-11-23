@@ -93,6 +93,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `__test_barrier` ([Test hooks](#test-hooks)), `--test-hold-store` (at the hub's end runtime.db's thread is held by a
   job until the hub gets SIGUSR1, with one write queued behind it, so a test sees the end close its connections first
   and then write that queue, or a second SIGTERM abandon it; only SIGUSR1 releases the job, never the runtime's end),
+  `--test-slow-stop-ms N` (the hub's end waits N ms on its clock before it marks its lock stopping: a stop as slow as a
+  loaded machine can make it, so a row that waits for the mark is shown not to lean on `stop`'s budget),
   and `--agent-socket SID[:JOB]`, which is refused without `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent, so a hub a test starts through `ensure` ends with the test.
 - **The gateway** (`ratatoskr/src/gateway.rs`, forwarding by `bifrost`) runs inside the hub: never in the
   editing Emacs, so streaming cannot touch the keystroke budget. Besides the 127.0.0.1 port it listens on **per-session
