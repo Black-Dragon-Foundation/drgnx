@@ -31,6 +31,7 @@ use crate::geom::Rect;
 use crate::minimap::Minimap;
 use crate::prim::Prim;
 use crate::stack::Stack;
+use kvardi::Px;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -142,7 +143,12 @@ impl Chrome {
         let (x0, y0) = (px(x.floor()), px(y.floor()));
         let (x1, y1) = (px((x + w as f64).ceil()), px((y + h as f64).ceil()));
         let side = |a: i64, b: i64| (b - a).min(i32::MAX as i64) as i32;
-        Rect::new(x0 as i32, y0 as i32, side(x0, x1), side(y0, y1))
+        Rect::new(
+            Px(x0 as i32),
+            Px(y0 as i32),
+            Px(side(x0, x1)),
+            Px(side(y0, y1)),
+        )
     }
 }
 
@@ -230,10 +236,10 @@ impl Block {
             // its rows across the layer, which clips them
             const REACH: i32 = 1 << 20;
             return Rect::new(
-                self.rect.x - REACH,
-                self.rect.y,
-                self.rect.w + 2 * REACH,
-                self.rect.h,
+                Px(self.rect.x - REACH),
+                Px(self.rect.y),
+                Px(self.rect.w + 2 * REACH),
+                Px(self.rect.h),
             );
         }
         let m = if self.kind != BlockKind::Ring {
@@ -253,10 +259,10 @@ impl Block {
             line.max(shadow)
         };
         Rect::new(
-            self.rect.x - m,
-            self.rect.y - m,
-            self.rect.w + 2 * m,
-            self.rect.h + 2 * m,
+            Px(self.rect.x - m),
+            Px(self.rect.y - m),
+            Px(self.rect.w + 2 * m),
+            Px(self.rect.h + 2 * m),
         )
     }
 }
@@ -306,9 +312,9 @@ pub fn card_group(outers: &[Rect], others: &[Rect]) -> Option<(Rect, Vec<Rect>)>
         }
         if gap > 0 {
             fill.push(if column {
-                Rect::new(a.x, a.y + a.h, a.w, gap)
+                Rect::new(Px(a.x), Px(a.y + a.h), Px(a.w), Px(gap))
             } else {
-                Rect::new(a.x + a.w, a.y, gap, a.h)
+                Rect::new(Px(a.x + a.w), Px(a.y), Px(gap), Px(a.h))
             });
         }
     }
@@ -344,10 +350,10 @@ pub fn card_corners(p: &Placed) -> Option<(u32, [Rect; 4])> {
     Some((
         r,
         [
-            Rect::new(x, y, ri, ri),
-            Rect::new(x + w - ri, y, ri, ri),
-            Rect::new(x, y + h - ri, ri, ri),
-            Rect::new(x + w - ri, y + h - ri, ri, ri),
+            Rect::new(Px(x), Px(y), Px(ri), Px(ri)),
+            Rect::new(Px(x + w - ri), Px(y), Px(ri), Px(ri)),
+            Rect::new(Px(x), Px(y + h - ri), Px(ri), Px(ri)),
+            Rect::new(Px(x + w - ri), Px(y + h - ri), Px(ri), Px(ri)),
         ],
     ))
 }
@@ -363,7 +369,7 @@ fn scrolled_corners(
     rect: Rect,
     scroll: i32,
 ) -> Vec<Rect> {
-    let view = Rect::new(0, 0, rect.w, rect.h);
+    let view = Rect::new(Px(0), Px(0), Px(rect.w), Px(rect.h));
     let parts = |placed: &[Placed]| -> Vec<Rect> {
         placed
             .iter()
@@ -373,7 +379,7 @@ fn scrolled_corners(
                 v.extend(block_patches(p));
                 v
             })
-            .map(|sq| sq.intersect(&rect).translate(-rect.x, -rect.y))
+            .map(|sq| sq.intersect(&rect).translate(Px(-rect.x), Px(-rect.y)))
             .filter(|r| !r.is_empty())
             .collect()
     };
@@ -385,7 +391,7 @@ fn scrolled_corners(
     let moved = here
         .iter()
         .chain(&before)
-        .map(|r| r.translate(0, scroll).intersect(&view))
+        .map(|r| r.translate(Px(0), Px(scroll)).intersect(&view))
         .filter(|r| !r.is_empty())
         .collect::<Vec<_>>();
     here.into_iter().chain(moved).collect()
@@ -399,10 +405,10 @@ pub fn bounds(rect: Rect, chrome: Option<&Chrome>) -> Rect {
             match c.ring().min(i32::MAX as u32 / 4) as i32 {
                 0 => b,
                 w => b.bounds(&Rect::new(
-                    rect.x - w,
-                    rect.y - w,
-                    rect.w + 2 * w,
-                    rect.h + 2 * w,
+                    Px(rect.x - w),
+                    Px(rect.y - w),
+                    Px(rect.w + 2 * w),
+                    Px(rect.h + 2 * w),
                 )),
             }
         }
@@ -417,10 +423,10 @@ pub fn card_bounds(rect: Rect, chrome: Option<&Chrome>, card: Option<&Card>) -> 
         Some(w) if w > 0 && !rect.is_empty() => {
             let w = w.min(i32::MAX as u32 / 4) as i32;
             b.bounds(&Rect::new(
-                rect.x - w,
-                rect.y - w,
-                rect.w + 2 * w,
-                rect.h + 2 * w,
+                Px(rect.x - w),
+                Px(rect.y - w),
+                Px(rect.w + 2 * w),
+                Px(rect.h + 2 * w),
             ))
         }
         _ => b,
@@ -770,10 +776,9 @@ impl Scene {
     /// Move LAYER's anchors in BAND by DY; those that leave the band or the layer go.
     pub fn decor_scroll(&mut self, layer: u64, band: Rect, dy: i32) -> Result<(), i32> {
         self.known(layer)?;
-        let extent = self
-            .layers
-            .get(&layer)
-            .map_or(Rect::default(), |l| Rect::new(0, 0, l.rect.w, l.rect.h));
+        let extent = self.layers.get(&layer).map_or(Rect::default(), |l| {
+            Rect::new(Px(0), Px(0), Px(l.rect.w), Px(l.rect.h))
+        });
         if let Some(a) = self.anchors.get_mut(&layer) {
             a.scroll(band, dy, extent);
         }
@@ -943,11 +948,11 @@ impl Scene {
                 let Some(p) = new_by.get(&id) else {
                     continue;
                 };
-                let local = Rect::new(0, 0, p.rect.w, p.rect.h);
+                let local = Rect::new(Px(0), Px(0), Px(p.rect.w), Px(p.rect.h));
                 out.extend(
                     rects
                         .iter()
-                        .map(|r| r.intersect(&local).translate(p.rect.x, p.rect.y)),
+                        .map(|r| r.intersect(&local).translate(Px(p.rect.x), Px(p.rect.y))),
                 );
                 out.extend(scrolls.iter().filter_map(|w| new_by.get(w)).map(|w| w.rect));
             }
@@ -1050,12 +1055,12 @@ impl Scene {
                 let before = self.snapshot.outputs.iter().find(|o| o.layer == p.id);
                 let full = rescaled || before.is_none_or(|o| o.rect != rect);
                 let mut damage: Vec<Rect> = if full {
-                    vec![Rect::new(0, 0, rect.w, rect.h)]
+                    vec![Rect::new(Px(0), Px(0), Px(rect.w), Px(rect.h))]
                 } else {
                     out.iter()
                         .map(|r| r.intersect(&rect))
                         .filter(|r| !r.is_empty())
-                        .map(|r| r.translate(-rect.x, -rect.y))
+                        .map(|r| r.translate(Px(-rect.x), Px(-rect.y)))
                         .collect()
                 };
                 let scroll = if full {
@@ -1168,6 +1173,7 @@ mod tests {
     use super::*;
     use crate::rng::XorShift;
     use crate::shadow::{ShadowCache, ShadowSpec};
+    use kvardi::Px;
 
     const ROOT: u64 = 1;
 
@@ -1185,8 +1191,15 @@ mod tests {
     /// A scene with the root's frame layer at W×H, committed once.
     fn scene(w: i32, h: i32, scale: f64) -> (Scene, Frames) {
         let (mut s, mut f) = (Scene::default(), Frames::new());
-        s.upsert(&desc(ROOT, 0, 1, Rect::new(0, 0, w, h), scale, true))
-            .unwrap();
+        s.upsert(&desc(
+            ROOT,
+            0,
+            1,
+            Rect::new(Px(0), Px(0), Px(w), Px(h)),
+            scale,
+            true,
+        ))
+        .unwrap();
         s.commit(ROOT, &mut f);
         (s, f)
     }
@@ -1200,7 +1213,7 @@ mod tests {
     }
 
     fn covered(damage: &[Rect], x: i32, y: i32) -> bool {
-        damage.iter().any(|r| r.contains(x, y))
+        damage.iter().any(|r| r.contains(Px(x), Px(y)))
     }
 
     /// Every pixel of R is in DAMAGE.
@@ -1227,16 +1240,16 @@ mod tests {
     #[test]
     fn commit_damage_covers_old_and_new_bounds() {
         const N: i32 = 160;
-        let root = Rect::new(0, 0, N, N);
+        let root = Rect::new(Px(0), Px(0), Px(N), Px(N));
         for seed in 1..=100u64 {
             let mut g = XorShift::new(seed);
             let (mut s, mut f) = scene(N, N, 1.0);
             let rnd = |g: &mut XorShift| {
                 Rect::new(
-                    g.below(N as u32) as i32 - 20,
-                    g.below(N as u32) as i32 - 20,
-                    g.below(60) as i32,
-                    g.below(60) as i32,
+                    Px(g.below(N as u32) as i32 - 20),
+                    Px(g.below(N as u32) as i32 - 20),
+                    Px(g.below(60) as i32),
+                    Px(g.below(60) as i32),
                 )
             };
             // (rect, visible, chrome) per child id 10..14
@@ -1284,25 +1297,37 @@ mod tests {
         }
         // a child frame's own damage lands at its place; a scroll damages its window layer
         let (mut s, mut f) = scene(800, 600, 1.0);
-        child(&mut s, 10, ROOT, Rect::new(100, 50, 200, 100));
-        s.upsert(&desc(11, 10, 2, Rect::new(104, 54, 192, 80), 1.0, true))
-            .unwrap();
+        child(
+            &mut s,
+            10,
+            ROOT,
+            Rect::new(Px(100), Px(50), Px(200), Px(100)),
+        );
+        s.upsert(&desc(
+            11,
+            10,
+            2,
+            Rect::new(Px(104), Px(54), Px(192), Px(80)),
+            1.0,
+            true,
+        ))
+        .unwrap();
         commit(&mut s, &mut f);
         let fd = f.entry(10).or_default();
-        fd.add(Rect::new(0, 0, 5, 5));
-        fd.add(Rect::new(190, 90, 50, 50));
+        fd.add(Rect::new(Px(0), Px(0), Px(5), Px(5)));
+        fd.add(Rect::new(Px(190), Px(90), Px(50), Px(50)));
         fd.scrolled(11);
         let d = commit(&mut s, &mut f);
-        assert!(covers(&d, Rect::new(100, 50, 5, 5)));
-        assert!(covers(&d, Rect::new(290, 140, 10, 10)));
-        assert!(covers(&d, Rect::new(104, 54, 192, 80)));
+        assert!(covers(&d, Rect::new(Px(100), Px(50), Px(5), Px(5))));
+        assert!(covers(&d, Rect::new(Px(290), Px(140), Px(10), Px(10))));
+        assert!(covers(&d, Rect::new(Px(104), Px(54), Px(192), Px(80))));
         assert!(!covered(&d, 300, 150), "clipped to the child: {d:?}");
     }
 
     #[test]
     fn shadow_extent_is_in_the_damage() {
         let (mut s, mut f) = scene(800, 600, 2.0);
-        let r = Rect::new(200, 150, 300, 200);
+        let r = Rect::new(Px(200), Px(150), Px(300), Px(200));
         let c = shadow();
         s.upsert(&desc(10, ROOT, 3, r, 2.0, true)).unwrap();
         s.set_chrome(10, Some(c)).unwrap();
@@ -1320,10 +1345,10 @@ mod tests {
         );
         let (iw, ih) = tiles.image_size(r.w as u32, r.h as u32);
         let image = Rect::new(
-            r.x - tiles.pad(),
-            r.y - tiles.pad() + c.offset_y as i32,
-            iw as i32,
-            ih as i32,
+            Px(r.x - tiles.pad()),
+            Px(r.y - tiles.pad() + c.offset_y as i32),
+            Px(iw as i32),
+            Px(ih as i32),
         );
         assert_eq!(c.shadow_rect(r), image);
         let d = commit(&mut s, &mut f);
@@ -1341,10 +1366,10 @@ mod tests {
         .unwrap();
         assert!(covers(&commit(&mut s, &mut f), image));
         // moved: old and new shadows
-        s.upsert(&desc(10, ROOT, 3, r.translate(40, 0), 2.0, true))
+        s.upsert(&desc(10, ROOT, 3, r.translate(Px(40), Px(0)), 2.0, true))
             .unwrap();
         let d = commit(&mut s, &mut f);
-        assert!(covers(&d, image) && covers(&d, image.translate(40, 0)));
+        assert!(covers(&d, image) && covers(&d, image.translate(Px(40), Px(0))));
         // a fractional offset rounds outward
         let mut half = c;
         half.offset_x = 0.5;
@@ -1357,7 +1382,7 @@ mod tests {
     #[test]
     fn hide_then_show_in_one_commit_cancels() {
         let (mut s, mut f) = scene(800, 600, 1.0);
-        let r = Rect::new(10, 10, 100, 40);
+        let r = Rect::new(Px(10), Px(10), Px(100), Px(40));
         child(&mut s, 10, ROOT, r);
         s.set_chrome(10, Some(shadow())).unwrap();
         assert!(!commit(&mut s, &mut f).is_empty());
@@ -1368,7 +1393,7 @@ mod tests {
         s.raise(10).unwrap();
         assert!(commit(&mut s, &mut f).is_empty());
         // a hide alone damages the bounds; so does the show after it
-        let b = bounds(r, Some(&shadow())).intersect(&Rect::new(0, 0, 800, 600));
+        let b = bounds(r, Some(&shadow())).intersect(&Rect::new(Px(0), Px(0), Px(800), Px(600)));
         s.upsert(&desc(10, ROOT, 3, r, 1.0, false)).unwrap();
         assert!(covers(&commit(&mut s, &mut f), b));
         s.upsert(&desc(10, ROOT, 3, r, 1.0, true)).unwrap();
@@ -1386,7 +1411,7 @@ mod tests {
                 let known = model.contains(&id);
                 match g.below(4) {
                     _ if !known => {
-                        child(&mut s, id, ROOT, Rect::new(0, 0, 10, 10));
+                        child(&mut s, id, ROOT, Rect::new(Px(0), Px(0), Px(10), Px(10)));
                         model.push(id);
                     }
                     0 => {
@@ -1405,7 +1430,7 @@ mod tests {
                     }
                     _ => {
                         // a change of geometry keeps the place
-                        child(&mut s, id, ROOT, Rect::new(5, 5, 20, 20));
+                        child(&mut s, id, ROOT, Rect::new(Px(5), Px(5), Px(20), Px(20)));
                     }
                 }
                 assert_eq!(s.list(), model.as_slice(), "seed {seed}");
@@ -1420,12 +1445,22 @@ mod tests {
     fn reparent_moves_the_subtree() {
         let (mut s, mut f) = scene(800, 600, 1.0);
         let (a, b, c, w) = (10, 20, 30, 31);
-        let (ra, rc) = (Rect::new(10, 10, 100, 100), Rect::new(20, 20, 30, 30));
+        let (ra, rc) = (
+            Rect::new(Px(10), Px(10), Px(100), Px(100)),
+            Rect::new(Px(20), Px(20), Px(30), Px(30)),
+        );
         child(&mut s, a, ROOT, ra);
-        child(&mut s, b, ROOT, Rect::new(50, 50, 100, 100));
+        child(&mut s, b, ROOT, Rect::new(Px(50), Px(50), Px(100), Px(100)));
         child(&mut s, c, a, rc);
-        s.upsert(&desc(w, c, 2, Rect::new(22, 22, 26, 26), 1.0, true))
-            .unwrap();
+        s.upsert(&desc(
+            w,
+            c,
+            2,
+            Rect::new(Px(22), Px(22), Px(26), Px(26)),
+            1.0,
+            true,
+        ))
+        .unwrap();
         commit(&mut s, &mut f);
         assert_eq!(s.list(), &[a, c, b]);
         s.reparent(a, b).unwrap();
@@ -1437,7 +1472,14 @@ mod tests {
         // under its own subtree: refused, nothing changes
         assert_eq!(s.reparent(b, c), Err(GLITNIR_E_ARG));
         assert_eq!(
-            s.upsert(&desc(b, w, 3, Rect::new(0, 0, 1, 1), 1.0, true)),
+            s.upsert(&desc(
+                b,
+                w,
+                3,
+                Rect::new(Px(0), Px(0), Px(1), Px(1)),
+                1.0,
+                true
+            )),
             Err(GLITNIR_E_ARG)
         );
         assert_eq!(s.list(), &[b, a, c]);
@@ -1453,29 +1495,48 @@ mod tests {
     fn nested_child_stacks_inside_its_parent() {
         let (mut s, mut f) = scene(800, 600, 1.0);
         let (a, b, c, d, w) = (10, 20, 30, 40, 11);
-        child(&mut s, a, ROOT, Rect::new(0, 0, 300, 300));
-        child(&mut s, b, ROOT, Rect::new(100, 100, 300, 300));
-        child(&mut s, c, a, Rect::new(10, 10, 50, 50));
+        child(&mut s, a, ROOT, Rect::new(Px(0), Px(0), Px(300), Px(300)));
+        child(
+            &mut s,
+            b,
+            ROOT,
+            Rect::new(Px(100), Px(100), Px(300), Px(300)),
+        );
+        child(&mut s, c, a, Rect::new(Px(10), Px(10), Px(50), Px(50)));
         assert_eq!(s.list(), &[a, c, b]);
         s.raise(c).unwrap();
         assert_eq!(s.list(), &[a, c, b], "C stays inside A, below B");
         s.raise(a).unwrap();
         assert_eq!(s.list(), &[b, a, c]);
-        child(&mut s, d, a, Rect::new(20, 20, 50, 50));
+        child(&mut s, d, a, Rect::new(Px(20), Px(20), Px(50), Px(50)));
         assert_eq!(s.list(), &[b, a, c, d]);
         s.lower(c).unwrap();
         assert_eq!(s.list(), &[b, a, c, d]);
         s.lower(d).unwrap();
         assert_eq!(s.list(), &[b, a, d, c]);
         // A's window paints above A and below A's children, whenever it came
-        s.upsert(&desc(w, a, 2, Rect::new(2, 2, 290, 290), 1.0, true))
-            .unwrap();
+        s.upsert(&desc(
+            w,
+            a,
+            2,
+            Rect::new(Px(2), Px(2), Px(290), Px(290)),
+            1.0,
+            true,
+        ))
+        .unwrap();
         commit(&mut s, &mut f);
         let ids: Vec<u64> = s.committed().iter().map(|p| p.id).collect();
         assert_eq!(ids, vec![ROOT, b, a, w, d, c]);
         // a hidden parent hides its subtree from the paint, not from the stacking
-        s.upsert(&desc(a, ROOT, 3, Rect::new(0, 0, 300, 300), 1.0, false))
-            .unwrap();
+        s.upsert(&desc(
+            a,
+            ROOT,
+            3,
+            Rect::new(Px(0), Px(0), Px(300), Px(300)),
+            1.0,
+            false,
+        ))
+        .unwrap();
         commit(&mut s, &mut f);
         let ids: Vec<u64> = s.committed().iter().map(|p| p.id).collect();
         assert_eq!(ids, vec![ROOT, b]);
@@ -1486,17 +1547,21 @@ mod tests {
     fn removed_layer_has_no_damage_source() {
         let (mut s, mut f) = scene(800, 600, 1.0);
         let (c, n) = (10, 20);
-        let r = Rect::new(100, 100, 50, 50);
+        let r = Rect::new(Px(100), Px(100), Px(50), Px(50));
         child(&mut s, c, ROOT, r);
-        child(&mut s, n, c, Rect::new(110, 110, 10, 10));
+        child(&mut s, n, c, Rect::new(Px(110), Px(110), Px(10), Px(10)));
         commit(&mut s, &mut f);
-        f.entry(c).or_default().add(Rect::new(0, 0, 10, 10));
+        f.entry(c)
+            .or_default()
+            .add(Rect::new(Px(0), Px(0), Px(10), Px(10)));
         s.remove(c);
         assert!(s.list().is_empty(), "the subtree went too");
         assert_eq!(s.set_chrome(n, None), Err(GLITNIR_E_ARG));
         assert!(covers(&commit(&mut s, &mut f), r));
         // the frame still draws (it is alive, e.g. on its way to another root): nothing reaches this root
-        f.entry(c).or_default().add(Rect::new(0, 0, 10, 10));
+        f.entry(c)
+            .or_default()
+            .add(Rect::new(Px(0), Px(0), Px(10), Px(10)));
         f.entry(c).or_default().scrolled(n);
         assert!(commit(&mut s, &mut f).is_empty());
         assert!(s.committed().iter().all(|p| p.id == ROOT));
@@ -1541,42 +1606,67 @@ mod tests {
 
     #[test]
     fn own_output_takes_its_window_damage() {
-        let r = Rect::new(10, 20, 400, 300);
+        let r = Rect::new(Px(10), Px(20), Px(400), Px(300));
         let (mut s, mut f) = own(1.0, r);
         let o = output(&s);
         assert!(o.full);
-        assert_eq!((o.rect, o.damage), (r, vec![Rect::new(0, 0, 400, 300)]));
+        assert_eq!(
+            (o.rect, o.damage),
+            (r, vec![Rect::new(Px(0), Px(0), Px(400), Px(300))])
+        );
         // inside the window: the output's, in its coordinates; outside: the frame's
-        add(&mut f, Rect::new(50, 50, 10, 10));
-        add(&mut f, Rect::new(600, 500, 10, 10));
+        add(&mut f, Rect::new(Px(50), Px(50), Px(10), Px(10)));
+        add(&mut f, Rect::new(Px(600), Px(500), Px(10), Px(10)));
         let d = commit(&mut s, &mut f);
         let o = output(&s);
         assert_eq!((o.full, o.scroll), (false, 0));
-        assert_eq!(o.damage, vec![Rect::new(40, 30, 10, 10)]);
+        assert_eq!(o.damage, vec![Rect::new(Px(40), Px(30), Px(10), Px(10))]);
         assert!(
-            covers(&d, Rect::new(600, 500, 10, 10)) && misses(&d, r),
+            covers(&d, Rect::new(Px(600), Px(500), Px(10), Px(10))) && misses(&d, r),
             "{d:?}"
         );
         // across the window's edge: split
-        add(&mut f, Rect::new(400, 100, 20, 10));
+        add(&mut f, Rect::new(Px(400), Px(100), Px(20), Px(10)));
         let d = commit(&mut s, &mut f);
-        assert_eq!(output(&s).damage, vec![Rect::new(390, 80, 10, 10)]);
+        assert_eq!(
+            output(&s).damage,
+            vec![Rect::new(Px(390), Px(80), Px(10), Px(10))]
+        );
         assert!(
-            covers(&d, Rect::new(410, 100, 10, 10)) && misses(&d, r),
+            covers(&d, Rect::new(Px(410), Px(100), Px(10), Px(10))) && misses(&d, r),
             "{d:?}"
         );
         // nothing changed: nothing on either
         assert!(commit(&mut s, &mut f).is_empty() && output(&s).damage.is_empty());
         // a new scale: drawn whole again
-        s.upsert(&desc(ROOT, 0, 1, Rect::new(0, 0, 800, 600), 2.0, true))
-            .unwrap();
+        s.upsert(&desc(
+            ROOT,
+            0,
+            1,
+            Rect::new(Px(0), Px(0), Px(800), Px(600)),
+            2.0,
+            true,
+        ))
+        .unwrap();
         commit(&mut s, &mut f);
         assert!(output(&s).full);
         // a window under a child frame is never an output; a hidden one is none while hidden
         let (mut s, mut f) = own(1.0, r);
-        child(&mut s, 30, ROOT, Rect::new(500, 0, 200, 200));
-        s.upsert(&desc(31, 30, 2, Rect::new(510, 10, 100, 100), 1.0, true))
-            .unwrap();
+        child(
+            &mut s,
+            30,
+            ROOT,
+            Rect::new(Px(500), Px(0), Px(200), Px(200)),
+        );
+        s.upsert(&desc(
+            31,
+            30,
+            2,
+            Rect::new(Px(510), Px(10), Px(100), Px(100)),
+            1.0,
+            true,
+        ))
+        .unwrap();
         s.set_output(31, true).unwrap();
         s.upsert(&desc(WIN, ROOT, 2, r, 1.0, false)).unwrap();
         commit(&mut s, &mut f);
@@ -1589,22 +1679,28 @@ mod tests {
 
     #[test]
     fn own_output_scroll_is_an_offset() {
-        let r = Rect::new(10, 20, 400, 300);
+        let r = Rect::new(Px(10), Px(20), Px(400), Px(300));
         let (mut s, mut f) = own(1.0, r);
         // drawn before the scroll: it moves with the pixels
-        add(&mut f, Rect::new(50, 100, 10, 10));
+        add(&mut f, Rect::new(Px(50), Px(100), Px(10), Px(10)));
         // the content moves up 40 rows, the whole window
-        run(&s, &mut f, r, -40, Rect::new(10, 280, 400, 40));
+        run(
+            &s,
+            &mut f,
+            r,
+            -40,
+            Rect::new(Px(10), Px(280), Px(400), Px(40)),
+        );
         let d = commit(&mut s, &mut f);
         let o = output(&s);
         assert_eq!((o.scroll, o.full), (-40, false));
         assert!(
-            covers(&o.damage, Rect::new(0, 260, 400, 40)),
+            covers(&o.damage, Rect::new(Px(0), Px(260), Px(400), Px(40))),
             "{:?}",
             o.damage
         );
         assert!(
-            covers(&o.damage, Rect::new(40, 40, 10, 10)),
+            covers(&o.damage, Rect::new(Px(40), Px(40), Px(10), Px(10))),
             "{:?}",
             o.damage
         );
@@ -1612,55 +1708,88 @@ mod tests {
         assert!(!covered(&o.damage, 200, 100) && !covered(&o.damage, 45, 85));
         assert!(misses(&d, r), "{d:?}");
         // runs in one commit add up; rows exposed by the first move with the second
-        run(&s, &mut f, r, -10, Rect::new(10, 310, 400, 10));
-        run(&s, &mut f, r, 25, Rect::new(10, 20, 400, 25));
+        run(
+            &s,
+            &mut f,
+            r,
+            -10,
+            Rect::new(Px(10), Px(310), Px(400), Px(10)),
+        );
+        run(
+            &s,
+            &mut f,
+            r,
+            25,
+            Rect::new(Px(10), Px(20), Px(400), Px(25)),
+        );
         commit(&mut s, &mut f);
         let o = output(&s);
         assert_eq!(o.scroll, 15);
         assert!(
-            covers(&o.damage, Rect::new(0, 0, 400, 25)),
+            covers(&o.damage, Rect::new(Px(0), Px(0), Px(400), Px(25))),
             "{:?}",
             o.damage
         );
         assert!(!covered(&o.damage, 0, 295), "{:?}", o.damage);
         // a run wider than the window: the frame takes the columns beside it
-        let wide = Rect::new(0, 20, 420, 300);
-        run(&s, &mut f, wide, -20, Rect::new(0, 300, 420, 20));
+        let wide = Rect::new(Px(0), Px(20), Px(420), Px(300));
+        run(
+            &s,
+            &mut f,
+            wide,
+            -20,
+            Rect::new(Px(0), Px(300), Px(420), Px(20)),
+        );
         let d = commit(&mut s, &mut f);
         assert_eq!(output(&s).scroll, -20);
-        assert!(covers(&d, Rect::new(0, 20, 10, 300)) && covers(&d, Rect::new(410, 20, 10, 300)));
+        assert!(
+            covers(&d, Rect::new(Px(0), Px(20), Px(10), Px(300)))
+                && covers(&d, Rect::new(Px(410), Px(20), Px(10), Px(300)))
+        );
         assert!(misses(&d, r), "{d:?}");
-        assert!(covers(&output(&s).damage, Rect::new(0, 280, 400, 20)));
+        assert!(covers(
+            &output(&s).damage,
+            Rect::new(Px(0), Px(280), Px(400), Px(20))
+        ));
     }
 
     #[test]
     fn scroll_above_a_partial_last_row_is_an_offset() {
-        let r = Rect::new(10, 20, 400, 300);
+        let r = Rect::new(Px(10), Px(20), Px(400), Px(300));
         let (mut s, mut f) = own(1.0, r);
         // the run stops 10 rows above the window's bottom (a partly visible last row is drawn again)
-        let (area, exposed) = (Rect::new(10, 20, 400, 290), Rect::new(10, 270, 400, 40));
+        let (area, exposed) = (
+            Rect::new(Px(10), Px(20), Px(400), Px(290)),
+            Rect::new(Px(10), Px(270), Px(400), Px(40)),
+        );
         run(&s, &mut f, area, -40, exposed);
         commit(&mut s, &mut f);
         let o = output(&s);
         assert_eq!((o.scroll, o.full), (-40, false));
         // the exposed rows and the rows below the run are damage; the rows that only moved are not
-        let below = Rect::new(0, 250, 400, 50);
+        let below = Rect::new(Px(0), Px(250), Px(400), Px(50));
         assert!(covers(&o.damage, below), "{:?}", o.damage);
         assert!(!covered(&o.damage, 200, 100), "{:?}", o.damage);
     }
 
     #[test]
     fn partial_scroll_stays_damage() {
-        let r = Rect::new(10, 20, 400, 300);
+        let r = Rect::new(Px(10), Px(20), Px(400), Px(300));
         let (mut s, mut f) = own(1.0, r);
         // rows 100..220 move up 20: a run inside the window
-        let area = Rect::new(10, 100, 400, 120);
-        run(&s, &mut f, area, -20, Rect::new(10, 200, 400, 20));
+        let area = Rect::new(Px(10), Px(100), Px(400), Px(120));
+        run(
+            &s,
+            &mut f,
+            area,
+            -20,
+            Rect::new(Px(10), Px(200), Px(400), Px(20)),
+        );
         let d = commit(&mut s, &mut f);
         let o = output(&s);
         assert_eq!((o.scroll, o.full), (0, false));
         assert!(
-            covers(&o.damage, area.translate(-10, -20)),
+            covers(&o.damage, area.translate(Px(-10), Px(-20))),
             "{:?}",
             o.damage
         );
@@ -1668,7 +1797,13 @@ mod tests {
         // a full-window run of a window that is no output is damage too
         s.set_output(WIN, false).unwrap();
         commit(&mut s, &mut f);
-        run(&s, &mut f, r, -40, Rect::new(10, 280, 400, 40));
+        run(
+            &s,
+            &mut f,
+            r,
+            -40,
+            Rect::new(Px(10), Px(280), Px(400), Px(40)),
+        );
         let d = commit(&mut s, &mut f);
         assert!(covers(&d, r) && s.snapshot.outputs.is_empty(), "{d:?}");
     }
@@ -1676,31 +1811,47 @@ mod tests {
     #[test]
     fn overlap_damage_goes_to_both_outputs() {
         // at 1.5 the window's left and top edges fall between the rows and columns a subsurface can take
-        let r = Rect::new(31, 31, 301, 151);
+        let r = Rect::new(Px(31), Px(31), Px(301), Px(151));
         let (mut s, mut f) = own(1.5, r);
         let o = output(&s);
-        assert_eq!(o.rect, Rect::new(30, 30, 302, 152));
+        assert_eq!(o.rect, Rect::new(Px(30), Px(30), Px(302), Px(152)));
         // a pixel of the neighbour the snapped rectangle covers, and one of the window
-        add(&mut f, Rect::new(30, 100, 1, 1));
-        add(&mut f, Rect::new(100, 100, 5, 5));
+        add(&mut f, Rect::new(Px(30), Px(100), Px(1), Px(1)));
+        add(&mut f, Rect::new(Px(100), Px(100), Px(5), Px(5)));
         let d = commit(&mut s, &mut f);
         let o = output(&s);
         assert!(
             covered(&o.damage, 0, 70) && covered(&d, 30, 100),
             "{d:?} {o:?}"
         );
-        assert!(covers(&o.damage, Rect::new(70, 70, 5, 5)) && !covered(&d, 100, 100));
+        assert!(
+            covers(&o.damage, Rect::new(Px(70), Px(70), Px(5), Px(5))) && !covered(&d, 100, 100)
+        );
         // the frame's damage stops at the window, not at the snapped rectangle
         assert!(misses(&d, r), "{d:?}");
         // a full-window scroll moves the overlap with the view though its pixels stayed: it is damage
-        run(&s, &mut f, r, -10, Rect::new(31, 172, 301, 10));
+        run(
+            &s,
+            &mut f,
+            r,
+            -10,
+            Rect::new(Px(31), Px(172), Px(301), Px(10)),
+        );
         let d = commit(&mut s, &mut f);
         let o = output(&s);
         assert_eq!(o.scroll, -10);
-        assert!(covers(&o.damage, Rect::new(0, 0, 1, 152)), "{:?}", o.damage);
-        assert!(covers(&o.damage, Rect::new(0, 0, 302, 1)), "{:?}", o.damage);
         assert!(
-            covers(&o.damage, Rect::new(1, 142, 301, 10)),
+            covers(&o.damage, Rect::new(Px(0), Px(0), Px(1), Px(152))),
+            "{:?}",
+            o.damage
+        );
+        assert!(
+            covers(&o.damage, Rect::new(Px(0), Px(0), Px(302), Px(1))),
+            "{:?}",
+            o.damage
+        );
+        assert!(
+            covers(&o.damage, Rect::new(Px(1), Px(142), Px(301), Px(10))),
             "{:?}",
             o.damage
         );
@@ -1709,7 +1860,7 @@ mod tests {
 
     #[test]
     fn demote_damages_the_window_rect_on_the_frame() {
-        let r = Rect::new(31, 31, 301, 151);
+        let r = Rect::new(Px(31), Px(31), Px(301), Px(151));
         let (mut s, mut f) = own(1.5, r);
         let snapped = output(&s).rect;
         assert!(commit(&mut s, &mut f).is_empty());
@@ -1728,66 +1879,112 @@ mod tests {
         s.upsert(&desc(WIN, ROOT, 2, r, 1.5, true)).unwrap();
         s.set_output(WIN, true).unwrap();
         commit(&mut s, &mut f);
-        s.upsert(&desc(WIN, ROOT, 2, Rect::new(31, 31, 301, 100), 1.5, true))
-            .unwrap();
+        s.upsert(&desc(
+            WIN,
+            ROOT,
+            2,
+            Rect::new(Px(31), Px(31), Px(301), Px(100)),
+            1.5,
+            true,
+        ))
+        .unwrap();
         let d = commit(&mut s, &mut f);
         let o = output(&s);
-        assert_eq!((o.full, o.rect), (true, Rect::new(30, 30, 302, 101)));
-        assert!(covers(&d, Rect::new(30, 131, 302, 51)), "{d:?}");
+        assert_eq!(
+            (o.full, o.rect),
+            (true, Rect::new(Px(30), Px(30), Px(302), Px(101)))
+        );
+        assert!(
+            covers(&d, Rect::new(Px(30), Px(131), Px(302), Px(51))),
+            "{d:?}"
+        );
     }
 
     #[test]
     fn scale_change_damages_everything() {
         let (mut s, mut f) = scene(800, 600, 1.0);
-        child(&mut s, 10, ROOT, Rect::new(100, 100, 50, 50));
+        child(
+            &mut s,
+            10,
+            ROOT,
+            Rect::new(Px(100), Px(100), Px(50), Px(50)),
+        );
         commit(&mut s, &mut f);
         assert!(commit(&mut s, &mut f).is_empty());
-        let all = Rect::new(0, 0, 800, 600);
+        let all = Rect::new(Px(0), Px(0), Px(800), Px(600));
         s.upsert(&desc(ROOT, 0, 1, all, 2.0, true)).unwrap();
         let d = commit(&mut s, &mut f);
         assert!(covers(&d, all), "{d:?}");
         assert!(commit(&mut s, &mut f).is_empty());
         // a child's scale alone damages the child
-        s.upsert(&desc(10, ROOT, 3, Rect::new(100, 100, 50, 50), 2.0, true))
-            .unwrap();
+        s.upsert(&desc(
+            10,
+            ROOT,
+            3,
+            Rect::new(Px(100), Px(100), Px(50), Px(50)),
+            2.0,
+            true,
+        ))
+        .unwrap();
         let d = commit(&mut s, &mut f);
-        assert!(covers(&d, Rect::new(100, 100, 50, 50)) && !covered(&d, 0, 0));
+        assert!(covers(&d, Rect::new(Px(100), Px(100), Px(50), Px(50))) && !covered(&d, 0, 0));
     }
 
     /// Windows that tile a rectangle as a column or a row, with dividers between them, are one card: its rectangle and
     /// the dividers it fills.  Anything else is no group (the windows stay separate cards).
     #[test]
     fn card_group_tiles_a_column_or_a_row() {
-        let top = Rect::new(0, 0, 100, 40);
-        let mid = Rect::new(0, 46, 100, 30);
-        let low = Rect::new(0, 82, 100, 18);
+        let top = Rect::new(Px(0), Px(0), Px(100), Px(40));
+        let mid = Rect::new(Px(0), Px(46), Px(100), Px(30));
+        let low = Rect::new(Px(0), Px(82), Px(100), Px(18));
         // a column, in any order: the dividers between the windows
         assert_eq!(
             card_group(&[low, top, mid], &[]),
             Some((
-                Rect::new(0, 0, 100, 100),
-                vec![Rect::new(0, 40, 100, 6), Rect::new(0, 76, 100, 6)]
+                Rect::new(Px(0), Px(0), Px(100), Px(100)),
+                vec![
+                    Rect::new(Px(0), Px(40), Px(100), Px(6)),
+                    Rect::new(Px(0), Px(76), Px(100), Px(6))
+                ]
             ))
         );
         // a row; windows that touch need no divider
-        let (a, b) = (Rect::new(10, 5, 30, 50), Rect::new(40, 5, 20, 50));
+        let (a, b) = (
+            Rect::new(Px(10), Px(5), Px(30), Px(50)),
+            Rect::new(Px(40), Px(5), Px(20), Px(50)),
+        );
         assert_eq!(
             card_group(&[a, b], &[]),
-            Some((Rect::new(10, 5, 50, 50), vec![]))
+            Some((Rect::new(Px(10), Px(5), Px(50), Px(50)), vec![]))
         );
         // one window is a plain card
         assert_eq!(card_group(&[top], &[]), None);
         // not a rectangle: a different width, an overlap, a gap wider than a divider
-        assert_eq!(card_group(&[top, Rect::new(0, 46, 90, 30)], &[]), None);
-        assert_eq!(card_group(&[top, Rect::new(0, 30, 100, 30)], &[]), None);
         assert_eq!(
-            card_group(&[top, Rect::new(0, 40 + CARD_GROUP_GAP + 1, 100, 30)], &[]),
+            card_group(&[top, Rect::new(Px(0), Px(46), Px(90), Px(30))], &[]),
+            None
+        );
+        assert_eq!(
+            card_group(&[top, Rect::new(Px(0), Px(30), Px(100), Px(30))], &[]),
+            None
+        );
+        assert_eq!(
+            card_group(
+                &[
+                    top,
+                    Rect::new(Px(0), Px(40 + CARD_GROUP_GAP + 1), Px(100), Px(30))
+                ],
+                &[]
+            ),
             None
         );
         // another window inside the rectangle breaks it
-        assert_eq!(card_group(&[top, mid], &[Rect::new(20, 41, 10, 4)]), None);
+        assert_eq!(
+            card_group(&[top, mid], &[Rect::new(Px(20), Px(41), Px(10), Px(4))]),
+            None
+        );
         // one beside it does not
-        assert!(card_group(&[top, mid], &[Rect::new(106, 0, 50, 76)]).is_some());
+        assert!(card_group(&[top, mid], &[Rect::new(Px(106), Px(0), Px(50), Px(76))]).is_some());
     }
 
     /// A group's fill changes damage the dividers it fills.
@@ -1795,7 +1992,7 @@ mod tests {
     fn card_fill_change_damages_the_dividers() {
         let (mut s, mut f) = scene(200, 150, 1.0);
         let win = (1u64 << 63) | 3;
-        let rect = Rect::new(10, 10, 100, 100);
+        let rect = Rect::new(Px(10), Px(10), Px(100), Px(100));
         s.upsert(&desc(win, ROOT, 2, rect, 1.0, true)).unwrap();
         s.set_chrome(
             win,
@@ -1807,7 +2004,7 @@ mod tests {
         .unwrap();
         s.set_card(win, Some(Card::default())).unwrap();
         commit(&mut s, &mut f);
-        let divider = Rect::new(10, 50, 100, 6);
+        let divider = Rect::new(Px(10), Px(50), Px(100), Px(6));
         s.set_card(
             win,
             Some(Card {

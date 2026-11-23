@@ -55,6 +55,7 @@ mod tests {
     };
     use crate::geom::Rect;
     use crate::scene::LayerDesc;
+    use kvardi::Px;
 
     fn upsert(root: u64, id: u64, parent: u64, kind: u32, rect: Rect) {
         let d = LayerDesc {
@@ -81,13 +82,25 @@ mod tests {
         let (root, win, kid) = (8501, 8502, 8503);
         let key = 0x8501_0001;
         assert_eq!(glitnir_root_new(root), GLITNIR_OK);
-        upsert(root, root, 0, 1, Rect::new(0, 0, 200, 100));
-        upsert(root, win, root, 2, Rect::new(10, 10, 180, 80));
-        upsert(root, kid, root, 3, Rect::new(50, 20, 40, 30));
+        upsert(root, root, 0, 1, Rect::new(Px(0), Px(0), Px(200), Px(100)));
+        upsert(
+            root,
+            win,
+            root,
+            2,
+            Rect::new(Px(10), Px(10), Px(180), Px(80)),
+        );
+        upsert(
+            root,
+            kid,
+            root,
+            3,
+            Rect::new(Px(50), Px(20), Px(40), Px(30)),
+        );
         sprite(key, 0xff10_2030);
         let a = Anchor {
-            glyph: Rect::new(20, 30, 8, 16),
-            clip: Rect::new(0, 0, 180, 80),
+            glyph: Rect::new(Px(20), Px(30), Px(8), Px(16)),
+            clip: Rect::new(Px(0), Px(0), Px(180), Px(80)),
             sprite: key,
             row_top: 0,
         };
@@ -106,8 +119,20 @@ mod tests {
         let generation = snap.sprites.peek(key).unwrap().2;
 
         // the host moves on: a layer moves, another appears, the label goes, its sprite is replaced
-        upsert(root, kid, root, 3, Rect::new(90, 40, 40, 30));
-        upsert(root, kid + 1, root, 3, Rect::new(0, 0, 10, 10));
+        upsert(
+            root,
+            kid,
+            root,
+            3,
+            Rect::new(Px(90), Px(40), Px(40), Px(30)),
+        );
+        upsert(
+            root,
+            kid + 1,
+            root,
+            3,
+            Rect::new(Px(0), Px(0), Px(10), Px(10)),
+        );
         assert_eq!(crate::ffi::glitnir_decor_drop_all(root, win), GLITNIR_OK);
         sprite(key, 0xff40_5060);
         assert_eq!(snap.layers, layers);

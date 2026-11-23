@@ -8,6 +8,7 @@
 use crate::ffi::{GLITNIR_E_ARG, ffi_guard};
 use crate::geom::Rect;
 use hlidskjalf::abi::with_model;
+use kvardi::Px;
 use std::sync::Arc;
 
 /// Minimap rows in one tile.
@@ -63,7 +64,7 @@ impl Minimap {
         } else {
             self.rect.x + self.rect.w - w
         };
-        Rect::new(x, self.rect.y, w, self.rect.h)
+        Rect::new(Px(x), Px(self.rect.y), Px(w), Px(self.rect.h))
     }
 }
 

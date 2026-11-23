@@ -5,6 +5,7 @@
 use super::*;
 use crate::geom::Rect;
 use crate::shadow::{ShadowCache, ShadowSpec, ShadowTiles, step_for};
+use kvardi::Px as DevPx;
 use std::sync::{Arc, OnceLock};
 
 struct Rng(u64);
@@ -730,7 +731,7 @@ fn random_image(r: &mut Rng, h: usize, stride: usize) -> Vec<u32> {
 }
 
 fn full(w: usize, h: usize) -> Rect {
-    Rect::new(0, 0, w as i32, h as i32)
+    Rect::new(DevPx(0), DevPx(0), DevPx(w as i32), DevPx(h as i32))
 }
 
 #[test]
@@ -806,10 +807,10 @@ fn scale_avx2_equals_baseline() {
         let src = random_image(&mut r, h, ss);
         let s = [0.5, 0.96, 1.0, 1.04, 1.7, 0.03][r.below(6)] + r.below(100) as f32 / 1000.0;
         let clip = Rect::new(
-            r.below(5) as i32 - 2,
-            r.below(5) as i32 - 2,
-            1 + r.below(w + 3) as i32,
-            1 + r.below(h + 3) as i32,
+            DevPx(r.below(5) as i32 - 2),
+            DevPx(r.below(5) as i32 - 2),
+            DevPx(1 + r.below(w + 3) as i32),
+            DevPx(1 + r.below(h + 3) as i32),
         );
         let mut a = vec![0x5555_5555; ds * h];
         let mut b = a.clone();

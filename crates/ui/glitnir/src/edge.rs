@@ -5,6 +5,7 @@
 //! ([`coverage`]); a shell that draws edges itself strokes the same outline.
 
 use crate::geom::Rect;
+use kvardi::Px;
 use std::sync::Arc;
 
 /// One edge ([`crate::scene::Scene::set_edges`]).  Colours are premultiplied ARGB.
@@ -131,10 +132,10 @@ pub fn bounds(edge: &Edge) -> Rect {
     }
     let r = reach(edge);
     Rect::new(
-        x0.saturating_sub(r),
-        y0.saturating_sub(r),
-        x1.saturating_sub(x0).saturating_add(2 * r + 1),
-        y1.saturating_sub(y0).saturating_add(2 * r + 1),
+        Px(x0.saturating_sub(r)),
+        Px(y0.saturating_sub(r)),
+        Px(x1.saturating_sub(x0).saturating_add(2 * r + 1)),
+        Px(y1.saturating_sub(y0).saturating_add(2 * r + 1)),
     )
 }
 
@@ -254,6 +255,7 @@ pub fn coverage(edge: &Edge, area: Rect) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kvardi::Px;
 
     fn edge(points: &[(i32, i32)]) -> Edge {
         Edge {
@@ -325,7 +327,7 @@ mod tests {
     /// A 1 px horizontal edge covers its row fully and the rows beside it not at all; a 2 px one two rows.
     #[test]
     fn a_line_covers_its_pixels() {
-        let area = Rect::new(0, 10, 60, 20);
+        let area = Rect::new(Px(0), Px(10), Px(60), Px(20));
         let c = coverage(&edge(&[(10, 20), (50, 20)]), area);
         assert_eq!(at(&c, area, 30, 20), 255);
         assert_eq!(at(&c, area, 30, 19), 0);
@@ -345,7 +347,7 @@ mod tests {
     /// A bend is anti-aliased: on the curve some pixels are partly covered, and the corner itself is not reached.
     #[test]
     fn a_bend_is_smooth() {
-        let area = Rect::new(0, 0, 80, 80);
+        let area = Rect::new(Px(0), Px(0), Px(80), Px(80));
         let c = coverage(&edge(&[(10, 20), (50, 20), (50, 60)]), area);
         assert_eq!(at(&c, area, 50, 20), 0, "the corner is cut by the curve");
         let partial = (44..=50)
@@ -359,7 +361,7 @@ mod tests {
     /// The arrowhead is filled; a dashed edge has gaps of the dash's length.
     #[test]
     fn arrow_filled_and_dashes_gapped() {
-        let area = Rect::new(0, 0, 80, 40);
+        let area = Rect::new(Px(0), Px(0), Px(80), Px(40));
         let c = coverage(
             &Edge {
                 arrow_px: 6,
@@ -392,8 +394,8 @@ mod tests {
             arrow_px: 6,
             ..edge(&[(10, 20), (50, 20), (50, 60)])
         };
-        let all = Rect::new(0, 0, 80, 80);
-        let piece = Rect::new(40, 15, 20, 20);
+        let all = Rect::new(Px(0), Px(0), Px(80), Px(80));
+        let piece = Rect::new(Px(40), Px(15), Px(20), Px(20));
         let (ca, cp) = (coverage(&e, all), coverage(&e, piece));
         for y in piece.y..piece.y + piece.h {
             for x in piece.x..piece.x + piece.w {

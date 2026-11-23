@@ -3,6 +3,7 @@ use glitnir::atlas::*;
 use glitnir::geom::Rect;
 use glitnir::prim::*;
 use glitnir::text::*;
+use kvardi::Px;
 
 const W: i32 = 64;
 const H: i32 = 32;
@@ -86,7 +87,7 @@ fn g(glyph: u32, x: i32, kind: AtlasKind) -> PlacedGlyph {
     }
 }
 
-const ALL: Rect = Rect::new(0, 0, W, H);
+const ALL: Rect = Rect::new(Px(0), Px(0), Px(W), Px(H));
 
 #[test]
 fn a_text_run_composes_from_atlas_masks_tinted() {
@@ -181,7 +182,7 @@ fn ellipsis_clips_at_the_run_clip() {
         baseline: 20,
         glyphs,
         color: RED,
-        clip: Rect::new(0, 0, 24, H),
+        clip: Rect::new(Px(0), Px(0), Px(24), Px(H)),
         ellipsis: Some(Ellipsis {
             key: key(2),
             adv: 5,
@@ -214,7 +215,7 @@ fn gradient_quad_two_stops() {
     let mut px = vec![0u32; (W * H) as usize];
     let p = Prim::GradQuad {
         id: 3,
-        rect: Rect::new(0, 0, W, 8),
+        rect: Rect::new(Px(0), Px(0), Px(W), Px(8)),
         radius: 0.0,
         axis: Axis::H,
         stops: [(0.0, 0xff00_0000), (1.0, 0x0000_0000)],
@@ -281,7 +282,7 @@ fn atlas_evicts_lru_and_reinserts() {
 
 #[test]
 fn every_prim_has_a_stable_id() {
-    let r = Rect::new(1, 1, 10, 10);
+    let r = Rect::new(Px(1), Px(1), Px(10), Px(10));
     let k = key(1);
     let prims = vec![
         Prim::Quad {
@@ -350,8 +351,8 @@ fn a_scene_holds_only_allowed_prim_kinds() {
 fn every_prim_clips_to_its_band() {
     let mut a = Atlases::default();
     a.a8.get_or_insert(key(1), || Some(block(255))).unwrap();
-    let band = Rect::new(0, 10, W, 12);
-    let half_out = Rect::new(4, 4, 20, 12);
+    let band = Rect::new(Px(0), Px(10), Px(W), Px(12));
+    let half_out = Rect::new(Px(4), Px(4), Px(20), Px(12));
     let prims = vec![
         Prim::Quad {
             id: 1,
@@ -442,7 +443,7 @@ fn an_icon_sprite_is_its_mask_tinted() {
         compose(
             &[sprite],
             &mut a,
-            Rect::new(0, 0, W, H),
+            Rect::new(Px(0), Px(0), Px(W), Px(H)),
             &mut target(&mut px),
         );
         let mut inked = 0;
