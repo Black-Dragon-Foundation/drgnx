@@ -443,6 +443,23 @@ impl Child {
         Ok(Some(status))
     }
 
+    /// [`Child::wait`], but once DEADLINE has passed on the installed clock the child's whole process group is killed
+    /// (SIGKILL: a grandchild in the group goes too) and its status is the kill's. The processes standard's deadline
+    /// (docs/develop/standards/processes.md).
+    pub async fn wait_deadline(&mut self, deadline: Duration) -> io::Result<Option<ExitStatus>> {
+        if let Ok(done) = drgnx_clock::timeout(deadline, self.wait()).await {
+            return done;
+        }
+        // SAFETY: kill(2) on the child's own group (its pid is the group's id, never ours: `spawn` makes a new group)
+        if unsafe { libc::kill(-self.pid, libc::SIGKILL) } != 0 {
+            let e = io::Error::last_os_error();
+            if e.raw_os_error() != Some(libc::ESRCH) {
+                return Err(e);
+            }
+        }
+        self.wait().await
+    }
+
     /// The last [`STDERR_TAIL_CHARS`] characters the child wrote to stderr so far (invalid UTF-8 replaced).
     pub fn stderr_tail(&self) -> String {
         self.stderr().get()

@@ -5,8 +5,9 @@
 //! - `open`: `open_path` and `open_beneath`, which refuse a link in any component and return the fd they checked;
 //!   `stat_beneath` and `stat_in`, the status of a file resolved the same way.
 //! - `read`: bounded reads of regular files only (a FIFO is never read).
-//! - `write`: writes by a temporary file and a rename, never through a link; a leaf removed or made a link at the
-//!   parent's held fd.
+//! - `write`: writes by a temporary file and a rename, never through a link (`write_regular` beneath a directory fd,
+//!   `replace_file` at an absolute path: the files standard's way to replace a file, docs/develop/standards/files.md);
+//!   a leaf removed or made a link at the parent's held fd.
 //! - `trusted`: a program that only root can change, found by fixed candidates and never through `PATH`; and
 //!   `root_only_file`, the same checks for a data file without the execute bit.
 
@@ -24,7 +25,7 @@ pub use read::read_regular;
 pub use trusted::{
     TrustedProgram, pin_system_owned_file, root_only_file, system_owned_file, trusted_program,
 };
-pub use write::{remove_beneath, symlink_beneath, write_regular};
+pub use write::{remove_beneath, replace_file, symlink_beneath, write_regular};
 
 /// Why an eitri call refused or failed. Nothing here is ever retried by resolving the path another way.
 #[derive(Debug)]
