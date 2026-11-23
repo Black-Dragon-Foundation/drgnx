@@ -32,6 +32,7 @@ mal-gen = { clean = true }
 sattr = { clean = true }
 kvardi = { clean = true }
 mot = { clean = true }
+tafl = { clean = true, ui = true }
 
 [[standard]]
 id = "errors"

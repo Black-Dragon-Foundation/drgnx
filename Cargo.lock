@@ -7160,6 +7160,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "tafl"
+version = "0.1.0"
+dependencies = [
+ "annall",
+ "proptest",
+ "raun",
+ "saman",
+ "serde",
+ "serde_json",
+ "sja",
+ "stund",
+ "tracing",
+ "trybuild",
+ "vag",
+ "villa",
+]
+
+[[package]]
 name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
