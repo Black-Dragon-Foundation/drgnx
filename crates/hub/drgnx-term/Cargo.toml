@@ -46,3 +46,11 @@ tempfile.workspace = true
 [[test]]
 name = "it"
 path = "tests/main.rs"
+
+# a process of its own: it reads the loop's trace events through a subscriber of its own, and tracing's per-callsite
+# interest is the process's. Beside the other files' loops (libtest's threads, as the macOS job runs `it`), a
+# callsite first hit on another thread while this subscriber was being registered kept the interest it had without it
+# ("program output" never reached the capture)
+[[test]]
+name = "logging"
+path = "tests/logging.rs"
