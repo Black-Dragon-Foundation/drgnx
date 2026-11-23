@@ -260,7 +260,6 @@ struct RecordDecisionArgs {
     about: Option<Vec<String>>,
     /// Ignored
     #[allow(dead_code)]
-    #[serde(skip_serializing)]
     step: Option<i64>,
     /// Where it came from: from-brief, own or needs-user
     origin: Option<String>,
