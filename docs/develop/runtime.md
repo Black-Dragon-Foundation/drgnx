@@ -112,11 +112,8 @@ There is no Lisp runtime. Ratatoskr is the whole server side, and the editor is 
 - **The editor's background jobs** (grammars, mermaid, the browser, local AI servers, onboarding installs) are the hub's
   `exec/*` jobs (`core/drgnx-exec.el` is the client); a server that stays up for days starts with `no_timebox`
   ([hub.md](hub.md#jobs-exec)).
-- **At start** the hub reaps the process groups `runtime.db` recorded and moves what the Lisp runtime left in the state
-  directory aside, once (`legacy::migrate`, [hub.md](hub.md#what-the-lisp-runtime-left)).
-- **The doctor** has a `lisp-runtime` check (a Lisp hub still running, an outside agent's config that still starts the
-  Lisp coordination server, old jobs still running, what waits in `hub/migrated-p7/`; [install.md](../guide/install.md))
-  and reads the job sandbox's state from `ratatoskr doctor --json`.
+- **At start** the hub reaps the process groups `runtime.db` recorded.
+- **The doctor** reads the job sandbox's state from `ratatoskr doctor --json`.
 
 ## runstav: the contract
 
@@ -734,8 +731,7 @@ Every scenario gets fresh temporary roots under `/tmp/rtsk-XXXXXX/` (`/tmp`, not
 short; taken by its true name, so `$ROOT` is `/private/tmp/rtsk-XXXXXX` on macOS, where `/tmp` is a link the hub
 refuses in a path and resolves in what it reports) holding `home run state data config cache tmp`, and the hub's `HOME`, `XDG_*`, `DRGNX_DATA_DIR`,
 `DRGNX_CONFIG_DIR` and `TMPDIR` point there. A hub is started with `--parent-pid` of the harness, so it ends with the
-test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH`, `DRGNX_EMACS` (for the rows that
-run the editor's own CLIs, such as the personal-notes canary) and `DBUS_SESSION_BUS_ADDRESS` are inherited, and
+test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH` and `DBUS_SESSION_BUS_ADDRESS` are inherited, and
 `DRGNX_RATATOSKR_LOG` and `DRGNX_RATATOSKR_STALL_FILE` (the stall watchdog's reports, hub.md) when set. Without it the hub logs `info` with a session's turn stages at `debug` (`HUB_LOG`:
 sending, the snapshot before the prompt, the prompt written, each update read and applied) and the long request paths'
 stages (target `ratatoskr::stages`, `src/stages.rs`: `history/fork`'s source, step, tree, branch and conversation,

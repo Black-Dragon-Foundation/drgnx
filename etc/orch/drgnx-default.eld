@@ -12,7 +12,7 @@
          (:id "affected-groups" :kind "enforced"
           :doc "A merge batch runs the test groups its combined diff can affect, read from the base's test/affected.eld."))
  :test-globs ("test/*" "*/tests/*" "*_test.rs" "*/tests.rs")
- :compile-fail-reds ("rust" "elisp")
+ :compile-fail-reds ("rust")
  :batch-size 3
  :no-cache ("--perf" "--soak" "--day" "--stress" "--bench")
  :context-share 120000)

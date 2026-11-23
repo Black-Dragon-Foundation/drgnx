@@ -90,7 +90,7 @@ folder.
   `(drgnx-sandbox-vc-folders)` re-reads the file when its stamp (time, size, inode) changes. Only absolute strings
   count; a damaged file guards nothing and breaks nothing. The Rust hub does not write this file (it keeps its own
   record of the folders a sandboxed agent worked in, [coordination.md](coordination.md#plan-runs-git-the-merge-gate-trial-merges-drgnx-ratatoskrsrcrunnergitrs)),
-  and `legacy::migrate` moves the old `<state>/sandbox/` aside, so the list is empty unless something registers.
+  so the list is empty unless something registers.
 - **`drgnx-sandbox-vc-guarded-p DIR`** compares true names on directory boundaries: `7-1/` never matches `7-10/`, and
   a link into a folder is the folder.
 - **`drgnx-sandbox-vc-mode`** (core, on in the editor) does two things:
