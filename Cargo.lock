@@ -4485,8 +4485,6 @@ dependencies = [
  "eitri",
  "kvardi",
  "raun",
- "serde_json",
- "skipan",
  "villa",
 ]
 
@@ -6837,6 +6835,7 @@ version = "0.1.0"
 dependencies = [
  "eitri",
  "huginn",
+ "mot",
  "raun",
  "saman",
  "serde_json",

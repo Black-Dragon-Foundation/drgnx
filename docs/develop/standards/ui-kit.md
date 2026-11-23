@@ -19,7 +19,7 @@ colour given as a number (or the other way round), a token twice and a token lef
 number Glitnir's `argb` fields hold). A test of the pixel arithmetic itself uses named bit patterns that are not
 colours of the UI (premultiplied half-alpha, a shadow's alpha).
 
-**Switching.** `ThemeSwitch` follows the setting `ui.theme` (through `skipan`): `poll()` applies a change and counts one
+**Switching.** `skipan::ThemeSwitch` (not `mot`: the token table has no settings, so the crates under it may use the table; a layer row keeps `mot` off `skipan` and `huginn`) follows the setting `ui.theme` (through `skipan`): `poll()` applies a change and counts one
 damage event for each switch that changes the theme (the UI redraws on it); an unrelated setting, or the same theme again,
 counts none; a theme that does not exist is reported and the current one stays.
 

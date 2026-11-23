@@ -5,18 +5,15 @@
 //! tokens). Nothing else makes a colour from numbers: the scan rule `no-colour-literal` rejects `Rgba::new(…)`, `rgb(…)`,
 //! a hex number used as a colour and a `"#…"` string anywhere outside this crate and `themes/`.
 //!
-//! [`ThemeSwitch`] follows the `ui.theme` setting, and counts a damage event for each switch that changes the theme.
+//! The live switch of theme, `skipan::ThemeSwitch`, follows the `ui.theme` setting; this crate knows no settings.
 
 mod sexp;
-mod switch;
 
 use std::collections::BTreeMap;
 use std::os::fd::AsFd;
 use std::path::Path;
 
 use kvardi::Lp;
-
-pub use switch::{THEME_KEY, ThemeSwitch};
 
 /// What a token is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
