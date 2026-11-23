@@ -11,6 +11,7 @@
 //! It comes back once its content fits [`BAND`] points inside, so a child sitting on the edge switches once.
 
 use glitnir::geom::Rect;
+use kvardi::Px;
 
 /// How far inside the root's bounds an overhanging child's content must come before it goes back (points).
 pub const BAND: i32 = 2;
@@ -33,7 +34,8 @@ pub struct Node {
 impl Node {
     /// The content rectangle in the node's own surface.
     pub fn content(&self) -> Rect {
-        self.input.unwrap_or(Rect::new(0, 0, self.w, self.h))
+        self.input
+            .unwrap_or(Rect::new(Px(0), Px(0), Px(self.w), Px(self.h)))
     }
 }
 
@@ -105,6 +107,7 @@ pub fn overhangs(content: Rect, w: i32, h: i32, was: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kvardi::Px;
 
     fn node(id: u64, parent: u64, x: i32, y: i32, w: i32, h: i32) -> Node {
         Node {
@@ -123,7 +126,7 @@ mod tests {
     fn a_click_on_the_shadow_falls_through_to_what_lies_beneath() {
         // child 2 at 100,100, 60 x 40 with a 10 point shadow margin around its native area
         let mut c = node(2, 1, 100, 100, 60, 40);
-        c.input = Some(Rect::new(10, 10, 40, 20));
+        c.input = Some(Rect::new(Px(10), Px(10), Px(40), Px(20)));
         let nodes = [c];
         assert_eq!(hit(1, &nodes, 115.0, 115.0), (2, 15.0, 15.0));
         // the shadow margin: the root takes it
@@ -166,7 +169,7 @@ mod tests {
             .collect();
         let mut on_edge_switches = 0;
         for (i, x) in xs.iter().enumerate() {
-            let now = overhangs(Rect::new(*x, 10, 50, 20), w, h, out);
+            let now = overhangs(Rect::new(Px(*x), Px(10), Px(50), Px(20)), w, h, out);
             if now != out {
                 switches += 1;
                 if i >= 62 {
@@ -178,8 +181,23 @@ mod tests {
         // out once at 351, back once below 348; the dither after crosses out once more and stays
         assert_eq!(switches, 3);
         assert_eq!(on_edge_switches, 1);
-        assert!(!overhangs(Rect::new(0, 0, 400, 300), w, h, false));
-        assert!(overhangs(Rect::new(-1, 0, 10, 10), w, h, false));
-        assert!(!overhangs(Rect::new(-5, 0, 0, 10), w, h, true));
+        assert!(!overhangs(
+            Rect::new(Px(0), Px(0), Px(400), Px(300)),
+            w,
+            h,
+            false
+        ));
+        assert!(overhangs(
+            Rect::new(Px(-1), Px(0), Px(10), Px(10)),
+            w,
+            h,
+            false
+        ));
+        assert!(!overhangs(
+            Rect::new(Px(-5), Px(0), Px(0), Px(10)),
+            w,
+            h,
+            true
+        ));
     }
 }

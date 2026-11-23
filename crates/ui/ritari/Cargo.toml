@@ -11,6 +11,13 @@ name = "nh-recorder"
 path = "src/main.rs"
 
 [dependencies]
+stund.workspace = true
+saman.workspace = true
+villa.workspace = true
+eitri.workspace = true
+stig.workspace = true
+annall.workspace = true
+tracing.workspace = true
 smithay = { version = "=0.7.0", default-features = false, features = ["wayland_frontend", "renderer_pixman"] }
 calloop = { version = "0.14", features = ["signals"] }
 serde = { version = "1", features = ["derive"] }
@@ -25,7 +32,12 @@ wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 [dev-dependencies]
+raun.workspace = true
+tempfile.workspace = true
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 
 [profile.release]
 opt-level = 2
+
+[lints]
+workspace = true

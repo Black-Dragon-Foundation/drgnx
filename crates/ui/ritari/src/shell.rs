@@ -26,7 +26,8 @@ use smithay::wayland::shell::xdg::{
 };
 use std::os::unix::net::UnixStream;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 const PING_TIMEOUT: Duration = Duration::from_millis(5000);
 
@@ -330,7 +331,7 @@ fn shows_a_buffer(surface: &WlSurface) -> bool {
         states
             .data_map
             .get::<RendererSurfaceStateUserData>()
-            .is_some_and(|r| r.lock().unwrap().buffer().is_some())
+            .is_some_and(|r| saman::lock(r).buffer().is_some())
     })
 }
 
@@ -349,7 +350,7 @@ impl State {
             states
                 .data_map
                 .get::<XdgPopupSurfaceData>()
-                .is_some_and(|d| d.lock().unwrap().configured)
+                .is_some_and(|d| saman::lock(d).configured)
         });
         let parent_shown = popup
             .get_parent_surface()
@@ -576,7 +577,7 @@ pub fn tree(state: &mut State) -> Value {
                     }
                     let (mapped, buffer) =
                         match states.data_map.get::<RendererSurfaceStateUserData>() {
-                            Some(r) => match r.lock().unwrap().buffer() {
+                            Some(r) => match saman::lock(r).buffer() {
                                 Some(b) => (
                                     true,
                                     with_buffer_contents(
@@ -614,7 +615,7 @@ pub fn tree(state: &mut State) -> Value {
             if role == "popup" {
                 compositor::with_states(surface, |states| {
                     if let Some(d) = states.data_map.get::<XdgPopupSurfaceData>() {
-                        let l = d.lock().unwrap().current.geometry.loc;
+                        let l = saman::lock(d).current.geometry.loc;
                         position = [l.x, l.y];
                     }
                 });

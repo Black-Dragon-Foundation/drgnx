@@ -222,6 +222,7 @@ pub fn seams(img: Image, fill: Rect, argb: u32, inset: u32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kvardi::Px;
 
     /// A gray picture from `rows` of 0..=255 values (opaque).
     fn gray<const N: usize>(rows: &[[u8; N]]) -> (Vec<u8>, usize, usize) {
@@ -249,7 +250,7 @@ mod tests {
     #[test]
     fn ideal_step_reads_0_8() {
         let (v, w, h) = gray(&[[0, 0, 0, 255, 255, 255]; 4]);
-        let e = edges(img(&v, w, h), Rect::new(0, 0, 6, 4)).unwrap();
+        let e = edges(img(&v, w, h), Rect::new(Px(0), Px(0), Px(6), Px(4))).unwrap();
         assert!((e.spread_px - 0.8).abs() < 1e-9, "{e:?}");
         assert!((e.contrast - 1.0).abs() < 1e-9);
         assert_eq!(e.runs, 4);
@@ -258,18 +259,18 @@ mod tests {
     #[test]
     fn blurred_step_is_wider() {
         let (v, w, h) = gray(&[[0, 0, 85, 170, 255, 255]; 4]);
-        let e = edges(img(&v, w, h), Rect::new(0, 0, 6, 4)).unwrap();
+        let e = edges(img(&v, w, h), Rect::new(Px(0), Px(0), Px(6), Px(4))).unwrap();
         assert!(e.spread_px > 2.0, "{e:?}");
     }
 
     #[test]
     fn one_px_rule_mass_is_1() {
         let (v, w, h) = gray(&[[255, 255, 0, 255, 255]; 6]);
-        let r = rule(img(&v, w, h), Rect::new(0, 0, 5, 6), true).unwrap();
+        let r = rule(img(&v, w, h), Rect::new(Px(0), Px(0), Px(5), Px(6)), true).unwrap();
         assert!((r.mass - 1.0).abs() < 1e-9, "{r:?}");
         assert!((r.width - 1.0).abs() < 1e-9 && (r.peak - 1.0).abs() < 1e-9);
         let (v, w, h) = gray(&[[255; 6], [0; 6], [255; 6]]);
-        let r = rule(img(&v, w, h), Rect::new(0, 0, 6, 3), false).unwrap();
+        let r = rule(img(&v, w, h), Rect::new(Px(0), Px(0), Px(6), Px(3)), false).unwrap();
         assert!((r.mass - 1.0).abs() < 1e-9, "{r:?}");
     }
 
@@ -283,14 +284,32 @@ mod tests {
         ]);
         let fill = 0xff09_0909;
         assert_eq!(
-            seams(img(&v, w, h), Rect::new(0, 0, 5, 4), fill, 0),
+            seams(
+                img(&v, w, h),
+                Rect::new(Px(0), Px(0), Px(5), Px(4)),
+                fill,
+                0
+            ),
             Some(1)
         );
         // inset 2 leaves no interior pixel off the colour
         assert_eq!(
-            seams(img(&v, w, h), Rect::new(0, 0, 5, 4), fill, 2),
+            seams(
+                img(&v, w, h),
+                Rect::new(Px(0), Px(0), Px(5), Px(4)),
+                fill,
+                2
+            ),
             Some(0)
         );
-        assert_eq!(seams(img(&v, w, h), Rect::new(0, 0, 6, 4), fill, 0), None);
+        assert_eq!(
+            seams(
+                img(&v, w, h),
+                Rect::new(Px(0), Px(0), Px(6), Px(4)),
+                fill,
+                0
+            ),
+            None
+        );
     }
 }

@@ -16,6 +16,7 @@
 
 use crate::ease::Curve;
 use crate::geom::Rect;
+use kvardi::Px;
 
 /// The side of the tiles a leg diffs once at its start ([`active_tiles`]).
 pub const TILE: i32 = 64;
@@ -77,7 +78,12 @@ impl LayoutLeg {
     pub fn at(it: &Item, p: f32) -> Rect {
         let l = |a: i32, b: i32| a + ((b - a) as f32 * p).round() as i32;
         let (s, t) = (it.start, it.to);
-        Rect::new(l(s.x, t.x), l(s.y, t.y), l(s.w, t.w), l(s.h, t.h))
+        Rect::new(
+            Px(l(s.x, t.x)),
+            Px(l(s.y, t.y)),
+            Px(l(s.w, t.w)),
+            Px(l(s.h, t.h)),
+        )
     }
 
     /// The leg starts while `running` runs (`t_ns` into it): each move whose id `running` has starts from where
@@ -154,10 +160,10 @@ pub fn subtract(r: Rect, hole: Rect) -> Vec<Rect> {
     let (r1, h1) = (r.y + r.h, h.y + h.h);
     let (rx1, hx1) = (r.x + r.w, h.x + h.w);
     let parts = [
-        Rect::new(r.x, r.y, r.w, h.y - r.y),
-        Rect::new(r.x, h1, r.w, r1 - h1),
-        Rect::new(r.x, h.y, h.x - r.x, h.h),
-        Rect::new(hx1, h.y, rx1 - hx1, h.h),
+        Rect::new(Px(r.x), Px(r.y), Px(r.w), Px(h.y - r.y)),
+        Rect::new(Px(r.x), Px(h1), Px(r.w), Px(r1 - h1)),
+        Rect::new(Px(r.x), Px(h.y), Px(h.x - r.x), Px(h.h)),
+        Rect::new(Px(hx1), Px(h.y), Px(rx1 - hx1), Px(h.h)),
     ];
     parts.into_iter().filter(|p| !p.is_empty()).collect()
 }
@@ -214,7 +220,7 @@ pub fn active_tiles(leg: &LayoutLeg, old: &[u32], new: &[u32], stride: usize) ->
         for tx in (0..r.w.max(0)).step_by(TILE as usize) {
             let tw = TILE.min(r.w - tx);
             if differs(old, new, stride, r, tx, ty, tw, th) {
-                let t = Rect::new(r.x + tx, r.y + ty, tw, th);
+                let t = Rect::new(Px(r.x + tx), Px(r.y + ty), Px(tw), Px(th));
                 run = Some(run.map_or(t, |a| a.bounds(&t)));
             } else if let Some(a) = run.take() {
                 out.push(a);
@@ -302,7 +308,7 @@ pub fn compose_leg(
         for (x, y) in pixels(now.intersect(&c)) {
             let sx = to.x + ((x - now.x) as i64 * to.w as i64 / now.w as i64) as i32;
             let sy = to.y + ((y - now.y) as i64 * to.h as i64 / now.h as i64) as i32;
-            if r.contains(sx, sy) {
+            if r.contains(Px(sx), Px(sy)) {
                 out[at(x, y)] = over(out[at(x, y)], new[at(sx, sy)], 256);
             }
         }
@@ -331,6 +337,7 @@ fn pixels(r: Rect) -> impl Iterator<Item = (i32, i32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kvardi::Px;
 
     const W: i32 = 40;
     const H: i32 = 30;
@@ -345,7 +352,7 @@ mod tests {
     fn leg(items: Vec<Item>) -> LayoutLeg {
         LayoutLeg {
             capture: 1,
-            rect: Rect::new(0, 0, W, H),
+            rect: Rect::new(Px(0), Px(0), Px(W), Px(H)),
             items,
             background: BG,
             duration_ns: 160 * MS,
@@ -392,8 +399,8 @@ mod tests {
         (px(v, x, y) >> 16) & 0xff
     }
 
-    const A: Rect = Rect::new(2, 2, 8, 6);
-    const B: Rect = Rect::new(22, 12, 8, 6);
+    const A: Rect = Rect::new(Px(2), Px(2), Px(8), Px(6));
+    const B: Rect = Rect::new(Px(22), Px(12), Px(8), Px(6));
 
     #[test]
     fn end_equals_the_new_front() {
@@ -420,7 +427,7 @@ mod tests {
         // pattern D: pure
         let l = leg(vec![mv(1, A, B)]);
         let half = LayoutLeg::at(&l.items[0], 0.5);
-        assert_eq!(half, Rect::new(12, 7, 8, 6));
+        assert_eq!(half, Rect::new(Px(12), Px(7), Px(8), Px(6)));
         assert_eq!(l.progress(80 * MS), 0.5);
         let (old, new) = (picture(OLD, &[A]), picture(NEW, &[B]));
         let out = draw(&l, 80 * MS, &old, &new);
@@ -479,7 +486,11 @@ mod tests {
         let running = leg(vec![mv(1, A, B)]);
         let mut next = leg(vec![mv(1, B, A), mv(7, B, A)]);
         next.retarget(&running, 80 * MS);
-        assert_eq!(next.items[0].start, Rect::new(12, 7, 8, 6), "id 1");
+        assert_eq!(
+            next.items[0].start,
+            Rect::new(Px(12), Px(7), Px(8), Px(6)),
+            "id 1"
+        );
         assert_eq!(next.items[0].from, B, "from stays");
         assert_eq!(next.items[1].start, B, "a new id");
     }
@@ -488,19 +499,32 @@ mod tests {
     fn active_tiles_skip_what_did_not_change() {
         // pattern D: pure
         let mut l = leg(Vec::new());
-        l.rect = Rect::new(0, 0, 200, 130);
+        l.rect = Rect::new(Px(0), Px(0), Px(200), Px(130));
         let stride = 200;
         let old = vec![OLD; 200 * 130];
         let mut new = old.clone();
         new[70 * stride + 150] = NEW;
         let tiles = active_tiles(&l, &old, &new, stride);
-        assert_eq!(tiles, vec![Rect::new(128, 64, 64, 64)], "one changed tile");
-        l.items
-            .push(mv(1, Rect::new(0, 0, 10, 10), Rect::new(0, 100, 10, 10)));
+        assert_eq!(
+            tiles,
+            vec![Rect::new(Px(128), Px(64), Px(64), Px(64))],
+            "one changed tile"
+        );
+        l.items.push(mv(
+            1,
+            Rect::new(Px(0), Px(0), Px(10), Px(10)),
+            Rect::new(Px(0), Px(100), Px(10), Px(10)),
+        ));
         let tiles = active_tiles(&l, &old, &new, stride);
-        assert!(tiles.contains(&Rect::new(0, 0, 10, 110)), "{tiles:?}");
+        assert!(
+            tiles.contains(&Rect::new(Px(0), Px(0), Px(10), Px(110))),
+            "{tiles:?}"
+        );
         assert_eq!(tick_px(&tiles), 64 * 64 + 10 * 110);
-        let rest = subtract(Rect::new(0, 0, 10, 10), Rect::new(2, 2, 4, 4));
+        let rest = subtract(
+            Rect::new(Px(0), Px(0), Px(10), Px(10)),
+            Rect::new(Px(2), Px(2), Px(4), Px(4)),
+        );
         assert_eq!(rest.iter().map(Rect::area).sum::<u64>(), 84);
     }
 
@@ -510,12 +534,28 @@ mod tests {
         // a frame composed every rectangle of the list, the overlaps again and again (the Work map's leg composed
         // 5.9M px a frame).  The rectangles cover what changed and what moves, and no pixel twice.
         let mut l = leg(vec![
-            mv(1, Rect::new(0, 0, 10, 10), Rect::new(64, 0, 10, 10)),
-            mv(2, Rect::new(20, 20, 40, 40), Rect::new(30, 30, 40, 40)),
-            mv(3, Rect::new(100, 80, 30, 30), Rect::new(150, 90, 30, 30)),
-            mv(4, Rect::new(110, 90, 30, 30), Rect::new(160, 95, 30, 30)),
+            mv(
+                1,
+                Rect::new(Px(0), Px(0), Px(10), Px(10)),
+                Rect::new(Px(64), Px(0), Px(10), Px(10)),
+            ),
+            mv(
+                2,
+                Rect::new(Px(20), Px(20), Px(40), Px(40)),
+                Rect::new(Px(30), Px(30), Px(40), Px(40)),
+            ),
+            mv(
+                3,
+                Rect::new(Px(100), Px(80), Px(30), Px(30)),
+                Rect::new(Px(150), Px(90), Px(30), Px(30)),
+            ),
+            mv(
+                4,
+                Rect::new(Px(110), Px(90), Px(30), Px(30)),
+                Rect::new(Px(160), Px(95), Px(30), Px(30)),
+            ),
         ]);
-        l.rect = Rect::new(0, 0, 200, 130);
+        l.rect = Rect::new(Px(0), Px(0), Px(200), Px(130));
         let stride = 200;
         let old = vec![OLD; 200 * 130];
         let mut new = old.clone();
@@ -531,16 +571,20 @@ mod tests {
             }
         }
         let want = [
-            Rect::new(0, 0, 128, 64),
-            Rect::new(20, 20, 50, 50),
-            Rect::new(100, 80, 80, 40),
-            Rect::new(110, 90, 80, 35),
+            Rect::new(Px(0), Px(0), Px(128), Px(64)),
+            Rect::new(Px(20), Px(20), Px(50), Px(50)),
+            Rect::new(Px(100), Px(80), Px(80), Px(40)),
+            Rect::new(Px(110), Px(90), Px(80), Px(35)),
         ];
         for y in 0..130 {
             for x in 0..200 {
                 let n = cover[y as usize * stride + x as usize];
                 assert!(n <= 1, "({x}, {y}) composed {n} times");
-                assert_eq!(n == 1, want.iter().any(|r| r.contains(x, y)), "({x}, {y})");
+                assert_eq!(
+                    n == 1,
+                    want.iter().any(|r| r.contains(Px(x), Px(y))),
+                    "({x}, {y})"
+                );
             }
         }
         assert_eq!(

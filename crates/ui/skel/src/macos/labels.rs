@@ -113,6 +113,10 @@ pub struct GlyphMask {
     pub data: Vec<u8>,
 }
 
+/// The ink a glyph mask is drawn with: white, because only its coverage (alpha) and a colour glyph's own pixels are read.
+/// It is not a colour of the UI.
+const MASK_INK: u32 = 0xffff_ffff;
+
 /// Glyph `glyph` of the open font `handle` (at its own size), drawn once by Core Text in white over its bounds grown
 /// by a pixel each side, as `nhwl_glyph_mask` draws through Cairo.  `None`: the font is not open, or nothing could be
 /// drawn.
@@ -139,7 +143,7 @@ pub fn glyph_mask(handle: u64, glyph: u16) -> Option<GlyphMask> {
                 y: f64::from(y_top),
                 glyphs: vec![glyph],
                 xs: vec![0.0],
-                argb: 0xffff_ffff,
+                argb: MASK_INK,
                 integral: fonts::integral(handle).unwrap_or(false),
             }],
         });

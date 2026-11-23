@@ -14,7 +14,13 @@ crate-type = ["rlib"]
 
 # std and one dependency, for the MARK sections' expression (README, "Crate rules"): an exact pin, no defaults
 [dependencies]
+stund.workspace = true
+villa.workspace = true
+saman.workspace = true
 regex-lite = { version = "=0.1.6", default-features = false, features = ["std", "string"] }
 
 [profile.test]
 opt-level = 1
+
+[lints]
+workspace = true

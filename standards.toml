@@ -32,6 +32,13 @@ mal-gen = { clean = true }
 sattr = { clean = true }
 kvardi = { clean = true }
 mot = { clean = true }
+huginn = { clean = true }
+hlidskjalf = { clean = true }
+ritari = { clean = true }
+skel = { clean = true }
+glitnir = { clean = true }
+sja = { clean = true }
+smidja = { clean = true }
 
 [[standard]]
 id = "errors"
@@ -163,6 +170,11 @@ crate = "drgnx"
 may_not_depend = ["glitnir"]
 
 # Settings files are read through skipan and key profiles through lykill: the UI crates do not read huginn themselves.
+# The token table has no settings: it sits under glitnir, skel, sja and smidja, which may use it (the switch is skipan's).
+[[layer]]
+crate = "mot"
+may_not_depend = ["skipan", "huginn"]
+
 [[layer]]
 crate = "glitnir"
 may_not_depend = ["huginn"]

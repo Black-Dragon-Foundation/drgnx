@@ -30,6 +30,7 @@ use crate::mac_child::{self, Node};
 use crate::units::Scale;
 use glitnir::geom::Rect;
 use glitnir::scene::Chrome;
+use kvardi::Px;
 use objc2::rc::Retained;
 use objc2_app_kit::NSWindow;
 use objc2_foundation::{NSPoint, NSRect, NSSize};
@@ -274,7 +275,7 @@ impl MacShell {
         let under = self.order.remove(&id).unwrap_or_default();
         self.retired.push((root, k));
         for c in under {
-            let _ = self.child_destroy(c);
+            let _outcome_not_needed = self.child_destroy(c);
         }
         self.hover.retain(|_, t| *t != id);
         if self.grab.is_some_and(|(_, t)| t == id) {
@@ -407,7 +408,7 @@ impl MacShell {
     /// A top-level goes: its children with it.
     pub(super) fn children_gone(&mut self, root: WindowId) {
         for c in self.order.remove(&root).unwrap_or_default() {
-            let _ = self.child_destroy(c);
+            let _outcome_not_needed = self.child_destroy(c);
         }
         self.retired.retain(|(r, _)| *r != root);
         self.owed.remove(&root);
@@ -626,7 +627,7 @@ impl MacShell {
             let now = k.visible()
                 && (k.backdrop > 0.0
                     || mac_child::overhangs(
-                        Rect::new(k.x + c.x, k.y + c.y, c.w, c.h),
+                        Rect::new(Px(k.x + c.x), Px(k.y + c.y), Px(c.w), Px(c.h)),
                         rw,
                         rh,
                         k.out,

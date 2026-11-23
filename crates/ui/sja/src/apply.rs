@@ -174,7 +174,7 @@ fn mutate(m: &mut Model, ops: &[Op]) -> HashMap<Id, Option<Id>> {
             Op::Nodes(ns) => {
                 for n in ns {
                     gone.remove(n.id.as_str());
-                    let _ = m.upsert(n);
+                    let _vocabulary_full = m.upsert(n);
                 }
             }
             Op::Remove(ids) => {
@@ -189,7 +189,7 @@ fn mutate(m: &mut Model, ops: &[Op]) -> HashMap<Id, Option<Id>> {
                     m.remove_edge(e);
                 }
                 for e in add {
-                    let _ = m.add_edge(e);
+                    let _vocabulary_full = m.add_edge(e);
                 }
             }
             Op::List(l) => m.set_list(l),

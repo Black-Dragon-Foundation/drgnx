@@ -159,3 +159,12 @@ fn watchdog_reports_slow_handler() {
         "{text}"
     );
 }
+
+#[test]
+fn a_spawned_thread_has_its_name_and_gives_its_result() {
+    let t = saman::spawn_thread("saman-test-thread", || {
+        std::thread::current().name().map(str::to_owned)
+    })
+    .unwrap();
+    assert_eq!(t.join().unwrap().as_deref(), Some("saman-test-thread"));
+}

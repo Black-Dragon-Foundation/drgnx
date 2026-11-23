@@ -19,7 +19,7 @@ fn realisation_scales_logical_to_device_px() {
     assert_eq!(size(&r, Region::Center), 2376);
     assert_eq!(r.version, wb.version());
     assert_eq!(
-        wb.rect(w, EdgeKey::Region(Region::Left)),
+        wb.rect(w, WindowEdge::Region(Region::Left)),
         Some(Rect {
             x: 100,
             y: 76,
@@ -34,7 +34,7 @@ fn stale_edges_are_ignored() {
     let (mut wb, w) = wb_1920();
     let v = wb.realisation(w).unwrap().version;
     let e = vec![(
-        EdgeKey::Region(Region::Left),
+        WindowEdge::Region(Region::Left),
         Rect {
             x: 50,
             y: 38,
@@ -45,7 +45,7 @@ fn stale_edges_are_ignored() {
     assert!(wb.set_edges(w, v, e.clone()));
     open(&mut wb, w, file("a"), How::Pin);
     let stale = vec![(
-        EdgeKey::Region(Region::Left),
+        WindowEdge::Region(Region::Left),
         Rect {
             x: 0,
             y: 0,
@@ -61,7 +61,7 @@ fn stale_edges_are_ignored() {
 fn edges_override_requested_sizes_for_chrome_and_hit() {
     let (mut wb, w) = wb_1920();
     let g = ag(&wb, w);
-    let asked = wb.rect(w, EdgeKey::Region(Region::Left)).unwrap();
+    let asked = wb.rect(w, WindowEdge::Region(Region::Left)).unwrap();
     assert_eq!(
         asked,
         Rect {
@@ -72,7 +72,7 @@ fn edges_override_requested_sizes_for_chrome_and_hit() {
         }
     );
     assert_eq!(
-        wb.rect(w, EdgeKey::Group(g)).unwrap(),
+        wb.rect(w, WindowEdge::Group(g)).unwrap(),
         Rect {
             x: 328,
             y: 38,
@@ -97,14 +97,14 @@ fn edges_override_requested_sizes_for_chrome_and_hit() {
         w,
         v,
         vec![
-            (EdgeKey::Region(Region::Left), actual),
-            (EdgeKey::Group(g), ga)
+            (WindowEdge::Region(Region::Left), actual),
+            (WindowEdge::Group(g), ga)
         ]
     ));
-    assert_eq!(wb.rect(w, EdgeKey::Region(Region::Left)), Some(actual));
-    assert_eq!(wb.rect(w, EdgeKey::Group(g)), Some(ga));
+    assert_eq!(wb.rect(w, WindowEdge::Region(Region::Left)), Some(actual));
+    assert_eq!(wb.rect(w, WindowEdge::Group(g)), Some(ga));
     assert_eq!(
-        wb.rect(w, EdgeKey::Region(Region::Right)).unwrap().w,
+        wb.rect(w, WindowEdge::Region(Region::Right)).unwrap().w,
         392,
         "a region not reported stays as asked"
     );
@@ -188,7 +188,7 @@ fn roles_tree_names_every_region_group_tab_and_chrome_element() {
         wb.query(w, "roles")
             .unwrap()
             .iter()
-            .filter(|t| **t == Token::Open)
+            .filter(|t| **t == QueryItem::Open)
             .count(),
         wb.roles(w).len()
     );

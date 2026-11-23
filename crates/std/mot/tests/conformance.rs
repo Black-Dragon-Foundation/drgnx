@@ -1,12 +1,8 @@
-//! The ui-kit standard's conformance test: every token has a value in every theme, a theme file is checked, and a switch
-//! of theme is one damage event (docs/develop/standards/ui-kit.md).
-
-use std::sync::Arc;
+//! The ui-kit standard's conformance test: every token has a value in every theme, a theme file is checked, and the colour
+//! as a number (docs/develop/standards/ui-kit.md). The live switch is tested in skipan.
 
 use kvardi::Lp;
-use mot::{Kind, Rgba, THEME_KEY, Theme, ThemeSwitch, Token};
-use serde_json::json;
-use skipan::{Level, Settings};
+use mot::{Kind, Rgba, Theme, Token};
 
 #[test]
 fn every_token_has_a_value_in_every_theme() {
@@ -95,49 +91,14 @@ fn a_theme_file_loads_from_disk() {
 }
 
 #[test]
-fn theme_switch_redraws() {
-    let settings = Arc::new(Settings::new());
-    let mut sw = ThemeSwitch::new(Arc::clone(&settings), Theme::builtin()).expect("starts");
-    assert_eq!(sw.current().name(), "dark");
-    assert_eq!(sw.damage_events(), 0);
-    // nothing changed: no redraw
-    assert!(!sw.poll().expect("polls"));
-    // an unrelated setting is no redraw
-    settings
-        .define("editor.wrap", skipan::Kind::Bool, json!(false))
-        .expect("defines");
-    settings
-        .set("editor.wrap", json!(true), Level::User)
-        .expect("sets");
-    assert!(!sw.poll().expect("polls"));
-    assert_eq!(sw.damage_events(), 0);
-    // the switch: one damage event, and the new theme draws
-    settings
-        .set(THEME_KEY, json!("light"), Level::User)
-        .expect("sets");
-    assert!(sw.poll().expect("polls"));
-    assert_eq!(sw.current().name(), "light");
-    assert_eq!(sw.damage_events(), 1);
-    // two changes before a poll: still one switch
-    settings
-        .set(THEME_KEY, json!("high-contrast"), Level::User)
-        .expect("sets");
-    settings
-        .set(THEME_KEY, json!("dark"), Level::User)
-        .expect("sets");
-    assert!(sw.poll().expect("polls"));
-    assert_eq!(sw.damage_events(), 2);
-    // the same theme again is not a change
-    settings
-        .set(THEME_KEY, json!("dark"), Level::User)
-        .expect("sets");
-    assert!(!sw.poll().expect("polls"));
-    assert_eq!(sw.damage_events(), 2);
-    // a theme that does not exist is reported and the current one stays
-    settings
-        .set(THEME_KEY, json!("nope"), Level::User)
-        .expect("sets");
-    let e = sw.poll().expect_err("no such theme");
-    assert_eq!(e.kind(), villa::Kind::NotFound);
-    assert_eq!(sw.current().name(), "dark");
+fn a_colour_as_the_argb_number_glitnir_takes() {
+    assert_eq!(
+        mot::Rgba::new(0x12, 0x34, 0x56, 0x78).to_argb(),
+        0x7812_3456
+    );
+    assert_eq!(mot::Rgba::new(0, 0, 0, 255).to_argb(), 0xff00_0000);
+    assert_eq!(
+        mot::Rgba::parse("#80ff0010").unwrap().to_argb(),
+        0x1080_ff00
+    );
 }

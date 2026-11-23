@@ -16,6 +16,10 @@ eitri::replace_file(&stig::state().join("session.json"), &bytes)?;
   never followed, and a link in a parent is refused; an existing file keeps its mode; on any error the old file is
   left whole and no temporary file remains.
 
+- A file read goes through `eitri::read_file(abs, cap)` / `eitri::read_string(abs, cap)` (an absolute path, at most
+  `cap` bytes, regular files only, a link in any component refused: `/proc/self` is a link, so a process reads
+  `/proc/<its pid>/…`). A test that needs a file other code will write to makes it with `tempfile`.
+
 **Enforced by:** clippy's `disallowed-methods` on the `std::fs` calls above. Owner: `eitri` (in `crates/hub/eitri`
 until it moves into `crates/std`). Conformance: `crates/hub/eitri/tests/conformance.rs` (a planted link; a full disk
 from `RLIMIT_FSIZE`).

@@ -9,6 +9,7 @@
 
 use crate::geom::Rect;
 use crate::kernels::{Kernels, MAX_RADIUS, Px, bilerp_px, kernels};
+use kvardi::Px as DevPx;
 
 /// A larger σ blurs as this one: the widest box the passes have.
 const MAX_SIGMA: f32 = 4.0 * MAX_RADIUS as f32;
@@ -56,7 +57,7 @@ impl Source<'_> {
 
 /// What the image was made from; a change of any of these recomputes it all.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Key {
+struct BlurId {
     sigma: u32,
     scale: u64,
     region: Rect,
@@ -76,7 +77,7 @@ struct Scratch {
 /// The blurred image of what lies beneath one layer.
 #[derive(Debug, Default)]
 pub struct Backdrop {
-    key: Option<Key>,
+    key: Option<BlurId>,
     /// The source pixels the image holds: the region and its margin within the source, out to the grid of 4.
     area: Rect,
     /// Premultiplied, `area.w / 4` cells by `area.h / 4`.
@@ -128,17 +129,22 @@ impl Backdrop {
         self.recomputed = 0;
         let m = margin(sigma_px);
         let grown = Rect::new(
-            region.x - m,
-            region.y - m,
-            region.w + 2 * m,
-            region.h + 2 * m,
+            DevPx(region.x - m),
+            DevPx(region.y - m),
+            DevPx(region.w + 2 * m),
+            DevPx(region.h + 2 * m),
         );
-        let around = grown.intersect(&Rect::new(0, 0, src.size.0, src.size.1));
+        let around = grown.intersect(&Rect::new(
+            DevPx(0),
+            DevPx(0),
+            DevPx(src.size.0),
+            DevPx(src.size.1),
+        ));
         if region.is_empty() || around.is_empty() || sigma_px.is_nan() || sigma_px <= 0.0 {
             self.invalidate();
             return None;
         }
-        let key = Key {
+        let key = BlurId {
             sigma: sigma_px.to_bits(),
             scale: scale.to_bits(),
             region,
@@ -150,7 +156,7 @@ impl Backdrop {
             let (x0, y0) = (around.x & !3, around.y & !3);
             let x1 = (around.x + around.w + 3) & !3;
             let y1 = (around.y + around.h + 3) & !3;
-            self.area = Rect::new(x0, y0, x1 - x0, y1 - y0);
+            self.area = Rect::new(DevPx(x0), DevPx(y0), DevPx(x1 - x0), DevPx(y1 - y0));
             self.recompute(k, src, 0, self.cells().1);
             std::mem::swap(&mut self.image, &mut self.scratch.fresh);
             return Some(region);
@@ -256,7 +262,12 @@ impl Backdrop {
             let same = |x: &usize| new[*x] == old[*x];
             let first = (0..w).find(|x| !same(x)).unwrap_or(0);
             let last = (0..w).rfind(|x| !same(x)).unwrap_or(0);
-            let cells = Rect::new(first as i32, y as i32, (last + 1 - first) as i32, 1);
+            let cells = Rect::new(
+                DevPx(first as i32),
+                DevPx(y as i32),
+                DevPx((last + 1 - first) as i32),
+                DevPx(1),
+            );
             *changed = changed.bounds(&cells);
             old.copy_from_slice(new);
         }
@@ -285,7 +296,7 @@ impl Backdrop {
         };
         let (x0, x1) = span(cells.x, cells.w, a.x, w);
         let (y0, y1) = span(cells.y, cells.h, a.y, h);
-        Rect::new(x0, y0, x1 - x0, y1 - y0)
+        Rect::new(DevPx(x0), DevPx(y0), DevPx(x1 - x0), DevPx(y1 - y0))
     }
 
     /// Row `y` of the blurred source from `x0`, in source coordinates, into `out`: bilinear between the cells' centres,
@@ -388,10 +399,11 @@ mod tests {
     use super::*;
     use crate::kernels::{avx2, baseline};
     use crate::rng::XorShift;
+    use kvardi::Px;
 
     const SIZE: (i32, i32) = (256, 200);
     const STRIDE: usize = 256;
-    const INSIDE: Rect = Rect::new(40, 30, 176, 140);
+    const INSIDE: Rect = Rect::new(DevPx(40), DevPx(30), DevPx(176), DevPx(140));
 
     /// The largest error against the reference over every fixture, σ and region, in 1/255: 5.29 measured, plus 1. The
     /// ceiling holds from σ 10 up. At σ 5, ¼ resolution is too coarse for it: 10.69 on hard edges, whose slope is then
@@ -555,8 +567,8 @@ mod tests {
                 // noise is no measure of the blur
                 let regions = [
                     INSIDE,
-                    Rect::new(0, 0, 120, 100),
-                    Rect::new(150, 110, 106, 90),
+                    Rect::new(DevPx(0), DevPx(0), DevPx(120), DevPx(100)),
+                    Rect::new(DevPx(150), DevPx(110), DevPx(106), DevPx(90)),
                 ];
                 let regions = &regions[..if *name == "noise" { 1 } else { 3 }];
                 for &region in regions {
@@ -584,17 +596,20 @@ mod tests {
     #[test]
     fn avx2_equals_baseline() {
         let Some(wide) = avx2() else {
-            eprintln!("no AVX2 build on this machine");
+            annall::cli_err("no AVX2 build on this machine").unwrap_or_default();
             return;
         };
         for (sigma, seed) in [(3.0, 21), (10.0, 22), (20.5, 23), (64.0, 24)] {
             let mut src = noise(seed);
-            let region = Rect::new(13, 9, 201, 170);
+            let region = Rect::new(DevPx(13), DevPx(9), DevPx(201), DevPx(170));
             let (mut a, mut b) = (Backdrop::new(), Backdrop::new());
-            for dirty in [&[][..], &[Rect::new(30, 60, 90, 11)][..]] {
+            for dirty in [
+                &[][..],
+                &[Rect::new(DevPx(30), DevPx(60), DevPx(90), DevPx(11))][..],
+            ] {
                 paint(
                     &mut src,
-                    Rect::new(30, 60, 90, 11),
+                    Rect::new(DevPx(30), DevPx(60), DevPx(90), DevPx(11)),
                     0xff12_3456 + seed as u32,
                 );
                 let s = Source {
@@ -621,17 +636,17 @@ mod tests {
     #[test]
     fn dirty_outside_margin_keeps_cache() {
         let mut src = noise(1);
-        let region = Rect::new(100, 80, 40, 30);
+        let region = Rect::new(DevPx(100), DevPx(80), DevPx(40), DevPx(30));
         let mut b = full(&src, region, 4.0);
         let m = margin(4.0);
         assert_eq!(m, 12);
         let image = b.image.clone();
         // past the grid cell that holds the margin's edge, on all four sides
         let outside = [
-            Rect::new(0, 0, 256, 80 - m - 4),
-            Rect::new(0, 80 + 30 + m + 4, 256, 20),
-            Rect::new(0, 60, 100 - m - 4, 60),
-            Rect::new(100 + 40 + m + 4, 60, 60, 60),
+            Rect::new(DevPx(0), DevPx(0), DevPx(256), DevPx(80 - m - 4)),
+            Rect::new(DevPx(0), DevPx(80 + 30 + m + 4), DevPx(256), DevPx(20)),
+            Rect::new(DevPx(0), DevPx(60), DevPx(100 - m - 4), DevPx(60)),
+            Rect::new(DevPx(100 + 40 + m + 4), DevPx(60), DevPx(60), DevPx(60)),
         ];
         for rect in outside {
             paint(&mut src, rect, 0xff00_ff00);
@@ -647,7 +662,7 @@ mod tests {
         let mut b = full(&src, INSIDE, 10.0);
         let whole = b.recomputed_px();
         let before = sampled(&b, INSIDE);
-        let strip = Rect::new(90, 100, 40, 8);
+        let strip = Rect::new(DevPx(90), DevPx(100), DevPx(40), DevPx(8));
         paint(&mut src, strip, 0xff00_0000);
         let changed = update(&mut b, &src, INSIDE, 10.0, &[strip]).expect("a change beneath");
         let m = margin(10.0);
@@ -663,7 +678,7 @@ mod tests {
             let px = INSIDE.x + (i % INSIDE.w as usize) as i32;
             let py = INSIDE.y + (i / INSIDE.w as usize) as i32;
             assert!(
-                x == y || changed.contains(px, py),
+                x == y || changed.contains(Px(px), Px(py)),
                 "({px},{py}) outside {changed:?}"
             );
         }
@@ -678,10 +693,10 @@ mod tests {
             let sigma = [3.0, 8.0, 10.0, 17.5][r.below(4) as usize];
             let (x, y) = (r.below(200) as i32, r.below(150) as i32);
             let region = Rect::new(
-                x,
-                y,
-                1 + r.below((SIZE.0 - x) as u32) as i32,
-                1 + r.below((SIZE.1 - y) as u32) as i32,
+                DevPx(x),
+                DevPx(y),
+                DevPx(1 + r.below((SIZE.0 - x) as u32) as i32),
+                DevPx(1 + r.below((SIZE.1 - y) as u32) as i32),
             );
             let mut src = noise(r.next_u64());
             let mut b = full(&src, region, sigma);
@@ -690,7 +705,12 @@ mod tests {
                     .map(|_| {
                         let (x, y) = (r.below(250) as i32, r.below(190) as i32);
                         let w = 1 + r.below((SIZE.0 - x).min(40) as u32) as i32;
-                        Rect::new(x, y, w, 1 + r.below((SIZE.1 - y).min(30) as u32) as i32)
+                        Rect::new(
+                            DevPx(x),
+                            DevPx(y),
+                            DevPx(w),
+                            DevPx(1 + r.below((SIZE.1 - y).min(30) as u32) as i32),
+                        )
                     })
                     .collect();
                 for rect in &dirty {
@@ -706,7 +726,7 @@ mod tests {
                     let px = region.x + (i % region.w as usize) as i32;
                     let py = region.y + (i / region.w as usize) as i32;
                     assert!(
-                        *p == q || changed.is_some_and(|c| c.contains(px, py)),
+                        *p == q || changed.is_some_and(|c| c.contains(Px(px), Px(py))),
                         "({px},{py}) {changed:?}"
                     );
                 }
@@ -736,7 +756,10 @@ mod tests {
     fn region_move_recomputes() {
         let src = noise(4);
         let mut b = full(&src, INSIDE, 10.0);
-        for moved in [INSIDE.translate(8, 0), INSIDE.translate(1, 3)] {
+        for moved in [
+            INSIDE.translate(Px(8), Px(0)),
+            INSIDE.translate(Px(1), Px(3)),
+        ] {
             assert_eq!(update(&mut b, &src, moved, 10.0, &[]), Some(moved));
             assert!(b.recomputed_px() > 0);
             assert_eq!(sampled(&b, moved), sampled(&full(&src, moved, 10.0), moved));
@@ -748,11 +771,23 @@ mod tests {
         let src = noise(5);
         let mut b = Backdrop::new();
         assert_eq!(
-            update(&mut b, &src, Rect::new(10, 10, 0, 20), 10.0, &[]),
+            update(
+                &mut b,
+                &src,
+                Rect::new(DevPx(10), DevPx(10), DevPx(0), DevPx(20)),
+                10.0,
+                &[]
+            ),
             None
         );
         assert_eq!(
-            update(&mut b, &src, Rect::new(4000, 10, 20, 20), 10.0, &[]),
+            update(
+                &mut b,
+                &src,
+                Rect::new(DevPx(4000), DevPx(10), DevPx(20), DevPx(20)),
+                10.0,
+                &[]
+            ),
             None
         );
         assert_eq!(b.recomputed_px(), 0);
@@ -764,7 +799,7 @@ mod tests {
     #[test]
     fn region_past_the_source_clamps_to_its_edge() {
         let src = flat();
-        let region = Rect::new(240, 190, 40, 30);
+        let region = Rect::new(DevPx(240), DevPx(190), DevPx(40), DevPx(30));
         let b = full(&src, region, 10.0);
         assert!(sampled(&b, region).iter().all(|&p| p == src[0]));
     }
@@ -781,7 +816,7 @@ mod tests {
                     src[y.min(h - 1) as usize * STRIDE + x.min(w - 1) as usize];
             }
         }
-        let region = Rect::new(200, 150, 53, 49);
+        let region = Rect::new(DevPx(200), DevPx(150), DevPx(53), DevPx(49));
         let mut b = Backdrop::new();
         assert_eq!(
             b.update(&src, STRIDE, (w, h), region, 10.0, 1.0, &[]),
@@ -804,18 +839,24 @@ mod tests {
             .collect();
         // `blur(10px)`: 1400×920 as the design's row names it, and the palette at scale 2
         for (region, sigma) in [
-            (Rect::new(260, 140, 1400, 920), 10.0),
-            (Rect::new(320, 200, 1280, 800), 20.0),
+            (
+                Rect::new(DevPx(260), DevPx(140), DevPx(1400), DevPx(920)),
+                10.0,
+            ),
+            (
+                Rect::new(DevPx(320), DevPx(200), DevPx(1280), DevPx(800)),
+                20.0,
+            ),
         ] {
             let mut b = Backdrop::new();
             let mut row = vec![0; region.w as usize];
             let (mut update_ms, mut sample_ms) = (Vec::new(), Vec::new());
             for _ in 0..41 {
                 b.invalidate();
-                let t = std::time::Instant::now();
+                let t = stund::Instant::now();
                 b.update(&src, w as usize, (w, h), region, sigma, 2.0, &[]);
                 update_ms.push(t.elapsed().as_secs_f64() * 1e3);
-                let t = std::time::Instant::now();
+                let t = stund::Instant::now();
                 for y in region.y..region.y + region.h {
                     b.sample_row(y, region.x, &mut row);
                     std::hint::black_box(&row);
@@ -824,7 +865,7 @@ mod tests {
             }
             update_ms.sort_by(f64::total_cmp);
             sample_ms.sort_by(f64::total_cmp);
-            println!(
+            annall::cli_out(&format!(
                 "{} {}x{} σ {sigma}: update {:.2} ms, fused sample {:.2} ms, cache {} kB",
                 kernels().name,
                 region.w,
@@ -832,7 +873,8 @@ mod tests {
                 update_ms[20],
                 sample_ms[20],
                 b.bytes() / 1024
-            );
+            ))
+            .unwrap_or_default();
         }
     }
 }

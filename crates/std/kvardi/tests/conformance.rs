@@ -182,3 +182,115 @@ fn a_display_that_changes_scale_changes_the_window_on_it() {
     screens.place(&mut w, Rect::new(2100, 100, 800, 600));
     assert_eq!(w.display(), Some(DisplayId(2)));
 }
+
+#[test]
+fn a_length_in_device_pixels_unrounded() {
+    let s = Scale {
+        output: 1.5,
+        ..Scale::default()
+    };
+    assert_eq!(Lp(3.0).to_px_f32(&s), 4.5);
+    assert_eq!(Lp(3.0).to_px(&s), Px(5), "the rounded one is a pixel count");
+    assert_eq!(Lp(2.0).to_px_f32(&Scale::default()), 2.0);
+}
+
+#[test]
+fn a_length_in_f64_device_pixels() {
+    assert_eq!(kvardi::device_f64(3.0, 1.5), 4.5);
+    assert_eq!(kvardi::device_f64(0.0, 2.0), 0.0);
+}
+
+mod snapping {
+    use kvardi::snap::*;
+
+    #[test]
+    fn stable_rounding_is_mutters_rule() {
+        // 1.25: 120ths 150
+        assert_eq!(stable_origin(3, 150), 4, "3.75 rounds up");
+        assert_eq!(stable_origin(2, 150), 3, "2.5 rounds away from zero");
+        assert_eq!(stable_origin(-2, 150), -3, "-2.5 rounds away from zero");
+        assert_eq!(stable_extent(1, 2, 150), 4 - 1, "3.75 -> 4 less 1.25 -> 1");
+        // edges of neighbours meet: the extent of a then b is the extent of both
+        for s in [120, 150, 180, 144, 201] {
+            for p in -5..6 {
+                assert_eq!(
+                    stable_extent(p, 3, s) + stable_extent(p + 3, 4, s),
+                    stable_extent(p, 7, s),
+                    "at {s}/120 from {p}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn outward_edges_hold_the_device_coordinate() {
+        for s in [90, 120, 150, 180, 200, 240] {
+            for d in -20..60 {
+                let (b, a) = (outward_before(d, s), outward_after(d, s));
+                assert!(
+                    stable_origin(b, s) <= d && stable_origin(b + 1, s) > d,
+                    "before {d} at {s}"
+                );
+                assert!(
+                    stable_origin(a, s) >= d && stable_origin(a - 1, s) < d,
+                    "after {d} at {s}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn snapping_follows_css_values_four() {
+        assert_eq!(scale_120ths(1.5), 180);
+        assert_eq!(scale_120ths(1.005), 121);
+        assert!(identity_scale(2.0) && identity_scale(0.0) && identity_scale(f64::NAN));
+        assert!(!identity_scale(1.5));
+        // a thin line is at least one device pixel; a thick one is whole pixels
+        assert_eq!(snap_line(0.5, 1.5), 1.0 / 1.5);
+        assert_eq!(snap_line(2.0, 1.5), 3.0 / 1.5);
+        assert_eq!(
+            snap_line(2.5, 1.5),
+            4.0 / 1.5,
+            "3.75 device pixels is 4, not 3"
+        );
+        // an axis at 1.5: start 1.2 -> device 1.8 -> 2 -> 4/3; length 2 -> end 3.2 -> 4.8 -> 5, so 3 px
+        let (p, l) = snap_span(1.2, 2.0, 1.5);
+        assert_eq!((p, l), (2.0 / 1.5, 3.0 / 1.5));
+        // under two device pixels: floor, at least 1
+        assert_eq!(snap_span(1.0, 0.5, 1.5), (2.0 / 1.5, 1.0 / 1.5));
+    }
+}
+
+#[test]
+fn pixels_add_subtract_and_scale_by_whole_numbers() {
+    let (a, b) = (Px(7), Px(3));
+    assert_eq!(a + b, Px(10));
+    assert_eq!(a - b, Px(4));
+    assert_eq!(a + 2, Px(9), "a count of pixels");
+    assert_eq!(a - 2, Px(5));
+    assert_eq!(a * 3, Px(21));
+    assert_eq!(a * Px(2), Px(14));
+    assert_eq!(a / 2, Px(3), "whole division");
+    assert_eq!(-a, Px(-7));
+    assert_eq!(Px(-4).abs(), Px(4));
+    assert_eq!(Px::ZERO, Px(0));
+    let mut c = Px(1);
+    c += 4;
+    c += Px(1);
+    c -= 2;
+    c *= 3;
+    c /= 2;
+    assert_eq!(c, Px(6));
+    assert!(a > 6 && a == 7 && b < Px(4), "compared with plain counts");
+    assert_eq!(i32::from(a), 7);
+}
+
+#[test]
+fn a_logical_length_reaches_pixels_only_through_the_scale() {
+    // `Px + Lp` is not defined (a compile-fail test in glitnir proves the other side); the one road is `to_px`
+    let s = Scale {
+        output: 2.0,
+        ..Scale::default()
+    };
+    assert_eq!(Lp(3.0).to_px(&s) + 1, Px(7));
+}

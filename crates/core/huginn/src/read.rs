@@ -1125,7 +1125,8 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../../test/fixtures/huginn/cases.json"
         );
-        let table = std::fs::read_to_string(path).expect("the shared case table");
+        let table =
+            eitri::read_string(std::path::Path::new(path), 1 << 24).expect("the shared case table");
         let rows: Vec<Value> = serde_json::from_str(&table).expect("cases.json is JSON");
         let mut ids = HashSet::new();
         let mut failures = Vec::new();
@@ -1225,7 +1226,8 @@ mod tests {
             ("#b", 0),
             ("#o", 0),
             ("#24r", 0),
-            ("#b12", 0),
+            ("#b2", 0),
+            ("#b1z", 0),
             ("#1r0", 0),
             ("#37r0", 0),
             ("#99999999999999999999r0", 0),

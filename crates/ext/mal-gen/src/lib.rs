@@ -363,8 +363,11 @@ impl Gen<'_> {
                 TypeDefKind::Enum(_) => Ty::Enum(*id),
                 TypeDefKind::List(inner) => {
                     let at = format!("{at}: a list");
-                    if matches!(self.scalar(inner, &at)?, Ty::List(_)) {
-                        return Err(fail(format!("{at} of lists is not supported")));
+                    // a list of lists is supported; a third level is not
+                    if let Ty::List(inner_id) = self.scalar(inner, &at)?
+                        && matches!(self.elem(inner_id)?, Ty::List(_))
+                    {
+                        return Err(fail(format!("{at} of lists of lists is not supported")));
                     }
                     Ty::List(*id)
                 }
@@ -579,8 +582,16 @@ impl Gen<'_> {
             }
             Ty::List(id) => {
                 let inner = self.dec(self.elem(id)?, "__e", &format!("{ctx}[]"))?;
+                // a list of lists is bounded in all: the inner lists' lengths add up to at most the limit too
+                let total = if matches!(self.elem(id)?, Ty::List(_)) {
+                    format!(
+                        "rt::check_len(__out.iter().map(|__x| __x.len()).sum(), __max, \"{ctx}\")?; "
+                    )
+                } else {
+                    String::new()
+                };
                 format!(
-                    "{{ let __items = rt::dec_list({val}, \"{ctx}\", __max)?; let mut __out = Vec::with_capacity(__items.len()); for __e in &__items {{ __out.push({inner}); }} __out }}"
+                    "{{ let __items = rt::dec_list({val}, \"{ctx}\", __max)?; let mut __out = Vec::with_capacity(__items.len()); for __e in &__items {{ __out.push({inner}); }} {total}__out }}"
                 )
             }
             Ty::Record(id) => {
@@ -618,8 +629,15 @@ impl Gen<'_> {
             Ty::Enum(_) => format!("rt::enc_str(__lua, {e}.as_str())?"),
             Ty::List(id) => {
                 let inner = self.enc(self.elem(id)?, "__x", ctx)?;
+                let total = if matches!(self.elem(id)?, Ty::List(_)) {
+                    format!(
+                        "rt::check_len({e}.iter().map(|__x| __x.len()).sum(), __max, \"{ctx}\")?; "
+                    )
+                } else {
+                    String::new()
+                };
                 format!(
-                    "{{ rt::check_len({e}.len(), __max, \"{ctx}\")?; let __lt = __lua.create_table()?; for (__i, __x) in {e}.iter().cloned().enumerate() {{ __lt.set(__i as i64 + 1, {inner})?; }} mlua::Value::Table(__lt) }}"
+                    "{{ rt::check_len({e}.len(), __max, \"{ctx}\")?; {total} let __lt = __lua.create_table()?; for (__i, __x) in {e}.iter().cloned().enumerate() {{ __lt.set(__i as i64 + 1, {inner})?; }} mlua::Value::Table(__lt) }}"
                 )
             }
             Ty::Record(id) => {
@@ -647,6 +665,15 @@ impl Gen<'_> {
             Ty::List(id) => match self.elem(id) {
                 Ok(Ty::Enum(_) | Ty::Record(_)) => {
                     format!("{e}.into_iter().map(Into::into).collect()")
+                }
+                // a list of lists: each inner list is converted the same way (a no-op for scalars)
+                Ok(inner @ Ty::List(_)) => {
+                    let c = self.conv(inner, "__in");
+                    if c == "__in" {
+                        e.to_string()
+                    } else {
+                        format!("{e}.into_iter().map(|__in| {c}).collect()")
+                    }
                 }
                 _ => e.to_string(),
             },
@@ -676,6 +703,11 @@ impl Gen<'_> {
         match t {
             Ty::List(id) => {
                 let mut s = format!("rt::len_ok({e}.len(), {max}, \"{ctx}\")?;\n        ");
+                if let Ok(Ty::List(_)) = self.elem(id) {
+                    s.push_str(&format!(
+                        "rt::len_ok({e}.iter().map(|__x| __x.len()).sum(), {max}, \"{ctx}\")?;\n        "
+                    ));
+                }
                 if let Ok(inner) = self.elem(id)
                     && self.has_list(inner)
                 {
@@ -907,9 +939,15 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
                 args.iter().map(|a| format!(", {a}")).collect::<String>()
             );
             let back = g.ret_from_ours(f.ret, "__r");
+            // a result that needs no conversion is not mapped (an identity `map` is a lint)
+            let mapped = if back == "__r" {
+                String::new()
+            } else {
+                format!(".map(|__r| {back})")
+            };
             putln!(
                 wasm,
-                "    fn {name}(&mut self{sig}) -> wasmtime::Result<{}> {{\n        {checks}let __c = rt::caller(&self.1);\n        rt::with_wasm(&*self.0, \"{}\", |__m| {call}).map(|__r| {back})\n    }}",
+                "    fn {name}(&mut self{sig}) -> wasmtime::Result<{}> {{\n        {checks}let __c = rt::caller(&self.1);\n        rt::with_wasm(&*self.0, \"{}\", |__m| {call}){mapped}\n    }}",
                 g.ret_ty(f.ret, true)?,
                 f.ctx
             )?;

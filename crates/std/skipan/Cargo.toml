@@ -13,6 +13,7 @@ saman.workspace = true
 huginn = { path = "../../core/huginn", version = "0.1.0" }
 eitri = { path = "../../hub/eitri", version = "0.1.0" }
 serde_json.workspace = true
+mot = { path = "../mot", version = "0.1.0" }
 
 [dev-dependencies]
 raun.workspace = true

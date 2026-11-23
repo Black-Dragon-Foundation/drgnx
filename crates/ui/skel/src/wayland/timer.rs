@@ -29,22 +29,19 @@ impl HostTimer {
     /// once.
     pub fn set(&mut self, shared: &Arc<Shared>, at_ns: Option<u64>) {
         let (m, cv) = &*self.inner;
-        m.lock().unwrap_or_else(|e| e.into_inner()).at = at_ns;
+        saman::lock(m).at = at_ns;
         cv.notify_one();
         if self.thread.is_none() && at_ns.is_some() {
             let inner = Arc::clone(&self.inner);
             let shared = Arc::downgrade(shared);
-            self.thread = std::thread::Builder::new()
-                .name("nhshell-timer".into())
-                .spawn(move || run(&inner, &shared))
-                .ok();
+            self.thread = saman::spawn_thread("nhshell-timer", move || run(&inner, &shared)).ok();
         }
     }
 }
 
 fn run(inner: &Inner, shared: &Weak<Shared>) {
     let (m, cv) = inner;
-    let mut s = m.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = saman::lock(m);
     loop {
         if s.stop {
             return;
@@ -66,7 +63,7 @@ fn run(inner: &Inner, shared: &Weak<Shared>) {
                     sh.post(Record::new(ShellEvent::Timer, 0, now));
                     sh.wake.signal();
                 }
-                s = m.lock().unwrap_or_else(|e| e.into_inner());
+                s = saman::lock(m);
             }
         }
     }
@@ -75,10 +72,10 @@ fn run(inner: &Inner, shared: &Weak<Shared>) {
 impl Drop for HostTimer {
     fn drop(&mut self) {
         let (m, cv) = &*self.inner;
-        m.lock().unwrap_or_else(|e| e.into_inner()).stop = true;
+        saman::lock(m).stop = true;
         cv.notify_one();
         if let Some(t) = self.thread.take() {
-            let _ = t.join();
+            let _thread_panic_seen_elsewhere = t.join();
         }
     }
 }
@@ -98,7 +95,7 @@ mod tests {
             if got >= n || now_ns() > end {
                 return got;
             }
-            std::thread::sleep(Duration::from_millis(2));
+            stund::sleep_blocking(Duration::from_millis(2));
         }
     }
 
@@ -114,7 +111,7 @@ mod tests {
         // cancelled long before it is due: nothing comes (the 2 s one was replaced too)
         t.set(&shared, Some(now_ns() + 1_000_000_000));
         t.set(&shared, None);
-        std::thread::sleep(Duration::from_millis(1500));
+        stund::sleep_blocking(Duration::from_millis(1500));
         assert_eq!(timers(&shared, 0), 0);
         t.set(&shared, Some(0));
         assert_eq!(timers(&shared, 1), 1);

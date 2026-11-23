@@ -12,6 +12,10 @@ let px = kvardi::Lp(1.0).to_px(&scale);                     // a 1-lp hairline a
 let rect = glitnir::geom::Rect::at(x, y, w, px);            // Glitnir takes Px, never Lp
 ```
 
+A length that is not a pixel count (a blur's sigma) is `Lp::to_px_f32(&Scale)`, unrounded. Geometry that rounds by its own
+rules (Glitnir's edge snapping, which floors and snaps outward) multiplies through `kvardi::device_f64(logical, scale)`;
+that rounding is the open question of moving it into `kvardi`.
+
 **Four levels of zoom, and the display's own scale.** `Scale { output, app, window, pane, panel }` and
 `Scale::effective()` is their product. Each zoom is kept between `MIN_ZOOM` and `MAX_ZOOM`.
 

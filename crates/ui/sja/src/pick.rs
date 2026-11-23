@@ -167,7 +167,7 @@ static LISTS: Mutex<Lists> = Mutex::new(Lists {
 });
 
 fn lists<R>(f: impl FnOnce(&mut Lists) -> R) -> R {
-    let mut l = LISTS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut l = saman::lock(&LISTS);
     f(&mut l)
 }
 

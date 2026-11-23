@@ -3,6 +3,7 @@
 //! y down; colours are ARGB words, not premultiplied.
 
 use glitnir::geom::Rect;
+use kvardi::Px;
 
 /// One shape.
 #[derive(Debug, Clone, PartialEq)]
@@ -142,8 +143,8 @@ impl Paint {
 }
 
 /// The rectangles a bitmap's set bits cover (`Shape::Bitmap`): one per run of set bits in a row, the leftmost bit in
-/// bit `w - 1`, each bit `scale` pixels square.
-pub fn bitmap_runs(x: i32, y: i32, w: i32, rows: &[u16], scale: i32) -> Vec<Rect> {
+/// bit `w - 1`, each bit `dot` pixels square.
+pub fn bitmap_runs(x: i32, y: i32, w: i32, rows: &[u16], dot: i32) -> Vec<Rect> {
     let mut out = Vec::new();
     for (i, bits) in rows.iter().enumerate() {
         let mut j = 0;
@@ -157,10 +158,10 @@ pub fn bitmap_runs(x: i32, y: i32, w: i32, rows: &[u16], scale: i32) -> Vec<Rect
                 j += 1;
             }
             out.push(Rect::new(
-                x + start * scale,
-                y + i as i32 * scale,
-                (j - start) * scale,
-                scale,
+                Px(x + start * dot),
+                Px(y + i as i32 * dot),
+                Px((j - start) * dot),
+                Px(dot),
             ));
         }
     }
@@ -170,6 +171,7 @@ pub fn bitmap_runs(x: i32, y: i32, w: i32, rows: &[u16], scale: i32) -> Vec<Rect
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kvardi::Px;
 
     #[test]
     fn bitmap_runs_cover_the_set_bits() {
@@ -178,9 +180,9 @@ mod tests {
         assert_eq!(
             r,
             vec![
-                Rect::new(10, 20, 1, 1),
-                Rect::new(13, 20, 1, 1),
-                Rect::new(11, 21, 2, 1)
+                Rect::new(Px(10), Px(20), Px(1), Px(1)),
+                Rect::new(Px(13), Px(20), Px(1), Px(1)),
+                Rect::new(Px(11), Px(21), Px(2), Px(1))
             ]
         );
     }
@@ -191,9 +193,9 @@ mod tests {
         assert_eq!(
             r,
             vec![
-                Rect::new(10, 20, 2, 2),
-                Rect::new(16, 20, 2, 2),
-                Rect::new(12, 22, 4, 2)
+                Rect::new(Px(10), Px(20), Px(2), Px(2)),
+                Rect::new(Px(16), Px(20), Px(2), Px(2)),
+                Rect::new(Px(12), Px(22), Px(4), Px(2))
             ]
         );
     }

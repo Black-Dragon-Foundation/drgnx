@@ -187,7 +187,7 @@ impl ShmBuf {
         let row = |r: i32| (r.clamp(0, self.h) as usize * self.stride as usize).min(self.len);
         let (start, end) = (row(from).next_multiple_of(page), row(to) / page * page);
         if end > start {
-            let _ = fallocate(
+            let _no_preallocation_is_fine = fallocate(
                 fd,
                 FallocateFlags::PUNCH_HOLE | FallocateFlags::KEEP_SIZE,
                 start as u64,
@@ -218,7 +218,7 @@ impl Drop for ShmBuf {
         self.buffer.destroy();
         // SAFETY: `ptr`/`len` are the mapping made in `create`, unmapped once.
         unsafe {
-            let _ = munmap(self.ptr.cast(), self.len);
+            let _unmap_failed_nothing_to_do = munmap(self.ptr.cast(), self.len);
         }
     }
 }

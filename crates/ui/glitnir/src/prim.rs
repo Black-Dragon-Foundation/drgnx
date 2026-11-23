@@ -8,9 +8,10 @@
 //! [`compose`] draws a list in order, source-over, into a premultiplied ARGB buffer (the CPU presenter); each primitive
 //! is clipped to the strip or band it belongs to, so nothing draws outside it. Naglfar draws the same list.
 
-use crate::atlas::{AtlasKind, Atlases, GlyphKey};
+use crate::atlas::{AtlasKind, Atlases, GlyphId};
 use crate::geom::Rect;
 use crate::text::TextRun;
+use kvardi::Px;
 
 /// A gradient's direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,7 +61,7 @@ pub enum Prim {
     Sprite {
         id: u64,
         at: (i32, i32),
-        key: GlyphKey,
+        key: GlyphId,
         tint: u32,
     },
     Text {
@@ -98,12 +99,20 @@ impl Prim {
                 ..
             } => {
                 let reach = (3.0 * (blur / 2.0).max(0.5)).ceil() as i32 + spread.ceil() as i32;
-                let r = rect.translate(offset.0.round() as i32, offset.1.round() as i32);
-                Rect::new(r.x - reach, r.y - reach, r.w + 2 * reach, r.h + 2 * reach)
+                let r = rect.translate(Px(offset.0.round() as i32), Px(offset.1.round() as i32));
+                Rect::new(
+                    Px(r.x - reach),
+                    Px(r.y - reach),
+                    Px(r.w + 2 * reach),
+                    Px(r.h + 2 * reach),
+                )
             }
-            Prim::Sprite { at, key, .. } => {
-                Rect::new(at.0, at.1, key.size_px as i32, key.size_px as i32)
-            }
+            Prim::Sprite { at, key, .. } => Rect::new(
+                Px(at.0),
+                Px(at.1),
+                Px(key.size_px as i32),
+                Px(key.size_px as i32),
+            ),
             Prim::Text { run, .. } => run.clip,
         }
     }
@@ -166,7 +175,7 @@ fn rrect_cov(r: Rect, rad: f32, grow: f32, px: f32, py: f32) -> f32 {
 
 /// Compose PRIMS into T in order, every primitive clipped to CLIP (the strip's or band's rect).
 pub fn compose(prims: &[Prim], atlases: &mut Atlases, clip: Rect, t: &mut Target) {
-    let view = Rect::new(t.origin.0, t.origin.1, t.w, t.h);
+    let view = Rect::new(Px(t.origin.0), Px(t.origin.1), Px(t.w), Px(t.h));
     let clip = clip.intersect(&view);
     if clip.is_empty() {
         return;
@@ -226,8 +235,13 @@ pub fn compose(prims: &[Prim], atlases: &mut Atlases, clip: Rect, t: &mut Target
             } => {
                 let sigma = (blur / 2.0).max(0.5);
                 let reach = (3.0 * sigma).ceil() as i32 + spread.ceil() as i32;
-                let r = rect.translate(offset.0.round() as i32, offset.1.round() as i32);
-                let grown = Rect::new(r.x - reach, r.y - reach, r.w + 2 * reach, r.h + 2 * reach);
+                let r = rect.translate(Px(offset.0.round() as i32), Px(offset.1.round() as i32));
+                let grown = Rect::new(
+                    Px(r.x - reach),
+                    Px(r.y - reach),
+                    Px(r.w + 2 * reach),
+                    Px(r.h + 2 * reach),
+                );
                 fill_shape(t, clip, grown, |x, y| {
                     // a Gaussian's edge (σ) over the distance to the spread shape (logistic approximation of erfc)
                     let d = rrect_dist(r, *radius, *spread, x, y);
@@ -241,7 +255,7 @@ pub fn compose(prims: &[Prim], atlases: &mut Atlases, clip: Rect, t: &mut Target
                 // an icon's mask is Glitnir's own raster, made on its first use (`icon`)
                 crate::icon::ensure(atlases, key);
                 if let Some(s) = atlases.a8.get(key) {
-                    let r = Rect::new(at.0, at.1, s.w as i32, s.h as i32);
+                    let r = Rect::new(Px(at.0), Px(at.1), Px(s.w as i32), Px(s.h as i32));
                     each_px(t, clip, r, |t, i, x, y| {
                         let cov =
                             u32::from(atlases.a8.texel(&s, (x - at.0) as u32, (y - at.1) as u32));
@@ -282,7 +296,7 @@ fn draw_run(run: &TextRun, atlases: &mut Atlases, clip: Rect, t: &mut Target) {
         };
         let Some(s) = slot else { continue };
         let (gx, gy) = (run.x + g.x + s.bearing_x, run.baseline - s.bearing_y);
-        let r = Rect::new(gx, gy, s.w as i32, s.h as i32);
+        let r = Rect::new(Px(gx), Px(gy), Px(s.w as i32), Px(s.h as i32));
         match g.kind {
             AtlasKind::A8 => each_px(t, clip, r, |t, i, x, y| {
                 let cov = u32::from(atlases.a8.texel(&s, (x - gx) as u32, (y - gy) as u32));

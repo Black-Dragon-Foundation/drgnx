@@ -4,7 +4,7 @@
 //! Prints the median and the slowest of 200 reads.
 
 use huginn::read::{Limits, read_all};
-use std::time::Instant;
+use stund::Instant;
 
 /// About 64 KiB of entries shaped like `settings.el`'s: a key, a value, comments between.
 fn fixture() -> String {
@@ -38,10 +38,11 @@ fn read_64_kib_within_1_ms() {
         .collect();
     times.sort_by(f64::total_cmp);
     let median = times[times.len() / 2];
-    println!(
+    annall::cli_out(&format!(
         "huginn read of {} bytes: median {median:.3} ms, max {:.3} ms",
         bytes.len(),
         times[times.len() - 1]
-    );
+    ))
+    .expect("stdout");
     assert!(median <= 1.0, "median {median:.3} ms exceeds 1 ms");
 }

@@ -231,7 +231,7 @@ pub fn with_picture<R>(
     make: impl FnOnce() -> Vec<u32>,
     f: impl FnOnce(*const c_void) -> R,
 ) -> Option<R> {
-    let mut all = pictures().lock().unwrap_or_else(|p| p.into_inner());
+    let mut all = saman::lock(pictures());
     if all.get(&key).is_none_or(|(m, _)| *m != mask) {
         let mut px = make();
         let (w, h) = (key.1 as usize, key.2 as usize);
@@ -271,8 +271,5 @@ pub fn with_picture<R>(
 
 /// Forget the pictures made from the pixels or the mask at `addr` (they are being freed).
 pub fn forget(addr: usize) {
-    pictures()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .retain(|k, (m, _)| k.0 != addr && *m != addr);
+    saman::lock(pictures()).retain(|k, (m, _)| k.0 != addr && *m != addr);
 }

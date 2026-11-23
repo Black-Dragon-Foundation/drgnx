@@ -247,9 +247,7 @@ define_class!(
         fn ended(&self, _s: &NSDraggingSession, p: NSPoint, op: NSDragOperation) {
             #[cfg(feature = "test-hooks")]
             {
-                let mut l = START_LOG
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut l = saman::lock(&START_LOG);
                 let head = l.trim_end_matches(')').to_owned();
                 *l = format!(
                     "{head} :moves {} :ended-at ({:.0} {:.0}) :operation {})",
@@ -260,7 +258,7 @@ define_class!(
                 );
             }
             #[cfg(not(feature = "test-hooks"))]
-            let _ = p;
+            let _position_only_logged_by_test_hooks = p;
             let action = dnd_map::actions_of(op.0);
             deliver(MacEv::Input(
                 self.ivars().1,
@@ -343,9 +341,7 @@ pub static START_LOG: std::sync::Mutex<String> = std::sync::Mutex::new(String::n
 
 #[cfg(feature = "test-hooks")]
 fn start_log(s: String) {
-    *START_LOG
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = s;
+    *saman::lock(&START_LOG) = s;
 }
 
 /// The moves the running drag session reported (test diagnostics; the session's end logs them).

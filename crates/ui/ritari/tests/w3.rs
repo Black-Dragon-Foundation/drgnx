@@ -3,15 +3,16 @@ mod common;
 use common::Env;
 use serde_json::{json, Value};
 use std::os::unix::fs::FileExt;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 use wayland_client::protocol::{wl_compositor::WlCompositor, wl_surface::WlSurface};
 use wayland_client::Proxy;
 use wayland_protocols::wp::presentation_time::client::wp_presentation::WpPresentation;
 
 /// Show a fresh 16 x 16 buffer on `s`; returns the file behind it.
-fn show(env: &mut Env, s: &WlSurface) -> std::path::PathBuf {
+fn show(env: &mut Env, s: &WlSurface) -> std::sync::Arc<std::fs::File> {
     let b = env.buffer(16, 16);
-    let path = env.pool_path();
+    let path = env.pool_file();
     s.attach(Some(&b), 0, 0);
     s.damage_buffer(0, 0, 16, 16);
     s.commit();
@@ -19,8 +20,7 @@ fn show(env: &mut Env, s: &WlSurface) -> std::path::PathBuf {
     path
 }
 
-fn scribble(path: &std::path::Path) {
-    let f = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+fn scribble(f: &std::fs::File) {
     f.write_all_at(&[0xff; 64], 0).unwrap();
 }
 
@@ -74,7 +74,7 @@ fn commit_has_a_timestamp() {
     let mut env = Env::new("sway", &[]);
     let s = env.surface();
     show(&mut env, &s);
-    std::thread::sleep(Duration::from_millis(5));
+    stund::sleep_blocking(Duration::from_millis(5));
     show(&mut env, &s);
     let c = env.rec.commits();
     let (t0, t1) = (
@@ -119,7 +119,7 @@ fn refresh_120_paces_callbacks() {
         while env.client.frames < n || env.client.presented.len() < n as usize {
             env.roundtrip();
             assert!(Instant::now() < end, "callback {n} never came");
-            std::thread::sleep(Duration::from_micros(300));
+            stund::sleep_blocking(Duration::from_micros(300));
         }
     }
     // the compositor's own presentation times are the vblanks of its refresh grid: each is a whole number of periods

@@ -16,7 +16,8 @@ use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::Errno;
 use rustix::pipe::{PipeFlags, pipe_with};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 use wayland_client::protocol::wl_data_offer::WlDataOffer;
 use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1;
 
@@ -46,7 +47,7 @@ pub struct OfferTypes(Mutex<Vec<String>>);
 
 impl OfferTypes {
     fn lock(&self) -> MutexGuard<'_, Vec<String>> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.0)
     }
 
     pub fn add(&self, mime_type: String) {

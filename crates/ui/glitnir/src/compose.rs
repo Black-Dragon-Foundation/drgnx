@@ -43,9 +43,10 @@ use crate::kernels::{
 use crate::scene::{Kind, Placed};
 use crate::shadow::{ShadowCache, ShadowSpec, ShadowTiles};
 use crate::stats::StatsEntry;
+use kvardi::Px;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use stund::Instant;
 
 /// One layer's pixels, borrowed for one call.  Layout equals `GlitnirSource`.
 #[repr(C)]
@@ -197,7 +198,12 @@ impl Target {
         Ok(TargetView {
             data,
             stride,
-            rect: Rect::new(self.origin_x, self.origin_y, self.width, self.height),
+            rect: Rect::new(
+                Px(self.origin_x),
+                Px(self.origin_y),
+                Px(self.width),
+                Px(self.height),
+            ),
             scale: self.scale,
         })
     }
@@ -234,10 +240,10 @@ pub(crate) fn subtract(a: Rect, b: Rect) -> impl Iterator<Item = Rect> {
         let (a_right, a_bottom) = (a.x + a.w, a.y + a.h);
         let (i_right, i_bottom) = (i.x + i.w, i.y + i.h);
         [
-            Rect::new(a.x, a.y, a.w, i.y - a.y),
-            Rect::new(a.x, i_bottom, a.w, a_bottom - i_bottom),
-            Rect::new(a.x, i.y, i.x - a.x, i.h),
-            Rect::new(i_right, i.y, a_right - i_right, i.h),
+            Rect::new(Px(a.x), Px(a.y), Px(a.w), Px(i.y - a.y)),
+            Rect::new(Px(a.x), Px(i_bottom), Px(a.w), Px(a_bottom - i_bottom)),
+            Rect::new(Px(a.x), Px(i.y), Px(i.x - a.x), Px(i.h)),
+            Rect::new(Px(i_right), Px(i.y), Px(a_right - i_right), Px(i.h)),
         ]
     };
     parts.into_iter().filter(|r| !r.is_empty())
@@ -342,10 +348,10 @@ impl Plan {
             let (iw, ih) = tiles.image_size(size.0, size.1);
             // a fractional offset rounds to the nearest pixel, inside the bounds the scene damages
             let image = Rect::new(
-                x - tiles.pad() + c.offset_x.round() as i32,
-                y - tiles.pad() + c.offset_y.round() as i32,
-                iw as i32,
-                ih as i32,
+                Px(x - tiles.pad() + c.offset_x.round() as i32),
+                Px(y - tiles.pad() + c.offset_y.round() as i32),
+                Px(iw as i32),
+                Px(ih as i32),
             );
             Shadow { tiles, size, image }
         });
@@ -355,15 +361,19 @@ impl Plan {
         Plan {
             origin: (x, y),
             copied: [
-                Rect::new(x + r, y, w - 2 * r, h),
-                Rect::new(x, y + r, r, h - 2 * r),
-                Rect::new(x + w - r, y + r, r, h - 2 * r),
+                Rect::new(Px(x + r), Px(y), Px(w - 2 * r), Px(h)),
+                Rect::new(Px(x), Px(y + r), Px(r), Px(h - 2 * r)),
+                Rect::new(Px(x + w - r), Px(y + r), Px(r), Px(h - 2 * r)),
             ],
             corner_at: [
-                (Rect::new(x, y, r, r), 0, 0),
-                (Rect::new(x + w - r, y, r, r), ru, 0),
-                (Rect::new(x, y + h - r, r, r), 0, ru),
-                (Rect::new(x + w - r, y + h - r, r, r), ru, ru),
+                (Rect::new(Px(x), Px(y), Px(r), Px(r)), 0, 0),
+                (Rect::new(Px(x + w - r), Px(y), Px(r), Px(r)), ru, 0),
+                (Rect::new(Px(x), Px(y + h - r), Px(r), Px(r)), 0, ru),
+                (
+                    Rect::new(Px(x + w - r), Px(y + h - r), Px(r), Px(r)),
+                    ru,
+                    ru,
+                ),
             ],
             side: 2 * ru,
             corners,
@@ -414,7 +424,7 @@ impl Plan {
             };
             // row by row, so that a row is in the cache when the layer goes over it
             for y in q.y..q.y + q.h {
-                let row = Rect::new(q.x, y, q.w, 1);
+                let row = Rect::new(Px(q.x), Px(y), Px(q.w), Px(1));
                 b.row(y, q, t.at(row).data);
                 k.over(&mut t.at(row), &src.at(row, self.origin), w, 1);
             }
@@ -647,7 +657,7 @@ fn draw_minimap(k: &Kernels, t: &mut TargetView, m: &crate::minimap::Minimap, cl
     }
     let w = m.rect.w.max(0) as usize;
     for tile in m.tiles.iter() {
-        let at = Rect::new(m.rect.x, tile.y, m.rect.w, tile.h as i32);
+        let at = Rect::new(Px(m.rect.x), Px(tile.y), Px(m.rect.w), Px(tile.h as i32));
         let q = at.intersect(&clip);
         if q.is_empty() || tile.px.len() < w * tile.h as usize {
             continue;
@@ -660,7 +670,7 @@ fn draw_minimap(k: &Kernels, t: &mut TargetView, m: &crate::minimap::Minimap, cl
         k.over(&mut t.at(q), &src, q.w as usize, q.h as usize);
     }
     for l in m.labels.iter() {
-        let at = Rect::new(l.x, l.y, l.w as i32, l.h as i32);
+        let at = Rect::new(Px(l.x), Px(l.y), Px(l.w as i32), Px(l.h as i32));
         let q = at.intersect(&clip);
         if q.is_empty() || l.px.len() < (l.w * l.h) as usize {
             continue;
@@ -678,10 +688,10 @@ fn draw_minimap(k: &Kernels, t: &mut TargetView, m: &crate::minimap::Minimap, cl
         if b.line_argb != 0 && !b.rect.is_empty() {
             let r = b.rect;
             for side in [
-                Rect::new(r.x, r.y, r.w, 1),
-                Rect::new(r.x, r.y + r.h - 1, r.w, 1),
-                Rect::new(r.x, r.y + 1, 1, r.h - 2),
-                Rect::new(r.x + r.w - 1, r.y + 1, 1, r.h - 2),
+                Rect::new(Px(r.x), Px(r.y), Px(r.w), Px(1)),
+                Rect::new(Px(r.x), Px(r.y + r.h - 1), Px(r.w), Px(1)),
+                Rect::new(Px(r.x), Px(r.y + 1), Px(1), Px(r.h - 2)),
+                Rect::new(Px(r.x + r.w - 1), Px(r.y + 1), Px(1), Px(r.h - 2)),
             ] {
                 fill_over(k, t, side.intersect(&clip), b.line_argb);
             }
@@ -796,16 +806,16 @@ impl CardRing {
             cov: ring_coverage(r + w, w),
             side: s as usize,
             squares: [
-                Rect::new(x - wi, y - wi, s, s),
-                Rect::new(x + rw - ri, y - wi, s, s),
-                Rect::new(x - wi, y + rh - ri, s, s),
-                Rect::new(x + rw - ri, y + rh - ri, s, s),
+                Rect::new(Px(x - wi), Px(y - wi), Px(s), Px(s)),
+                Rect::new(Px(x + rw - ri), Px(y - wi), Px(s), Px(s)),
+                Rect::new(Px(x - wi), Px(y + rh - ri), Px(s), Px(s)),
+                Rect::new(Px(x + rw - ri), Px(y + rh - ri), Px(s), Px(s)),
             ],
             strips: [
-                Rect::new(x + ri, y - wi, rw - 2 * ri, wi),
-                Rect::new(x + ri, y + rh, rw - 2 * ri, wi),
-                Rect::new(x - wi, y + ri, wi, rh - 2 * ri),
-                Rect::new(x + rw, y + ri, wi, rh - 2 * ri),
+                Rect::new(Px(x + ri), Px(y - wi), Px(rw - 2 * ri), Px(wi)),
+                Rect::new(Px(x + ri), Px(y + rh), Px(rw - 2 * ri), Px(wi)),
+                Rect::new(Px(x - wi), Px(y + ri), Px(wi), Px(rh - 2 * ri)),
+                Rect::new(Px(x + rw), Px(y + ri), Px(wi), Px(rh - 2 * ri)),
             ],
         }
     }
@@ -881,15 +891,25 @@ fn draw_inner(k: &Kernels, t: &mut TargetView, b: &crate::scene::Block, clip: Re
         if b.open_top { r0 as i32 + w } else { 0 },
         if b.open_bottom { r0 as i32 + w } else { 0 },
     );
-    let ext = Rect::new(rect.x, rect.y - top, rect.w, rect.h + top + bottom);
+    let ext = Rect::new(
+        Px(rect.x),
+        Px(rect.y - top),
+        Px(rect.w),
+        Px(rect.h + top + bottom),
+    );
     let r = clamp_radius(ext.w as usize, ext.h as usize, r0);
     let ri = r as i32;
     if b.fill_argb != 0 {
         // the straight parts: the middle band whole, the top and bottom bands between the corners
         for q in [
-            Rect::new(ext.x, ext.y + ri, ext.w, ext.h - 2 * ri),
-            Rect::new(ext.x + ri, ext.y, ext.w - 2 * ri, ri),
-            Rect::new(ext.x + ri, ext.y + ext.h - ri, ext.w - 2 * ri, ri),
+            Rect::new(Px(ext.x), Px(ext.y + ri), Px(ext.w), Px(ext.h - 2 * ri)),
+            Rect::new(Px(ext.x + ri), Px(ext.y), Px(ext.w - 2 * ri), Px(ri)),
+            Rect::new(
+                Px(ext.x + ri),
+                Px(ext.y + ext.h - ri),
+                Px(ext.w - 2 * ri),
+                Px(ri),
+            ),
         ] {
             solid_rect(k, t, q.intersect(&clip), b.fill_argb);
         }
@@ -897,10 +917,15 @@ fn draw_inner(k: &Kernels, t: &mut TargetView, b: &crate::scene::Block, clip: Re
             let inside = corner_coverage(r);
             let (n, ru) = (2 * r as usize, r as usize);
             let squares = [
-                Rect::new(ext.x, ext.y, ri, ri),
-                Rect::new(ext.x + ext.w - ri, ext.y, ri, ri),
-                Rect::new(ext.x, ext.y + ext.h - ri, ri, ri),
-                Rect::new(ext.x + ext.w - ri, ext.y + ext.h - ri, ri, ri),
+                Rect::new(Px(ext.x), Px(ext.y), Px(ri), Px(ri)),
+                Rect::new(Px(ext.x + ext.w - ri), Px(ext.y), Px(ri), Px(ri)),
+                Rect::new(Px(ext.x), Px(ext.y + ext.h - ri), Px(ri), Px(ri)),
+                Rect::new(
+                    Px(ext.x + ext.w - ri),
+                    Px(ext.y + ext.h - ri),
+                    Px(ri),
+                    Px(ri),
+                ),
             ];
             for (i, sq) in squares.iter().enumerate() {
                 let q = sq.intersect(&clip);
@@ -914,13 +939,18 @@ fn draw_inner(k: &Kernels, t: &mut TargetView, b: &crate::scene::Block, clip: Re
     }
     if b.ring_argb != 0 && ext.w >= 2 * w && ext.h >= 2 * w {
         // the border: a card's ring around the rectangle w px in, so its outer edge is the rectangle's
-        let inner = Rect::new(ext.x + w, ext.y + w, ext.w - 2 * w, ext.h - 2 * w);
+        let inner = Rect::new(
+            Px(ext.x + w),
+            Px(ext.y + w),
+            Px(ext.w - 2 * w),
+            Px(ext.h - 2 * w),
+        );
         let ring = CardRing::around(inner, r.max(wu) - wu, wu, b.ring_argb);
         let mut dst = t.at(clip);
         ring.draw(k, &mut dst, clip);
     }
     if b.top_argb != 0 && !b.open_top {
-        let line = Rect::new(rect.x + ri, rect.y, rect.w - 2 * ri, w);
+        let line = Rect::new(Px(rect.x + ri), Px(rect.y), Px(rect.w - 2 * ri), Px(w));
         solid_rect(k, t, line.intersect(&clip), b.top_argb);
     }
 }
@@ -949,7 +979,12 @@ fn draw_block(
             bounds.y + bounds.h
         },
     );
-    let outer = clip.intersect(&Rect::new(bounds.x, top_y, bounds.w, bottom_y - top_y));
+    let outer = clip.intersect(&Rect::new(
+        Px(bounds.x),
+        Px(top_y),
+        Px(bounds.w),
+        Px(bottom_y - top_y),
+    ));
     if b.kind == crate::scene::BlockKind::Row {
         draw_row(k, t, b, clip);
         return;
@@ -966,7 +1001,7 @@ fn draw_block(
     }
     let solid = solid_rect;
     if b.kind == crate::scene::BlockKind::Rule {
-        let line = Rect::new(rect.x, rect.y + rect.h - w, rect.w, w);
+        let line = Rect::new(Px(rect.x), Px(rect.y + rect.h - w), Px(rect.w), Px(w));
         solid(k, t, line.intersect(&clip), b.ring_argb);
         return;
     }
@@ -985,18 +1020,23 @@ fn draw_block(
         if b.open_bottom { 0 } else { gap },
     );
     if gap_top > 0 {
-        let band = Rect::new(rect.x, rect.y, rect.w, gap_top);
+        let band = Rect::new(Px(rect.x), Px(rect.y), Px(rect.w), Px(gap_top));
         solid(k, t, band.intersect(&clip), b.beneath_argb);
     }
     if gap_bottom > 0 {
-        let band = Rect::new(rect.x, rect.y + rect.h - gap_bottom, rect.w, gap_bottom);
+        let band = Rect::new(
+            Px(rect.x),
+            Px(rect.y + rect.h - gap_bottom),
+            Px(rect.w),
+            Px(gap_bottom),
+        );
         solid(k, t, band.intersect(&clip), b.beneath_argb);
     }
     let rect = Rect::new(
-        rect.x,
-        rect.y + gap_top,
-        rect.w,
-        (rect.h - gap_top - gap_bottom).max(0),
+        Px(rect.x),
+        Px(rect.y + gap_top),
+        Px(rect.w),
+        Px((rect.h - gap_top - gap_bottom).max(0)),
     );
     let wu = w as u32;
     let r0 = b.radius_px.max(wu);
@@ -1004,7 +1044,12 @@ fn draw_block(
         if b.open_top { r0 as i32 + w } else { 0 },
         if b.open_bottom { r0 as i32 + w } else { 0 },
     );
-    let ext = Rect::new(rect.x, rect.y - top, rect.w, rect.h + top + bottom);
+    let ext = Rect::new(
+        Px(rect.x),
+        Px(rect.y - top),
+        Px(rect.w),
+        Px(rect.h + top + bottom),
+    );
     if ext.w < 2 * w || ext.h < 2 * w {
         return;
     }
@@ -1014,10 +1059,15 @@ fn draw_block(
     let outside = outside_coverage(r);
     let (n, ru) = (2 * r as usize, r as usize);
     let squares = [
-        Rect::new(ext.x, ext.y, ri, ri),
-        Rect::new(ext.x + ext.w - ri, ext.y, ri, ri),
-        Rect::new(ext.x, ext.y + ext.h - ri, ri, ri),
-        Rect::new(ext.x + ext.w - ri, ext.y + ext.h - ri, ri, ri),
+        Rect::new(Px(ext.x), Px(ext.y), Px(ri), Px(ri)),
+        Rect::new(Px(ext.x + ext.w - ri), Px(ext.y), Px(ri), Px(ri)),
+        Rect::new(Px(ext.x), Px(ext.y + ext.h - ri), Px(ri), Px(ri)),
+        Rect::new(
+            Px(ext.x + ext.w - ri),
+            Px(ext.y + ext.h - ri),
+            Px(ri),
+            Px(ri),
+        ),
     ];
     for (i, sq) in squares.iter().enumerate() {
         let q = sq.intersect(&clip);
@@ -1052,7 +1102,12 @@ fn draw_block(
         return;
     }
     // the ring: a card's ring around the rectangle w px in, so its outer edge is the rectangle's, radius r
-    let inner = Rect::new(ext.x + w, ext.y + w, ext.w - 2 * w, ext.h - 2 * w);
+    let inner = Rect::new(
+        Px(ext.x + w),
+        Px(ext.y + w),
+        Px(ext.w - 2 * w),
+        Px(ext.h - 2 * w),
+    );
     let ring = CardRing::around(inner, r - wu, wu, b.ring_argb);
     let mut dst = t.at(clip);
     ring.draw(k, &mut dst, clip);
@@ -1063,13 +1118,18 @@ fn draw_block(
 /// which draws their default background in the block's fill.
 fn draw_row(k: &Kernels, t: &mut TargetView, b: &crate::scene::Block, clip: Rect) {
     let rect = b.rect;
-    let band = clip.intersect(&Rect::new(clip.x, rect.y, clip.w, rect.h));
+    let band = clip.intersect(&Rect::new(Px(clip.x), Px(rect.y), Px(clip.w), Px(rect.h)));
     if band.is_empty() {
         return;
     }
     let right = rect.x + rect.w;
-    let before = Rect::new(band.x, band.y, rect.x - band.x, band.h);
-    let past = Rect::new(right, band.y, band.x + band.w - right, band.h);
+    let before = Rect::new(Px(band.x), Px(band.y), Px(rect.x - band.x), Px(band.h));
+    let past = Rect::new(
+        Px(right),
+        Px(band.y),
+        Px(band.x + band.w - right),
+        Px(band.h),
+    );
     solid_rect(k, t, before.intersect(&band), b.beneath_argb);
     solid_rect(k, t, past.intersect(&band), b.beneath_argb);
     if b.radius_px == 0 {
@@ -1080,7 +1140,12 @@ fn draw_row(k: &Kernels, t: &mut TargetView, b: &crate::scene::Block, clip: Rect
         if b.open_top { b.radius_px as i32 } else { 0 },
         if b.open_bottom { b.radius_px as i32 } else { 0 },
     );
-    let ext = Rect::new(rect.x, rect.y - top, rect.w, rect.h + top + bottom);
+    let ext = Rect::new(
+        Px(rect.x),
+        Px(rect.y - top),
+        Px(rect.w),
+        Px(rect.h + top + bottom),
+    );
     if ext.w <= 0 || ext.h <= 0 {
         return;
     }
@@ -1093,10 +1158,15 @@ fn draw_row(k: &Kernels, t: &mut TargetView, b: &crate::scene::Block, clip: Rect
     let outside = outside_coverage(r);
     let (n, ru) = (2 * r as usize, r as usize);
     let squares = [
-        Rect::new(ext.x, ext.y, ri, ri),
-        Rect::new(ext.x + ext.w - ri, ext.y, ri, ri),
-        Rect::new(ext.x, ext.y + ext.h - ri, ri, ri),
-        Rect::new(ext.x + ext.w - ri, ext.y + ext.h - ri, ri, ri),
+        Rect::new(Px(ext.x), Px(ext.y), Px(ri), Px(ri)),
+        Rect::new(Px(ext.x + ext.w - ri), Px(ext.y), Px(ri), Px(ri)),
+        Rect::new(Px(ext.x), Px(ext.y + ext.h - ri), Px(ri), Px(ri)),
+        Rect::new(
+            Px(ext.x + ext.w - ri),
+            Px(ext.y + ext.h - ri),
+            Px(ri),
+            Px(ri),
+        ),
     ];
     for (i, sq) in squares.iter().enumerate() {
         let q = sq.intersect(&clip);
@@ -1136,10 +1206,10 @@ fn block_shadow(
     let tiles = shadows.get(size.0, size.1, &spec);
     let (iw, ih) = tiles.image_size(size.0, size.1);
     let image = Rect::new(
-        card.x - tiles.pad(),
-        card.y - tiles.pad() + b.shadow_y_px.clamp(-(1 << 12), 1 << 12),
-        iw as i32,
-        ih as i32,
+        Px(card.x - tiles.pad()),
+        Px(card.y - tiles.pad() + b.shadow_y_px.clamp(-(1 << 12), 1 << 12)),
+        Px(iw as i32),
+        Px(ih as i32),
     );
     let q = image.intersect(&clip);
     if q.is_empty() {
@@ -1185,7 +1255,7 @@ fn block_shadow(
             stride: q.w as usize,
         };
         k.solid_over(
-            &mut t.at(Rect::new(q.x, y, q.w, 1)),
+            &mut t.at(Rect::new(Px(q.x), Px(y), Px(q.w), Px(1))),
             tiles.colour(),
             &mask,
             q.w as usize,
@@ -1245,10 +1315,10 @@ impl CardPlan {
             let tiles = shadows.get(size.0, size.1, &spec);
             let (iw, ih) = tiles.image_size(size.0, size.1);
             let image = Rect::new(
-                rect.x - tiles.pad() + c.offset_x.round() as i32,
-                rect.y - tiles.pad() + c.offset_y.round() as i32,
-                iw as i32,
-                ih as i32,
+                Px(rect.x - tiles.pad() + c.offset_x.round() as i32),
+                Px(rect.y - tiles.pad() + c.offset_y.round() as i32),
+                Px(iw as i32),
+                Px(ih as i32),
             );
             Shadow { tiles, size, image }
         });
@@ -1563,7 +1633,7 @@ pub fn compose_committed_with(
     let start = Instant::now();
     #[cfg(test)]
     if let Some(g) = &k.gate {
-        let _ = g.recv_timeout(std::time::Duration::from_secs(5));
+        let _gate_timed_out_or_opened = g.recv_timeout(std::time::Duration::from_secs(5));
     }
     let shadows = k.shadows.get_or_insert_with(ShadowCache::new);
     let layers = compose_layers(
@@ -1588,7 +1658,7 @@ pub fn compose_committed_with(
 static PROCESS: Mutex<Composer> = Mutex::new(Composer::new());
 
 fn process() -> MutexGuard<'static, Composer> {
-    PROCESS.lock().unwrap_or_else(|p| p.into_inner())
+    saman::lock(&PROCESS)
 }
 
 /// Compose ROOT's committed scene (`glitnir_compose`) with the C ABI's composer.  `GLITNIR_E_STATE` when ROOT has no
@@ -1637,6 +1707,7 @@ mod tests {
     use crate::kernels::kernels;
     use crate::rng::XorShift;
     use crate::scene::{Chrome, LayerDesc, Scene};
+    use kvardi::Px;
     use std::time::Duration;
 
     const ROOT: u64 = 1;
@@ -1696,14 +1767,14 @@ mod tests {
             TargetView {
                 data: &mut self.px,
                 stride: self.w as usize,
-                rect: Rect::new(0, 0, self.w, self.h),
+                rect: Rect::new(Px(0), Px(0), Px(self.w), Px(self.h)),
                 scale,
             }
         }
 
         /// New pixels in R (clipped to the buffer).
         fn paint(&mut self, g: &mut XorShift, r: Rect) {
-            let r = r.intersect(&Rect::new(0, 0, self.w, self.h));
+            let r = r.intersect(&Rect::new(Px(0), Px(0), Px(self.w), Px(self.h)));
             for y in r.y..r.y + r.h {
                 for x in r.x..r.x + r.w {
                     let v = pixel(g);
@@ -1728,9 +1799,9 @@ mod tests {
                 }
             }
             if dy < 0 {
-                Rect::new(area.x, area.y + area.h + dy, area.w, -dy)
+                Rect::new(Px(area.x), Px(area.y + area.h + dy), Px(area.w), Px(-dy))
             } else {
-                Rect::new(area.x, area.y, area.w, dy)
+                Rect::new(Px(area.x), Px(area.y), Px(area.w), Px(dy))
             }
         }
     }
@@ -1781,7 +1852,8 @@ mod tests {
     }
 
     fn covers(damage: &[Rect], r: Rect) -> bool {
-        (r.y..r.y + r.h).all(|y| (r.x..r.x + r.w).all(|x| damage.iter().any(|d| d.contains(x, y))))
+        (r.y..r.y + r.h)
+            .all(|y| (r.x..r.x + r.w).all(|x| damage.iter().any(|d| d.contains(Px(x), Px(y)))))
     }
 
     fn rand_chrome(g: &mut XorShift) -> Chrome {
@@ -1821,10 +1893,10 @@ mod tests {
     impl Kid {
         fn window(&self) -> Rect {
             Rect::new(
-                self.rect.x + 2,
-                self.rect.y + 2,
-                self.rect.w - 4,
-                self.rect.h - 4,
+                Px(self.rect.x + 2),
+                Px(self.rect.y + 2),
+                Px(self.rect.w - 4),
+                Px(self.rect.h - 4),
             )
         }
 
@@ -1848,15 +1920,15 @@ mod tests {
         const W: i32 = 96;
         const H: i32 = 72;
         const ROOT_WINDOW: u64 = 99;
-        let all = Rect::new(0, 0, W, H);
-        let root_window = Rect::new(4, 4, W - 8, H - 16);
+        let all = Rect::new(Px(0), Px(0), Px(W), Px(H));
+        let root_window = Rect::new(Px(4), Px(4), Px(W - 8), Px(H - 16));
         let mut shadows = ShadowCache::new();
         let rand_rect = |g: &mut XorShift| {
             Rect::new(
-                g.below(W as u32 + 16) as i32 - 16,
-                g.below(H as u32 + 16) as i32 - 16,
-                1 + g.below(48) as i32,
-                1 + g.below(40) as i32,
+                Px(g.below(W as u32 + 16) as i32 - 16),
+                Px(g.below(H as u32 + 16) as i32 - 16),
+                Px(1 + g.below(48) as i32),
+                Px(1 + g.below(40) as i32),
             )
         };
         for seed in 1..=500u64 {
@@ -1926,10 +1998,10 @@ mod tests {
                             };
                             let b = src.get_mut(&id).unwrap();
                             let r = Rect::new(
-                                g.below(b.w as u32 + 4) as i32 - 2,
-                                g.below(b.h as u32 + 4) as i32 - 2,
-                                1 + g.below(16) as i32,
-                                1 + g.below(16) as i32,
+                                Px(g.below(b.w as u32 + 4) as i32 - 2),
+                                Px(g.below(b.h as u32 + 4) as i32 - 2),
+                                Px(1 + g.below(16) as i32),
+                                Px(1 + g.below(16) as i32),
                             );
                             b.paint(&mut g, r);
                             f.entry(id).or_default().add(r);
@@ -1941,7 +2013,7 @@ mod tests {
                             } else {
                                 let k = &kids[i];
                                 let w = k.window();
-                                (k.id, 100 + k.id, w.translate(-k.rect.x, -k.rect.y))
+                                (k.id, 100 + k.id, w.translate(Px(-k.rect.x), Px(-k.rect.y)))
                             };
                             if area.is_empty() {
                                 continue;
@@ -1992,16 +2064,16 @@ mod tests {
     #[test]
     fn scroll_op_compose_equals_scrolled_content() {
         let (w, h, scale) = (160, 120, 2.0);
-        let all = Rect::new(0, 0, w, h);
+        let all = Rect::new(Px(0), Px(0), Px(w), Px(h));
         let mut g = XorShift::new(7);
         let (mut s, mut f) = (Scene::default(), Frames::new());
         let mut shadows = ShadowCache::new();
         let mut src: BTreeMap<u64, Buf> = BTreeMap::new();
         s.upsert(&desc(ROOT, 0, 1, all, scale, true)).unwrap();
-        let win = Rect::new(8, 8, 144, 96);
+        let win = Rect::new(Px(8), Px(8), Px(144), Px(96));
         s.upsert(&desc(50, ROOT, 2, win, scale, true)).unwrap();
         // a chromed popup over the window, with a window of its own
-        let pop = Rect::new(90, 20, 60, 40);
+        let pop = Rect::new(Px(90), Px(20), Px(60), Px(40));
         s.upsert(&desc(10, ROOT, 3, pop, scale, true)).unwrap();
         s.set_chrome(
             10,
@@ -2010,16 +2082,16 @@ mod tests {
                 blur_px: 6.0,
                 offset_y: 3.0,
                 shadow_opacity: 0.4,
-                shadow_argb: 0xff00_0000,
+                shadow_argb: crate::testkit::argb(mot::Token::Gap),
                 border_px: 2.0,
-                border_argb: 0xff40_80c0,
+                border_argb: crate::testkit::argb(mot::Token::AccentFill),
                 ring_px: 0.0,
                 ring_argb: 0,
                 ..Chrome::default()
             }),
         )
         .unwrap();
-        let pwin = Rect::new(92, 22, 56, 36);
+        let pwin = Rect::new(Px(92), Px(22), Px(56), Px(36));
         s.upsert(&desc(51, 10, 2, pwin, scale, true)).unwrap();
         src.insert(ROOT, Buf::random(&mut g, w, h));
         src.insert(10, Buf::random(&mut g, pop.w, pop.h));
@@ -2034,7 +2106,7 @@ mod tests {
         let d = f.entry(ROOT).or_default();
         d.scroll(win, exposed);
         d.scrolled(50);
-        let local = pwin.translate(-pop.x, -pop.y);
+        let local = pwin.translate(Px(-pop.x), Px(-pop.y));
         let exposed = src.get_mut(&10).unwrap().scroll(&mut g, local, 5);
         let d = f.entry(10).or_default();
         d.scroll(local, exposed);
@@ -2047,7 +2119,7 @@ mod tests {
         let popup = s.committed().iter().find(|p| p.id == 10).unwrap().bounds;
         for y in win.y..win.y + win.h - dy {
             for x in win.x..win.x + win.w {
-                if !popup.contains(x, y) {
+                if !popup.contains(Px(x), Px(y)) {
                     assert_eq!(out.at(x, y), before.at(x, y + dy), "pixel {x},{y}");
                 }
             }
@@ -2063,23 +2135,23 @@ mod tests {
     #[test]
     fn a_chrome_ring_lies_just_outside_the_layer() {
         let (w, h, scale) = (64, 48, 1.0);
-        let all = Rect::new(0, 0, w, h);
+        let all = Rect::new(Px(0), Px(0), Px(w), Px(h));
         let mut g = XorShift::new(31);
         let (mut s, mut f) = (Scene::default(), Frames::new());
-        let b = Rect::new(12, 10, 36, 26);
+        let b = Rect::new(Px(12), Px(10), Px(36), Px(26));
         s.upsert(&desc(ROOT, 0, 1, all, scale, true)).unwrap();
         s.upsert(&desc(20, ROOT, 3, b, scale, true)).unwrap();
         let ring = Chrome {
             radius_px: 6.0,
             ring_px: 1.0,
-            ring_argb: 0x7300_0000,
+            ring_argb: crate::testkit::argb_alpha(mot::Token::Gap, 0x73),
             ..Chrome::default()
         };
         s.set_chrome(20, Some(ring)).unwrap();
         s.commit(ROOT, &mut f);
         assert_eq!(
             crate::scene::bounds(b, Some(&ring)),
-            Rect::new(11, 9, 38, 28)
+            Rect::new(Px(11), Px(9), Px(38), Px(28))
         );
         let mut src: BTreeMap<u64, Buf> = BTreeMap::new();
         src.insert(ROOT, Buf::random(&mut g, w, h));
@@ -2120,15 +2192,25 @@ mod tests {
     #[test]
     fn no_chrome_is_a_plain_copy() {
         let (w, h, scale) = (64, 48, 1.0);
-        let all = Rect::new(0, 0, w, h);
+        let all = Rect::new(Px(0), Px(0), Px(w), Px(h));
         let mut g = XorShift::new(3);
         let (mut s, mut f) = (Scene::default(), Frames::new());
         let mut shadows = ShadowCache::new();
-        let (a, b) = (Rect::new(10, 8, 20, 16), Rect::new(30, 20, 25, 20));
+        let (a, b) = (
+            Rect::new(Px(10), Px(8), Px(20), Px(16)),
+            Rect::new(Px(30), Px(20), Px(25), Px(20)),
+        );
         s.upsert(&desc(ROOT, 0, 1, all, scale, true)).unwrap();
         s.upsert(&desc(10, ROOT, 3, a, scale, true)).unwrap();
-        s.upsert(&desc(11, 10, 2, Rect::new(10, 8, 20, 12), scale, true))
-            .unwrap();
+        s.upsert(&desc(
+            11,
+            10,
+            2,
+            Rect::new(Px(10), Px(8), Px(20), Px(12)),
+            scale,
+            true,
+        ))
+        .unwrap();
         s.upsert(&desc(20, ROOT, 3, b, scale, true)).unwrap();
         // all-zero chrome: no radius, no shadow, no border
         s.set_chrome(20, Some(Chrome::default())).unwrap();
@@ -2155,12 +2237,15 @@ mod tests {
         assert_eq!(first_difference(&out, &want), None);
 
         // within overlapping clips: those pixels, once; the rest stays as it was
-        let clips = [Rect::new(5, 5, 30, 20), Rect::new(20, 15, 20, 20)];
+        let clips = [
+            Rect::new(Px(5), Px(5), Px(30), Px(20)),
+            Rect::new(Px(20), Px(15), Px(20), Px(20)),
+        ];
         let mut out = garbage.clone();
         run(&s, &mut out, scale, &clips, &src, &mut shadows);
         for y in 0..h {
             for x in 0..w {
-                let inside = clips.iter().any(|c| c.contains(x, y));
+                let inside = clips.iter().any(|c| c.contains(Px(x), Px(y)));
                 let expect = if inside {
                     want.at(x, y)
                 } else {
@@ -2176,7 +2261,7 @@ mod tests {
         let r = 8301;
         let (w, h) = (32, 24);
         assert_eq!(glitnir_root_new(r), GLITNIR_OK);
-        let layer = desc(r, 0, 1, Rect::new(0, 0, w, h), 2.0, true);
+        let layer = desc(r, 0, 1, Rect::new(Px(0), Px(0), Px(w), Px(h)), 2.0, true);
         assert_eq!(unsafe { glitnir_layer_upsert(r, &layer) }, GLITNIR_OK);
         let mut committed = crate::ffi::CommitOut {
             rects: std::ptr::null(),
@@ -2202,7 +2287,7 @@ mod tests {
             height: h,
             scale,
         };
-        let clip = [Rect::new(0, 0, w, h)];
+        let clip = [Rect::new(Px(0), Px(0), Px(w), Px(h))];
         let call =
             |t: &Target, s: &Source| unsafe { glitnir_compose(r, t, clip.as_ptr(), 1, s, 1) };
 
@@ -2273,21 +2358,21 @@ mod tests {
         const H: i32 = 48;
         let mut s = Scene::default();
         let mut frames = crate::damage::Frames::new();
-        let up = desc(1, 0, 1, Rect::new(0, 0, W, H), 1.0, true);
+        let up = desc(1, 0, 1, Rect::new(Px(0), Px(0), Px(W), Px(H)), 1.0, true);
         s.upsert(&up).unwrap();
         let mut sprites = Sprites::new();
         sprites.put(7, vec![0xffff_8000; 12 * 6], 12, 6);
         let sprites = std::sync::Arc::new(sprites);
         s.commit_with(1, &mut frames, &sprites);
         let a = Anchor {
-            glyph: Rect::new(16, 24, 8, 12),
-            clip: Rect::new(0, 0, W, H),
+            glyph: Rect::new(Px(16), Px(24), Px(8), Px(12)),
+            clip: Rect::new(Px(0), Px(0), Px(W), Px(H)),
             sprite: 7,
             row_top: 0,
         };
         s.decor_put(1, &a).unwrap();
         let damage = s.commit_with(1, &mut frames, &sprites).to_vec();
-        let pill = Rect::new(16, 18, 12, 6);
+        let pill = Rect::new(Px(16), Px(18), Px(12), Px(6));
         assert!(
             damage.iter().any(|r| !r.intersect(&pill).is_empty()),
             "{damage:?}"
@@ -2298,7 +2383,7 @@ mod tests {
             &s.snapshot(),
             &mut Composer::new(),
             &mut out.target(1.0),
-            &[Rect::new(0, 0, W, H)],
+            &[Rect::new(Px(0), Px(0), Px(W), Px(H))],
             &[src.source(1, 1.0)],
         );
         assert_eq!(drawn, Ok(1));
@@ -2313,7 +2398,7 @@ mod tests {
         // after the host has moved on: layers moved and re-chromed, anchors dropped, sprites replaced.
         const W: i32 = 96;
         const H: i32 = 72;
-        let all = Rect::new(0, 0, W, H);
+        let all = Rect::new(Px(0), Px(0), Px(W), Px(H));
         for seed in 1..=60u64 {
             let mut g = XorShift::new(seed);
             let root = 870_000 + seed * 100;
@@ -2326,17 +2411,17 @@ mod tests {
                 assert_eq!(unsafe { glitnir_layer_upsert(root, &d) }, GLITNIR_OK);
             };
             upsert(root, 0, 1, all);
-            upsert(win, root, 2, Rect::new(4, 4, W - 8, H - 16));
+            upsert(win, root, 2, Rect::new(Px(4), Px(4), Px(W - 8), Px(H - 16)));
             let mut src: BTreeMap<u64, Buf> = BTreeMap::new();
             src.insert(root, Buf::random(&mut g, W, H));
             let mut kids: Vec<(u64, Rect)> = Vec::new();
             for i in 0..1 + g.below(3) as u64 {
                 let id = root + 10 + i;
                 let r = Rect::new(
-                    g.below(W as u32) as i32 - 8,
-                    g.below(H as u32) as i32 - 8,
-                    8 + g.below(40) as i32,
-                    8 + g.below(30) as i32,
+                    Px(g.below(W as u32) as i32 - 8),
+                    Px(g.below(H as u32) as i32 - 8),
+                    Px(8 + g.below(40) as i32),
+                    Px(8 + g.below(30) as i32),
                 );
                 upsert(id, root, 3, r);
                 src.insert(id, Buf::random(&mut g, r.w, r.h));
@@ -2347,7 +2432,7 @@ mod tests {
                     let (id, r) = kids[g.below(kids.len() as u32) as usize];
                     match g.below(5) {
                         // a move keeps the size, so the sources stay valid
-                        0 => upsert(id, root, 3, r.translate(g.below(9) as i32 - 4, 3)),
+                        0 => upsert(id, root, 3, r.translate(Px(g.below(9) as i32 - 4), Px(3))),
                         1 => {
                             let c = rand_chrome(g);
                             let rc = unsafe { glitnir_layer_set_chrome(root, id, &c) };
@@ -2359,11 +2444,12 @@ mod tests {
                             put_sprite(key, &Buf::random(g, sw, sh));
                         }
                         3 => {
-                            let cell =
-                                |c: u32, r: u32| Rect::new(c as i32 * 8, r as i32 * 12, 8, 12);
+                            let cell = |c: u32, r: u32| {
+                                Rect::new(Px(c as i32 * 8), Px(r as i32 * 12), Px(8), Px(12))
+                            };
                             let a = Anchor {
                                 glyph: cell(g.below(10), 1 + g.below(4)),
-                                clip: Rect::new(0, 0, W - 8, H - 16),
+                                clip: Rect::new(Px(0), Px(0), Px(W - 8), Px(H - 16)),
                                 sprite: keys[g.below(2) as usize],
                                 row_top: 0,
                             };
@@ -2423,9 +2509,12 @@ mod tests {
         // host has drawn: a lock held across the compose would block the host until the gate's 5 s timeout
         let (w, h) = (3840, 2160);
         let root = 8801;
-        let pop = Rect::new(800, 500, 1280, 800);
+        let pop = Rect::new(Px(800), Px(500), Px(1280), Px(800));
         assert_eq!(glitnir_root_new(root), GLITNIR_OK);
-        for (id, kind, r) in [(root, 1, Rect::new(0, 0, w, h)), (root + 1, 3, pop)] {
+        for (id, kind, r) in [
+            (root, 1, Rect::new(Px(0), Px(0), Px(w), Px(h))),
+            (root + 1, 3, pop),
+        ] {
             let d = desc(id, if id == root { 0 } else { root }, kind, r, 1.0, true);
             assert_eq!(unsafe { glitnir_layer_upsert(root, &d) }, GLITNIR_OK);
         }
@@ -2438,7 +2527,7 @@ mod tests {
         let (_, snap) = crate::damage::commit_snapshot(root).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let (release, gate) = std::sync::mpsc::channel();
-        let a = std::thread::spawn(move || {
+        let a = saman::spawn_thread("glitnir-test", move || {
             crate::mark_compose_thread();
             let root_px = Buf::new(w, h, 0xfff0_f0f0);
             let popup = Buf::new(pop.w, pop.h, 0xff20_2428);
@@ -2451,16 +2540,19 @@ mod tests {
                 &snap,
                 &mut k,
                 &mut out.target(1.0),
-                &[Rect::new(0, 0, w, h)],
+                &[Rect::new(Px(0), Px(0), Px(w), Px(h))],
                 &sources,
             )
-        });
+        })
+        .unwrap();
         rx.recv().unwrap();
         // A is inside its compose; the host goes on drawing into the same root
-        std::thread::sleep(Duration::from_millis(5));
+        stund::sleep_blocking(Duration::from_millis(5));
         let t0 = Instant::now();
         for i in 0..1000 {
-            crate::damage::with(root, |d| d.add(Rect::new(i % 640, i / 640, 1, 1)));
+            crate::damage::with(root, |d| {
+                d.add(Rect::new(Px(i % 640), Px(i / 640), Px(1), Px(1)))
+            });
         }
         let took = t0.elapsed();
         release.send(()).unwrap();
@@ -2510,17 +2602,20 @@ mod tests {
     #[test]
     fn backdrop_under_content_inside_corners() {
         const BENEATH: u32 = 0xff40_80c0;
-        let (surface, rect) = (Rect::new(0, 0, 48, 48), Rect::new(8, 8, 32, 32));
+        let (surface, rect) = (
+            Rect::new(Px(0), Px(0), Px(48), Px(48)),
+            Rect::new(Px(8), Px(8), Px(32), Px(32)),
+        );
         let chrome = Chrome {
             radius_px: 8.0,
             blur_px: 6.0,
             shadow_opacity: 0.5,
-            shadow_argb: 0xff00_0000,
+            shadow_argb: crate::testkit::argb(mot::Token::Gap),
             ..Chrome::default()
         };
         let s = kid_scene(rect, Some(chrome));
         let parent = Buf::new(96, 96, BENEATH);
-        let b = blurred(&parent, Rect::new(20, 30, 32, 32), 8.0);
+        let b = blurred(&parent, Rect::new(Px(20), Px(30), Px(32), Px(32)), 8.0);
         let x = Extras {
             backdrop: Some((&b, ROOT)),
         };
@@ -2550,10 +2645,10 @@ mod tests {
     fn extras_none_equals_compose_committed() {
         const W: i32 = 64;
         const H: i32 = 48;
-        let all = Rect::new(0, 0, W, H);
+        let all = Rect::new(Px(0), Px(0), Px(W), Px(H));
         for seed in 1..=100 {
             let mut g = XorShift::new(seed);
-            let rect = Rect::new(6, 5, 40, 30);
+            let rect = Rect::new(Px(6), Px(5), Px(40), Px(30));
             let s = kid_scene(rect, Some(rand_chrome(&mut g)));
             let content = Buf::random(&mut g, rect.w, rect.h);
             let parent = Buf::random(&mut g, 96, 96);
@@ -2589,7 +2684,7 @@ mod tests {
     fn damage_only_equals_full_with_backdrop() {
         const W: i32 = 64;
         const H: i32 = 48;
-        let all = Rect::new(0, 0, W, H);
+        let all = Rect::new(Px(0), Px(0), Px(W), Px(H));
         let clear = |b: &mut Buf, clips: &[Rect]| {
             for c in clips {
                 let c = c.intersect(&all);
@@ -2600,17 +2695,22 @@ mod tests {
         };
         for seed in 1..=200 {
             let mut g = XorShift::new(seed);
-            let rect = Rect::new(4 + g.below(8) as i32, 3 + g.below(6) as i32, 40, 30);
+            let rect = Rect::new(
+                Px(4 + g.below(8) as i32),
+                Px(3 + g.below(6) as i32),
+                Px(40),
+                Px(30),
+            );
             let chrome = (g.below(4) != 0).then(|| rand_chrome(&mut g));
             let s = kid_scene(rect, chrome);
             let mut content = Buf::random(&mut g, rect.w, rect.h);
             let mut parent = Buf::random(&mut g, 96, 80);
             // the region may hang over the parent's edge
             let region = Rect::new(
-                g.below(96) as i32 - 20,
-                g.below(80) as i32 - 16,
-                rect.w,
-                rect.h,
+                Px(g.below(96) as i32 - 20),
+                Px(g.below(80) as i32 - 16),
+                Px(rect.w),
+                Px(rect.h),
             );
             let sigma = [4.0, 8.0, 10.5][g.below(3) as usize];
             let mut b = Backdrop::new();
@@ -2630,24 +2730,24 @@ mod tests {
                 let mut clips = Vec::new();
                 if g.below(2) == 0 {
                     let r = Rect::new(
-                        g.below(96) as i32,
-                        g.below(80) as i32,
-                        1 + g.below(30) as i32,
-                        1 + g.below(30) as i32,
+                        Px(g.below(96) as i32),
+                        Px(g.below(80) as i32),
+                        Px(1 + g.below(30) as i32),
+                        Px(1 + g.below(30) as i32),
                     );
                     parent.paint(&mut g, r);
                     let changed = b.update(&parent.px, 96, size, region, sigma, 1.0, &[r]);
                     let to_layer = (rect.x - region.x, rect.y - region.y);
-                    clips.extend(changed.map(|c| c.translate(to_layer.0, to_layer.1)));
+                    clips.extend(changed.map(|c| c.translate(Px(to_layer.0), Px(to_layer.1))));
                 } else {
                     let r = Rect::new(
-                        g.below(40) as i32,
-                        g.below(30) as i32,
-                        1 + g.below(12) as i32,
-                        1 + g.below(12) as i32,
+                        Px(g.below(40) as i32),
+                        Px(g.below(30) as i32),
+                        Px(1 + g.below(12) as i32),
+                        Px(1 + g.below(12) as i32),
                     );
                     content.paint(&mut g, r);
-                    clips.push(r.translate(rect.x, rect.y));
+                    clips.push(r.translate(Px(rect.x), Px(rect.y)));
                 }
                 let x = Extras {
                     backdrop: Some((&b, ROOT)),
@@ -2669,10 +2769,17 @@ mod tests {
         // a 640×400 logical popup at scale 2 with the default look (radius 8, blur 16, offset (0, 6), opacity 0.35;
         // a 1 px border) shows on a 2880×1800 root: the damage is its bounds, composed with the baseline kernels
         let (w, h, scale) = (2880, 1800, 2.0);
-        let pop = Rect::new(800, 500, 1280, 800);
+        let pop = Rect::new(Px(800), Px(500), Px(1280), Px(800));
         let (mut s, mut f) = (Scene::default(), Frames::new());
-        s.upsert(&desc(ROOT, 0, 1, Rect::new(0, 0, w, h), scale, true))
-            .unwrap();
+        s.upsert(&desc(
+            ROOT,
+            0,
+            1,
+            Rect::new(Px(0), Px(0), Px(w), Px(h)),
+            scale,
+            true,
+        ))
+        .unwrap();
         s.commit(ROOT, &mut f);
         s.upsert(&desc(10, ROOT, 3, pop, scale, true)).unwrap();
         s.set_chrome(
@@ -2684,9 +2791,9 @@ mod tests {
                 offset_y: 12.0,
                 spread_px: 0.0,
                 shadow_opacity: 0.35,
-                shadow_argb: 0xff00_0000,
+                shadow_argb: crate::testkit::argb(mot::Token::Gap),
                 border_px: 2.0,
-                border_argb: 0xff60_6060,
+                border_argb: crate::testkit::argb(mot::Token::BorderStrong),
                 ring_px: 0.0,
                 ring_argb: 0,
             }),
@@ -2717,9 +2824,10 @@ mod tests {
         let mut ms: Vec<f64> = (0..31).map(|_| once()).collect();
         ms.sort_by(f64::total_cmp);
         let (median, max) = (ms[ms.len() / 2], ms[ms.len() - 1]);
-        eprintln!(
+        annall::cli_err(&format!(
             "compose bench (baseline): median {median:.3} ms, max {max:.3} ms over {damage:?}"
-        );
+        ))
+        .unwrap_or_default();
         assert!(median <= 2.0, "median {median:.3} ms > 2 ms");
     }
 
@@ -2729,6 +2837,7 @@ mod tests {
         use crate::committed::OutputFrame;
         use crate::kernels::corner_coverage;
         use crate::scene::{Card, card_corners};
+        use kvardi::Px;
 
         const WIN: u64 = (1 << 63) | 7;
         const CARD: u64 = (1 << 62) | 7;
@@ -2748,8 +2857,15 @@ mod tests {
         /// A W x H root at SCALE over FRONT's pixels, with window layer id at RECT, a card of radius R, committed.
         fn carded(w: i32, h: i32, scale: f64, id: u64, rect: Rect, r: f32) -> (Scene, Frames) {
             let (mut s, mut f) = (Scene::default(), Frames::new());
-            s.upsert(&desc(ROOT, 0, 1, Rect::new(0, 0, w, h), scale, true))
-                .unwrap();
+            s.upsert(&desc(
+                ROOT,
+                0,
+                1,
+                Rect::new(Px(0), Px(0), Px(w), Px(h)),
+                scale,
+                true,
+            ))
+            .unwrap();
             s.upsert(&desc(id, ROOT, 2, rect, scale, true)).unwrap();
             s.set_chrome(id, Some(radius(r))).unwrap();
             s.set_card(
@@ -2766,7 +2882,7 @@ mod tests {
 
         fn compose_all(s: &Scene, front: &Buf, scale: f64) -> Buf {
             let mut out = Buf::new(front.w, front.h, 0x5a5a_5a5a);
-            let all = Rect::new(0, 0, front.w, front.h);
+            let all = Rect::new(Px(0), Px(0), Px(front.w), Px(front.h));
             let mut src = BTreeMap::new();
             src.insert(ROOT, front.clone());
             run(s, &mut out, scale, &[all], &src, &mut ShadowCache::new());
@@ -2785,7 +2901,7 @@ mod tests {
             let mut t = TargetView {
                 data: &mut out.px,
                 stride: out.w as usize,
-                rect: Rect::new(at.0, at.1, out.w, out.h),
+                rect: Rect::new(Px(at.0), Px(at.1), Px(out.w), Px(out.h)),
                 scale,
             };
             let views = [front.source(ROOT, scale)];
@@ -2808,7 +2924,7 @@ mod tests {
         #[test]
         fn corner_shows_beneath() {
             for scale in [1.0, 2.0, 1.25] {
-                let rect = Rect::new(10, 10, 40, 30);
+                let rect = Rect::new(Px(10), Px(10), Px(40), Px(30));
                 let (s, _) = carded(64, 48, scale, WIN, rect, 8.0);
                 let front = Buf::new(64, 48, 0xffaa_bbcc);
                 let out = compose_all(&s, &front, scale);
@@ -2835,7 +2951,7 @@ mod tests {
         #[test]
         fn interior_is_copy() {
             let mut g = XorShift::new(11);
-            let rect = Rect::new(6, 5, 50, 36);
+            let rect = Rect::new(Px(6), Px(5), Px(50), Px(36));
             let (s, _) = carded(64, 48, 1.0, WIN, rect, 9.0);
             let front = Buf::random(&mut g, 64, 48);
             let out = compose_all(&s, &front, 1.0);
@@ -2847,7 +2963,7 @@ mod tests {
             for y in 0..48 {
                 for x in 0..64 {
                     let full = squares.iter().enumerate().all(|(i, q)| {
-                        if !q.contains(x, y) {
+                        if !q.contains(Px(x), Px(y)) {
                             return true;
                         }
                         let (mx, my) = ((i as i32 % 2) * r as i32, (i as i32 / 2) * r as i32);
@@ -2863,7 +2979,7 @@ mod tests {
         #[test]
         fn removed_restores_backing_pixels() {
             let mut g = XorShift::new(12);
-            let rect = Rect::new(6, 5, 50, 36);
+            let rect = Rect::new(Px(6), Px(5), Px(50), Px(36));
             let (mut s, mut f) = carded(64, 48, 2.0, WIN, rect, 10.0);
             let front = Buf::random(&mut g, 64, 48);
             let mut out = compose_all(&s, &front, 2.0);
@@ -2877,7 +2993,14 @@ mod tests {
         #[test]
         fn chrome_without_card_draws_nothing() {
             let mut g = XorShift::new(13);
-            let (mut s, mut f) = carded(64, 48, 1.0, WIN, Rect::new(6, 5, 50, 36), 10.0);
+            let (mut s, mut f) = carded(
+                64,
+                48,
+                1.0,
+                WIN,
+                Rect::new(Px(6), Px(5), Px(50), Px(36)),
+                10.0,
+            );
             s.set_card(WIN, None).unwrap();
             s.commit(ROOT, &mut f);
             let front = Buf::random(&mut g, 64, 48);
@@ -2903,23 +3026,23 @@ mod tests {
 
         #[test]
         fn output_scroll_damages_corners() {
-            let r = Rect::new(10, 20, 400, 300);
+            let r = Rect::new(Px(10), Px(20), Px(400), Px(300));
             let (mut s, mut f) = own(r, true);
-            let exposed = Rect::new(10, 304, 400, 16);
+            let exposed = Rect::new(Px(10), Px(304), Px(400), Px(16));
             s.scroll(ROOT, f.entry(ROOT).or_default(), WIN, r, -16, exposed);
             s.commit(ROOT, &mut f);
             let o = output(&s, WIN);
             assert_eq!((o.scroll, o.full), (-16, false));
             let want = [
-                Rect::new(0, 284, 400, 16),
+                Rect::new(Px(0), Px(284), Px(400), Px(16)),
                 // the corners where they are now
-                Rect::new(0, 0, 10, 10),
-                Rect::new(390, 0, 10, 10),
-                Rect::new(0, 290, 10, 10),
-                Rect::new(390, 290, 10, 10),
+                Rect::new(Px(0), Px(0), Px(10), Px(10)),
+                Rect::new(Px(390), Px(0), Px(10), Px(10)),
+                Rect::new(Px(0), Px(290), Px(10), Px(10)),
+                Rect::new(Px(390), Px(290), Px(10), Px(10)),
                 // and where the scroll took the old bottom ones (the top ones left the view)
-                Rect::new(0, 274, 10, 10),
-                Rect::new(390, 274, 10, 10),
+                Rect::new(Px(0), Px(274), Px(10), Px(10)),
+                Rect::new(Px(390), Px(274), Px(10), Px(10)),
             ];
             for w in want {
                 assert!(covers(&o.damage, w), "{w:?} not in {:?}", o.damage);
@@ -2929,7 +3052,7 @@ mod tests {
 
         #[test]
         fn output_scroll_without_card_is_unchanged() {
-            let r = Rect::new(10, 20, 400, 300);
+            let r = Rect::new(Px(10), Px(20), Px(400), Px(300));
             let (mut s, mut f) = own(r, false);
             s.scroll(
                 ROOT,
@@ -2937,11 +3060,14 @@ mod tests {
                 WIN,
                 r,
                 -16,
-                Rect::new(10, 304, 400, 16),
+                Rect::new(Px(10), Px(304), Px(400), Px(16)),
             );
             s.commit(ROOT, &mut f);
             let o = output(&s, WIN);
-            assert!(covers(&o.damage, Rect::new(0, 284, 400, 16)));
+            assert!(covers(
+                &o.damage,
+                Rect::new(Px(0), Px(284), Px(400), Px(16))
+            ));
             assert_eq!(area(&o.damage), 400 * 16, "{:?}", o.damage);
         }
 
@@ -2951,7 +3077,7 @@ mod tests {
                 blur_px: 6.0,
                 offset_y: 2.0,
                 shadow_opacity: 0.45,
-                shadow_argb: 0xff00_0000,
+                shadow_argb: crate::testkit::argb(mot::Token::Gap),
                 ..radius(r)
             }
         }
@@ -3030,7 +3156,7 @@ mod tests {
             const FILL: u32 = 0xff20_3040;
             for scale in [1.0, 2.0] {
                 let mut g = XorShift::new(47);
-                let rect = Rect::new(16, 14, 40, 50);
+                let rect = Rect::new(Px(16), Px(14), Px(40), Px(50));
                 let mut front = Buf::random(&mut g, 80, 84);
                 for v in front.px.iter_mut() {
                     *v |= 0xff00_0000;
@@ -3040,13 +3166,13 @@ mod tests {
                     blur_px: 6.0,
                     offset_y: 3.0,
                     shadow_opacity: 0.4,
-                    shadow_argb: 0xff00_0000,
+                    shadow_argb: crate::testkit::argb(mot::Token::Gap),
                     ..Chrome::default()
                 };
                 let card = Card {
                     fill_argb: FILL,
-                    fill: vec![Rect::new(16, 34, 40, 6)].into(),
-                    ..rich(1, &[Rect::new(60, 0, 20, 84)])
+                    fill: vec![Rect::new(Px(16), Px(34), Px(40), Px(6))].into(),
+                    ..rich(1, &[Rect::new(Px(60), Px(0), Px(20), Px(84))])
                 };
                 let (s, _) = with_card(80, 84, scale, rect, chrome, card);
                 let out = compose_all(&s, &front, scale);
@@ -3087,8 +3213,8 @@ mod tests {
             for scale in [1.0, 2.0] {
                 let mut g = XorShift::new(31);
                 // the windows (10,10,40,20) and (10,36,40,24); the divider (10,30,40,6) between them
-                let rect = Rect::new(10, 10, 40, 50);
-                let divider = Rect::new(10, 30, 40, 6);
+                let rect = Rect::new(Px(10), Px(10), Px(40), Px(50));
+                let divider = Rect::new(Px(10), Px(30), Px(40), Px(6));
                 let front = Buf::random(&mut g, 64, 72);
                 let card = Card {
                     fill_argb: FILL,
@@ -3126,7 +3252,7 @@ mod tests {
                     scale,
                     &mut part,
                     (0, 0),
-                    &[Rect::new(20, 31, 4, 2)],
+                    &[Rect::new(Px(20), Px(31), Px(4), Px(2))],
                 );
                 assert_eq!(part.at(21, 32), FILL);
             }
@@ -3137,15 +3263,15 @@ mod tests {
         #[test]
         fn shadow_never_inside_keep_out() {
             let mut g = XorShift::new(21);
-            let rect = Rect::new(10, 10, 40, 40);
+            let rect = Rect::new(Px(10), Px(10), Px(40), Px(40));
             // the neighbour 6 px to the right, well inside the shadow's reach
-            let next = Rect::new(56, 4, 40, 60);
+            let next = Rect::new(Px(56), Px(4), Px(40), Px(60));
             let front = Buf::random(&mut g, 120, 80);
             let (s, _) = with_card(120, 80, 1.0, rect, shadowed(8.0), rich(1, &[next]));
             let out = compose_all(&s, &front, 1.0);
             assert!(same_in(&out, &front, next), "the neighbour is untouched");
             // the gap between them is not
-            let gap = Rect::new(50, 20, 6, 20);
+            let gap = Rect::new(Px(50), Px(20), Px(6), Px(20));
             assert!(
                 !same_in(&out, &front, gap),
                 "the gap has the shadow and the ring"
@@ -3160,7 +3286,7 @@ mod tests {
         #[test]
         fn ring_outside_never_touches_interior() {
             let mut g = XorShift::new(22);
-            let rect = Rect::new(10, 10, 40, 30);
+            let rect = Rect::new(Px(10), Px(10), Px(40), Px(30));
             let front = Buf::random(&mut g, 64, 56);
             let (s, _) = with_card(64, 56, 1.0, rect, radius(8.0), rich(2, &[]));
             let out = compose_all(&s, &front, 1.0);
@@ -3183,29 +3309,32 @@ mod tests {
         #[test]
         fn ring_change_damages_the_ring() {
             let mut g = XorShift::new(23);
-            let rect = Rect::new(10, 10, 40, 30);
+            let rect = Rect::new(Px(10), Px(10), Px(40), Px(30));
             let front = Buf::random(&mut g, 64, 56);
             let (mut s, mut f) = with_card(64, 56, 1.0, rect, radius(8.0), rich(2, &[]));
             let mut out = compose_all(&s, &front, 1.0);
             s.set_card(
                 WIN,
                 Some(Card {
-                    ring_argb: 0xff80_9010,
+                    ring_argb: crate::testkit::argb(mot::Token::Warn),
                     ..rich(2, &[])
                 }),
             )
             .unwrap();
             let damage = s.commit(ROOT, &mut f).to_vec();
             for r in [
-                Rect::new(18, 8, 24, 2),
-                Rect::new(18, 40, 24, 2),
-                Rect::new(8, 18, 2, 14),
-                Rect::new(50, 18, 2, 14),
-                Rect::new(8, 8, 10, 10),
+                Rect::new(Px(18), Px(8), Px(24), Px(2)),
+                Rect::new(Px(18), Px(40), Px(24), Px(2)),
+                Rect::new(Px(8), Px(18), Px(2), Px(14)),
+                Rect::new(Px(50), Px(18), Px(2), Px(14)),
+                Rect::new(Px(8), Px(8), Px(10), Px(10)),
             ] {
                 assert!(covers(&damage, r), "{r:?} not in {damage:?}");
             }
-            assert!(!damage.iter().any(|d| d.contains(30, 25)), "{damage:?}");
+            assert!(
+                !damage.iter().any(|d| d.contains(Px(30), Px(25))),
+                "{damage:?}"
+            );
             compose_at(&s, &front, 1.0, &mut out, (0, 0), &damage);
             assert_eq!(first_difference(&out, &compose_all(&s, &front, 1.0)), None);
         }
@@ -3215,7 +3344,7 @@ mod tests {
         #[test]
         fn typing_damage_inside_skips_corners() {
             let mut g = XorShift::new(24);
-            let rect = Rect::new(10, 10, 60, 40);
+            let rect = Rect::new(Px(10), Px(10), Px(60), Px(40));
             let front = Buf::random(&mut g, 96, 72);
             let (s, _) = with_card(96, 72, 1.0, rect, shadowed(8.0), rich(1, &[]));
             let mut out = compose_all(&s, &front, 1.0);
@@ -3225,10 +3354,19 @@ mod tests {
                 CARD_PX.with(|n| n.get())
             };
             // a line of text, and a cursor at the window's left edge, between the corners
-            assert_eq!(drawn(&mut out, Rect::new(20, 30, 40, 12)), 0);
-            assert_eq!(drawn(&mut out, Rect::new(10, 20, 2, 20)), 0);
-            assert!(drawn(&mut out, Rect::new(10, 10, 4, 4)) > 0, "a corner");
-            assert!(drawn(&mut out, Rect::new(30, 51, 4, 2)) > 0, "the gap");
+            assert_eq!(
+                drawn(&mut out, Rect::new(Px(20), Px(30), Px(40), Px(12))),
+                0
+            );
+            assert_eq!(drawn(&mut out, Rect::new(Px(10), Px(20), Px(2), Px(20))), 0);
+            assert!(
+                drawn(&mut out, Rect::new(Px(10), Px(10), Px(4), Px(4))) > 0,
+                "a corner"
+            );
+            assert!(
+                drawn(&mut out, Rect::new(Px(30), Px(51), Px(4), Px(2))) > 0,
+                "the gap"
+            );
             assert_eq!(first_difference(&out, &compose_all(&s, &front, 1.0)), None);
         }
 
@@ -3237,8 +3375,8 @@ mod tests {
         #[test]
         fn scales_1_2_and_1_25() {
             for scale in [1.0, 2.0, 1.25] {
-                let rect = Rect::new(20, 20, 80, 60);
-                let next = Rect::new(20, 92, 80, 20);
+                let rect = Rect::new(Px(20), Px(20), Px(80), Px(60));
+                let next = Rect::new(Px(20), Px(92), Px(80), Px(20));
                 let front = Buf::new(128, 120, 0xffaa_bbcc);
                 let (s, _) = with_card(128, 120, scale, rect, shadowed(10.0), rich(2, &[next]));
                 let out = compose_all(&s, &front, scale);
@@ -3261,14 +3399,14 @@ mod tests {
         #[test]
         fn corner_shows_a_neighbours_shadow() {
             for scale in [1.0, 2.0, 1.25] {
-                let left = Rect::new(10, 10, 40, 40);
+                let left = Rect::new(Px(10), Px(10), Px(40), Px(40));
                 // 4 px of gap, well inside the neighbour's shadow
-                let right = Rect::new(54, 10, 40, 40);
+                let right = Rect::new(Px(54), Px(10), Px(40), Px(40));
                 let front = Buf::new(110, 64, BENEATH);
                 let soft = Chrome {
                     blur_px: 12.0,
                     shadow_opacity: 0.6,
-                    shadow_argb: 0xff00_0000,
+                    shadow_argb: crate::testkit::argb(mot::Token::Gap),
                     ..radius(8.0)
                 };
                 let build = |r: f32, keep: &[Rect]| {
@@ -3301,7 +3439,7 @@ mod tests {
         /// spread of 1 is the same with radius 16 as with 6.
         #[test]
         fn shadow_radius_clamps_as_the_corners() {
-            let rect = Rect::new(20, 30, 60, 13);
+            let rect = Rect::new(Px(20), Px(30), Px(60), Px(13));
             let front = Buf::new(100, 72, 0xffaa_bbcc);
             let look = |r: f32| Chrome {
                 spread_px: 1.0,
@@ -3322,15 +3460,28 @@ mod tests {
         /// which shows the frame's pixels in any order.
         #[test]
         fn raise_damages_the_card_alone() {
-            let rect = Rect::new(10, 10, 60, 40);
+            let rect = Rect::new(Px(10), Px(10), Px(60), Px(40));
             let (mut s, mut f) = with_card(96, 72, 1.0, rect, shadowed(8.0), rich(1, &[]));
-            s.upsert(&desc(NEXT, ROOT, 2, Rect::new(0, 60, 96, 12), 1.0, true))
-                .unwrap();
+            s.upsert(&desc(
+                NEXT,
+                ROOT,
+                2,
+                Rect::new(Px(0), Px(60), Px(96), Px(12)),
+                1.0,
+                true,
+            ))
+            .unwrap();
             s.commit(ROOT, &mut f);
             s.raise(WIN).unwrap();
             let damage = s.commit(ROOT, &mut f).to_vec();
-            assert!(covers(&damage, Rect::new(10, 10, 8, 8)), "{damage:?}");
-            assert!(!damage.iter().any(|d| d.contains(40, 30)), "{damage:?}");
+            assert!(
+                covers(&damage, Rect::new(Px(10), Px(10), Px(8), Px(8))),
+                "{damage:?}"
+            );
+            assert!(
+                !damage.iter().any(|d| d.contains(Px(40), Px(30))),
+                "{damage:?}"
+            );
         }
 
         /// The key property with cards: composing each commit's damage into a kept buffer equals composing the whole
@@ -3340,14 +3491,14 @@ mod tests {
         fn damage_only_equals_full_with_cards() {
             const W: i32 = 120;
             const H: i32 = 96;
-            let all = Rect::new(0, 0, W, H);
+            let all = Rect::new(Px(0), Px(0), Px(W), Px(H));
             let mut shadows = ShadowCache::new();
             let rand_rect = |g: &mut XorShift| {
                 Rect::new(
-                    g.below(W as u32) as i32 - 8,
-                    g.below(H as u32) as i32 - 8,
-                    8 + g.below(56) as i32,
-                    8 + g.below(48) as i32,
+                    Px(g.below(W as u32) as i32 - 8),
+                    Px(g.below(H as u32) as i32 - 8),
+                    Px(8 + g.below(56) as i32),
+                    Px(8 + g.below(48) as i32),
                 )
             };
             let rand_card = |g: &mut XorShift, keep_out: Vec<Rect>| Card {
@@ -3458,16 +3609,16 @@ mod tests {
         fn scrolled_output_equals_frame_compose() {
             const W: i32 = 160;
             const H: i32 = 140;
-            let all = Rect::new(0, 0, W, H);
+            let all = Rect::new(Px(0), Px(0), Px(W), Px(H));
             for seed in 1..=120u64 {
                 let mut g = XorShift::new(seed);
                 let scale = [1.0, 2.0, 1.25][g.below(3) as usize];
                 // on the device grid of every scale, so the output is the window's rectangle
-                let win = Rect::new(10 * (1 + g.below(3) as i32), 20, 100, 80);
+                let win = Rect::new(Px(10 * (1 + g.below(3) as i32)), Px(20), Px(100), Px(80));
                 let outer = if g.below(2) == 0 {
                     win
                 } else {
-                    Rect::new(win.x, win.y, win.w, win.h + 20)
+                    Rect::new(Px(win.x), Px(win.y), Px(win.w), Px(win.h + 20))
                 };
                 let (mut s, mut f) = (Scene::default(), Frames::new());
                 s.upsert(&desc(ROOT, 0, 1, all, scale, true)).unwrap();
@@ -3479,14 +3630,14 @@ mod tests {
                     beneath_argb: 0xff00_0000 | g.below(1 << 24),
                     ring_argb: if g.below(2) == 0 { 0 } else { RING },
                     ring_px: 1 + g.below(3),
-                    keep_out: Arc::from([Rect::new(0, 0, W, 10)]),
+                    keep_out: Arc::from([Rect::new(Px(0), Px(0), Px(W), Px(10))]),
                     ..Card::default()
                 };
                 let chrome = |g: &mut XorShift, r: u32| Chrome {
                     shadow_opacity: if g.below(2) == 0 { 0.0 } else { 0.45 },
                     blur_px: g.below(8) as f32,
                     offset_y: g.below(3) as f32,
-                    shadow_argb: 0xff00_0000,
+                    shadow_argb: crate::testkit::argb(mot::Token::Gap),
                     ..radius(r as f32)
                 };
                 let r = 2 + g.below(14);
@@ -3512,10 +3663,10 @@ mod tests {
                             // the frame draws somewhere
                             3 => {
                                 let r = Rect::new(
-                                    g.below(W as u32) as i32 - 8,
-                                    g.below(H as u32) as i32 - 8,
-                                    1 + g.below(30) as i32,
-                                    1 + g.below(20) as i32,
+                                    Px(g.below(W as u32) as i32 - 8),
+                                    Px(g.below(H as u32) as i32 - 8),
+                                    Px(1 + g.below(30) as i32),
+                                    Px(1 + g.below(20) as i32),
                                 );
                                 front.paint(&mut g, r);
                                 f.entry(ROOT).or_default().add(r);
@@ -3551,8 +3702,11 @@ mod tests {
                             }
                         }
                     }
-                    let clips: Vec<Rect> =
-                        o.damage.iter().map(|r| r.translate(win.x, win.y)).collect();
+                    let clips: Vec<Rect> = o
+                        .damage
+                        .iter()
+                        .map(|r| r.translate(Px(win.x), Px(win.y)))
+                        .collect();
                     compose_at(&s, &front, scale, &mut layer, (win.x, win.y), &clips);
                     let want = compose_all(&s, &front, scale);
                     for y in 0..win.h {
@@ -3576,6 +3730,7 @@ mod tests {
     mod block {
         use super::*;
         use crate::scene::{Block, BlockKind};
+        use kvardi::Px;
 
         const WIN: u64 = (1 << 61) | 7;
         const FRONT: u32 = 0xffaa_bbcc;
@@ -3597,8 +3752,15 @@ mod tests {
         /// A 120 x 80 root at SCALE with window layer WIN at WINDOW holding BLOCKS, committed.
         fn blocked(window: Rect, blocks: &[Block], scale: f64) -> Scene {
             let (mut s, mut f) = (Scene::default(), Frames::new());
-            s.upsert(&desc(ROOT, 0, 1, Rect::new(0, 0, 120, 80), scale, true))
-                .unwrap();
+            s.upsert(&desc(
+                ROOT,
+                0,
+                1,
+                Rect::new(Px(0), Px(0), Px(120), Px(80)),
+                scale,
+                true,
+            ))
+            .unwrap();
             s.upsert(&desc(WIN, ROOT, 2, window, scale, true)).unwrap();
             s.set_blocks(WIN, blocks.into()).unwrap();
             s.commit(ROOT, &mut f);
@@ -3613,7 +3775,7 @@ mod tests {
                 s,
                 &mut out,
                 scale,
-                &[Rect::new(0, 0, front.w, front.h)],
+                &[Rect::new(Px(0), Px(0), Px(front.w), Px(front.h))],
                 &src,
                 &mut ShadowCache::new(),
             );
@@ -3632,7 +3794,7 @@ mod tests {
         #[test]
         fn ring_inside_with_carved_corners() {
             for scale in [1.0, 2.0] {
-                let b = Rect::new(20, 10, 60, 40);
+                let b = Rect::new(Px(20), Px(10), Px(60), Px(40));
                 let s = blocked(ALL, &[ring(b, 6, 1)], scale);
                 let out = compose_all(&s, &Buf::new(120, 80, FRONT), scale);
                 for (x, y) in [(50, 10), (50, 49), (20, 30), (79, 30)] {
@@ -3669,10 +3831,17 @@ mod tests {
         #[test]
         fn edges_draw_over_the_frame_in_the_window() {
             use crate::edge::Edge;
-            let window = Rect::new(0, 0, 100, 80);
+            let window = Rect::new(Px(0), Px(0), Px(100), Px(80));
             let (mut s, mut f) = (Scene::default(), Frames::new());
-            s.upsert(&desc(ROOT, 0, 1, Rect::new(0, 0, 120, 80), 1.0, true))
-                .unwrap();
+            s.upsert(&desc(
+                ROOT,
+                0,
+                1,
+                Rect::new(Px(0), Px(0), Px(120), Px(80)),
+                1.0,
+                true,
+            ))
+            .unwrap();
             s.upsert(&desc(WIN, ROOT, 2, window, 1.0, true)).unwrap();
             s.set_edges(
                 WIN,
@@ -3698,7 +3867,7 @@ mod tests {
         /// A block whose top was scrolled out: no top line and no top corners; the sides run to its top.
         #[test]
         fn open_top_has_no_top_side() {
-            let b = Rect::new(20, 10, 60, 40);
+            let b = Rect::new(Px(20), Px(10), Px(60), Px(40));
             let s = blocked(
                 ALL,
                 &[Block {
@@ -3721,13 +3890,13 @@ mod tests {
         fn rules_are_bottom_lines() {
             let r1 = Block {
                 kind: BlockKind::Rule,
-                ..ring(Rect::new(20, 10, 60, 10), 6, 1)
+                ..ring(Rect::new(Px(20), Px(10), Px(60), Px(10)), 6, 1)
             };
             let r2 = Block {
                 kind: BlockKind::Rule,
-                ..ring(Rect::new(20, 20, 60, 10), 6, 1)
+                ..ring(Rect::new(Px(20), Px(20), Px(60), Px(10)), 6, 1)
             };
-            let c = ring(Rect::new(20, 40, 60, 30), 6, 1);
+            let c = ring(Rect::new(Px(20), Px(40), Px(60), Px(30)), 6, 1);
             let s = blocked(ALL, &[r1, r2, c], 1.0);
             let out = compose_all(&s, &Buf::new(120, 80, FRONT), 1.0);
             for x in 20..80 {
@@ -3755,7 +3924,7 @@ mod tests {
             for scale in [1.0, 2.0] {
                 let bar = Block {
                     kind: BlockKind::Bar,
-                    ..ring(Rect::new(20, 10, 3, 30), 6, 1)
+                    ..ring(Rect::new(Px(20), Px(10), Px(3), Px(30)), 6, 1)
                 };
                 let s = blocked(ALL, &[bar], scale);
                 let out = compose_all(&s, &Buf::new(120, 80, FRONT), scale);
@@ -3781,7 +3950,7 @@ mod tests {
             const FILL: u32 = 0xff00_8800;
             const HAIR: u32 = 0xff00_0088;
             for scale in [1.0, 2.0] {
-                let r = Rect::new(20, 10, 40, 30);
+                let r = Rect::new(Px(20), Px(10), Px(40), Px(30));
                 let inner = Block {
                     kind: BlockKind::Inner,
                     fill_argb: FILL,
@@ -3849,8 +4018,8 @@ mod tests {
         #[test]
         fn clipped_to_the_window() {
             let s = blocked(
-                Rect::new(0, 20, 120, 60),
-                &[ring(Rect::new(20, 10, 60, 40), 6, 1)],
+                Rect::new(Px(0), Px(20), Px(120), Px(60)),
+                &[ring(Rect::new(Px(20), Px(10), Px(60), Px(40)), 6, 1)],
                 1.0,
             );
             let out = compose_all(&s, &Buf::new(120, 80, FRONT), 1.0);
@@ -3866,9 +4035,9 @@ mod tests {
         /// ring and what lies outside the rounded path change.
         #[test]
         fn carve_only_outside_the_path() {
-            for scale in [1.0, 2.0] {
-                let (r, w) = (6 * scale as i32, scale as i32);
-                let b = Rect::new(20, 10, 60, 40);
+            for dpr in [1.0, 2.0] {
+                let (r, w) = (6 * dpr as i32, dpr as i32);
+                let b = Rect::new(Px(20), Px(10), Px(60), Px(40));
                 let mut front = Buf::new(120, 80, FRONT);
                 // a tint row across the inside, from the ring's inner edge, and a chip at the inner top-left
                 for y in 10 + w..10 + w + 8 {
@@ -3876,8 +4045,8 @@ mod tests {
                         front.px[(y * 120 + x) as usize] = TINT;
                     }
                 }
-                let s = blocked(ALL, &[ring(b, r as u32, w as u32)], scale);
-                let out = compose_all(&s, &front, scale);
+                let s = blocked(ALL, &[ring(b, r as u32, w as u32)], dpr);
+                let out = compose_all(&s, &front, dpr);
                 let rf = r as f64;
                 for y in b.y..b.y + b.h {
                     for x in b.x..b.x + b.w {
@@ -3904,7 +4073,7 @@ mod tests {
                             assert_eq!(
                                 out.at(x, y),
                                 front.at(x, y),
-                                "scale {scale}: inside the path at {x},{y}"
+                                "dpr {dpr}: inside the path at {x},{y}"
                             );
                         }
                     }
@@ -3918,17 +4087,23 @@ mod tests {
             let (mut s, mut f) = (Scene::default(), Frames::new());
             s.upsert(&desc(ROOT, 0, 1, ALL, 1.0, true)).unwrap();
             s.upsert(&desc(WIN, ROOT, 2, ALL, 1.0, true)).unwrap();
-            s.set_blocks(WIN, [ring(Rect::new(20, 10, 60, 20), 6, 1)].into())
-                .unwrap();
+            s.set_blocks(
+                WIN,
+                [ring(Rect::new(Px(20), Px(10), Px(60), Px(20)), 6, 1)].into(),
+            )
+            .unwrap();
             s.commit(ROOT, &mut f);
-            s.set_blocks(WIN, [ring(Rect::new(20, 30, 60, 20), 6, 1)].into())
-                .unwrap();
+            s.set_blocks(
+                WIN,
+                [ring(Rect::new(Px(20), Px(30), Px(60), Px(20)), 6, 1)].into(),
+            )
+            .unwrap();
             let d = s.commit(ROOT, &mut f).to_vec();
             let area: u64 = d.iter().map(Rect::area).sum();
             assert!(area <= 2 * 60 * 20, "damage {d:?}");
             for p in [(20, 10), (79, 29), (20, 30), (79, 49)] {
                 assert!(
-                    d.iter().any(|r| r.contains(p.0, p.1)),
+                    d.iter().any(|r| r.contains(Px(p.0), Px(p.1))),
                     "{p:?} damaged: {d:?}"
                 );
             }
@@ -3939,9 +4114,9 @@ mod tests {
         fn minimap(reveal: u32) -> crate::minimap::Minimap {
             use crate::minimap::{Band, Minimap, Row, TileAt, TileSpec, raster};
             let band = Band {
-                rect: Rect::new(80, 2, 40, 4),
+                rect: Rect::new(Px(80), Px(2), Px(40), Px(4)),
                 fill_argb: 0,
-                line_argb: 0xff_00_00_ff,
+                line_argb: crate::testkit::argb(mot::Token::Accent),
             };
             let spec = TileSpec {
                 width: 40,
@@ -3956,10 +4131,10 @@ mod tests {
                 ..Default::default()
             });
             Minimap {
-                rect: Rect::new(80, 0, 40, 80),
+                rect: Rect::new(Px(80), Px(0), Px(40), Px(80)),
                 reveal_px: reveal,
                 left: false,
-                fill_argb: 0xff_20_20_20,
+                fill_argb: crate::testkit::argb(mot::Token::Panel),
                 tiles: [TileAt {
                     y: 0,
                     h: 8,
@@ -3969,8 +4144,8 @@ mod tests {
                 bands: [band].into(),
                 // a nesting shade below the tile, inset 4 px
                 shades: [Band {
-                    rect: Rect::new(84, 60, 36, 10),
-                    fill_argb: 0xff_40_40_40,
+                    rect: Rect::new(Px(84), Px(60), Px(36), Px(10)),
+                    fill_argb: crate::testkit::argb(mot::Token::Hover),
                     line_argb: 0,
                 }]
                 .into(),
@@ -3984,7 +4159,7 @@ mod tests {
                         .map(|i| if i % 10 < 5 { 0xff_ff_00_00 } else { 0 })
                         .collect::<Vec<u32>>()
                         .into(),
-                    back_argb: 0xff_10_10_10,
+                    back_argb: crate::testkit::argb(mot::Token::Editor),
                 }]
                 .into(),
             }
@@ -4002,24 +4177,48 @@ mod tests {
             let out = compose_all(&s, &Buf::new(120, 80, FRONT), 1.0);
             assert_eq!(out.at(79, 0), FRONT, "the text beside it");
             assert_eq!(out.at(85, 0), 0xff_ff_ff_ff, "row 0's bar (10 columns)");
-            assert_eq!(out.at(95, 0), 0xff_20_20_20, "past it, the surface");
+            assert_eq!(
+                out.at(95, 0),
+                crate::testkit::argb(mot::Token::Panel),
+                "past it, the surface"
+            );
             assert_eq!(out.at(81, 7), 0xff_ff_ff_ff, "row 3's bar");
-            assert_eq!(out.at(100, 2), 0xff_00_00_ff, "the band's top line");
-            assert_eq!(out.at(119, 4), 0xff_00_00_ff, "the band's right line");
+            assert_eq!(
+                out.at(100, 2),
+                crate::testkit::argb(mot::Token::Accent),
+                "the band's top line"
+            );
+            assert_eq!(
+                out.at(119, 4),
+                crate::testkit::argb(mot::Token::Accent),
+                "the band's right line"
+            );
             assert_eq!(
                 out.at(100, 40),
-                0xff_20_20_20,
+                crate::testkit::argb(mot::Token::Panel),
                 "below the tile, the surface"
             );
-            assert_eq!(out.at(100, 65), 0xff_40_40_40, "a shade");
-            assert_eq!(out.at(82, 65), 0xff_20_20_20, "left of its inset");
+            assert_eq!(
+                out.at(100, 65),
+                crate::testkit::argb(mot::Token::Hover),
+                "a shade"
+            );
+            assert_eq!(
+                out.at(82, 65),
+                crate::testkit::argb(mot::Token::Panel),
+                "left of its inset"
+            );
             assert_eq!(out.at(92, 41), 0xff_ff_00_00, "a label's sprite");
             assert_eq!(
                 out.at(97, 41),
-                0xff_10_10_10,
+                crate::testkit::argb(mot::Token::Editor),
                 "its backing, where the sprite is clear"
             );
-            assert_eq!(out.at(97, 45), 0xff_20_20_20, "below it, the surface");
+            assert_eq!(
+                out.at(97, 45),
+                crate::testkit::argb(mot::Token::Panel),
+                "below it, the surface"
+            );
             // half revealed: only the outer 20 px show
             let (mut s, mut f) = (Scene::default(), Frames::new());
             s.upsert(&desc(ROOT, 0, 1, ALL, 1.0, true)).unwrap();
@@ -4029,7 +4228,11 @@ mod tests {
             let out = compose_all(&s, &Buf::new(120, 80, FRONT), 1.0);
             assert_eq!(out.at(85, 0), FRONT, "not yet revealed");
             assert_eq!(out.at(99, 0), FRONT);
-            assert_eq!(out.at(100, 0), 0xff_20_20_20, "the revealed part");
+            assert_eq!(
+                out.at(100, 0),
+                crate::testkit::argb(mot::Token::Panel),
+                "the revealed part"
+            );
             assert_eq!(out.at(105, 6), 0xff_ff_ff_ff, "row 3's bar reaches it");
         }
 
@@ -4044,12 +4247,12 @@ mod tests {
             let d = s.commit(ROOT, &mut f).to_vec();
             let area: u64 = d.iter().map(Rect::area).sum();
             assert!(area <= 40 * 80, "damage {d:?}");
-            assert!(d.iter().any(|r| r.contains(119, 79)), "{d:?}");
-            assert!(!d.iter().any(|r| r.contains(10, 10)), "{d:?}");
+            assert!(d.iter().any(|r| r.contains(Px(119), Px(79))), "{d:?}");
+            assert!(!d.iter().any(|r| r.contains(Px(10), Px(10))), "{d:?}");
             s.set_minimap(WIN, None).unwrap();
             let d = s.commit(ROOT, &mut f).to_vec();
             assert!(
-                d.iter().any(|r| r.contains(80, 0)),
+                d.iter().any(|r| r.contains(Px(80), Px(0))),
                 "closing damages it: {d:?}"
             );
         }
@@ -4077,7 +4280,7 @@ mod tests {
             assert!(area <= 2 * 70 * 15, "damage {d:?}");
             for p in [(20, 10), (80, 10), (20, 50), (80, 50)] {
                 assert!(
-                    d.iter().any(|r| r.contains(p.0, p.1)),
+                    d.iter().any(|r| r.contains(Px(p.0), Px(p.1))),
                     "{p:?} damaged: {d:?}"
                 );
             }
@@ -4088,17 +4291,24 @@ mod tests {
         #[test]
         fn chrome_prims_draw_over_the_frame_in_the_window() {
             use crate::prim::Prim;
-            let window = Rect::new(0, 0, 100, 80);
+            let window = Rect::new(Px(0), Px(0), Px(100), Px(80));
             let (mut s, mut f) = (Scene::default(), Frames::new());
-            s.upsert(&desc(ROOT, 0, 1, Rect::new(0, 0, 120, 80), 1.0, true))
-                .unwrap();
+            s.upsert(&desc(
+                ROOT,
+                0,
+                1,
+                Rect::new(Px(0), Px(0), Px(120), Px(80)),
+                1.0,
+                true,
+            ))
+            .unwrap();
             s.upsert(&desc(WIN, ROOT, 2, window, 1.0, true)).unwrap();
             s.set_prims(
                 WIN,
                 vec![
                     Prim::Quad {
                         id: 1,
-                        rect: Rect::new(10, 10, 110, 20),
+                        rect: Rect::new(Px(10), Px(10), Px(110), Px(20)),
                         radius: 0.0,
                         fill: RING,
                     },
@@ -4128,7 +4338,7 @@ mod tests {
             use crate::prim::Prim;
             let quad = |y: i32| Prim::Quad {
                 id: 1,
-                rect: Rect::new(20, y, 60, 10),
+                rect: Rect::new(Px(20), Px(y), Px(60), Px(10)),
                 radius: 0.0,
                 fill: RING,
             };
@@ -4143,7 +4353,7 @@ mod tests {
             assert!(area <= 2 * 60 * 10, "damage {d:?}");
             for p in [(20, 10), (79, 19), (20, 50), (79, 59)] {
                 assert!(
-                    d.iter().any(|r| r.contains(p.0, p.1)),
+                    d.iter().any(|r| r.contains(Px(p.0), Px(p.1))),
                     "{p:?} damaged: {d:?}"
                 );
             }

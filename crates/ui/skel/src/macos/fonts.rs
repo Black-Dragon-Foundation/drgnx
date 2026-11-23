@@ -191,7 +191,7 @@ pub fn open(
             family: Cf::new(CTFontCopyFamilyName(f)).map_or_else(String::new, |s| string(s.get())),
         }
     };
-    let mut open = open_fonts().lock().unwrap_or_else(|p| p.into_inner());
+    let mut open = saman::lock(open_fonts());
     open.0 += 1;
     let handle = open.0;
     open.1.insert(
@@ -230,7 +230,7 @@ pub fn raw(handle: u64) -> Option<RawMetrics> {
 
 /// The open font `handle`'s synthesised italic and bold, and its size (`None`: not open).
 pub fn synthetic(handle: u64) -> Option<(bool, bool, f64)> {
-    let open = open_fonts().lock().unwrap_or_else(|p| p.into_inner());
+    let open = saman::lock(open_fonts());
     open.1
         .get(&handle)
         .map(|o| (o.synthetic_italic, o.synthetic_bold, o.size))
@@ -238,7 +238,7 @@ pub fn synthetic(handle: u64) -> Option<(bool, bool, f64)> {
 
 /// The newest open font of `family` at `size` pixels (the test hooks' way to name the font a frame uses).
 pub fn find(family: &str, size: f64) -> Option<u64> {
-    let open = open_fonts().lock().unwrap_or_else(|p| p.into_inner());
+    let open = saman::lock(open_fonts());
     open.1
         .iter()
         .filter(|(_, o)| o.family.eq_ignore_ascii_case(family) && o.size == size)
@@ -251,11 +251,8 @@ pub fn find(family: &str, size: f64) -> Option<u64> {
 /// smaller).  `None`: not open.
 pub fn sized(handle: u64, size: f64) -> Option<u64> {
     static SIZED: OnceLock<Mutex<HashMap<(u64, u64), u64>>> = OnceLock::new();
-    let mut sized = SIZED
-        .get_or_init(Mutex::default)
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    let mut open = open_fonts().lock().unwrap_or_else(|p| p.into_inner());
+    let mut sized = saman::lock(SIZED.get_or_init(Mutex::default));
+    let mut open = saman::lock(open_fonts());
     // copies of fonts closed since go with them
     sized.retain(|(h, _), c| {
         if !open.1.contains_key(h) {
@@ -288,16 +285,12 @@ pub fn sized(handle: u64, size: f64) -> Option<u64> {
 }
 
 pub fn close(handle: u64) {
-    open_fonts()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .1
-        .remove(&handle);
+    saman::lock(open_fonts()).1.remove(&handle);
 }
 
 /// `f` on the open font `handle`'s `CTFont` (`None`: not open); the font stays open for the call.
 pub fn with_font<R>(handle: u64, f: impl FnOnce(*const c_void) -> R) -> Option<R> {
-    let open = open_fonts().lock().unwrap_or_else(|p| p.into_inner());
+    let open = saman::lock(open_fonts());
     open.1.get(&handle).map(|o| f(o.font.get()))
 }
 
@@ -336,7 +329,7 @@ fn collection(path: &str) -> bool {
 /// `f` on the open font `handle`'s `cmap` table (`CTFontCopyTable`, read once; empty when it has none); `None`: not
 /// open.
 pub fn with_cmap<R>(handle: u64, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
-    let open = open_fonts().lock().unwrap_or_else(|p| p.into_inner());
+    let open = saman::lock(open_fonts());
     let o = open.1.get(&handle)?;
     let cmap = o.cmap.get_or_init(|| {
         // SAFETY: a live font; the table's copy is +1, owned by `Cf`.

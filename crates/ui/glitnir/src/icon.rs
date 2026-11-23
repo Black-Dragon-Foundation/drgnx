@@ -7,7 +7,7 @@
 //! FNV-1a hash as its glyph, so the atlas finds the name again on a miss ([`ensure`]).  A 16 px icon at scale 2 is a
 //! 32 × 32 mask: 1 KiB of the atlas.
 
-use crate::atlas::{Atlases, GlyphKey, ICON_FONT, Mask, MaskData};
+use crate::atlas::{Atlases, GlyphId, ICON_FONT, Mask, MaskData};
 
 mod lucide;
 
@@ -37,12 +37,12 @@ pub fn glyph(name: &str) -> u32 {
 }
 
 /// Icon NAME's sprite key at SIZE_PX device px and SCALE.
-pub fn key(name: &str, size_px: u32, scale: f32) -> GlyphKey {
-    GlyphKey {
+pub fn key(name: &str, size_px: u32, scale: f32) -> GlyphId {
+    GlyphId {
         font: ICON_FONT,
         glyph: glyph(name),
         size_px,
-        scale120: (scale * 120.0).round() as u32,
+        scale120: crate::snap::s120_of(f64::from(scale)),
     }
 }
 
@@ -116,7 +116,7 @@ pub fn mask_of(shapes: &[Shape], size_px: u32) -> Option<Mask> {
 
 /// Make sure the A8 atlas holds KEY when it is an icon's: rasterised on the first use of its name, size and scale.
 /// Whether the atlas holds it.
-pub fn ensure(atlases: &mut Atlases, key: &GlyphKey) -> bool {
+pub fn ensure(atlases: &mut Atlases, key: &GlyphId) -> bool {
     if key.font != ICON_FONT {
         return false;
     }

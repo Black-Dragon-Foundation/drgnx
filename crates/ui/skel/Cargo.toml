@@ -37,6 +37,13 @@ svg = ["dep:resvg"]
 test-hooks = []
 
 [dependencies]
+stund.workspace = true
+saman.workspace = true
+villa.workspace = true
+eitri.workspace = true
+stig.workspace = true
+annall.workspace = true
+kvardi.workspace = true
 glitnir = { path = "../glitnir", version = "0.1.0" }
 wayland-client = { version = "0.31", optional = true }
 wayland-cursor = { version = "0.31", optional = true }
@@ -49,6 +56,10 @@ libc = "0.2"
 # text and the system's fonts, as librsvg has them; no raster images inside SVG (their decoders would duplicate Glitnir's)
 resvg = { version = "0.45.1", default-features = false, features = ["text", "system-fonts", "memmap-fonts"], optional = true }
 
+[dev-dependencies]
+raun.workspace = true
+mot = { path = "../../std/mot", version = "0.1.0" }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", features = ["exception"], optional = true }
 objc2-foundation = { version = "0.3", optional = true }
@@ -60,3 +71,6 @@ panic = "unwind"
 lto = true
 codegen-units = 1
 debug = 1
+
+[lints]
+workspace = true

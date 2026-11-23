@@ -19,7 +19,7 @@ static SHARED: Mutex<Option<Atlases>> = Mutex::new(None);
 
 /// F over the process's atlases.  Never call it from inside F (the lock is not re-entrant).
 pub fn with_shared<R>(f: impl FnOnce(&mut Atlases) -> R) -> R {
-    let mut g = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+    let mut g = saman::lock(&SHARED);
     f(g.get_or_insert_with(Atlases::default))
 }
 
@@ -32,7 +32,7 @@ pub const ICON_FONT: u32 = u32::MAX;
 
 /// One mask's key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct GlyphKey {
+pub struct GlyphId {
     pub font: u32,
     pub glyph: u32,
     /// The run's size, device px.
@@ -170,7 +170,7 @@ impl<T: Texel> Page<T> {
 /// One atlas.
 pub struct Atlas<T> {
     pages: Vec<Page<T>>,
-    slots: HashMap<GlyphKey, AtlasSlot>,
+    slots: HashMap<GlyphId, AtlasSlot>,
     tick: u64,
     misses: u64,
     evictions: u64,
@@ -190,7 +190,7 @@ impl<T: Texel> Default for Atlas<T> {
 
 impl<T: Texel> Atlas<T> {
     /// KEY's slot, a use (the page's LRU tick).
-    pub fn get(&mut self, key: &GlyphKey) -> Option<AtlasSlot> {
+    pub fn get(&mut self, key: &GlyphId) -> Option<AtlasSlot> {
         let s = *self.slots.get(key)?;
         self.tick += 1;
         self.pages[s.page].used = self.tick;
@@ -198,7 +198,7 @@ impl<T: Texel> Atlas<T> {
     }
 
     /// Whether KEY is held (not a use).
-    pub fn contains(&self, key: &GlyphKey) -> bool {
+    pub fn contains(&self, key: &GlyphId) -> bool {
         self.slots.contains_key(key)
     }
 
@@ -206,7 +206,7 @@ impl<T: Texel> Atlas<T> {
     /// page.
     pub fn get_or_insert(
         &mut self,
-        key: GlyphKey,
+        key: GlyphId,
         mask: impl FnOnce() -> Option<Mask>,
     ) -> Option<AtlasSlot> {
         if let Some(s) = self.get(&key) {
@@ -217,7 +217,7 @@ impl<T: Texel> Atlas<T> {
         self.insert(key, &m)
     }
 
-    fn insert(&mut self, key: GlyphKey, m: &Mask) -> Option<AtlasSlot> {
+    fn insert(&mut self, key: GlyphId, m: &Mask) -> Option<AtlasSlot> {
         let src = T::of(&m.data)?;
         if src.len() != (m.w * m.h) as usize {
             return None;
@@ -307,7 +307,7 @@ impl Atlases {
     pub fn get_or_insert(
         &mut self,
         kind: AtlasKind,
-        key: GlyphKey,
+        key: GlyphId,
         mask: impl FnOnce() -> Option<Mask>,
     ) -> Option<AtlasSlot> {
         match kind {

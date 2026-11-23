@@ -6,7 +6,8 @@ use crate::wayland::{MainState, WaylandShell};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 use wayland_client::{Connection, Dispatch, QueueHandle, delegate_noop};
 use wayland_protocols::xdg::foreign::zv2::client::zxdg_exported_v2::{self, ZxdgExportedV2};
 use wayland_protocols::xdg::foreign::zv2::client::zxdg_exporter_v2::ZxdgExporterV2;
@@ -78,10 +79,10 @@ impl WaylandShell {
             };
             let wake = self.shared.wake.fd();
             let mut fds = [PollFd::new(&wake, PollFlags::IN)];
-            let _ = poll(&mut fds, Some(&t));
+            let _timeout_or_interrupt = poll(&mut fds, Some(&t));
             // readable for queued records, not for us: do not spin
             if !self.shared.main_pending.load(Ordering::Acquire) {
-                std::thread::sleep(Duration::from_millis(1));
+                stund::sleep_blocking(Duration::from_millis(1));
             }
         }
     }

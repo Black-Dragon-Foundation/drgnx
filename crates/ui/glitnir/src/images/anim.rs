@@ -35,10 +35,10 @@ pub fn blend_non_premult(src: [u8; 4], dst: [u8; 4]) -> [u8; 4] {
     // dst_factor_a = (dst_a * (255 - src_a)) / 255, approximately
     let dst_factor_a = ((dst_a * (256 - src_a)) >> 8) & 0xff;
     let blend_a = (src_a + dst_factor_a) & 0xff;
-    let scale = (1u32 << 24) / blend_a;
+    let recip = (1u32 << 24) / blend_a;
     let ch = |k: usize| -> u8 {
-        let unscaled = u32::from(src[k]) * src_a + u32::from(dst[k]) * dst_factor_a;
-        ((unscaled * scale) >> 24) as u8
+        let weighted = u32::from(src[k]) * src_a + u32::from(dst[k]) * dst_factor_a;
+        ((weighted * recip) >> 24) as u8
     };
     [ch(0), ch(1), ch(2), blend_a as u8]
 }
@@ -67,9 +67,9 @@ mod tests {
         let blend_a: u8 = src_a.wrapping_add(dst_factor_a);
         let scale: u32 = (1u32 << 24) / u32::from(blend_a);
         let ch = |k: usize| -> u8 {
-            let blend_unscaled: u32 =
+            let blend_weighted: u32 =
                 u32::from(src[k]) * u32::from(src_a) + u32::from(dst[k]) * u32::from(dst_factor_a);
-            (blend_unscaled.wrapping_mul(scale) >> 24) as u8
+            (blend_weighted.wrapping_mul(scale) >> 24) as u8
         };
         [ch(0), ch(1), ch(2), blend_a]
     }

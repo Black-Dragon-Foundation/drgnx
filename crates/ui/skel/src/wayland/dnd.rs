@@ -454,11 +454,7 @@ impl WaylandShell {
             .ok_or(ShellError::State)?
             .clone();
         let qh = self.main.reader_qh.clone().ok_or(ShellError::State)?;
-        let (serial, _touch) = self
-            .shared
-            .serials
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        let (serial, _touch) = saman::lock(&self.shared.serials)
             .drag_serial()
             .ok_or(ShellError::State)?;
         let shared = self.shared.clone();

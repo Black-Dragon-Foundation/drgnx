@@ -11,18 +11,20 @@ use common::backing::*;
 use common::*;
 use glitnir::geom::Rect;
 use glitnir::scene::LayerDesc;
+use kvardi::Px;
 use skel::api::*;
 use skel::event::*;
 use skel::wayland::WaylandShell;
 use skel::wayland::scale::viewport_size;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 const BG: u32 = 0xff20_4060;
 /// The window layer's Glitnir id (a window id carries the top bit, as the glue's do).
 const WIN: u64 = (1 << 63) | 7;
 /// The window's rectangle on a 400 x 300 frame: the text area, with 60 rows of frame (a mode line, an echo area)
 /// below it.
-const VIEW: Rect = Rect::new(0, 0, 400, 240);
+const VIEW: Rect = Rect::new(Px(0), Px(0), Px(400), Px(240));
 
 /// Dispatch the shell's records until `f` holds (10 s at most).
 fn until(shell: &mut WaylandShell, what: &str, f: impl Fn(&mut WaylandShell) -> bool) {
@@ -33,7 +35,7 @@ fn until(shell: &mut WaylandShell, what: &str, f: impl Fn(&mut WaylandShell) -> 
             return;
         }
         assert!(Instant::now() < deadline, "never: {what}");
-        std::thread::sleep(Duration::from_millis(5));
+        stund::sleep_blocking(Duration::from_millis(5));
     }
 }
 
@@ -88,7 +90,14 @@ fn damage(c: &str) -> Vec<Rect> {
         .split("\"rect\":")
         .skip(1)
         .filter_map(|r| numbers_after(r, ""))
-        .map(|v| Rect::new(v[0] as i32, v[1] as i32, v[2] as i32, v[3] as i32))
+        .map(|v| {
+            Rect::new(
+                Px(v[0] as i32),
+                Px(v[1] as i32),
+                Px(v[2] as i32),
+                Px(v[3] as i32),
+            )
+        })
         .collect()
 }
 
@@ -157,7 +166,7 @@ fn promote(b: &mut Backing, n: &mut u32) {
     })
     .unwrap();
     for y in VIEW.y..VIEW.y + VIEW.h {
-        b.fill(Rect::new(VIEW.x, y, VIEW.w, 1), colour(n));
+        b.fill(Rect::new(Px(VIEW.x), Px(y), Px(VIEW.w), Px(1)), colour(n));
     }
 }
 
@@ -183,13 +192,16 @@ fn scroll(b: &mut Backing, dy: i32, n: &mut u32) {
         }
     }
     let exposed = if dy < 0 {
-        Rect::new(VIEW.x, VIEW.y + VIEW.h + dy, VIEW.w, -dy)
+        Rect::new(Px(VIEW.x), Px(VIEW.y + VIEW.h + dy), Px(VIEW.w), Px(-dy))
     } else {
-        Rect::new(VIEW.x, VIEW.y, VIEW.w, dy)
+        Rect::new(Px(VIEW.x), Px(VIEW.y), Px(VIEW.w), Px(dy))
     };
     glitnir::damage::scroll(b.g, WIN, VIEW, dy, exposed);
     for y in exposed.y..exposed.y + exposed.h {
-        b.fill(Rect::new(exposed.x, y, exposed.w, 1), colour(n));
+        b.fill(
+            Rect::new(Px(exposed.x), Px(y), Px(exposed.w), Px(1)),
+            colour(n),
+        );
     }
 }
 
@@ -295,7 +307,7 @@ fn composed(b: &Backing) -> Vec<u32> {
             .map(|p| u32::from_ne_bytes(*p))
             .collect();
     let mut out = px.clone();
-    let all = Rect::new(0, 0, b.w, b.h);
+    let all = Rect::new(Px(0), Px(0), Px(b.w), Px(b.h));
     let src = SourceView {
         layer: b.g,
         data: &px,
@@ -347,6 +359,7 @@ fn children(rec: &Recorder, id: u64) -> Vec<u64> {
 
 mod layers {
     use super::*;
+    use kvardi::Px;
 
     /// A full-window scroll of dy moves the layer's viewport source by -dy rows within the ring's buffer.
     #[test]
@@ -377,7 +390,7 @@ mod layers {
         let c = scroll_step(&mut shell, &rec, &mut b, id, surface, -16, &mut n);
         let off = source(&c)[1] as i32;
         let d = damage(&c);
-        let exposed = Rect::new(0, off + VIEW.h - 16, 400, 16);
+        let exposed = Rect::new(Px(0), Px(off + VIEW.h - 16), Px(400), Px(16));
         assert!(!d.is_empty(), "{c}");
         assert!(
             d.iter().all(|r| r.intersect(&exposed) == *r),
@@ -545,7 +558,7 @@ mod layers {
             publish(&mut shell, id, &[(&b, id)], 0);
             while shell.next_event().unwrap().is_some() {}
             // pacing only, so that frames commit while every buffer is held; no interleaving may write a held one
-            std::thread::sleep(Duration::from_millis(2));
+            stund::sleep_blocking(Duration::from_millis(2));
         }
         let w = rec.control(r#"{"cmd":"held_buffer_writes","since":0}"#);
         assert!(w.contains("\"writes\":[]"), "held buffers written: {w}");
@@ -580,7 +593,7 @@ mod layers {
     #[test]
     fn card_taller_than_the_layer() {
         let rec = Recorder::start("sway");
-        let outer = Rect::new(VIEW.x, VIEW.y, VIEW.w, VIEW.h + 20);
+        let outer = Rect::new(Px(VIEW.x), Px(VIEW.y), Px(VIEW.w), Px(VIEW.h + 20));
         let (mut shell, mut b, id, surface, mut n) = carded(&rec, outer);
         assert_eq!(
             composed(&b)[(259 * 400) as usize],
@@ -608,13 +621,13 @@ mod layers {
             let c = scroll_step(&mut shell, &rec, &mut b, id, surface, -16, &mut n);
             let off = source(&c)[1] as i32;
             let d = damage(&c);
-            let exposed = Rect::new(0, off + VIEW.h - 16, 400, 16);
+            let exposed = Rect::new(Px(0), Px(off + VIEW.h - 16), Px(400), Px(16));
             let r2 = (RADIUS * RADIUS) as u64;
             assert!(
-                (0..exposed.h).all(|y| d.iter().any(|r| r.contains(0, exposed.y + y))),
+                (0..exposed.h).all(|y| d.iter().any(|r| r.contains(Px(0), Px(exposed.y + y)))),
                 "the exposed rows {exposed:?}: {d:?}"
             );
-            let corner = Rect::new(0, off, RADIUS, RADIUS);
+            let corner = Rect::new(Px(0), Px(off), Px(RADIUS), Px(RADIUS));
             assert!(
                 d.iter().any(|r| !r.intersect(&corner).is_empty()),
                 "the top-left corner: {d:?}"
@@ -703,7 +716,7 @@ mod layers {
                     })
                 })
             };
-            checker(&mut b, Rect::new(0, 0, w, h), 0);
+            checker(&mut b, Rect::new(Px(0), Px(0), Px(w), Px(h)), 0);
             assert!(publish(&mut shell, id, &[(&b, id)], 0));
             until(
                 &mut shell,
@@ -711,7 +724,7 @@ mod layers {
                 |_| shows(&rec, &b),
             );
             // a window on the device grid of every scale, promoted, its own pixels new
-            let view = Rect::new(0, 0, 200, 120);
+            let view = Rect::new(Px(0), Px(0), Px(200), Px(120));
             glitnir::scene::with(b.g, |sc| {
                 sc.upsert(&LayerDesc {
                     id: WIN,

@@ -99,12 +99,12 @@ fn every_table_is_made_read_only() {
 fn unsupported_types_are_refused_with_the_wit_name() {
     let cases = [
         (
-            "f: func(x: list<list<u8>>);",
-            "acme:thing@1.0.0/i.f, parameter `x`: a list of lists is not supported",
+            "f: func(x: list<list<list<u8>>>);",
+            "acme:thing@1.0.0/i.f, parameter `x`: a list of lists of lists is not supported",
         ),
         (
-            "record r { a: list<list<u8>> }\n  f: func(x: r);",
-            "acme:thing@1.0.0/i.f, parameter `x`: record `r`, field `a`: a list of lists is not supported",
+            "record r { a: list<list<list<u8>>> }\n  f: func(x: r);",
+            "acme:thing@1.0.0/i.f, parameter `x`: record `r`, field `a`: a list of lists of lists is not supported",
         ),
         (
             "record inner { a: list<u8> }\n  record outer { i: inner, x: char }\n  f: func(x: outer);",
@@ -126,7 +126,7 @@ fn unsupported_types_are_refused_with_the_wit_name() {
         ),
         ("f: func() -> result<u8>;", "acme:thing@1.0.0/i.f, result"),
         (
-            "f: func() -> result<list<list<u8>>, k>;\n  enum k { a }",
+            "f: func() -> result<list<list<list<u8>>>, k>;\n  enum k { a }",
             "acme:thing@1.0.0/i.f, result",
         ),
         (

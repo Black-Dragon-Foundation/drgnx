@@ -5,7 +5,8 @@ mod common;
 
 use common::*;
 use skel::api::{ShellBackend, ShellError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 fn fds() -> usize {
     std::fs::read_dir("/proc/self/fd").unwrap().count()
@@ -17,7 +18,11 @@ fn tasks() -> usize {
 
 /// VmRSS in KiB.
 fn rss_kib() -> u64 {
-    let status = std::fs::read_to_string("/proc/self/status").unwrap();
+    let status = eitri::read_string(
+        std::path::Path::new(&format!("/proc/{}/status", std::process::id())),
+        1 << 16,
+    )
+    .unwrap();
     let line = status.lines().find(|l| l.starts_with("VmRSS:")).unwrap();
     line.split_whitespace().nth(1).unwrap().parse().unwrap()
 }
@@ -38,8 +43,8 @@ fn cycle(rec: &Recorder) {
                 assert!(Instant::now() < deadline, "no DISCONNECTED");
                 // the recorder closes a killed client's socket at its next dispatch of the clients, which a request
                 // from any client starts
-                let _ = shell.set_title(w, "t");
-                let _ = shell.flush();
+                let _outcome_not_needed = shell.set_title(w, "t");
+                let _outcome_not_needed = shell.flush();
                 readable_within(shell.wake_fd(), 50);
             }
             Err(e) => {
@@ -84,7 +89,7 @@ mod reader {
                 break;
             }
             assert!(Instant::now() < deadline, "clients left: {c}");
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         }
     }
 }

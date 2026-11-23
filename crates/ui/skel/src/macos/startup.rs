@@ -34,10 +34,11 @@ pub fn init() {
     let system = NSLocale::currentLocale().localeIdentifier().to_string();
     let (lang, fell_back) = startup::lang(current.as_deref(), &system, usable);
     if fell_back {
-        eprintln!(
+        annall::cli_err(&format!(
             "LANG={} cannot be used, using {lang} instead.",
             current.unwrap_or_default()
-        );
+        ))
+        .unwrap_or_default();
     }
     // SAFETY: before Emacs starts any thread of its own, which is when `setenv` is safe.
     unsafe { std::env::set_var("LANG", lang) };

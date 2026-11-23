@@ -54,7 +54,7 @@ struct Rings {
 static RINGS: Mutex<Option<Rings>> = Mutex::new(None);
 
 fn rings() -> MutexGuard<'static, Option<Rings>> {
-    RINGS.lock().unwrap_or_else(|p| p.into_inner())
+    saman::lock(&RINGS)
 }
 
 fn with<R>(f: impl FnOnce(&mut Rings) -> R) -> R {
