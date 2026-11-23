@@ -1,5 +1,5 @@
 [package]
-name = "drgnx-budget"
+name = "vag"
 description = "Measures the editor against its resource budgets: PSS, per-thread wakeups, and JSON reports that compare to an earlier build"
 version.workspace = true
 edition.workspace = true

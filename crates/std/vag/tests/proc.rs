@@ -11,7 +11,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use drgnx_budget::{Error, Report, pss_kib, pss_kib_at, wakeups};
+use vag::{Error, Report, pss_kib, pss_kib_at, wakeups};
 
 fn scratch(name: &str) -> PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("budget-{name}"));
@@ -56,7 +56,7 @@ fn thread_state(tid: u32) -> String {
         .to_string()
 }
 
-fn entry(w: &drgnx_budget::ThreadWakeups, comm: &str) -> u64 {
+fn entry(w: &vag::ThreadWakeups, comm: &str) -> u64 {
     w.per_thread
         .iter()
         .find(|(c, _)| c == comm)

@@ -164,6 +164,11 @@ jobs:
       - run: cargo fmt --check
       - if: ${{ !cancelled() }}
         run: cargo clippy --locked --workspace --all-targets --features ratatoskr/test-hooks,ferja/test-hooks -- -D warnings
+      # The standards table, the generated clippy configs, the scanner and the ownership check (docs/develop/standards/);
+      # it fails on a finding in the table or in a crate standards.toml marks clean
+      - name: the standards (cargo xtask standards)
+        if: ${{ !cancelled() }}
+        run: cargo xtask standards
       # The pinned model files the tests run the built-in model from (they fail without DRGNX_TEST_MODELS), beside the
       # checkout, not in it (the tests that list a checkout would find them): one cache for Linux and macOS, kept by
       # the list's hash; models.sh checks each restored file's sum and fetches what is missing from Hugging Face at its
@@ -220,6 +225,11 @@ jobs:
         run: cargo nextest run --locked --no-fail-fast --retries 0 --workspace --features ratatoskr/test-hooks,ferja/test-hooks
       - if: ${{ !cancelled() }}
         run: cargo test --locked --no-fail-fast --workspace --doc --features ratatoskr/test-hooks,ferja/test-hooks
+      # The sentinel-HOME run (docs/develop/standards/test-harness.md): the clean crates' tests with HOME an empty
+      # read-only directory; it fails if anything appears there
+      - name: the sentinel-HOME run (cargo xtask test-sandbox)
+        if: ${{ !cancelled() }}
+        run: cargo xtask test-sandbox
       # the test-hooks binary and the harness for the steps below
       # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM;
       # + drgnx-key beside the hub, which a keyed job here runs in front of its command)

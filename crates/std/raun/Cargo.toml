@@ -1,0 +1,20 @@
+[package]
+name = "raun"
+description = "The test harness: a sandbox with a temp HOME, the test profile's paths and a virtual clock (the test-harness standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+stig.workspace = true
+saman.workspace = true
+stund = { workspace = true, features = ["test-hooks"] }
+tempfile.workspace = true
+
+[dev-dependencies]
+eitri = { path = "../../hub/eitri" }
+
+[lints]
+workspace = true

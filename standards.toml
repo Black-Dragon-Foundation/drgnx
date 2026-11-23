@@ -1,0 +1,108 @@
+# The standards table (docs/develop/standards/README.md): one row per cross-cutting standard. `cargo xtask standards`
+# enforces it, and `cargo xtask standards --write` writes the clippy.toml files from it (the table is the one source).
+#
+#   id            the standard; its page is docs/develop/standards/<id>.md
+#   owner         the one crate that may silence this standard's lints, and that the scanner's rules for it skip
+#   clippy        paths clippy's disallowed-methods rejects outside the owner (the scanner rejects them too, also
+#                 through `use … as`, `type` aliases and glob imports within one file, and inside macro arguments)
+#   clippy_types  paths clippy's disallowed-types rejects outside the owner
+#   lints         clippy lints this standard denies ([workspace.lints.clippy] in Cargo.toml)
+#   scan          the scanner's rule ids (xtask/src/standards/scan.rs)
+#   conformance   the test that drives the standard's API
+#
+# No allowlist: no row ever names a site outside its owner.
+
+# A crate marked `clean` has no finding, and CI and the hooks enforce every row on it. A crate is marked when it reaches
+# zero and is never unmarked. A crate not marked yet takes migration commits only (the hub track's freeze, D15): the
+# commit-msg hook refuses any other commit that touches it. `ui` marks a crate whose code runs on the UI thread.
+[crates]
+villa = { clean = true }
+annall = { clean = true }
+stig = { clean = true }
+raun = { clean = true }
+saman = { clean = true }
+hulda = { clean = true }
+
+[[standard]]
+id = "errors"
+owner = "villa"
+lints = ["let_underscore_must_use", "unused_result_ok"]
+scan = ["no-string-error", "no-let-underscore-result"]
+conformance = "crates/std/villa/tests/conformance.rs"
+
+[[standard]]
+id = "logging"
+owner = "annall"
+clippy = ["std::io::stdout", "std::io::stderr"]
+lints = ["print_stdout", "print_stderr", "dbg_macro"]
+scan = ["no-print"]
+conformance = "crates/std/annall/tests/conformance.rs"
+
+[[standard]]
+id = "paths"
+owner = "stig"
+clippy = ["std::env::home_dir"]
+scan = ["no-env-home"]
+conformance = "crates/std/stig/tests/conformance.rs"
+
+[[standard]]
+id = "test-harness"
+owner = "raun"
+conformance = "crates/std/raun/tests/conformance.rs"
+
+[[standard]]
+id = "time"
+owner = "stund"
+clippy = [
+    "std::time::Instant::now",
+    "std::time::SystemTime::now",
+    "std::thread::sleep",
+    "tokio::time::sleep",
+    "tokio::time::Instant::now",
+]
+conformance = "crates/hub/stund/tests/conformance.rs"
+
+[[standard]]
+id = "files"
+owner = "eitri"
+clippy = [
+    "std::fs::write",
+    "std::fs::read_to_string",
+    "std::fs::File::create",
+    "std::fs::rename",
+    "std::fs::OpenOptions::open",
+]
+conformance = "crates/hub/eitri/tests/conformance.rs"
+
+[[standard]]
+id = "processes"
+owner = "draugr"
+clippy = ["std::process::Command::new", "tokio::process::Command::new"]
+conformance = "crates/hub/draugr/tests/conformance.rs"
+
+[[standard]]
+id = "concurrency"
+owner = "saman"
+clippy = [
+    "std::thread::spawn",
+    "std::thread::Builder::spawn",
+    "tokio::spawn",
+    "tokio::task::spawn",
+    "tokio::task::spawn_blocking",
+    "tokio::runtime::Builder::new_multi_thread",
+    "tokio::runtime::Builder::new_current_thread",
+    "std::sync::Mutex::lock",
+]
+scan = ["no-blocking-recv-on-ui"]
+conformance = "crates/std/saman/tests/conformance.rs"
+
+[[standard]]
+id = "data-hygiene"
+owner = "hulda"
+scan = ["secret-has-redact"]
+conformance = "crates/std/hulda/tests/conformance.rs"
+
+# The layers: a crate may not depend on these, directly or through other workspace crates (cargo metadata).
+[[layer]]
+crate = "drgnx"
+may_not_depend = ["glitnir"]

@@ -1,7 +1,7 @@
 # cargo-fuzz targets for the parsers of phase 1 (docs/develop/runtime.md, "Fuzzing").  Its own workspace: the product
 # workspace excludes it, and it builds on the pinned nightly only.
 [package]
-name = "drgnx-fuzz"
+name = "hrista"
 version = "0.0.0"
 edition = "2024"
 license = "GPL-3.0-or-later"

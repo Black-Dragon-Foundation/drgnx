@@ -15,7 +15,7 @@ use rustix::fs::{
 use rustix::io::Errno;
 
 use crate::open::{checked_rel, invalid};
-use crate::{FsError, Kind, open_beneath};
+use crate::{FsError, Kind, open_beneath, open_path};
 
 /// Writes `bytes` to `rel` beneath `dir` through a temporary file and a rename.
 ///
@@ -143,6 +143,24 @@ pub fn symlink_beneath(dir: BorrowedFd<'_>, rel: &Path, target: &[u8]) -> Result
         let _ = unlinkat(parent, tmp.as_str(), AtFlags::empty());
     }
     done
+}
+
+/// Replaces the file at the absolute path `abs` with `bytes`: the parent opened with `open_path` (a link in any
+/// component is refused), then [`write_regular`] there, so a link at `abs` is replaced and never followed, and a
+/// reader sees the old bytes or the new ones, never a part. An existing regular file keeps its permission bits; a new
+/// file gets 0o666 less the umask (as `std::fs::write`). On an error the old file is left as it was.
+pub fn replace_file(abs: &Path, bytes: &[u8]) -> Result<(), FsError> {
+    let (Some(parent), Some(name)) = (abs.parent(), abs.file_name()) else {
+        return Err(invalid("the path names no file"));
+    };
+    let parent = open_path(parent, Kind::Dir)?;
+    let dir = parent.fd.as_fd();
+    let old = statat(dir, name, AtFlags::SYMLINK_NOFOLLOW)
+        .ok()
+        .filter(|st| FileType::from_raw_mode(st.st_mode) == FileType::RegularFile);
+    #[allow(clippy::unnecessary_cast)] // st_mode is u16 on macOS, u32 on Linux and Android
+    let mode = old.map_or(0o666, |st| st.st_mode as u32 & 0o777);
+    write_regular(dir, Path::new(name), bytes, mode)
 }
 
 /// A fresh `.eitri-<16 hex>` name.

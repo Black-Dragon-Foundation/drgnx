@@ -130,6 +130,30 @@ wasmtime-wasi-io = { version = "=48.0.10", default-features = false, features = 
 bytes = "1"
 # brokkr's tests only: component text for what no toolchain emits on purpose (a disabled proposal, many handles)
 wat = "=1.263.0"
+# xtask's standards scanner (docs/develop/standards/README.md): every .rs parsed, with line numbers; the table in TOML
+syn = { version = "2", features = ["full", "visit"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+toml = "0.9"
+# the standards' own crates (crates/std, docs/develop/standards/)
+villa = { path = "crates/std/villa" }
+annall = { path = "crates/std/annall" }
+stig = { path = "crates/std/stig" }
+raun = { path = "crates/std/raun" }
+saman = { path = "crates/std/saman" }
+hulda = { path = "crates/std/hulda" }
+stund = { path = "crates/hub/stund" }
+
+# The standards' clippy lints (standards.toml's `lints`, and the two disallowed-* lints its `clippy` rows feed), denied
+# for every crate that has `[lints] workspace = true`: a clean crate must (cargo xtask standards checks it). Each is
+# legal to silence only in the crate that owns its standard.
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+disallowed_types = "deny"
+let_underscore_must_use = "deny"
+unused_result_ok = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro = "deny"
 
 [profile.release]
 strip = true

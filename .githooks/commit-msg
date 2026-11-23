@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# drgnx commit-msg: the standards' freeze (docs/develop/standards/README.md). A crate standards.toml does not mark clean
+# takes migration commits only: a commit that touches one must start its subject with `migrate`.
+# DRGNX_XTASK names another way to run `cargo xtask`; unset, it is cargo itself. Bypass is not allowed (no --no-verify).
+set -euo pipefail
+top="$(git rev-parse --show-toplevel)"
+[ -f "$top/standards.toml" ] || exit 0
+msg="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACMRD)
+# shellcheck disable=SC2086 # DRGNX_XTASK is a command line
+cd "$top" && exec ${DRGNX_XTASK:-cargo xtask} standards --commit-msg "$msg" "${staged[@]}"

@@ -1,0 +1,18 @@
+[package]
+name = "hulda"
+description = "Secrets that never print: Secret<T> and the Redact trait (the data-hygiene standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dev-dependencies]
+annall.workspace = true
+raun.workspace = true
+stig.workspace = true
+villa.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
