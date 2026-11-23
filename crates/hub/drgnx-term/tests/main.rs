@@ -3,13 +3,12 @@
 //! process of its own is a `[[test]]` of its own in Cargo.toml, with the reason there, and is named in `APART`.
 
 mod images;
-mod logging;
 mod running;
 mod vttest;
 mod worker;
 
 /// The test files that are binaries of their own (Cargo.toml says why).
-const APART: &[&str] = &[];
+const APART: &[&str] = &["logging"];
 
 /// `autotests = false` means a file nobody lists never runs, and nothing says so: a new `tests/*.rs` must be a `mod`
 /// line above, or (process of its own) a `[[test]]` in Cargo.toml and a name in `APART`.
