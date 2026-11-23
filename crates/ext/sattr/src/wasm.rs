@@ -150,7 +150,7 @@ impl<A: Api + Send + 'static> Guest<A> {
         let mut store = Store::new(
             engine,
             State {
-                api: WasmApi(Arc::clone(api), caller),
+                api: WasmApi(Arc::clone(api), caller, limits.max_list),
                 memory_bytes: limits.memory_bytes,
                 table_elements: limits.table_elements,
                 denied: 0,

@@ -110,10 +110,10 @@ fn exposure_to(e: bod::Exposure) -> Exposure {
     }
 }
 
-/// The arguments as the WIT spells them: one line each, `name: what it is`.
-fn parse_args(text: &str) -> Result<bod::ArgSpec, Error> {
+/// The arguments as the WIT spells them: one entry each, `name: what it is`.
+fn parse_args(lines: &[String]) -> Result<bod::ArgSpec, Error> {
     let mut args = Vec::new();
-    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+    for line in lines.iter().map(|l| l.trim()) {
         let Some((name, doc)) = line.split_once(':') else {
             return Err(err(
                 ErrorKind::Invalid,
@@ -255,8 +255,7 @@ impl api::commands::Api for Editor {
                 .args
                 .iter()
                 .map(|(n, d)| format!("{n}: {d}"))
-                .collect::<Vec<_>>()
-                .join("\n"),
+                .collect(),
             exposure: exposure_to(c.exposure),
         })
     }

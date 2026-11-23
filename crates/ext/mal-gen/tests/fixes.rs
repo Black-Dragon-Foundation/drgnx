@@ -99,8 +99,12 @@ fn every_table_is_made_read_only() {
 fn unsupported_types_are_refused_with_the_wit_name() {
     let cases = [
         (
-            "f: func(x: list<u8>);",
-            "acme:thing@1.0.0/i.f, parameter `x`",
+            "f: func(x: list<list<u8>>);",
+            "acme:thing@1.0.0/i.f, parameter `x`: a list of lists or records is not supported",
+        ),
+        (
+            "record r { a: u8 }\n  f: func(x: list<r>);",
+            "acme:thing@1.0.0/i.f, parameter `x`: a list of lists or records is not supported",
         ),
         ("f: func(x: char);", "acme:thing@1.0.0/i.f, parameter `x`"),
         ("f: func() -> option<u8>;", "acme:thing@1.0.0/i.f, result"),
@@ -109,8 +113,8 @@ fn unsupported_types_are_refused_with_the_wit_name() {
             "acme:thing@1.0.0/i.f, result",
         ),
         (
-            "record r { a: list<u8> }\n  f: func() -> r;",
-            "acme:thing@1.0.0/i.f, result",
+            "record r { a: list<option<u8>> }\n  f: func() -> r;",
+            "acme:thing@1.0.0/i.f, result: record `r`, field `a`",
         ),
         (
             "f: func() -> result<u8, string>;",
@@ -118,7 +122,7 @@ fn unsupported_types_are_refused_with_the_wit_name() {
         ),
         ("f: func() -> result<u8>;", "acme:thing@1.0.0/i.f, result"),
         (
-            "f: func() -> result<list<u8>, k>;\n  enum k { a }",
+            "f: func() -> result<list<list<u8>>, k>;\n  enum k { a }",
             "acme:thing@1.0.0/i.f, result",
         ),
         (
@@ -312,7 +316,7 @@ fn every_api_method_gets_the_caller() {
     );
     assert!(out.rust.contains("::f(__m, &__c"), "{}", out.rust);
     // the component host: `WasmApi` holds the cell, and a Host method passes the caller too
-    assert!(out.rust.contains("pub struct WasmApi<A>(pub std::sync::Arc<std::sync::Mutex<A>>, pub std::sync::Arc<std::sync::RwLock<crate::C>>)"), "{}", out.rust);
+    assert!(out.rust.contains("pub struct WasmApi<A>(pub std::sync::Arc<std::sync::Mutex<A>>, pub std::sync::Arc<std::sync::RwLock<crate::C>>, pub usize)"), "{}", out.rust);
     assert!(
         out.rust.contains("let __c = rt::caller(&self.1);"),
         "{}",
@@ -326,4 +330,47 @@ fn a_poisoned_lock_is_never_recovered() {
     let out = must(BASIC);
     assert!(!out.rust.contains("into_inner"), "{}", out.rust);
     assert!(out.rust.contains("Poisoned(_)"), "{}", out.rust);
+}
+
+// lists: scalars, strings and enums, as parameters, results and record fields; never in an exported function
+#[test]
+fn lists_are_supported_in_the_hosts_functions_and_checked_against_the_limit() {
+    let out = must(
+        "package acme:thing@1.0.0;
+interface i {
+  enum k { a, b }
+  record bag { names: list<string>, sizes: list<u32>, n: u8 }
+  f: func(a: list<string>, b: list<u64>, c: list<k>, d: bag) -> result<list<string>, k>;
+  g: func() -> list<bool>;
+}
+world w { import i; }
+",
+    );
+    parses(&out);
+    for want in [
+        "Vec<String>",
+        "Vec<u64>",
+        "rt::dec_list(",
+        "rt::check_len(",
+        "rt::len_ok(",
+        "max_list: usize",
+        ", pub usize);",
+        "__lt.set(",
+    ] {
+        assert!(out.rust.contains(want), "`{want}` missing:\n{}", out.rust);
+    }
+    // a list in an exported function is refused, with the WIT name
+    let e = gen_wit(
+        "package acme:thing@1.0.0;
+interface e { run: func(x: list<u8>); }
+world w { export e; }
+",
+    )
+    .err()
+    .expect("refused");
+    assert!(
+        e.to_string()
+            .contains("acme:thing@1.0.0/e.run: lists are not supported in exported functions"),
+        "{e}"
+    );
 }

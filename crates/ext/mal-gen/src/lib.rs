@@ -178,6 +178,8 @@ enum Ty {
     Enum(TypeId),
     /// a record of scalar fields (no record inside a record)
     Record(TypeId),
+    /// a list (its type definition) of scalars, strings or enums
+    List(TypeId),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -359,6 +361,13 @@ impl Gen<'_> {
             Type::Id(id) => match &self.r.types[*id].kind {
                 TypeDefKind::Type(inner) => self.scalar(inner, at)?,
                 TypeDefKind::Enum(_) => Ty::Enum(*id),
+                TypeDefKind::List(inner) => {
+                    let at = format!("{at}: a list");
+                    if matches!(self.scalar(inner, &at)?, Ty::List(_) | Ty::Record(_)) {
+                        return Err(fail(format!("{at} of lists or records is not supported")));
+                    }
+                    Ty::List(*id)
+                }
                 TypeDefKind::Record(rec) => {
                     let name = self.r.types[*id].name.clone().unwrap_or_default();
                     for f in &rec.fields {
@@ -392,6 +401,25 @@ impl Gen<'_> {
         }
     }
 
+    /// The element of a list.
+    fn elem(&self, id: TypeId) -> Result<Ty> {
+        let TypeDefKind::List(t) = &self.r.types[id].kind else {
+            return Err(fail("a list was expected"));
+        };
+        self.scalar(t, "a list")
+    }
+
+    /// Whether T is a list, or a record with a list in it.
+    fn has_list(&self, t: Ty) -> bool {
+        match t {
+            Ty::List(_) => true,
+            Ty::Record(id) => self
+                .record_fields(id)
+                .is_ok_and(|fs| fs.iter().any(|(_, t)| matches!(t, Ty::List(_)))),
+            _ => false,
+        }
+    }
+
     /// The fields of a record, each as its Ty.
     fn record_fields(&self, id: TypeId) -> Result<Vec<(String, Ty)>> {
         let TypeDefKind::Record(rec) = &self.r.types[id].kind else {
@@ -416,7 +444,7 @@ impl Gen<'_> {
         }
     }
 
-    fn func(&self, iface_label: &str, f: &Function) -> Result<Func> {
+    fn func(&self, iface_label: &str, f: &Function, exported: bool) -> Result<Func> {
         let ctx = format!("{iface_label}.{}", f.name);
         if !matches!(f.kind, FunctionKind::Freestanding) {
             return Err(fail(format!("{ctx}: only plain functions are supported")));
@@ -443,6 +471,17 @@ impl Gen<'_> {
                 None => Ret::Plain(self.scalar(t, &at)?),
             },
         };
+        if exported
+            && params
+                .iter()
+                .map(|(_, t)| *t)
+                .chain(ret_tys(ret))
+                .any(|t| self.has_list(t))
+        {
+            return Err(fail(format!(
+                "{ctx}: lists are not supported in exported functions yet"
+            )));
+        }
         Ok(Func {
             wit: f.name.clone(),
             ctx,
@@ -451,14 +490,14 @@ impl Gen<'_> {
         })
     }
 
-    fn iface(&self, id: InterfaceId) -> Result<Iface> {
+    fn iface(&self, id: InterfaceId, exported: bool) -> Result<Iface> {
         let label = self.iface_label(id)?;
         let i = &self.r.interfaces[id];
         let p = self.pkg_of(id)?;
         let name = i.name.clone().unwrap_or_default();
         let mut funcs = Vec::new();
         for f in i.functions.values() {
-            funcs.push(self.func(&label, f)?);
+            funcs.push(self.func(&label, f, exported)?);
         }
         Ok(Iface {
             id,
@@ -479,12 +518,14 @@ impl Gen<'_> {
             Ty::F64 => "f64".into(),
             Ty::Str => "String".into(),
             Ty::Enum(id) | Ty::Record(id) => self.enum_path(id)?,
+            Ty::List(id) => format!("Vec<{}>", self.rust_ty(self.elem(id)?)?),
         })
     }
 
     fn wasm_ty(&self, t: Ty) -> Result<String> {
         match t {
             Ty::Enum(id) | Ty::Record(id) => self.wasm_enum_path(id),
+            Ty::List(id) => Ok(format!("Vec<{}>", self.wasm_ty(self.elem(id)?)?)),
             other => self.rust_ty(other),
         }
     }
@@ -533,6 +574,12 @@ impl Gen<'_> {
                     self.enum_path(id)?
                 )
             }
+            Ty::List(id) => {
+                let inner = self.dec(self.elem(id)?, "__e", &format!("{ctx}[]"))?;
+                format!(
+                    "{{ let __items = rt::dec_list({val}, \"{ctx}\", __max)?; let mut __out = Vec::with_capacity(__items.len()); for __e in &__items {{ __out.push({inner}); }} __out }}"
+                )
+            }
             Ty::Record(id) => {
                 let mut s = format!(
                     "{{ let __tb = rt::dec_table({val}, \"{ctx}\")?; {} {{ ",
@@ -566,6 +613,12 @@ impl Gen<'_> {
             Ty::F64 => format!("mlua::Value::Number({e})"),
             Ty::Str => format!("rt::enc_str(__lua, &{e})?"),
             Ty::Enum(_) => format!("rt::enc_str(__lua, {e}.as_str())?"),
+            Ty::List(id) => {
+                let inner = self.enc(self.elem(id)?, "__x", ctx)?;
+                format!(
+                    "{{ rt::check_len({e}.len(), __max, \"{ctx}\")?; let __lt = __lua.create_table()?; for (__i, __x) in {e}.iter().cloned().enumerate() {{ __lt.set(__i as i64 + 1, {inner})?; }} mlua::Value::Table(__lt) }}"
+                )
+            }
             Ty::Record(id) => {
                 let mut s = String::from("{ let __rt = __lua.create_table()?; ");
                 for (name, t) in self.record_fields(id)? {
@@ -584,28 +637,52 @@ impl Gen<'_> {
 
     // ---- component host conversions
 
-    /// The wasm value E (of type T) as our own type.
-    fn from_wasm(t: Ty, e: &str) -> String {
+    /// The value E of T, converted to the other side's type (our own to bindgen's, or back).
+    fn conv(&self, t: Ty, e: &str) -> String {
         match t {
             Ty::Enum(_) | Ty::Record(_) => format!("{e}.into()"),
+            Ty::List(id) => match self.elem(id) {
+                Ok(Ty::Enum(_)) => format!("{e}.into_iter().map(Into::into).collect()"),
+                _ => e.to_string(),
+            },
             _ => e.to_string(),
         }
     }
 
-    fn ret_from_ours(r: Ret, e: &str) -> String {
+    fn ret_from_ours(&self, r: Ret, e: &str) -> String {
         match r {
             Ret::Nothing => e.to_string(),
-            Ret::Plain(Ty::Enum(_) | Ty::Record(_)) => format!("{e}.into()"),
-            Ret::Plain(_) => e.to_string(),
-            Ret::Result(Some(Ty::Enum(_) | Ty::Record(_)), _) => {
-                format!("{e}.map(|__v| __v.into()).map_err(Into::into)")
+            Ret::Plain(t) => self.conv(t, e),
+            Ret::Result(Some(t), _) => {
+                let c = self.conv(t, "__v");
+                if c == "__v" {
+                    format!("{e}.map_err(Into::into)")
+                } else {
+                    format!("{e}.map(|__v| {c}).map_err(Into::into)")
+                }
             }
-            Ret::Result(_, _) => format!("{e}.map_err(Into::into)"),
+            Ret::Result(None, _) => format!("{e}.map_err(Into::into)"),
         }
     }
 
-    fn ret_from_wasm(r: Ret, e: &str) -> String {
-        Self::ret_from_ours(r, e)
+    /// The statements that refuse a list longer than the host's limit in the parameter E of type T.
+    fn len_checks(&self, t: Ty, e: &str, ctx: &str) -> String {
+        match t {
+            Ty::List(_) => format!("rt::len_ok({e}.len(), self.2, \"{ctx}\")?;\n        "),
+            Ty::Record(id) => self
+                .record_fields(id)
+                .unwrap_or_default()
+                .iter()
+                .filter(|(_, t)| matches!(t, Ty::List(_)))
+                .map(|(n, _)| {
+                    format!(
+                        "rt::len_ok({e}.{}.len(), self.2, \"{ctx}\")?;\n        ",
+                        bindgen_ident(n)
+                    )
+                })
+                .collect(),
+            _ => String::new(),
+        }
     }
 }
 
@@ -663,7 +740,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     let mut imports = Vec::new();
     for item in w.imports.values() {
         match item {
-            WorldItem::Interface { id, .. } => imports.push(g.iface(*id)?),
+            WorldItem::Interface { id, .. } => imports.push(g.iface(*id, false)?),
             WorldItem::Function(f) => {
                 return Err(fail(format!(
                     "{}: world-level functions are not supported",
@@ -676,7 +753,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     let mut exports = Vec::new();
     for item in w.exports.values() {
         match item {
-            WorldItem::Interface { id, .. } => exports.push(g.iface(*id)?),
+            WorldItem::Interface { id, .. } => exports.push(g.iface(*id, true)?),
             WorldItem::Function(f) => {
                 return Err(fail(format!(
                     "{}: world-level functions are not supported",
@@ -807,19 +884,21 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
         for f in &i.funcs {
             let mut sig = String::new();
             let mut args = Vec::new();
+            let mut checks = String::new();
             for (n, t) in &f.params {
                 put!(sig, ", {}: {}", ident(n, &f.ctx)?, g.wasm_ty(*t)?)?;
-                args.push(Gen::from_wasm(*t, &ident(n, &f.ctx)?));
+                args.push(g.conv(*t, &ident(n, &f.ctx)?));
+                checks.push_str(&g.len_checks(*t, &ident(n, &f.ctx)?, &f.ctx));
             }
             let name = ident(&f.wit, &label)?;
             let call = format!(
                 "{trait_path}::{name}(__m, &__c{})",
                 args.iter().map(|a| format!(", {a}")).collect::<String>()
             );
-            let back = Gen::ret_from_ours(f.ret, "__r");
+            let back = g.ret_from_ours(f.ret, "__r");
             putln!(
                 wasm,
-                "    fn {name}(&mut self{sig}) -> wasmtime::Result<{}> {{\n        let __c = rt::caller(&self.1);\n        rt::with_wasm(&*self.0, \"{}\", |__m| {call}).map(|__r| {back})\n    }}",
+                "    fn {name}(&mut self{sig}) -> wasmtime::Result<{}> {{\n        {checks}let __c = rt::caller(&self.1);\n        rt::with_wasm(&*self.0, \"{}\", |__m| {call}).map(|__r| {back})\n    }}",
                 g.ret_ty(f.ret, true)?,
                 f.ctx
             )?;
@@ -916,7 +995,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     )?;
     putln!(
         out,
-        "pub fn install_luau<A: Api + 'static>(lua: &mlua::Lua, api: &std::sync::Arc<std::sync::Mutex<A>>, caller: &std::sync::Arc<std::sync::RwLock<{}>>) -> mlua::Result<()> {{\n    let __d = lua.create_table()?;",
+        "pub fn install_luau<A: Api + 'static>(lua: &mlua::Lua, api: &std::sync::Arc<std::sync::Mutex<A>>, caller: &std::sync::Arc<std::sync::RwLock<{}>>, max_list: usize) -> mlua::Result<()> {{\n    let __d = lua.create_table()?;",
         o.caller
     )?;
     for p in keys.values() {
@@ -944,7 +1023,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     )?;
     putln!(
         out,
-        "pub struct WasmApi<A>(pub std::sync::Arc<std::sync::Mutex<A>>, pub std::sync::Arc<std::sync::RwLock<{}>>);",
+        "pub struct WasmApi<A>(pub std::sync::Arc<std::sync::Mutex<A>>, pub std::sync::Arc<std::sync::RwLock<{}>>, pub usize);",
         o.caller
     )?;
     out.push_str(&wasm);
@@ -1060,7 +1139,7 @@ fn luau_fn(g: &Gen, trait_path: &str, f: &Func, label: &str) -> Result<String> {
     };
     putln!(
         s,
-        "        {{\n        let __api = std::sync::Arc::clone(api);\n        let __caller = std::sync::Arc::clone(caller);\n        __t.set(\"{}\", lua.create_function(move |__lua, __args: mlua::MultiValue| -> mlua::Result<mlua::MultiValue> {{\n            let __a: Vec<mlua::Value> = __args.into_iter().collect();\n            rt::arity(\"{}\", &__a, {n})?;\n{decode}            let __c = rt::caller(&__caller);\n            let __r = rt::with_api(&*__api, \"{}\", |__m| {trait_path}::{name}(__m, &__c{}))?;\n            {encode}\n        }})?)?;\n        }}",
+        "        {{\n        let __api = std::sync::Arc::clone(api);\n        let __caller = std::sync::Arc::clone(caller);\n        let __max = max_list;\n        __t.set(\"{}\", lua.create_function(move |__lua, __args: mlua::MultiValue| -> mlua::Result<mlua::MultiValue> {{\n            let __a: Vec<mlua::Value> = __args.into_iter().collect();\n            rt::arity(\"{}\", &__a, {n})?;\n{decode}            let __c = rt::caller(&__caller);\n            let __r = rt::with_api(&*__api, \"{}\", |__m| {trait_path}::{name}(__m, &__c{}))?;\n            {encode}\n        }})?)?;\n        }}",
         snake(&f.wit),
         f.ctx,
         f.ctx,
@@ -1122,7 +1201,7 @@ fn export_fn(g: &Gen, f: &Func, acc: &str, ext_ty: &str) -> Result<String> {
         enc.join(", ")
     )?;
     let wret = g.ret_ty(f.ret, false)?;
-    let conv = Gen::ret_from_wasm(f.ret, "__r");
+    let conv = g.ret_from_ours(f.ret, "__r");
     let body = if matches!(f.ret, Ret::Nothing) {
         format!(
             "__ext.{acc}().call_{name}(__store{})?;\n    Ok(())",
@@ -1154,12 +1233,8 @@ fn record_code(g: &Gen, tid: TypeId, name: &str) -> Result<String> {
         let ours = ident(n, name)?;
         let theirs = bindgen_ident(n);
         decl.push_str(&format!("pub {ours}: {}, ", g.rust_ty(*t)?));
-        let conv = |v: String| match t {
-            Ty::Enum(_) | Ty::Record(_) => format!("{v}.into()"),
-            _ => v,
-        };
-        to_wasm.push_str(&format!("{theirs}: {}, ", conv(format!("e.{ours}"))));
-        from_wasm.push_str(&format!("{ours}: {}, ", conv(format!("e.{theirs}"))));
+        to_wasm.push_str(&format!("{theirs}: {}, ", g.conv(*t, &format!("e.{ours}"))));
+        from_wasm.push_str(&format!("{ours}: {}, ", g.conv(*t, &format!("e.{theirs}"))));
     }
     putln!(
         s,

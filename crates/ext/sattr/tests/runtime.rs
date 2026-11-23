@@ -37,6 +37,7 @@ fn wasm_api(api: &Arc<Mutex<Editor>>, extension: &str, origin: Origin) -> WasmAp
             extension: extension.to_string(),
             origin,
         })),
+        LIMITS.max_list,
     )
 }
 
@@ -75,12 +76,12 @@ fn spec(id: &str, exposure: Exposure) -> CommandSpec {
         id: id.into(),
         title: "Title".into(),
         doc: "Doc.".into(),
-        args: "file: the file\nline: the line".into(),
+        args: vec!["file: the file".into(), "line: the line".into()],
         exposure,
     }
 }
 
-const REGISTER: &str = "drgnx.commands.register({ id = 'x', title = 'T', doc = 'D', args = '', exposure = 'palette' })";
+const REGISTER: &str = "drgnx.commands.register({ id = 'x', title = 'T', doc = 'D', args = {}, exposure = 'palette' })";
 
 // 1. u64 and s64 refuse values above 2^53 and fractions
 #[test]
@@ -197,31 +198,34 @@ fn an_extensions_commands_are_namespaced_listed_and_cannot_clash_through_either_
     let d = CommandsHost::describe(&mut w, "ext/c/visit".into())
         .expect("no trap")
         .expect("known");
+    assert_eq!((d.id.as_str(), d.title.as_str()), ("ext/c/visit", "Title"));
     assert_eq!(
-        (d.id.as_str(), d.title.as_str(), d.args.as_str()),
-        ("ext/c/visit", "Title", "file: the file\nline: the line")
+        d.args,
+        ["file: the file", "line: the line"],
+        "the list came back as it went in"
     );
     assert!(matches!(d.exposure, Exposure::Extension));
     run(
         &a,
         "local d = drgnx.commands.describe('ext/a/x')
-         assert(d.id == 'ext/a/x' and d.exposure == 'palette' and d.title == 'T' and d.doc == 'D')",
+         assert(d.id == 'ext/a/x' and d.exposure == 'palette' and d.title == 'T' and d.doc == 'D')
+         assert(type(d.args) == 'table' and #d.args == 0)",
     )
     .expect("a record comes back to Luau as a table");
     // a record that is not a record, or has a field of the wrong kind, is refused
     refused(&a, "drgnx.commands.register('x')", "expected a table");
     refused(
         &a,
-        "drgnx.commands.register({ id = 'y', title = 'T', doc = 'D', args = '', exposure = 'public' })",
+        "drgnx.commands.register({ id = 'y', title = 'T', doc = 'D', args = {}, exposure = 'public' })",
         "not one of",
     );
     refused(
         &a,
-        "drgnx.commands.register({ id = 'y', title = 1, doc = 'D', args = '', exposure = 'palette' })",
+        "drgnx.commands.register({ id = 'y', title = 1, doc = 'D', args = {}, exposure = 'palette' })",
         "expected a string",
     );
     // an argument line that is not `name: what it is`
-    run(&a, "local v, e = drgnx.commands.register({ id = 'z', title = 'T', doc = 'D', args = 'nonsense', exposure = 'palette' }); assert(v == nil and e.kind == 'invalid' and e.message:find('name'))")
+    run(&a, "local v, e = drgnx.commands.register({ id = 'z', title = 'T', doc = 'D', args = { 'nonsense' }, exposure = 'palette' }); assert(v == nil and e.kind == 'invalid' and e.message:find('name'))")
         .expect("a bad argument line");
 }
 
@@ -241,7 +245,7 @@ fn an_extension_name_that_could_collide_is_refused_by_both_hosts() {
     assert!(e.is_some(), "the component host refuses it too");
     // so an id with a slash in it is `ext/a/b/x`, the one command of `a`
     let a = luau(&api, "a");
-    run(&a, "assert(drgnx.commands.register({ id = 'b/x', title = 'T', doc = 'D', args = '', exposure = 'palette' }) == true)").expect("registers");
+    run(&a, "assert(drgnx.commands.register({ id = 'b/x', title = 'T', doc = 'D', args = {}, exposure = 'palette' }) == true)").expect("registers");
     assert!(saman::lock(&api).registry.get("ext/a/b/x").is_some());
 }
 
@@ -539,7 +543,7 @@ fn an_agent_runs_an_extension_command_only_if_it_is_exposed_to_agents() {
     let (api, _ex) = editor();
     let h = luau(&api, "ext");
     for (id, exposure) in [("p", "palette"), ("a", "agent"), ("e", "extension")] {
-        run(&h, &format!("assert(drgnx.commands.register({{ id = '{id}', title = 'T', doc = 'D', args = 'q: a query', exposure = '{exposure}' }}) == true)")).expect("registers");
+        run(&h, &format!("assert(drgnx.commands.register({{ id = '{id}', title = 'T', doc = 'D', args = {{ 'q: a query' }}, exposure = '{exposure}' }}) == true)")).expect("registers");
     }
     let mut ed = saman::lock(&api);
     let by_agent = |ed: &Editor, id: &str| {
@@ -886,4 +890,83 @@ fn a_guests_fuel_is_renewed_for_each_call() {
     for n in 0..200 {
         g.init(user()).unwrap_or_else(|e| panic!("call {n}: {e:?}"));
     }
+}
+
+// lists: a round trip, an empty list, and a list over the limit, in both hosts
+#[test]
+fn a_list_round_trips_may_be_empty_and_is_refused_over_the_limit_in_both_hosts() {
+    let (api, _ex) = editor();
+    let h = luau(&api, "lists");
+    run(
+        &h,
+        "assert(drgnx.commands.register({ id = 'two', title = 'T', doc = 'D', args = { 'file: the file', 'line: the line' }, exposure = 'palette' }) == true)
+         local d = drgnx.commands.describe('ext/lists/two')
+         assert(#d.args == 2 and d.args[1] == 'file: the file' and d.args[2] == 'line: the line')
+         assert(drgnx.commands.register({ id = 'none', title = 'T', doc = 'D', args = {}, exposure = 'palette' }) == true)
+         assert(#drgnx.commands.describe('ext/lists/none').args == 0)",
+    )
+    .expect("a list goes in and comes back, empty or not");
+    // exactly the limit is fine, one more is not, in Luau
+    let many = |n: usize| {
+        format!(
+            "{{ {} }}",
+            (0..n)
+                .map(|i| format!("'a{i}: x'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let at = LIMITS.max_list;
+    run(&h, &format!("assert(drgnx.commands.register({{ id = 'full', title = 'T', doc = 'D', args = {}, exposure = 'palette' }}) == true)", many(at))).expect("at the limit");
+    refused(
+        &h,
+        &format!(
+            "drgnx.commands.register({{ id = 'over', title = 'T', doc = 'D', args = {}, exposure = 'palette' }})",
+            many(at + 1)
+        ),
+        "longer than",
+    );
+    refused(
+        &h,
+        "drgnx.commands.register({ id = 'bad', title = 'T', doc = 'D', args = 'a: b', exposure = 'palette' })",
+        "expected a list",
+    );
+    refused(
+        &h,
+        "drgnx.commands.register({ id = 'bad', title = 'T', doc = 'D', args = { 1 }, exposure = 'palette' })",
+        "expected a string",
+    );
+    // the component host: the same round trip, the empty list, and a million-element list is refused
+    let mut w = wasm_api(&api, "wasm-lists", user());
+    let mut c = spec("two", Exposure::Palette);
+    assert!(
+        CommandsHost::register(&mut w, c.clone())
+            .expect("no trap")
+            .is_ok()
+    );
+    let d = CommandsHost::describe(&mut w, "ext/wasm-lists/two".into())
+        .expect("no trap")
+        .expect("known");
+    assert_eq!(d.args, c.args);
+    c.id = "none".into();
+    c.args = Vec::new();
+    assert!(
+        CommandsHost::register(&mut w, c.clone())
+            .expect("no trap")
+            .is_ok()
+    );
+    let d = CommandsHost::describe(&mut w, "ext/wasm-lists/none".into())
+        .expect("no trap")
+        .expect("known");
+    assert!(d.args.is_empty());
+    c.id = "huge".into();
+    c.args = (0..1_000_000).map(|i| format!("a{i}: x")).collect();
+    let e = CommandsHost::register(&mut w, c).expect_err("a trap");
+    assert!(e.to_string().contains("longer than"), "{e}");
+    assert!(
+        saman::lock(&api)
+            .registry
+            .get("ext/wasm-lists/huge")
+            .is_none()
+    );
 }

@@ -37,6 +37,8 @@ pub struct Limits {
     pub ticks: u64,
     /// The largest table a component may grow (elements).
     pub table_elements: usize,
+    /// The longest list an extension may hand the API (elements), or be handed back.
+    pub max_list: usize,
 }
 
 impl Limits {
@@ -46,6 +48,7 @@ impl Limits {
         memory_bytes: 16 << 20,
         ticks: 2_000,
         table_elements: 10_000,
+        max_list: 256,
     };
 }
 

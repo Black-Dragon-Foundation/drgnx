@@ -70,6 +70,39 @@ pub mod rt {
         }
     }
 
+    /// A list given to a function: its elements, refused when it is longer than MAX.
+    pub fn dec_list(v: &mlua::Value, ctx: &str, max: usize) -> mlua::Result<Vec<mlua::Value>> {
+        match v {
+            mlua::Value::Table(t) => {
+                let n = t.raw_len();
+                check_len(n, max, ctx)?;
+                let mut out = Vec::with_capacity(n);
+                for i in 1..=n {
+                    out.push(t.raw_get::<mlua::Value>(i as i64)?);
+                }
+                Ok(out)
+            }
+            _ => Err(bad(ctx, "expected a list")),
+        }
+    }
+
+    pub fn check_len(n: usize, max: usize, ctx: &str) -> mlua::Result<()> {
+        if n > max {
+            Err(bad(ctx, &format!("the list is longer than {max}")))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The same for a list a guest sent: its length, refused when it is over MAX.
+    pub fn len_ok(n: usize, max: usize, ctx: &str) -> wasmtime::Result<()> {
+        if n > max {
+            Err(wasmtime::Error::msg(format!("{ctx}: the list is longer than {max}")))
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn enc_u64(v: u64, ctx: &str) -> mlua::Result<mlua::Value> {
         if v > (1u64 << 53) {
             Err(bad(ctx, "the result is above 2^53, which Luau cannot hold exactly"))

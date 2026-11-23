@@ -68,7 +68,8 @@ impl LuauHost {
             extension: extension.to_string(),
             origin: Origin::Extension(extension.to_string()),
         }));
-        crate::generated::install_luau(&lua, api, &caller).map_err(script_error)?;
+        crate::generated::install_luau(&lua, api, &caller, limits.max_list)
+            .map_err(script_error)?;
         lua.sandbox(true).map_err(script_error)?;
         lua.set_memory_limit(lua.used_memory() + limits.memory_bytes)
             .map_err(script_error)?;

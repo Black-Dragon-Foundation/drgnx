@@ -39,12 +39,12 @@ interface commands {
     key-only,
   }
 
-  /// A command, as an extension offers it. `args` is one line per argument, `name: what it is`.
+  /// A command, as an extension offers it. `args` has one entry per argument, `name: what it is`.
   record command-spec {
     id: string,
     title: string,
     doc: string,
-    args: string,
+    args: list<string>,
     exposure: exposure,
   }
 
