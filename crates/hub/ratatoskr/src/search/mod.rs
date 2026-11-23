@@ -7,6 +7,7 @@ pub mod context;
 pub mod download;
 pub mod mcp;
 pub mod methods;
+pub mod packs;
 pub mod power;
 pub mod project;
 pub mod saved;

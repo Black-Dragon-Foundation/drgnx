@@ -89,6 +89,19 @@ pub enum SearchCommand {
         k: Option<u32>,
         json: bool,
     },
+    /// A vector pack of the repo's vectors (`search/export`).
+    Export {
+        root: PathBuf,
+        out: Option<PathBuf>,
+        branch: Option<String>,
+        all_trees: bool,
+    },
+    /// A vector pack merged into the machine's cache (`search/import`).
+    Import {
+        file: PathBuf,
+        root: Option<PathBuf>,
+        keep_all: bool,
+    },
     /// `eval gen|run|compare` (`crate::eval_cli`): needs no hub.
     Eval(crate::eval_cli::EvalCommand),
 }
@@ -440,6 +453,7 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
             return serve_mcp(env, root);
         }
         SearchCommand::Eval(_) => unreachable!("handled above"),
+        SearchCommand::Export { .. } | SearchCommand::Import { .. } => unimplemented!(),
         SearchCommand::Index { root, rebuild, now } => {
             let mut p = json!({"root": absolute(&cwd, root)});
             if *rebuild {
@@ -686,6 +700,50 @@ mod tests {
             )),
             "indexed: no rule applies\n"
         );
+    }
+
+    #[test]
+    fn export_and_import_parse() {
+        assert_eq!(
+            p(&["export", "/r", "--out", "/o.pack", "--branch", "main"]).unwrap(),
+            SearchCommand::Export {
+                root: "/r".into(),
+                out: Some("/o.pack".into()),
+                branch: Some("main".into()),
+                all_trees: false
+            }
+        );
+        assert_eq!(
+            p(&["export", "/r", "--all-trees"]).unwrap(),
+            SearchCommand::Export {
+                root: "/r".into(),
+                out: None,
+                branch: None,
+                all_trees: true
+            }
+        );
+        assert_eq!(
+            p(&["import", "/f.pack"]).unwrap(),
+            SearchCommand::Import {
+                file: "/f.pack".into(),
+                root: None,
+                keep_all: false
+            }
+        );
+        assert_eq!(
+            p(&["import", "/f.pack", "/r", "--keep-all"]).unwrap(),
+            SearchCommand::Import {
+                file: "/f.pack".into(),
+                root: Some("/r".into()),
+                keep_all: true
+            }
+        );
+        assert!(p(&["export"]).is_err());
+        assert!(p(&["import"]).is_err());
+        assert!(p(&["export", "/r", "--keep-all"]).is_err());
+        assert!(p(&["import", "/f", "--out", "/x"]).is_err());
+        assert!(p(&["export", "/r", "--branch", "a", "--all-trees"]).is_err());
+        assert!(p(&["import", "/f", "/r", "extra"]).is_err());
     }
 
     #[test]

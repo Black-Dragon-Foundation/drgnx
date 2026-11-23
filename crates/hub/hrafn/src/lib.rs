@@ -29,6 +29,7 @@ pub mod store;
 pub mod structural;
 pub mod symbols;
 pub mod tree;
+pub mod vector_pack;
 pub mod watch;
 
 pub use cache::{QuantRow, VectorCache};
@@ -55,3 +56,6 @@ pub use store::{
     chunk_key, path_key, path_text,
 };
 pub use tree::{TreeId, TreeRow, TreeState, View};
+pub use vector_pack::{
+    ExportScope, PACK_FORMAT, PackHeader, PackReader, export_keys, read_pack, write_pack,
+};

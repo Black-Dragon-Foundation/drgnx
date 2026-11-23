@@ -86,6 +86,33 @@ impl Caches {
         self.open.lock().await.values().cloned().collect()
     }
 
+    /// The state directory the caches belong to (`<state>/code/` holds the repo stores).
+    pub fn state(&self) -> &Path {
+        &self.state
+    }
+
+    /// The identity (record and a label) of every cache file on disk, opened or not.
+    pub fn stored(&self) -> Vec<Identity> {
+        let Ok(rd) = std::fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<Identity> = rd
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "db"))
+            .filter_map(|p| {
+                let c = urdr::open_readonly(&p).ok()?;
+                let record = hrafn_embed::fingerprint::FingerprintRecord::from_json(
+                    &urdr::meta(&c, "record").ok()??,
+                )
+                .ok()?;
+                let id = Identity::new(record.clone(), record.model_id.clone());
+                (urdr::meta(&c, "fingerprint").ok()?? == id.fp.hex()).then_some(id)
+            })
+            .collect();
+        out.sort_by_key(|i| i.fp);
+        out
+    }
+
     /// `drgnx-search-cache-cap`: the bytes of unheld keys a collection keeps (none: MP-7's rule).
     pub fn set_cap(&self, cap: Option<u64>) {
         *self.cap.lock().unwrap_or_else(PoisonError::into_inner) = cap;
