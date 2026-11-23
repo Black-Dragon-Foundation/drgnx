@@ -417,10 +417,12 @@ jobs:
           sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone || true
           /usr/bin/bwrap --unshare-all --ro-bind / / true && echo "bwrap: user namespaces work" || echo "bwrap: refused (exit $?)"
       - run: bash .github/ci/rust.sh
-      # one cache for the job's builds (the escape suite's and the agent core's tests), saved at its end
+      # one cache for the job's builds (the escape suite's and the agent core's tests), saved at its end. One entry an
+      # architecture, shared by its 24.04 and 26.04 legs and saved by the 24.04 one (the oldest glibc, as the build-once
+      # design's x64-build): four entries of 2.7 GB each would not fit the repository's 10 GB beside the others
       - uses: ./.github/actions/cargo-target
         with:
-          job: escape-${{ matrix.os }}
+          job: escape
           mode: restore
       # the seccomp real-install cases and everything else of the three Linux crates, on this architecture
       - run: cargo test --locked --no-fail-fast --manifest-path Cargo.toml -p gleipnir -p draugr -p eitri -p gleipnir-escape
@@ -544,10 +546,10 @@ jobs:
           target/release/domr --hub-bin target/release/ratatoskr \
             --scenarios test/conformance --only 'real-start/*' --require-all
       # last, whatever the tests said
-      - if: ${{ !cancelled() }}
+      - if: ${{ !cancelled() && !startsWith(matrix.os, 'ubuntu-26.04') }}
         uses: ./.github/actions/cargo-target
         with:
-          job: escape-${{ matrix.os }}
+          job: escape
           mode: save
           build-outcome: ${{ steps.build.outcome == 'success' && 'success' || steps.core-build.outcome }}
           status: ${{ job.status }}

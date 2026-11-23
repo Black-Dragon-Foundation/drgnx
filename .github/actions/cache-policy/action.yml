@@ -30,4 +30,6 @@ runs:
         REPO: ${{ github.repository }}
         EXACT_HIT: ${{ inputs.exact-hit }}
         BUILD_OUTCOME: ${{ inputs.build-outcome }}
-      run: bash "${{ github.workspace }}/.github/ci/cache-policy.sh" | tee -a "$GITHUB_OUTPUT"
+      # the working directory, not github.workspace in the script: a container job's workspace has another path inside
+      working-directory: ${{ github.workspace }}
+      run: bash .github/ci/cache-policy.sh | tee -a "$GITHUB_OUTPUT"
