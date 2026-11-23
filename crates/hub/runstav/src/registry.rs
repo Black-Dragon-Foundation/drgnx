@@ -411,6 +411,8 @@ mod tests {
         want.extend(CORE_WRITES);
         // Hrafn's: the index and the consented download change what the hub holds
         want.extend(["search/index", "search/model-download"]);
+        // vector packs: an export writes a file, an import writes the cache
+        want.extend(["search/export", "search/import"]);
         // the Search view's saved searches: the hub's state, and the project's file on a click
         // the Search view's writes: project files, on disk or through the editor
         want.extend(["search/apply", "search/undo"]);
