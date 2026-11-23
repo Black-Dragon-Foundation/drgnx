@@ -56,4 +56,12 @@ if [ -f "$top/standards.toml" ]; then
     echo "pre-commit: the standards refuse this commit (cargo xtask standards; docs/develop/standards/README.md)." >&2
     exit 1
   }
+  # The extension API's version rule: when the WIT is staged, it needs the bump its change deserves
+  if printf '%s\n' "${staged[@]}" | grep -qx 'crates/ext/mal/drgnx.wit'; then
+    # shellcheck disable=SC2086 # DRGNX_XTASK is a command line
+    (cd "$top" && ${DRGNX_XTASK:-cargo xtask} wit-check) || {
+      echo "pre-commit: the extension API changed without its version bump (wit-check; docs/develop/standards/api-versioning.md)." >&2
+      exit 1
+    }
+  fi
 fi

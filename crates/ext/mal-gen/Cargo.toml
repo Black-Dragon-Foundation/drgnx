@@ -1,0 +1,20 @@
+[package]
+name = "mal-gen"
+description = "The binding generator: WIT in, Rust out that binds a world to Luau (mlua) and to wasmtime's component host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true # planned: Apache-2.0 after the audit
+publish = false
+
+[dependencies]
+villa.workspace = true
+wit-parser.workspace = true
+
+[dev-dependencies]
+syn.workspace = true
+tempfile.workspace = true
+eitri = { path = "../../hub/eitri" }
+
+[lints]
+workspace = true

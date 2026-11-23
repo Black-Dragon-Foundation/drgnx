@@ -1,0 +1,123 @@
+/// What the generated bindings share. The Luau error contract (docs/develop/standards/api-versioning.md):
+/// - a failure of the API itself (`result<_, E>`) is returned, never raised: `nil, "kind"`; success is the value (or
+///   `true` when there is none), alone;
+/// - a failure of the call (a wrong argument, a number out of range, a busy API) is raised as a Lua error;
+/// - a script's function that breaks this (`true, "denied"`, `nil` alone, an unknown kind) is refused, never read as success.
+pub mod rt {
+    /// 2^53: the largest integer an f64 holds exactly, and so the largest 64-bit value Luau can carry.
+    pub const MAX_SAFE: f64 = 9007199254740992.0;
+
+    pub fn bad(ctx: &str, why: &str) -> mlua::Error {
+        mlua::Error::runtime(format!("{ctx}: {why}"))
+    }
+
+    pub fn contract(ctx: &str, why: &str) -> mlua::Error {
+        mlua::Error::runtime(format!("{ctx}: breaks the result contract: {why}"))
+    }
+
+    pub fn arity(ctx: &str, a: &[mlua::Value], n: usize) -> mlua::Result<()> {
+        if a.len() == n {
+            Ok(())
+        } else {
+            Err(bad(ctx, &format!("expected {n} argument(s), got {}", a.len())))
+        }
+    }
+
+    pub fn dec_bool(v: &mlua::Value, ctx: &str) -> mlua::Result<bool> {
+        match v {
+            mlua::Value::Boolean(b) => Ok(*b),
+            _ => Err(bad(ctx, "expected a boolean")),
+        }
+    }
+
+    pub fn dec_num(v: &mlua::Value, ctx: &str) -> mlua::Result<f64> {
+        match v {
+            mlua::Value::Number(n) => Ok(*n),
+            mlua::Value::Integer(i) => Ok(*i as f64),
+            _ => Err(bad(ctx, "expected a number")),
+        }
+    }
+
+    /// A whole number in MIN..=MAX (a 64-bit type's range is cut to +-2^53: beyond it Luau has already rounded).
+    pub fn dec_int(v: &mlua::Value, ctx: &str, min: f64, max: f64) -> mlua::Result<f64> {
+        let n = dec_num(v, ctx)?;
+        if !n.is_finite() || n.fract() != 0.0 {
+            Err(bad(ctx, "expected a whole number"))
+        } else if n < min || n > max {
+            Err(bad(ctx, &format!("{n} is outside {min}..={max}")))
+        } else {
+            Ok(n)
+        }
+    }
+
+    pub fn dec_str(v: &mlua::Value, ctx: &str) -> mlua::Result<String> {
+        match v {
+            mlua::Value::String(s) => match s.to_str() {
+                Ok(b) => {
+                    let t: &str = &b;
+                    Ok(t.to_owned())
+                }
+                Err(_) => Err(bad(ctx, "expected valid UTF-8")),
+            },
+            _ => Err(bad(ctx, "expected a string")),
+        }
+    }
+
+    pub fn enc_u64(v: u64, ctx: &str) -> mlua::Result<mlua::Value> {
+        if v > (1u64 << 53) {
+            Err(bad(ctx, "the result is above 2^53, which Luau cannot hold exactly"))
+        } else {
+            Ok(mlua::Value::Number(v as f64))
+        }
+    }
+
+    pub fn enc_i64(v: i64, ctx: &str) -> mlua::Result<mlua::Value> {
+        if v.unsigned_abs() > (1u64 << 53) {
+            Err(bad(ctx, "the result is beyond 2^53, which Luau cannot hold exactly"))
+        } else {
+            Ok(mlua::Value::Number(v as f64))
+        }
+    }
+
+    pub fn enc_str(lua: &mlua::Lua, s: &str) -> mlua::Result<mlua::Value> {
+        lua.create_string(s).map(mlua::Value::String)
+    }
+
+    /// Run F on the API. A panic that poisoned the lock is recovered from (the next call works); a call from inside
+    /// a call (the lock is held) is an error, never a deadlock.
+    pub fn with_api<A, R>(
+        api: &std::sync::Mutex<A>,
+        ctx: &str,
+        f: impl FnOnce(&mut A) -> R,
+    ) -> mlua::Result<R> {
+        match api.try_lock() {
+            Ok(mut g) => Ok(f(&mut g)),
+            Err(std::sync::TryLockError::Poisoned(p)) => {
+                let mut g = p.into_inner();
+                Ok(f(&mut g))
+            }
+            Err(std::sync::TryLockError::WouldBlock) => Err(bad(
+                ctx,
+                "the API is busy: a call from inside a call is refused",
+            )),
+        }
+    }
+
+    /// The same for the component host: the error traps the guest instead.
+    pub fn with_wasm<A, R>(
+        api: &std::sync::Mutex<A>,
+        ctx: &str,
+        f: impl FnOnce(&mut A) -> R,
+    ) -> wasmtime::Result<R> {
+        match api.try_lock() {
+            Ok(mut g) => Ok(f(&mut g)),
+            Err(std::sync::TryLockError::Poisoned(p)) => {
+                let mut g = p.into_inner();
+                Ok(f(&mut g))
+            }
+            Err(std::sync::TryLockError::WouldBlock) => Err(wasmtime::Error::msg(format!(
+                "{ctx}: the API is busy: a call from inside a call is refused"
+            ))),
+        }
+    }
+}

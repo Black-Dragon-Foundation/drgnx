@@ -1,0 +1,28 @@
+[package]
+name = "sattr"
+description = "The extension API (sáttr, an agreement): the hosts for drgnx:api, Luau and WebAssembly components, both generated from the WIT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true # planned: Apache-2.0 after the audit
+publish = false
+build = "build.rs"
+
+[dependencies]
+villa.workspace = true
+mlua.workspace = true
+wasmtime.workspace = true
+
+[build-dependencies]
+villa.workspace = true
+annall.workspace = true
+mal-gen.workspace = true
+eitri = { path = "../../hub/eitri" }
+
+[dev-dependencies]
+saman.workspace = true
+mal.workspace = true
+wit-parser.workspace = true
+
+[lints]
+workspace = true

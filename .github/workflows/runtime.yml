@@ -169,6 +169,11 @@ jobs:
       - name: the standards (cargo xtask standards)
         if: ${{ !cancelled() }}
         run: cargo xtask standards
+      # The extension API's version rule (docs/develop/standards/api-versioning.md): crates/ext/mal/drgnx.wit against the
+      # last tag's; it passes when no tag is fetched
+      - name: the extension API's version (cargo xtask wit-check)
+        if: ${{ !cancelled() }}
+        run: cargo xtask wit-check
       # The pinned model files the tests run the built-in model from (they fail without DRGNX_TEST_MODELS), beside the
       # checkout, not in it (the tests that list a checkout would find them): one cache for Linux and macOS, kept by
       # the list's hash; models.sh checks each restored file's sum and fetches what is missing from Hugging Face at its

@@ -1,0 +1,115 @@
+// The extension API: one WIT package, two hosts (WebAssembly components and Luau), both generated from this file.
+// The rules (crates/ext/mal-gen): only bool, integers, floats, string, enum and `result<T?, enum>` are used so far; a
+// 64-bit integer is exact up to 2^53 in Luau; a function that can fail returns `result<_, error-kind>`. Anything
+// changed or removed here needs a version bump (the xtask's wit-check).
+package drgnx:api@0.1.0;
+
+/// The kinds of failure every interface shares (villa's wire names).
+interface types {
+  enum error-kind {
+    not-found,
+    conflict,
+    unavailable,
+    refused,
+    invalid,
+    cancelled,
+    internal,
+  }
+}
+
+/// The command registry (bod): what an extension offers and what it can run.
+interface commands {
+  use types.{error-kind};
+
+  /// Offer a command: its id, the title the palette shows, and its doc.
+  register: func(id: string, title: string, doc: string) -> result<_, error-kind>;
+  /// Run a command by id with its arguments as one JSON text; the result is JSON text too.
+  run: func(id: string, args: string) -> result<string, error-kind>;
+  /// Where a command is defined, as `file:line`.
+  find-source: func(id: string) -> result<string, error-kind>;
+}
+
+/// The key engine (lykill): chords as text (`C-x C-f`), contexts as the design's expression.
+interface keys {
+  use types.{error-kind};
+
+  /// Bind a chord to a command where the context expression holds (an empty context binds everywhere).
+  bind: func(chord: string, command: string, context: string) -> result<_, error-kind>;
+  /// The command id a chord resolves to in a context, or `prefix` when more keys are needed.
+  resolve: func(chord: string, context: string) -> result<string, error-kind>;
+}
+
+/// The settings stack (skipan); the levels, the least specific first.
+interface settings {
+  use types.{error-kind};
+
+  enum level {
+    built-in,
+    user,
+    machine,
+    project,
+    %stream,
+    language,
+    document,
+    pane,
+  }
+
+  /// A setting's value as text.
+  get: func(key: string) -> result<string, error-kind>;
+  /// Set a setting at a level.
+  set: func(key: string, value: string, at: level) -> result<_, error-kind>;
+  /// Why the setting has its value: the level and, for a file, `file:line`.
+  provenance: func(key: string) -> result<string, error-kind>;
+}
+
+/// The one non-blocking question API (spurn). Choices are separated by newlines until lists are supported.
+interface ask {
+  use types.{error-kind};
+
+  /// Ask; the answer is the chosen choice. A headless host answers the default at once, and so does a question
+  /// that times out (`timeout-ms` 0 waits for the user).
+  choose: func(title: string, body: string, choices: string, default-choice: string, timeout-ms: u32) -> result<string, error-kind>;
+}
+
+/// Notices (tidindi): the same key updates a notice instead of adding one.
+interface notices {
+  use types.{error-kind};
+
+  enum level {
+    info,
+    warning,
+    error,
+  }
+
+  /// Post a notice; the result is its id.
+  post: func(at: level, title: string, body: string, key: string) -> result<u64, error-kind>;
+  /// Remove a notice by its id.
+  dismiss: func(id: u64) -> result<_, error-kind>;
+}
+
+/// Declared empty until the editing model lands.
+interface buffers {}
+
+/// Declared empty until the editing model lands.
+interface views {}
+
+interface entry {
+  use types.{error-kind};
+
+  /// Called once after instantiation: the extension registers its commands.
+  init: func();
+  /// Run a command the extension registered, on a buffer.
+  run: func(name: string, buffer: u64) -> result<_, error-kind>;
+}
+
+world extension {
+  import types;
+  import commands;
+  import keys;
+  import settings;
+  import ask;
+  import notices;
+  import buffers;
+  import views;
+  export entry;
+}

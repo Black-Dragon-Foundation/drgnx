@@ -1,0 +1,11 @@
+[package]
+name = "mal"
+description = "The extension API's WIT package, drgnx:api (the one definition both hosts are generated from)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true # planned: Apache-2.0 after the audit
+publish = false
+
+[lints]
+workspace = true

@@ -3,6 +3,7 @@
 mod measure;
 mod sandbox;
 mod standards;
+mod wit;
 
 use std::process::ExitCode;
 
@@ -12,6 +13,7 @@ fn main() -> ExitCode {
         Some("measure") => measure::run(args.collect()),
         Some("standards") => standards::run(args.collect()),
         Some("test-sandbox") => sandbox::run(args.collect()),
+        Some("wit-check") => wit::run(args.collect()),
         Some(other) => Err(format!("unknown task `{other}`\n{USAGE}")),
         None => Err(USAGE.to_string()),
     };
@@ -27,4 +29,5 @@ fn main() -> ExitCode {
 const USAGE: &str = "usage:
   cargo xtask measure <scenario> --out FILE [--base FILE] (--pid PID | --spawn CMD [ARGS])
   cargo xtask standards [--write] [--changed FILE…] [--commit-msg MSGFILE FILE…]
-  cargo xtask test-sandbox [NEXTEST ARGS…]";
+  cargo xtask test-sandbox [NEXTEST ARGS…]
+  cargo xtask wit-check [--root DIR] [--base REF]";
