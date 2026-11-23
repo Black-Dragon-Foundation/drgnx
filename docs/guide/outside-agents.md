@@ -39,7 +39,8 @@ proposals. It works in its own project only, and it follows the matrix like drgn
   you answer. Your yes lets that exact call through once: the agent is told, makes the same call again within the
   card's window (10 minutes by default, `agents-browser-once-window`) and it lands. A call with other arguments is
   another change and asks again; so does the same call after the window or after it went through once. Your no
-  refuses that call for good.
+  refuses that call for the same window, so a no given by mistake is undone by waiting: after the window the
+  agent's retry makes a new card you can answer again.
 - It never marks a task done, approves a record, pushes, merges, starts or steers agents, spends, or changes
   settings, whatever the matrix says for its role.
 - It never runs drgnx jobs: you start those, and drgnx's own agents run them.

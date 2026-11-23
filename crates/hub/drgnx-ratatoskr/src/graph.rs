@@ -1563,7 +1563,8 @@ fn change_of_card(d: &Value) -> Option<(grants::Change, String)> {
 /// An outside agent's change card CARD (data D) settled with CHOICE: `allow` writes, in this tx (the user's: the
 /// guard refuses a grant from anyone else), the grant of exactly that change until the card's `once_window` ends;
 /// the gate lets one retry of it through and spends the card ([`crate::matrix_gate`]).  Any other choice refuses that
-/// change for good.  The agent hears either.  False when the card was not open.
+/// change for the same window; after it the same call asks again.  The agent hears either.  False when the card was
+/// not open.
 fn settle_change(
     tx: &mut WTx<'_>,
     card: i64,
@@ -1587,7 +1588,7 @@ fn settle_change(
             g.id, window
         )
     } else {
-        "refused: do not retry it".to_owned()
+        format!("refused: do not retry it within {window} seconds")
     };
     messages::send(
         tx,
@@ -1675,7 +1676,7 @@ pub async fn settle_with(
                 Some("matrix") if browser => {
                     settle_browser(tx, card, mapped.as_deref().unwrap_or("refuse"), now, &d)
                 }
-                // an outside agent's change is the user's to answer, either way (a no refuses it for good)
+                // an outside agent's change is the user's to answer, either way (a no refuses it for the window)
                 Some("matrix") if !by_user && change_of_card(&d).is_some() => {
                     *lock(&theirs) = Some(Error {
                         code: ErrorCode::NotAllowed,

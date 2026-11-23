@@ -1149,9 +1149,11 @@ its title is `ID wants METHOD on RECORD`; so another call is another card.
   spent (`matrix_gate::change_grant`); it spends the card in the same tx (`cards::matrix_card_spend` sets
   `data.spent` to the tx) and allows. A second call, another change, or one after the window makes a new card.
 - Before a new card, `check` looks for a settled card with the same data (less `once_window`) the user did not allow
-  (`cards::matrix_card_declined`): the call is then Never (`the user refused this change (card N)`), with no card.
+  whose `settled_at` + its `once_window` is still ahead (`cards::matrix_card_declined`): the call is then Never (`the
+  user refused this change (card N)`), with no card. A no lasts that window, as a yes does; after it the same call
+  makes a new card (the way back from a mistaken no).
 - Only the user's `cards/settle` answers such a card (the method is user-class; `settle_with` refuses any other
-  caller too, so no agent can refuse another's change for good).
+  caller too, so no agent can refuse another's change).
 - A Never verdict (a cap, a cell) is decided before any grant, so a yes never opens one. The card is spent when the
   gate allows, even when a later check of the same write (`task.done`) refuses it.
 

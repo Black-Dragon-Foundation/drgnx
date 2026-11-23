@@ -1152,6 +1152,56 @@ async fn a_yes_ends_with_its_window() {
     assert_eq!(check(now + 1.0).await, Gate::Allow);
 }
 
+/// [Wave 3, the user's call] A no lasts the once window: within it the same change is refused with no card; after it
+/// the retry makes a new card the user can answer again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_no_lasts_the_once_window() {
+    use crate::matrix_gate::Gate;
+    let w = world();
+    let (_a, id, plan) = w.agent_and_users_plan().await;
+    let (who, base) = who_for(&w.f, &agent(&id)).await.unwrap();
+    let ctx = crate::matrix_gate::ActionCtx {
+        change: Some(norn::grants::Change::of(
+            "plans/write",
+            &plan,
+            &retitle(&plan, "x"),
+        )),
+        ..base
+    };
+    let check = |now: f64| {
+        let (g, who, ctx) = (w.f.core.matrix.clone(), who.clone(), ctx.clone());
+        let c = agent(&id);
+        let f = w.f.clone();
+        async move {
+            f.writer
+                .write(&c, "test", move |tx| {
+                    g.check(tx, &who, norn::matrix::Action::GraphChange, &ctx, now)
+                })
+                .await
+                .unwrap()
+        }
+    };
+    let now = crate::clock::wall_secs();
+    let Gate::Ask(n) = check(now).await else {
+        panic!("the change asks first")
+    };
+    w.settle_at(n, "deny", now).await;
+    let window = crate::matrix_gate::DEFAULT_ONCE_WINDOW as f64;
+    let within = check(now + window - 1.0).await;
+    assert!(
+        matches!(&within, Gate::Never(why) if why.contains(&format!("card {n}"))),
+        "{within:?}"
+    );
+    assert_eq!(w.cards().await, 1);
+    let Gate::Ask(m) = check(now + window + 1.0).await else {
+        panic!("an ended no asks again")
+    };
+    assert_ne!(m, n);
+    // the user answers the new card: a yes now lets the change through
+    w.settle_at(m, "allow", now + window + 2.0).await;
+    assert_eq!(check(now + window + 3.0).await, Gate::Allow);
+}
+
 /// [Wave 3 review] Only the user answers an outside agent's change card: another caller's yes or no is refused and
 /// the card stays open.
 #[tokio::test(flavor = "multi_thread")]
