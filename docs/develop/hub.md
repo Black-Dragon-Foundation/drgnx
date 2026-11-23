@@ -1655,9 +1655,6 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string} \| {lang?: string, mode: "pattern", pattern: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
 | `search/saved/share` | user | `{name: string, root: AbsPath}` | `{path: AbsPath}` | yes |
 | `search/scope-bases` | user | `{root: AbsPath}` | `{current?: string, default?: string, detached: boolean, recent: [string], upstream?: string}` | no |
-| `search/server-plan` | user | `{kind: "tei" \| "ollama"}` | `ServerPlan` | no |
-| `search/server-start` | user | `{confirm: boolean, kind: "tei" \| "ollama"}` | `{provider: ProviderEntry, started: boolean, unit: string}` | no |
-| `search/server-stop` | user | `{kind: "tei" \| "ollama"}` | `{stopped: boolean}` | no |
 | `search/status` | user | `{root: AbsPath}` | `StatusAnswer` | no |
 | `search/symbol-at` | user | `{file: string, line: natnum, root: AbsPath}` | `{name?: string}` | no |
 | `search/symbols` | user | `{base?: boolean, k?: natnum, kind?: [string], match?: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", name: string, path?: string, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code"}` | `{fresh: Fresh, matched: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", symbols: [SymbolHit]}` | no |

@@ -37,14 +37,16 @@
    (gpt4all :name "GPT4All" :kind openai :url "http://127.0.0.1:4891/v1" :caps (chat))
    (lemonade :name "Lemonade" :kind openai :url "http://127.0.0.1:13305/api/v1" :caps (chat fim embed))
    (llamafile :name "llamafile" :kind openai :url "http://127.0.0.1:8081/v1" :caps (chat fim)) ; its 8080 is TEI's
-   (tei :name "Text Embeddings Inference" :kind tei :url "http://127.0.0.1:8080" :caps (embed))))
+   (tei :name "Text Embeddings Inference" :kind tei :url "http://127.0.0.1:8080" :caps (embed))
+   ;; drgnx's own llama.cpp engine for Hrafn: no URL, the hub starts it once its download was consented
+   (llama :name "drgnx engine" :kind llama :caps (embed))))
 
  ;; Each role's chain when neither the project nor the user names one.
  (drgnx-ai-default-roles
   ((complete (ollama . "qwen2.5-coder:1.5b")) ; fits next to TEI on a 6 GB GPU
    (edit (openrouter . "openrouter/auto") (ollama . "qwen2.5-coder:7b"))
    (chat (openrouter . "openrouter/auto") (ollama . "qwen2.5-coder:7b"))
-   (embed (tei))
+   (embed (llama))
    (agent (openrouter)))) ; the gateway's chain for agents; nil model: the agent's own
 
  ;; Profiles drgnx offers without setup; :ai names the provider environment the agent gets when it starts

@@ -954,7 +954,8 @@ const EMBED_NOTICE: &str = "embed-chain";
 /// The entity embedder (`embed`, Task 192): the embed role's chain in the user's order ([`crate::embed::ordered`]),
 /// stepped on its own task when the store is ready and [`crate::embed::Driver::wants`] it, one step at a time.  A step
 /// probes the down embedders whose backoff is over and runs a round after a quiet minute while one answers.  Each
-/// change of state is one log line, and the Notices row follows the chain.  It never starts a provider.
+/// change of state is one log line, and the Notices row follows the chain.  It never starts a provider; the local engine
+/// (MP-17), a process of the hub's own, starts when the chain asks it for vectors, once its download was consented.
 fn embed_idle(front: &Arc<Front>) {
     let Some(g) = front.tools.graph() else { return };
     let st = g.writer.status();
@@ -999,7 +1000,14 @@ fn embed_idle(front: &Arc<Front>) {
         for p in &providers {
             let _ = crate::search::DocEmbedder::probe(p).await;
         }
-        let entries = crate::embed::ordered(&steps, providers, builtin, search_builtin);
+        // the local engine, when the role names it and it may run (its download consented and in place)
+        let engine = front
+            .search
+            .engine(&front)
+            .await
+            .map(|(id, e)| (id, e as Arc<dyn urdr::graph::search::Embedder>));
+        let engine = engine.as_ref().map(|(id, e)| (id.as_str(), e.clone()));
+        let entries = crate::embed::ordered(&steps, providers, engine, builtin, search_builtin);
         let mut guard = guard;
         let driver = guard.get_or_insert_with(|| crate::embed::Driver::new(now));
         if retry {

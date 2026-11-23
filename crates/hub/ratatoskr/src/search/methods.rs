@@ -10,13 +10,15 @@
 //! - **A query** refreshes tier 1 when the files changed, picks the model (`search::prefer`: a server that answers and
 //!   covers 95 % of the chunks, else the built-in model), embeds the question with it and asks `hrafn::search`. With no
 //!   model the answer is keyword, symbol and path results at once, and says why.
-//! - **The embedders** of a project are the built-in model's worker (when `drgnx-search-builtin` is on and the model is
-//!   `Ready`) and the servers the gateway has. A change in that set opens the project again.
+//! - **The embedders** of a project are the local engine (when the `embed` role names it and its download was
+//!   consented and is in place), the servers the gateway has, and the built-in model's worker (when
+//!   `drgnx-search-builtin` is on and the model is `Ready`). A change in that set opens the project again.
 
+use super::engine::LocalEngine;
 use super::project::{Project, ProjectError, ProjectSpec, Tier2, ViewOf, project_id};
 use super::saved::Saved;
 use super::worker::WorkerEmbedder;
-use super::{DocEmbedder, Search, download, power, prefer, saved, scope, servers};
+use super::{DocEmbedder, Search, download, power, prefer, saved, scope};
 use crate::clock;
 use crate::dispatch::Caller;
 use crate::embed::ProviderEmbedder;
@@ -26,6 +28,7 @@ use hrafn_embed::cache::{ModelState, model_dir, state};
 use hrafn_embed::fingerprint::{Fingerprint, Identity};
 use hrafn_embed::{default_model, download_bytes};
 use runstav::methods::Params;
+use runstav::methods::gateway::ProviderKind;
 use runstav::methods::search as w;
 use runstav::paths::{self, Env};
 use runstav::wire::{Error, ErrorCode};
@@ -270,6 +273,39 @@ impl Hub {
         self.search.get()?.builtin()
     }
 
+    /// The local engine and the provider id its step goes by, when the `embed` role names a provider of kind `llama`
+    /// and the engine may run: its download was consented and its files are in the cache. None otherwise, so a chain
+    /// that names it falls through.
+    pub async fn engine(&self, front: &Front) -> Option<(String, Arc<LocalEngine>)> {
+        let id = {
+            let current = front.settings.current();
+            let values = &current.loaded.values;
+            let defaults = crate::settings::defaults();
+            let steps =
+                crate::settings::providers::role_chain(&values.ai_roles, &defaults.roles, "embed");
+            let providers =
+                crate::settings::providers::effective(&defaults.presets, &values.ai_providers);
+            steps.into_iter().find_map(|s| {
+                providers
+                    .iter()
+                    .any(|p| p.id == s.provider && p.kind == Some(ProviderKind::Llama))
+                    .then_some(s.provider)
+            })?
+        };
+        let dirs = self.dirs().ok()?;
+        let gguf = hrafn_embed::default_gguf();
+        let consented = super::stored_engine_consent(&dirs.runtime)
+            .await
+            .is_some_and(|c| c.model == gguf.id);
+        match self.search.get()?.engine(consented) {
+            Ok(e) => Some((id, e)),
+            Err(why) => {
+                tracing::debug!("search: no local engine: {}", why.0);
+                None
+            }
+        }
+    }
+
     /// `status.watch`: the inotify budget and each open project's watches.
     pub fn watch_status(&self) -> runstav::methods::hub::WatchStatus {
         use runstav::methods::hub::{ProjectWatch, WatchStatus};
@@ -446,6 +482,11 @@ impl Hub {
         // what each embedder proves now: the project is another one when a fingerprint changes (a server swapped for
         // another model), and a server that does not answer has none
         let mut fingerprints: Vec<String> = Vec::new();
+        // the local engine first, when the role names it and it may run (it knows its fingerprint without a start)
+        if let Some((_, e)) = self.engine(front).await {
+            fingerprints.push(format!("engine:{}", e.identity().fp.hex()));
+            embedders.push(e);
+        }
         for (i, s) in self.servers(front).into_iter().enumerate() {
             fingerprints.push(
                 self.probed(&s)
@@ -613,6 +654,32 @@ impl Hub {
         let mut labels: HashMap<Fingerprint, String> = HashMap::new();
         let mut ids: HashMap<Fingerprint, Identity> = HashMap::new();
         let mut down: Vec<String> = Vec::new();
+        // the local engine is asked as a server is: first, when it covers enough or is the only way to vectors
+        if let Some((_, e)) = self.engine(front).await {
+            let id = e.identity();
+            let lag = p.lag(Some(&id)).await.map_err(project_error)?;
+            ids.insert(id.fp, id.clone());
+            let up = if covers(&lag) || builtin_id.is_none() {
+                match e.embed_query(text, Some(scope.instruction())).await {
+                    Ok(v) => {
+                        qvecs.insert(id.fp, v);
+                        true
+                    }
+                    Err(why) => {
+                        tracing::debug!(
+                            "search: the local engine did not answer the question: {}",
+                            why.0
+                        );
+                        down.push(id.label.clone());
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+            labels.insert(id.fp, id.label);
+            infos.push((id.fp, lag, up));
+        }
         for s in self.servers(front) {
             // a server states its model now (a probe of the last few seconds counts): another model under the same
             // URL is another fingerprint, with its own vectors
@@ -1265,6 +1332,9 @@ impl Hub {
         p: w::DownloadParams,
     ) -> Result<w::Started, Error> {
         let dirs = self.dirs()?;
+        if p.model.as_str() == hrafn_embed::default_gguf().id {
+            return self.engine_download(front, p).await;
+        }
         let spec = super::model(p.model.as_str()).ok_or_else(|| {
             error(
                 ErrorCode::InvalidParams,
@@ -1337,60 +1407,99 @@ impl Hub {
         Ok(w::Started { started: true })
     }
 
-    /// `search/server-plan`: what a start would run. The host is read, nothing runs.
-    async fn server_plan(&self, kind: w::ServerKind) -> Result<w::ServerPlan, Error> {
-        let env = self.dirs()?.env.clone();
-        let host = crate::clock::blocking(move || servers::Host::probe(&env))
-            .await
-            .map_err(internal)?;
-        Ok(servers::plan(&host, kind))
-    }
-
-    /// `search/server-start`: the only door to [`servers::start`].
-    async fn server_start(&self, p: w::ServerStartParams) -> Result<w::ServerStarted, Error> {
-        self.server_job(move |host, run| servers::start(host, run, p.kind, p.confirm))
-            .await
-    }
-
-    /// `search/server-stop`: the only door to [`servers::stop`].
-    async fn server_stop(&self, kind: w::ServerKind) -> Result<w::ServerStopped, Error> {
-        let stopped = self
-            .server_job(move |host, run| servers::stop(host, run, kind))
-            .await?;
-        Ok(w::ServerStopped { stopped })
-    }
-
-    /// F on a probed host and the runner (the real tools; with test-hooks one that records and runs nothing), off the
-    /// async threads.
-    async fn server_job<T: Send + 'static>(
+    /// `search/model-download` of the engine's GGUF: the GGUF and this machine's engine asset under one consent, whose
+    /// bytes are their sum. The consent is stored first (the engine runs only with it), then both are fetched, the
+    /// GGUF from the model host (or the mirror), the asset from its pinned URL.
+    async fn engine_download(
         &self,
-        f: impl FnOnce(&servers::Host, &dyn servers::Run) -> Result<T, servers::Refused>
-        + Send
-        + 'static,
-    ) -> Result<T, Error> {
-        let env = self.dirs()?.env.clone();
-        crate::clock::blocking(move || {
-            let host = servers::Host::probe(&env);
-            #[cfg(feature = "test-hooks")]
-            let run = servers::Record(
-                PathBuf::from(env.vars.get("XDG_STATE_HOME").cloned().unwrap_or_default())
-                    .join("drgnx/servers-test.log"),
-            );
-            #[cfg(not(feature = "test-hooks"))]
-            let run = servers::System;
-            f(&host, &run)
-        })
-        .await
-        .map_err(internal)?
-        .map_err(|r| match r {
-            servers::Refused::Confirm => error(
+        front: &Front,
+        p: w::DownloadParams,
+    ) -> Result<w::Started, Error> {
+        let dirs = self.dirs()?;
+        let gguf = hrafn_embed::default_gguf();
+        let asset = hrafn_embed::engine_here().ok_or_else(|| {
+            error(
+                ErrorCode::NotAllowed,
+                "drgnx pins no llama.cpp build for this machine",
+                Some("model"),
+            )
+        })?;
+        let total = gguf.bytes + asset.bytes;
+        if p.consent.bytes != total {
+            return Err(error(
                 ErrorCode::InvalidParams,
-                "starting a server needs the user's confirmation (confirm: true)",
-                Some("confirm"),
-            ),
-            servers::Refused::Unavailable(why) => error(ErrorCode::NotAllowed, why, Some("kind")),
-            servers::Refused::Failed(why) => internal(why),
-        })
+                format!(
+                    "the consent names {} bytes; the engine and its model are {total} bytes",
+                    p.consent.bytes
+                ),
+                Some("consent.bytes"),
+            ));
+        }
+        let base = super::model_base(
+            front
+                .settings
+                .current()
+                .loaded
+                .values
+                .search_model_mirror
+                .as_deref(),
+        )
+        .map_err(|m| error(ErrorCode::InvalidParams, m, None))?;
+        {
+            let mut d = self
+                .download
+                .lock()
+                .map_err(|_| internal("download state"))?;
+            if d.running {
+                return Ok(w::Started { started: false });
+            }
+            *d = Download {
+                running: true,
+                have: 0,
+                total,
+                failed: None,
+            };
+        }
+        let consent = super::Consent {
+            model: gguf.id.to_string(),
+            bytes: total,
+            at: clock::wall_secs(),
+        };
+        super::store_engine_consent(&dirs.runtime, &consent).await;
+        let (state, projects) = (self.download.clone(), self.projects.clone());
+        let models = super::models_root(&dirs.env);
+        let engine_dir = super::engine_install::dir_for(&paths::cache_dir(&dirs.env), asset);
+        clock::spawn("search:download", async move {
+            let held = |have: u64| {
+                if let Ok(mut d) = state.lock() {
+                    d.have = have;
+                }
+            };
+            let asset_consent = super::Consent {
+                model: asset.id(),
+                bytes: asset.bytes,
+                at: consent.at,
+            };
+            let result = match super::download_gguf(gguf, &models, &base, &held).await {
+                Ok(()) => super::engine_install::install_with(
+                    asset,
+                    &asset_consent,
+                    &engine_dir,
+                    &|have| held(gguf.bytes + have),
+                )
+                .await
+                .map(|_| ()),
+                Err(e) => Err(e),
+            };
+            if let Ok(mut d) = state.lock() {
+                d.running = false;
+                d.failed = result.as_ref().err().map(|e| format!("{e:?}"));
+            }
+            if result.is_ok() {
+                projects.lock().await.clear();
+            }
+        });
+        Ok(w::Started { started: true })
     }
 
     async fn typing(&self) {
@@ -1526,9 +1635,6 @@ pub async fn serve(
             Ok(json!(true))
         }
         Params::SearchModelDownload(d) => hub.model_download(front, d).await.map(|s| json!(s)),
-        Params::SearchServerPlan(k) => hub.server_plan(k.kind).await.map(|p| json!(p)),
-        Params::SearchServerStart(s) => hub.server_start(s).await.map(|r| json!(r)),
-        Params::SearchServerStop(k) => hub.server_stop(k.kind).await.map(|r| json!(r)),
         Params::SearchSymbolAt(a) => symbol_at(a).await.map(|s| json!(s)),
         Params::SearchSymbols(a) => hub.symbols(front, a).await.map(|s| json!(s)),
         Params::SearchOutline(a) => hub.outline(front, a).await.map(|o| json!(o)),

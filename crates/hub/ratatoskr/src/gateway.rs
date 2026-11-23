@@ -1110,6 +1110,7 @@ fn provider(c: &ProviderConfig) -> Result<Provider, String> {
             ProviderKind::Llamacpp => Kind::Llamacpp,
             ProviderKind::Tei => Kind::Tei,
             ProviderKind::Anthropic => Kind::Anthropic,
+            ProviderKind::Llama => Kind::Llama,
         },
         base,
         auth: match c.auth {

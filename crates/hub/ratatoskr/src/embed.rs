@@ -1011,12 +1011,15 @@ pub fn notice_text(chain: &Chain, labels: &[Label]) -> Option<String> {
     })
 }
 
-/// The role's chain in the user's order (Task 192): each step of STEPS that names a server of SERVERS (by provider
-/// id) or `builtin` (the built-in model, BUILTIN when it is ready), nothing else and nothing reordered; the built-in
-/// model goes last only when no step names it and SEARCH_BUILTIN is on.
+/// The role's chain in the user's order (Task 192): each step of STEPS that names a server of SERVERS on this machine
+/// (by provider id), the local engine (ENGINE: its provider id and the engine, when it may run) or `builtin` (the
+/// built-in model, BUILTIN when it is ready), nothing else and nothing reordered; the built-in model goes last only when
+/// no step names it and SEARCH_BUILTIN is on. A server elsewhere never gets a place (MP-17: work-graph text goes to no
+/// remote source, whatever the role names).
 pub fn ordered(
     steps: &[crate::settings::ChainStep],
     servers: Vec<ProviderEmbedder>,
+    engine: Option<(&str, std::sync::Arc<dyn Embedder>)>,
     builtin: Option<std::sync::Arc<dyn Embedder>>,
     search_builtin: bool,
 ) -> Vec<(Label, std::sync::Arc<dyn Embedder>)> {
@@ -1024,10 +1027,27 @@ pub fn ordered(
         model: e.model(),
         label: "the built-in model".to_owned(),
     };
-    let mut servers: Vec<Option<ProviderEmbedder>> = servers.into_iter().map(Some).collect();
+    let mut servers: Vec<Option<ProviderEmbedder>> = servers
+        .into_iter()
+        .filter(|s| is_loopback(&s.base))
+        .map(Some)
+        .collect();
+    let mut engine = engine;
     let mut out: Vec<(Label, std::sync::Arc<dyn Embedder>)> = Vec::new();
     let mut placed = false;
     for s in steps {
+        if engine.as_ref().is_some_and(|(id, _)| *id == s.provider)
+            && let Some((_, e)) = engine.take()
+        {
+            out.push((
+                Label {
+                    model: e.model(),
+                    label: "the local engine".to_owned(),
+                },
+                e,
+            ));
+            continue;
+        }
         if s.provider == BUILTIN_STEP {
             if let Some(b) = &builtin
                 && !placed
@@ -1879,7 +1899,7 @@ pub(crate) mod tests {
             model: None,
         };
         let models = |steps: &[crate::settings::ChainStep], on: bool| {
-            ordered(steps, servers(), Some(builtin.clone()), on)
+            ordered(steps, servers(), None, Some(builtin.clone()), on)
                 .into_iter()
                 .map(|(l, e)| {
                     assert_eq!(l.model, e.model());
@@ -1901,9 +1921,56 @@ pub(crate) mod tests {
         assert_eq!(models(&[step("a")], true), ["unprobed:a", "builtin"]);
         // an unknown step adds nothing
         assert_eq!(models(&[step("nope"), step("c")], false), ["unprobed:c"]);
-        let labels = ordered(&mid, servers(), Some(builtin.clone()), false);
+        let labels = ordered(&mid, servers(), None, Some(builtin.clone()), false);
         assert_eq!(labels[0].0.label, "TEI at 127.0.0.1:80b");
         assert_eq!(labels[1].0.label, "the built-in model");
+    }
+
+    #[test]
+    fn default_embed_role_is_llama() {
+        let d = crate::settings::defaults();
+        let chain = crate::settings::providers::role_chain(&[], &d.roles, "embed");
+        let names: Vec<&str> = chain.iter().map(|s| s.provider.as_str()).collect();
+        assert_eq!(names, ["llama"]);
+        let kind = |id: &str| d.presets.iter().find(|p| p.id == id).and_then(|p| p.kind);
+        assert_eq!(
+            kind("llama"),
+            Some(runstav::methods::gateway::ProviderKind::Llama)
+        );
+        assert_eq!(
+            kind("tei"),
+            Some(runstav::methods::gateway::ProviderKind::Tei),
+            "TEI stays a provider"
+        );
+        let llama = d.presets.iter().find(|p| p.id == "llama").unwrap();
+        assert_eq!(llama.url, None, "the engine has no URL");
+        assert_eq!(llama.caps, ["embed"]);
+    }
+
+    /// MP-17: the entity chain is the local engine, the built-in model and servers on this machine; a server elsewhere
+    /// (a remote source) never gets a place in it, whatever the role names.
+    #[test]
+    fn entity_chain_has_no_remote_vectors_source() {
+        let near = ProviderEmbedder::tei(1, "t".into(), "near", "http://127.0.0.1:8080");
+        let far = ProviderEmbedder::tei(1, "t".into(), "far", "https://vectors.example.com");
+        let engine: std::sync::Arc<dyn Embedder> = std::sync::Arc::new(Toy::new("engine", true));
+        let builtin: std::sync::Arc<dyn Embedder> = std::sync::Arc::new(Toy::new("builtin", true));
+        let step = |p: &str| crate::settings::ChainStep {
+            provider: p.into(),
+            model: None,
+        };
+        let steps = [step("far"), step("llama"), step("near"), step("builtin")];
+        let got: Vec<String> = ordered(
+            &steps,
+            vec![far, near],
+            Some(("llama", engine)),
+            Some(builtin),
+            false,
+        )
+        .into_iter()
+        .map(|(l, _)| l.model)
+        .collect();
+        assert_eq!(got, ["engine", "unprobed:near", "builtin"]);
     }
 
     #[tokio::test]
