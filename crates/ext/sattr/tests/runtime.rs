@@ -895,7 +895,7 @@ fn a_guests_fuel_is_renewed_for_each_call() {
 // lists: a round trip, an empty list, and a list over the limit, in both hosts
 #[test]
 fn a_list_round_trips_may_be_empty_and_is_refused_over_the_limit_in_both_hosts() {
-    let (api, _ex) = editor();
+    let (api, ex) = editor();
     let h = luau(&api, "lists");
     run(
         &h,
@@ -961,7 +961,24 @@ fn a_list_round_trips_may_be_empty_and_is_refused_over_the_limit_in_both_hosts()
     assert!(d.args.is_empty());
     c.id = "huge".into();
     c.args = (0..1_000_000).map(|i| format!("a{i}: x")).collect();
-    let e = CommandsHost::register(&mut w, c).expect_err("a trap");
+    let e = CommandsHost::register(&mut w, c.clone()).expect_err("a trap");
+    assert!(e.to_string().contains("longer than"), "{e}");
+    // and through a real guest's own store, which is where the limit comes from in production
+    let engine = wasm::engine().expect("engine");
+    let linker = wasm::linker::<Editor>(&engine).expect("links");
+    let clock = wasm::ticker(&ex, engine.clone());
+    let component = guest::component(&engine, &guest::spin());
+    let mut g = wasm::Guest::instantiate(
+        &engine,
+        &linker,
+        &component,
+        &api,
+        "guest-lists",
+        LIMITS,
+        &clock,
+    )
+    .expect("instantiates");
+    let e = CommandsHost::register(g.imports(), c).expect_err("the store's limit refuses it");
     assert!(e.to_string().contains("longer than"), "{e}");
     assert!(
         saman::lock(&api)
