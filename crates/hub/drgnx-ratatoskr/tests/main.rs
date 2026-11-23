@@ -11,6 +11,7 @@ mod hub_reads_its_clock;
 mod packs_sync;
 mod runners_orders;
 mod sandbox_check;
+mod search_cache;
 mod search_download;
 mod search_eval_sources;
 mod search_fingerprint;

@@ -593,7 +593,7 @@ impl Hub {
             .as_ref()
             .and_then(|b| DocEmbedder::identity(b.as_ref()));
         let builtin_lag = match &builtin_id {
-            Some(id) => Some(p.lag(Some(&id.fp.hex())).await.map_err(project_error)?),
+            Some(id) => Some(p.lag(Some(id)).await.map_err(project_error)?),
             None => None,
         };
         let covers = |l: &Lag| {
@@ -603,6 +603,7 @@ impl Hub {
         let mut infos: Vec<(Fingerprint, Lag, bool)> = Vec::new();
         let mut qvecs: HashMap<Fingerprint, Vec<f32>> = HashMap::new();
         let mut labels: HashMap<Fingerprint, String> = HashMap::new();
+        let mut ids: HashMap<Fingerprint, Identity> = HashMap::new();
         let mut down: Vec<String> = Vec::new();
         for s in self.servers(front) {
             // a server states its model now (a probe of the last few seconds counts): another model under the same
@@ -611,7 +612,8 @@ impl Hub {
                 down.push(s.provider().to_owned());
                 continue;
             };
-            let lag = p.lag(Some(&id.fp.hex())).await.map_err(project_error)?;
+            let lag = p.lag(Some(&id)).await.map_err(project_error)?;
+            ids.insert(id.fp, id.clone());
             // only a server that could win is asked: one that covers enough, or the only way to vectors
             let up = if covers(&lag) || builtin_id.is_none() {
                 match s.embed_query(text, Some(scope.instruction())).await {
@@ -644,13 +646,14 @@ impl Hub {
         );
         if let Some(i) = &builtin_id {
             labels.insert(i.fp, i.label.clone());
+            ids.insert(i.fp, i.clone());
         }
         let mut notice = None;
-        let qvec: Option<(String, Vec<f32>)> = match chosen {
-            Some(m) if qvecs.contains_key(&m) => qvecs.remove(&m).map(|v| (m.hex(), v)),
+        let qvec: Option<(Fingerprint, Vec<f32>)> = match chosen {
+            Some(m) if qvecs.contains_key(&m) => qvecs.remove(&m).map(|v| (m, v)),
             Some(m) => match &builtin {
                 Some(b) => match b.embed_query(text, None).await {
-                    Ok(v) => Some((m.hex(), v)),
+                    Ok(v) => Some((m, v)),
                     Err(e) => {
                         notice = Some(format!("the built-in model did not answer: {}", e.0));
                         None
@@ -674,12 +677,20 @@ impl Hub {
             path_weight: hrafn::query::PATH_WEIGHT,
             dir_weight: hrafn::query::DIR_WEIGHT,
         };
+        // the chosen fingerprint's cache (its identity is the one a server or the built-in model proved above)
+        let qvec = match qvec {
+            Some((m, v)) => match ids.get(&m) {
+                Some(id) => Some((p.cache(id).await.map_err(project_error)?, v)),
+                None => None,
+            },
+            None => None,
+        };
         let (pr, at) = (p.clone(), of.root.clone());
         let mut a = hrafn::search(
             p.store(),
             &q,
             of.view,
-            qvec.as_ref().map(|(m, v)| (m.as_str(), v.as_slice())),
+            qvec.as_ref().map(|(c, v)| (c.as_ref(), v.as_slice())),
             &move |rel: &str| pr.read_now_in(&at, rel),
         )
         .await
@@ -1006,7 +1017,7 @@ impl Hub {
 
     async fn status(&self, front: &Front, root: &Path) -> Result<w::StatusAnswer, Error> {
         let p = self.project(front, root).await?;
-        let (per_class, models) = p
+        let per_class = p
             .store()
             .handle()
             .read(|c| {
@@ -1025,29 +1036,41 @@ impl Hub {
                         })
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
-                let mut st =
-                    c.prepare("select model, count(*) from vec group by model order by model")?;
-                let models = st
-                    .query_map([], |r| {
-                        Ok(w::ModelCount {
-                            model: r.get(0)?,
-                            label: None,
-                            vectors: r.get::<_, i64>(1)?.try_into().unwrap_or(0),
-                        })
-                    })?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok((classes, models))
+                Ok(classes)
             })
             .await
             .map_err(internal)?;
+        // the vectors of this project's keys in each cache the hub has open (one per fingerprint)
+        let mut models: Vec<w::ModelCount> = Vec::new();
+        for cache in p.caches().opened().await {
+            let n: i64 = p
+                .store()
+                .attach_cache(cache.path(), |c| {
+                    Ok(c.query_row(
+                        "select (select count(*) from vc.chunk_vec v
+                                  where exists (select 1 from chunk c where c.key = v.key and c.embed = 1))
+                              + (select count(*) from vc.path_vec v
+                                  where exists (select 1 from path_key p where p.key = v.key))",
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .map_err(internal)?;
+            if n > 0 {
+                models.push(w::ModelCount {
+                    model: cache.fp_hex().to_string(),
+                    label: None,
+                    vectors: n.try_into().unwrap_or(0),
+                });
+            }
+        }
+        models.sort_by(|a, b| a.model.cmp(&b.model));
         let builtin = self.builtin();
         let builtin_id = builtin
             .as_ref()
             .and_then(|b| DocEmbedder::identity(b.as_ref()));
-        let lag = p
-            .lag(builtin_id.as_ref().map(|i| i.fp.hex()).as_deref())
-            .await
-            .map_err(project_error)?;
+        let lag = p.lag(builtin_id.as_ref()).await.map_err(project_error)?;
         // the labels of the fingerprints that have vectors: the models this hub's embedders state now
         let mut known: HashMap<String, String> = HashMap::new();
         if let Some(i) = &builtin_id {

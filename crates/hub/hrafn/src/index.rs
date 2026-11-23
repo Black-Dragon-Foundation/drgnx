@@ -7,6 +7,7 @@
 //! set, the least recently referenced going first. A path has a vector too ([`crate::path_key`], `vec.kind` 1): tier 1
 //! keeps the base's `path_key` rows with its file rows, so a move embeds the new path's key and no chunk.
 
+use crate::cache::VectorCache;
 use crate::chunk::{BUDGET, CHUNKER_VERSION, PARSE_VERSION, chunk_file_refs, embed_text_and_key};
 use crate::files::Listed;
 use crate::memo;
@@ -246,7 +247,7 @@ pub async fn refresh(
     store: &CodeStore,
     listed: &[Listed],
     read: &(dyn Fn(&str) -> io::Result<Vec<u8>> + Sync),
-    models: &[(&str, usize)],
+    caches: &[&VectorCache],
 ) -> Result<Refresh, StoreError> {
     let before: i64 = store
         .handle()
@@ -256,7 +257,7 @@ pub async fn refresh(
             Ok(v)
         })
         .await?;
-    let out = refresh_files(store, listed, read, models).await;
+    let out = refresh_files(store, listed, read, caches).await;
     store
         .handle()
         .read(move |c| {
@@ -276,7 +277,7 @@ async fn refresh_files(
     store: &CodeStore,
     listed: &[Listed],
     read: &(dyn Fn(&str) -> io::Result<Vec<u8>> + Sync),
-    models: &[(&str, usize)],
+    caches: &[&VectorCache],
 ) -> Result<Refresh, StoreError> {
     let stamp = crate::chunk::lang_stamp();
     let (known, flags, chunker, parse, langs) = store
@@ -407,17 +408,9 @@ async fn refresh_files(
             .await?;
         store.meta_set(META_LANGS, &stamp).await?;
     }
-    let models: Vec<String> = models.iter().map(|(m, _)| m.to_string()).collect();
-    out.keys_missing = store
-        .handle()
-        .read(move |c| {
-            let mut n = 0u32;
-            for m in &models {
-                n = n.saturating_add(count(c, MISSING_KEYS, m)?);
-            }
-            Ok(n)
-        })
-        .await?;
+    if !caches.is_empty() {
+        unimplemented!("keys missing from the cache")
+    }
     Ok(out)
 }
 
@@ -425,21 +418,40 @@ async fn refresh_files(
 /// [`crate::query::DIR_WEIGHT`] gives them a part in the score.
 pub async fn missing(
     store: &CodeStore,
-    model: &str,
+    cache: &VectorCache,
     limit: u32,
 ) -> Result<Vec<(KeyKind, [u8; 32], String)>, StoreError> {
-    missing_with(store, model, limit, crate::query::DIR_WEIGHT > 0.0).await
+    missing_with(store, cache, limit, crate::query::DIR_WEIGHT > 0.0).await
+}
+
+/// STORE's live key set (the distinct keys of its chunks that want vectors, and its `path_key` rows) reported to CACHE
+/// as the diff against what the cache last recorded for it, with ROOT its checkout and NOW (milliseconds) the time.
+pub async fn hold(
+    store: &CodeStore,
+    cache: &VectorCache,
+    root: &std::path::Path,
+    now: i64,
+) -> Result<(), StoreError> {
+    unimplemented!(
+        "{} {} {} {now}",
+        store.holder_id(),
+        cache.fp_hex(),
+        root.display()
+    )
 }
 
 /// Up to `limit` keys MODEL lacks, with the text to embed: the chunk keys in chunk order, each file's path key after its
 /// chunks' (and, with DIRS, its directories' keys after it), then the path keys of files whose chunks have vectors.
 pub async fn missing_with(
     store: &CodeStore,
-    model: &str,
+    cache: &VectorCache,
     limit: u32,
     dirs: bool,
 ) -> Result<Vec<(KeyKind, [u8; 32], String)>, StoreError> {
-    let model = model.to_string();
+    let model = cache.fp_hex().to_string();
+    if !model.is_empty() {
+        unimplemented!("keys the cache lacks");
+    }
     let limit = limit as usize;
     Ok(store
         .handle()
@@ -714,8 +726,15 @@ pub const LAG_TREE_SQL: &str = "select coalesce(sum(n.sign * n.total), 0), coale
 /// How far behind VIEW's index is for MODEL (none: no model fills tier 2, so nothing is behind on vectors). A
 /// worktree's view is the base's lag plus the delta of its rows, both read through indexes. The counts are kept until
 /// the store changes (`memo.rs`): a query between two index writes counts nothing again.
-pub async fn lag(store: &CodeStore, model: Option<&str>, view: View) -> Result<Lag, StoreError> {
-    let model = model.map(str::to_string);
+pub async fn lag(
+    store: &CodeStore,
+    cache: Option<&VectorCache>,
+    view: View,
+) -> Result<Lag, StoreError> {
+    let model = cache.map(|c| c.fp_hex().to_string());
+    if model.is_some() {
+        unimplemented!("the lag against the cache");
+    }
     let memo = store.memo();
     Ok(store
         .handle()

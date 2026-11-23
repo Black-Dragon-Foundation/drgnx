@@ -383,6 +383,9 @@ pub const KEY_CHUNKS_SQL: &str = concat!(
 /// MODEL's (?1) vector of kind ?2 (`store::KeyKind`) for key ?3: one primary-key probe of `vec`.
 pub const VEC_SQL: &str = "select vec, scale from vec where model = ?1 and kind = ?2 and key = ?3";
 
+/// (Task 12 stub: the cache's path vectors.)
+pub const PATH_VEC_SQL: &str = VEC_SQL;
+
 /// The int8 dot product of the query's values QINTS with the stored vector BLOB (sign bits first, BYTES of them),
 /// dequantised by the vector's own scale.
 fn dot8(blob: &[u8], bytes: usize, qints: &[i8], scale: f64) -> f64 {
@@ -721,9 +724,13 @@ pub async fn search(
     store: &CodeStore,
     q: &Query,
     view: View,
-    qvec: Option<(&str, &[f32])>,
+    qvec: Option<(&crate::cache::VectorCache, &[f32])>,
     now: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Answer, StoreError> {
+    if qvec.is_some() {
+        unimplemented!("the vector route over the cache");
+    }
+    let qvec: Option<(&str, &[f32])> = None;
     let (text, scope, k) = (q.text.clone(), q.scope, q.k.max(1) as usize);
     let weights = (q.path_weight, q.dir_weight);
     let owned = qvec.map(|(m, v)| (m.to_string(), v.to_vec()));
@@ -826,7 +833,7 @@ pub async fn search(
         }
     }
     let model = qvec.map(|(m, _)| m.to_string());
-    let lag = lag(store, model.as_deref(), view).await?;
+    let lag = lag(store, None, view).await?;
     let notice = model
         .is_none()
         .then(|| "no embedding model answered".to_string());

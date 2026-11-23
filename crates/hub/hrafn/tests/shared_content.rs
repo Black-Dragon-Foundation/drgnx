@@ -85,19 +85,18 @@ async fn rows(s: &urdr::Handle, sql: &'static str) -> Vec<Vec<String>> {
 }
 
 /// What the migration must keep: chunk ids with their paths, symbol ids with their names and chunks, the FTS hits of
-/// both tables, and every vector.
+/// both tables. (The vectors went to the machine-wide cache with V8, which drops `vec`.)
 const KEPT: &[&str] = &[
     "select id, path, start, line_start, key, embed_text from chunk order by id",
     "select rowid, name, kind, path, chunk from symbol order by rowid",
     "select rowid from chunk_fts where chunk_fts match 'body:alpha OR body:gamma' order by rowid",
     "select rowid from symbol_fts where symbol_fts match '\"timer\"' order by rowid",
-    "select model, key, vec, scale from vec order by model, key",
     "select path, blob, class from file order by path",
 ];
 
-/// Pattern D. A V2 store opens as V3 with no re-chunk and no re-embed: chunk ids, symbol ids, the FTS hits and the
-/// vectors are as they were, `chunk.blob` and `symbol.blob` are filled from the file's row, and a query finds the same
-/// chunks.
+/// Pattern D. A V2 store opens at the last schema with no re-chunk: chunk ids, symbol ids and the FTS hits are as they
+/// were, `chunk.blob` and `symbol.blob` are filled from the file's row, and a query finds the same chunks; its vectors
+/// are gone with `vec` (V8: the cache holds vectors, and the store is embedded again).
 #[tokio::test]
 async fn v2_store_migrates_keeping_rows_and_vectors() {
     let dir = tempfile::tempdir().unwrap();
@@ -162,8 +161,16 @@ async fn v2_store_migrates_keeping_rows_and_vectors() {
     std::thread::spawn(move || store.shutdown()).join().unwrap();
 
     let s = CodeStore::open(&path).unwrap();
-    // (V7 gives `vec` its kind, every old row a chunk's, and adds `path_key`)
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("7"));
+    // (V7 adds `path_key`; V8 drops `vec`)
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("8"));
+    assert!(
+        rows(
+            s.handle(),
+            "select name from sqlite_master where name = 'vec'"
+        )
+        .await
+        .is_empty()
+    );
     // the references come with the next parse (`PARSE_VERSION`); the migration only makes the table
     assert!(rows(s.handle(), "select path from ref").await.is_empty());
     for (q, b) in KEPT.iter().zip(&before) {

@@ -1,4 +1,4 @@
-use hrafn::{ChunkIn, CodeStore, FileRow, KeyKind, SymbolIn, VecRow, chunk_key, encode_symbol};
+use hrafn::{ChunkIn, CodeStore, FileRow, KeyKind, SymbolIn, chunk_key, encode_symbol};
 
 fn chunk(text: &str, symbols: &str, body: &str) -> ChunkIn {
     ChunkIn {
@@ -98,34 +98,6 @@ fn keys_change_with_the_text_and_its_kind() {
     assert_eq!(a, KeyKind::Chunk.key("text"));
     assert_ne!(a, chunk_key("text2"));
     assert_ne!(a, KeyKind::Path.key("text"), "another version, another key");
-}
-
-#[tokio::test]
-async fn two_models_share_a_key() {
-    let dir = tempfile::tempdir().unwrap();
-    let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
-    s.put_file(file("a.el")).await.unwrap();
-    let c = chunk("(defun a ())", "a", "defun a");
-    let key = c.key;
-    s.replace_chunks("a.el", "b", vec![c], vec![])
-        .await
-        .unwrap();
-    for model in ["m1", "m2"] {
-        s.put_vec(VecRow {
-            model: model.into(),
-            dims: 4,
-            key,
-            bits: 8,
-            vec: vec![1, 2, 3, 4],
-            scale: 1.0,
-            last_used: 1,
-        })
-        .await
-        .unwrap();
-    }
-    assert_eq!(count(&s, "select count(*) from vec").await, 2);
-    assert_eq!(count(&s, "select count(distinct key) from vec").await, 1);
-    assert_eq!(count(&s, "select count(*) from chunk").await, 1);
 }
 
 #[tokio::test]

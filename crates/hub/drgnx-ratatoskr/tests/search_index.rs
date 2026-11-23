@@ -37,10 +37,8 @@ fn exe() -> PathBuf {
 }
 
 /// What the built-in model's vectors are keyed by: its fingerprint (`vec.model` is never the model's name).
-fn model_hex() -> String {
+fn model_id() -> hrafn_embed::fingerprint::Identity {
     drgnx_ratatoskr::search::builtin_identity(hrafn_embed::default_model())
-        .fp
-        .hex()
 }
 
 fn model_dir() -> PathBuf {
@@ -586,7 +584,8 @@ async fn denied_root_refused_and_canary_never_embedded() {
             .unwrap()
     };
     assert_eq!(leaked, 0);
-    let pending = hrafn::missing(p.store(), MODEL, 1000).await.unwrap();
+    let cache = p.cache(&model_id()).await.unwrap();
+    let pending = hrafn::missing(p.store(), &cache, 1000).await.unwrap();
     assert!(pending.iter().all(|(_, _, t)| !t.contains(&canary)));
 }
 
@@ -634,7 +633,7 @@ fn typing_holds_tier2_between_requests() {
         let again = status_until(&p, "typing again", |s| s.tier2 == Tier2::Typing).await;
         assert_eq!(again.embedded, 4, "held between requests, never inside one");
         assert_eq!(
-            p.lag(Some(&model_hex())).await.unwrap().chunks_behind as u64,
+            p.lag(Some(&model_id())).await.unwrap().chunks_behind as u64,
             total - 4
         );
 
@@ -644,7 +643,7 @@ fn typing_holds_tier2_between_requests() {
         }
         let done = status_until(&p, "idle", |s| s.tier2 == Tier2::Idle).await;
         assert_eq!(done.embedded, total);
-        assert_eq!(p.lag(Some(&model_hex())).await.unwrap().chunks_behind, 0);
+        assert_eq!(p.lag(Some(&model_id())).await.unwrap().chunks_behind, 0);
     })
 }
 
