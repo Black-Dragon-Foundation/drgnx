@@ -245,7 +245,11 @@ pub fn for_caller(
                 }
             }
             What::All => star = true,
-            What::Task(_) | What::OptionsGlobal | What::OptionsProject | What::Matrix { .. } => {
+            What::Task(_)
+            | What::Plan(_)
+            | What::OptionsGlobal
+            | What::OptionsProject
+            | What::Matrix { .. } => {
                 continue;
             }
         }

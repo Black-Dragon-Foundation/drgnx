@@ -521,7 +521,24 @@ async fn an_outside_actor_reaches_only_four_methods_through_exec() {
         ),
         ("graph/put-parsed", json!({"gone": []})),
         ("graph/grants", json!({"list": {}})),
+        // a write grant, its edit and its revoke: an outside agent never widens its own rights
+        (
+            "graph/grants",
+            json!({"grant": {"who": "any-outside", "what": "project:1", "access": "task-write", "ops": ["status.done"]}}),
+        ),
+        (
+            "graph/grants",
+            json!({"edit": {"id": "grant:x", "ops": ["status.done"]}}),
+        ),
+        ("graph/grants", json!({"revoke": "grant:x"})),
         ("graph/settings", json!({})),
+        (
+            "graph/settings",
+            json!({"set": {"only_user_closes": false}}),
+        ),
+        ("records/status", json!({})),
+        ("records/conflict", json!({"id": "record:x"})),
+        ("records/resolve", json!({"id": "record:x", "keep": "file"})),
         ("graph/excise", json!({"target": 1, "reason": "x"})),
         ("graph/revert", json!({"tx": 1})),
         ("job/approve", json!({"id": "job-1"})),
@@ -746,6 +763,91 @@ async fn records_write_on_a_users_spec_asks_and_writes_nothing() {
         .unwrap();
     let v: Value = serde_json::from_str(&again).unwrap();
     assert_eq!(v["version"], json!(version));
+}
+
+impl World {
+    /// The user's `task-write` grant for every outside agent of KIND on WHAT, for OPS.
+    async fn write_grant(&self, kind: &str, what: norn::grants::What, ops: &[&str]) {
+        let (who, ops) = (
+            norn::grants::Who::Kind(kind.into()),
+            ops.iter().map(|o| (*o).to_owned()).collect::<Vec<_>>(),
+        );
+        self.f
+            .writer
+            .write(&user(), "graph/grants", move |tx| {
+                Ok(norn::grants::create_task_write(tx, who, what, ops, None)?)
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn only_user_closes(&self, on: bool) {
+        self.f
+            .writer
+            .write(&user(), "graph/settings", move |tx| {
+                crate::graph::put_setting(tx, norn::tracker::ONLY_USER_CLOSES, on)
+            })
+            .await
+            .unwrap();
+    }
+}
+
+/// A user's `status.done` grant for the plan opens the done the matrix keeps Never, for that plan's tasks only, and
+/// "only I close my tasks" makes it inert; with no grant the answer is the matrix's, as before.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_status_done_grant_lets_an_outside_agent_mark_done_under_it() {
+    let w = world();
+    w.bind("claude", &w.root, "manager").await;
+    let a = w.attach(&w.root).await;
+    let mut plans = Vec::new();
+    for rel in ["docs/plans/org/one.md", "docs/plans/org/two.md"] {
+        let written = w.tool(&a.who, "plan_write", w.new_plan(rel)).await.unwrap();
+        plans.push(
+            serde_json::from_str::<Value>(&written).unwrap()["plan"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    let done = |plan: &str| json!({"plan": plan, "tasks": [{"number": "1", "status": "done"}]});
+    let e = w
+        .tool(&a.who, "plan_write", done(&plans[0]))
+        .await
+        .unwrap_err();
+    assert_eq!(e, "task.done is never allowed here");
+    let id = plans[0].clone();
+    w.write_grant("claude", norn::grants::What::Plan(id), &["status.done"])
+        .await;
+    // under the plan: done; the other plan and a codex-kind agent are not covered
+    w.tool(&a.who, "plan_write", done(&plans[0])).await.unwrap();
+    let e = w
+        .tool(&a.who, "plan_write", done(&plans[1]))
+        .await
+        .unwrap_err();
+    assert_eq!(e, "task.done is never allowed here");
+    let status: String = {
+        let p = plans[0].clone();
+        w.f.writer
+            .db
+            .read(move |c| {
+                Ok(c.query_row(
+                    "select t.status from entity t join link l on l.dst = t.n join entity p on p.n = l.src \
+                     where p.id = ?1 and l.kind = 'parent_of' and t.kind = 'task'",
+                    [&p],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap()
+    };
+    assert_eq!(status, "done");
+    // inert while only the user closes
+    w.only_user_closes(true).await;
+    let e = w
+        .tool(&a.who, "plan_write", done(&plans[0]))
+        .await
+        .unwrap_err();
+    assert_eq!(e, "task.done is never allowed here");
 }
 
 /// [MP-2] An outside agent never marks a task done nor approves a record, whatever its role.

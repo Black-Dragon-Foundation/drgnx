@@ -975,6 +975,11 @@ fn what_of(c: &Connection, text: &str) -> Result<Option<What>, urdr::SqliteError
     if text == "*" || text.starts_with("options:") {
         return Ok(What::parse(text));
     }
+    if text.starts_with("plan:") {
+        return Ok(entity::by_id(c, text)?
+            .filter(|e| e.kind == "plan" && e.retired_tx.is_none())
+            .map(|e| What::Plan(e.id)));
+    }
     if text.starts_with("project:") {
         return Ok(project_n(c, text)?.map(What::Project));
     }
@@ -995,6 +1000,7 @@ fn view(g: &grants::Grant, now: f64) -> api::GrantView {
         access: g.access.as_str().to_owned(),
         expires: g.expires,
         names: g.names.clone(),
+        ops: g.ops.clone(),
         status: g.status.clone(),
         active: g.active(now),
     }
@@ -1006,6 +1012,7 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
     if let Some(l) = p.list {
         let who = l.who.map(|s| s.into_inner());
         let active = l.active;
+        let effective = l.effective_for.map(|s| s.into_inner());
         let list = read(w, move |c| {
             let who = match who {
                 Some(t) => {
@@ -1014,7 +1021,25 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
                 None => None,
             };
             let filter = grants::Filter { who, active };
-            Ok(grants::list(c, &StoreCaller::user(), &filter, at)?)
+            let mut list = grants::list(c, &StoreCaller::user(), &filter, at)?;
+            if let Some(actor) = &effective {
+                // the rights of an actor: its active grants (a project or profile grant needs the actor's project)
+                let outside = actor.starts_with("ext:");
+                let caller = StoreCaller {
+                    class: if outside {
+                        urdr::graph::Class::Ext
+                    } else {
+                        urdr::graph::Class::Agent
+                    },
+                    actor: actor.clone(),
+                    session: Some(actor.clone()),
+                    profile: None,
+                    job: None,
+                    project: None,
+                };
+                list.retain(|g| g.active(at) && g.who.matches(&caller));
+            }
+            Ok(list)
         })
         .await?;
         return Ok(json!(api::GrantsAnswer {
@@ -1024,7 +1049,13 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
     }
     // the registry's class check is the first door; this one holds without it
     if caller.class != runstav::registry::Class::User {
-        let path = if p.grant.is_some() { "grant" } else { "revoke" };
+        let path = if p.grant.is_some() {
+            "grant"
+        } else if p.edit.is_some() {
+            "edit"
+        } else {
+            "revoke"
+        };
         return Err(not_allowed(
             path,
             "grants are the user's: an agent's connection never makes or revokes one",
@@ -1036,6 +1067,9 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
         let names: Option<Vec<String>> = g
             .names
             .map(|l| l.into_inner().into_iter().map(|s| s.into_inner()).collect());
+        let ops: Option<Vec<String>> = g
+            .ops
+            .map(|l| l.into_inner().into_iter().map(|s| s.into_inner()).collect());
         let made = w
             .write(caller, "graph/grants", move |tx| {
                 let w = who_of(tx.sql(), &who)?.ok_or_else(|| {
@@ -1045,10 +1079,18 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
                 })?;
                 let x = what_of(tx.sql(), &what)?.ok_or_else(|| {
                     refused(format!(
-                        "no such what: {what} (project:ID or a slug, *, task:ID, options:global or options:project)"
+                        "no such what: {what} (project:ID or a slug, *, task:ID, plan:ID, options:global or options:project)"
                     ))
                 })?;
+                if ops.is_some() && access != api::GrantAccess::TaskWrite {
+                    return Err(refused("only a task-write grant names operations"));
+                }
                 match access {
+                    api::GrantAccess::TaskWrite => {
+                        let ops = ops
+                            .ok_or_else(|| refused("a task-write grant needs ops (--what)"))?;
+                        Ok(grants::create_task_write(tx, w, x, ops, expires)?)
+                    }
                     api::GrantAccess::Options => {
                         Ok(grants::create_options(tx, w, x, names, expires)?)
                     }
@@ -1063,6 +1105,27 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
             .map_err(coord::fail)?;
         return Ok(json!(api::GrantsAnswer {
             grant: Some(view(&made, at)),
+            ..api::GrantsAnswer::default()
+        }));
+    }
+    if let Some(e) = p.edit {
+        let ops: Option<Vec<String>> = e
+            .ops
+            .map(|l| l.into_inner().into_iter().map(|s| s.into_inner()).collect());
+        let expires = if e.clear_expires == Some(true) {
+            Some(None)
+        } else {
+            e.expires.map(Some)
+        };
+        let id = e.id.into_inner();
+        let edited = w
+            .write(caller, "graph/grants", move |tx| {
+                Ok(grants::edit(tx, &id, ops, expires)?)
+            })
+            .await
+            .map_err(coord::fail)?;
+        return Ok(json!(api::GrantsAnswer {
+            edited: Some(edited),
             ..api::GrantsAnswer::default()
         }));
     }
@@ -2611,6 +2674,8 @@ mod tests {
             for p in [
                 json!({"grant": {"who": "session:s1", "what": "*", "access": "read"}}),
                 json!({"revoke": "grant:x"}),
+                json!({"edit": {"id": "grant:x", "ops": ["status.done"]}}),
+                json!({"grant": {"who": "any-outside", "what": "*", "access": "task-write", "ops": ["note"]}}),
             ] {
                 let e = grants_of(&w, &caller, serde_json::from_value(p).unwrap())
                     .await
@@ -2619,6 +2684,88 @@ mod tests {
             }
         }
         assert!(grants_now(&w).await.is_empty());
+    }
+
+    /// The user's write grants: made, listed by the actor they apply to, edited and revoked, each a user-class tx.
+    #[tokio::test]
+    async fn task_write_grants_are_made_listed_edited_and_revoked_as_the_user() {
+        let (_dir, w, a, _b) = fixture().await;
+        let call = |p: Value| {
+            let w = &w;
+            async move { grants_of(w, &user(), serde_json::from_value(p).unwrap()).await }
+        };
+        let made = call(
+            json!({"grant": {"who": "kind:claude", "what": format!("project:{a}"),
+            "access": "task-write", "ops": ["note", "status.done"]}}),
+        )
+        .await
+        .unwrap();
+        let id = made["grant"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(made["grant"]["ops"], json!(["note", "status.done"]));
+        assert_eq!(made["grant"]["who"], "kind:claude");
+        // the grants that apply to one outside agent: its kind's, not another kind's
+        let shown =
+            |actor: &'static str| call(json!({"list": {"effective_for": actor, "active": true}}));
+        assert_eq!(
+            shown("ext:claude:7-ab").await.unwrap()["grants"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            shown("ext:codex:7-ab").await.unwrap()["grants"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        // parked, an unknown who, a write grant without ops, ops on a read grant: refused
+        for p in [
+            json!({"grant": {"who": "any-outside", "what": format!("project:{a}"), "access": "task-write", "ops": ["status.parked"]}}),
+            json!({"grant": {"who": "any-outside", "what": format!("project:{a}"), "access": "task-write"}}),
+            json!({"grant": {"who": "any-outside", "what": format!("project:{a}"), "access": "read"}}),
+            json!({"grant": {"who": "kind:claude", "what": "*", "access": "task-write", "ops": ["note"]}}),
+            json!({"grant": {"who": "session:s", "what": format!("project:{a}"), "access": "read", "ops": ["note"]}}),
+        ] {
+            assert!(call(p.clone()).await.is_err(), "{p}");
+        }
+        let edited = call(json!({"edit": {"id": id, "ops": ["note"], "expires": now() + 3600.0}}))
+            .await
+            .unwrap();
+        assert_eq!(edited["edited"], true);
+        let gs = grants_now(&w).await;
+        assert_eq!(gs.len(), 1);
+        assert_eq!(gs[0].ops.as_deref(), Some(&["note".to_owned()][..]));
+        assert!(gs[0].expires.is_some());
+        let cleared = call(json!({"edit": {"id": id, "clear_expires": true}}))
+            .await
+            .unwrap();
+        assert_eq!(cleared["edited"], true);
+        assert!(grants_now(&w).await[0].expires.is_none());
+        assert_eq!(call(json!({"revoke": id})).await.unwrap()["revoked"], true);
+        assert_eq!(
+            call(json!({"edit": {"id": id, "ops": ["note"]}}))
+                .await
+                .unwrap()["edited"],
+            false
+        );
+        // every change is a user-class tx in the history, and nothing else wrote a grant
+        assert!(
+            count(
+                &w,
+                "select count(*) from tx where class = 'user' and tool = 'proto:graph/grants'"
+            )
+            .await
+                >= 4
+        );
+        assert_eq!(
+            count(
+                &w,
+                "select count(*) from tx where class <> 'user' and tool = 'proto:graph/grants'"
+            )
+            .await,
+            0
+        );
     }
 
     #[tokio::test]

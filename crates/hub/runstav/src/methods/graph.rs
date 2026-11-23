@@ -461,7 +461,8 @@ pub struct ExciseAnswer {
     pub transcripts_redacted: Vec<String>,
 }
 
-/// `project:N` (or `project:SLUG`), `profile:NAME` or `session:SID`.
+/// `project:N` (or `project:SLUG`), `profile:NAME`, `session:SID`, or for a `task-write` grant `agent:ID`, `kind:KIND`
+/// (`claude`, `codex`, …) or `any-outside`.
 pub type GrantWho = Bounded<String, 256>;
 /// `project:N` (or `project:SLUG`), `*`, `task:N` / `task:ID` (an `edit-user-tasks` grant), or `options:global` /
 /// `options:project` (an `options` grant: settings agents may change).
@@ -474,6 +475,8 @@ pub enum GrantAccess {
     EditUserTasks,
     /// Change settings (`options:global` or `options:project`), never a deny-listed one.
     Options,
+    /// Write tasks under a project, a plan or a task: `ops` names the operations.
+    TaskWrite,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -482,6 +485,29 @@ pub struct GrantsList {
     pub who: Option<GrantWho>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<bool>,
+    /// An actor (`ext:KIND:ID`, an agent or session id): only the active grants that apply to it (its effective
+    /// rights; a project or profile grant cannot be matched without the actor's project).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_for: Option<GrantWho>,
+}
+
+/// An operation of a `task-write` grant: `create`, `update.title|body|acceptance|priority|labels`, `status.<status>`,
+/// `note`, `link`, `split` or `claim`.
+pub type GrantOp = Bounded<String, 64>;
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct EditGrant {
+    /// A grant's id (`grant:…`).
+    pub id: Bounded<String, 64>,
+    /// The `task-write` grant's new operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ops: Option<Bounded<Vec<GrantOp>, 32>>,
+    /// A new expiry, unix seconds in the future.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires: Option<f64>,
+    /// Remove the expiry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_expires: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -495,6 +521,9 @@ pub struct NewGrant {
     /// An `options` grant's setting names: globs (`*` only, no `/`); none: every name the deny-list leaves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub names: Option<Bounded<Vec<Bounded<String, 256>>, 64>>,
+    /// A `task-write` grant's operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ops: Option<Bounded<Vec<GrantOp>, 32>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -506,6 +535,8 @@ pub struct GrantsParams {
     /// A grant's id (`grant:…`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revoke: Option<Bounded<String, 64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit: Option<EditGrant>,
 }
 
 /// A grant as the user sees it.
@@ -521,6 +552,9 @@ pub struct GrantView {
     /// An `options` grant's name globs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub names: Option<Vec<String>>,
+    /// A `task-write` grant's operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ops: Option<Vec<String>>,
     /// `active` or `revoked`.
     pub status: String,
     /// Active and not expired now.
@@ -537,6 +571,9 @@ pub struct GrantsAnswer {
     pub grant: Option<GrantView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revoked: Option<bool>,
+    /// Whether an `edit` found an active grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -770,20 +807,36 @@ fn check_excise(p: &ExciseParams) -> Result<(), Error> {
 }
 
 fn check_grants(p: &GrantsParams) -> Result<(), Error> {
-    let n = [p.list.is_some(), p.grant.is_some(), p.revoke.is_some()]
-        .iter()
-        .filter(|x| **x)
-        .count();
+    let n = [
+        p.list.is_some(),
+        p.grant.is_some(),
+        p.revoke.is_some(),
+        p.edit.is_some(),
+    ]
+    .iter()
+    .filter(|x| **x)
+    .count();
     if n != 1 {
         return Err(invalid(
             "list",
-            "graph/grants takes one of list, grant or revoke",
+            "graph/grants takes one of list, grant, revoke or edit",
         ));
     }
     if let Some(g) = &p.grant
         && g.expires.is_some_and(|t| !t.is_finite())
     {
         return Err(invalid("grant.expires", "unix seconds"));
+    }
+    if let Some(e) = &p.edit {
+        if e.expires.is_some_and(|t| !t.is_finite()) {
+            return Err(invalid("edit.expires", "unix seconds"));
+        }
+        if e.expires.is_some() && e.clear_expires == Some(true) {
+            return Err(invalid(
+                "edit.clear_expires",
+                "an expiry or clear_expires, not both",
+            ));
+        }
     }
     Ok(())
 }

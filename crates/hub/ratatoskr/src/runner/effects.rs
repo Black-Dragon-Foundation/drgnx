@@ -726,7 +726,7 @@ pub async fn plans_write(f: &Front, c: &Caller, p: WriteParams) -> Result<PlanWr
         change,
     )
     .await?;
-    may_finish(f, c, &p).await?;
+    may_finish(f, c, &p, &scope).await?;
     if c.class == Class::Agent
         && p.tasks
             .0
@@ -811,14 +811,20 @@ fn live_by_id(conn: &Tx, id: &str) -> Result<Option<Ent>, CoordError> {
 
 /// A task an agent marks `done` is the matrix's `task.done` (never for a worker), not just `graph.change`: the
 /// status is the same fact the review and the user's own close write.
-async fn may_finish(f: &Front, c: &Caller, p: &WriteParams) -> Result<(), Error> {
-    if c.class != Class::Agent
-        || !p
-            .tasks
-            .0
-            .iter()
-            .any(|t| t.status.as_ref().is_some_and(|s| s.as_str() == "done"))
-    {
+async fn may_finish(f: &Front, c: &Caller, p: &WriteParams, scope: &Scope) -> Result<(), Error> {
+    let done: Vec<String> = p
+        .tasks
+        .0
+        .iter()
+        .filter(|t| t.status.as_ref().is_some_and(|s| s.as_str() == "done"))
+        .map(|t| t.number.as_str().to_owned())
+        .collect();
+    if c.class != Class::Agent || done.is_empty() {
+        return Ok(());
+    }
+    // the user's `task-write` grant with `status.done` for every one of them stands in for the matrix's `task.done`
+    // (inert while "only I close my tasks" is on); with none, the matrix decides as before
+    if granted_done(f, c, p, scope, done).await? {
         return Ok(());
     }
     matrix_allows_done(
@@ -829,6 +835,67 @@ async fn may_finish(f: &Front, c: &Caller, p: &WriteParams) -> Result<(), Error>
         "write the plan again once it is settled",
     )
     .await
+}
+
+/// Whether C holds a `status.done` grant ([`norn::grants::may_write_task`]) for every task of plan P numbered in
+/// NUMBERS.
+async fn granted_done(
+    f: &Front,
+    c: &Caller,
+    p: &WriteParams,
+    scope: &Scope,
+    numbers: Vec<String>,
+) -> Result<bool, Error> {
+    let (Some(plan), Some(sid)) = (
+        p.plan.as_ref().map(|i| i.as_str().to_owned()),
+        c.sid.clone(),
+    ) else {
+        return Ok(false);
+    };
+    let project = match scope {
+        Scope::Project { id, .. } => id.clone(),
+        Scope::Anyone => None,
+    };
+    let at = now();
+    f.writer
+        .db
+        .read(move |conn| {
+            let Some(plan) = live_by_id(conn, &plan)? else {
+                return Ok(false);
+            };
+            let project = match project {
+                Some(id) => live_by_id(conn, &id)?.map(|e| e.n),
+                None => None,
+            };
+            let outside = crate::outside::is_ext(&sid);
+            let caller = norn::scope::Caller {
+                class: if outside {
+                    urdr::graph::Class::Ext
+                } else {
+                    urdr::graph::Class::Agent
+                },
+                actor: if outside {
+                    sid.clone()
+                } else {
+                    format!("agent:{sid}")
+                },
+                session: Some(sid),
+                profile: None,
+                job: None,
+                project,
+            };
+            for number in &numbers {
+                let Some(t) = task_by_number(conn, plan.n, number)? else {
+                    return Ok(false);
+                };
+                if !norn::grants::may_write_task(conn, &caller, t.n, &["status.done"], at)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        })
+        .await
+        .map_err(fail)
 }
 
 /// Whether the matrix lets the agent C approve a record (`task.done`, the same fact as closing a task): `Ok`, or why
