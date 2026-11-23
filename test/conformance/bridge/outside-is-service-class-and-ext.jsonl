@@ -14,4 +14,4 @@
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "status"}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"mcp": {"sessions": 0, "outside": 1}}}}
 {"do": "send", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "claim_task", "arguments": {"task": "j1#1", "seen_version": 0}}}}
-{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "jobs are drgnx's: report your work with report_edit (claim_task is for drgnx's own job agents)"}], "isError": true}}}
+{"do": "expect", "conn": "b", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "claim_task is for drgnx's own job agents: the user starts jobs; report your work with report_edit and report_test"}], "isError": true}}}
