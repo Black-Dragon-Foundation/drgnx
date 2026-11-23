@@ -29,7 +29,7 @@ fn ids(l: &Loaded) -> Vec<&str> {
 fn defaults_parse() {
     let d = defaults();
     assert_eq!(d.problems, Vec::<String>::new());
-    assert_eq!(d.presets.len(), 16);
+    assert_eq!(d.presets.len(), 17);
     assert_eq!(d.presets[0].id, "openrouter");
     assert_eq!(d.presets[0].key_env.as_deref(), Some("OPENROUTER_API_KEY"));
     assert_eq!(

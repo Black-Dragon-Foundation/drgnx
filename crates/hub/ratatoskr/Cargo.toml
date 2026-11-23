@@ -212,3 +212,7 @@ name = "macos"
 # installs the process-wide virtual clock (clock::install_virtual) and a runtime of its own: no other row may run beside it
 [[test]]
 name = "search_index"
+
+# the local engine's rows: the process-wide virtual clock, as search_index
+[[test]]
+name = "search_engine"

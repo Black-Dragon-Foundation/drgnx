@@ -735,6 +735,11 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
   the three `defconst`s take their values from it. `test/fixtures/settings/defconsts-before.eld` is the three constants
   as `main` had them: `drgnx-settings-defaults/equal-the-old-defconsts` compares. Ratatoskr embeds the same file
   (Task 20).
+- **Provider kinds.** A provider's `:kind` is `openai`, `ollama`, `llamacpp` (a llama.cpp server you run, at its
+  `:url`), `tei`, `anthropic` or `llama`. `llama` is drgnx's own llama.cpp engine (the `llama` preset, `:caps (embed)`):
+  it has no `:url`, so it is in no provider table the gateway forwards by; the hub starts it for Hrafn once you
+  consented to its download (`search/model-download`, runtime.md "The local engine"). The shipped `embed` role is
+  `(llama)`; the `tei` preset stays for a TEI server you run and name in the role.
 - **The old files.** `drgnx-config-define 'agents` and `'ai` stay, for the migration only (it reads the old files
   through them). `agents` and `ai` are out of `drgnx-settings-shim-areas`, so a file that stayed is no longer read.
   The project's `.drgnx/ai.eld` (`ai-project`) is unchanged until the workspace layers fold it in.

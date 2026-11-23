@@ -2,7 +2,11 @@
 //!
 //! A row lists exactly what a download fetches: the safetensors, the tokeniser and two configs, at a pinned revision and
 //! sum. There is no ONNX file and no GGUF. All three models pool on CLS, so there is no pooling field.
+//!
+//! The llama.cpp engine's rows are separate: [`ENGINES`] (the pinned `llama-server` release assets) and
+//! [`GGUF_MODELS`] (the GGUF it runs, with the fingerprint record of its vectors).
 
+use crate::fingerprint::{FingerprintRecord, Pooling};
 use serde_json::Value;
 use std::fmt;
 use std::path::Path;
@@ -156,6 +160,178 @@ pub fn default_model() -> &'static ModelSpec {
 /// The size the wizard states.
 pub fn download_bytes(spec: &ModelSpec) -> u64 {
     spec.files.iter().map(|f| f.bytes).sum()
+}
+
+/// One pinned llama.cpp release asset (MP-20): upstream's own build, pinned by sha256. Vulkan on Linux and Windows,
+/// Metal on macOS; CUDA and ROCm get no row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EngineAsset {
+    /// The release tag, `b12200`.
+    pub tag: &'static str,
+    /// `linux`, `windows` or `macos` (as `std::env::consts::OS`).
+    pub os: &'static str,
+    /// `x86_64` or `aarch64` (as `std::env::consts::ARCH`).
+    pub arch: &'static str,
+    /// `vulkan` or `metal`.
+    pub backend: &'static str,
+    pub url: &'static str,
+    pub sha256: &'static str,
+    pub bytes: u64,
+    /// The path of `llama-server` inside the archive.
+    pub binary: &'static str,
+}
+
+impl EngineAsset {
+    /// `llama.cpp-b12200-linux-x86_64-vulkan`: the name its folder goes by.
+    pub fn id(&self) -> String {
+        format!(
+            "llama.cpp-{}-{}-{}-{}",
+            self.tag, self.os, self.arch, self.backend
+        )
+    }
+
+    /// The archive's file name (the URL's last segment).
+    pub fn file_name(&self) -> &'static str {
+        self.url.rsplit('/').next().unwrap_or(self.url)
+    }
+}
+
+/// The llama.cpp release every machine runs (the plan's P4: the newest release at least two weeks old).
+pub const ENGINE_TAG: &str = "b12200";
+
+/// The pinned assets, one per machine kind. Each sum was checked against a download (2026-11-23).
+pub const ENGINES: &[EngineAsset] = &[
+    EngineAsset {
+        tag: ENGINE_TAG,
+        os: "linux",
+        arch: "x86_64",
+        backend: "vulkan",
+        url: "https://github.com/ggml-org/llama.cpp/releases/download/b12200/llama-b12200-bin-ubuntu-vulkan-x64.tar.gz",
+        sha256: "cb394dcf28580fca94830ddb499d9ffe989bc3a8ec4b8f9da772394cd71f067c",
+        bytes: 35_882_938,
+        binary: "llama-b12200/llama-server",
+    },
+    EngineAsset {
+        tag: ENGINE_TAG,
+        os: "windows",
+        arch: "x86_64",
+        backend: "vulkan",
+        url: "https://github.com/ggml-org/llama.cpp/releases/download/b12200/llama-b12200-bin-win-vulkan-x64.zip",
+        sha256: "ef1e842d94184f7f4c949535b489b64162d59fddc490a371e5497c982344e1af",
+        bytes: 37_715_401,
+        binary: "llama-server.exe",
+    },
+    EngineAsset {
+        tag: ENGINE_TAG,
+        os: "macos",
+        arch: "aarch64",
+        backend: "metal",
+        url: "https://github.com/ggml-org/llama.cpp/releases/download/b12200/llama-b12200-bin-macos-arm64.tar.gz",
+        sha256: "5e7be50755d8016cee3c4c1ebba8321fe260a6323b61141a2dc7c50ee3d77cce",
+        bytes: 16_708_425,
+        binary: "llama-b12200/llama-server",
+    },
+];
+
+/// The asset of a machine of OS and ARCH (`std::env::consts`); none where drgnx pins no Vulkan or Metal build.
+pub fn engine_for(os: &str, arch: &str) -> Option<&'static EngineAsset> {
+    ENGINES.iter().find(|e| e.os == os && e.arch == arch)
+}
+
+/// This machine's asset.
+pub fn engine_here() -> Option<&'static EngineAsset> {
+    engine_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// One pinned GGUF for the engine: the file, its sum, and the record its vectors carry.
+#[derive(Debug, Clone, Copy)]
+pub struct GgufSpec {
+    /// `qwen3-embedding-0.6b-q8_0`: what `search/model-download` and the `llama` step of the embed role name.
+    pub id: &'static str,
+    pub repo: &'static str,
+    pub revision: &'static str,
+    pub file: &'static str,
+    pub sha256: &'static str,
+    pub bytes: u64,
+    /// The record of its vectors at an embed-text version (hrafn's, which this crate does not know).
+    pub record: fn(u32) -> FingerprintRecord,
+    /// The engine's self-check: `{text, vector, ...}`, one chunk of drgnx and its F16 Transformers reference vector
+    /// (`data/<model>.selfcheck.json`, made by the plan's Task 19 Step 1).
+    pub selfcheck: &'static str,
+}
+
+impl GgufSpec {
+    /// The self-check's text and reference vector; None if the data does not read (a build mistake, caught by a test).
+    pub fn selfcheck(&self) -> Option<(String, Vec<f32>)> {
+        let v: serde_json::Value = serde_json::from_str(self.selfcheck).ok()?;
+        let vector = v["vector"]
+            .as_array()?
+            .iter()
+            .map(|x| x.as_f64().map(|f| f as f32))
+            .collect::<Option<Vec<f32>>>()?;
+        Some((v["text"].as_str()?.to_string(), vector))
+    }
+
+    /// The file as a row of the model download.
+    pub fn model_file(&self) -> ModelFile {
+        ModelFile {
+            name: self.file,
+            sha256: self.sha256,
+            bytes: self.bytes,
+        }
+    }
+}
+
+/// The token limit of the shared fingerprint: the engine's largest context, and the longest text it embeds.
+pub const QWEN3_MAX_TOKENS: u32 = 8192;
+
+fn qwen3_q8_0(embed_text_version: u32) -> FingerprintRecord {
+    FingerprintRecord {
+        model_id: "Qwen/Qwen3-Embedding-0.6B".to_owned(),
+        weights_sha256: GGUF_MODELS[0].sha256.to_owned(),
+        quant: "Q8_0".to_owned(),
+        pooling: Pooling::Last,
+        normalized: true,
+        dims: 1024,
+        max_tokens: QWEN3_MAX_TOKENS,
+        doc_prefix: String::new(),
+        query_template: "Instruct: {task}\nQuery:{query}".to_owned(),
+        embed_text_version,
+    }
+}
+
+/// The shared default fingerprint's model (MP-3): Qwen3-Embedding-0.6B in Q8_0, last-token pooling, normalised, 1,024
+/// dims (the plan's P4 pins).
+pub const GGUF_MODELS: &[GgufSpec] = &[GgufSpec {
+    id: "qwen3-embedding-0.6b-q8_0",
+    repo: "Qwen/Qwen3-Embedding-0.6B-GGUF",
+    revision: "370f27d7550e0def9b39c1f16d3fbaa13aa67728",
+    file: "Qwen3-Embedding-0.6B-Q8_0.gguf",
+    sha256: "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
+    bytes: 639_150_592,
+    record: qwen3_q8_0,
+    selfcheck: include_str!("../data/qwen3-embedding-0.6b.selfcheck.json"),
+}];
+
+/// The engine's default model.
+pub fn default_gguf() -> &'static GgufSpec {
+    &GGUF_MODELS[0]
+}
+
+#[cfg(test)]
+mod gguf_tests {
+    use super::*;
+
+    #[test]
+    fn every_gguf_has_a_unit_selfcheck_of_its_dims() {
+        for g in GGUF_MODELS {
+            let (text, vector) = g.selfcheck().expect("the self-check data reads");
+            assert!(!text.is_empty(), "{}", g.id);
+            assert_eq!(vector.len() as u32, (g.record)(1).dims, "{}", g.id);
+            let norm: f32 = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+            assert!((norm - 1.0).abs() < 1e-3, "{}: norm {norm}", g.id);
+        }
+    }
 }
 
 #[derive(Debug)]

@@ -28,9 +28,12 @@ pub use http::Uri;
 pub enum Kind {
     Openai,
     Ollama,
+    /// A llama.cpp server the user runs.
     Llamacpp,
     Tei,
     Anthropic,
+    /// drgnx's own llama.cpp engine, which the hub starts and reaches itself: no path is forwarded to it.
+    Llama,
 }
 
 impl Kind {
@@ -49,7 +52,7 @@ impl Kind {
             ],
             Self::Llamacpp => &["/infill", "/v1/chat/completions", "/v1/embeddings"],
             Self::Tei => &["/embed", "/info"],
-            Self::Anthropic => &[],
+            Self::Anthropic | Self::Llama => &[],
         }
     }
 }

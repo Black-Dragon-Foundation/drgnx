@@ -455,6 +455,93 @@ fn tier2_is_idle_when_the_default_server_does_not_answer() {
     assert_eq!(s["tier2"], "idle", "{s}");
 }
 
+/// The local engine as installed in ROOT's cache, but its `llama-server` only marks that it ran (in the file it gives
+/// back): the GGUF at its size (sparse) and the engine folder with its marker.
+fn plant_engine(root: &Root) -> PathBuf {
+    use ratatoskr::search::engine_install;
+    let cache = root.dir.path().join("h/xk/drgnx");
+    let gguf = hrafn_embed::default_gguf();
+    let file = engine_install::gguf_path(&cache.join("models"), gguf);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::File::create(&file)
+        .unwrap()
+        .set_len(gguf.bytes)
+        .unwrap();
+    let asset = hrafn_embed::engine_here().expect("an engine for this machine");
+    let dir = engine_install::dir_for(&cache, asset);
+    let exe = dir.join("bin").join(asset.binary);
+    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    let ran = root.dir.path().join("engine-ran");
+    std::fs::write(
+        &exe,
+        format!("#!/bin/sh\necho \"$@\" >> '{}'\nexit 1\n", ran.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    std::fs::write(dir.join(engine_install::MARKER), asset.sha256).unwrap();
+    ran
+}
+
+/// Pattern C. With the shipped `embed` role (the engine) and the engine's files in place but no consent to its
+/// download, the engine is never started: tier 2 runs on the built-in model and settles idle.
+#[test]
+fn engine_not_started_without_consent() {
+    let root = Root::new();
+    install_model(&root);
+    let ran = plant_engine(&root);
+    let proj = project(&root, "proj");
+    let (_hub, mut c) = ready(&root, 1);
+    let started = call(&mut c, 1, "search/index", json!({"root": proj}));
+    assert_eq!(started["result"]["started"], true, "{started}");
+    let mut id = 1;
+    let s = skuld::wait_until(
+        "every chunk has its vector and tier 2 has settled",
+        FAILED_AFTER.as_secs() * 10,
+        || {
+            id += 1;
+            let s = call(&mut c, id, "search/status", json!({"root": proj}))["result"].clone();
+            (s["lag"]["chunks_behind"] == 0
+                && s["lag"]["chunks_total"].as_u64() > Some(0)
+                && (s["tier2"] == "idle" || s["tier2"] == "failed"))
+                .then_some(s)
+        },
+    );
+    assert_eq!(s["tier2"], "idle", "{s}");
+    assert_eq!(
+        s["lag"]["model"],
+        model(),
+        "the built-in model's vectors: {s}"
+    );
+    id += 1;
+    let a = call(
+        &mut c,
+        id,
+        "search/query",
+        json!({"root": proj, "text": "divide the window", "k": 5}),
+    );
+    assert_eq!(a["result"]["model"], model(), "{a}");
+    assert!(
+        !ran.exists(),
+        "the engine never ran: {:?}",
+        std::fs::read_to_string(&ran)
+    );
+}
+
+/// Pattern D. The podman wizard is gone: its three methods are unknown to the hub.
+#[test]
+fn server_methods_are_gone() {
+    let root = Root::new();
+    let (_hub, mut c) = ready(&root, 1);
+    for (id, m) in [
+        (1, "search/server-plan"),
+        (2, "search/server-start"),
+        (3, "search/server-stop"),
+    ] {
+        let a = call(&mut c, id, m, json!({"kind": "tei"}));
+        assert_eq!(a["error"]["code"], "no-method", "{m}: {a}");
+    }
+}
+
 /// Pattern C. With the real built-in model, each of ten questions finds its file in the top five, and the answer says the
 /// model took part.
 #[test]

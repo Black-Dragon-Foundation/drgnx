@@ -150,9 +150,13 @@ pub struct SetBudgetParams {
 pub enum ProviderKind {
     Openai,
     Ollama,
+    /// A llama.cpp server the user runs.
     Llamacpp,
     Tei,
     Anthropic,
+    /// drgnx's own engine (Hrafn's llama.cpp, a process the hub starts after the download's consent): no URL, so the
+    /// gateway never forwards to it.
+    Llama,
 }
 
 /// How a provider takes its key; `none` is a keyless (local) provider.

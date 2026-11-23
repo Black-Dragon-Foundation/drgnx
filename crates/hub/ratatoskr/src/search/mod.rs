@@ -5,6 +5,8 @@
 pub mod caches;
 pub mod context;
 pub mod download;
+pub mod engine;
+pub mod engine_install;
 pub mod mcp;
 pub mod methods;
 pub mod packs;
@@ -12,11 +14,10 @@ pub mod power;
 pub mod project;
 pub mod saved;
 pub mod scope;
-pub mod servers;
 pub mod sources;
 pub mod worker;
 
-pub use download::{Consent, DownloadError, download};
+pub use download::{Consent, DownloadError, download, download_gguf};
 pub use methods::Hub;
 
 use bifrost::Uri;
@@ -106,13 +107,14 @@ pub trait DocEmbedder: Send + Sync {
     }
 }
 
-/// The hub's Hrafn state that is not one project's: the built-in model's worker, shared by every project and by the
-/// entity embedder.
+/// The hub's Hrafn state that is not one project's: the built-in model's worker and the local engine, each shared by
+/// every project and by the entity embedder.
 pub struct Search {
     /// `<cache>/models`.
     models: PathBuf,
     exe: PathBuf,
     builtin: Mutex<Option<Arc<worker::WorkerEmbedder>>>,
+    engine: Mutex<Option<Arc<engine::LocalEngine>>>,
 }
 
 impl Search {
@@ -121,7 +123,43 @@ impl Search {
             models: models_root(env),
             exe: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ratatoskr")),
             builtin: Mutex::new(None),
+            engine: Mutex::new(None),
         }
+    }
+
+    /// The local engine, once CONSENTED (the user consented to its download) and its GGUF and this machine's engine
+    /// asset are in the cache; never a download. Otherwise why not, and a chain that names it falls through.
+    pub fn engine(&self, consented: bool) -> Result<Arc<engine::LocalEngine>, EmbedError> {
+        let not_installed = || EmbedError("the engine is not installed".into());
+        if !consented {
+            return Err(not_installed());
+        }
+        let gguf = hrafn_embed::default_gguf();
+        let asset = hrafn_embed::engine_here().ok_or_else(not_installed)?;
+        let cache = self.models.parent().ok_or_else(not_installed)?;
+        let exe = engine_install::installed(asset, &engine_install::dir_for(cache, asset))
+            .filter(|_| engine_install::gguf_ready(&self.models, gguf))
+            .ok_or_else(not_installed)?;
+        let mut held = self
+            .engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(held
+            .get_or_insert_with(|| {
+                Arc::new(engine::LocalEngine::new(engine::EngineSpec {
+                    exe,
+                    gguf: engine_install::gguf_path(&self.models, gguf),
+                    record: (gguf.record)(EMBED_TEXT_VERSION),
+                    label: format!("the engine ({})", gguf.id),
+                    ctx: hrafn_embed::models::QWEN3_MAX_TOKENS,
+                    ubatch: hrafn_embed::models::QWEN3_MAX_TOKENS,
+                    idle: engine::IDLE,
+                    selfcheck: gguf
+                        .selfcheck()
+                        .map(|(text, vector)| engine::SelfCheck { text, vector }),
+                }))
+            })
+            .clone())
     }
 
     /// The built-in model's worker, once the model is `Ready` in the cache (never before, and never a download); none
@@ -185,6 +223,22 @@ pub async fn store_consent(db: &urdr::Handle, consent: &Consent) {
     match serde_json::to_string(consent) {
         Ok(text) => crate::gateway::kv_set(db, KV_CONSENT, &text).await,
         Err(e) => tracing::warn!("the consent does not encode: {e}"),
+    }
+}
+
+/// The `kv` key of the local engine's consent (its GGUF and this machine's asset), in `runtime.db`.
+const KV_ENGINE_CONSENT: &str = "search.consent.engine";
+
+/// The consent the user gave to the engine's download, if any.
+pub async fn stored_engine_consent(db: &urdr::Handle) -> Option<Consent> {
+    let text = crate::gateway::kv_get(db, KV_ENGINE_CONSENT).await?;
+    serde_json::from_str(&text).ok()
+}
+
+pub async fn store_engine_consent(db: &urdr::Handle, consent: &Consent) {
+    match serde_json::to_string(consent) {
+        Ok(text) => crate::gateway::kv_set(db, KV_ENGINE_CONSENT, &text).await,
+        Err(e) => tracing::warn!("the engine's consent does not encode: {e}"),
     }
 }
 

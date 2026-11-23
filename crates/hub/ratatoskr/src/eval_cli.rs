@@ -124,6 +124,9 @@ pub enum EvalCommand {
         /// Boxed: the variant is otherwise far larger than the others.
         source: Box<SourceArg>,
         query_source: Option<Box<SourceArg>>,
+        /// Index only, then write this many of the project's chunk texts (as tier 2 would embed them, evenly spread)
+        /// to `--out` as `{"texts": [...]}`: the engine's parity check embeds them elsewhere. No model is opened.
+        dump_chunks: Option<usize>,
     },
     Compare {
         a: PathBuf,
@@ -150,6 +153,7 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
         (None, "dev".to_string(), None, "cpu".to_string());
     let (mut models, mut state, mut out, mut map) = (None, None, None, None);
     let (mut source, mut query_source) = (Box::new(SourceArg::Builtin), None);
+    let mut dump_chunks = None;
     let mut by = eval::Gate::Chunk;
     let mut words: Vec<PathBuf> = Vec::new();
     while let Some(arg) = p.next().map_err(e)? {
@@ -198,6 +202,13 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
                     _ => return Err(format!("--map is a token budget, 256 to 32000, not {v:?}")),
                 }
             }
+            Long("dump-chunks") if name == "run" => {
+                let v = p.value().map_err(e)?.string().map_err(e)?;
+                match v.parse::<usize>() {
+                    Ok(n) if (1..=10000).contains(&n) => dump_chunks = Some(n),
+                    _ => return Err(format!("--dump-chunks is a count, 1 to 10000, not {v:?}")),
+                }
+            }
             Word(v) => words.push(PathBuf::from(v)),
             other => return Err(other.unexpected().to_string()),
         }
@@ -225,6 +236,7 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
             map,
             source,
             query_source,
+            dump_chunks,
         },
         _ => EvalCommand::Compare {
             a: next("two reports")?,
@@ -732,6 +744,42 @@ fn unique_code_names(all: Vec<(String, String, String, String)>) -> Vec<(String,
     out
 }
 
+/// `eval run ROOT --dump-chunks N --out FILE`: index ROOT into STATE (or a scratch folder), then write N of its chunk
+/// texts, evenly spread over the project, to FILE as `{"texts": [...]}`. The texts are what tier 2 embeds (documents
+/// plain). No model is opened: the cache is keyed by a fingerprint of its own.
+fn dump_chunks(
+    root: &Path,
+    n: usize,
+    state: Option<PathBuf>,
+    out: Option<PathBuf>,
+) -> Result<String, String> {
+    let out = out.ok_or("--dump-chunks needs --out FILE")?;
+    let rt = runtime()?;
+    let state_dir = state.unwrap_or_else(|| scratch("dump"));
+    std::fs::create_dir_all(&state_dir).map_err(|e| e.to_string())?;
+    let store = CodeStore::open(&state_dir.join("code.db")).map_err(|e| e.to_string())?;
+    let (fp, record) = eval_fingerprint("dump-chunks", 0);
+    let cache = VectorCache::open_writer(&state_dir.join("vectors"), &fp, &record)
+        .map_err(|e| e.to_string())?;
+    rt.block_on(index(&store, root, &[&cache]))?;
+    let texts: Vec<String> = rt
+        .block_on(hrafn::missing_with(&store, &cache, u32::MAX, false))
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
+        .map(|(_, _, t)| t)
+        .collect();
+    let all = texts.len();
+    let texts = spread(texts, n);
+    let json = serde_json::json!({ "texts": texts }).to_string();
+    std::fs::write(&out, json).map_err(|e| format!("{}: {e}", out.display()))?;
+    Ok(format!(
+        "{} of {all} chunk texts written to {}",
+        texts.len(),
+        out.display()
+    ))
+}
+
 /// Up to LIMIT of ITEMS, evenly spread.
 fn spread<T>(items: Vec<T>, limit: usize) -> Vec<T> {
     let step = (items.len() / limit.max(1)).max(1);
@@ -1053,6 +1101,13 @@ pub fn run(env: &runstav::paths::Env, cmd: EvalCommand) -> i32 {
         EvalCommand::Gen { root, out } => done(gen_sets(&root, out)),
         EvalCommand::Run {
             root,
+            state,
+            out,
+            dump_chunks: Some(n),
+            ..
+        } => done(dump_chunks(&root, n, state, out)),
+        EvalCommand::Run {
+            root,
             model,
             set,
             rows,
@@ -1063,6 +1118,7 @@ pub fn run(env: &runstav::paths::Env, cmd: EvalCommand) -> i32 {
             map,
             source,
             query_source,
+            dump_chunks: None,
         } => {
             let models = models.unwrap_or_else(|| crate::search::models_root(env));
             done(run_set(
@@ -1215,6 +1271,18 @@ mod tests {
         assert!(p(&["run", "/r", "--map", "255"]).is_err());
         assert!(p(&["run", "/r", "--map", "lots"]).is_err());
         assert!(p(&["compare", "--map", "8000", "a.json", "b.json"]).is_err());
+    }
+
+    #[test]
+    fn run_takes_a_chunk_dump_count() {
+        let dump_of = |args: &[&str]| match p(args).unwrap() {
+            EvalCommand::Run { dump_chunks, .. } => dump_chunks,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(dump_of(&["run", "/r"]), None);
+        assert_eq!(dump_of(&["run", "/r", "--dump-chunks", "200"]), Some(200));
+        assert!(p(&["run", "/r", "--dump-chunks", "0"]).is_err());
+        assert!(p(&["compare", "--dump-chunks", "5", "a.json", "b.json"]).is_err());
     }
 
     /// The lines of a chunk, by the hit's range, counted as the search baseline packs them.
