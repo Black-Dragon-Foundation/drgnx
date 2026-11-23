@@ -167,4 +167,93 @@ pub mod rt {
             ))),
         }
     }
+
+    /// A resource handle an extension holds: the slot's generation (high 32 bits) and index (low 32 bits). Handle 0 is
+    /// never issued.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub struct RHandle(pub u64);
+
+    impl RHandle {
+        pub fn index(self) -> u32 {
+            self.0 as u32
+        }
+
+        pub fn generation(self) -> u32 {
+            (self.0 >> 32) as u32
+        }
+    }
+
+    /// Why a table refused a handle.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum HandleError {
+        /// the extension holds as many handles as it may
+        Full(usize),
+        /// dropped, never issued, or issued to another extension
+        Stale,
+        /// a handle of another resource type
+        WrongKind,
+    }
+
+    impl std::fmt::Display for HandleError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                HandleError::Full(n) => write!(f, "this extension holds {n} handles, the most it may"),
+                HandleError::Stale => write!(f, "the handle was dropped, or it is not this extension's"),
+                HandleError::WrongKind => write!(f, "the handle is of another resource type"),
+            }
+        }
+    }
+
+    /// One extension's live handles.
+    pub struct HandleTable {
+        cap: usize,
+    }
+
+    impl HandleTable {
+        pub fn new(cap: usize) -> Self {
+            Self { cap }
+        }
+
+        pub fn new_at(cap: usize, _first_generation: u32) -> Self {
+            Self { cap }
+        }
+
+        pub fn cap(&self) -> usize {
+            self.cap
+        }
+
+        pub fn live(&self) -> usize {
+            0
+        }
+
+        pub fn has_room(&self) -> Result<(), HandleError> {
+            Ok(())
+        }
+
+        pub fn insert(&mut self, _kind: u32, _rep: u64) -> Result<RHandle, HandleError> {
+            Ok(RHandle(1))
+        }
+
+        pub fn get(&self, _h: RHandle, _kind: u32) -> Result<u64, HandleError> {
+            Ok(0)
+        }
+
+        pub fn remove(&mut self, _h: RHandle, _kind: u32) -> Result<u64, HandleError> {
+            Ok(0)
+        }
+
+        pub fn at_index(&self, index: u32) -> Option<RHandle> {
+            Some(RHandle(u64::from(index)))
+        }
+
+        pub fn defer(&mut self, _kind: u32, _rep: u64) {}
+
+        pub fn take_deferred(&mut self) -> Vec<(u32, u64)> {
+            Vec::new()
+        }
+
+        pub fn drain(&mut self) -> Vec<(u32, u64)> {
+            Vec::new()
+        }
+    }
 }

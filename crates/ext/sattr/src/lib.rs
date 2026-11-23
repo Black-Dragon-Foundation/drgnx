@@ -39,6 +39,9 @@ pub struct Limits {
     pub table_elements: usize,
     /// The longest list an extension may hand the API (elements), or be handed back.
     pub max_list: usize,
+    /// The resource handles an extension may hold at once, over all resource types (see the `drgnx:api` WIT's
+    /// resources): the next one is refused until a handle is dropped.
+    pub handles: usize,
 }
 
 impl Limits {
@@ -49,6 +52,7 @@ impl Limits {
         ticks: 2_000,
         table_elements: 10_000,
         max_list: 256,
+        handles: 4096,
     };
 }
 

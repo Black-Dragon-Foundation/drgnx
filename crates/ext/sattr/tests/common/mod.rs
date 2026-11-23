@@ -13,6 +13,7 @@ pub const LIMITS: Limits = Limits {
     ticks: 2_000,
     table_elements: 10_000,
     max_list: 256,
+    handles: 4096,
 };
 
 /// An editor with a few settings and commands, behind the lock the hosts share.
