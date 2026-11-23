@@ -723,7 +723,7 @@ impl Gate {
         })?;
         write(&self.regs.0).insert(hash, kept);
         Ok(EditorToken {
-            token,
+            token: hulda::Secret::new(token),
             url: format!("http://127.0.0.1:{port}"),
         })
     }
@@ -1833,7 +1833,7 @@ mod tests {
         assert_eq!(t.url, format!("http://127.0.0.1:{port}"));
         assert_eq!(
             g.regs
-                .find(&token_hash(t.token.as_bytes()))
+                .find(&token_hash(t.token.expose().as_bytes()))
                 .map(|r| r.listener),
             Some(ListenerId::Loopback)
         );
@@ -1855,7 +1855,7 @@ mod tests {
         let path = "/p/chat/chat/completions";
         let unix = || async { tokio::net::UnixStream::connect(&sock).await.unwrap() };
         assert_eq!(
-            status_over(unix().await, "localhost", &t.token, path).await,
+            status_over(unix().await, "localhost", t.token.expose(), path).await,
             401
         );
         let tcp = || async {
@@ -1864,7 +1864,10 @@ mod tests {
                 .unwrap()
         };
         let host = format!("127.0.0.1:{port}");
-        assert_eq!(status_over(tcp().await, &host, &t.token, path).await, 502);
+        assert_eq!(
+            status_over(tcp().await, &host, t.token.expose(), path).await,
+            502
+        );
         // and the agent's token never reaches /p/…
         assert_eq!(
             status_over(unix().await, "localhost", &agent.token, path).await,
@@ -1884,7 +1887,11 @@ mod tests {
         .unwrap();
         write(&g.regs.0).clear();
         g.restore(&h.front.mcp).await;
-        assert!(g.regs.find(&token_hash(t.token.as_bytes())).is_none());
+        assert!(
+            g.regs
+                .find(&token_hash(t.token.expose().as_bytes()))
+                .is_none()
+        );
         assert_eq!(
             rows_of(h.dir.path(), "select class from registration"),
             vec![vec![json!("agent")]]
@@ -1903,18 +1910,30 @@ mod tests {
             .unwrap();
         let theirs = g.editor_token(Some(other.id() as i32)).await.unwrap();
         let second = g.editor_token(Some(me())).await.unwrap();
-        assert_ne!(first.token, second.token);
-        assert!(g.regs.find(&token_hash(first.token.as_bytes())).is_none());
-        assert!(g.regs.find(&token_hash(second.token.as_bytes())).is_some());
-        assert!(g.regs.find(&token_hash(theirs.token.as_bytes())).is_some());
+        assert_ne!(first.token.expose(), second.token.expose());
+        assert!(
+            g.regs
+                .find(&token_hash(first.token.expose().as_bytes()))
+                .is_none()
+        );
+        assert!(
+            g.regs
+                .find(&token_hash(second.token.expose().as_bytes()))
+                .is_some()
+        );
+        assert!(
+            g.regs
+                .find(&token_hash(theirs.token.expose().as_bytes()))
+                .is_some()
+        );
         let mut hashes = rows_of(
             h.dir.path(),
             "select hash from registration where class = 'editor'",
         );
         hashes.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
         let mut want = vec![
-            vec![json!(token_hash(second.token.as_bytes()))],
-            vec![json!(token_hash(theirs.token.as_bytes()))],
+            vec![json!(token_hash(second.token.expose().as_bytes()))],
+            vec![json!(token_hash(theirs.token.expose().as_bytes()))],
         ];
         want.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
         assert_eq!(hashes, want, "one row per owner");
@@ -1922,7 +1941,11 @@ mod tests {
         other.kill().unwrap();
         other.wait().unwrap();
         g.prune(&h.front.mcp).await;
-        assert!(g.regs.find(&token_hash(theirs.token.as_bytes())).is_none());
+        assert!(
+            g.regs
+                .find(&token_hash(theirs.token.expose().as_bytes()))
+                .is_none()
+        );
         assert_eq!(g.status().registrations, 1);
         // a caller whose process cannot be read gets none
         let e = g.editor_token(None).await.unwrap_err();
@@ -1934,7 +1957,7 @@ mod tests {
         let h = hub().await;
         let g = &h.front.gate;
         let t = g.editor_token(Some(me())).await.unwrap();
-        let hash = token_hash(t.token.as_bytes());
+        let hash = token_hash(t.token.expose().as_bytes());
         assert_eq!(g.regs.find(&hash), Some(Registration::editor()));
         assert_eq!(
             rows_of(

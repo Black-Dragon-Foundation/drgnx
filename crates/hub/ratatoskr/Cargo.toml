@@ -53,6 +53,7 @@ name = "fleet_cloud"
 required-features = ["fleet", "test-hooks"]
 
 [dependencies]
+hulda.workspace = true
 runstav = { path = "../runstav", version = "0.1.0" }
 # background tasks' problem-matcher patterns (already in the tree)
 regex.workspace = true

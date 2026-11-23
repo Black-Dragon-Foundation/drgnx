@@ -95,7 +95,7 @@ pub async fn start(env: &Env) -> Result<(), String> {
         }
         (None, Some(dir)) => {
             let dir = PathBuf::from(dir);
-            rec::read_manifest(&dir)?;
+            rec::read_manifest(&dir).map_err(|e| e.to_string())?;
             let (d, e) = (dir.clone(), env.clone());
             let (port, mock, scratch) =
                 crate::clock::blocking(move || replayer(&d, &e))

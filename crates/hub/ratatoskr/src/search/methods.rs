@@ -1971,7 +1971,7 @@ impl Hub {
             )
         })?;
         Ok(w::ServeToken {
-            token: r.new_token().map_err(internal)?,
+            token: hulda::Secret::new(r.new_token().map_err(internal)?),
         })
     }
 }

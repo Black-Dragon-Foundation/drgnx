@@ -56,28 +56,43 @@ pub fn manifest(
 }
 
 /// Why a reader refuses manifest M: an unknown `format`, or a `version` it does not know.
-pub fn check_manifest(m: &Value) -> Result<(), String> {
+pub fn check_manifest(m: &Value) -> villa::Result<()> {
     match m.get("format").and_then(Value::as_str) {
         Some(FORMAT) => {}
-        Some(other) => return Err(format!("not a drgnx recording (format {other:?})")),
-        None => return Err("not a drgnx recording (the manifest names no format)".into()),
+        Some(other) => {
+            return Err(villa::Error::invalid(format!(
+                "not a drgnx recording (format {other:?})"
+            )));
+        }
+        None => {
+            return Err(villa::Error::invalid(
+                "not a drgnx recording (the manifest names no format)",
+            ));
+        }
     }
     match m.get("version").and_then(Value::as_u64) {
-        Some(v) if v > VERSION => Err(format!(
+        Some(v) if v > VERSION => Err(villa::Error::invalid(format!(
             "the recording's version {v} is newer than this drgnx reads ({VERSION}): update drgnx"
-        )),
-        Some(0) | None => Err("the manifest has no version".into()),
+        ))),
+        Some(0) | None => Err(villa::Error::invalid("the manifest has no version")),
         Some(_) => Ok(()),
     }
 }
 
+/// The longest manifest read (bytes): a manifest is a few kilobytes.
+const MAX_MANIFEST: u64 = 16 << 20;
+
 /// DIR's `manifest.json`, checked.
-pub fn read_manifest(dir: &Path) -> Result<Value, String> {
+pub fn read_manifest(dir: &Path) -> villa::Result<Value> {
     let path = dir.join("manifest.json");
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("no recording at {}: {e}", dir.display()))?;
-    let m: Value = serde_json::from_str(&text)
-        .map_err(|e| format!("{} does not read: {e}", path.display()))?;
+    let text = eitri::read_string(&path, MAX_MANIFEST).map_err(|e| {
+        let e = villa::Error::from(e);
+        villa::Error::new(e.kind(), format!("no recording at {}", dir.display()))
+            .with_detail(e.to_string())
+    })?;
+    let m: Value = serde_json::from_str(&text).map_err(|e| {
+        villa::Error::invalid(format!("{} does not read: {e}", path.display())).with_source(e)
+    })?;
     check_manifest(&m)?;
     Ok(m)
 }
@@ -160,12 +175,12 @@ impl Roots {
     /// The roots a hub or a replayer with environment ENV has: its state and data dirs, home and temp dir.
     pub fn of_env(env: &crate::paths::Env) -> Roots {
         let s = |p: std::path::PathBuf| p.to_string_lossy().into_owned();
-        let var = |k: &str| env.vars.get(k).filter(|v| v.starts_with('/')).cloned();
+        let var = |k: &str| env.absolute(k).map(str::to_owned);
         let mut pairs = vec![
             ("$STATE", s(crate::paths::state_dir(env))),
             ("$DATA", s(crate::paths::data_dir(env))),
         ];
-        if let Some(home) = var("HOME") {
+        if let Some(home) = var(stig::HOME_VAR) {
             pairs.push(("$HOME", home));
         }
         pairs.push(("$TMP", var("TMPDIR").unwrap_or_else(|| "/tmp".into())));
@@ -688,7 +703,7 @@ pub const HEADERS: [&str; 7] = [
 /// The environment variables whose values are stored; every other value is `$SECRET`.
 pub const ENV_NAMES: [&str; 22] = [
     "PATH",
-    "HOME",
+    stig::HOME_VAR,
     "LANG",
     "LANGUAGE",
     "LC_ALL",
@@ -703,11 +718,11 @@ pub const ENV_NAMES: [&str; 22] = [
     "SHELL",
     "TMPDIR",
     "PWD",
-    "XDG_RUNTIME_DIR",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "XDG_STATE_HOME",
-    "XDG_CACHE_HOME",
+    stig::Xdg::Runtime.var(),
+    stig::Xdg::Config.var(),
+    stig::Xdg::Data.var(),
+    stig::Xdg::State.var(),
+    stig::Xdg::Cache.var(),
     "DRGNX_DATA_DIR",
 ];
 
@@ -1222,14 +1237,21 @@ fn lint_json(file: &str, text: &str, at: usize, v: &Value, out: &mut Vec<Finding
 
 /// Every file under DIR linted: rules 1, 2 and 4, secret-looking values under secret-named fields, the size of the
 /// run, and, for a recording under a repository's `test/fixtures/recordings/`, that the mocks made it.
-pub fn lint_run(dir: &Path) -> Result<Vec<Finding>, String> {
+pub fn lint_run(dir: &Path) -> villa::Result<Vec<Finding>> {
     let mut files = Vec::new();
-    collect(dir, dir, &mut files).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+    collect(dir, dir, &mut files).map_err(|e| {
+        let e = villa::Error::from(e);
+        villa::Error::new(e.kind(), format!("cannot read {}", dir.display()))
+            .with_detail(e.to_string())
+    })?;
     files.sort();
     let mut out = Vec::new();
     let mut total = 0u64;
     for rel in &files {
-        let b = std::fs::read(dir.join(rel)).map_err(|e| format!("cannot read {rel}: {e}"))?;
+        let b = std::fs::read(dir.join(rel)).map_err(|e| {
+            let e = villa::Error::from(e);
+            villa::Error::new(e.kind(), format!("cannot read {rel}")).with_detail(e.to_string())
+        })?;
         total += b.len() as u64;
         let json_file = rel.ends_with(".json") || rel.ends_with(".jsonl");
         out.extend(lint_bytes(rel, &b, json_file));
@@ -1269,7 +1291,7 @@ pub fn lint_run(dir: &Path) -> Result<Vec<Finding>, String> {
         });
     }
     if under_fixtures(dir) {
-        let provenance = std::fs::read_to_string(dir.join("manifest.json"))
+        let provenance = eitri::read_string(&dir.join("manifest.json"), MAX_MANIFEST)
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
             .and_then(|m| {
@@ -1518,12 +1540,12 @@ mod tests {
         let v = s.value(&json!({
             "mcpServers": [{"name": "drgnx", "env": [{"name": "PATH", "value": "/usr/bin"},
                                                     {"name": "DRGNX_TOKEN", "value": "plain-looking"}]}],
-            "_meta": {"claudeCode": {"options": {"env": {"HOME": "/tmp/h", "ANTHROPIC_AUTH_TOKEN": "x"}}}},
+            "_meta": {"claudeCode": {"options": {"env": {"LANG": "/tmp/h", "ANTHROPIC_AUTH_TOKEN": "x"}}}},
             "note": format!("key {or}"),
         }));
         assert_eq!(v["mcpServers"][0]["env"][0]["value"], "/usr/bin");
         assert_eq!(v["mcpServers"][0]["env"][1]["value"], SECRET);
-        assert_eq!(v["_meta"]["claudeCode"]["options"]["env"]["HOME"], "/tmp/h");
+        assert_eq!(v["_meta"]["claudeCode"]["options"]["env"]["LANG"], "/tmp/h");
         assert_eq!(
             v["_meta"]["claudeCode"]["options"]["env"]["ANTHROPIC_AUTH_TOKEN"],
             SECRET
@@ -1547,7 +1569,7 @@ mod tests {
         let run = dir.path().join("2026-11-06-x");
         std::fs::create_dir_all(run.join("bundle")).unwrap();
         let m = manifest("live", "2026-11-06T00:00:00Z", "abc", "test", &roots("L"));
-        std::fs::write(run.join("manifest.json"), m.to_string()).unwrap();
+        crate::testfs::write(run.join("manifest.json"), m.to_string()).unwrap();
         let key = fake(
             "sk-or-v1-",
             "fedcba9876543210fedcba9876543210fedcba9876543210",
@@ -1556,7 +1578,7 @@ mod tests {
         let line = json!({"seq": 1, "key": match_key, "request": {"headers": {"authorization": "Bearer x"},
                           "body": format!("{{\"k\":\"{key}\"}}")}});
         let text = format!("{}\n{line}\n", json!({"seq": 0, "note": "clean"}));
-        std::fs::write(run.join("llm.jsonl"), &text).unwrap();
+        crate::testfs::write(run.join("llm.jsonl"), &text).unwrap();
         let mut db = b"SQLite format 3\0\x01\x02".to_vec();
         db.extend_from_slice(
             json!({"api_token": "Zq8RmT4vXk2PwN7sLc9H"})
@@ -1564,7 +1586,7 @@ mod tests {
                 .as_bytes(),
         );
         db.extend_from_slice(key.as_bytes());
-        std::fs::write(run.join("bundle/work.db"), &db).unwrap();
+        crate::testfs::write(run.join("bundle/work.db"), &db).unwrap();
 
         let found = lint_run(&run).unwrap();
         let shown: Vec<String> = found.iter().map(ToString::to_string).collect();
@@ -1615,7 +1637,7 @@ mod tests {
 
         // scrubbed, it passes
         let clean = Scrub::default();
-        std::fs::write(
+        crate::testfs::write(
             run.join("llm.jsonl"),
             clean
                 .text(&text.replace("authorization", "content-type"))
@@ -1628,7 +1650,7 @@ mod tests {
         // under a repository's fixtures only a recording the mocks made passes
         let fixture = dir.path().join("test/fixtures/recordings/smoke");
         std::fs::create_dir_all(&fixture).unwrap();
-        std::fs::write(fixture.join("manifest.json"), m.to_string()).unwrap();
+        crate::testfs::write(fixture.join("manifest.json"), m.to_string()).unwrap();
         let found = lint_run(&fixture).unwrap();
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(
@@ -1636,7 +1658,7 @@ mod tests {
             ("manifest.json", "not-mock")
         );
         let mock = manifest("mock", "2026-11-06T00:00:00Z", "abc", "test", &roots("L"));
-        std::fs::write(fixture.join("manifest.json"), mock.to_string()).unwrap();
+        crate::testfs::write(fixture.join("manifest.json"), mock.to_string()).unwrap();
         assert_eq!(lint_run(&fixture).unwrap(), vec![]);
     }
 
@@ -1644,21 +1666,66 @@ mod tests {
     #[test]
     fn manifest_refuses_a_newer_version() {
         let mut m = manifest("mock", "2026-11-06T00:00:00Z", "abc", "test", &roots("M"));
-        assert_eq!(check_manifest(&m), Ok(()));
+        assert!(check_manifest(&m).is_ok());
         assert_eq!(m["format"], FORMAT);
         assert_eq!(m["version"], VERSION);
         assert_eq!(m["status"], "incomplete");
         m["version"] = json!(VERSION + 1);
         let e = check_manifest(&m).unwrap_err();
-        assert!(e.contains("newer"), "{e}");
+        assert!(e.message().contains("newer"), "{e}");
+        assert_eq!(e.kind(), villa::Kind::Invalid);
         m["version"] = json!(VERSION);
         m["format"] = json!("something-else");
         assert!(
             check_manifest(&m)
                 .unwrap_err()
+                .message()
                 .contains("not a drgnx recording")
         );
         assert!(check_manifest(&json!({})).is_err());
+    }
+
+    #[test]
+    fn a_manifest_without_a_usable_version_is_refused() {
+        for v in [
+            json!({"format": FORMAT}),
+            json!({"format": FORMAT, "version": 0}),
+        ] {
+            let e = check_manifest(&v).unwrap_err();
+            assert_eq!(e.kind(), villa::Kind::Invalid);
+            assert!(e.message().contains("no version"), "{e}");
+        }
+    }
+
+    #[test]
+    fn read_manifest_names_what_went_wrong() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = read_manifest(&dir.path().join("none")).unwrap_err();
+        assert_eq!(e.kind(), villa::Kind::NotFound);
+        assert!(e.message().starts_with("no recording at "), "{e}");
+
+        crate::testfs::write(dir.path().join("manifest.json"), "{not json").unwrap();
+        let e = read_manifest(dir.path()).unwrap_err();
+        assert_eq!(e.kind(), villa::Kind::Invalid);
+        assert!(e.message().contains(" does not read: "), "{e}");
+
+        let m = manifest("mock", "2026-11-06T00:00:00Z", "abc", "test", &roots("M"));
+        crate::testfs::write(dir.path().join("manifest.json"), m.to_string()).unwrap();
+        assert_eq!(read_manifest(dir.path()).unwrap()["format"], FORMAT);
+
+        crate::testfs::write(dir.path().join("manifest.json"), r#"{"format":"other"}"#).unwrap();
+        assert_eq!(
+            read_manifest(dir.path()).unwrap_err().kind(),
+            villa::Kind::Invalid
+        );
+    }
+
+    #[test]
+    fn lint_run_of_a_missing_directory_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = lint_run(&dir.path().join("none")).unwrap_err();
+        assert_eq!(e.kind(), villa::Kind::NotFound);
+        assert!(e.message().starts_with("cannot read "), "{e}");
     }
 
     // Pattern D (pure): a recording made under one root and build replays from another root and build.

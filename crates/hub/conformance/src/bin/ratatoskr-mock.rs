@@ -479,7 +479,7 @@ struct Replay {
 
 fn load_replay(dir: &std::path::Path) -> Result<Vec<Recorded>, String> {
     use runstav::recording as rec;
-    let manifest = rec::read_manifest(dir)?;
+    let manifest = rec::read_manifest(dir).map_err(|e| e.to_string())?;
     let live = rec::Roots::from_json(&manifest["roots"]);
     let text = match std::fs::read_to_string(dir.join("llm.jsonl")) {
         Ok(t) => t,

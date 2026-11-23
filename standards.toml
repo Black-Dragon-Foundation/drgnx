@@ -54,6 +54,7 @@ skel = { clean = true }
 glitnir = { clean = true }
 sja = { clean = true }
 smidja = { clean = true }
+runstav = { clean = true }
 tafl = { clean = true, ui = true }
 
 [[standard]]

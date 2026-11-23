@@ -7,6 +7,10 @@
 //!
 //! This crate owns the `paths` standard: nothing else reads `HOME` or an `XDG_` variable.
 
+mod env;
+
+pub use env::{Env, Xdg};
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};

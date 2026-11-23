@@ -333,7 +333,7 @@ params! {
     FoldsLoad(folds::FoldsLoad),
     TermOpen(term::TermOpen),
     TermConfig(term::TermConfig),
-    TermKey(term::TermKey),
+    TermKey(term::TermKeyEvent),
     TermText(term::TermText),
     TermPaste(term::TermText),
     TermFocus(term::TermFocus),

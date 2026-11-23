@@ -5,59 +5,17 @@
 
 use rustix::fs::{FileType, Mode, OFlags};
 use sha1::{Digest, Sha1};
-use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
+use stig::Xdg;
 
 /// The longest socket path used (bytes): `sun_path` holds 104 on macOS, with its NUL.
 pub const MAX_SOCKET_PATH: usize = 103;
 
-/// The environment a hub sees (only the variables the rule reads matter) and the uid it runs as.
-#[derive(Clone, Debug, Default)]
-pub struct Env {
-    pub vars: BTreeMap<String, String>,
-    pub uid: u32,
-}
-
-impl Env {
-    pub fn new(vars: &[(&str, &str)], uid: u32) -> Env {
-        Env {
-            vars: vars
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            uid,
-        }
-    }
-
-    /// This process's own environment and effective uid.
-    pub fn process() -> Env {
-        Env {
-            vars: std::env::vars_os()
-                .map(|(k, v)| {
-                    (
-                        k.to_string_lossy().into_owned(),
-                        v.to_string_lossy().into_owned(),
-                    )
-                })
-                .collect(),
-            uid: rustix::process::geteuid().as_raw(),
-        }
-    }
-
-    fn get(&self, name: &str) -> Option<&str> {
-        self.vars.get(name).map(String::as_str)
-    }
-
-    /// `drgnx-paths-env-dir`: the value when it begins with "/", else nothing (unset, empty, relative and "~/..."
-    /// all mean the default).
-    fn abs(&self, name: &str) -> Option<&str> {
-        self.get(name).filter(|v| v.starts_with('/'))
-    }
-}
+pub use stig::Env;
 
 /// A path that cannot be used.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,14 +108,14 @@ fn expand_in(name: &str, dir: &str) -> String {
 
 /// `(expand-file-name "~/REST")` with the home from HOME.
 fn in_home(env: &Env, rest: &str) -> String {
-    expand_in(rest, env.get("HOME").unwrap_or("/"))
+    expand_in(rest, env.home().unwrap_or("/"))
 }
 
 /// `(drgnx-paths-dir KIND)` for the kinds a hub needs: `own` is drgnx's variable, `xdg` the XDG one, `base` under "~".
-fn dir(env: &Env, own: Option<&str>, xdg: &str, base: &str) -> String {
-    let d = match own.and_then(|o| env.abs(o)) {
+fn dir(env: &Env, own: Option<&str>, xdg: Xdg, base: &str) -> String {
+    let d = match own.and_then(|o| env.absolute(o)) {
         Some(v) => normalize(v),
-        None => match env.abs(xdg) {
+        None => match env.xdg(xdg) {
             Some(x) => expand_in("drgnx", x),
             None => expand_in("drgnx", &in_home(env, base)),
         },
@@ -167,26 +125,16 @@ fn dir(env: &Env, own: Option<&str>, xdg: &str, base: &str) -> String {
 
 /// `(drgnx-data-dir)`: a name ending in "/".
 pub fn data_dir(env: &Env) -> PathBuf {
-    PathBuf::from(dir(
-        env,
-        Some("DRGNX_DATA_DIR"),
-        "XDG_DATA_HOME",
-        ".local/share",
-    ))
+    PathBuf::from(dir(env, Some("DRGNX_DATA_DIR"), Xdg::Data, ".local/share"))
 }
 
 /// `(drgnx-paths-dir 'config)`: a name ending in "/".
 pub fn config_dir(env: &Env) -> PathBuf {
-    PathBuf::from(dir(
-        env,
-        Some("DRGNX_CONFIG_DIR"),
-        "XDG_CONFIG_HOME",
-        ".config",
-    ))
+    PathBuf::from(dir(env, Some("DRGNX_CONFIG_DIR"), Xdg::Config, ".config"))
 }
 
 fn state(env: &Env) -> String {
-    dir(env, None, "XDG_STATE_HOME", ".local/state")
+    dir(env, None, Xdg::State, ".local/state")
 }
 
 /// `(drgnx-state-dir)`: a name ending in "/" (`runtime.db` and the hub's log are under its `hub/`).
@@ -196,7 +144,7 @@ pub fn state_dir(env: &Env) -> PathBuf {
 
 /// `(drgnx-cache-dir)`: a name ending in "/" (Hrafn's models are under its `models/`).
 pub fn cache_dir(env: &Env) -> PathBuf {
-    PathBuf::from(dir(env, None, "XDG_CACHE_HOME", ".cache"))
+    PathBuf::from(dir(env, None, Xdg::Cache, ".cache"))
 }
 
 /// `<tmp>`, Emacs's `temporary-file-directory` on Linux and macOS: the first of TMPDIR, TMP, TEMP that is set, else
@@ -230,7 +178,7 @@ pub fn socket_path(env: &Env) -> PathBuf {
         .collect();
     let name = format!("hub-{}.sock", &hex[..8]);
     let path = match env
-        .abs("XDG_RUNTIME_DIR")
+        .xdg(Xdg::Runtime)
         .filter(|r| std::fs::metadata(r).is_ok_and(|m| m.is_dir()))
     {
         Some(run) => expand_in(&name, &expand_in("drgnx", run)),
@@ -472,6 +420,7 @@ pub fn owned_in_trusted(dir: &std::os::fd::OwnedFd, name: &Path) -> io::Result<(
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use stig::HOME_VAR as HOME;
 
     #[test]
     fn socket_cases_fixture() {
@@ -480,7 +429,7 @@ mod tests {
             "/../../../test/fixtures/hub-socket-cases.json"
         );
         let cases: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(file).expect("the fixture file"))
+            serde_json::from_str(&crate::testfs::read(file).expect("the fixture file"))
                 .expect("the fixture's JSON");
         let cases = cases.as_array().expect("an array");
         assert!(cases.len() >= 13, "the fixture needs at least 13 cases");
@@ -512,16 +461,16 @@ mod tests {
     fn config_dir_follows_drgnx_paths_dir() {
         let e = |vars: &[(&str, &str)]| config_dir(&Env::new(vars, 1));
         assert_eq!(
-            e(&[("HOME", "/hm"), ("DRGNX_CONFIG_DIR", "/c/x")]),
+            e(&[(HOME, "/hm"), ("DRGNX_CONFIG_DIR", "/c/x")]),
             Path::new("/c/x/")
         );
         assert_eq!(
-            e(&[("HOME", "/hm"), ("XDG_CONFIG_HOME", "/xc")]),
+            e(&[(HOME, "/hm"), (Xdg::Config.var(), "/xc")]),
             Path::new("/xc/drgnx/")
         );
         // a relative value counts for nothing
         assert_eq!(
-            e(&[("HOME", "/hm"), ("DRGNX_CONFIG_DIR", "c")]),
+            e(&[(HOME, "/hm"), ("DRGNX_CONFIG_DIR", "c")]),
             Path::new("/hm/.config/drgnx/")
         );
     }
@@ -529,9 +478,9 @@ mod tests {
     #[test]
     fn cache_dir_follows_drgnx_paths_dir() {
         let e = |vars: &[(&str, &str)]| cache_dir(&Env::new(vars, 1));
-        assert_eq!(e(&[("HOME", "/hm")]), Path::new("/hm/.cache/drgnx/"));
+        assert_eq!(e(&[(HOME, "/hm")]), Path::new("/hm/.cache/drgnx/"));
         assert_eq!(
-            e(&[("HOME", "/hm"), ("XDG_CACHE_HOME", "/xc")]),
+            e(&[(HOME, "/hm"), (Xdg::Cache.var(), "/xc")]),
             Path::new("/xc/drgnx/")
         );
     }
@@ -548,8 +497,8 @@ mod tests {
     fn session_dirs_are_within_103_bytes() {
         let env = Env::new(
             &[
-                ("HOME", "/hm/u"),
-                ("XDG_RUNTIME_DIR", "/tmp"),
+                (HOME, "/hm/u"),
+                (Xdg::Runtime.var(), "/tmp"),
                 ("DRGNX_DATA_DIR", "/srv/a"),
             ],
             4242,
@@ -576,7 +525,7 @@ mod tests {
             assert!(session_dir(&env, &socket, good).is_ok(), "{good:?}");
         }
         // sized for gateway.sock: 103 bytes fit beside the socket, 104 go under <tmp>
-        let t = Env::new(&[("HOME", "/hm/u"), ("TMPDIR", "/var/tmp")], 4242);
+        let t = Env::new(&[(HOME, "/hm/u"), ("TMPDIR", "/var/tmp")], 4242);
         let sid = "0123456789ab";
         let room = |n: usize| {
             // "<dir>/hub-546b5fa5.sock" whose "<dir>/s/SID/gateway.sock" is n bytes
@@ -611,7 +560,7 @@ mod tests {
             Path::new("/var/tmp/drgnx-hub-4242/s/0123456789ab")
         );
         let long_tmp = format!("/{}", "t".repeat(80));
-        let t = Env::new(&[("HOME", "/hm/u"), ("TMPDIR", &long_tmp)], 4242);
+        let t = Env::new(&[(HOME, "/hm/u"), ("TMPDIR", &long_tmp)], 4242);
         assert!(matches!(
             session_dir(&t, &room(104), sid),
             Err(PathError::TooLong(_))
@@ -625,8 +574,8 @@ mod tests {
         let run = root.path().join("run");
         let env = Env::new(
             &[
-                ("HOME", "/hm/u"),
-                ("XDG_RUNTIME_DIR", run.to_str().unwrap()),
+                (HOME, "/hm/u"),
+                (Xdg::Runtime.var(), run.to_str().unwrap()),
                 ("DRGNX_DATA_DIR", "/srv/a"),
             ],
             4242,
@@ -685,7 +634,7 @@ mod tests {
         assert!(!root.path().join("nowhere").exists());
         // a file is refused
         let file = root.path().join("file");
-        std::fs::write(&file, "").unwrap();
+        crate::testfs::write(&file, "").unwrap();
         assert!(private_dir(&file).is_err());
     }
 
@@ -758,7 +707,7 @@ mod tests {
             judged(&link)
         );
         let file = root.path().join("file");
-        std::fs::write(&file, "").unwrap();
+        crate::testfs::write(&file, "").unwrap();
         assert!(
             judged(&file).ends_with("is not a directory"),
             "{}",
@@ -785,7 +734,7 @@ mod tests {
         std::fs::create_dir(&d).unwrap();
         std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
         let fd = trusted_dir(&d).unwrap();
-        std::fs::write(d.join("hub-x.cap"), "c").unwrap();
+        crate::testfs::write(d.join("hub-x.cap"), "c").unwrap();
         let mut text = String::new();
         std::io::Read::read_to_string(
             &mut open_in_trusted(&fd, Path::new("hub-x.cap")).unwrap(),
@@ -803,7 +752,7 @@ mod tests {
         );
         // a link to a file elsewhere is not followed
         let outside = root.path().join("outside");
-        std::fs::write(&outside, "secret").unwrap();
+        crate::testfs::write(&outside, "secret").unwrap();
         std::os::unix::fs::symlink(&outside, d.join("hub-y.cap")).unwrap();
         assert!(open_in_trusted(&fd, Path::new("hub-y.cap")).is_err());
         // a directory is no file

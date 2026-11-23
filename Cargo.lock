@@ -5720,6 +5720,7 @@ dependencies = [
  "http",
  "http-body-util",
  "huginn",
+ "hulda",
  "hyper",
  "hyper-util",
  "jsonc-parser",
@@ -6078,8 +6079,10 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 name = "runstav"
 version = "0.1.0"
 dependencies = [
+ "eitri",
  "getrandom 0.4.3",
  "hmac",
+ "hulda",
  "proptest",
  "rodd",
  "rustix",
@@ -6092,9 +6095,11 @@ dependencies = [
  "sha1 0.11.0",
  "sha2 0.11.1",
  "skuld",
+ "stig",
  "subtle",
  "tempfile",
  "tokio-util",
+ "villa",
  "zeroize",
 ]
 
@@ -7096,6 +7101,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 name = "stig"
 version = "0.1.0"
 dependencies = [
+ "rustix",
  "tempfile",
  "villa",
 ]
