@@ -522,6 +522,52 @@ fn a_watcher_event_waits_for_the_step_that_claims_it() {
     assert_eq!(kind_of(&hub, out[0].op), Kind::External);
 }
 
+/// Why the hub's own write must never be seen torn: a step's claim that reads the file while the write is under way
+/// finds it empty, which is an outside change that emptied the file, and the next claim, finding the written text
+/// again, is a new version that wrote every line of it: the line's record is the claim's (session and step, no reason,
+/// op 4), not the agent's write that had the reason (op 2).  This is the history's answer to a torn read; the write
+/// that cannot be torn is `agents::session::write_whole`.
+#[test]
+fn a_torn_read_of_a_hub_write_takes_the_line_from_the_agents_record() {
+    let Fixture {
+        repo,
+        hist: _hist,
+        hub,
+        tree,
+    } = fixture(&[("a.txt", "base\n")]);
+    let disk = repo.path().join("a.txt");
+    let turn_1 = hub
+        .on_agent_write(&tree, "a.txt", b"one\n", "s1", cause("2"), 10.0)
+        .unwrap();
+    std::fs::write(&disk, "one\n").unwrap();
+    let reasoned = Cause {
+        decision: Some("decision:1".into()),
+        ..cause("7")
+    };
+    let turn_2 = hub
+        .on_agent_write(&tree, "a.txt", b"one\ntwo\n", "s1", reasoned, 11.0)
+        .unwrap();
+    assert_eq!((turn_1[0].op, turn_2[0].op), (1, 2));
+    // the claim of the step before reads the file while the write truncated it and has not written yet
+    std::fs::write(&disk, "").unwrap();
+    let torn = hub
+        .claim(&tree, &["a.txt".to_owned()], false, "s1", cause("6"), 11.1)
+        .unwrap();
+    assert_eq!(torn[0].op, 3);
+    std::fs::write(&disk, "one\ntwo\n").unwrap();
+    let refilled = hub
+        .claim(&tree, &["a.txt".to_owned()], false, "s1", cause("7"), 11.2)
+        .unwrap();
+    assert_eq!(refilled[0].op, 4);
+    let (op, _) = hub.hunk_at(&tree, "a.txt", 2).unwrap().unwrap();
+    assert_eq!(op.0, 4, "the line is the claim's now");
+    assert_eq!(hub.cause_of(op.0).unwrap().decision, None);
+    assert_eq!(
+        hub.cause_of(2).unwrap().decision.as_deref(),
+        Some("decision:1")
+    );
+}
+
 fn kind_of(hub: &Hub, op: i64) -> Kind {
     hub.with(|h| h.op(OpId(op)).unwrap().kind)
 }

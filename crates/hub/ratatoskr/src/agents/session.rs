@@ -6491,7 +6491,7 @@ impl Session {
         }
         // the edit history records what is written: the content after the hooks' change, never a refused write
         self.record_write(&real, &content).await;
-        tokio::fs::write(&real, content)
+        write_whole(real, content)
             .await
             .map_err(|e| (-32602, format!("{path}: {e}")))
     }
@@ -7129,6 +7129,78 @@ pub(crate) fn text_for_intent(text: &str, intent: Option<SendIntent>) -> String 
     match intent {
         Some(SendIntent::Ask) => format!("{ASK_INSTRUCTION}\n\n{text}"),
         _ => text.to_string(),
+    }
+}
+
+/// CONTENT as the whole of the file REAL: written to a temporary file in its folder and renamed over it (its mode
+/// kept, 0o644 for a new file), so the file is never seen empty or half written.  A step's claim, the watcher and a
+/// rescan read the file while the write is under way (the history recorded it first); an in-place truncating write
+/// let one read it empty, which the history recorded as an outside change that emptied the file, and the version that
+/// refilled it then took the lines from the agent's write and the reason that went with them.
+async fn write_whole(real: PathBuf, content: String) -> std::io::Result<()> {
+    let joined = crate::clock::blocking(move || {
+        let (Some(parent), Some(name)) = (real.parent(), real.file_name()) else {
+            return Err(std::io::Error::other("the path names no file"));
+        };
+        let dir = std::fs::File::open(parent)?;
+        let name = Path::new(name);
+        let mode = eitri::open_beneath(std::os::fd::AsFd::as_fd(&dir), name, eitri::Kind::File)
+            .ok()
+            .and_then(|o| rustix::fs::fstat(&o.fd).ok())
+            .map_or(0o644, |st| u32::from(st.st_mode) & 0o777);
+        eitri::write_regular(
+            std::os::fd::AsFd::as_fd(&dir),
+            name,
+            content.as_bytes(),
+            mode,
+        )
+        .map_err(|e| std::io::Error::other(e.to_string()))
+    })
+    .await;
+    joined.unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())))
+}
+
+#[cfg(test)]
+mod write_tests {
+    use super::*;
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A reader that has the file open while the agent's write lands sees the whole old file, never a truncated or
+    /// half-written one, and the name holds the whole new one; the mode stays and no temporary file is left.
+    // test-pattern: D
+    #[tokio::test]
+    async fn a_write_replaces_the_file_whole_and_never_truncates_it_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("b.txt");
+        std::fs::write(&f, "one\n").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let mut reader = std::fs::File::open(&f).unwrap();
+        write_whole(f.clone(), "one\ntwo\n".to_owned())
+            .await
+            .unwrap();
+        let mut old = String::new();
+        reader.read_to_string(&mut old).unwrap();
+        assert_eq!(
+            old, "one\n",
+            "the open reader still sees the whole old file"
+        );
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "one\ntwo\n");
+        assert_eq!(
+            std::fs::metadata(&f).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    /// A file that is not there yet is made, readable by its folder's users as a new file is.
+    // test-pattern: D
+    #[tokio::test]
+    async fn a_write_makes_a_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("new.txt");
+        write_whole(f.clone(), "x\n".to_owned()).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "x\n");
     }
 }
 

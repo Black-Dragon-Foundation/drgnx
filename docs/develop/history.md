@@ -266,8 +266,12 @@ Every `fs/write_text_file` the session handler serves (`agents/session.rs`, afte
 `on_agent_write` first, in its worktree's project history, with the session's whole cause (`Session::write_cause`): the
 session, the step running (its key, `step.seq`), the task it works on, and the conclusion it recorded in the same turn
 at or before that step. A folder that is no git worktree or a path outside it (a brainstorm's document)
-is not recorded, and a history that fails never fails the write. A Fork from here of a worker starts a worker in its new
-tree, so its writes are served (a chat's fork stays a chat, its project read-only).
+is not recorded, and a history that fails never fails the write. The file is then written through a temporary file
+and a rename (`write_whole`, as `eitri::write_regular` does), its mode kept: a step's claim, the watcher or a rescan
+that reads it while the write lands sees the old file or the new one, never an empty or half-written one. (An in-place
+truncating write let a claim read it empty, record an outside change that emptied the file, and then record the written
+text as a new version of the claim's own: the line lost the agent's record and the reason in it.) A Fork from here of a
+worker starts a worker in its new tree, so its writes are served (a chat's fork stays a chat, its project read-only).
 
 **Merges** (`merge.rs`). After git merged a task's branch into the job's tree (the review's merge and a manager's
 `merge` tool), `Hub::on_git_merge(target, source, old, new, now)` reads git's text of every file the merge changed from
