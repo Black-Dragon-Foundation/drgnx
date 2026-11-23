@@ -2639,6 +2639,11 @@ mod tests {
         );
         assert!(!may_write_task(&conn, &me, t, &["note"], NOW).unwrap());
         assert!(may_write_task(&conn, &me, t, &["claim"], NOW + 200.0).unwrap());
+        // an expiry in the past is refused, as at the grant
+        let past = write(&mut conn, user(), |tx| {
+            edit(tx, &g.id, None, Some(Some(1.0)))
+        });
+        assert!(matches!(past, Err(WriteError::Refused(_))));
         // an agent or an outside caller edits, revokes and creates nothing
         for meta in [
             TxMeta::new("agent:s", Class::Agent, "test"),
