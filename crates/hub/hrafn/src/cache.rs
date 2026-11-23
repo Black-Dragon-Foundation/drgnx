@@ -182,8 +182,7 @@ impl VectorCache {
         Ok(self
             .handle
             .read(move |c| {
-                let mut st =
-                    c.prepare_cached(&format!("select 1 from {} where key = ?1", table(kind)))?;
+                let mut st = c.prepare(&format!("select 1 from {} where key = ?1", table(kind)))?;
                 let mut out = Vec::with_capacity(keys.len());
                 for k in &keys {
                     out.push(st.exists([k.as_slice()])?);
@@ -231,7 +230,7 @@ impl VectorCache {
             .handle
             .write(move |c| {
                 let used = next_used(c)?;
-                let mut st = c.prepare_cached(&format!(
+                let mut st = c.prepare(&format!(
                     "insert or replace into {}(key, bits, vec, scale, last_used) values (?1, ?2, ?3, ?4, ?5)",
                     table(kind)
                 ))?;
@@ -249,7 +248,7 @@ impl VectorCache {
         Ok(self
             .handle
             .read(move |c| {
-                let mut st = c.prepare_cached(&format!(
+                let mut st = c.prepare(&format!(
                     "select bits, vec, scale from {} where key = ?1",
                     table(kind)
                 ))?;
@@ -311,19 +310,17 @@ impl VectorCache {
                 )?;
                 let used = next_used(c)?;
                 let k = kind.as_i64();
-                let mut add = c.prepare_cached(
-                    "insert or ignore into held(holder, kind, key) values (?1, ?2, ?3)",
-                )?;
+                let mut add =
+                    c.prepare("insert or ignore into held(holder, kind, key) values (?1, ?2, ?3)")?;
                 for key in &added {
                     add.execute(params![id, k, key.as_slice()])?;
                 }
-                let mut del = c.prepare_cached(
-                    "delete from held where holder = ?1 and kind = ?2 and key = ?3",
-                )?;
+                let mut del =
+                    c.prepare("delete from held where holder = ?1 and kind = ?2 and key = ?3")?;
                 for key in &removed {
                     del.execute(params![id, k, key.as_slice()])?;
                 }
-                let mut touch = c.prepare_cached(&format!(
+                let mut touch = c.prepare(&format!(
                     "update {} set last_used = ?1 where key = ?2",
                     table(kind)
                 ))?;
@@ -371,7 +368,7 @@ impl VectorCache {
         Ok(self
             .handle
             .read(move |c| {
-                let mut st = c.prepare_cached(
+                let mut st = c.prepare(
                     "select 1 from held h join holder o on o.id = h.holder
                      where h.kind = ?1 and h.key = ?2 and o.live = 1",
                 )?;
