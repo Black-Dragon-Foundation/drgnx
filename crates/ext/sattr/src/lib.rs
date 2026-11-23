@@ -12,7 +12,9 @@
 pub mod luau;
 pub mod wasm;
 
-/// The generated bindings (see build.rs). The generator writes its own `allow(dead_code, unused)`: an interface the editor does not use is not an error.
+/// The generated bindings (see build.rs).
+// dead_code: the bindings cover the whole API, and a given crate calls only part of it
+#[allow(dead_code)]
 pub mod generated {
     include!(concat!(env!("OUT_DIR"), "/api_gen.rs"));
 }

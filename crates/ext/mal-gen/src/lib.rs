@@ -777,7 +777,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
         w.name
     )?;
     for (pkg, ifaces) in &modules {
-        putln!(out, "#[allow(dead_code, unused)]\npub mod {pkg} {{")?;
+        putln!(out, "pub mod {pkg} {{")?;
         let mut ex = String::new();
         for (module, b) in ifaces {
             putln!(out, "pub mod {module} {{\n{}{}}}", b.enums, b.api)?;
@@ -795,7 +795,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
         }
         out.push_str("}\n");
     }
-    out.push_str("#[allow(dead_code, unused)]\n");
+    out.push_str("");
     out.push_str(RT);
     putln!(out, "pub const BOUND: &[&str] = &[{}];", quoted(&bound))?;
     putln!(
@@ -832,7 +832,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     )?;
     putln!(
         out,
-        "#[allow(dead_code, unused)]\npub fn install_luau<A: Api + 'static>(lua: &mlua::Lua, api: &std::sync::Arc<std::sync::Mutex<A>>) -> mlua::Result<()> {{\n    let __d = lua.create_table()?;"
+        "pub fn install_luau<A: Api + 'static>(lua: &mlua::Lua, api: &std::sync::Arc<std::sync::Mutex<A>>) -> mlua::Result<()> {{\n    let __d = lua.create_table()?;"
     )?;
     for p in keys.values() {
         putln!(
@@ -864,7 +864,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     out.push_str(&wasm);
     putln!(
         out,
-        "#[allow(dead_code, unused)]\npub fn wasm_link<A: Api + 'static>(__linker: &mut wasmtime::component::Linker<{}>) -> wasmtime::Result<()> {{\n{link}    Ok(())\n}}",
+        "pub fn wasm_link<A: Api + 'static>(__linker: &mut wasmtime::component::Linker<{}>) -> wasmtime::Result<()> {{\n{link}    Ok(())\n}}",
         o.state
     )?;
     Ok(Output {
