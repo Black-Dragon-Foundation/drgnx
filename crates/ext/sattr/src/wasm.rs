@@ -99,14 +99,23 @@ pub fn linker<A: Api + Send + 'static>(engine: &Engine) -> villa::Result<Linker<
     Ok(linker)
 }
 
-/// The epoch's clock: one tick a millisecond for as long as the task lives (dropping it stops the ticks).
-pub fn ticker(executor: &saman::Executor, engine: Engine) -> saman::Task<()> {
-    executor.spawn("epoch-ticker", async move {
-        for _ in 0..u64::MAX {
-            stund::sleep(Duration::from_millis(1)).await;
-            engine.increment_epoch();
-        }
-    })
+/// The epoch's clock: one tick a millisecond for as long as it lives; the guests hold it, so a deadline is never armed
+/// without a clock to reach it, and dropping the last holder stops the ticks.
+#[derive(Clone)]
+pub struct EpochClock {
+    _task: Arc<saman::Task<()>>,
+}
+
+/// Start the epoch's clock for ENGINE on EXECUTOR.
+pub fn ticker(executor: &saman::Executor, engine: Engine) -> EpochClock {
+    EpochClock {
+        _task: Arc::new(executor.spawn("epoch-ticker", async move {
+            for _ in 0..u64::MAX {
+                stund::sleep(Duration::from_millis(1)).await;
+                engine.increment_epoch();
+            }
+        })),
+    }
 }
 
 /// One extension's component, instantiated: its store holds the caller and the limits.
@@ -114,6 +123,8 @@ pub struct Guest<A: Send + 'static> {
     store: Store<State<A>>,
     ext: bindings::Extension,
     limits: Limits,
+    /// the epoch's clock: held for as long as the guest lives
+    _clock: EpochClock,
 }
 
 fn guest_error(what: &str, e: wasmtime::Error) -> villa::Error {
@@ -129,6 +140,7 @@ impl<A: Api + Send + 'static> Guest<A> {
         api: &Arc<Mutex<A>>,
         extension: &str,
         limits: Limits,
+        clock: &EpochClock,
     ) -> villa::Result<Self> {
         crate::valid_extension_name(extension)?;
         let caller = Arc::new(RwLock::new(Caller {
@@ -149,7 +161,12 @@ impl<A: Api + Send + 'static> Guest<A> {
         arm(&mut store, &limits)?;
         let ext = bindings::Extension::instantiate(&mut store, component, linker)
             .map_err(|e| guest_error("Instantiating the extension", e))?;
-        Ok(Guest { store, ext, limits })
+        Ok(Guest {
+            store,
+            ext,
+            limits,
+            _clock: clock.clone(),
+        })
     }
 
     /// F, the guest's call, armed with fuel and the epoch, for ORIGIN; the origin is put back whatever F does.

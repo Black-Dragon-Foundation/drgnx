@@ -228,14 +228,16 @@ fn an_extensions_commands_are_namespaced_listed_and_cannot_clash_through_either_
 // extension names: `a/b` + `x` and `a` + `b/x` cannot meet
 #[test]
 fn an_extension_name_that_could_collide_is_refused_by_both_hosts() {
-    let (api, _ex) = editor();
+    let (api, ex) = editor();
     for bad in ["a/b", "A", "a b", "", "a.b"] {
         assert!(LuauHost::new(&api, bad, LIMITS).is_err(), "`{bad}`");
     }
     let engine = wasm::engine().expect("engine");
     let linker = wasm::linker::<Editor>(&engine).expect("links");
+    let clock = wasm::ticker(&ex, engine.clone());
     let component = guest::component(&engine, &guest::spin());
-    let e = wasm::Guest::instantiate(&engine, &linker, &component, &api, "a/b", LIMITS).err();
+    let e =
+        wasm::Guest::instantiate(&engine, &linker, &component, &api, "a/b", LIMITS, &clock).err();
     assert!(e.is_some(), "the component host refuses it too");
     // so an id with a slash in it is `ext/a/b/x`, the one command of `a`
     let a = luau(&api, "a");
@@ -796,12 +798,14 @@ fn the_extension_runs_for_the_origin_it_is_given() {
 // 3. a real guest calls an import: the linker routes it to the store's `WasmApi`, with the store's caller
 #[test]
 fn a_real_guest_is_refused_a_reserved_key_through_the_linker() {
-    let (api, _ex) = editor();
+    let (api, ex) = editor();
     let engine = wasm::engine().expect("engine");
     let linker = wasm::linker::<Editor>(&engine).expect("links");
+    let clock = wasm::ticker(&ex, engine.clone());
     let component = guest::component(&engine, &binds_a_reserved_key());
-    let mut g = wasm::Guest::instantiate(&engine, &linker, &component, &api, "guest", LIMITS)
-        .expect("instantiates");
+    let mut g =
+        wasm::Guest::instantiate(&engine, &linker, &component, &api, "guest", LIMITS, &clock)
+            .expect("instantiates");
     // the guest traps unless `keys.bind("C-g", …)` answered with the error `refused`
     g.init(user())
         .expect("the import routed to the editor, which refused the key");
@@ -814,9 +818,10 @@ fn a_real_guest_is_refused_a_reserved_key_through_the_linker() {
 // 2. an origin from one call never reaches the next
 #[test]
 fn a_guests_origin_is_put_back_after_every_call_even_a_trapped_one() {
-    let (api, _ex) = editor();
+    let (api, ex) = editor();
     let engine = wasm::engine().expect("engine");
     let linker = wasm::linker::<Editor>(&engine).expect("links");
+    let clock = wasm::ticker(&ex, engine.clone());
     let limits = sattr::Limits {
         steps: 50_000,
         ..LIMITS
@@ -828,6 +833,7 @@ fn a_guests_origin_is_put_back_after_every_call_even_a_trapped_one() {
         &api,
         "first",
         limits,
+        &clock,
     )
     .expect("instantiates");
     assert_eq!(ok.origin(), Origin::Extension("first".into()));
@@ -844,6 +850,7 @@ fn a_guests_origin_is_put_back_after_every_call_even_a_trapped_one() {
         &api,
         "second",
         limits,
+        &clock,
     )
     .expect("instantiates");
     assert!(
@@ -857,4 +864,26 @@ fn a_guests_origin_is_put_back_after_every_call_even_a_trapped_one() {
     );
     // and the fuel was renewed for the next call: the same guest runs out again, it does not start empty
     assert!(stuck.init(user()).is_err());
+}
+
+// 2. the fuel is renewed for every call: a guest that is cheap per call can be called again and again
+#[test]
+fn a_guests_fuel_is_renewed_for_each_call() {
+    let (api, ex) = editor();
+    let engine = wasm::engine().expect("engine");
+    let linker = wasm::linker::<Editor>(&engine).expect("links");
+    let clock = wasm::ticker(&ex, engine.clone());
+    // enough for one call, far too little for two hundred if it were spent for good
+    let limits = sattr::Limits {
+        steps: 5_000,
+        ..LIMITS
+    };
+    let component = guest::component(&engine, &binds_a_reserved_key());
+    let mut g = wasm::Guest::instantiate(
+        &engine, &linker, &component, &api, "thrifty", limits, &clock,
+    )
+    .expect("instantiates");
+    for n in 0..200 {
+        g.init(user()).unwrap_or_else(|e| panic!("call {n}: {e:?}"));
+    }
 }

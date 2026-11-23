@@ -27,16 +27,17 @@ fn table_bomb() -> String {
     )
 }
 
-/// Run the guest's `init` under LIMITS (with the epoch ticking when TICKS): the error text, and how often a limit said
+/// Run the guest's `init` under LIMITS (the epoch always ticking: the guest holds the clock): the error text, and how often a limit said
 /// no to growth.
-fn init(source: &str, limits: Limits, ticks: bool) -> (Result<(), String>, u32) {
+fn init(source: &str, limits: Limits) -> (Result<(), String>, u32) {
     let (api, ex) = editor();
     let engine = wasm::engine().expect("the engine");
-    let _clock = ticks.then(|| wasm::ticker(&ex, engine.clone()));
     let component = guest::component(&engine, source);
     let linker = wasm::linker::<Editor>(&engine).expect("links");
-    let mut g = wasm::Guest::instantiate(&engine, &linker, &component, &api, "greedy", limits)
-        .expect("instantiates");
+    let clock = wasm::ticker(&ex, engine.clone());
+    let mut g =
+        wasm::Guest::instantiate(&engine, &linker, &component, &api, "greedy", limits, &clock)
+            .expect("instantiates");
     let r = g.init(user()).map_err(|e| format!("{e:?}"));
     (r, g.denied_growths())
 }
@@ -52,25 +53,25 @@ fn limits(steps: u64, memory_bytes: usize, ticks: u64) -> Limits {
 
 #[test]
 fn a_component_that_never_ends_runs_out_of_fuel() {
-    let (r, _) = init(
-        &guest::spin(),
-        limits(100_000, 1 << 20, u64::MAX / 2),
-        false,
-    );
+    // the epoch (5 s, ticking) is the backstop: if the fuel limit were broken the guest would end in seconds as an
+    // interrupt, and this assertion would fail instead of the test hanging
+    let (r, _) = init(&guest::spin(), limits(100_000, 1 << 20, 5_000));
     let e = r.expect_err("stopped");
     assert!(e.contains("fuel"), "{e}");
 }
 
 #[test]
 fn a_component_that_never_ends_is_interrupted_by_the_epoch() {
-    let (r, _) = init(&guest::spin(), limits(u64::MAX / 2, 1 << 20, 30), true);
+    // the fuel (a few seconds of work) is the backstop: if the epoch did not fire the guest would end as `fuel`, and
+    // this assertion would fail instead of the test hanging
+    let (r, _) = init(&guest::spin(), limits(3_000_000_000, 1 << 20, 30));
     let e = r.expect_err("stopped");
     assert!(e.contains("interrupt"), "{e}");
 }
 
 #[test]
 fn a_component_memory_bomb_is_refused_memory() {
-    let (r, denied) = init(&bomb(), limits(10_000_000, 1 << 20, u64::MAX / 2), false);
+    let (r, denied) = init(&bomb(), limits(10_000_000, 1 << 20, u64::MAX / 2));
     let e = r.expect_err("the guest gave up when growing failed");
     assert!(
         e.contains("unreachable"),
@@ -85,7 +86,7 @@ fn a_component_table_bomb_is_refused_by_the_limit_in_limits() {
         table_elements: 50,
         ..limits(10_000_000, 1 << 20, u64::MAX / 2)
     };
-    let (r, denied) = init(&table_bomb(), tight, false);
+    let (r, denied) = init(&table_bomb(), tight);
     let e = r.expect_err("the guest gave up when growing failed");
     assert!(
         e.contains("unreachable"),
@@ -97,7 +98,7 @@ fn a_component_table_bomb_is_refused_by_the_limit_in_limits() {
         table_elements: 1_000_000,
         ..limits(10_000, 1 << 20, u64::MAX / 2)
     };
-    let (r, denied) = init(&table_bomb(), roomy, false);
+    let (r, denied) = init(&table_bomb(), roomy);
     assert!(r.expect_err("fuel").contains("fuel"));
     assert_eq!(denied, 0);
 }
@@ -133,10 +134,23 @@ fn a_luau_loop_and_a_luau_memory_bomb_are_stopped_and_the_host_goes_on() {
 fn luau_honours_the_wall_clock_deadline() {
     let (api, _ex) = editor();
     // plenty of steps, little time: the clock stops the script, not the step budget
-    let tight = limits(u64::MAX / 4, 8 << 20, 50);
+    // (the step budget is a backstop of a few seconds, so a broken clock fails the assertion rather than hanging)
+    let tight = limits(200_000_000, 8 << 20, 50);
     let h = sattr::luau::LuauHost::new(&api, "slow", tight).expect("the host starts");
     let e = h
         .exec(user(), "spin", "while true do end")
         .expect_err("stopped");
     assert!(format!("{:?}", e.detail()).contains("its time"), "{e:?}");
+}
+
+#[test]
+fn luau_stops_a_loop_by_its_step_budget_before_the_clock() {
+    let (api, _ex) = editor();
+    // a roomy clock (5 s): only the step budget can stop it at once, and without it the clock ends the loop as `its time`
+    let h = sattr::luau::LuauHost::new(&api, "steps", limits(10_000, 8 << 20, 5_000))
+        .expect("the host starts");
+    let e = h
+        .exec(user(), "spin", "while true do end")
+        .expect_err("stopped");
+    assert!(format!("{:?}", e.detail()).contains("step budget"), "{e:?}");
 }
