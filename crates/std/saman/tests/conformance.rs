@@ -211,6 +211,19 @@ fn a_tuned_pool_runs_the_tuning_and_a_finished_task_says_so() {
 }
 
 #[test]
+fn the_pool_names_its_threads_and_has_at_least_one_worker() {
+    let ex = Executor::new(0).unwrap();
+    let name = ex.block_on(async {
+        ex.spawn("who", async {
+            std::thread::current().name().map(str::to_owned)
+        })
+        .await
+        .unwrap()
+    });
+    assert_eq!(name.as_deref(), Some("saman-worker"));
+}
+
+#[test]
 fn a_send_to_a_gone_receiver_is_reported_not_raised() {
     let (tx, rx) = mpsc::channel::<u8>();
     assert!(saman::delivered(tx.send(1), "a test channel"));
