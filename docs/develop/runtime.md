@@ -1660,7 +1660,9 @@ hub's clock) without one, and started again, once, when it dies inside a request
   back in the caller's order, normalised.
 - **The self-check.** After each start the engine embeds the reference text of
   `hrafn-embed/data/qwen3-embedding-0.6b.selfcheck.json` and compares it with the stored F16 reference vector
-  (Transformers on the safetensors, last-token pooling, normalised). Under a cosine of 0.99 the engine is refused: its
+  (Transformers on the safetensors in float16 on the CPU, last-token pooling, normalised; the text is a typical chunk of
+  drgnx's own tree, from `eval run --dump-chunks`, and the Q8_0 engine on an RX 7900 gives it 0.9994; a unit row checks
+  the data reads and is a unit vector of the model's dims). Under a cosine of 0.99 the engine is refused: its
   process ends, it embeds nothing more, and the chain goes on without it.
 - **Backend.** The asset's own: Vulkan on Linux and Windows, Metal on macOS. With several Vulkan devices ggml's own
   default holds (the dedicated GPUs, else the first integrated one); a user's `GGML_VK_VISIBLE_DEVICES` is passed on.
@@ -1813,7 +1815,9 @@ hub's clock) without one, and started again, once, when it dies inside a request
   Documents go plain and questions carry `Instruct: <task>\nQuery:<q>` as the hub's do. `--query-source SRC` embeds the
   questions with another source (the same model on another machine, for a parity check); with `--state DIR` the chunk
   vectors already in DIR are reused and no document text is sent. The report JSON has `source` and
-  `embed_seconds_per_chunk`.
+  `embed_seconds_per_chunk`. `eval run ROOT --dump-chunks N --out FILE` only indexes and writes N of the project's chunk
+  texts (evenly spread; documents plain, as tier 2 embeds them) to FILE as `{"texts": [...]}`, opening no model: the
+  engine's parity check and its self-check reference come from such a dump.
 - **The MCP tools (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets
   `search.sock` beside `mcp.sock` (recorded in the session's row, so it is bound again at a restart and closed with the
   session): the tools `search` (`query`, `scope`, `k`), `symbols` (`name`, `match`, `kind`, `path`, `scope`, `k`) and

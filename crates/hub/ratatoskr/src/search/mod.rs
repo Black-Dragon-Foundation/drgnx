@@ -153,7 +153,9 @@ impl Search {
                     ctx: hrafn_embed::models::QWEN3_MAX_TOKENS,
                     ubatch: hrafn_embed::models::QWEN3_MAX_TOKENS,
                     idle: engine::IDLE,
-                    selfcheck: None,
+                    selfcheck: gguf
+                        .selfcheck()
+                        .map(|(text, vector)| engine::SelfCheck { text, vector }),
                 }))
             })
             .clone())

@@ -255,9 +255,23 @@ pub struct GgufSpec {
     pub bytes: u64,
     /// The record of its vectors at an embed-text version (hrafn's, which this crate does not know).
     pub record: fn(u32) -> FingerprintRecord,
+    /// The engine's self-check: `{text, vector, ...}`, one chunk of drgnx and its F16 Transformers reference vector
+    /// (`data/<model>.selfcheck.json`, made by the plan's Task 19 Step 1).
+    pub selfcheck: &'static str,
 }
 
 impl GgufSpec {
+    /// The self-check's text and reference vector; None if the data does not read (a build mistake, caught by a test).
+    pub fn selfcheck(&self) -> Option<(String, Vec<f32>)> {
+        let v: serde_json::Value = serde_json::from_str(self.selfcheck).ok()?;
+        let vector = v["vector"]
+            .as_array()?
+            .iter()
+            .map(|x| x.as_f64().map(|f| f as f32))
+            .collect::<Option<Vec<f32>>>()?;
+        Some((v["text"].as_str()?.to_string(), vector))
+    }
+
     /// The file as a row of the model download.
     pub fn model_file(&self) -> ModelFile {
         ModelFile {
@@ -296,11 +310,28 @@ pub const GGUF_MODELS: &[GgufSpec] = &[GgufSpec {
     sha256: "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
     bytes: 639_150_592,
     record: qwen3_q8_0,
+    selfcheck: include_str!("../data/qwen3-embedding-0.6b.selfcheck.json"),
 }];
 
 /// The engine's default model.
 pub fn default_gguf() -> &'static GgufSpec {
     &GGUF_MODELS[0]
+}
+
+#[cfg(test)]
+mod gguf_tests {
+    use super::*;
+
+    #[test]
+    fn every_gguf_has_a_unit_selfcheck_of_its_dims() {
+        for g in GGUF_MODELS {
+            let (text, vector) = g.selfcheck().expect("the self-check data reads");
+            assert!(!text.is_empty(), "{}", g.id);
+            assert_eq!(vector.len() as u32, (g.record)(1).dims, "{}", g.id);
+            let norm: f32 = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+            assert!((norm - 1.0).abs() < 1e-3, "{}: norm {norm}", g.id);
+        }
+    }
 }
 
 #[derive(Debug)]
