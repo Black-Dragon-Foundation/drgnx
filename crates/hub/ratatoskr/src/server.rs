@@ -14,7 +14,7 @@
 //! 6. the process groups `runtime.db` recorded reaped (a crashed hub's children, an old hub's Lisp backend), the
 //!    sessions' `mcp.sock` of live owners bound again ([`crate::sessions`]; their owners watched each second), the
 //!    gateway listening on 127.0.0.1 and its registrations of live owners kept ([`crate::gateway`]; pruned each
-//!    second), and the `events` broadcaster.  No child Emacs is started: every method is the front's.
+//!    second), and the `events` broadcaster.  Every method is the front's.
 //!
 //! Every socket is close-on-exec (Rust's default, tested), so no child (an agent, a job) inherits a listener.
 //!
@@ -217,17 +217,6 @@ pub async fn run(args: ServeArgs) -> Exit {
     if let Err(e) = reap_recorded(&runtime).await {
         tracing::warn!("{e}");
     }
-    // what the Lisp hub left in the state dir, moved aside (never deleted), before anything is served
-    let moving = env.clone();
-    match crate::clock::blocking(move || crate::legacy::migrate(&moving)).await {
-        Ok(Ok(m)) => {
-            if !m.moved.is_empty() || !m.left.is_empty() {
-                tracing::info!(moved = ?m.moved, left = ?m.left, "what the Lisp hub left");
-            }
-        }
-        Ok(Err(e)) => tracing::warn!("cannot move what the Lisp hub left: {e}"),
-        Err(e) => tracing::warn!("moving what the Lisp hub left failed: {e}"),
-    }
     // what the hub's end reads of work.db's writer while it stops (its queue)
     let graph_queue = graph.writer.clone();
     let front = Arc::new(Front::with_graph(
@@ -240,15 +229,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     front.tool_hub.bind(&front);
     // what the browser sessions' web proxies never reach: the host's addresses and the hub's loopback ports, kept
     // live from now on (the gateway's port is added once it listens)
-    front
-        .browser_nevers
-        .start(crate::browser::nevers::emacs_server_dirs(
-            &home,
-            env.vars
-                .get("XDG_CONFIG_HOME")
-                .map(Path::new)
-                .filter(|p| p.is_absolute()),
-        ));
+    front.browser_nevers.start();
     let _ = front.dirs.set(crate::graph::StoreDirs {
         home,
         config: paths::config_dir(&env),

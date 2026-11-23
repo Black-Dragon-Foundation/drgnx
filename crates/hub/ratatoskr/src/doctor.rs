@@ -4,10 +4,7 @@
 //! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, gateway: {port, registrations, providers, keys_held,
 //! warnings, keys_refused?}?, store: {schema, writer, failed, denied_in}?, watch: {max_user_watches?, projects: [{root, watched, error?}]}?,
 //! socket_dir: {path, mode, ok}, sqlite,
-//! job_agents, exe_mode (`private-table`, `lock` or `direct`: how a file written and run is kept from ETXTBSY), sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}, legacy: {moved, left, at,
-//! lisp_processes: [{pid, what}]}}`.  `legacy` is what the Lisp runtime left (`crate::legacy`): what the first start
-//! moved to `<state>/hub/migrated-p7/`, what stays (a command job still running), and the user's processes that are
-//! still the Lisp hub or its coordination server.  `store` is the running hub's
+//! job_agents, exe_mode (`private-table`, `lock` or `direct`: how a file written and run is kept from ETXTBSY), sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}}`.  `store` is the running hub's
 //! work.db: a failed move to schema 7, and the copies that still hold what its deny-list kept out; and from files
 //! (also with no hub, when work.db exists) `wal_bytes`, `last_backup`, `backup_ok`, `backup_age_s`, `deny_list:
 //! {opted_in, warnings}`, `copies: {pre7, schema5}` and `warnings` (a WAL above 64 MiB, a backup older than 48 h or
@@ -135,7 +132,6 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
         "job_agents": JOB_AGENTS,
         "exe_mode": hlaup::mode().name(),
         "sandbox": sandbox_section(sandbox),
-        "legacy": crate::legacy::section(env),
         "packs": packs_section(env),
         "debug_adapters": debug_adapters_section(env),
     });
@@ -879,13 +875,11 @@ fn text(v: &Value, sandbox: &Check) -> String {
         t(&v["container_net"])
     ));
     out.push_str(&watch_lines(&v["watch"]));
-    out.push_str(&legacy_lines(&v["legacy"]));
     out.push_str(&pack_lines(&v["packs"]));
     out.push_str(&debug_adapter_lines(&v["debug_adapters"]));
     out
 }
 
-/// Lines about what the Lisp runtime left: a command job still running there, and its processes still alive.
 /// `watch`: the inotify budget and the open projects' watches; a project that runs unwatched is named with why.
 fn watch_lines(watch: &Value) -> String {
     let Some(projects) = watch["projects"].as_array().filter(|p| !p.is_empty()) else {
@@ -905,25 +899,6 @@ fn watch_lines(watch: &Value) -> String {
                 p["root"].as_str().unwrap_or("?")
             ));
         }
-    }
-    out
-}
-
-fn legacy_lines(legacy: &Value) -> String {
-    let list = |k: &str, f: &dyn Fn(&Value) -> String| {
-        legacy[k]
-            .as_array()
-            .map(|a| a.iter().map(f).collect::<Vec<_>>().join(", "))
-            .filter(|s| !s.is_empty())
-    };
-    let mut out = String::new();
-    if let Some(left) = list("left", &|v| v.as_str().unwrap_or("?").to_string()) {
-        out.push_str(&format!("\nlegacy: left in place until it ends: {left}"));
-    }
-    if let Some(p) = list("lisp_processes", &|v| {
-        format!("{} (pid {})", v["what"].as_str().unwrap_or("?"), v["pid"])
-    }) {
-        out.push_str(&format!("\nlegacy: Lisp runtime still running: {p}"));
     }
     out
 }
@@ -1025,10 +1000,6 @@ mod tests {
         assert_eq!(v["exe_mode"], hlaup::mode().name());
         assert!(text(&v, &working()).contains("files run after writing: "));
         assert!(!text(&v, &working()).contains("writing: ?"));
-        for k in ["moved", "left", "lisp_processes"] {
-            assert!(v["legacy"][k].is_array(), "legacy.{k}");
-        }
-        assert!(v["legacy"]["at"].is_null());
         assert!(v.get("running").is_none());
         // too open: not ok
         std::fs::set_permissions(&sock_dir, std::fs::Permissions::from_mode(0o755)).unwrap();

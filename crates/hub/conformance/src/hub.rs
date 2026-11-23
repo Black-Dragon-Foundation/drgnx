@@ -94,8 +94,7 @@ impl Root {
         self.dir.path()
     }
 
-    /// The whole environment a hub or a CLI run gets (nothing else is inherited but `PATH`, `DRGNX_EMACS` (the
-    /// editor's own CLIs that a row runs need it), `DBUS_SESSION_BUS_ADDRESS`, `DRGNX_PACK_LOCK` and
+    /// The whole environment a hub or a CLI run gets (nothing else is inherited but `PATH`, `DBUS_SESSION_BUS_ADDRESS`, `DRGNX_PACK_LOCK` and
     /// `DRGNX_PACK_GRAMMARS` (the grammars a run was pointed at) and `DRGNX_RATATOSKR_LOG`, [`HUB_LOG`] when unset): every directory points into this root, so nothing reaches `~`.  The session bus is
     /// how a container job's podman reaches the user's systemd, which enforces the job's caps (the hub refuses the job
     /// without it; `XDG_RUNTIME_DIR` here is the root's, so podman cannot find the bus there).  `extra` wins.
@@ -113,7 +112,6 @@ impl Root {
         let mut vars: BTreeMap<String, String> = BTreeMap::new();
         for k in [
             "PATH",
-            "DRGNX_EMACS",
             "DBUS_SESSION_BUS_ADDRESS",
             "DRGNX_RATATOSKR_STALL_FILE",
             "DRGNX_PACK_LOCK",

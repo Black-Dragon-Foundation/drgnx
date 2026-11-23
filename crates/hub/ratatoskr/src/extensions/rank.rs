@@ -75,7 +75,6 @@ fn keeps(e: &Entry, f: &w::Filters, ids: Option<&HashSet<&str>>) -> bool {
         && (!f.updates || row.state == w::State::Update)
         && (!f.enabled || row.state == w::State::On)
         && (!f.disabled || row.state == w::State::Off)
-        && (!f.builtin || row.kind == w::Kind::Emacs)
         && (!f.bundled || row.source == "drgnx" && row.state == w::State::BuiltIn)
         && (!f.plugins || row.kind == w::Kind::Plugin)
         && (!f.packs || row.kind == w::Kind::Pack)

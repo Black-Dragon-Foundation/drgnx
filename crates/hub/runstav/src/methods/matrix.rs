@@ -71,8 +71,6 @@ pub enum Action {
     SettingsChange,
     #[serde(rename = "user.private")]
     UserPrivate,
-    #[serde(rename = "user.emacs")]
-    UserEmacs,
     #[serde(rename = "chat.project-read")]
     ChatProjectRead,
     #[serde(rename = "plugin.abilities")]
@@ -98,7 +96,7 @@ pub enum Action {
 
 impl Action {
     /// Every action, in the matrix's row order.
-    pub const ALL: [Action; 34] = [
+    pub const ALL: [Action; 33] = [
         Action::AgentsStart,
         Action::AgentsModel,
         Action::AgentsControl,
@@ -123,7 +121,6 @@ impl Action {
         Action::Unsandboxed,
         Action::SettingsChange,
         Action::UserPrivate,
-        Action::UserEmacs,
         Action::ChatProjectRead,
         Action::PluginAbilities,
         Action::ChatProjectEdit,
@@ -162,7 +159,6 @@ impl Action {
             Action::Unsandboxed => "unsandboxed",
             Action::SettingsChange => "settings.change",
             Action::UserPrivate => "user.private",
-            Action::UserEmacs => "user.emacs",
             Action::ChatProjectRead => "chat.project-read",
             Action::PluginAbilities => "plugin.abilities",
             Action::ChatProjectEdit => "chat.project-edit",

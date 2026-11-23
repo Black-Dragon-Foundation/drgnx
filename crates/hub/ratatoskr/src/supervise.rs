@@ -825,8 +825,6 @@ mod tests {
         ] {
             assert!(SUPERVISOR_ENV.contains(&n), "{n}");
         }
-        // no child Emacs: the hub has no use for the editor's Emacs
-        assert!(!SUPERVISOR_ENV.contains(&"DRGNX_EMACS"));
         // no provider key is ever passed on
         assert!(SUPERVISOR_ENV.iter().all(|n| !n.contains("KEY")));
     }
