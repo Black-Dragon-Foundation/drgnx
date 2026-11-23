@@ -4,6 +4,7 @@
 //! - [`Executor`]: the one tokio runtime of the work pool. [`Executor::spawn`] names each task and gives a [`Task`],
 //!   which cancels the task when dropped; [`Task::detach`] lets it run on and must say why.
 //! - [`Cancel`]: a cancellation token; [`Cancel::child`] is cancelled with its parent.
+//! - [`spawn_thread`]: a named OS thread, for what must own one.
 //! - [`ui`]: [`ui::UiQueue::post`], the only way back to the UI thread, and the [`ui::Watchdog`] that times every UI
 //!   handler.
 //!
@@ -27,6 +28,24 @@ pub fn lock<T: ?Sized>(m: &Mutex<T>) -> MutexGuard<'_, T> {
                 );
             }
             poisoned.into_inner()
+        })
+}
+
+/// F on a new OS thread named NAME, for what must own a thread (a blocking read of a descriptor, a UI toolkit's own
+/// loop, a test's second thread); background work that can be a future goes on the [`Executor`]. [`villa::Kind::Unavailable`]
+/// when the system gives no thread.
+pub fn spawn_thread<F, T>(name: &str, f: F) -> villa::Result<std::thread::JoinHandle<T>>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(f)
+        .map_err(|e| {
+            villa::Error::unavailable("The editor could not start a thread.")
+                .with_detail(format!("starting thread {name}"))
+                .with_source(e)
         })
 }
 

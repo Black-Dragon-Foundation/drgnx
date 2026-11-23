@@ -96,6 +96,97 @@ pub fn now() -> Duration {
     }
 }
 
+/// A point on the installed clock (else tokio's), the stand-in for `std::time::Instant` that follows the clock a test installs.
+/// Only differences between two of them mean anything; `Instant - Instant` panics when the right side is later, like std's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Instant(Duration);
+
+impl Instant {
+    /// The installed clock's reading now (see [`now`]).
+    pub fn now() -> Instant {
+        Instant(now())
+    }
+
+    /// The time since this instant on the clock now.
+    pub fn elapsed(&self) -> Duration {
+        Instant::now().saturating_duration_since(*self)
+    }
+
+    /// The time from EARLIER to this instant; zero when EARLIER is later.
+    pub fn saturating_duration_since(&self, earlier: Instant) -> Duration {
+        self.0.saturating_sub(earlier.0)
+    }
+
+    /// The time from EARLIER to this instant, or `None` when EARLIER is later.
+    pub fn checked_duration_since(&self, earlier: Instant) -> Option<Duration> {
+        self.0.checked_sub(earlier.0)
+    }
+
+    /// The time from EARLIER to this instant; zero when EARLIER is later.
+    pub fn duration_since(&self, earlier: Instant) -> Duration {
+        self.saturating_duration_since(earlier)
+    }
+
+    /// This instant moved on by D, or `None` on overflow.
+    pub fn checked_add(&self, d: Duration) -> Option<Instant> {
+        self.0.checked_add(d).map(Instant)
+    }
+
+    /// This instant moved back by D, or `None` before the clock's origin.
+    pub fn checked_sub(&self, d: Duration) -> Option<Instant> {
+        self.0.checked_sub(d).map(Instant)
+    }
+}
+
+impl std::ops::Add<Duration> for Instant {
+    type Output = Instant;
+    fn add(self, d: Duration) -> Instant {
+        Instant(self.0 + d)
+    }
+}
+
+impl std::ops::AddAssign<Duration> for Instant {
+    fn add_assign(&mut self, d: Duration) {
+        self.0 += d;
+    }
+}
+
+impl std::ops::Sub<Duration> for Instant {
+    type Output = Instant;
+    fn sub(self, d: Duration) -> Instant {
+        Instant(self.0 - d)
+    }
+}
+
+impl std::ops::Sub<Instant> for Instant {
+    type Output = Duration;
+    fn sub(self, earlier: Instant) -> Duration {
+        self.0 - earlier.0
+    }
+}
+
+/// Wait D with the calling thread blocked, on the installed clock, else for real: for code that has no executor (a
+/// thread of the UI crates' tests, a polling loop). A virtual clock decides when it returns, like [`sleep`].
+pub fn sleep_blocking(d: Duration) {
+    match current() {
+        None => std::thread::sleep(d),
+        Some(p) => {
+            struct Unpark(std::thread::Thread);
+            impl std::task::Wake for Unpark {
+                fn wake(self: Arc<Self>) {
+                    self.0.unpark();
+                }
+            }
+            let waker = std::task::Waker::from(Arc::new(Unpark(std::thread::current())));
+            let mut cx = std::task::Context::from_waker(&waker);
+            let mut s = p.sleep(d);
+            while s.as_mut().poll(&mut cx).is_pending() {
+                std::thread::park();
+            }
+        }
+    }
+}
+
 /// A [`timeout`] that ran out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Elapsed;
