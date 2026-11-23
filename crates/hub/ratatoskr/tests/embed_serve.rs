@@ -26,6 +26,11 @@ use tokio::time::Instant;
 
 const DIMS: usize = 8;
 
+/// The chain's "now" (its backoff's clock, nothing here waits on it): the virtual origin, as `search_sources` has it.
+fn t0() -> Instant {
+    Instant::from_std(skuld::origin())
+}
+
 /// A machine that serves: its state (cache, `embed-serve/`), TEI as its embedder, the server, and the first token.
 struct Machine {
     /// The embedder reaches TEI through it.
@@ -475,9 +480,7 @@ async fn untrusted_remote_gets_lookups_only() {
     let here = tempfile::tempdir().unwrap();
     let cache = Caches::shared(here.path()).get(&id).await.unwrap();
     let mut chain = SourceChain::new(id.fp, vec![remote.clone() as Arc<dyn Source>]);
-    let out = chain
-        .fill(&cache, &items(&["held", "missing"]), Instant::now())
-        .await;
+    let out = chain.fill(&cache, &items(&["held", "missing"]), t0()).await;
     assert_eq!(
         out,
         FillOutcome::Filled {
@@ -516,7 +519,7 @@ async fn trusted_remote_gets_text_after_lookup_misses() {
     let cache = Caches::shared(here.path()).get(&id).await.unwrap();
     let mut chain = SourceChain::new(id.fp, vec![remote.clone() as Arc<dyn Source>]);
     let out = chain
-        .fill(&cache, &items(&["held", "fresh one"]), Instant::now())
+        .fill(&cache, &items(&["held", "fresh one"]), t0())
         .await;
     assert_eq!(
         out,
@@ -584,10 +587,8 @@ async fn remote_not_gated_by_battery() {
     let cache = Caches::shared(here.path()).get(&id).await.unwrap();
     let mut chain = SourceChain::new(id.fp, vec![remote.clone() as Arc<dyn Source>]);
     chain.set_gates(true, false);
-    assert!(chain.ready(Instant::now()), "the battery holds no remote");
-    let out = chain
-        .fill(&cache, &items(&["on battery"]), Instant::now())
-        .await;
+    assert!(chain.ready(t0()), "the battery holds no remote");
+    let out = chain.fill(&cache, &items(&["on battery"]), t0()).await;
     assert_eq!(
         out,
         FillOutcome::Filled {
@@ -611,7 +612,7 @@ async fn served_and_trusted_remote_embeds_count_as_spend() {
         let id = remote.probe().await.unwrap();
         let cache = Caches::shared(here.path()).get(&id).await.unwrap();
         let mut chain = SourceChain::new(id.fp, vec![remote as Arc<dyn Source>]);
-        chain.fill(&cache, &items(texts), Instant::now()).await
+        chain.fill(&cache, &items(texts), t0()).await
     };
     // lookups only: nothing counted
     let looked = fill(
