@@ -5,6 +5,7 @@ bad = { clean = true }
 app = { clean = true }
 glitnir = { clean = true }
 uiapp = { clean = true, ui = true }
+reactive = { clean = true, ui = true }
 
 [[standard]]
 id = "processes"
@@ -72,6 +73,12 @@ conformance = "crates/owner/tests/conformance.rs"
 id = "scale-zoom"
 owner = "villa"
 scan = ["no-raw-scale-mul"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "ui-reactivity"
+owner = "villa"
+scan = ["no-ui-observer", "no-dependency-list-api"]
 conformance = "crates/owner/tests/conformance.rs"
 
 [[layer]]

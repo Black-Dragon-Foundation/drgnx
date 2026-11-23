@@ -224,6 +224,7 @@ fn scan_file(root: &Path, table: &Table, file: &Path, krate: &str) -> Vec<Findin
     };
     let mut rules = scan::Rules {
         ui: table.is_ui(krate),
+        reactive: table.is_ui(krate) || rel.starts_with("crates/ui/"),
         ..Default::default()
     };
     for s in table.standard.iter().filter(|s| s.owner != krate) {

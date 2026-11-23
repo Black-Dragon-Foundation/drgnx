@@ -22,6 +22,8 @@ pub const SCAN_RULES: &[&str] = &[
     "no-colour-literal",
     "no-raw-scale-mul",
     "command-has-doc",
+    "no-ui-observer",
+    "no-dependency-list-api",
 ];
 
 #[derive(Debug, Default, Deserialize)]

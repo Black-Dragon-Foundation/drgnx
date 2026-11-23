@@ -158,6 +158,12 @@ owner = "mot"
 scan = ["no-colour-literal"]
 conformance = "crates/std/mot/tests/conformance.rs"
 
+[[standard]]
+id = "ui-reactivity"
+owner = "tafl"
+scan = ["no-ui-observer", "no-dependency-list-api"]
+conformance = "crates/ui/tafl/tests/conformance.rs"
+
 # The layers: a crate may not depend on these, directly or through other workspace crates (cargo metadata).
 [[layer]]
 crate = "drgnx"

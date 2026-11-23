@@ -19,13 +19,15 @@ pub struct Hit {
 }
 
 /// What the scanner checks in one file: each disallowed path with its standard's id and owner, each scan rule with its
-/// standard's id, and whether the crate runs on the UI thread.
+/// standard's id, whether the crate runs on the UI thread, and whether the file holds UI state (a `ui` crate, or any
+/// file under `crates/ui/`: the ui-reactivity rules' reach).
 #[derive(Default)]
 pub struct Rules {
     pub methods: BTreeMap<String, (String, String)>,
     pub types: BTreeMap<String, (String, String)>,
     pub scan: BTreeMap<String, String>,
     pub ui: bool,
+    pub reactive: bool,
 }
 
 const SECRET_SUFFIXES: &[&str] = &["Token", "Secret", "Key", "Password", "Credential"];
@@ -96,6 +98,157 @@ fn names_scale(e: &Expr) -> bool {
     }
 }
 
+/// The calls whose closure arguments are formulas or callbacks of the reactive engine (`no-ui-observer`); a name that
+/// starts with `on_` registers a callback.
+const REACTIVE_SINKS: &[&str] = &["formula", "filter", "filter_by", "sort_by"];
+/// The types that make an observer when shared (`Rc<RefCell<…>>`, `Arc<Mutex<…>>` and their kin).
+const SHARED: &[&str] = &["Rc", "Arc"];
+const INTERIOR: &[&str] = &["RefCell", "Cell", "Mutex", "RwLock"];
+/// The functions that make a channel, and a channel's ends.
+const CHANNEL_FNS: &[&str] = &["channel", "sync_channel", "unbounded", "bounded"];
+const CHANNEL_ENDS: &[&str] = &[
+    "Sender",
+    "SyncSender",
+    "Receiver",
+    "UnboundedSender",
+    "UnboundedReceiver",
+];
+
+/// The last segment of a path expression.
+fn last_ident(e: &Expr) -> Option<String> {
+    match e {
+        Expr::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+        _ => None,
+    }
+}
+
+/// A single-segment path expression's name (a local).
+fn local_name(e: &Expr) -> Option<String> {
+    match e {
+        Expr::Path(p) if p.path.segments.len() == 1 && p.qself.is_none() => {
+            Some(p.path.segments[0].ident.to_string())
+        }
+        Expr::Reference(r) => local_name(&r.expr),
+        Expr::Paren(p) => local_name(&p.expr),
+        _ => None,
+    }
+}
+
+/// Whether TY is `Rc<RefCell<…>>`, `Arc<Mutex<…>>` or a kin.
+fn is_shared_interior_type(ty: &syn::Type) -> bool {
+    let syn::Type::Path(p) = ty else {
+        return false;
+    };
+    let Some(last) = p.path.segments.last() else {
+        return false;
+    };
+    if !SHARED.contains(&last.ident.to_string().as_str()) {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return false;
+    };
+    args.args.iter().any(|a| {
+        matches!(a, syn::GenericArgument::Type(syn::Type::Path(inner))
+            if inner.path.segments.last().is_some_and(|s| INTERIOR.contains(&s.ident.to_string().as_str())))
+    })
+}
+
+/// The locals of a function that hold an observer: `Rc::new(RefCell::new(…))`, `Arc::new(Mutex::new(…))` and kin, a
+/// local typed so, a clone of one, and both ends of a channel.
+fn observer_locals(block: &syn::Block) -> std::collections::BTreeSet<String> {
+    struct Locals {
+        found: std::collections::BTreeSet<String>,
+    }
+    fn names(p: &syn::Pat, out: &mut Vec<String>) {
+        match p {
+            syn::Pat::Ident(i) => out.push(i.ident.to_string()),
+            syn::Pat::Tuple(t) => t.elems.iter().for_each(|e| names(e, out)),
+            syn::Pat::Type(t) => names(&t.pat, out),
+            syn::Pat::Reference(r) => names(&r.pat, out),
+            _ => {}
+        }
+    }
+    impl Locals {
+        fn observer_init(&self, e: &Expr) -> bool {
+            match e {
+                Expr::Call(c) => {
+                    let Expr::Path(f) = &*c.func else {
+                        return false;
+                    };
+                    let segs = &f.path.segments;
+                    let last = segs.last().map(|s| s.ident.to_string()).unwrap_or_default();
+                    let ty = segs
+                        .len()
+                        .checked_sub(2)
+                        .and_then(|i| segs.iter().nth(i))
+                        .map(|s| s.ident.to_string())
+                        .unwrap_or_default();
+                    if SHARED.contains(&ty.as_str()) && last == "new" {
+                        return c.args.first().is_some_and(|a| {
+                            matches!(a, Expr::Call(inner) if matches!(&*inner.func, Expr::Path(ip)
+                                if ip.path.segments.len() >= 2
+                                    && INTERIOR.contains(&ip.path.segments[ip.path.segments.len() - 2].ident.to_string().as_str())))
+                        });
+                    }
+                    if SHARED.contains(&ty.as_str()) && last == "clone" {
+                        return c
+                            .args
+                            .first()
+                            .and_then(local_name)
+                            .is_some_and(|n| self.found.contains(&n));
+                    }
+                    false
+                }
+                Expr::MethodCall(m) if m.method == "clone" => {
+                    local_name(&m.receiver).is_some_and(|n| self.found.contains(&n))
+                }
+                _ => false,
+            }
+        }
+    }
+    impl<'ast> Visit<'ast> for Locals {
+        fn visit_local(&mut self, l: &'ast syn::Local) {
+            let mut bound = Vec::new();
+            names(&l.pat, &mut bound);
+            let typed = matches!(&l.pat, syn::Pat::Type(t) if is_shared_interior_type(&t.ty));
+            let channel = l.init.as_ref().is_some_and(|i| {
+                matches!(&*i.expr, Expr::Call(c) if last_ident(&c.func)
+                    .is_some_and(|n| CHANNEL_FNS.contains(&n.as_str())))
+            });
+            let shared = l.init.as_ref().is_some_and(|i| self.observer_init(&i.expr));
+            if typed || channel || shared {
+                self.found.extend(bound);
+            }
+            visit::visit_local(self, l);
+        }
+    }
+    let mut l = Locals {
+        found: Default::default(),
+    };
+    // twice, so a clone of a clone made later in the text is found too
+    for _ in 0..2 {
+        l.visit_block(block);
+    }
+    l.found
+}
+
+/// Whether a signature takes or returns a closure type (`impl Fn…`, `dyn FnMut…`, a parameter bound by `FnOnce`).
+fn mentions_fn_trait(sig: &syn::Signature) -> bool {
+    struct F(bool);
+    impl<'ast> Visit<'ast> for F {
+        fn visit_path_segment(&mut self, s: &'ast syn::PathSegment) {
+            if s.ident == "Fn" || s.ident == "FnMut" || s.ident == "FnOnce" {
+                self.0 = true;
+            }
+            visit::visit_path_segment(self, s);
+        }
+    }
+    let mut f = F(false);
+    f.visit_signature(sig);
+    f.0
+}
+
 pub fn scan(file: &syn::File, rules: &Rules) -> Vec<Hit> {
     let mut aliases = Aliases::default();
     aliases.collect(file);
@@ -103,6 +256,7 @@ pub fn scan(file: &syn::File, rules: &Rules) -> Vec<Hit> {
         rules,
         aliases: &aliases,
         hits: Vec::new(),
+        observers: Vec::new(),
     };
     v.visit_file(file);
     v.hits
@@ -237,9 +391,129 @@ struct Scanner<'a> {
     rules: &'a Rules,
     aliases: &'a Aliases,
     hits: Vec<Hit>,
+    /// The observer locals of each function being visited, innermost last.
+    observers: Vec<std::collections::BTreeSet<String>>,
 }
 
 impl Scanner<'_> {
+    /// The ui-reactivity rule RULE's standard id, when the file is in its reach.
+    fn reactive_rule(&self, rule: &str) -> Option<String> {
+        if self.rules.reactive {
+            self.rule(rule)
+        } else {
+            None
+        }
+    }
+
+    /// `no-dependency-list-api`: a public hook-shaped function: `create_signal`; `use_*`, `*_effect` or `memo*` taking or
+    /// returning a closure; `signal*` taking a closure or returning a pair; anything with a `deps` parameter.
+    fn check_dependency_api(&mut self, vis: &syn::Visibility, sig: &syn::Signature) {
+        if !matches!(vis, syn::Visibility::Public(_)) {
+            return;
+        }
+        let Some(id) = self.reactive_rule("no-dependency-list-api") else {
+            return;
+        };
+        let name = sig.ident.to_string();
+        let closure = mentions_fn_trait(sig);
+        let pair = matches!(&sig.output, syn::ReturnType::Type(_, t) if matches!(**t, syn::Type::Tuple(_)));
+        let deps = sig.inputs.iter().any(|a| {
+            matches!(a, syn::FnArg::Typed(t) if matches!(&*t.pat, syn::Pat::Ident(i) if i.ident == "deps"))
+        });
+        let hook = name == "create_signal"
+            || deps
+            || ((name.starts_with("use_")
+                || name.ends_with("_effect")
+                || name.starts_with("memo"))
+                && closure)
+            || (name.starts_with("signal") && (closure || pair));
+        if hook {
+            self.hit(
+                sig.ident.span(),
+                &id,
+                "no-dependency-list-api",
+                format!("`{name}` is a hook, signal or dependency-list API: UI state is a tafl State and derived values are formulas (`move |r| …`)"),
+            );
+        }
+    }
+
+    /// `no-ui-observer`: a closure given to a formula or registered as a callback that captures an observer local.
+    fn check_sink(&mut self, name: &str, args: &Punctuated<Expr, Token![,]>) {
+        if !(REACTIVE_SINKS.contains(&name) || name.starts_with("on_")) {
+            return;
+        }
+        let Some(id) = self.reactive_rule("no-ui-observer") else {
+            return;
+        };
+        let Some(observers) = self.observers.last() else {
+            return;
+        };
+        if observers.is_empty() {
+            return;
+        }
+        struct Uses<'s> {
+            observers: &'s std::collections::BTreeSet<String>,
+            used: Option<String>,
+        }
+        impl<'ast> Visit<'ast> for Uses<'_> {
+            fn visit_expr_path(&mut self, p: &'ast syn::ExprPath) {
+                if p.path.segments.len() == 1 {
+                    let n = p.path.segments[0].ident.to_string();
+                    if self.used.is_none() && self.observers.contains(&n) {
+                        self.used = Some(n);
+                    }
+                }
+                visit::visit_expr_path(self, p);
+            }
+        }
+        let mut found = Vec::new();
+        for a in args {
+            if let Expr::Closure(c) = a {
+                let mut u = Uses {
+                    observers,
+                    used: None,
+                };
+                u.visit_expr(&c.body);
+                if let Some(n) = u.used {
+                    found.push((c.span(), n));
+                }
+            }
+        }
+        for (span, n) in found {
+            self.hit(
+                span,
+                &id,
+                "no-ui-observer",
+                format!("a closure given to `{name}` captures `{n}`, a shared cell, lock or channel: UI state is a tafl State, read through `&Rd`"),
+            );
+        }
+    }
+
+    /// `no-ui-observer`: a channel held as a state cell's value.
+    fn check_channel_state(&mut self, t: &syn::TypePath) {
+        let Some(last) = t.path.segments.last() else {
+            return;
+        };
+        if last.ident != "State" && last.ident != "Formula" {
+            return;
+        }
+        let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+            return;
+        };
+        let channel = args.args.iter().any(|a| {
+            matches!(a, syn::GenericArgument::Type(syn::Type::Path(p))
+                if p.path.segments.last().is_some_and(|s| CHANNEL_ENDS.contains(&s.ident.to_string().as_str())))
+        });
+        if channel && let Some(id) = self.reactive_rule("no-ui-observer") {
+            self.hit(
+                t.span(),
+                &id,
+                "no-ui-observer",
+                "a channel held as UI state: state is a value in a tafl State, and work comes back through saman's UiQueue".into(),
+            );
+        }
+    }
+
     fn hit(&mut self, span: Span, id: &str, rule: &str, message: String) {
         self.hits.push(Hit {
             line: line(span),
@@ -523,6 +797,7 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
     }
 
     fn visit_type_path(&mut self, t: &'ast syn::TypePath) {
+        self.check_channel_state(t);
         let segs = segments(&t.path);
         for full in self.aliases.resolve(&segs) {
             self.check_key(t.span(), &full);
@@ -590,6 +865,7 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
     }
 
     fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
+        self.check_sink(&m.method.to_string(), &m.args);
         if names_colour(&m.method.to_string())
             && m.args.iter().any(is_hex_colour_int)
             && let Some(id) = self.rule("no-colour-literal")
@@ -624,12 +900,26 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
 
     fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
         self.check_fn(&f.vis, &f.sig);
+        self.check_dependency_api(&f.vis, &f.sig);
+        self.observers.push(if self.rules.reactive {
+            observer_locals(&f.block)
+        } else {
+            Default::default()
+        });
         visit::visit_item_fn(self, f);
+        self.observers.pop();
     }
 
     fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
         self.check_fn(&f.vis, &f.sig);
+        self.check_dependency_api(&f.vis, &f.sig);
+        self.observers.push(if self.rules.reactive {
+            observer_locals(&f.block)
+        } else {
+            Default::default()
+        });
         visit::visit_impl_item_fn(self, f);
+        self.observers.pop();
     }
 
     fn visit_item_struct(&mut self, s: &'ast syn::ItemStruct) {
