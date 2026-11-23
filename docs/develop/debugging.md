@@ -845,7 +845,10 @@ session gets a block of ports and its launch configuration becomes an attach the
   --connect 127.0.0.1:B --configure-subProcess BOOL (PROGRAM | -m MODULE) ARGS…`. debugpy connects once without
   retrying, so the hub starts it once B listens, the listener checked to be the adapter's (no probe connection), and
   gives up after 30 s, stopping the adapter.
-  Subprocesses connect to B too.
+  Subprocesses connect to B too. The session sends the plan's attach, not the configuration's launch: a fork's start
+  asks its launcher (`Launcher::own_start`), since a `launch` has debugpy's adapter bind a listener for its servers on
+  a port of its own, which Seatbelt refuses (`couldn't create listener socket for servers: [Errno 1]`). If the program
+  is never started, or starts and ends, the session's end says why (and how its stderr ended).
 - **js-debug:** the hub starts `node RUNTIME-ARGS… --inspect-brk=127.0.0.1:B PROGRAM ARGS…`, which waits at its first
   line, then the adapter (`dapDebugServer.js A`), and attaches to B with `autoAttachChildProcesses` and
   `continueOnAttach`. js-debug writes its bootloader into the program's `NODE_OPTIONS` only once attached (104–166

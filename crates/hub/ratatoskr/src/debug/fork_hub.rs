@@ -359,17 +359,19 @@ impl Forks {
                     .inner
                     .sealer
                     .launcher(adapter, &run, &tree, &config, &tmp)?;
+                let mut start = Start {
+                    name: format!("Run of {} in {}", run.id, tree.display()),
+                    adapter_id: ty,
+                    request: Request::Launch,
+                    arguments: super::launch::adapter_arguments(&config),
+                    breakpoints: vec![],
+                    functions: vec![],
+                    exception_filters: None,
+                };
+                launcher.own_start(&mut start);
                 fork::watch(Watched {
                     launcher,
-                    start: Start {
-                        name: format!("Run of {} in {}", run.id, tree.display()),
-                        adapter_id: ty,
-                        request: Request::Launch,
-                        arguments: super::launch::adapter_arguments(&config),
-                        breakpoints: vec![],
-                        functions: vec![],
-                        exception_filters: None,
-                    },
+                    start,
                     adapter: adapter.to_owned(),
                     watch: watch_t,
                     limit,
@@ -644,7 +646,7 @@ impl Forks {
                 later.push(k);
             }
         }
-        let start = Start {
+        let mut start = Start {
             name: format!("What if: {}", run.id),
             adapter_id: ty,
             request: Request::Launch,
@@ -653,6 +655,7 @@ impl Forks {
             functions: vec![],
             exception_filters: None,
         };
+        launcher.own_start(&mut start);
         let out = fork::drive(Drive {
             launcher,
             start,
