@@ -314,20 +314,20 @@ pub enum Gate {
 
 /// B against A on the same queries, on chunk-level MRR@10 under the non-regression floors: [`compare_on`] with
 /// [`Gate::Floor`].
-pub fn compare(a: &Report, b: &Report) -> Result<Verdict, String> {
+pub fn compare(a: &Report, b: &Report) -> villa::Result<Verdict> {
     compare_on(a, b, Gate::Floor)
 }
 
 /// B against A on the same queries: paired bootstrap of the difference of GATE's metric, under GATE's rule. Whatever the
 /// rule, B's index must have no coverage error and its exact-symbol recall (when measured) must be 1.0. Reports over
 /// different queries are refused, and so is the file gate over a report that has no file ranks.
-pub fn compare_on(a: &Report, b: &Report, gate: Gate) -> Result<Verdict, String> {
+pub fn compare_on(a: &Report, b: &Report, gate: Gate) -> villa::Result<Verdict> {
     if a.rows.keys().ne(b.rows.keys()) {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "the reports are over different queries ({} and {} rows): a paired difference needs the same ones",
             a.rows.len(),
             b.rows.len()
-        ));
+        )));
     }
     if gate == Gate::File
         && a.rows
@@ -335,7 +335,9 @@ pub fn compare_on(a: &Report, b: &Report, gate: Gate) -> Result<Verdict, String>
             .chain(b.rows.values())
             .any(|r| r.judged.file_rr.is_none())
     {
-        return Err("a report has no file MRR (made before it was measured): run it again".into());
+        return Err(villa::Error::invalid(
+            "a report has no file MRR (made before it was measured): run it again",
+        ));
     }
     let (metric, label): (fn(&Judged) -> f64, &str) = match gate {
         Gate::Chunk | Gate::Floor => (|j| j.rr, "MRR@10"),

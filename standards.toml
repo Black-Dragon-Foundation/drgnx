@@ -33,6 +33,7 @@ mal-gen = { clean = true }
 sattr = { clean = true }
 kvardi = { clean = true }
 mot = { clean = true }
+hrafn = { clean = true }
 urdr = { clean = true }
 vor = { clean = true }
 mimir = { clean = true }

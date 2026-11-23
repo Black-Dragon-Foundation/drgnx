@@ -7,7 +7,6 @@ use hrafn::files::{self, Config, Snapshot};
 use hrafn::rules::{Decision, Layer, List, RuleSet, Rules, Verdict, builtin_rules};
 use hrafn::{CodeStore, GitCli, Listed, list, missing, refresh};
 use std::path::Path;
-use std::process::Command;
 
 fn set(include: &[&str], ignore: &[&str], no_embed: &[&str]) -> RuleSet {
     let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect();
@@ -201,14 +200,7 @@ fn defaults_list_is_the_designs() {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(st.success(), "git {args:?}");
+    crate::gitfx::git(dir, args);
 }
 
 /// A repository of MANIFEST (everything added to the index) under the real path of the temp dir.
@@ -218,7 +210,7 @@ fn repo(manifest: &[(&str, &str)]) -> tempfile::TempDir {
     for (p, c) in manifest {
         let f = dir.path().join(p);
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-        std::fs::write(f, c).unwrap();
+        eitri::replace_file(&f, c.as_bytes()).unwrap();
     }
     git(dir.path(), &["add", "-A"]);
     dir
@@ -290,62 +282,66 @@ async fn chunk_counts(s: &CodeStore, path: &str) -> (i64, i64) {
         .unwrap()
 }
 
-#[tokio::test]
-async fn no_embed_is_listed_without_vectors() {
-    let d = repo(&[
-        ("a.rs", "fn alpha_thing() {}\n"),
-        (
-            "data/table.json",
-            "{\"words\": \"several words of plain text for one chunk\"}\n",
-        ),
-    ]);
-    let cfg = user(set(&[], &[], &["*.json"]));
-    let l = run(d.path(), &cfg).unwrap();
-    assert_eq!(
-        names(&l),
-        ["a.rs", "data/table.json"],
-        "listed, not ignored"
-    );
-    let s = store_of(d.path()).await;
-    index(&s, d.path(), &l).await;
-    let (n, embedded) = chunk_counts(&s, "data/table.json").await;
-    assert!(n > 0, "keyword and symbol search have its chunks");
-    assert_eq!(embedded, 0, "no vectors wanted");
-    assert!(chunk_counts(&s, "a.rs").await.1 > 0);
-    let cache = hrafn::VectorCache::open_writer(
-        &d.path().join(".git/vectors"),
-        "7ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee5",
-        "{}",
-    )
-    .unwrap();
-    let wanted = missing(&s, &cache, 100).await.unwrap();
-    assert!(!wanted.is_empty());
-    assert!(
-        wanted.iter().all(|(_, _, t)| !t.contains("plain text")),
-        "missing() never offers a no-embed file: {wanted:?}"
-    );
+#[test]
+fn no_embed_is_listed_without_vectors() {
+    saman::block_on_current(async {
+        let d = repo(&[
+            ("a.rs", "fn alpha_thing() {}\n"),
+            (
+                "data/table.json",
+                "{\"words\": \"several words of plain text for one chunk\"}\n",
+            ),
+        ]);
+        let cfg = user(set(&[], &[], &["*.json"]));
+        let l = run(d.path(), &cfg).unwrap();
+        assert_eq!(
+            names(&l),
+            ["a.rs", "data/table.json"],
+            "listed, not ignored"
+        );
+        let s = store_of(d.path()).await;
+        index(&s, d.path(), &l).await;
+        let (n, embedded) = chunk_counts(&s, "data/table.json").await;
+        assert!(n > 0, "keyword and symbol search have its chunks");
+        assert_eq!(embedded, 0, "no vectors wanted");
+        assert!(chunk_counts(&s, "a.rs").await.1 > 0);
+        let cache = hrafn::VectorCache::open_writer(
+            &d.path().join(".git/vectors"),
+            "7ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee57ee5",
+            "{}",
+        )
+        .unwrap();
+        let wanted = missing(&s, &cache, 100).await.unwrap();
+        assert!(!wanted.is_empty());
+        assert!(
+            wanted.iter().all(|(_, _, t)| !t.contains("plain text")),
+            "missing() never offers a no-embed file: {wanted:?}"
+        );
+    })
 }
 
 /// The rule moves, the file's blob does not: its chunks are written again, with the flag the rule now says.
-#[tokio::test]
-async fn a_no_embed_rule_added_later_rewrites_the_chunks() {
-    let d = repo(&[(
-        "data/table.json",
-        "{\"words\": \"several words of plain text for one chunk\"}\n",
-    )]);
-    let s = store_of(d.path()).await;
-    let l = run(d.path(), &Config::default()).unwrap();
-    index(&s, d.path(), &l).await;
-    let (n, embedded) = chunk_counts(&s, "data/table.json").await;
-    assert!(n > 0 && embedded == n, "embedded at first");
-    let l = run(d.path(), &user(set(&[], &[], &["*.json"]))).unwrap();
-    index(&s, d.path(), &l).await;
-    assert_eq!(chunk_counts(&s, "data/table.json").await.1, 0);
-    // and taken away again
-    let l = run(d.path(), &Config::default()).unwrap();
-    index(&s, d.path(), &l).await;
-    let (n, embedded) = chunk_counts(&s, "data/table.json").await;
-    assert!(n > 0 && embedded == n);
+#[test]
+fn a_no_embed_rule_added_later_rewrites_the_chunks() {
+    saman::block_on_current(async {
+        let d = repo(&[(
+            "data/table.json",
+            "{\"words\": \"several words of plain text for one chunk\"}\n",
+        )]);
+        let s = store_of(d.path()).await;
+        let l = run(d.path(), &Config::default()).unwrap();
+        index(&s, d.path(), &l).await;
+        let (n, embedded) = chunk_counts(&s, "data/table.json").await;
+        assert!(n > 0 && embedded == n, "embedded at first");
+        let l = run(d.path(), &user(set(&[], &[], &["*.json"]))).unwrap();
+        index(&s, d.path(), &l).await;
+        assert_eq!(chunk_counts(&s, "data/table.json").await.1, 0);
+        // and taken away again
+        let l = run(d.path(), &Config::default()).unwrap();
+        index(&s, d.path(), &l).await;
+        let (n, embedded) = chunk_counts(&s, "data/table.json").await;
+        assert!(n > 0 && embedded == n);
+    })
 }
 
 #[test]
@@ -368,7 +364,7 @@ fn toml_that_cannot_be_read_turns_search_off() {
         "ignore = \"a\"\n",
         big.as_str(),
     ] {
-        std::fs::write(&toml, bad).unwrap();
+        eitri::replace_file(&toml, bad.as_bytes()).unwrap();
         let e = run(d.path(), &Config::default()).expect_err(bad);
         assert!(e.to_string().contains("search.toml cannot be read"), "{e}");
         assert!(
@@ -377,7 +373,7 @@ fn toml_that_cannot_be_read_turns_search_off() {
         );
     }
     // readable: fine
-    std::fs::write(&toml, "ignore = []\n").unwrap();
+    eitri::replace_file(&toml, b"ignore = []\n").unwrap();
     assert_eq!(names(&run(d.path(), &Config::default()).unwrap()), ["a.rs"]);
 }
 
@@ -391,10 +387,7 @@ fn the_repo_file_is_a_layer_read_at_every_listing() {
     ]);
     let toml = d.path().join(".drgnx/search.toml");
     std::fs::create_dir_all(toml.parent().unwrap()).unwrap();
-    std::fs::write(
-        &toml,
-        "# the team's rules\nignore = [\"notes/\", \"!licence-check/LICENSE\"]\nno-embed = [\"*.json\"]\n",
-    )
+    eitri::replace_file(&toml, b"# the team's rules\nignore = [\"notes/\", \"!licence-check/LICENSE\"]\nno-embed = [\"*.json\"]\n")
     .unwrap();
     let mut snap = Snapshot::default();
     let cfg = Config::default();
@@ -409,7 +402,7 @@ fn the_repo_file_is_a_layer_read_at_every_listing() {
         ]
     );
     // an edit of the file takes effect at the next listing, with the same snapshot
-    std::fs::write(&toml, "ignore = [\"a.rs\"]\n").unwrap();
+    eitri::replace_file(&toml, b"ignore = [\"a.rs\"]\n").unwrap();
     let l = files::list_with(d.path(), &GitCli, &cfg, &allow_all, &mut snap).unwrap();
     assert_eq!(names(&l), ["data/t.json", "notes/n.md"]);
 }
@@ -424,9 +417,9 @@ fn why_names_the_layer_that_decided() {
         ("data/t.json", "{}\n"),
     ]);
     std::fs::create_dir_all(d.path().join(".drgnx")).unwrap();
-    std::fs::write(
-        d.path().join(".drgnx/search.toml"),
-        "ignore = [\"src/r.rs\"]\n",
+    eitri::replace_file(
+        &d.path().join(".drgnx/search.toml"),
+        b"ignore = [\"src/r.rs\"]\n",
     )
     .unwrap();
     let cfg = user(set(&[], &["src/u.rs"], &["*.json"]));

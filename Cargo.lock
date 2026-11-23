@@ -3325,7 +3325,9 @@ dependencies = [
 name = "hrafn"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "ast-grep-core",
+ "draugr",
  "eitri",
  "gix",
  "hlaup",
@@ -3334,17 +3336,22 @@ dependencies = [
  "notify",
  "regex",
  "rusqlite",
+ "saman",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "skald",
  "skuld",
+ "stig",
+ "stund",
  "tempfile",
  "tokio",
  "toml_edit",
+ "tracing",
  "tree-sitter",
  "tree-sitter-elisp",
  "urdr",
+ "villa",
 ]
 
 [[package]]

@@ -152,374 +152,396 @@ fn unchanged(texts: HashMap<&'static str, &'static str>) -> impl Fn(&str) -> Opt
 
 /// Pattern D. A query that is one exact name puts its definition first, whatever else the words match; the test file's
 /// stub of the same name comes after the code's.
-#[tokio::test]
-async fn exact_symbol_pins_definition() {
-    let (_dir, store, texts) = indexed().await;
-    let now = unchanged(texts);
-    for (name, path) in DEFINERS {
-        let a = search(&store, &q(name, Scope::All), hrafn::View::Base, None, &now)
-            .await
+#[test]
+fn exact_symbol_pins_definition() {
+    saman::block_on_current(async {
+        let (_dir, store, texts) = indexed().await;
+        let now = unchanged(texts);
+        for (name, path) in DEFINERS {
+            let a = search(&store, &q(name, Scope::All), hrafn::View::Base, None, &now)
+                .await
+                .unwrap();
+            assert_eq!(a.hits[0].path, *path, "{name}: {:?}", a.hits);
+            assert_eq!(a.hits[0].routes[0], "symbol", "{name}");
+        }
+        let a = search(
+            &store,
+            &q("drgnx-timer-fire", Scope::All),
+            hrafn::View::Base,
+            None,
+            &now,
+        )
+        .await
+        .unwrap();
+        let paths: Vec<&str> = a.hits.iter().map(|h| h.path.as_str()).collect();
+        let code = paths
+            .iter()
+            .position(|p| *p == "core/drgnx-timer.el")
             .unwrap();
-        assert_eq!(a.hits[0].path, *path, "{name}: {:?}", a.hits);
-        assert_eq!(a.hits[0].routes[0], "symbol", "{name}");
-    }
-    let a = search(
-        &store,
-        &q("drgnx-timer-fire", Scope::All),
-        hrafn::View::Base,
-        None,
-        &now,
-    )
-    .await
-    .unwrap();
-    let paths: Vec<&str> = a.hits.iter().map(|h| h.path.as_str()).collect();
-    let code = paths
-        .iter()
-        .position(|p| *p == "core/drgnx-timer.el")
-        .unwrap();
-    let test = paths
-        .iter()
-        .position(|p| *p == "test/drgnx-timer-test.el")
-        .unwrap();
-    assert!(code < test, "non-test before test: {paths:?}");
+        let test = paths
+            .iter()
+            .position(|p| *p == "test/drgnx-timer-test.el")
+            .unwrap();
+        assert!(code < test, "non-test before test: {paths:?}");
+    })
 }
 
 /// Pattern D. Words that the code and the test both have: the code ranks above the test, and the test is still there.
-#[tokio::test]
-async fn test_file_demoted_not_dropped() {
-    let (_dir, store, texts) = indexed().await;
-    let a = search(
-        &store,
-        &q("timer fires when due", Scope::Code),
-        hrafn::View::Base,
-        None,
-        &unchanged(texts),
-    )
-    .await
-    .unwrap();
-    let paths: Vec<&str> = a.hits.iter().map(|h| h.path.as_str()).collect();
-    let code = paths.iter().position(|p| *p == "core/drgnx-timer.el");
-    let test = paths.iter().position(|p| *p == "test/drgnx-timer-test.el");
-    assert!(code.is_some() && test.is_some(), "{paths:?}");
-    assert!(code < test, "{paths:?}");
-    // the generated file is demoted, not dropped, too
-    let gen_at = paths.iter().position(|p| *p == "core/drgnx-loaddefs.el");
-    assert!(gen_at.is_some(), "{paths:?}");
-    assert!(code < gen_at, "{paths:?}");
+#[test]
+fn test_file_demoted_not_dropped() {
+    saman::block_on_current(async {
+        let (_dir, store, texts) = indexed().await;
+        let a = search(
+            &store,
+            &q("timer fires when due", Scope::Code),
+            hrafn::View::Base,
+            None,
+            &unchanged(texts),
+        )
+        .await
+        .unwrap();
+        let paths: Vec<&str> = a.hits.iter().map(|h| h.path.as_str()).collect();
+        let code = paths.iter().position(|p| *p == "core/drgnx-timer.el");
+        let test = paths.iter().position(|p| *p == "test/drgnx-timer-test.el");
+        assert!(code.is_some() && test.is_some(), "{paths:?}");
+        assert!(code < test, "{paths:?}");
+        // the generated file is demoted, not dropped, too
+        let gen_at = paths.iter().position(|p| *p == "core/drgnx-loaddefs.el");
+        assert!(gen_at.is_some(), "{paths:?}");
+        assert!(code < gen_at, "{paths:?}");
+    })
 }
 
 /// Pattern D. A scope narrows to its class.
-#[tokio::test]
-async fn scope_tests_only_tests() {
-    let (_dir, store, texts) = indexed().await;
-    let now = unchanged(texts);
-    let tests = search(
-        &store,
-        &q("timer fires", Scope::Tests),
-        hrafn::View::Base,
-        None,
-        &now,
-    )
-    .await
-    .unwrap();
-    assert!(!tests.hits.is_empty());
-    assert!(
-        tests.hits.iter().all(|h| h.path.starts_with("test/")),
-        "{:?}",
-        tests.hits
-    );
-    let docs = search(
-        &store,
-        &q("timer fires", Scope::Docs),
-        hrafn::View::Base,
-        None,
-        &now,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        docs.hits
-            .iter()
-            .map(|h| h.path.as_str())
-            .collect::<Vec<_>>(),
-        ["docs/timers.md"]
-    );
-    let code = search(
-        &store,
-        &q("timer fires", Scope::Code),
-        hrafn::View::Base,
-        None,
-        &now,
-    )
-    .await
-    .unwrap();
-    assert!(
-        code.hits.iter().all(|h| !h.path.starts_with("docs/")),
-        "{:?}",
-        code.hits
-    );
+#[test]
+fn scope_tests_only_tests() {
+    saman::block_on_current(async {
+        let (_dir, store, texts) = indexed().await;
+        let now = unchanged(texts);
+        let tests = search(
+            &store,
+            &q("timer fires", Scope::Tests),
+            hrafn::View::Base,
+            None,
+            &now,
+        )
+        .await
+        .unwrap();
+        assert!(!tests.hits.is_empty());
+        assert!(
+            tests.hits.iter().all(|h| h.path.starts_with("test/")),
+            "{:?}",
+            tests.hits
+        );
+        let docs = search(
+            &store,
+            &q("timer fires", Scope::Docs),
+            hrafn::View::Base,
+            None,
+            &now,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            docs.hits
+                .iter()
+                .map(|h| h.path.as_str())
+                .collect::<Vec<_>>(),
+            ["docs/timers.md"]
+        );
+        let code = search(
+            &store,
+            &q("timer fires", Scope::Code),
+            hrafn::View::Base,
+            None,
+            &now,
+        )
+        .await
+        .unwrap();
+        assert!(
+            code.hits.iter().all(|h| !h.path.starts_with("docs/")),
+            "{:?}",
+            code.hits
+        );
+    })
 }
 
 /// Pattern D. A file name matches the path list, and the hit says the path route found it.
-#[tokio::test]
-async fn path_query_adds_path_list() {
-    let (_dir, store, texts) = indexed().await;
-    let now = unchanged(texts);
-    let a = search(
-        &store,
-        &q("drgnx-hub.el", Scope::All),
-        hrafn::View::Base,
-        None,
-        &now,
-    )
-    .await
-    .unwrap();
-    assert_eq!(a.hits[0].path, "core/drgnx-hub.el", "{:?}", a.hits);
-    assert!(a.hits[0].routes.contains(&"path"), "{:?}", a.hits[0].routes);
-    // a bare file stem too
-    let b = search(
-        &store,
-        &q("show me drgnx-hub", Scope::All),
-        hrafn::View::Base,
-        None,
-        &now,
-    )
-    .await
-    .unwrap();
-    assert!(
-        b.hits
-            .iter()
-            .any(|h| h.path == "core/drgnx-hub.el" && h.routes.contains(&"path")),
-        "{:?}",
-        b.hits
-    );
+#[test]
+fn path_query_adds_path_list() {
+    saman::block_on_current(async {
+        let (_dir, store, texts) = indexed().await;
+        let now = unchanged(texts);
+        let a = search(
+            &store,
+            &q("drgnx-hub.el", Scope::All),
+            hrafn::View::Base,
+            None,
+            &now,
+        )
+        .await
+        .unwrap();
+        assert_eq!(a.hits[0].path, "core/drgnx-hub.el", "{:?}", a.hits);
+        assert!(a.hits[0].routes.contains(&"path"), "{:?}", a.hits[0].routes);
+        // a bare file stem too
+        let b = search(
+            &store,
+            &q("show me drgnx-hub", Scope::All),
+            hrafn::View::Base,
+            None,
+            &now,
+        )
+        .await
+        .unwrap();
+        assert!(
+            b.hits
+                .iter()
+                .any(|h| h.path == "core/drgnx-hub.el" && h.routes.contains(&"path")),
+            "{:?}",
+            b.hits
+        );
+    })
 }
 
 /// Pattern D. With no vector model the answer is keyword, symbol and path results at once, and says what it lacks.
-#[tokio::test]
-async fn no_model_answers_keyword_with_lag() {
-    let (_dir, store, texts) = indexed().await;
-    let a = search(
-        &store,
-        &q("embed role provider", Scope::Code),
-        hrafn::View::Base,
-        None,
-        &unchanged(texts),
-    )
-    .await
-    .unwrap();
-    assert_eq!(a.hits[0].path, "core/drgnx-ai.el", "{:?}", a.hits);
-    assert_eq!(a.model, None);
-    assert_eq!(a.lag.model, None);
-    let line = a.lag_line();
-    assert!(line.starts_with("vectors: not used"), "{line}");
-    assert!(
-        line.contains("keyword and symbol results are current"),
-        "{line}"
-    );
+#[test]
+fn no_model_answers_keyword_with_lag() {
+    saman::block_on_current(async {
+        let (_dir, store, texts) = indexed().await;
+        let a = search(
+            &store,
+            &q("embed role provider", Scope::Code),
+            hrafn::View::Base,
+            None,
+            &unchanged(texts),
+        )
+        .await
+        .unwrap();
+        assert_eq!(a.hits[0].path, "core/drgnx-ai.el", "{:?}", a.hits);
+        assert_eq!(a.model, None);
+        assert_eq!(a.lag.model, None);
+        let line = a.lag_line();
+        assert!(line.starts_with("vectors: not used"), "{line}");
+        assert!(
+            line.contains("keyword and symbol results are current"),
+            "{line}"
+        );
+    })
 }
 
 /// Pattern D. The vector route: the nearest chunk comes in through it, and the lag line counts the files without
 /// vectors of the model.
-#[tokio::test]
-async fn vector_route_and_lag_line() {
-    let (dir, store, texts) = indexed().await;
-    let c = cache(dir.path());
-    let want = hrafn::missing(&store, &c, 100).await.unwrap();
-    assert!(want.len() >= 6, "{}", want.len());
-    // one chunk, the hub's, gets a vector; nothing else does
-    let hub = want
-        .iter()
-        .find(|(k, _, t)| *k == KeyKind::Chunk && t.contains("drgnx-hub-call"))
-        .unwrap()
-        .1;
-    c.put(KeyKind::Chunk, 4, &[(hub, vec![1.0, 0.0, 0.0, 0.0])])
+#[test]
+fn vector_route_and_lag_line() {
+    saman::block_on_current(async {
+        let (dir, store, texts) = indexed().await;
+        let c = cache(dir.path());
+        let want = hrafn::missing(&store, &c, 100).await.unwrap();
+        assert!(want.len() >= 6, "{}", want.len());
+        // one chunk, the hub's, gets a vector; nothing else does
+        let hub = want
+            .iter()
+            .find(|(k, _, t)| *k == KeyKind::Chunk && t.contains("drgnx-hub-call"))
+            .unwrap()
+            .1;
+        c.put(KeyKind::Chunk, 4, &[(hub, vec![1.0, 0.0, 0.0, 0.0])])
+            .await
+            .unwrap();
+        let a = search(
+            &store,
+            &q("completely unrelated words", Scope::All),
+            hrafn::View::Base,
+            Some((&c, &[1.0, 0.0, 0.0, 0.0])),
+            &unchanged(texts),
+        )
         .await
         .unwrap();
-    let a = search(
-        &store,
-        &q("completely unrelated words", Scope::All),
-        hrafn::View::Base,
-        Some((&c, &[1.0, 0.0, 0.0, 0.0])),
-        &unchanged(texts),
-    )
-    .await
-    .unwrap();
-    assert_eq!(a.hits[0].path, "core/drgnx-hub.el", "{:?}", a.hits);
-    assert_eq!(a.hits[0].routes, ["vector"]);
-    assert_eq!(a.model.as_deref(), Some(FP));
-    let behind = lag(&store, Some(&c), hrafn::View::Base)
-        .await
-        .unwrap()
-        .files_behind;
-    assert!(behind >= 5, "{behind}");
-    assert_eq!(a.lag.files_behind, behind);
-    assert!(
-        a.lag_line().contains(&format!("{behind} files behind")),
-        "{}",
-        a.lag_line()
-    );
+        assert_eq!(a.hits[0].path, "core/drgnx-hub.el", "{:?}", a.hits);
+        assert_eq!(a.hits[0].routes, ["vector"]);
+        assert_eq!(a.model.as_deref(), Some(FP));
+        let behind = lag(&store, Some(&c), hrafn::View::Base)
+            .await
+            .unwrap()
+            .files_behind;
+        assert!(behind >= 5, "{behind}");
+        assert_eq!(a.lag.files_behind, behind);
+        assert!(
+            a.lag_line().contains(&format!("{behind} files behind")),
+            "{}",
+            a.lag_line()
+        );
+    })
 }
 
 /// Pattern D (Task 12). The cache is shared, so it holds other repos' keys: none of them is ever a hit here, nor takes
 /// the place of this repo's own. 250 keys of another repo lie nearer the question than this repo's one vector; it is
 /// still the vector route's hit, and the answer has nothing else from the route.
-#[tokio::test]
-async fn query_sees_only_its_repos_keys() {
-    let (dir, store, texts) = indexed().await;
-    let c = cache(dir.path());
-    let hub = hrafn::missing(&store, &c, 100)
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|(k, _, t)| *k == KeyKind::Chunk && t.contains("drgnx-hub-call"))
-        .unwrap()
-        .1;
-    // the question's own direction for the foreign keys; one sign bit off for the repo's key
-    let foreign: Vec<([u8; 32], Vec<f32>)> = (0..250u32)
-        .map(|i| {
-            let mut k = [0xee; 32];
-            k[..4].copy_from_slice(&i.to_be_bytes());
-            (k, vec![1.0, 0.0, 0.0, 0.0])
-        })
-        .collect();
-    c.put(KeyKind::Chunk, 4, &foreign).await.unwrap();
-    c.put(KeyKind::Chunk, 4, &[(hub, vec![0.9, 0.3, 0.0, 0.0])])
+#[test]
+fn query_sees_only_its_repos_keys() {
+    saman::block_on_current(async {
+        let (dir, store, texts) = indexed().await;
+        let c = cache(dir.path());
+        let hub = hrafn::missing(&store, &c, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|(k, _, t)| *k == KeyKind::Chunk && t.contains("drgnx-hub-call"))
+            .unwrap()
+            .1;
+        // the question's own direction for the foreign keys; one sign bit off for the repo's key
+        let foreign: Vec<([u8; 32], Vec<f32>)> = (0..250u32)
+            .map(|i| {
+                let mut k = [0xee; 32];
+                k[..4].copy_from_slice(&i.to_be_bytes());
+                (k, vec![1.0, 0.0, 0.0, 0.0])
+            })
+            .collect();
+        c.put(KeyKind::Chunk, 4, &foreign).await.unwrap();
+        c.put(KeyKind::Chunk, 4, &[(hub, vec![0.9, 0.3, 0.0, 0.0])])
+            .await
+            .unwrap();
+        let a = search(
+            &store,
+            &q("completely unrelated words", Scope::All),
+            hrafn::View::Base,
+            Some((&c, &[1.0, 0.0, 0.0, 0.0])),
+            &unchanged(texts),
+        )
         .await
         .unwrap();
-    let a = search(
-        &store,
-        &q("completely unrelated words", Scope::All),
-        hrafn::View::Base,
-        Some((&c, &[1.0, 0.0, 0.0, 0.0])),
-        &unchanged(texts),
-    )
-    .await
-    .unwrap();
-    let by_vector: Vec<&str> = a
-        .hits
-        .iter()
-        .filter(|h| h.routes.contains(&"vector"))
-        .map(|h| h.path.as_str())
-        .collect();
-    assert_eq!(by_vector, ["core/drgnx-hub.el"], "{:?}", a.hits);
+        let by_vector: Vec<&str> = a
+            .hits
+            .iter()
+            .filter(|h| h.routes.contains(&"vector"))
+            .map(|h| h.path.as_str())
+            .collect();
+        assert_eq!(by_vector, ["core/drgnx-hub.el"], "{:?}", a.hits);
+    })
 }
 
 /// Pattern D. The lag and the vectors a query reads are kept between two changes of the store or the cache, never past
 /// one: a vector written after a query is the next query's nearest and leaves one file fewer behind, and a commit to
 /// the cache by another connection (its `data_version`) is seen too.
-#[tokio::test]
-async fn what_a_query_keeps_ends_at_the_next_write() {
-    let (dir, store, texts) = indexed().await;
-    let c = cache(dir.path());
-    let want = hrafn::missing(&store, &c, 100).await.unwrap();
-    let key = |name: &str| {
-        want.iter()
-            .find(|(k, _, t)| *k == KeyKind::Chunk && t.contains(name))
-            .unwrap()
-            .1
-    };
-    c.put(
-        KeyKind::Chunk,
-        4,
-        &[(key("drgnx-hub-call"), vec![1.0, 0.0, 0.0, 0.0])],
-    )
-    .await
-    .unwrap();
-    let (query, same) = (
-        q("completely unrelated words", Scope::All),
-        unchanged(texts),
-    );
-    let ask = || {
-        search(
-            &store,
-            &query,
-            hrafn::View::Base,
-            Some((&c, &[0.0, 1.0, 0.0, 0.0])),
-            &same,
+#[test]
+fn what_a_query_keeps_ends_at_the_next_write() {
+    saman::block_on_current(async {
+        let (dir, store, texts) = indexed().await;
+        let c = cache(dir.path());
+        let want = hrafn::missing(&store, &c, 100).await.unwrap();
+        let key = |name: &str| {
+            want.iter()
+                .find(|(k, _, t)| *k == KeyKind::Chunk && t.contains(name))
+                .unwrap()
+                .1
+        };
+        c.put(
+            KeyKind::Chunk,
+            4,
+            &[(key("drgnx-hub-call"), vec![1.0, 0.0, 0.0, 0.0])],
         )
-    };
-    let first = ask().await.unwrap();
-    assert_eq!(first.hits[0].path, "core/drgnx-hub.el", "{:?}", first.hits);
-    let again = ask().await.unwrap();
-    assert_eq!(again.lag, first.lag);
-    c.put(
-        KeyKind::Chunk,
-        4,
-        &[(key("drgnx-ai-embed"), vec![0.0, 1.0, 0.0, 0.0])],
-    )
-    .await
-    .unwrap();
-    let after = ask().await.unwrap();
-    assert_eq!(after.hits[0].path, "core/drgnx-ai.el", "{:?}", after.hits);
-    assert_eq!(after.lag.files_behind + 1, first.lag.files_behind);
-    // another connection takes every vector away
-    let other = rusqlite::Connection::open(c.path()).unwrap();
-    other.execute("delete from chunk_vec", []).unwrap();
-    let gone = ask().await.unwrap();
-    assert!(
-        gone.hits.iter().all(|h| !h.routes.contains(&"vector")),
-        "{:?}",
-        gone.hits
-    );
-    assert_eq!(gone.lag.files_behind, first.lag.files_behind + 1);
+        .await
+        .unwrap();
+        let (query, same) = (
+            q("completely unrelated words", Scope::All),
+            unchanged(texts),
+        );
+        let ask = || {
+            search(
+                &store,
+                &query,
+                hrafn::View::Base,
+                Some((&c, &[0.0, 1.0, 0.0, 0.0])),
+                &same,
+            )
+        };
+        let first = ask().await.unwrap();
+        assert_eq!(first.hits[0].path, "core/drgnx-hub.el", "{:?}", first.hits);
+        let again = ask().await.unwrap();
+        assert_eq!(again.lag, first.lag);
+        c.put(
+            KeyKind::Chunk,
+            4,
+            &[(key("drgnx-ai-embed"), vec![0.0, 1.0, 0.0, 0.0])],
+        )
+        .await
+        .unwrap();
+        let after = ask().await.unwrap();
+        assert_eq!(after.hits[0].path, "core/drgnx-ai.el", "{:?}", after.hits);
+        assert_eq!(after.lag.files_behind + 1, first.lag.files_behind);
+        // another connection takes every vector away
+        let other = rusqlite::Connection::open(c.path()).unwrap();
+        other.execute("delete from chunk_vec", []).unwrap();
+        let gone = ask().await.unwrap();
+        assert!(
+            gone.hits.iter().all(|h| !h.routes.contains(&"vector")),
+            "{:?}",
+            gone.hits
+        );
+        assert_eq!(gone.lag.files_behind, first.lag.files_behind + 1);
+    })
 }
 
 /// Pattern D. The vector scan reads each vector once and looks its chunk up by key: its plan has no scan of `chunk` and
 /// no list built from a subquery (that plan took 37 s on a 16,000-chunk project, 55 ms the other way).
-#[tokio::test]
-async fn the_vector_scan_plan_is_one_pass_over_the_vectors() {
-    let (dir, store, _texts) = indexed().await;
-    let c = cache(dir.path());
-    let text = plan_vc(&store, &c, hrafn::query::NEAREST_SQL, 0).await;
-    assert!(!text.contains("LIST SUBQUERY"), "{text}");
-    assert!(!text.contains("SCAN chunk "), "{text}");
-    assert!(text.contains("SCAN vc.chunk_vec"), "{text}");
+#[test]
+fn the_vector_scan_plan_is_one_pass_over_the_vectors() {
+    saman::block_on_current(async {
+        let (dir, store, _texts) = indexed().await;
+        let c = cache(dir.path());
+        let text = plan_vc(&store, &c, hrafn::query::NEAREST_SQL, 0).await;
+        assert!(!text.contains("LIST SUBQUERY"), "{text}");
+        assert!(!text.contains("SCAN chunk "), "{text}");
+        assert!(text.contains("SCAN vc.chunk_vec"), "{text}");
+    })
 }
 
 /// Pattern D. The scan touches the vectors and nothing else: a chunk is looked up only for a vector that enters the
 /// best 200, not for each of the 50,000 (a subquery per vector was 160 ms of the 180 at 50,000 chunks).
-#[tokio::test]
-async fn the_vector_scan_reads_no_chunk_per_vector() {
-    let (dir, store, _texts) = indexed().await;
-    let c = cache(dir.path());
-    let plan = plan_vc(&store, &c, hrafn::query::NEAREST_SQL, 0).await;
-    assert!(!plan.contains("SUBQUERY"), "{plan}");
-    assert!(!plan.replace("chunk_vec", "").contains("chunk"), "{plan}");
+#[test]
+fn the_vector_scan_reads_no_chunk_per_vector() {
+    saman::block_on_current(async {
+        let (dir, store, _texts) = indexed().await;
+        let c = cache(dir.path());
+        let plan = plan_vc(&store, &c, hrafn::query::NEAREST_SQL, 0).await;
+        assert!(!plan.contains("SUBQUERY"), "{plan}");
+        assert!(!plan.replace("chunk_vec", "").contains("chunk"), "{plan}");
+    })
 }
 
 /// Pattern D (Hrafn redesign Task 9, the plan test extended to `path_key`; Task 12, the vectors in the cache). The
 /// vector route's own reads, the scan and the re-rank's vectors (a chunk's and its path's, by key), touch the cache's
 /// `chunk_vec` and `path_vec` alone: no `chunk`, `symbol`, `file` or `path_key` row; a candidate's chunks are found by
 /// the key's index, never by a scan.
-#[tokio::test]
-async fn vector_route_reads_no_chunk_rows() {
-    let (dir, store, _texts) = indexed().await;
-    let c = cache(dir.path());
-    for sql in [
-        hrafn::query::NEAREST_SQL,
-        hrafn::query::VEC_SQL,
-        hrafn::query::PATH_VEC_SQL,
-    ] {
-        let plan = plan_vc(&store, &c, sql, usize::from(sql.contains("?1"))).await;
-        // every table step is of the cache's vectors (a plan names a table by its alias, so the step itself is read)
-        for l in plan.lines().map(str::trim_start) {
-            if l.starts_with("SEARCH") || l.starts_with("SCAN") {
-                let table = l.split_whitespace().nth(1).unwrap_or_default();
-                assert!(
-                    table == "vc.chunk_vec" || table == "vc.path_vec",
-                    "{plan}\n{sql}"
-                );
+#[test]
+fn vector_route_reads_no_chunk_rows() {
+    saman::block_on_current(async {
+        let (dir, store, _texts) = indexed().await;
+        let c = cache(dir.path());
+        for sql in [
+            hrafn::query::NEAREST_SQL,
+            hrafn::query::VEC_SQL,
+            hrafn::query::PATH_VEC_SQL,
+        ] {
+            let plan = plan_vc(&store, &c, sql, usize::from(sql.contains("?1"))).await;
+            // every table step is of the cache's vectors (a plan names a table by its alias, so the step itself is read)
+            for l in plan.lines().map(str::trim_start) {
+                if l.starts_with("SEARCH") || l.starts_with("SCAN") {
+                    let table = l.split_whitespace().nth(1).unwrap_or_default();
+                    assert!(
+                        table == "vc.chunk_vec" || table == "vc.path_vec",
+                        "{plan}\n{sql}"
+                    );
+                }
             }
+            assert!(plan.contains("_vec"), "{plan}");
         }
-        assert!(plan.contains("_vec"), "{plan}");
-    }
-    let plan = plan_of(&store, hrafn::query::KEY_CHUNKS_SQL, 2).await;
-    assert!(plan.contains("SEARCH c "), "{plan}");
-    assert!(
-        !plan.lines().any(|l| l.trim_start().starts_with("SCAN")),
-        "{plan}"
-    );
+        let plan = plan_of(&store, hrafn::query::KEY_CHUNKS_SQL, 2).await;
+        assert!(plan.contains("SEARCH c "), "{plan}");
+        assert!(
+            !plan.lines().any(|l| l.trim_start().starts_with("SCAN")),
+            "{plan}"
+        );
+    })
 }
 
 /// Embeds every key the fixture's store lacks: a chunk's vector from CHUNK, a path's from PATH (by its path). How many
@@ -563,156 +585,166 @@ async fn embed_with(
 /// Pattern D (Hrafn redesign Task 9). Every chunk has one vector, so the chunk term ties them all; the question is
 /// near one file's path only: that file's chunk comes first, through the vector route alone. With the path's weight at
 /// 0 the tie stands, and the hub's file is not first.
-#[tokio::test]
-async fn path_vector_lifts_the_file_named_by_the_query() {
-    let (dir, store, texts) = indexed().await;
-    let c = cache(dir.path());
-    let paths = embed_with(&store, &c, &|_| vec![1.0, 0.0, 0.0, 0.0], &|p| {
-        if p == "core/drgnx-hub.el" {
-            vec![0.0, 1.0, 0.0, 0.0]
-        } else {
-            vec![0.0, 0.0, 1.0, 0.0]
-        }
-    })
-    .await;
-    let wanted = fixture().iter().filter(|f| !f.generated).count();
-    assert_eq!(paths, wanted, "one path key per file that has vectors");
-    let qv: [f32; 4] = [0.6, 0.8, 0.0, 0.0];
-    let now = unchanged(texts);
-    let ask = |w: f32| {
-        let q = Query {
-            path_weight: w,
-            ..q("completely unrelated words", Scope::All)
+#[test]
+fn path_vector_lifts_the_file_named_by_the_query() {
+    saman::block_on_current(async {
+        let (dir, store, texts) = indexed().await;
+        let c = cache(dir.path());
+        let paths = embed_with(&store, &c, &|_| vec![1.0, 0.0, 0.0, 0.0], &|p| {
+            if p == "core/drgnx-hub.el" {
+                vec![0.0, 1.0, 0.0, 0.0]
+            } else {
+                vec![0.0, 0.0, 1.0, 0.0]
+            }
+        })
+        .await;
+        let wanted = fixture().iter().filter(|f| !f.generated).count();
+        assert_eq!(paths, wanted, "one path key per file that has vectors");
+        let qv: [f32; 4] = [0.6, 0.8, 0.0, 0.0];
+        let now = unchanged(texts);
+        let ask = |w: f32| {
+            let q = Query {
+                path_weight: w,
+                ..q("completely unrelated words", Scope::All)
+            };
+            let now = &now;
+            let (store, c) = (&store, &c);
+            async move {
+                search(store, &q, hrafn::View::Base, Some((c, &qv)), now)
+                    .await
+                    .unwrap()
+            }
         };
-        let now = &now;
-        let (store, c) = (&store, &c);
-        async move {
-            search(store, &q, hrafn::View::Base, Some((c, &qv)), now)
-                .await
-                .unwrap()
-        }
-    };
-    let a = ask(hrafn::query::PATH_WEIGHT).await;
-    assert_eq!(a.hits[0].path, "core/drgnx-hub.el", "{:?}", a.hits);
-    assert_eq!(a.hits[0].routes, ["vector"]);
-    let flat = ask(0.0).await;
-    assert_ne!(flat.hits[0].path, "core/drgnx-hub.el", "{:?}", flat.hits);
+        let a = ask(hrafn::query::PATH_WEIGHT).await;
+        assert_eq!(a.hits[0].path, "core/drgnx-hub.el", "{:?}", a.hits);
+        assert_eq!(a.hits[0].routes, ["vector"]);
+        let flat = ask(0.0).await;
+        assert_ne!(flat.hits[0].path, "core/drgnx-hub.el", "{:?}", flat.hits);
+    })
 }
 
 /// Pattern D (Hrafn redesign Task 9). One text in two files is one key and one vector, and two hits: the key resolves
 /// to every file that holds it.
-#[tokio::test]
-async fn one_key_in_two_files_is_two_hits() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = CodeStore::open(&dir.path().join("code.db")).unwrap();
-    let same = ";;; util.el --- shared helpers\n\n(defun util-clamp (x)\n  \"Clamp X.\"\n  x)\n";
-    let other = ";;; other.el --- something else\n\n(defun other-thing ()\n  \"Other.\"\n  nil)\n";
-    let files = [
-        ("lib/a/util.el", same),
-        ("lib/b/util.el", same),
-        ("other.el", other),
-    ];
-    let listed: Vec<Listed> = files
-        .iter()
-        .map(|(p, t)| Listed {
-            path: (*p).into(),
-            blob: format!("blob-{}", t.len()),
-            class: Class::Code,
-            lang: Lang::Elisp,
-            generated: false,
-            embed: true,
-            size: t.len() as u64,
-        })
-        .collect();
-    let by_path: HashMap<&str, &str> = files.iter().copied().collect();
-    refresh(
-        &store,
-        &listed,
-        &|p: &str| {
-            by_path
-                .get(p)
-                .map(|t| t.as_bytes().to_vec())
-                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
-        },
-        &[],
-    )
-    .await
-    .unwrap();
-    let c = cache(dir.path());
-    let want = hrafn::missing(&store, &c, 100).await.unwrap();
-    let chunks: Vec<_> = want
-        .iter()
-        .filter(|(k, _, _)| *k == KeyKind::Chunk)
-        .collect();
-    assert_eq!(chunks.len(), 2, "one key for the shared text: {chunks:?}");
-    embed_with(
-        &store,
-        &c,
-        &|t| {
-            if t.contains("util-clamp") {
-                vec![1.0, 0.0, 0.0, 0.0]
-            } else {
-                vec![0.0, 1.0, 0.0, 0.0]
-            }
-        },
-        &|_| vec![0.0, 0.0, 0.0, 1.0],
-    )
-    .await;
-    let a = search(
-        &store,
-        &q("completely unrelated words", Scope::All),
-        hrafn::View::Base,
-        Some((&c, &[1.0, 0.0, 0.0, 0.0])),
-        &|p: &str| by_path.get(p).map(|t| t.to_string()),
-    )
-    .await
-    .unwrap();
-    let mut first_two: Vec<&str> = a.hits.iter().take(2).map(|h| h.path.as_str()).collect();
-    first_two.sort();
-    assert_eq!(
-        first_two,
-        ["lib/a/util.el", "lib/b/util.el"],
-        "{:?}",
-        a.hits
-    );
-    assert!(a.hits.iter().take(2).all(|h| h.routes == ["vector"]));
+#[test]
+fn one_key_in_two_files_is_two_hits() {
+    saman::block_on_current(async {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CodeStore::open(&dir.path().join("code.db")).unwrap();
+        let same =
+            ";;; util.el --- shared helpers\n\n(defun util-clamp (x)\n  \"Clamp X.\"\n  x)\n";
+        let other =
+            ";;; other.el --- something else\n\n(defun other-thing ()\n  \"Other.\"\n  nil)\n";
+        let files = [
+            ("lib/a/util.el", same),
+            ("lib/b/util.el", same),
+            ("other.el", other),
+        ];
+        let listed: Vec<Listed> = files
+            .iter()
+            .map(|(p, t)| Listed {
+                path: (*p).into(),
+                blob: format!("blob-{}", t.len()),
+                class: Class::Code,
+                lang: Lang::Elisp,
+                generated: false,
+                embed: true,
+                size: t.len() as u64,
+            })
+            .collect();
+        let by_path: HashMap<&str, &str> = files.iter().copied().collect();
+        refresh(
+            &store,
+            &listed,
+            &|p: &str| {
+                by_path
+                    .get(p)
+                    .map(|t| t.as_bytes().to_vec())
+                    .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+        let c = cache(dir.path());
+        let want = hrafn::missing(&store, &c, 100).await.unwrap();
+        let chunks: Vec<_> = want
+            .iter()
+            .filter(|(k, _, _)| *k == KeyKind::Chunk)
+            .collect();
+        assert_eq!(chunks.len(), 2, "one key for the shared text: {chunks:?}");
+        embed_with(
+            &store,
+            &c,
+            &|t| {
+                if t.contains("util-clamp") {
+                    vec![1.0, 0.0, 0.0, 0.0]
+                } else {
+                    vec![0.0, 1.0, 0.0, 0.0]
+                }
+            },
+            &|_| vec![0.0, 0.0, 0.0, 1.0],
+        )
+        .await;
+        let a = search(
+            &store,
+            &q("completely unrelated words", Scope::All),
+            hrafn::View::Base,
+            Some((&c, &[1.0, 0.0, 0.0, 0.0])),
+            &|p: &str| by_path.get(p).map(|t| t.to_string()),
+        )
+        .await
+        .unwrap();
+        let mut first_two: Vec<&str> = a.hits.iter().take(2).map(|h| h.path.as_str()).collect();
+        first_two.sort();
+        assert_eq!(
+            first_two,
+            ["lib/a/util.el", "lib/b/util.el"],
+            "{:?}",
+            a.hits
+        );
+        assert!(a.hits.iter().take(2).all(|h| h.routes == ["vector"]));
+    })
 }
 
 /// Pattern D. The lag every answer carries is counted on an index: a scan of the chunk table reads every chunk's text
 /// (100 ms of each query at 50,000 chunks, twice more with a model).
-#[tokio::test]
-async fn the_lag_counts_are_passes_over_an_index() {
-    let (dir, store, _texts) = indexed().await;
-    let c = cache(dir.path());
-    for sql in [
-        hrafn::index::LAG_TOTAL_SQL,
-        hrafn::index::LAG_BEHIND_SQL,
-        hrafn::index::LAG_FILES_SQL,
-    ] {
-        let plan = plan_vc(&store, &c, sql, usize::from(sql.contains("?1"))).await;
-        for line in plan.lines().filter(|l| l.starts_with("SCAN")) {
-            assert!(line.contains("COVERING INDEX"), "{line}\n{plan}");
+#[test]
+fn the_lag_counts_are_passes_over_an_index() {
+    saman::block_on_current(async {
+        let (dir, store, _texts) = indexed().await;
+        let c = cache(dir.path());
+        for sql in [
+            hrafn::index::LAG_TOTAL_SQL,
+            hrafn::index::LAG_BEHIND_SQL,
+            hrafn::index::LAG_FILES_SQL,
+        ] {
+            let plan = plan_vc(&store, &c, sql, usize::from(sql.contains("?1"))).await;
+            for line in plan.lines().filter(|l| l.starts_with("SCAN")) {
+                assert!(line.contains("COVERING INDEX"), "{line}\n{plan}");
+            }
         }
-    }
+    })
 }
 
 /// Pattern D. A path or symbol-name question reads the small tables (`file`, an index of symbol names), not the chunk
 /// table with its text or a scan of every symbol: 7 ms per path token and 18 ms per name at 50,000 chunks.
-#[tokio::test]
-async fn path_and_name_routes_do_not_scan_chunks_or_symbols() {
-    let (_dir, store, _texts) = indexed().await;
-    for sql in [hrafn::query::PATH_ANY_SQL, hrafn::query::PATH_NAME_SQL] {
-        let plan = plan_of(&store, sql, if sql.contains("?2") { 2 } else { 1 }).await;
-        // the base's rows of `file`, by its primary key's first column (the view's tree)
-        assert!(
-            plan.contains("SEARCH f USING PRIMARY KEY (tree=?)"),
-            "{plan}"
-        );
-        assert!(!plan.contains("SCAN c"), "{plan}");
-    }
-    let plan = plan_of(&store, hrafn::query::NAME_PREFIX_SQL, 1).await;
-    assert!(plan.contains("symbol_name_nc"), "{plan}");
-    assert!(!plan.contains("SCAN"), "{plan}");
+#[test]
+fn path_and_name_routes_do_not_scan_chunks_or_symbols() {
+    saman::block_on_current(async {
+        let (_dir, store, _texts) = indexed().await;
+        for sql in [hrafn::query::PATH_ANY_SQL, hrafn::query::PATH_NAME_SQL] {
+            let plan = plan_of(&store, sql, if sql.contains("?2") { 2 } else { 1 }).await;
+            // the base's rows of `file`, by its primary key's first column (the view's tree)
+            assert!(
+                plan.contains("SEARCH f USING PRIMARY KEY (tree=?)"),
+                "{plan}"
+            );
+            assert!(!plan.contains("SCAN c"), "{plan}");
+        }
+        let plan = plan_of(&store, hrafn::query::NAME_PREFIX_SQL, 1).await;
+        assert!(plan.contains("symbol_name_nc"), "{plan}");
+        assert!(!plan.contains("SCAN"), "{plan}");
+    })
 }
 
 /// The plan of SQL with BINDS parameters bound, one line per step.
@@ -754,162 +786,168 @@ async fn plan_vc(store: &CodeStore, c: &VectorCache, sql: &str, binds: usize) ->
 
 /// Pattern D. In a file that has not changed, no hit moves, whatever the chunk starts with (a blank line, an attribute):
 /// the hit's lines are the chunk's own, and it is not marked as found again.
-#[tokio::test]
-async fn an_unchanged_file_moves_no_hit() {
-    let text = "use std::fmt;\n\npub const FIRST_LIMIT: usize = 64;\n\n/// How long the second waits.\npub const SECOND_WAIT: u64 = 5;\n\n#[derive(Debug)]\nstruct ThirdArgs {\n    a: u32,\n}\n\nfn fourth_helper() -> u32 {\n    7\n}\n";
-    let dir = tempfile::tempdir().unwrap();
-    let store = CodeStore::open(&dir.path().join("code.db")).unwrap();
-    let listed = vec![Listed {
-        path: "src/lib.rs".into(),
-        blob: "b".into(),
-        class: Class::Code,
-        lang: Lang::Rust,
-        generated: false,
-        embed: true,
-        size: text.len() as u64,
-    }];
-    refresh(
-        &store,
-        &listed,
-        &|_: &str| Ok(text.as_bytes().to_vec()),
-        &[],
-    )
-    .await
-    .unwrap();
-    let starts: Vec<(i64, String)> = store
-        .handle()
-        .read(|c| {
-            let mut st = c.prepare(
-                "select s.name, c.line_start from symbol s join chunk c on c.id = s.chunk",
-            )?;
-            let rows = st
-                .query_map([], |r| Ok((r.get::<_, i64>(1)?, r.get::<_, String>(0)?)))?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(rows)
-        })
-        .await
-        .unwrap();
-    assert!(starts.len() >= 4, "{starts:?}");
-    for (line, name) in starts {
-        let a = search(
+#[test]
+fn an_unchanged_file_moves_no_hit() {
+    saman::block_on_current(async {
+        let text = "use std::fmt;\n\npub const FIRST_LIMIT: usize = 64;\n\n/// How long the second waits.\npub const SECOND_WAIT: u64 = 5;\n\n#[derive(Debug)]\nstruct ThirdArgs {\n    a: u32,\n}\n\nfn fourth_helper() -> u32 {\n    7\n}\n";
+        let dir = tempfile::tempdir().unwrap();
+        let store = CodeStore::open(&dir.path().join("code.db")).unwrap();
+        let listed = vec![Listed {
+            path: "src/lib.rs".into(),
+            blob: "b".into(),
+            class: Class::Code,
+            lang: Lang::Rust,
+            generated: false,
+            embed: true,
+            size: text.len() as u64,
+        }];
+        refresh(
             &store,
-            &q(&name, Scope::All),
-            hrafn::View::Base,
-            None,
-            &|_: &str| Some(text.to_string()),
+            &listed,
+            &|_: &str| Ok(text.as_bytes().to_vec()),
+            &[],
         )
         .await
         .unwrap();
-        let h = &a.hits[0];
-        assert_eq!(
-            (h.line_start as i64, h.reanchored),
-            (line, false),
-            "{name}: {h:?}"
-        );
-    }
+        let starts: Vec<(i64, String)> = store
+            .handle()
+            .read(|c| {
+                let mut st = c.prepare(
+                    "select s.name, c.line_start from symbol s join chunk c on c.id = s.chunk",
+                )?;
+                let rows = st
+                    .query_map([], |r| Ok((r.get::<_, i64>(1)?, r.get::<_, String>(0)?)))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap();
+        assert!(starts.len() >= 4, "{starts:?}");
+        for (line, name) in starts {
+            let a = search(
+                &store,
+                &q(&name, Scope::All),
+                hrafn::View::Base,
+                None,
+                &|_: &str| Some(text.to_string()),
+            )
+            .await
+            .unwrap();
+            let h = &a.hits[0];
+            assert_eq!(
+                (h.line_start as i64, h.reanchored),
+                (line, false),
+                "{name}: {h:?}"
+            );
+        }
+    })
 }
 
 /// Pattern D. The file grew three lines at its top since it was indexed: the hit's lines are found again and move.
-#[tokio::test]
-async fn reanchors_moved_hit() {
-    let (_dir, store, texts) = indexed().await;
-    let still = search(
-        &store,
-        &q("drgnx-hub-call", Scope::All),
-        hrafn::View::Base,
-        None,
-        &unchanged(texts.clone()),
-    )
-    .await
-    .unwrap();
-    let before = still.hits[0].clone();
-    assert!(!before.reanchored);
-    let moved = |p: &str| {
-        texts.get(p).map(|t| {
-            if p == "core/drgnx-hub.el" {
-                format!(";; one\n;; two\n;; three\n{t}")
-            } else {
-                t.to_string()
-            }
-        })
-    };
-    let after = search(
-        &store,
-        &q("drgnx-hub-call", Scope::All),
-        hrafn::View::Base,
-        None,
-        &moved,
-    )
-    .await
-    .unwrap();
-    let hit = &after.hits[0];
-    assert_eq!(hit.path, "core/drgnx-hub.el");
-    assert!(hit.reanchored);
-    assert_eq!(
-        (hit.line_start, hit.line_end),
-        (before.line_start + 3, before.line_end + 3)
-    );
-    // a file that is gone keeps the lines it had
-    let gone = search(
-        &store,
-        &q("drgnx-hub-call", Scope::All),
-        hrafn::View::Base,
-        None,
-        &|_: &str| None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(gone.hits[0].line_start, before.line_start);
-    assert!(!gone.hits[0].reanchored);
+#[test]
+fn reanchors_moved_hit() {
+    saman::block_on_current(async {
+        let (_dir, store, texts) = indexed().await;
+        let still = search(
+            &store,
+            &q("drgnx-hub-call", Scope::All),
+            hrafn::View::Base,
+            None,
+            &unchanged(texts.clone()),
+        )
+        .await
+        .unwrap();
+        let before = still.hits[0].clone();
+        assert!(!before.reanchored);
+        let moved = |p: &str| {
+            texts.get(p).map(|t| {
+                if p == "core/drgnx-hub.el" {
+                    format!(";; one\n;; two\n;; three\n{t}")
+                } else {
+                    t.to_string()
+                }
+            })
+        };
+        let after = search(
+            &store,
+            &q("drgnx-hub-call", Scope::All),
+            hrafn::View::Base,
+            None,
+            &moved,
+        )
+        .await
+        .unwrap();
+        let hit = &after.hits[0];
+        assert_eq!(hit.path, "core/drgnx-hub.el");
+        assert!(hit.reanchored);
+        assert_eq!(
+            (hit.line_start, hit.line_end),
+            (before.line_start + 3, before.line_end + 3)
+        );
+        // a file that is gone keeps the lines it had
+        let gone = search(
+            &store,
+            &q("drgnx-hub-call", Scope::All),
+            hrafn::View::Base,
+            None,
+            &|_: &str| None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(gone.hits[0].line_start, before.line_start);
+        assert!(!gone.hits[0].reanchored);
+    })
 }
 
 /// Pattern D. The ranks of three queries with vectors off, frozen: a change to a route, a weight or the demotion
 /// shows here.
-#[tokio::test]
-async fn golden_ranks_vectors_off() {
-    let (_dir, store, texts) = indexed().await;
-    let now = unchanged(texts);
-    let mut got = Vec::new();
-    for text in ["timer", "run BODY with a timer", "hub answer"] {
-        let a = search(&store, &q(text, Scope::All), hrafn::View::Base, None, &now)
-            .await
-            .unwrap();
-        got.push((
-            text,
-            a.hits
-                .iter()
-                .map(|h| h.path.as_str().to_string())
-                .collect::<Vec<_>>(),
-        ));
-    }
-    let golden: Vec<(&str, Vec<&str>)> = vec![
-        (
-            "timer",
-            vec![
-                "core/drgnx-timer.el",
-                "core/drgnx-macro.el",
-                "core/drgnx-var.el",
-                "core/drgnx-loaddefs.el",
-                "test/drgnx-timer-test.el",
-                "docs/timers.md",
-            ],
-        ),
-        (
-            "run BODY with a timer",
-            vec![
-                "core/drgnx-macro.el",
-                "core/drgnx-timer.el",
-                "docs/timers.md",
-                "core/drgnx-var.el",
-                "core/drgnx-loaddefs.el",
-                "test/drgnx-timer-test.el",
-            ],
-        ),
-        ("hub answer", vec!["core/drgnx-hub.el"]),
-    ];
-    assert_eq!(
-        format!("{got:#?}"),
-        format!("{golden:#?}"),
-        "the frozen ranks differ"
-    );
+#[test]
+fn golden_ranks_vectors_off() {
+    saman::block_on_current(async {
+        let (_dir, store, texts) = indexed().await;
+        let now = unchanged(texts);
+        let mut got = Vec::new();
+        for text in ["timer", "run BODY with a timer", "hub answer"] {
+            let a = search(&store, &q(text, Scope::All), hrafn::View::Base, None, &now)
+                .await
+                .unwrap();
+            got.push((
+                text,
+                a.hits
+                    .iter()
+                    .map(|h| h.path.as_str().to_string())
+                    .collect::<Vec<_>>(),
+            ));
+        }
+        let golden: Vec<(&str, Vec<&str>)> = vec![
+            (
+                "timer",
+                vec![
+                    "core/drgnx-timer.el",
+                    "core/drgnx-macro.el",
+                    "core/drgnx-var.el",
+                    "core/drgnx-loaddefs.el",
+                    "test/drgnx-timer-test.el",
+                    "docs/timers.md",
+                ],
+            ),
+            (
+                "run BODY with a timer",
+                vec![
+                    "core/drgnx-macro.el",
+                    "core/drgnx-timer.el",
+                    "docs/timers.md",
+                    "core/drgnx-var.el",
+                    "core/drgnx-loaddefs.el",
+                    "test/drgnx-timer-test.el",
+                ],
+            ),
+            ("hub answer", vec!["core/drgnx-hub.el"]),
+        ];
+        assert_eq!(
+            format!("{got:#?}"),
+            format!("{golden:#?}"),
+            "the frozen ranks differ"
+        );
+    })
 }

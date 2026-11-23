@@ -22,7 +22,6 @@ use crate::tree::View;
 use std::collections::HashSet;
 use std::io;
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -255,23 +254,21 @@ pub fn names(root: &Path, ignore: Ignore, exclude: &[String]) -> io::Result<Vec<
 
 /// What git lists under ROOT (paths relative to it). A nested repository is listed as its folder (`dir/`): left out.
 fn git_names(root: &Path) -> io::Result<Vec<String>> {
-    let out = Command::new("git")
-        .args([
+    let out = crate::proc::git(
+        root,
+        &[
             "ls-files",
             "-z",
             "--cached",
             "--others",
             "--exclude-standard",
-        ])
-        .current_dir(root)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()?;
+        ],
+        Vec::new(),
+    )?;
     if !out.status.success() {
         return Err(io::Error::other(format!(
             "git ls-files: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            out.stderr.trim()
         )));
     }
     Ok(out
@@ -297,7 +294,7 @@ struct Rules {
 
 impl Rules {
     fn read(file: &Path, base: &str) -> Option<Rules> {
-        let text = std::fs::read_to_string(file).ok()?;
+        let text = eitri::read_string(file, crate::proc::TEXT_CAP).ok()?;
         let patterns = text
             .lines()
             .filter_map(|line| {

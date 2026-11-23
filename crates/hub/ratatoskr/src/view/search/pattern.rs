@@ -118,7 +118,7 @@ pub(super) fn run(
             on_file(batch);
         }
     });
-    result?;
+    result.map_err(|e| e.to_string())?;
     let refused: Vec<&String> = patterns
         .by_lang
         .values()

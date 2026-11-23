@@ -10,7 +10,7 @@ use super::ts::Kind;
 use super::{registry, worker};
 use crate::Lang;
 use serde::{Deserialize, Serialize};
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 use tree_sitter::{CaptureQuantifier, Query, QueryCursor, StreamingIterator, Tree};
 
 /// The fold kinds, at their numbers in the line model (`@fold` is `block`).
@@ -57,8 +57,8 @@ impl FoldQuery {
     /// SCM, a `folds.scm`, compiled against LANGUAGE: a capture is `@fold`, `@fold.KIND` or `@_NAME` (a predicate's
     /// argument), and the predicates are the text ones Nidhogg's runner reads too (`#eq?`, `#not-eq?`, `#any-of?`,
     /// `#match?`, `#not-match?`; tree-sitter evaluates those itself, so any other is in `general_predicates`).
-    pub fn folds(language: &tree_sitter::Language, scm: &str) -> Result<FoldQuery, String> {
-        let query = Query::new(language, scm).map_err(|e| e.to_string())?;
+    pub fn folds(language: &tree_sitter::Language, scm: &str) -> villa::Result<FoldQuery> {
+        let query = Query::new(language, scm).map_err(|e| villa::Error::invalid(e.to_string()))?;
         let kinds: Vec<Option<u8>> = query.capture_names().iter().map(|c| fold_kind(c)).collect();
         if let Some(c) = query
             .capture_names()
@@ -66,25 +66,31 @@ impl FoldQuery {
             .zip(&kinds)
             .find(|(c, k)| k.is_none() && !c.starts_with('_'))
         {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "@{}: not a fold capture (@fold, @fold.KIND or @_NAME)",
                 c.0
-            ));
+            )));
         }
         for p in 0..query.pattern_count() {
             if let Some(g) = query.general_predicates(p).first() {
-                return Err(format!("#{}: not a fold query's predicate", g.operator));
+                return Err(villa::Error::invalid(format!(
+                    "#{}: not a fold query's predicate",
+                    g.operator
+                )));
             }
             if !query.property_settings(p).is_empty() || !query.property_predicates(p).is_empty() {
-                return Err("#set!, #is? and #is-not?: not a fold query's predicates".into());
+                return Err(villa::Error::invalid(
+                    "#set!, #is? and #is-not?: not a fold query's predicates",
+                ));
             }
         }
         Ok(FoldQuery { query, kinds })
     }
 
     /// TAGS, a `tags.scm`, compiled against LANGUAGE as a fold query: its definitions, every other pattern off.
-    pub fn from_tags(language: &tree_sitter::Language, tags: &str) -> Result<FoldQuery, String> {
-        let mut query = Query::new(language, tags).map_err(|e| e.to_string())?;
+    pub fn from_tags(language: &tree_sitter::Language, tags: &str) -> villa::Result<FoldQuery> {
+        let mut query =
+            Query::new(language, tags).map_err(|e| villa::Error::invalid(e.to_string()))?;
         let kinds: Vec<Option<u8>> = query
             .capture_names()
             .iter()
@@ -172,7 +178,7 @@ fn folds_source(kind: Kind) -> &'static str {
 /// not compile against its grammar is said once and folds by indentation).
 fn query(kind: Kind) -> Option<&'static FoldQuery> {
     static QUERIES: Mutex<Vec<(Kind, &'static FoldQuery)>> = Mutex::new(Vec::new());
-    let mut all = QUERIES.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut all = saman::lock(&QUERIES);
     if let Some((_, q)) = all.iter().find(|(k, _)| *k == kind) {
         return Some(q);
     }
@@ -194,12 +200,12 @@ fn query(kind: Kind) -> Option<&'static FoldQuery> {
 }
 
 /// Every built-in kind's fold query compiled (a test checks each against its grammar), or why not.
-pub fn check_all() -> Vec<(&'static str, Result<(), String>)> {
+pub fn check_all() -> Vec<(&'static str, villa::Result<()>)> {
     Kind::ALL
         .iter()
         .map(|k| {
             let r = match registry::language(*k) {
-                None => Err("its grammar is not built".to_owned()),
+                None => Err(villa::Error::unavailable("its grammar is not built")),
                 Some(l) => FoldQuery::folds(&l, folds_source(*k)).map(|_| ()),
             };
             (registry::pack_name(*k), r)
@@ -288,7 +294,10 @@ mod tests {
             ("((function_item) @fold (#is-test? @fold))", "#is-test?"),
             ("((function_item) @fold (#set! priority 1))", "#set!"),
         ] {
-            let e = FoldQuery::folds(&rust, bad).err().unwrap_or_default();
+            let e = FoldQuery::folds(&rust, bad)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
             assert!(e.contains(why), "{bad}: {e}");
         }
     }

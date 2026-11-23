@@ -2,41 +2,15 @@
 //! answer the same questions; the gix door runs no filter, hook or fsmonitor and writes nothing.
 use hrafn::{Blob, GitCli, GixDoor, Head, Obj, Status, TreeChange, TreeGit};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
-fn git_cmd(dir: &Path, args: &[&str]) -> std::process::Output {
-    Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args([
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap()
-}
 
 fn git(dir: &Path, args: &[&str]) {
-    let o = git_cmd(dir, args);
-    assert!(
-        o.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&o.stderr)
-    );
+    let o = crate::gitfx::out(dir, args);
+    assert!(o.status.success(), "git {args:?}: {}", o.stderr.trim());
 }
 
 fn out(dir: &Path, args: &[&str]) -> String {
-    let o = git_cmd(dir, args);
-    assert!(
-        o.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&o.stderr)
-    );
+    let o = crate::gitfx::out(dir, args);
+    assert!(o.status.success(), "git {args:?}: {}", o.stderr.trim());
     String::from_utf8_lossy(&o.stdout).trim().to_string()
 }
 
@@ -48,7 +22,7 @@ fn write(root: &Path, files: &[(&str, &str)]) {
     for (p, c) in files {
         let f = root.join(p);
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-        std::fs::write(f, c).unwrap();
+        eitri::replace_file(&f, c.as_bytes()).unwrap();
     }
 }
 
@@ -56,10 +30,7 @@ fn write(root: &Path, files: &[(&str, &str)]) {
 fn backdate(root: &Path, paths: &[&str]) {
     let then = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
     for p in paths {
-        let f = std::fs::File::options()
-            .write(true)
-            .open(root.join(p))
-            .unwrap();
+        let f = eitri::open_lock(&root.join(p), 0o600).unwrap();
         f.set_modified(then).unwrap();
     }
 }
@@ -364,7 +335,11 @@ fn gix_door_runs_no_filters_or_hooks() {
     }
     // a dirty, a new and a racy file, so a status or a refresh would have to read and filter them
     write(r, &[("f.txt", "x dirty\n"), ("n.txt", "new\n")]);
-    let _ = std::fs::remove_file(&marker);
+    match std::fs::remove_file(&marker) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => panic!("the marker: {e}"),
+    }
     let before = git_dir_snapshot(r);
     let index_before = std::fs::read(r.join(".git/index")).unwrap();
 
@@ -388,7 +363,7 @@ fn gix_door_runs_no_filters_or_hooks() {
     assert!(
         !marker.exists(),
         "ran: {}",
-        std::fs::read_to_string(&marker).unwrap_or_default()
+        eitri::read_string(&marker, 4 << 20).unwrap_or_default()
     );
     assert_eq!(git_dir_snapshot(r), before, "the gitdir is unchanged");
     assert_eq!(std::fs::read(r.join(".git/index")).unwrap(), index_before);
@@ -399,7 +374,7 @@ fn gix_door_runs_no_filters_or_hooks() {
     assert!(!blobs[2].uncertain, "{blobs:?}");
 
     // the marker works: git itself runs the filter on the same file (and fails: the marker is no filter protocol)
-    let _ = git_cmd(r, &["hash-object", "f.txt"]);
+    drop(crate::gitfx::out(r, &["hash-object", "f.txt"]));
     assert!(
         marker.exists(),
         "the clean filter writes the marker when git runs it"
@@ -432,19 +407,12 @@ fn raw_hash_equals_hash_object_no_filters() {
     for (p, b) in paths.iter().zip(&got) {
         let want = if p == "ln" {
             // a link's blob is its target, as git stores it
-            let o = Command::new("git")
-                .arg("-C")
-                .arg(r)
-                .args(["hash-object", "--no-filters", "--stdin"])
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .spawn()
-                .and_then(|mut c| {
-                    use std::io::Write;
-                    c.stdin.take().unwrap().write_all(b"p.rs")?;
-                    c.wait_with_output()
-                })
-                .unwrap();
+            let o = crate::gitfx::out_with(
+                r,
+                &["hash-object", "--no-filters", "--stdin"],
+                &[],
+                b"p.rs".to_vec(),
+            );
             String::from_utf8_lossy(&o.stdout).trim().to_string()
         } else {
             out(r, &["hash-object", "--no-filters", p])

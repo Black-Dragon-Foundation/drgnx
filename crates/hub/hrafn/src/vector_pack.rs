@@ -16,9 +16,8 @@ use crate::tree::View;
 use rusqlite::{Connection, OpenFlags, params};
 use sha2::{Digest, Sha256};
 use std::io;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 /// The format this build writes and the only one it reads.
 pub const PACK_FORMAT: u32 = 1;
@@ -71,7 +70,7 @@ fn refuse(msg: impl Into<String>) -> StoreError {
 
 impl PackReader {
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap_or_else(PoisonError::into_inner)
+        saman::lock(&self.conn)
     }
 
     /// The vectors in it, of both kinds.
@@ -185,11 +184,9 @@ pub fn write_pack(
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.into()),
     }
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(out)?;
+    if !eitri::create_new(out, 0o600).map_err(|e| StoreError::Io(io::Error::other(e)))? {
+        return Err(StoreError::Io(io::ErrorKind::AlreadyExists.into()));
+    }
     {
         let mut c = Connection::open(out)?;
         c.query_row("pragma journal_mode = off", [], |_| Ok(()))?;

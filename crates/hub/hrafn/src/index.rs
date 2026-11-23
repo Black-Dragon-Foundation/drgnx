@@ -19,7 +19,7 @@ use crate::tree::{View, transition};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 /// Files rebuilt in one transaction.
 const FILE_BATCH: usize = 64;
@@ -76,7 +76,7 @@ pub(crate) fn known_blobs(c: &Connection) -> urdr::Result<HashMap<String, String
 }
 
 fn now_secs() -> i64 {
-    SystemTime::now()
+    stund::wall()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
 }

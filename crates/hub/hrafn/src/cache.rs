@@ -16,7 +16,7 @@ use crate::store::{KeyKind, StoreError};
 use rusqlite::{Connection, OpenFlags, params};
 use std::fs::File;
 use std::io::{self, Read, Seek, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use urdr::{Handle, Mode, Store, StoreSpec};
@@ -472,7 +472,14 @@ impl VectorCache {
     /// one, the thread is joined from another).
     pub fn shutdown(mut self) {
         if let Some(store) = self.store.take() {
-            let _ = std::thread::spawn(move || store.shutdown()).join();
+            match saman::spawn_thread("hrafn-cache-shutdown", move || store.shutdown()) {
+                Ok(thread) => {
+                    if thread.join().is_err() {
+                        tracing::warn!("the cache's shutdown thread panicked");
+                    }
+                }
+                Err(e) => tracing::warn!("the cache could not be shut down: {e}"),
+            }
         }
     }
 }
@@ -482,13 +489,8 @@ impl VectorCache {
 fn writer_lock(path: &Path) -> Result<File, StoreError> {
     let mut name = path.as_os_str().to_owned();
     name.push(".writer");
-    let mut f = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(PathBuf::from(name))?;
+    let mut f = eitri::open_lock(&PathBuf::from(name), 0o600)
+        .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
     match f.try_lock() {
         Ok(()) => {
             f.set_len(0)?;
@@ -498,7 +500,8 @@ fn writer_lock(path: &Path) -> Result<File, StoreError> {
         }
         Err(std::fs::TryLockError::WouldBlock) => {
             let mut pid = String::new();
-            let _ = f.read_to_string(&mut pid);
+            // the holder's PID only names who it is; an unreadable lock file names nobody
+            f.read_to_string(&mut pid).unwrap_or_default();
             Err(StoreError::Busy(format!(
                 "the cache is written by hub PID {} ({})",
                 pid.trim(),

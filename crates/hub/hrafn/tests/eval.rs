@@ -3,29 +3,28 @@
 //! test-pattern: pure (D): git runs to its exit in a temporary repository, the store thread answers in order, and the
 //! metrics and the bootstrap are functions of their inputs (the bootstrap's generator is seeded); no clock, no wait.
 
-use hrafn::eval::{EvalRow, Gate, Report, compare, compare_on, generate, judge, run};
+use hrafn::eval::{
+    EvalRow, Gate, Report, compare, compare_on, generate, judge, read_set, run, write_sets,
+};
 use hrafn::{Answer, CodeStore, Config, GitCli, Hit, Lag, Query, refresh};
 use std::path::Path;
-use std::process::Command;
 
 fn git(dir: &Path, day: u32, args: &[&str]) {
     let date = format!("2026-01-{day:02}T12:00:00+0000");
-    let st = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
-        .args(args)
-        .env("GIT_AUTHOR_DATE", &date)
-        .env("GIT_COMMITTER_DATE", &date)
-        .status()
-        .unwrap();
+    let st = crate::gitfx::out_with(
+        dir,
+        args,
+        &[("GIT_AUTHOR_DATE", &date), ("GIT_COMMITTER_DATE", &date)],
+        Vec::new(),
+    )
+    .status;
     assert!(st.success(), "git {args:?}");
 }
 
 fn put(dir: &Path, path: &str, text: &str) {
     let f = dir.join(path);
     std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-    std::fs::write(f, text).unwrap();
+    eitri::replace_file(&f, text.as_bytes()).unwrap();
 }
 
 fn defun(name: &str, body: &str) -> String {
@@ -138,67 +137,71 @@ async fn indexed(root: &Path) -> (CodeStore, tempfile::TempDir) {
 
 /// Pattern D. A subject that names an identifier is dropped, a ticket id is stripped from the others, and the queries
 /// are the subjects that remain.
-#[tokio::test]
-async fn gen_drops_identifier_subjects() {
-    let repo = fixture();
-    let (store, _db) = indexed(repo.path()).await;
-    let rows = generate(repo.path(), &GitCli, &store).await.unwrap();
-    let mut queries: Vec<&str> = rows.iter().map(|r| r.query.as_str()).collect();
-    queries.sort();
-    assert_eq!(
-        queries,
-        [
-            "Cover the empty queue case",
-            "Run the timer when its time is due",
-            "Share one queue between the timer and the window code",
-            "Shrink the gap between split windows",
-            "split windows side by side",
-        ],
-        "{rows:#?}"
-    );
-    assert!(rows.iter().all(|r| !r.query.contains("timer-fire")));
-    assert!(rows.iter().all(|r| !r.query.contains("ABC")));
+#[test]
+fn gen_drops_identifier_subjects() {
+    saman::block_on_current(async {
+        let repo = fixture();
+        let (store, _db) = indexed(repo.path()).await;
+        let rows = generate(repo.path(), &GitCli, &store).await.unwrap();
+        let mut queries: Vec<&str> = rows.iter().map(|r| r.query.as_str()).collect();
+        queries.sort();
+        assert_eq!(
+            queries,
+            [
+                "Cover the empty queue case",
+                "Run the timer when its time is due",
+                "Share one queue between the timer and the window code",
+                "Shrink the gap between split windows",
+                "split windows side by side",
+            ],
+            "{rows:#?}"
+        );
+        assert!(rows.iter().all(|r| !r.query.contains("timer-fire")));
+        assert!(rows.iter().all(|r| !r.query.contains("ABC")));
+    })
 }
 
 /// Pattern D. Targets are the forms around the hunks, found again at HEAD by name (a renamed file follows its
 /// functions), and a form that is gone drops its commit.
-#[tokio::test]
-async fn gen_maps_targets_through_symbols() {
-    let repo = fixture();
-    let (store, _db) = indexed(repo.path()).await;
-    let rows = generate(repo.path(), &GitCli, &store).await.unwrap();
-    let row = |q: &str| {
-        rows.iter()
-            .find(|r| r.query == q)
-            .unwrap_or_else(|| panic!("{q}: {rows:#?}"))
-    };
-    let t = |p: &str, s: &str| (p.to_string(), s.to_string());
-    assert_eq!(
-        row("split windows side by side").targets,
-        [t("core/win.el", "window-split")]
-    );
-    assert_eq!(
-        row("Shrink the gap between split windows").targets,
-        [t("core/win.el", "window-split")]
-    );
-    assert_eq!(
-        row("Run the timer when its time is due").targets,
-        [t("core/timer.el", "timer-fire")]
-    );
-    assert_eq!(row("Cover the empty queue case").stratum, "tests");
-    let both = row("Share one queue between the timer and the window code");
-    assert_eq!(both.stratum, "cross-file");
-    assert_eq!(both.targets.len(), 2);
-    assert_eq!(row("Run the timer when its time is due").stratum, "symbol");
-    // the old helper's commits and the cancel helper's removal leave no row
-    assert!(
-        rows.iter()
-            .all(|r| !r.query.contains("old helper") && !r.query.contains("cancel"))
-    );
-    // ages count back from HEAD's day; the halves split the rows by commit id
-    assert_eq!(row("Run the timer when its time is due").age_days, 9);
-    assert!(rows.iter().all(|r| r.half == "dev" || r.half == "test"));
-    assert!(rows.iter().all(|r| r.dir == "core" || r.dir == "tests"));
+#[test]
+fn gen_maps_targets_through_symbols() {
+    saman::block_on_current(async {
+        let repo = fixture();
+        let (store, _db) = indexed(repo.path()).await;
+        let rows = generate(repo.path(), &GitCli, &store).await.unwrap();
+        let row = |q: &str| {
+            rows.iter()
+                .find(|r| r.query == q)
+                .unwrap_or_else(|| panic!("{q}: {rows:#?}"))
+        };
+        let t = |p: &str, s: &str| (p.to_string(), s.to_string());
+        assert_eq!(
+            row("split windows side by side").targets,
+            [t("core/win.el", "window-split")]
+        );
+        assert_eq!(
+            row("Shrink the gap between split windows").targets,
+            [t("core/win.el", "window-split")]
+        );
+        assert_eq!(
+            row("Run the timer when its time is due").targets,
+            [t("core/timer.el", "timer-fire")]
+        );
+        assert_eq!(row("Cover the empty queue case").stratum, "tests");
+        let both = row("Share one queue between the timer and the window code");
+        assert_eq!(both.stratum, "cross-file");
+        assert_eq!(both.targets.len(), 2);
+        assert_eq!(row("Run the timer when its time is due").stratum, "symbol");
+        // the old helper's commits and the cancel helper's removal leave no row
+        assert!(
+            rows.iter()
+                .all(|r| !r.query.contains("old helper") && !r.query.contains("cancel"))
+        );
+        // ages count back from HEAD's day; the halves split the rows by commit id
+        assert_eq!(row("Run the timer when its time is due").age_days, 9);
+        assert!(rows.iter().all(|r| r.half == "dev" || r.half == "test"));
+        assert!(rows.iter().all(|r| r.dir == "core" || r.dir == "tests"));
+    })
 }
 
 fn hit(path: &str, symbol: &str) -> Hit {
@@ -564,4 +567,38 @@ fn yields_summarise_per_stratum() {
     );
     assert_eq!(s["symbol"].file, 0.75);
     assert_eq!((s["docs"].def_n, s["docs"].def), (0, 0.0));
+}
+
+fn row(id: &str, half: &str) -> EvalRow {
+    EvalRow {
+        id: id.into(),
+        stratum: "symbol".into(),
+        query: format!("find {id}"),
+        targets: vec![("a.rs".into(), "a".into())],
+        age_days: 1,
+        dir: "src".into(),
+        half: half.into(),
+    }
+}
+
+/// The frozen sets are written once, one file a half, and a second write refuses and leaves them as they were.
+#[test]
+fn the_sets_are_written_once_and_never_overwritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let rows = vec![row("a1", "dev"), row("b2", "test"), row("c3", "dev")];
+    write_sets(dir.path(), &rows).unwrap();
+    assert_eq!(
+        read_set(&dir.path().join("dev.jsonl")).unwrap(),
+        [rows[0].clone(), rows[2].clone()]
+    );
+    assert_eq!(
+        read_set(&dir.path().join("test.jsonl")).unwrap(),
+        [rows[1].clone()]
+    );
+    let e = write_sets(dir.path(), &[row("z9", "dev")]).unwrap_err();
+    assert!(e.to_string().contains("frozen"), "{e}");
+    assert_eq!(
+        read_set(&dir.path().join("dev.jsonl")).unwrap(),
+        [rows[0].clone(), rows[2].clone()]
+    );
 }

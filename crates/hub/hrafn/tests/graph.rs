@@ -86,39 +86,43 @@ fn get(ranks: &[(String, f64)], path: &str) -> f64 {
 }
 
 /// The values come from an independent power iteration run to 1e-15 (the plan's ledger has the script).
-#[tokio::test]
-async fn pagerank_of_four_files_matches_hand_values() {
-    let (_d, s) = four().await;
-    let (ranks, _) = file_ranks(&s, View::Base, &RankAsk::default())
-        .await
-        .unwrap();
-    for (p, want) in [
-        ("a.rs", 0.047619048),
-        ("b.rs", 0.456027456),
-        ("c.rs", 0.448734449),
-        ("d.rs", 0.047619048),
-    ] {
-        assert!((get(&ranks, p) - want).abs() < 1e-6, "{p}: {ranks:?}");
-    }
-    assert_eq!(ranks[0].0, "b.rs", "best first");
+#[test]
+fn pagerank_of_four_files_matches_hand_values() {
+    saman::block_on_current(async {
+        let (_d, s) = four().await;
+        let (ranks, _) = file_ranks(&s, View::Base, &RankAsk::default())
+            .await
+            .unwrap();
+        for (p, want) in [
+            ("a.rs", 0.047619048),
+            ("b.rs", 0.456027456),
+            ("c.rs", 0.448734449),
+            ("d.rs", 0.047619048),
+        ] {
+            assert!((get(&ranks, p) - want).abs() < 1e-6, "{p}: {ranks:?}");
+        }
+        assert_eq!(ranks[0].0, "b.rs", "best first");
+    })
 }
 
-#[tokio::test]
-async fn focus_moves_rank_to_its_neighbours() {
-    let (_d, s) = four().await;
-    let ask = RankAsk {
-        focus: vec!["a.rs".into()],
-        ..RankAsk::default()
-    };
-    let (ranks, _) = file_ranks(&s, View::Base, &ask).await.unwrap();
-    for (p, want) in [
-        ("a.rs", 0.15),
-        ("b.rs", 0.436486486),
-        ("c.rs", 0.413513514),
-        ("d.rs", 0.0),
-    ] {
-        assert!((get(&ranks, p) - want).abs() < 1e-6, "{p}: {ranks:?}");
-    }
+#[test]
+fn focus_moves_rank_to_its_neighbours() {
+    saman::block_on_current(async {
+        let (_d, s) = four().await;
+        let ask = RankAsk {
+            focus: vec!["a.rs".into()],
+            ..RankAsk::default()
+        };
+        let (ranks, _) = file_ranks(&s, View::Base, &ask).await.unwrap();
+        for (p, want) in [
+            ("a.rs", 0.15),
+            ("b.rs", 0.436486486),
+            ("c.rs", 0.413513514),
+            ("d.rs", 0.0),
+        ] {
+            assert!((get(&ranks, p) - want).abs() < 1e-6, "{p}: {ranks:?}");
+        }
+    })
 }
 
 #[test]
@@ -142,35 +146,39 @@ fn weights_follow_the_name() {
 }
 
 /// Scope code leaves tests and docs out of the walk and the answer.
-#[tokio::test]
-async fn code_scope_leaves_tests_out() {
-    let (_d, s) = four().await;
-    put(&s, "tests/t.rs", "test", &[], &[("beta", 100)]).await;
-    let (all, _) = file_ranks(&s, View::Base, &RankAsk::default())
-        .await
-        .unwrap();
-    assert!(get(&all, "tests/t.rs") > 0.0);
-    let code = RankAsk {
-        code_only: true,
-        ..RankAsk::default()
-    };
-    let (ranks, _) = file_ranks(&s, View::Base, &code).await.unwrap();
-    assert_eq!(get(&ranks, "tests/t.rs"), -1.0);
-    assert!(
-        (get(&ranks, "b.rs") - 0.456027456).abs() < 1e-6,
-        "{ranks:?}"
-    );
+#[test]
+fn code_scope_leaves_tests_out() {
+    saman::block_on_current(async {
+        let (_d, s) = four().await;
+        put(&s, "tests/t.rs", "test", &[], &[("beta", 100)]).await;
+        let (all, _) = file_ranks(&s, View::Base, &RankAsk::default())
+            .await
+            .unwrap();
+        assert!(get(&all, "tests/t.rs") > 0.0);
+        let code = RankAsk {
+            code_only: true,
+            ..RankAsk::default()
+        };
+        let (ranks, _) = file_ranks(&s, View::Base, &code).await.unwrap();
+        assert_eq!(get(&ranks, "tests/t.rs"), -1.0);
+        assert!(
+            (get(&ranks, "b.rs") - 0.456027456).abs() < 1e-6,
+            "{ranks:?}"
+        );
+    })
 }
 
 /// The graph is built once per store state: reused until a write, built again after one.
-#[tokio::test]
-async fn the_graph_is_cached_until_the_store_changes() {
-    let (_d, s) = four().await;
-    let ask = RankAsk::default();
-    assert!(file_ranks(&s, View::Base, &ask).await.unwrap().1, "built");
-    assert!(!file_ranks(&s, View::Base, &ask).await.unwrap().1, "reused");
-    put(&s, "e.rs", "code", &[], &[("delta", 1)]).await;
-    let (ranks, built) = file_ranks(&s, View::Base, &ask).await.unwrap();
-    assert!(built, "built again after a write");
-    assert!(get(&ranks, "d.rs") > 0.047619048 + 1e-3, "{ranks:?}");
+#[test]
+fn the_graph_is_cached_until_the_store_changes() {
+    saman::block_on_current(async {
+        let (_d, s) = four().await;
+        let ask = RankAsk::default();
+        assert!(file_ranks(&s, View::Base, &ask).await.unwrap().1, "built");
+        assert!(!file_ranks(&s, View::Base, &ask).await.unwrap().1, "reused");
+        put(&s, "e.rs", "code", &[], &[("delta", 1)]).await;
+        let (ranks, built) = file_ranks(&s, View::Base, &ask).await.unwrap();
+        assert!(built, "built again after a write");
+        assert!(get(&ranks, "d.rs") > 0.047619048 + 1e-3, "{ranks:?}");
+    })
 }

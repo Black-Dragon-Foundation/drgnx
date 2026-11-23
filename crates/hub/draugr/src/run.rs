@@ -5,7 +5,7 @@ use std::io;
 use std::process::ExitStatus;
 use std::time::Duration;
 
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::spawn::{Spec, spawn};
 
@@ -22,10 +22,27 @@ pub struct Output {
 /// installed clock its whole process group is killed. Not for a thread of a runtime (it makes one): use [`spawn`]
 /// there. [`io::ErrorKind::TimedOut`] when the deadline passed before the child closed its stdout.
 pub fn run(spec: Spec, deadline: Duration) -> io::Result<Output> {
+    run_with_input(spec, Vec::new(), deadline)
+}
+
+/// [`run`] with INPUT written to the child's stdin (closed after it; SPEC must not have `stdin_null`, or INPUT is
+/// dropped). A child that stops reading early (git failing on its arguments) is not an error here: its status says so.
+pub fn run_with_input(spec: Spec, input: Vec<u8>, deadline: Duration) -> io::Result<Output> {
     let exec = saman::Executor::new(1).map_err(io::Error::other)?;
     exec.block_on(async {
         let mut child = spawn(spec).await?;
         let mut stdout = child.take_stdout();
+        let mut stdin = child.take_stdin();
+        let write = async {
+            if let Some(mut pipe) = stdin.take() {
+                match pipe.write_all(&input).await {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok::<_, io::Error>(())
+        };
         let read = async {
             let mut bytes = Vec::new();
             if let Some(out) = stdout.as_mut() {
@@ -33,7 +50,9 @@ pub fn run(spec: Spec, deadline: Duration) -> io::Result<Output> {
             }
             Ok::<_, io::Error>(bytes)
         };
-        let Ok(bytes) = stund::timeout(deadline, read).await else {
+        let Ok((written, bytes)) =
+            stund::timeout(deadline, async { tokio::join!(write, read) }).await
+        else {
             // the child's group is ended and reaped; its stdout never closed in time
             child.wait_deadline(Duration::ZERO).await?;
             return Err(io::Error::new(
@@ -41,6 +60,7 @@ pub fn run(spec: Spec, deadline: Duration) -> io::Result<Output> {
                 "the child did not finish in time",
             ));
         };
+        written?;
         let status = child
             .wait_deadline(deadline)
             .await?
@@ -79,6 +99,19 @@ mod tests {
         assert_eq!(out.stdout, b"out\n");
         assert_eq!(out.stderr.trim(), "err");
         assert_eq!(out.status.code(), Some(3));
+    }
+
+    #[test]
+    fn the_input_reaches_the_childs_stdin_and_a_child_that_ignores_it_is_no_error() {
+        let mut cat = sh("cat");
+        cat.stdin_null = false;
+        let out = run_with_input(cat, b"hello".to_vec(), Duration::from_secs(30)).unwrap();
+        assert_eq!(out.stdout, b"hello");
+        let mut quiet = sh("exit 0");
+        quiet.stdin_null = false;
+        let big = vec![b'x'; 4 << 20];
+        let out = run_with_input(quiet, big, Duration::from_secs(30)).unwrap();
+        assert_eq!(out.status.code(), Some(0));
     }
 
     #[test]

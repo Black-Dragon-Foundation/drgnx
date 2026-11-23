@@ -27,7 +27,7 @@ pub use trusted::{
     TrustedProgram, pin_system_owned_file, root_only_file, system_owned_file, trusted_program,
 };
 pub use write::{
-    create_new, remove_beneath, rename_dir, rename_file, replace_file, symlink_beneath,
+    create_new, open_lock, remove_beneath, rename_dir, rename_file, replace_file, symlink_beneath,
     write_regular,
 };
 

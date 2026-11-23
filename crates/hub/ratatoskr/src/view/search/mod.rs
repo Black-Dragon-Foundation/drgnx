@@ -1319,6 +1319,7 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
                         grep::run(q, c, |ms| {
                             let _ = to_read.send(ms);
                         })
+                        .map_err(|e| e.to_string())
                     });
                     for r in reads {
                         send(r);
@@ -1332,6 +1333,7 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
                         send(r);
                     }
                 })
+                .map_err(|e| e.to_string())
             };
             if let Some(f) = front.upgrade() {
                 // the editor's buffers with unsaved edits, searched here, outside every lock

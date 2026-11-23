@@ -124,7 +124,7 @@ impl ProjectWatch {
     }
 
     fn instance(&self) -> std::io::Result<Arc<dyn Watch>> {
-        let mut g = self.inst.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = saman::lock(&self.inst);
         if let Some(i) = g.as_ref() {
             return Ok(i.clone());
         }
@@ -135,7 +135,7 @@ impl ProjectWatch {
 
     /// Whether the one instance exists (it could be started).
     pub fn is_up(&self) -> bool {
-        self.inst.lock().is_ok_and(|g| g.is_some())
+        saman::lock(&self.inst).is_some()
     }
 
     pub fn add_tree(&self, spec: TreeSpec) -> Result<(), AddError> {
@@ -182,7 +182,7 @@ pub struct Router {
 
 /// The branch HEAD of GITDIR names (`refs/heads/X` gives `X`); none when detached.
 fn head_branch(gitdir: &Path) -> Option<String> {
-    let h = std::fs::read_to_string(gitdir.join("HEAD")).ok()?;
+    let h = eitri::read_string(&gitdir.join("HEAD"), crate::proc::TEXT_CAP).ok()?;
     h.trim()
         .strip_prefix("ref: refs/heads/")
         .map(str::to_string)
@@ -190,15 +190,16 @@ fn head_branch(gitdir: &Path) -> Option<String> {
 
 /// The commit HEAD of GITDIR points at (refs come from COMMON, loose or packed).
 fn head_commit(common: &Path, gitdir: &Path) -> Option<String> {
-    let h = std::fs::read_to_string(gitdir.join("HEAD")).ok()?;
+    let h = eitri::read_string(&gitdir.join("HEAD"), crate::proc::TEXT_CAP).ok()?;
     let h = h.trim();
     let Some(r) = h.strip_prefix("ref: ") else {
         return Some(h.to_string());
     };
-    if let Ok(s) = std::fs::read_to_string(common.join(r)) {
+    if let Ok(s) = eitri::read_string(&common.join(r), crate::proc::TEXT_CAP) {
         return Some(s.trim().to_string());
     }
-    let packed = std::fs::read_to_string(common.join("packed-refs")).ok()?;
+    let packed =
+        eitri::read_string(&common.join("packed-refs"), crate::proc::PACKED_REFS_CAP).ok()?;
     packed.lines().find_map(|l| {
         let (sha, name) = l.split_once(' ')?;
         (name == r).then(|| sha.to_string())
@@ -639,13 +640,15 @@ mod inotify_backend {
                 && let Some((wd, _)) = by_path.remove(dir)
             {
                 lock(&s.by_id).remove(&wd.get_watch_descriptor_id());
-                let _ = lock(&s.watches).remove(wd);
+                if let Err(e) = lock(&s.watches).remove(wd) {
+                    tracing::debug!("a watch that was gone already: {e}");
+                }
             }
         }
     }
 
     fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-        m.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(m)
     }
 
     pub struct InotifyWatch {
@@ -670,9 +673,8 @@ mod inotify_backend {
             });
             let stop = Arc::new(AtomicBool::new(false));
             let (s, st) = (shared.clone(), stop.clone());
-            std::thread::Builder::new()
-                .name("hrafn:watch".into())
-                .spawn(move || read_loop(ino, &s, &st))?;
+            saman::spawn_thread("hrafn:watch", move || read_loop(ino, &s, &st))
+                .map_err(std::io::Error::other)?;
             Ok(InotifyWatch {
                 rx: Mutex::new(Some(rx)),
                 shared,
@@ -785,7 +787,7 @@ mod inotify_backend {
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
                 Err(_) => {
                     // a read error loses events: never silently
-                    let _ = s.tx.send(WatchEvent::Overflow);
+                    saman::delivered(s.tx.send(WatchEvent::Overflow), "watch event");
                     continue;
                 }
             };
@@ -804,7 +806,7 @@ mod inotify_backend {
     fn handle(s: &Shared, raw: Raw) {
         match raw {
             Raw::Overflow => {
-                let _ = s.tx.send(WatchEvent::Overflow);
+                saman::delivered(s.tx.send(WatchEvent::Overflow), "watch event");
             }
             Raw::Ignored => {}
             Raw::SelfGone(dir) | Raw::DirGone(dir) => {
@@ -814,7 +816,7 @@ mod inotify_backend {
             }
             Raw::Changed(path) => {
                 for e in lock(&s.router).route(&path) {
-                    let _ = s.tx.send(e);
+                    saman::delivered(s.tx.send(e), "watch event");
                 }
             }
             Raw::DirCreated(dir) => created(s, &dir),
@@ -848,7 +850,7 @@ mod inotify_backend {
                 let mut router = lock(&s.router);
                 for f in files {
                     for e in router.route(&f) {
-                        let _ = s.tx.send(e);
+                        saman::delivered(s.tx.send(e), "watch event");
                     }
                 }
             }
@@ -888,24 +890,22 @@ mod macos {
             let (r, ig) = (router.clone(), ignored.clone());
             let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
                 let Ok(ev) = res else {
-                    let _ = tx.send(WatchEvent::Overflow);
+                    saman::delivered(tx.send(WatchEvent::Overflow), "watch event");
                     return;
                 };
                 if ev.need_rescan() {
-                    let _ = tx.send(WatchEvent::Overflow);
+                    saman::delivered(tx.send(WatchEvent::Overflow), "watch event");
                 }
                 if !(ev.kind.is_create() || ev.kind.is_modify() || ev.kind.is_remove()) {
                     return;
                 }
-                let (Ok(mut r), Ok(ig)) = (r.lock(), ig.lock()) else {
-                    return;
-                };
+                let (mut r, ig) = (saman::lock(&r), saman::lock(&ig));
                 for p in &ev.paths {
                     if ig.iter().any(|d| p.starts_with(d)) {
                         continue;
                     }
                     for e in r.route(p) {
-                        let _ = tx.send(e);
+                        saman::delivered(tx.send(e), "watch event");
                     }
                 }
             })
@@ -920,7 +920,7 @@ mod macos {
         }
 
         pub fn state(&self) -> WatchState {
-            self.state.lock().map(|s| s.clone()).unwrap_or_default()
+            saman::lock(&self.state).clone()
         }
     }
 
@@ -930,7 +930,7 @@ mod macos {
         }
 
         fn events(&self) -> Receiver<WatchEvent> {
-            match self.rx.lock().ok().and_then(|mut r| r.take()) {
+            match saman::lock(&self.rx).take() {
                 Some(rx) => rx,
                 None => channel().1,
             }
@@ -938,11 +938,11 @@ mod macos {
 
         fn add_tree(&self, spec: TreeSpec) -> Result<(), AddError> {
             let skip = ignored_dirs(&spec.root);
-            let (Ok(mut w), Ok(mut ig), Ok(mut r)) =
-                (self.watcher.lock(), self.ignored.lock(), self.router.lock())
-            else {
-                return Err(AddError::Other("the watcher is poisoned".into()));
-            };
+            let (mut w, mut ig, mut r) = (
+                saman::lock(&self.watcher),
+                saman::lock(&self.ignored),
+                saman::lock(&self.router),
+            );
             ig.extend(skip.iter().map(|d| spec.root.join(d)));
             let mut paths = w.paths_mut();
             let added = paths
@@ -961,9 +961,7 @@ mod macos {
         }
 
         fn remove_tree(&self, key: &str) {
-            if let Ok(mut r) = self.router.lock() {
-                r.remove(key);
-            }
+            saman::lock(&self.router).remove(key);
         }
     }
 }
@@ -991,9 +989,7 @@ mod tests {
             }
         }
         fn names(&self, root: &Path) -> Vec<String> {
-            self.dirs
-                .lock()
-                .unwrap()
+            saman::lock(&self.dirs)
                 .iter()
                 .map(|d| d.strip_prefix(root).unwrap().display().to_string())
                 .collect()
@@ -1002,7 +998,7 @@ mod tests {
 
     impl Adder for Fake {
         fn add(&mut self, dir: &Path) -> Result<(), AddError> {
-            let mut d = self.dirs.lock().unwrap();
+            let mut d = saman::lock(&self.dirs);
             if d.len() >= self.limit {
                 return Err(AddError::NoSpace("fake limit".into()));
             }
@@ -1010,7 +1006,7 @@ mod tests {
             Ok(())
         }
         fn remove(&mut self, dir: &Path) {
-            self.dirs.lock().unwrap().remove(dir);
+            saman::lock(&self.dirs).remove(dir);
         }
     }
 
@@ -1073,7 +1069,7 @@ mod tests {
         }
         // a created directory that git does not ignore gets a watch, with what is inside; an ignored one does not
         mk(root, &["new/deep", "target/other"]);
-        std::fs::write(root.join("new/deep/f.rs"), "x").unwrap();
+        eitri::replace_file(&root.join("new/deep/f.rs"), b"x").unwrap();
         let files = w.created(&root.join("new")).unwrap();
         assert!(f.names(root).contains(&"new/deep".to_string()));
         assert_eq!(files, vec![root.join("new/deep/f.rs")]);
@@ -1178,7 +1174,7 @@ mod route_tests {
 
     fn w(p: &Path, s: &str) {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, s).unwrap();
+        eitri::replace_file(p, s.as_bytes()).unwrap();
     }
 
     fn spec(key: &str, root: &Path, gitdir: &Path) -> TreeSpec {
@@ -1282,7 +1278,7 @@ mod route_tests {
             std::sync::mpsc::channel().1
         }
         fn add_tree(&self, spec: TreeSpec) -> Result<(), AddError> {
-            self.trees.lock().unwrap().push(spec.key);
+            saman::lock(&self.trees).push(spec.key);
             Ok(())
         }
     }
@@ -1303,9 +1299,9 @@ mod route_tests {
             pw.add_tree(spec(k, Path::new("/r"), Path::new("/r/.git")))
                 .unwrap();
         }
-        let _ = Watch::events(&pw);
+        drop(Watch::events(&pw));
         assert_eq!(made.load(Ordering::SeqCst), 1);
-        assert_eq!(*inst.trees.lock().unwrap(), ["main", "x", "y"]);
+        assert_eq!(*saman::lock(&inst.trees), ["main", "x", "y"]);
     }
 }
 
@@ -1380,7 +1376,7 @@ mod inotify_tests {
         let wt = InotifyWatch::new(&root.join(".git")).unwrap();
         let rx = wt.events();
         wt.add_tree(TreeSpec::main(&root)).unwrap();
-        std::fs::write(root.join("a.rs"), "x").unwrap();
+        eitri::replace_file(&root.join("a.rs"), b"x").unwrap();
         let want = WatchEvent::File {
             tree: MAIN_TREE.into(),
             rel: "a.rs".into(),
@@ -1393,7 +1389,7 @@ mod inotify_tests {
         skuld::wait_until("the new directory is watched", 10, || {
             (wt.state().watched >= 2).then_some(())
         });
-        std::fs::write(root.join("new/b.rs"), "x").unwrap();
+        eitri::replace_file(&root.join("new/b.rs"), b"x").unwrap();
         let want = WatchEvent::File {
             tree: MAIN_TREE.into(),
             rel: "new/b.rs".into(),
@@ -1420,7 +1416,7 @@ mod inotify_tests {
         };
         wt.add_tree(inner).unwrap();
         wt.remove_tree("b");
-        std::fs::write(root.join("shared/f.rs"), "x").unwrap();
+        eitri::replace_file(&root.join("shared/f.rs"), b"x").unwrap();
         let want = WatchEvent::File {
             tree: MAIN_TREE.into(),
             rel: "shared/f.rs".into(),

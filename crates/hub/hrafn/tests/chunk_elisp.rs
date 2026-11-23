@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 fn fixture(name: &str) -> (String, PathBuf) {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/elisp");
-    (std::fs::read_to_string(dir.join(name)).unwrap(), dir)
+    (eitri::read_string(&dir.join(name), 4 << 20).unwrap(), dir)
 }
 
 fn chunks(text: &str, budget: usize) -> (Vec<Chunk>, Vec<Symbol>) {
@@ -19,7 +19,8 @@ fn names(syms: &[Symbol]) -> Vec<&str> {
 fn spans_match_emacs_reader() {
     for name in ["basic.el", "reader.el"] {
         let (text, dir) = fixture(name);
-        let json = std::fs::read_to_string(dir.join(name.replace(".el", ".forms.json"))).unwrap();
+        let json =
+            eitri::read_string(&dir.join(name.replace(".el", ".forms.json")), 4 << 20).unwrap();
         let oracle: Vec<(usize, usize)> = serde_json::from_str::<Vec<[usize; 2]>>(&json)
             .unwrap()
             .into_iter()

@@ -23,7 +23,7 @@ use crate::store::{CodeStore, KeyKind, StoreError, path_key};
 use crate::tree::View;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// RRF's k.
 pub const RRF_K: f64 = 60.0;
@@ -392,8 +392,8 @@ pub const VEC_SQL: &str = "select vec, scale from vc.chunk_vec where key = ?1";
 pub const PATH_VEC_SQL: &str = "select vec, scale from vc.path_vec where key = ?1";
 
 /// The int8 dot product of the query's values QINTS with the stored vector BLOB (sign bits first, BYTES of them),
-/// dequantised by the vector's own scale.
-fn dot8(blob: &[u8], bytes: usize, qints: &[i8], scale: f64) -> f64 {
+/// dequantised by the vector's own step (the stored `scale` column).
+fn dot8(blob: &[u8], bytes: usize, qints: &[i8], step: f64) -> f64 {
     let dot: i64 = blob
         .get(bytes..)
         .unwrap_or_default()
@@ -401,7 +401,7 @@ fn dot8(blob: &[u8], bytes: usize, qints: &[i8], scale: f64) -> f64 {
         .zip(qints)
         .map(|(a, b)| i64::from(*a as i8) * i64::from(*b))
         .sum();
-    dot as f64 * scale
+    dot as f64 * step
 }
 
 /// The nearest chunks of MODEL to the query vector V: Hamming over the chunk vectors' sign bits for the best SCAN
@@ -478,7 +478,7 @@ fn nearest(
         let row: Option<(Vec<u8>, f64)> = st
             .query_row([&key[..]], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()?;
-        Ok(row.map(|(blob, scale)| dot8(&blob, bytes, &qints, scale)))
+        Ok(row.map(|(blob, step)| dot8(&blob, bytes, &qints, step)))
     };
     let mut path_terms: HashMap<String, f64> = HashMap::new();
     let mut dir_terms: HashMap<String, f64> = HashMap::new();
@@ -835,7 +835,7 @@ pub async fn search(
         })
         .await?;
     // re-anchor, within the files and the time it may take
-    let started = Instant::now();
+    let started = stund::Instant::now();
     let mut files: Vec<String> = Vec::new();
     let mut current: HashMap<String, Option<String>> = HashMap::new();
     for (h, t) in hits.iter_mut().zip(&texts) {
@@ -923,110 +923,114 @@ mod tests {
 
     /// Pattern D. 40 symbols named `needle` that only a worktree has, written first so they come first in every index:
     /// the Base view's name routes still return 30 base hits each, none of them the tree's.
-    #[tokio::test]
-    async fn base_view_filters_before_limit() {
-        let dir = tempfile::tempdir().unwrap();
-        let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
-        let t = s.tree_open("wt", "/w", "/g", DoorKind::Cli).await.unwrap();
-        let (c, y) = needles("t.el", 40);
-        s.write_file(View::Tree(t), row("t.el", "T"), c, y)
-            .await
-            .unwrap();
-        let (c, y) = needles("b.el", 35);
-        let base: HashSet<i64> = s
-            .write_file(View::Base, row("b.el", "B"), c, y)
-            .await
-            .unwrap()
-            .into_iter()
-            .collect();
-        let found = s
-            .handle()
-            .read(|c| Ok(names(c, "needle", View::Base)?))
-            .await
-            .unwrap();
-        assert_eq!(found.len(), 90, "30 from each of the three name routes");
-        assert!(found.iter().all(|id| base.contains(id)), "{found:?}");
-        let pinned = s
-            .handle()
-            .read(|c| Ok(pinned(c, "needle", View::Base)?))
-            .await
-            .unwrap();
-        assert_eq!(pinned.len(), 35);
-        assert!(pinned.iter().all(|id| base.contains(id)));
+    #[test]
+    fn base_view_filters_before_limit() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
+            let t = s.tree_open("wt", "/w", "/g", DoorKind::Cli).await.unwrap();
+            let (c, y) = needles("t.el", 40);
+            s.write_file(View::Tree(t), row("t.el", "T"), c, y)
+                .await
+                .unwrap();
+            let (c, y) = needles("b.el", 35);
+            let base: HashSet<i64> = s
+                .write_file(View::Base, row("b.el", "B"), c, y)
+                .await
+                .unwrap()
+                .into_iter()
+                .collect();
+            let found = s
+                .handle()
+                .read(|c| Ok(names(c, "needle", View::Base)?))
+                .await
+                .unwrap();
+            assert_eq!(found.len(), 90, "30 from each of the three name routes");
+            assert!(found.iter().all(|id| base.contains(id)), "{found:?}");
+            let pinned = s
+                .handle()
+                .read(|c| Ok(pinned(c, "needle", View::Base)?))
+                .await
+                .unwrap();
+            assert_eq!(pinned.len(), 35);
+            assert!(pinned.iter().all(|id| base.contains(id)));
+        })
     }
 
     /// Pattern D. 500 chunks only a worktree has outrank 150 of the base's on the keyword (a shorter body that says it
     /// more often): the Base view's keyword list is still LIST base chunks, best first, and the tree's view still
     /// starts with its own.
-    #[tokio::test]
-    async fn keyword_list_filters_before_limit() {
-        let dir = tempfile::tempdir().unwrap();
-        let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
-        let t = s.tree_open("wt", "/w", "/g", DoorKind::Cli).await.unwrap();
-        let chunk = |path: &str, i: usize, body: &str| {
-            let text = format!("{path} {i} {body}");
-            ChunkIn {
-                start: 0,
-                end: 1,
-                line_start: i as u32 + 1,
-                line_end: i as u32 + 1,
-                symbol: None,
-                key: chunk_key(&text),
-                embed: true,
-                embed_text: text,
-                symbols: String::new(),
-                doc: String::new(),
-                body: body.into(),
+    #[test]
+    fn keyword_list_filters_before_limit() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
+            let t = s.tree_open("wt", "/w", "/g", DoorKind::Cli).await.unwrap();
+            let chunk = |path: &str, i: usize, body: &str| {
+                let text = format!("{path} {i} {body}");
+                ChunkIn {
+                    start: 0,
+                    end: 1,
+                    line_start: i as u32 + 1,
+                    line_end: i as u32 + 1,
+                    symbol: None,
+                    key: chunk_key(&text),
+                    embed: true,
+                    embed_text: text,
+                    symbols: String::new(),
+                    doc: String::new(),
+                    body: body.into(),
+                }
+            };
+            let mut tree = HashSet::new();
+            for f in 0..50 {
+                let path = format!("t{f}.el");
+                let cs = (0..10).map(|i| chunk(&path, i, "walrus walrus")).collect();
+                tree.extend(
+                    s.write_file(View::Tree(t), row(&path, &format!("T{f}")), cs, vec![])
+                        .await
+                        .unwrap(),
+                );
             }
-        };
-        let mut tree = HashSet::new();
-        for f in 0..50 {
-            let path = format!("t{f}.el");
-            let cs = (0..10).map(|i| chunk(&path, i, "walrus walrus")).collect();
-            tree.extend(
-                s.write_file(View::Tree(t), row(&path, &format!("T{f}")), cs, vec![])
-                    .await
-                    .unwrap(),
-            );
-        }
-        let mut base = HashSet::new();
-        for f in 0..15 {
-            let path = format!("b{f}.el");
-            let cs = (0..10)
-                .map(|i| {
-                    chunk(
-                        &path,
-                        i,
-                        &format!("walrus and the {i} other words of a longer body"),
-                    )
+            let mut base = HashSet::new();
+            for f in 0..15 {
+                let path = format!("b{f}.el");
+                let cs = (0..10)
+                    .map(|i| {
+                        chunk(
+                            &path,
+                            i,
+                            &format!("walrus and the {i} other words of a longer body"),
+                        )
+                    })
+                    .collect();
+                base.extend(
+                    s.write_file(View::Base, row(&path, &format!("B{f}")), cs, vec![])
+                        .await
+                        .unwrap(),
+                );
+            }
+            let m = fts_match(&["walrus".to_string()], false).unwrap();
+            let (b, w) = s
+                .handle()
+                .read(move |c| {
+                    Ok((
+                        keywords(c, &m, View::Base)?,
+                        keywords(c, &m, View::Tree(t))?,
+                    ))
                 })
-                .collect();
-            base.extend(
-                s.write_file(View::Base, row(&path, &format!("B{f}")), cs, vec![])
-                    .await
-                    .unwrap(),
+                .await
+                .unwrap();
+            assert_eq!(b.len(), LIST, "{} base hits", b.len());
+            assert!(
+                b.iter().all(|id| base.contains(id)),
+                "a hidden chunk in the base's list"
             );
-        }
-        let m = fts_match(&["walrus".to_string()], false).unwrap();
-        let (b, w) = s
-            .handle()
-            .read(move |c| {
-                Ok((
-                    keywords(c, &m, View::Base)?,
-                    keywords(c, &m, View::Tree(t))?,
-                ))
-            })
-            .await
-            .unwrap();
-        assert_eq!(b.len(), LIST, "{} base hits", b.len());
-        assert!(
-            b.iter().all(|id| base.contains(id)),
-            "a hidden chunk in the base's list"
-        );
-        assert_eq!(w.len(), LIST);
-        assert!(
-            w.iter().all(|id| tree.contains(id)),
-            "the tree's own chunks rank first in its view"
-        );
+            assert_eq!(w.len(), LIST);
+            assert!(
+                w.iter().all(|id| tree.contains(id)),
+                "the tree's own chunks rank first in its view"
+            );
+        })
     }
 }

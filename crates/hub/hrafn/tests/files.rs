@@ -1,16 +1,9 @@
 use hrafn::{Class, Config, CoverageError, GitCli, Lang, Listed, coverage, list};
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(st.success(), "git {args:?}");
+    crate::gitfx::git(dir, args);
 }
 
 /// A repository in a temp dir, built from a manifest of (path, content); everything is added to the index. The temp dir
@@ -22,7 +15,7 @@ fn repo(manifest: &[(&str, &str)]) -> tempfile::TempDir {
     for (p, c) in manifest {
         let f = dir.path().join(p);
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-        std::fs::write(f, c).unwrap();
+        eitri::replace_file(&f, c.as_bytes()).unwrap();
     }
     git(dir.path(), &["add", "-A"]);
     dir
@@ -69,7 +62,7 @@ fn nested_repo_left_out() {
     let inner = d.path().join("vendor/inner");
     std::fs::create_dir_all(&inner).unwrap();
     git(&inner, &["init", "-q"]);
-    std::fs::write(inner.join("b.el"), "b\n").unwrap();
+    eitri::replace_file(&inner.join("b.el"), b"b\n").unwrap();
     let l = run(d.path(), &Config::default()).unwrap();
     assert_eq!(paths(&l), ["a.el"]);
 }
@@ -191,11 +184,9 @@ fn off_lists_nothing() {
 fn fifo_and_symlink_never_listed() {
     let d = repo(&[("a.el", "a\n"), ("target.el", "t\n")]);
     std::os::unix::fs::symlink("target.el", d.path().join("link.el")).unwrap();
-    let st = Command::new("mkfifo")
-        .arg(d.path().join("pipe.el"))
-        .status()
-        .unwrap();
-    assert!(st.success());
+    let pipe = d.path().join("pipe.el");
+    let st = crate::gitfx::run("mkfifo", None, &[&pipe.to_string_lossy()], &[], Vec::new());
+    assert!(st.status.success());
     let l = run(d.path(), &Config::default()).unwrap();
     assert_eq!(paths(&l), ["a.el", "target.el"]);
 }
@@ -217,7 +208,7 @@ fn uncommitted_edit_changes_blob() {
         ],
     );
     let before = run(d.path(), &Config::default()).unwrap()[0].blob.clone();
-    std::fs::write(d.path().join("a.el"), "two\n").unwrap();
+    eitri::replace_file(&d.path().join("a.el"), b"two\n").unwrap();
     let after = run(d.path(), &Config::default()).unwrap()[0].blob.clone();
     assert_ne!(before, after);
 }
@@ -254,9 +245,7 @@ impl hrafn::Git for Hashes {
 /// status-change time still moves, so a backdated edit is seen.
 fn backdate(file: &Path) {
     let then = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
-    std::fs::File::options()
-        .write(true)
-        .open(file)
+    eitri::open_lock(file, 0o600)
         .unwrap()
         .set_modified(then)
         .unwrap();
@@ -292,12 +281,12 @@ fn a_second_listing_hashes_only_what_changed() {
     assert_eq!(hashed, ["a.el", "b.el", "c.rs"]);
     assert!(l[0].generated && !l[1].generated);
     assert!(list_again().1.is_empty(), "nothing changed, nothing hashed");
-    std::fs::write(file("b.el"), "b two\n").unwrap();
+    eitri::replace_file(&file("b.el"), b"b two\n").unwrap();
     backdate(&file("b.el"));
     assert_eq!(list_again().1, ["b.el"]);
     assert!(list_again().1.is_empty());
     // a file written this moment: its time cannot tell a later write in the same tick, so it is read every time
-    std::fs::write(file("d.el"), "d\n").unwrap();
+    eitri::replace_file(&file("d.el"), b"d\n").unwrap();
     assert_eq!(list_again().1, ["d.el"]);
     assert_eq!(list_again().1, ["d.el"]);
     backdate(&file("d.el"));
@@ -307,7 +296,7 @@ fn a_second_listing_hashes_only_what_changed() {
     let (l, hashed) = list_again();
     assert_eq!((paths(&l), hashed.len()), (vec!["b.el", "c.rs", "d.el"], 0));
     // .gitattributes moves the attributes and the clean filters a blob goes through: everything is read again
-    std::fs::write(file(".gitattributes"), "c.rs linguist-generated\n").unwrap();
+    eitri::replace_file(&file(".gitattributes"), b"c.rs linguist-generated\n").unwrap();
     backdate(&file(".gitattributes"));
     let (l, hashed) = list_again();
     // (c.rs is now ignored by default: the attribute marks it generated)
@@ -353,4 +342,11 @@ fn coverage_flags_nonempty_file_without_chunks() {
         coverage(&l, &c),
         vec![CoverageError::FileWithoutChunks("b.el".into())]
     );
+}
+
+#[test]
+fn a_git_call_that_fails_is_an_error_naming_it() {
+    let d = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let e = hrafn::files::ignored_dirs(&d.path().join("not-a-repository")).unwrap_err();
+    assert!(e.to_string().contains("git ls-files"), "{e}");
 }

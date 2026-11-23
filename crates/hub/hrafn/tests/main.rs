@@ -12,6 +12,7 @@ mod chunk_other;
 mod door;
 mod eval;
 mod files;
+mod gitfx;
 mod graph;
 mod index;
 mod map;

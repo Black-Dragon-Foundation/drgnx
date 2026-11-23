@@ -541,7 +541,9 @@ fn gen_sets(root: &Path, out: Option<PathBuf>) -> Result<String, String> {
     let store = CodeStore::open(&state.join("code.db")).map_err(|e| e.to_string())?;
     let rows = rt.block_on(async {
         index(&store, root, &[]).await?;
-        eval::generate(root, &GitCli, &store).await
+        eval::generate(root, &GitCli, &store)
+            .await
+            .map_err(|e| e.to_string())
     });
     store.shutdown();
     let _ = std::fs::remove_dir_all(&state);
@@ -1061,7 +1063,7 @@ fn compare_files(a: &Path, b: &Path, by: eval::Gate) -> Result<(String, bool), S
         serde_json::from_str(&text).map_err(|e| format!("{}: {e}", p.display()))
     };
     let (fa, fb) = (load(a)?, load(b)?);
-    let v = eval::compare_on(&fa.report, &fb.report, by)?;
+    let v = eval::compare_on(&fa.report, &fb.report, by).map_err(|e| e.to_string())?;
     let label = match by {
         eval::Gate::Chunk | eval::Gate::Floor => "MRR@10",
         eval::Gate::File => "file MRR@10",

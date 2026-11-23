@@ -198,6 +198,45 @@ pub fn create_new(abs: &Path, mode: u32) -> Result<bool, FsError> {
     }
 }
 
+/// Opens the regular file at the absolute path `abs` for reading and writing, creating it with `mode` (less the umask)
+/// when it is absent, and never truncating it: the file a process holds a lock on (`File::try_lock`). The parent is
+/// opened with `open_path` (a link in any component is refused); the open is `O_NOFOLLOW`, so a link at `abs` is
+/// `Link`, and anything that is not a regular file is `NotRegular`. `mode` above 0o777 is refused.
+pub fn open_lock(abs: &Path, mode: u32) -> Result<std::fs::File, FsError> {
+    if mode & !0o777 != 0 {
+        return Err(invalid("a mode beyond 0o777"));
+    }
+    let (Some(parent), Some(name)) = (abs.parent(), abs.file_name()) else {
+        return Err(invalid("the path names no file"));
+    };
+    let parent = open_path(parent, Kind::Dir)?;
+    let flags = OFlags::RDWR
+        | OFlags::CREATE
+        | OFlags::NOFOLLOW
+        | OFlags::CLOEXEC
+        | OFlags::NOCTTY
+        | OFlags::NONBLOCK;
+    let fd = match openat(
+        parent.fd.as_fd(),
+        name,
+        flags,
+        Mode::from_raw_mode(mode as RawMode),
+    ) {
+        Ok(fd) => fd,
+        Err(Errno::LOOP) => {
+            return Err(FsError::Link {
+                path: abs.to_path_buf(),
+            });
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let st = rustix::fs::fstat(&fd)?;
+    if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile {
+        return Err(FsError::NotRegular);
+    }
+    Ok(std::fs::File::from(fd))
+}
+
 /// Renames the directory `from` to `to` (absolute paths, each parent opened with `open_path`, so a link in either is
 /// refused). `from` must be a directory itself: a link (even to a directory) is `Link`, anything else `NotDir`. As
 /// `rename(2)`, `to` is replaced when it is an empty directory; both parents are synced.

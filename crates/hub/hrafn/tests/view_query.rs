@@ -159,37 +159,39 @@ fn in_file(hits: &[(String, String)], path: &str, text: &str) -> bool {
 }
 
 /// Pattern D. A query in T finds T's text of p, never the base's; the base view is as it was.
-#[tokio::test]
-async fn overlay_shadows_base_path() {
-    let (_d, s, t, _t2) = store().await;
-    put(&s, t, "src/p.rs", "fn tree_only_fn() {\n    yak();\n}\n").await;
-    let tv = View::Tree(t);
-    assert!(hits(&s, tv, "zebra").await.is_empty(), "the base's keyword");
-    // `fn` alone matches every file's body: what matters is which file and which text
-    assert!(
-        !in_file(&hits(&s, tv, "base_only_fn").await, "src/p.rs", "zebra"),
-        "the base's symbol"
-    );
-    assert!(hits(&s, tv, "giraffe").await.is_empty());
-    let y = hits(&s, tv, "yak").await;
-    assert_eq!(y.len(), 1, "{y:?}");
-    assert!(y[0].1.contains("yak"));
-    let n = hits(&s, tv, "tree_only_fn").await;
-    assert!(n.first().is_some_and(|h| h.0 == "src/p.rs"), "{n:?}");
-    assert_eq!(
-        hits(&s, tv, "okapi").await.len(),
-        1,
-        "an unshadowed base file"
-    );
-    // the base view
-    assert!(hits(&s, View::Base, "yak").await.is_empty());
-    assert!(!in_file(
-        &hits(&s, View::Base, "tree_only_fn").await,
-        "src/p.rs",
-        "yak"
-    ));
-    assert_eq!(hits(&s, View::Base, "zebra").await.len(), 1);
-    assert_eq!(hits(&s, View::Base, "base_only_fn").await[0].0, "src/p.rs");
+#[test]
+fn overlay_shadows_base_path() {
+    saman::block_on_current(async {
+        let (_d, s, t, _t2) = store().await;
+        put(&s, t, "src/p.rs", "fn tree_only_fn() {\n    yak();\n}\n").await;
+        let tv = View::Tree(t);
+        assert!(hits(&s, tv, "zebra").await.is_empty(), "the base's keyword");
+        // `fn` alone matches every file's body: what matters is which file and which text
+        assert!(
+            !in_file(&hits(&s, tv, "base_only_fn").await, "src/p.rs", "zebra"),
+            "the base's symbol"
+        );
+        assert!(hits(&s, tv, "giraffe").await.is_empty());
+        let y = hits(&s, tv, "yak").await;
+        assert_eq!(y.len(), 1, "{y:?}");
+        assert!(y[0].1.contains("yak"));
+        let n = hits(&s, tv, "tree_only_fn").await;
+        assert!(n.first().is_some_and(|h| h.0 == "src/p.rs"), "{n:?}");
+        assert_eq!(
+            hits(&s, tv, "okapi").await.len(),
+            1,
+            "an unshadowed base file"
+        );
+        // the base view
+        assert!(hits(&s, View::Base, "yak").await.is_empty());
+        assert!(!in_file(
+            &hits(&s, View::Base, "tree_only_fn").await,
+            "src/p.rs",
+            "yak"
+        ));
+        assert_eq!(hits(&s, View::Base, "zebra").await.len(), 1);
+        assert_eq!(hits(&s, View::Base, "base_only_fn").await[0].0, "src/p.rs");
+    })
 }
 
 /// The ranked file query's paths for TEXT in VIEW.
@@ -198,52 +200,56 @@ async fn ranked(s: &CodeStore, view: View, text: &str) -> Vec<String> {
 }
 
 /// Pattern D. p deleted in T (a tombstone): no hit, no path row and no ranked file in T; the base still has it.
-#[tokio::test]
-async fn tombstone_hides_base_file() {
-    let (_d, s, t, _t2) = store().await;
-    tombstone(&s, t, "src/p.rs").await;
-    let tv = View::Tree(t);
-    assert!(hits(&s, tv, "zebra").await.is_empty());
-    assert!(!in_file(
-        &hits(&s, tv, "base_only_fn").await,
-        "src/p.rs",
-        ""
-    ));
-    assert!(hits(&s, tv, "src/p.rs").await.is_empty(), "the path route");
-    assert_eq!(hits(&s, tv, "src/q.rs").await.len(), 1);
-    assert!(!hits(&s, View::Base, "src/p.rs").await.is_empty());
-    assert_eq!(ranked(&s, tv, "rs").await, ["src/q.rs"]);
-    assert_eq!(ranked(&s, View::Base, "rs").await, ["src/p.rs", "src/q.rs"]);
+#[test]
+fn tombstone_hides_base_file() {
+    saman::block_on_current(async {
+        let (_d, s, t, _t2) = store().await;
+        tombstone(&s, t, "src/p.rs").await;
+        let tv = View::Tree(t);
+        assert!(hits(&s, tv, "zebra").await.is_empty());
+        assert!(!in_file(
+            &hits(&s, tv, "base_only_fn").await,
+            "src/p.rs",
+            ""
+        ));
+        assert!(hits(&s, tv, "src/p.rs").await.is_empty(), "the path route");
+        assert_eq!(hits(&s, tv, "src/q.rs").await.len(), 1);
+        assert!(!hits(&s, View::Base, "src/p.rs").await.is_empty());
+        assert_eq!(ranked(&s, tv, "rs").await, ["src/q.rs"]);
+        assert_eq!(ranked(&s, View::Base, "rs").await, ["src/p.rs", "src/q.rs"]);
+    })
 }
 
 /// Pattern D. A new untracked file is found in its tree, not in the base or in another tree.
-#[tokio::test]
-async fn untracked_file_only_in_its_tree() {
-    let (_d, s, t, t2) = store().await;
-    put(
-        &s,
-        t,
-        "src/new.rs",
-        "fn brand_new_fn() {\n    narwhal();\n}\n",
-    )
-    .await;
-    assert_eq!(hits(&s, View::Tree(t), "narwhal").await.len(), 1);
-    assert_eq!(hits(&s, View::Tree(t), "src/new.rs").await.len(), 1);
-    for v in [View::Base, View::Tree(t2)] {
-        assert!(hits(&s, v, "narwhal").await.is_empty(), "{v:?}");
-        assert!(
-            !in_file(&hits(&s, v, "brand_new_fn").await, "src/new.rs", ""),
-            "{v:?}"
-        );
-        assert!(hits(&s, v, "src/new.rs").await.is_empty(), "{v:?}");
-        assert!(
-            !ranked(&s, v, "new")
-                .await
-                .contains(&"src/new.rs".to_string()),
-            "{v:?}"
-        );
-    }
-    assert_eq!(ranked(&s, View::Tree(t), "new").await, ["src/new.rs"]);
+#[test]
+fn untracked_file_only_in_its_tree() {
+    saman::block_on_current(async {
+        let (_d, s, t, t2) = store().await;
+        put(
+            &s,
+            t,
+            "src/new.rs",
+            "fn brand_new_fn() {\n    narwhal();\n}\n",
+        )
+        .await;
+        assert_eq!(hits(&s, View::Tree(t), "narwhal").await.len(), 1);
+        assert_eq!(hits(&s, View::Tree(t), "src/new.rs").await.len(), 1);
+        for v in [View::Base, View::Tree(t2)] {
+            assert!(hits(&s, v, "narwhal").await.is_empty(), "{v:?}");
+            assert!(
+                !in_file(&hits(&s, v, "brand_new_fn").await, "src/new.rs", ""),
+                "{v:?}"
+            );
+            assert!(hits(&s, v, "src/new.rs").await.is_empty(), "{v:?}");
+            assert!(
+                !ranked(&s, v, "new")
+                    .await
+                    .contains(&"src/new.rs".to_string()),
+                "{v:?}"
+            );
+        }
+        assert_eq!(ranked(&s, View::Tree(t), "new").await, ["src/new.rs"]);
+    })
 }
 
 /// Pattern D. The ranked file query: a basename that starts with the query first, then one that holds it, then a
@@ -279,107 +285,113 @@ fn ranks_basename_prefix_first() {
 
 /// Pattern D. A vector whose key only the base's shadowed p uses gives no hit in T (the vector route takes the first
 /// visible chunk of a key, and there is none); in the base, T's content gives no hit.
-#[tokio::test]
-async fn vector_hit_resolves_to_a_visible_chunk() {
-    let (d, s, t, _t2) = store().await;
-    let c = cache(&d);
-    put(&s, t, "src/p.rs", "fn tree_only_fn() {\n    yak();\n}\n").await;
-    let keys: Vec<([u8; 32], Vec<f32>)> = hrafn::missing(&s, &c, 100)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
-        .enumerate()
-        .map(|(i, (_, k, _))| {
-            let mut v = vec![0.0; DIMS];
-            v[i % DIMS] = 1.0;
-            (k, v)
-        })
-        .collect();
-    c.put(hrafn::KeyKind::Chunk, DIMS as u32, &keys)
-        .await
-        .unwrap();
-    for (_, v) in &keys {
-        let base = search(&s, &q("unrelated words"), View::Base, Some((&c, v)), &NONE)
+#[test]
+fn vector_hit_resolves_to_a_visible_chunk() {
+    saman::block_on_current(async {
+        let (d, s, t, _t2) = store().await;
+        let c = cache(&d);
+        put(&s, t, "src/p.rs", "fn tree_only_fn() {\n    yak();\n}\n").await;
+        let keys: Vec<([u8; 32], Vec<f32>)> = hrafn::missing(&s, &c, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
+            .enumerate()
+            .map(|(i, (_, k, _))| {
+                let mut v = vec![0.0; DIMS];
+                v[i % DIMS] = 1.0;
+                (k, v)
+            })
+            .collect();
+        c.put(hrafn::KeyKind::Chunk, DIMS as u32, &keys)
             .await
             .unwrap();
-        let tree = search(
-            &s,
-            &q("unrelated words"),
-            View::Tree(t),
-            Some((&c, v)),
-            &NONE,
-        )
-        .await
-        .unwrap();
-        for h in &tree.hits {
-            assert!(
-                !(h.path == "src/p.rs" && h.preview.contains("zebra")),
-                "a shadowed base chunk in T: {:?}",
-                tree.hits
-            );
-            assert!(!h.preview.contains("giraffe"), "{:?}", tree.hits);
+        for (_, v) in &keys {
+            let base = search(&s, &q("unrelated words"), View::Base, Some((&c, v)), &NONE)
+                .await
+                .unwrap();
+            let tree = search(
+                &s,
+                &q("unrelated words"),
+                View::Tree(t),
+                Some((&c, v)),
+                &NONE,
+            )
+            .await
+            .unwrap();
+            for h in &tree.hits {
+                assert!(
+                    !(h.path == "src/p.rs" && h.preview.contains("zebra")),
+                    "a shadowed base chunk in T: {:?}",
+                    tree.hits
+                );
+                assert!(!h.preview.contains("giraffe"), "{:?}", tree.hits);
+            }
+            assert!(!base.hits.iter().any(|h| h.preview.contains("yak")));
         }
-        assert!(!base.hits.iter().any(|h| h.preview.contains("yak")));
-    }
+    })
 }
 
 /// Pattern D. A hit in T is found again in T's file as it is now (the caller's reader of T's root), at T's lines.
-#[tokio::test]
-async fn reanchor_reads_the_tree_root() {
-    let (_d, s, t, _t2) = store().await;
-    let tree_text = "fn tree_only_fn() {\n    yak();\n}\n";
-    put(&s, t, "src/p.rs", tree_text).await;
-    let now_t = format!("// moved\n// down\n{tree_text}");
-    let read_t = move |p: &str| (p == "src/p.rs").then(|| now_t.clone());
-    let a = search(&s, &q("tree_only_fn"), View::Tree(t), None, &read_t)
-        .await
-        .unwrap();
-    assert!(!a.hits.is_empty(), "T's symbol found in T");
-    let h = &a.hits[0];
-    assert_eq!(h.path, "src/p.rs");
-    assert!(h.reanchored, "{h:?}");
-    assert_eq!(h.line_start, 3, "{h:?}");
+#[test]
+fn reanchor_reads_the_tree_root() {
+    saman::block_on_current(async {
+        let (_d, s, t, _t2) = store().await;
+        let tree_text = "fn tree_only_fn() {\n    yak();\n}\n";
+        put(&s, t, "src/p.rs", tree_text).await;
+        let now_t = format!("// moved\n// down\n{tree_text}");
+        let read_t = move |p: &str| (p == "src/p.rs").then(|| now_t.clone());
+        let a = search(&s, &q("tree_only_fn"), View::Tree(t), None, &read_t)
+            .await
+            .unwrap();
+        assert!(!a.hits.is_empty(), "T's symbol found in T");
+        let h = &a.hits[0];
+        assert_eq!(h.path, "src/p.rs");
+        assert!(h.reanchored, "{h:?}");
+        assert_eq!(h.line_start, 3, "{h:?}");
+    })
 }
 
 /// Pattern D. The lag is the view's: the base's does not count a tree's content; a tree's counts its own rows'
 /// chunks and leaves out the base chunks it shadows, and says how many files differ.
-#[tokio::test]
-async fn view_lag_counts_the_views_content() {
-    let (d, s, t, _t2) = store().await;
-    let c = cache(&d);
-    // every base chunk embedded
-    let keys: Vec<([u8; 32], Vec<f32>)> = hrafn::missing(&s, &c, 100)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
-        .map(|(_, k, _)| (k, vec![1.0; DIMS]))
-        .collect();
-    c.put(hrafn::KeyKind::Chunk, DIMS as u32, &keys)
-        .await
-        .unwrap();
-    let base_total = lag(&s, Some(&c), View::Base).await.unwrap().chunks_total;
-    put(
-        &s,
-        t,
-        "src/new.rs",
-        "fn brand_new_fn() {\n    narwhal();\n}\n",
-    )
-    .await;
-    tombstone(&s, t, "src/q.rs").await;
-    let b = lag(&s, Some(&c), View::Base).await.unwrap();
-    assert_eq!(
-        (b.chunks_total, b.chunks_behind, b.files_behind),
-        (base_total, 0, 0)
-    );
-    assert_eq!(b.differing_files, None);
-    let l = lag(&s, Some(&c), View::Tree(t)).await.unwrap();
-    assert_eq!(l.files_behind, 1, "{l:?}");
-    assert!(l.chunks_behind >= 1, "{l:?}");
-    assert_eq!(l.differing_files, Some(2));
-    // q.rs's chunks are not in T's total
-    assert!(l.chunks_total < base_total + l.chunks_behind, "{l:?}");
+#[test]
+fn view_lag_counts_the_views_content() {
+    saman::block_on_current(async {
+        let (d, s, t, _t2) = store().await;
+        let c = cache(&d);
+        // every base chunk embedded
+        let keys: Vec<([u8; 32], Vec<f32>)> = hrafn::missing(&s, &c, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
+            .map(|(_, k, _)| (k, vec![1.0; DIMS]))
+            .collect();
+        c.put(hrafn::KeyKind::Chunk, DIMS as u32, &keys)
+            .await
+            .unwrap();
+        let base_total = lag(&s, Some(&c), View::Base).await.unwrap().chunks_total;
+        put(
+            &s,
+            t,
+            "src/new.rs",
+            "fn brand_new_fn() {\n    narwhal();\n}\n",
+        )
+        .await;
+        tombstone(&s, t, "src/q.rs").await;
+        let b = lag(&s, Some(&c), View::Base).await.unwrap();
+        assert_eq!(
+            (b.chunks_total, b.chunks_behind, b.files_behind),
+            (base_total, 0, 0)
+        );
+        assert_eq!(b.differing_files, None);
+        let l = lag(&s, Some(&c), View::Tree(t)).await.unwrap();
+        assert_eq!(l.files_behind, 1, "{l:?}");
+        assert!(l.chunks_behind >= 1, "{l:?}");
+        assert_eq!(l.differing_files, Some(2));
+        // q.rs's chunks are not in T's total
+        assert!(l.chunks_total < base_total + l.chunks_behind, "{l:?}");
+    })
 }
 
 /// The plan of SQL, one line per step, with BINDS parameters bound (text, then the view's tree).
@@ -410,66 +422,80 @@ async fn plan_of(s: &CodeStore, sql: &'static str, binds: usize) -> String {
 /// `file` by an index:
 /// no line scans one of them (a virtual table's scan is the FTS index; a covering index scan reads no row), and
 /// `file` is reached by its primary key `(tree, path)`.
-#[tokio::test]
-async fn overlay_predicates_use_indexes() {
-    let (d, s, t, _t2) = store().await;
-    put(&s, t, "src/new.rs", "fn brand_new_fn() {}\n").await;
-    // the lag's SQL reads the vectors of the cache attached as `vc` (it stays attached on the store's connection)
-    let c = cache(&d);
-    s.attach_cache(c.path(), |_| Ok(())).await.unwrap();
-    let routes = [
-        hrafn::query::PINNED_SQL,
-        hrafn::query::NAME_EXACT_SQL,
-        hrafn::query::NAME_PREFIX_SQL,
-        hrafn::query::NAME_TRIGRAM_SQL,
-        hrafn::query::PATH_ANY_SQL,
-        hrafn::query::PATH_NAME_SQL,
-        hrafn::query::VISIBLE_SQL,
-        hrafn::query::KEY_CHUNKS_SQL,
-        hrafn::query::META_SQL,
-        hrafn::refs::REFS_SQL,
-        hrafn::index::LAG_TOTAL_SQL,
-        hrafn::index::LAG_BEHIND_SQL,
-        hrafn::index::LAG_FILES_SQL,
-        hrafn::index::LAG_TREE_SQL,
-    ];
-    for sql in routes {
-        let plan = plan_of(&s, sql, 0).await;
-        for line in plan.lines() {
-            let line = line.trim();
-            // a scan of a table (by its name or the routes' aliases) that no covering index serves
-            let table = line
-                .strip_prefix("SCAN ")
-                .and_then(|r| r.split_whitespace().next());
-            let scans = matches!(
-                table,
-                Some("chunk" | "symbol" | "file" | "ref" | "c" | "s" | "f" | "o" | "t" | "b" | "r")
-            ) && !line.contains("COVERING INDEX");
-            assert!(!scans, "{line}\n{plan}\n{sql}");
+#[test]
+fn overlay_predicates_use_indexes() {
+    saman::block_on_current(async {
+        let (d, s, t, _t2) = store().await;
+        put(&s, t, "src/new.rs", "fn brand_new_fn() {}\n").await;
+        // the lag's SQL reads the vectors of the cache attached as `vc` (it stays attached on the store's connection)
+        let c = cache(&d);
+        s.attach_cache(c.path(), |_| Ok(())).await.unwrap();
+        let routes = [
+            hrafn::query::PINNED_SQL,
+            hrafn::query::NAME_EXACT_SQL,
+            hrafn::query::NAME_PREFIX_SQL,
+            hrafn::query::NAME_TRIGRAM_SQL,
+            hrafn::query::PATH_ANY_SQL,
+            hrafn::query::PATH_NAME_SQL,
+            hrafn::query::VISIBLE_SQL,
+            hrafn::query::KEY_CHUNKS_SQL,
+            hrafn::query::META_SQL,
+            hrafn::refs::REFS_SQL,
+            hrafn::index::LAG_TOTAL_SQL,
+            hrafn::index::LAG_BEHIND_SQL,
+            hrafn::index::LAG_FILES_SQL,
+            hrafn::index::LAG_TREE_SQL,
+        ];
+        for sql in routes {
+            let plan = plan_of(&s, sql, 0).await;
+            for line in plan.lines() {
+                let line = line.trim();
+                // a scan of a table (by its name or the routes' aliases) that no covering index serves
+                let table = line
+                    .strip_prefix("SCAN ")
+                    .and_then(|r| r.split_whitespace().next());
+                let scans = matches!(
+                    table,
+                    Some(
+                        "chunk"
+                            | "symbol"
+                            | "file"
+                            | "ref"
+                            | "c"
+                            | "s"
+                            | "f"
+                            | "o"
+                            | "t"
+                            | "b"
+                            | "r"
+                    )
+                ) && !line.contains("COVERING INDEX");
+                assert!(!scans, "{line}\n{plan}\n{sql}");
+            }
+            assert!(
+                plan.contains("PRIMARY KEY (tree=")
+                    || plan.contains("file_path_blob (path=? AND blob=? AND tree=?)"),
+                "file by (tree, path):\n{plan}\n{sql}"
+            );
         }
+        let plan = plan_of(&s, hrafn::refs::REFS_SQL, 0).await;
         assert!(
-            plan.contains("PRIMARY KEY (tree=")
-                || plan.contains("file_path_blob (path=? AND blob=? AND tree=?)"),
-            "file by (tree, path):\n{plan}\n{sql}"
+            plan.contains("ref_name (name=?)"),
+            "references by name:\n{plan}"
         );
-    }
-    let plan = plan_of(&s, hrafn::refs::REFS_SQL, 0).await;
-    assert!(
-        plan.contains("ref_name (name=?)"),
-        "references by name:\n{plan}"
-    );
-    // a name's usages rank the rows on the index alone, the view's pairs filtered by its graph (no `file` join)
-    let plan = plan_of(&s, hrafn::refs::COUNTS_SQL, 0).await;
-    assert!(
-        plan.contains("COVERING INDEX ref_name (name=?)"),
-        "usages' counts by name:\n{plan}"
-    );
-    // the keyword ranking reads the FTS index only; the view is applied to its candidates by VISIBLE_SQL
-    let plan = plan_of(&s, hrafn::query::KEYWORD_RANK_SQL, 0).await;
-    assert!(
-        plan.lines()
-            .filter(|l| l.contains("SCAN ") || l.contains("SEARCH "))
-            .all(|l| l.contains("chunk_fts VIRTUAL TABLE")),
-        "{plan}"
-    );
+        // a name's usages rank the rows on the index alone, the view's pairs filtered by its graph (no `file` join)
+        let plan = plan_of(&s, hrafn::refs::COUNTS_SQL, 0).await;
+        assert!(
+            plan.contains("COVERING INDEX ref_name (name=?)"),
+            "usages' counts by name:\n{plan}"
+        );
+        // the keyword ranking reads the FTS index only; the view is applied to its candidates by VISIBLE_SQL
+        let plan = plan_of(&s, hrafn::query::KEYWORD_RANK_SQL, 0).await;
+        assert!(
+            plan.lines()
+                .filter(|l| l.contains("SCAN ") || l.contains("SEARCH "))
+                .all(|l| l.contains("chunk_fts VIRTUAL TABLE")),
+            "{plan}"
+        );
+    })
 }

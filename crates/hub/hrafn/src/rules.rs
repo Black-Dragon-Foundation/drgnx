@@ -131,23 +131,29 @@ pub fn builtin_rules() -> RuleSet {
 
 /// `.drgnx/search.toml`'s text as a layer: `include`, `ignore` and `no-embed`, each a list of strings. Any other key,
 /// or a value that is no list of strings, is an error.
-pub fn parse_toml(text: &str) -> Result<RuleSet, String> {
-    let doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("not TOML: {e}"))?;
+pub fn parse_toml(text: &str) -> villa::Result<RuleSet> {
+    let doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e| villa::Error::invalid(format!("not TOML: {e}")))?;
     let mut out = RuleSet::default();
     for (key, item) in doc.iter() {
         let slot = match key {
             "include" => &mut out.include,
             "ignore" => &mut out.ignore,
             "no-embed" => &mut out.no_embed,
-            other => return Err(format!("{other:?} is not include, ignore or no-embed")),
+            other => {
+                return Err(villa::Error::invalid(format!(
+                    "{other:?} is not include, ignore or no-embed"
+                )));
+            }
         };
         let list = item
             .as_array()
-            .ok_or_else(|| format!("{key} is not a list of strings"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("{key} is not a list of strings")))?;
         for v in list {
-            let s = v
-                .as_str()
-                .ok_or_else(|| format!("{key} holds what is not a string"))?;
+            let s = v.as_str().ok_or_else(|| {
+                villa::Error::invalid(format!("{key} holds what is not a string"))
+            })?;
             slot.push(s.to_string());
         }
     }

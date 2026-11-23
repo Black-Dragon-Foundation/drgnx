@@ -1,31 +1,10 @@
 //! A touched tree's door works with no `git` on PATH: it is in-process (gix), and the cli door that a user tree gets
 //! fails on every call here. Its own test binary, because it empties PATH for the whole process.
 use hrafn::{Config, DoorKind, door, list};
-use std::path::Path;
-use std::process::Command;
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let o = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args([
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        o.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&o.stderr)
-    );
-    String::from_utf8_lossy(&o.stdout).trim().to_string()
-}
+#[path = "gitfx.rs"]
+mod gitfx;
+use gitfx::git;
 
 #[test]
 fn touched_tree_seeds_without_git_cli() {
@@ -40,15 +19,15 @@ fn touched_tree_seeds_without_git_cli() {
     let t = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let r = t.path();
     git(r, &["init", "-q", "-b", "main"]);
-    std::fs::write(r.join("a.rs"), "fn a() {}\n").unwrap();
-    std::fs::write(r.join("b.rs"), "fn b() {}\n").unwrap();
+    eitri::replace_file(&r.join("a.rs"), b"fn a() {}\n").unwrap();
+    eitri::replace_file(&r.join("b.rs"), b"fn b() {}\n").unwrap();
     git(r, &["add", "-A"]);
     git(r, &["commit", "-q", "-m", "one"]);
     let c1 = git(r, &["rev-parse", "HEAD"]);
-    std::fs::write(r.join("b.rs"), "fn b2() {}\n").unwrap();
+    eitri::replace_file(&r.join("b.rs"), b"fn b2() {}\n").unwrap();
     git(r, &["commit", "-q", "-am", "two"]);
     let c2 = git(r, &["rev-parse", "HEAD"]);
-    std::fs::write(r.join("u.rs"), "fn u() {}\n").unwrap();
+    eitri::replace_file(&r.join("u.rs"), b"fn u() {}\n").unwrap();
 
     let empty = tempfile::tempdir().unwrap();
     // SAFETY: this binary has one test; nothing else reads the environment while it runs.
