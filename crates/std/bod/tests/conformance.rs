@@ -163,7 +163,7 @@ fn advice_wraps_and_unwraps() {
     };
     assert_eq!(run(&r, 5), json!(10));
 
-    // the first advice adds one to the argument; the second (outside it) negates the result
+    // the first advice adds one to the argument; the second (outside it) triples the argument first
     let plus = r
         .advise(
             "math.double",
@@ -174,15 +174,12 @@ fn advice_wraps_and_unwraps() {
     let neg = r
         .advise(
             "math.double",
-            advice(|cx, args, next| {
-                let v = next(cx, args)?;
-                Ok(json!(-v.as_i64().unwrap_or(0)))
-            }),
+            advice(|cx, args, next| next(cx, json!(args.as_i64().unwrap_or(0) * 3))),
         )
         .expect("advises");
-    assert_eq!(run(&r, 5), json!(-12));
+    assert_eq!(run(&r, 5), json!(32), "outer first: (5 * 3 + 1) * 2");
     r.unadvise(plus).expect("unwraps the inner");
-    assert_eq!(run(&r, 5), json!(-10));
+    assert_eq!(run(&r, 5), json!(30));
     r.unadvise(neg).expect("unwraps the outer");
     assert_eq!(run(&r, 5), json!(10));
     assert_eq!(
