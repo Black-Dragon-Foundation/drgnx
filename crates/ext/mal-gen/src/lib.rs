@@ -197,12 +197,43 @@ struct Func {
     ret: Ret,
 }
 
+/// A resource an interface declares: a constructor and methods, and the handle the extension holds.
+struct Res {
+    wit: String,
+    /// bindgen's marker type, in the interface's module
+    ty: String,
+    /// its number over the world's imports: what a handle table keeps beside the rep
+    kind: u32,
+    ctor: Func,
+    methods: Vec<Func>,
+}
+
+impl Iface {
+    /// Every function the interface has: the plain ones, and each resource's constructor and methods.
+    fn all_funcs(&self) -> impl Iterator<Item = &Func> {
+        self.funcs.iter().chain(
+            self.resources
+                .iter()
+                .flat_map(|r| std::iter::once(&r.ctor).chain(&r.methods)),
+        )
+    }
+}
+
+/// A resource while its functions are being collected.
+struct Found {
+    tid: TypeId,
+    wit: String,
+    ctor: Option<Func>,
+    methods: Vec<Func>,
+}
+
 struct Iface {
     id: InterfaceId,
     wit: String,
     pkg: String,
     module: String,
     funcs: Vec<Func>,
+    resources: Vec<Res>,
 }
 
 struct Gen<'a> {
@@ -461,18 +492,26 @@ impl Gen<'_> {
         }
     }
 
-    fn func(&self, iface_label: &str, f: &Function) -> Result<Func> {
+    /// A function; a method's `self` (SKIP) is not one of its parameters. NAME is its WIT name, or the resource's
+    /// method's.
+    fn func(
+        &self,
+        iface_label: &str,
+        f: &Function,
+        name: &str,
+        skip: usize,
+        ctor: bool,
+    ) -> Result<Func> {
         let ctx = format!("{iface_label}.{}", f.name);
-        if !matches!(f.kind, FunctionKind::Freestanding) {
-            return Err(fail(format!("{ctx}: only plain functions are supported")));
-        }
         let mut params = Vec::new();
-        for p in &f.params {
+        for p in f.params.iter().skip(skip) {
             let at = format!("{ctx}, parameter `{}`", p.name);
             params.push((p.name.clone(), self.scalar(&p.ty, &at)?));
         }
         let at = format!("{ctx}, result");
         let ret = match &f.result {
+            // a constructor's result is the handle the host makes: it is not one of the function's values
+            _ if ctor => Ret::Nothing,
             None => Ret::Nothing,
             Some(t) => match self.result_of(t) {
                 Some((ok, err)) => {
@@ -489,7 +528,7 @@ impl Gen<'_> {
             },
         };
         Ok(Func {
-            wit: f.name.clone(),
+            wit: name.to_string(),
             ctx,
             params,
             ret,
@@ -502,8 +541,66 @@ impl Gen<'_> {
         let p = self.pkg_of(id)?;
         let name = i.name.clone().unwrap_or_default();
         let mut funcs = Vec::new();
+        // each resource, in declaration order: its constructor and its methods
+        let mut found: Vec<Found> = Vec::new();
+        for tid in i.types.values() {
+            let d = &self.r.types[*tid];
+            if matches!(d.kind, TypeDefKind::Resource) {
+                let wit = d.name.clone().unwrap_or_default();
+                camel(&wit, &label)?;
+                found.push(Found {
+                    tid: *tid,
+                    wit,
+                    ctor: None,
+                    methods: Vec::new(),
+                });
+            }
+        }
+        let at = |found: &[Found], rid: TypeId| {
+            found
+                .iter()
+                .position(|r| r.tid == rid)
+                .ok_or_else(|| fail(format!("{label}: a resource declared in another interface")))
+        };
         for f in i.functions.values() {
-            funcs.push(self.func(&label, f)?);
+            match f.kind {
+                FunctionKind::Freestanding => funcs.push(self.func(&label, f, &f.name, 0, false)?),
+                FunctionKind::Constructor(rid) => {
+                    let n = at(&found, rid)?;
+                    found[n].ctor = Some(self.func(&label, f, "new", 0, true)?);
+                }
+                FunctionKind::Method(rid) => {
+                    let n = at(&found, rid)?;
+                    let name = f.name.rsplit('.').next().unwrap_or(&f.name).to_string();
+                    found[n]
+                        .methods
+                        .push(self.func(&label, f, &name, 1, false)?);
+                }
+                _ => {
+                    return Err(fail(format!(
+                        "{label}.{}: a resource's static function is not supported",
+                        f.name
+                    )));
+                }
+            }
+        }
+        let mut resources = Vec::new();
+        for Found {
+            wit, ctor, methods, ..
+        } in found
+        {
+            let Some(ctor) = ctor else {
+                return Err(fail(format!(
+                    "{label}: the resource `{wit}` has no constructor, so an extension could not make one"
+                )));
+            };
+            resources.push(Res {
+                ty: camel(&wit, &label)?,
+                wit,
+                kind: 0,
+                ctor,
+                methods,
+            });
         }
         Ok(Iface {
             id,
@@ -511,6 +608,7 @@ impl Gen<'_> {
             pkg: self.pkg_module(p),
             wit: name,
             funcs,
+            resources,
         })
     }
 
@@ -753,6 +851,8 @@ struct Body {
     enums: String,
     api: String,
     exports: String,
+    /// the userdata types of the interface's resources
+    res: String,
 }
 
 /// The bindings for WORLD of the WIT package in WIT_DIR.
@@ -797,7 +897,17 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     let mut exports = Vec::new();
     for item in w.exports.values() {
         match item {
-            WorldItem::Interface { id, .. } => exports.push(g.iface(*id)?),
+            WorldItem::Interface { id, .. } => {
+                let i = g.iface(*id)?;
+                if let Some(r) = i.resources.first() {
+                    return Err(fail(format!(
+                        "{}: the resource `{}` is in an exported interface: only the editor's resources are supported",
+                        g.iface_label(*id)?,
+                        r.wit
+                    )));
+                }
+                exports.push(i);
+            }
             WorldItem::Function(f) => {
                 return Err(fail(format!(
                     "{}: world-level functions are not supported",
@@ -805,6 +915,15 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
                 )));
             }
             WorldItem::Type { .. } => {}
+        }
+    }
+
+    // a resource type's number over the world: what a handle table keeps beside the rep
+    let mut kinds = 0;
+    for i in &mut imports {
+        for r in &mut i.resources {
+            r.kind = kinds;
+            kinds += 1;
         }
     }
 
@@ -835,7 +954,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
         if !seen_ifaces.contains(&i.id) {
             seen_ifaces.push(i.id);
         }
-        for f in &i.funcs {
+        for f in i.all_funcs() {
             for t in f.params.iter().map(|(_, t)| *t).chain(ret_tys(f.ret)) {
                 for owner in g.owners(t)? {
                     if !seen_ifaces.contains(&owner) {
@@ -900,6 +1019,40 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
                 g.ret_ty(f.ret, false)?
             )?;
         }
+        for r in &i.resources {
+            let c = &r.ctor;
+            let mut sig = String::new();
+            for (n, t) in &c.params {
+                put!(sig, ", {}: {}", ident(n, &c.ctx)?, g.rust_ty(*t)?)?;
+            }
+            putln!(
+                tr,
+                "    /// A `{}` for the extension: the editor's rep of it.\n    fn {}(&mut self, __caller: &{}{sig}) -> u64;",
+                r.wit,
+                res_method(r, "new", &label)?,
+                o.caller
+            )?;
+            for m in &r.methods {
+                let mut sig = String::new();
+                for (n, t) in &m.params {
+                    put!(sig, ", {}: {}", ident(n, &m.ctx)?, g.rust_ty(*t)?)?;
+                }
+                putln!(
+                    tr,
+                    "    fn {}(&mut self, __caller: &{}, __rep: u64{sig}) -> {};",
+                    res_method(r, &m.wit, &label)?,
+                    o.caller,
+                    g.ret_ty(m.ret, false)?
+                )?;
+            }
+            putln!(
+                tr,
+                "    /// The extension's `{}` handle of this rep is gone: dropped, collected, or its extension unloaded.\n    fn {}(&mut self, __caller: &{}, __rep: u64);",
+                r.wit,
+                res_method(r, "dropped", &label)?,
+                o.caller
+            )?;
+        }
         tr.push_str("}\n");
         body.api = tr;
 
@@ -909,6 +1062,14 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
         for f in &i.funcs {
             bound.push(format!("{}.{}", i.wit, f.wit));
             luau.push_str(&luau_fn(&g, &trait_path, f, &label)?);
+        }
+        for r in &i.resources {
+            for f in std::iter::once(&r.ctor).chain(&r.methods) {
+                bound.push(format!("{}.{}.{}", i.wit, r.wit, f.wit));
+            }
+            let (table, ud) = luau_resource(&g, i, &trait_path, r, &label)?;
+            luau.push_str(&table);
+            body.res.push_str(&ud);
         }
         putln!(
             luau,
@@ -953,6 +1114,9 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
             )?;
         }
         wasm.push_str("}\n");
+        for r in &i.resources {
+            wasm.push_str(&wasm_resource(&g, &trait_path, &wp, r, &label)?);
+        }
         putln!(
             link,
             "    {wp}::add_to_linker::<{}, wasmtime::component::HasSelf<WasmApi<A>>>(__linker, |__s| &mut __s.{})?;",
@@ -992,7 +1156,21 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
         putln!(out, "pub mod {pkg} {{")?;
         let mut ex = String::new();
         for (module, b) in ifaces {
-            putln!(out, "pub mod {module} {{\n{}{}}}", b.enums, b.api)?;
+            let uses = if b.res.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "use {g}::{{rt, flush_handles, release_handle, tell_dropped, Api as AllApi}};\n",
+                    g = o.generated
+                )
+            };
+            putln!(
+                out,
+                "pub mod {module} {{\n{uses}{}{}{}}}",
+                b.enums,
+                b.api,
+                b.res
+            )?;
             if !b.exports.is_empty() {
                 putln!(
                     ex,
@@ -1028,6 +1206,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     if let [v] = versions.as_slice() {
         putln!(out, "pub const API_VERSION: &str = \"{v}\";")?;
     }
+    out.push_str(&handle_fns(&g, &imports)?);
     putln!(
         out,
         "/// Every interface's `Api` in one trait: what the editor implements.\npub trait Api: {} {{}}\nimpl<T: {}> Api for T {{}}",
@@ -1044,8 +1223,8 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     )?;
     putln!(
         out,
-        "pub fn install_luau<A: Api + 'static>(lua: &mlua::Lua, api: &std::sync::Arc<std::sync::Mutex<A>>, caller: &std::sync::Arc<std::sync::RwLock<{}>>, max_list: usize) -> mlua::Result<()> {{\n    let __d = lua.create_table()?;",
-        o.caller
+        "/// Install the API in LUA for one extension: HANDLES is its table of resource handles (held to its cap), and LUA is\n/// used by that extension alone (a handle is refused in any other state).\npub fn install_luau<A: Api + 'static>(lua: &mlua::Lua, api: &std::sync::Arc<std::sync::Mutex<A>>, caller: &std::sync::Arc<std::sync::RwLock<{c}>>, handles: &std::sync::Arc<std::sync::Mutex<rt::HandleTable>>, max_list: usize) -> mlua::Result<()> {{\n    let __inst = std::sync::Arc::new(rt::LuaInst {{ api: std::sync::Arc::clone(api), caller: std::sync::Arc::clone(caller), hs: std::sync::Arc::clone(handles), max: max_list }});\n    lua.set_app_data(std::sync::Arc::clone(&__inst));\n    let _ = &__inst;\n    let __d = lua.create_table()?;",
+        c = o.caller
     )?;
     for p in keys.values() {
         putln!(
@@ -1072,7 +1251,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
     )?;
     putln!(
         out,
-        "pub struct WasmApi<A>(pub std::sync::Arc<std::sync::Mutex<A>>, pub std::sync::Arc<std::sync::RwLock<{}>>, pub usize);",
+        "/// What a component's imports reach: the API, who is calling, the list limit, and the extension's table of resource\n/// handles.\npub struct WasmApi<A>(pub std::sync::Arc<std::sync::Mutex<A>>, pub std::sync::Arc<std::sync::RwLock<{}>>, pub usize, pub std::sync::Arc<std::sync::Mutex<rt::HandleTable>>);",
         o.caller
     )?;
     out.push_str(&wasm);
@@ -1154,9 +1333,8 @@ fn enum_code(
     Ok(s)
 }
 
-fn luau_fn(g: &Gen, trait_path: &str, f: &Func, label: &str) -> Result<String> {
-    let mut s = String::new();
-    let n = f.params.len();
+/// The statements that decode a Luau function's arguments (`__a`, `n` of them) into `__p0`.., and their names.
+fn luau_decode(g: &Gen, f: &Func) -> Result<(String, Vec<String>)> {
     let mut args = Vec::new();
     let mut decode = String::new();
     for (k, (pn, t)) in f.params.iter().enumerate() {
@@ -1168,8 +1346,12 @@ fn luau_fn(g: &Gen, trait_path: &str, f: &Func, label: &str) -> Result<String> {
         )?;
         args.push(format!("__p{k}"));
     }
-    let name = ident(&f.wit, label)?;
-    let encode = match f.ret {
+    Ok((decode, args))
+}
+
+/// The expression that turns the API's result `__r` into the Luau function's values.
+fn luau_encode(g: &Gen, f: &Func) -> Result<String> {
+    Ok(match f.ret {
         Ret::Nothing => "Ok(mlua::MultiValue::new())".to_string(),
         Ret::Plain(t) => format!(
             "Ok([{}].into_iter().collect::<mlua::MultiValue>())",
@@ -1185,7 +1367,15 @@ fn luau_fn(g: &Gen, trait_path: &str, f: &Func, label: &str) -> Result<String> {
                 "Ok(match __r {{\n                Ok(__v) => [{okv}].into_iter().collect::<mlua::MultiValue>(),\n                Err(__e) => [mlua::Value::Nil, {errv}].into_iter().collect::<mlua::MultiValue>(),\n            }})"
             )
         }
-    };
+    })
+}
+
+fn luau_fn(g: &Gen, trait_path: &str, f: &Func, label: &str) -> Result<String> {
+    let mut s = String::new();
+    let n = f.params.len();
+    let (decode, args) = luau_decode(g, f)?;
+    let name = ident(&f.wit, label)?;
+    let encode = luau_encode(g, f)?;
     putln!(
         s,
         "        {{\n        let __api = std::sync::Arc::clone(api);\n        let __caller = std::sync::Arc::clone(caller);\n        let __max = max_list;\n        __t.set(\"{}\", lua.create_function(move |__lua, __args: mlua::MultiValue| -> mlua::Result<mlua::MultiValue> {{\n            let __a: Vec<mlua::Value> = __args.into_iter().collect();\n            rt::arity(\"{}\", &__a, {n})?;\n{decode}            let __c = rt::caller(&__caller);\n            let __r = rt::with_api(&*__api, \"{}\", |__m| {trait_path}::{name}(__m, &__c{}))?;\n            {encode}\n        }})?)?;\n        }}",
@@ -1195,6 +1385,200 @@ fn luau_fn(g: &Gen, trait_path: &str, f: &Func, label: &str) -> Result<String> {
         args.iter().map(|a| format!(", {a}")).collect::<String>()
     )?;
     Ok(s)
+}
+
+/// The functions that tell the editor a handle's rep is gone, and the unload that drains a table.
+fn handle_fns(g: &Gen, imports: &[Iface]) -> Result<String> {
+    let caller = &g.o.caller;
+    let mut arms = String::new();
+    for i in imports {
+        let label = g.iface_label(i.id)?;
+        for r in &i.resources {
+            putln!(
+                arms,
+                "        {} => {}::{}::{}::Api::{}(__a, __c, __rep),",
+                r.kind,
+                g.o.generated,
+                i.pkg,
+                i.module,
+                res_method(r, "dropped", &label)?
+            )?;
+        }
+    }
+    let mut s = String::new();
+    putln!(
+        s,
+        r#"#[allow(dead_code, unused_variables, clippy::match_single_binding)]
+fn dropped_kind<A: Api>(__a: &mut A, __c: &{caller}, __kind: u32, __rep: u64) {{
+    match __kind {{
+{arms}        _ => {{}}
+    }}
+}}
+/// Tell the editor that a handle's rep is gone: now when its API is free, else with the extension's next call.
+#[allow(dead_code)]
+pub fn tell_dropped<A: Api + 'static>(__i: &rt::LuaInst<A, {caller}>, __kind: u32, __rep: u64) {{
+    match __i.api.try_lock() {{
+        Ok(mut __a) => {{
+            let __c = rt::caller(&__i.caller);
+            dropped_kind(&mut *__a, &__c, __kind, __rep);
+        }}
+        // the API failed earlier: it is not trusted again
+        Err(std::sync::TryLockError::Poisoned(_)) => {{}}
+        Err(std::sync::TryLockError::WouldBlock) => rt::defer(&__i.hs, __kind, __rep),
+    }}
+}}
+/// A handle that was let go (the collector, or the state closing): out of the table, and the editor told.
+#[allow(dead_code)]
+pub fn release_handle<A: Api + 'static>(__i: &rt::LuaInst<A, {caller}>, __kind: u32, __h: rt::RHandle) {{
+    if let Some(__rep) = rt::forget(&__i.hs, __h, __kind) {{
+        tell_dropped(__i, __kind, __rep);
+    }}
+}}
+/// The drops that found the API busy, told now.
+#[allow(dead_code)]
+pub fn flush_handles<A: Api + 'static>(__i: &rt::LuaInst<A, {caller}>) {{
+    for (__kind, __rep) in rt::deferred(&__i.hs) {{
+        tell_dropped(__i, __kind, __rep);
+    }}
+}}
+/// Unload an extension: every handle it still holds is dropped and the editor is told once of each (and of the drops
+/// that were waiting). How many. The API's lock is waited for, so this is never called from inside an API call.
+#[allow(dead_code)]
+pub fn drain_handles<A: Api>(
+    api: &std::sync::Arc<std::sync::Mutex<A>>,
+    caller: &std::sync::Arc<std::sync::RwLock<{caller}>>,
+    handles: &std::sync::Arc<std::sync::Mutex<rt::HandleTable>>,
+) -> usize {{
+    let mut __all = rt::deferred(handles);
+    __all.extend(rt::drained(handles));
+    let __n = __all.len();
+    if __n == 0 {{
+        return 0;
+    }}
+    // a poisoned lock: the API failed earlier and is not trusted again, so it is not told
+    if !api.is_poisoned() {{
+        let mut __a = saman::lock(api);
+        let __c = rt::caller(caller);
+        for (__kind, __rep) in __all {{
+            // a panic in the editor's `*_dropped` must not leave the rest of the handles untold
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{
+                dropped_kind(&mut *__a, &__c, __kind, __rep);
+            }})) {{
+                Ok(()) | Err(_) => {{}}
+            }}
+        }}
+    }}
+    __n
+}}"#
+    )?;
+    Ok(s)
+}
+
+/// The component host's side of a resource: the bindgen `Host<Resource>` trait on `WasmApi`.
+fn wasm_resource(g: &Gen, trait_path: &str, wp: &str, r: &Res, label: &str) -> Result<String> {
+    let kind = r.kind;
+    let ty = format!("wasmtime::component::Resource<{wp}::{}>", r.ty);
+    let mut s = String::new();
+    putln!(
+        s,
+        "impl<A: {trait_path}> {wp}::Host{} for WasmApi<A> {{",
+        r.ty
+    )?;
+    for (f, own) in std::iter::once((&r.ctor, true)).chain(r.methods.iter().map(|m| (m, false))) {
+        let mut sig = String::new();
+        let mut args = Vec::new();
+        let mut checks = String::new();
+        for (n, t) in &f.params {
+            put!(sig, ", {}: {}", ident(n, &f.ctx)?, g.wasm_ty(*t)?)?;
+            args.push(g.conv(*t, &ident(n, &f.ctx)?));
+            checks.push_str(&g.len_checks(*t, &ident(n, &f.ctx)?, &f.ctx, "self.2"));
+        }
+        let call_args = args.iter().map(|a| format!(", {a}")).collect::<String>();
+        let ctx = &f.ctx;
+        if own {
+            let new = res_method(r, "new", label)?;
+            putln!(
+                s,
+                "    fn new(&mut self{sig}) -> wasmtime::Result<{ty}> {{\n        {checks}let __c = rt::caller(&self.1);\n        rt::wasm_room(&self.3, \"{ctx}\")?;\n        let __rep = rt::with_wasm(&*self.0, \"{ctx}\", |__m| {trait_path}::{new}(__m, &__c{call_args}))?;\n        let __h = rt::wasm_insert(&self.3, {kind}, __rep, \"{ctx}\")?;\n        Ok(wasmtime::component::Resource::new_own(__h))\n    }}"
+            )?;
+        } else {
+            let name = res_method(r, &f.wit, label)?;
+            let back = g.ret_from_ours(f.ret, "__r");
+            let mapped = if back == "__r" {
+                String::new()
+            } else {
+                format!(".map(|__r| {back})")
+            };
+            putln!(
+                s,
+                "    fn {}(&mut self, __self: {ty}{sig}) -> wasmtime::Result<{}> {{\n        {checks}let __c = rt::caller(&self.1);\n        let __rep = rt::wasm_get(&self.3, {kind}, __self.rep(), \"{ctx}\")?;\n        rt::with_wasm(&*self.0, \"{ctx}\", |__m| {trait_path}::{name}(__m, &__c, __rep{call_args})){mapped}\n    }}",
+                bindgen_ident(&f.wit),
+                g.ret_ty(f.ret, true)?
+            )?;
+        }
+    }
+    let dropped = res_method(r, "dropped", label)?;
+    putln!(
+        s,
+        "    fn drop(&mut self, __self: {ty}) -> wasmtime::Result<()> {{\n        let __rep = rt::wasm_remove(&self.3, {kind}, __self.rep(), \"{label}.{wit}.drop\")?;\n        let __c = rt::caller(&self.1);\n        rt::with_wasm(&*self.0, \"{label}.{wit}.drop\", |__m| {trait_path}::{dropped}(__m, &__c, __rep))\n    }}\n}}",
+        wit = r.wit
+    )?;
+    Ok(s)
+}
+
+/// The API method a resource's function is: `<resource>_<function>`.
+fn res_method(r: &Res, wit: &str, at: &str) -> Result<String> {
+    ident(&format!("{}-{wit}", r.wit), at)
+}
+
+/// Luau: a resource's `new` in the interface's table, and the userdata type its handles are (methods generated from the
+/// WIT, `drop`, and the collector's drop).
+fn luau_resource(
+    g: &Gen,
+    i: &Iface,
+    trait_path: &str,
+    r: &Res,
+    label: &str,
+) -> Result<(String, String)> {
+    let kind = r.kind;
+    let ud_name = format!("{}Ref", r.ty);
+    let ud = format!("{}::{}::{}::{ud_name}", g.o.generated, i.pkg, i.module);
+    let new = res_method(r, "new", label)?;
+    // the constructor, in the interface's table
+    let c = &r.ctor;
+    let (decode, args) = luau_decode(g, c)?;
+    let n = c.params.len();
+    let mut table = String::new();
+    putln!(
+        table,
+        "        {{\n        let __rt = lua.create_table()?;\n        let __inst = std::sync::Arc::clone(&__inst);\n        __rt.set(\"new\", lua.create_function(move |__lua, __args: mlua::MultiValue| -> mlua::Result<mlua::MultiValue> {{\n            let __a: Vec<mlua::Value> = __args.into_iter().collect();\n            let __max = __inst.max;\n            let _ = __max;\n            rt::arity(\"{ctx}\", &__a, {n})?;\n{decode}            flush_handles(&__inst);\n            rt::lua_room(&__inst.hs, \"{ctx}\")?;\n            let __c = rt::caller(&__inst.caller);\n            let __rep = rt::with_api(&*__inst.api, \"{ctx}\", |__m| {trait_path}::{new}(__m, &__c{}))?;\n            let __h = match rt::lua_insert(&__inst.hs, {kind}, __rep, \"{ctx}\") {{\n                Ok(__h) => __h,\n                Err(__e) => {{ tell_dropped(&__inst, {kind}, __rep); return Err(__e); }}\n            }};\n            let __ud = __lua.create_userdata({ud} {{ inst: std::sync::Arc::clone(&__inst), h: __h }})?;\n            Ok([mlua::Value::UserData(__ud)].into_iter().collect::<mlua::MultiValue>())\n        }})?)?;\n        __rt.set_readonly(true);\n        __t.set(\"{}\", __rt)?;\n        }}\n",
+        args.iter().map(|a| format!(", {a}")).collect::<String>(),
+        snake(&r.wit),
+        ctx = c.ctx
+    )?;
+    // the handle's userdata
+    let mut methods = String::new();
+    for m in &r.methods {
+        let (decode, args) = luau_decode(g, m)?;
+        let n = m.params.len();
+        let name = res_method(r, &m.wit, label)?;
+        let encode = luau_encode(g, m)?;
+        putln!(
+            methods,
+            "        __m.add_method(\"{}\", |__lua, __this, __args: mlua::MultiValue| -> mlua::Result<mlua::MultiValue> {{\n            let __a: Vec<mlua::Value> = __args.into_iter().collect();\n            let __max = __this.inst.max;\n            let _ = __max;\n            rt::arity(\"{ctx}\", &__a, {n})?;\n{decode}            rt::own(__lua, &__this.inst, \"{ctx}\")?;\n            flush_handles(&__this.inst);\n            let __rep = rt::lua_get(&__this.inst.hs, __this.h, {kind}, \"{ctx}\")?;\n            let __c = rt::caller(&__this.inst.caller);\n            let __r = rt::with_api(&*__this.inst.api, \"{ctx}\", |__m| {trait_path}::{name}(__m, &__c, __rep{}))?;\n            {encode}\n        }});",
+            snake(&m.wit),
+            args.iter().map(|a| format!(", {a}")).collect::<String>(),
+            ctx = m.ctx
+        )?;
+    }
+    let mut out = String::new();
+    putln!(
+        out,
+        "/// A `{wit}` handle in a script: the userdata an extension holds. Dropped by `:drop()`, by the collector, or when the\n/// extension unloads.\npub struct {ud_name}<A: AllApi + 'static> {{ pub inst: std::sync::Arc<rt::LuaInst<A, {caller}>>, pub h: rt::RHandle }}\nimpl<A: AllApi + 'static> Drop for {ud_name}<A> {{\n    fn drop(&mut self) {{ release_handle(&self.inst, {kind}, self.h); }}\n}}\nimpl<A: AllApi + 'static> mlua::UserData for {ud_name}<A> {{\n    fn add_methods<M: mlua::UserDataMethods<Self>>(__m: &mut M) {{\n{methods}        __m.add_method(\"drop\", |__lua, __this, __args: mlua::MultiValue| -> mlua::Result<mlua::MultiValue> {{\n            let __a: Vec<mlua::Value> = __args.into_iter().collect();\n            rt::arity(\"{label}.{wit}.drop\", &__a, 0)?;\n            rt::own(__lua, &__this.inst, \"{label}.{wit}.drop\")?;\n            flush_handles(&__this.inst);\n            let __rep = rt::lua_remove(&__this.inst.hs, __this.h, {kind}, \"{label}.{wit}.drop\")?;\n            tell_dropped(&__this.inst, {kind}, __rep);\n            Ok(mlua::MultiValue::new())\n        }});\n    }}\n}}\n",
+        wit = r.wit,
+        caller = g.o.caller
+    )?;
+    Ok((table, out))
 }
 
 fn export_fn(g: &Gen, f: &Func, acc: &str, ext_ty: &str) -> Result<String> {

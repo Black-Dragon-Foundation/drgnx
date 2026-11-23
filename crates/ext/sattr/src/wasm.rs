@@ -15,6 +15,7 @@ use wasmtime::{Config, Engine, ResourceLimiter, Store};
 use crate::generated::drgnx_api_v0_1_0::entry::AnsweredHow;
 use crate::generated::drgnx_api_v0_1_0::exports::entry;
 use crate::generated::drgnx_api_v0_1_0::types::Error;
+use crate::generated::rt::HandleTable;
 use crate::generated::{Api, WasmApi};
 use crate::{Caller, Limits};
 
@@ -125,6 +126,10 @@ pub struct Guest<A: Send + 'static> {
     limits: Limits,
     /// the epoch's clock: held for as long as the guest lives
     _clock: EpochClock,
+    /// the extension's resource handles, held to `limits.handles`
+    handles: Arc<Mutex<HandleTable>>,
+    /// drops every handle and tells the editor (see [`Guest::unload`])
+    unload: Box<dyn Fn() -> usize + Send>,
 }
 
 fn guest_error(what: &str, e: wasmtime::Error) -> villa::Error {
@@ -147,10 +152,21 @@ impl<A: Api + Send + 'static> Guest<A> {
             extension: extension.to_string(),
             origin: Origin::Extension(extension.to_string()),
         }));
+        let handles = Arc::new(Mutex::new(HandleTable::new(limits.handles)));
+        let unload = {
+            let (api, caller, handles) =
+                (Arc::clone(api), Arc::clone(&caller), Arc::clone(&handles));
+            Box::new(move || crate::generated::drain_handles(&api, &caller, &handles))
+        };
         let mut store = Store::new(
             engine,
             State {
-                api: WasmApi(Arc::clone(api), caller, limits.max_list),
+                api: WasmApi(
+                    Arc::clone(api),
+                    caller,
+                    limits.max_list,
+                    Arc::clone(&handles),
+                ),
                 memory_bytes: limits.memory_bytes,
                 table_elements: limits.table_elements,
                 denied: 0,
@@ -166,7 +182,20 @@ impl<A: Api + Send + 'static> Guest<A> {
             ext,
             limits,
             _clock: clock.clone(),
+            handles,
+            unload,
         })
+    }
+
+    /// Unload the extension: every resource handle it still holds is dropped and the editor is told once of each. How
+    /// many. Done when the guest is dropped too; a second call finds nothing.
+    pub fn unload(&self) -> usize {
+        (self.unload)()
+    }
+
+    /// The extension's table of resource handles.
+    pub fn handles(&self) -> &Arc<Mutex<HandleTable>> {
+        &self.handles
     }
 
     /// F, the guest's call, armed with fuel and the epoch, for ORIGIN; the origin is put back whatever F does.
@@ -213,6 +242,12 @@ impl<A: Api + Send + 'static> Guest<A> {
     /// How many times a limit said no to a memory or table growth.
     pub fn denied_growths(&self) -> u32 {
         self.store.data().denied
+    }
+}
+
+impl<A: Send + 'static> Drop for Guest<A> {
+    fn drop(&mut self) {
+        (self.unload)();
     }
 }
 

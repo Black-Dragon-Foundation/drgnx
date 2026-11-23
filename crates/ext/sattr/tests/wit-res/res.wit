@@ -1,0 +1,30 @@
+package acme:res@1.0.0;
+
+// A test world for resource types, which the real API does not use yet (tests/resources.rs generates it and runs it
+// in both hosts): two resources, so that a handle of one kind is never read as the other.
+interface r {
+  enum oops { too-big }
+  resource counter {
+    constructor(start: u32);
+    bump: func(by: u32) -> u32;
+    value: func() -> u32;
+    check: func(limit: u32) -> result<u32, oops>;
+  }
+  resource gauge {
+    constructor();
+    level: func() -> u32;
+  }
+}
+
+interface e {
+  make: func(start: u32);
+  bump: func(by: u32) -> u32;
+  drop: func();
+  make-n: func(n: u32);
+  poke: func(h: u32) -> u32;
+}
+
+world w {
+  import r;
+  export e;
+}
