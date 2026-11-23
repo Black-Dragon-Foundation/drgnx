@@ -245,7 +245,7 @@ fn not_ready(tx: &Tx<'_>, e: &Ent) -> Result<WriteError, WriteError> {
     };
     let blockers = ids(
         "select b.id from link l join entity b on b.n = l.src where l.dst = ?1 and l.kind = 'blocks' \
-         and l.tx_to = ?2 and b.retired_tx is null and coalesce(b.status, '') not in ('done', 'dropped') order by b.n",
+         and l.tx_to = ?2 and b.retired_tx is null and coalesce(b.status, '') not in ('done', 'dropped', 'accepted', 'parked', 'superseded') order by b.n",
     )?;
     if !blockers.is_empty() {
         return Ok(refused(format!(
@@ -256,7 +256,7 @@ fn not_ready(tx: &Tx<'_>, e: &Ent) -> Result<WriteError, WriteError> {
     }
     let parts = ids(
         "select c.id from link l join entity c on c.n = l.dst where l.src = ?1 and l.kind = 'parent_of' \
-         and l.tx_to = ?2 and c.retired_tx is null and coalesce(c.status, '') not in ('done', 'dropped') order by c.n",
+         and l.tx_to = ?2 and c.retired_tx is null and coalesce(c.status, '') not in ('done', 'dropped', 'accepted', 'parked', 'superseded') order by c.n",
     )?;
     if !parts.is_empty() {
         return Ok(refused(format!(
@@ -324,6 +324,11 @@ pub fn create(tx: &mut Tx<'_>, caller: &Caller, t: NewTask) -> Result<TaskAnswer
     Ok(done(&e, e.ver, None))
 }
 
+/// Whether a task has replaced E: a live `supersedes` link ends at it (`superseded` needs one).
+pub(crate) fn replaced(tx: &Tx<'_>, e: &Ent) -> Result<bool, WriteError> {
+    super::replaced_by_link(tx.sql(), e.n)
+}
+
 /// `update`: fields of task ID at VER. The user's rules on a user-made task (answer 4, call 17); a status change
 /// while another holds the lease is refused.
 pub fn update(
@@ -355,6 +360,16 @@ pub fn update(
             return Err(refused(format!(
                 "{id} is claimed by {}: only the holder changes its status (or reassign it, with a note)",
                 e.lease.holder.as_deref().unwrap_or("someone")
+            )));
+        }
+        if agent && s == "parked" {
+            return Err(refused(
+                "parked is the user's own choice: agents never defer (set blocked, or add a note)",
+            ));
+        }
+        if s == "superseded" && !replaced(tx, &e)? {
+            return Err(refused(format!(
+                "{id} is replaced by another task: link that task first (link REPLACEMENT supersedes {id}), then set superseded"
             )));
         }
         if users {
@@ -812,6 +827,19 @@ pub fn complete(
         notices::now_ready(tx, caller, e.n)?;
     }
     Ok(done(&e, ver, None))
+}
+
+/// `note`: a progress note about task ID (the user's door; an empty text writes nothing).
+pub fn note(
+    tx: &mut Tx<'_>,
+    caller: &Caller,
+    id: &str,
+    text: &str,
+) -> Result<TaskAnswer, WriteError> {
+    let e = writable_task(tx, caller, id, false)?;
+    let note = add_note(tx, &e, "progress", text)?;
+    notices::changed(tx, caller, &e, &["notes"], note.as_deref(), None)?;
+    Ok(done(&e, e.ver, None))
 }
 
 /// `label`: add and remove labels (idempotent, never a whole-list replace; no `ver`).

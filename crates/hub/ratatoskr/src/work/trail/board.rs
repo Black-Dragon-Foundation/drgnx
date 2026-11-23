@@ -63,7 +63,7 @@ pub(crate) fn column(status: &str) -> usize {
         "waiting" => 2,
         "needs-input" => 3,
         "in-review" => 4,
-        "done" | "dropped" => 5,
+        "done" | "dropped" | "accepted" | "parked" | "superseded" => 5,
         _ => 0,
     }
 }

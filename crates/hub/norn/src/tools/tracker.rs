@@ -663,7 +663,7 @@ async fn task_read(coord: &Coord, who: &Identity, a: TaskReadArgs) -> Result<Ans
                 let look = Look::new(c, &caller, now)?;
                 let mut stmt = c.prepare(
                     "select n from entity where kind = 'task' and retired_tx is null \
-                     and (assignee = ?1 or lease_holder = ?1) and coalesce(status, '') not in ('done', 'dropped') \
+                     and (assignee = ?1 or lease_holder = ?1) and coalesce(status, '') not in ('done', 'dropped', 'accepted', 'parked', 'superseded') \
                      order by coalesce(priority, 1000000), n",
                 )?;
                 let ns: Vec<i64> = stmt
@@ -928,7 +928,7 @@ struct TaskWriteArgs {
     priority: Option<i64>,
     /// create, update: when it is done
     acceptance: Option<String>,
-    /// update: open, running, needs-input, in-review, blocked, done or dropped
+    /// update: open, running, needs-input, in-review, blocked, done, dropped, accepted, superseded (needs a `supersedes` link) or parked (user only)
     status: Option<String>,
     /// create; label uses add, remove
     labels: Option<Vec<String>>,
@@ -1479,7 +1479,7 @@ async fn brief(coord: &Coord, who: &Identity, tasks: bool) -> Result<(String, Va
             if tasks {
                 let mut stmt = c.prepare(
                     "select n from entity where kind = 'task' and retired_tx is null \
-                     and (assignee = ?1 or lease_holder = ?1) and coalesce(status, '') not in ('done', 'dropped') \
+                     and (assignee = ?1 or lease_holder = ?1) and coalesce(status, '') not in ('done', 'dropped', 'accepted', 'parked', 'superseded') \
                      order by coalesce(priority, 1000000), n limit 20",
                 )?;
                 let ns: Vec<i64> = stmt

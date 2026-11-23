@@ -1757,6 +1757,83 @@ fn dropped_stays_the_users() {
     assert_eq!(fx.ent(&t).status.as_deref(), Some("dropped"));
 }
 
+#[test]
+fn accepted_parked_and_superseded_are_statuses_that_close() {
+    for s in ["accepted", "parked", "superseded"] {
+        assert!(STATUSES.contains(&s), "{s}");
+        assert!(CLOSED.contains(&s), "{s}");
+        assert_eq!(board_column(s), Column::Done, "{s}");
+    }
+}
+
+#[test]
+fn parked_is_the_users_never_an_agents_even_with_a_grant() {
+    let mut fx = Fx::new();
+    let a = fx.agent("a");
+    let mine = fx.task(&a, "mine");
+    let got = no(fx.update(&a, &mine, |f| f.status = Some("parked".into())));
+    assert!(got.contains("agents never defer"), "{got}");
+    // the user's task with an edit grant: the grant does not open parked either
+    let theirs = fx.task(&fx.user(fx.a), "the user's");
+    fx.edit_grant("a", &theirs);
+    let got = no(fx.update(&a, &theirs, |f| f.status = Some("parked".into())));
+    assert!(got.contains("agents never defer"), "{got}");
+    assert_eq!(fx.ent(&theirs).status.as_deref(), Some("open"));
+    ok(fx.update(&fx.user(fx.a), &theirs, |f| {
+        f.status = Some("parked".into())
+    }));
+    assert_eq!(fx.ent(&theirs).status.as_deref(), Some("parked"));
+}
+
+#[test]
+fn a_note_op_writes_a_note_about_the_task() {
+    let mut fx = Fx::new();
+    let a = fx.agent("a");
+    let t = fx.task(&a, "mine");
+    ok(fx.run(
+        &a,
+        TaskOp::Note {
+            id: t.clone(),
+            text: "waiting on B1".into(),
+        },
+    ));
+    assert_eq!(
+        fx.count("select count(*) from entity where kind = 'note' and body = 'waiting on B1'"),
+        1
+    );
+}
+
+#[test]
+fn accepted_is_set_like_any_status_and_releases_what_it_blocks() {
+    let mut fx = Fx::new();
+    let a = fx.agent("a");
+    let (spike, after) = (fx.task(&a, "spike"), fx.task(&a, "after"));
+    fx.link(&a, &spike, "blocks", &after);
+    assert!(!is_ready(&fx.c, fx.n(&after), 1_000.0).unwrap());
+    ok(fx.update(&a, &spike, |f| f.status = Some("accepted".into())));
+    assert_eq!(fx.ent(&spike).status.as_deref(), Some("accepted"));
+    assert!(
+        is_ready(&fx.c, fx.n(&after), 1_000.0).unwrap(),
+        "accepted ends the wait"
+    );
+}
+
+#[test]
+fn superseded_needs_a_supersedes_link_from_the_replacement() {
+    let mut fx = Fx::new();
+    let a = fx.agent("a");
+    let (old, new) = (fx.task(&a, "old"), fx.task(&a, "new"));
+    let got = no(fx.update(&a, &old, |f| f.status = Some("superseded".into())));
+    assert!(got.contains("link that task first"), "{got}");
+    assert_eq!(fx.ent(&old).status.as_deref(), Some("open"));
+    // the link the other way round does not count
+    fx.link(&a, &old, "supersedes", &new);
+    no(fx.update(&a, &old, |f| f.status = Some("superseded".into())));
+    fx.link(&a, &new, "supersedes", &old);
+    ok(fx.update(&a, &old, |f| f.status = Some("superseded".into())));
+    assert_eq!(fx.ent(&old).status.as_deref(), Some("superseded"));
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
 
@@ -1852,6 +1929,9 @@ fn board_columns_map_every_status() {
         ("in-review", Review),
         ("done", Done),
         ("dropped", Done),
+        ("accepted", Done),
+        ("parked", Done),
+        ("superseded", Done),
     ];
     for (status, column) in want {
         assert_eq!(board_column(status), column, "{status}");

@@ -2168,6 +2168,10 @@ fn task_op(p: tasks_api::WriteParams) -> TaskOp {
             add: labels32(p.add),
             remove: labels32(p.remove),
         },
+        Op::Note => TaskOp::Note {
+            id,
+            text: text(p.note).unwrap_or_default(),
+        },
         Op::Tools => TaskOp::Tools {
             id,
             tracker: p.tracker,

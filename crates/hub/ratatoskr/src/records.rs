@@ -2712,11 +2712,13 @@ pub async fn import_core(
             });
         }
     }
+    let warnings = status_warnings(&found);
     if dry {
         return Ok(ImportReport {
             dry_run: true,
             backup: None,
             files,
+            warnings,
         });
     }
     if !fresh.is_empty() {
@@ -2754,7 +2756,25 @@ pub async fn import_core(
         dry_run: false,
         backup: backup_dir.map(|d| d.to_string_lossy().into_owned()),
         files,
+        warnings,
     })
+}
+
+/// A plan task's status line with a word that is no status: the file, the task and the word, so it is never silent.
+fn status_warnings(found: &[Found]) -> Vec<String> {
+    let mut out = Vec::new();
+    for f in found.iter().filter(|f| f.kind == RecordKind::Plans) {
+        let Ok(text) = std::fs::read_to_string(&f.path) else {
+            continue;
+        };
+        for (task, word) in status::unknown_status_words(&text) {
+            out.push(format!(
+                "{}: task {task}: status line word {word:?} is no status; kept as text, the ticks decide",
+                f.path.display()
+            ));
+        }
+    }
+    out
 }
 
 /// The files the graph knows, and where each stands.
@@ -3760,6 +3780,45 @@ pub(crate) mod tests {
         assert!(got.contains(&("One".into(), "The spec".into())), "{got:?}");
         assert!(got.contains(&("Two".into(), "The spec".into())), "{got:?}");
         assert!(!got.iter().any(|(p, _)| p == "Lone"), "{got:?}");
+    }
+
+    /// A plan task's status line is its status; a word that is no status stays text, the ticks decide, and the import
+    /// report names the file, the task and the word.
+    #[tokio::test]
+    async fn a_status_line_sets_the_status_and_an_unknown_word_is_reported() {
+        let f = fix();
+        std::fs::write(
+            f.root.join("docs/plans/drgnx/lines.md"),
+            "# Lines\n\n### Task 1: a\n\n**Status:** blocked \u{2014} waits\n\n- [ ] a\n\n### Task 2: b\n\n**Status:** wibble\n\n- [ ] a\n\n### Task 3: c\n\n**Status:** accepted\n\nProse.\n",
+        )
+        .unwrap();
+        let r = f.import(None, false).await;
+        let status = |n: &'static str| {
+            let db = f.db.clone();
+            async move {
+                db.read(move |c| {
+                    Ok(c.query_row(
+                        "select coalesce(status, '') from entity where kind = 'task' and retired_tx is null \
+                         and json_extract(data, '$.number') = ?1 and json_extract(data, '$.records.file') like '%/lines.md'",
+                        [n],
+                        |r| r.get::<_, String>(0),
+                    )?)
+                })
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(status("1").await, "blocked");
+        assert_eq!(status("2").await, "open");
+        assert_eq!(status("3").await, "accepted");
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert!(
+            r.warnings[0].contains("lines.md")
+                && r.warnings[0].contains("task 2")
+                && r.warnings[0].contains("wibble"),
+            "{:?}",
+            r.warnings
+        );
     }
 
     /// A task whose steps are all ticked is done, one with an open step is not (`steps-of-a-completed-task-count-as-done`).

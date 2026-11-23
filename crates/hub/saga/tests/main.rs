@@ -8,6 +8,7 @@ mod ledger;
 mod plan;
 mod records;
 mod round_trip;
+mod task_status_line;
 
 /// The test files that are binaries of their own (Cargo.toml says why).
 const APART: &[&str] = &[];

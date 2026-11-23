@@ -36190,6 +36190,13 @@
                   "null"
                 ]
               },
+              "reason": {
+                "maxLength": 512,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "role": {
                 "maxLength": 32,
                 "type": [
@@ -37283,6 +37290,13 @@
             "default": [],
             "items": {
               "$ref": "#/$defs/ImportedFile"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "description": "What the import kept but could not read: a plan task's status line with a word that is no status (the file,\nthe task and the word); its ticks decide.",
+            "items": {
+              "type": "string"
             },
             "type": "array"
           }
@@ -48290,7 +48304,7 @@
       "classes": [
         "user"
       ],
-      "doc": "one tracker operation as the user (create, update, claim, heartbeat, release, handoff, reassign, split, complete, link, unlink, label, tools): done, a conflict with what changed, a lost lease, or a close proposal",
+      "doc": "one tracker operation as the user (create, update, claim, heartbeat, release, handoff, reassign, split, complete, link, unlink, label, tools, note): done, a conflict with what changed, a lost lease, or a close proposal",
       "name": "tasks/write",
       "params": {
         "$defs": {
@@ -48302,22 +48316,31 @@
           },
           "Op": {
             "description": "A tracker operation.",
-            "enum": [
-              "create",
-              "update",
-              "claim",
-              "heartbeat",
-              "release",
-              "handoff",
-              "reassign",
-              "split",
-              "complete",
-              "link",
-              "unlink",
-              "label",
-              "tools"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "create",
+                  "update",
+                  "claim",
+                  "heartbeat",
+                  "release",
+                  "handoff",
+                  "reassign",
+                  "split",
+                  "complete",
+                  "link",
+                  "unlink",
+                  "label",
+                  "tools"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "note",
+                "description": "A note about the task (`note` is its text).",
+                "type": "string"
+              }
+            ]
           },
           "SplitMode": {
             "description": "How a split goes: the parts as children (default), or in the task's place.",

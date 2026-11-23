@@ -85,6 +85,8 @@ pub enum Op {
     Unlink,
     Label,
     Tools,
+    /// A note about the task (`note` is its text).
+    Note,
 }
 
 /// How a split goes: the parts as children (default), or in the task's place.
@@ -205,6 +207,10 @@ fn check_write(p: &WriteParams) -> Result<(), Error> {
             Ok(())
         }
         Op::Claim | Op::Label | Op::Tools => need(p.id.is_some(), "id"),
+        Op::Note => {
+            need(p.id.is_some(), "id")?;
+            need(p.note.is_some(), "note")
+        }
         Op::Link | Op::Unlink => {
             need(p.src.is_some(), "src")?;
             need(p.kind.is_some(), "kind")?;
@@ -229,7 +235,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "tasks/write", TasksWrite(WriteParams) -> WriteAnswer,
             classes: [User], writes: true,
-            doc: "one tracker operation as the user (create, update, claim, heartbeat, release, handoff, reassign, split, complete, link, unlink, label, tools): done, a conflict with what changed, a lost lease, or a close proposal",
+            doc: "one tracker operation as the user (create, update, claim, heartbeat, release, handoff, reassign, split, complete, link, unlink, label, tools, note): done, a conflict with what changed, a lost lease, or a close proposal",
             check: check_write,
         ),
     ]

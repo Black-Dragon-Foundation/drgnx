@@ -86,6 +86,9 @@ pub struct TaskWrite {
     pub title: Option<Bounded<String, 512>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<Status>,
+    // why the task has that status (a plan task's `**Status:**` line keeps it); plain comment: no schema description
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Bounded<String, 512>>,
     // a hint for the forecast when no profile is named: a named profile runs its own model
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<Bounded<String, 128>>,

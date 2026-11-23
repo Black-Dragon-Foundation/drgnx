@@ -48,9 +48,21 @@ pub const STATUSES: &[&str] = &[
     "blocked",
     "done",
     "dropped",
+    "accepted",
+    "parked",
+    "superseded",
 ];
-/// The statuses that close a task: its `blocks` and its parent's wait end.
-pub const CLOSED: &[&str] = &["done", "dropped"];
+/// Whether a live `supersedes` link ends at task N: another task replaced it (`superseded` needs one).
+pub fn replaced_by_link(c: &Connection, n: i64) -> Result<bool, WriteError> {
+    Ok(c.query_row(
+        &format!("select count(*) from link where kind = 'supersedes' and dst = ?1 and tx_to = {SENTINEL}"),
+        [n],
+        |r| r.get::<_, i64>(0),
+    )? > 0)
+}
+/// The statuses that close a task: its `blocks` and its parent's wait end.  `accepted` is finished like `done` (a spike
+/// whose result was accepted); `parked` and `superseded` are closed, not open.
+pub const CLOSED: &[&str] = &["done", "dropped", "accepted", "parked", "superseded"];
 
 /// A column of the board (agent system part 1, Calls made 17).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -73,7 +85,7 @@ pub fn board_column(status: &str) -> Column {
         "waiting" => Column::Waiting,
         "needs-input" => Column::NeedsYou,
         "in-review" => Column::Review,
-        "done" | "dropped" => Column::Done,
+        "done" | "dropped" | "accepted" | "parked" | "superseded" => Column::Done,
         _ => Column::Queued,
     }
 }
@@ -139,6 +151,10 @@ pub enum TaskOp {
         kind: LinkName,
         dst: String,
     },
+    Note {
+        id: String,
+        text: String,
+    },
     Unlink {
         src: String,
         kind: LinkName,
@@ -172,6 +188,7 @@ impl TaskOp {
             TaskOp::Link { .. } => "link",
             TaskOp::Unlink { .. } => "unlink",
             TaskOp::Label { .. } => "label",
+            TaskOp::Note { .. } => "note",
             TaskOp::Tools { .. } => "tools",
         }
     }
@@ -190,6 +207,7 @@ impl TaskOp {
             | TaskOp::Split { id, .. }
             | TaskOp::Complete { id, .. }
             | TaskOp::Label { id, .. }
+            | TaskOp::Note { id, .. }
             | TaskOp::Tools { id, .. } => Some(id),
         }
     }
@@ -305,6 +323,7 @@ pub fn op(tx: &mut Tx<'_>, caller: &Caller, op: TaskOp) -> Result<TaskAnswer, Wr
         TaskOp::Link { src, kind, dst } => ops::link(tx, caller, &src, &kind, &dst)?,
         TaskOp::Unlink { src, kind, dst } => ops::unlink(tx, caller, &src, &kind, &dst)?,
         TaskOp::Label { id, add, remove } => ops::label(tx, caller, &id, &add, &remove)?,
+        TaskOp::Note { id, text } => ops::note(tx, caller, &id, &text)?,
         TaskOp::Tools { id, tracker } => ops::tools(tx, caller, &id, tracker)?,
     };
     // The ops answer from the entity as they read it; an `Update` may have changed the title since.
@@ -481,10 +500,10 @@ fn ready_sql() -> String {
          and (e.lease_holder is null or e.lease_until is null or e.lease_until <= ?1) \
          and not exists (select 1 from link l join entity b on b.n = l.src \
                          where l.dst = e.n and l.kind = 'blocks' and l.tx_to = {SENTINEL} \
-                         and b.retired_tx is null and coalesce(b.status, '') not in ('done', 'dropped')) \
+                         and b.retired_tx is null and coalesce(b.status, '') not in ('done', 'dropped', 'accepted', 'parked', 'superseded')) \
          and not exists (select 1 from link l join entity c on c.n = l.dst \
                          where l.src = e.n and l.kind = 'parent_of' and l.tx_to = {SENTINEL} \
-                         and c.retired_tx is null and coalesce(c.status, '') not in ('done', 'dropped'))"
+                         and c.retired_tx is null and coalesce(c.status, '') not in ('done', 'dropped', 'accepted', 'parked', 'superseded'))"
     )
 }
 

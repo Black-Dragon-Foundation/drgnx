@@ -785,6 +785,31 @@ async fn an_outside_agent_never_marks_done() {
     assert_eq!(w.cards().await, 0);
 }
 
+/// Agents never defer: `parked` is the user's, through plan_write too.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_outside_agent_never_parks() {
+    let w = world();
+    w.bind("claude", &w.root, "manager").await;
+    let a = w.attach(&w.root).await;
+    let written = w
+        .tool(&a.who, "plan_write", w.new_plan("docs/plans/org/mine.md"))
+        .await
+        .unwrap();
+    let plan = serde_json::from_str::<Value>(&written).unwrap()["plan"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let e = w
+        .tool(
+            &a.who,
+            "plan_write",
+            json!({"plan": plan, "tasks": [{"number": "1", "status": "parked"}]}),
+        )
+        .await
+        .unwrap_err();
+    assert!(e.contains("agents never defer"), "{e}");
+}
+
 /// An entity ID written by ACTOR (class CLASS) with DATA: its `n`.
 async fn entity_by(
     w: &World,
@@ -1240,4 +1265,64 @@ async fn only_the_user_answers_a_change_card() {
     // the agent's retry still asks on the same card
     let e = w.exec(&id, "plans/write", p).await.unwrap_err();
     assert_eq!(card_in(&e), n);
+}
+
+// ---- ask_user, answered by the user ----
+
+/// An outside agent asks with `ask_user`; the user answers as `ratatoskr message reply` does (`messages/send`
+/// naming the question's sender and `answers` its id); the agent's `read_inbox` holds the answer.  `cards/settle`
+/// is for cards (an `ask` card's settling writes an `answer` event, not a message), so it is not this path.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_outside_agents_question_is_answered_through_message_reply() {
+    let w = world();
+    w.bind("claude", &w.root, "worker").await;
+    let a = w.attach(&w.root).await;
+    let asked = w
+        .tool(
+            &a.who,
+            "ask_user",
+            json!({"question": "Which one?", "options": ["red", "blue"]}),
+        )
+        .await
+        .unwrap();
+    let q = serde_json::from_str::<Value>(&asked).unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    // what `message reply Q TEXT` does: read the sender, send to it naming the question
+    let sender: String =
+        w.f.writer
+            .db
+            .read(move |c| {
+                Ok(
+                    c.query_row("select sender from message where id = ?1", [q], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
+            .await
+            .unwrap();
+    assert_eq!(Some(sender.as_str()), a.who.id());
+    let p = runstav::registry::find("messages/send").unwrap();
+    let params = (p.decode)(&json!({"recipient": sender, "text": "blue", "answers": q}))
+        .unwrap()
+        .0;
+    crate::coord::serve(&w.f.writer, &user(), params)
+        .await
+        .unwrap_or_else(|_| panic!("messages/send is the coordination writer's"))
+        .unwrap();
+    let inbox = w.tool(&a.who, "read_inbox", json!({})).await.unwrap();
+    let rows = serde_json::from_str::<Value>(&inbox).unwrap();
+    let all = rows.as_array().cloned().unwrap_or_else(|| {
+        rows["messages"]
+            .as_array()
+            .unwrap_or_else(|| panic!("inbox shape: {inbox}"))
+            .clone()
+    });
+    let got: Vec<&Value> = all.iter().filter(|m| m["text"] == "blue").collect();
+    assert_eq!(got.len(), 1, "the answer is in the inbox: {inbox}");
+    // the user is no agent: its message has no sender
+    assert!(got[0]["sender"].is_null(), "{inbox}");
+    // read once: the inbox is empty the second time
+    let again = w.tool(&a.who, "read_inbox", json!({})).await.unwrap();
+    assert!(!again.contains("blue"), "{again}");
 }
