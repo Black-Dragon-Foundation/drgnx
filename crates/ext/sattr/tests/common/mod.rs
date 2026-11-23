@@ -10,7 +10,8 @@ use serde_json::json;
 pub const LIMITS: Limits = Limits {
     steps: 1_000_000,
     memory_bytes: 8 << 20,
-    ticks: 100,
+    ticks: 2_000,
+    table_elements: 10_000,
 };
 
 /// An editor with a few settings and commands, behind the lock the hosts share.
@@ -28,12 +29,12 @@ pub fn editor() -> (Arc<Mutex<Editor>>, Arc<saman::Executor>) {
         e.registry
             .register(
                 Command {
-                    id: CommandId(id),
-                    title: "A title",
-                    doc: "A doc.",
+                    id: CommandId::from(id),
+                    title: "A title".to_string(),
+                    doc: "A doc.".to_string(),
                     args: ArgSpec::NONE,
                     source: SourceLoc {
-                        file: file!(),
+                        file: file!().to_string(),
                         line: line!(),
                     },
                     exposure,

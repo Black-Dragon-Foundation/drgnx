@@ -1,30 +1,36 @@
 //! The review's findings and the extension API's security claims, run through the hosts: Luau scripts through
-//! `LuauHost`, and, for the component host, the generated `Host` impls that a guest's imports run (the limits of the
-//! component host, which need a guest, are in limits.rs). Every claim here is a claim about the editor behind the API,
-//! so each goes through the code an extension really reaches.
+//! `LuauHost`, and the component host through the generated `Host` impls that a guest's imports run, and through real
+//! guests (guest.rs). Every claim here is a claim about the editor behind the API, so each goes through the code an
+//! extension really reaches.
 
 mod common;
+#[path = "common/guest.rs"]
+mod guest;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-
 use std::sync::{Arc, Mutex, RwLock};
 
 use bod::Origin;
-use common::{editor, user};
-use sattr::Caller;
+use common::{LIMITS, editor, user};
 use sattr::editor::Editor;
 use sattr::generated::WasmApi;
-use sattr::generated::drgnx_api_v0_1_0::types::ErrorKind;
+use sattr::generated::drgnx_api_v0_1_0::entry::AnsweredHow;
 use sattr::luau::LuauHost;
 use sattr::wasm::bindings::drgnx::api::{
-    ask::Host as AskHost, commands::Host as CommandsHost, keys::Host as KeysHost,
-    notices::Host as NoticesHost, notices::Level, settings::Host as SettingsHost,
+    ask::Host as AskHost,
+    commands::{CommandSpec, Exposure, Host as CommandsHost},
+    keys::Host as KeysHost,
+    notices::Host as NoticesHost,
+    notices::Level,
+    settings::Host as SettingsHost,
     settings::ScopedLevel,
+    types::ErrorKind,
 };
+use sattr::{Caller, wasm};
 
 /// What a component's imports reach, for EXTENSION acting for ORIGIN: the generated `Host` impls, the code a guest's
 /// calls run.
-pub fn wasm_api(api: &Arc<Mutex<Editor>>, extension: &str, origin: Origin) -> WasmApi<Editor> {
+fn wasm_api(api: &Arc<Mutex<Editor>>, extension: &str, origin: Origin) -> WasmApi<Editor> {
     WasmApi(
         Arc::clone(api),
         Arc::new(RwLock::new(Caller {
@@ -35,7 +41,7 @@ pub fn wasm_api(api: &Arc<Mutex<Editor>>, extension: &str, origin: Origin) -> Wa
 }
 
 fn luau(api: &Arc<Mutex<Editor>>, extension: &str) -> LuauHost {
-    LuauHost::new(api, extension, common::LIMITS).expect("the host starts")
+    LuauHost::new(api, extension, LIMITS).expect("the host starts")
 }
 
 fn run(h: &LuauHost, src: &str) -> villa::Result<()> {
@@ -51,6 +57,30 @@ fn refused(h: &LuauHost, src: &str, about: &str) {
         }
     }
 }
+
+/// A guest whose `init` calls `keys.bind("C-g", "ext.ping", "")` and traps unless the answer is the error `refused`.
+fn binds_a_reserved_key() -> String {
+    guest::core_module(
+        r#"(import "drgnx:api/keys@0.1.0" "bind" (func $bind (param i32 i32 i32 i32 i32 i32 i32)))"#,
+        r#"(data (i32.const 16) "C-g") (data (i32.const 32) "ext.ping")"#,
+        // the result<_, error> lands at 64: the tag (1 = error), then the error's kind (3 = refused)
+        r#"(call $bind (i32.const 16) (i32.const 3) (i32.const 32) (i32.const 8) (i32.const 48) (i32.const 0) (i32.const 64))
+           (if (i32.ne (i32.load8_u (i32.const 64)) (i32.const 1)) (then unreachable))
+           (if (i32.ne (i32.load8_u (i32.const 68)) (i32.const 3)) (then unreachable))"#,
+    )
+}
+
+fn spec(id: &str, exposure: Exposure) -> CommandSpec {
+    CommandSpec {
+        id: id.into(),
+        title: "Title".into(),
+        doc: "Doc.".into(),
+        args: "file: the file\nline: the line".into(),
+        exposure,
+    }
+}
+
+const REGISTER: &str = "drgnx.commands.register({ id = 'x', title = 'T', doc = 'D', args = '', exposure = 'palette' })";
 
 // 1. u64 and s64 refuse values above 2^53 and fractions
 #[test]
@@ -89,11 +119,13 @@ fn integers_above_two_to_the_53_and_fractions_are_refused() {
     let ext = h
         .load(user(), "ext", "return { answered = function() end }")
         .expect("loads");
+    let how = AnsweredHow::User;
     assert!(
-        h.answered(user(), &ext, (1 << 53) + 1, "x").is_err(),
+        h.answered(user(), &ext, (1 << 53) + 1, "x", how).is_err(),
         "refused, not rounded"
     );
-    h.answered(user(), &ext, 1 << 53, "x").expect("2^53 passes");
+    h.answered(user(), &ext, 1 << 53, "x", how)
+        .expect("2^53 passes");
 }
 
 // 2. the bound tables are read-only to scripts
@@ -110,9 +142,8 @@ fn a_script_cannot_replace_the_api() {
     ] {
         refused(&h, src, "readonly");
     }
-    run(&h, "assert(drgnx.commands.register('a', 'b', 'c') == true)")
-        .expect("the real function still runs");
-    assert!(saman::lock(&api).extension_commands.contains_key("ro/a"));
+    run(&h, &format!("assert({REGISTER} == true)")).expect("the real function still runs");
+    assert!(saman::lock(&api).registry.get("ext/ro/x").is_some());
 }
 
 // the sandbox: no way out of the script's own world
@@ -134,29 +165,82 @@ fn the_luau_sandbox_has_no_door_to_files_processes_or_other_code() {
     .expect("the doors are shut");
 }
 
-// 1 (caller identity). each call is the caller's: two extensions with the same ids have their own
+// 1 (caller identity), and 8: an extension's commands live in the registry, under its own name
 #[test]
-fn the_caller_reaches_the_api_from_both_hosts() {
+fn an_extensions_commands_are_namespaced_listed_and_cannot_clash_through_either_host() {
     let (api, _ex) = editor();
     let a = luau(&api, "a");
     let b = luau(&api, "b");
-    run(&a, "assert(drgnx.commands.register('x', 'T', 'D') == true)").expect("a registers");
-    run(&b, "assert(drgnx.commands.register('x', 'T', 'D') == true)")
-        .expect("b registers its own `x`");
+    run(&a, &format!("assert({REGISTER} == true)")).expect("a registers");
+    run(&b, &format!("assert({REGISTER} == true)")).expect("b registers its own `x`");
     run(
         &a,
-        "local v, e = drgnx.commands.register('x', 'T', 'D'); assert(v == nil and e == 'conflict')",
+        &format!("local v, e = {REGISTER}; assert(v == nil and e.kind == 'conflict')"),
     )
     .expect("a's `x` is taken");
     let mut w = wasm_api(&api, "c", user());
-    let r = CommandsHost::register(&mut w, "x".into(), "T".into(), "D".into()).expect("no trap");
+    let r = CommandsHost::register(&mut w, spec("x", Exposure::Palette)).expect("no trap");
     assert!(r.is_ok());
-    let keys: Vec<String> = saman::lock(&api)
-        .extension_commands
-        .keys()
-        .cloned()
-        .collect();
-    assert_eq!(keys, ["a/x", "b/x", "c/x"]);
+    {
+        let ed = saman::lock(&api);
+        let ids: Vec<&str> = ed
+            .registry
+            .list()
+            .filter(|c| c.id.0.starts_with("ext/"))
+            .map(|c| c.id.0.as_str())
+            .collect();
+        assert_eq!(ids, ["ext/a/x", "ext/b/x", "ext/c/x"]);
+    }
+    // it lists with its args and exposure, as a record, in both hosts
+    let r = CommandsHost::register(&mut w, spec("visit", Exposure::Extension)).expect("no trap");
+    assert!(r.is_ok());
+    let d = CommandsHost::describe(&mut w, "ext/c/visit".into())
+        .expect("no trap")
+        .expect("known");
+    assert_eq!(
+        (d.id.as_str(), d.title.as_str(), d.args.as_str()),
+        ("ext/c/visit", "Title", "file: the file\nline: the line")
+    );
+    assert!(matches!(d.exposure, Exposure::Extension));
+    run(
+        &a,
+        "local d = drgnx.commands.describe('ext/a/x')
+         assert(d.id == 'ext/a/x' and d.exposure == 'palette' and d.title == 'T' and d.doc == 'D')",
+    )
+    .expect("a record comes back to Luau as a table");
+    // a record that is not a record, or has a field of the wrong kind, is refused
+    refused(&a, "drgnx.commands.register('x')", "expected a table");
+    refused(
+        &a,
+        "drgnx.commands.register({ id = 'y', title = 'T', doc = 'D', args = '', exposure = 'public' })",
+        "not one of",
+    );
+    refused(
+        &a,
+        "drgnx.commands.register({ id = 'y', title = 1, doc = 'D', args = '', exposure = 'palette' })",
+        "expected a string",
+    );
+    // an argument line that is not `name: what it is`
+    run(&a, "local v, e = drgnx.commands.register({ id = 'z', title = 'T', doc = 'D', args = 'nonsense', exposure = 'palette' }); assert(v == nil and e.kind == 'invalid' and e.message:find('name'))")
+        .expect("a bad argument line");
+}
+
+// extension names: `a/b` + `x` and `a` + `b/x` cannot meet
+#[test]
+fn an_extension_name_that_could_collide_is_refused_by_both_hosts() {
+    let (api, _ex) = editor();
+    for bad in ["a/b", "A", "a b", "", "a.b"] {
+        assert!(LuauHost::new(&api, bad, LIMITS).is_err(), "`{bad}`");
+    }
+    let engine = wasm::engine().expect("engine");
+    let linker = wasm::linker::<Editor>(&engine).expect("links");
+    let component = guest::component(&engine, &guest::spin());
+    let e = wasm::Guest::instantiate(&engine, &linker, &component, &api, "a/b", LIMITS).err();
+    assert!(e.is_some(), "the component host refuses it too");
+    // so an id with a slash in it is `ext/a/b/x`, the one command of `a`
+    let a = luau(&api, "a");
+    run(&a, "assert(drgnx.commands.register({ id = 'b/x', title = 'T', doc = 'D', args = '', exposure = 'palette' }) == true)").expect("registers");
+    assert!(saman::lock(&api).registry.get("ext/a/b/x").is_some());
 }
 
 // 2. settings.set takes the scoped levels only, and the provenance names the extension
@@ -177,9 +261,9 @@ fn an_extension_sets_scoped_settings_only_through_either_host() {
             "not one of",
         );
     }
-    run(&h, "local v, e = drgnx.settings.set('editor.theme', '\"x\"', 'language', ''); assert(v == nil and e == 'invalid')")
+    run(&h, "local v, e = drgnx.settings.set('editor.theme', '\"x\"', 'language', ''); assert(v == nil and e.kind == 'invalid')")
         .expect("an empty scope id");
-    run(&h, "local v, e = drgnx.settings.set('nope', '1', 'pane', 'p'); assert(v == nil and e == 'not-found')")
+    run(&h, "local v, e = drgnx.settings.set('nope', '1', 'pane', 'p'); assert(v == nil and e.kind == 'not-found' and e.message ~= '')")
         .expect("an unknown key");
     let rust = skipan::Scope {
         language: Some("rust".into()),
@@ -221,6 +305,38 @@ fn an_extension_sets_scoped_settings_only_through_either_host() {
     assert_eq!(source, skipan::Source::Extension("wasm-ext".into()));
 }
 
+// 8. an extension is told the level of a value, not the file it came from
+#[test]
+fn provenance_gives_an_extension_the_level_and_never_a_path() {
+    let sb = raun::Sandbox::new();
+    let (api, _ex) = editor();
+    let path = sb.home().join("user.eld");
+    eitri::replace_file(
+        &path,
+        b"(drgnx-settings :version 1\n (editor.theme \"dark\"))\n",
+    )
+    .expect("written");
+    {
+        let ed = saman::lock(&api);
+        ed.settings
+            .attach(skipan::Level::User, &path)
+            .expect("attaches");
+        ed.settings.reload().expect("reloads");
+    }
+    let h = luau(&api, "peek");
+    run(
+        &h,
+        "assert(drgnx.settings.provenance('editor.theme') == 'user')",
+    )
+    .expect("the level, nothing else");
+    let mut w = wasm_api(&api, "peek-wasm", user());
+    let got = SettingsHost::provenance(&mut w, "editor.theme".into())
+        .expect("no trap")
+        .expect("known");
+    assert_eq!(got, "user");
+    assert!(!got.contains(path.to_string_lossy().as_ref()));
+}
+
 // 3. ask.choose never waits
 #[test]
 fn a_question_returns_at_once_has_a_capped_timeout_and_its_answer_comes_later() {
@@ -232,21 +348,12 @@ fn a_question_returns_at_once_has_a_capped_timeout_and_its_answer_comes_later() 
         "assert(drgnx.ask.choose('t', 'b', 'a\\nb', 'a', 300000) == 1)",
     )
     .expect("returns the id");
-    run(
-        &h,
-        "local v, e = drgnx.ask.choose('t', 'b', 'a', 'a', 0); assert(v == nil and e == 'invalid')",
-    )
-    .expect("zero");
-    run(&h, "local v, e = drgnx.ask.choose('t', 'b', 'a', 'a', 300001); assert(v == nil and e == 'invalid')").expect("long");
-    run(&h, "local v, e = drgnx.ask.choose('t', 'b', 'a', 'z', 1000); assert(v == nil and e == 'invalid')")
-        .expect("a default that is no choice");
+    run(&h, "local v, e = drgnx.ask.choose('t', 'b', 'a', 'a', 0); assert(v == nil and e.kind == 'invalid')").expect("zero");
+    run(&h, "local v, e = drgnx.ask.choose('t', 'b', 'a', 'a', 300001); assert(v == nil and e.kind == 'invalid')").expect("long");
+    run(&h, "local v, e = drgnx.ask.choose('t', 'b', 'a', 'z', 1000); assert(v == nil and e.kind == 'invalid')").expect("a default that is no choice");
     // the answer (a headless editor answers the default) arrives through `answered`
     let ext = h
-        .load(
-            user(),
-            "ext",
-            "local E = {}; E.answered = function(q, c) E.last = q .. ':' .. c end; return E",
-        )
+        .load(user(), "ext", "local E = {}; E.answered = function(q, c, how) E.last = q .. ':' .. c .. ':' .. how end; return E")
         .expect("loads");
     let mut got = Vec::new();
     ex.block_on(async {
@@ -267,14 +374,15 @@ fn a_question_returns_at_once_has_a_capped_timeout_and_its_answer_comes_later() 
         ),
         ("asker", 1, "a")
     );
-    h.answered(user(), &ext, got[0].question, &got[0].choice)
+    assert_eq!(got[0].how, AnsweredHow::Default);
+    h.answered(user(), &ext, got[0].question, &got[0].choice, got[0].how)
         .expect("delivers");
-    assert_eq!(ext.get::<String>("last").expect("recorded"), "1:a");
+    assert_eq!(ext.get::<String>("last").expect("recorded"), "1:a:default");
     // an extension holds only a few questions at once
     for _ in 0..20 {
         run(&h, "assert(drgnx.ask.choose('t', 'b', 'a', 'a', 1000))").expect("within the cap");
     }
-    run(&h, "local v, e = drgnx.ask.choose('t', 'b', 'a', 'a', 1000); assert(v == nil and e == 'refused')").expect("over");
+    run(&h, "local v, e = drgnx.ask.choose('t', 'b', 'a', 'a', 1000); assert(v == nil and e.kind == 'refused')").expect("over");
     // the component host's door
     let mut w = wasm_api(&api, "wasm-asker", user());
     let r = AskHost::choose(&mut w, "t".into(), "b".into(), "a".into(), "a".into(), 0)
@@ -290,6 +398,43 @@ fn a_question_returns_at_once_has_a_capped_timeout_and_its_answer_comes_later() 
     )
     .expect("no trap");
     assert!(r.is_ok());
+}
+
+// 7. a question that failed still tells the extension
+#[test]
+fn a_question_that_failed_is_delivered_as_cancelled() {
+    struct Panics;
+    impl spurn::Presenter for Panics {
+        fn present(&self, _q: &spurn::Question, _reply: tokio::sync::oneshot::Sender<String>) {
+            panic!("the UI broke while showing the question");
+        }
+    }
+    let ex = Arc::new(saman::Executor::new(1).expect("a pool"));
+    let api = Arc::new(Mutex::new(Editor::new(
+        Arc::clone(&ex),
+        Some(Arc::new(Panics)),
+    )));
+    let h = luau(&api, "asker");
+    run(
+        &h,
+        "assert(drgnx.ask.choose('t', 'b', 'a', 'a', 1000) == 1)",
+    )
+    .expect("asks");
+    let mut got = Vec::new();
+    ex.block_on(async {
+        for _ in 0..100_000 {
+            got = saman::lock(&api).poll_answers();
+            if !got.is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    });
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(
+        (got[0].question, got[0].choice.as_str(), got[0].how),
+        (1, "", AnsweredHow::Cancelled)
+    );
 }
 
 // 10. notices belong to the extension that posted them
@@ -315,12 +460,8 @@ fn notices_are_namespaced_owned_and_capped_through_either_host() {
     )
     .expect("a's key updates a's notice");
     assert_eq!(saman::lock(&api).notices.len(), 2);
-    // b cannot touch a's notice
-    run(
-        &b,
-        "local v, e = drgnx.notices.dismiss(1); assert(v == nil and e == 'refused')",
-    )
-    .expect("not b's");
+    // b cannot touch a's notice, and is told why
+    run(&b, "local v, e = drgnx.notices.dismiss(1); assert(v == nil and e.kind == 'refused' and e.message:find('not yours'))").expect("not b's");
     assert_eq!(saman::lock(&api).notices.len(), 2);
     run(&a, "assert(drgnx.notices.dismiss(1) == true)").expect("a's own");
     assert_eq!(saman::lock(&api).notices.len(), 1);
@@ -328,13 +469,16 @@ fn notices_are_namespaced_owned_and_capped_through_either_host() {
     for _ in 0..20 {
         run(&a, "assert(drgnx.notices.post('info', 'n', 'x', ''))").expect("within the cap");
     }
-    run(&a, "local v, e = drgnx.notices.post('info', 'n', 'x', ''); assert(v == nil and e == 'refused')").expect("over");
+    run(&a, "local v, e = drgnx.notices.post('info', 'n', 'x', ''); assert(v == nil and e.kind == 'refused')").expect("over");
     run(&b, "assert(drgnx.notices.post('info', 'n', 'x', ''))").expect("b is its own");
-    // the component host's door: another extension's id is not its to dismiss
+    // the component host's door: another extension's id is not its to dismiss, and the message says so
     let mut w = wasm_api(&api, "c", user());
     let theirs = saman::lock(&api).notices.len();
-    let r = NoticesHost::dismiss(&mut w, 2).expect("no trap");
-    assert!(r.is_err());
+    let e = NoticesHost::dismiss(&mut w, 2)
+        .expect("no trap")
+        .expect_err("refused");
+    assert!(matches!(e.kind, ErrorKind::Refused));
+    assert!(e.message.contains("not yours"), "{}", e.message);
     assert_eq!(saman::lock(&api).notices.len(), theirs);
     let r = NoticesHost::post(&mut w, Level::Info, "T".into(), "B".into(), "k".into())
         .expect("no trap");
@@ -353,7 +497,7 @@ fn an_extension_runs_only_extension_commands_and_an_agent_cannot_borrow_it() {
         "assert(drgnx.commands.run('ext.ping', '') == '\"ran\"')
          for _, id in ipairs({'buffer.save', 'agent.echo'}) do
            local v, e = drgnx.commands.run(id, '')
-           assert(v == nil and e == 'refused', id)
+           assert(v == nil and e.kind == 'refused', id)
          end",
     )
     .expect("the extension's door");
@@ -363,7 +507,7 @@ fn an_extension_runs_only_extension_commands_and_an_agent_cannot_borrow_it() {
         "t",
         "for _, id in ipairs({'ext.ping', 'buffer.save', 'agent.echo'}) do
            local v, e = drgnx.commands.run(id, '')
-           assert(v == nil and e == 'refused', id)
+           assert(v == nil and e.kind == 'refused', id)
          end",
     )
     .expect("the confused deputy is refused");
@@ -387,29 +531,95 @@ fn an_extension_runs_only_extension_commands_and_an_agent_cannot_borrow_it() {
     );
 }
 
-// 9. an extension binds no reserved key
+// 8. an extension's command is in the registry: an agent cannot run it unless it is exposed to agents
 #[test]
-fn an_extension_cannot_bind_a_reserved_key_through_either_host() {
+fn an_agent_runs_an_extension_command_only_if_it_is_exposed_to_agents() {
     let (api, _ex) = editor();
+    let h = luau(&api, "ext");
+    for (id, exposure) in [("p", "palette"), ("a", "agent"), ("e", "extension")] {
+        run(&h, &format!("assert(drgnx.commands.register({{ id = '{id}', title = 'T', doc = 'D', args = 'q: a query', exposure = '{exposure}' }}) == true)")).expect("registers");
+    }
+    let mut ed = saman::lock(&api);
+    let by_agent = |ed: &Editor, id: &str| {
+        ed.registry
+            .run(id, serde_json::Value::Null, &mut bod::Cx::agent("a1"))
+    };
+    assert_eq!(
+        by_agent(&ed, "ext/ext/p").expect_err("palette").kind(),
+        villa::Kind::Refused
+    );
+    assert_eq!(
+        by_agent(&ed, "ext/ext/e").expect_err("extension").kind(),
+        villa::Kind::Refused
+    );
+    by_agent(&ed, "ext/ext/a").expect("exposed to agents: runs");
+    // it is a tool, with its arguments
+    let tools = bod::tool_specs(&ed.registry);
+    let t = tools
+        .iter()
+        .find(|t| t.name == "ext/ext/a")
+        .expect("a tool");
+    assert_eq!(t.input_schema["properties"]["q"]["description"], "a query");
+    // running it queued a call for the extension's own host
+    let calls = ed.take_invocations();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        (calls[0].extension.as_str(), calls[0].id.as_str()),
+        ("ext", "a")
+    );
+}
+
+// 9 and 4. an extension binds no reserved key, shadows no prefix, and binds only commands it may
+#[test]
+fn keys_bind_only_what_the_extension_may_through_either_host() {
+    let (api, _ex) = editor();
+    saman::lock(&api)
+        .keymap
+        .bind("C-x C-f", "buffer.save", "")
+        .expect("the user's chord");
     let h = luau(&api, "keys");
+    let visit = REGISTER.replace("'x'", "'visit'");
+    run(&h, &format!("assert({visit} == true)")).expect("a command of its own");
     run(
         &h,
         "for _, c in ipairs({'C-g', 'C-g C-x', 'M-x', 'ctrl+shift+p', 'f1'}) do
-           local v, e = drgnx.keys.bind(c, 'evil', '')
-           assert(v == nil and e == 'refused', c)
+           local v, e = drgnx.keys.bind(c, 'ext.ping', '')
+           assert(v == nil and e.kind == 'refused', c)
          end
-         assert(drgnx.keys.bind('C-x C-v', 'vim-visit', '') == true)
-         assert(drgnx.keys.resolve('C-x C-v', '') == 'vim-visit')",
+         -- a prefix of a bound chord would shadow it
+         local v, e = drgnx.keys.bind('C-x', 'ext.ping', ''); assert(v == nil and e.kind == 'refused')
+         -- the editor's own command, and one that does not exist
+         v, e = drgnx.keys.bind('C-c C-a', 'buffer.save', ''); assert(v == nil and e.kind == 'refused')
+         v, e = drgnx.keys.bind('C-c C-b', 'nope', ''); assert(v == nil and e.kind == 'not-found')
+         -- its own command, and one open to extensions
+         assert(drgnx.keys.bind('C-c C-v', 'ext/keys/visit', '') == true)
+         assert(drgnx.keys.bind('C-c C-p', 'ext.ping', '') == true)
+         assert(drgnx.keys.resolve('C-c C-v', '') == 'ext/keys/visit')",
     )
-    .expect("reserved keys are refused");
+    .expect("the rules");
     let mut w = wasm_api(&api, "wasm-keys", user());
     assert!(
-        KeysHost::bind(&mut w, "C-g".into(), "evil".into(), String::new())
+        KeysHost::bind(&mut w, "C-g".into(), "ext.ping".into(), String::new())
             .expect("no trap")
             .is_err()
     );
     assert!(
-        KeysHost::bind(&mut w, "C-c C-v".into(), "ok".into(), String::new())
+        KeysHost::bind(&mut w, "C-x".into(), "ext.ping".into(), String::new())
+            .expect("no trap")
+            .is_err()
+    );
+    assert!(
+        KeysHost::bind(
+            &mut w,
+            "C-c C-w".into(),
+            "buffer.save".into(),
+            String::new()
+        )
+        .expect("no trap")
+        .is_err()
+    );
+    assert!(
+        KeysHost::bind(&mut w, "C-c C-w".into(), "ext.ping".into(), String::new())
             .expect("no trap")
             .is_ok()
     );
@@ -423,12 +633,12 @@ fn a_panic_in_the_api_fails_the_extension_and_every_later_call() {
         .registry
         .register(
             bod::Command {
-                id: bod::CommandId("ext.boom"),
-                title: "Boom",
-                doc: "Panics.",
+                id: bod::CommandId::from("ext.boom"),
+                title: "Boom".to_string(),
+                doc: "Panics.".to_string(),
                 args: bod::ArgSpec::NONE,
                 source: bod::SourceLoc {
-                    file: file!(),
+                    file: file!().to_string(),
                     line: line!(),
                 },
                 exposure: bod::Exposure::Extension,
@@ -446,7 +656,7 @@ fn a_panic_in_the_api_fails_the_extension_and_every_later_call() {
     let again = luau(&api, "another");
     refused(
         &again,
-        "drgnx.commands.register('a', 'b', 'c')",
+        "drgnx.commands.run('ext.ping', '')",
         "failed earlier",
     );
     refused(
@@ -455,7 +665,7 @@ fn a_panic_in_the_api_fails_the_extension_and_every_later_call() {
         "failed earlier",
     );
     let mut w = wasm_api(&api, "c", user());
-    let e = CommandsHost::register(&mut w, "a".into(), "b".into(), "c".into()).expect_err("a trap");
+    let e = CommandsHost::run(&mut w, "ext.ping".into(), String::new()).expect_err("a trap");
     assert!(e.to_string().contains("failed earlier"), "{e}");
 }
 
@@ -464,9 +674,9 @@ fn a_call_from_inside_a_call_is_refused_not_deadlocked() {
     let (api, _ex) = editor();
     let h = luau(&api, "busy");
     let held = saman::lock(&api);
-    refused(&h, "drgnx.commands.register('a', 'b', 'c')", "busy");
+    refused(&h, REGISTER, "busy");
     drop(held);
-    run(&h, "drgnx.commands.register('a', 'b', 'c')").expect("free again");
+    run(&h, REGISTER).expect("free again");
 }
 
 // 6 and 7. names are namespaced, and the version is in them
@@ -488,20 +698,27 @@ fn names_carry_the_package_version() {
     );
 }
 
-// 8. one Luau error contract
+// 11. an API failure is a record, with its message, in both hosts
 #[test]
-fn an_api_failure_is_returned_and_a_misuse_is_raised() {
+fn an_api_failure_is_a_record_with_a_message_and_a_misuse_is_raised() {
     let (api, _ex) = editor();
     let h = luau(&api, "contract");
     run(
         &h,
         "local v, e = drgnx.commands.find_source('nope')
-         assert(v == nil and e == 'not-found')
+         assert(v == nil and type(e) == 'table')
+         assert(e.kind == 'not-found' and e.message ~= '', e.message)
          assert(type(drgnx.commands.find_source('buffer.save')) == 'string')",
     )
     .expect("the contract");
     refused(&h, "drgnx.commands.find_source()", "expected 1 argument");
     refused(&h, "drgnx.commands.find_source(1)", "expected a string");
+    let mut w = wasm_api(&api, "c", user());
+    let e = CommandsHost::find_source(&mut w, "nope".into())
+        .expect("no trap")
+        .expect_err("unknown");
+    assert!(matches!(e.kind, ErrorKind::NotFound));
+    assert!(!e.message.is_empty());
 }
 
 #[test]
@@ -519,15 +736,23 @@ fn a_scripts_ambiguous_result_is_refused() {
         h.run(user(), &ext, "x")
     };
     assert_eq!(call("return true").expect("success"), Ok(()));
+    let failure = call("return nil, { kind = 'refused', message = 'no thanks' }")
+        .expect("a failure")
+        .expect_err("is the error");
     assert_eq!(
-        call("return nil, 'refused'").expect("a failure"),
-        Err(ErrorKind::Refused)
+        (failure.kind, failure.message.as_str()),
+        (
+            sattr::generated::drgnx_api_v0_1_0::types::ErrorKind::Refused,
+            "no thanks"
+        )
     );
     for bad in [
         "return true, 'refused'",
         "return nil",
         "return",
         "return nil, 'denied'",
+        "return nil, { kind = 'nonsense', message = 'm' }",
+        "return nil, { kind = 'refused' }",
         "return false",
         "return 1",
         "return true, true",
@@ -535,8 +760,9 @@ fn a_scripts_ambiguous_result_is_refused() {
         let e = call(bad)
             .err()
             .unwrap_or_else(|| panic!("`{bad}` must be refused"));
+        let d = format!("{:?}", e.detail());
         assert!(
-            format!("{:?}", e.detail()).contains("contract"),
+            d.contains("contract") || d.contains("expected") || d.contains("not one of"),
             "`{bad}`: {e:?}"
         );
     }
@@ -556,7 +782,7 @@ fn the_extension_runs_for_the_origin_it_is_given() {
         .load(
             user(),
             "ext",
-            "return { init = function() local v, e = drgnx.commands.run('ext.ping', ''); assert(v == '\"ran\"', e) end }",
+            "return { init = function() local v, e = drgnx.commands.run('ext.ping', ''); assert(v == '\"ran\"', e and e.message) end }",
         )
         .expect("loads");
     h.init(user(), &ext).expect("for the user: runs");
@@ -565,4 +791,70 @@ fn the_extension_runs_for_the_origin_it_is_given() {
         "for an agent: refused, and the assert raises"
     );
     h.init(user(), &ext).expect("the origin was restored");
+}
+
+// 3. a real guest calls an import: the linker routes it to the store's `WasmApi`, with the store's caller
+#[test]
+fn a_real_guest_is_refused_a_reserved_key_through_the_linker() {
+    let (api, _ex) = editor();
+    let engine = wasm::engine().expect("engine");
+    let linker = wasm::linker::<Editor>(&engine).expect("links");
+    let component = guest::component(&engine, &binds_a_reserved_key());
+    let mut g = wasm::Guest::instantiate(&engine, &linker, &component, &api, "guest", LIMITS)
+        .expect("instantiates");
+    // the guest traps unless `keys.bind("C-g", …)` answered with the error `refused`
+    g.init(user())
+        .expect("the import routed to the editor, which refused the key");
+    assert!(
+        saman::lock(&api).keymap.bindings().is_empty(),
+        "nothing was bound"
+    );
+}
+
+// 2. an origin from one call never reaches the next
+#[test]
+fn a_guests_origin_is_put_back_after_every_call_even_a_trapped_one() {
+    let (api, _ex) = editor();
+    let engine = wasm::engine().expect("engine");
+    let linker = wasm::linker::<Editor>(&engine).expect("links");
+    let limits = sattr::Limits {
+        steps: 50_000,
+        ..LIMITS
+    };
+    let mut ok = wasm::Guest::instantiate(
+        &engine,
+        &linker,
+        &guest::component(&engine, &binds_a_reserved_key()),
+        &api,
+        "first",
+        limits,
+    )
+    .expect("instantiates");
+    assert_eq!(ok.origin(), Origin::Extension("first".into()));
+    ok.init(Origin::Agent("a1".into())).expect("runs");
+    assert_eq!(
+        ok.origin(),
+        Origin::Extension("first".into()),
+        "the agent's origin did not stay"
+    );
+    let mut stuck = wasm::Guest::instantiate(
+        &engine,
+        &linker,
+        &guest::component(&engine, &guest::spin()),
+        &api,
+        "second",
+        limits,
+    )
+    .expect("instantiates");
+    assert!(
+        stuck.init(Origin::Agent("a2".into())).is_err(),
+        "out of fuel"
+    );
+    assert_eq!(
+        stuck.origin(),
+        Origin::Extension("second".into()),
+        "restored after a trap too"
+    );
+    // and the fuel was renewed for the next call: the same guest runs out again, it does not start empty
+    assert!(stuck.init(user()).is_err());
 }

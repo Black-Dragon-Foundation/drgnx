@@ -63,6 +63,13 @@ pub mod rt {
         }
     }
 
+    pub fn dec_table(v: &mlua::Value, ctx: &str) -> mlua::Result<mlua::Table> {
+        match v {
+            mlua::Value::Table(t) => Ok(t.clone()),
+            _ => Err(bad(ctx, "expected a table")),
+        }
+    }
+
     pub fn enc_u64(v: u64, ctx: &str) -> mlua::Result<mlua::Value> {
         if v > (1u64 << 53) {
             Err(bad(ctx, "the result is above 2^53, which Luau cannot hold exactly"))

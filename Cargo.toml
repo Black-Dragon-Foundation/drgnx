@@ -151,6 +151,8 @@ inventory = "0.3"
 # lock through wasmtime's bindgen). mlua builds the Luau VM from C++ (the image carries gcc-c++)
 mlua = { version = "0.12", features = ["luau"] }
 wit-parser = "=0.254.2"
+# sattr's tests wrap a core module into a component (a real guest that calls the API's imports)
+wit-component = "=0.254.2"
 
 # The standards' clippy lints (standards.toml's `lints`, and the two disallowed-* lints its `clippy` rows feed), denied
 # for every crate that has `[lints] workspace = true`: a clean crate must (cargo xtask standards checks it). Each is

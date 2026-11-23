@@ -1,15 +1,19 @@
 //! The editor's side of the API: the generated `Api` implemented once, on the standards' crates. Both hosts call it,
 //! and it decides on the [`Caller`] of each call:
 //!
-//! - commands: an extension runs only commands exposed to extensions, and the origin that started the chain stays;
-//! - keys: an extension binds no reserved key;
-//! - settings: an extension sets the scoped levels only, through `skipan::Settings::set_by_extension`;
-//! - ask: a question has a timeout of at most five minutes, is never waited for, and its answer is delivered later;
+//! - commands: an extension's commands live in `bod::Registry` as `ext/<extension>/<id>`; an extension runs only
+//!   commands exposed to extensions, and the origin that started the chain stays;
+//! - keys: an extension binds no reserved key, shadows no prefix, and binds only its own commands or ones exposed to
+//!   extensions;
+//! - settings: an extension sets the scoped levels only, through `skipan::Settings::set_by_extension`, and is told the
+//!   level of a value, never the file it came from;
+//! - ask: a question has a timeout of at most five minutes, is never waited for, and its answer, or its failure, is
+//!   delivered later;
 //! - notices: keys and ids belong to the extension that posted them, and each extension may hold only a few.
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
@@ -17,7 +21,9 @@ use serde_json::Value;
 
 use crate::Caller;
 use crate::generated::drgnx_api_v0_1_0 as api;
-use api::types::ErrorKind;
+use api::commands::{CommandSpec, Exposure};
+use api::entry::AnsweredHow;
+use api::types::{Error, ErrorKind};
 
 /// The longest an extension's question waits for the user.
 pub const MAX_QUESTION_MS: u32 = 300_000;
@@ -36,6 +42,15 @@ pub struct Delivery {
     pub extension: String,
     pub question: u64,
     pub choice: String,
+    pub how: AnsweredHow,
+}
+
+/// An extension's command that something ran: the host calls the extension's `run` with `id`.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Invocation {
+    pub extension: String,
+    pub id: String,
+    pub args: Value,
 }
 
 pub struct Editor {
@@ -47,8 +62,14 @@ pub struct Editor {
     questions: Vec<Pending>,
     pub next_question: u64,
     owners: BTreeMap<u64, String>,
-    /// `extension/id` of every command an extension offered, with its title and doc
-    pub extension_commands: BTreeMap<String, (String, String)>,
+    invocations: Arc<Mutex<Vec<Invocation>>>,
+}
+
+fn err(kind: ErrorKind, message: &str) -> Error {
+    Error {
+        kind,
+        message: message.to_string(),
+    }
 }
 
 fn kind(k: villa::Kind) -> ErrorKind {
@@ -63,8 +84,52 @@ fn kind(k: villa::Kind) -> ErrorKind {
     }
 }
 
-fn fail(e: villa::Error) -> ErrorKind {
-    kind(e.kind())
+/// A villa error as the API's: its kind, and the sentence the user would read (never its detail).
+fn fail(e: villa::Error) -> Error {
+    Error {
+        kind: kind(e.kind()),
+        message: e.message().to_string(),
+    }
+}
+
+fn exposure_of(e: Exposure) -> bod::Exposure {
+    match e {
+        Exposure::Palette => bod::Exposure::Palette,
+        Exposure::Agent => bod::Exposure::Agent,
+        Exposure::Extension => bod::Exposure::Extension,
+        Exposure::KeyOnly => bod::Exposure::KeyOnly,
+    }
+}
+
+fn exposure_to(e: bod::Exposure) -> Exposure {
+    match e {
+        bod::Exposure::Palette => Exposure::Palette,
+        bod::Exposure::Agent => Exposure::Agent,
+        bod::Exposure::Extension => Exposure::Extension,
+        bod::Exposure::KeyOnly => Exposure::KeyOnly,
+    }
+}
+
+/// The arguments as the WIT spells them: one line each, `name: what it is`.
+fn parse_args(text: &str) -> Result<bod::ArgSpec, Error> {
+    let mut args = Vec::new();
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let Some((name, doc)) = line.split_once(':') else {
+            return Err(err(
+                ErrorKind::Invalid,
+                "An argument is `name: what it is`.",
+            ));
+        };
+        let (name, doc) = (name.trim(), doc.trim());
+        if name.is_empty() || doc.is_empty() {
+            return Err(err(
+                ErrorKind::Invalid,
+                "An argument needs a name and a sentence.",
+            ));
+        }
+        args.push((name.to_string(), doc.to_string()));
+    }
+    Ok(bod::ArgSpec { args })
 }
 
 impl Editor {
@@ -87,11 +152,17 @@ impl Editor {
             questions: Vec::new(),
             next_question: 0,
             owners: BTreeMap::new(),
-            extension_commands: BTreeMap::new(),
+            invocations: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    /// The answers that have come in, to deliver to the extensions that asked. It never waits.
+    /// The commands of extensions that were run, for the host to hand to each extension's `run`.
+    pub fn take_invocations(&mut self) -> Vec<Invocation> {
+        std::mem::take(&mut *saman::lock(&self.invocations))
+    }
+
+    /// The answers that have come in, and the questions that failed, to deliver to the extensions that asked: an
+    /// extension always hears back. It never waits.
     pub fn poll_answers(&mut self) -> Vec<Delivery> {
         let mut cx = Context::from_waker(Waker::noop());
         let mut out = Vec::new();
@@ -99,13 +170,23 @@ impl Editor {
             .retain_mut(|p| match Pin::new(&mut p.task).poll(&mut cx) {
                 Poll::Pending => true,
                 Poll::Ready(r) => {
-                    if let Ok(a) = r {
-                        out.push(Delivery {
-                            extension: p.extension.clone(),
-                            question: p.id,
-                            choice: a.choice,
-                        });
-                    }
+                    let (choice, how) = match r {
+                        Ok(a) => (
+                            a.choice,
+                            match a.by {
+                                spurn::AnswerBy::User => AnsweredHow::User,
+                                spurn::AnswerBy::Default => AnsweredHow::Default,
+                                spurn::AnswerBy::Timeout => AnsweredHow::Timeout,
+                            },
+                        ),
+                        Err(_) => (String::new(), AnsweredHow::Cancelled),
+                    };
+                    out.push(Delivery {
+                        extension: p.extension.clone(),
+                        question: p.id,
+                        choice,
+                        how,
+                    });
                     false
                 }
             });
@@ -125,30 +206,67 @@ impl api::buffers::Api for Editor {}
 impl api::views::Api for Editor {}
 
 impl api::commands::Api for Editor {
-    fn register(
-        &mut self,
-        caller: &Caller,
-        id: String,
-        title: String,
-        doc: String,
-    ) -> Result<(), ErrorKind> {
-        if id.trim().is_empty() || title.trim().is_empty() || doc.trim().is_empty() {
-            return Err(ErrorKind::Invalid);
+    fn register(&mut self, caller: &Caller, command: CommandSpec) -> Result<(), Error> {
+        crate::valid_extension_name(&caller.extension).map_err(fail)?;
+        if command.id.trim().is_empty() {
+            return Err(err(ErrorKind::Invalid, "A command needs an id."));
         }
-        // an extension's ids are its own: `vim/visit`, never `buffer.save`
-        let owned = format!("{}/{id}", caller.extension);
-        if self.extension_commands.contains_key(&owned) {
-            return Err(ErrorKind::Conflict);
-        }
-        self.extension_commands.insert(owned, (title, doc));
-        Ok(())
+        // an extension's ids are its own: `ext/vim/visit`, never `buffer.save`
+        let full = format!("ext/{}/{}", caller.extension, command.id);
+        let queue = Arc::clone(&self.invocations);
+        let (extension, id) = (caller.extension.clone(), command.id.clone());
+        self.registry
+            .register(
+                bod::Command {
+                    id: bod::CommandId(full),
+                    title: command.title,
+                    doc: command.doc,
+                    args: parse_args(&command.args)?,
+                    source: bod::SourceLoc {
+                        file: format!("extension {}", caller.extension),
+                        line: 0,
+                    },
+                    exposure: exposure_of(command.exposure),
+                },
+                // the extension's code runs in its host: the command is queued for it
+                bod::handler(move |_cx, args| {
+                    saman::lock(&queue).push(Invocation {
+                        extension: extension.clone(),
+                        id: id.clone(),
+                        args,
+                    });
+                    Ok(Value::Null)
+                }),
+            )
+            .map_err(fail)
     }
 
-    fn run(&mut self, caller: &Caller, id: String, args: String) -> Result<String, ErrorKind> {
+    fn describe(&mut self, _caller: &Caller, id: String) -> Result<CommandSpec, Error> {
+        let c = self
+            .registry
+            .get(&id)
+            .ok_or_else(|| err(ErrorKind::NotFound, "There is no such command."))?;
+        Ok(CommandSpec {
+            id: c.id.0.clone(),
+            title: c.title.clone(),
+            doc: c.doc.clone(),
+            args: c
+                .args
+                .args
+                .iter()
+                .map(|(n, d)| format!("{n}: {d}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            exposure: exposure_to(c.exposure),
+        })
+    }
+
+    fn run(&mut self, caller: &Caller, id: String, args: String) -> Result<String, Error> {
         let args: Value = if args.trim().is_empty() {
             Value::Null
         } else {
-            serde_json::from_str(&args).map_err(|_| ErrorKind::Invalid)?
+            serde_json::from_str(&args)
+                .map_err(|_| err(ErrorKind::Invalid, "The arguments are not JSON."))?
         };
         // the origin that started the chain goes through, and the extension is the one the call goes through
         let mut cx = bod::Cx::through_extension(caller.origin.clone(), caller.extension.clone());
@@ -156,7 +274,7 @@ impl api::commands::Api for Editor {
         Ok(out.to_string())
     }
 
-    fn find_source(&mut self, _caller: &Caller, id: String) -> Result<String, ErrorKind> {
+    fn find_source(&mut self, _caller: &Caller, id: String) -> Result<String, Error> {
         let at = self.registry.find_source(&id).map_err(fail)?;
         Ok(format!("{}:{}", at.file, at.line))
     }
@@ -169,7 +287,19 @@ impl api::keys::Api for Editor {
         chord: String,
         command: String,
         context: String,
-    ) -> Result<(), ErrorKind> {
+    ) -> Result<(), Error> {
+        // an extension binds its own commands, and commands that are open to extensions: not the editor's
+        let own = format!("ext/{}/", caller.extension);
+        match self.registry.get(&command) {
+            Some(c) if command.starts_with(&own) || c.exposure == bod::Exposure::Extension => {}
+            Some(_) => {
+                return Err(err(
+                    ErrorKind::Refused,
+                    "An extension binds its own commands and the ones open to extensions.",
+                ));
+            }
+            None => return Err(err(ErrorKind::NotFound, "There is no such command.")),
+        }
         let by = bod::Origin::Extension(caller.extension.clone());
         self.keymap
             .bind_by(&by, &chord, &command, &context)
@@ -181,7 +311,7 @@ impl api::keys::Api for Editor {
         _caller: &Caller,
         chord: String,
         context: String,
-    ) -> Result<String, ErrorKind> {
+    ) -> Result<String, Error> {
         // the context is `term=value` pairs and bare flags, separated by commas
         let mut cx = lykill::KeyContext::new();
         for part in context.split(',').map(str::trim).filter(|p| !p.is_empty()) {
@@ -200,7 +330,7 @@ impl api::keys::Api for Editor {
 }
 
 impl api::settings::Api for Editor {
-    fn get(&mut self, _caller: &Caller, key: String) -> Result<String, ErrorKind> {
+    fn get(&mut self, _caller: &Caller, key: String) -> Result<String, Error> {
         let v = self
             .settings
             .snapshot()
@@ -216,21 +346,29 @@ impl api::settings::Api for Editor {
         value: String,
         at: api::settings::ScopedLevel,
         scope_id: String,
-    ) -> Result<(), ErrorKind> {
+    ) -> Result<(), Error> {
         let level = match at {
             api::settings::ScopedLevel::Stream => skipan::Level::Stream,
             api::settings::ScopedLevel::Language => skipan::Level::Language,
             api::settings::ScopedLevel::Document => skipan::Level::Document,
             api::settings::ScopedLevel::Pane => skipan::Level::Pane,
         };
-        let value: Value = serde_json::from_str(&value).map_err(|_| ErrorKind::Invalid)?;
+        let value: Value = serde_json::from_str(&value)
+            .map_err(|_| err(ErrorKind::Invalid, "The value is not JSON."))?;
         self.settings
             .set_by_extension(&caller.extension, &key, value, level, &scope_id)
             .map_err(fail)
     }
 
-    fn provenance(&mut self, _caller: &Caller, key: String) -> Result<String, ErrorKind> {
-        Ok(self.settings.provenance(&key).map_err(fail)?.to_string())
+    /// The level a value comes from, and no more: a file's path is the user's business.
+    fn provenance(&mut self, _caller: &Caller, key: String) -> Result<String, Error> {
+        Ok(self
+            .settings
+            .provenance(&key)
+            .map_err(fail)?
+            .level
+            .name()
+            .to_string())
     }
 }
 
@@ -243,10 +381,13 @@ impl api::ask::Api for Editor {
         choices: String,
         default_choice: String,
         timeout_ms: u32,
-    ) -> Result<u64, ErrorKind> {
+    ) -> Result<u64, Error> {
         // an extension's question always has a timeout, and a short one: the user is not held up by it
         if timeout_ms == 0 || timeout_ms > MAX_QUESTION_MS {
-            return Err(ErrorKind::Invalid);
+            return Err(err(
+                ErrorKind::Invalid,
+                "A question's timeout is from 1 ms to 5 minutes.",
+            ));
         }
         let own = self
             .questions
@@ -254,7 +395,7 @@ impl api::ask::Api for Editor {
             .filter(|p| p.extension == caller.extension)
             .count();
         if own >= MAX_PER_EXTENSION {
-            return Err(ErrorKind::Refused);
+            return Err(err(ErrorKind::Refused, "Too many questions are open."));
         }
         let choices: Vec<spurn::Choice> = choices
             .lines()
@@ -290,8 +431,9 @@ impl api::notices::Api for Editor {
         title: String,
         body: String,
         key: String,
-    ) -> Result<u64, ErrorKind> {
-        let level = tidindi::Level::from_name(at.as_str()).ok_or(ErrorKind::Invalid)?;
+    ) -> Result<u64, Error> {
+        let level = tidindi::Level::from_name(at.as_str())
+            .ok_or_else(|| err(ErrorKind::Invalid, "Not a level."))?;
         // the key is the extension's own: two extensions with the key `disk` have two notices
         let key =
             (!key.is_empty()).then(|| tidindi::DedupTag(format!("{}/{key}", caller.extension)));
@@ -307,21 +449,24 @@ impl api::notices::Api for Editor {
         if !self.owners.contains_key(&id.0) {
             if held >= MAX_PER_EXTENSION {
                 self.notices.dismiss(id).map_err(fail)?;
-                return Err(ErrorKind::Refused);
+                return Err(err(ErrorKind::Refused, "Too many notices are open."));
             }
             self.owners.insert(id.0, caller.extension.clone());
         }
         Ok(id.0)
     }
 
-    fn dismiss(&mut self, caller: &Caller, id: u64) -> Result<(), ErrorKind> {
+    fn dismiss(&mut self, caller: &Caller, id: u64) -> Result<(), Error> {
         match self.owners.get(&id) {
             Some(owner) if *owner == caller.extension => {
                 self.owners.remove(&id);
                 self.notices.dismiss(tidindi::NoticeId(id)).map_err(fail)
             }
             // another extension's notice, or the editor's own: not the caller's to touch
-            Some(_) | None => Err(ErrorKind::Refused),
+            Some(_) | None => Err(err(
+                ErrorKind::Refused,
+                "That notice is not yours to dismiss.",
+            )),
         }
     }
 }

@@ -32,8 +32,11 @@ pub struct Limits {
     pub steps: u64,
     /// The memory the extension may hold, in bytes.
     pub memory_bytes: usize,
-    /// Components: epoch ticks (1 ms each, while an [`wasm::ticker`] runs) a call may take.
+    /// Wall-clock time a call may take, in milliseconds. Luau checks the clock itself; components get it as epoch ticks
+    /// (1 ms each, while a [`wasm::ticker`] runs).
     pub ticks: u64,
+    /// The largest table a component may grow (elements).
+    pub table_elements: usize,
 }
 
 impl Limits {
@@ -41,8 +44,27 @@ impl Limits {
     pub const DEFAULT: Limits = Limits {
         steps: 5_000_000,
         memory_bytes: 16 << 20,
-        ticks: 100,
+        ticks: 2_000,
+        table_elements: 10_000,
     };
+}
+
+/// An extension's name: `a-z`, `0-9` and `-` only, so that the ids made from it (`ext/<name>/<id>`) cannot collide
+/// (no `/`, no case, no space).
+pub fn valid_extension_name(name: &str) -> villa::Result<()> {
+    let ok = !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if ok {
+        Ok(())
+    } else {
+        Err(villa::Error::invalid(
+            "An extension's name is lower-case letters, digits and `-`, up to 64.",
+        )
+        .with_detail(name.to_string()))
+    }
 }
 
 /// The generated bindings (see build.rs).

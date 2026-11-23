@@ -28,11 +28,13 @@ mal-gen.workspace = true
 eitri = { path = "../../hub/eitri", version = "0.1.0" }
 
 [dev-dependencies]
+eitri = { path = "../../hub/eitri", version = "0.1.0" }
 mal.workspace = true
 wat.workspace = true
 raun.workspace = true
 tokio.workspace = true
 wit-parser.workspace = true
+wit-component.workspace = true
 
 [lints]
 workspace = true

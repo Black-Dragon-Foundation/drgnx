@@ -21,7 +21,7 @@ bod::command! {
     id: "agent.echo",
     title: "Echo",
     doc: "Give the text back.",
-    args: ArgSpec { args: &[("text", "what to echo")] },
+    args: ArgSpec::of(&[("text", "what to echo")]),
     exposure: Exposure::Agent,
     handler: |_cx, args| Ok(args["text"].clone()),
 }
@@ -37,12 +37,12 @@ bod::command! {
 
 fn cmd(id: &'static str, exposure: Exposure) -> Command {
     Command {
-        id: CommandId(id),
-        title: "A title",
-        doc: "A doc.",
+        id: CommandId::from(id),
+        title: "A title".to_string(),
+        doc: "A doc.".to_string(),
         args: ArgSpec::NONE,
         source: SourceLoc {
-            file: file!(),
+            file: file!().to_string(),
             line: line!(),
         },
         exposure,
@@ -53,12 +53,12 @@ fn cmd(id: &'static str, exposure: Exposure) -> Command {
 fn every_registered_command_has_a_title_a_doc_and_a_listing() {
     let r = Registry::linked().expect("the linked commands register");
     assert!(r.list().count() >= 3);
-    let palette: Vec<&str> = r.palette().iter().map(|c| c.id.0).collect();
+    let palette: Vec<&str> = r.palette().iter().map(|c| c.id.0.as_str()).collect();
     for c in r.list() {
         assert!(!c.title.trim().is_empty(), "{} has no title", c.id);
         assert!(!c.doc.trim().is_empty(), "{} has no doc", c.id);
         assert_eq!(
-            palette.contains(&c.id.0),
+            palette.contains(&c.id.0.as_str()),
             !matches!(c.exposure, Exposure::KeyOnly | Exposure::Extension),
             "{} is in the palette list exactly when it is not key-only",
             c.id
@@ -140,7 +140,7 @@ fn duplicate_id_is_conflict() {
 fn a_command_without_a_title_or_doc_is_refused() {
     let mut r = Registry::new();
     let mut c = cmd("x.y", Exposure::Palette);
-    c.doc = "  ";
+    c.doc = "  ".to_string();
     assert_eq!(
         r.register(c, handler(|_, _| Ok(Value::Null)))
             .expect_err("no doc")
@@ -180,7 +180,7 @@ fn advice_wraps_and_unwraps() {
     assert_eq!(run(&r, 5), json!(32), "outer first: (5 * 3 + 1) * 2");
     r.unadvise(plus).expect("unwraps the inner");
     assert_eq!(run(&r, 5), json!(30));
-    r.unadvise(neg).expect("unwraps the outer");
+    r.unadvise(neg.clone()).expect("unwraps the outer");
     assert_eq!(run(&r, 5), json!(10));
     assert_eq!(
         r.unadvise(neg).expect_err("twice").kind(),

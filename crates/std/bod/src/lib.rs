@@ -18,12 +18,18 @@ use serde_json::{Value, json};
 pub use inventory;
 
 /// A command's id, as keys, the palette and agents name it: `buffer.save`.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct CommandId(pub &'static str);
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct CommandId(pub String);
+
+impl From<&str> for CommandId {
+    fn from(id: &str) -> CommandId {
+        CommandId(id.to_string())
+    }
+}
 
 impl fmt::Display for CommandId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.0)
+        f.write_str(&self.0)
     }
 }
 
@@ -49,28 +55,39 @@ pub enum Origin {
 }
 
 /// The arguments of a command: each one's name and a sentence about it. The values are JSON.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct ArgSpec {
-    pub args: &'static [(&'static str, &'static str)],
+    /// each argument's name and a sentence about it
+    pub args: Vec<(String, String)>,
 }
 
 impl ArgSpec {
-    pub const NONE: ArgSpec = ArgSpec { args: &[] };
+    pub const NONE: ArgSpec = ArgSpec { args: Vec::new() };
+
+    /// An argument list from `(name, doc)` pairs.
+    pub fn of(args: &[(&str, &str)]) -> ArgSpec {
+        ArgSpec {
+            args: args
+                .iter()
+                .map(|(n, d)| ((*n).to_string(), (*d).to_string()))
+                .collect(),
+        }
+    }
 }
 
 /// Where a command is defined: find-the-source.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SourceLoc {
-    pub file: &'static str,
+    pub file: String,
     pub line: u32,
 }
 
 /// One command's description.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Command {
     pub id: CommandId,
-    pub title: &'static str,
-    pub doc: &'static str,
+    pub title: String,
+    pub doc: String,
     pub args: ArgSpec,
     pub source: SourceLoc,
     pub exposure: Exposure,
@@ -168,11 +185,11 @@ macro_rules! command {
         $crate::inventory::submit! {
             $crate::Registration {
                 command: || $crate::Command {
-                    id: $crate::CommandId($id),
-                    title: $title,
-                    doc: $doc,
+                    id: $crate::CommandId::from($id),
+                    title: $title.to_string(),
+                    doc: $doc.to_string(),
                     args: $args,
-                    source: $crate::SourceLoc { file: file!(), line: line!() },
+                    source: $crate::SourceLoc { file: file!().to_string(), line: line!() },
                     exposure: $exposure,
                 },
                 handler: || $crate::handler($handler),
@@ -190,12 +207,12 @@ struct Entry {
 /// The registry. Registering and advising need `&mut`; running does not.
 #[derive(Default)]
 pub struct Registry {
-    entries: BTreeMap<&'static str, Entry>,
+    entries: BTreeMap<String, Entry>,
     next_advice: u64,
 }
 
 /// A piece of advice, to take it off again.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct AdviceId(CommandId, u64);
 
 impl Registry {
@@ -218,7 +235,7 @@ impl Registry {
             return Err(villa::Error::invalid("A command needs a title and a doc.")
                 .with_detail(command.id.to_string()));
         }
-        if let Some(old) = self.entries.get(command.id.0) {
+        if let Some(old) = self.entries.get(&command.id.0) {
             return Err(villa::Error::conflict(format!(
                 "The command `{}` already exists.",
                 command.id
@@ -232,7 +249,7 @@ impl Registry {
             )));
         }
         self.entries.insert(
-            command.id.0,
+            command.id.0.clone(),
             Entry {
                 command,
                 handler,
@@ -285,12 +302,12 @@ impl Registry {
             )));
         };
         e.advice.push((n, around));
-        Ok(AdviceId(e.command.id, n))
+        Ok(AdviceId(e.command.id.clone(), n))
     }
 
     /// Take a piece of advice off again; the command runs as before it.
     pub fn unadvise(&mut self, advice: AdviceId) -> villa::Result<()> {
-        let Some(e) = self.entries.get_mut(advice.0.0) else {
+        let Some(e) = self.entries.get_mut(&advice.0.0) else {
             return Err(villa::Error::not_found(format!(
                 "There is no command `{}`.",
                 advice.0
@@ -308,7 +325,7 @@ impl Registry {
 
     /// Where a command is defined.
     pub fn find_source(&self, id: &str) -> villa::Result<SourceLoc> {
-        Ok(self.entry(id)?.command.source)
+        Ok(self.entry(id)?.command.source.clone())
     }
 
     pub fn get(&self, id: &str) -> Option<&Command> {
@@ -347,15 +364,15 @@ pub fn tool_specs(registry: &Registry) -> Vec<ToolSpec> {
                 .args
                 .args
                 .iter()
-                .map(|(n, d)| ((*n).to_string(), json!({ "description": d })))
+                .map(|(n, d)| (n.clone(), json!({ "description": d })))
                 .collect();
             ToolSpec {
-                name: c.id.0.to_string(),
+                name: c.id.0.clone(),
                 description: format!("{}: {}", c.title, c.doc),
                 input_schema: json!({
                     "type": "object",
                     "properties": props,
-                    "required": c.args.args.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+                    "required": c.args.args.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
                 }),
             }
         })

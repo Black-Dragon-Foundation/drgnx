@@ -7,19 +7,22 @@
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
 use bod::Origin;
 use mlua::{Lua, Table, VmState};
 
 use crate::generated::Api;
+use crate::generated::drgnx_api_v0_1_0::entry::AnsweredHow;
 use crate::generated::drgnx_api_v0_1_0::exports::entry;
-use crate::generated::drgnx_api_v0_1_0::types::ErrorKind;
+use crate::generated::drgnx_api_v0_1_0::types::Error;
 use crate::{Caller, Limits};
 
 /// A Luau state with the API installed, for one extension.
 pub struct LuauHost {
     lua: Lua,
     steps: Rc<Cell<u64>>,
+    deadline: Rc<Cell<Option<Duration>>>,
     caller: Arc<RwLock<Caller>>,
     limits: Limits,
 }
@@ -50,6 +53,7 @@ impl LuauHost {
         extension: &str,
         limits: Limits,
     ) -> villa::Result<Self> {
+        crate::valid_extension_name(extension)?;
         let lua = Lua::new();
         let globals = lua.globals();
         for name in GLOBALS_REMOVED {
@@ -71,16 +75,23 @@ impl LuauHost {
         let steps = Rc::new(Cell::new(0));
         let counter = Rc::clone(&steps);
         let budget = limits.steps;
+        let deadline = Rc::new(Cell::new(None));
+        let due = Rc::clone(&deadline);
         lua.set_interrupt(move |_| {
             counter.set(counter.get() + 1);
             if counter.get() > budget {
                 return Err(mlua::Error::runtime("the script used up its step budget"));
+            }
+            // the clock every 256th step: a script that waits in a long loop of cheap steps is stopped by time too
+            if counter.get().is_multiple_of(256) && due.get().is_some_and(|d| stund::now() >= d) {
+                return Err(mlua::Error::runtime("the script used up its time"));
             }
             Ok(VmState::Continue)
         });
         Ok(Self {
             lua,
             steps,
+            deadline,
             caller,
             limits,
         })
@@ -94,9 +105,13 @@ impl LuauHost {
         f: impl FnOnce(&Lua) -> mlua::Result<T>,
     ) -> villa::Result<T> {
         self.steps.set(0);
+        self.deadline.set(Some(
+            stund::now() + Duration::from_millis(self.limits.ticks),
+        ));
         let before = self.set_origin(origin);
         let r = f(&self.lua);
         self.set_origin(before);
+        self.deadline.set(None);
         r.map_err(script_error)
     }
 
@@ -124,12 +139,7 @@ impl LuauHost {
     }
 
     /// The extension's `run` of the command NAME.
-    pub fn run(
-        &self,
-        origin: Origin,
-        ext: &Table,
-        name: &str,
-    ) -> villa::Result<Result<(), ErrorKind>> {
+    pub fn run(&self, origin: Origin, ext: &Table, name: &str) -> villa::Result<Result<(), Error>> {
         self.guarded(origin, |lua| entry::luau_run(lua, ext, name))
     }
 
@@ -140,9 +150,10 @@ impl LuauHost {
         ext: &Table,
         question: u64,
         choice: &str,
+        how: AnsweredHow,
     ) -> villa::Result<()> {
         self.guarded(origin, |lua| {
-            entry::luau_answered(lua, ext, question, choice)
+            entry::luau_answered(lua, ext, question, choice, how)
         })
     }
 

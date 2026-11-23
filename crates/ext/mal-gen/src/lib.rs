@@ -176,14 +176,16 @@ enum Ty {
     F64,
     Str,
     Enum(TypeId),
+    /// a record of scalar fields (no record inside a record)
+    Record(TypeId),
 }
 
 #[derive(Clone, Copy, Debug)]
 enum Ret {
     Nothing,
     Plain(Ty),
-    /// `result<ok?, enum>`
-    Result(Option<Ty>, TypeId),
+    /// `result<ok?, E>`, E an enum or a record
+    Result(Option<Ty>, Ty),
 }
 
 struct Func {
@@ -204,6 +206,8 @@ struct Iface {
 struct Gen<'a> {
     r: &'a Resolve,
     o: &'a Options,
+    /// the interfaces the world exports: bindgen puts their types under `exports::`
+    exported: Vec<InterfaceId>,
 }
 
 fn pkg_label(r: &Resolve, id: PackageId) -> String {
@@ -273,8 +277,13 @@ impl Gen<'_> {
             return Err(fail("an interface without a package or a name"));
         };
         Ok(format!(
-            "{}::{}::{}::{}",
+            "{}::{}{}::{}::{}",
             self.o.bindings,
+            if self.exported.contains(&id) {
+                "exports::"
+            } else {
+                ""
+            },
             bindgen_ident(&self.r.packages[p].name.namespace),
             self.bindgen_pkg(p),
             bindgen_ident(n)
@@ -350,6 +359,18 @@ impl Gen<'_> {
             Type::Id(id) => match &self.r.types[*id].kind {
                 TypeDefKind::Type(inner) => self.scalar(inner, at)?,
                 TypeDefKind::Enum(_) => Ty::Enum(*id),
+                TypeDefKind::Record(rec) => {
+                    let name = self.r.types[*id].name.clone().unwrap_or_default();
+                    for f in &rec.fields {
+                        let at = format!("{at}: record `{name}`, field `{}`", f.name);
+                        if matches!(self.scalar(&f.ty, &at)?, Ty::Record(_)) {
+                            return Err(fail(format!(
+                                "{at}: a record inside a record is not supported"
+                            )));
+                        }
+                    }
+                    Ty::Record(*id)
+                }
                 TypeDefKind::Result(_) => {
                     return Err(fail(format!(
                         "{at}: a `result` is supported only as a function's result"
@@ -362,13 +383,28 @@ impl Gen<'_> {
         })
     }
 
-    fn enum_of(&self, t: &Type, at: &str) -> Result<TypeId> {
+    fn err_of(&self, t: &Type, at: &str) -> Result<Ty> {
         match self.scalar(t, at)? {
-            Ty::Enum(id) => Ok(id),
+            e @ (Ty::Enum(_) | Ty::Record(_)) => Ok(e),
             _ => Err(fail(format!(
-                "{at}: the error of a `result` must be an enum"
+                "{at}: the error of a `result` must be an enum or a record"
             ))),
         }
+    }
+
+    /// The fields of a record, each as its Ty.
+    fn record_fields(&self, id: TypeId) -> Result<Vec<(String, Ty)>> {
+        let TypeDefKind::Record(rec) = &self.r.types[id].kind else {
+            return Err(fail("a record was expected"));
+        };
+        let name = self.r.types[id].name.clone().unwrap_or_default();
+        rec.fields
+            .iter()
+            .map(|f| {
+                let at = format!("record `{name}`, field `{}`", f.name);
+                Ok((f.name.clone(), self.scalar(&f.ty, &at)?))
+            })
+            .collect()
     }
 
     fn result_of(&self, t: &Type) -> Option<(Option<Type>, Option<Type>)> {
@@ -402,7 +438,7 @@ impl Gen<'_> {
                         Some(t) => Some(self.scalar(&t, &at)?),
                         None => None,
                     };
-                    Ret::Result(ok, self.enum_of(&err, &at)?)
+                    Ret::Result(ok, self.err_of(&err, &at)?)
                 }
                 None => Ret::Plain(self.scalar(t, &at)?),
             },
@@ -442,13 +478,13 @@ impl Gen<'_> {
             Ty::F32 => "f32".into(),
             Ty::F64 => "f64".into(),
             Ty::Str => "String".into(),
-            Ty::Enum(id) => self.enum_path(id)?,
+            Ty::Enum(id) | Ty::Record(id) => self.enum_path(id)?,
         })
     }
 
     fn wasm_ty(&self, t: Ty) -> Result<String> {
         match t {
-            Ty::Enum(id) => self.wasm_enum_path(id),
+            Ty::Enum(id) | Ty::Record(id) => self.wasm_enum_path(id),
             other => self.rust_ty(other),
         }
     }
@@ -469,7 +505,7 @@ impl Gen<'_> {
                     Some(t) => ty(t)?,
                     None => "()".into(),
                 };
-                let err = ty(Ty::Enum(err))?;
+                let err = ty(err)?;
                 format!("Result<{ok}, {err}>")
             }
         })
@@ -497,6 +533,22 @@ impl Gen<'_> {
                     self.enum_path(id)?
                 )
             }
+            Ty::Record(id) => {
+                let mut s = format!(
+                    "{{ let __tb = rt::dec_table({val}, \"{ctx}\")?; {} {{ ",
+                    self.enum_path(id)?
+                );
+                for (name, t) in self.record_fields(id)? {
+                    let inner = self.dec(t, "&__f", &format!("{ctx}.{name}"))?;
+                    s.push_str(&format!(
+                        "{}: {{ let __f: mlua::Value = __tb.get(\"{}\")?; {inner} }}, ",
+                        ident(&name, ctx)?,
+                        snake(&name)
+                    ));
+                }
+                s.push_str("} }");
+                s
+            }
         })
     }
 
@@ -514,6 +566,19 @@ impl Gen<'_> {
             Ty::F64 => format!("mlua::Value::Number({e})"),
             Ty::Str => format!("rt::enc_str(__lua, &{e})?"),
             Ty::Enum(_) => format!("rt::enc_str(__lua, {e}.as_str())?"),
+            Ty::Record(id) => {
+                let mut s = String::from("{ let __rt = __lua.create_table()?; ");
+                for (name, t) in self.record_fields(id)? {
+                    let field = format!("{e}.{}", ident(&name, ctx)?);
+                    s.push_str(&format!(
+                        "__rt.set(\"{}\", {})?; ",
+                        snake(&name),
+                        self.enc(t, &field, ctx)?
+                    ));
+                }
+                s.push_str("mlua::Value::Table(__rt) }");
+                s
+            }
         })
     }
 
@@ -522,7 +587,7 @@ impl Gen<'_> {
     /// The wasm value E (of type T) as our own type.
     fn from_wasm(t: Ty, e: &str) -> String {
         match t {
-            Ty::Enum(_) => format!("{e}.into()"),
+            Ty::Enum(_) | Ty::Record(_) => format!("{e}.into()"),
             _ => e.to_string(),
         }
     }
@@ -530,9 +595,9 @@ impl Gen<'_> {
     fn ret_from_ours(r: Ret, e: &str) -> String {
         match r {
             Ret::Nothing => e.to_string(),
-            Ret::Plain(Ty::Enum(_)) => format!("{e}.into()"),
+            Ret::Plain(Ty::Enum(_) | Ty::Record(_)) => format!("{e}.into()"),
             Ret::Plain(_) => e.to_string(),
-            Ret::Result(Some(Ty::Enum(_)), _) => {
+            Ret::Result(Some(Ty::Enum(_) | Ty::Record(_)), _) => {
                 format!("{e}.map(|__v| __v.into()).map_err(Into::into)")
             }
             Ret::Result(_, _) => format!("{e}.map_err(Into::into)"),
@@ -584,7 +649,15 @@ pub fn generate(wit_dir: &Path, world: &str, o: &Options) -> Result<Output> {
 }
 
 fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
-    let g = Gen { r, o };
+    let exported = r.worlds[wid]
+        .exports
+        .values()
+        .filter_map(|item| match item {
+            WorldItem::Interface { id, .. } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    let g = Gen { r, o, exported };
     let w = &r.worlds[wid];
 
     let mut imports = Vec::new();
@@ -643,7 +716,7 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
         }
         for f in &i.funcs {
             for t in f.params.iter().map(|(_, t)| *t).chain(ret_tys(f.ret)) {
-                if let Ty::Enum(id) = t {
+                if let Ty::Enum(id) | Ty::Record(id) = t {
                     let owner = g.enum_owner(id)?.0;
                     if !seen_ifaces.contains(&owner) {
                         seen_ifaces.push(owner);
@@ -661,6 +734,10 @@ fn generate_world(r: &Resolve, wid: WorldId, o: &Options) -> Result<Output> {
         let body = modules.entry(pkg).or_default().entry(module).or_default();
         for tid in it.types.values() {
             let d = &r.types[*tid];
+            if let TypeDefKind::Record(_) = &d.kind {
+                let name = camel(d.name.as_deref().unwrap_or_default(), &label)?;
+                body.enums.push_str(&record_code(&g, *tid, &name)?);
+            }
             if let TypeDefKind::Enum(e) = &d.kind {
                 let name = camel(d.name.as_deref().unwrap_or_default(), &label)?;
                 let cases = e
@@ -894,7 +971,7 @@ fn ret_tys(r: Ret) -> Vec<Ty> {
     match r {
         Ret::Nothing => vec![],
         Ret::Plain(t) => vec![t],
-        Ret::Result(ok, e) => ok.into_iter().chain([Ty::Enum(e)]).collect(),
+        Ret::Result(ok, e) => ok.into_iter().chain([e]).collect(),
     }
 }
 
@@ -970,13 +1047,14 @@ fn luau_fn(g: &Gen, trait_path: &str, f: &Func, label: &str) -> Result<String> {
             "Ok([{}].into_iter().collect::<mlua::MultiValue>())",
             g.enc(t, "__r", &f.ctx)?
         ),
-        Ret::Result(ok, _) => {
+        Ret::Result(ok, err) => {
+            let errv = g.enc(err, "__e", &f.ctx)?;
             let okv = match ok {
                 Some(t) => g.enc(t, "__v", &f.ctx)?,
                 None => "mlua::Value::Boolean(true)".to_string(),
             };
             format!(
-                "Ok(match __r {{\n                Ok(__v) => [{okv}].into_iter().collect::<mlua::MultiValue>(),\n                Err(__e) => [mlua::Value::Nil, rt::enc_str(__lua, __e.as_str())?].into_iter().collect::<mlua::MultiValue>(),\n            }})"
+                "Ok(match __r {{\n                Ok(__v) => [{okv}].into_iter().collect::<mlua::MultiValue>(),\n                Err(__e) => [mlua::Value::Nil, {errv}].into_iter().collect::<mlua::MultiValue>(),\n            }})"
             )
         }
     };
@@ -1026,7 +1104,7 @@ fn export_fn(g: &Gen, f: &Func, acc: &str, ext_ty: &str) -> Result<String> {
             g.dec(t, "&__v[0]", ctx)?
         ),
         Ret::Result(ok, e) => {
-            let en = g.enum_path(e)?;
+            let errdec = g.dec(e, "&__v[1]", ctx)?;
             let okv = match ok {
                 Some(t) => format!("Ok(Ok({}))", g.dec(t, "&__v[0]", ctx)?),
                 None => format!(
@@ -1034,7 +1112,7 @@ fn export_fn(g: &Gen, f: &Func, acc: &str, ext_ty: &str) -> Result<String> {
                 ),
             };
             format!(
-                "    if __v.len() == 2 && matches!(__v[0], mlua::Value::Nil) {{\n        let __k = rt::dec_str(&__v[1], \"{ctx}\")?;\n        return Ok(Err({en}::from_name(&__k).ok_or_else(|| rt::contract(\"{ctx}\", &format!(\"unknown error kind `{{__k}}`\")))?));\n    }}\n    if __v.len() != 1 || matches!(__v[0], mlua::Value::Nil) {{ return Err(rt::contract(\"{ctx}\", \"a result is `value`, or `nil, kind`\")); }}\n    {okv}"
+                "    if __v.len() == 2 && matches!(__v[0], mlua::Value::Nil) {{\n        return Ok(Err({errdec}));\n    }}\n    if __v.len() != 1 || matches!(__v[0], mlua::Value::Nil) {{ return Err(rt::contract(\"{ctx}\", \"a result is `value`, or `nil, error`\")); }}\n    {okv}"
             )
         }
     };
@@ -1060,6 +1138,40 @@ fn export_fn(g: &Gen, f: &Func, acc: &str, ext_ty: &str) -> Result<String> {
         s,
         "pub fn wasm_{name}(__store: impl wasmtime::AsContextMut, __ext: &{}::{ext_ty}{sig}) -> wasmtime::Result<{wret}> {{\n    {body}\n}}",
         g.o.bindings
+    )?;
+    Ok(s)
+}
+
+/// A record as a Rust struct, and its conversions to and from bindgen's.
+fn record_code(g: &Gen, tid: TypeId, name: &str) -> Result<String> {
+    let mut s = String::new();
+    let fields = g.record_fields(tid)?;
+    let wasm = g.wasm_enum_path(tid)?;
+    let mut decl = String::new();
+    let mut to_wasm = String::new();
+    let mut from_wasm = String::new();
+    for (n, t) in &fields {
+        let ours = ident(n, name)?;
+        let theirs = bindgen_ident(n);
+        decl.push_str(&format!("pub {ours}: {}, ", g.rust_ty(*t)?));
+        let conv = |v: String| match t {
+            Ty::Enum(_) | Ty::Record(_) => format!("{v}.into()"),
+            _ => v,
+        };
+        to_wasm.push_str(&format!("{theirs}: {}, ", conv(format!("e.{ours}"))));
+        from_wasm.push_str(&format!("{ours}: {}, ", conv(format!("e.{theirs}"))));
+    }
+    putln!(
+        s,
+        "#[derive(Clone, Debug, PartialEq)]\npub struct {name} {{ {decl}}}"
+    )?;
+    putln!(
+        s,
+        "impl From<{name}> for {wasm} {{ fn from(e: {name}) -> Self {{ Self {{ {to_wasm}}} }} }}"
+    )?;
+    putln!(
+        s,
+        "impl From<{wasm}> for {name} {{ fn from(e: {wasm}) -> Self {{ Self {{ {from_wasm}}} }} }}"
     )?;
     Ok(s)
 }

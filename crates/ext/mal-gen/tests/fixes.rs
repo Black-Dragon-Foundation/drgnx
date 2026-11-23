@@ -109,7 +109,7 @@ fn unsupported_types_are_refused_with_the_wit_name() {
             "acme:thing@1.0.0/i.f, result",
         ),
         (
-            "record r { a: u8 }\n  f: func() -> r;",
+            "record r { a: list<u8> }\n  f: func() -> r;",
             "acme:thing@1.0.0/i.f, result",
         ),
         (
@@ -263,7 +263,8 @@ fn a_script_result_is_checked_against_the_contract() {
     let out = must(BASIC);
     // the export caller refuses `true, kind`, a lone nil, and an unknown kind
     assert!(out.rust.contains("rt::contract("), "{}", out.rust);
-    assert!(out.rust.contains("unknown error kind"), "{}", out.rust);
+    // and the failure is decoded as the error type, which refuses an unknown kind
+    assert!(out.rust.contains("not one of"), "{}", out.rust);
     assert!(out.rust.contains("__v.len() != 1"), "{}", out.rust);
 }
 

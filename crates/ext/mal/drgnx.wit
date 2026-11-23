@@ -1,6 +1,6 @@
 // The extension API: one WIT package, two hosts (WebAssembly components and Luau), both generated from this file.
 // The rules (crates/ext/mal-gen): only bool, integers, floats, string, enum and `result<T?, enum>` are used so far; a
-// 64-bit integer is exact up to 2^53 in Luau; a function that can fail returns `result<_, error-kind>`. Anything
+// 64-bit integer is exact up to 2^53 in Luau; a function that can fail returns `result<_, error>`. Anything
 // changed or removed here needs a version bump (the xtask's wit-check).
 package drgnx:api@0.1.0;
 
@@ -15,34 +15,63 @@ interface types {
     cancelled,
     internal,
   }
+
+  /// What an API failure says: its kind, and a sentence for the caller.
+  record error {
+    kind: error-kind,
+    message: string,
+  }
 }
 
 /// The command registry (bod): what an extension offers and what it can run.
 interface commands {
-  use types.{error-kind};
+  use types.{error};
 
-  /// Offer a command: its id, the title the palette shows, and its doc.
-  register: func(id: string, title: string, doc: string) -> result<_, error-kind>;
+  /// Who may run a command.
+  enum exposure {
+    /// the palette lists it; keys and the user run it
+    palette,
+    /// agents run it too
+    agent,
+    /// other extensions run it
+    extension,
+    /// only a key reaches it
+    key-only,
+  }
+
+  /// A command, as an extension offers it. `args` is one line per argument, `name: what it is`.
+  record command-spec {
+    id: string,
+    title: string,
+    doc: string,
+    args: string,
+    exposure: exposure,
+  }
+
+  /// Offer a command. It is the extension's own: its full id is `ext/<extension>/<id>`.
+  register: func(command: command-spec) -> result<_, error>;
+  /// A command as the registry holds it, by its full id.
+  describe: func(id: string) -> result<command-spec, error>;
   /// Run a command by id with its arguments as one JSON text; the result is JSON text too.
-  run: func(id: string, args: string) -> result<string, error-kind>;
+  run: func(id: string, args: string) -> result<string, error>;
   /// Where a command is defined, as `file:line`.
-  find-source: func(id: string) -> result<string, error-kind>;
+  find-source: func(id: string) -> result<string, error>;
 }
 
 /// The key engine (lykill): chords as text (`C-x C-f`), contexts as the design's expression.
 interface keys {
-  use types.{error-kind};
+  use types.{error};
 
   /// Bind a chord to a command where the context expression holds (an empty context binds everywhere).
-  bind: func(chord: string, command: string, context: string) -> result<_, error-kind>;
+  bind: func(chord: string, command: string, context: string) -> result<_, error>;
   /// The command id a chord resolves to in a context, or `prefix` when more keys are needed.
-  resolve: func(chord: string, context: string) -> result<string, error-kind>;
+  resolve: func(chord: string, context: string) -> result<string, error>;
 }
 
 /// The settings stack (skipan). An extension sets the scoped levels only: the user's files and the built-in level are not
 /// its to change.
 interface settings {
-  use types.{error-kind};
+  use types.{error};
 
   /// The levels that belong to one stream, language, document or pane.
   enum scoped-level {
@@ -53,27 +82,27 @@ interface settings {
   }
 
   /// A setting's value as JSON text.
-  get: func(key: string) -> result<string, error-kind>;
+  get: func(key: string) -> result<string, error>;
   /// Set a setting, as JSON text, at a scoped level for the stream, language, document or pane named SCOPE-ID.
-  set: func(key: string, value: string, at: scoped-level, scope-id: string) -> result<_, error-kind>;
+  set: func(key: string, value: string, at: scoped-level, scope-id: string) -> result<_, error>;
   /// Why the setting has its value: the level and, for a file, `file:line`.
-  provenance: func(key: string) -> result<string, error-kind>;
+  provenance: func(key: string) -> result<string, error>;
 }
 
 /// The one non-blocking question API (spurn). Choices are separated by newlines until lists are supported.
 interface ask {
-  use types.{error-kind};
+  use types.{error};
 
   /// Ask: the call returns the question's id at once and never waits. The answer comes later, to `entry.answered`. The
   /// timeout is in milliseconds, from 1 to 300000: an extension's question always has one; at its end the default is the
   /// answer.
-  choose: func(title: string, body: string, choices: string, default-choice: string, timeout-ms: u32) -> result<u64, error-kind>;
+  choose: func(title: string, body: string, choices: string, default-choice: string, timeout-ms: u32) -> result<u64, error>;
 }
 
 /// Notices (tidindi): the same key updates a notice instead of adding one. Keys and ids belong to the extension that
 /// posted them: another extension's notice cannot be touched.
 interface notices {
-  use types.{error-kind};
+  use types.{error};
 
   enum level {
     info,
@@ -82,9 +111,9 @@ interface notices {
   }
 
   /// Post a notice; the result is its id.
-  post: func(at: level, title: string, body: string, key: string) -> result<u64, error-kind>;
+  post: func(at: level, title: string, body: string, key: string) -> result<u64, error>;
   /// Remove one of the caller's own notices by its id.
-  dismiss: func(id: u64) -> result<_, error-kind>;
+  dismiss: func(id: u64) -> result<_, error>;
 }
 
 /// Declared empty until the editing model lands.
@@ -94,14 +123,26 @@ interface buffers {}
 interface views {}
 
 interface entry {
-  use types.{error-kind};
+  use types.{error};
 
   /// Called once after instantiation: the extension registers its commands.
   init: func();
   /// Run a command the extension registered.
-  run: func(name: string) -> result<_, error-kind>;
-  /// An answer to a question the extension asked with `ask.choose`.
-  answered: func(question: u64, choice: string);
+  run: func(name: string) -> result<_, error>;
+  /// How an answer came.
+  enum answered-how {
+    /// the user chose
+    user,
+    /// nobody was there to ask: the default
+    default,
+    /// the time ran out: the default
+    timeout,
+    /// the question failed or was withdrawn: there is no choice
+    cancelled,
+  }
+
+  /// An answer to a question the extension asked with `ask.choose`: it always comes, even when the question failed.
+  answered: func(question: u64, choice: string, how: answered-how);
 }
 
 world extension {
