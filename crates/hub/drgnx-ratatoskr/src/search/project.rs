@@ -22,7 +22,7 @@
 //!   [`Status`].
 
 use super::caches::Caches;
-use super::sources::{ChainEntry, DocSource, Slot, Source, SourceChain, run_pass};
+use super::sources::{ChainEntry, DocSource, Slot, Source, SourceChain, run_pass_with};
 use super::{DocEmbedder, power};
 use crate::clock;
 use hrafn::fresh::{Due, Fresh, Settle};
@@ -1536,7 +1536,17 @@ impl Inner {
                 }
                 let order = self.order().await;
                 let mut reads = 0;
-                match run_pass(&mut slots, &self.store, &order, clock::now(), &mut reads).await {
+                let running = || self.publish(Tier2::Running);
+                match run_pass_with(
+                    &mut slots,
+                    &self.store,
+                    &order,
+                    clock::now(),
+                    &mut reads,
+                    &running,
+                )
+                .await
+                {
                     Ok(out) if out.filled => {
                         self.publish(Tier2::Running);
                         // the chunks filled (what `keys_missing` and the lag count); a path's vector rides along

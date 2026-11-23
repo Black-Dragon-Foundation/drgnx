@@ -484,6 +484,21 @@ impl SourceChain {
         now: Instant,
         reads: &mut usize,
     ) -> Result<FillOutcome, StoreError> {
+        self.step_with(store, cache, order, now, reads, &|| {})
+            .await
+    }
+
+    /// [`step`](Self::step), calling ON_WORK once keys are found and before they are filled (tier 2 is `Running`
+    /// while a request is in flight).
+    pub async fn step_with(
+        &mut self,
+        store: &CodeStore,
+        cache: &VectorCache,
+        order: &[String],
+        now: Instant,
+        reads: &mut usize,
+        on_work: &(dyn Fn() + Sync),
+    ) -> Result<FillOutcome, StoreError> {
         if !self.ready(now) {
             return Ok(FillOutcome::AllDown);
         }
@@ -492,6 +507,7 @@ impl SourceChain {
         if keys.is_empty() {
             return Ok(FillOutcome::Nothing);
         }
+        on_work();
         Ok(self.fill(cache, &keys, now).await)
     }
 }
@@ -530,6 +546,18 @@ pub async fn run_pass(
     now: Instant,
     reads: &mut usize,
 ) -> Result<PassOutcome, StoreError> {
+    run_pass_with(slots, store, order, now, reads, &|| {}).await
+}
+
+/// [`run_pass`], calling ON_WORK before each chain's request.
+pub async fn run_pass_with(
+    slots: &mut [Slot],
+    store: &CodeStore,
+    order: &[String],
+    now: Instant,
+    reads: &mut usize,
+    on_work: &(dyn Fn() + Sync),
+) -> Result<PassOutcome, StoreError> {
     let mut out = PassOutcome::default();
     let (mut held, mut down) = (false, None);
     for builtin in [false, true] {
@@ -539,7 +567,7 @@ pub async fn run_pass(
         for slot in slots.iter_mut().filter(|s| s.chain.is_builtin() == builtin) {
             match slot
                 .chain
-                .step(store, &slot.cache, order, now, reads)
+                .step_with(store, &slot.cache, order, now, reads, on_work)
                 .await?
             {
                 FillOutcome::Filled { n, .. } => {
