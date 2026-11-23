@@ -255,3 +255,37 @@ mod snapping {
         assert_eq!(snap_span(1.0, 0.5, 1.5), (2.0 / 1.5, 1.0 / 1.5));
     }
 }
+
+#[test]
+fn pixels_add_subtract_and_scale_by_whole_numbers() {
+    let (a, b) = (Px(7), Px(3));
+    assert_eq!(a + b, Px(10));
+    assert_eq!(a - b, Px(4));
+    assert_eq!(a + 2, Px(9), "a count of pixels");
+    assert_eq!(a - 2, Px(5));
+    assert_eq!(a * 3, Px(21));
+    assert_eq!(a * Px(2), Px(14));
+    assert_eq!(a / 2, Px(3), "whole division");
+    assert_eq!(-a, Px(-7));
+    assert_eq!(Px(-4).abs(), Px(4));
+    assert_eq!(Px::ZERO, Px(0));
+    let mut c = Px(1);
+    c += 4;
+    c += Px(1);
+    c -= 2;
+    c *= 3;
+    c /= 2;
+    assert_eq!(c, Px(6));
+    assert!(a > 6 && a == 7 && b < Px(4), "compared with plain counts");
+    assert_eq!(i32::from(a), 7);
+}
+
+#[test]
+fn a_logical_length_reaches_pixels_only_through_the_scale() {
+    // `Px + Lp` is not defined (a compile-fail test in glitnir proves the other side); the one road is `to_px`
+    let s = Scale {
+        output: 2.0,
+        ..Scale::default()
+    };
+    assert_eq!(Lp(3.0).to_px(&s) + 1, Px(7));
+}
