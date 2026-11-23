@@ -1,0 +1,11 @@
+[package]
+name = "villa"
+description = "The one error type: a kind, the user's sentence, a detail and a source (the errors standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true

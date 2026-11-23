@@ -1,0 +1,17 @@
+[package]
+name = "stig"
+description = "The editor's directories: XDG, with the profile (default, dev, test) as a subfolder (the paths standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+villa.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
