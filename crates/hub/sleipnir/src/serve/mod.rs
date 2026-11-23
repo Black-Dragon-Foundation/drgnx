@@ -166,7 +166,9 @@ impl Config {
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|_| "runner".into());
         let profile = profile.ok_or("--profile is needed")?;
-        Limits::for_profile(profile, 0, 1).with_reserve(profile, reserve_mib)?;
+        Limits::for_profile(profile, 0, 1)
+            .with_reserve(profile, reserve_mib)
+            .map_err(|e| e.to_string())?;
         Ok(Config {
             root,
             prefix,
@@ -412,7 +414,8 @@ impl<W: Write> Serve<W> {
         let scheduler = cfg.scheduler();
         let limits = platform
             .limits(cfg.profile)
-            .with_reserve(cfg.profile, cfg.reserve_mib)?;
+            .with_reserve(cfg.profile, cfg.reserve_mib)
+            .map_err(|e| e.to_string())?;
         let exe = std::env::current_exe().map_err(|e| format!("this binary's path: {e}"))?;
         let bin = cfg.root.join("bin");
         let bundle = exe

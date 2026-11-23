@@ -1918,6 +1918,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "skuld",
+ "villa",
 ]
 
 [[package]]
@@ -6269,6 +6270,8 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "pulldown-cmark",
+ "stund",
+ "villa",
 ]
 
 [[package]]
@@ -7992,6 +7995,7 @@ dependencies = [
  "serde",
  "serde_json",
  "skuld",
+ "villa",
 ]
 
 [[package]]

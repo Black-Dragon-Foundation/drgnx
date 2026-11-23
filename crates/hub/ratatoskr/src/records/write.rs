@@ -329,7 +329,7 @@ pub(crate) async fn write_core_events(
                     .collect(),
                 ..Default::default()
             };
-            saga::spec::edit(&blank, &edits).map_err(invalid)?;
+            saga::spec::edit(&blank, &edits).map_err(|e| invalid(e.to_string()))?;
             let text = saga::spec::new_text(title.as_str(), &word, &sections);
             let (file, tx) = create_file(db, actor, rel.as_str(), rk, &text).await?;
             let events = sync_after(db, views, &file, rk).await?;
@@ -371,7 +371,7 @@ pub(crate) async fn write_core_events(
                     .flat_map(|r| r.0.iter().map(|k| k.as_str().to_owned()))
                     .collect(),
             };
-            let new = saga::spec::edit(&old, &edits).map_err(invalid)?;
+            let new = saga::spec::edit(&old, &edits).map_err(|e| invalid(e.to_string()))?;
             if actor.agent && !actor.may_approve && !old_done {
                 let now = saga::spec::parse(&new).status;
                 if now.as_deref().is_some_and(approves) {

@@ -465,7 +465,9 @@ fn limits(profile: Profile, reserve_mib: Option<u64>) -> Result<forseti::Limits,
         Profile::Dedicated => forseti::Profile::Dedicated,
         Profile::Workstation => forseti::Profile::Workstation,
     };
-    forseti::Limits::for_profile(p, 0, 1).with_reserve(p, reserve_mib)
+    forseti::Limits::for_profile(p, 0, 1)
+        .with_reserve(p, reserve_mib)
+        .map_err(|e| e.to_string())
 }
 
 /// A reserve for the user is a workstation's, of at least [`forseti::MIN_RESERVE_MIB`].
