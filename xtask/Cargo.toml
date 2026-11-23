@@ -1,0 +1,11 @@
+[package]
+name = "xtask"
+description = "Repository tasks: cargo xtask measure"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+drgnx-budget = { path = "../crates/std/budget" }
