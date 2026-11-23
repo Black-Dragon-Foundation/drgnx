@@ -8,4 +8,4 @@ license.workspace = true
 publish = false
 
 [dependencies]
-drgnx-budget = { path = "../crates/std/budget" }
+vag = { path = "../crates/std/vag" }

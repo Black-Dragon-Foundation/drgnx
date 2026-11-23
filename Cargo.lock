@@ -1535,14 +1535,6 @@ name = "drgnx"
 version = "0.1.0"
 
 [[package]]
-name = "drgnx-budget"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "drgnx-clock"
 version = "0.1.0"
 dependencies = [
@@ -7617,6 +7609,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vag"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8778,7 +8778,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
- "drgnx-budget",
+ "vag",
 ]
 
 [[package]]

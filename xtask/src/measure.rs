@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::time::Duration;
 
-use drgnx_budget::{Report, pss_kib, wakeups};
+use vag::{Report, pss_kib, wakeups};
 
 /// How long a spawned command gets to start up and go idle before it is measured.
 const SETTLE: Duration = Duration::from_secs(1);
@@ -125,7 +125,7 @@ pub fn run(args: Vec<String>) -> Result<ExitCode, String> {
     })
 }
 
-fn measure(pid: u32) -> Result<(u64, drgnx_budget::ThreadWakeups), String> {
+fn measure(pid: u32) -> Result<(u64, vag::ThreadWakeups), String> {
     let pss = pss_kib(pid).map_err(|e| e.to_string())?;
     let w = wakeups(pid, WINDOW).map_err(|e| e.to_string())?;
     Ok((pss, w))

@@ -10,6 +10,6 @@ with no allowlists), a documentation page, and a conformance test.
 
 Here so far:
 
-- `budget` (`drgnx-budget`): the resource budgets' measuring crate. PSS over a process tree, per-thread wakeups
+- `vag` (*vág*, the scales): the resource budgets' measuring crate. PSS over a process tree, per-thread wakeups
   (context-switch deltas from `/proc/PID/task/*/status`), and JSON reports that compare to an earlier build. Its front
   end is `cargo xtask measure` (`xtask/README.md`). Linux only.
