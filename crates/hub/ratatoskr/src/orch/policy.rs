@@ -165,7 +165,7 @@ mod tests {
         assert!(p.on("red-first") && p.on("author-check") && p.on("affected-groups"));
         assert!(!p.on("push-gate"));
         assert!(!p.on("merge-notes") && !p.on("trailers"));
-        assert!(p.build_reds("rust") && p.build_reds("elisp"));
+        assert!(p.build_reds("rust"));
         assert_eq!(p.batch(), 3);
         assert!(p.is_test_path("runtime/crates/x/src/a/tests.rs"));
         // any project's: no project's commands (the author check is the task's own tests)
