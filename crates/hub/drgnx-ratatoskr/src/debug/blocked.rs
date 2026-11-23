@@ -495,6 +495,13 @@ pub(super) fn why_not_listening(e: String, pid: i32, stderr: &str) -> String {
 }
 
 impl Launcher for Blocked {
+    /// The plan's request: the program is the hub's to start, so the adapter attaches (debugpy listening for it on
+    /// the block's port, js-debug to its inspector). A `launch` would have debugpy open a listener on a port of its
+    /// own choosing, which the block's Seatbelt profile refuses.
+    fn own_start(&self, start: &mut super::session::Start) {
+        start.request = self.plan.request;
+        start.arguments = self.plan.arguments.clone();
+    }
     fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
         Box::pin(async move {
             let slot: Arc<Mutex<Option<draugr::Child>>> = Arc::default();

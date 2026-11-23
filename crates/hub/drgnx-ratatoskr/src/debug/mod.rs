@@ -220,6 +220,10 @@ pub trait Launcher: Send + Sync {
     fn fill(&self, arguments: Value) -> BoxFut<'_, Result<Value, String>> {
         Box::pin(async move { Ok(arguments) })
     }
+    /// The request a session's first start sends: a launcher that starts the program beside the adapter
+    /// (`debug::blocked`: debugpy attached and listening for it) puts its own in place of the configuration's
+    /// `launch`; the same by default.
+    fn own_start(&self, _start: &mut Start) {}
 }
 
 /// A terminal `runInTerminal` opened: its id, its view and its program's pid.

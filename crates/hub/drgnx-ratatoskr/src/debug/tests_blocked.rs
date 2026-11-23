@@ -233,6 +233,32 @@ fn sleeping(port: u16) -> Plan {
     }
 }
 
+#[test]
+fn a_blocks_session_starts_with_the_plans_request_not_the_launch() {
+    use super::Launcher;
+    use super::session::Start;
+    let p = plan_of(
+        "debugpy",
+        Found::Python("/d/tools/venv/bin/python3".into()),
+        json!({"type": "debugpy", "request": "launch", "name": "Py", "program": "/p/a.py"}),
+    )
+    .unwrap();
+    let want = p.arguments.clone();
+    let l = blocked::Blocked::new(p, vec![], std::env::temp_dir(), None);
+    let mut s = Start {
+        name: "Py".into(),
+        adapter_id: "debugpy".into(),
+        request: Request::Launch,
+        arguments: json!({"program": "/p/a.py"}),
+        breakpoints: vec![],
+        functions: vec![],
+        exception_filters: None,
+    };
+    l.own_start(&mut s);
+    assert_eq!(s.request, Request::Attach);
+    assert_eq!(s.arguments, want);
+}
+
 #[tokio::test]
 async fn a_strangers_listener_on_the_adapters_port_ends_the_session_unconnected() {
     use super::Launcher;

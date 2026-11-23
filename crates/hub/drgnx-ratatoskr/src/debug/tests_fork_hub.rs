@@ -108,14 +108,23 @@ struct MockSealer {
     configs: Mutex<Vec<Value>>,
     trees: Mutex<Vec<PathBuf>>,
     running: Arc<Mutex<Vec<Mock>>>,
+    /// The attach arguments the launchers put in place of the launch (as a port block's does); none: the launch.
+    own: Option<Value>,
 }
 
 struct OneMock {
     script: Mutex<Option<Vec<Value>>>,
     running: Arc<Mutex<Vec<Mock>>>,
+    own: Option<Value>,
 }
 
 impl Launcher for OneMock {
+    fn own_start(&self, start: &mut super::session::Start) {
+        if let Some(a) = &self.own {
+            start.request = super::session::Request::Attach;
+            start.arguments = a.clone();
+        }
+    }
     fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
         Box::pin(async move {
             let steps = self.script.lock().unwrap().take().ok_or("no script")?;
@@ -154,6 +163,7 @@ impl Sealer for MockSealer {
         Ok(Arc::new(OneMock {
             script: Mutex::new(self.scripts.lock().unwrap().pop_front()),
             running: self.running.clone(),
+            own: self.own.clone(),
         }))
     }
 }
@@ -362,6 +372,37 @@ async fn a_fork_goes_from_preparing_to_done_with_its_comparison() {
             .any(|(_, d)| d.to_string().contains("s3cr3t")),
         "an environment value is in an event"
     );
+    let mocks: Vec<Mock> = std::mem::take(&mut *sealer.running.lock().unwrap());
+    for m in mocks {
+        m.finish().await.unwrap();
+    }
+}
+
+/// A launcher that starts the program itself (macOS's port block: debugpy attached and listening for it) has the
+/// fork send its attach: a launch there has debugpy open a listener the block's Seatbelt profile refuses.
+#[tokio::test(start_paused = true)]
+async fn a_fork_sends_its_launchers_own_request() {
+    let listen = json!({"request": "attach", "listen": {"host": "127.0.0.1", "port": 47001}});
+    let mut s = script();
+    s[1] = json!({"expect": "attach", "args": listen, "ok": {}});
+    let ev = Arc::new(Events::default());
+    let sealer = Arc::new(MockSealer {
+        scripts: Mutex::new(vec![s].into()),
+        own: Some(listen.clone()),
+        ..Default::default()
+    });
+    let f = Forks::new(
+        ev.clone(),
+        Arc::new(OneRun(run())),
+        Arc::new(FakeTrees::default()),
+        sealer.clone(),
+        true,
+    );
+    let Made::Fork(_) = f.fork(ask(Change::Nothing)).unwrap() else {
+        panic!("asked");
+    };
+    until(|| ev.states().last().map(String::as_str) == Some("done")).await;
+    assert_eq!(ev.states(), ["preparing", "running", "done"]);
     let mocks: Vec<Mock> = std::mem::take(&mut *sealer.running.lock().unwrap());
     for m in mocks {
         m.finish().await.unwrap();
