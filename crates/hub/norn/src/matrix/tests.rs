@@ -24,7 +24,7 @@ fn balanced_is_the_mockups_table() {
     use Action::*;
     use Verdict::*;
     let p = preset(Preset::Balanced);
-    let rows: [(Action, [Verdict; 3]); 34] = [
+    let rows: [(Action, [Verdict; 3]); 33] = [
         (AgentsStart, [Allow, Never, Never]),
         (AgentsModel, [Allow, Never, Never]),
         (AgentsControl, [Allow, Never, Never]),
@@ -49,7 +49,6 @@ fn balanced_is_the_mockups_table() {
         (Unsandboxed, [Never, Never, Never]),
         (SettingsChange, [Ask, Ask, Ask]),
         (UserPrivate, [Never, Never, Never]),
-        (UserEmacs, [Ask, Never, Never]),
         (ChatProjectRead, [Never, Never, Ask]),
         (PluginAbilities, [Allow, Allow, Ask]),
         (ChatProjectEdit, [Never, Never, Ask]),
@@ -60,7 +59,7 @@ fn balanced_is_the_mockups_table() {
         (DebugLiveEval, [Ask, Ask, Ask]),
         (DebugDrive, [Ask, Ask, Ask]),
     ];
-    assert_eq!(p.cells.len(), 34 * 3);
+    assert_eq!(p.cells.len(), 33 * 3);
     for (a, vs) in rows {
         for (r, want) in [Role::Manager, Role::Worker, Role::Chat]
             .into_iter()
@@ -110,7 +109,7 @@ fn browser_rows_per_preset() {
             assert_eq!(decide(&eff(&[&m], &who(r)), a, None), want);
         }
     }
-    assert_eq!(Action::ALL.len(), 34);
+    assert_eq!(Action::ALL.len(), 33);
     let at = |a| Action::ALL.iter().position(|x| *x == a).unwrap();
     assert_eq!(
         (at(Browser), at(BrowserWeb), at(BrowserPrivate)),
@@ -666,7 +665,7 @@ fn debug_rows_per_preset() {
 
 /// The rows an outside agent's cells take from the matrix (the others are [`OUTSIDE_NEVER`]): a new action fails
 /// [`every_action_is_classified_for_outside_agents`] until it is placed in one list or the other.
-const OUTSIDE_BY_MATRIX: [Action; 19] = [
+const OUTSIDE_BY_MATRIX: [Action; 18] = [
     Action::GraphChange,
     Action::CodeRead,
     Action::CodeEdit,
@@ -676,7 +675,6 @@ const OUTSIDE_BY_MATRIX: [Action; 19] = [
     Action::Browser,
     Action::BrowserWeb,
     Action::BrowserPrivate,
-    Action::UserEmacs,
     Action::ChatProjectRead,
     Action::PluginAbilities,
     Action::ChatProjectEdit,

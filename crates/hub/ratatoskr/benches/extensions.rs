@@ -69,11 +69,9 @@ fn catalog() -> Vec<u8> {
                 "maintainer": "A. Maintainer",
                 "url": "https://example.invalid/pkg",
                 "kind": if i % 3 == 0 { "single" } else { "tar" },
-                "versions": [{"archive": archive, "version": format!("1.{}", i % 9),
-                              "reqs": if i % 5 == 0 { json!([["emacs", "29.1"]]) } else { json!([]) }}],
+                "versions": [{"archive": archive, "version": format!("1.{}", i % 9)}],
                 "candidate": {"archive": archive, "version": format!("1.{}", i % 9)},
                 "held": false,
-                "incompat": false,
                 "downloads": i * 3,
             }));
         }
@@ -83,7 +81,7 @@ fn catalog() -> Vec<u8> {
         .map(|(n, _)| json!({"name": n, "url": format!("https://example.invalid/{n}/"), "signed": *n == "gnu"}))
         .collect();
     serde_json::to_vec(&json!({
-        "version": 1, "written": 1_730_851_200.0, "emacs": "31.1",
+        "version": 1, "written": 1_730_851_200.0,
         "archives": archives, "packages": packages,
     }))
     .unwrap()

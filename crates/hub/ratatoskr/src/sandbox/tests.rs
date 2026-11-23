@@ -84,10 +84,6 @@ fn context_closes_data_state_config_and_sockets() {
         fx.p("home/.local/state/drgnx/hub"),
         fx.p("run/drgnx"),
         fx.p("t/drgnx-hub-1000"),
-        fx.p("t/emacs1000"),
-        // the true name: on macOS /tmp is a link to /private/tmp, and the context closes true names
-        std::fs::canonicalize("/tmp").unwrap().join("emacs1000"),
-        fx.p("run/emacs"),
         fx.p("src"),
         fx.p("bin"),
     ] {

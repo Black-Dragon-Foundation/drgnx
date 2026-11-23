@@ -134,7 +134,6 @@ fn state_chip(r: &w::Row) -> Option<(String, &'static str)> {
             FaceId::StatusWarn.name(),
         ),
         S::Held => ("held".into(), FaceId::StatusWarn.name()),
-        S::Incompat => ("needs a newer Emacs".into(), FaceId::StatusWarn.name()),
         // a row the user did not ask for: a neutral warning, not a failure
         S::Missing => (
             "missing: no archive you use has it".into(),

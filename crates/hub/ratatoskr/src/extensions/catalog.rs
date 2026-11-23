@@ -34,8 +34,6 @@ pub struct Archive {
 pub struct Version {
     pub archive: String,
     pub version: String,
-    #[serde(default)]
-    pub reqs: Vec<(String, String)>,
 }
 
 /// What `package.el` would install.
@@ -79,19 +77,7 @@ pub struct Pkg {
     #[serde(default)]
     pub held: bool,
     #[serde(default)]
-    pub incompat: bool,
-    #[serde(default)]
     pub downloads: Option<u64>,
-}
-
-/// A package Emacs ships.
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct Builtin {
-    pub name: String,
-    #[serde(default)]
-    pub version: String,
-    #[serde(default)]
-    pub summary: String,
 }
 
 /// An entry the refresh job could not use.
@@ -113,8 +99,6 @@ pub struct CatalogFile {
     pub archives: Vec<Archive>,
     #[serde(default)]
     pub packages: Vec<Pkg>,
-    #[serde(default)]
-    pub builtins: Vec<Builtin>,
     #[serde(default)]
     pub skipped: Vec<Skipped>,
 }
@@ -345,11 +329,7 @@ impl Entry {
             || self.row.kind == w::Kind::Package
                 && matches!(
                     self.row.state,
-                    w::State::Installed
-                        | w::State::Update
-                        | w::State::Dependency
-                        | w::State::Held
-                        | w::State::Incompat
+                    w::State::Installed | w::State::Update | w::State::Dependency | w::State::Held
                 )
     }
 }
@@ -469,7 +449,6 @@ pub fn build(inputs: Inputs) -> Index {
         }
 
         let state = match (l, c) {
-            (Some(_), Some(c)) if c.incompat => w::State::Incompat,
             (Some(_), Some(c)) if c.update.is_some() => w::State::Update,
             (Some(_), Some(c)) if c.held => w::State::Held,
             (Some(_), _) if matches!(why.as_slice(), [w::Why::NeededBy(_)]) => w::State::Dependency,
@@ -527,24 +506,7 @@ pub fn build(inputs: Inputs) -> Index {
                     version: v.clone(),
                 })
                 .collect(),
-            (None, Some(c)) => c
-                .versions
-                .iter()
-                .find(|v| {
-                    candidate.is_some_and(|k| k.archive == v.archive && k.version == v.version)
-                })
-                .or(c.versions.first())
-                .map(|v| {
-                    v.reqs
-                        .iter()
-                        .map(|(n, ver)| w::Requirement {
-                            name: n.clone(),
-                            version: Some(ver.clone()),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            (None, None) => Vec::new(),
+            (None, _) => Vec::new(),
         };
         let row = w::Row {
             id: format!("pkg:{name}"),
@@ -576,24 +538,6 @@ pub fn build(inputs: Inputs) -> Index {
             c.map(|c| c.keywords.clone()).unwrap_or_default(),
             detail,
         ));
-    }
-
-    for b in &catalog.builtins {
-        let row = w::Row {
-            id: format!("emacs:{}", b.name),
-            kind: w::Kind::Emacs,
-            name: b.name.clone(),
-            summary: b.summary.clone(),
-            state: w::State::BuiltIn,
-            source: "emacs".into(),
-            signed: w::Signed::None,
-            version: Some(b.version.clone()).filter(|v| !v.is_empty()),
-            latest: None,
-            downloads: None,
-            why: Vec::new(),
-            layers: Vec::new(),
-        };
-        entries.push(Entry::new(row, Vec::new(), Detail::default()));
     }
 
     for m in inputs.modules {
@@ -1044,14 +988,12 @@ mod tests {
         assert_eq!(magit.version.as_deref(), Some("4.1"));
         assert_eq!(magit.latest.as_deref(), Some("20261104.815"));
         assert_eq!(row(&i, "pkg:dash").state, w::State::Held);
-        assert_eq!(row(&i, "pkg:newer-emacs-only").state, w::State::Incompat);
         // available: the version an install would take
         assert_eq!(
             row(&i, "pkg:magit-todos").latest.as_deref(),
             Some("20260901.100")
         );
         assert_eq!(row(&i, "pkg:magit").downloads, Some(4212345));
-        assert_eq!(row(&i, "emacs:eglot").state, w::State::BuiltIn);
         assert_eq!(row(&i, "module:git").state, w::State::On);
         assert_eq!(row(&i, "module:git").summary, "The git module.");
     }

@@ -30,8 +30,7 @@ pub const ENV_DENY: &[&str] = &[
 
 /// What no spec may expose, for the hub `env` describes, as true names (GL-T2-2):
 /// - closed: drgnx's data, config, cache and state dirs; every socket dir a hub may use (`<runtime>/drgnx`, `<state>/hub`,
-///   `<tmp>/drgnx-hub-UID`); `DRGNX_DIR` (the checkout); Emacs's server dirs (`<tmp>/emacsUID`, `/tmp/emacsUID`,
-///   `<runtime>/emacs`); and this binary's own dir (review M12), so no write bind can replace the helper;
+///   `<tmp>/drgnx-hub-UID`); `DRGNX_DIR` (the checkout); and this binary's own dir (review M12), so no write bind can replace the helper;
 /// - `user_sockets`: `SSH_AUTH_SOCK` and the D-Bus session bus's `unix:path=`;
 /// - `run_parents`: `paths::session_parents`, where session dirs are made (`<socket dir>/s`, and the fallback
 ///   `<tmp>/drgnx-hub-UID/s`), never the backend's `hub-HASH.d/` (review M10);
@@ -78,14 +77,8 @@ pub fn context_for(env: &Env, helper: Option<&Path>) -> Context {
         state.join("hub"),
         socket_dir.clone(),
         tmp.join(format!("drgnx-hub-{uid}")),
-        tmp.join(format!("emacs{uid}")),
-        PathBuf::from(format!("/tmp/emacs{uid}")),
     ];
-    closed.extend(
-        runtime
-            .iter()
-            .flat_map(|r| [r.join("drgnx"), r.join("emacs")]),
-    );
+    closed.extend(runtime.iter().map(|r| r.join("drgnx")));
     closed.extend(var("DRGNX_DIR"));
     closed.extend(helper.and_then(Path::parent).map(Path::to_path_buf));
     let mut user_sockets: Vec<PathBuf> = var("SSH_AUTH_SOCK").into_iter().collect();
