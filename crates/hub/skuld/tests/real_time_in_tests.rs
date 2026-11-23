@@ -424,11 +424,7 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// The helpers allowed to carry the `paused clock` marker: (file suffix, fn name, why). Only ever shrinks.
-const MARKED: &[(&str, &str, &str)] = &[(
-    "mimir/src/bridge.rs",
-    "connect",
-    "the test connector (Fake) dials only inside the module's paused tests",
-)];
+const MARKED: &[(&str, &str, &str)] = &[];
 
 /// The names of the fns in `src` that carry the `paused clock` marker attribute.
 fn marked_fns(src: &str) -> Vec<String> {
@@ -696,22 +692,14 @@ fn says(problems: &[String], a: &str, b: &str) -> bool {
 #[test]
 fn the_paused_clock_marker_is_fenced() {
     let marker = "#[doc = \"paused clock: why\"]";
-    // listed, marked: fine
-    let ok = format!("impl X {{\n    {marker}\n    fn connect(&self) {{}}\n}}\n");
-    assert!(marker_problems("crates/mimir/src/bridge.rs", &ok).is_empty());
-    // marked but not listed (another fn, or another file)
-    let other = format!("{marker}\nfn helper() {{}}\n");
-    let p = marker_problems("crates/mimir/src/bridge.rs", &other);
-    assert!(says(&p, "fn helper", "not in MARKED"), "{p:?}");
-    let p = marker_problems("crates/norn/src/x.rs", &ok);
+    // nothing is listed in MARKED now: a marker anywhere fails
+    let marked = format!("impl X {{\n    {marker}\n    fn connect(&self) {{}}\n}}\n");
+    let p = marker_problems("crates/mimir/src/bridge.rs", &marked);
     assert!(says(&p, "fn connect", "not in MARKED"), "{p:?}");
-    // listed but no longer marked
-    let p = marker_problems("crates/mimir/src/bridge.rs", "fn connect(&self) {}\n");
-    assert!(
-        says(&p, "fn connect", "carries no paused-clock marker"),
-        "{p:?}"
-    );
-    // a file that is not listed and has no marker is clean
+    let other = format!("{marker}\nfn helper() {{}}\n");
+    let p = marker_problems("crates/norn/src/x.rs", &other);
+    assert!(says(&p, "fn helper", "not in MARKED"), "{p:?}");
+    // a file with no marker is clean
     assert!(marker_problems("crates/norn/src/x.rs", "fn a() {}\n").is_empty());
 }
 

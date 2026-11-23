@@ -477,7 +477,8 @@ fn tool_error(text: &str, modern: bool) -> Value {
 struct Live<W> {
     w: W,
     rx: mpsc::Receiver<String>,
-    reader: Task<()>,
+    /// Held so the task ends with the connection (a dropped task is cancelled).
+    _reader: Task<()>,
 }
 
 /// An agent request sent on the live connection, waiting for its answer.
@@ -665,7 +666,11 @@ impl<C: Connector, O: AsyncWrite + Unpin> Bridge<C, O> {
             "mimir-hub-reader",
             read_hub(r, tx, self.opts.limits.max_out),
         );
-        self.live = Some(Live { w, rx, reader });
+        self.live = Some(Live {
+            w,
+            rx,
+            _reader: reader,
+        });
         self.next_dial = None;
         self.backoff = self.opts.backoff;
         if self.told {
@@ -1049,6 +1054,9 @@ mod tests {
 
     struct HubState {
         up: bool,
+        /// Dials get a pipe whose far end nobody reads, so a write to it stalls.
+        stall: bool,
+        stalled: Vec<DuplexStream>,
         tools: Tools,
         servers: Vec<Task<End>>,
         dials: Vec<Instant>,
@@ -1066,6 +1074,8 @@ mod tests {
             Fake {
                 hub: Arc::new(Mutex::new(HubState {
                     up: true,
+                    stall: false,
+                    stalled: Vec::new(),
                     tools: first_tools(),
                     servers: Vec::new(),
                     dials: Vec::new(),
@@ -1075,21 +1085,25 @@ mod tests {
         }
 
         fn set_up(&self, up: bool) {
-            self.hub.lock().expect("hub").up = up;
+            saman::lock(&self.hub).up = up;
+        }
+
+        fn set_stall(&self, stall: bool) {
+            saman::lock(&self.hub).stall = stall;
         }
 
         fn set_tools(&self, tools: Tools) {
-            self.hub.lock().expect("hub").tools = tools;
+            saman::lock(&self.hub).tools = tools;
         }
 
         /// The hub goes away: every connection's server ends, so its socket closes.
         fn drop_all(&self) {
             // a dropped task is cancelled
-            self.hub.lock().expect("hub").servers.clear();
+            saman::lock(&self.hub).servers.clear();
         }
 
         fn dials(&self) -> Vec<Instant> {
-            self.hub.lock().expect("hub").dials.clone()
+            saman::lock(&self.hub).dials.clone()
         }
 
         fn echoes(&self) -> usize {
@@ -1108,10 +1122,15 @@ mod tests {
         fn connect(&self) -> BoxFuture<'static, Result<(Self::R, Self::W), Dial>> {
             let (hub, ctx) = (self.hub.clone(), self.ctx.clone());
             Box::pin(async move {
-                let mut h = hub.lock().expect("hub");
-                h.dials.push(Instant::now());
+                let mut h = saman::lock(&hub);
+                h.dials.push(stund::Instant::now());
                 if !h.up {
                     return Err(Dial::Again("no hub".into()));
+                }
+                if h.stall {
+                    let (bridge_end, hub_end) = duplex(8);
+                    h.stalled.push(hub_end);
+                    return Ok(split(bridge_end));
                 }
                 let (bridge_end, hub_end) = duplex(1 << 16);
                 let (r, w) = split(hub_end);
@@ -1308,7 +1327,7 @@ mod tests {
             fake.set_up(false);
             fake.drop_all();
             until(&clock, "the bridge tried again", || fake.dials().len() >= 2).await;
-            let t0 = Instant::now();
+            let t0 = stund::Instant::now();
             a.send(call(1, "echo")).await;
             a.send(req(2, "resources/list", json!({}))).await;
             assert_eq!(
@@ -1350,7 +1369,7 @@ mod tests {
             fake.set_up(false);
             fake.drop_all();
             until(&clock, "the bridge tried again", || fake.dials().len() >= 2).await;
-            let t0 = Instant::now();
+            let t0 = stund::Instant::now();
             a.send(req(2, "tools/list", json!({}))).await;
             let cached = a.recv().await;
             assert_eq!(cached["id"], 2);
@@ -1401,7 +1420,7 @@ mod tests {
             );
             let fake = Fake::new();
             fake.set_up(false);
-            let t0 = Instant::now();
+            let t0 = stund::Instant::now();
             let mut a = start(&clock, &fake, BridgeOpts::default());
             let end = drive(&clock, &mut a.bridge).await.expect("the bridge ends");
             assert!(matches!(end, BridgeEnd::GaveUp(_)), "{end:?}");
@@ -1422,6 +1441,25 @@ mod tests {
                 "the last dial is at the limit"
             );
             drop(a.w);
+        });
+    }
+
+    #[test]
+    fn a_write_that_makes_no_progress_for_the_wait_drops_the_connection() {
+        in_clock(async |clock| {
+            let fake = Fake::new();
+            fake.set_stall(true);
+            let mut a = start(&clock, &fake, BridgeOpts::default());
+            until(&clock, "the first dial", || fake.dials().len() == 1).await;
+            // a line longer than the pipe's room: the write waits for a reader that never comes
+            a.send(req(1, "ping", json!({"pad": "x".repeat(100)})))
+                .await;
+            until(&clock, "the bridge dialed again", || {
+                fake.dials().len() == 2
+            })
+            .await;
+            // the wait (10 s), then the redial's backoff (100 ms)
+            assert_eq!(clock.elapsed(), Duration::from_millis(10_100));
         });
     }
 
