@@ -17,10 +17,19 @@ path = "src/bin/vor-mock.rs"
 required-features = ["mock"]
 
 [dependencies]
+saman.workspace = true
+stund.workspace = true
+villa.workspace = true
+annall.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+eitri.workspace = true
+stund = { workspace = true, features = ["test-hooks"] }
 tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

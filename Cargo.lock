@@ -8090,10 +8090,15 @@ version = "0.1.0"
 name = "vor"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "eitri",
+ "saman",
  "serde",
  "serde_json",
+ "stund",
  "tokio",
  "tokio-util",
+ "villa",
 ]
 
 [[package]]

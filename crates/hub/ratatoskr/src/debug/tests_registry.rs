@@ -93,7 +93,7 @@ impl Mocks {
         let ms: Vec<Mock> = std::mem::take(&mut *self.running.lock().unwrap());
         let mut out = vec![];
         for m in ms {
-            out.push(m.finish().await);
+            out.push(m.finish().await.map_err(|e| e.to_string()));
         }
         out
     }
