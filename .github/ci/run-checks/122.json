@@ -1,0 +1,6 @@
+{"run": {"id": 122, "created_at": "2026-11-22T10:00:00Z", "head_sha": "bbbb"},
+ "jobs": [
+  {"id": 1221, "name": "Runtime / build (ubuntu-24.04)", "conclusion": "failure", "labels": ["ubuntu-24.04"], "log": "error[E0425]: cannot find value\n"},
+  {"id": 1222, "name": "Runtime / escape suite on the runner (ubuntu-24.04)", "conclusion": "failure", "labels": ["ubuntu-24.04"], "log": "Artifact not found for name: x64-bins\n"},
+  {"id": 1223, "name": "CI gate", "conclusion": "failure", "labels": ["ubuntu-24.04"], "log": "runtime: failure\n"}
+ ]}

@@ -1,0 +1,13 @@
+{
+  "aaaa": [
+    {"id": 1, "name": "CI", "event": "push", "head_branch": "ci/x"},
+    {"id": 2, "name": "CI", "event": "pull_request", "head_branch": "ci/x"},
+    {"id": 3, "name": "CodeQL", "event": "pull_request", "head_branch": "ci/x"}
+  ],
+  "bbbb": [
+    {"id": 4, "name": "CI", "event": "pull_request", "head_branch": "ci/x"},
+    {"id": 5, "name": "CI", "event": "push", "head_branch": "main"},
+    {"id": 6, "name": "CI", "event": "workflow_dispatch", "head_branch": "ci/x"},
+    {"id": 7, "name": "CodeQL", "event": "push", "head_branch": "main"}
+  ]
+}

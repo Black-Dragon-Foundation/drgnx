@@ -175,6 +175,30 @@ gh workflow run runtime.yml --ref ci/my-lane -f only=rt-fleet
 gh workflow run runtime.yml --ref ci/my-lane -f only=rt-macrunner
 ```
 
+## Checking a run
+
+`.github/ci/run-checks.sh` reads a finished run through the GitHub API (its jobs, their logs, its escape reports) and
+prints one `check N: PASS|FAIL <why>` line per check; it exits 1 when one failed. It is how a change to CI's layout is
+shown to keep its promises:
+
+| Check | Command | Passes when |
+|---|---|---|
+| 1 | `runs SHA` | `CI` ran at most once as `pull_request` and once as `push` for the commit, the push on `main` |
+| 2 | `compiles RUN` | every job stays within its row of `.github/ci/compile-budget.txt`: the most `Compiling drgnx-ratatoskr v` lines and `Compiling ` lines in all; a consumer's row is `0 0`, and a job with no row fails |
+| 3 | `cache RUN` | every build job (a row with `any`) restored its target cache (`Cache restored from key: cargo-…`) within the toolchain of the key it prints as `cache-primary-key:` (the part through `-rustc-<version>-`), and compiled fewer than 5 % of its target's third-party packages (`cargo metadata --filter-platform`, workspace members left out) |
+| 4 | `budget [--before LISTING]` | the repository's caches hold under 10 GiB, and every `main` entry of a saved listing (`gh api …/actions/caches --paginate`) is still there |
+| 5 | `wall RUN --warm\|--cold` | the run's start to its `CI gate`'s end takes at most 25 (warm) or 60 (cold) minutes |
+| 6 | `seeded RUN --gate-fails --failed JOB…` | on a run with a seeded failure, `CI gate` failed and each job whose name holds JOB failed rather than being skipped |
+| 7 | `coverage RUN BASE_RUN` | the same counts as the base run: nextest's `Starting N tests` per platform, the macOS runner's `Running` lines, domr's rows and skips, and each `escape-report-*`'s rows, statuses and skip reasons |
+| 8 | `macos RUN…` | at most six macOS jobs over the runs of one push, at most four at once |
+| 9 | `env RUN` | the Fedora jobs pull the `Prebuilt image` job's digest, and each `rustc -V` (or `toolchain.txt: rustc …`) line is `test/container/rust-version`'s; a job that compiles must log one (MSRV and the fuzz build have their own toolchains) |
+| 10 | `shards RUN [--base BASE_RUN]` | each Fedora test consumer logs `shard-stats: step_seconds=N peak_bytes=N`; above 12 GiB it warns (the runner has 16 GB) |
+
+`all RUN [--base BASE_RUN] [--warm|--cold]` runs each that applies to one run. `CHECKS_CACHE=DIR` keeps the fetched
+jobs and logs between calls; `CHECKS_METADATA=FILE` gives check 3 a saved `cargo metadata` instead of running cargo.
+`bash .github/ci/run-checks.sh --self-test` runs every check against the fixtures in `.github/ci/run-checks/` (one
+JSON per run: its record, its jobs with their logs, its artifacts) through a stand-in `gh`; `scripts` runs it.
+
 ## Runners in CI
 
 Where each part of the runners work (`docs/guide/runners.md`, `docs/develop/hub.md`, `docs/develop/sleipnir.md`) is

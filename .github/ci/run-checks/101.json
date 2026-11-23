@@ -1,0 +1,7 @@
+{"run": {"id": 101, "created_at": "2026-11-22T10:00:00Z", "head_sha": "aaaa"},
+ "jobs": [
+  {"id": 1011, "name": "Runtime / build (Fedora 45)", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "   Compiling serde v1.0.0\n   Compiling drgnx-ratatoskr v0.1.0 (/__w/drgnx/drgnx/crates/hub/ratatoskr)\n   Compiling drgnx-ratatoskr v0.1.0 (/__w/drgnx/drgnx/crates/hub/ratatoskr)\n   Compiling drgnx-ratatoskr v0.1.0 (/__w/drgnx/drgnx/crates/hub/ratatoskr)\n"},
+  {"id": 1012, "name": "Runtime / escape suite on the runner (ubuntu-24.04)", "conclusion": "success", "labels": ["ubuntu-24.04"],
+   "log": "unpacked x64-bins\n   Compiling serde v1.0.0\nPASS rows/any/one\n"}
+ ]}
