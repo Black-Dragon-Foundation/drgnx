@@ -98,29 +98,32 @@ pub async fn tls_server(leaf: Leaf) -> TlsServer {
     let port = listener.local_addr().unwrap().port();
     let requests = Arc::new(AtomicUsize::new(0));
     let counter = requests.clone();
-    tokio::spawn(async move {
+    saman::spawn("test-server", async move {
         loop {
             let Ok((tcp, _)) = listener.accept().await else {
                 return;
             };
             let acceptor = acceptor.clone();
             let counter = counter.clone();
-            tokio::spawn(async move {
+            saman::spawn("test-server", async move {
                 let Ok(mut tls) = acceptor.accept(tcp).await else {
                     return;
                 };
                 let mut buf = [0u8; 4096];
                 if matches!(tls.read(&mut buf).await, Ok(n) if n > 0) {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    let _ = tls
-                        .write_all(
+                    drop(
+                        tls.write_all(
                             b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
                         )
-                        .await;
-                    let _ = tls.shutdown().await;
+                        .await,
+                    );
+                    drop(tls.shutdown().await);
                 }
-            });
+            })
+            .detach("a test server ends with the test");
         }
-    });
+    })
+    .detach("a test server ends with the test");
     TlsServer { port, requests }
 }

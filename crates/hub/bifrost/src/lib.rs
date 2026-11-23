@@ -142,11 +142,11 @@ impl Restrictions {
         ignore: Vec<String>,
         data_collection_deny: bool,
         zdr: bool,
-    ) -> Result<Self, String> {
+    ) -> villa::Result<Self> {
         if let Some(bad) = only.iter().chain(&ignore).find(|s| !is_slug(s)) {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "OpenRouter restrictions: {bad:?} is not a provider slug (like \"anthropic\")"
-            ));
+            )));
         }
         Ok(Self {
             only,

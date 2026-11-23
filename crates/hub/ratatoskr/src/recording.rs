@@ -451,7 +451,7 @@ impl Tap for Recorder {
             .unwrap_or(Value::Null);
         let mut line = Map::new();
         line.insert("seq".into(), json!(seq));
-        line.insert("t_ms".into(), json!(self.t_ms(sent.at)));
+        line.insert("t_ms".into(), json!(self.t_ms(crate::clock::real_now())));
         line.insert("id".into(), json!(format!("x{id}")));
         if let Some(s) = sent.session {
             line.insert("session".into(), json!(s));
@@ -474,8 +474,8 @@ impl Tap for Recorder {
             line,
             response: Map::new(),
             chunks: Vec::new(),
-            begun: sent.at,
-            last: sent.at,
+            begun: crate::clock::real_now(),
+            last: crate::clock::real_now(),
             scrub,
             lines: lock(&self.lines).clone(),
             written: false,
@@ -522,7 +522,9 @@ impl Line {
 }
 
 impl Exchange for Line {
-    fn head(&mut self, at: Instant, status: u16, headers: &http::HeaderMap) {
+    // the gateway's instants are stund's; this file's are the hub clock's, read where the event is handled
+    fn head(&mut self, _at: stund::Instant, status: u16, headers: &http::HeaderMap) {
+        let at = crate::clock::real_now();
         let pairs: Vec<(&str, &str)> = headers
             .iter()
             .filter_map(|(n, v)| Some((n.as_str(), v.to_str().ok()?)))
@@ -535,13 +537,14 @@ impl Exchange for Line {
         self.last = at;
     }
 
-    fn chunk(&mut self, at: Instant, data: &[u8]) {
+    fn chunk(&mut self, _at: stund::Instant, data: &[u8]) {
+        let at = crate::clock::real_now();
         self.chunks
             .push(json!([ms(self.last, at), stored(&self.scrub, data)]));
         self.last = at;
     }
 
-    fn end(mut self: Box<Self>, _at: Instant, end: End) {
+    fn end(mut self: Box<Self>, _at: stund::Instant, end: End) {
         let end = match end {
             End::Complete => json!({"end": "complete"}),
             End::Dropped => json!({"end": "dropped"}),

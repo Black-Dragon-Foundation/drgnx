@@ -7,9 +7,8 @@
 //! first (`cargo build -p domr --bin ratatoskr-mock`; a workspace `cargo test` builds it anyway).
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -35,7 +34,6 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
 const AGENT: &str = "agent-token-0123456789abcdef0123456789abcdef0123456789abcdef0123";
 const OTHER: &str = "other-token-0123456789abcdef0123456789abcdef0123456789abcdef0123";
@@ -56,7 +54,8 @@ fn mock_bin() -> PathBuf {
 
 /// `ratatoskr-mock llm` with `script`, on 127.0.0.1; killed when dropped.
 struct Mock {
-    child: Child,
+    stop: Option<std::sync::mpsc::Sender<()>>,
+    keeper: Option<std::thread::JoinHandle<()>>,
     port: u16,
     log: PathBuf,
     /// The mock's stdout lines after the port line (`--print-closed`: `MOCK-LLM-CLOSED` per hang-up).
@@ -68,23 +67,39 @@ impl Mock {
     fn start(script: Value) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let script_path = dir.path().join("script.json");
-        std::fs::write(&script_path, script.to_string()).unwrap();
+        eitri::replace_file(&script_path, script.to_string().as_bytes()).unwrap();
         let log = dir.path().join("log.jsonl");
-        let mut child = Command::new(mock_bin())
-            .arg("llm")
-            .arg("--script")
-            .arg(&script_path)
-            .arg("--log")
-            .arg(&log)
-            .arg("--parent")
-            .arg(std::process::id().to_string())
-            .arg("--print-closed")
-            .stdout(Stdio::piped())
-            .spawn()
+        let pid = std::process::id().to_string();
+        let (script_arg, log_arg) = (script_path.clone(), log.clone());
+        let (ready, started) = std::sync::mpsc::channel();
+        let (stop, stopped) = std::sync::mpsc::channel::<()>();
+        // the child lives on a thread of its own: `TestChild` runs a reactor, which a test's runtime cannot host
+        let keeper = saman::spawn_thread("mock-child", move || {
+            let mut child = raun::proc::TestChild::start(
+                &mock_bin(),
+                &[
+                    "llm".as_ref(),
+                    "--script".as_ref(),
+                    script_arg.as_os_str(),
+                    "--log".as_ref(),
+                    log_arg.as_os_str(),
+                    "--parent".as_ref(),
+                    pid.as_ref(),
+                    "--print-closed".as_ref(),
+                ],
+                &[],
+            )
             .unwrap();
-        let mut out = BufReader::new(child.stdout.take().unwrap());
-        let mut line = String::new();
-        out.read_line(&mut line).unwrap();
+            let line = child.read_line().unwrap();
+            let out = child.take_stdout().unwrap();
+            saman::delivered(ready.send((line, out)), "mock start");
+            // until the `Mock` drops its end: then the child and its group end
+            let gone = stopped.recv().is_err();
+            tracing::debug!(gone, "mock stopped");
+            drop(child);
+        })
+        .unwrap();
+        let (line, out) = started.recv().unwrap();
         let port = line
             .trim()
             .strip_prefix("MOCK-LLM-PORT ")
@@ -92,15 +107,17 @@ impl Mock {
             .unwrap_or_else(|| panic!("ratatoskr-mock said {line:?}"));
         // the rest of its stdout, line by line, until it ends with the process
         let (tx, said) = mpsc::unbounded_channel();
-        std::thread::spawn(move || {
+        saman::spawn_thread("mock-stdout", move || {
             for line in out.lines().map_while(Result::ok) {
                 if tx.send(line).is_err() {
                     break;
                 }
             }
-        });
+        })
+        .unwrap();
         Self {
-            child,
+            stop: Some(stop),
+            keeper: Some(keeper),
             port,
             log,
             said,
@@ -124,7 +141,7 @@ impl Mock {
     }
 
     fn log(&self) -> Vec<Value> {
-        std::fs::read_to_string(&self.log)
+        eitri::read_string(&self.log, 64 << 20)
             .unwrap_or_default()
             .lines()
             .filter_map(|l| serde_json::from_str(l).ok())
@@ -149,8 +166,10 @@ impl Mock {
 
 impl Drop for Mock {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        drop(self.stop.take());
+        if let Some(keeper) = self.keeper.take() {
+            drop(keeper.join());
+        }
     }
 }
 
@@ -184,7 +203,7 @@ struct Book {
 
 impl Book {
     fn rows(&self) -> Vec<SpendRow> {
-        self.rows.lock().unwrap().clone()
+        saman::lock(&self.rows).clone()
     }
 }
 
@@ -205,7 +224,7 @@ impl Ledger for Book {
             if self.hold.load(Ordering::SeqCst) {
                 self.gate.notified().await;
             }
-            self.rows.lock().unwrap().push(row);
+            saman::lock(&self.rows).push(row);
         })
     }
 }
@@ -248,7 +267,7 @@ struct Gw {
     port: u16,
     book: Arc<Book>,
     events: mpsc::UnboundedReceiver<GatewayEvent>,
-    listener: JoinHandle<()>,
+    listener: saman::Task<()>,
 }
 
 impl Gw {
@@ -288,7 +307,7 @@ impl Gw {
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let listener = tokio::spawn(listen::serve_tcp(gw.clone(), listener, port));
+        let listener = saman::spawn("test-server", listen::serve_tcp(gw.clone(), listener, port));
         Self {
             gw,
             keys,
@@ -311,7 +330,7 @@ impl Gw {
             listener,
             ..
         } = self;
-        listener.abort();
+        drop(listener);
         drop(gw);
         tokio::time::timeout(Duration::from_secs(30), async {
             let mut rest = Vec::new();
@@ -386,13 +405,13 @@ impl Reply {
     }
 }
 
-async fn open<S>(io: S) -> (client::SendRequest<Full<Bytes>>, JoinHandle<()>)
+async fn open<S>(io: S) -> (client::SendRequest<Full<Bytes>>, saman::Task<()>)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let (sender, conn) = client::handshake(TokioIo::new(io)).await.unwrap();
-    let task = tokio::spawn(async move {
-        let _ = conn.await;
+    let task = saman::spawn("test-server", async move {
+        drop(conn.await);
     });
     (sender, task)
 }
@@ -430,50 +449,56 @@ const MESSAGE_STOP: &str = "event: message_stop\ndata: {\"type\":\"message_stop\
 
 // ------------------------------------------------------------------------------------------ the agent's chain
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_stream_passes_through_and_the_first_chunk_goes_first() {
-    let mock = Mock::start(json!([
-        {"path": "/a/v1/messages", "chunks": [[0, MESSAGE_START], [1500, MESSAGE_DELTA]]}
-    ]));
-    let mut gw = Gw::start(
-        vec![provider(
-            "a",
-            Kind::Anthropic,
-            &mock.url("/a"),
-            Auth::XApiKey,
-        )],
-        vec![(AGENT, agent(&["a"], None))],
-        &[("a", "sk-a")],
-        0.0,
-    )
-    .await;
-    let (mut sender, _conn) = open(TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap()).await;
-    let response = sender
-        .send_request(gw.request(AGENT, "/v1/messages", "{\"stream\":true}"))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
-    let mut body = response.into_body();
-    // streamed, not buffered: the first frame holds the first chunk alone (the mock sends the second 1.5 s later), so
-    // this does not depend on how fast the machine is
-    let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
-    assert!(
-        text(&first).starts_with("event: message_start"),
-        "{first:?}"
-    );
-    assert!(!text(&first).contains("message_delta"));
-    let rest = body.collect().await.unwrap().to_bytes();
-    assert_eq!(
-        text(&first) + &text(&rest),
-        format!("{MESSAGE_START}{MESSAGE_DELTA}")
-    );
-    let row = gw.row().await;
-    assert_eq!((row.input, row.output, row.status), (10, 5, 200));
+#[test]
+fn a_stream_passes_through_and_the_first_chunk_goes_first() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let mock = Mock::start(json!([
+            {"path": "/a/v1/messages", "chunks": [[0, MESSAGE_START], [1500, MESSAGE_DELTA]]}
+        ]));
+        let mut gw = Gw::start(
+            vec![provider(
+                "a",
+                Kind::Anthropic,
+                &mock.url("/a"),
+                Auth::XApiKey,
+            )],
+            vec![(AGENT, agent(&["a"], None))],
+            &[("a", "sk-a")],
+            0.0,
+        )
+        .await;
+        let (mut sender, _conn) =
+            open(TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap()).await;
+        let response = sender
+            .send_request(gw.request(AGENT, "/v1/messages", "{\"stream\":true}"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
+        let mut body = response.into_body();
+        // streamed, not buffered: the first frame holds the first chunk alone (the mock sends the second 1.5 s later), so
+        // this does not depend on how fast the machine is
+        let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
+        assert!(
+            text(&first).starts_with("event: message_start"),
+            "{first:?}"
+        );
+        assert!(!text(&first).contains("message_delta"));
+        let rest = body.collect().await.unwrap().to_bytes();
+        assert_eq!(
+            text(&first) + &text(&rest),
+            format!("{MESSAGE_START}{MESSAGE_DELTA}")
+        );
+        let row = gw.row().await;
+        assert_eq!((row.input, row.output, row.status), (10, 5, 200));
+    });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_rate_limit_moves_to_the_next_provider() {
+#[test]
+fn a_rate_limit_moves_to_the_next_provider() {
+    saman::Executor::new(2)
+        .unwrap()
+        .block_on(async {
     let mock = Mock::start(json!([
         {"path": "/a/", "status": 429, "body": "{\"error\":\"slow down\"}", "headers": {"Retry-After": "3"}},
         {"path": "/b/", "body": "{\"id\":\"from-b\"}"}
@@ -505,86 +530,94 @@ async fn a_rate_limit_moves_to_the_next_provider() {
         .collect();
     assert_eq!(bodies[0]["model"], "a-model");
     assert_eq!(bodies[1]["model"], "b-model");
+        });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_last_provider_429_is_passed_through_with_retry_after() {
-    let refusal =
-        "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"later\"}}";
-    let mock = Mock::start(json!([
-        {"path": "/a/", "status": 500, "body": "{}"},
-        {"path": "/b/", "status": 429, "body": refusal, "headers": {"Retry-After": "7"}}
-    ]));
-    let mut gw = Gw::start(
-        vec![
-            provider("a", Kind::Anthropic, &mock.url("/a"), Auth::XApiKey),
-            provider("b", Kind::Anthropic, &mock.url("/b"), Auth::XApiKey),
-        ],
-        vec![(AGENT, agent(&["a", "b"], None))],
-        &[("a", "sk-a"), ("b", "sk-b")],
-        0.0,
-    )
-    .await;
-    let reply = gw.call(AGENT, "/v1/messages", "{}").await;
-    assert_eq!(reply.status, 429);
-    assert_eq!(reply.headers[RETRY_AFTER], "7");
-    assert_eq!(reply.headers[CONTENT_TYPE], "application/json");
-    assert_eq!(reply.body, refusal);
-    // the passed-through refusal is a completed request: one row, with its status. The row may already be sent when
-    // the reply is read, so the events are taken in order up to it (the fallback comes first).
-    let mut before = Vec::new();
-    let row = loop {
-        match gw.until(|_| true).await {
-            GatewayEvent::Request(row) => break row,
-            e => before.push(e),
-        }
-    };
-    assert_eq!(
-        fallbacks(&before),
-        vec![("a".to_string(), "b".to_string(), "HTTP 500".to_string())]
-    );
-    assert_eq!((row.provider.as_str(), row.status), ("b", 429));
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_dead_or_failing_provider_moves_on_too() {
-    let mock = Mock::start(json!([
-        {"path": "/f/", "status": 503, "body": "{}"},
-        {"path": "/g/", "body": "{\"ok\":true}"}
-    ]));
-    let mut gw = Gw::start(
-        vec![
-            provider("dead", Kind::Anthropic, &dead_url(), Auth::None),
-            provider("failing", Kind::Anthropic, &mock.url("/f"), Auth::None),
-            provider("good", Kind::Anthropic, &mock.url("/g"), Auth::None),
-        ],
-        vec![(AGENT, agent(&["dead", "failing", "good"], None))],
-        &[],
-        0.0,
-    )
-    .await;
-    let reply = gw.call(AGENT, "/v1/messages", "{}").await;
-    assert_eq!(reply.status, 200);
-    assert_eq!(reply.body, "{\"ok\":true}");
-    let moves = fallbacks(&gw.pending());
-    assert_eq!(moves.len(), 2, "{moves:?}");
-    assert_eq!(
-        (moves[0].0.as_str(), moves[0].1.as_str()),
-        ("dead", "failing")
-    );
-    assert!(moves[0].2.starts_with("no answer ("), "{moves:?}");
-    assert_eq!(
-        moves[1],
-        (
-            "failing".to_string(),
-            "good".to_string(),
-            "HTTP 503".to_string()
+#[test]
+fn the_last_provider_429_is_passed_through_with_retry_after() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let refusal =
+            "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"later\"}}";
+        let mock = Mock::start(json!([
+            {"path": "/a/", "status": 500, "body": "{}"},
+            {"path": "/b/", "status": 429, "body": refusal, "headers": {"Retry-After": "7"}}
+        ]));
+        let mut gw = Gw::start(
+            vec![
+                provider("a", Kind::Anthropic, &mock.url("/a"), Auth::XApiKey),
+                provider("b", Kind::Anthropic, &mock.url("/b"), Auth::XApiKey),
+            ],
+            vec![(AGENT, agent(&["a", "b"], None))],
+            &[("a", "sk-a"), ("b", "sk-b")],
+            0.0,
         )
-    );
+        .await;
+        let reply = gw.call(AGENT, "/v1/messages", "{}").await;
+        assert_eq!(reply.status, 429);
+        assert_eq!(reply.headers[RETRY_AFTER], "7");
+        assert_eq!(reply.headers[CONTENT_TYPE], "application/json");
+        assert_eq!(reply.body, refusal);
+        // the passed-through refusal is a completed request: one row, with its status. The row may already be sent when
+        // the reply is read, so the events are taken in order up to it (the fallback comes first).
+        let mut before = Vec::new();
+        let row = loop {
+            match gw.until(|_| true).await {
+                GatewayEvent::Request(row) => break row,
+                e => before.push(e),
+            }
+        };
+        assert_eq!(
+            fallbacks(&before),
+            vec![("a".to_string(), "b".to_string(), "HTTP 500".to_string())]
+        );
+        assert_eq!((row.provider.as_str(), row.status), ("b", 429));
+    });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn when_every_provider_fails_the_agent_hears_why() {
+#[test]
+fn a_dead_or_failing_provider_moves_on_too() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let mock = Mock::start(json!([
+            {"path": "/f/", "status": 503, "body": "{}"},
+            {"path": "/g/", "body": "{\"ok\":true}"}
+        ]));
+        let mut gw = Gw::start(
+            vec![
+                provider("dead", Kind::Anthropic, &dead_url(), Auth::None),
+                provider("failing", Kind::Anthropic, &mock.url("/f"), Auth::None),
+                provider("good", Kind::Anthropic, &mock.url("/g"), Auth::None),
+            ],
+            vec![(AGENT, agent(&["dead", "failing", "good"], None))],
+            &[],
+            0.0,
+        )
+        .await;
+        let reply = gw.call(AGENT, "/v1/messages", "{}").await;
+        assert_eq!(reply.status, 200);
+        assert_eq!(reply.body, "{\"ok\":true}");
+        let moves = fallbacks(&gw.pending());
+        assert_eq!(moves.len(), 2, "{moves:?}");
+        assert_eq!(
+            (moves[0].0.as_str(), moves[0].1.as_str()),
+            ("dead", "failing")
+        );
+        assert!(moves[0].2.starts_with("no answer ("), "{moves:?}");
+        assert_eq!(
+            moves[1],
+            (
+                "failing".to_string(),
+                "good".to_string(),
+                "HTTP 503".to_string()
+            )
+        );
+    });
+}
+
+#[test]
+fn when_every_provider_fails_the_agent_hears_why() {
+    saman::Executor::new(2)
+        .unwrap()
+        .block_on(async {
     let mut nomsg = provider("nomsg", Kind::Openai, &dead_url(), Auth::None);
     nomsg.messages = false;
     let mut gw = Gw::start(
@@ -622,10 +655,14 @@ async fn when_every_provider_fails_the_agent_hears_why() {
     let late = gw.settled().await;
     assert!(book.rows().is_empty(), "no provider answered: no spend row");
     assert!(!late.iter().any(|e| matches!(e, GatewayEvent::Request(_))));
+        });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn no_fallback_once_the_answer_started() {
+#[test]
+fn no_fallback_once_the_answer_started() {
+    saman::Executor::new(2)
+        .unwrap()
+        .block_on(async {
     let overloaded =
         "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}\n\n";
     let mock = Mock::start(json!([
@@ -663,98 +700,108 @@ async fn no_fallback_once_the_answer_started() {
     assert_eq!(row.provider, "a");
     assert!(fallbacks(&gw.pending()).is_empty());
     assert_eq!(mock.paths(), vec!["/a/v1/messages"], "b was never asked");
+        });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spend_is_recorded_once_per_request() {
-    let mock = Mock::start(json!([
-        {"path": "/a/", "chunks": [[0, MESSAGE_START], [20, MESSAGE_DELTA], [20, MESSAGE_STOP]]}
-    ]));
-    let mut priced = provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None);
-    priced.price = Some(Price {
-        input_per_m: 3.0,
-        output_per_m: 15.0,
+#[test]
+fn spend_is_recorded_once_per_request() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let mock = Mock::start(json!([
+            {"path": "/a/", "chunks": [[0, MESSAGE_START], [20, MESSAGE_DELTA], [20, MESSAGE_STOP]]}
+        ]));
+        let mut priced = provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None);
+        priced.price = Some(Price {
+            input_per_m: 3.0,
+            output_per_m: 15.0,
+        });
+        let mut gw = Gw::start(vec![priced], vec![(AGENT, agent(&["a"], None))], &[], 0.0).await;
+        let reply = gw.call(AGENT, "/v1/messages", "{}").await;
+        assert_eq!(reply.status, 200);
+        assert_eq!(
+            reply.body,
+            format!("{MESSAGE_START}{MESSAGE_DELTA}{MESSAGE_STOP}")
+        );
+        let row = gw.row().await;
+        let book = gw.book.clone();
+        let late = gw.settled().await;
+        assert_eq!(book.rows(), vec![row.clone()], "one row for three chunks");
+        assert!(!late.iter().any(|e| matches!(e, GatewayEvent::Request(_))));
+        assert_eq!(row.job.as_deref(), Some("j1"));
+        assert_eq!(row.task.as_deref(), Some("t1"));
+        assert_eq!(row.agent.as_deref(), Some("a1"));
+        assert_eq!(row.provider, "a");
+        assert_eq!(row.model.as_deref(), Some("a-model"));
+        assert_eq!((row.input, row.output, row.status), (10, 5, 200));
+        assert!(
+            (row.cost - (10.0 * 3.0 + 5.0 * 15.0) / 1e6).abs() < 1e-12,
+            "{}",
+            row.cost
+        );
     });
-    let mut gw = Gw::start(vec![priced], vec![(AGENT, agent(&["a"], None))], &[], 0.0).await;
-    let reply = gw.call(AGENT, "/v1/messages", "{}").await;
-    assert_eq!(reply.status, 200);
-    assert_eq!(
-        reply.body,
-        format!("{MESSAGE_START}{MESSAGE_DELTA}{MESSAGE_STOP}")
-    );
-    let row = gw.row().await;
-    let book = gw.book.clone();
-    let late = gw.settled().await;
-    assert_eq!(book.rows(), vec![row.clone()], "one row for three chunks");
-    assert!(!late.iter().any(|e| matches!(e, GatewayEvent::Request(_))));
-    assert_eq!(row.job.as_deref(), Some("j1"));
-    assert_eq!(row.task.as_deref(), Some("t1"));
-    assert_eq!(row.agent.as_deref(), Some("a1"));
-    assert_eq!(row.provider, "a");
-    assert_eq!(row.model.as_deref(), Some("a-model"));
-    assert_eq!((row.input, row.output, row.status), (10, 5, 200));
-    assert!(
-        (row.cost - (10.0 * 3.0 + 5.0 * 15.0) / 1e6).abs() < 1e-12,
-        "{}",
-        row.cost
-    );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_skipped_step_records_nothing() {
-    let mock = Mock::start(json!([
-        {"path": "/a/", "body": "{\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}"}
-    ]));
-    let mut gw = Gw::start(
-        vec![
-            provider("nokey", Kind::Anthropic, &mock.url("/n"), Auth::XApiKey),
-            provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None),
-        ],
-        vec![(AGENT, agent(&["nokey", "a"], None))],
-        &[],
-        0.0,
-    )
-    .await;
-    assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 200);
-    let row = gw.row().await;
-    let book = gw.book.clone();
-    gw.settled().await;
-    assert_eq!(book.rows(), vec![row.clone()]);
-    assert_eq!((row.provider.as_str(), row.input, row.output), ("a", 4, 2));
-    assert_eq!(mock.paths(), vec!["/a/v1/messages"]);
+#[test]
+fn a_skipped_step_records_nothing() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let mock = Mock::start(json!([
+            {"path": "/a/", "body": "{\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}"}
+        ]));
+        let mut gw = Gw::start(
+            vec![
+                provider("nokey", Kind::Anthropic, &mock.url("/n"), Auth::XApiKey),
+                provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None),
+            ],
+            vec![(AGENT, agent(&["nokey", "a"], None))],
+            &[],
+            0.0,
+        )
+        .await;
+        assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 200);
+        let row = gw.row().await;
+        let book = gw.book.clone();
+        gw.settled().await;
+        assert_eq!(book.rows(), vec![row.clone()]);
+        assert_eq!((row.provider.as_str(), row.input, row.output), ("a", 4, 2));
+        assert_eq!(mock.paths(), vec!["/a/v1/messages"]);
+    });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_budget_stops_new_requests_at_equal() {
-    let mock = Mock::start(json!([{"path": "/a/", "body": "{}"}]));
-    let mut gw = Gw::start(
-        vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
-        vec![(AGENT, agent(&["a"], Some(1.0)))],
-        &[],
-        1.0,
-    )
-    .await;
-    let reply = gw.call(AGENT, "/v1/messages", "{}").await;
-    assert_eq!(reply.status, 429);
-    let error = reply.json();
-    assert_eq!(error["error"]["type"], "budget_exceeded");
-    assert_eq!(
-        error["error"]["message"],
-        "the job's budget (1 USD) is spent"
-    );
-    assert_eq!(
-        gw.pending(),
-        vec![GatewayEvent::Budget {
-            job: "j1".into(),
-            spent: 1.0,
-            budget: 1.0
-        }]
-    );
-    assert!(mock.requests().is_empty());
+#[test]
+fn the_budget_stops_new_requests_at_equal() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let mock = Mock::start(json!([{"path": "/a/", "body": "{}"}]));
+        let mut gw = Gw::start(
+            vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
+            vec![(AGENT, agent(&["a"], Some(1.0)))],
+            &[],
+            1.0,
+        )
+        .await;
+        let reply = gw.call(AGENT, "/v1/messages", "{}").await;
+        assert_eq!(reply.status, 429);
+        let error = reply.json();
+        assert_eq!(error["error"]["type"], "budget_exceeded");
+        assert_eq!(
+            error["error"]["message"],
+            "the job's budget (1 USD) is spent"
+        );
+        assert_eq!(
+            gw.pending(),
+            vec![GatewayEvent::Budget {
+                job: "j1".into(),
+                spent: 1.0,
+                budget: 1.0
+            }]
+        );
+        assert!(mock.requests().is_empty());
+    });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn budget_event_after_the_crossing_request() {
+#[test]
+fn budget_event_after_the_crossing_request() {
+    saman::Executor::new(2)
+        .unwrap()
+        .block_on(async {
     let mock = Mock::start(json!([
         {"path": "/a/", "body": "{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.6}}"}
     ]));
@@ -778,13 +825,17 @@ async fn budget_event_after_the_crossing_request() {
     }
     assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 429);
     assert_eq!(mock.requests().len(), 1);
+        });
 }
 
 /// The spend row is committed after the answer: a request that comes before that commit lands is judged against the
 /// budget with it (the check waits for the job's pending rows), so the budget is not exceeded by a request that raced the
 /// commit.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_request_racing_the_spend_commit_sees_the_spend() {
+#[test]
+fn a_request_racing_the_spend_commit_sees_the_spend() {
+    saman::Executor::new(2)
+        .unwrap()
+        .block_on(async {
     let mock = Mock::start(json!([
         {"path": "/a/", "body": "{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.6}}"}
     ]));
@@ -799,7 +850,7 @@ async fn a_request_racing_the_spend_commit_sees_the_spend() {
     assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 200);
     // the row of that request is not committed: a second request is asked now
     let (port, token) = (gw.port, AGENT);
-    let second = tokio::spawn(async move {
+    let second = saman::spawn("test-server", async move {
         let (mut sender, _conn) =
             open(TcpStream::connect(("127.0.0.1", port)).await.unwrap()).await;
         let request = Request::post("/v1/messages")
@@ -823,145 +874,159 @@ async fn a_request_racing_the_spend_commit_sees_the_spend() {
         "the second request passed the budget before the first's row landed: {body}"
     );
     assert_eq!(mock.requests().len(), 1);
+        });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_hang_up_stops_the_upstream() {
-    let mut chunks = vec![json!([0, MESSAGE_START])];
-    chunks.extend((0..40).map(|_| json!([100, ": tick\n\n"])));
-    let mut mock = Mock::start(json!([{"path": "/a/", "chunks": chunks}]));
-    let mut gw = Gw::start(
-        vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
-        vec![(AGENT, agent(&["a"], None))],
-        &[],
-        0.0,
-    )
-    .await;
-    let (mut sender, conn) = open(TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap()).await;
-    let response = sender
-        .send_request(gw.request(AGENT, "/v1/messages", "{}"))
-        .await
-        .unwrap();
-    let mut body = response.into_body();
-    let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
-    assert!(text(&first).starts_with("event: message_start"));
-    // the agent hangs up
-    drop(body);
-    drop(sender);
-    conn.abort();
-    // the provider's side of the stream is hung up on, while it still has about 4 s of ticks to send
-    mock.hang_up().await;
-    let row = gw.row().await;
-    assert_eq!(
-        (row.provider.as_str(), row.status, row.input),
-        ("a", 200, 10)
-    );
-    let book = gw.book.clone();
-    gw.settled().await;
-    assert_eq!(book.rows().len(), 1);
+#[test]
+fn a_hang_up_stops_the_upstream() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let mut chunks = vec![json!([0, MESSAGE_START])];
+        chunks.extend((0..40).map(|_| json!([100, ": tick\n\n"])));
+        let mut mock = Mock::start(json!([{"path": "/a/", "chunks": chunks}]));
+        let mut gw = Gw::start(
+            vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
+            vec![(AGENT, agent(&["a"], None))],
+            &[],
+            0.0,
+        )
+        .await;
+        let (mut sender, conn) =
+            open(TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap()).await;
+        let response = sender
+            .send_request(gw.request(AGENT, "/v1/messages", "{}"))
+            .await
+            .unwrap();
+        let mut body = response.into_body();
+        let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
+        assert!(text(&first).starts_with("event: message_start"));
+        // the agent hangs up
+        drop(body);
+        drop(sender);
+        drop(conn);
+        // the provider's side of the stream is hung up on, while it still has about 4 s of ticks to send
+        mock.hang_up().await;
+        let row = gw.row().await;
+        assert_eq!(
+            (row.provider.as_str(), row.status, row.input),
+            ("a", 200, 10)
+        );
+        let book = gw.book.clone();
+        gw.settled().await;
+        assert_eq!(book.rows().len(), 1);
+    });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn no_key_sends_need_keys_once_a_minute() {
-    let mut gw = Gw::start(
-        vec![provider(
-            "nokey",
-            Kind::Anthropic,
-            &dead_url(),
-            Auth::Bearer,
-        )],
-        vec![(AGENT, agent(&["nokey"], None))],
-        &[],
-        0.0,
-    )
-    .await;
-    assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 502);
-    assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 502);
-    let asked: Vec<_> = gw
-        .pending()
-        .into_iter()
-        .filter(|e| matches!(e, GatewayEvent::NeedKeys { .. }))
-        .collect();
-    assert_eq!(
-        asked,
-        vec![GatewayEvent::NeedKeys {
-            providers: vec!["nokey".into()]
-        }]
-    );
+#[test]
+fn no_key_sends_need_keys_once_a_minute() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let mut gw = Gw::start(
+            vec![provider(
+                "nokey",
+                Kind::Anthropic,
+                &dead_url(),
+                Auth::Bearer,
+            )],
+            vec![(AGENT, agent(&["nokey"], None))],
+            &[],
+            0.0,
+        )
+        .await;
+        assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 502);
+        assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 502);
+        let asked: Vec<_> = gw
+            .pending()
+            .into_iter()
+            .filter(|e| matches!(e, GatewayEvent::NeedKeys { .. }))
+            .collect();
+        assert_eq!(
+            asked,
+            vec![GatewayEvent::NeedKeys {
+                providers: vec!["nokey".into()]
+            }]
+        );
+    });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_key_never_reaches_the_agent() {
-    // a string no other run or test holds: this process, and this test
-    let canary = format!(
-        "sk-canary-{}-the-key-never-reaches-the-agent",
-        std::process::id()
-    );
-    let mock = Mock::start(json!([{"path": "/a/", "body": "{\"ok\":true}"}]));
-    let gw = Gw::start(
-        vec![
-            provider("a", Kind::Anthropic, &mock.url("/a"), Auth::Bearer),
-            provider("d", Kind::Anthropic, &dead_url(), Auth::XApiKey),
-        ],
-        vec![(AGENT, agent(&["a"], None)), (OTHER, agent(&["d"], None))],
-        &[("a", canary.as_str()), ("d", canary.as_str())],
-        0.0,
-    )
-    .await;
-    let answered = gw.call(AGENT, "/v1/messages", "{}").await;
-    assert_eq!(answered.status, 200);
-    let failed = gw.call(OTHER, "/v1/messages", "{}").await;
-    assert_eq!(failed.status, 502);
-    for reply in [&answered, &failed] {
-        let seen = format!("{:?}{}", reply.headers, reply.body);
-        assert!(!seen.contains(&canary), "the key reached the agent: {seen}");
-    }
-    // the provider got it, as the provider's auth header
-    assert_eq!(
-        mock.requests()[0]["headers"]["authorization"],
-        format!("Bearer {canary}")
-    );
+#[test]
+fn the_key_never_reaches_the_agent() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        // a string no other run or test holds: this process, and this test
+        let canary = format!(
+            "sk-canary-{}-the-key-never-reaches-the-agent",
+            std::process::id()
+        );
+        let mock = Mock::start(json!([{"path": "/a/", "body": "{\"ok\":true}"}]));
+        let gw = Gw::start(
+            vec![
+                provider("a", Kind::Anthropic, &mock.url("/a"), Auth::Bearer),
+                provider("d", Kind::Anthropic, &dead_url(), Auth::XApiKey),
+            ],
+            vec![(AGENT, agent(&["a"], None)), (OTHER, agent(&["d"], None))],
+            &[("a", canary.as_str()), ("d", canary.as_str())],
+            0.0,
+        )
+        .await;
+        let answered = gw.call(AGENT, "/v1/messages", "{}").await;
+        assert_eq!(answered.status, 200);
+        let failed = gw.call(OTHER, "/v1/messages", "{}").await;
+        assert_eq!(failed.status, 502);
+        for reply in [&answered, &failed] {
+            let seen = format!("{:?}{}", reply.headers, reply.body);
+            assert!(!seen.contains(&canary), "the key reached the agent: {seen}");
+        }
+        // the provider got it, as the provider's auth header
+        assert_eq!(
+            mock.requests()[0]["headers"]["authorization"],
+            format!("Bearer {canary}")
+        );
+    });
 }
 
 // ------------------------------------------------------------------------------------------ connections
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn keep_alive_checks_the_token_on_each_request() {
-    let mock = Mock::start(json!([{"path": "/a/", "body": "{\"ok\":true}"}]));
-    let gw = Gw::start(
-        vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
-        vec![(AGENT, agent(&["a"], None))],
-        &[],
-        0.0,
-    )
-    .await;
-    let (mut sender, _conn) = open(TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap()).await;
-    let first = read(
-        sender
-            .send_request(gw.request(AGENT, "/v1/messages", "{}"))
-            .await
-            .unwrap(),
-    )
-    .await;
-    assert_eq!(first.status, 200);
-    sender.ready().await.expect("the connection is kept alive");
-    let second = read(
-        sender
-            .send_request(gw.request("not-a-token", "/v1/messages", "{}"))
-            .await
-            .unwrap(),
-    )
-    .await;
-    assert_eq!(second.status, 401);
-    assert_eq!(
-        second.json()["error"]["message"],
-        "not a drgnx gateway token"
-    );
-    assert_eq!(mock.requests().len(), 1);
+#[test]
+fn keep_alive_checks_the_token_on_each_request() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let mock = Mock::start(json!([{"path": "/a/", "body": "{\"ok\":true}"}]));
+        let gw = Gw::start(
+            vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
+            vec![(AGENT, agent(&["a"], None))],
+            &[],
+            0.0,
+        )
+        .await;
+        let (mut sender, _conn) =
+            open(TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap()).await;
+        let first = read(
+            sender
+                .send_request(gw.request(AGENT, "/v1/messages", "{}"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(first.status, 200);
+        sender.ready().await.expect("the connection is kept alive");
+        let second = read(
+            sender
+                .send_request(gw.request("not-a-token", "/v1/messages", "{}"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(second.status, 401);
+        assert_eq!(
+            second.json()["error"]["message"],
+            "not a drgnx gateway token"
+        );
+        assert_eq!(mock.requests().len(), 1);
+    });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_refused_body_is_drained() {
+#[test]
+fn a_refused_body_is_drained() {
+    saman::Executor::new(2)
+        .unwrap()
+        .block_on(async {
     let gw = Gw::start(vec![], vec![], &[], 0.0).await;
     let mut s = TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap();
     let n = 60_000;
@@ -981,92 +1046,104 @@ async fn a_refused_body_is_drained() {
     let answer = String::from_utf8_lossy(&answer);
     assert!(answer.starts_with("HTTP/1.1 401"), "{answer}");
     assert!(answer.contains("not a drgnx gateway token"), "{answer}");
+        });
 }
 
 /// A chunked body over the limit is answered 413 and the unread rest (up to the drain's 64 KiB) is read before the
 /// connection closes, so the client that is still sending is not reset under its answer.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_chunked_body_over_the_limit_is_413_and_drained() {
-    let mock = Mock::start(json!([{"path": "/a/", "body": "{\"ok\":true}"}]));
-    let gw = Gw::start(
-        vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
-        vec![(AGENT, agent(&["a"], None))],
-        &[],
-        0.0,
-    )
-    .await;
-    let s = TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap();
-    let (mut rd, mut wr) = s.into_split();
-    let head = format!(
-        "POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {AGENT}\r\n\
+#[test]
+fn a_chunked_body_over_the_limit_is_413_and_drained() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let mock = Mock::start(json!([{"path": "/a/", "body": "{\"ok\":true}"}]));
+        let gw = Gw::start(
+            vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
+            vec![(AGENT, agent(&["a"], None))],
+            &[],
+            0.0,
+        )
+        .await;
+        let s = TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap();
+        let (mut rd, mut wr) = s.into_split();
+        let head = format!(
+            "POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {AGENT}\r\n\
          Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
-        gw.port
-    );
-    wr.write_all(head.as_bytes()).await.unwrap();
-    // 32 MiB and 40 KiB over, in 8 KiB chunks: less than the drain's limit is left unread when the gateway answers
-    let writer = tokio::spawn(async move {
-        let chunk = [b"2000\r\n".as_slice(), &[b'x'; 8192], b"\r\n"].concat();
-        for _ in 0..(32 * 1024 / 8 + 5) {
-            if wr.write_all(&chunk).await.is_err() {
-                return;
+            gw.port
+        );
+        wr.write_all(head.as_bytes()).await.unwrap();
+        // 32 MiB and 40 KiB over, in 8 KiB chunks: less than the drain's limit is left unread when the gateway answers
+        let writer = saman::spawn("test-server", async move {
+            let chunk = [b"2000\r\n".as_slice(), &[b'x'; 8192], b"\r\n"].concat();
+            for _ in 0..(32 * 1024 / 8 + 5) {
+                if wr.write_all(&chunk).await.is_err() {
+                    return;
+                }
             }
-        }
-        let _ = wr.write_all(b"0\r\n\r\n").await;
+            drop(wr.write_all(b"0\r\n\r\n").await);
+        });
+        let mut answer = Vec::new();
+        let read = tokio::time::timeout(Duration::from_secs(60), rd.read_to_end(&mut answer))
+            .await
+            .expect("the gateway closes within 60 s");
+        // a close with the body unread would reset the connection under the client
+        assert!(read.is_ok(), "{read:?}");
+        let answer = String::from_utf8_lossy(&answer);
+        assert!(answer.starts_with("HTTP/1.1 413"), "{answer}");
+        assert!(answer.contains("over 32 MiB"), "{answer}");
+        drop(writer.await);
+        assert_eq!(mock.requests().len(), 0);
     });
-    let mut answer = Vec::new();
-    let read = tokio::time::timeout(Duration::from_secs(60), rd.read_to_end(&mut answer))
-        .await
-        .expect("the gateway closes within 60 s");
-    // a close with the body unread would reset the connection under the client
-    assert!(read.is_ok(), "{read:?}");
-    let answer = String::from_utf8_lossy(&answer);
-    assert!(answer.starts_with("HTTP/1.1 413"), "{answer}");
-    assert!(answer.contains("over 32 MiB"), "{answer}");
-    let _ = writer.await;
-    assert_eq!(mock.requests().len(), 0);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_session_token_is_401_on_tcp() {
-    let mock = Mock::start(json!([{"path": "/a/", "body": "{\"ok\":true}"}]));
-    let mut session = agent(&["a"], None);
-    session.listener = ListenerId::Session("s1".into());
-    let gw = Gw::start(
-        vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
-        vec![(SESSION, session), (AGENT, agent(&["a"], None))],
-        &[],
-        0.0,
-    )
-    .await;
-    let on_tcp = gw.call(SESSION, "/v1/messages", "{}").await;
-    assert_eq!(on_tcp.status, 401);
+#[test]
+fn a_session_token_is_401_on_tcp() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let mock = Mock::start(json!([{"path": "/a/", "body": "{\"ok\":true}"}]));
+        let mut session = agent(&["a"], None);
+        session.listener = ListenerId::Session("s1".into());
+        let gw = Gw::start(
+            vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
+            vec![(SESSION, session), (AGENT, agent(&["a"], None))],
+            &[],
+            0.0,
+        )
+        .await;
+        let on_tcp = gw.call(SESSION, "/v1/messages", "{}").await;
+        assert_eq!(on_tcp.status, 401);
 
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("gateway.sock");
-    tokio::spawn(listen::serve_unix(
-        gw.gw.clone(),
-        UnixListener::bind(&path).unwrap(),
-        ListenerId::Session("s1".into()),
-    ));
-    let on_socket = |token: &'static str| {
-        Request::post("/v1/messages")
-            .header(HOST, "localhost")
-            .header(AUTHORIZATION, format!("Bearer {token}"))
-            .body(Full::new(Bytes::from_static(b"{}")))
-            .unwrap()
-    };
-    let (mut sender, _conn) = open(UnixStream::connect(&path).await.unwrap()).await;
-    let reply = read(sender.send_request(on_socket(SESSION)).await.unwrap()).await;
-    assert_eq!(reply.status, 200, "{}", reply.body);
-    // and the loopback listener's token is no token on the session's socket
-    let (mut sender, _conn) = open(UnixStream::connect(&path).await.unwrap()).await;
-    let reply = read(sender.send_request(on_socket(AGENT)).await.unwrap()).await;
-    assert_eq!(reply.status, 401);
-    assert_eq!(mock.requests().len(), 1);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.sock");
+        saman::spawn(
+            "test-server",
+            listen::serve_unix(
+                gw.gw.clone(),
+                UnixListener::bind(&path).unwrap(),
+                ListenerId::Session("s1".into()),
+            ),
+        )
+        .detach("a test server ends with the test");
+        let on_socket = |token: &'static str| {
+            Request::post("/v1/messages")
+                .header(HOST, "localhost")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Full::new(Bytes::from_static(b"{}")))
+                .unwrap()
+        };
+        let (mut sender, _conn) = open(UnixStream::connect(&path).await.unwrap()).await;
+        let reply = read(sender.send_request(on_socket(SESSION)).await.unwrap()).await;
+        assert_eq!(reply.status, 200, "{}", reply.body);
+        // and the loopback listener's token is no token on the session's socket
+        let (mut sender, _conn) = open(UnixStream::connect(&path).await.unwrap()).await;
+        let reply = read(sender.send_request(on_socket(AGENT)).await.unwrap()).await;
+        assert_eq!(reply.status, 401);
+        assert_eq!(mock.requests().len(), 1);
+    });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_sixty_fifth_connection_is_closed() {
+#[test]
+fn the_sixty_fifth_connection_is_closed() {
+    saman::Executor::new(2)
+        .unwrap()
+        .block_on(async {
     let gw = Gw::start(vec![], vec![], &[], 0.0).await;
     let mut held = Vec::new();
     for _ in 0..listen::TCP_CONNECTIONS {
@@ -1102,6 +1179,7 @@ async fn the_sixty_fifth_connection_is_closed() {
         "{}",
         String::from_utf8_lossy(&answer)
     );
+        });
 }
 
 // ------------------------------------------------------------------------------------------ the editor's route
@@ -1111,8 +1189,11 @@ fn editor_gw_providers(base: &str) -> Vec<Provider> {
     vec![provider("or", Kind::Openai, base, Auth::Bearer)]
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_editor_route_passes_the_body_unchanged() {
+#[test]
+fn the_editor_route_passes_the_body_unchanged() {
+    saman::Executor::new(2)
+        .unwrap()
+        .block_on(async {
     let mock = Mock::start(json!([
         {"path": "/api/v1/chat/completions", "body": "{\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}"}
     ]));
@@ -1150,10 +1231,14 @@ async fn the_editor_route_passes_the_body_unchanged() {
         assert_eq!(request["headers"]["authorization"], "Bearer sk-or");
     }
     assert_eq!(mock.requests().len(), 2);
+        });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_editor_route_never_falls_back() {
+#[test]
+fn the_editor_route_never_falls_back() {
+    saman::Executor::new(2)
+        .unwrap()
+        .block_on(async {
     let mock = Mock::start(json!([
         {"path": "/o/", "status": 429, "body": "{\"error\":\"later\"}", "headers": {"Retry-After": "9"}},
         {"path": "/p2/", "body": "{}"}
@@ -1174,10 +1259,14 @@ async fn the_editor_route_never_falls_back() {
     assert_eq!(reply.body, "{\"error\":\"later\"}");
     assert_eq!(mock.paths(), vec!["/o/chat/completions"]);
     assert!(fallbacks(&gw.pending()).is_empty());
+        });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_editor_route_streams_sse() {
+#[test]
+fn the_editor_route_streams_sse() {
+    saman::Executor::new(2)
+        .unwrap()
+        .block_on(async {
     let keep_alive = ": OPENROUTER PROCESSING\n\n";
     let last = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4}}\n\ndata: [DONE]\n\n";
     let mock = Mock::start(json!([
@@ -1209,10 +1298,14 @@ async fn the_editor_route_streams_sse() {
     assert_eq!(text(&rest), last);
     let row = gw.row().await;
     assert_eq!((row.input, row.output), (3, 4));
+        });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_editor_route_records_a_spend_row_with_no_job() {
+#[test]
+fn the_editor_route_records_a_spend_row_with_no_job() {
+    saman::Executor::new(2)
+        .unwrap()
+        .block_on(async {
     let mock = Mock::start(json!([
         {"path": "/ol/api/chat", "body": "{\"done\":true,\"prompt_eval_count\":7,\"eval_count\":3}"}
     ]));
@@ -1242,68 +1335,73 @@ async fn the_editor_route_records_a_spend_row_with_no_job() {
     let book = gw.book.clone();
     gw.settled().await;
     assert_eq!(book.rows(), vec![row]);
+        });
 }
 
 /// A key the hub forgot (`Keys::remove`, `gateway/revoke-key`) is no key for the next request, whoever sends it; another
 /// provider's key keeps working.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_request_after_a_revoke_is_refused_and_another_providers_key_works() {
-    let mock = Mock::start(json!([{"path": "/", "body": "{}"}]));
-    let mut providers = editor_gw_providers(&mock.url("/api/v1"));
-    providers.push(provider(
-        "other",
-        Kind::Openai,
-        &mock.url("/api/v1"),
-        Auth::Bearer,
-    ));
-    let gw = Gw::start(
-        providers,
-        vec![(EDITOR, Registration::editor())],
-        &[("or", "sk-or"), ("other", "sk-other")],
-        0.0,
-    )
-    .await;
-    assert_eq!(
-        gw.call(EDITOR, "/p/or/chat/completions", "{}").await.status,
-        200
-    );
-    assert!(gw.keys.write().unwrap().remove("or"));
-    let reply = gw.call(EDITOR, "/p/or/chat/completions", "{}").await;
-    assert_eq!(reply.status, 503);
-    assert_eq!(
-        reply.json()["error"]["message"],
-        "no key for or in the drgnx hub"
-    );
-    assert_eq!(
-        gw.call(EDITOR, "/p/other/chat/completions", "{}")
-            .await
-            .status,
-        200
-    );
+#[test]
+fn a_request_after_a_revoke_is_refused_and_another_providers_key_works() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let mock = Mock::start(json!([{"path": "/", "body": "{}"}]));
+        let mut providers = editor_gw_providers(&mock.url("/api/v1"));
+        providers.push(provider(
+            "other",
+            Kind::Openai,
+            &mock.url("/api/v1"),
+            Auth::Bearer,
+        ));
+        let gw = Gw::start(
+            providers,
+            vec![(EDITOR, Registration::editor())],
+            &[("or", "sk-or"), ("other", "sk-other")],
+            0.0,
+        )
+        .await;
+        assert_eq!(
+            gw.call(EDITOR, "/p/or/chat/completions", "{}").await.status,
+            200
+        );
+        assert!(gw.keys.write().unwrap().remove("or"));
+        let reply = gw.call(EDITOR, "/p/or/chat/completions", "{}").await;
+        assert_eq!(reply.status, 503);
+        assert_eq!(
+            reply.json()["error"]["message"],
+            "no key for or in the drgnx hub"
+        );
+        assert_eq!(
+            gw.call(EDITOR, "/p/other/chat/completions", "{}")
+                .await
+                .status,
+            200
+        );
+    });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_editor_route_without_a_key_is_503_and_need_keys() {
-    let mock = Mock::start(json!([{"path": "/", "body": "{}"}]));
-    let mut gw = Gw::start(
-        editor_gw_providers(&mock.url("/api/v1")),
-        vec![(EDITOR, Registration::editor())],
-        &[],
-        0.0,
-    )
-    .await;
-    let reply = gw.call(EDITOR, "/p/or/chat/completions", "{}").await;
-    assert_eq!(reply.status, 503);
-    let error = reply.json();
-    assert_eq!(error["error"]["type"], "api_error");
-    assert_eq!(error["error"]["message"], "no key for or in the drgnx hub");
-    assert_eq!(
-        gw.pending(),
-        vec![GatewayEvent::NeedKeys {
-            providers: vec!["or".into()]
-        }]
-    );
-    assert!(mock.requests().is_empty());
+#[test]
+fn the_editor_route_without_a_key_is_503_and_need_keys() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let mock = Mock::start(json!([{"path": "/", "body": "{}"}]));
+        let mut gw = Gw::start(
+            editor_gw_providers(&mock.url("/api/v1")),
+            vec![(EDITOR, Registration::editor())],
+            &[],
+            0.0,
+        )
+        .await;
+        let reply = gw.call(EDITOR, "/p/or/chat/completions", "{}").await;
+        assert_eq!(reply.status, 503);
+        let error = reply.json();
+        assert_eq!(error["error"]["type"], "api_error");
+        assert_eq!(error["error"]["message"], "no key for or in the drgnx hub");
+        assert_eq!(
+            gw.pending(),
+            vec![GatewayEvent::NeedKeys {
+                providers: vec!["or".into()]
+            }]
+        );
+        assert!(mock.requests().is_empty());
+    });
 }
 
 // ------------------------------------------------------------------------------------------ the tap
@@ -1320,7 +1418,7 @@ struct Seen {
     client: Option<String>,
     status: Option<u16>,
     /// The instant of the begin, the head and each chunk, in that order.
-    at: Vec<std::time::Instant>,
+    at: Vec<stund::Instant>,
     chunks: Vec<String>,
     end: Option<End>,
 }
@@ -1333,7 +1431,7 @@ struct One(Arc<Mutex<Vec<Seen>>>, usize);
 
 impl Tap for Taps {
     fn begin(&self, sent: Sent<'_>) -> Box<dyn Exchange> {
-        let mut all = self.0.lock().unwrap();
+        let mut all = saman::lock(&self.0);
         all.push(Seen {
             provider: sent.provider.to_owned(),
             path: sent.path.to_owned(),
@@ -1350,27 +1448,30 @@ impl Tap for Taps {
 }
 
 impl Exchange for One {
-    fn head(&mut self, at: std::time::Instant, status: u16, _headers: &HeaderMap) {
-        let mut all = self.0.lock().unwrap();
+    fn head(&mut self, at: stund::Instant, status: u16, _headers: &HeaderMap) {
+        let mut all = saman::lock(&self.0);
         all[self.1].status = Some(status);
         all[self.1].at.push(at);
     }
 
-    fn chunk(&mut self, at: std::time::Instant, data: &[u8]) {
-        let mut all = self.0.lock().unwrap();
+    fn chunk(&mut self, at: stund::Instant, data: &[u8]) {
+        let mut all = saman::lock(&self.0);
         all[self.1]
             .chunks
             .push(String::from_utf8_lossy(data).into_owned());
         all[self.1].at.push(at);
     }
 
-    fn end(self: Box<Self>, _at: std::time::Instant, end: End) {
-        self.0.lock().unwrap()[self.1].end = Some(end);
+    fn end(self: Box<Self>, _at: stund::Instant, end: End) {
+        saman::lock(&self.0)[self.1].end = Some(end);
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_tap_sees_every_attempt_with_its_chunks() {
+#[test]
+fn a_tap_sees_every_attempt_with_its_chunks() {
+    saman::Executor::new(2)
+        .unwrap()
+        .block_on(async {
     // Pattern C: the reply is read to its end, and the tap's line ends before the upstream body does, so both lines
     // are complete when the reply is.
     let mock = Mock::start(json!([
@@ -1401,7 +1502,7 @@ async fn a_tap_sees_every_attempt_with_its_chunks() {
         reply.body,
         format!("{MESSAGE_START}{MESSAGE_DELTA}{MESSAGE_STOP}")
     );
-    let seen = seen.lock().unwrap().clone();
+    let seen = saman::lock(&seen).clone();
     assert_eq!(seen.len(), 2, "{seen:?}");
     let (first, second) = (&seen[0], &seen[1]);
     assert_eq!(
@@ -1456,61 +1557,65 @@ async fn a_tap_sees_every_attempt_with_its_chunks() {
         .as_deref()
         .expect("the client's own body, as it was rewritten");
     assert!(client.contains("\"model\":\"x\""), "{client}");
+        });
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_hang_up_is_recorded_as_client_left() {
-    // Pattern C: the mock says the upstream was hung up on; the gateway ends the tap's line before it drops the
-    // upstream body, so the line is ended by then.
-    let mut chunks = vec![json!([0, MESSAGE_START])];
-    chunks.extend((0..40).map(|_| json!([100, ": tick\n\n"])));
-    let mut mock = Mock::start(json!([{"path": "/p/or/", "chunks": chunks}]));
-    let gw = Gw::start(
-        editor_gw_providers(&mock.url("/p/or")),
-        vec![(EDITOR, Registration::editor())],
-        &[("or", "sk-or-editor")],
-        0.0,
-    )
-    .await;
-    let taps = Taps::default();
-    let seen = taps.0.clone();
-    gw.gw.set_tap(Arc::new(taps));
-    let (mut sender, conn) = open(TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap()).await;
-    let response = sender
-        .send_request(gw.request(EDITOR, "/p/or/chat/completions", "{\"stream\":true}"))
-        .await
-        .unwrap();
-    let mut body = response.into_body();
-    let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
-    assert!(text(&first).starts_with("event: message_start"));
-    drop(body);
-    drop(sender);
-    conn.abort();
-    mock.hang_up().await;
-    let seen = seen.lock().unwrap().clone();
-    assert_eq!(seen.len(), 1, "{seen:?}");
-    let s = &seen[0];
-    assert_eq!(
-        (
-            s.provider.as_str(),
-            s.path.as_str(),
-            s.attempt,
-            s.of,
-            s.status
-        ),
-        ("or", "/chat/completions", 1, 1, Some(200))
-    );
-    assert!(s.client.is_none(), "the editor's body is sent as it came");
-    match s.end {
-        Some(End::ClientLeft { chunk }) => {
-            assert!(
-                chunk >= 1 && chunk == s.chunks.len(),
-                "{chunk} of {:?}",
-                s.chunks
-            );
+#[test]
+fn a_hang_up_is_recorded_as_client_left() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        // Pattern C: the mock says the upstream was hung up on; the gateway ends the tap's line before it drops the
+        // upstream body, so the line is ended by then.
+        let mut chunks = vec![json!([0, MESSAGE_START])];
+        chunks.extend((0..40).map(|_| json!([100, ": tick\n\n"])));
+        let mut mock = Mock::start(json!([{"path": "/p/or/", "chunks": chunks}]));
+        let gw = Gw::start(
+            editor_gw_providers(&mock.url("/p/or")),
+            vec![(EDITOR, Registration::editor())],
+            &[("or", "sk-or-editor")],
+            0.0,
+        )
+        .await;
+        let taps = Taps::default();
+        let seen = taps.0.clone();
+        gw.gw.set_tap(Arc::new(taps));
+        let (mut sender, conn) =
+            open(TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap()).await;
+        let response = sender
+            .send_request(gw.request(EDITOR, "/p/or/chat/completions", "{\"stream\":true}"))
+            .await
+            .unwrap();
+        let mut body = response.into_body();
+        let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
+        assert!(text(&first).starts_with("event: message_start"));
+        drop(body);
+        drop(sender);
+        drop(conn);
+        mock.hang_up().await;
+        let seen = saman::lock(&seen).clone();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        let s = &seen[0];
+        assert_eq!(
+            (
+                s.provider.as_str(),
+                s.path.as_str(),
+                s.attempt,
+                s.of,
+                s.status
+            ),
+            ("or", "/chat/completions", 1, 1, Some(200))
+        );
+        assert!(s.client.is_none(), "the editor's body is sent as it came");
+        match s.end {
+            Some(End::ClientLeft { chunk }) => {
+                assert!(
+                    chunk >= 1 && chunk == s.chunks.len(),
+                    "{chunk} of {:?}",
+                    s.chunks
+                );
+            }
+            ref other => panic!("{other:?}"),
         }
-        ref other => panic!("{other:?}"),
-    }
+    });
 }
 
 // ------------------------------------------------------------------------------------------ in flight (test-hooks)
@@ -1527,69 +1632,72 @@ impl Ledger for Held {
 
     fn record(&self, _row: SpendRow) -> BoxFuture<'_, ()> {
         Box::pin(async {
-            let _ = self.0.acquire().await;
+            drop(self.0.acquire().await);
         })
     }
 }
 
 #[cfg(feature = "test-hooks")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_request_is_in_flight_until_its_event_is_sent() {
-    // Pattern C: the client has read its whole answer, and the spend row is held: the request still counts in flight
-    // (its event is not in the channel yet); once the row is let go and the event is sent, nothing does.
-    let mock = Mock::start(json!([
-        {"path": "/a/", "chunks": [[0, MESSAGE_START], [0, MESSAGE_STOP]]}
-    ]));
-    let registry = Arc::new(Mem(
-        [(token_hash(AGENT.as_bytes()), agent(&["a"], None))].into()
-    ));
-    let providers = Arc::new(RwLock::new(
-        [(
-            "a".to_owned(),
-            provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None),
-        )]
-        .into(),
-    ));
-    let ledger = Arc::new(Held(tokio::sync::Semaphore::new(0)));
-    let (tx, mut events) = mpsc::unbounded_channel();
-    let upstream =
-        Upstream::with_proxy(UpstreamOpts::default(), Matcher::builder().build()).unwrap();
-    let gw = Gateway::new(
-        registry,
-        providers,
-        Arc::new(RwLock::new(Keys::new())),
-        ledger.clone(),
-        tx,
-        upstream,
-    );
-    let in_flight = gw.in_flight();
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let serving = tokio::spawn(listen::serve_tcp(gw.clone(), listener, port));
-    let (mut sender, _conn) = open(TcpStream::connect(("127.0.0.1", port)).await.unwrap()).await;
-    let request = Request::post("/v1/messages")
-        .header(HOST, format!("127.0.0.1:{port}"))
-        .header(AUTHORIZATION, format!("Bearer {AGENT}"))
-        .header(CONTENT_TYPE, "application/json")
-        .body(Full::new(Bytes::from_static(b"{}")))
-        .unwrap();
-    let reply = read(sender.send_request(request).await.unwrap()).await;
-    assert_eq!(reply.status, 200);
-    assert_eq!(in_flight.get(), 1, "answered, its event not sent");
-    assert!(events.try_recv().is_err());
-    ledger.0.add_permits(1);
-    let event = tokio::time::timeout(Duration::from_secs(30), events.recv())
+#[test]
+fn a_request_is_in_flight_until_its_event_is_sent() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        // Pattern C: the client has read its whole answer, and the spend row is held: the request still counts in flight
+        // (its event is not in the channel yet); once the row is let go and the event is sent, nothing does.
+        let mock = Mock::start(json!([
+            {"path": "/a/", "chunks": [[0, MESSAGE_START], [0, MESSAGE_STOP]]}
+        ]));
+        let registry = Arc::new(Mem(
+            [(token_hash(AGENT.as_bytes()), agent(&["a"], None))].into()
+        ));
+        let providers = Arc::new(RwLock::new(
+            [(
+                "a".to_owned(),
+                provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None),
+            )]
+            .into(),
+        ));
+        let ledger = Arc::new(Held(tokio::sync::Semaphore::new(0)));
+        let (tx, mut events) = mpsc::unbounded_channel();
+        let upstream =
+            Upstream::with_proxy(UpstreamOpts::default(), Matcher::builder().build()).unwrap();
+        let gw = Gateway::new(
+            registry,
+            providers,
+            Arc::new(RwLock::new(Keys::new())),
+            ledger.clone(),
+            tx,
+            upstream,
+        );
+        let in_flight = gw.in_flight();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let serving = saman::spawn("test-server", listen::serve_tcp(gw.clone(), listener, port));
+        let (mut sender, _conn) =
+            open(TcpStream::connect(("127.0.0.1", port)).await.unwrap()).await;
+        let request = Request::post("/v1/messages")
+            .header(HOST, format!("127.0.0.1:{port}"))
+            .header(AUTHORIZATION, format!("Bearer {AGENT}"))
+            .header(CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from_static(b"{}")))
+            .unwrap();
+        let reply = read(sender.send_request(request).await.unwrap()).await;
+        assert_eq!(reply.status, 200);
+        assert_eq!(in_flight.get(), 1, "answered, its event not sent");
+        assert!(events.try_recv().is_err());
+        ledger.0.add_permits(1);
+        let event = tokio::time::timeout(Duration::from_secs(30), events.recv())
+            .await
+            .expect("the event within 30 s")
+            .expect("the channel is open");
+        assert!(matches!(event, GatewayEvent::Request(_)), "{event:?}");
+        // the count goes once the task that sent the event ends; nothing else holds one
+        drop(serving);
+        drop((sender, gw));
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while events.recv().await.is_some() {}
+        })
         .await
-        .expect("the event within 30 s")
-        .expect("the channel is open");
-    assert!(matches!(event, GatewayEvent::Request(_)), "{event:?}");
-    // the count goes once the task that sent the event ends; nothing else holds one
-    serving.abort();
-    drop((sender, gw));
-    tokio::time::timeout(Duration::from_secs(30), async {
-        while events.recv().await.is_some() {}
-    })
-    .await
-    .expect("the gateway settled within 30 s");
-    assert_eq!(in_flight.get(), 0);
+        .expect("the gateway settled within 30 s");
+        assert_eq!(in_flight.get(), 0);
+    });
 }

@@ -274,7 +274,7 @@ impl Serialize for Json {
 /// An agent's upstream URL: the provider's base without a trailing `/` and then a trailing `/v1` (OpenRouter's
 /// `…/api/v1` becomes `…/api`), plus the request's path and query. Refused when the result would leave the base's
 /// scheme, host and port.
-pub fn upstream_uri(base: &Uri, path_and_query: &str) -> Result<Uri, String> {
+pub fn upstream_uri(base: &Uri, path_and_query: &str) -> villa::Result<Uri> {
     let prefix = base_path(base)?;
     join(
         base,
@@ -285,30 +285,30 @@ pub fn upstream_uri(base: &Uri, path_and_query: &str) -> Result<Uri, String> {
 
 /// An editor's upstream URL: the provider's base without a trailing `/`, plus REST and its query, with **no** `/v1`
 /// stripping (OpenRouter's base is `…/api/v1` and its paths follow it). Refused as [`upstream_uri`].
-pub fn provider_uri(base: &Uri, rest_and_query: &str) -> Result<Uri, String> {
+pub fn provider_uri(base: &Uri, rest_and_query: &str) -> villa::Result<Uri> {
     join(base, base_path(base)?, rest_and_query)
 }
 
 /// The base's path without a trailing `/` ("" for none).
-fn base_path(base: &Uri) -> Result<&str, String> {
+fn base_path(base: &Uri) -> villa::Result<&str> {
     if base.query().is_some() {
-        return Err("the provider's URL has a query".into());
+        return Err(villa::Error::invalid("the provider's URL has a query"));
     }
     let path = base.path();
     Ok(path.strip_suffix('/').unwrap_or(path))
 }
 
-fn join(base: &Uri, prefix: &str, tail: &str) -> Result<Uri, String> {
+fn join(base: &Uri, prefix: &str, tail: &str) -> villa::Result<Uri> {
     let (Some(scheme), Some(authority)) = (base.scheme(), base.authority()) else {
-        return Err("the provider's URL is not absolute".into());
+        return Err(villa::Error::invalid("the provider's URL is not absolute"));
     };
-    let leaves = || format!("the request would leave {}", authority.host());
+    let leaves = || villa::Error::refused(format!("the request would leave {}", authority.host()));
     if !tail.starts_with('/') {
         return Err(leaves());
     }
     let uri: Uri = format!("{scheme}://{authority}{prefix}{tail}")
         .parse()
-        .map_err(|e| format!("not a URL: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("not a URL: {e}")))?;
     if uri.scheme() != base.scheme() || uri.authority() != base.authority() {
         return Err(leaves());
     }
@@ -419,10 +419,12 @@ mod tests {
 
     fn uri(
         base: &str,
-        f: fn(&Uri, &str) -> Result<Uri, String>,
+        f: fn(&Uri, &str) -> villa::Result<Uri>,
         tail: &str,
     ) -> Result<String, String> {
-        f(&base.parse().unwrap(), tail).map(|u| u.to_string())
+        f(&base.parse().unwrap(), tail)
+            .map(|u| u.to_string())
+            .map_err(|e| e.message().to_string())
     }
 
     #[test]

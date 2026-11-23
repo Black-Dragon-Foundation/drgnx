@@ -1099,7 +1099,7 @@ fn restrictions(
     let deny = o.data_collection == Some(DataCollection::Deny);
     let zdr = o.zdr == Some(true);
     let r = Restrictions::new(only.clone(), ignore.clone(), deny, zdr)
-        .map_err(|e| invalid("openrouter", e))?;
+        .map_err(|e| invalid("openrouter", e.message().to_string()))?;
     let mut kept = serde_json::Map::new();
     if !only.is_empty() {
         kept.insert("only".into(), json!(only));
