@@ -254,3 +254,23 @@ fn a_bad_chord_or_binding_is_reported_and_the_rest_stands() {
     );
     assert!(p.get("broken").is_none());
 }
+
+#[test]
+fn an_extension_cannot_bind_a_reserved_key() {
+    let mut k = Keymap::new();
+    let ext = bod::Origin::Extension("vim".into());
+    for chord in ["C-g", "C-g C-x", "M-x", "ctrl+shift+p", "f1", "ctrl+g"] {
+        let e = k.bind_by(&ext, chord, "evil", "").expect_err(chord);
+        assert_eq!(e.kind(), villa::Kind::Refused, "{chord}");
+    }
+    assert!(k.bindings().is_empty());
+    // the same chords are fine for the user, and an extension's other chords are fine for it
+    k.bind_by(&bod::Origin::User, "C-g", "cancel", "")
+        .expect("the user may");
+    k.bind_by(&ext, "C-x C-v", "vim-visit", "")
+        .expect("an ordinary chord");
+    assert_eq!(
+        k.resolve(&chord("C-g"), &KeyContext::new()),
+        Resolution::Command("cancel".into())
+    );
+}

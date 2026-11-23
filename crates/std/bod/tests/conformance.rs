@@ -59,7 +59,7 @@ fn every_registered_command_has_a_title_a_doc_and_a_listing() {
         assert!(!c.doc.trim().is_empty(), "{} has no doc", c.id);
         assert_eq!(
             palette.contains(&c.id.0),
-            c.exposure != Exposure::KeyOnly,
+            !matches!(c.exposure, Exposure::KeyOnly | Exposure::Extension),
             "{} is in the palette list exactly when it is not key-only",
             c.id
         );
@@ -194,4 +194,47 @@ fn advice_wraps_and_unwraps() {
     );
     // the origin reaches the handler and the advice
     assert!(matches!(Cx::agent("x").origin, Origin::Agent(_)));
+}
+
+#[test]
+fn an_extension_runs_only_what_is_exposed_to_extensions_and_an_agent_cannot_borrow_it() {
+    let mut r = Registry::new();
+    for (id, exposure) in [
+        ("p.palette", Exposure::Palette),
+        ("p.agent", Exposure::Agent),
+        ("p.ext", Exposure::Extension),
+    ] {
+        r.register(cmd(id, exposure), handler(|_, _| Ok(json!("ran"))))
+            .expect("registers");
+    }
+    let by_ext = |origin: Origin| Cx::through_extension(origin, "vim");
+    // an extension acting for the user: only the extension command
+    assert_eq!(
+        r.run("p.ext", Value::Null, &mut by_ext(Origin::User))
+            .expect("runs"),
+        json!("ran")
+    );
+    for id in ["p.palette", "p.agent"] {
+        assert_eq!(
+            r.run(id, Value::Null, &mut by_ext(Origin::User))
+                .expect_err("not for extensions")
+                .kind(),
+            villa::Kind::Refused,
+            "{id}"
+        );
+    }
+    // the confused deputy: an agent has the extension run a command; the agent's origin goes through, so the command
+    // must pass the agent door too, which an extension command does not
+    for id in ["p.ext", "p.agent", "p.palette"] {
+        assert_eq!(
+            r.run(id, Value::Null, &mut by_ext(Origin::Agent("a1".into())))
+                .expect_err("two doors")
+                .kind(),
+            villa::Kind::Refused,
+            "{id}"
+        );
+    }
+    // an extension command is neither in the palette's list nor a tool
+    assert!(r.palette().iter().all(|c| c.id.0 != "p.ext"));
+    assert!(tool_specs(&r).iter().all(|t| t.name != "p.ext"));
 }

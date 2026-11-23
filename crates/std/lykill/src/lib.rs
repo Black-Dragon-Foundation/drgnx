@@ -20,6 +20,10 @@ pub use when::{KeyContext, Term, When};
 /// The head of a profile file: `(drgnx-keys :version 1 (COMMAND KEYS)…)`.
 pub const FILE_HEAD: &str = "drgnx-keys";
 
+/// The chords no extension may bind or start a chord with: cancel, the command key and the palette's keys. A key the user
+/// always has, whatever an extension does.
+pub const RESERVED: &[&str] = &["C-g", "M-x", "ctrl+shift+p", "f1"];
+
 /// One binding.
 #[derive(Clone, Debug)]
 pub struct Binding {
@@ -63,6 +67,28 @@ impl Keymap {
             source: None,
         });
         Ok(())
+    }
+
+    /// What `bind` does, for the origin ORIGIN: an extension's binding may not be, or start with, a reserved key.
+    pub fn bind_by(
+        &mut self,
+        origin: &bod::Origin,
+        chord: &str,
+        command: &str,
+        when: &str,
+    ) -> villa::Result<()> {
+        if matches!(origin, bod::Origin::Extension(_)) {
+            let wanted = parse_chord(chord)?;
+            for r in RESERVED {
+                let reserved = parse_chord(r)?;
+                if wanted.first() == reserved.first() {
+                    return Err(villa::Error::refused(format!(
+                        "The key `{r}` is reserved: an extension may not use it."
+                    )));
+                }
+            }
+        }
+        self.bind(chord, command, when)
     }
 
     /// Lay a profile over this keymap: its bindings win over the ones already here.

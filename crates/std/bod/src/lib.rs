@@ -36,6 +36,8 @@ pub enum Exposure {
     Agent,
     /// Only a key reaches it: the palette does not list it.
     KeyOnly,
+    /// An extension may run it too, through the extension API (`commands.run`). Agents and the palette do not.
+    Extension,
 }
 
 /// Who asks for a command (and, in spurn, who asks a question).
@@ -77,19 +79,33 @@ pub struct Command {
 /// What a command runs in: who is asking.
 #[derive(Clone, Debug)]
 pub struct Cx {
+    /// Who started the call: the user, an agent, an extension.
     pub origin: Origin,
+    /// The extension the call goes through, when it comes through one: the origin stays the one that started the
+    /// chain (an agent that runs an extension that runs a command is still the agent's).
+    pub via: Option<String>,
 }
 
 impl Cx {
     pub fn user() -> Cx {
         Cx {
             origin: Origin::User,
+            via: None,
         }
     }
 
     pub fn agent(id: impl Into<String>) -> Cx {
         Cx {
             origin: Origin::Agent(id.into()),
+            via: None,
+        }
+    }
+
+    /// A call that an extension makes for ORIGIN (whoever started the chain).
+    pub fn through_extension(origin: Origin, extension: impl Into<String>) -> Cx {
+        Cx {
+            origin,
+            via: Some(extension.into()),
         }
     }
 }
@@ -241,6 +257,13 @@ impl Registry {
                 "The command `{id}` is not open to agents."
             )));
         }
+        // an extension runs only what is exposed to extensions, whoever started the chain: an agent that has an
+        // extension run a command must pass both doors, and no exposure passes both
+        if cx.via.is_some() && e.command.exposure != Exposure::Extension {
+            return Err(villa::Error::refused(format!(
+                "The command `{id}` is not open to extensions."
+            )));
+        }
         fn call(e: &Entry, upto: usize, cx: &mut Cx, args: Value) -> villa::Result<Value> {
             if upto == 0 {
                 return (e.handler)(cx, args);
@@ -297,10 +320,10 @@ impl Registry {
         self.entries.values().map(|e| &e.command)
     }
 
-    /// What the palette lists: the commands exposed to the palette or to agents (not the key-only ones).
+    /// What the palette lists: the commands exposed to the palette or to agents (not the key-only or extension ones).
     pub fn palette(&self) -> Vec<&Command> {
         self.list()
-            .filter(|c| c.exposure != Exposure::KeyOnly)
+            .filter(|c| !matches!(c.exposure, Exposure::KeyOnly | Exposure::Extension))
             .collect()
     }
 }
