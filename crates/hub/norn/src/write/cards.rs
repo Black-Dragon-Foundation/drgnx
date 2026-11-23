@@ -315,19 +315,34 @@ pub fn matrix_card(tx: &mut WTx<'_>, ask: MatrixAsk, now: f64) -> Result<i64, Co
     )
 }
 
-/// The newest settled `matrix` card asking exactly ASK's question (its data) that the user did not allow: its id.
+/// The newest settled `matrix` card asking exactly ASK's question that the user did not allow: its id.  The question
+/// is the card's data less `once_window` (how long a yes would have lasted is the setting's, not the question's).
 pub fn matrix_card_declined(tx: &mut WTx<'_>, ask: &MatrixAsk) -> Result<Option<i64>, CoordError> {
-    let data = ask.data.to_string();
-    match tx.sql().query_row(
-        "select id from card where kind = 'matrix' and state = 'settled' and data = ?1 \
-         and coalesce(choice, '') <> 'allow' order by id desc limit 1",
-        [&data],
-        |r| r.get(0),
-    ) {
-        Ok(id) => Ok(Some(id)),
-        Err(urdr::SqliteError::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.into()),
+    let question = |d: &Value| {
+        let mut d = d.clone();
+        if let Some(o) = d.as_object_mut() {
+            o.remove("once_window");
+        }
+        d
+    };
+    let want = question(&ask.data);
+    let mut st = tx.sql().prepare(
+        "select id, data from card where kind = 'matrix' and state = 'settled' \
+         and coalesce(choice, '') <> 'allow' and data like '%\"change\"%' order by id desc",
+    )?;
+    let rows = st.query_map([], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
+    })?;
+    for row in rows {
+        let (id, data) = row?;
+        let d: Value = data
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or(Value::Null);
+        if question(&d) == want {
+            return Ok(Some(id));
+        }
     }
+    Ok(None)
 }
 
 /// Whether matrix card ID, settled `allow`, has already let its change through (`data.spent`).
@@ -456,6 +471,31 @@ mod tests {
         assert!(card_settle(&mut tx, id, "yes", 2.0).unwrap());
         assert!(!card_settle(&mut tx, id, "no", 3.0).unwrap());
         assert_eq!(kinds(tx.sql()), ["question", "answer"]);
+    }
+
+    /// [Wave 3 review] A declined change stays declined when only the once window changed, and a yes is never a
+    /// decline; another change is another question.
+    #[test]
+    fn a_declined_question_ignores_the_once_window() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        let ask = |change: &str, once: u64| MatrixAsk {
+            title: "t".into(),
+            data: json!({"action": "graph.change", "session": "ext:claude:1-abc",
+                         "change": {"method": "plans/write", "record": "plan:x", "digest": change},
+                         "once_window": once}),
+            job: None,
+        };
+        let no = matrix_card(&mut tx, ask("a", 600), 1.0).unwrap();
+        assert!(card_settle(&mut tx, no, "deny", 2.0).unwrap());
+        let yes = matrix_card(&mut tx, ask("b", 600), 3.0).unwrap();
+        assert!(card_settle(&mut tx, yes, "allow", 4.0).unwrap());
+        assert_eq!(
+            matrix_card_declined(&mut tx, &ask("a", 900)).unwrap(),
+            Some(no)
+        );
+        assert_eq!(matrix_card_declined(&mut tx, &ask("b", 600)).unwrap(), None);
+        assert_eq!(matrix_card_declined(&mut tx, &ask("c", 600)).unwrap(), None);
     }
 
     /// Pure (D): withdrawing takes an open card out of the open ones once, with its event; a settled card stays.

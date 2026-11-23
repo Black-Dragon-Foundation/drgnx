@@ -1148,8 +1148,10 @@ its title is `ID wants METHOD on RECORD`; so another call is another card.
 - `check` with the verdict Ask looks for a live change grant of the session naming the same change whose card is not
   spent (`matrix_gate::change_grant`); it spends the card in the same tx (`cards::matrix_card_spend` sets
   `data.spent` to the tx) and allows. A second call, another change, or one after the window makes a new card.
-- Before a new card, `check` looks for a settled card with the same data the user did not allow
+- Before a new card, `check` looks for a settled card with the same data (less `once_window`) the user did not allow
   (`cards::matrix_card_declined`): the call is then Never (`the user refused this change (card N)`), with no card.
+- Only the user's `cards/settle` answers such a card (the method is user-class; `settle_with` refuses any other
+  caller too, so no agent can refuse another's change for good).
 - A Never verdict (a cap, a cell) is decided before any grant, so a yes never opens one. The card is spent when the
   gate allows, even when a later check of the same write (`task.done`) refuses it.
 

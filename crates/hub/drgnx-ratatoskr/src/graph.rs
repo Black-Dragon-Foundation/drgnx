@@ -1633,6 +1633,7 @@ pub async fn settle_with(
     let theirs = refusal.clone();
     let allowed: Arc<Mutex<Option<Allowed>>> = Arc::default();
     let mine = allowed.clone();
+    let by_user = caller.class == runstav::registry::Class::User;
     let r = w
         .write(caller, "cards/settle", move |tx| {
             let (kind, data) = opt(tx.sql().query_row(
@@ -1673,6 +1674,15 @@ pub async fn settle_with(
                 Some("close") => settle_close(tx, card, &choice, now),
                 Some("matrix") if browser => {
                     settle_browser(tx, card, mapped.as_deref().unwrap_or("refuse"), now, &d)
+                }
+                // an outside agent's change is the user's to answer, either way (a no refuses it for good)
+                Some("matrix") if !by_user && change_of_card(&d).is_some() => {
+                    *lock(&theirs) = Some(Error {
+                        code: ErrorCode::NotAllowed,
+                        message: "an outside agent's change card is the user's to answer".into(),
+                        path: None,
+                    });
+                    Err(refused(UNDONE))
                 }
                 Some("matrix") => settle_change(tx, card, &choice, now, &d),
                 _ => cards::card_settle(tx, card, &choice, now),

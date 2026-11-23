@@ -1151,3 +1151,30 @@ async fn a_yes_ends_with_its_window() {
     assert_ne!(m, n);
     assert_eq!(check(now + 1.0).await, Gate::Allow);
 }
+
+/// [Wave 3 review] Only the user answers an outside agent's change card: another caller's yes or no is refused and
+/// the card stays open.
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_user_answers_a_change_card() {
+    let w = world();
+    let (_a, id, plan) = w.agent_and_users_plan().await;
+    let p = retitle(&plan, "changed");
+    let n = card_in(&w.exec(&id, "plans/write", p.clone()).await.unwrap_err());
+    for choice in ["deny", "allow"] {
+        let now = crate::clock::wall_secs();
+        let e = crate::graph::settle(&w.f.writer, &agent("s-other"), n, choice.into(), now)
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotAllowed, "{choice}: {}", e.message);
+    }
+    let state: String =
+        w.f.writer
+            .db
+            .read(move |c| Ok(norn::write::cards::matrix_card_get(c, n)?.unwrap().state))
+            .await
+            .unwrap();
+    assert_eq!(state, "open");
+    // the agent's retry still asks on the same card
+    let e = w.exec(&id, "plans/write", p).await.unwrap_err();
+    assert_eq!(card_in(&e), n);
+}
