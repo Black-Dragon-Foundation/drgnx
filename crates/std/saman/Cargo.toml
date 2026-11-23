@@ -1,0 +1,22 @@
+[package]
+name = "saman"
+description = "Concurrency: the lock that survives a panic, one executor, tasks that cancel on drop, cancellation tokens, the UI queue and its watchdog (the concurrency standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+villa.workspace = true
+drgnx-clock.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+drgnx-clock = { workspace = true, features = ["test-hooks"] }
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
