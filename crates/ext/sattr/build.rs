@@ -36,5 +36,20 @@ fn main() -> villa::Result<()> {
                 .with_detail(format!("{e:?}"))
         },
     )?;
+    // a third, for resource types (tests/resources.rs)
+    annall::cli_out("cargo::rerun-if-changed=tests/wit-res")?;
+    let res = mal_gen::Options {
+        generated: "crate::g".into(),
+        bindings: "crate::b".into(),
+        state: "crate::S<A>".into(),
+        api_field: "api".into(),
+        global: "res".into(),
+        caller: "crate::C".into(),
+    };
+    let out = mal_gen::generate(Path::new("tests/wit-res"), "w", &res)?;
+    eitri::replace_file(&Path::new(&dir).join("res_gen.rs"), out.rust.as_bytes()).map_err(|e| {
+        villa::Error::io("The resource test bindings could not be written.")
+            .with_detail(format!("{e:?}"))
+    })?;
     Ok(())
 }
