@@ -1037,7 +1037,7 @@ impl Project {
 }
 
 /// The store's meta key naming the checkout its base was built from.
-const META_BASE_ROOT: &str = "base_root";
+pub(crate) const META_BASE_ROOT: &str = "base_root";
 
 /// `max_user_watches`: the user's inotify budget.
 const MAX_USER_WATCHES: &str = "/proc/sys/fs/inotify/max_user_watches";

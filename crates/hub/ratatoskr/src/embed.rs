@@ -74,6 +74,8 @@ pub struct ProviderEmbedder {
     ident: std::sync::Mutex<Option<Identity>>,
     /// What the server said when the dims were last measured, and the dims.
     dims_seen: std::sync::Mutex<Option<(String, u32)>>,
+    /// Its entry says `trusted`.
+    marked: bool,
 }
 
 /// Whether the URL BASE names this machine (`localhost`, 127.x or ::1): the only providers that receive document text
@@ -106,6 +108,7 @@ impl ProviderEmbedder {
             api: Api::Tei,
             ident: std::sync::Mutex::new(None),
             dims_seen: std::sync::Mutex::new(None),
+            marked: false,
         }
     }
 
@@ -125,7 +128,14 @@ impl ProviderEmbedder {
             api: Api::Ollama(model.to_owned()),
             ident: std::sync::Mutex::new(None),
             dims_seen: std::sync::Mutex::new(None),
+            marked: false,
         }
+    }
+
+    /// Its entry's `trusted`: text may go to it off this machine too.
+    pub(crate) fn marked_trusted(mut self, yes: bool) -> ProviderEmbedder {
+        self.marked = yes;
+        self
     }
 
     /// What a probe of this server is cached under: the provider and, for Ollama, the model asked for.
@@ -481,9 +491,9 @@ impl crate::search::DocEmbedder for ProviderEmbedder {
         self.provider.clone()
     }
 
-    /// A server on this machine only, until its entry can say `trusted` (Task 23).
+    /// A server on this machine, or one whose entry says `trusted`.
     fn trusted(&self) -> bool {
-        is_loopback(&self.base)
+        self.marked || is_loopback(&self.base)
     }
 
     fn embed_docs<'a>(

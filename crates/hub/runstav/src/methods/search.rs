@@ -151,8 +151,13 @@ pub struct StatusAnswer {
     /// Where each fingerprint's vectors come from here: its chain of sources as the last pass of tier 2 left it.
     pub sources: Vec<ChainStatus>,
     pub worker: WorkerStatus,
-    /// `stopped`, `idle`, `running`, `typing`, `battery` or `failed`.
+    /// `stopped`, `idle`, `running`, `typing`, `battery`, `paused` or `failed`.
     pub tier2: String,
+    /// The root's state as the user sees it: `idle`, `running`, `paused` or `stopped` (Hrafn redesign §11A).
+    pub state: String,
+    /// Why it waits, while `paused`: `user`, `battery`, `load`, `disk-floor` or `no-embedder`, and its words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<PauseReason>,
     /// Vectors tier 2 wrote since the hub opened the project.
     pub embedded: u64,
     /// The project's worktree overlays.
@@ -225,6 +230,118 @@ pub struct ModelCount {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     pub vectors: u64,
+}
+
+/// Why a root's index waits.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PauseReason {
+    /// `user`, `battery`, `load`, `disk-floor` or `no-embedder`.
+    pub name: String,
+    pub text: String,
+}
+
+/// One root the hub keeps an index of.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RootInfo {
+    /// The checkout the index is built from.
+    pub root: String,
+    /// The store's id.
+    pub id: String,
+    /// `idle`, `running`, `paused` or `stopped`.
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<PauseReason>,
+    /// Whether this hub has it open (a closed root's state is what the user set).
+    pub open: bool,
+    pub files: u64,
+    pub chunks: u64,
+    /// The store's bytes on disk.
+    pub bytes: u64,
+}
+
+/// `search/list`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListAnswer {
+    pub roots: Vec<RootInfo>,
+}
+
+/// `search/pause`, `search/resume`, `search/stop`: ROOT, or every root with ALL.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ManageParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<AbsPath>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all: Option<bool>,
+}
+
+/// The roots a pause, resume or stop reached, as they are after it.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ManageAnswer {
+    pub roots: Vec<RootInfo>,
+}
+
+/// `search/delete`: ROOT's index, once the user CONFIRMed (the CLI asks).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteParams {
+    pub root: AbsPath,
+    pub confirm: bool,
+}
+
+/// What a delete freed.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteAnswer {
+    pub root: String,
+    pub bytes: u64,
+    /// Vectors no other root held.
+    pub vectors: u64,
+    pub packs: u64,
+}
+
+/// `search/forget-pin`: the `vectors` provider whose pinned certificate is forgotten.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ForgetPinParams {
+    pub provider: String,
+}
+
+/// `embed/serve-start`: serve this machine's vectors on LISTEN (`ADDR:PORT`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ServeStartParams {
+    pub listen: String,
+    /// Plain HTTP: loopback or a Tailscale address only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plain: Option<bool>,
+    /// Lookups only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_embed: Option<bool>,
+}
+
+/// A running vector server.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ServeAnswer {
+    pub url: String,
+    /// The certificate's sha256 (none when plain).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert_sha256: Option<String>,
+    /// The token, the first time only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+/// `embed/serve-token`: a new token, shown once.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ServeToken {
+    pub token: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -1786,6 +1903,51 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/import", SearchImport(ImportParams) -> ImportAnswer,
             classes: [User], writes: true,
             doc: "merge a vector pack into the cache: only the keys a repo store here references (or all with keep_all); a model no source here can use is refused unless keep_all",
+        ),
+        method!(
+            "search/list", SearchList(Empty) -> ListAnswer,
+            classes: [User], writes: false,
+            doc: "every root this machine keeps an index of: its state, why it waits, its files, chunks and bytes",
+        ),
+        method!(
+            "search/pause", SearchPause(ManageParams) -> ManageAnswer,
+            classes: [User], writes: true,
+            doc: "pause a root's index (or every root's with all): the batch in flight finishes, then tier 2 holds until resume; kept across restarts and changes; the user's, never an MCP tool's",
+        ),
+        method!(
+            "search/resume", SearchResume(ManageParams) -> ManageAnswer,
+            classes: [User], writes: true,
+            doc: "resume a paused or stopped index: it goes on with the keys still missing; the user's, never an MCP tool's",
+        ),
+        method!(
+            "search/stop", SearchStop(ManageParams) -> ManageAnswer,
+            classes: [User], writes: true,
+            doc: "stop a root's index now: what it finished stays; the next change or search/index goes on; the user's, never an MCP tool's",
+        ),
+        method!(
+            "search/delete", SearchDelete(DeleteParams) -> DeleteAnswer,
+            classes: [User], writes: true,
+            doc: "delete a root's index (confirm must be true): its store, its packs and the vectors no other root holds; recorded with its reason; the user's, never an MCP tool's",
+        ),
+        method!(
+            "search/forget-pin", SearchForgetPin(ForgetPinParams) -> bool,
+            classes: [User], writes: true,
+            doc: "forget a vectors provider's pinned certificate: the next answer pins the one it shows",
+        ),
+        method!(
+            "embed/serve-start", EmbedServeStart(ServeStartParams) -> ServeAnswer,
+            classes: [User], writes: true,
+            doc: "serve this machine's vector cache and embedders over the vector protocol v1 (TLS, or plain HTTP on loopback or a Tailscale address); the token is shown the first time only",
+        ),
+        method!(
+            "embed/serve-stop", EmbedServeStop(Empty) -> bool,
+            classes: [User], writes: true,
+            doc: "stop serving vectors; false when none was served",
+        ),
+        method!(
+            "embed/serve-token", EmbedServeToken(Empty) -> ServeToken,
+            classes: [User], writes: true,
+            doc: "a new token for the vector server, shown once; the old one is refused from the next request",
         ),
     ]
 }

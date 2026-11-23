@@ -37,6 +37,10 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr search index ROOT [--rebuild] [--now]   (build or rebuild a project's code index)\n\
     \x20      ratatoskr search query ROOT QUESTION... [-k N] [--scope code|tests|docs|all] [--json]\n\
     \x20      ratatoskr search mcp [ROOT]   (the MCP search tool on stdio, for an agent outside drgnx)\n\
+    \x20      ratatoskr search list [--json] | status [ROOT] [--json] | pause|resume|stop ROOT|--all | delete ROOT [--yes]\n\
+    \x20          (every root's index; pause, resume, stop or delete one)\n\
+    \x20      ratatoskr embed serve --listen ADDR:PORT [--plain] [--no-embed] | --stop | --new-token\n\
+    \x20          (serve this machine's vectors to others: the vector protocol v1)\n\
     \x20      ratatoskr mcp-bridge --socket PATH   (an agent's coordination tools: stdio to its session's mcp.sock)\n\
     \x20      ratatoskr mcp-bridge --outside --kind KIND [--cwd DIR]   (an agent outside drgnx: stdio to the hub)\n\
     \x20      ratatoskr outside bind --kind K --root DIR --role manager|worker|chat | unbind ID | list   [--json]\n\
@@ -135,6 +139,8 @@ pub enum Command {
     Plugins(crate::plugins_cli::PluginsCommand),
     /// `search …`: Hrafn from a terminal, and the MCP `search` tool on stdio (`crate::search_cli`).
     Search(crate::search_cli::SearchCommand),
+    /// `embed serve …`: the vector server, through the running hub (`crate::embed_serve`).
+    Embed(crate::embed_serve::EmbedCommand),
     /// `embed-worker …`: Hrafn's embed worker, a child of the hub (`crate::search::worker`). `main` runs it before
     /// any tokio runtime.
     EmbedWorker(crate::search::worker::WorkerArgs),
@@ -444,6 +450,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "packs" => crate::packs_cli::parse(p.raw_args().map_err(e)?).map(Command::Packs),
         "plugins" => crate::plugins_cli::parse(p.raw_args().map_err(e)?).map(Command::Plugins),
         "search" => crate::search_cli::parse(p.raw_args().map_err(e)?).map(Command::Search),
+        "embed" => crate::embed_serve::parse(p.raw_args().map_err(e)?).map(Command::Embed),
         #[cfg(feature = "test-hooks")]
         "debug-mock" => match p.next().map_err(e)? {
             Some(Value(v)) => Ok(Command::DebugMock { script: v }),

@@ -582,6 +582,59 @@ pub fn render_export(a: &w::ExportAnswer) -> String {
     )
 }
 
+/// Roots, one a line: the state (and why it waits), the counts, the root.
+pub fn render_roots(roots: &[w::RootInfo]) -> String {
+    if roots.is_empty() {
+        return "no index on this machine\n".into();
+    }
+    let mut out = String::new();
+    for r in roots {
+        let why = r
+            .why
+            .as_ref()
+            .map_or_else(String::new, |w| format!(" ({})", w.text));
+        out.push_str(&format!(
+            "{:<8} {:>7} files {:>8} chunks {:>6} MiB  {}{why}\n",
+            r.state,
+            r.files,
+            r.chunks,
+            r.bytes >> 20,
+            r.root
+        ));
+    }
+    out
+}
+
+/// `search/status`'s text answer: the state and why, the counts, tier 2, the lag, the sources.
+pub fn render_status(s: &w::StatusAnswer) -> String {
+    let why = s
+        .why
+        .as_ref()
+        .map_or_else(String::new, |w| format!(": {}", w.text));
+    let mut out = format!(
+        "{}{why}\n{} files, {} chunks; tier 2 {}, {} vectors written since the hub opened it\n",
+        s.state, s.files, s.chunks, s.tier2, s.embedded
+    );
+    for m in &s.models {
+        out.push_str(&format!(
+            "model {} ({}): {} vectors\n",
+            m.label.as_deref().unwrap_or("?"),
+            &m.model[..16.min(m.model.len())],
+            m.vectors
+        ));
+    }
+    for c in &s.sources {
+        for e in &c.entries {
+            let why = e
+                .why
+                .as_ref()
+                .map_or_else(String::new, |w| format!(": {w}"));
+            out.push_str(&format!("source {} ({}): {}{why}\n", e.id, e.kind, e.state));
+        }
+    }
+    out
+}
+
 /// `search/import`'s text answer: what was kept, and of which model.
 pub fn render_import(a: &w::ImportAnswer) -> String {
     format!(
@@ -611,6 +664,18 @@ fn text(
         "search/map" => render_map(&serde_json::from_value(a)?),
         "search/export" => render_export(&serde_json::from_value(a)?),
         "search/import" => render_import(&serde_json::from_value(a)?),
+        "search/list" => render_roots(&serde_json::from_value::<w::ListAnswer>(a)?.roots),
+        "search/pause" | "search/resume" | "search/stop" => {
+            render_roots(&serde_json::from_value::<w::ManageAnswer>(a)?.roots)
+        }
+        "search/status" => render_status(&serde_json::from_value(a)?),
+        "search/delete" => {
+            let d: w::DeleteAnswer = serde_json::from_value(a)?;
+            format!(
+                "deleted the index of {}: {} bytes, {} vectors no other root held, {} packs\n",
+                d.root, d.bytes, d.vectors, d.packs
+            )
+        }
         "search/usages" => render_usages(
             params["name"].as_str().unwrap_or_default(),
             &serde_json::from_value(a)?,
@@ -640,10 +705,36 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
             return serve_mcp(env, root);
         }
         SearchCommand::Eval(_) => unreachable!("handled above"),
-        SearchCommand::List { .. }
-        | SearchCommand::Status { .. }
-        | SearchCommand::Manage { .. }
-        | SearchCommand::Delete { .. } => unimplemented!("Wave 9 stub"),
+        SearchCommand::List { json } => ("search/list", json!({}), *json),
+        SearchCommand::Status { root, json } => {
+            let root = root.as_ref().map_or(cwd.clone(), |r| cwd.join(r));
+            (
+                "search/status",
+                json!({"root": absolute(&cwd, &root)}),
+                *json,
+            )
+        }
+        SearchCommand::Manage { verb, root, all } => {
+            let p = match root {
+                Some(r) => json!({"root": absolute(&cwd, r)}),
+                None => json!({"all": all}),
+            };
+            (verb.method(), p, false)
+        }
+        SearchCommand::Delete { root, yes } => {
+            use std::io::IsTerminal as _;
+            let root = absolute(&cwd, root);
+            let tty = std::io::stdin().is_terminal();
+            let (mut input, mut out) = (std::io::stdin().lock(), std::io::stderr());
+            if !confirm_delete(&root, *yes, tty, &mut input, &mut out) {
+                return 1;
+            }
+            (
+                "search/delete",
+                json!({"root": root, "confirm": true}),
+                false,
+            )
+        }
         SearchCommand::Export {
             root,
             out,

@@ -173,6 +173,8 @@ pub struct Gate {
     coord: CoordDb,
     regs: Arc<Regs>,
     providers: Arc<RwLock<BTreeMap<String, Provider>>>,
+    /// The providers whose entry says `trusted`: document text may go to them off this machine.
+    trusted: RwLock<BTreeSet<String>>,
     keys: Arc<RwLock<Keys>>,
     /// The ids whose key is held (`Keys` lists none).
     held: Mutex<BTreeSet<String>>,
@@ -207,6 +209,7 @@ impl Gate {
             coord,
             regs: Arc::new(Regs::default()),
             providers: Arc::new(RwLock::new(BTreeMap::new())),
+            trusted: RwLock::new(BTreeSet::new()),
             keys: Arc::new(RwLock::new(Keys::new())),
             held: Mutex::new(BTreeSet::new()),
             keys_refused: Mutex::new(Some("the hub was not hardened".into())),
@@ -339,33 +342,61 @@ impl Gate {
             return Ok(Vec::new());
         }
         let token = self.hub_embed_token()?;
+        let trusted = read(&self.trusted).clone();
         let mut out = Vec::new();
         for (id, kind, base) in found {
+            let marked = trusted.contains(&id);
             match kind {
-                Kind::Tei => out.push(crate::embed::ProviderEmbedder::tei(
-                    *port,
-                    token.clone(),
-                    &id,
-                    &base,
-                )),
+                Kind::Tei => out.push(
+                    crate::embed::ProviderEmbedder::tei(*port, token.clone(), &id, &base)
+                        .marked_trusted(marked),
+                ),
                 _ => {
                     if let Some(model) = chain
                         .iter()
                         .find(|s| s.provider == id)
                         .and_then(|s| s.model.as_deref())
                     {
-                        out.push(crate::embed::ProviderEmbedder::ollama(
-                            *port,
-                            token.clone(),
-                            &id,
-                            &base,
-                            model,
-                        ));
+                        out.push(
+                            crate::embed::ProviderEmbedder::ollama(
+                                *port,
+                                token.clone(),
+                                &id,
+                                &base,
+                                model,
+                            )
+                            .marked_trusted(marked),
+                        );
                     }
                 }
             }
         }
         Ok(out)
+    }
+
+    /// The `vectors` providers (another machine's `embed serve`): id, URL, the token its `key_env` handed over (never
+    /// logged), and whether it is trusted with text. None while replaying a recording.
+    pub(crate) fn vectors(&self) -> Vec<(String, String, Option<String>, bool)> {
+        use secrecy::ExposeSecret as _;
+        if crate::recording::replaying() {
+            return Vec::new();
+        }
+        let trusted = read(&self.trusted).clone();
+        let keys = read(&self.keys);
+        read(&self.providers)
+            .values()
+            .filter(|p| p.kind == Kind::Vectors)
+            .map(|p| {
+                let token = keys.get(&p.id).map(|k| k.expose_secret().to_owned());
+                let base = p.base.to_string().trim_end_matches('/').to_owned();
+                (p.id.clone(), base, token, trusted.contains(&p.id))
+            })
+            .collect()
+    }
+
+    /// `runtime.db`, once the gateway has it.
+    pub(crate) fn runtime_db(&self) -> Option<urdr::Handle> {
+        self.db.get().cloned()
     }
 
     /// Provider ID's URL, as the table has it.
@@ -844,6 +875,11 @@ impl Gate {
             next.insert(p.id.clone(), p);
         }
         *write(&self.providers) = next;
+        *write(&self.trusted) = table
+            .iter()
+            .filter(|c| c.trusted == Some(true))
+            .map(|c| c.id.as_str().to_owned())
+            .collect();
         {
             let mut warned = lock(&self.warned);
             for w in &warnings {
@@ -1111,6 +1147,7 @@ fn provider(c: &ProviderConfig) -> Result<Provider, String> {
             ProviderKind::Tei => Kind::Tei,
             ProviderKind::Anthropic => Kind::Anthropic,
             ProviderKind::Llama => Kind::Llama,
+            ProviderKind::Vectors => Kind::Vectors,
         },
         base,
         auth: match c.auth {

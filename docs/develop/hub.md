@@ -1449,6 +1449,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `doc-comments/close` | user | `{view: string}` | `boolean` | no |
 | `doc-comments/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
 | `doc-comments/subscribe` | user | `{record: string, view: string}` | `boolean` | no |
+| `embed/serve-start` | user | `{listen: string, no_embed?: boolean, plain?: boolean}` | `{cert_sha256?: string, token?: string, url: string}` | yes |
+| `embed/serve-stop` | user | `{}` | `boolean` | yes |
+| `embed/serve-token` | user | `{}` | `{token: string}` | yes |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes |
 | `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no |
@@ -1628,6 +1631,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/applied` | user | `{applied?: [string], change: natnum, inverse?: [{byte_end?: natnum, byte_start?: natnum, col: natnum, end_col: natnum, end_line: natnum, id: string, line: natnum, new: string, old: string}], not_open?: boolean, path: string, saved?: boolean, skipped?: [{id: string, why: string}], tick?: natnum}` | `boolean` | no |
 | `search/apply` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
 | `search/buffer` | user | `{large?: boolean, mirror?: boolean, path: AbsPath, text?: string, tick?: natnum, version?: natnum, view: string}` | `boolean` | no |
+| `search/delete` | user | `{confirm: boolean, root: AbsPath}` | `{bytes: natnum, packs: natnum, root: string, vectors: natnum}` | yes |
 | `search/edit-doc` | user | `{context?: natnum, max?: natnum, view: string}` | `{lines: [EditLine], over?: boolean, skipped?: [EditSkip], total: natnum}` | no |
 | `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], lines?: [{eol?: boolean, line: natnum, line_id: string, new?: [string], old: string, path: AbsPath}], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
 | `search/embed-retry` | user | `{}` | `boolean` | no |
@@ -1635,6 +1639,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/export` | user | `{all_trees?: boolean, branch?: string, out?: AbsPath, root: AbsPath}` | `{keys: natnum, path: AbsPath, sha256: string, warning: string}` | yes |
 | `search/files` | user | `{exclude?: [string], ignore?: "index" \| "real", n?: natnum, name?: boolean, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
 | `search/fold` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
+| `search/forget-pin` | user | `{provider: string}` | `boolean` | yes |
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
 | `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
 | `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
@@ -1645,12 +1650,15 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/handoff-state` | user | `{handoff: string}` | `HandoffState` | no |
 | `search/import` | user | `{file: AbsPath, keep_all?: boolean, root?: AbsPath}` | `ImportAnswer` | yes |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
+| `search/list` | user | `{}` | `{roots: [RootInfo]}` | no |
 | `search/map` | user | `{base?: boolean, budget?: natnum, focus?: [string], names?: [string], root: AbsPath, scope?: "code" \| "all"}` | `{files: [MapFile], files_total: natnum, fresh: Fresh, text: string, tokens: natnum}` | no |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
 | `search/outline` | user | `{base?: boolean, docs?: boolean, path: string, root: AbsPath}` | `{entries: [OutlineEntry], fresh: Fresh, lang: string, path: string}` | no |
+| `search/pause` | user | `{all?: boolean, root?: AbsPath}` | `{roots: [RootInfo]}` | yes |
 | `search/preview` | user | `{off?: [string], path: AbsPath, replace?: string, view: string}` | `PreviewAnswer` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
+| `search/resume` | user | `{all?: boolean, root?: AbsPath}` | `{roots: [RootInfo]}` | yes |
 | `search/run` | user | `{context?: boolean, count?: boolean, group?: "file" \| "tree" \| "symbol", ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string} \| {lang?: string, mode: "pattern", pattern: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, sort?: "path" \| "count" \| "rank", view: string}` | `{run: natnum}` | no |
 | `search/saved/delete` | user | `{name: string, root: AbsPath}` | `boolean` | yes |
 | `search/saved/list` | user | `{root: AbsPath}` | `{problems?: [string], saved: [SavedSearch]}` | no |
@@ -1658,6 +1666,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/saved/share` | user | `{name: string, root: AbsPath}` | `{path: AbsPath}` | yes |
 | `search/scope-bases` | user | `{root: AbsPath}` | `{current?: string, default?: string, detached: boolean, recent: [string], upstream?: string}` | no |
 | `search/status` | user | `{root: AbsPath}` | `StatusAnswer` | no |
+| `search/stop` | user | `{all?: boolean, root?: AbsPath}` | `{roots: [RootInfo]}` | yes |
 | `search/symbol-at` | user | `{file: string, line: natnum, root: AbsPath}` | `{name?: string}` | no |
 | `search/symbols` | user | `{base?: boolean, k?: natnum, kind?: [string], match?: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", name: string, path?: string, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code"}` | `{fresh: Fresh, matched: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", symbols: [SymbolHit]}` | no |
 | `search/typing` | user | `{}` | `{}` | no |
@@ -3167,6 +3176,45 @@ The file format, the proof of possession and the warning are in [runtime.md](run
   pack and also takes a fingerprint no source here serves. `invalid_params` for a file that is not a pack, a format
   this build does not read, a fingerprint no source here can use (without `keep_all`) and a row of the wrong size.
 
+### Managing indexing (`search/list`, `pause`, `resume`, `stop`, `delete`)
+
+Every root's index has a state the user controls, kept in its store's `meta` (`index_state`: `on`, `paused`,
+`stopped`), so neither a hub restart nor a file change undoes it (`search/manage.rs`, `Project::pause|resume|stop`).
+`ratatoskr search list|status|pause|resume|stop|delete` are the terminal's clients.
+
+- `search/list {}` → `{roots: [{root, id, state, why?, open, files, chunks, bytes}]}`: every store under the state's
+  `code/`, open or not. `state` is `idle`, `running`, `paused` or `stopped`; `why` (`{name, text}`) says what a paused
+  root waits for: `user`, `battery`, `load`, `disk-floor` or `no-embedder` (tier 2 has gates for the battery and for no
+  embedder; load and the disk floor are named for the gates to come). The user's pause comes first: an automatic
+  reason that clears never lifts it. `search/status` has the same `state` and `why`.
+- `search/pause|resume|stop {root} | {all: true}` → `{roots}` (the roots as they are after it). **Pause**: the batch in
+  flight finishes and is written, then tier 2 holds (`Tier2::Paused`) until resume; queries answer from what is
+  indexed. **Resume**: tier 2 goes on with the keys still missing, nothing done is sent again. **Stop**: tier 2 is
+  cancelled now (a request in flight is dropped) and what it wrote stays; the watcher stays on, and the next change
+  (tier 1 with files changed) or `search/index` goes on. A root that is not open gets the state written to its store.
+- `search/delete {root, confirm: true}` → `{root, bytes, vectors, packs}`: the project is closed, then its store files,
+  its `.drgnx/packs/` and the vectors only it held (`VectorCache::drop_holder`: a key another store holds stays) go;
+  `runtime.db`'s `kv` records it (`search.deleted.<id>`: the root, the reason, when, what was freed). `confirm` must be
+  true: the CLI asks (`[y/N]`, a terminal only) unless `--yes`.
+- **Agents.** The MCP search tools call only `search/query`, `symbols`, `outline`, `map`, `usages`, `results`, `list`
+  and `status` (`mcp::MCP_METHODS`); both MCP backends refuse anything else ("… is not for an MCP tool"), so no agent
+  pauses, resumes, stops or deletes an index.
+
+### The vector server (`embed/serve-*`) and remote sources
+
+The protocol, the token, TLS and pinning are in [vector-protocol.md](vector-protocol.md).
+
+- `embed/serve-start {listen, plain?, no_embed?}` → `{url, cert_sha256?, token?}`: serves this machine's caches and its
+  local embedders (the engine, the built-in model); a server already running is replaced. `token` only at the first
+  start. `invalid_params` for an address that is not `ADDR:PORT`, plain HTTP off loopback and Tailscale, or a port that
+  does not bind.
+- `embed/serve-stop {}` → whether one ran. `embed/serve-token {}` → `{token}`: a new token, the old refused from the
+  next request.
+- `search/forget-pin {provider}` → whether a pin was kept: the `vectors` provider's pinned certificate is forgotten.
+- **Remote sources.** Each `vectors` provider of the table (`Gate::vectors`: id, URL, the token its `key_env` handed
+  over, `trusted`) is a `RemoteVectors` source of every project the hub opens; the providers are part of the project's
+  signature, so a change opens it again.
+
 ### Ranked file names as rows (`search/files`)
 
 Quick Open's and Find's candidates are a row stream too (`crates/hub/ratatoskr/src/view/files.rs`; the list
@@ -4027,7 +4075,9 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   decoded; no migration), so they survive a restart. An entry that is absent has its default, and no last good value.
 - **The provider table** (design §11.1's mapping, as `drgnx-hub--provider-json` has it): the presets, each of the
   user's `drgnx-ai-providers` entries replacing the preset of its id and going first; `:url` → `base`, `:auth
-  x-api-key` / `:key-env` / neither → `auth`, the known `:caps` once each, `:price (IN . OUT)` → `price`. A provider
+  x-api-key` / `:key-env` / neither → `auth`, the known `:caps` once each, `:price (IN . OUT)` → `price`, `:trusted t`
+  → `trusted: true` (document text may go to a `vectors`, `tei` or `ollama` server off this machine; kind `vectors` is
+  another machine's `embed serve`, [vector-protocol.md](vector-protocol.md)). A provider
   with no `:url` or `:kind` is left out silently, as the editor leaves it out; one the gateway would refuse (a URL
   that is not a provider's) is left out with a problem. `settings::conformance::providers_json_equals_lisp` compares
   the table with the editor's for `test/conformance/settings/providers-settings.el`. The gateway's table is this one

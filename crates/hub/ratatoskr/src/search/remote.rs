@@ -61,7 +61,12 @@ pub struct KvPins {
 
 impl Pins for KvPins {
     fn get(&self) -> BoxFuture<'_, Option<String>> {
-        Box::pin(crate::gateway::kv_get(&self.db, &self.key))
+        // a forgotten pin is kept as an empty value (`search/forget-pin`)
+        Box::pin(async move {
+            crate::gateway::kv_get(&self.db, &self.key)
+                .await
+                .filter(|v| !v.is_empty())
+        })
     }
     fn set<'a>(&'a self, sha256: &'a str) -> BoxFuture<'a, ()> {
         Box::pin(crate::gateway::kv_set(&self.db, &self.key, sha256))

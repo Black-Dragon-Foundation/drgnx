@@ -304,6 +304,113 @@ impl Serve for CacheServe {
     }
 }
 
+/// `ratatoskr embed serve …`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EmbedCommand {
+    Start {
+        listen: String,
+        plain: bool,
+        no_embed: bool,
+    },
+    Stop,
+    NewToken,
+}
+
+/// The arguments after `embed`.
+pub fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<EmbedCommand, String> {
+    use lexopt::Arg::{Long, Value as Word};
+    use lexopt::ValueExt;
+    const USE: &str =
+        "embed serve --listen ADDR:PORT [--plain] [--no-embed] | --stop | --new-token";
+    let mut p = lexopt::Parser::from_args(args);
+    let e = |e: lexopt::Error| e.to_string();
+    match p.next().map_err(e)? {
+        Some(Word(v)) if v == "serve" => {}
+        _ => return Err(format!("usage: ratatoskr {USE}")),
+    }
+    let (mut listen, mut plain, mut no_embed, mut stop, mut new_token) =
+        (None, false, false, false, false);
+    while let Some(arg) = p.next().map_err(e)? {
+        match arg {
+            Long("listen") => listen = Some(p.value().map_err(e)?.string().map_err(e)?),
+            Long("plain") => plain = true,
+            Long("no-embed") => no_embed = true,
+            Long("stop") => stop = true,
+            Long("new-token") => new_token = true,
+            other => return Err(other.unexpected().to_string()),
+        }
+    }
+    match (listen, stop, new_token) {
+        (Some(listen), false, false) => Ok(EmbedCommand::Start {
+            listen,
+            plain,
+            no_embed,
+        }),
+        (None, true, false) if !plain && !no_embed => Ok(EmbedCommand::Stop),
+        (None, false, true) if !plain && !no_embed => Ok(EmbedCommand::NewToken),
+        _ => Err(format!("usage: ratatoskr {USE}")),
+    }
+}
+
+/// One call to the running hub; prints what it answered (the token only when it is new).
+pub fn run(env: &runstav::paths::Env, cmd: EmbedCommand) -> i32 {
+    let hub = crate::supervise::ensure_quiet(env, crate::cli::ENSURE_TIMEOUT);
+    if hub != 0 {
+        return hub;
+    }
+    let (method, params) = match &cmd {
+        EmbedCommand::Start {
+            listen,
+            plain,
+            no_embed,
+        } => (
+            "embed/serve-start",
+            serde_json::json!({"listen": listen, "plain": plain, "no_embed": no_embed}),
+        ),
+        EmbedCommand::Stop => ("embed/serve-stop", serde_json::json!({})),
+        EmbedCommand::NewToken => ("embed/serve-token", serde_json::json!({})),
+    };
+    let answer = crate::client::Client::user(env, std::time::Duration::from_secs(5))
+        .and_then(|mut c| c.call(method, params, std::time::Duration::from_secs(30)));
+    let a = match answer {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("ratatoskr embed serve: {e}");
+            return 1;
+        }
+    };
+    let text = |k: &str| a.get(k).and_then(serde_json::Value::as_str);
+    match cmd {
+        EmbedCommand::Start { .. } => {
+            println!("serving on {}", text("url").unwrap_or_default());
+            if let Some(c) = text("cert_sha256") {
+                println!("certificate sha256 {c} (the client pins it on first use)");
+            }
+            match text("token") {
+                Some(t) => println!("token {t}\n(shown once: put it in the client's key_env)"),
+                None => println!(
+                    "the token is the one shown before (embed serve --new-token makes another)"
+                ),
+            }
+        }
+        EmbedCommand::Stop => println!(
+            "{}",
+            if a.as_bool() == Some(true) {
+                "stopped"
+            } else {
+                "no vector server was running"
+            }
+        ),
+        EmbedCommand::NewToken => {
+            println!(
+                "token {}\n(shown once; the old one is refused from now)",
+                text("token").unwrap_or_default()
+            );
+        }
+    }
+    0
+}
+
 /// What a fingerprint this server does not serve is answered with.
 const UNKNOWN_FP: &str = "unknown-fingerprint";
 
@@ -723,4 +830,47 @@ async fn answer(
 
 fn to_json<T: Serialize>(v: &T) -> serde_json::Value {
     serde_json::to_value(v).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn p(args: &[&str]) -> Result<EmbedCommand, String> {
+        parse(args.iter().map(std::ffi::OsString::from))
+    }
+
+    /// `embed serve`: --listen with its flags, or --stop, or --new-token; never two of them.
+    #[test]
+    fn embed_serve_parses() {
+        assert_eq!(
+            p(&[
+                "serve",
+                "--listen",
+                "100.94.36.51:7878",
+                "--plain",
+                "--no-embed"
+            ])
+            .unwrap(),
+            EmbedCommand::Start {
+                listen: "100.94.36.51:7878".into(),
+                plain: true,
+                no_embed: true
+            }
+        );
+        assert_eq!(p(&["serve", "--stop"]).unwrap(), EmbedCommand::Stop);
+        assert_eq!(
+            p(&["serve", "--new-token"]).unwrap(),
+            EmbedCommand::NewToken
+        );
+        for bad in [
+            &["serve"][..],
+            &["serve", "--stop", "--new-token"],
+            &["serve", "--listen", "a:1", "--stop"],
+            &["serve", "--stop", "--plain"],
+            &["lookup"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?}");
+        }
+    }
 }

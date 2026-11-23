@@ -413,6 +413,16 @@ mod tests {
         want.extend(["search/index", "search/model-download"]);
         // vector packs: an export writes a file, an import writes the cache
         want.extend(["search/export", "search/import"]);
+        // managing indexing (the user's): a state kept in the store, a store deleted, a pin forgotten
+        want.extend([
+            "search/delete",
+            "search/forget-pin",
+            "search/pause",
+            "search/resume",
+            "search/stop",
+        ]);
+        // the vector server: a listener, its token
+        want.extend(["embed/serve-start", "embed/serve-stop", "embed/serve-token"]);
         // the Search view's saved searches: the hub's state, and the project's file on a click
         // the Search view's writes: project files, on disk or through the editor
         want.extend(["search/apply", "search/undo"]);

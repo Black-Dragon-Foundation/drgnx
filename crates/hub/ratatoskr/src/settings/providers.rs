@@ -29,6 +29,9 @@ pub struct ProviderEntry {
     pub messages: bool,
     /// `x-api-key`: the key goes in that header (else `Authorization: Bearer`).
     pub auth: Option<String>,
+    /// Document text may be sent to it (a `vectors`, `tei` or `ollama` server on another machine).
+    #[serde(default)]
+    pub trusted: bool,
 }
 
 /// A role's chain: `(ROLE (PROVIDER . MODEL)…)`, tried in order.
@@ -195,6 +198,9 @@ fn wire(p: &ProviderEntry) -> Option<Value> {
     let mut v = json!({"id": p.id, "kind": kind, "base": url, "auth": auth, "messages": p.messages, "caps": caps});
     if let Some((input, output)) = p.price {
         v["price"] = json!({"input": input, "output": output});
+    }
+    if p.trusted {
+        v["trusted"] = json!(true);
     }
     Some(v)
 }

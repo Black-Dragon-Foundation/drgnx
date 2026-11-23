@@ -1764,7 +1764,7 @@ hub's clock) without one, and started again, once, when it dies inside a request
   at 127.0.0.1:8080 when it is not running) has no fingerprint in that pass, gets no request and does not make tier 2
   `Failed`, so tier 2 ends `Idle` once the others are done, and the server is asked again at the next change. Between
   requests it waits while typing holds (3 s from the last `note_typing`). Its state (`Stopped`, `Idle`, `Running`,
-  `Typing`, `Battery`, `Failed`) and the vectors written are published for `search/status`. Its embedders are
+  `Typing`, `Battery`, `Paused`, `Failed`) and the vectors written are published for `search/status`. Its embedders are
   `DocEmbedder`s (the built-in model's worker and each server that answers), each wrapped in a `DocSource`; the
   sources that state one fingerprint are one chain, filling that fingerprint's cache (`Project::cache(id)`).
 - **The source chain (`search/sources.rs`, `chain.rs`).** Per batch of at most the chain's `max_batch` missing keys (8
@@ -1772,15 +1772,26 @@ hub's clock) without one, and started again, once, when it dies inside a request
   1. The cache is asked first (a vector that arrived since the keys were read: an import, another repo).
   2. Lookup sources (`SourceKind::Lookup`) get the keys, never a text; the vectors they hold go into the cache.
   3. The keys still missing go, as the texts their keys were made of, to the first source that may be sent text and
-     answers: an `Embed` source only when it is on this machine (`embed::is_loopback`; a remote needs `trusted`,
-     which Task 23's provider entry adds), the local engine, the built-in model. A source that fails is marked down and
+     answers: an `Embed` source only when it is on this machine (`embed::is_loopback`) or its provider entry says
+     `trusted`, the local engine, the built-in model. A source that fails is marked down and
      the **same** batch goes to the next. Each source has its own backoff (`chain::Chain`, shared with the entity
      embedder: 1, 5, 30 minutes, then 6 hours, on the hub's clock); a source whose wait is over is asked again with
      the next batch, and tier 2 wakes when one is due. While every source is down and none is due,
      `SourceChain::step` reads no store rows.
   A `Guarded` wrapper refuses `embed` for a source that may not be sent text, so a lookup-only source never sees one
-  whatever the chain does. `Project::add_sources` adds sources before tier 2 starts (Waves 7 to 9 add the engine and
-  the remotes). Entity vectors build no chain (MP-17).
+  whatever the chain does. `Project::add_sources` adds sources before tier 2 starts (the engine, and the remotes).
+  **Remote sources (`search/remote.rs`, MP-18).** A `vectors` provider (another machine's `ratatoskr embed serve`,
+  [vector-protocol.md](vector-protocol.md)) is a `RemoteVectors` source: `Lookup` (source 2: keys only) unless its
+  entry says `trusted`, then `Embed` (source 3: its `embed` asks `/v1/lookup` for the batch first and sends only the
+  misses as texts). Its identity is the first fingerprint of its `/v1/info`; its certificate is pinned on first use.
+  Entity vectors build no chain (MP-17).
+  **The user's state (§11A, `search/manage.rs`).** `Project::pause` writes `index_state = paused` to the store's meta
+  and wakes tier 2, which finishes the batch in flight and then holds in its gates (`Tier2::Paused`) until `resume`;
+  `stop` writes `stopped`, aborts tier 2 and publishes `Stopped`, and the next refresh that changed files (or
+  `search/index`) resumes it. The user's pause is checked before any automatic gate, so the battery's end never lifts
+  it. `Project::state()` is `RootState` (`Idle`, `Running`, `Paused(PauseWhy)`, `Stopped`), the user's reason first.
+  `manage::delete_root` removes a closed root's store files and packs and drops its holds in every cache
+  (`VectorCache::drop_holder`, which deletes only the keys no other holder holds).
   **Order of work (MP-14).** `missing_first(store, cache, n, order)` takes the chunks of `order`'s paths first (open
   files from `Project::order_hint`, files the history feed names as edited, then the paths of the newest 300 commits,
   at most 500 paths), then the rest in chunk order. **The built-in model's chain** (its own fingerprint, its own
@@ -1863,7 +1874,9 @@ hub's clock) without one, and started again, once, when it dies inside a request
   `outline` (`path`, `docs`), pinned to the session's `cwd`; the paths a tool takes are relative and stay inside it.
   The agent's `mcpServers` list them as `drgnx-search`. `ratatoskr search mcp [ROOT]` serves the same tools on stdio
   for an agent outside drgnx, their questions going to the hub; `ratatoskr search index|query|symbols|outline` are
-  terminal clients of the `search/*` methods.
+  terminal clients of the `search/*` methods, and `search list|status|pause|resume|stop|delete` manage every root's
+  index (`delete` asks first unless `--yes`). The MCP tools may call only `mcp::MCP_METHODS` (reading, `list`,
+  `status`): pausing, resuming, stopping and deleting are the user's.
 - **Servers as embedders (`embed.rs`, `Gate::embedders`).** The providers of kind `tei` and `ollama` with the `embed`
   capability embed through the hub's own gateway listener (`/p/ID/embed`, `/p/ID/api/embed`), so each request is in
   `spend`. An Ollama provider needs the model the `embed` role names for it. **A server's model is its fingerprint**, not
