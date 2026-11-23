@@ -9,12 +9,14 @@ interface i {
   record row { name: string, tags: list<string>, at: span }
   record table { rows: list<row>, title: string }
   put: func(t: table) -> result<list<row>, kind>;
+  grid: func(g: list<list<u32>>) -> list<list<u32>>;
 }
 
 interface e {
   use i.{row, table, kind};
   rows: func(t: table, names: list<string>) -> result<list<row>, kind>;
   tags: func() -> list<string>;
+  cells: func(g: list<list<string>>) -> list<list<string>>;
 }
 
 world w {
