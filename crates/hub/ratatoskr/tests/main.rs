@@ -18,7 +18,6 @@ mod search_fingerprint;
 mod search_modes_rows;
 mod search_prefer;
 mod search_query;
-mod search_servers;
 mod search_sources;
 mod search_tools;
 mod server;
@@ -44,6 +43,7 @@ const APART: &[&str] = &[
     "pair_timing",
     "sandbox_inner",
     "sandbox_run",
+    "search_engine",
     "search_index",
     "term_scope",
     "timing",

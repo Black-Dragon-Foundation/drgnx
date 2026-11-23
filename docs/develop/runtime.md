@@ -1626,6 +1626,47 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   retries: `Offline` is reported once, and the hub tries again at its next start or on `search/model-download`. Proxies come
   from the environment, through `bifrost::upstream::Upstream::get`. `test-tiny` (test-hooks builds, `test/fixtures/test-tiny/`)
   is a model of no weights for the flows that need no inference. The download's stall limit runs on the hub's clock.
+- **The engine's download (`engine_install.rs`, MP-20).** The local engine is two pinned downloads: the GGUF of
+  `GGUF_MODELS` (Qwen3-Embedding-0.6B in Q8_0, from `Qwen/Qwen3-Embedding-0.6B-GGUF` at a pinned revision, into
+  `<cache>/models/<id>/<file>`) and this machine's llama.cpp release asset of `ENGINES` (upstream's own build at one tag:
+  Linux x64 Vulkan and Windows x64 Vulkan, both from their `.tar.gz` and `.zip`, and macOS arm64 Metal; no CUDA or ROCm
+  row), each by its sha256 and size. `search/model-download` with `{model: "qwen3-embedding-0.6b-q8_0"}` takes one
+  consent whose bytes are the two sizes' sum, keeps it in `kv` (`search.consent.engine`) and fetches both: the GGUF from the
+  model host (or the mirror) like a model's files, the asset from its pinned URL by the same redirect rules. A wrong sum
+  of the asset keeps its `.part` and says where (the next install fetches it over); the GGUF's is removed as a model
+  file's is. The archive is unpacked into `<cache>/engines/<asset id>/bin.new` by the hub's own unpackers (zip, or tar with
+  flate2), which refuse an entry that is absolute or climbs out of the folder, a link that leaves it, a name twice and
+  sizes past their limits. `llama-server` is made executable, the folder becomes `bin/`, the archive goes, and only then
+  is `.installed` written (the asset's sum), so a half install is never taken for one. Nothing is fetched on an idle path:
+  the engine with no download is a source that is not there, and the chain goes on without it.
+
+### The local engine
+
+`search/engine.rs` (MP-8) runs llama.cpp's `llama-server` from the installed asset as a process the hub manages, the
+way it runs the built-in model's worker: started by the first request that needs it, ended after `IDLE` (300 s, on the
+hub's clock) without one, and started again, once, when it dies inside a request.
+
+- **The start.** Through `draugr`, in a process group of its own, with an allowlisted environment (`PATH`, `HOME`,
+  `XDG_RUNTIME_DIR`, the locale, and the `VK_`, `MESA_`, `RADV_`, `__NV_`, `__GLX_` and `GGML_` variables) and the
+  release's folder as `LD_LIBRARY_PATH`: `llama-server -m GGUF --embedding --pooling last -c CTX -b CTX -ub CTX -ngl 999
+  --host 127.0.0.1 --port 0 --no-webui`. The port is read from its log line (`… listening on http://127.0.0.1:PORT …`, or
+  the older `… port: PORT …`), and the start waits for `/health` to answer 200 (its model loaded), at most 120 s.
+- **Never cut.** A text's tokens are at most its bytes plus two (the end-of-text token that last-token pooling reads,
+  and one spare). A text whose bound passes the fingerprint's 8,192 tokens is counted by the engine (`/tokenize`); one
+  over the limit is an error to the caller, and no embeddings request goes out. The chunker keeps chunks under it.
+- **Batches.** A request's texts go shortest first (`hrafn_embed::pace::by_length`), in batches of at most `ubatch`
+  tokens (`Pacer::fixed`, the engine's own budget; the built-in engine keeps its stall-measured one). CTX is the longest
+  text rounded up to 512, at most 8,192; a request that needs more starts the engine again with more. Vectors come
+  back in the caller's order, normalised.
+- **The self-check.** After each start the engine embeds the reference text of
+  `hrafn-embed/data/qwen3-embedding-0.6b.selfcheck.json` and compares it with the stored F16 reference vector
+  (Transformers on the safetensors, last-token pooling, normalised). Under a cosine of 0.99 the engine is refused: its
+  process ends, it embeds nothing more, and the chain goes on without it.
+- **Backend.** The asset's own: Vulkan on Linux and Windows, Metal on macOS. With several Vulkan devices ggml's own
+  default holds (the dedicated GPUs, else the first integrated one); a user's `GGML_VK_VISIBLE_DEVICES` is passed on.
+- **Identity.** The engine knows its fingerprint without a start: the GGUF row's record (`Qwen/Qwen3-Embedding-0.6B`,
+  the GGUF's sha256, `Q8_0`, last-token pooling, normalised, 1,024 dims, 8,192 tokens, no document prefix, the Qwen3
+  query template). Its source kind is `LocalEngine` and its source id `llama`.
 
 ### The index: tier 1, tier 2 and the embed worker
 
@@ -1741,16 +1782,12 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   user's: an agent has no search method. A project's rules are `.drgnx/search.toml` (read at every listing; a file that does
   not read is an error the listing reports) and the editor's per-project `drgnx-search-{rules,off}`
   (`overrides::PER_PROJECT`); `search/why` says which layer decided a file.
-- **Servers on request (`search/servers.rs`).** `search/server-plan` shows what starting TEI or Ollama would run (it
-  writes and runs nothing); `search/server-start` needs `confirm: true` and answers the provider entry for the settings'
-  provider table (the hub writes no settings: the editor's writer adds it); `search/server-stop` stops it. TEI is a
-  podman Quadlet `drgnx-tei.container` under `$XDG_CONFIG_HOME/containers/systemd/` (CPU image, or the GPU tag of the
-  card when the NVIDIA CDI device is present; 4 GiB or 2 GiB memory cap, loopback port 8087, a named cache volume, no
-  `[Install]`): Linux with podman and a systemd user session, and not inside a container. Ollama needs `ollama` on the
-  PATH; its service starts only when it does not answer (`systemctl --user`, or `launchctl` on macOS), then the model
-  is pulled. Nothing in the hub's idle paths reaches a start. With test-hooks the runner only records the commands in
-  `$XDG_STATE_HOME/drgnx/servers-test.log`. The macOS Ollama start (`launchctl start com.ollama.ollama`) is unverified
-  on a Mac.
+- **The embed role and its sources.** The shipped `embed` role is `(llama)`: the `llama` preset, of kind `llama`, is the
+  local engine (§"The local engine"), which has no URL and which the gateway never forwards to. It takes part only once
+  its download was consented and is in place; until then it is not in the chain and the chain goes on (the built-in
+  model, as `drgnx-search-builtin` says). TEI and Ollama stay providers the user runs and names in the role (their
+  fingerprints from `/info` and `/api/show`); the hub starts neither. The work graph's entity vectors (MP-17) take the
+  engine, the built-in model and servers on this machine only: a provider elsewhere never gets work-graph text.
 - **The eval (`hrafn::eval`, `ratatoskr search eval`).** `eval gen ROOT` makes questions from the project's own history
   (commit subjects without ticket ids, dropping those that name an identifier; the answer is the top-level forms the
   commit changed, found again at HEAD by name) into `crates/hub/hrafn/eval/<project>/{dev,test}.jsonl`, which are
