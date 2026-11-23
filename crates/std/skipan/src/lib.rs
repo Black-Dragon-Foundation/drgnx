@@ -384,7 +384,7 @@ fn render(snap: &SettingsSnapshot, level: Level) -> (String, BTreeMap<String, u3
     let mut lines = BTreeMap::new();
     let mut line = 1;
     for ((key, l, tag), e) in &snap.entries {
-        if *l == level && tag.is_empty() && !matches!(e.source, Source::Extension(_)) {
+        if *l == level && tag.is_empty() {
             line += 1;
             lines.insert(key.clone(), line);
             text.push_str(&format!("\n ({key} {})", render_value(&e.value)));
@@ -520,19 +520,30 @@ impl Settings {
         self.set_at(key, value, level, scope_id, Source::Runtime)
     }
 
-    /// An extension's override of KEY at LEVEL (in memory, never written to a file; its provenance names the extension).
+    /// An extension's override of KEY at a scoped LEVEL, for the stream, language, document or pane named SCOPE_ID (in
+    /// memory; its provenance names the extension). An extension never sets a level the user's files hold, nor the
+    /// built-in one: that is refused.
     pub fn set_by_extension(
         &self,
         extension: &str,
         key: &str,
         value: Value,
         level: Level,
+        scope_id: &str,
     ) -> villa::Result<()> {
+        if !level.is_scoped() {
+            return Err(villa::Error::refused(
+                "An extension does not set the user's levels or the built-in one.",
+            ));
+        }
+        if scope_id.is_empty() {
+            return Err(villa::Error::invalid("The scope id is empty."));
+        }
         self.set_at(
             key,
             value,
             level,
-            "",
+            scope_id,
             Source::Extension(extension.to_string()),
         )
     }
@@ -559,7 +570,6 @@ impl Settings {
                 "The value does not fit the setting `{key}`."
             )));
         };
-        let source_of_write = source.clone();
         let mut next = (*g.cur).clone();
         next.entries.insert(
             (key.to_string(), level, tag.to_string()),
@@ -568,13 +578,12 @@ impl Settings {
         // a file level is written first: a failed write leaves memory as it was
         if level.is_file()
             && tag.is_empty()
-            && matches!(source_of_write, Source::Runtime)
             && let Some(path) = g.files.get(&level).cloned()
         {
             let (text, lines) = render(&next, level);
             eitri::replace_file(&path, text.as_bytes()).map_err(|e| fs_error(&path, e))?;
             for ((k, l, t), e) in &mut next.entries {
-                if *l == level && t.is_empty() && !matches!(e.source, Source::Extension(_)) {
+                if *l == level && t.is_empty() {
                     e.source = Source::File {
                         path: path.clone(),
                         line: lines.get(k).copied().unwrap_or(1),
@@ -667,9 +676,8 @@ impl Settings {
                     );
                 }
             }
-            next.entries.retain(|(_, l, t), e| {
-                !(*l == level && t.is_empty() && !matches!(e.source, Source::Extension(_)))
-            });
+            next.entries
+                .retain(|(_, l, t), _| !(*l == level && t.is_empty()));
             next.entries.extend(fresh);
         }
         let mut changed: Vec<String> = Vec::new();

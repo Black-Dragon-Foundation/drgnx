@@ -148,18 +148,30 @@ fn the_levels_stack_most_specific_last() {
             .kind(),
         villa::Kind::NotFound
     );
-    // an extension's override says whose it is, and never writes a file
-    s.set_by_extension("vim-keys", "editor.theme", json!("night"), Level::Machine)
-        .expect("extension");
+    // an extension's override, for a language, says whose it is
+    s.set_by_extension(
+        "vim-keys",
+        "editor.theme",
+        json!("night"),
+        Level::Language,
+        "rust",
+    )
+    .expect("extension");
+    let rust = Scope {
+        language: Some("rust".into()),
+        ..Scope::default()
+    };
     assert_eq!(
-        s.provenance("editor.theme").expect("provenance").source,
+        s.snapshot()
+            .provenance_in("editor.theme", &rust)
+            .expect("provenance")
+            .source,
         Source::Extension("vim-keys".into())
     );
     assert_eq!(
-        s.set_by_extension("x", "editor.theme", json!("a"), Level::BuiltIn)
-            .expect_err("fixed")
-            .kind(),
-        villa::Kind::Refused
+        s.get::<String>("editor.theme").expect("get"),
+        "light",
+        "other languages do not see it"
     );
 }
 
@@ -311,5 +323,29 @@ fn a_bad_entry_is_reported_and_the_rest_stands() {
             .expect_err("twice")
             .kind(),
         villa::Kind::Conflict
+    );
+}
+
+#[test]
+fn an_extension_cannot_set_a_file_level() {
+    let sb = raun::Sandbox::new();
+    let path = user_file(&sb);
+    put(
+        &path,
+        "(drgnx-settings :version 1\n (editor.theme \"dark\"))\n",
+    );
+    let s = settings();
+    s.attach(Level::User, &path).expect("attaches");
+    s.reload().expect("reloads");
+    for level in [Level::BuiltIn, Level::User, Level::Machine, Level::Project] {
+        let e = s
+            .set_by_extension("vim-keys", "editor.theme", json!("night"), level, "x")
+            .expect_err("a level that is not the extension's");
+        assert_eq!(e.kind(), villa::Kind::Refused, "{level}");
+    }
+    assert_eq!(s.get::<String>("editor.theme").expect("get"), "dark");
+    assert_eq!(
+        s.provenance("editor.theme").expect("provenance").level,
+        Level::User
     );
 }
