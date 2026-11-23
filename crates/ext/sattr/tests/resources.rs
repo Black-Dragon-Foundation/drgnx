@@ -15,6 +15,8 @@ use wit_parser::{Resolve, UnresolvedPackageGroup};
 
 #[allow(dead_code)]
 mod common;
+#[path = "common/guest.rs"]
+mod guest;
 
 use common::{LIMITS, editor};
 
