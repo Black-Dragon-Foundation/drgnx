@@ -182,3 +182,19 @@ fn a_display_that_changes_scale_changes_the_window_on_it() {
     screens.place(&mut w, Rect::new(2100, 100, 800, 600));
     assert_eq!(w.display(), Some(DisplayId(2)));
 }
+
+#[test]
+fn a_length_between_pixels_keeps_its_fraction() {
+    let s = Scale {
+        output: 1.5,
+        ..Scale::default()
+    };
+    assert_eq!(Lp(3.0).to_len(&s), 4.5);
+    assert_eq!(Lp(3.0).to_px(&s), Px(5), "the pixel rule still rounds");
+    let zoomed = Scale {
+        output: 1.5,
+        pane: 2.0,
+        ..Scale::default()
+    };
+    assert_eq!(Lp(0.5).to_len(&zoomed), 1.5, "every zoom is in the product");
+}

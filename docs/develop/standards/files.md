@@ -16,8 +16,12 @@ eitri::replace_file(&stig::state().join("session.json"), &bytes)?;
   never followed, and a link in a parent is refused; an existing file keeps its mode; on any error the old file is
   left whole and no temporary file remains.
 
+- `eitri::rename_dir(from, to)` moves a directory, and `eitri::rename_file(from, to)` a file too large to rewrite (both
+  parents opened with `open_path`; a link as `from`, even to a directory, is refused; both parents are synced).
+
 **Enforced by:** clippy's `disallowed-methods` on the `std::fs` calls above. Owner: `eitri` (in `crates/hub/eitri`
-until it moves into `crates/std`). Conformance: `crates/hub/eitri/tests/conformance.rs` (a planted link; a full disk
+until it moves into `crates/std`), with `hlaup` as co-owner: it creates the files a program writes and then runs, with a
+private descriptor table (a rename keeps the same file, so `replace_file` cannot give that) (`co_owners` in `standards.toml`). Conformance: `crates/hub/eitri/tests/conformance.rs` (a planted link; a full disk
 from `RLIMIT_FSIZE`).
 
 **Why.** An in-place write that fails halfway leaves a truncated file, and a write through a planted link lets a

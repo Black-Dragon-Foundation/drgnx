@@ -24,7 +24,7 @@ fn plain_git(home: &Path, cwd: &Path, args: &[&str]) {
         .args(args)
         .current_dir(cwd)
         .env_clear()
-        .env("HOME", home)
+        .env(stig::HOME_VAR, home)
         .env("PATH", "/usr/bin:/bin")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .status()
@@ -44,7 +44,7 @@ fn runner_git(home: &Path, cwd: &Path, args: &[&str]) {
         .args(argv)
         .current_dir(cwd)
         .env_clear()
-        .env("HOME", home)
+        .env(stig::HOME_VAR, home)
         .env("PATH", "/usr/bin:/bin")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .envs(env)
@@ -66,7 +66,7 @@ fn planted_repo(home: &Path, name: &str, canary: &Path) -> PathBuf {
         home,
         &["-c", "init.defaultBranch=main", "init", "-q", name],
     );
-    fs::write(repo.join("a"), "a\n").unwrap();
+    eitri::replace_file(&repo.join("a"), b"a\n").unwrap();
     plain_git(home, &repo, &["add", "a"]);
     plain_git(
         home,
@@ -105,7 +105,7 @@ fn a_planted_fsmonitor_and_hook_never_run() {
     let repo = planted_repo(&home, "control", &canary);
     plain_git(&home, &repo, &["status"]);
     plain_git(&home, &repo, &["checkout", "-q", "b"]);
-    let ran = fs::read_to_string(&canary).unwrap_or_default();
+    let ran = eitri::read_string(&canary, 1 << 20).unwrap_or_default();
     assert!(
         ran.contains("fsmonitor") && ran.contains("hook"),
         "control: {ran:?}"
@@ -118,14 +118,14 @@ fn a_planted_fsmonitor_and_hook_never_run() {
     assert!(
         !canary.exists(),
         "{:?}",
-        fs::read_to_string(&canary).unwrap_or_default()
+        eitri::read_string(&canary, 1 << 20).unwrap_or_default()
     );
 }
 
 /// A bare-looking git dir: just a directory with a `config` file.
 fn git_dir(path: &Path) {
     fs::create_dir_all(path).unwrap();
-    fs::write(path.join("config"), "[core]\n").unwrap();
+    eitri::replace_file(&path.join("config"), b"[core]\n").unwrap();
 }
 
 fn refused_in_ledger(r: Result<(), GitRefusal>) -> PathBuf {
@@ -148,7 +148,7 @@ fn a_gitdir_file_into_a_ledger_folder_is_refused() {
     ] {
         let repo = t.join("repo");
         fs::create_dir_all(&repo).unwrap();
-        fs::write(repo.join(".git"), &line).unwrap();
+        eitri::replace_file(&repo.join(".git"), line.as_bytes()).unwrap();
         // The control: with no ledger folder, the same repository passes.
         check_trusted_repo(&repo, &|_| false).unwrap_or_else(|e| panic!("{line}: {e}"));
         assert_eq!(
@@ -178,10 +178,14 @@ fn a_commondir_in_a_ledger_folder_is_refused() {
         format!("{}\n", ledger.join("common").display()),
         "../../ledger/common\n".to_string(),
     ] {
-        fs::write(gd.join("commondir"), &line).unwrap();
+        eitri::replace_file(&gd.join("commondir"), line.as_bytes()).unwrap();
         let repo = t.join("repo");
         fs::create_dir_all(&repo).unwrap();
-        fs::write(repo.join(".git"), format!("gitdir: {}\n", gd.display())).unwrap();
+        eitri::replace_file(
+            &repo.join(".git"),
+            format!("gitdir: {}\n", gd.display()).as_bytes(),
+        )
+        .unwrap();
         check_trusted_repo(&repo, &|_| false).unwrap_or_else(|e| panic!("{line}: {e}"));
         assert_eq!(
             refused_in_ledger(check_trusted_repo(&repo, &|p: &Path| p == ledger)),
@@ -218,7 +222,11 @@ fn links_in_the_git_metadata_are_refused() {
     symlink(ledger.join("config"), gd.join("config")).unwrap();
     let repo = t.join("repo");
     fs::create_dir_all(&repo).unwrap();
-    fs::write(repo.join(".git"), format!("gitdir: {}\n", gd.display())).unwrap();
+    eitri::replace_file(
+        &repo.join(".git"),
+        format!("gitdir: {}\n", gd.display()).as_bytes(),
+    )
+    .unwrap();
     assert!(
         matches!(
             check_trusted_repo(&repo, &|_| false),
@@ -232,7 +240,7 @@ fn links_in_the_git_metadata_are_refused() {
     );
     // A worktree's `config.worktree` a link.
     fs::remove_file(gd.join("config")).unwrap();
-    fs::write(gd.join("config"), "[core]\n").unwrap();
+    eitri::replace_file(&gd.join("config"), b"[core]\n").unwrap();
     check_trusted_repo(&repo, &|_| false).unwrap();
     fs::create_dir_all(gd.join("worktrees/w")).unwrap();
     symlink(
@@ -260,7 +268,7 @@ fn links_in_the_git_metadata_are_refused() {
         })
     ));
     fs::remove_file(gd.join("worktrees")).unwrap();
-    fs::write(ledger.join("commondir"), "../gd\n").unwrap();
+    eitri::replace_file(&ledger.join("commondir"), b"../gd\n").unwrap();
     symlink(ledger.join("commondir"), gd.join("commondir")).unwrap();
     assert!(matches!(
         check_trusted_repo(&repo, &|_| false),
@@ -287,7 +295,7 @@ fn a_tramp_looking_gitdir_is_just_a_missing_path() {
     let (_dir, t) = root();
     let repo = t.join("repo");
     fs::create_dir_all(&repo).unwrap();
-    fs::write(repo.join(".git"), "gitdir: /ssh:canary:/x\n").unwrap();
+    eitri::replace_file(&repo.join(".git"), b"gitdir: /ssh:canary:/x\n").unwrap();
     match check_trusted_repo(&repo, &|_| false) {
         Err(GitRefusal::Fs {
             path,
@@ -300,7 +308,7 @@ fn a_tramp_looking_gitdir_is_just_a_missing_path() {
     }
     // A `.git` file without a `gitdir:` line, and an empty one.
     for text in ["", "gitdir:\n", "worktree: /x\n"] {
-        fs::write(repo.join(".git"), text).unwrap();
+        eitri::replace_file(&repo.join(".git"), text.as_bytes()).unwrap();
         assert!(
             matches!(
                 check_trusted_repo(&repo, &|_| false),

@@ -49,6 +49,9 @@ pub struct Mark {
 pub struct Standard {
     pub id: String,
     pub owner: String,
+    /// Crates that own the standard with `owner`: the layer under it that the owner is built on.
+    #[serde(default)]
+    pub co_owners: Vec<String>,
     #[serde(default)]
     pub clippy: Vec<String>,
     #[serde(default)]
@@ -66,6 +69,13 @@ pub struct Layer {
     #[serde(rename = "crate")]
     pub krate: String,
     pub may_not_depend: Vec<String>,
+}
+
+impl Standard {
+    /// Whether KRATE owns this standard, as its owner or a co-owner.
+    pub fn owned_by(&self, krate: &str) -> bool {
+        self.owner == krate || self.co_owners.iter().any(|c| c == krate)
+    }
 }
 
 impl Table {
@@ -106,7 +116,7 @@ impl Table {
 
     /// Whether KRATE may silence LINT: it owns a standard that denies it.
     pub fn may_silence(&self, krate: &str, lint: &str) -> bool {
-        self.standard.iter().filter(|s| s.owner == krate).any(|s| {
+        self.standard.iter().filter(|s| s.owned_by(krate)).any(|s| {
             s.lints.iter().any(|l| l == lint)
                 || (lint == "disallowed_methods" && !s.clippy.is_empty())
                 || (lint == "disallowed_types" && !s.clippy_types.is_empty())
@@ -215,6 +225,12 @@ pub fn check(root: &Path, table: &Table, members: &[Member]) -> Vec<Finding> {
                     "`{}`: its owner `{}` is not a workspace crate",
                     s.id, s.owner
                 ),
+            ));
+        }
+        for c in s.co_owners.iter().filter(|c| !names.contains(c.as_str())) {
+            out.push(table_finding(
+                "standards.toml",
+                format!("`{}`: its co-owner `{c}` is not a workspace crate", s.id),
             ));
         }
         let doc = format!("docs/develop/standards/{}.md", s.id);
@@ -346,7 +362,7 @@ fn clippy_config(table: &Table, krate: Option<&str>) -> String {
     let rows: Vec<&Standard> = table
         .standard
         .iter()
-        .filter(|r| Some(r.owner.as_str()) != krate)
+        .filter(|r| !krate.is_some_and(|k| r.owned_by(k)))
         .collect();
     s.push_str("disallowed-methods = [\n");
     for r in &rows {

@@ -11,6 +11,8 @@ publish = false
 runstav = { path = "../runstav", version = "0.1.0" }
 draugr = { path = "../draugr", version = "0.1.0" }
 agent-client-protocol-schema.workspace = true
+saman.workspace = true
+stund.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -19,4 +21,8 @@ tokio-util.workspace = true
 bytes = "1"              # the read buffer the line codec decodes from (already in the tree through tokio)
 
 [dev-dependencies]
+eitri.workspace = true
 skuld = { path = "../skuld", version = "0.1.0" }
+
+[lints]
+workspace = true

@@ -32,7 +32,7 @@ use vegvisir::render;
 use vegvisir::{
     CardFact, CardKind, Core, Delta, Density, Effect, Event, Filters, GraphFact, ItemId, JobFact,
     Kind, MachineFact, Mode, PresenceEntry, PresenceFact, RefFact, RunnerFact, SessionFact, State,
-    StepFact, ViewKey, ViewOp, ViewState,
+    StepFact, ViewId, ViewOp, ViewState,
 };
 
 /// At most one delta per view this often (ms).
@@ -502,7 +502,7 @@ pub(crate) fn huddle_card(
 #[derive(Default)]
 struct Inner {
     spaces: BTreeMap<String, Space>,
-    views: BTreeMap<ViewKey, View>,
+    views: BTreeMap<ViewId, View>,
     sessions: BTreeMap<String, Sess>,
     next_seq: u64,
     /// The cards open at the last read (a card gone from the list is settled).
@@ -1298,7 +1298,7 @@ impl Map {
     }
 
     /// One input to VIEW's coalescing, after the clock's reading; what it asks is done.
-    fn coalesce(self: &Arc<Self>, g: &mut Inner, key: &ViewKey, input: Option<CoIn>, now: u64) {
+    fn coalesce(self: &Arc<Self>, g: &mut Inner, key: &ViewId, input: Option<CoIn>, now: u64) {
         let Some(v) = g.views.get_mut(key) else {
             return;
         };
@@ -1309,7 +1309,7 @@ impl Map {
         self.outs(g, key, outs, now);
     }
 
-    fn outs(self: &Arc<Self>, g: &mut Inner, key: &ViewKey, outs: Vec<CoOut>, now: u64) {
+    fn outs(self: &Arc<Self>, g: &mut Inner, key: &ViewId, outs: Vec<CoOut>, now: u64) {
         for o in outs {
             match o {
                 CoOut::Wake(at) => self.wake(key.clone(), at.saturating_sub(now)),
@@ -1328,7 +1328,7 @@ impl Map {
     }
 
     /// Give VIEW's coalescing the clock's reading in MS.
-    fn wake(self: &Arc<Self>, key: ViewKey, ms: u64) {
+    fn wake(self: &Arc<Self>, key: ViewId, ms: u64) {
         let me = self.clone();
         crate::clock::spawn("map:wake", async move {
             crate::clock::sleep(Duration::from_millis(ms)).await;
@@ -1339,7 +1339,7 @@ impl Map {
     }
 
     /// Whether laying VIEW out again would move an item of its selection's chain.
-    fn chain_moves(&self, g: &Inner, key: &ViewKey) -> bool {
+    fn chain_moves(&self, g: &Inner, key: &ViewId) -> bool {
         let Some(v) = g.views.get(key) else {
             return false;
         };
@@ -1357,7 +1357,7 @@ impl Map {
     }
 
     /// The gathered DELTA to VIEW: arrivals at free places, departures leaving theirs empty, nothing else moved.
-    fn send_delta(&self, g: &mut Inner, key: &ViewKey, delta: Delta) {
+    fn send_delta(&self, g: &mut Inner, key: &ViewId, delta: Delta) {
         let Inner { spaces, views, .. } = g;
         let Some(v) = views.get_mut(key) else {
             return;
@@ -1404,7 +1404,7 @@ impl Map {
     }
 
     /// VIEW laid out again and drawn anew.
-    fn send_full(&self, g: &mut Inner, key: &ViewKey) {
+    fn send_full(&self, g: &mut Inner, key: &ViewId) {
         let Inner { spaces, views, .. } = g;
         let Some(v) = views.get_mut(key) else {
             return;
@@ -1424,7 +1424,7 @@ impl Map {
     /// from what it holds (`view::Views::publish_built`), naming the model's version.
     /// A conclusion that changed since V was last drawn marks its card new for [`NEW_MS`]; one wake of the hub's
     /// clock draws the view again when the oldest mark leaves.
-    fn publish(&self, sp: &Space, v: &mut View, key: &ViewKey) {
+    fn publish(&self, sp: &Space, v: &mut View, key: &ViewId) {
         if !v.shown {
             return;
         }
@@ -1477,7 +1477,7 @@ impl Map {
     }
 
     /// In MS, draw rows view KEY again: its oldest new mark has left.
-    fn new_wake(self: &Arc<Self>, key: ViewKey, ms: u64) {
+    fn new_wake(self: &Arc<Self>, key: ViewId, ms: u64) {
         let me = self.clone();
         crate::clock::spawn("map:new", async move {
             crate::clock::sleep(Duration::from_millis(ms)).await;
@@ -1494,13 +1494,7 @@ impl Map {
 
     /// The Detail panel beside rows view V (KEY): its rows for V's selection, to each class its editor sent an env
     /// for (CLASS: only that one). Nothing while no editor shows it.
-    fn publish_detail(
-        f: &Front,
-        m: &vegvisir::Model,
-        v: &View,
-        key: &ViewKey,
-        class: Option<&str>,
-    ) {
+    fn publish_detail(f: &Front, m: &vegvisir::Model, v: &View, key: &ViewId, class: Option<&str>) {
         let view = detail::view_of(&key.view);
         let now = crate::clock::wall_secs() as u64;
         // every budget the selected item's scope names, and what it counts toward (`budget/get` along the chain)
@@ -1529,7 +1523,7 @@ impl Map {
     /// item id, its label), by start order. The Board puts each on its task's card (`work::trail::board`).
     pub fn agents_of(&self, conn: u64, view: &str) -> Vec<(String, String, String)> {
         let g = lock(&self.inner);
-        let key = ViewKey {
+        let key = ViewId {
             conn,
             view: view.to_owned(),
         };
@@ -1559,7 +1553,7 @@ impl Map {
     /// [`Map::task_agents_of`] in G.  An agent's task is its card's, else its session's own: a plan run's tasks are
     /// the job's, which no plan on the map holds.
     fn task_agents_in(g: &Inner, conn: u64, view: &str) -> Vec<TaskAgent> {
-        let key = ViewKey {
+        let key = ViewId {
             conn,
             view: view.to_owned(),
         };
@@ -1597,7 +1591,7 @@ impl Map {
     /// The machines of connection CONN's map VIEW and their load: (label, slots used, slots), in the map's order.
     pub fn machines_of(&self, conn: u64, view: &str) -> Vec<(String, u32, u32)> {
         let g = lock(&self.inner);
-        let key = ViewKey {
+        let key = ViewId {
             conn,
             view: view.to_owned(),
         };
@@ -1706,7 +1700,7 @@ impl Map {
     pub fn view_env(self: &Arc<Self>, f: &Front, k3: &crate::view::Key) {
         if let Some(map_view) = detail::map_of(&k3.1) {
             // a Detail panel's class: its rows for the map's selection now
-            let key = ViewKey {
+            let key = ViewId {
                 conn: k3.0,
                 view: map_view.to_owned(),
             };
@@ -1718,7 +1712,7 @@ impl Map {
             }
             return;
         }
-        let key = ViewKey {
+        let key = ViewId {
             conn: k3.0,
             view: k3.1.clone(),
         };
@@ -1777,14 +1771,14 @@ impl Map {
 
     pub fn gone(&self, conn: u64) {
         let mut g = lock(&self.inner);
-        let keys: Vec<ViewKey> = g.views.keys().filter(|k| k.conn == conn).cloned().collect();
+        let keys: Vec<ViewId> = g.views.keys().filter(|k| k.conn == conn).cloned().collect();
         for k in keys {
             Self::close_view(&mut g, &k);
         }
         self.open.store(!g.views.is_empty(), Ordering::Relaxed);
     }
 
-    fn close_view(g: &mut Inner, key: &ViewKey) -> bool {
+    fn close_view(g: &mut Inner, key: &ViewId) -> bool {
         let Some(v) = g.views.remove(key) else {
             return false;
         };
@@ -1831,7 +1825,7 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows
         .map(|s| (s.snapshot(), s.subagents()))
         .collect();
     let files = f.core.presence.all_now();
-    let key = ViewKey {
+    let key = ViewId {
         conn: c.conn_id,
         view: p.view.clone(),
     };
@@ -1949,7 +1943,7 @@ pub async fn target_set(
 /// version after it.
 pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
     let map = &f.core.map;
-    let key = ViewKey {
+    let key = ViewId {
         conn: c.conn_id,
         view: p.view.clone(),
     };
@@ -2058,7 +2052,7 @@ pub fn close(f: &Front, c: &Caller, p: MapClose) -> Result<bool, Error> {
     let mut g = lock(&map.inner);
     let closed = Map::close_view(
         &mut g,
-        &ViewKey {
+        &ViewId {
             conn: c.conn_id,
             view: p.view,
         },

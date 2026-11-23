@@ -35,7 +35,7 @@ pub use model::{
 };
 pub use overlap::Overlap;
 pub use view::{
-    Density, Filters, Group, MapMode, RECENT_DAYS, Show, ViewKey, ViewOp, ViewState, Visibility,
+    Density, Filters, Group, MapMode, RECENT_DAYS, Show, ViewId, ViewOp, ViewState, Visibility,
     group, shown,
 };
 
@@ -233,9 +233,9 @@ impl Delta {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Effect {
     /// Send this shown view what changed (a hidden one gets nothing until it is shown again).
-    Delta { view: ViewKey, delta: Delta },
+    Delta { view: ViewId, delta: Delta },
     /// Lay this view out again and draw it anew: the user opened, changed or showed it.
-    Relayout { view: ViewKey },
+    Relayout { view: ViewId },
 }
 
 struct ViewEntry {
@@ -247,7 +247,7 @@ struct ViewEntry {
 #[derive(Default)]
 pub struct Core {
     model: Model,
-    views: BTreeMap<ViewKey, ViewEntry>,
+    views: BTreeMap<ViewId, ViewEntry>,
 }
 
 impl Core {
@@ -260,12 +260,12 @@ impl Core {
     }
 
     /// A view's state, while it is open.
-    pub fn view(&self, key: &ViewKey) -> Option<&ViewState> {
+    pub fn view(&self, key: &ViewId) -> Option<&ViewState> {
         self.views.get(key).map(|v| &v.state)
     }
 
     /// Whether an open view is shown.
-    pub fn shown(&self, key: &ViewKey) -> Option<bool> {
+    pub fn shown(&self, key: &ViewId) -> Option<bool> {
         self.views.get(key).map(|v| v.shown)
     }
 

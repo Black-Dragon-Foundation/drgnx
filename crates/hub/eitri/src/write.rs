@@ -52,7 +52,9 @@ pub fn write_regular(
         .and_then(|()| replaceable(parent, name))
         .and_then(|()| renameat(parent, &tmp, parent, name).map_err(FsError::from));
     if done.is_err() {
-        let _ = unlinkat(parent, &tmp, AtFlags::empty());
+        if let Err(e) = unlinkat(parent, &tmp, AtFlags::empty()) {
+            tracing::debug!(error = %e, "a temporary file was not removed");
+        }
         return done;
     }
     sync_dir(parent)
@@ -139,8 +141,10 @@ pub fn symlink_beneath(dir: BorrowedFd<'_>, rel: &Path, target: &[u8]) -> Result
     })?;
     let done = replaceable(parent, name)
         .and_then(|()| renameat(parent, tmp.as_str(), parent, name).map_err(FsError::from));
-    if done.is_err() {
-        let _ = unlinkat(parent, tmp.as_str(), AtFlags::empty());
+    if done.is_err()
+        && let Err(e) = unlinkat(parent, tmp.as_str(), AtFlags::empty())
+    {
+        tracing::debug!(error = %e, "a temporary symlink was not removed");
     }
     done
 }
@@ -161,6 +165,45 @@ pub fn replace_file(abs: &Path, bytes: &[u8]) -> Result<(), FsError> {
     #[allow(clippy::unnecessary_cast)] // st_mode is u16 on macOS, u32 on Linux and Android
     let mode = old.map_or(0o666, |st| st.st_mode as u32 & 0o777);
     write_regular(dir, Path::new(name), bytes, mode)
+}
+
+/// Renames the directory `from` to `to` (absolute paths, each parent opened with `open_path`, so a link in either is
+/// refused). `from` must be a directory itself: a link (even to a directory) is `Link`, anything else `NotDir`. As
+/// `rename(2)`, `to` is replaced when it is an empty directory; both parents are synced.
+pub fn rename_dir(from: &Path, to: &Path) -> Result<(), FsError> {
+    rename_entry(from, to, FileType::Directory, FsError::NotDir)
+}
+
+/// Renames the regular file `from` to `to` (absolute paths, each parent opened with `open_path`, so a link in either
+/// is refused), for a file too large to rewrite through [`replace_file`]. `from` must be a regular file itself: a link
+/// is `Link`, anything else `NotRegular`. As `rename(2)`, `to` is replaced; both parents are synced.
+pub fn rename_file(from: &Path, to: &Path) -> Result<(), FsError> {
+    rename_entry(from, to, FileType::RegularFile, FsError::NotRegular)
+}
+
+/// `from` renamed to `to` when `from` is itself of type WANT (else a link is `Link` and any other type REFUSED).
+fn rename_entry(from: &Path, to: &Path, want: FileType, refused: FsError) -> Result<(), FsError> {
+    let (Some(from_parent), Some(from_name), Some(to_parent), Some(to_name)) =
+        (from.parent(), from.file_name(), to.parent(), to.file_name())
+    else {
+        return Err(invalid("a path names nothing to rename"));
+    };
+    let from_dir = open_path(from_parent, Kind::Dir)?;
+    let to_dir = open_path(to_parent, Kind::Dir)?;
+    let (from_fd, to_fd) = (from_dir.fd.as_fd(), to_dir.fd.as_fd());
+    let st = statat(from_fd, from_name, AtFlags::SYMLINK_NOFOLLOW)?;
+    match FileType::from_raw_mode(st.st_mode) {
+        t if t == want => {}
+        FileType::Symlink => {
+            return Err(FsError::Link {
+                path: from.to_path_buf(),
+            });
+        }
+        _ => return Err(refused),
+    }
+    renameat(from_fd, from_name, to_fd, to_name)?;
+    sync_dir(to_fd)?;
+    sync_dir(from_fd)
 }
 
 /// A fresh `.eitri-<16 hex>` name.
@@ -250,6 +293,97 @@ mod tests {
         assert_eq!(DIR_SYNCS.with(std::cell::Cell::get), before + 1);
     }
 
+    #[test]
+    fn rename_dir_moves_a_directory_with_its_contents() {
+        let root = tempfile::tempdir().unwrap();
+        let (from, to) = (root.path().join("a"), root.path().join("b"));
+        fs::create_dir_all(from.join("sub")).unwrap();
+        fs::write(from.join("sub/x"), b"x").unwrap();
+        rename_dir(&from, &to).unwrap();
+        assert!(!from.exists());
+        assert_eq!(fs::read(to.join("sub/x")).unwrap(), b"x");
+        // into another folder
+        fs::create_dir(root.path().join("other")).unwrap();
+        rename_dir(&to, &root.path().join("other/c")).unwrap();
+        assert!(root.path().join("other/c/sub/x").is_file());
+    }
+
+    #[test]
+    fn rename_dir_refuses_what_is_not_a_plain_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let real = root.path().join("real");
+        fs::create_dir(&real).unwrap();
+        symlink(&real, root.path().join("l")).unwrap();
+        fs::write(root.path().join("file"), b"f").unwrap();
+        let r = rename_dir(&root.path().join("l"), &root.path().join("m"));
+        assert!(matches!(r, Err(FsError::Link { .. })), "{r:?}");
+        assert!(
+            fs::symlink_metadata(root.path().join("l"))
+                .unwrap()
+                .is_symlink()
+        );
+        assert!(!root.path().join("m").exists());
+        let r = rename_dir(&root.path().join("file"), &root.path().join("m"));
+        assert!(matches!(r, Err(FsError::NotDir)), "{r:?}");
+        let r = rename_dir(&root.path().join("absent"), &root.path().join("m"));
+        assert!(
+            matches!(&r, Err(FsError::Io(e)) if e.kind() == io::ErrorKind::NotFound),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn rename_dir_refuses_a_link_in_either_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(outside.path().join("a")).unwrap();
+        symlink(outside.path(), root.path().join("ldir")).unwrap();
+        let r = rename_dir(&root.path().join("ldir/a"), &root.path().join("b"));
+        assert!(matches!(r, Err(FsError::Link { .. })), "{r:?}");
+        fs::create_dir(root.path().join("a")).unwrap();
+        let r = rename_dir(&root.path().join("a"), &root.path().join("ldir/b"));
+        assert!(matches!(r, Err(FsError::Link { .. })), "{r:?}");
+        assert!(root.path().join("a").is_dir() && !outside.path().join("b").exists());
+    }
+
+    #[test]
+    fn rename_file_moves_a_regular_file_and_refuses_the_rest() {
+        let root = tempfile::tempdir().unwrap();
+        let p = root.path();
+        fs::write(p.join("part"), b"bytes").unwrap();
+        fs::write(p.join("old"), b"old").unwrap();
+        rename_file(&p.join("part"), &p.join("old")).unwrap();
+        assert!(!p.join("part").exists());
+        assert_eq!(
+            fs::read(p.join("old")).unwrap(),
+            b"bytes",
+            "replaces the target"
+        );
+        fs::create_dir(p.join("d")).unwrap();
+        let r = rename_file(&p.join("d"), &p.join("e"));
+        assert!(matches!(r, Err(FsError::NotRegular)), "{r:?}");
+        symlink(p.join("old"), p.join("l")).unwrap();
+        let r = rename_file(&p.join("l"), &p.join("m"));
+        assert!(matches!(r, Err(FsError::Link { .. })), "{r:?}");
+        assert!(p.join("old").is_file() && !p.join("m").exists());
+        fs::create_dir(p.join("sub")).unwrap();
+        let r = rename_file(&p.join("sub/absent"), &p.join("x"));
+        assert!(
+            matches!(&r, Err(FsError::Io(e)) if e.kind() == io::ErrorKind::NotFound),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn rename_dir_syncs_both_parents() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("p/a")).unwrap();
+        fs::create_dir(root.path().join("q")).unwrap();
+        let before = DIR_SYNCS.with(std::cell::Cell::get);
+        rename_dir(&root.path().join("p/a"), &root.path().join("q/a")).unwrap();
+        assert_eq!(DIR_SYNCS.with(std::cell::Cell::get), before + 2);
+    }
+
     /// The names in `dir` that look like eitri's temporary files.
     fn temps(dir: &Path) -> Vec<String> {
         fs::read_dir(dir)
@@ -335,7 +469,7 @@ mod tests {
 
         // A read-only parent: uid 0 writes through it (CAP_DAC_OVERRIDE), so only as another user.
         if rustix::process::geteuid().is_root() {
-            eprintln!(
+            tracing::warn!(
                 "write_leaves_no_temp_on_error: the read-only parent needs a uid other than 0; skipped"
             );
         } else {

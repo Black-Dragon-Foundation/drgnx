@@ -1548,9 +1548,11 @@ dependencies = [
  "libc",
  "saman",
  "skuld",
+ "stig",
  "stund",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1604,7 +1606,10 @@ dependencies = [
  "libc",
  "proptest",
  "rustix",
+ "saman",
+ "stund",
  "tempfile",
+ "tracing",
  "villa",
 ]
 
@@ -3262,10 +3267,13 @@ dependencies = [
  "agent-client-protocol-schema",
  "bytes",
  "draugr",
+ "eitri",
  "runstav",
+ "saman",
  "serde",
  "serde_json",
  "skuld",
+ "stund",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3281,7 +3289,9 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 name = "hlaup"
 version = "0.1.0"
 dependencies = [
+ "eitri",
  "libc",
+ "stund",
  "tempfile",
 ]
 
@@ -3331,16 +3341,23 @@ dependencies = [
 name = "hrafn-embed"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "bytemuck",
+ "draugr",
+ "eitri",
  "gemm",
  "half",
  "pollster",
  "rayon",
  "safetensors",
+ "saman",
  "serde_json",
  "sha2 0.11.1",
+ "stig",
+ "stund",
  "tempfile",
  "tokenizers",
+ "villa",
  "wgpu",
 ]
 
@@ -6773,7 +6790,10 @@ dependencies = [
 name = "skald"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "cc",
+ "draugr",
+ "eitri",
  "huginn",
  "libloading",
  "regex",
@@ -6781,9 +6801,12 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "sha2 0.11.1",
+ "stig",
  "tempfile",
+ "tracing",
  "tree-sitter",
  "tree-sitter-language",
+ "villa",
 ]
 
 [[package]]
@@ -7961,11 +7984,15 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 name = "vegvisir"
 version = "0.1.0"
 dependencies = [
+ "eitri",
+ "kvardi",
  "proptest",
  "rodd",
  "serde",
  "serde_json",
  "skuld",
+ "stund",
+ "tracing",
  "vegvisir",
 ]
 

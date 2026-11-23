@@ -132,7 +132,11 @@ pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
 
 fn write_in(mode: Mode, path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let made = private_fds_in(mode, || {
-        let _ = std::fs::remove_file(path);
+        if let Err(e) = std::fs::remove_file(path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(e);
+        }
         let mut f = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -160,9 +164,9 @@ fn wait_unshared_within(path: &Path, within: std::time::Duration) -> std::io::Re
         let m = std::fs::metadata(path)?;
         (m.dev(), m.ino())
     };
-    let deadline = std::time::Instant::now() + within;
+    let deadline = stund::real::instant() + within;
     while held_for_writing(id) {
-        if std::time::Instant::now() >= deadline {
+        if stund::real::instant() >= deadline {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 format!(
@@ -171,7 +175,7 @@ fn wait_unshared_within(path: &Path, within: std::time::Duration) -> std::io::Re
                 ),
             ));
         }
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        stund::real::sleep_blocking(std::time::Duration::from_millis(1));
     }
     Ok(())
 }
@@ -200,7 +204,7 @@ fn held_for_writing(id: (u64, u64)) -> bool {
             if (m.dev(), m.ino()) != id {
                 continue;
             }
-            let info = std::fs::read_to_string(p.path().join("fdinfo").join(fd.file_name()))
+            let info = eitri::read_string(&p.path().join("fdinfo").join(fd.file_name()), 1 << 16)
                 .unwrap_or_default();
             let flags = info
                 .lines()
@@ -269,7 +273,7 @@ mod tests {
         use std::sync::atomic::{AtomicBool, Ordering};
         let d = tempfile::tempdir().unwrap();
         let src = d.path().join("src");
-        std::fs::write(&src, b"#!/bin/sh\nexit 0\n").unwrap();
+        eitri::replace_file(&src, b"#!/bin/sh\nexit 0\n").unwrap();
         let stop = AtomicBool::new(false);
         std::thread::scope(|s| {
             for _ in 0..4 {
@@ -277,7 +281,7 @@ mod tests {
                     while !stop.load(Ordering::Relaxed) {
                         let child =
                             spawn_in(mode, || std::process::Command::new("/bin/true").spawn());
-                        let _ = child.and_then(|mut c| c.wait());
+                        child.and_then(|mut c| c.wait()).expect("/bin/true runs");
                     }
                 });
             }

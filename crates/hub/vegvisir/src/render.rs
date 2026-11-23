@@ -194,24 +194,42 @@ pub fn rows(s: &Scene, index: &Index, env: &Env, m: &dyn Measure) -> Drawn {
     }
 }
 
+/// The scale of an env: its display scale, the zooms already folded in by the hub.
+pub(crate) fn scale_of(scale: f32) -> kvardi::Scale {
+    kvardi::Scale {
+        output: scale,
+        ..kvardi::Scale::default()
+    }
+}
+
+/// LP logical pixels as whole device pixels (kvardi's one rounding rule).
+pub(crate) fn rounded(lp: f32, scale: &kvardi::Scale) -> u32 {
+    u32::try_from(kvardi::Lp(lp).to_px(scale).0).unwrap_or(0)
+}
+
+/// LP logical pixels as a device length that may lie between pixels (a stroke, a dash).
+pub(crate) fn len(lp: f32, scale: &kvardi::Scale) -> f32 {
+    kvardi::Lp(lp).to_len(scale)
+}
+
 /// Units and px at one scale.
 struct Geo {
-    scale: f32,
+    scale: kvardi::Scale,
     margin: u32,
 }
 
 impl Geo {
     fn new(env: &Env) -> Geo {
-        let scale = if env.scale > 0.0 { env.scale } else { 1.0 };
+        let scale = scale_of(if env.scale > 0.0 { env.scale } else { 1.0 });
         Geo {
             scale,
-            margin: (MARGIN as f32 * scale).round() as u32,
+            margin: rounded(MARGIN as f32, &scale),
         }
     }
 
     /// UNITS (4 logical px each) in device px.
     fn px(&self, units: u32) -> u32 {
-        (units as f32 * 4.0 * self.scale).round() as u32
+        rounded(units as f32 * 4.0, &self.scale)
     }
 }
 
@@ -476,10 +494,10 @@ fn segment(
     };
     let left = g.margin + g.px(rect.x);
     let right = g.margin + g.px(rect.x + rect.w);
-    let icon_px = (ICON_PX as f32 * g.scale).round() as u32;
+    let icon_px = rounded(ICON_PX as f32, &g.scale);
     let icon = l.1.filter(|(name, _)| !name.is_empty());
     // the text sits inside the card: 10 px from the border of an agent's, 8 px of a chip's
-    let pad = ((if lines.len() > 1 { 10.0 } else { 8.0 }) * g.scale).round() as u32;
+    let pad = rounded(if lines.len() > 1 { 10.0 } else { 8.0 }, &g.scale);
     let room = (right - left).saturating_sub(10 + pad);
     // a `new` mark at the end of the line keeps its place: the text before it is what gets cut
     let tail =
@@ -1101,7 +1119,7 @@ impl<'a> Edges<'a> {
             palette: env.palette,
             epoch: env.epoch,
             line: env.line,
-            tile: (TILE as f32 * g.scale).round() as u32,
+            tile: rounded(TILE as f32, &g.scale),
         }
     }
 
@@ -1162,7 +1180,7 @@ impl<'a> Edges<'a> {
             .collect();
         let w = i64::from(self.tile);
         let edge_px = |u: u32| i64::from(g.margin + g.px(u));
-        let chip_w = i64::from((30.0 * g.scale).round() as u32);
+        let chip_w = i64::from(rounded(30.0, &g.scale));
         let seg_in = |s: &crate::layout::Seg, t: i64| {
             let (a, b) = (edge_px(s.x0), edge_px(s.x1));
             a.min(b) < (t + 1) * w + 2 && a.max(b) > t * w - 2
@@ -1207,12 +1225,12 @@ impl<'a> Edges<'a> {
                     format!("M{x0} 0C{x0} {m} {x1} {m} {x1} {h}")
                 };
                 let (role, width, dash) = self.look(&s.from, &s.to, s.kind);
-                let dash: Vec<f32> = dash.iter().map(|d| d * g.scale).collect();
-                svg.path_dashed(&d, width * g.scale, role, &dash);
+                let dash: Vec<f32> = dash.iter().map(|d| len(*d, &g.scale)).collect();
+                svg.path_dashed(&d, len(width, &g.scale), role, &dash);
             }
             for (c, n) in &here {
                 let cw = chip_w;
-                let ch = i64::from(height.min((12.0 * g.scale).round() as u32));
+                let ch = i64::from(height.min(rounded(12.0, &g.scale)));
                 let cx = edge_px(*c) - t * w;
                 let h = i64::from(height);
                 svg.rect(
@@ -1275,12 +1293,12 @@ impl<'a> Edges<'a> {
                         |best, l| if width(l) > width(best) { l } else { best },
                     );
                 let (role, w, dash) = self.look(&lane.from, &lane.to, lane.kind);
-                let px = (w.max(2.0) * g.scale).round() as u32;
+                let px = rounded(w.max(2.0), &g.scale);
                 let mut svg = Svg::new(self.palette, px, height);
-                let dash: Vec<f32> = dash.iter().map(|d| d * g.scale).collect();
+                let dash: Vec<f32> = dash.iter().map(|d| len(*d, &g.scale)).collect();
                 svg.path_dashed(
                     &format!("M{} 0V{height}", px as f32 / 2.0),
-                    w * g.scale,
+                    len(w, &g.scale),
                     role,
                     &dash,
                 );
@@ -1355,7 +1373,8 @@ pub fn strip(
         .map(|e| e.text)
         .collect();
     // a chip: its text and, for a machine, its Lucide icon (a monitor; a laptop for "laptop") before the text
-    let icon_px = (ICON_PX as f32 * env.scale).round() as u32;
+    let sc = scale_of(env.scale);
+    let icon_px = rounded(ICON_PX as f32, &sc);
     let chips: Vec<(String, Option<&str>)> = extra
         .iter()
         .map(|c| (format!(" {c} "), None))
@@ -1391,13 +1410,13 @@ pub fn strip(
         .sum::<f32>()
         + fit::width_in(m, Some(CARD_FONT), " ") * chips.len().saturating_sub(1) as f32
         // the pace and budget chips are the kit's, with their own pads
-        + EXTRA_CHIP_PAD * env.scale * extra.len() as f32;
+        + len(EXTRA_CHIP_PAD, &sc) * extra.len() as f32;
     // the needs-you chips share what the right-hand chips leave, each cut to its share (no chip runs under them): the
     // chip's own padding and its key hint come off the share
     let shown = entries.len().clamp(1, 9);
-    let spare = (env.width_px as f32 - w - 44.0 * env.scale) / shown as f32;
-    let room = (spare - CHIP_OVERHEAD * env.scale)
-        .max(40.0 * env.scale)
+    let spare = (env.width_px as f32 - w - len(44.0, &sc)) / shown as f32;
+    let room = (spare - len(CHIP_OVERHEAD, &sc))
+        .max(len(40.0, &sc))
         .round() as u32;
     let mut b = RowBuilder::new("strip");
     for (i, e) in entries.iter().take(9).enumerate() {
@@ -1442,7 +1461,7 @@ pub fn strip(
     // 20 px short of the edge: the window's fringe and its truncation glyph are not drawn on
     b.stop(
         env.width_px
-            .saturating_sub(w.ceil() as u32 + (20.0 * env.scale) as u32),
+            .saturating_sub(w.ceil() as u32 + len(20.0, &sc) as u32),
     );
     let mut images = BTreeMap::new();
     for (i, (c, icon)) in chips.iter().enumerate() {
@@ -1490,7 +1509,7 @@ pub fn strip(
     }
     let end = b.pos();
     b.face(0, end, FaceId::WorkCard.name());
-    b.height(1, (30.0 * env.scale).round() as u32);
+    b.height(1, rounded(30.0, &sc));
     (b.finish(), images.into_iter().collect())
 }
 

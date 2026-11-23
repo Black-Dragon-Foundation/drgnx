@@ -168,3 +168,49 @@ fn a_spawned_thread_has_its_name_and_gives_its_result() {
     .unwrap();
     assert_eq!(t.join().unwrap().as_deref(), Some("saman-test-thread"));
 }
+
+#[test]
+fn an_ambient_task_runs_on_the_callers_runtime_and_is_cancelled_when_dropped() {
+    let ex = Executor::new(2).unwrap();
+    let (tx, rx) = mpsc::channel();
+    let out = ex.block_on(async {
+        let task = saman::spawn("ambient", async { 7 });
+        assert_eq!(task.name(), "ambient");
+        let blocking = saman::spawn_blocking("ambient-blocking", || 8);
+        let flag = Flag(tx);
+        let held = saman::spawn("held", async move {
+            let _flag = flag;
+            std::future::pending::<()>().await;
+        });
+        let sum = task.await.unwrap() + blocking.await.unwrap();
+        assert!(!held.is_finished());
+        drop(held);
+        sum
+    });
+    assert_eq!(out, 15);
+    rx.recv_timeout(WAIT)
+        .expect("dropping the task cancelled it");
+}
+
+#[test]
+fn a_tuned_pool_runs_the_tuning_and_a_finished_task_says_so() {
+    let (tx, rx) = mpsc::channel();
+    let ex = Executor::tuned(1, move |b| {
+        b.on_thread_start(move || tx.send(()).unwrap_or_default());
+    })
+    .unwrap();
+    let task = ex.spawn("done", async { 1 });
+    assert_eq!(ex.block_on(async { task.await.unwrap() }), 1);
+    rx.recv_timeout(WAIT)
+        .expect("the tuning reached the builder");
+    let detached = ex.spawn("detached", async {});
+    detached.detach("a test");
+}
+
+#[test]
+fn a_send_to_a_gone_receiver_is_reported_not_raised() {
+    let (tx, rx) = mpsc::channel::<u8>();
+    assert!(saman::delivered(tx.send(1), "a test channel"));
+    drop(rx);
+    assert!(!saman::delivered(tx.send(2), "a test channel"));
+}

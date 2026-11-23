@@ -77,4 +77,10 @@ impl Lp {
         let v = f64::from(self.0) * f64::from(s.effective());
         Px(v.round() as i32)
     }
+
+    /// The length at SCALE, not rounded to a pixel: for what lies between pixels (a stroke's width, a dash). The same
+    /// product as [`Lp::to_px`] before its rounding.
+    pub fn to_len(self, s: &Scale) -> f32 {
+        (f64::from(self.0) * f64::from(s.effective())) as f32
+    }
 }

@@ -3,7 +3,6 @@
 //! (tree-sitter-json, vendored, no scanner) in a throwaway git repo stands for a pack's repository.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use skald::job::{JobError, Options, Query, Unit, load, run, tree_hash, verify_lib};
 
@@ -20,27 +19,43 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
+/// git in DIR with a fixed identity and no user or system config.
+fn run_git(dir: &Path, args: &[&str]) -> draugr::Output {
+    let off = std::ffi::OsStr::new("/dev/null");
+    let mut all: Vec<std::ffi::OsString> = [
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "commit.gpgsign=false",
+    ]
+    .iter()
+    .map(std::ffi::OsString::from)
+    .collect();
+    all.extend(args.iter().map(std::ffi::OsString::from));
+    draugr::run(
+        draugr::Spec {
+            program: "git".into(),
+            args: all,
+            env: draugr::env::build(
+                &["PATH"],
+                &[],
+                &[("GIT_CONFIG_GLOBAL", off), ("GIT_CONFIG_SYSTEM", off)],
+            ),
+            cwd: Some(dir.to_path_buf()),
+            stdin_null: true,
+            pass_fds: Vec::new(),
+            new_session: false,
+        },
+        std::time::Duration::from_secs(60),
+    )
+    .unwrap()
+}
+
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .args([
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let out = run_git(dir, args);
+    assert!(out.status.success(), "git {args:?}: {}", out.stderr);
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
@@ -85,8 +100,8 @@ fn tags(text: &str) -> Vec<Query> {
 fn the_tree_hash_is_over_modes_paths_and_blob_hashes() {
     let d = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(d.path().join("a")).unwrap();
-    std::fs::write(d.path().join("a/b.txt"), "hi\n").unwrap();
-    std::fs::write(d.path().join("c.sh"), "x\n").unwrap();
+    eitri::replace_file(&d.path().join("a/b.txt"), b"hi\n").unwrap();
+    eitri::replace_file(&d.path().join("c.sh"), b"x\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(
         d.path().join("c.sh"),
@@ -95,7 +110,7 @@ fn the_tree_hash_is_over_modes_paths_and_blob_hashes() {
     .unwrap();
     // a .git folder is not part of the tree
     std::fs::create_dir_all(d.path().join(".git")).unwrap();
-    std::fs::write(d.path().join(".git/HEAD"), "ref").unwrap();
+    eitri::replace_file(&d.path().join(".git/HEAD"), b"ref").unwrap();
     assert_eq!(
         tree_hash(d.path()).unwrap(),
         "516c92587f97152e1089d58248b0bac1062d8b2203d1d64e2e51bb98d208facf"
@@ -232,7 +247,7 @@ fn a_source_folder_without_a_parser_is_refused() {
 fn checker(root: &Path, body: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let p = root.join("checker.sh");
-    std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+    eitri::replace_file(&p, format!("#!/bin/sh\n{body}\n").as_bytes()).unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
     p
 }

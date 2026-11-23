@@ -489,8 +489,8 @@ impl Source for RemoteVectors {
                 .fingerprints
                 .first()
                 .ok_or_else(|| self.bad("no fingerprint"))?;
-            let record =
-                FingerprintRecord::from_json(&f.record.to_string()).map_err(|e| self.bad(&e))?;
+            let record = FingerprintRecord::from_json(&f.record.to_string())
+                .map_err(|e| self.bad(&e.to_string()))?;
             let id = Identity::new(record.clone(), record.model_id.clone());
             if id.fp.hex() != f.hex {
                 return Err(self.bad("a record that is not its fingerprint's"));

@@ -226,7 +226,7 @@ fn scan_file(root: &Path, table: &Table, file: &Path, krate: &str) -> Vec<Findin
         ui: table.is_ui(krate),
         ..Default::default()
     };
-    for s in table.standard.iter().filter(|s| s.owner != krate) {
+    for s in table.standard.iter().filter(|s| !s.owned_by(krate)) {
         for p in &s.clippy {
             rules
                 .methods

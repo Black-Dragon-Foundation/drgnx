@@ -2,7 +2,6 @@
 //! when one is not available. A fixture grammar (tree-sitter-json, vendored) is built by the pack job.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use skald::job::{Options, Unit, run, tree_hash};
 use skald::registry::{Entry, from_lock, install, install_from, language, status};
@@ -20,22 +19,42 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
+/// git in DIR with a fixed identity and no user or system config.
+fn run_git(dir: &Path, args: &[&str]) -> draugr::Output {
+    let off = std::ffi::OsStr::new("/dev/null");
+    let mut all: Vec<std::ffi::OsString> = [
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "commit.gpgsign=false",
+    ]
+    .iter()
+    .map(std::ffi::OsString::from)
+    .collect();
+    all.extend(args.iter().map(std::ffi::OsString::from));
+    draugr::run(
+        draugr::Spec {
+            program: "git".into(),
+            args: all,
+            env: draugr::env::build(
+                &["PATH"],
+                &[],
+                &[("GIT_CONFIG_GLOBAL", off), ("GIT_CONFIG_SYSTEM", off)],
+            ),
+            cwd: Some(dir.to_path_buf()),
+            stdin_null: true,
+            pass_fds: Vec::new(),
+            new_session: false,
+        },
+        std::time::Duration::from_secs(60),
+    )
+    .unwrap()
+}
+
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .args([
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
+    let out = run_git(dir, args);
     assert!(out.status.success(), "git {args:?}");
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
@@ -85,7 +104,7 @@ fn the_registry_loads_what_the_lock_names_and_says_why_it_cannot_otherwise() {
 
     // the lock's grammars load, parse and are the same language the second time
     let lock_file = dir.path().join("drgnx.lock.eld");
-    std::fs::write(&lock_file, &lock).unwrap();
+    eitri::replace_file(&lock_file, lock.as_bytes()).unwrap();
     assert_eq!(install_from(&lock_file, &grammars).unwrap(), 1);
     let l = language("json").unwrap();
     let mut p = tree_sitter::Parser::new();

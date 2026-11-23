@@ -26,7 +26,9 @@ pub use read::{read_file, read_regular, read_string};
 pub use trusted::{
     TrustedProgram, pin_system_owned_file, root_only_file, system_owned_file, trusted_program,
 };
-pub use write::{remove_beneath, replace_file, symlink_beneath, write_regular};
+pub use write::{
+    remove_beneath, rename_dir, rename_file, replace_file, symlink_beneath, write_regular,
+};
 
 /// Why an eitri call refused or failed. Nothing here is ever retried by resolving the path another way.
 #[derive(Debug)]

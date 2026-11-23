@@ -22,7 +22,7 @@ let mut guard = saman::lock(&state);     // also after a holder panicked
 **Enforced by:** clippy's `disallowed-methods` on `std::thread::spawn`, `std::thread::Builder::spawn`, `tokio::spawn`,
 `tokio::task::spawn`, `tokio::task::spawn_blocking`, `tokio::runtime::Builder::new_*` and `std::sync::Mutex::lock`, and
 the scan rule `no-blocking-recv-on-ui` (`.recv()`, `.recv_timeout()` and `blocking_*` calls in crates marked `ui`; an
-awaited `recv()` is fine). Owner: `saman`. Conformance: `crates/std/saman/tests/conformance.rs`.
+awaited `recv()` is fine). Owner: `saman`, with `stund` as co-owner: `saman` reads `stund`'s clock, so `stund` cannot use `saman` (it would be a cycle); its test clock locks a `std::sync::Mutex` itself and recovers a poisoned one the same way. (`co_owners` in `standards.toml`.) Conformance: `crates/std/saman/tests/conformance.rs`.
 
 **Why.** A poisoned lock unwrapped turns one bug into a panic on every later call; a task nobody owns runs on after its
 reason is gone; a blocking call on the UI thread freezes the window.

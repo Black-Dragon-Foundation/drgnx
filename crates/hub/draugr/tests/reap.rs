@@ -116,8 +116,12 @@ struct Sentinel(std::process::Child);
 
 impl Drop for Sentinel {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        if let Err(e) = self.0.kill() {
+            tracing::debug!(error = %e, "the sentinel was already gone");
+        }
+        if let Err(e) = self.0.wait() {
+            tracing::debug!(error = %e, "the sentinel was not waited for");
+        }
     }
 }
 
@@ -173,10 +177,13 @@ async fn a_term_ignoring_group_is_killed_only_after_the_grace() {
     let recs = vec![g.record()];
     let spy = std::sync::Arc::new(Spy::real());
     let clock = stund::Manual::default();
-    let reaping = tokio::spawn(clock.scope({
-        let spy = spy.clone();
-        async move { reap(&recs, &*spy).await }
-    }));
+    let reaping = saman::spawn(
+        "reaping",
+        clock.scope({
+            let spy = spy.clone();
+            async move { reap(&recs, &*spy).await }
+        }),
+    );
     let step = Duration::from_millis(20);
     let mut advanced = Duration::ZERO;
     let (_, out) = tokio::join!(g.child.wait(), async {
@@ -303,11 +310,13 @@ async fn a_group_with_only_an_unreaped_zombie_leader_is_gone() {
     let mut g = Group::start("exit 0").await;
     let stat = format!("/proc/{}/stat", g.pgid);
     skuld::wait_until("the leader is a zombie", 10, || {
-        std::fs::read_to_string(&stat).ok().filter(|s| {
-            s.rsplit(')')
-                .next()
-                .is_some_and(|r| r.trim_start().starts_with('Z'))
-        })
+        eitri::read_string(std::path::Path::new(&stat), 1 << 16)
+            .ok()
+            .filter(|s| {
+                s.rsplit(')')
+                    .next()
+                    .is_some_and(|r| r.trim_start().starts_with('Z'))
+            })
     });
     assert!(g.exists(), "the zombie still answers kill(-pgid, 0)");
     let out = timeout(

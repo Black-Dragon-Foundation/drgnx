@@ -587,10 +587,10 @@ fn every_order_deltas_then_resync_converge() {
 }
 
 /// A map of N sessions with one rows view `m` of connection 1 on it, laid out at WIDTH.
-fn rows_map(n: u64, width: u32) -> (Arc<Map>, Inner, ViewKey) {
+fn rows_map(n: u64, width: u32) -> (Arc<Map>, Inner, ViewId) {
     let mut core = core_with(n);
     let v = rows_view(core.model(), width);
-    let key = ViewKey {
+    let key = ViewId {
         conn: 1,
         view: "m".into(),
     };

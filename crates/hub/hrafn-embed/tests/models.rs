@@ -35,7 +35,7 @@ fn tiny(dir: &Path) -> ModelSpec {
     ] {
         let path = dir.join(name);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, body).unwrap();
+        eitri::replace_file(&path, body.as_bytes()).unwrap();
         let sha256: &'static str = cache::sha256_file(&path).unwrap().leak();
         files.push(ModelFile {
             name,
@@ -115,8 +115,12 @@ fn tables_name_no_onnx_or_gguf() {
 // test-pattern: D (pure). CI fetches the volume from this list (.github/ci/models.sh), so it is the table, line for line.
 #[test]
 fn the_ci_model_list_is_the_table() {
-    let list = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../.github/ci/models.txt"),
+    let list = eitri::read_string(
+        &fs::canonicalize(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../.github/ci/models.txt"),
+        )
+        .unwrap(),
+        1 << 20,
     )
     .unwrap();
     let listed: Vec<&str> = list
@@ -294,7 +298,7 @@ fn corrupt_file_refuses_load() {
     let path = dir.path().join("sub/data.bin");
     let mut body = fs::read(&path).unwrap();
     body[0] ^= 1;
-    fs::write(&path, &body).unwrap();
+    eitri::replace_file(&path, body.as_bytes()).unwrap();
     assert_eq!(
         cache::state(&spec, dir.path()),
         ModelState::Corrupt {
@@ -305,7 +309,7 @@ fn corrupt_file_refuses_load() {
         matches!(cache::verify(&spec, dir.path()), Err(CacheError::Corrupt(f)) if f == "sub/data.bin")
     );
 
-    fs::write(&path, b"short").unwrap();
+    eitri::replace_file(&path, b"short").unwrap();
     assert_eq!(
         cache::state(&spec, dir.path()),
         ModelState::Corrupt {
@@ -321,7 +325,7 @@ fn partial_and_missing_are_told_apart() {
     let empty = tempfile::tempdir().unwrap();
     assert_eq!(cache::state(&spec, empty.path()), ModelState::Missing);
     fs::remove_file(dir.path().join("sub/data.bin")).unwrap();
-    fs::write(dir.path().join("sub/data.bin.part"), "some").unwrap();
+    eitri::replace_file(&dir.path().join("sub/data.bin.part"), b"some").unwrap();
     let total = download_bytes(&spec);
     assert_eq!(
         cache::state(&spec, dir.path()),
@@ -340,7 +344,11 @@ fn import_verifies_sums() {
     assert_eq!(cache::state(&spec, &dir), ModelState::Ready);
 
     // a bad source: nothing lands under a real name
-    fs::write(source.path().join("sub/data.bin"), "some bytes of a m0del").unwrap();
+    eitri::replace_file(
+        &source.path().join("sub/data.bin"),
+        b"some bytes of a m0del",
+    )
+    .unwrap();
     let other = root.path().join("other");
     assert!(matches!(
         cache::import(&spec, source.path(), &other),

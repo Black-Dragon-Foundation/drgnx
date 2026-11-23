@@ -155,7 +155,7 @@ fn the_generic_packs_translate_and_name_what_they_navigate_to() {
         let dir = packs_dir().join(&name).join("queries");
         let t = skald::translate::translate(
             &name,
-            &std::fs::read_to_string(dir.join("highlights.scm")).unwrap(),
+            &eitri::read_string(&dir.join("highlights.scm"), 1 << 24).unwrap(),
         )
         .unwrap_or_else(|e| panic!("{name}: {e:?}"));
         let features: Vec<&str> = t.rules.iter().map(|r| r.feature.as_str()).collect();
@@ -166,7 +166,7 @@ fn the_generic_packs_translate_and_name_what_they_navigate_to() {
             );
         }
         let kinds = skald::translate::definition_kinds(
-            &std::fs::read_to_string(dir.join("tags.scm")).unwrap(),
+            &eitri::read_string(&dir.join("tags.scm"), 1 << 24).unwrap(),
         );
         assert!(!kinds.is_empty(), "{name} defines nothing to navigate to");
     }
@@ -230,7 +230,8 @@ fn the_compiled_in_manifests_are_the_packs_folder() {
     let compiled: Vec<&str> = skald::builtin::SOURCES.iter().map(|s| s.0).collect();
     assert_eq!(compiled, folders);
     for (name, text) in skald::builtin::SOURCES {
-        let on_disk = std::fs::read_to_string(packs_dir().join(name).join("pack.eld")).unwrap();
+        let on_disk =
+            eitri::read_string(&packs_dir().join(name).join("pack.eld"), 1 << 24).unwrap();
         assert_eq!(*text, on_disk, "{name}");
         assert_eq!(skald::builtin::get(name).unwrap().pack, *name);
     }

@@ -7,10 +7,10 @@
 //! The library is loaded here to check it (dlopen runs its constructors): the job runs inside the pack job's own
 //! process, which Task 2b hands to the sandbox. Sync (Task 2b) owns the lock, `active.eld` and the move out of staging.
 
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 use tree_sitter::Language;
@@ -198,27 +198,69 @@ pub fn tree_hash(dir: &Path) -> Result<String, JobError> {
     Ok(hex(&h.finalize()))
 }
 
+/// How long one git command may run (a full fetch of a large grammar repository is the longest).
+const GIT_DEADLINE: Duration = Duration::from_secs(600);
+
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
-        .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ASKPASS", "true")
-        .args([
-            "-c",
-            "protocol.ext.allow=never",
-            "-c",
-            "core.hooksPath=/dev/null",
-        ])
-        .args(args)
-        .output()
-        .map_err(|e| format!("git: {e}"))?;
+    let mut all: Vec<OsString> = [
+        "-c",
+        "protocol.ext.allow=never",
+        "-c",
+        "core.hooksPath=/dev/null",
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
+    all.extend(args.iter().map(OsString::from));
+    let off = OsStr::new("/dev/null");
+    let spec = draugr::Spec {
+        program: "git".into(),
+        args: all,
+        env: draugr::env::build(
+            &[
+                "PATH",
+                "LANG",
+                stig::HOME_VAR,
+                "http_proxy",
+                "https_proxy",
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "NO_PROXY",
+                "SSL_CERT_FILE",
+                "SSL_CERT_DIR",
+            ],
+            &[],
+            &[
+                ("GIT_CONFIG_GLOBAL", off),
+                ("GIT_CONFIG_SYSTEM", off),
+                ("GIT_TERMINAL_PROMPT", OsStr::new("0")),
+                ("GIT_ASKPASS", OsStr::new("true")),
+            ],
+        ),
+        cwd: Some(dir.to_path_buf()),
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: false,
+    };
+    let out = draugr::run(spec, GIT_DEADLINE).map_err(|e| format!("git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        Err(out.stderr.trim().to_string())
     }
+}
+
+/// Removes the folder PATH and all under it; a folder that is not there is already as wanted.
+fn remove_tree(path: &Path) {
+    if let Err(e) = std::fs::remove_dir_all(path)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(path = %path.display(), error = %e, "could not remove a work folder");
+    }
+}
+
+fn fs_err(what: &str, e: eitri::FsError) -> JobError {
+    JobError::Io(format!("{what}: {e}"))
 }
 
 /// REPO at COMMIT into DEST: a shallow fetch of the bare commit (GitHub and GitLab allow it), else a full fetch.
@@ -262,14 +304,15 @@ pub fn pin(repo: &str, commit: &str, src: &str) -> Result<(String, Option<u32>),
     }
     let tmp = std::env::temp_dir().join(format!("skald-pin-{}", std::process::id()));
     let work = Work(tmp);
-    let _ = std::fs::remove_dir_all(&work.0);
+    remove_tree(&work.0);
     fetch(repo, commit, &work.0)?;
     let tree = tree_hash(&work.0)?;
-    let parser = std::fs::read_to_string(work.0.join(src).join("parser.c")).map_err(|_| {
-        JobError::Build(format!(
-            "no src/parser.c at {commit} in {src}: a commit with generated files is needed"
-        ))
-    })?;
+    let parser =
+        eitri::read_string(&work.0.join(src).join("parser.c"), 256 << 20).map_err(|_| {
+            JobError::Build(format!(
+                "no src/parser.c at {commit} in {src}: a commit with generated files is needed"
+            ))
+        })?;
     let abi = parser
         .lines()
         .find_map(|l| l.strip_prefix("#define LANGUAGE_VERSION "))
@@ -434,42 +477,39 @@ fn child_check(
     work: &Path,
 ) -> Result<u32, JobError> {
     let l = |m: String| JobError::Load(format!("{name}: {m}"));
-    let mut cmd = Command::new(prog);
-    cmd.args(["packs", "load-check"])
-        .arg(lib)
-        .arg(name)
-        .arg(opts.min_abi.to_string());
+    let mut args: Vec<OsString> = vec![
+        "packs".into(),
+        "load-check".into(),
+        lib.into(),
+        name.into(),
+        opts.min_abi.to_string().into(),
+    ];
     for (i, (file, text)) in queries.iter().enumerate() {
         let path = work.join(format!("query-{name}-{i}.scm"));
-        std::fs::write(&path, text).map_err(|e| io("query file", e))?;
-        cmd.arg(format!("{file}={}", path.display()));
+        eitri::replace_file(&path, text.as_bytes()).map_err(|e| fs_err("query file", e))?;
+        args.push(format!("{file}={}", path.display()).into());
     }
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| l(format!("cannot start {}: {e}", prog.display())))?;
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait().map_err(|e| l(e.to_string()))? {
-            Some(s) => break s,
-            None if started.elapsed() > opts.check_timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(l(format!(
-                    "the load check did not finish in {} s and was killed",
-                    opts.check_timeout.as_secs_f32().ceil()
-                )));
-            }
-            None => std::thread::sleep(Duration::from_millis(20)),
-        }
+    let spec = draugr::Spec {
+        program: prog.to_path_buf(),
+        args,
+        env: draugr::env::build(&["PATH", "LANG"], &[], &[]),
+        cwd: None,
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: false,
     };
-    use std::io::Read;
-    let mut out = String::new();
-    if let Some(mut so) = child.stdout.take() {
-        let _ = so.by_ref().take(64 * 1024).read_to_string(&mut out);
-    }
+    let run = draugr::run(spec, opts.check_timeout).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::TimedOut {
+            l(format!(
+                "the load check did not finish in {} s and was killed",
+                opts.check_timeout.as_secs_f32().ceil()
+            ))
+        } else {
+            l(format!("cannot run {}: {e}", prog.display()))
+        }
+    })?;
+    let status = run.status;
+    let out = String::from_utf8_lossy(&run.stdout[..run.stdout.len().min(64 * 1024)]).into_owned();
     let first = out.lines().next().unwrap_or("");
     if let Some(abi) = first
         .strip_prefix("ok ")
@@ -513,7 +553,7 @@ struct Work(PathBuf);
 
 impl Drop for Work {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        remove_tree(&self.0);
     }
 }
 
@@ -526,7 +566,7 @@ fn safe_rel(s: &str) -> bool {
 pub fn run(units: &[Unit], queries: &[Query], opts: &Options) -> Result<Vec<Staged>, JobError> {
     std::fs::create_dir_all(&opts.staging).map_err(|e| io("staging folder", e))?;
     let work = Work(opts.staging.join(format!(".work-{}", std::process::id())));
-    let _ = std::fs::remove_dir_all(&work.0);
+    remove_tree(&work.0);
     std::fs::create_dir_all(&work.0).map_err(|e| io("work folder", e))?;
 
     let mut built: Vec<(Staged, PathBuf)> = Vec::new();
@@ -591,8 +631,8 @@ pub fn run(units: &[Unit], queries: &[Query], opts: &Options) -> Result<Vec<Stag
         }
         std::fs::create_dir_all(dest.parent().expect("a folder"))
             .map_err(|e| io("grammars folder", e))?;
-        std::fs::rename(lib_dir, dest)
-            .map_err(|e| io(&format!("moving {} into place", s.name), e))?;
+        eitri::rename_dir(lib_dir, dest)
+            .map_err(|e| fs_err(&format!("moving {} into place", s.name), e))?;
     }
     Ok(built.into_iter().map(|(s, _)| s).collect())
 }

@@ -146,22 +146,24 @@ mod tests {
     async fn a_sleep_ends_only_when_the_clock_moves_past_it() {
         let c = Manual::default();
         let done = Arc::new(AtomicBool::new(false));
-        let t = tokio::spawn(c.scope({
+        let sleeper = c.scope({
             let done = done.clone();
             async move {
                 crate::sleep(Duration::from_secs(5)).await;
                 done.store(true, Ordering::SeqCst);
             }
-        }));
-        skuld::wait_until_async("the sleeper waits", 10, || async {
-            (c.sleepers() == 1).then_some(())
-        })
-        .await;
-        c.advance(Duration::from_millis(4999));
-        tokio::task::yield_now().await;
-        assert!(!done.load(Ordering::SeqCst), "ended 1 ms early");
-        c.advance(Duration::from_millis(1));
-        t.await.unwrap();
+        });
+        let driver = async {
+            skuld::wait_until_async("the sleeper waits", 10, || async {
+                (c.sleepers() == 1).then_some(())
+            })
+            .await;
+            c.advance(Duration::from_millis(4999));
+            tokio::task::yield_now().await;
+            assert!(!done.load(Ordering::SeqCst), "ended 1 ms early");
+            c.advance(Duration::from_millis(1));
+        };
+        tokio::join!(sleeper, driver);
         assert!(done.load(Ordering::SeqCst));
         assert_eq!(c.elapsed(), Duration::from_secs(5));
     }
@@ -171,61 +173,79 @@ mod tests {
     async fn a_timeout_follows_the_scoped_clock() {
         let c = Manual::default();
         let (tx, rx) = tokio::sync::oneshot::channel::<u8>();
-        let waiting = tokio::spawn(c.scope(crate::timeout(Duration::from_secs(10), rx)));
-        skuld::wait_until_async("the deadline is set", 10, || async {
-            (c.sleepers() == 1).then_some(())
-        })
-        .await;
-        tx.send(7).unwrap();
-        assert_eq!(waiting.await.unwrap().unwrap().unwrap(), 7);
+        let waiting = c.scope(crate::timeout(Duration::from_secs(10), rx));
+        let driver = async {
+            skuld::wait_until_async("the deadline is set", 10, || async {
+                (c.sleepers() == 1).then_some(())
+            })
+            .await;
+            tx.send(7).unwrap();
+        };
+        let (answer, ()) = tokio::join!(waiting, driver);
+        assert_eq!(answer.unwrap().unwrap(), 7);
         assert_eq!(c.sleepers(), 0, "the finished timeout left its timer");
 
-        let never = tokio::spawn(c.scope(crate::timeout(
+        let never = c.scope(crate::timeout(
             Duration::from_secs(10),
             std::future::pending::<()>(),
-        )));
-        skuld::wait_until_async("the deadline is set", 10, || async {
-            (c.sleepers() == 1).then_some(())
-        })
-        .await;
-        c.advance(Duration::from_secs(10));
-        assert_eq!(never.await.unwrap(), Err(crate::Elapsed));
+        ));
+        let driver = async {
+            skuld::wait_until_async("the deadline is set", 10, || async {
+                (c.sleepers() == 1).then_some(())
+            })
+            .await;
+            c.advance(Duration::from_secs(10));
+        };
+        let (out, ()) = tokio::join!(never, driver);
+        assert_eq!(out, Err(crate::Elapsed));
     }
 
-    /// On a current-thread test the spawned tasks read the clock too, and a second thread's timers do not.
+    /// On a current-thread test the thread's clock reaches its sleepers, and a second thread's clock reads are real.
     #[tokio::test]
-    async fn the_thread_clock_reaches_spawned_tasks_and_no_other_thread() {
+    async fn the_thread_clock_reaches_this_thread_and_no_other_thread() {
         let c = Manual::default();
         let _on = c.on_this_thread();
-        let t = tokio::spawn(crate::sleep(Duration::from_secs(3600)));
-        skuld::wait_until_async("the spawned sleeper waits", 10, || async {
-            (c.sleepers() == 1).then_some(())
-        })
-        .await;
-        let other = std::thread::spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_time()
-                .build()
-                .unwrap()
-                .block_on(crate::sleep(Duration::ZERO));
-        });
-        other.join().unwrap();
-        assert_eq!(c.sleepers(), 1);
-        c.advance(Duration::from_secs(3600));
-        t.await.unwrap();
+        let sleeper = crate::sleep(Duration::from_secs(3600));
+        let driver = async {
+            skuld::wait_until_async("the sleeper waits", 10, || async {
+                (c.sleepers() == 1).then_some(())
+            })
+            .await;
+            let other = std::thread::scope(|s| {
+                s.spawn(crate::now)
+                    .join()
+                    .expect("the other thread reads the clock")
+            });
+            assert_eq!(c.sleepers(), 1);
+            c.advance(Duration::from_secs(3600));
+            assert!(
+                crate::now() >= Duration::from_secs(3600),
+                "this thread reads the manual clock"
+            );
+            assert!(
+                other < Duration::from_secs(3600),
+                "the other thread read the manual clock: {other:?}"
+            );
+        };
+        tokio::join!(sleeper, driver);
     }
 
     /// Outside the scope a timer is tokio's: another test's clock never reaches it.
     #[tokio::test]
     async fn a_timer_outside_the_scope_does_not_see_the_clock() {
         let c = Manual::default();
-        let inside = tokio::spawn(c.scope(crate::sleep(Duration::from_secs(3600))));
-        skuld::wait_until_async("the scoped sleeper waits", 10, || async {
-            (c.sleepers() == 1).then_some(())
-        })
-        .await;
-        crate::sleep(Duration::ZERO).await;
-        assert_eq!(c.sleepers(), 1);
-        inside.abort();
+        let inside = c.scope(crate::sleep(Duration::from_secs(3600)));
+        let driver = async {
+            skuld::wait_until_async("the scoped sleeper waits", 10, || async {
+                (c.sleepers() == 1).then_some(())
+            })
+            .await;
+            crate::sleep(Duration::ZERO).await;
+            assert_eq!(c.sleepers(), 1);
+        };
+        tokio::select! {
+            () = inside => panic!("the scoped sleeper ended on its own"),
+            () = driver => {}
+        }
     }
 }

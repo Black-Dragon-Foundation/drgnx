@@ -57,10 +57,22 @@ pub struct Executor {
 impl Executor {
     /// A pool of WORKERS threads (at least one), named `saman-worker`.
     pub fn new(workers: usize) -> villa::Result<Executor> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
+        Executor::tuned(workers, |_| {})
+    }
+
+    /// [`Executor::new`], with TUNE applied to the runtime's builder first: for a test that must watch the pool's
+    /// threads come and go (`thread_keep_alive`, `on_thread_stop`).
+    pub fn tuned(
+        workers: usize,
+        tune: impl FnOnce(&mut tokio::runtime::Builder),
+    ) -> villa::Result<Executor> {
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder
             .worker_threads(workers.max(1))
             .thread_name("saman-worker")
-            .enable_all()
+            .enable_all();
+        tune(&mut builder);
+        let rt = builder
             .build()
             .map_err(|e| villa::Error::from(e).with_detail("starting the work pool"))?;
         Ok(Executor { rt })
@@ -84,6 +96,42 @@ impl Executor {
     }
 }
 
+/// Whether SENT, the result of a send on a channel (`mpsc`, `oneshot`, `watch`), reached a receiver. A receiver that is
+/// gone is the ordinary end of a task whose listener left, so it is logged at debug under WHAT and never an error.
+pub fn delivered<T, E>(sent: Result<T, E>, what: &str) -> bool {
+    let ok = sent.is_ok();
+    if !ok {
+        tracing::debug!(what, "nobody was listening");
+    }
+    ok
+}
+
+/// FUT as a task named NAME on the runtime the caller is running in (an [`Executor`] task, a `#[tokio::test]`, a
+/// server's accept loop): for code that has no [`Executor`] of its own to call. Panics outside a runtime, as tokio's
+/// own spawn does. Dropping the [`Task`] cancels it.
+pub fn spawn<F>(name: &'static str, fut: F) -> Task<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    Task {
+        name,
+        handle: Some(tokio::spawn(fut)),
+    }
+}
+
+/// F on a blocking thread of the runtime the caller is running in, as a task named NAME.
+pub fn spawn_blocking<F, T>(name: &'static str, f: F) -> Task<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    Task {
+        name,
+        handle: Some(tokio::task::spawn_blocking(f)),
+    }
+}
+
 /// A spawned task. Awaiting it gives its output, or an error: [`villa::Kind::Cancelled`] when it was cancelled,
 /// [`villa::Kind::Internal`] when it panicked. Dropping it cancels the task.
 pub struct Task<T> {
@@ -94,6 +142,11 @@ pub struct Task<T> {
 impl<T> Task<T> {
     pub fn name(&self) -> &'static str {
         self.name
+    }
+
+    /// Whether the task has ended (finished, panicked or been cancelled). A detached task reports `true`.
+    pub fn is_finished(&self) -> bool {
+        self.handle.as_ref().is_none_or(|h| h.is_finished())
     }
 
     /// Let the task run on with no one awaiting it. WHY is logged: a detached task is a decision, never a default.

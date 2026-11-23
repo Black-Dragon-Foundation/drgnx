@@ -143,12 +143,13 @@ mod tests {
         // SAFETY: a valid NUL-terminated path.
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
         let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
+        saman::spawn_thread("fifo-reader", move || {
             let read = read_regular(fd.as_fd(), Path::new("p"), 16).map(drop);
             let pin = crate::open_beneath(fd.as_fd(), Path::new("p"), crate::Kind::File).map(drop);
             let pin_abs = crate::open_path(&fifo, crate::Kind::File).map(drop);
             tx.send((read, pin, pin_abs)).unwrap();
-        });
+        })
+        .unwrap();
         let (read, pin, pin_abs) = rx
             .recv_timeout(Duration::from_secs(1))
             .expect("a FIFO blocked");
@@ -170,11 +171,12 @@ mod tests {
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
         let (tx, rx) = mpsc::channel();
         let path = fifo.clone();
-        let writer = std::thread::spawn(move || {
+        let writer = saman::spawn_thread("fifo-writer", move || {
             let f = fs::OpenOptions::new().write(true).open(&path); // blocks until a reader opens
             tx.send(f.is_ok()).unwrap();
-        });
-        std::thread::sleep(Duration::from_millis(200)); // the writer is inside open(2)
+        })
+        .unwrap();
+        stund::real::sleep_blocking(Duration::from_millis(200)); // the writer is inside open(2)
         let r = read_regular(fd.as_fd(), Path::new("p"), 16);
         assert!(matches!(r, Err(FsError::NotRegular)), "{r:?}");
         assert!(

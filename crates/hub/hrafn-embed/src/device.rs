@@ -17,7 +17,6 @@ use crate::local::{Device, EmbedFail, LocalEmbedder};
 use crate::models::{LoadError, ModelSpec};
 use serde_json::{Value, json};
 use std::path::Path;
-use std::time::Instant;
 
 /// Raised on a kernel change, so every cached choice measures again.
 pub const ENGINE_VERSION: u32 = 1;
@@ -257,7 +256,7 @@ pub fn probe(
     let mut embedder = LocalEmbedder::load(spec, dir, device)?;
     let batch = [embedder.encode_doc(&check.text)];
     embedder.embed_ids(&batch).map_err(failed)?;
-    let start = Instant::now();
+    let start = stund::real::instant();
     let forward = embedder.embed_ids(&batch).map_err(failed)?;
     let secs = start.elapsed().as_secs_f64().max(1e-9);
     let vector = forward

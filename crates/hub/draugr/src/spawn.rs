@@ -13,7 +13,6 @@ use tokio::io::AsyncReadExt;
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 
 /// How much of a child's stderr is kept, in characters.
 pub const STDERR_TAIL_CHARS: usize = 8000;
@@ -68,10 +67,7 @@ fn file_id(fd: RawFd) -> Option<(u64, u64)> {
 /// FD (a hub's listening socket) is never passed to a child: a spawn that tries panics in debug builds.
 pub fn never_pass(fd: &impl AsRawFd) {
     if let Some(id) = file_id(fd.as_raw_fd()) {
-        NEVER_PASS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(id);
+        saman::lock(&NEVER_PASS).push(id);
     }
 }
 
@@ -86,7 +82,7 @@ pub struct Child {
     inner: tokio::process::Child,
     pid: i32,
     tail: Arc<Mutex<Vec<u8>>>,
-    reader: Option<JoinHandle<()>>,
+    reader: Option<saman::Task<()>>,
     exited: bool,
 }
 
@@ -132,25 +128,24 @@ static SPAWNER_STALL: Mutex<()> = Mutex::new(());
 
 /// The `draugr-spawner` thread's queue, starting the thread on first use. The thread never exits.
 fn spawner() -> io::Result<mpsc::Sender<Job>> {
-    let mut slot = SPAWNER.lock().unwrap_or_else(|e| e.into_inner());
+    let mut slot = saman::lock(&SPAWNER);
     if let Some(tx) = &*slot {
         return Ok(tx.clone());
     }
     let (tx, rx) = mpsc::channel::<Job>();
-    std::thread::Builder::new()
-        .name("draugr-spawner".into())
-        .spawn(move || {
-            for job in rx {
-                // a test holds this to keep the spawner from starting a job it has queued
-                #[cfg(test)]
-                drop(SPAWNER_STALL.lock().unwrap_or_else(|e| e.into_inner()));
-                let _rt = job.runtime.enter();
-                if let Err(Ok(child)) = job.reply.send(start(job.spec)) {
-                    // The caller stopped waiting: nobody owns this child, so its group ends now.
-                    kill_cancelled(-child.pid);
-                }
+    saman::spawn_thread("draugr-spawner", move || {
+        for job in rx {
+            // a test holds this to keep the spawner from starting a job it has queued
+            #[cfg(test)]
+            drop(saman::lock(&SPAWNER_STALL));
+            let _rt = job.runtime.enter();
+            if let Err(Ok(child)) = job.reply.send(start(job.spec)) {
+                // The caller stopped waiting: nobody owns this child, so its group ends now.
+                kill_cancelled(-child.pid);
             }
-        })?;
+        }
+    })
+    .map_err(|e| io::Error::other(e.to_string()))?;
     *slot = Some(tx.clone());
     Ok(tx)
 }
@@ -159,10 +154,7 @@ fn spawner() -> io::Result<mpsc::Sender<Job>> {
 /// leader, so its pid names the group: a negative `target`).
 fn kill_cancelled(target: i32) {
     #[cfg(test)]
-    CANCELLED
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .push(target);
+    saman::lock(&CANCELLED).push(target);
     // SAFETY: kill(2) has no memory effects; `target` is a child this thread just started.
     unsafe { libc::kill(target, libc::SIGKILL) };
 }
@@ -179,7 +171,7 @@ fn start(spec: Spec) -> io::Result<Child> {
 /// there, as another thread of the process could).
 fn start_with(spec: Spec, after_move: impl FnOnce(&mut Moved)) -> io::Result<Child> {
     if cfg!(debug_assertions) {
-        let never = NEVER_PASS.lock().unwrap_or_else(|e| e.into_inner());
+        let never = saman::lock(&NEVER_PASS);
         debug_assert!(
             spec.pass_fds
                 .iter()
@@ -258,10 +250,10 @@ fn start_with(spec: Spec, after_move: impl FnOnce(&mut Moved)) -> io::Result<Chi
     let tail = Arc::new(Mutex::new(Vec::new()));
     let reader = inner.stderr.take().map(|mut stderr| {
         let tail = Arc::clone(&tail);
-        tokio::spawn(async move {
+        saman::spawn("draugr-stderr-tail", async move {
             let mut buf = [0u8; 4096];
             while let Ok(n @ 1..) = stderr.read(&mut buf).await {
-                let mut t = tail.lock().unwrap_or_else(|e| e.into_inner());
+                let mut t = saman::lock(&tail);
                 t.extend_from_slice(&buf[..n]);
                 let over = t.len().saturating_sub(TAIL_BYTES);
                 t.drain(..over);
@@ -438,7 +430,11 @@ impl Child {
         let status = self.inner.wait().await?;
         self.exited = true;
         if let Some(reader) = self.reader.take() {
-            let _ = tokio::time::timeout(TAIL_SETTLE, reader).await;
+            // real time, whatever clock a test installed: the grandchild holding stderr open is a real process
+            tokio::select! {
+                _ = reader => {}
+                () = stund::real::sleep(TAIL_SETTLE) => {}
+            }
         }
         Ok(Some(status))
     }
@@ -478,7 +474,7 @@ pub struct StderrTail(Arc<Mutex<Vec<u8>>>);
 impl StderrTail {
     /// [`Child::stderr_tail`].
     pub fn get(&self) -> String {
-        let bytes = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let bytes = saman::lock(&self.0);
         let text = String::from_utf8_lossy(&bytes);
         let skip = text.chars().count().saturating_sub(STDERR_TAIL_CHARS);
         text.chars().skip(skip).collect()
@@ -520,11 +516,16 @@ mod tests {
     /// deadline only bounds a failure).
     fn read_to_eof(r: OwnedFd) -> Option<String> {
         let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
+        saman::spawn_thread("read-to-eof", move || {
             let mut s = String::new();
-            let _ = io::Read::read_to_string(&mut std::fs::File::from(r), &mut s);
-            let _ = tx.send(s);
-        });
+            if let Err(e) = io::Read::read_to_string(&mut std::fs::File::from(r), &mut s) {
+                tracing::debug!(error = %e, "the read ended early");
+            }
+            if tx.send(s).is_err() {
+                tracing::debug!("the reader gave up first");
+            }
+        })
+        .unwrap();
         rx.recv_timeout(Duration::from_secs(30)).ok()
     }
 
@@ -546,7 +547,7 @@ mod tests {
         std::mem::forget(sock);
         let mut spec = sh("exit 0", true);
         spec.pass_fds.push(pass(&fd, 3));
-        let _ = spawn(spec).await;
+        assert!(spawn(spec).await.is_err());
     }
 
     #[tokio::test]
@@ -727,15 +728,16 @@ mod tests {
         use tokio::io::AsyncWriteExt;
         // The runtime reports each thread that retires (its tid, from the thread itself).
         let (stopped_tx, mut stopped) = tokio::sync::mpsc::unbounded_channel();
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_keep_alive(Duration::from_millis(100))
-            .on_thread_stop(move || {
-                let _ = stopped_tx.send(unsafe { libc::gettid() });
-            })
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = saman::Executor::tuned(1, |b| {
+            b.thread_keep_alive(Duration::from_millis(100))
+                .on_thread_stop(move || {
+                    // a closed channel means the test ended first
+                    stopped_tx
+                        .send(unsafe { libc::gettid() })
+                        .unwrap_or_default();
+                });
+        })
+        .unwrap();
         rt.block_on(async {
             let spec = Spec {
                 program: "/usr/bin/setpriv".into(),
@@ -751,11 +753,12 @@ mod tests {
                 .to_vec(),
                 ..sh("", false)
             };
-            let mut child =
-                tokio::task::spawn_blocking(|| Handle::current().block_on(spawn_pinned(spec)))
-                    .await
-                    .unwrap()
-                    .unwrap();
+            let mut child = saman::spawn_blocking("pinned-spawn", || {
+                Handle::current().block_on(spawn_pinned(spec))
+            })
+            .await
+            .unwrap()
+            .unwrap();
             // The blocking thread retires after 100 ms idle; a child forked there would get SIGKILL as the thread
             // exits. Wait for the retirement itself: the runtime says it is stopping, and its /proc entry goes after
             // the kernel has sent the signals of its exit. (The deadline only bounds a failure.)
@@ -793,8 +796,8 @@ mod tests {
     #[tokio::test]
     async fn a_cancelled_pinned_spawn_kills_the_group() {
         use std::future::Future;
-        let stall = SPAWNER_STALL.lock().unwrap();
-        let before = CANCELLED.lock().unwrap().len();
+        let stall = saman::lock(&SPAWNER_STALL);
+        let before = saman::lock(&CANCELLED).len();
         // queue the job, then drop the caller before the spawner may start it
         let mut fut = Box::pin(spawn_pinned(sh("sleep 30", true)));
         let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
@@ -806,7 +809,7 @@ mod tests {
         drop(stall);
         let sent =
             skuld::wait_until_async("the spawner killed the cancelled child", 10, || async {
-                let fresh: Vec<i32> = CANCELLED.lock().unwrap()[before..].to_vec();
+                let fresh: Vec<i32> = saman::lock(&CANCELLED)[before..].to_vec();
                 (!fresh.is_empty()).then_some(fresh)
             })
             .await;

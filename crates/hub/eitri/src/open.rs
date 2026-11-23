@@ -240,7 +240,7 @@ pub(crate) fn raw_open(
     path: &Path,
     how: How,
 ) -> Result<OwnedFd, FsError> {
-    let _ = (dir, path, how, refused);
+    let _not_used_here = (dir, path, how, refused);
     Err(FsError::Unsupported(
         "no open that refuses links on this OS",
     ))

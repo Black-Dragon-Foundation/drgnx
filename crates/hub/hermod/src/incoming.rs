@@ -60,7 +60,7 @@ impl<T: Serialize> Responder<T> {
 
     /// Resolves when the child has exited.
     pub async fn cancelled(&mut self) {
-        let _ = self.closed.wait_for(|c| *c).await;
+        saman::delivered(self.closed.wait_for(|c| *c).await, "the closed flag");
     }
 
     pub fn respond(mut self, value: T) -> Result<(), Error> {
@@ -95,7 +95,7 @@ impl<T> Drop for Responder<T> {
         }
         if let Some(tx) = self.tx.upgrade() {
             let line = json!({"jsonrpc": "2.0", "id": self.id, "error": {"code": -32800, "message": "cancelled"}});
-            let _ = tx.send(line.to_string());
+            saman::delivered(tx.send(line.to_string()), "tx receiver");
         }
     }
 }

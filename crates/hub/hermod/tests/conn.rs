@@ -411,7 +411,9 @@ struct Mock {
 
 impl Drop for Mock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        if let Err(e) = std::fs::remove_dir_all(&self.dir) {
+            tracing::debug!(error = %e, "the mock's folder was already gone");
+        }
     }
 }
 
@@ -445,7 +447,11 @@ impl Mock {
             new_session: false,
         };
         let (conn, mut rx) = Conn::spawn(spec, opts()).await.expect("spawn the mock");
-        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        saman::spawn(
+            "drain-events",
+            async move { while rx.recv().await.is_some() {} },
+        )
+        .detach("it ends with the connection");
         conn.initialize(ClientCaps::default())
             .await
             .expect("initialize");
@@ -454,7 +460,7 @@ impl Mock {
 
     /// The values of KEY in LOG, in order.
     fn logged(&self, log: &str, key: &str) -> Vec<Value> {
-        std::fs::read_to_string(self.dir.join(log))
+        eitri::read_string(&self.dir.join(log), 1 << 24)
             .unwrap_or_default()
             .lines()
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
@@ -668,7 +674,7 @@ async fn ext_request_returns_the_answer_or_ends_at_its_deadline() {
 async fn stderr_is_readable_while_the_child_runs() {
     let (conn, _rx) = start("echo 'bwrap: no permission' >&2; cat >/dev/null", opts()).await;
     let tail = conn.stderr();
-    tokio::task::spawn_blocking(move || {
+    saman::spawn_blocking("wait-for-stderr", move || {
         skuld::wait_until("the child's stderr holds its complaint", 10, || {
             tail.get().contains("bwrap: no permission").then_some(())
         });
@@ -684,16 +690,17 @@ async fn stderr_is_readable_while_the_child_runs() {
 #[test]
 fn the_agent_survives_its_callers_thread() {
     let (stopped_tx, mut stopped) = tokio::sync::mpsc::unbounded_channel();
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .thread_keep_alive(Duration::from_millis(100))
-        .on_thread_stop(move || {
-            // this thread's own /proc entry: "PID/task/TID"
-            let _ = stopped_tx.send(std::fs::read_link("/proc/thread-self").ok());
-        })
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = saman::Executor::tuned(1, |b| {
+        b.thread_keep_alive(Duration::from_millis(100))
+            .on_thread_stop(move || {
+                // this thread's own /proc entry: "PID/task/TID"
+                saman::delivered(
+                    stopped_tx.send(std::fs::read_link("/proc/thread-self").ok()),
+                    "stopped_tx receiver",
+                );
+            });
+    })
+    .unwrap();
     rt.block_on(async {
         let mut spec = spec(&format!("read a; printf '%s\\n' '{INIT}'; cat >/dev/null"));
         let mut args: Vec<std::ffi::OsString> = ["--pdeathsig", "KILL", "--", "/bin/sh"]
@@ -702,7 +709,7 @@ fn the_agent_survives_its_callers_thread() {
         args.append(&mut spec.args);
         spec.program = "/usr/bin/setpriv".into();
         spec.args = args;
-        let (conn, _rx) = tokio::task::spawn_blocking(|| {
+        let (conn, _rx) = saman::spawn_blocking("pinned-spawn", || {
             tokio::runtime::Handle::current().block_on(Conn::spawn(spec, opts()))
         })
         .await

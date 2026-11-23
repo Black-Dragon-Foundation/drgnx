@@ -97,15 +97,16 @@ fn length_sweep(model: &mut LocalEmbedder, id: &str) {
     for (ids, want) in sweep(id) {
         let got = model.embed_ids(std::slice::from_ref(&ids)).unwrap();
         let c = cos(&got.vectors[0], &want);
-        println!(
+        annall::cli_out(&format!(
             "PARITY {id} length {} cosine {c:.6} worst submit {:?}",
             ids.len(),
             got.worst_submit
-        );
+        ))
+        .unwrap();
         assert!(c >= 0.999, "{id} at {} tokens: {c}", ids.len());
         worst = worst.min(c);
     }
-    println!("PARITY {id} sweep min {worst:.6}");
+    annall::cli_out(&format!("PARITY {id} sweep min {worst:.6}")).unwrap();
 }
 
 #[test]
@@ -129,7 +130,7 @@ fn queries_match_the_fixture() {
                 .embed_query(q["text"].as_str().unwrap(), None)
                 .unwrap();
             let c = cos(&got, &vector(&q["vector"]));
-            println!("PARITY {id} query cosine {c:.6}");
+            annall::cli_out(&format!("PARITY {id} query cosine {c:.6}")).unwrap();
             assert!(c >= 0.999, "{id}: {c}");
         }
     }
@@ -148,7 +149,11 @@ fn batched_equals_alone() {
     for (ids, got) in batch.iter().zip(&together) {
         let alone = model.embed_ids(std::slice::from_ref(ids)).unwrap().vectors;
         let c = cos(&alone[0], got);
-        println!("PARITY batched length {} cosine {c:.6}", ids.len());
+        annall::cli_out(&format!(
+            "PARITY batched length {} cosine {c:.6}",
+            ids.len()
+        ))
+        .unwrap();
         assert!(c >= 0.99999, "{} tokens: {c}", ids.len());
     }
 }
@@ -173,7 +178,11 @@ fn f32_weights_match_f16() {
             .unwrap()
             .vectors;
         let c = cos(&a[0], &b[0]);
-        println!("PARITY f32 against f16 length {} cosine {c:.6}", ids.len());
+        annall::cli_out(&format!(
+            "PARITY f32 against f16 length {} cosine {c:.6}",
+            ids.len()
+        ))
+        .unwrap();
         assert!(c >= 0.9999, "{} tokens: {c}", ids.len());
     }
 }
@@ -191,10 +200,11 @@ fn cpu_and_gpu_agree() {
                 &cpu.embed_ids(one).unwrap().vectors[0],
                 &gpu.embed_ids(one).unwrap().vectors[0],
             );
-            println!(
+            annall::cli_out(&format!(
                 "PARITY {id} cpu against gpu length {} cosine {c:.6}",
                 ids.len()
-            );
+            ))
+            .unwrap();
             assert!(c >= 0.999, "{id} at {} tokens: {c}", ids.len());
         }
     }
@@ -282,7 +292,7 @@ fn refuses_what_it_cannot_run() {
 #[ignore = "a listing for macos-metal-parity.sh, not a check"]
 fn lists_the_adapters() {
     for a in adapters() {
-        println!("ADAPTER\t{}\t{:?}\t{}", a.name, a.kind, a.metal);
+        annall::cli_out(&format!("ADAPTER\t{}\t{:?}\t{}", a.name, a.kind, a.metal)).unwrap();
     }
 }
 
@@ -291,7 +301,7 @@ fn lists_the_adapters() {
 fn names_its_adapter() {
     let want = std::env::var("DRGNX_TEST_ADAPTER").unwrap();
     let all = adapters();
-    println!("ADAPTERS {all:?}");
+    annall::cli_out(&format!("ADAPTERS {all:?}")).unwrap();
     assert!(
         all.iter().any(|a| a.name.contains(&want)),
         "{want} not in {all:?}"
@@ -316,7 +326,7 @@ fn full_references(model: &mut LocalEmbedder, id: &str) {
                 .unwrap();
             worst = worst.min(cos(&got[0], &vector(v)));
         }
-        println!("PARITY {id} full {texts} min {worst:.6}");
+        annall::cli_out(&format!("PARITY {id} full {texts} min {worst:.6}")).unwrap();
         assert!(worst >= 0.999, "{id} {texts}: {worst}");
     }
 }

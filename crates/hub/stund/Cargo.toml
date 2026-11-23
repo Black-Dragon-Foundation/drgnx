@@ -17,3 +17,6 @@ tokio.workspace = true
 [dev-dependencies]
 skuld = { path = "../skuld", version = "0.1.0" }
 stund = { path = ".", features = ["test-hooks"] }
+
+[lints]
+workspace = true

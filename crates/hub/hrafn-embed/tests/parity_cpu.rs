@@ -84,7 +84,11 @@ fn length_sweep(model: &mut LocalEmbedder, id: &str) {
     for (ids, want) in sweep(id) {
         let got = model.embed_ids(std::slice::from_ref(&ids)).unwrap();
         let c = cos(&got.vectors[0], &want);
-        println!("PARITY {id} cpu length {} cosine {c:.6}", ids.len());
+        annall::cli_out(&format!(
+            "PARITY {id} cpu length {} cosine {c:.6}",
+            ids.len()
+        ))
+        .unwrap();
         assert!(c >= 0.999, "{id} at {} tokens: {c}", ids.len());
         assert!(got.worst_submit.is_zero());
     }
@@ -121,7 +125,7 @@ fn reference_chunks_and_queries_gte() {
             .embed_docs(&[row["text"].as_str().unwrap().to_string()])
             .unwrap();
         let c = cos(&got[0], &vector(&row["vector"]));
-        println!("PARITY {GTE} cpu chunk cosine {c:.6}");
+        annall::cli_out(&format!("PARITY {GTE} cpu chunk cosine {c:.6}")).unwrap();
         assert!(c >= 0.999, "{c}");
     }
     for row in f["queries"].as_array().unwrap() {
@@ -129,7 +133,7 @@ fn reference_chunks_and_queries_gte() {
             .embed_query(row["text"].as_str().unwrap(), None)
             .unwrap();
         let c = cos(&got, &vector(&row["vector"]));
-        println!("PARITY {GTE} cpu query cosine {c:.6}");
+        annall::cli_out(&format!("PARITY {GTE} cpu query cosine {c:.6}")).unwrap();
         assert!(c >= 0.999, "{c}");
     }
 }
@@ -150,7 +154,11 @@ fn batched_equals_alone() {
     for (ids, got) in batch.iter().zip(&together) {
         let alone = model.embed_ids(std::slice::from_ref(ids)).unwrap().vectors;
         let c = cos(&alone[0], got);
-        println!("PARITY cpu batched length {} cosine {c:.6}", ids.len());
+        annall::cli_out(&format!(
+            "PARITY cpu batched length {} cosine {c:.6}",
+            ids.len()
+        ))
+        .unwrap();
         assert!(c >= 0.99999, "{} tokens: {c}", ids.len());
     }
 }
@@ -171,10 +179,11 @@ fn baseline_matches_avx2() {
         let a = plain.embed_ids(std::slice::from_ref(ids)).unwrap().vectors;
         let b = model.embed_ids(std::slice::from_ref(ids)).unwrap().vectors;
         let c = cos(&a[0], &b[0]);
-        println!(
+        annall::cli_out(&format!(
             "PARITY baseline against dispatched length {} cosine {c:.6}",
             ids.len()
-        );
+        ))
+        .unwrap();
         assert!(c >= 0.99999, "{} tokens: {c}", ids.len());
     }
 }

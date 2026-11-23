@@ -117,7 +117,7 @@ impl CpuEngine {
                 head,
                 heads: c.heads,
                 glu: c.intermediate,
-                scale: 1.0 / (head as f32).sqrt(),
+                inv_sqrt_head: 1.0 / (head as f32).sqrt(),
                 eps: c.norm_eps,
             },
             kernels: if tuning.baseline_cpu {
