@@ -185,6 +185,7 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-search-off" => values.search_off = de(v)?,
         "drgnx-search-base" => values.search_base = de(v)?,
         "drgnx-search-cache-cap" => values.search_cache_cap = de(v)?,
+        "drgnx-search-battery-engine" => values.search_battery_engine = de(v)?,
         "drgnx-search-ignore-rules" => {
             let s: String = de(v)?;
             if !["index", "real"].contains(&s.as_str()) {
@@ -344,6 +345,7 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-search-off" => json!(values.search_off),
         "drgnx-search-base" => json!(values.search_base),
         "drgnx-search-cache-cap" => json!(values.search_cache_cap),
+        "drgnx-search-battery-engine" => json!(values.search_battery_engine),
         "drgnx-search-ignore-rules" => json!(values.search_ignore_rules),
         "drgnx-agents-plugins" => json!(values.agents_plugins),
         "drgnx-agents-hook-rules" => match &values.agents_hook_rules {

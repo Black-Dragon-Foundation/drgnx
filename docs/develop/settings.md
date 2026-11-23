@@ -115,6 +115,16 @@ reads it at every search call, so a change counts from the next hourly sweep.
 (drgnx-search-cache-cap 4294967296)   ; 4 GiB of vectors no checkout uses
 ```
 
+## `drgnx-search-battery-engine`
+
+Whether Hrafn's local vector sources (the built-in model, the local engine) embed while the machine runs on battery
+(runtime.md, "The source chain"). `nil` (the default): they wait for AC or `index now`. Remote sources (a TEI or Ollama
+server) are never held by battery. The hub reads it at every search call, so a change counts from the next pass.
+
+```elisp
+(drgnx-search-battery-engine t)   ; embed on battery too
+```
+
 ## Conformance
 
 The two readers are held to each other by four things, all under `test/fixtures/huginn/` and `crates/core/huginn`:

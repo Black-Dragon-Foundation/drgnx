@@ -493,7 +493,6 @@ pub async fn missing_ordered(
 ) -> Result<Vec<(KeyKind, [u8; 32], String)>, StoreError> {
     let limit = limit as usize;
     let order: Vec<String> = order.to_vec();
-    let order: Vec<String> = Vec::new(); // STUB (red run): the order is ignored
     store
         .attach_cache(cache.path(), move |c| {
             type Row = (Vec<u8>, String, String);
@@ -506,9 +505,13 @@ pub async fn missing_ordered(
                        and not exists (select 1 from vc.chunk_vec v where v.key = c.key)
                      order by c.id",
                 )?;
+                let mut visited: HashSet<&str> = HashSet::new();
                 for p in &order {
                     if chunks.len() >= limit {
                         break;
+                    }
+                    if !visited.insert(p.as_str()) {
+                        continue;
                     }
                     let rows = by_path
                         .query_map(params![p], |r| {
