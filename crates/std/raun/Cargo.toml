@@ -14,7 +14,7 @@ stund = { workspace = true, features = ["test-hooks"] }
 tempfile.workspace = true
 
 [dev-dependencies]
-eitri = { path = "../../hub/eitri" }
+eitri = { path = "../../hub/eitri", version = "0.1.0" }
 
 [lints]
 workspace = true

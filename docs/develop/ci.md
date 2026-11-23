@@ -561,6 +561,8 @@ Fedora ships (the rustup jobs follow, as the same file names it), fix what the n
 a changed cargo layout like 1.100's), and land it as any change, through the checks. Never pin an older Fedora build
 or install Rust from elsewhere in that image to dodge it: the two would drift apart.
 
+The image also carries `gcc-c++` (`rust-packages.sh`): sattr's Luau host (mlua's `luau` feature) compiles the Luau VM from C++, and the extension API's tests cannot build without it.
+
 The MSRV job (1.95.0) and the fuzz nightly name their own pinned versions.
 `drgnx-ci/the-rust-toolchain-is-one-pinned-version` (test/unit/ci-workflows-test.el) fails on a workflow that names
 `stable` or installs another toolchain. Moving to a newer Rust is an edit of `rust-version`, checked like any change.

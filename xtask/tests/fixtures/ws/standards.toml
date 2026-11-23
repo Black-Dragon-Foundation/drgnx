@@ -44,6 +44,30 @@ owner = "villa"
 scan = ["secret-has-redact"]
 conformance = "crates/owner/tests/conformance.rs"
 
+[[standard]]
+id = "api-versioning"
+owner = "villa"
+scan = ["no-hand-luau-binding"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "keys"
+owner = "villa"
+scan = ["no-raw-key-event"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "kit"
+owner = "villa"
+scan = ["no-colour-literal"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "commands"
+owner = "villa"
+scan = ["command-has-doc"]
+conformance = "crates/owner/tests/conformance.rs"
+
 [[layer]]
 crate = "app"
 may_not_depend = ["glitnir"]

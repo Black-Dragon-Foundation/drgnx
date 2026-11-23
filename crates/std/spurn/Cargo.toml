@@ -1,0 +1,22 @@
+[package]
+name = "spurn"
+description = "Prompts: one non-blocking ask API; a daemon or headless context answers the default at once (the prompts standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+villa.workspace = true
+saman.workspace = true
+stund.workspace = true
+bod.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+raun.workspace = true
+
+[lints]
+workspace = true

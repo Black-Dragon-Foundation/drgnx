@@ -270,3 +270,75 @@ fn commit_msg_freezes_a_crate_not_clean() {
         0
     );
 }
+
+#[test]
+fn raw_key_event_outside_lykill_fails() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    let hits = lines(&out, "crates/bad/src/keys.rs", "[keys/no-raw-key-event]");
+    // the type in the signature (line 3) and the `Event::Key` pattern (line 7); not `Event` alone
+    let at: Vec<&str> = hits.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
+    assert_eq!(at, ["3", "7"], "{out}");
+    // the owner may read them
+    assert!(
+        !out.lines()
+            .any(|l| l.starts_with("crates/villa/") && l.contains("no-raw-key-event")),
+        "{out}"
+    );
+}
+
+#[test]
+fn colour_literal_fails() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    let hits = lines(&out, "crates/bad/src/colour.rs", "[kit/no-colour-literal]");
+    // the hex string and `rgb(1, 2, 3)`; not "#hashtag"
+    let at: Vec<&str> = hits.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
+    assert_eq!(at, ["1", "5"], "{out}");
+    assert!(
+        !out.lines()
+            .any(|l| l.starts_with("crates/villa/") && l.contains("no-colour-literal")),
+        "{out}"
+    );
+}
+
+#[test]
+fn hand_written_luau_binding_fails() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    let hits = lines(
+        &out,
+        "crates/bad/src/luau.rs",
+        "[api-versioning/no-hand-luau-binding]",
+    );
+    assert_eq!(hits.len(), 1, "{out}");
+    assert!(hits[0].starts_with("crates/bad/src/luau.rs:3:"), "{out}");
+    assert!(
+        !out.lines()
+            .any(|l| l.starts_with("crates/villa/") && l.contains("no-hand-luau-binding")),
+        "{out}"
+    );
+}
+
+#[test]
+fn command_without_a_doc_fails() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    // the empty doc (line 1) and the missing one (line 3); not the one with text, not the owner's own
+    let hits = lines(
+        &out,
+        "crates/bad/src/command.rs",
+        "[commands/command-has-doc]",
+    );
+    let at: Vec<&str> = hits.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
+    assert_eq!(at, ["1", "3"], "{out}");
+    assert!(
+        !out.lines()
+            .any(|l| l.starts_with("crates/villa/") && l.contains("command-has-doc")),
+        "{out}"
+    );
+}

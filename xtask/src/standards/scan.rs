@@ -30,6 +30,17 @@ pub struct Rules {
 
 const SECRET_SUFFIXES: &[&str] = &["Token", "Secret", "Key", "Password", "Credential"];
 const PRINTS: &[&str] = &["println", "print", "eprintln", "eprint", "dbg"];
+/// skel's raw input types: its key event, the keyboard's own state and what a key press resolves to.
+const KEY_TYPES: &[&str] = &["KeyEv", "KeyEvent", "Keyed", "KeyboardState"];
+/// The functions that make a colour from numbers.
+const COLOUR_FNS: &[&str] = &[
+    "rgb",
+    "rgba",
+    "from_rgb",
+    "from_rgba",
+    "from_rgb8",
+    "from_rgba8",
+];
 
 pub fn scan(file: &syn::File, rules: &Rules) -> Vec<Hit> {
     let mut aliases = Aliases::default();
@@ -192,6 +203,7 @@ impl Scanner<'_> {
     fn check_path(&mut self, path: &syn::Path) {
         let segs = segments(path);
         for full in self.aliases.resolve(&segs) {
+            self.check_key(path.span(), &full);
             let joined = full.join("::");
             if let Some((id, owner)) = self.rules.methods.get(&joined) {
                 let (id, owner) = (id.clone(), owner.clone());
@@ -206,6 +218,36 @@ impl Scanner<'_> {
             if self.check_type_prefix(path.span(), &full) {
                 return;
             }
+        }
+    }
+
+    /// A path into skel's raw key events (`no-raw-key-event`): only lykill reads them.
+    fn check_key(&mut self, span: Span, full: &[String]) {
+        let Some(id) = self.rule("no-raw-key-event") else {
+            return;
+        };
+        if full.first().map(String::as_str) != Some("skel") {
+            return;
+        }
+        let raw = full.iter().enumerate().skip(1).any(|(i, s)| {
+            KEY_TYPES.contains(&s.as_str()) || (s == "Key" && full[i - 1] == "Event")
+        });
+        if raw {
+            self.hit(
+                span,
+                &id,
+                "no-raw-key-event",
+                format!(
+                    "`{}` is skel's raw key event: keys are read through lykill's Keymap",
+                    full.join("::")
+                ),
+            );
+        }
+    }
+
+    fn check_pat_path(&mut self, path: &syn::Path) {
+        for full in self.aliases.resolve(&segments(path)) {
+            self.check_key(path.span(), &full);
         }
     }
 
@@ -342,8 +384,47 @@ impl Scanner<'_> {
                 format!("`{name}!` prints: use annall (cli_out / cli_err, or tracing)"),
             );
         }
+        if name == "command"
+            && let Some(id) = self.rule("command-has-doc")
+            && !command_has_doc(mac)
+        {
+            self.hit(
+                mac.path.span(),
+                &id,
+                "command-has-doc",
+                "`command!` has no doc, or an empty one: every command says what it does".into(),
+            );
+        }
         self.visit_macro_args(mac);
     }
+}
+
+/// Whether a `command!` invocation has `doc: "…"` with some text.
+fn command_has_doc(mac: &syn::Macro) -> bool {
+    use proc_macro2::TokenTree;
+    let toks: Vec<TokenTree> = mac.tokens.clone().into_iter().collect();
+    toks.windows(3).any(|w| {
+        if let [
+            TokenTree::Ident(i),
+            TokenTree::Punct(p),
+            TokenTree::Literal(l),
+        ] = w
+        {
+            i == "doc"
+                && p.as_char() == ':'
+                && syn::parse_str::<syn::LitStr>(&l.to_string())
+                    .is_ok_and(|s| !s.value().trim().is_empty())
+        } else {
+            false
+        }
+    })
+}
+
+/// `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`.
+fn is_hex_colour(v: &str) -> bool {
+    v.strip_prefix('#').is_some_and(|h| {
+        matches!(h.len(), 3 | 4 | 6 | 8) && h.chars().all(|c| c.is_ascii_hexdigit())
+    })
 }
 
 fn derives_debug(attrs: &[syn::Attribute]) -> bool {
@@ -375,11 +456,61 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
     fn visit_type_path(&mut self, t: &'ast syn::TypePath) {
         let segs = segments(&t.path);
         for full in self.aliases.resolve(&segs) {
+            self.check_key(t.span(), &full);
             if self.check_type_prefix(t.span(), &full) {
                 break;
             }
         }
         visit::visit_type_path(self, t);
+    }
+
+    fn visit_pat_tuple_struct(&mut self, p: &'ast syn::PatTupleStruct) {
+        self.check_pat_path(&p.path);
+        visit::visit_pat_tuple_struct(self, p);
+    }
+
+    fn visit_pat_struct(&mut self, p: &'ast syn::PatStruct) {
+        self.check_pat_path(&p.path);
+        visit::visit_pat_struct(self, p);
+    }
+
+    fn visit_item_impl(&mut self, i: &'ast syn::ItemImpl) {
+        if let Some((_, path, _)) = &i.trait_
+            && let Some(id) = self.rule("no-hand-luau-binding")
+            && self
+                .aliases
+                .resolve(&segments(path))
+                .iter()
+                .any(|f| f.last().is_some_and(|l| l == "UserData"))
+        {
+            self.hit(
+                path.span(),
+                &id,
+                "no-hand-luau-binding",
+                "a hand-written `UserData` impl: Luau bindings are generated from the WIT (mal-gen), in sattr".into(),
+            );
+        }
+        visit::visit_item_impl(self, i);
+    }
+
+    fn visit_expr_call(&mut self, c: &'ast syn::ExprCall) {
+        if let Expr::Path(p) = &*c.func
+            && let Some(id) = self.rule("no-colour-literal")
+            && p.path
+                .segments
+                .last()
+                .is_some_and(|s| COLOUR_FNS.contains(&s.ident.to_string().as_str()))
+            && c.args.iter().all(|a| matches!(a, Expr::Lit(_)))
+        {
+            self.hit(
+                p.path.span(),
+                &id,
+                "no-colour-literal",
+                "a colour made from literal numbers: colours come from the kit's tokens (themes/)"
+                    .into(),
+            );
+        }
+        visit::visit_expr_call(self, c);
     }
 
     fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
@@ -420,6 +551,18 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
 
     fn visit_lit_str(&mut self, s: &'ast syn::LitStr) {
         let v = s.value();
+        if is_hex_colour(&v)
+            && let Some(id) = self.rule("no-colour-literal")
+        {
+            self.hit(
+                s.span(),
+                &id,
+                "no-colour-literal",
+                format!(
+                    "\"{v}\" is a colour literal: colours come from the kit's tokens (themes/)"
+                ),
+            );
+        }
         if (v == "HOME" || v.starts_with("XDG_"))
             && let Some(id) = self.rule("no-env-home")
         {

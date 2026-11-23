@@ -2,7 +2,11 @@
 
 mod alias;
 mod allow;
+mod colour;
+mod command;
 mod home;
+mod keys;
+mod luau;
 mod print;
 mod secret;
 mod strings;

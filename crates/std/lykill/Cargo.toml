@@ -1,0 +1,21 @@
+[package]
+name = "lykill"
+description = "Keys: one engine for chords, contexts and profiles (Emacs, VS Code) read from keys.eld, with a timeout for a prefix (the keys standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+villa.workspace = true
+stund.workspace = true
+bod.workspace = true
+huginn = { path = "../../core/huginn", version = "0.1.0" }
+eitri = { path = "../../hub/eitri", version = "0.1.0" }
+
+[dev-dependencies]
+raun.workspace = true
+
+[lints]
+workspace = true
