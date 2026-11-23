@@ -17,7 +17,7 @@ fn saves_the_session() {
 - `Sandbox::new` makes a temp HOME, points every `stig` directory under it with the `test` profile, and installs a
   virtual clock (`sb.clock()`, `sb.advance(d)`). Dropping it removes the HOME and puts things back.
 - A test's child process (a compositor to talk to) is started with `raun::proc::TestChild::start(program, args, env)`:
-  through `draugr`, with exactly the environment the test gives, its stdout read by `read_line()`, and its whole group
+  through `draugr`, with exactly the environment the test gives, its stdout read by `read_line()` (or handed on with `take_stdout()` to a reader of the test's own), and its whole group
   ended and reaped when the value drops.
 - Sandboxes of one process take turns; under nextest each test is its own process anyway.
 
