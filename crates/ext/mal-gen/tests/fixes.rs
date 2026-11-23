@@ -100,11 +100,11 @@ fn unsupported_types_are_refused_with_the_wit_name() {
     let cases = [
         (
             "f: func(x: list<list<u8>>);",
-            "acme:thing@1.0.0/i.f, parameter `x`: a list of lists or records is not supported",
+            "acme:thing@1.0.0/i.f, parameter `x`: a list of lists is not supported",
         ),
         (
-            "record r { a: u8 }\n  f: func(x: list<r>);",
-            "acme:thing@1.0.0/i.f, parameter `x`: a list of lists or records is not supported",
+            "record r { a: list<u8> }\n  f: func(x: list<r>);",
+            "acme:thing@1.0.0/i.f, parameter `x`: a list of records that hold lists is not supported",
         ),
         ("f: func(x: char);", "acme:thing@1.0.0/i.f, parameter `x`"),
         ("f: func() -> option<u8>;", "acme:thing@1.0.0/i.f, result"),
@@ -373,4 +373,29 @@ world w { export e; }
             .contains("acme:thing@1.0.0/e.run: lists are not supported in exported functions"),
         "{e}"
     );
+}
+
+// a list of records: a codec one level deep, in every host
+#[test]
+fn a_list_of_records_is_supported_when_the_records_hold_no_list() {
+    let out = must(
+        "package acme:thing@1.0.0;
+interface i {
+  enum kind { a, b }
+  record item { name: string, kind: kind, on: bool }
+  record order { items: list<item>, note: string }
+  f: func(o: order) -> result<list<item>, kind>;
+}
+world w { import i; }
+",
+    );
+    parses(&out);
+    for want in [
+        "::i::Item>",
+        "into_iter().map(Into::into).collect()",
+        "rt::dec_list(",
+        "__rt.set(",
+    ] {
+        assert!(out.rust.contains(want), "`{want}` missing:\n{}", out.rust);
+    }
 }

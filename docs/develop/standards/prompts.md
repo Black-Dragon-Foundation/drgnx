@@ -24,7 +24,7 @@ question's id at once, and the answer (or, when the timeout runs out, the defaul
 its exported `answered(question, choice)`. The host delivers it; the editor never holds a lock across a wait. An
 extension's timeout is from 1 ms to five minutes (0 and more are refused), and it may have 20 questions open.
 
-The answer arrives with how it came (`user`, `default`, `timeout`) and a question that failed arrives too, as `cancelled`: an extension always
+The choices are a list of strings. The answer arrives with how it came (`user`, `default`, `timeout`) and a question that failed arrives too, as `cancelled`: an extension always
 hears back.
 
 **Enforced by:** the conformance test. The layer rule that only `spurn` reaches the UI's modal API waits for that API,

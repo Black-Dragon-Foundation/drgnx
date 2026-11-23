@@ -14,7 +14,7 @@ change to the package needs the version bump it deserves.
   to an interface the host provides, a new interface, type or import is additive: from 1.0 the major and the minor version, below 1.0 (as cargo
   reads it) the minor and the patch version. Comments and docs are not the API.
 - The editor implements the generated `Api` trait once; both hosts call it.
-- Supported WIT: bool, the integers, floats, string, enum, a record of those (no record inside a record), and `result<T, E>` or
+- Supported WIT: bool, the integers, floats, string, enum, a record of those (no record inside a record), a list of those or of such records (a record in a list holds no list), and `result<T, E>` or
   `result<_, E>` as a result, E an enum or a record. The API's error is the record `error { kind, message }`.
   `mal-gen` checks every position and refuses anything else with the WIT name.
 
@@ -24,7 +24,7 @@ namespaced command ids, notice keys and ids owned per extension (and a cap of 20
 `set_by_extension`, no reserved keys, `commands.run` through the extension's door. Both hosts hold an extension to the
 same `Limits`: Luau a step budget and a memory limit; a component fuel, a memory limit (a `ResourceLimiter`) and an epoch
 deadline (the `wasm::ticker`). A panic that poisoned the API's lock stops the extension: no call after it succeeds.
-A guest runs only through `wasm::Guest`, whose every call arms fuel and the epoch, sets the origin and puts it back after, as `LuauHost`
+Every list is bounded by `Limits.max_list` (Luau before it reads or writes one; the component host on what the guest sent). A guest runs only through `wasm::Guest`, whose every call arms fuel and the epoch, sets the origin and puts it back after, as `LuauHost`
 does. Extension names are `[a-z0-9-]`, so the ids made from them cannot collide. A message tells an extension what happened, and never a file path.
 `settings.set` takes `scoped-level` (stream, language, document, pane) and a scope id; `ask.choose` returns a question id and
 the answer comes to `entry.answered`.

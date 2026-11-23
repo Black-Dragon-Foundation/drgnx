@@ -32,6 +32,9 @@ started a chord with, by an extension: `Keymap::bind_by` refuses an extension or
 **An extension's bindings** (the API's `keys.bind`) name its own commands (`ext/<extension>/…`) or commands exposed to extensions, never
 the editor's, and may not be the start of a chord that is bound (`C-x` over `C-x C-f`).
 
+When a profile is layered after an extension's binding (`Keymap::layer`), the prefix check runs again: an extension binding that
+the profile makes a prefix is dropped, and the editor posts a notice naming the extension and the command.
+
 **Enforced by:** the scan rule `no-raw-key-event` (a path into skel's key event types, or `Event::Key`, anywhere but
 `lykill`), and the layer rows that keep the UI crates off huginn. Owner: `lykill`. Conformance:
 `crates/std/lykill/tests/conformance.rs`.

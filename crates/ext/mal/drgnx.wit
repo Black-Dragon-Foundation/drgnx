@@ -1,7 +1,8 @@
 // The extension API: one WIT package, two hosts (WebAssembly components and Luau), both generated from this file.
-// The rules (crates/ext/mal-gen): only bool, integers, floats, string, enum and `result<T?, enum>` are used so far; a
-// 64-bit integer is exact up to 2^53 in Luau; a function that can fail returns `result<_, error>`. Anything
-// changed or removed here needs a version bump (the xtask's wit-check).
+// What the generator (crates/ext/mal-gen) accepts: bool, the integers, floats, string, enum, records of those, lists of
+// those and of such records, and `result<T?, E>` with E an enum or a record. A 64-bit integer is exact up to 2^53 in Luau;
+// a list is bounded by `Limits.max_list`; a function that can fail returns `result<_, error>`. Anything changed or removed
+// here needs a version bump (the xtask's wit-check).
 package drgnx:api@0.1.0;
 
 /// The kinds of failure every interface shares (villa's wire names).
@@ -39,12 +40,30 @@ interface commands {
     key-only,
   }
 
-  /// A command, as an extension offers it. `args` has one entry per argument, `name: what it is`.
+  /// What kind of value an argument takes.
+  enum arg-kind {
+    %string,
+    number,
+    %bool,
+    path,
+    /// one of a fixed set that the argument's doc names
+    choice,
+  }
+
+  /// One argument of a command.
+  record arg-spec {
+    name: string,
+    kind: arg-kind,
+    required: bool,
+    doc: string,
+  }
+
+  /// A command, as an extension offers it.
   record command-spec {
     id: string,
     title: string,
     doc: string,
-    args: list<string>,
+    args: list<arg-spec>,
     exposure: exposure,
   }
 
@@ -89,14 +108,14 @@ interface settings {
   provenance: func(key: string) -> result<string, error>;
 }
 
-/// The one non-blocking question API (spurn). Choices are separated by newlines until lists are supported.
+/// The one non-blocking question API (spurn).
 interface ask {
   use types.{error};
 
   /// Ask: the call returns the question's id at once and never waits. The answer comes later, to `entry.answered`. The
   /// timeout is in milliseconds, from 1 to 300000: an extension's question always has one; at its end the default is the
-  /// answer.
-  choose: func(title: string, body: string, choices: string, default-choice: string, timeout-ms: u32) -> result<u64, error>;
+  /// answer. The answer is one of the choices.
+  choose: func(title: string, body: string, choices: list<string>, default-choice: string, timeout-ms: u32) -> result<u64, error>;
 }
 
 /// Notices (tidindi): the same key updates a notice instead of adding one. Keys and ids belong to the extension that

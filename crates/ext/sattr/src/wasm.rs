@@ -205,12 +205,6 @@ impl<A: Api + Send + 'static> Guest<A> {
         })
     }
 
-    /// The API as the guest's imports reach it (its store's, with its caller and its list limit): for tests that
-    /// call an import without writing a guest for it.
-    pub fn imports(&mut self) -> &mut WasmApi<A> {
-        &mut self.store.data_mut().api
-    }
-
     /// For whom the guest's calls into the API are, between calls: always the extension itself.
     pub fn origin(&self) -> Origin {
         self.store.data().origin()

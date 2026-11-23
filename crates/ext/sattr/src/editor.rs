@@ -21,7 +21,7 @@ use serde_json::Value;
 
 use crate::Caller;
 use crate::generated::drgnx_api_v0_1_0 as api;
-use api::commands::{CommandSpec, Exposure};
+use api::commands::{ArgKind, ArgSpec, CommandSpec, Exposure};
 use api::entry::AnsweredHow;
 use api::types::{Error, ErrorKind};
 
@@ -110,24 +110,39 @@ fn exposure_to(e: bod::Exposure) -> Exposure {
     }
 }
 
-/// The arguments as the WIT spells them: one entry each, `name: what it is`.
-fn parse_args(lines: &[String]) -> Result<bod::ArgSpec, Error> {
+fn kind_of(k: ArgKind) -> bod::ArgKind {
+    match k {
+        ArgKind::String => bod::ArgKind::String,
+        ArgKind::Number => bod::ArgKind::Number,
+        ArgKind::Bool => bod::ArgKind::Bool,
+        ArgKind::Path => bod::ArgKind::Path,
+        ArgKind::Choice => bod::ArgKind::Choice,
+    }
+}
+
+fn kind_to(k: bod::ArgKind) -> ArgKind {
+    match k {
+        bod::ArgKind::String => ArgKind::String,
+        bod::ArgKind::Number => ArgKind::Number,
+        bod::ArgKind::Bool => ArgKind::Bool,
+        bod::ArgKind::Path => ArgKind::Path,
+        bod::ArgKind::Choice => ArgKind::Choice,
+    }
+}
+
+/// The arguments as the WIT spells them, as the registry holds them.
+fn parse_args(specs: &[ArgSpec]) -> Result<bod::ArgSpec, Error> {
     let mut args = Vec::new();
-    for line in lines.iter().map(|l| l.trim()) {
-        let Some((name, doc)) = line.split_once(':') else {
-            return Err(err(
-                ErrorKind::Invalid,
-                "An argument is `name: what it is`.",
-            ));
-        };
-        let (name, doc) = (name.trim(), doc.trim());
-        if name.is_empty() || doc.is_empty() {
-            return Err(err(
-                ErrorKind::Invalid,
-                "An argument needs a name and a sentence.",
-            ));
+    for a in specs {
+        if a.name.trim().is_empty() {
+            return Err(err(ErrorKind::Invalid, "An argument needs a name."));
         }
-        args.push((name.to_string(), doc.to_string()));
+        args.push(bod::Arg {
+            name: a.name.clone(),
+            kind: kind_of(a.kind),
+            required: a.required,
+            doc: a.doc.clone(),
+        });
     }
     Ok(bod::ArgSpec { args })
 }
@@ -153,6 +168,23 @@ impl Editor {
             next_question: 0,
             owners: BTreeMap::new(),
             invocations: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Lay a key profile over the keymap (the user's, a later one). An extension's binding that would now shadow a
+    /// prefix is dropped, and the user is told in a notice.
+    pub fn layer_profile(&mut self, profile: &lykill::Profile) {
+        for d in self.keymap.layer(profile) {
+            self.notices.post(tidindi::Notice {
+                level: tidindi::Level::Warning,
+                title: "A key binding was dropped".to_string(),
+                body: format!(
+                    "The extension `{}` bound `{}`, which is the start of a chord in the profile `{}`.",
+                    d.extension, d.command, profile.name
+                ),
+                actions: Vec::new(),
+                key: None,
+            });
         }
     }
 
@@ -211,6 +243,13 @@ impl api::commands::Api for Editor {
         if command.id.trim().is_empty() {
             return Err(err(ErrorKind::Invalid, "A command needs an id."));
         }
+        // the user decides, per extension, whether its commands are open to agents; there is no way to say so yet
+        if matches!(command.exposure, Exposure::Agent) {
+            return Err(err(
+                ErrorKind::Refused,
+                "An extension's commands are open to agents only with the user's approval for that extension (the agent-exposure permission, which does not exist yet).",
+            ));
+        }
         // an extension's ids are its own: `ext/vim/visit`, never `buffer.save`
         let full = format!("ext/{}/{}", caller.extension, command.id);
         let queue = Arc::clone(&self.invocations);
@@ -254,7 +293,12 @@ impl api::commands::Api for Editor {
                 .args
                 .args
                 .iter()
-                .map(|(n, d)| format!("{n}: {d}"))
+                .map(|a| ArgSpec {
+                    name: a.name.clone(),
+                    kind: kind_to(a.kind),
+                    required: a.required,
+                    doc: a.doc.clone(),
+                })
                 .collect(),
             exposure: exposure_to(c.exposure),
         })
@@ -377,7 +421,7 @@ impl api::ask::Api for Editor {
         caller: &Caller,
         title: String,
         body: String,
-        choices: String,
+        choices: Vec<String>,
         default_choice: String,
         timeout_ms: u32,
     ) -> Result<u64, Error> {
@@ -397,9 +441,9 @@ impl api::ask::Api for Editor {
             return Err(err(ErrorKind::Refused, "Too many questions are open."));
         }
         let choices: Vec<spurn::Choice> = choices
-            .lines()
-            .filter(|l| !l.is_empty())
-            .map(|l| spurn::Choice::new(l, l))
+            .iter()
+            .filter(|c| !c.is_empty())
+            .map(|c| spurn::Choice::new(c, c))
             .collect();
         let q = spurn::Question::new(
             &title,

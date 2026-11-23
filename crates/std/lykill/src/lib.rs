@@ -32,6 +32,16 @@ pub struct Binding {
     pub when: Option<When>,
     /// The profile file and line it came from, when it came from one.
     pub source: Option<(String, u32)>,
+    /// Who bound it, when it was an extension (the one origin whose bindings are checked again when a profile is layered).
+    pub by: Option<bod::Origin>,
+}
+
+/// An extension's binding that was dropped because a profile made it a prefix.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Dropped {
+    pub extension: String,
+    pub command: String,
+    pub chord: Vec<KeyEvent>,
 }
 
 /// What a chord is in a context.
@@ -65,6 +75,7 @@ impl Keymap {
                 Some(When::parse(when)?)
             },
             source: None,
+            by: None,
         });
         Ok(())
     }
@@ -94,7 +105,11 @@ impl Keymap {
                 "That chord is the start of a longer binding: an extension may not shadow it.",
             ));
         }
-        self.bind(chord, command, when)
+        self.bind(chord, command, when)?;
+        if let Some(b) = self.bindings.last_mut() {
+            b.by = Some(origin.clone());
+        }
+        Ok(())
     }
 
     /// Whether CHORD is the start of a longer chord that is bound (binding it would make that chord a prefix).
@@ -105,8 +120,29 @@ impl Keymap {
     }
 
     /// Lay a profile over this keymap: its bindings win over the ones already here.
-    pub fn layer(&mut self, profile: &Profile) {
+    /// An extension's binding that the profile makes a prefix is dropped (the profile's chord wins, as an extension may
+    /// not shadow one): the dropped ones are returned, for the user to be told.
+    pub fn layer(&mut self, profile: &Profile) -> Vec<Dropped> {
         self.bindings.extend(profile.bindings.iter().cloned());
+        let mut dropped = Vec::new();
+        let all = self.bindings.clone();
+        self.bindings.retain(|b| {
+            let Some(bod::Origin::Extension(ext)) = &b.by else {
+                return true;
+            };
+            let shadows = all
+                .iter()
+                .any(|o| o.chord.len() > b.chord.len() && o.chord.starts_with(&b.chord));
+            if shadows {
+                dropped.push(Dropped {
+                    extension: ext.clone(),
+                    command: b.command.clone(),
+                    chord: b.chord.clone(),
+                });
+            }
+            !shadows
+        });
+        dropped
     }
 
     pub fn from_profile(profile: &Profile) -> Keymap {
@@ -232,6 +268,7 @@ impl Profile {
                         command: e.var.clone(),
                         when,
                         source: Some((format!("{name}.eld"), line)),
+                        by: None,
                     }),
                     Err(err) => problems.push(format!("{name}.eld:{line}: {err}")),
                 }

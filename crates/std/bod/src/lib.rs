@@ -54,22 +54,58 @@ pub enum Origin {
     Extension(String),
 }
 
-/// The arguments of a command: each one's name and a sentence about it. The values are JSON.
+/// What kind of value an argument takes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ArgKind {
+    #[default]
+    String,
+    Number,
+    Bool,
+    Path,
+    /// one of a fixed set the argument's doc names
+    Choice,
+}
+
+impl ArgKind {
+    /// The JSON schema type of the argument.
+    pub fn json_type(self) -> &'static str {
+        match self {
+            ArgKind::String | ArgKind::Path | ArgKind::Choice => "string",
+            ArgKind::Number => "number",
+            ArgKind::Bool => "boolean",
+        }
+    }
+}
+
+/// One argument of a command.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Arg {
+    pub name: String,
+    pub kind: ArgKind,
+    pub required: bool,
+    pub doc: String,
+}
+
+/// The arguments of a command. The values are JSON.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct ArgSpec {
-    /// each argument's name and a sentence about it
-    pub args: Vec<(String, String)>,
+    pub args: Vec<Arg>,
 }
 
 impl ArgSpec {
     pub const NONE: ArgSpec = ArgSpec { args: Vec::new() };
 
-    /// An argument list from `(name, doc)` pairs.
+    /// An argument list from `(name, doc)` pairs: each a required string.
     pub fn of(args: &[(&str, &str)]) -> ArgSpec {
         ArgSpec {
             args: args
                 .iter()
-                .map(|(n, d)| ((*n).to_string(), (*d).to_string()))
+                .map(|(n, d)| Arg {
+                    name: (*n).to_string(),
+                    kind: ArgKind::String,
+                    required: true,
+                    doc: (*d).to_string(),
+                })
                 .collect(),
         }
     }
@@ -364,7 +400,12 @@ pub fn tool_specs(registry: &Registry) -> Vec<ToolSpec> {
                 .args
                 .args
                 .iter()
-                .map(|(n, d)| (n.clone(), json!({ "description": d })))
+                .map(|a| {
+                    (
+                        a.name.clone(),
+                        json!({ "type": a.kind.json_type(), "description": a.doc }),
+                    )
+                })
                 .collect();
             ToolSpec {
                 name: c.id.0.clone(),
@@ -372,7 +413,7 @@ pub fn tool_specs(registry: &Registry) -> Vec<ToolSpec> {
                 input_schema: json!({
                     "type": "object",
                     "properties": props,
-                    "required": c.args.args.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+                    "required": c.args.args.iter().filter(|a| a.required).map(|a| a.name.as_str()).collect::<Vec<_>>(),
                 }),
             }
         })

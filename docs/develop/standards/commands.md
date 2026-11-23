@@ -29,6 +29,11 @@ r.find_source("buffer.save")?;             // file and line of the definition
 **Owned ids.** A command's id is a `String`: an extension's commands are registered in the same registry as `ext/<extension>/<id>`,
 with their arguments and exposure, so they list, and run, like any other.
 
+**Agent exposure is the user's to give.** An extension may open its commands to agents only with the user's approval, per
+extension. There is no permission UI yet, so registering a command with the `agent` exposure is refused, naming that
+permission; the exposure stays in the API so that turning it on later changes nothing for extensions. An extension's
+arguments are `arg-spec` records (`name`, `kind`, `required`, `doc`), which become the agents' tool schema once exposed.
+
 **Who may run a command.** A call carries who started it (`Cx::origin`: the user, an agent, an extension) and, when it
 comes through an extension, which one (`Cx::via`). An agent runs only `Exposure::Agent` commands. A call through an
 extension runs only `Exposure::Extension` commands (which the palette and the tools do not list). The origin that started

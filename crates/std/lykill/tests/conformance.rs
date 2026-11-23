@@ -296,3 +296,49 @@ fn an_extension_cannot_shadow_a_prefix() {
     k.bind_by(&bod::Origin::User, "C-x", "user-cut", "")
         .expect("the user may");
 }
+
+#[test]
+fn a_profile_layered_after_an_extension_binding_drops_the_one_that_would_shadow_a_prefix() {
+    let mut k = Keymap::new();
+    let ext = bod::Origin::Extension("vim".into());
+    k.bind_by(&ext, "C-y", "vim-yank", "")
+        .expect("free when it was bound");
+    k.bind_by(&ext, "C-w", "vim-window", "")
+        .expect("free, and stays free");
+    assert_eq!(
+        k.resolve(&chord("C-y"), &KeyContext::new()),
+        Resolution::Command("vim-yank".into())
+    );
+    // the user's profile now has `C-y C-z`: `C-y` alone would shadow it
+    let (profile, problems) =
+        lykill::Profile::parse("mine", b"(drgnx-keys :version 1\n (paste \"C-y C-z\"))\n")
+            .expect("parses");
+    assert!(problems.is_empty());
+    let dropped = k.layer(&profile);
+    assert_eq!(dropped.len(), 1, "{dropped:?}");
+    assert_eq!(
+        (dropped[0].extension.as_str(), dropped[0].command.as_str()),
+        ("vim", "vim-yank")
+    );
+    assert_eq!(
+        k.resolve(&chord("C-y"), &KeyContext::new()),
+        Resolution::Prefix
+    );
+    assert_eq!(
+        k.resolve(&chord("C-y C-z"), &KeyContext::new()),
+        Resolution::Command("paste".into())
+    );
+    assert_eq!(
+        k.resolve(&chord("C-w"), &KeyContext::new()),
+        Resolution::Command("vim-window".into()),
+        "the other stays"
+    );
+    // the user's own bindings are never dropped
+    let mut u = Keymap::new();
+    u.bind("C-y", "user-yank", "").expect("the user's");
+    assert!(u.layer(&profile).is_empty());
+    assert_eq!(
+        u.resolve(&chord("C-y"), &KeyContext::new()),
+        Resolution::Command("user-yank".into())
+    );
+}

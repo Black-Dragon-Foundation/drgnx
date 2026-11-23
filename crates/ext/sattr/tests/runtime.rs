@@ -18,7 +18,7 @@ use sattr::generated::drgnx_api_v0_1_0::entry::AnsweredHow;
 use sattr::luau::LuauHost;
 use sattr::wasm::bindings::drgnx::api::{
     ask::Host as AskHost,
-    commands::{CommandSpec, Exposure, Host as CommandsHost},
+    commands::{ArgKind, ArgSpec, CommandSpec, Exposure, Host as CommandsHost},
     keys::Host as KeysHost,
     notices::Host as NoticesHost,
     notices::Level,
@@ -76,7 +76,20 @@ fn spec(id: &str, exposure: Exposure) -> CommandSpec {
         id: id.into(),
         title: "Title".into(),
         doc: "Doc.".into(),
-        args: vec!["file: the file".into(), "line: the line".into()],
+        args: vec![
+            ArgSpec {
+                name: "file".into(),
+                kind: ArgKind::Path,
+                required: true,
+                doc: "the file".into(),
+            },
+            ArgSpec {
+                name: "line".into(),
+                kind: ArgKind::Number,
+                required: false,
+                doc: "the line".into(),
+            },
+        ],
         exposure,
     }
 }
@@ -93,12 +106,12 @@ fn integers_above_two_to_the_53_and_fractions_are_refused() {
     refused(&h, "drgnx.notices.dismiss(-1)", "outside");
     refused(
         &h,
-        "drgnx.ask.choose('t', 'b', 'x', 'x', 1.5)",
+        "drgnx.ask.choose('t', 'b', {'x'}, 'x', 1.5)",
         "whole number",
     );
     refused(
         &h,
-        "drgnx.ask.choose('t', 'b', 'x', 'x', 4294967296)",
+        "drgnx.ask.choose('t', 'b', {'x'}, 'x', 4294967296)",
         "outside",
     );
     refused(&h, "drgnx.notices.dismiss('7')", "expected a number");
@@ -107,13 +120,13 @@ fn integers_above_two_to_the_53_and_fractions_are_refused() {
     saman::lock(&api).next_question = 1 << 53;
     refused(
         &h,
-        "drgnx.ask.choose('t', 'b', 'x', 'x', 1000)",
+        "drgnx.ask.choose('t', 'b', {'x'}, 'x', 1000)",
         "above 2^53",
     );
     saman::lock(&api).next_question = 6;
     run(
         &h,
-        "assert(drgnx.ask.choose('t', 'b', 'x', 'x', 1000) == 7)",
+        "assert(drgnx.ask.choose('t', 'b', {'x'}, 'x', 1000) == 7)",
     )
     .expect("a small id passes");
     // and what the host hands a script's function
@@ -199,10 +212,10 @@ fn an_extensions_commands_are_namespaced_listed_and_cannot_clash_through_either_
         .expect("no trap")
         .expect("known");
     assert_eq!((d.id.as_str(), d.title.as_str()), ("ext/c/visit", "Title"));
+    assert_eq!(d.args.len(), 2, "the list came back as it went in");
     assert_eq!(
-        d.args,
-        ["file: the file", "line: the line"],
-        "the list came back as it went in"
+        (d.args[0].name.as_str(), d.args[0].required),
+        ("file", true)
     );
     assert!(matches!(d.exposure, Exposure::Extension));
     run(
@@ -225,7 +238,7 @@ fn an_extensions_commands_are_namespaced_listed_and_cannot_clash_through_either_
         "expected a string",
     );
     // an argument line that is not `name: what it is`
-    run(&a, "local v, e = drgnx.commands.register({ id = 'z', title = 'T', doc = 'D', args = { 'nonsense' }, exposure = 'palette' }); assert(v == nil and e.kind == 'invalid' and e.message:find('name'))")
+    run(&a, "local v, e = drgnx.commands.register({ id = 'z', title = 'T', doc = 'D', args = { { name = '', kind = 'string', required = true, doc = 'd' } }, exposure = 'palette' }); assert(v == nil and e.kind == 'invalid' and e.message:find('name'))")
         .expect("a bad argument line");
 }
 
@@ -351,12 +364,12 @@ fn a_question_returns_at_once_has_a_capped_timeout_and_its_answer_comes_later() 
     // the longest allowed wait is five minutes, and the call does not wait for any of it
     run(
         &h,
-        "assert(drgnx.ask.choose('t', 'b', 'a\\nb', 'a', 300000) == 1)",
+        "assert(drgnx.ask.choose('t', 'b', {'a', 'b'}, 'a', 300000) == 1)",
     )
     .expect("returns the id");
-    run(&h, "local v, e = drgnx.ask.choose('t', 'b', 'a', 'a', 0); assert(v == nil and e.kind == 'invalid')").expect("zero");
-    run(&h, "local v, e = drgnx.ask.choose('t', 'b', 'a', 'a', 300001); assert(v == nil and e.kind == 'invalid')").expect("long");
-    run(&h, "local v, e = drgnx.ask.choose('t', 'b', 'a', 'z', 1000); assert(v == nil and e.kind == 'invalid')").expect("a default that is no choice");
+    run(&h, "local v, e = drgnx.ask.choose('t', 'b', {'a'}, 'a', 0); assert(v == nil and e.kind == 'invalid')").expect("zero");
+    run(&h, "local v, e = drgnx.ask.choose('t', 'b', {'a'}, 'a', 300001); assert(v == nil and e.kind == 'invalid')").expect("long");
+    run(&h, "local v, e = drgnx.ask.choose('t', 'b', {'a'}, 'z', 1000); assert(v == nil and e.kind == 'invalid')").expect("a default that is no choice");
     // the answer (a headless editor answers the default) arrives through `answered`
     let ext = h
         .load(user(), "ext", "local E = {}; E.answered = function(q, c, how) E.last = q .. ':' .. c .. ':' .. how end; return E")
@@ -386,19 +399,26 @@ fn a_question_returns_at_once_has_a_capped_timeout_and_its_answer_comes_later() 
     assert_eq!(ext.get::<String>("last").expect("recorded"), "1:a:default");
     // an extension holds only a few questions at once
     for _ in 0..20 {
-        run(&h, "assert(drgnx.ask.choose('t', 'b', 'a', 'a', 1000))").expect("within the cap");
+        run(&h, "assert(drgnx.ask.choose('t', 'b', {'a'}, 'a', 1000))").expect("within the cap");
     }
-    run(&h, "local v, e = drgnx.ask.choose('t', 'b', 'a', 'a', 1000); assert(v == nil and e.kind == 'refused')").expect("over");
+    run(&h, "local v, e = drgnx.ask.choose('t', 'b', {'a'}, 'a', 1000); assert(v == nil and e.kind == 'refused')").expect("over");
     // the component host's door
     let mut w = wasm_api(&api, "wasm-asker", user());
-    let r = AskHost::choose(&mut w, "t".into(), "b".into(), "a".into(), "a".into(), 0)
-        .expect("no trap");
+    let r = AskHost::choose(
+        &mut w,
+        "t".into(),
+        "b".into(),
+        vec!["a".into()],
+        "a".into(),
+        0,
+    )
+    .expect("no trap");
     assert!(r.is_err(), "zero is refused here too");
     let r = AskHost::choose(
         &mut w,
         "t".into(),
         "b".into(),
-        "a".into(),
+        vec!["a".into()],
         "a".into(),
         300_000,
     )
@@ -423,7 +443,7 @@ fn a_question_that_failed_is_delivered_as_cancelled() {
     let h = luau(&api, "asker");
     run(
         &h,
-        "assert(drgnx.ask.choose('t', 'b', 'a', 'a', 1000) == 1)",
+        "assert(drgnx.ask.choose('t', 'b', {'a'}, 'a', 1000) == 1)",
     )
     .expect("asks");
     let mut got = Vec::new();
@@ -539,13 +559,27 @@ fn an_extension_runs_only_extension_commands_and_an_agent_cannot_borrow_it() {
 
 // 8. an extension's command is in the registry: an agent cannot run it unless it is exposed to agents
 #[test]
-fn an_agent_runs_an_extension_command_only_if_it_is_exposed_to_agents() {
+fn an_extension_cannot_open_a_command_to_agents_and_an_agent_cannot_run_the_others() {
     let (api, _ex) = editor();
     let h = luau(&api, "ext");
-    for (id, exposure) in [("p", "palette"), ("a", "agent"), ("e", "extension")] {
-        run(&h, &format!("assert(drgnx.commands.register({{ id = '{id}', title = 'T', doc = 'D', args = {{ 'q: a query' }}, exposure = '{exposure}' }}) == true)")).expect("registers");
+    for (id, exposure) in [("p", "palette"), ("e", "extension")] {
+        run(&h, &format!("assert(drgnx.commands.register({{ id = '{id}', title = 'T', doc = 'D', args = {{ {{ name = 'q', kind = 'string', required = true, doc = 'a query' }} }}, exposure = '{exposure}' }}) == true)")).expect("registers");
     }
+    // the user's approval, per extension, is what would open a command to agents: it does not exist yet, so it is refused
+    run(
+        &h,
+        "local v, e = drgnx.commands.register({ id = 'a', title = 'T', doc = 'D', args = {}, exposure = 'agent' })
+         assert(v == nil and e.kind == 'refused' and e.message:find('approval'), e.message)",
+    )
+    .expect("refused, naming the permission");
+    let mut w = wasm_api(&api, "wasm-ext", user());
+    let e = CommandsHost::register(&mut w, spec("a", Exposure::Agent))
+        .expect("no trap")
+        .expect_err("refused");
+    assert!(matches!(e.kind, ErrorKind::Refused));
+    assert!(e.message.contains("approval"), "{}", e.message);
     let mut ed = saman::lock(&api);
+    assert!(ed.registry.get("ext/ext/a").is_none() && ed.registry.get("ext/wasm-ext/a").is_none());
     let by_agent = |ed: &Editor, id: &str| {
         ed.registry
             .run(id, serde_json::Value::Null, &mut bod::Cx::agent("a1"))
@@ -558,20 +592,21 @@ fn an_agent_runs_an_extension_command_only_if_it_is_exposed_to_agents() {
         by_agent(&ed, "ext/ext/e").expect_err("extension").kind(),
         villa::Kind::Refused
     );
-    by_agent(&ed, "ext/ext/a").expect("exposed to agents: runs");
-    // it is a tool, with its arguments
-    let tools = bod::tool_specs(&ed.registry);
-    let t = tools
-        .iter()
-        .find(|t| t.name == "ext/ext/a")
-        .expect("a tool");
-    assert_eq!(t.input_schema["properties"]["q"]["description"], "a query");
-    // running it queued a call for the extension's own host
+    // no extension command is a tool; a running one queues a call for the extension's own host
+    assert!(
+        bod::tool_specs(&ed.registry)
+            .iter()
+            .all(|t| !t.name.starts_with("ext/"))
+    );
+    let mut by_ext = bod::Cx::through_extension(bod::Origin::User, "other");
+    ed.registry
+        .run("ext/ext/e", serde_json::Value::Null, &mut by_ext)
+        .expect("runs for an extension");
     let calls = ed.take_invocations();
     assert_eq!(calls.len(), 1);
     assert_eq!(
         (calls[0].extension.as_str(), calls[0].id.as_str()),
-        ("ext", "a")
+        ("ext", "e")
     );
 }
 
@@ -894,26 +929,25 @@ fn a_guests_fuel_is_renewed_for_each_call() {
 
 // lists: a round trip, an empty list, and a list over the limit, in both hosts
 #[test]
-fn a_list_round_trips_may_be_empty_and_is_refused_over_the_limit_in_both_hosts() {
-    let (api, ex) = editor();
+fn a_list_of_records_round_trips_may_be_empty_and_is_refused_over_the_limit_in_both_hosts() {
+    let (api, _ex) = editor();
     let h = luau(&api, "lists");
     run(
         &h,
-        "assert(drgnx.commands.register({ id = 'two', title = 'T', doc = 'D', args = { 'file: the file', 'line: the line' }, exposure = 'palette' }) == true)
+        "local args = { { name = 'file', kind = 'path', required = true, doc = 'the file' }, { name = 'line', kind = 'number', required = false, doc = 'the line' } }
+         assert(drgnx.commands.register({ id = 'two', title = 'T', doc = 'D', args = args, exposure = 'palette' }) == true)
          local d = drgnx.commands.describe('ext/lists/two')
-         assert(#d.args == 2 and d.args[1] == 'file: the file' and d.args[2] == 'line: the line')
+         assert(#d.args == 2)
+         assert(d.args[1].name == 'file' and d.args[1].kind == 'path' and d.args[1].required == true and d.args[1].doc == 'the file')
+         assert(d.args[2].name == 'line' and d.args[2].kind == 'number' and d.args[2].required == false)
          assert(drgnx.commands.register({ id = 'none', title = 'T', doc = 'D', args = {}, exposure = 'palette' }) == true)
          assert(#drgnx.commands.describe('ext/lists/none').args == 0)",
     )
-    .expect("a list goes in and comes back, empty or not");
-    // exactly the limit is fine, one more is not, in Luau
+    .expect("a list of records goes in and comes back, empty or not");
+    // exactly the limit is fine, one more is not
     let many = |n: usize| {
         format!(
-            "{{ {} }}",
-            (0..n)
-                .map(|i| format!("'a{i}: x'"))
-                .collect::<Vec<_>>()
-                .join(", ")
+            "(function() local t = {{}} for i = 1, {n} do t[i] = {{ name = 'a' .. i, kind = 'string', required = true, doc = 'd' }} end return t end)()"
         )
     };
     let at = LIMITS.max_list;
@@ -934,9 +968,16 @@ fn a_list_round_trips_may_be_empty_and_is_refused_over_the_limit_in_both_hosts()
     refused(
         &h,
         "drgnx.commands.register({ id = 'bad', title = 'T', doc = 'D', args = { 1 }, exposure = 'palette' })",
-        "expected a string",
+        "expected a table",
     );
-    // the component host: the same round trip, the empty list, and a million-element list is refused
+    refused(
+        &h,
+        "drgnx.commands.register({ id = 'bad', title = 'T', doc = 'D', args = { { name = 'a', kind = 'text', required = true, doc = '' } }, exposure = 'palette' })",
+        "not one of",
+    );
+    run(&h, "local v, e = drgnx.commands.register({ id = 'nameless', title = 'T', doc = 'D', args = { { name = '', kind = 'string', required = true, doc = 'd' } }, exposure = 'palette' }); assert(v == nil and e.kind == 'invalid' and e.message:find('name'))")
+        .expect("an argument needs a name");
+    // the component host's door: the same round trip, the empty list, and a long list is refused
     let mut w = wasm_api(&api, "wasm-lists", user());
     let mut c = spec("two", Exposure::Palette);
     assert!(
@@ -947,7 +988,14 @@ fn a_list_round_trips_may_be_empty_and_is_refused_over_the_limit_in_both_hosts()
     let d = CommandsHost::describe(&mut w, "ext/wasm-lists/two".into())
         .expect("no trap")
         .expect("known");
-    assert_eq!(d.args, c.args);
+    assert_eq!(d.args.len(), c.args.len());
+    for (got, sent) in d.args.iter().zip(&c.args) {
+        assert_eq!(
+            (got.name.as_str(), got.required, got.doc.as_str()),
+            (sent.name.as_str(), sent.required, sent.doc.as_str())
+        );
+        assert_eq!(format!("{:?}", got.kind), format!("{:?}", sent.kind));
+    }
     c.id = "none".into();
     c.args = Vec::new();
     assert!(
@@ -955,35 +1003,126 @@ fn a_list_round_trips_may_be_empty_and_is_refused_over_the_limit_in_both_hosts()
             .expect("no trap")
             .is_ok()
     );
-    let d = CommandsHost::describe(&mut w, "ext/wasm-lists/none".into())
-        .expect("no trap")
-        .expect("known");
-    assert!(d.args.is_empty());
+    assert!(
+        CommandsHost::describe(&mut w, "ext/wasm-lists/none".into())
+            .expect("no trap")
+            .expect("known")
+            .args
+            .is_empty()
+    );
     c.id = "huge".into();
-    c.args = (0..1_000_000).map(|i| format!("a{i}: x")).collect();
-    let e = CommandsHost::register(&mut w, c.clone()).expect_err("a trap");
-    assert!(e.to_string().contains("longer than"), "{e}");
-    // and through a real guest's own store, which is where the limit comes from in production
-    let engine = wasm::engine().expect("engine");
-    let linker = wasm::linker::<Editor>(&engine).expect("links");
-    let clock = wasm::ticker(&ex, engine.clone());
-    let component = guest::component(&engine, &guest::spin());
-    let mut g = wasm::Guest::instantiate(
-        &engine,
-        &linker,
-        &component,
-        &api,
-        "guest-lists",
-        LIMITS,
-        &clock,
-    )
-    .expect("instantiates");
-    let e = CommandsHost::register(g.imports(), c).expect_err("the store's limit refuses it");
+    c.args = (0..10_000)
+        .map(|i| ArgSpec {
+            name: format!("a{i}"),
+            kind: ArgKind::String,
+            required: true,
+            doc: "d".into(),
+        })
+        .collect();
+    let e = CommandsHost::register(&mut w, c).expect_err("a trap");
     assert!(e.to_string().contains("longer than"), "{e}");
     assert!(
         saman::lock(&api)
             .registry
             .get("ext/wasm-lists/huge")
             .is_none()
+    );
+}
+
+/// A guest whose `init` calls `commands.register` with N arguments, written into its own memory.
+fn registers_n_arguments(n: u32) -> String {
+    guest::core_module(
+        r#"(import "drgnx:api/commands@0.1.0" "register" (func $register (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)))"#,
+        r#"(data (i32.const 32) "x") (data (i32.const 40) "T") (data (i32.const 48) "D") (data (i32.const 56) "n") (data (i32.const 64) "d")"#,
+        &format!(
+            r#"(local $i i32)
+           (loop $fill
+             ;; an arg-spec is 20 bytes: name (ptr, len), kind (u8), required (u8), doc (ptr, len)
+             (i32.store (i32.add (i32.const 1024) (i32.mul (local.get $i) (i32.const 20))) (i32.const 56))
+             (i32.store (i32.add (i32.const 1028) (i32.mul (local.get $i) (i32.const 20))) (i32.const 1))
+             (i32.store8 (i32.add (i32.const 1032) (i32.mul (local.get $i) (i32.const 20))) (i32.const 0))
+             (i32.store8 (i32.add (i32.const 1033) (i32.mul (local.get $i) (i32.const 20))) (i32.const 1))
+             (i32.store (i32.add (i32.const 1036) (i32.mul (local.get $i) (i32.const 20))) (i32.const 64))
+             (i32.store (i32.add (i32.const 1040) (i32.mul (local.get $i) (i32.const 20))) (i32.const 1))
+             (local.set $i (i32.add (local.get $i) (i32.const 1)))
+             (br_if $fill (i32.lt_u (local.get $i) (i32.const {n}))))
+           (call $register (i32.const 32) (i32.const 1) (i32.const 40) (i32.const 1) (i32.const 48) (i32.const 1)
+                           (i32.const 1024) (i32.const {n}) (i32.const 0) (i32.const 4096))
+           ;; the result<_, error> at 4096: its tag must be `ok`
+           (if (i32.ne (i32.load8_u (i32.const 4096)) (i32.const 0)) (then unreachable))"#
+        ),
+    )
+}
+
+// 2. a real guest lowers a list of records: up to the limit it registers, beyond it the import traps
+#[test]
+fn a_real_guest_sends_a_list_of_records_up_to_the_limit_and_no_further() {
+    let (api, ex) = editor();
+    let engine = wasm::engine().expect("engine");
+    let linker = wasm::linker::<Editor>(&engine).expect("links");
+    let clock = wasm::ticker(&ex, engine.clone());
+    let at = LIMITS.max_list as u32;
+    let mut ok = wasm::Guest::instantiate(
+        &engine,
+        &linker,
+        &guest::component(&engine, &registers_n_arguments(at)),
+        &api,
+        "list-ok",
+        LIMITS,
+        &clock,
+    )
+    .expect("instantiates");
+    ok.init(user())
+        .expect("the guest's own call registered the command");
+    let n = saman::lock(&api)
+        .registry
+        .get("ext/list-ok/x")
+        .map(|c| c.args.args.len());
+    assert_eq!(n, Some(at as usize));
+    let mut big = wasm::Guest::instantiate(
+        &engine,
+        &linker,
+        &guest::component(&engine, &registers_n_arguments(at + 1)),
+        &api,
+        "list-big",
+        LIMITS,
+        &clock,
+    )
+    .expect("instantiates");
+    let e = big.init(user()).expect_err("the import trapped");
+    assert!(format!("{:?}", e.detail()).contains("longer than"), "{e:?}");
+    assert!(saman::lock(&api).registry.get("ext/list-big/x").is_none());
+}
+
+// 4. a profile layered after an extension's binding: the binding that would now shadow a prefix is dropped, with a notice
+#[test]
+fn a_profile_layered_later_drops_an_extension_binding_that_would_shadow_it_and_says_so() {
+    let (api, _ex) = editor();
+    let h = luau(&api, "vimm");
+    run(
+        &h,
+        "assert(drgnx.commands.register({ id = 'yank', title = 'T', doc = 'D', args = {}, exposure = 'palette' }) == true)
+         assert(drgnx.keys.bind('C-y', 'ext/vimm/yank', '') == true)
+         assert(drgnx.keys.resolve('C-y', '') == 'ext/vimm/yank')",
+    )
+    .expect("the binding is allowed when it is made");
+    let (profile, problems) =
+        lykill::Profile::parse("mine", b"(drgnx-keys :version 1\n (paste \"C-y C-z\"))\n")
+            .expect("parses");
+    assert!(problems.is_empty());
+    saman::lock(&api).layer_profile(&profile);
+    run(
+        &h,
+        "assert(drgnx.keys.resolve('C-y', '') == 'prefix', 'C-y now waits for C-z')
+             assert(drgnx.keys.resolve('C-y C-z', '') == 'paste')",
+    )
+    .expect("the profile won");
+    let ed = saman::lock(&api);
+    let rows = ed.notices.rows();
+    assert_eq!(rows.len(), 1, "the user was told");
+    assert!(
+        rows[0].text.contains("dropped") && rows[0].text.contains("vimm"),
+        "{}",
+        rows[0].text
     );
 }

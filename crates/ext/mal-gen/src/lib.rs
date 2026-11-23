@@ -363,8 +363,17 @@ impl Gen<'_> {
                 TypeDefKind::Enum(_) => Ty::Enum(*id),
                 TypeDefKind::List(inner) => {
                     let at = format!("{at}: a list");
-                    if matches!(self.scalar(inner, &at)?, Ty::List(_) | Ty::Record(_)) {
-                        return Err(fail(format!("{at} of lists or records is not supported")));
+                    match self.scalar(inner, &at)? {
+                        Ty::List(_) => {
+                            return Err(fail(format!("{at} of lists is not supported")));
+                        }
+                        // a record in a list has no list in it: the codec stays one level deep
+                        Ty::Record(rid) if self.has_list(Ty::Record(rid)) => {
+                            return Err(fail(format!(
+                                "{at} of records that hold lists is not supported"
+                            )));
+                        }
+                        _ => {}
                     }
                     Ty::List(*id)
                 }
@@ -642,7 +651,9 @@ impl Gen<'_> {
         match t {
             Ty::Enum(_) | Ty::Record(_) => format!("{e}.into()"),
             Ty::List(id) => match self.elem(id) {
-                Ok(Ty::Enum(_)) => format!("{e}.into_iter().map(Into::into).collect()"),
+                Ok(Ty::Enum(_) | Ty::Record(_)) => {
+                    format!("{e}.into_iter().map(Into::into).collect()")
+                }
                 _ => e.to_string(),
             },
             _ => e.to_string(),
