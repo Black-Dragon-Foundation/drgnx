@@ -1,0 +1,10 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+glitnir = { path = "../glitnir" }
+
+[lints]
+workspace = true

@@ -1,0 +1,49 @@
+[crates]
+owner = { clean = true }
+villa = { clean = true }
+bad = { clean = true }
+app = { clean = true }
+glitnir = { clean = true }
+uiapp = { clean = true, ui = true }
+
+[[standard]]
+id = "processes"
+owner = "owner"
+clippy = ["std::process::Command::new"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "logging"
+owner = "owner"
+lints = ["print_stdout"]
+scan = ["no-print"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "errors"
+owner = "villa"
+lints = ["let_underscore_must_use"]
+scan = ["no-string-error", "no-let-underscore-result"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "paths"
+owner = "villa"
+scan = ["no-env-home"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "concurrency"
+owner = "villa"
+scan = ["no-blocking-recv-on-ui"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "data-hygiene"
+owner = "villa"
+scan = ["secret-has-redact"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[layer]]
+crate = "app"
+may_not_depend = ["glitnir"]

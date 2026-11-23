@@ -9,3 +9,8 @@ Scripts and Rust tasks that build, package or measure the workspace, run from th
   for a second, as a JSON report (`vag`'s `Report`). With `--base`, a metric more than 5 % above the earlier
   report is a regression and the exit code is 1. `--spawn` takes the rest of the line, so it goes last. Linux only
   (it reads `/proc`).
+- `cargo xtask standards [--write] [--changed FILE…] [--commit-msg MSGFILE FILE…]`: the standards table, the generated
+  clippy configs, the scanner and the ownership check (`docs/develop/standards/README.md`). The hooks in `.githooks/`
+  run it on each commit.
+- `cargo xtask test-sandbox [NEXTEST ARGS…]`: the sentinel-HOME run (`docs/develop/standards/test-harness.md`); with
+  no arguments, the clean crates' tests.

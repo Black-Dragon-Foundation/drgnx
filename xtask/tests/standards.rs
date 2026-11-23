@@ -1,0 +1,272 @@
+//! `cargo xtask standards` against a fixture workspace (fixtures/ws): one planted violation per rule, each shown
+//! rejected, and the owner's silencing shown accepted. Each test runs the xtask binary on its own copy of the fixture.
+
+use std::path::Path;
+use std::process::Command;
+
+fn copy(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let (src, dst) = (e.path(), to.join(e.file_name()));
+        if src.is_dir() {
+            copy(&src, &dst);
+        } else {
+            std::fs::copy(&src, &dst).unwrap();
+        }
+    }
+}
+
+/// A fresh copy of the fixture, its clippy.toml files written (`--write`).
+fn fixture() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    copy(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ws"),
+        dir.path(),
+    );
+    run(dir.path(), &["--write"]);
+    dir
+}
+
+/// The exit code and stdout of `xtask standards --root DIR ARGS`.
+fn run(dir: &Path, args: &[&str]) -> (i32, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .arg("standards")
+        .arg("--root")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    (out.status.code().unwrap_or(-1), format!("{stdout}{stderr}"))
+}
+
+fn lines<'a>(out: &'a str, file: &str, tag: &str) -> Vec<&'a str> {
+    out.lines()
+        .filter(|l| l.starts_with(&format!("{file}:")) && l.contains(tag))
+        .collect()
+}
+
+#[test]
+fn table_row_missing_doc_fails() {
+    let ws = fixture();
+    std::fs::remove_file(ws.path().join("docs/develop/standards/logging.md")).unwrap();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("standards.toml:1: [standards/table] `logging`: its doc page docs/develop/standards/logging.md is missing"),
+        "{out}"
+    );
+}
+
+#[test]
+fn allow_outside_owner_fails() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    let allows = lines(&out, "crates/bad/src/allow.rs", "/allow]");
+    // the allow of disallowed_methods, and the expect of print_stdout inside a cfg_attr
+    assert_eq!(allows.len(), 2, "{out}");
+    assert!(allows[1].contains("[logging/allow]"), "{out}");
+}
+
+#[test]
+fn allow_inside_owner_passes() {
+    let ws = fixture();
+    let (_, out) = run(ws.path(), &[]);
+    assert!(out.contains("enforced finding(s)"), "{out}");
+    assert!(
+        !out.lines().any(|l| l.starts_with("crates/owner/")),
+        "{out}"
+    );
+    assert!(
+        !out.lines().any(|l| l.starts_with("crates/villa/")),
+        "{out}"
+    );
+}
+
+#[test]
+fn string_error_in_pub_fn_fails() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    let hits = lines(
+        &out,
+        "crates/bad/src/strings.rs",
+        "[errors/no-string-error]",
+    );
+    // `pub fn f`, not the private one
+    assert_eq!(hits.len(), 1, "{out}");
+    assert!(hits[0].starts_with("crates/bad/src/strings.rs:1:"), "{out}");
+    assert!(
+        hits[0].ends_with("(docs/develop/standards/errors.md)"),
+        "{out}"
+    );
+}
+
+#[test]
+fn let_underscore_result_fails() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    let hits = lines(
+        &out,
+        "crates/bad/src/underscore.rs",
+        "[errors/no-let-underscore-result]",
+    );
+    assert_eq!(hits.len(), 1, "{out}");
+    assert!(
+        hits[0].starts_with("crates/bad/src/underscore.rs:2:"),
+        "{out}"
+    );
+}
+
+#[test]
+fn lint_catches_reexport_and_alias() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    // `C::new` through `use … as`, `Command::new` through a glob, and one inside `vec![…]`
+    let paths = lines(
+        &out,
+        "crates/bad/src/alias.rs",
+        "[processes/disallowed-path]",
+    );
+    let at: Vec<&str> = paths.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
+    assert_eq!(at, ["6", "14", "19"], "{out}");
+    // `type R<T> = Result<T, String>`
+    assert_eq!(
+        lines(&out, "crates/bad/src/alias.rs", "[errors/no-string-error]").len(),
+        1,
+        "{out}"
+    );
+}
+
+#[test]
+fn layer_violation_fails() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains(
+            "crates/app/Cargo.toml:7: [standards/layer] `app` may not depend on `glitnir`"
+        ),
+        "{out}"
+    );
+}
+
+#[test]
+fn cli_out_is_the_only_printer() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    assert_eq!(
+        lines(&out, "crates/bad/src/print.rs", "[logging/no-print]").len(),
+        1,
+        "{out}"
+    );
+}
+
+#[test]
+fn env_home_literal_fails() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    assert_eq!(
+        lines(&out, "crates/bad/src/home.rs", "[paths/no-env-home]").len(),
+        1,
+        "{out}"
+    );
+}
+
+#[test]
+fn blocking_recv_on_ui_fails() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    // the blocking recv only: not the awaited one, not try_recv
+    let hits = lines(
+        &out,
+        "crates/uiapp/src/lib.rs",
+        "[concurrency/no-blocking-recv-on-ui]",
+    );
+    assert_eq!(hits.len(), 1, "{out}");
+    assert!(hits[0].starts_with("crates/uiapp/src/lib.rs:2:"), "{out}");
+}
+
+#[test]
+fn derive_debug_on_token_type_fails_scan() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    // ApiToken; not WrappedToken (every field a Secret), not PlainKey (no Debug)
+    let hits = lines(
+        &out,
+        "crates/bad/src/secret.rs",
+        "[data-hygiene/secret-has-redact]",
+    );
+    assert_eq!(hits.len(), 1, "{out}");
+    assert!(hits[0].contains("`ApiToken`"), "{out}");
+}
+
+#[test]
+fn generated_clippy_config_is_checked() {
+    let ws = fixture();
+    let bad = std::fs::read_to_string(ws.path().join("crates/bad/clippy.toml")).unwrap();
+    let owner = std::fs::read_to_string(ws.path().join("crates/owner/clippy.toml")).unwrap();
+    assert!(bad.contains("std::process::Command::new"), "{bad}");
+    // the owner's own rows are not in its file
+    assert!(!owner.contains("std::process::Command::new"), "{owner}");
+    std::fs::write(
+        ws.path().join("crates/bad/clippy.toml"),
+        "disallowed-methods = []\n",
+    )
+    .unwrap();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("crates/bad/clippy.toml:1: [standards/clippy-config]"),
+        "{out}"
+    );
+}
+
+#[test]
+fn changed_scans_only_the_named_files() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &["--changed", "crates/bad/src/print.rs"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("crates/bad/src/print.rs:2:"), "{out}");
+    assert!(!out.contains("crates/bad/src/alias.rs"), "{out}");
+}
+
+#[test]
+fn commit_msg_freezes_a_crate_not_clean() {
+    let ws = fixture();
+    let table = ws.path().join("standards.toml");
+    let text = std::fs::read_to_string(&table).unwrap();
+    std::fs::write(&table, text.replace("bad = { clean = true }", "bad = {}")).unwrap();
+    let msg = ws.path().join("MSG");
+    std::fs::write(&msg, "bad: a feature\n").unwrap();
+    let file = "crates/bad/src/print.rs";
+    let (code, out) = run(ws.path(), &["--commit-msg", msg.to_str().unwrap(), file]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("touches bad, not clean yet"), "{out}");
+    std::fs::write(&msg, "migrate(bad): prints through the owner\n").unwrap();
+    assert_eq!(
+        run(ws.path(), &["--commit-msg", msg.to_str().unwrap(), file]).0,
+        0
+    );
+    std::fs::write(&msg, "owner: a feature\n").unwrap();
+    assert_eq!(
+        run(
+            ws.path(),
+            &[
+                "--commit-msg",
+                msg.to_str().unwrap(),
+                "crates/owner/src/lib.rs"
+            ]
+        )
+        .0,
+        0
+    );
+}

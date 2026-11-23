@@ -45,3 +45,15 @@ if git diff --cached --name-only | grep -qE "$secret_files"; then
   echo "pre-commit: refusing to commit an env/secrets/key file." >&2
   exit 1
 fi
+
+# The standards (docs/develop/standards/README.md) over the staged files: the table's checks and each file's findings.
+# DRGNX_XTASK names another way to run `cargo xtask` (one that builds elsewhere); unset, it is cargo itself.
+top="$(git rev-parse --show-toplevel)"
+if [ -f "$top/standards.toml" ]; then
+  mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACMR)
+  # shellcheck disable=SC2086 # DRGNX_XTASK is a command line
+  (cd "$top" && ${DRGNX_XTASK:-cargo xtask} standards --changed "${staged[@]}") || {
+    echo "pre-commit: the standards refuse this commit (cargo xtask standards; docs/develop/standards/README.md)." >&2
+    exit 1
+  }
+fi
