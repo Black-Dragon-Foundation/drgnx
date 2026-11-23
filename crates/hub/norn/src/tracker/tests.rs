@@ -1943,3 +1943,80 @@ fn board_columns_map_every_status() {
     }
     assert_eq!(board_column("nonsense"), Queued);
 }
+
+impl Fx {
+    /// A `task-write` grant to session SID on WHAT for OPS.
+    fn write_grant(&mut self, sid: &str, what: What, ops: &[&str]) -> String {
+        let ops: Vec<String> = ops.iter().map(|o| (*o).to_owned()).collect();
+        self.write(TxMeta::new("user", Class::User, "test"), |tx| {
+            grants::create_task_write(tx, Who::Session(sid.into()), what, ops, None)
+        })
+        .id
+    }
+}
+
+#[test]
+fn a_task_write_grant_lifts_the_users_task_rules_one_operation_at_a_time() {
+    let mut fx = Fx::new();
+    let (a, b) = (fx.agent("a"), fx.agent("b"));
+    let t = fx.task(&fx.user(fx.a), "the user's");
+    let n = fx.n(&t);
+    // no grant: exactly today's rules
+    assert!(no(fx.update(&a, &t, |f| f.title = Some("x".into()))).contains("permission"));
+    assert!(no(fx.update(&a, &t, |f| f.status = Some("done".into()))).contains("the user closes"));
+    assert!(
+        no(fx.update(&a, &t, |f| f.status = Some("blocked".into()))).contains("only in-review")
+    );
+    // update.title opens the title, not the body, not done
+    let g = fx.write_grant("a", What::Task(n), &["update.title", "status.blocked"]);
+    ok(fx.update(&a, &t, |f| f.title = Some("renamed".into())));
+    assert!(no(fx.update(&a, &t, |f| f.body = Some("x".into()))).contains("permission"));
+    assert!(no(fx.update(&a, &t, |f| f.status = Some("done".into()))).contains("the user closes"));
+    ok(fx.update(&a, &t, |f| f.status = Some("blocked".into())));
+    // another session has nothing
+    assert!(no(fx.update(&b, &t, |f| f.title = Some("b".into()))).contains("permission"));
+    // revoking takes effect on the next write
+    fx.write(TxMeta::new("user", Class::User, "test"), |tx| {
+        grants::revoke(tx, &g)
+    });
+    assert!(no(fx.update(&a, &t, |f| f.title = Some("again".into()))).contains("permission"));
+    // status.done is its own right; with "only I close my tasks" on it is inert
+    fx.write_grant("a", What::Project(fx.a), &["status.done"]);
+    let u = fx.task(&fx.user(fx.a), "another of the user's");
+    fx.only_user_closes(true);
+    assert!(no(fx.update(&a, &u, |f| f.status = Some("done".into()))).contains("the user closes"));
+    fx.only_user_closes(false);
+    ok(fx.update(&a, &u, |f| f.status = Some("done".into())));
+    assert_eq!(fx.ent(&u).status.as_deref(), Some("done"));
+    // complete on an agent's own task is done, not in-review, with the right
+    let own = fx.task(&a, "mine");
+    let lease = fx.claim(&a, &own);
+    ok(fx.run(
+        &a,
+        TaskOp::Complete {
+            id: own.clone(),
+            lease,
+            note: None,
+        },
+    ));
+    assert_eq!(fx.ent(&own).status.as_deref(), Some("done"));
+}
+
+#[test]
+fn a_write_in_another_project_needs_a_grant_naming_it() {
+    let mut fx = Fx::new();
+    let a = fx.agent("a");
+    let tb = fx.task(&fx.user(fx.b), "beta's");
+    let note = |id: &str| TaskOp::Note {
+        id: id.into(),
+        text: "hello".into(),
+    };
+    no(fx.run(&a, note(&tb)));
+    // a grant for project alpha does not reach beta; one for beta reaches only its operations
+    fx.write_grant("a", What::Project(fx.a), &["note"]);
+    no(fx.run(&a, note(&tb)));
+    fx.write_grant("a", What::Project(fx.b), &["note"]);
+    ok(fx.run(&a, note(&tb)));
+    no(fx.update(&a, &tb, |f| f.title = Some("x".into())));
+    no(fx.run(&a, TaskOp::Claim { id: tb.clone() }));
+}

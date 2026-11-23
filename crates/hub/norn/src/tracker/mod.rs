@@ -653,14 +653,27 @@ pub(crate) fn of_a_job(job: &str) -> WriteError {
     ))
 }
 
-/// The task ID that CALLER may change: a tracker task (a job's task too when JOBS) in CALLER's project.
+/// The task ID that CALLER may change: a tracker task (a job's task too when JOBS) in CALLER's project, or in another
+/// project when a `task-write` grant covers it for every one of OPS ([`crate::grants::may_write_task`]).
 pub(crate) fn writable_task(
     tx: &Tx<'_>,
     caller: &Caller,
     id: &str,
     jobs: bool,
+    ops: &[&str],
 ) -> Result<Ent, WriteError> {
-    let (e, full) = visible(tx, caller, id, "task")?;
+    let granted = |e: &Ent| -> Result<bool, WriteError> {
+        Ok(!ops.is_empty()
+            && e.kind == "task"
+            && crate::grants::may_write_task(tx.sql(), caller, e.n, ops, tx.at())?)
+    };
+    let (e, full) = match visible(tx, caller, id, "task") {
+        Ok(seen) => seen,
+        Err(err) => match entity::by_id(tx.sql(), id)?.filter(|e| e.retired_tx.is_none()) {
+            Some(e) if granted(&e)? => (e, true),
+            _ => return Err(err),
+        },
+    };
     if is_parsed(&e) {
         return Err(from_a_file(&e, full));
     }
@@ -670,9 +683,9 @@ pub(crate) fn writable_task(
     if e.kind != "task" {
         return Err(refused(format!("{id} is a {}, not a task", e.kind)));
     }
-    if !caller.may_write_into(e.project) {
+    if !caller.may_write_into(e.project) && !granted(&e)? {
         return Err(refused(format!(
-            "{id} is in another project: a grant opens reading only; add a task in your project that relates to it"
+            "{id} is in another project: a read grant opens reading only; add a task in your project that relates to it, or ask the user for a write grant"
         )));
     }
     Ok(e)

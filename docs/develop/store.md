@@ -504,6 +504,13 @@ arguments.
   - `revoke(tx, id)` sets `revoked`; false when there was no active grant.
   - `list(conn, &caller, &Filter { who, active }, now)`: the user sees every grant; an agent or ext caller only the
     grants whose `who` is its own (others would name other projects).
+  - A `task-write` grant (`create_task_write`, `edit`; the user's, refused for any other class): `who` also
+    `{"agent": ID}`, `{"kind": KIND}` (an `ext:KIND:…` caller) or `{"any": "outside"}`; `what` a project, `{"plan": ID}`
+    or `{"task": N}` (the task and its `parent_of` descendants), never `*`; `ops` (1 to 32 of `create`,
+    `update.title|body|acceptance|priority|labels`, `status.<s>` for every status but `parked`, `note`, `link`,
+    `split`, `claim`). `may_write_task(conn, &caller, task, ops, now)` is true when active grants of the caller cover
+    every op for the task; it is also what opens a write across projects (the tracker's `writable_task`, `ends`),
+    and `status.done` is inert while `setting:only-user-closes` is on. With no grant everything is as before.
   - `may_edit_user_task(conn, &caller, task, now)`: an active `edit-user-tasks` grant for the task, its project or
     `*`, and the task in the caller's own project (a grant never opens writes across projects); the user always.
 - **The class check is in the write path.** `grants::register(&mut Guard)` puts norn's two rules into urdr's guard:
@@ -891,9 +898,11 @@ tool the method's name); another class is `not-allowed` at the registry, and `gr
   `backups_holding` (or `backups_removed` with `rotate_backups`) and `transcripts_holding` (or `transcripts_redacted`:
   the hub's `sessions/*.jsonl`, rewritten in place with `transcripts`). Exports are listed with the backups, not
   made again.
-- **`graph/grants {list: {who?, active?}} | {grant: {who, what, access, expires?}} | {revoke: id}`**: `who` is
-  `project:ID` (or a slug), `profile:NAME` or `session:SID`; `what` is `project:ID`, `*` or `task:ID`; access `read`
-  or `edit-user-tasks`. Only the user's connection makes or revokes one (an agent's or the backend's is
+- **`graph/grants {list: {who?, active?, effective_for?}} | {grant: {who, what, access, expires?, names?, ops?}} |
+  {edit: {id, ops?, expires?, clear_expires?}} | {revoke: id}`**: `who` is
+  `project:ID` (or a slug), `profile:NAME`, `session:SID`, or for `task-write` `agent:ID`, `kind:KIND`, `any-outside`;
+  `what` is `project:ID`, `*`, `task:ID` or `plan:ID`; access `read`, `edit-user-tasks`, `options` or `task-write`
+  (with `ops`). `effective_for` an actor id lists the active grants that apply to it. Only the user's connection makes or revokes one (an agent's or the backend's is
   `not-allowed`, the registry's class check aside); the store's grant guard refuses any other tx too.
 - **`graph/settings {get} | {set: {only_user_closes}}`** → `{only_user_closes}`: `kv` key `setting:only-user-closes`,
   written in a user-class tx (the store's `setting:` guard). **`graph/privacy {reload}`** applies a change of the

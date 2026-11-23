@@ -25841,6 +25841,46 @@
       "name": "graph/grants",
       "params": {
         "$defs": {
+          "EditGrant": {
+            "properties": {
+              "clear_expires": {
+                "description": "Remove the expiry.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "expires": {
+                "description": "A new expiry, unix seconds in the future.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "A grant's id (`grant:…`).",
+                "maxLength": 64,
+                "type": "string"
+              },
+              "ops": {
+                "description": "The `task-write` grant's new operations.",
+                "items": {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
           "GrantAccess": {
             "oneOf": [
               {
@@ -25854,6 +25894,11 @@
                 "const": "options",
                 "description": "Change settings (`options:global` or `options:project`), never a deny-listed one.",
                 "type": "string"
+              },
+              {
+                "const": "task-write",
+                "description": "Write tasks under a project, a plan or a task: `ops` names the operations.",
+                "type": "string"
               }
             ]
           },
@@ -25862,6 +25907,14 @@
               "active": {
                 "type": [
                   "boolean",
+                  "null"
+                ]
+              },
+              "effective_for": {
+                "description": "An actor (`ext:KIND:ID`, an agent or session id): only the active grants that apply to it (its effective\nrights; a project or profile grant cannot be matched without the actor's project).",
+                "maxLength": 256,
+                "type": [
+                  "string",
                   "null"
                 ]
               },
@@ -25900,6 +25953,18 @@
                   "null"
                 ]
               },
+              "ops": {
+                "description": "A `task-write` grant's operations.",
+                "items": {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
               "what": {
                 "maxLength": 4352,
                 "type": "string"
@@ -25919,6 +25984,16 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "edit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EditGrant"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "grant": {
             "anyOf": [
               {
@@ -25984,6 +26059,16 @@
                   "null"
                 ]
               },
+              "ops": {
+                "description": "A `task-write` grant's operations.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
               "status": {
                 "description": "`active` or `revoked`.",
                 "type": "string"
@@ -26010,6 +26095,13 @@
         "additionalProperties": false,
         "description": "`graph/grants`' answer: the list, the new grant, or whether a grant was revoked.",
         "properties": {
+          "edited": {
+            "description": "Whether an `edit` found an active grant.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "grant": {
             "anyOf": [
               {

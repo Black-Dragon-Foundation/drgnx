@@ -311,6 +311,11 @@ commits, and the caller answers with the kept answer.
   **only I close my tasks** (`kv` `setting:only-user-closes`, `1`) is on: then `done` is a `close` card (`card` kind
   `close`, `entity` the task, `data {task, ver, by, note}`, merged while one is open) and a notice to the user, and
   the task is unchanged, so it unblocks nothing. An agent's own task goes `in-review` on `complete`.
+  A `task-write` grant (`norn::grants::may_write_task`) lifts these rules per operation: `update.title|body|acceptance`,
+  `status.dropped`, `status.done` (and so `complete` gives `done`, also on an agent's own task); it is also the only
+  way to write a task of another project (`note`, `claim`, `split`, `link`, `update.*` on its project, plan or task).
+  `status.done` grants do nothing while only-I-close is on. `plans/write` consults the same grant for `done` before
+  it asks the matrix's `task.done` (`runner/effects.rs`). `parked` is never grantable.
 - **Secrets:** a title, body, acceptance, label or note that looks like a credential (`runstav::secrets`) is
   refused with the rule's name.
 

@@ -40,6 +40,9 @@ pub const USAGE: &str = "usage: ratatoskr graph export [--project P --out DIR] [
     \x20      ratatoskr graph excise ID|TX [--field F]... --reason R [--rotate-backups] [--transcripts] [--yes] [--json]\n\
     \x20      ratatoskr graph scrub [--json]\n\
     \x20      ratatoskr graph grants [list [--who W] | grant WHO WHAT [--access read|edit-user-tasks] [--expires T] | revoke ID] [--json]\n\
+    \x20      ratatoskr graph grants grant --who WHO --where PROJECT|plan:ID|task:ID --what OP... [--until T] [--json]\n\
+    \x20      ratatoskr graph grants edit ID [--what OP...] [--until T|none] [--json]   show WHO [--json]\n\
+    \x20      ratatoskr graph settings [only-user-closes on|off] [--json]\n\
     \x20      ratatoskr graph sql 'SELECT …' [--json]\n\
     \x20      ratatoskr graph compact [--dry-run] [--json]\n\
     \x20      ratatoskr graph proposed accept|reject TX... [--json]\n\
@@ -81,6 +84,10 @@ pub enum Sub {
     },
     Scrub,
     Grants(GrantsSub),
+    /// The store's settings: shown, or "only I close my tasks" set.
+    Settings {
+        only_user_closes: Option<bool>,
+    },
     Sql(String),
     Compact {
         dry_run: bool,
@@ -115,8 +122,18 @@ pub enum GrantsSub {
         what: String,
         access: String,
         expires: Option<String>,
+        /// A `task-write` grant's operations (`--what`).
+        ops: Vec<String>,
     },
     Revoke(String),
+    Edit {
+        id: String,
+        ops: Vec<String>,
+        /// `none` clears it.
+        until: Option<String>,
+    },
+    /// The active grants that apply to an actor.
+    Show(String),
 }
 
 fn num(v: &str, what: &str) -> Result<u64, String> {
@@ -142,7 +159,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
     // options that take a value
     let valued = [
         "project", "out", "since", "tx", "entity", "to-ver", "field", "reason", "who", "access",
-        "expires", "with", "root", "only", "path",
+        "expires", "with", "root", "only", "path", "where", "what", "until",
     ];
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
@@ -290,7 +307,20 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
             Sub::Scrub
         }
         "grants" => {
-            known(&["who", "access", "expires"])?;
+            known(&["who", "access", "expires", "where", "what", "until"])?;
+            let ops: Vec<String> = opts
+                .iter()
+                .filter(|(k, _)| k == "what")
+                .filter_map(|(_, v)| v.clone())
+                .flat_map(|v| {
+                    v.split(',')
+                        .map(str::trim)
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                })
+                .filter(|o| !o.is_empty())
+                .collect();
+            let until = get("until").or_else(|| get("expires"));
             let mut w = words.iter().map(String::as_str);
             let g = match w.next() {
                 None | Some("list") => {
@@ -299,26 +329,67 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
                 }
                 Some("grant") => {
                     no_words(3)?;
+                    let who = get("who").or_else(|| w.next().map(String::from));
+                    let what = get("where").or_else(|| w.next().map(String::from));
+                    let (who, what) = who.zip(what).ok_or(
+                        "graph grants grant needs WHO and WHAT (or --who and --where, with --what OP...)",
+                    )?;
+                    let access = match (get("access"), ops.is_empty()) {
+                        (None, false) => "task-write".to_owned(),
+                        (Some(a), false) if a != "task-write" => {
+                            return Err(
+                                "--what names a task-write grant's operations, not --access".into(),
+                            );
+                        }
+                        (Some(a), _) => a,
+                        (None, true) => "read".to_owned(),
+                    };
+                    if access == "task-write" && ops.is_empty() {
+                        return Err("a task-write grant needs --what OP...".into());
+                    }
                     GrantsSub::Grant {
-                        who: w
-                            .next()
-                            .ok_or("graph grants grant needs WHO and WHAT")?
-                            .into(),
-                        what: w
-                            .next()
-                            .ok_or("graph grants grant needs WHO and WHAT")?
-                            .into(),
-                        access: get("access").unwrap_or_else(|| "read".into()),
-                        expires: get("expires"),
+                        who,
+                        what,
+                        access,
+                        expires: until,
+                        ops,
                     }
                 }
                 Some("revoke") => {
                     no_words(2)?;
                     GrantsSub::Revoke(w.next().ok_or("graph grants revoke needs an ID")?.into())
                 }
+                Some("edit") => {
+                    no_words(2)?;
+                    let id = w.next().ok_or("graph grants edit needs an ID")?.to_owned();
+                    if ops.is_empty() && until.is_none() {
+                        return Err("graph grants edit needs --what OP... or --until T".into());
+                    }
+                    GrantsSub::Edit { id, ops, until }
+                }
+                Some("show") => {
+                    no_words(2)?;
+                    GrantsSub::Show(w.next().ok_or("graph grants show needs WHO")?.into())
+                }
                 Some(other) => return Err(format!("unknown grants subcommand {other:?}")),
             };
             Sub::Grants(g)
+        }
+        "settings" => {
+            known(&[])?;
+            no_words(2)?;
+            let only_user_closes = match words.as_slice() {
+                [] => None,
+                [k, v] if k == "only-user-closes" => Some(match v.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    other => {
+                        return Err(format!("only-user-closes takes on or off, not {other:?}"));
+                    }
+                }),
+                _ => return Err("graph settings takes only-user-closes on|off, or nothing".into()),
+            };
+            Sub::Settings { only_user_closes }
         }
         "forget" => {
             known(&["root", "missing", "path", "dry-run", "yes"])?;
@@ -512,14 +583,41 @@ impl GraphCommand {
                 what,
                 access,
                 expires,
+                ops,
             }) => {
                 let mut g = json!({"who": who, "what": what, "access": access});
                 if let Some(t) = expires {
                     g["expires"] = json!(expires_at(t, now)?);
                 }
+                if !ops.is_empty() {
+                    g["ops"] = json!(ops);
+                }
                 ("graph/grants", json!({"grant": g}))
             }
+            Sub::Grants(GrantsSub::Edit { id, ops, until }) => {
+                let mut e = json!({"id": id});
+                if !ops.is_empty() {
+                    e["ops"] = json!(ops);
+                }
+                match until.as_deref() {
+                    Some("none") => e["clear_expires"] = json!(true),
+                    Some(t) => e["expires"] = json!(expires_at(t, now)?),
+                    None => {}
+                }
+                ("graph/grants", json!({"edit": e}))
+            }
+            Sub::Grants(GrantsSub::Show(who)) => (
+                "graph/grants",
+                json!({"list": {"effective_for": who, "active": true}}),
+            ),
             Sub::Grants(GrantsSub::Revoke(id)) => ("graph/grants", json!({"revoke": id})),
+            Sub::Settings { only_user_closes } => (
+                "graph/settings",
+                match only_user_closes {
+                    Some(on) => json!({"set": {"only_user_closes": on}}),
+                    None => json!({"get": {}}),
+                },
+            ),
             Sub::Sql(sql) => ("graph/sql", json!({"sql": sql})),
             Sub::Compact { dry_run } => ("graph/compact", json!({"dry_run": dry_run})),
             Sub::Proposed { accept, reject } => {
@@ -875,12 +973,18 @@ pub fn render(sub: &Sub, a: &Value) -> (String, bool) {
                 Vec::new()
             };
             for g in &rows {
+                let ops = list(&g["ops"]);
                 out.push_str(&format!(
-                    "{}  {} -> {}  {}  {}{}\n",
+                    "{}  {} -> {}  {}{}  {}{}\n",
                     g["id"].as_str().unwrap_or("?"),
                     g["who"].as_str().unwrap_or("?"),
                     g["what"].as_str().unwrap_or("?"),
                     g["access"].as_str().unwrap_or("?"),
+                    if ops.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [{}]", ops.join(", "))
+                    },
                     g["status"].as_str().unwrap_or("?"),
                     g["expires"].as_f64().map_or(String::new(), |t| format!(
                         " until {}",
@@ -895,6 +999,20 @@ pub fn render(sub: &Sub, a: &Value) -> (String, bool) {
                 out.push_str(if r { "revoked\n" } else { "no such grant\n" });
                 ok = r;
             }
+            if let Some(r) = a["edited"].as_bool() {
+                out.push_str(if r { "edited\n" } else { "no such grant\n" });
+                ok = r;
+            }
+        }
+        Sub::Settings { .. } => {
+            out.push_str(&format!(
+                "only-user-closes: {}\n",
+                if a["only_user_closes"] == true {
+                    "on"
+                } else {
+                    "off"
+                }
+            ));
         }
         Sub::Sql(_) => {
             let cols = list(&a["columns"]);
@@ -1033,6 +1151,100 @@ mod tests {
             .request(Path::new("/w"), 0.0)
             .unwrap();
         assert_eq!(none, json!({}));
+    }
+
+    #[test]
+    fn task_write_grants_and_settings_make_the_exact_calls() {
+        let m = |args: &[&str]| p(args).unwrap().request(Path::new("/w"), 1000.0).unwrap();
+        assert_eq!(
+            m(&[
+                "grants",
+                "grant",
+                "--who",
+                "kind:claude",
+                "--where",
+                "project:3",
+                "--what",
+                "update.title",
+                "--what",
+                "status.done,note",
+                "--until",
+                "1h",
+            ]),
+            (
+                "graph/grants",
+                json!({"grant": {"who": "kind:claude", "what": "project:3", "access": "task-write",
+                    "expires": 4600.0, "ops": ["update.title", "status.done", "note"]}})
+            )
+        );
+        assert_eq!(
+            m(&[
+                "grants", "edit", "grant:x", "--what", "claim", "--until", "none"
+            ]),
+            (
+                "graph/grants",
+                json!({"edit": {"id": "grant:x", "ops": ["claim"], "clear_expires": true}})
+            )
+        );
+        assert_eq!(
+            m(&["grants", "edit", "grant:x", "--until", "2h"]).1,
+            json!({"edit": {"id": "grant:x", "expires": 8200.0}})
+        );
+        assert_eq!(
+            m(&["grants", "show", "ext:claude:7"]),
+            (
+                "graph/grants",
+                json!({"list": {"effective_for": "ext:claude:7", "active": true}})
+            )
+        );
+        assert_eq!(m(&["settings"]), ("graph/settings", json!({"get": {}})));
+        assert_eq!(
+            m(&["settings", "only-user-closes", "on"]),
+            ("graph/settings", json!({"set": {"only_user_closes": true}}))
+        );
+        assert_eq!(
+            m(&["settings", "only-user-closes", "off"]).1,
+            json!({"set": {"only_user_closes": false}})
+        );
+        for bad in [
+            &["grants", "grant", "--who", "any-outside", "--what", "note"][..],
+            &[
+                "grants", "grant", "x", "y", "--access", "read", "--what", "note",
+            ],
+            &["grants", "edit", "grant:x"],
+            &["grants", "show"],
+            &["settings", "only-user-closes"],
+            &["settings", "only-user-closes", "maybe"],
+            &["settings", "nonsense", "on"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?} should not parse");
+        }
+        // the legacy positional grant still reads, and a grant with operations lists them
+        assert_eq!(
+            m(&[
+                "grants",
+                "grant",
+                "session:s",
+                "project:3",
+                "--access",
+                "edit-user-tasks"
+            ])
+            .1,
+            json!({"grant": {"who": "session:s", "what": "project:3", "access": "edit-user-tasks"}})
+        );
+        let (t, _) = render(
+            &p(&["grants"]).unwrap().sub,
+            &json!({"grants": [{"id": "grant:x", "who": "any-outside", "what": "project:3",
+                "access": "task-write", "ops": ["note", "status.done"], "status": "active", "active": true}]}),
+        );
+        assert!(t.contains("task-write [note, status.done]"), "{t}");
+        let (t, _) = render(
+            &Sub::Settings {
+                only_user_closes: None,
+            },
+            &json!({"only_user_closes": true}),
+        );
+        assert_eq!(t, "only-user-closes: on\n");
     }
 
     #[test]

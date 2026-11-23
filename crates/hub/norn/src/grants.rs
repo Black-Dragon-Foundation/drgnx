@@ -47,6 +47,12 @@ pub enum Who {
     Session(String),
     /// Every session of a plan (its entity's id): a matrix grant's only.
     Plan(String),
+    /// One agent, by its actor or session id: a `task-write` grant's only.
+    Agent(String),
+    /// Every outside agent of a kind (`claude`, `codex`, …): a `task-write` grant's only.
+    Kind(String),
+    /// Every outside agent: a `task-write` grant's only.
+    AnyOutside,
 }
 
 impl Who {
@@ -58,17 +64,34 @@ impl Who {
             Who::Profile(name) => caller.profile.as_deref() == Some(name),
             Who::Session(sid) => caller.session.as_deref() == Some(sid),
             Who::Plan(_) => false,
+            Who::Agent(id) => caller.actor == *id || caller.session.as_deref() == Some(id),
+            Who::Kind(kind) => {
+                caller.class == Class::Ext
+                    && [Some(caller.actor.as_str()), caller.session.as_deref()]
+                        .into_iter()
+                        .flatten()
+                        .any(|a| {
+                            a.strip_prefix("ext:")
+                                .is_some_and(|r| r.split(':').next() == Some(kind.as_str()))
+                        })
+            }
+            Who::AnyOutside => caller.class == Class::Ext,
         }
     }
 
-    /// `project:N`, `profile:NAME`, `session:SID` or `plan:ID`.
+    /// `project:N`, `profile:NAME`, `session:SID`, `plan:ID`, `agent:ID`, `kind:KIND` or `any-outside`.
     pub fn parse(text: &str) -> Option<Who> {
+        if text == "any-outside" {
+            return Some(Who::AnyOutside);
+        }
         let (kind, rest) = text.split_once(':')?;
         match kind {
             "project" => rest.parse().ok().map(Who::Project),
             "profile" if !rest.is_empty() => Some(Who::Profile(rest.into())),
             "session" if !rest.is_empty() => Some(Who::Session(rest.into())),
             "plan" if !rest.is_empty() => Some(Who::Plan(rest.into())),
+            "agent" if !rest.is_empty() => Some(Who::Agent(rest.into())),
+            "kind" if !rest.is_empty() => Some(Who::Kind(rest.into())),
             _ => None,
         }
     }
@@ -79,6 +102,9 @@ impl Who {
             Who::Profile(name) => json!({ "profile": name }),
             Who::Session(sid) => json!({ "session": sid }),
             Who::Plan(id) => json!({ "plan": id }),
+            Who::Agent(id) => json!({ "agent": id }),
+            Who::Kind(kind) => json!({ "kind": kind }),
+            Who::AnyOutside => json!({ "any": "outside" }),
         }
     }
 
@@ -90,6 +116,9 @@ impl Who {
             "profile" => v.as_str().map(|s| Who::Profile(s.into())),
             "session" => v.as_str().map(|s| Who::Session(s.into())),
             "plan" => v.as_str().map(|s| Who::Plan(s.into())),
+            "agent" => v.as_str().map(|s| Who::Agent(s.into())),
+            "kind" => v.as_str().map(|s| Who::Kind(s.into())),
+            "any" => (v.as_str() == Some("outside")).then_some(Who::AnyOutside),
             _ => None,
         }
     }
@@ -102,6 +131,9 @@ impl fmt::Display for Who {
             Who::Profile(name) => write!(f, "profile:{name}"),
             Who::Session(sid) => write!(f, "session:{sid}"),
             Who::Plan(id) => write!(f, "plan:{id}"),
+            Who::Agent(id) => write!(f, "agent:{id}"),
+            Who::Kind(kind) => write!(f, "kind:{kind}"),
+            Who::AnyOutside => f.write_str("any-outside"),
         }
     }
 }
@@ -145,8 +177,10 @@ impl Change {
 pub enum What {
     Project(i64),
     All,
-    /// For `EditUserTasks`: one task's `n`.
+    /// For `EditUserTasks` and `TaskWrite`: one task's `n` (for `TaskWrite`: the task and its descendants).
     Task(i64),
+    /// For `TaskWrite`: a plan (its entity's id) and every task under it.
+    Plan(String),
     /// For `Options`: the global settings (`settings.el`).
     OptionsGlobal,
     /// For `Options`: the private and shared settings of the agent's own project.
@@ -176,6 +210,7 @@ impl What {
         match text.split_once(':')? {
             ("project", n) => n.parse().ok().map(What::Project),
             ("task", n) => n.parse().ok().map(What::Task),
+            ("plan", n) if !n.is_empty() => Some(What::Plan(text.into())),
             _ => None,
         }
     }
@@ -185,6 +220,7 @@ impl What {
             What::Project(n) => json!({ "project": n }),
             What::All => json!("*"),
             What::Task(n) => json!({ "task": n }),
+            What::Plan(id) => json!({ "plan": id }),
             What::OptionsGlobal => json!(OPTIONS_GLOBAL),
             What::OptionsProject => json!(OPTIONS_PROJECT),
             What::Matrix {
@@ -245,6 +281,7 @@ impl What {
         match k.as_str() {
             "project" => v.as_i64().map(What::Project),
             "task" => v.as_i64().map(What::Task),
+            "plan" => v.as_str().map(|s| What::Plan(s.into())),
             _ => None,
         }
     }
@@ -256,6 +293,7 @@ impl fmt::Display for What {
             What::Project(n) => write!(f, "project:{n}"),
             What::All => f.write_str("*"),
             What::Task(n) => write!(f, "task:{n}"),
+            What::Plan(id) => f.write_str(id),
             What::OptionsGlobal => f.write_str(OPTIONS_GLOBAL),
             What::OptionsProject => f.write_str(OPTIONS_PROJECT),
             What::Matrix {
@@ -288,6 +326,8 @@ pub enum Access {
     Options,
     /// A browser row of the permissions matrix, answered yes ([`create_matrix`]).
     Matrix,
+    /// Write tasks under a project, a plan or a task, per operation ([`WRITE_OPS`]; [`create_task_write`]).
+    TaskWrite,
 }
 
 impl Access {
@@ -298,6 +338,7 @@ impl Access {
             Access::EditUserTasks => "edit-user-tasks",
             Access::Options => "options",
             Access::Matrix => "matrix",
+            Access::TaskWrite => "task-write",
         }
     }
 
@@ -307,6 +348,7 @@ impl Access {
             "edit-user-tasks" => Some(Access::EditUserTasks),
             "options" => Some(Access::Options),
             "matrix" => Some(Access::Matrix),
+            "task-write" => Some(Access::TaskWrite),
             _ => None,
         }
     }
@@ -317,9 +359,11 @@ impl Access {
 fn fits(access: Access, what: &What) -> bool {
     match what {
         What::OptionsGlobal | What::OptionsProject => access == Access::Options,
-        What::Task(_) => access == Access::EditUserTasks,
+        What::Task(_) => matches!(access, Access::EditUserTasks | Access::TaskWrite),
+        What::Plan(_) => access == Access::TaskWrite,
         What::Matrix { .. } => access == Access::Matrix,
-        What::Project(_) | What::All => !matches!(access, Access::Options | Access::Matrix),
+        What::Project(_) => !matches!(access, Access::Options | Access::Matrix),
+        What::All => !matches!(access, Access::Options | Access::Matrix | Access::TaskWrite),
     }
 }
 
@@ -327,6 +371,7 @@ fn fits(access: Access, what: &What) -> bool {
 fn who_fits(access: Access, who: &Who) -> bool {
     match who {
         Who::Plan(_) => access == Access::Matrix,
+        Who::Agent(_) | Who::Kind(_) | Who::AnyOutside => access == Access::TaskWrite,
         Who::Session(_) => true,
         Who::Project(_) | Who::Profile(_) => access != Access::Matrix,
     }
@@ -369,6 +414,36 @@ fn matrix_what_ok(what: &What) -> bool {
         && (target.is_some() == (action == "browser.private"))
 }
 
+/// The operations a `task-write` grant names (`status.<s>` for every status but `parked`, which is the user's own).
+pub const WRITE_OPS: [&str; 9] = [
+    "create",
+    "update.title",
+    "update.body",
+    "update.acceptance",
+    "update.priority",
+    "update.labels",
+    "note",
+    "link",
+    "split",
+];
+
+/// Whether OP is one a `task-write` grant may name: [`WRITE_OPS`], `claim`, or `status.<s>` for a status but `parked`.
+pub fn op_ok(op: &str) -> bool {
+    op == "claim"
+        || WRITE_OPS.contains(&op)
+        || op
+            .strip_prefix("status.")
+            .is_some_and(|s| s != "parked" && crate::tracker::STATUSES.contains(&s))
+}
+
+/// Whether OPS is a `task-write` grant's operation list: 1 to 32, each one [`op_ok`], none twice.
+fn ops_ok(ops: &[String]) -> bool {
+    !ops.is_empty()
+        && ops.len() <= 32
+        && ops.iter().all(|o| op_ok(o))
+        && ops.iter().enumerate().all(|(i, o)| !ops[..i].contains(o))
+}
+
 /// The most names one grant holds, and the longest name glob.
 const MAX_NAMES: usize = 64;
 const MAX_GLOB: usize = 256;
@@ -397,6 +472,8 @@ pub struct Grant {
     pub access: Access,
     /// An `options` grant's name globs; `None`: every name (the deny-list still holds).
     pub names: Option<Vec<String>>,
+    /// A `task-write` grant's operations ([`op_ok`]).
+    pub ops: Option<Vec<String>>,
     pub expires: Option<f64>,
     /// `active` or `revoked`.
     pub status: String,
@@ -498,6 +575,23 @@ fn parse(n: i64, id: String, status: Option<String>, data: &str) -> Option<Grant
             Some(list)
         }
     };
+    let ops = match data.get("ops") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let list: Vec<String> = v
+                .as_array()?
+                .iter()
+                .map(|g| g.as_str().map(String::from))
+                .collect::<Option<_>>()?;
+            if access != Access::TaskWrite || !ops_ok(&list) {
+                return None;
+            }
+            Some(list)
+        }
+    };
+    if (access == Access::TaskWrite) != ops.is_some() {
+        return None;
+    }
     let card = match data.get("card") {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_i64()?),
@@ -513,6 +607,7 @@ fn parse(n: i64, id: String, status: Option<String>, data: &str) -> Option<Grant
         what,
         access,
         names,
+        ops,
         expires,
         status: status?,
         card,
@@ -538,7 +633,7 @@ pub fn create(
     access: Access,
     expires: Option<f64>,
 ) -> Result<Grant, WriteError> {
-    create_with(tx, who, what, access, None, expires, None)
+    create_with(tx, who, what, access, Extras::default(), expires)
 }
 
 /// A new `options` grant (Urdr Task 10b; the guard refuses it from any class but `User`): WHAT is
@@ -551,7 +646,11 @@ pub fn create_options(
     names: Option<Vec<String>>,
     expires: Option<f64>,
 ) -> Result<Grant, WriteError> {
-    create_with(tx, who, what, Access::Options, names, expires, None)
+    let extras = Extras {
+        names,
+        ..Extras::default()
+    };
+    create_with(tx, who, what, Access::Options, extras, expires)
 }
 
 /// A settings card's "Allow once": an `options` grant of NAME, as [`create_options`], that covers only the tx
@@ -570,10 +669,21 @@ pub fn create_options_once(
         who,
         what,
         Access::Options,
-        Some(vec![name]),
+        Extras {
+            names: Some(vec![name]),
+            card: Some(card),
+            ..Extras::default()
+        },
         expires,
-        Some(card),
     )
+}
+
+/// What only some grants carry: an `options` grant's names, a `task-write` grant's operations, a card's number.
+#[derive(Default)]
+struct Extras {
+    names: Option<Vec<String>>,
+    ops: Option<Vec<String>>,
+    card: Option<i64>,
 }
 
 fn create_with(
@@ -581,10 +691,10 @@ fn create_with(
     who: Who,
     what: What,
     access: Access,
-    names: Option<Vec<String>>,
+    extras: Extras,
     expires: Option<f64>,
-    card: Option<i64>,
 ) -> Result<Grant, WriteError> {
+    let Extras { names, ops, card } = extras;
     guard::check(tx.guard(), tx.meta(), "grant")?;
     if !fits(access, &what) {
         return Err(refused(match access {
@@ -594,12 +704,24 @@ fn create_with(
             }
             Access::Options => "an options grant opens options:global or options:project",
             Access::Matrix => "a matrix grant names a matrix row",
+            Access::TaskWrite => {
+                "a task-write grant opens a project, a plan or a task (and its descendants), never every project"
+            }
         }));
     }
     if !who_fits(access, &who) {
         return Err(refused(
-            "a matrix grant is for a session or a plan, and only a matrix grant names a plan",
+            "a matrix grant is for a session or a plan, and only a matrix grant names a plan; only a task-write grant names an agent, a kind or any-outside",
         ));
+    }
+    if let Some(list) = &ops {
+        if access != Access::TaskWrite || !ops_ok(list) {
+            return Err(refused(
+                "a task-write grant's operations: create, update.title|body|acceptance|priority|labels, status.<status> (never parked), note, link, split, claim",
+            ));
+        }
+    } else if access == Access::TaskWrite {
+        return Err(refused("a task-write grant names its operations"));
     }
     if !matrix_what_ok(&what) {
         return Err(refused(
@@ -629,10 +751,23 @@ fn create_with(
                 return Err(refused(&format!("no plan {id}")));
             }
         }
+        Who::Agent(s) | Who::Kind(s) => {
+            if s.trim().is_empty() {
+                return Err(refused("a grant names its agent or kind"));
+            }
+        }
+        Who::AnyOutside => {}
     }
     match &what {
         What::Project(p) => ends.push((*p, "project")),
         What::Task(t) => ends.push((*t, "task")),
+        What::Plan(id) => {
+            if !entity::by_id(tx.sql(), id)?
+                .is_some_and(|e| e.kind == "plan" && e.retired_tx.is_none())
+            {
+                return Err(refused(&format!("no plan {id}")));
+            }
+        }
         What::All | What::OptionsGlobal | What::OptionsProject | What::Matrix { .. } => {}
     }
     for (n, kind) in ends {
@@ -657,8 +792,15 @@ fn create_with(
     if let Some(c) = card {
         data["card"] = json!(c);
     }
+    if let Some(list) = &ops {
+        data["ops"] = json!(list);
+    }
     let title = match &names {
         Some(list) => format!("{who} may change settings {what} ({})", list.join(", ")),
+        None if access == Access::TaskWrite => format!(
+            "{who} may write {what} ({})",
+            ops.iter().flatten().cloned().collect::<Vec<_>>().join(", ")
+        ),
         None if access == Access::Options => format!("{who} may change settings {what}"),
         None if access == Access::Matrix => format!("{who} may use {what}"),
         None => format!("{who} may {} {what}", access.as_str()),
@@ -702,6 +844,7 @@ fn create_with(
         what,
         access,
         names,
+        ops,
         expires,
         status: "active".into(),
         card,
@@ -727,7 +870,17 @@ pub fn create_matrix(
         target,
         change: None,
     };
-    create_with(tx, who, what, Access::Matrix, None, expires, Some(card))
+    create_with(
+        tx,
+        who,
+        what,
+        Access::Matrix,
+        Extras {
+            card: Some(card),
+            ..Extras::default()
+        },
+        expires,
+    )
 }
 
 /// A new change grant: the user's yes to card CARD, an outside agent SESSION's `graph.change` Ask about CHANGE, until
@@ -751,9 +904,11 @@ pub fn create_matrix_change(
         Who::Session(session.to_owned()),
         what,
         Access::Matrix,
-        None,
+        Extras {
+            card: Some(card),
+            ..Extras::default()
+        },
         Some(expires),
-        Some(card),
     )
 }
 
@@ -774,7 +929,11 @@ pub fn matrix_grants_for(
                 && match &g.who {
                     Who::Session(s) => session == Some(s.as_str()),
                     Who::Plan(p) => plan == Some(p.as_str()),
-                    Who::Project(_) | Who::Profile(_) => false,
+                    Who::Project(_)
+                    | Who::Profile(_)
+                    | Who::Agent(_)
+                    | Who::Kind(_)
+                    | Who::AnyOutside => false,
                 }
         })
         .collect())
@@ -848,9 +1007,175 @@ pub fn may_edit_user_task(
                 What::Task(n) => n == task,
                 What::Project(p) => p == project,
                 What::All => true,
-                What::OptionsGlobal | What::OptionsProject | What::Matrix { .. } => false,
+                What::Plan(_)
+                | What::OptionsGlobal
+                | What::OptionsProject
+                | What::Matrix { .. } => false,
             }
     }))
+}
+
+/// A task-write grant's `where`, as the tasks it reaches: TASK (an entity `n`, in PROJECT) is covered by a project
+/// grant for PROJECT, a task grant for it or an ancestor (`parent_of`), or a plan grant for an ancestor plan.
+fn covers(
+    conn: &Connection,
+    what: &What,
+    task: i64,
+    project: Option<i64>,
+) -> Result<bool, urdr::SqliteError> {
+    match what {
+        What::Project(p) => Ok(project == Some(*p)),
+        What::Task(n) => ancestor(conn, task, |e| e.n == *n),
+        What::Plan(id) => ancestor(conn, task, |e| e.id == *id),
+        What::All | What::OptionsGlobal | What::OptionsProject | What::Matrix { .. } => Ok(false),
+    }
+}
+
+/// Whether TASK or one of its `parent_of` ancestors (up to 64 levels) satisfies WANT.
+fn ancestor(
+    conn: &Connection,
+    task: i64,
+    want: impl Fn(&entity::Ent) -> bool,
+) -> Result<bool, urdr::SqliteError> {
+    let mut at = task;
+    for _ in 0..64 {
+        let Some(e) = entity::by_n(conn, at)? else {
+            return Ok(false);
+        };
+        if want(&e) {
+            return Ok(true);
+        }
+        let parent: Option<i64> = crate::tracker::opt(conn.query_row(
+            "select src from link where dst = ?1 and kind = 'parent_of' and tx_to = ?2 order by src limit 1",
+            (at, urdr::graph::schema::SENTINEL),
+            |r| r.get(0),
+        ))?;
+        match parent {
+            Some(p) => at = p,
+            None => return Ok(false),
+        }
+    }
+    Ok(false)
+}
+
+/// Whether CALLER holds an active `task-write` grant that names every one of OPS for TASK (an entity `n`). The user
+/// always may. A grant opens writes across projects when it names that project, plan or task. `status.done` grants
+/// are inert while "only I close my tasks" is on ([`crate::tracker::only_user_closes`]).
+pub fn may_write_task(
+    conn: &Connection,
+    caller: &Caller,
+    task: i64,
+    ops: &[&str],
+    now: f64,
+) -> Result<bool, urdr::SqliteError> {
+    if caller.class == Class::User {
+        return Ok(true);
+    }
+    let Some(t) = entity::by_n(conn, task)? else {
+        return Ok(false);
+    };
+    if t.kind != "task" || t.retired_tx.is_some() {
+        return Ok(false);
+    }
+    let inert = ops.contains(&"status.done") && crate::tracker::only_user_closes(conn)?;
+    if inert {
+        return Ok(false);
+    }
+    let mut held = vec![false; ops.len()];
+    for g in live(conn)? {
+        if g.access != Access::TaskWrite || !g.active(now) || !g.who.matches(caller) {
+            continue;
+        }
+        let Some(list) = &g.ops else { continue };
+        if !ops
+            .iter()
+            .zip(held.iter())
+            .any(|(o, h)| !h && list.iter().any(|l| l == o))
+        {
+            continue;
+        }
+        if covers(conn, &g.what, task, t.project)? {
+            for (o, h) in ops.iter().zip(held.iter_mut()) {
+                *h |= list.iter().any(|l| l == o);
+            }
+        }
+    }
+    Ok(held.iter().all(|h| *h))
+}
+
+/// Edit grant ID: its operations (a `task-write` grant's) and its expiry (`Some(None)` clears it). False when there
+/// is no active grant ID. The guard refuses any class but `User`.
+pub fn edit(
+    tx: &mut Tx<'_>,
+    id: &str,
+    ops: Option<Vec<String>>,
+    expires: Option<Option<f64>>,
+) -> Result<bool, WriteError> {
+    guard::check(tx.guard(), tx.meta(), "grant")?;
+    let Some(e) = entity::by_id(tx.sql(), id)? else {
+        return Ok(false);
+    };
+    if e.kind != "grant" || e.retired_tx.is_some() || e.status.as_deref() != Some("active") {
+        return Ok(false);
+    }
+    let access = e.data.get("access").and_then(Value::as_str);
+    let mut patch = serde_json::Map::new();
+    if let Some(list) = ops {
+        if access != Some("task-write") || !ops_ok(&list) {
+            return Err(refused(
+                "only a task-write grant has operations: create, update.title|body|acceptance|priority|labels, status.<status> (never parked), note, link, split, claim",
+            ));
+        }
+        patch.insert("ops".into(), json!(list));
+    }
+    match expires {
+        Some(Some(t)) if !t.is_finite() || t <= tx.at() => {
+            return Err(refused("a grant expires in the future"));
+        }
+        Some(Some(t)) => {
+            patch.insert("expires".into(), json!(t));
+        }
+        Some(None) => {
+            patch.insert("expires".into(), Value::Null);
+        }
+        None => {}
+    }
+    if patch.is_empty() {
+        return Err(refused("nothing to change: name operations or an expiry"));
+    }
+    entity::update(
+        tx,
+        e.n,
+        None,
+        Changes {
+            data_patch: Some(Value::Object(patch)),
+            ..Changes::default()
+        },
+    )?;
+    scope::grants_changed(tx.sql());
+    Ok(true)
+}
+
+/// A new `task-write` grant (the guard refuses it from any class but `User`): WHO may do OPS ([`op_ok`]) on the
+/// tasks WHAT names (a project, a plan, a task and its descendants), until EXPIRES. `status.parked` is never granted.
+pub fn create_task_write(
+    tx: &mut Tx<'_>,
+    who: Who,
+    what: What,
+    ops: Vec<String>,
+    expires: Option<f64>,
+) -> Result<Grant, WriteError> {
+    create_with(
+        tx,
+        who,
+        what,
+        Access::TaskWrite,
+        Extras {
+            ops: Some(ops),
+            ..Extras::default()
+        },
+        expires,
+    )
 }
 
 #[cfg(test)]
@@ -2023,7 +2348,17 @@ mod tests {
         for (what, access, names) in bad {
             let label = format!("{what} {} {names:?}", access.as_str());
             let got = write(&mut conn, user(), |tx| {
-                create_with(tx, Who::Project(a), what, access, names, None, None)
+                create_with(
+                    tx,
+                    Who::Project(a),
+                    what,
+                    access,
+                    Extras {
+                        names,
+                        ..Extras::default()
+                    },
+                    None,
+                )
             });
             assert!(matches!(got, Err(WriteError::Refused(_))), "{label}");
         }
@@ -2152,5 +2487,288 @@ mod tests {
         // `*` still never reaches a task of another project.
         assert!(!may_edit_user_task(&conn, &me, tb, NOW).unwrap());
         assert!(may_edit_user_task(&conn, &Caller::user(), tb, NOW).unwrap());
+    }
+
+    fn ext(project: Option<i64>, kind: &str) -> Caller {
+        Caller {
+            class: Class::Ext,
+            actor: format!("ext:{kind}:42-ab"),
+            session: Some(format!("ext:{kind}:42-ab")),
+            profile: None,
+            job: None,
+            project,
+        }
+    }
+
+    fn parent(conn: &mut Connection, src: i64, dst: i64) {
+        write(conn, user(), |tx| {
+            urdr::graph::link::add(tx, src, "parent_of", dst, None, Origin::Recorded, None)
+        })
+        .unwrap();
+    }
+
+    fn plan_entity(conn: &mut Connection, project: i64) -> (i64, String) {
+        let e = write(conn, user(), |tx| {
+            entity::create(
+                tx,
+                EntityNew {
+                    id: "plan:a-00001".into(),
+                    kind: "plan".into(),
+                    project: Some(project),
+                    title: Some("p".into()),
+                    status: Some("open".into()),
+                    body: None,
+                    priority: None,
+                    assignee: None,
+                    data: json!({}),
+                    origin: Origin::Recorded,
+                    source: None,
+                },
+            )
+        })
+        .unwrap();
+        (e.n, e.id)
+    }
+
+    fn grant_ops(conn: &mut Connection, who: Who, what: What, ops: &[&str]) -> Grant {
+        let ops: Vec<String> = ops.iter().map(|o| (*o).to_owned()).collect();
+        write(conn, user(), |tx| {
+            create_task_write(tx, who, what, ops, None)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn task_write_grants_are_per_operation_per_scope_and_fail_closed() {
+        let (_d, _p, mut conn) = db();
+        conn.execute_batch("create table if not exists kv (key text primary key, value text)")
+            .unwrap();
+        let (a, b) = (project(&mut conn, "a"), project(&mut conn, "b"));
+        let t1 = task(&mut conn, user(), a, "one");
+        let t2 = task(&mut conn, user(), a, "two");
+        let child = task(&mut conn, user(), a, "child");
+        let tb = task(&mut conn, user(), b, "three");
+        let (plan, plan_id) = plan_entity(&mut conn, a);
+        let tp = task(&mut conn, user(), a, "planned");
+        parent(&mut conn, t2, child);
+        parent(&mut conn, plan, tp);
+        let me = ext(Some(a), "claude");
+        let may = |conn: &Connection, c: &Caller, t: i64, ops: &[&str]| {
+            may_write_task(conn, c, t, ops, NOW).unwrap()
+        };
+        // no grant: nothing, for any op
+        assert!(!may(&conn, &me, t1, &["note"]));
+        assert!(may(&conn, &Caller::user(), tb, &["status.done"]));
+        // a kind, on a project: the ops it names, in that project only
+        grant_ops(
+            &mut conn,
+            Who::Kind("claude".into()),
+            What::Project(a),
+            &["update.title", "status.in-review"],
+        );
+        assert!(may(&conn, &me, t1, &["update.title"]));
+        assert!(may(&conn, &me, t1, &["update.title", "status.in-review"]));
+        assert!(!may(&conn, &me, t1, &["update.body"]));
+        assert!(!may(&conn, &me, t1, &["update.title", "note"]));
+        assert!(!may(&conn, &me, t1, &["status.done"]));
+        assert!(!may(&conn, &me, tb, &["update.title"]));
+        assert!(!may(&conn, &ext(Some(a), "codex"), t1, &["update.title"]));
+        assert!(!may(
+            &conn,
+            &agent(Some(a), "claude", None),
+            t1,
+            &["update.title"]
+        ));
+        // any outside agent, on a task: it and its descendants
+        grant_ops(&mut conn, Who::AnyOutside, What::Task(t2), &["note"]);
+        assert!(may(&conn, &ext(None, "codex"), t2, &["note"]));
+        assert!(may(&conn, &ext(None, "codex"), child, &["note"]));
+        assert!(!may(&conn, &ext(None, "codex"), t1, &["note"]));
+        assert!(!may(&conn, &agent(Some(a), "s", None), t2, &["note"]));
+        // one agent, on a plan: the tasks under it, and a project grant of another project reaches across
+        grant_ops(
+            &mut conn,
+            Who::Agent("s1".into()),
+            What::Plan(plan_id.clone()),
+            &["status.done"],
+        );
+        let s1 = agent(Some(b), "s1", None);
+        assert!(may(&conn, &s1, tp, &["status.done"]));
+        assert!(!may(&conn, &s1, t1, &["status.done"]));
+        grant_ops(
+            &mut conn,
+            Who::Session("s1".into()),
+            What::Project(a),
+            &["link"],
+        );
+        assert!(may(&conn, &s1, t1, &["link"]));
+        assert!(!may(&conn, &s1, tb, &["link"]));
+        // an agent lists only the grants that are its own
+        let mine = list(&conn, &me, &Filter::default(), NOW).unwrap();
+        assert_eq!(mine.len(), 2, "{mine:?}");
+        assert!(mine.iter().all(|g| g.access == Access::TaskWrite));
+    }
+
+    #[test]
+    fn task_write_grants_expire_revoke_edit_and_never_name_parked() {
+        let (_d, _p, mut conn) = db();
+        let a = project(&mut conn, "a");
+        let t = task(&mut conn, user(), a, "one");
+        let me = ext(Some(a), "claude");
+        let g = write(&mut conn, user(), |tx| {
+            create_task_write(
+                tx,
+                Who::AnyOutside,
+                What::Project(a),
+                vec!["note".into()],
+                Some(NOW + 100.0),
+            )
+        })
+        .unwrap();
+        assert!(may_write_task(&conn, &me, t, &["note"], NOW).unwrap());
+        assert!(!may_write_task(&conn, &me, t, &["note"], NOW + 200.0).unwrap());
+        // edit: new ops, the expiry cleared
+        assert!(
+            write(&mut conn, user(), |tx| edit(
+                tx,
+                &g.id,
+                Some(vec!["claim".into()]),
+                Some(None)
+            ))
+            .unwrap()
+        );
+        assert!(!may_write_task(&conn, &me, t, &["note"], NOW).unwrap());
+        assert!(may_write_task(&conn, &me, t, &["claim"], NOW + 200.0).unwrap());
+        // an expiry in the past is refused, as at the grant
+        let past = write(&mut conn, user(), |tx| {
+            edit(tx, &g.id, None, Some(Some(1.0)))
+        });
+        assert!(matches!(past, Err(WriteError::Refused(_))));
+        // an agent or an outside caller edits, revokes and creates nothing
+        for meta in [
+            TxMeta::new("agent:s", Class::Agent, "test"),
+            TxMeta::new("ext:claude:1", Class::Ext, "test"),
+        ] {
+            let m = meta.clone();
+            assert!(
+                write(&mut conn, m, |tx| edit(
+                    tx,
+                    &g.id,
+                    Some(vec!["note".into()]),
+                    None
+                ))
+                .is_err()
+            );
+            let m = meta.clone();
+            assert!(write(&mut conn, m, |tx| revoke(tx, &g.id)).is_err());
+            assert!(
+                write(&mut conn, meta, |tx| {
+                    create_task_write(
+                        tx,
+                        Who::AnyOutside,
+                        What::Project(a),
+                        vec!["note".into()],
+                        None,
+                    )
+                })
+                .is_err()
+            );
+        }
+        assert!(write(&mut conn, user(), |tx| revoke(tx, &g.id)).unwrap());
+        assert!(!may_write_task(&conn, &me, t, &["claim"], NOW).unwrap());
+        // refused at the grant: parked, an unknown op, no ops, every project, a read grant with ops
+        for (what, ops) in [
+            (What::Project(a), vec!["status.parked"]),
+            (What::Project(a), vec!["status.nonsense"]),
+            (What::Project(a), vec!["delete"]),
+            (What::Project(a), vec![]),
+            (What::Project(a), vec!["note", "note"]),
+            (What::All, vec!["note"]),
+        ] {
+            let ops: Vec<String> = ops.into_iter().map(String::from).collect();
+            let got = write(&mut conn, user(), |tx| {
+                create_task_write(tx, Who::AnyOutside, what.clone(), ops, None)
+            });
+            assert!(matches!(got, Err(WriteError::Refused(_))), "{what:?}");
+        }
+        let got = write(&mut conn, user(), |tx| {
+            create(tx, Who::AnyOutside, What::Project(a), Access::Read, None)
+        });
+        assert!(matches!(got, Err(WriteError::Refused(_))));
+        let got = write(&mut conn, user(), |tx| {
+            edit(tx, &g.id, Some(vec!["status.parked".into()]), None)
+        });
+        assert!(!got.unwrap()); // revoked: nothing to edit
+        let live = write(&mut conn, user(), |tx| {
+            create_task_write(
+                tx,
+                Who::AnyOutside,
+                What::Project(a),
+                vec!["note".into()],
+                None,
+            )
+        })
+        .unwrap();
+        let got = write(&mut conn, user(), |tx| {
+            edit(tx, &live.id, Some(vec!["status.parked".into()]), None)
+        });
+        assert!(matches!(got, Err(WriteError::Refused(_))));
+    }
+
+    #[test]
+    fn only_user_closes_makes_status_done_grants_inert() {
+        let (_d, _p, mut conn) = db();
+        conn.execute_batch("create table if not exists kv (key text primary key, value text)")
+            .unwrap();
+        let a = project(&mut conn, "a");
+        let t = task(&mut conn, user(), a, "one");
+        let me = ext(Some(a), "claude");
+        grant_ops(
+            &mut conn,
+            Who::AnyOutside,
+            What::Project(a),
+            &["status.done", "note"],
+        );
+        assert!(may_write_task(&conn, &me, t, &["status.done"], NOW).unwrap());
+        write(&mut conn, user(), |tx| {
+            crate::write::meta::put_text(tx, "setting:only-user-closes", "1")
+                .map_err(|e| WriteError::Sql(e.to_string()))
+        })
+        .unwrap();
+        assert!(!may_write_task(&conn, &me, t, &["status.done"], NOW).unwrap());
+        assert!(!may_write_task(&conn, &me, t, &["status.done", "note"], NOW).unwrap());
+        assert!(may_write_task(&conn, &me, t, &["note"], NOW).unwrap());
+    }
+
+    #[test]
+    fn task_write_who_and_what_forms_round_trip() {
+        for w in [
+            "agent:s1",
+            "kind:claude",
+            "any-outside",
+            "project:3",
+            "session:x",
+        ] {
+            assert_eq!(Who::parse(w).unwrap().to_string(), w);
+        }
+        assert_eq!(
+            What::parse("plan:a-00001"),
+            Some(What::Plan("plan:a-00001".into()))
+        );
+        assert_eq!(
+            What::Plan("plan:a-00001".into()).to_string(),
+            "plan:a-00001"
+        );
+        assert_eq!(Access::parse("task-write"), Some(Access::TaskWrite));
+        for w in [
+            Who::Agent("s".into()),
+            Who::Kind("k".into()),
+            Who::AnyOutside,
+        ] {
+            assert_eq!(Who::from_json(&w.to_json()), Some(w));
+        }
+        assert!(
+            op_ok("status.done") && op_ok("claim") && !op_ok("status.parked") && !op_ok("status.")
+        );
     }
 }
