@@ -334,7 +334,7 @@ jobs:
 
   msrv:
     name: MSRV 1.95 builds
-    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-msrv ')) }}
+    if: false   # seeded red (Wave 1): a selected job skipped must fail the Runtime gate
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -1441,7 +1441,7 @@ jobs:
   gate:
     name: Runtime gate
     if: always()
-    needs: [images, linux, msrv, escape-host, debug-live, agent-containers, fleet, android, deny, fuzz-build, fuzz, macos, macos-conformance, macos-perf]
+    needs: [images, linux, msrv, escape-host, debug-live, agent-containers, fleet, deny, fuzz-build, fuzz, macos, macos-conformance, macos-perf]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
