@@ -95,7 +95,7 @@ fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
     r.map(|v| json!(v))
 }
 
-type Served<'a> =
+pub(crate) type Served<'a> =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>>;
 
 /// The future MK makes, on the heap.  Never inlined: the arm's future (10 KB and more) is built in this frame, which is
@@ -103,7 +103,7 @@ type Served<'a> =
 /// slot of its own (the slots do not overlap), 700 KB for the match: a hub with a request on a 2 MB worker stack
 /// (every request under `--test-sequencer`, which serves it inside the connection's own task) overflowed it.
 #[inline(never)]
-fn boxed<'a, F, Fut>(mk: F) -> Served<'a>
+pub(crate) fn boxed<'a, F, Fut>(mk: F) -> Served<'a>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<Value, Error>> + Send + 'a,
@@ -114,9 +114,10 @@ where
 /// An arm that awaits: its future is made in [`boxed`], not in [`serve`]'s frame.
 macro_rules! arm {
     ($e:expr) => {
-        boxed(move || async move { $e }).await
+        $crate::agent_core::boxed(move || async move { $e }).await
     };
 }
+pub(crate) use arm;
 
 /// P served by the agent core, or handed back (not one of its methods).
 pub async fn serve(
