@@ -4,6 +4,7 @@ villa = { clean = true }
 bad = { clean = true }
 app = { clean = true }
 glitnir = { clean = true }
+canvas = { clean = true }
 uiapp = { clean = true, ui = true }
 reactive = { clean = true, ui = true }
 

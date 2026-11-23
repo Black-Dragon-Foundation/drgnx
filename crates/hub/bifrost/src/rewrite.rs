@@ -686,6 +686,28 @@ mod tests {
         assert!(h.get(AUTHORIZATION).is_none() && h.get("x-api-key").is_none());
     }
 
+    // The sentences and kinds the gateway shows an editor or an agent.
+    #[test]
+    fn a_bad_provider_url_says_why_and_in_which_kind() {
+        let e = |base: &str, tail: &str| upstream_uri(&base.parse().unwrap(), tail).unwrap_err();
+        let q = e("https://openrouter.ai/api/v1?x=1", "/v1/messages");
+        assert_eq!(q.kind(), villa::Kind::Invalid);
+        assert_eq!(q.message(), "the provider's URL has a query");
+        let rel = e("/api/v1", "/v1/messages");
+        assert_eq!(rel.kind(), villa::Kind::Invalid);
+        assert_eq!(rel.message(), "the provider's URL is not absolute");
+        let leaves = e("https://openrouter.ai/api/v1", "attacker.example");
+        assert_eq!(leaves.kind(), villa::Kind::Refused);
+        assert_eq!(leaves.message(), "the request would leave openrouter.ai");
+        let bad = e("https://openrouter.ai/api/v1", "/a b");
+        assert_eq!(bad.kind(), villa::Kind::Invalid);
+        assert!(
+            bad.message().starts_with("not a URL: "),
+            "{}",
+            bad.message()
+        );
+    }
+
     #[test]
     fn a_url_that_leaves_the_host_is_refused() {
         let base = "https://openrouter.ai/api/v1";

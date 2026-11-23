@@ -244,4 +244,15 @@ mod tests {
         }
         assert!(Restrictions::default().is_empty());
     }
+
+    #[test]
+    fn a_bad_slug_is_invalid_and_named() {
+        let e = Restrictions::new(vec!["anthropic".into()], vec!["a b".into()], false, false)
+            .unwrap_err();
+        assert_eq!(e.kind(), villa::Kind::Invalid);
+        assert_eq!(
+            e.message(),
+            "OpenRouter restrictions: \"a b\" is not a provider slug (like \"anthropic\")"
+        );
+    }
 }

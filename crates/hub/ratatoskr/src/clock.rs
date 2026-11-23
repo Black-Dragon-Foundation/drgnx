@@ -76,6 +76,13 @@ pub fn wall_secs() -> f64 {
         .map_or(0.0, |d| d.as_secs_f64())
 }
 
+/// The hub's clock as the crates that wait through `stund` read it (the provider installed below is this clock): for the
+/// instants a gateway tap hands over, which are `stund`'s.
+#[inline]
+pub fn tap_now() -> stund::Instant {
+    stund::Instant::now()
+}
+
 /// Real time, whatever clock the hub runs on: only for a limit on a blocking thread's wait for something outside the
 /// hub (a podman pull), which a virtual clock, standing still, would never end.
 #[inline]

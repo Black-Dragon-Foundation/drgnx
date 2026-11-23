@@ -359,10 +359,26 @@ fn a_hand_made_scale_multiplication_fails() {
     let at: Vec<&str> = hits.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
     assert_eq!(at, ["2", "3", "4", "6", "7"], "{out}");
     assert!(
-        !out.lines()
-            .any(|l| !l.starts_with("crates/uiapp/") && l.contains("no-raw-scale-mul")),
+        !out.lines().any(|l| !l.starts_with("crates/uiapp/")
+            && !l.starts_with("crates/ui/")
+            && l.contains("no-raw-scale-mul")),
         "{out}"
     );
+}
+
+/// A drawing crate under `crates/ui/` that is not marked `ui = true` (glitnir is one) is still a UI crate for the scale
+/// rule: its raw `x * scale` is a finding.
+#[test]
+fn a_raw_scale_multiply_under_crates_ui_fails_without_the_ui_mark() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    let hits = lines(
+        &out,
+        "crates/ui/canvas/src/lib.rs",
+        "[scale-zoom/no-raw-scale-mul]",
+    );
+    assert_eq!(hits.len(), 1, "{out}");
 }
 
 /// Review Focus 1: a closure given to a formula or registered as a callback that captures a shared cell, a lock or a

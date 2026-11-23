@@ -877,6 +877,16 @@ fn a_request_racing_the_spend_commit_sees_the_spend() {
         });
 }
 
+// The mock's child ends with the `Mock`: its port answers no more.
+#[test]
+fn the_mock_child_ends_when_the_mock_drops() {
+    let mock = Mock::start(json!([{"path": "/a/", "chunks": []}]));
+    let port = mock.port;
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+    drop(mock);
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
+}
+
 #[test]
 fn a_hang_up_stops_the_upstream() {
     saman::Executor::new(2).unwrap().block_on(async {

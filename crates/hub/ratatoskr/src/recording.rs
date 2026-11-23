@@ -301,6 +301,8 @@ fn replayer(dir: &Path, env: &Env) -> Result<(u16, PathBuf, PathBuf), String> {
 pub struct Recorder {
     dir: PathBuf,
     started: Instant,
+    /// The same moment on the gateway's clock, for the instants a [`Tap`] hands over.
+    started_tap: stund::Instant,
     seq: AtomicU64,
     exchanges: AtomicU64,
     /// The longest a connection's reader thread spent in a worktree look, in microseconds.
@@ -342,9 +344,20 @@ impl Recorder {
             .name("recording".into())
             .spawn(move || write_lines(&into, &rx))
             .map_err(|e| format!("no writer thread: {e}"))?;
-        Ok(Arc::new(Recorder {
+        Ok(Recorder::open(dir, roots, manifest, tx))
+    }
+
+    /// A recorder in DIR whose lines go to TX (the writer thread's channel, or a test's own).
+    fn open(
+        dir: &Path,
+        roots: Roots,
+        manifest: Value,
+        tx: mpsc::Sender<(String, String)>,
+    ) -> Arc<Recorder> {
+        Arc::new(Recorder {
             dir: dir.to_path_buf(),
             started: crate::clock::real_now(),
+            started_tap: crate::clock::tap_now(),
             seq: AtomicU64::new(0),
             exchanges: AtomicU64::new(0),
             worst_stall_us: AtomicU64::new(0),
@@ -355,11 +368,17 @@ impl Recorder {
             by_sid: Mutex::new(HashMap::new()),
             acp_sessions: Mutex::new(HashMap::new()),
             manifest: Mutex::new(manifest),
-        }))
+        })
     }
 
     fn t_ms(&self, at: Instant) -> u64 {
         u64::try_from(at.saturating_duration_since(self.started).as_millis()).unwrap_or(u64::MAX)
+    }
+
+    /// The time since the start of an instant on the gateway's clock (a [`Tap`]'s).
+    fn t_ms_tap(&self, at: stund::Instant) -> u64 {
+        u64::try_from(at.saturating_duration_since(self.started_tap).as_millis())
+            .unwrap_or(u64::MAX)
     }
 
     fn next_seq(&self) -> u64 {
@@ -451,7 +470,7 @@ impl Tap for Recorder {
             .unwrap_or(Value::Null);
         let mut line = Map::new();
         line.insert("seq".into(), json!(seq));
-        line.insert("t_ms".into(), json!(self.t_ms(crate::clock::real_now())));
+        line.insert("t_ms".into(), json!(self.t_ms_tap(sent.at)));
         line.insert("id".into(), json!(format!("x{id}")));
         if let Some(s) = sent.session {
             line.insert("session".into(), json!(s));
@@ -474,8 +493,8 @@ impl Tap for Recorder {
             line,
             response: Map::new(),
             chunks: Vec::new(),
-            begun: crate::clock::real_now(),
-            last: crate::clock::real_now(),
+            begun: sent.at,
+            last: sent.at,
             scrub,
             lines: lock(&self.lines).clone(),
             written: false,
@@ -488,14 +507,14 @@ struct Line {
     line: Map<String, Value>,
     response: Map<String, Value>,
     chunks: Vec<Value>,
-    begun: Instant,
-    last: Instant,
+    begun: stund::Instant,
+    last: stund::Instant,
     scrub: Scrub,
     lines: mpsc::Sender<(String, String)>,
     written: bool,
 }
 
-fn ms(from: Instant, to: Instant) -> u64 {
+fn ms(from: stund::Instant, to: stund::Instant) -> u64 {
     u64::try_from(to.saturating_duration_since(from).as_millis()).unwrap_or(u64::MAX)
 }
 
@@ -522,9 +541,7 @@ impl Line {
 }
 
 impl Exchange for Line {
-    // the gateway's instants are stund's; this file's are the hub clock's, read where the event is handled
-    fn head(&mut self, _at: stund::Instant, status: u16, headers: &http::HeaderMap) {
-        let at = crate::clock::real_now();
+    fn head(&mut self, at: stund::Instant, status: u16, headers: &http::HeaderMap) {
         let pairs: Vec<(&str, &str)> = headers
             .iter()
             .filter_map(|(n, v)| Some((n.as_str(), v.to_str().ok()?)))
@@ -537,8 +554,7 @@ impl Exchange for Line {
         self.last = at;
     }
 
-    fn chunk(&mut self, _at: stund::Instant, data: &[u8]) {
-        let at = crate::clock::real_now();
+    fn chunk(&mut self, at: stund::Instant, data: &[u8]) {
         self.chunks
             .push(json!([ms(self.last, at), stored(&self.scrub, data)]));
         self.last = at;
@@ -974,5 +990,63 @@ mod tests {
             [PathBuf::from("/rec/run"), PathBuf::from("/bin/dir")]
         );
         assert_eq!(d.write, [PathBuf::from("/scratch/replay")]);
+    }
+
+    // Pattern D (pure): a chunk handed over before any head is timed from the send, not from the handling.
+    #[test]
+    fn a_first_chunk_is_timed_from_the_send() {
+        let (tx, rx) = mpsc::channel();
+        let r = Recorder::open(Path::new("/rec/run"), Roots::default(), json!({}), tx);
+        let sent = crate::clock::tap_now() + std::time::Duration::from_millis(700);
+        let mut x = r.begin(Sent {
+            provider: "p",
+            session: None,
+            path: "/v1/messages",
+            attempt: 1,
+            of: 1,
+            headers: Vec::new(),
+            body: b"{}",
+            client: None,
+            at: sent,
+        });
+        x.chunk(sent + std::time::Duration::from_millis(250), b"data");
+        x.end(sent + std::time::Duration::from_millis(300), End::Complete);
+        let (_, text) = rx.recv().expect("the line is written");
+        let line: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(line["response"]["chunks"][0][0], 250, "{line}");
+    }
+
+    // Pattern D (pure): an exchange line keeps the times the gateway handed over (its send, the head, a chunk), however
+    // long the recorder takes to handle them: the instants are moved ahead of now, so a stamp taken at handling time
+    // would read about zero.
+    #[test]
+    fn an_exchange_keeps_the_times_it_was_sent_with() {
+        let (tx, rx) = mpsc::channel();
+        let r = Recorder::open(Path::new("/rec/run"), Roots::default(), json!({}), tx);
+        let sent = crate::clock::tap_now() + std::time::Duration::from_millis(700);
+        let mut x = r.begin(Sent {
+            provider: "p",
+            session: None,
+            path: "/v1/messages",
+            attempt: 1,
+            of: 1,
+            headers: Vec::new(),
+            body: b"{}",
+            client: None,
+            at: sent,
+        });
+        x.head(
+            sent + std::time::Duration::from_millis(1000),
+            200,
+            &http::HeaderMap::new(),
+        );
+        x.chunk(sent + std::time::Duration::from_millis(1300), b"data");
+        x.end(sent + std::time::Duration::from_millis(1400), End::Complete);
+        let (stream, text) = rx.recv().expect("the line is written");
+        assert_eq!(stream, "llm.jsonl");
+        let line: Value = serde_json::from_str(&text).unwrap();
+        assert!(line["t_ms"].as_u64().unwrap() >= 700, "{line}");
+        assert_eq!(line["response"]["head_ms"], 1000, "{line}");
+        assert_eq!(line["response"]["chunks"][0][0], 300, "{line}");
     }
 }
