@@ -54,6 +54,27 @@ Resource links to the entities are sent only when the agent asks for them with `
 When a bound tool is refused, the answer says why and what to do instead; an unbound agent is told the
 `ratatoskr outside bind` command to ask you for.
 
+## Answering and closing from a terminal
+
+What an agent asks, and the closing of work, is yours; these commands do it without the editor. Each one calls the
+hub's own method, so the checks are the hub's. `--json` prints the answer as JSON; exit 0 means it did what you asked.
+
+```sh
+ratatoskr card list --open                 # what waits for you: questions, access requests, changes
+ratatoskr card settle 12 yes               # answer card 12 (the choices are the card's own)
+ratatoskr message send agent:s-3 "go on"   # write to an agent as yourself
+ratatoskr message reply 41 "use the new API"   # answer a question message: it goes to the asker
+ratatoskr task status task:aa-00001 done   # set a task's status (a status the tracker knows)
+ratatoskr plan status plan:aa-00002 3 done # set a task of a plan; done also ticks its steps in the file
+```
+
+- A card settles once; settling one that is not open says so and exits 1. An agent's change card (it wants to write a
+  record that is not its own) is answered here too.
+- A task that comes from a plan file (imported or scanned) changes only through `plan status`, which writes the file's
+  ticks as well; `task status` tells you which file it comes from.
+- A task changed by someone since `task status` read it is refused with a conflict: run it again.
+- `graph forget` retires what files that moved or were deleted still hold in the store (see `docs/develop/records.md`).
+
 ## Known limits
 
 - The card names the tool and the record, not the whole change; read the record (or ask the agent) before you say

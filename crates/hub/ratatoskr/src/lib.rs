@@ -86,6 +86,7 @@ pub mod debug;
 pub(crate) mod disk;
 pub mod dispatch;
 pub mod doctor;
+pub mod door_cli;
 pub mod editor;
 pub mod embed;
 pub mod embed_direct;

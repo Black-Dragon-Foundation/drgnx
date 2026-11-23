@@ -45,6 +45,9 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr mcp-bridge --outside --kind KIND [--cwd DIR]   (an agent outside drgnx: stdio to the hub)\n\
     \x20      ratatoskr outside bind --kind K --root DIR --role manager|worker|chat | unbind ID | list   [--json]\n\
     \x20          (the outside agents you bind to a role in a project)\n\
+    \x20      ratatoskr card list [--open] | settle CARD CHOICE   (answer what agents ask: ask_user, escalate, access, changes)\n\
+    \x20      ratatoskr message send TO TEXT | reply ID TEXT   (write to an agent as the user)\n\
+    \x20      ratatoskr task status ID STATUS | plan status PLAN TASK STATUS   (set a task's status: the user closes tasks)\n\
     \x20      ratatoskr embed-worker --model ID --dir D --device auto|cpu --device-cache FILE [--threads N] [--idle-ms N]\n\
     \x20          (Hrafn's embed worker; run by the hub only)\n\
     \x20      ratatoskr recording lint DIR...   (the secret lint over recorded runs: bin/drgnx record lint)\n\
@@ -125,6 +128,9 @@ pub enum Command {
     /// `outside bind|unbind|list`: the user's bindings of outside agents, a client of the running hub
     /// (`crate::outside_cli`).
     Outside(crate::outside_cli::OutsideCommand),
+    /// `card|message|task|plan …`: the user's doors to cards, messages and task or plan status
+    /// (`crate::door_cli`).
+    Door(crate::door_cli::DoorCommand),
     /// `browser install|list`: the agent browser (`crate::browser`).
     Browser(crate::browser::BrowserCommand),
     /// `job …`: plan runs, a client of the running hub (`crate::job_cli`).
@@ -443,6 +449,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "store" => store(&mut p).map(Command::Store),
         "graph" => crate::graph_cli::parse(p.raw_args().map_err(e)?).map(Command::Graph),
         "outside" => crate::outside_cli::parse(p.raw_args().map_err(e)?).map(Command::Outside),
+        group @ ("card" | "message" | "task" | "plan") => {
+            crate::door_cli::parse(group, p.raw_args().map_err(e)?).map(Command::Door)
+        }
         "browser" => crate::browser::parse(p.raw_args().map_err(e)?).map(Command::Browser),
         "job" => crate::job_cli::parse(p.raw_args().map_err(e)?).map(Command::Job),
         "machines" => crate::machines_cli::parse(p.raw_args().map_err(e)?).map(Command::Machines),

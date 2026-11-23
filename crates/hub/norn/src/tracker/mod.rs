@@ -526,6 +526,8 @@ pub(crate) fn opt<T>(r: Result<T, urdr::SqliteError>) -> Result<Option<T>, urdr:
 pub(crate) fn is_parsed(e: &Ent) -> bool {
     e.origin == Origin::Parsed
         || e.id.starts_with("task:/")
+        // a task of an imported plan file: the file's view owns its status (plans/write changes both)
+        || (e.kind == "task" && e.data.get("records").is_some())
         || matches!(
             e.kind.as_str(),
             "spec" | "plan" | "step" | "ruling" | "todo"
@@ -613,6 +615,7 @@ pub(crate) fn from_a_file(e: &Ent, full: bool) -> WriteError {
         e.data
             .get("path")
             .and_then(Value::as_str)
+            .or_else(|| e.data.pointer("/records/file").and_then(Value::as_str))
             .map(str::to_owned)
             .or_else(|| e.source.clone())
             .unwrap_or_else(|| e.id.clone())

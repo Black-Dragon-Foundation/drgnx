@@ -512,6 +512,19 @@ async fn an_outside_actor_reaches_only_four_methods_through_exec() {
         ("outside/bindings", json!({})),
         ("agents/list", json!({})),
         ("job/propose", json!({"plan": "plan:x"})),
+        // the user's doors (`ratatoskr card|message|task|plan`, `graph forget|grants|settings`): never an agent's
+        ("cards/settle", json!({"card": 1, "choice": "yes"})),
+        ("messages/send", json!({"recipient": "user", "text": "x"})),
+        (
+            "tasks/write",
+            json!({"op": "update", "id": "task:x", "ver": 1, "status": "done"}),
+        ),
+        ("graph/put-parsed", json!({"gone": []})),
+        ("graph/grants", json!({"list": {}})),
+        ("graph/settings", json!({})),
+        ("graph/excise", json!({"target": 1, "reason": "x"})),
+        ("graph/revert", json!({"tx": 1})),
+        ("job/approve", json!({"id": "job-1"})),
     ] {
         let e = w.exec(id, method, p).await.unwrap_err();
         assert!(e.contains("not open to an outside agent"), "{method}: {e}");

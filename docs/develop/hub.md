@@ -703,6 +703,20 @@ project's `history.db` to `<data>/backup/history-<project>.db` (one copy each, r
 `messages/send`'s `sender` is refused from every connection (`invalid-params` at `sender`): a message's sender is
 its connection's, and the hub is work.db's one writer (coordination.md, "Who writes what").
 
+### The user's doors (`door_cli`)
+
+What the editor did and an outside agent may never do has a terminal door each, in `crates/hub/ratatoskr/src/door_cli.rs`
+(and `graph forget` in `graph_cli.rs`): a user client of the running hub that calls the method itself, never a second
+implementation. `card list|settle` (`graph/sql` over the `card` table; `cards/settle`), `message send|reply`
+(`messages/send`; a reply reads the question's sender from `message` and sends with `answers`), `task status ID STATUS`
+(`graph/entity` for the version, then `tasks/write update`) and `plan status PLAN TASK STATUS` (`plans/get`, then
+`plans/write` with `base_version`; `done` sends every step ticked so the file and the graph agree). The CLI checks only
+the shape of a status word; the tracker's `STATUSES` is the one set and the hub names it when it refuses a word. A task
+of an imported or scanned plan file is read-only to `tasks/write` (`norn::tracker::is_parsed`: the file's view owns its
+status, "this comes from FILE"); `plans/write` is its only door. The outside bridge serves `plans/get|write` and
+`records/read|write` only (`OUTSIDE_METHODS`); the test `outside::tests` pins that `cards/settle`, `messages/send`,
+`tasks/write`, `graph/put-parsed|grants|settings|excise|revert` and `job/approve` are refused to it.
+
 ### The reaper
 
 `runtime.db`'s `proc` table records process groups by pid, start time, group and boot id. The hubs before phase 7
