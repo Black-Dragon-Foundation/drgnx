@@ -18,6 +18,7 @@ use std::time::Duration;
 
 pub mod attempts;
 pub mod cloud;
+pub mod disk;
 pub mod health;
 pub mod keys;
 pub mod link;

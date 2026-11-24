@@ -528,6 +528,10 @@ params! {
     AgentsPair(pair::PairToggle),
     AgentsFollow(editor::FollowParams),
     AgentsUnfollow(editor::UnfollowParams),
+    // a runner's disk (runners W1, §4.8)
+    RunnersDisk(runners::DiskParams),
+    RunnersReclaim(runners::ReclaimParams),
+    RunnersPin(runners::PinParams),
 }
 
 /// Every method, in no order.

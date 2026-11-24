@@ -40,7 +40,8 @@ Developer notes for the hub's crates are in [`develop/`](develop/runtime.md), ca
 some of them still describe that version's Emacs side, and they are revised as the new editor replaces it.
 
 User guides: [agents outside drgnx](guide/outside-agents.md) (Claude Code, Codex… joining the work, and binding them
-to a role); [search](guide/search.md) (the engine per GPU, the download and its total, your CPU, memory and GPU limits).
+to a role); [search](guide/search.md) (the engine per GPU, the download and its total, your CPU, memory and GPU limits);
+[runners](guide/runners.md) (the machines that run jobs, and how each keeps its disk).
 
 ## Licences
 

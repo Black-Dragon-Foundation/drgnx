@@ -248,6 +248,10 @@ pub struct Derived {
     /// defaults, `sleipnir::linux::progress`).
     pub stall_s: Option<u64>,
     pub silent_s: Option<u64>,
+    /// The job writes the disk hard (a build, a cold test build): only such jobs wait on IO pressure
+    /// ([`crate::admit::admit`]'s IO gate). The pack declares it.
+    #[serde(default)]
+    pub io_heavy: bool,
 }
 
 /// The history class of a tree of BYTES: `floor(log2(MiB))`, 0 below 2 MiB.
@@ -359,6 +363,10 @@ pub struct MachineState {
     pub psi: Psi,
     pub disk_free_gb: u64,
     pub disk_total_gb: u64,
+    /// The running jobs' declared disk need they have not yet written, GB: admission counts it as taken
+    /// ([`crate::disk::disk_fits`]).
+    #[serde(default)]
+    pub disk_unused_gib: u64,
     pub on_ac: bool,
     pub last_start: Option<u64>,
     /// The job started at `last_start` was small ([`crate::admit::small`]): a small job after it needs no gap.
@@ -494,8 +502,9 @@ fn pressure_name<'de, D: Deserializer<'de>>(d: D) -> Result<PressureName, D::Err
 pub struct PsiLimits {
     pub mem_some10: f64,
     pub cpu_some10: f64,
+    /// IO `full`: only jobs marked `io_heavy` wait on it. The runner's `--io-pct` sets it ([`Limits::with_io_pct`]).
     pub io_full10: f64,
-    /// The user's apps' memory `some`, on machines that read it apart.
+    /// The user's apps' memory `some`, on machines that read it apart: the app gate, which holds every job.
     pub app_mem_some10: Option<f64>,
 }
 
@@ -513,9 +522,12 @@ pub struct Limits {
     pub reserve_user_threads: u32,
     pub cores_usable: u32,
     pub psi: PsiLimits,
-    /// Disk that stays free: at least `disk_guard_gb` and at least `disk_guard_pct` % of the filesystem.
-    pub disk_guard_gb: u64,
-    pub disk_guard_pct: u32,
+    /// The disk rules (§4.8): admission keeps `stop_below_gb` free after the job's need.
+    #[serde(default)]
+    pub disk: crate::disk::DiskRules,
+    /// Only light jobs start here (the laptop as a runner).
+    #[serde(default)]
+    pub light_only: bool,
     /// CPU overcommit allowed while the running jobs are mostly idle (1.0: none).
     pub overcommit: f64,
     pub no_jobs_on_battery: bool,
@@ -535,10 +547,11 @@ impl Limits {
     ///
     /// - `dedicated`: floor 2 GiB, no user reserve, every core, PSI limits memory 10 %, CPU 40 %, IO full 10 %,
     ///   overcommit 1.5;
-    /// - `workstation`: floor 1.5 GiB, the user's 4 GiB and 4 threads, PSI limits memory 2 %, the user's apps 1 %,
+    /// - `workstation`: floor 1.5 GiB, the user's 4 GiB and 4 threads, PSI limits memory 2 %, the user's apps 2 %,
     ///   CPU 20 %, IO full 5 %, no overcommit, no jobs on battery.
     ///
-    /// Both keep 20 GB and 10 % of the disk free. `mem_total_mib` isn't read by F1's values.
+    /// Both take §4.8's disk rules ([`crate::disk::DiskRules::standard`]) and every job. `mem_total_mib` isn't read
+    /// by F1's values.
     pub fn for_profile(profile: Profile, _mem_total_mib: u64, cores: u32) -> Limits {
         match profile {
             Profile::Dedicated => Limits {
@@ -552,8 +565,8 @@ impl Limits {
                     io_full10: 10.0,
                     app_mem_some10: None,
                 },
-                disk_guard_gb: 20,
-                disk_guard_pct: 10,
+                disk: crate::disk::DiskRules::standard(),
+                light_only: false,
                 overcommit: 1.5,
                 no_jobs_on_battery: false,
                 fixed_slots: None,
@@ -568,10 +581,10 @@ impl Limits {
                     mem_some10: 2.0,
                     cpu_some10: 20.0,
                     io_full10: 5.0,
-                    app_mem_some10: Some(1.0),
+                    app_mem_some10: Some(2.0),
                 },
-                disk_guard_gb: 20,
-                disk_guard_pct: 10,
+                disk: crate::disk::DiskRules::standard(),
+                light_only: false,
                 overcommit: 1.0,
                 no_jobs_on_battery: true,
                 fixed_slots: None,
@@ -603,6 +616,22 @@ impl Limits {
         })
     }
 
+    /// These limits with the IO gate's limit (IO `full avg10`, percent) set to PCT (`runner add --io-pct`; the
+    /// desktop passes 35); none keeps the profile's. Refused outside (0, 100].
+    pub fn with_io_pct(self, pct: Option<f64>) -> villa::Result<Limits> {
+        let Some(p) = pct else {
+            return Ok(self);
+        };
+        if !(p > 0.0 && p <= 100.0) {
+            return Err(villa::Error::invalid(format!(
+                "the IO limit is a percent above 0 and at most 100, not {p}"
+            )));
+        }
+        let mut l = self;
+        l.psi.io_full10 = p;
+        Ok(l)
+    }
+
     /// Admission by count: at most `n` jobs at once, with no memory, PSI or disk reading (a macOS hub's own machine).
     pub fn fixed_slots(n: u32) -> Limits {
         Limits {
@@ -616,8 +645,8 @@ impl Limits {
                 io_full10: 100.0,
                 app_mem_some10: None,
             },
-            disk_guard_gb: 0,
-            disk_guard_pct: 0,
+            disk: crate::disk::DiskRules::standard(),
+            light_only: false,
             overcommit: 1.0,
             no_jobs_on_battery: false,
             fixed_slots: Some(n),
@@ -640,7 +669,8 @@ mod tests {
         assert_eq!(d.cores_usable, 24);
         assert!(!d.no_jobs_on_battery);
         assert_eq!(d.overcommit, 1.5);
-        assert_eq!((d.disk_guard_gb, d.disk_guard_pct), (20, 10));
+        assert_eq!(d.disk, crate::disk::DiskRules::standard());
+        assert!(!d.light_only);
         assert_eq!(d.fixed_slots, None);
 
         let w = Limits::for_profile(Profile::Workstation, 32768, 16);
@@ -649,7 +679,7 @@ mod tests {
         assert_eq!(w.cores_usable, 12);
         assert!(w.no_jobs_on_battery);
         assert_eq!(w.overcommit, 1.0);
-        assert_eq!(w.psi.app_mem_some10, Some(1.0));
+        assert_eq!(w.psi.app_mem_some10, Some(2.0));
 
         let f = Limits::fixed_slots(4);
         assert_eq!(f.fixed_slots, Some(4));

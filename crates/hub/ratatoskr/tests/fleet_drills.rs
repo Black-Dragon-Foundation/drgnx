@@ -1125,6 +1125,67 @@ mod drill {
         })
     }
 
+    /// [C] §4.8 on a real runner: two idle build dirs past their age in the runner's register, reported at hello. On
+    /// the user's `reclaim` the hub orders the one not pinned removed; the runner re-checks it, removes it and answers,
+    /// and it leaves the hub's register. The one the user pinned stays, and so does a folder the register doesn't hold.
+    #[test]
+    #[ignore = "fleet"]
+    fn fleet_guard_evicts_an_idle_build_dir_on_order() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let mut d = Drill::new("guard", "r1", "dedicated");
+            let item = |sid: &str| {
+                format!(
+                    r#"{{"item": {{"id": "build:{sid}", "kind": "build-dir", "owner": "p", "machine": "", "bytes": 1000000, "last_used": 1, "created": 1, "name": null, "budget_bytes": null, "trust": "Private"}}, "rel": "slots-target/{sid}", "measured": 0}}"#
+                )
+            };
+            let reg = format!(
+                r#"{{"version": 1, "round": 0, "items": [{}, {}]}}"#,
+                item("sx"),
+                item("sy")
+            );
+            sh(
+                "r1",
+                &format!(
+                    "mkdir -p {r}/slots-target/sx {r}/slots-target/sy {r}/stray && echo x > {r}/slots-target/sx/f \
+                     && echo y > {r}/slots-target/sy/f && printf %s '{reg}' > {r}/register.json",
+                    r = d.root
+                ),
+            );
+            d.link().await;
+            d.drive("r1's disk report", |q, _, _| {
+                q.disk_view(Some("r1"), 0)
+                    .first()
+                    .filter(|v| v.items.len() >= 2)
+                    .map(|_| ())
+            })
+            .await;
+            d.q.disk_pin("r1", "build:sy", true).unwrap();
+            let plan = d.q.disk_reclaim("r1", false, d.now()).unwrap();
+            assert_eq!(
+                plan.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+                vec!["build:sx"]
+            );
+            d.drive("build:sx evicted", |q, _, _| {
+                let v = q.disk_view(Some("r1"), 0);
+                (!v[0].items.iter().any(|(i, _)| i.id == "build:sx")).then_some(())
+            })
+            .await;
+            let left = sh(
+                "r1",
+                &format!(
+                    "ls {r}/slots-target; test -d {r}/stray && echo stray",
+                    r = d.root
+                ),
+            );
+            assert_eq!(
+                left.split_whitespace().collect::<Vec<_>>(),
+                vec!["sy", "stray"]
+            );
+            assert!(d.lost.is_empty(), "{:?}", d.lost);
+            d.end().await;
+        })
+    }
+
     /// [C] The runner's memory falls into danger during a job on a `workstation` runner (its folder's figures): its
     /// ladder kills our newest job, `infra: killed`, never `red`; the link stays up.
     #[test]

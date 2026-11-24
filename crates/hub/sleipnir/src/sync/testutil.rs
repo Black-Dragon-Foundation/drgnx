@@ -44,14 +44,6 @@ pub fn write(root: &Path, rel: &[u8], bytes: &[u8]) {
     crate::fsio::write(p, bytes).unwrap();
 }
 
-/// The time as the filesystem under `dir` stamps it now (the mtime of a file written just now): what the files'
-/// ages are measured against, without a read of the process's own clock.
-pub fn fs_now(dir: &Path) -> std::time::SystemTime {
-    let probe = dir.join(".fs-now");
-    crate::fsio::write(&probe, b"").unwrap();
-    fs::metadata(&probe).unwrap().modified().unwrap()
-}
-
 /// A repository at `dir/repo` with `files` committed; returns its path and the commit.
 pub fn repo(dir: &Path, files: &[(&[u8], &[u8])]) -> (PathBuf, String) {
     let repo = dir.join("repo");

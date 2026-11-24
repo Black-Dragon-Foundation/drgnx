@@ -314,6 +314,7 @@ mod tests {
             psi: Psi::default(),
             disk_free_gb: 100,
             disk_total_gb: 200,
+            disk_unused_gib: 0,
             on_ac: true,
             last_start: None,
             last_start_small: false,

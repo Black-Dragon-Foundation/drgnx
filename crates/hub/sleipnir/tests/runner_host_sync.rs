@@ -561,9 +561,11 @@ fn origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent() {
 
 mod guard {
     use super::*;
-    use sleipnir::sync::guard::{self, Df, Item, Needs, What};
+    use forseti::disk::{DiskItem, DiskRules, ItemKind};
+    use sleipnir::sync::guard::{self, Df, Evict, Pins, Why};
+    use sleipnir::sync::register::Register;
 
-    /// Always below the floor, so every prune for the floor is done.
+    /// Always below the floor, so every eviction for the floor is done.
     fn low() -> Df {
         Df {
             total: 1 << 40,
@@ -571,7 +573,37 @@ mod guard {
         }
     }
 
-    // [C] real files and links under a real runner folder; scan, plan and apply as the guard runs them
+    /// A week after every item's last use: all are past their age.
+    const NOW: u64 = 7 * 24 * 3600;
+
+    fn cache(rel: &str) -> DiskItem {
+        DiskItem {
+            id: format!("cache:{rel}"),
+            kind: ItemKind::Cache,
+            owner: "p".into(),
+            machine: String::new(),
+            bytes: 1,
+            last_used: 0,
+            created: 0,
+            name: None,
+            budget_bytes: None,
+            trust: forseti::JobTrust::Public,
+        }
+    }
+
+    fn apply(reg: &mut Register, plan: &[Evict]) -> Vec<guard::Evicted> {
+        guard::apply(
+            reg,
+            plan,
+            &|_| false,
+            &mut || Ok(low()),
+            &mut || 0.0,
+            &DiskRules::standard(),
+            &mut |_| {},
+        )
+    }
+
+    // [C] real files and links under a real runner folder; the register, plan and apply as the guard runs them
     #[test]
     #[ignore = "runner-host"]
     fn a_symlink_planted_in_a_cache_is_never_followed() {
@@ -594,28 +626,33 @@ mod guard {
         std::os::unix::fs::symlink(&outside, root.join("cache/p/private/b")).unwrap();
         std::os::unix::fs::symlink(&outside, root.join("cache/q")).unwrap();
 
-        // the filesystem's own now: the mtime of a file written just now
-        let probe = t.path().join(".fs-now");
-        sleipnir::fsio::write(&probe, b"").unwrap();
-        let now = fs::metadata(&probe).unwrap().modified().unwrap();
-        let items = guard::scan(&root, now, 10 << 30).unwrap();
-        let mut plan = guard::plan(low(), &items, &Needs::default());
+        let mut reg = Register::open(&root).unwrap();
+        // the cache, and a stale record whose path now runs through a planted link
+        for rel in ["cache/p/public/a", "cache/q/public/x"] {
+            reg.add(cache(rel), Path::new(rel)).unwrap();
+        }
+        let plan = guard::plan(
+            low(),
+            0,
+            &reg.items(),
+            &Pins::default(),
+            &DiskRules::standard(),
+            NOW,
+        );
         assert!(
             plan.iter()
-                .any(|p| p.what == What::Path("cache/p/public/a".into())),
+                .any(|e| e.id == "cache:cache/p/public/a" && e.why == Why::Floor),
             "{plan:?}"
         );
-        // and a prune through a planted link, as a stale record could name it
-        plan.push(guard::Prune {
-            what: What::Path("cache/q/public/x".into()),
-            for_floor: true,
-        });
-        let done = guard::apply(&root, &plan, &mut || Ok(low()));
+        let done = apply(&mut reg, &plan);
         let through = done
             .iter()
-            .find(|(p, _)| p.what == What::Path("cache/q/public/x".into()))
+            .find(|e| e.id == "cache:cache/q/public/x")
             .unwrap();
-        assert!(through.1.is_err(), "a prune through a link is refused");
+        assert!(
+            through.refused.is_some(),
+            "an eviction through a link is refused"
+        );
 
         assert!(!a.exists(), "the cache is pruned");
         assert_eq!(
@@ -673,33 +710,38 @@ mod guard {
         let name = format!("localhost/sleipnir-guard-test:{}", std::process::id());
         assert!(podman(&["import", "-q", tar.to_str().unwrap(), &name]).0);
         let (_, ours) = podman(&["image", "inspect", "--format", "{{.Id}}", &name]);
-        sleipnir::fsio::write(root.join("images"), format!("{ours} {name}\n")).unwrap();
-
-        let items = guard::images(&root).unwrap();
-        let is = |id: &str| {
-            items
-                .iter()
-                .find(|i| matches!(i, Item::Image { id: x, .. } if x == id))
-                .cloned()
-        };
-        assert!(
-            matches!(is(&base_id), Some(Item::Image { pulled_as, .. }) if pulled_as.is_empty())
-        );
-        assert!(
-            matches!(is(&ours), Some(Item::Image { pulled_as, .. }) if pulled_as == [name.clone()])
-        );
+        // registered as a pull registers it; two newer of its name, so it is past the newest two
+        let mut reg = Register::open(&root).unwrap();
+        let ours_id = format!("image:{}", ours.trim_start_matches("sha256:"));
+        reg.add(
+            guard::image_item(ours.trim_start_matches("sha256:"), &name, "p", 0),
+            Path::new(""),
+        )
+        .unwrap();
+        for (n, at) in [("a", 1), ("b", 2)] {
+            let newer = guard::image_item(n, &name, "p", at);
+            reg.add(newer, Path::new("")).unwrap();
+        }
+        let items = reg.items();
+        let r = DiskRules::standard();
 
         // a queued job naming ours keeps it
-        let needs = Needs {
-            images: [name.clone()].into(),
-            ..Needs::default()
+        let pins = Pins {
+            pinned: [ours_id.clone()].into(),
+            ..Pins::default()
         };
-        assert!(guard::plan(low(), &items, &needs).is_empty());
+        assert!(guard::plan(low(), 0, &items, &pins, &r, NOW).is_empty());
 
-        let plan = guard::plan(low(), &items, &Needs::default());
+        let mut plan = guard::plan(low(), 0, &items, &Pins::default(), &r, NOW);
         assert_eq!(plan.len(), 1, "{plan:?}");
-        let done = guard::apply(&root, &plan, &mut || Ok(low()));
-        assert!(done[0].1.is_ok(), "{:?}", done[0].1);
+        // and an order naming the base image, which the register doesn't hold
+        plan.push(Evict {
+            id: format!("image:{}", base_id.trim_start_matches("sha256:")),
+            why: Why::Ordered("test".into()),
+        });
+        let done = apply(&mut reg, &plan);
+        assert_eq!(done[0].refused, None, "{:?}", done[0]);
+        assert!(done[1].refused.is_some(), "{:?}", done[1]);
         assert!(!podman(&["image", "exists", &name]).0, "ours is removed");
         assert!(podman(&["image", "exists", base]).0, "the base image stays");
     }

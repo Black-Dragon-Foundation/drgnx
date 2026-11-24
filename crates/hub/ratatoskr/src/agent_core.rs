@@ -308,6 +308,9 @@ pub async fn serve(
         Params::RunnersKeys(p) => arm!(answer(runners::methods::keys(f, c, p).await)),
         Params::RunnersKeysHeld(p) => arm!(answer(runners::methods::keys_held(f, c, p).await)),
         Params::RunnersAudit(p) => arm!(answer(runners::methods::audit(f, c, p).await)),
+        Params::RunnersDisk(p) => arm!(answer(runners::methods::disk(f, c, p).await)),
+        Params::RunnersReclaim(p) => arm!(answer(runners::methods::reclaim(f, c, p).await)),
+        Params::RunnersPin(p) => arm!(answer(runners::methods::pin(f, c, p).await)),
         Params::WorkConclusions(p) => arm!(answer(work::conclusions::get(f, c, p).await)),
         Params::ReviewEffects(p) => arm!(answer(work::task_effects::effects(f, c, p).await)),
         Params::AgentsPresenceSubscribe(p) => {

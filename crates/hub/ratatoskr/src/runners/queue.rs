@@ -323,7 +323,8 @@ pub enum Outcome {
 pub struct Ticked {
     pub starts: Vec<String>,
     pub outcomes: Vec<Outcome>,
-    /// Jobs here evicted for a whole-machine run's drain: the job layer stops each and starts it again.
+    /// Jobs here evicted for a whole-machine run's drain, or by this machine's ladder in danger: the job layer stops
+    /// each and starts it again.
     pub evict: Vec<String>,
 }
 
@@ -515,6 +516,9 @@ enum Db {
     Flush(tokio::sync::oneshot::Sender<()>),
 }
 
+/// How often this machine's disk guard passes, seconds (a runner's serve does it as often).
+const LOCAL_DISK_EVERY_S: u64 = 600;
+
 /// The ends the queue keeps for jobs that need them ([`St::ended`]).
 const ENDED_KEPT: usize = 4096;
 
@@ -554,6 +558,10 @@ struct St {
     /// The machine each session's next jobs go to, as the user moved the session (`machines/move`); kept in
     /// `asession.machine` and restored with the rest ([`Kept`]).
     prefs: BTreeMap<String, Machine>,
+    /// Every machine's disk as its runner reports it, the pins sent and the orders (editing-model design §4.8).
+    disk: super::disk::DiskRegister,
+    /// When this machine's next disk pass is due (seconds since the epoch; every ten minutes).
+    local_disk_next: u64,
     /// This tick's drains (design §5.6): each machine a whole-machine timing run has, while it waits to start there
     /// or runs; no other job starts on it. The highest P1–P2 priority pending, while that holds every drain back.
     drains: BTreeMap<String, String>,
@@ -694,6 +702,8 @@ fn hist_row(spec: &JobSpec, machine: &str, result: &Value, now: u64) -> Option<H
         at: now,
         // set by the queue for a runner's start it knew to be warm (its slot and image there)
         warm: result["warm"].as_bool() == Some(true),
+        // the runner measures the job's folder at its end (build dir and outputs)
+        disk_gib: result["disk_gib"].as_u64(),
     })
 }
 
@@ -801,6 +811,7 @@ pub async fn kept(db: &urdr::Handle) -> Kept {
                 disturbed: false,
                 at: at.max(0.0) as u64,
                 warm,
+                disk_gib: None,
             })
         })
         .collect();
@@ -1066,8 +1077,15 @@ impl Queue {
             tx
         });
         let (links, rx) = mpsc::unbounded_channel();
+        let mut st = St::default();
+        // the disk register writes its rows through the queue's store thread
+        if let Some(tx) = db.clone() {
+            st.disk = super::disk::DiskRegister::new().with_persist(move |op| {
+                crate::soft::done(tx.send(Db::Op(op)), "db send");
+            });
+        }
         let q = Queue {
-            st: Mutex::new(St::default()),
+            st: Mutex::new(st),
             local: cfg.local,
             hub_id: cfg.hub_id,
             exec_root: cfg.exec_root,
@@ -2273,6 +2291,29 @@ impl Queue {
         }
         Self::drains(&mut st, &eff, now);
         t.evict = self.drain_evict(&mut st, &eff, now, &mut t.outcomes);
+        // this machine's ladder: in danger our newest job here stops and is requeued (the user's own load)
+        let running: Vec<RunningJob> = st.local_running.values().cloned().collect();
+        for id in self.local.ladder(&running, st.last_local_start, now) {
+            if !t.evict.contains(&id) {
+                t.evict.push(id);
+            }
+        }
+        // and its disk, every ten minutes: the runner's guard in process, its report into the register
+        if now >= st.local_disk_next {
+            st.local_disk_next = now + LOCAL_DISK_EVERY_S;
+            let pins = Self::disk_pins(&mut st, LOCAL);
+            if let Some((report, done)) = self.local.disk_pass(&pins, now) {
+                st.disk.report(LOCAL, &report, now);
+                if !done.is_empty() {
+                    st.disk.evicted(LOCAL, None, &done);
+                }
+            }
+            // the hub's own producers (§2.1's sources), on the hub folder's file system
+            if let Ok(df) = sleipnir::sync::guard::df(&self.exec_root) {
+                st.disk
+                    .run_sources(df, &forseti::disk::DiskRules::standard(), now);
+            }
+        }
         if queued.is_empty() {
             Self::tell_head(&mut st, None);
             return t;
@@ -3080,6 +3121,8 @@ impl Queue {
                 if st.head_told.as_ref().is_some_and(|(m, ..)| m == runner) {
                     st.head_told = None;
                 }
+                // and hears what to keep on its disk
+                Self::send_pins(st, runner);
                 AEvent::Hello {
                     runner: runner.into(),
                     listed: attempts.iter().map(Listed::from).collect(),
@@ -3335,6 +3378,22 @@ impl Queue {
                 }
                 return;
             }
+            Frame::Disk(rep) => {
+                st.disk.report(runner, &rep, now);
+                Self::send_pins(st, runner);
+                // below the floor or over the quota: the order follows the report
+                if let Some((order, plan)) =
+                    st.disk
+                        .order(runner, &forseti::disk::DiskRules::standard(), now)
+                {
+                    Self::send_order(st, runner, order, &plan);
+                }
+                return;
+            }
+            Frame::Evicted { order, done } => {
+                st.disk.evicted(runner, order, &done);
+                return;
+            }
             f => match f.job() {
                 Some(r) => AEvent::FrameFrom {
                     runner: runner.into(),
@@ -3349,6 +3408,97 @@ impl Queue {
         for j in jobs {
             self.put_attempts(st, &j);
         }
+    }
+
+    /// What RUNNER's disk must keep: active, what its open attempts use (their folders, slots and build dirs); pinned,
+    /// the slots the queued jobs will check out (§4.8), and the user's pins ([`super::disk::DiskRegister::pins_for`]).
+    fn disk_pins(st: &mut St, runner: &str) -> forseti::disk::Pins {
+        let mut running = BTreeSet::new();
+        let mut needed = BTreeSet::new();
+        for (id, j) in &st.jobs {
+            let sid =
+                j.s.inputs
+                    .is_some()
+                    .then(|| sleipnir::sync::slot::SlotId::of(&j.s.spec).id());
+            match st.attempts.current(id) {
+                Some((n, a)) if a.runner == runner && a.state.open() => {
+                    running.insert(format!("jobs/{id}.{n}"));
+                    if let Some(sid) = sid {
+                        running.insert(format!("slot:{sid}"));
+                        running.insert(format!("build:{sid}"));
+                    }
+                }
+                _ if matches!(j.state, QState::Queued) => {
+                    needed.extend(sid.map(|s| format!("slot:{s}")))
+                }
+                _ => {}
+            }
+        }
+        st.disk.pins_for(runner, &needed, &running)
+    }
+
+    /// RUNNER hears its pins.
+    fn send_pins(st: &mut St, runner: &str) {
+        let pins = Self::disk_pins(st, runner);
+        if let Some(r) = st.runners.get(runner) {
+            r.session.send(Frame::Pins { pins });
+        }
+    }
+
+    /// RUNNER hears eviction order ORDER: PLAN's items, with the reasons they go for.
+    fn send_order(st: &St, runner: &str, order: u64, plan: &[forseti::disk::Evict]) {
+        let mut why: Vec<String> = plan.iter().map(|e| e.why.text()).collect();
+        why.sort();
+        why.dedup();
+        if let Some(r) = st.runners.get(runner) {
+            r.session.send(Frame::Evict {
+                order,
+                ids: plan.iter().map(|e| e.id.clone()).collect(),
+                why: why.join(", "),
+            });
+        }
+    }
+
+    /// Every machine's disk, or MACHINE's, as `runners/disk` shows it.
+    pub fn disk_view(&self, machine: Option<&str>, now: u64) -> Vec<super::disk::DiskView> {
+        self.lock().disk.view(machine, now)
+    }
+
+    /// The user pins item ID on MACHINE (ON) or lets it go; the runner hears its pins again.
+    pub fn disk_pin(&self, machine: &str, id: &str, on: bool) -> villa::Result<()> {
+        let mut st = self.lock();
+        st.disk.user_pin(machine, id, on)?;
+        Self::send_pins(&mut st, machine);
+        Ok(())
+    }
+
+    /// The user's `runner reclaim`: MACHINE's items past their age and not pinned or in use, ordered removed (DRY_RUN:
+    /// only listed). What goes, in order.
+    pub fn disk_reclaim(
+        &self,
+        machine: &str,
+        dry_run: bool,
+        now: u64,
+    ) -> villa::Result<Vec<forseti::disk::Evict>> {
+        let mut st = self.lock();
+        if st.disk.machine(machine).is_none() {
+            return Err(villa::Error::not_found(format!(
+                "no disk report from {machine}"
+            )));
+        }
+        Self::disk_pins(&mut st, machine);
+        let Some((order, plan)) = st.disk.reclaim(machine, dry_run, now) else {
+            return Ok(vec![]);
+        };
+        if !dry_run {
+            Self::send_order(&st, machine, order, &plan);
+        }
+        Ok(plan)
+    }
+
+    /// A hub-side producer's items join the disk register (`R/server.rs`, one line per source).
+    pub fn add_disk_source(&self, s: Arc<dyn super::disk::DiskSource>) {
+        self.lock().disk.add_source(s);
     }
 
     /// What JOB's ATTEMPT on RUNNER returned to put back, when it declared `writes` or `outputs`.
@@ -4094,6 +4244,7 @@ fn runner_state(name: &str, now: u64, running: Vec<RunningJob>) -> forseti::Mach
         psi: forseti::Psi::default(),
         disk_free_gb: 0,
         disk_total_gb: 0,
+        disk_unused_gib: 0,
         on_ac: true,
         last_start: None,
         last_start_small: false,

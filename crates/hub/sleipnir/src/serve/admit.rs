@@ -60,6 +60,8 @@ pub struct Offer<'a> {
     pub expected: Option<Expected>,
     /// The machine's timing island and the timing job on it (`serve --island`); none: no timing lane.
     pub island: Option<forseti::Island>,
+    /// The running jobs' declared disk need they have not used yet, GiB: admission counts it as taken (§4.8).
+    pub disk_unused_gib: u64,
 }
 
 /// Admits OFFER on the machine of PLATFORM at NOW under LIMITS for SCHEDULER, whose running jobs are OURS and whose
@@ -84,6 +86,7 @@ pub fn admit(
         m.last_start = last.at;
         m.last_start_small = last.small;
         m.island = offer.island.clone();
+        m.disk_unused_gib = offer.disk_unused_gib;
         let budget = forseti::budget(&m, limits);
         let job = Job {
             id: JobId(offer.id.to_string()),
@@ -303,8 +306,12 @@ mod tests {
                 io_full10: 10.0,
                 app_mem_some10: None,
             },
-            disk_guard_gb: 0,
-            disk_guard_pct: 0,
+            // no disk floor here: these rows are about memory and the lock
+            disk: forseti::disk::DiskRules {
+                stop_below_gb: 0,
+                ..forseti::disk::DiskRules::standard()
+            },
+            light_only: false,
             overcommit: 1.0,
             no_jobs_on_battery: false,
             fixed_slots: None,
@@ -333,6 +340,7 @@ mod tests {
                     priority: Priority::P3,
                     expected: None,
                     island: None,
+                    disk_unused_gib: 0,
                 };
                 tx.send(admit(
                     &lp(&p2),
@@ -376,6 +384,7 @@ mod tests {
             priority: Priority::P3,
             expected: None,
             island: None,
+            disk_unused_gib: 0,
         };
         let refused = admit(
             &lp(&other),
@@ -430,6 +439,7 @@ mod tests {
             priority: Priority::P3,
             expected: None,
             island: None,
+            disk_unused_gib: 0,
         };
         let grant = admit(
             &lp(&p),
@@ -511,6 +521,7 @@ mod tests {
             priority: Priority::P3,
             expected: None,
             island: None,
+            disk_unused_gib: 0,
         };
         admit(
             &lp(&p),
@@ -592,6 +603,7 @@ mod tests {
             priority: Priority::P3,
             expected: None,
             island: None,
+            disk_unused_gib: 0,
         };
         let facts =
             |json: &str| crate::fsio::write(d.path().join("test-machine.json"), json).unwrap();
@@ -612,8 +624,8 @@ mod tests {
             Ok(()),
             "the host's pressure or disk reached a test build"
         );
-        // the facts are the machine: low disk in them is refused under the profile's floor, as on a real runner
-        facts(&quiet.replace("400", "44"));
+        // the facts are the machine: low disk in them is refused under §4.8's stop floor (20 GB), as on a real runner
+        facts(&quiet.replace("\"disk_free_gb\": 400", "\"disk_free_gb\": 19"));
         assert_eq!(
             admit(
                 &lp(&p),

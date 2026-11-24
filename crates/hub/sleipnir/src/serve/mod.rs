@@ -20,6 +20,7 @@
 pub mod admit;
 pub mod attempts;
 pub mod cleanup;
+pub mod disk;
 pub mod platform;
 #[cfg(test)]
 mod platform_tests;
@@ -307,6 +308,8 @@ enum Event {
     Broken(String),
     /// An attempt's origin fetch ended: done, or why not.
     Fetched(JobRef, Result<(), String>),
+    /// A disk guard pass ended (for the hub's order, when one asked): what went and what stayed.
+    Guarded(Option<u64>, Vec<forseti::disk::Evicted>),
 }
 
 /// What the loop does after a frame.
@@ -358,6 +361,8 @@ pub struct Serve<W: Write> {
     sent_idle: Option<u64>,
     /// Whether the island was last set on or off (none: not since this `serve` started; its start sets it).
     island_held: Option<bool>,
+    /// The disk guard's state: the hub's last pins, the last pass and report ([`disk`]).
+    disk: disk::DiskState,
 }
 
 /// Runs `serve` with CFG on INPUT and OUTPUT until the link ends; the exit status.
@@ -402,6 +407,11 @@ pub fn run<R: Read + Send + 'static, W: Write>(cfg: Config, input: R, output: W)
             }
             Ok(Event::Fetched(r, result)) => {
                 if s.fetched(&r, result) == Next::Stop {
+                    return 0;
+                }
+            }
+            Ok(Event::Guarded(order, done)) => {
+                if s.guarded(order, done) == Next::Stop {
                     return 0;
                 }
             }
@@ -454,6 +464,7 @@ impl<W: Write> Serve<W> {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let now = Instant::now();
+        let root = cfg.root.clone();
         let mut s = Serve {
             cfg,
             w: FrameWriter::new(output),
@@ -483,6 +494,7 @@ impl<W: Write> Serve<W> {
             sent_preempting: false,
             sent_idle: None,
             island_held: None,
+            disk: disk::DiskState::load(&root, now),
         };
         if let Some(i) = &s.cfg.island {
             s.platform.island_check(i)?;
@@ -636,6 +648,8 @@ impl<W: Write> Serve<W> {
             }
             Frame::Done { r } => self.done(&r),
             Frame::Key(k) => self.key(k),
+            Frame::Pins { pins } => self.pins(pins),
+            Frame::Evict { order, ids, why } => self.evict(order, ids, why),
             other => {
                 if let Some(line) = other.loggable() {
                     crate::eline!("sleipnir serve: not handled here: {line}");
@@ -671,10 +685,12 @@ impl<W: Write> Serve<W> {
             attempts,
             missing,
         };
-        if self.send(&ok) == Next::Stop {
+        if self.send(&ok) == Next::Stop || self.ready() == Next::Stop {
             return Next::Stop;
         }
-        self.ready()
+        // a new link hears the whole disk
+        self.disk.reported.clear();
+        self.disk_report()
     }
 
     fn probe_result(&mut self) -> Next {
@@ -983,6 +999,14 @@ impl<W: Write> Serve<W> {
         if self.stop_admitting {
             return self.refuse(r, "the runner's memory ladder stops admissions");
         }
+        // below the evict floor the guard runs first; while its pass runs the offer waits
+        if self.guard_before_admission() {
+            return self.send(&Frame::Refuse {
+                r,
+                why: "the disk guard is freeing space".into(),
+                reason: Some(forseti::WaitReason::DiskLow),
+            });
+        }
         let offer = admit::Offer {
             id: &r.job,
             attempt: r.attempt,
@@ -990,6 +1014,7 @@ impl<W: Write> Serve<W> {
             priority,
             expected,
             island: self.island_state(),
+            disk_unused_gib: self.disk_unused_gib(),
         };
         let ours = self.running_jobs();
         match admit::admit(
@@ -1037,6 +1062,7 @@ impl<W: Write> Serve<W> {
                     self.unreserve(&r);
                     return self.refuse(r, format!("the attempt's folder: {e}"));
                 }
+                self.register_job(&dir, &meta.spec);
                 self.live
                     .insert((r.job.clone(), r.attempt), Live::new(dir, meta));
                 self.send(&Frame::Admit { r, grant })
@@ -1096,6 +1122,10 @@ impl<W: Write> Serve<W> {
                 .map_err(villa::Error::unavailable),
             None => Ok(dir.join("src")),
         };
+        // the slot and its build dir join the disk register, or are used again
+        if meta.slot.is_some() {
+            self.register_slot(&meta.spec);
+        }
         // work leaves the island before the timing job starts on it
         if timing {
             self.island_sync();
@@ -1737,6 +1767,13 @@ impl<W: Write> Serve<W> {
             self.last_cleanup = Instant::now();
             self.cleanup();
         }
+        // the disk guard's timer pass, beside the cleanup's (a pass a moment ago counts)
+        if self.disk.last_pass.elapsed() >= CLEANUP_EVERY
+            && !self.disk.guarding
+            && self.guard_timer() == Next::Stop
+        {
+            return Next::Stop;
+        }
         let check_units = self.last_units.elapsed() >= READY_EVERY;
         if check_units {
             self.last_units = Instant::now();
@@ -1870,6 +1907,11 @@ impl<W: Write> Serve<W> {
         }
         if self.give_back(&meta.r, dir, &meta.spec) == Next::Stop {
             return Err(());
+        }
+        // what it took on the disk, for the hub's history (§4.8: the job's disk need learned)
+        let disk_gib = self.measured_gib(dir, meta.slot.as_deref());
+        if let Some(o) = result.as_object_mut() {
+            o.insert("disk_gib".into(), serde_json::json!(disk_gib));
         }
         let rows = result["rows"].as_array().cloned().unwrap_or_default();
         for row in rows {

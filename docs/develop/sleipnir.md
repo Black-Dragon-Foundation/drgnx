@@ -394,8 +394,8 @@ with it. Nothing outlives the job, so no daemon is left behind, and `serve` may 
   entry naming `metadata.google.internal`, `169.254.169.254`, `fd00:ec2::254` or any address that isn't public is
   refused, no name is pinned, and the proxy connects only to public addresses, so a listed name that resolves to
   `169.254.x` gets `403` too. (The agent browser's `METADATA_NEVER` replaces this list once both are on one line.)
-- watches the runner folder's disk every 10 s (`linux::disk`, which a Mac's job-exec runs itself). Below the floor (the larger of 20 GB and 10 % of its
-  filesystem, `forseti`'s disk guard) the job that grew most since its start is stopped: its helper writes
+- watches the runner folder's disk every 10 s (`linux::disk`, which a Mac's job-exec runs itself). Below the stop floor (20 GB free,
+  `forseti::disk::DiskRules::stop_below_gb`) the job that grew most since its start is stopped: its helper writes
   `kill_reason("infra: disk")` and kills its container. A job's growth is its attempt folder's size less its size
   when its helper started (`disk-start`); every helper sums the same running attempts, so only one acts per reading
   and they agree which. In a test build the floor reads the folder's `test-machine.json` too.
@@ -563,7 +563,7 @@ links are copied as links, and `dest` must not exist.
 dies:
 
 - `read` is shared and marks the slot used;
-- `try_update` (a move, `gc`, the disk guard's prune) is exclusive, `None` at once while anyone reads;
+- `try_update` (a move, the disk guard's eviction) is exclusive, `None` at once while anyone reads;
 - `target` is exclusive, for a job that builds into the target dir (`try_target`: `None` instead of waiting).
 
 `hold(paths, inputs, move_to)` is a job's read lock on its slot at its input key: the slot's git dir records the key
@@ -579,8 +579,9 @@ Locks can't be handed to job-exec: a systemd-run unit inherits no file descripto
 child forked by another thread shares until it execs: a `try_*` can see a lock held a moment after its holder let it
 go. So the locks' test (`tests/slot_locks.rs`) runs alone in its own binary, where no other thread spawns git.
 
-`gc(root, now, in_use)` removes slots unused for 7 days (by the `used` file), target dir first, then the checkout,
-then the git dir. A slot in `in_use`, or one whose lock is held, is kept.
+`register(reg, paths, key, now)` puts the slot (`slot:<id>`, at `slots/<id>`) and its build dir (`build:<id>`, at
+`slots-target/<id>`) in the disk register on lease, and touches both on every use. The disk guard removes them
+(below).
 
 ### The escape rows
 
@@ -665,38 +666,67 @@ inside:
 
 Then comes one mount per declared cache. A `CacheKind::Shared` cache (cargo home, ccache, the Lisp cache) is shared by
 the project's jobs of that trust. A `CacheKind::PerJob` cache (dnf and other package caches) is
-`<name>@<job id>`, one per running job, since two runs on one dnf cache fail. Each cache's budget is 10 GiB
-(`cache::BUDGET`, a setting).
+`<name>@<job id>`, one per running job, since two runs on one dnf cache fail. A cache's budget is what its suite
+declares (`SuiteCache::budget_bytes`; the compiler cache's is `forseti::disk::COMPILER_CACHE_GB`); none means only its
+age and the floor decide. `register(reg, job, suite_caches, mounts, now)` puts each cache in the disk register with
+its budget (`cache:<path under the runner folder>`).
+
+### The disk register (`sync::register`)
+
+The guard removes only what the register holds, never by path pattern. `<root>/register.json` is one entry per item
+drgnx made under the runner folder:
+
+```json
+{"version": 1, "round": 3, "items": [
+  {"item": {"id": "build:<slot id>", "kind": "build-dir", "owner": "drgnx", "machine": "", "bytes": 5368709120,
+            "last_used": 1795000000, "created": 1794000000, "name": null, "budget_bytes": null, "trust": "Private"},
+   "rel": "slots-target/<slot id>", "measured": 3}]}
+```
+
+`item` is `forseti::disk::DiskItem` (times in epoch seconds); `rel` is its path under the runner folder, empty for an
+image (it lives in podman's store); `measured` is the `measure` round that last sized it. Every change takes
+`<root>/register.lock` (an `flock`), reads the file again, and writes it whole as a new file renamed over the old one,
+so a crash mid-write leaves the old register; a register that does not parse is an error, never an empty one.
+
+- `open(root)`, `add(item, rel)` (a `rel` that is not a plain path under the folder is refused; an item already there
+  keeps its creation time, so `add` is also the touch on use), `touch(id, now)`, `remove(id)`, `items()`, `get(id)`.
+- `measure(budget)` sizes items, the least recently sized first, until BUDGET has passed on the installed clock
+  (`stund::now`): each by a walk that adds up `st_blocks` and never follows a link, never `du`.
+- `reconcile()` lists the folders under `jobs/`, `artifacts/`, `outputs/`, `slots*/` and `cache/<project>/<trust>/`
+  that no entry stands for: each is added as an `unknown` item, reported and kept (only the one-time prune removes
+  those). Entries whose folder is gone leave the register (`take_gone`). A link is never followed or listed.
 
 ### The disk guard (`sync::guard`)
 
-The floor is 20 GB and 10 % of the runner folder's filesystem, whichever is more. Free space comes from `statvfs`
-(`guard::df`), never from adding up sizes. The guard has four parts:
+The rules are `forseti::disk::DiskRules` (§4.8): evict below 80 GB free; build dirs and outputs may go after 24 h
+unused, recordings after 30 days, the rest after 3 days; the newest two images per name are kept; the owner's quota
+caps what drgnx keeps. Free space comes from `statvfs` (`guard::df`), never from adding up sizes.
 
-- **`scan(root, now, budget)`** lists what may go:
-  - job folders, collected (the `collected` marker) or older than 24 h;
-  - artifacts, by job;
-  - slots, with how long each has been unused;
-  - caches, each with its size (a walk that never follows a link, used only against its budget) and its last use.
+- **`plan(df, ours, items, pins, rules, now)`** is pure. While OURS (the bytes drgnx keeps) is over the quota, it
+  evicts anything not active, pinned and young items too, in the order below, until OURS is under the quota. Below
+  the evict floor it evicts every item past its age, in §4.8's order:
+  1. job folders (the hub pins one until it has collected it) and outputs;
+  2. artifacts no queued job needs (the hub pins those that one needs);
+  3. idle build dirs, least recently used first;
+  4. idle slots;
+  5. caches over their budget (whatever their age), then the others, lowest trust first;
+  6. unpinned images past the newest two of their name, oldest first (no age).
 
-  A link where one of these folders belongs is never followed and never listed.
-- **`images(root)`** lists the podman store's images, each with the references we pulled it by. `<root>/images`
-  records those, one `<id> <reference>` line per `pull`.
-- **`plan(df, items, needs)`** is pure. Below the floor, it prunes in the design's order:
-  1. collected job folders;
-  2. artifacts no queued job needs;
-  3. slots unused for 7 days, target dir first;
-  4. caches over their budget, then the others, lowest trust first and least recently used first;
-  5. images we pulled that no queued job names. An image we didn't pull is never pruned.
+  Above the floor, only caches over their budget are trimmed (`Why::CacheBudget`). An active item (`Pins::active`)
+  and an `unknown` one are never planned.
+- **`apply(reg, plan, live, df, io_full10, rules, log)`** re-reads `df` before every eviction for the floor and skips
+  the rest of those once the floor is met. Before each removal it waits while IO `full avg10` is above
+  `pace_io_full_pct` (20 %), at most `pace_max_s` (60 s), on `stund`'s clock. It then re-checks the item and records
+  a refusal, never skips it silently: one not in the register, an `unknown` one, one `live` says is in use (a running
+  job, the hub's pins), a slot or build dir whose update or target lock a job holds, one whose path runs through a
+  link. Every path is opened component by component under the root with `O_NOFOLLOW` (`eitri` has no tree removal;
+  the guard's own walk does it with `rustix`), and below it nothing is followed: a link is removed as a link. A slot
+  goes with its checkout, git dir and build dir. An image goes with `podman image rm`, never forced; one the register
+  doesn't hold (one we didn't pull) is never removed. Every outcome (`Evicted`) goes to `log`.
 
-  Above the floor, only caches over their budget are pruned (between jobs).
-- **`apply(root, plan, df)`** re-reads `df` before every prune for the floor and skips those once the floor is
-  reached. Every path is opened component by component under the root with `O_NOFOLLOW`, so a link on the way fails
-  that prune. Below it nothing is followed, and a link is removed as a link. A slot goes under its update lock, so a
-  slot in use is kept. An image goes with `podman image rm`, never forced.
-
-`pull(root, reference, allow)` pulls only `<repository>@sha256:<digest>` with the repository on the project's
-allow-list (`check_pull`), and records it as ours. Jobs run `--pull=never`.
+`pull(reg, reference, allow, owner)` pulls only `<repository>@sha256:<digest>` with the repository on the project's
+allow-list (`check_pull`), and registers it as ours (`image:<id>`, named by its repository). Jobs run
+`--pull=never`.
 
 ## The protocol (`proto`)
 
@@ -737,6 +767,9 @@ does not parse.
 | `finished` | runner → hub | the attempt's `result.json`: the only source of a verdict |
 | `cancel`, `fetch`, `attach`, `done` | hub → runner | stop the attempt; send a file of it; after a reconnect, stream its log from the hub's offset and its end; the hub has the result, so the attempt's folder may go |
 | `preempting`, `draining`, `idle` | runner → hub | when, since when |
+| `disk` | runner → hub | `forseti::disk::DiskReport`: free and total bytes, what drgnx keeps, the owner's quota, btrfs's unallocated bytes, the use per kind, the items changed since the last report and the ids gone; after `hello-ok` (all items) and after every guard pass |
+| `pins` | hub → runner | `forseti::disk::Pins`: what is in use (active) and what queued jobs and the user keep (pinned); the runner keeps the last in `pins.json` and plans with it while no hub speaks to it |
+| `evict` / `evicted` | hub → runner / back | an eviction order: its number, the item ids, why; each outcome (`Evicted`), with the order's number, or none for the runner's own pass |
 | `ping` / `pong` | both | every 10 s |
 | `bye` | both | a clean end: an EOF without it is `link-lost` |
 
@@ -770,6 +803,31 @@ after 45 s without a frame (the hub pings every 10 s, and so does `serve`). Noth
 connections the runner has its folder and, with linger, the attempts still running in their own units. It is blocking
 and threaded (one thread reads frames, the main loop handles them and ticks every 100 ms); no async runtime.
 
+### The disk guard in serve (`serve::disk`)
+
+`serve` runs the guard (above) on its own register:
+
+- **Before admission.** Below the evict floor an offer starts a pass and is refused with `WaitReason::DiskLow` ("the
+  disk guard is freeing space"); the hub offers again.
+- **Every ten minutes.** `reconcile` (an unknown folder is reported, kept), `measure` for at most 5 s, a pass, then a
+  `disk` report of what changed.
+- **On an order.** `evict` from the hub is planned again on the runner: each item goes through `apply`, which
+  re-checks it (in use, not in the register, unknown) and answers in `evicted` with the order's number.
+- **Alone.** A pass reads the pins the hub sent last (`pins.json`, with when they were learned); a runner the hub
+  hasn't spoken to still meets the floor with them.
+
+A pass runs on a thread of its own (`sleipnir-disk-guard`), so pings go on; orders that arrive meanwhile wait for it.
+An admitted attempt joins the register as a job folder; a checkout as its slot and build dir. `finish` adds
+`disk_gib` (the folder and its build dir, measured) to the result. Admission counts the running jobs' declared need
+they have not used yet (`Offer.disk_unused_gib`).
+
+The owner caps what drgnx keeps on a machine in its `runner.conf`: `[disk] quota_gb = N`
+(`platform::disk_quota_gb`); the hub's quota for the machine, when it sets one, is capped by it
+(`forseti::disk::owners_quota`, the smaller). On a btrfs, `statvfs` can report room the file system cannot allocate,
+so the report carries btrfs's unallocated bytes too: the device sizes under `/sys/fs/btrfs/<uuid>/devices/` less the
+`disk_total` of `allocation/{data,metadata,system}`, for the file system that holds the runner root
+(`/proc/self/mountinfo`, the longest mount point).
+
 ### Platforms (`serve::platform`)
 
 `serve`'s protocol loop never calls the machine itself: everything it asks of it goes through a `Platform`, so one
@@ -783,6 +841,7 @@ cgroups and PSI); `DarwinPlatform` is a Mac's ("A Mac runner", above). What a pl
 | attempts | `launch`, `active`, `kill` | `job.json`, `sleipnir job-exec` in a transient unit; `podman kill` |
 | caps | `current_mib`, `pause`, `unpause`, `grow_candidate`, `resize`, `weight_unit`, `set_weight` | the job slice's cgroup, `linux::resize` |
 | cleanup | `cleanup` | containers, units, attempt folders, bundles (`serve::cleanup`) |
+| disk | `df`, `btrfs_unallocated`, `disk_quota_gb` | `statvfs` of the root (with `test-hooks`, the facts file's disk); `/sys/fs/btrfs`; `runner.conf`'s `[disk] quota_gb` |
 
 A platform that has no pause, grow or CPU weights says so (`grow_candidate` and `weight_unit` answer none), and the
 loop skips them. The rows in `serve/platform_tests.rs` run the loop on a fake platform: hello and probe answer from
@@ -1003,10 +1062,11 @@ keyed job without `memory.swap.max` 0, and a job outliving its starter.
 - `push_into_the_mirror_runs_no_hook`: a push through `sleipnir git-receive` into a mirror with every receive hook
   planted, and a planted `core.hooksPath`, runs none of them; a path outside the mirrors is refused;
 - `guard::a_symlink_planted_in_a_cache_is_never_followed`: links in a cache to a sentinel outside the root, and links
-  where a cache or project folder belongs; after a scan, plan and apply below the floor the cache is gone, the
-  sentinel is untouched, and a prune through a planted link is refused;
+  where a cache or project folder belongs; after the register's plan and apply below the floor the cache is gone, the
+  sentinel is untouched, and an eviction through a planted link is refused;
 - `guard::never_removes_an_image_we_did_not_pull`: the fake runner's base image (not ours) and an imported image
-  recorded as ours; only ours goes, and not while a queued job names it;
+  registered as ours, past the newest two of its name; only ours goes, and not while it is pinned; an order naming
+  the base image is refused;
 - `origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent`: real `sleipnir sync-fetch` children (a test-hooks
   mode taking the deploy key on stdin) fetch over `ssh://` through a fake `ssh` first on PATH, which records what the
   per-fetch agent holds, parks on a FIFO while the test scans the runner folder, `/tmp` and the home for the key, then

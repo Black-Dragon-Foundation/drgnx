@@ -26,6 +26,9 @@ pub struct HistRow {
     pub at: u64,
     /// It found its slot and images in place (a warm start).
     pub warm: bool,
+    /// What it left on the disk, GB: its build dir plus its outputs, measured at its end (none: not measured).
+    #[serde(default)]
+    pub disk_gib: Option<u64>,
 }
 
 /// The key runs of the same work share: the kind, then the suite (a check's stage), the class of the rows selected
@@ -189,10 +192,49 @@ pub fn wall_p95_s(rows: &[HistRow], other: &[HistRow], speed_ratio: f64) -> Opti
     Some((walls[rank - 1] * ratio).ceil() as u64)
 }
 
+/// A job's disk need, GB: the p95 (nearest rank) of its build dir plus outputs over the last 5 undisturbed `rows` that
+/// measured it, else `declared` (the pack's or the starter's `disk_gib`). History replaces the declared value once
+/// it has a measurement.
+pub fn disk_need_gib(rows: &[HistRow], declared: u32) -> u64 {
+    let mut sizes: Vec<u64> = last_undisturbed(rows)
+        .iter()
+        .filter_map(|r| r.disk_gib)
+        .collect();
+    if sizes.is_empty() {
+        return u64::from(declared);
+    }
+    sizes.sort_unstable();
+    let rank = (sizes.len() * 95).div_ceil(100).max(1);
+    sizes[rank - 1]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testkit::spec;
+
+    /// [D] pure (old Task 48): the p95 of what the job left on the disk replaces the pack's need once measured.
+    #[test]
+    fn history_replaces_the_packs_need() {
+        assert_eq!(disk_need_gib(&[], 7), 7);
+        let mut rows: Vec<HistRow> = (0..5)
+            .map(|i| HistRow {
+                disk_gib: Some(10 + i),
+                ..row(1.0, 1.0, 512, 100 + i, false)
+            })
+            .collect();
+        assert_eq!(disk_need_gib(&rows, 7), 14);
+        rows[4].disturbed = true;
+        assert_eq!(disk_need_gib(&rows, 7), 13, "a disturbed run says little");
+        for r in &mut rows {
+            r.disk_gib = None;
+        }
+        assert_eq!(
+            disk_need_gib(&rows, 7),
+            7,
+            "no measurement: the declared need"
+        );
+    }
 
     fn row(wall_min: f64, cpu: f64, peak: u64, at: u64, disturbed: bool) -> HistRow {
         HistRow {
@@ -210,6 +252,7 @@ mod tests {
             disturbed,
             at,
             warm: true,
+            disk_gib: None,
         }
     }
 
