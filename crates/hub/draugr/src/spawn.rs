@@ -5,6 +5,7 @@
 use std::ffi::OsString;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
@@ -34,6 +35,51 @@ pub struct Spec {
     pub stdin_null: bool,
     pub pass_fds: Vec<PassFd>,
     pub new_session: bool,
+}
+
+/// Where one of a child's output streams goes: by default into a pipe the parent reads ([`Child::take_stdout`], the
+/// stderr tail).
+#[derive(Debug, Clone, Default)]
+pub enum Redirect {
+    /// A pipe: stdout is [`Child::take_stdout`]'s, stderr is kept as the tail.
+    #[default]
+    Pipe,
+    /// `/dev/null`.
+    Null,
+    /// The parent's own stream.
+    Inherit,
+    /// The file behind this descriptor (a log): the child writes to it directly, the parent reads nothing.
+    To(Arc<OwnedFd>),
+}
+
+impl Redirect {
+    fn stdio(&self) -> io::Result<Stdio> {
+        Ok(match self {
+            Redirect::Pipe => Stdio::piped(),
+            Redirect::Null => Stdio::null(),
+            Redirect::Inherit => Stdio::inherit(),
+            Redirect::To(fd) => Stdio::from(fd.try_clone()?),
+        })
+    }
+}
+
+/// What a start may ask for beside the [`Spec`] (`Opts::default()` is a plain [`spawn`]).
+#[derive(Debug, Clone, Default)]
+pub struct Opts {
+    /// The terminal (a pty's slave) that becomes the child's controlling terminal (`TIOCSCTTY` after `setsid`): the
+    /// spec must have `new_session`. For a shell on a pty, and a harness that tests what a program does on one.
+    pub controlling_tty: Option<Arc<OwnedFd>>,
+    /// The child's stdin is this descriptor's file (a pty's slave), whatever `Spec::stdin_null` says.
+    pub stdin: Option<Arc<OwnedFd>>,
+    /// The child's niceness (`setpriority`), for a job that must not slow the editor.
+    pub nice: Option<i32>,
+    pub stdout: Redirect,
+    pub stderr: Redirect,
+    /// The child keeps the descriptors it inherits (3 and up are not closed at its exec): only for a harness that tests
+    /// what a sandbox does with descriptors it was handed. Everything else gets 0–2 and its `pass_fds`.
+    pub inherit_fds: bool,
+    /// Keep all of the child's stderr, not its tail ([`StderrTail::get_all`]): for a check that must see every byte.
+    pub stderr_all: bool,
 }
 
 /// A descriptor the child gets at the number `target` (3 or more; each target once). The same `fd` may go to
@@ -95,6 +141,47 @@ pub struct Child {
 /// is consumed: its `PassFd`s are dropped once the child is started.
 pub async fn spawn(spec: Spec) -> io::Result<Child> {
     start(spec)
+}
+
+/// [`spawn`] with OPTS: redirected streams, a controlling terminal, niceness, all of stderr.
+pub async fn spawn_with(spec: Spec, opts: &Opts) -> io::Result<Child> {
+    start_with(spec, opts, |_| {})
+}
+
+/// [`spawn_with`] for a caller with no runtime: the child is a `std::process::Child` (its pipes the std ones, nothing
+/// keeps its stderr), its group and descriptors as for [`spawn`]. For a worker whose child is a shell on a pty.
+pub fn spawn_std(spec: &Spec, opts: &Opts) -> io::Result<std::process::Child> {
+    launch(spec, opts, |_| {}, |mut cmd| hlaup::spawn(|| cmd.spawn()))
+}
+
+/// The calling process becomes SPEC's program (`exec`): its environment is exactly `spec.env`, its directory `spec.cwd`,
+/// its signals SIGPIPE ignored and SIGINT and SIGQUIT at their defaults. Only returns on a failure, with its error:
+/// for a wrapper that must be the traced command itself, not its parent. `pass_fds`, `new_session` and `opts` do not
+/// apply (the process keeps the descriptors and session it has).
+pub fn exec(spec: &Spec) -> io::Error {
+    use std::os::unix::process::CommandExt;
+    let mut cmd = std::process::Command::new(&spec.program);
+    cmd.args(&spec.args)
+        .env_clear()
+        .envs(spec.env.iter().map(|(k, v)| (k, v)));
+    if let Some(cwd) = &spec.cwd {
+        cmd.current_dir(cwd);
+    }
+    // SAFETY: runs in the forked child before exec; signal(2) is async-signal-safe.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::signal(libc::SIGPIPE, libc::SIG_IGN) == libc::SIG_ERR {
+                return Err(io::Error::last_os_error());
+            }
+            for sig in [libc::SIGINT, libc::SIGQUIT] {
+                if libc::signal(sig, libc::SIG_DFL) == libc::SIG_ERR {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+    cmd.exec()
 }
 
 /// [`spawn`], forked from one long-lived thread, `draugr-spawner` (started on first use, kept for the process's
@@ -164,12 +251,63 @@ fn kill_cancelled(target: i32) {
 static CANCELLED: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 
 fn start(spec: Spec) -> io::Result<Child> {
-    start_with(spec, |_| {})
+    start_with(spec, &Opts::default(), |_| {})
 }
 
 /// [`start`], with `after_move` run once the descriptors are held and before the spawn (a test closes a held number
 /// there, as another thread of the process could).
-fn start_with(spec: Spec, after_move: impl FnOnce(&mut Moved)) -> io::Result<Child> {
+fn start_with(spec: Spec, opts: &Opts, after_move: impl FnOnce(&mut Moved)) -> io::Result<Child> {
+    let spawned = launch(&spec, opts, after_move, |cmd| {
+        let mut cmd = Command::from(cmd);
+        // under hlaup's lock where unshare is refused: a file written meanwhile is never held open by this fork
+        hlaup::spawn(|| cmd.spawn())
+    });
+    drop(spec);
+    let mut inner = spawned?;
+    let pid = inner
+        .id()
+        .and_then(|p| i32::try_from(p).ok())
+        .ok_or_else(|| io::Error::other("the child has no pid"))?;
+    let tail = Arc::new(Mutex::new(Vec::new()));
+    let keep = if opts.stderr_all {
+        usize::MAX
+    } else {
+        TAIL_BYTES
+    };
+    let reader = inner.stderr.take().map(|mut stderr| {
+        let tail = Arc::clone(&tail);
+        saman::spawn("draugr-stderr-tail", async move {
+            let mut buf = [0u8; 4096];
+            while let Ok(n @ 1..) = stderr.read(&mut buf).await {
+                let mut t = saman::lock(&tail);
+                t.extend_from_slice(&buf[..n]);
+                let over = t.len().saturating_sub(keep);
+                t.drain(..over);
+            }
+        })
+    });
+    Ok(Child {
+        inner,
+        pid,
+        tail,
+        reader,
+        exited: false,
+    })
+}
+
+/// The spawn both [`spawn_with`] and [`spawn_std`] make: the checks, the descriptors held, the command built, GO run on it.
+fn launch<C>(
+    spec: &Spec,
+    opts: &Opts,
+    after_move: impl FnOnce(&mut Moved),
+    go: impl Fn(std::process::Command) -> io::Result<C>,
+) -> io::Result<C> {
+    if opts.controlling_tty.is_some() && !spec.new_session {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a controlling terminal needs new_session",
+        ));
+    }
     if cfg!(debug_assertions) {
         let never = saman::lock(&NEVER_PASS);
         debug_assert!(
@@ -183,23 +321,23 @@ fn start_with(spec: Spec, after_move: impl FnOnce(&mut Moved)) -> io::Result<Chi
     // the numbers are held anew. A few tries; a process that closes and opens descriptors that fast is refused.
     let mut after_move = Some(after_move);
     let mut tries = 0;
-    let spawned = loop {
+    loop {
         let mut moved = move_above_targets(&spec.pass_fds)?;
         if let Some(f) = after_move.take() {
             f(&mut moved);
         }
         let expect = std::mem::take(&mut moved.expect);
-        let mut cmd = Command::new(&spec.program);
+        let mut cmd = std::process::Command::new(&spec.program);
         cmd.args(&spec.args)
             .env_clear()
             .envs(spec.env.iter().map(|(k, v)| (k, v)))
-            .stdin(if spec.stdin_null {
-                Stdio::null()
-            } else {
-                Stdio::piped()
+            .stdin(match &opts.stdin {
+                Some(fd) => Stdio::from(fd.try_clone()?),
+                None if spec.stdin_null => Stdio::null(),
+                None => Stdio::piped(),
             })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdout(opts.stdout.stdio()?)
+            .stderr(opts.stderr.stdio()?);
         // std's setpgid runs before the pre_exec closure, and a group leader cannot setsid: so one or the other.
         let new_session = spec.new_session;
         if !new_session {
@@ -210,6 +348,11 @@ fn start_with(spec: Spec, after_move: impl FnOnce(&mut Moved)) -> io::Result<Chi
         }
         let pairs = moved.pairs.clone();
         let guarded = !expect.is_empty();
+        let inherit = opts.inherit_fds;
+        let (nice, tty) = (
+            opts.nice,
+            opts.controlling_tty.as_ref().map(|f| f.as_raw_fd()),
+        );
         // SAFETY: runs in the forked child before exec; setsid(2), signal(2), close_range(2), fcntl(2), getrlimit(2)
         // and dup2(2) are async-signal-safe and nothing here allocates (`pairs` was built in the parent). std runs
         // pre_exec closures after it has reset SIGPIPE to the default and set up 0–2.
@@ -227,46 +370,30 @@ fn start_with(spec: Spec, after_move: impl FnOnce(&mut Moved)) -> io::Result<Chi
                         return Err(io::Error::last_os_error());
                     }
                 }
-                child_fds(&pairs, &expect)
+                child_fds(&pairs, &expect, inherit)?;
+                if let Some(n) = nice
+                    && libc::setpriority(libc::PRIO_PROCESS, 0, n) < 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                if let Some(fd) = tty
+                    && libc::ioctl(fd, libc::TIOCSCTTY as _, 0) < 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
             });
         }
-        // under hlaup's lock where unshare is refused: a file written meanwhile is never held open by this fork
-        let r = hlaup::spawn(|| cmd.spawn());
+        let r = go(cmd);
         drop(moved);
         match r {
             Err(e) if guarded && tries < 4 && e.raw_os_error() == Some(libc::EBUSY) => {
                 tries += 1;
                 GUARD_RETRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-            r => break r,
+            r => return r,
         }
-    };
-    drop(spec);
-    let mut inner = spawned?;
-    let pid = inner
-        .id()
-        .and_then(|p| i32::try_from(p).ok())
-        .ok_or_else(|| io::Error::other("the child has no pid"))?;
-    let tail = Arc::new(Mutex::new(Vec::new()));
-    let reader = inner.stderr.take().map(|mut stderr| {
-        let tail = Arc::clone(&tail);
-        saman::spawn("draugr-stderr-tail", async move {
-            let mut buf = [0u8; 4096];
-            while let Ok(n @ 1..) = stderr.read(&mut buf).await {
-                let mut t = saman::lock(&tail);
-                t.extend_from_slice(&buf[..n]);
-                let over = t.len().saturating_sub(TAIL_BYTES);
-                t.drain(..over);
-            }
-        })
-    });
-    Ok(Child {
-        inner,
-        pid,
-        tail,
-        reader,
-        exited: false,
-    })
+    }
 }
 
 /// The parent's side of passing descriptors: each source moved above the highest target, and the free numbers from
@@ -342,13 +469,19 @@ fn dup_cloexec(fd: RawFd, lowest: RawFd) -> io::Result<OwnedFd> {
 /// a `dup2` onto it would make that failure look like a start (GL-T6-1). Then the child refuses to go on (`EBUSY`),
 /// and the failure comes back through the intact report socket. A number that is simply closed now is fine: nothing
 /// took it, and the `dup2` fills it.
-fn child_fds(pairs: &[(RawFd, RawFd)], expect: &[(RawFd, (u64, u64))]) -> io::Result<()> {
+fn child_fds(
+    pairs: &[(RawFd, RawFd)],
+    expect: &[(RawFd, (u64, u64))],
+    inherit: bool,
+) -> io::Result<()> {
     for &(target, id) in expect {
         if file_id(target).is_some_and(|now| now != id) {
             return Err(io::Error::from_raw_os_error(libc::EBUSY));
         }
     }
-    cloexec_from(3);
+    if !inherit {
+        cloexec_from(3);
+    }
     for &(src, target) in pairs {
         // SAFETY: dup2(2) on descriptors this child holds.
         while unsafe { libc::dup2(src, target) } < 0 {
@@ -478,6 +611,11 @@ impl StderrTail {
         let text = String::from_utf8_lossy(&bytes);
         let skip = text.chars().count().saturating_sub(STDERR_TAIL_CHARS);
         text.chars().skip(skip).collect()
+    }
+
+    /// Everything kept: all of stderr when the child was started with `Opts::stderr_all`, else the tail's bytes.
+    pub fn get_all(&self) -> String {
+        String::from_utf8_lossy(&saman::lock(&self.0)).into_owned()
     }
 }
 
@@ -705,9 +843,11 @@ mod tests {
             // child's) lands on a target
             spec.pass_fds = (3..=40).map(|t| pass(&w, t)).collect();
             let before = GUARD_RETRIES.load(std::sync::atomic::Ordering::Relaxed);
-            let err = start_with(spec, |moved| moved.held.retain(|f| f.as_raw_fd() > 40))
-                .err()
-                .expect("a failed exec is an error");
+            let err = start_with(spec, &Opts::default(), |moved| {
+                moved.held.retain(|f| f.as_raw_fd() > 40)
+            })
+            .err()
+            .expect("a failed exec is an error");
             // the guard stopped the first try (EBUSY), the second try held the numbers again and std reported the exec
             assert!(
                 GUARD_RETRIES.load(std::sync::atomic::Ordering::Relaxed) > before,
@@ -949,6 +1089,213 @@ mod tests {
             let tail = child.stderr_tail();
             assert_eq!(tail.chars().count(), STDERR_TAIL_CHARS);
             assert!(tail.ends_with("ab"), "{}", &tail[tail.len() - 10..]);
+        })
+    }
+
+    fn opts(f: impl FnOnce(&mut Opts)) -> Opts {
+        let mut o = Opts::default();
+        f(&mut o);
+        o
+    }
+
+    #[test]
+    fn a_stream_sent_to_a_file_is_written_there_and_not_piped() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let log = eitri::open_append(&dir.path().join("log"), Some(0o600)).unwrap();
+            let fd: OwnedFd = log.into();
+            let to = Redirect::To(Arc::new(fd));
+            let o = opts(|o| {
+                o.stdout = to.clone();
+                o.stderr = to.clone();
+            });
+            let mut child = spawn_with(sh("echo out; echo err >&2", true), &o)
+                .await
+                .unwrap();
+            assert!(child.take_stdout().is_none(), "stdout is not a pipe");
+            assert!(child.wait().await.unwrap().unwrap().success());
+            assert_eq!(child.stderr_tail(), "", "stderr is not kept");
+            let text = eitri::read_string(&dir.path().join("log"), 1 << 20).unwrap();
+            assert!(text.contains("out") && text.contains("err"), "{text}");
+        })
+    }
+
+    #[test]
+    fn a_null_stream_is_empty_and_all_of_stderr_can_be_kept() {
+        saman::block_on_current(async {
+            let o = opts(|o| o.stdout = Redirect::Null);
+            let mut child = spawn_with(sh("echo gone", true), &o).await.unwrap();
+            assert!(child.take_stdout().is_none());
+            assert!(child.wait().await.unwrap().unwrap().success());
+            let all = opts(|o| o.stderr_all = true);
+            let mut child = spawn_with(
+                sh(
+                    "head -c 40000 /dev/zero | tr '\\0' a >&2; printf z >&2",
+                    true,
+                ),
+                &all,
+            )
+            .await
+            .unwrap();
+            assert!(child.wait().await.unwrap().unwrap().success());
+            let kept = child.stderr().get_all();
+            assert_eq!(kept.len(), 40001, "all of stderr, not a tail");
+            assert!(kept.starts_with('a') && kept.ends_with('z'));
+        })
+    }
+
+    #[test]
+    fn a_niced_child_runs_at_that_niceness() {
+        saman::block_on_current(async {
+            let o = opts(|o| o.nice = Some(7));
+            let mut child = spawn_with(sh("nice", true), &o).await.unwrap();
+            let mut out = String::new();
+            child
+                .take_stdout()
+                .unwrap()
+                .read_to_string(&mut out)
+                .await
+                .unwrap();
+            assert!(child.wait().await.unwrap().unwrap().success());
+            let base: i32 = {
+                let mut plain = spawn(sh("nice", true)).await.unwrap();
+                let mut o = String::new();
+                plain
+                    .take_stdout()
+                    .unwrap()
+                    .read_to_string(&mut o)
+                    .await
+                    .unwrap();
+                plain.wait().await.unwrap();
+                o.trim().parse().unwrap()
+            };
+            assert_eq!(out.trim().parse::<i32>().unwrap(), base + 7);
+        })
+    }
+
+    #[test]
+    fn a_controlling_terminal_is_the_childs_and_needs_a_session() {
+        saman::block_on_current(async {
+            // field 7 of /proc/self/stat is the controlling terminal's number: 0 without one
+            let probe = "cut -d' ' -f7 /proc/self/stat";
+            // SAFETY: posix_openpt and friends on descriptors this test owns
+            let (master, slave) = unsafe {
+                let m = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+                assert!(m >= 0 && libc::grantpt(m) == 0 && libc::unlockpt(m) == 0);
+                let name = libc::ptsname(m);
+                let s = libc::open(name, libc::O_RDWR | libc::O_NOCTTY);
+                assert!(s >= 0);
+                (OwnedFd::from_raw_fd(m), OwnedFd::from_raw_fd(s))
+            };
+            let slave = Arc::new(slave);
+            let mut spec = sh(probe, true);
+            spec.new_session = true;
+            let o = opts(|o| o.controlling_tty = Some(slave.clone()));
+            let mut child = spawn_with(spec, &o).await.unwrap();
+            let mut out = String::new();
+            child
+                .take_stdout()
+                .unwrap()
+                .read_to_string(&mut out)
+                .await
+                .unwrap();
+            assert!(child.wait().await.unwrap().unwrap().success());
+            assert_ne!(out.trim(), "0", "the child has a controlling terminal");
+            let no_session = sh(probe, true);
+            let err = spawn_with(no_session, &o).await.err().expect("refused");
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+            drop(master);
+        })
+    }
+
+    #[test]
+    fn exec_replaces_the_process_with_the_program() {
+        if std::env::var_os("DRAUGR_EXEC_CHILD").is_some() {
+            let mut spec = sh("exit 7", true);
+            spec.env = crate::env::build(&["PATH"], &[], &[]);
+            let e = exec(&spec);
+            panic!("exec returned: {e}");
+        }
+        let spec = Spec {
+            program: std::env::current_exe().unwrap(),
+            args: [
+                "--exact",
+                "spawn::tests::exec_replaces_the_process_with_the_program",
+                "--nocapture",
+                "--test-threads",
+                "1",
+            ]
+            .map(Into::into)
+            .into(),
+            env: crate::env::build(&["PATH"], &[], &[("DRAUGR_EXEC_CHILD", "1".as_ref())]),
+            cwd: None,
+            stdin_null: true,
+            pass_fds: vec![],
+            new_session: false,
+        };
+        let out = crate::run::run(spec, Duration::from_secs(60)).unwrap();
+        assert_eq!(out.status.code(), Some(7), "{}", out.stderr);
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !said.contains("test result"),
+            "the test harness ended itself: {said}"
+        );
+    }
+
+    #[test]
+    fn a_std_child_leads_its_group_and_writes_where_it_was_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let log: OwnedFd = eitri::open_append(&dir.path().join("log"), Some(0o600))
+            .unwrap()
+            .into();
+        let to = Redirect::To(Arc::new(log));
+        let o = opts(|o| {
+            o.stdout = to.clone();
+            o.stderr = to.clone();
+            o.stdin = Some(Arc::new(std::fs::File::open("/dev/null").unwrap().into()));
+        });
+        let mut child = spawn_std(&sh("echo std-child; ps -o pgid= -p $$", true), &o).unwrap();
+        assert!(child.wait().unwrap().success());
+        let text = eitri::read_string(&dir.path().join("log"), 1 << 20).unwrap();
+        assert!(text.contains("std-child"), "{text}");
+        let pgid: i32 = text.lines().last().unwrap().trim().parse().unwrap();
+        assert_eq!(pgid, child.id() as i32, "the child leads its group");
+    }
+
+    #[test]
+    fn an_inherited_descriptor_reaches_the_child_only_when_asked_for() {
+        saman::block_on_current(async {
+            let mut fds = [0 as libc::c_int; 2];
+            // SAFETY: pipe(2) fills two descriptors, which this test owns and does not mark close-on-exec
+            let (keep, other) = unsafe {
+                assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+                (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1]))
+            };
+            let n = keep.as_raw_fd();
+            let probe =
+                format!("if [ -e /proc/self/fd/{n} ]; then echo held; else echo closed; fi");
+            let ask = |o: &Opts| {
+                let (o, probe) = (o.clone(), probe.clone());
+                async move {
+                    let mut child = spawn_with(sh(&probe, true), &o).await.unwrap();
+                    let mut out = String::new();
+                    child
+                        .take_stdout()
+                        .unwrap()
+                        .read_to_string(&mut out)
+                        .await
+                        .unwrap();
+                    child.wait().await.unwrap();
+                    out.trim().to_owned()
+                }
+            };
+            assert_eq!(
+                ask(&Opts::default()).await,
+                "closed",
+                "a plain spawn gives 0-2 only"
+            );
+            assert_eq!(ask(&opts(|o| o.inherit_fds = true)).await, "held");
+            drop((keep, other));
         })
     }
 }
