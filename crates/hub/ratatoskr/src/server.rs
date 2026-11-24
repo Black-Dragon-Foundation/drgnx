@@ -570,14 +570,15 @@ pub async fn run(args: ServeArgs) -> Exit {
         hold_store(&runtime).await;
     }
     // the store threads stop once what is queued to them is written: no write is dropped, however long it takes
-    let queue = runtime.clone();
+    let (queue, now) = (runtime.clone(), runtime.clone());
     stop_threads(
         vec![
             Stopping::start(
                 "runtime.db's thread",
                 move || queue.queued(),
                 move || store.shutdown(),
-            ),
+            )
+            .running(move || now.running()),
             Stopping::start(
                 "work.db's writer thread",
                 move || graph_queue.queued(),
@@ -672,10 +673,15 @@ async fn reap_recorded(db: &urdr::Handle) -> villa::Result<()> {
 /// How often, in real time, the hub's end says which store thread is still stopping.
 const STOP_NOTE_EVERY: Duration = Duration::from_secs(5);
 
-/// A store thread being stopped: its name, how much it still has queued, and the blocking join, run off the runtime.
+/// What a store thread runs now: the place its request was asked from and for how long (none: nothing, or unknown).
+type RunningNow = Box<dyn Fn() -> Option<(String, Duration)> + Send>;
+
+/// A store thread being stopped: its name, how much it still has queued, what it runs now, and the blocking join, run
+/// off the runtime.
 struct Stopping {
     what: &'static str,
     queued: Box<dyn Fn() -> usize + Send>,
+    running: Option<RunningNow>,
     join: saman::Task<()>,
 }
 
@@ -689,8 +695,18 @@ impl Stopping {
         Stopping {
             what,
             queued: Box::new(queued),
+            running: None,
             join: saman::spawn_blocking("server:stop-store", stop),
         }
+    }
+
+    /// RUNNING says what the thread runs now, so a note of a slow stop names the request that holds it.
+    fn running(
+        mut self,
+        running: impl Fn() -> Option<(String, Duration)> + Send + 'static,
+    ) -> Stopping {
+        self.running = Some(Box::new(running));
+        self
     }
 }
 
@@ -727,12 +743,19 @@ async fn stop_threads(mut threads: Vec<Stopping>, term: &mut Signal, int: &mut S
         };
         for t in threads.iter().filter(|t| !t.join.is_finished()) {
             let queued = (t.queued)();
+            let now = t
+                .running
+                .as_ref()
+                .and_then(|r| r())
+                .map_or_else(String::new, |(at, age)| {
+                    format!(", running the request from {at} for {} ms", age.as_millis())
+                });
             match signal {
                 None => tracing::error!(
                     thread = t.what,
                     queued,
-                    "{} is still stopping, {queued} more queued: the hub ends once its queue is written (SIGTERM \
-                     or SIGINT abandons it)",
+                    "{} is still stopping, {queued} more queued{now}: the hub ends once its queue is written \
+                     (SIGTERM or SIGINT abandons it)",
                     t.what
                 ),
                 Some(sig) => tracing::error!(

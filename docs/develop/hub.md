@@ -66,7 +66,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   waits on anything that can hang. Last, it stops its store
   threads (runtime.db's and work.db's writer). Each writes what is queued to it first: no queued write is dropped,
   and that wait has no limit. Every 5 s while a thread is still stopping, the log names it as an error, with how many
-  requests it still has queued. A second SIGTERM or SIGINT during that wait ends the hub at once, and the log says
+  requests it still has queued, and for runtime.db's the request it runs now (where it was asked from, how long it has
+  run). A second SIGTERM or SIGINT during that wait ends the hub at once, and the log says
   which thread's queued writes were abandoned at the user's request; one that came before the wait began (while the
   hub ended its sessions or closed its connections) does not. Then the hub exits 0. The log is tracing JSON, one object per line, in `<state>/hub/log/hub-YYYY-MM-DD.jsonl` (UTC days, 0600,
   the newest 7 kept, written by tracing-appender's non-blocking worker). Warnings and errors also go to stderr, behind
@@ -656,7 +657,8 @@ last, events: [{id, at, agent, job, task, kind, summary, data?}]}`, after `since
 1000), `data` the parsed JSON object. `last` is the newest id answered, or `since` when there is none. `status` also
 says `gateway: {port?, registrations, requests,
 errors, fallbacks, bytes_in, bytes_out, providers, keys_held, keys_refused?, warnings}`, the front's own gateway
-([Registrations](#registrations)): `providers` is how many the table has, `keys_held` the providers whose key the hub
+([Registrations](#registrations)): `registrations` counts the agents' and editors' (the token the hub's own embedders
+use is not one), `providers` is how many the table has, `keys_held` the providers whose key the hub
 holds (never a key), `keys_refused` why it takes none (only when it could not be hardened), `errors` the requests answered with no status or one of 400 and up. The front also serves the
 gateway's methods, `gateway/{register,unregister,keys,set-budget}` and `spend`, the settings' (`config/settings`,
 `config/changed`) and `env/set`; the rest, next section.
@@ -687,11 +689,11 @@ is no claim of zeroisation.
 
 **The front's writes.** The front writes work.db's coordination and job tables itself, through norn's writer
 (`crates/hub/ratatoskr/src/coord.rs`; [coordination.md](coordination.md#who-writes-what)): the editor's
-`cards/settle`, `messages/send`, `messages/mark`, `events/add` and `review/mark`, and the `coord/*` methods. Each is
+`cards/settle`, `messages/send`, `messages/mark`, `events/add` and `review/mark`. Each is
 decoded by the registry, written in one transaction and answered typed. A work.db that is not ready (below schema 6, or a migration that failed) is `internal` with the
 opening rule's text (the writer looks at the file once more first); a newer one is `schema`; a busy one `internal` "work.db is busy; retry" (a
-`best_effort` event and `coord/agent`'s `seen` answer `{}`); a writer's refusal (a `seen` from the future, a review
-state) `invalid-params` with its text. `coord/prune` never fails (`{pruned: false}`). `coord/notify`, from any
+`best_effort` event answers `{}`); a writer's refusal (a `seen` from the future, a review
+state) `invalid-params` with its text. `coord/notify`, from any
 class, wakes the `events` broadcast. `status` says `store: {schema, writer: ready | not-ready |
 read-only, writes, migrated_at?, failed?, wal_bytes?, last_backup?, backup_ok?, history_backup?, denied_in?}`: the
 writer's state from its opening rule's last answer, the transactions the front's methods committed since start, when the
@@ -709,13 +711,14 @@ its connection's, and the hub is work.db's one writer (coordination.md, "Who wri
 What the editor did and an outside agent may never do has a terminal door each, in `crates/hub/ratatoskr/src/door_cli.rs`
 (and `graph forget` in `graph_cli.rs`): a user client of the running hub that calls the method itself, never a second
 implementation. `card list|settle` (`graph/sql` over the `card` table; `cards/settle`), `message send|reply`
-(`messages/send`; a reply reads the question's sender from `message` and sends with `answers`), `task status ID STATUS`
+(`messages/send`; a reply reads the question's sender from `message` and sends with `answers`), `task list|ready|show`
+(the readers: `tasks/find`, `tasks/ready`, `graph/entity` with its links and notes), `task status ID STATUS`
 (`graph/entity` for the version, then `tasks/write update`) and `plan status PLAN TASK STATUS` (`plans/get`, then
 `plans/write` with `base_version`; `done` sends every step ticked so the file and the graph agree). The CLI checks only
 the shape of a status word; the tracker's `STATUSES` is the one set and the hub names it when it refuses a word. A task
 of an imported or scanned plan file is read-only to `tasks/write` (`norn::tracker::is_parsed`: the file's view owns its
 status, "this comes from FILE"); `plans/write` is its only door. The outside bridge serves `plans/get|write` and
-`records/read|write` only (`OUTSIDE_METHODS`); the test `outside::tests` pins that `cards/settle`, `messages/send`,
+`records/read|write` only (`outside::outside_methods()`); the test `outside::tests` pins that `cards/settle`, `messages/send`,
 `tasks/write`, `graph/put-parsed|grants|settings|excise|revert` and `job/approve` are refused to it.
 
 ### The reaper
@@ -881,7 +884,7 @@ in the same transaction as the change they record:
   `Agents::resume_paused`, which does nothing to a session the user's wheel holds (a pause cancels the turn, so a
   queue delivery alone would leave it idle); a job's card then resumes the job through `fallback::resume`, unless a
   scope above its run still holds it. `fallback::resume` skips every session a holder still holds.
-- **Retention:** the hub's housekeeping runs the daily prune (`coord/prune`, `norn::write::prune`): by age once a
+- **Retention:** the hub's housekeeping runs the daily prune (`norn::write::prune`): by age once a
   day, and on every call the row cap.
 
 Subscribers get them as `events` (`:since ID :last ID :events [{id, at, agent, job, task, kind, summary, data}…]`,
@@ -1384,17 +1387,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `comments/resolve` | user | `{comment: string}` | `boolean` | yes |
 | `config/changed` | user | `{}` | `boolean` | no |
 | `config/settings` | user | `{overrides: [{name: string, source: string, value: SettingValue}], project?: string}` | `{applied: natnum}` | no |
-| `coord/agent` | user | `{register?: {base?: string, branch?: string, clear?: ["kind" \| "name" \| "cwd" \| "worktree" \| "branch" \| "base" \| "plan" \| "task" \| "pid"], cwd?: string, id: AgentName, kind?: string, name?: string, pid?: natnum, plan?: string, task?: TaskRef, worktree?: string}, seen?: AgentName}` | `{id?: string, seen?: number}` | yes |
-| `coord/card-create` | user | `{data?: JsonObject, job?: Id, kind?: string, task?: TaskRef, title?: Text}` | `{id: natnum}` | yes |
-| `coord/card-set` | user | `{data?: JsonObject, id: natnum, state?: Status, title?: Text}` | `boolean` | yes |
-| `coord/decide` | user | `{author: AgentName, job?: Id, kind: string, paths?: Text, reason?: Text, replaces?: natnum, seen?: natnum, subject: Text, task?: TaskRef}` | `Decided` | yes |
-| `coord/held` | user | `{agent: AgentName, held: boolean}` | `boolean` | yes |
-| `coord/job-create` | user | `{data?: JsonObject, id: Id, plan?: string, repo?: string, tasks?: [{deps?: [natnum], n: natnum, role?: string, title: Text}], title: Text}` | `{id: string}` | yes |
-| `coord/job-set` | user | `{data?: JsonObject, id: Id, status?: Status}` | `boolean` | yes |
-| `coord/leases` | user | `{release_stale?: boolean, renew?: [AgentName]}` | `{released?: [Released]}` | yes |
 | `coord/notify` | user, agent, service | `{}` | `boolean` | no |
-| `coord/prune` | user | `{}` | `{pruned: boolean}` | yes |
-| `coord/task-status` | user | `{agent?: AgentName, status: Status, task: TaskRef}` | `boolean` | yes |
 | `debug/bisect` | user | `{good: {id: string, kind: string}, parallel?: natnum, predicate: {argv?: [string], at?: string, build?: [string], code?: integer, condition?: string, kind: string, run?: string, timebox_s?: natnum}, root: string}` | `{bisect: string, estimate: any, states: [any]}` | no |
 | `debug/bisect/cancel` | user | `{bisect: string}` | `boolean` | no |
 | `debug/bisect/narrow` | user | `{bisect: string}` | `boolean` | no |
@@ -1591,10 +1584,11 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `plugins/list` | user | `{}` | `{plugins?: [PluginRow]}` | no |
 | `presence/set` | user | `{away: boolean}` | `boolean` | no |
 | `records/conflict` | user | `{id: Id}` | `{at: number, file: string, graph: string, id: string, path: string}` | no |
-| `records/import` | user | `{dry_run?: boolean, only?: "specs" \| "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board" \| "decisions", path?: AbsPath, root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile], warnings?: [string]}` | yes |
+| `records/forget-root` | user | `{root: AbsPath}` | `{files: natnum, pieces: natnum}` | yes |
+| `records/import` | user | `{adopt?: boolean, dry_run?: boolean, only?: "specs" \| "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board" \| "decisions", path?: AbsPath, root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile], warnings?: [string]}` | yes |
 | `records/read` | user | `{record: string}` | `RecordView` | no |
 | `records/resolve` | user | `{id: Id, keep: "file" \| "graph"}` | `{id: string, keep: "file" \| "graph", path: string}` | yes |
-| `records/status` | user | `{path?: AbsPath}` | `{views?: [ViewStatus]}` | no |
+| `records/status` | user | `{path?: AbsPath}` | `{skipped?: [Skipped], views?: [ViewStatus]}` | no |
 | `records/write` | user | `{base_version: natnum, kind: "spec" \| "decision", path?: string, project?: string, record?: string, remove?: [string], sections?: [{after?: string, body: Text, heading: string, key?: string}], status?: Status, title?: string}` | `{path: string, record: string, sections?: [SectionId], tx: natnum, version: natnum}` | yes |
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
@@ -3986,6 +3980,11 @@ held one or marks its provider held (the editor never sends one either). `status
 needs one fails over or answers "no key", and the `gateway/need-keys {providers}` event (also sent to each new
 subscriber for the providers kept registrations need) tells the editor to hand them over. The hub is not dumpable
 ([Stopping a hub](#stopping-a-hub)), so another process of the user's cannot read them from its memory.
+
+No terminal command hands keys, the login shell's variables (`env/set`) or settings overrides (`config/settings`) over:
+the hub's CLI clients send none of them, and a hub the CLI starts (`ratatoskr ensure`, a job command) holds no key,
+has the supervisor's `PATH` and reads only the settings files. Agents on a subscription need no key. These three are
+marked "Emacs-era, re-decide at B1" in the registry; the native UI is their client.
 
 The registrations, the port and the keys of the Lisp runtime's gateway (`registrations.eld`, `port`) are read by nothing.
 

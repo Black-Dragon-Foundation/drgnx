@@ -685,7 +685,7 @@ drgnx made under the runner folder:
 ```json
 {"version": 1, "round": 3, "items": [
   {"item": {"id": "build:<slot id>", "kind": "build-dir", "owner": "drgnx", "machine": "", "bytes": 5368709120,
-            "last_used": 1795000000, "created": 1794000000, "name": null, "budget_bytes": null, "trust": "private"},
+            "last_used": 1795000000, "created": 1794000000, "name": null, "budget_bytes": null, "trust": "Private"},
    "rel": "slots-target/<slot id>", "measured": 3}]}
 ```
 

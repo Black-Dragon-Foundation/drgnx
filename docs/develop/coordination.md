@@ -228,7 +228,7 @@ work.db has one writer: the hub (Ratatoskr). Every write below is a transaction 
 | Writes | Through | Who calls | `tx` actor |
 |---|---|---|---|
 | a card settled, a message sent or marked, an event, a review mark and its event | the front's `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark` (`ratatoskr/src/coord.rs` on `norn::write`) | the editor (a user connection) | `user` |
-| jobs, tasks, leases, decisions, agents, cards, held counts, the daily prune | `coord/job-create`, `coord/job-set`, `coord/task-status`, `coord/leases`, `coord/decide`, `coord/agent`, `coord/card-create`, `coord/card-set`, `coord/held`, `coord/prune` (user class), and the hub's own runner and timers on `norn::write` | a user connection; the hub itself | `hub` (class `system`) |
+| jobs, tasks, leases, decisions, agents, cards, held counts, the daily prune | the hub's own runner and timers on `norn::write` (no wire method: the Lisp job runner's `coord/*` seam is gone) | the hub itself | `hub` (class `system`) |
 | what the coordination tools write | `norn::tools` on the same `CoordDb` (`Front.tools`) | agents, through the MCP hosting | `agent:SID` (or the outside agent's `ext:…`) |
 
 A service connection's write is the hub's (`hub`, class `system`); an agent socket's is its session's. No other
@@ -237,9 +237,7 @@ process writes these tables: an editor, the CLI and any Lisp reach them only thr
 The front's methods take the Lisp keywords as params (`messages/send` `{recipient, text, job?, seen?, answers?,
 question?}`; a `sender` is refused from every caller, `invalid-params` with path `sender`: a message's sender is its
 connection's) and answer the Lisp results typed: `messages/send` is `{ok, id, state}` or `{held, version, changes}`
-(the decisions after `seen`, newest first, as `decisions_since` reads them), `coord/decide` `{ok, n, status,
-version}`, `{held, version, changes}` or `{error}`, `coord/leases` `{released: [{task, agent, job}]}`. Each is one
-transaction; each committed one is counted in `status`'s `store.writes`, sends its new events to subscribers and wakes
+(the decisions after `seen`, newest first, as `decisions_since` reads them). Each is one transaction; each committed one is counted in `status`'s `store.writes`, sends its new events to subscribers and wakes
 delivery.
 
 ### Who opens work.db
@@ -452,7 +450,9 @@ root, role}`; the guard keeps the kind the user's, and `bindings::role_for` coun
 - **Who it is to the matrix** (`outside::who_for`): its role's column and the agent column `ext:KIND`, its project,
   no plan, and whether it acts on its own record ([The matrix in the hub](#the-matrix-in-the-hub-drgnx-ratatoskrsrcmatrix_gaters)).
 - **What it reaches:** through the tools' `exec` only `plans/get`, `plans/write`, `records/read` and
-  `records/write` (`outside::OUTSIDE_METHODS`; any other method answers `M is not open to an outside agent`). Its
+  `records/write` (`outside::outside_methods()`, composed from per-area slices: today `OUTSIDE_RECORD_METHODS`, and
+  the tool names likewise from `norn::tools::outside_tool_names()`; an area adds a slice and one line to each
+  composing function; any other method answers `M is not open to an outside agent`). Its
   scope is its project (`outside::scope_of`): records of that project, records of no project whose file lies under its
   root, and records of no project it wrote itself. The scope is checked before the matrix, so a record outside it
   makes no card.
@@ -600,7 +600,7 @@ same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 22 tools, or th
   names there are; the text is the pack's as the job's approval froze it (`orchestration.md`, "The rule pack").
 - `hello` keeps its first text item and adds a second one and `structuredContent.brief`; `record_decision` takes
   `about: [id]`.
-- `task_read find` takes `kind` (`task`, the default, `plan`, `spec` or `decision`; a spec or decision of no project
+- `task_read find` takes `kind` (`task`, the default, `plan`, `spec`, `decision` or `run`; a spec or decision of no project
   shows as a stub to an agent: `records_read` reads it in full) and ranks by words (FTS) and says `vectors: "behind N"` while entities in the caller's scope (its
   project and the projects granted to it) lack a vector; the vector half
   waits for the embedder (Task 12b).
@@ -1143,7 +1143,9 @@ from an attached, bound bridge) is an outside agent's. `effective_for` gives it:
 - else its role's and its kind's (`ext:KIND`) cells from every layer, as for a session (an agent column only
   tightens), then `norn::matrix::outside_effective`: every row of `OUTSIDE_NEVER` (task done, the pushes and merge,
   starting or steering agents, spending, containers and keys, machines, `settings.change`, and the two rows no one
-  gets) is Never, and on a record it did not create (`ActionCtx.own_record` false) `graph.change` is at most Ask.
+  gets) is Never, and on a record it did not create (`ActionCtx.own_record` false) each row of `OUTSIDE_ASK_AT_MOST`
+  (`graph.change`) is at most Ask. `matrix/get` shows both lists as `outside: {never, ask_at_most}`, read from these
+  same constants.
 No delegation is ever read for it. An Ask's card keeps `own_record` in its data, and `recheck` reads it back, so the
 cap holds at execution. The plan and record writes check the scope first, then `graph.change` (`effects::may_change`
 with the write's own-record answer), then `task.done` for a status of done or an approval (Never for an outside

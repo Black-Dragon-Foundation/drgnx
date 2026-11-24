@@ -167,6 +167,15 @@ batch it is on it waits, `search status` shows the source as `held` with the pro
 free again. The signals are another process using at least 10 percent of the GPU (NVML's list on NVIDIA, the DRM
 `fdinfo` clients on AMD and Intel; our own engines excluded) and free video memory under the engine's need.
 
+## `records.adopt`
+
+Whether a project's record files are adopted into the graph (`docs/develop/records.md`, "Not for this project"). A
+bool, on by default, kept per project root in the graph store (`work.db` `kv` `setting:records-adopt:ROOT`, written
+only when off), as the store's other settings are; the hub reads it, no settings file holds it, and so it never adds a
+file to the project. `records/forget-root {root}` turns it off; `records/import {root, adopt: true}` turns it on. While
+it is off, an import of the root or of a folder inside it is refused. The project level is the only one so far: a
+user- or machine-wide default arrives with the hub's reading of the settings stack.
+
 ## Conformance
 
 The two readers are held to each other by four things, all under `test/fixtures/huginn/` and `crates/core/huginn`:

@@ -63,7 +63,65 @@ fn parse(args: Vec<String>) -> Result<Args, String> {
     })
 }
 
+/// The records scene's report, unless `--out` names another.
+const RECORDS_BASELINE: &str = "crates/std/vag/baselines/records_org_scale.json";
+
+/// `cargo xtask measure records_org_scale [--reps N] [--out FILE]`: ratatoskr's `records_org_scale` example (release)
+/// on a generated tree shaped like the org folder, under `target/`; its medians become a report (a baseline the
+/// bars are set from, not a bar).
+fn records_org_scale(args: &[String]) -> Result<ExitCode, String> {
+    let (mut reps, mut out) = ("5".to_string(), PathBuf::from(RECORDS_BASELINE));
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--reps" => reps = it.next().ok_or("--reps needs a number")?.clone(),
+            "--out" => out = PathBuf::from(it.next().ok_or("--out needs a path")?),
+            other => return Err(format!("unknown flag `{other}`")),
+        }
+    }
+    let tree = PathBuf::from("target/records_org_scale");
+    let json = PathBuf::from("target/records_org_scale.json");
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let status = Command::new(cargo)
+        .args([
+            "run",
+            "--release",
+            "--locked",
+            "-p",
+            "ratatoskr",
+            "--example",
+            "records_org_scale",
+            "--",
+        ])
+        .arg(&tree)
+        .arg(&json)
+        .arg(&reps)
+        .status()
+        .map_err(|e| format!("cannot start cargo: {e}"))?;
+    if !status.success() {
+        return Err(format!("records_org_scale: {status}"));
+    }
+    let text = std::fs::read_to_string(&json).map_err(|e| format!("{}: {e}", json.display()))?;
+    let metrics: BTreeMap<String, f64> =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", json.display()))?;
+    let report = Report {
+        name: "records_org_scale".to_string(),
+        commit: git_commit(),
+        machine: std::fs::read_to_string("/proc/sys/kernel/hostname")
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        metrics,
+    };
+    report.write_json(&out).map_err(|e| e.to_string())?;
+    println!("{}: {:?}", report.name, report.metrics);
+    Ok(ExitCode::SUCCESS)
+}
+
 pub fn run(args: Vec<String>) -> Result<ExitCode, String> {
+    if args.first().map(String::as_str) == Some("records_org_scale") {
+        return records_org_scale(&args[1..]);
+    }
     let args = parse(args)?;
     let mut child: Option<Child> = None;
     let pid = match &args.target {

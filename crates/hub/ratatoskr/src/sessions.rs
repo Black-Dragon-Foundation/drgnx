@@ -279,7 +279,7 @@ pub struct Sessions {
     tools: Arc<Coord>,
     /// Every tool: an unbound outside bridge's.
     list: ToolList,
-    /// A bound outside bridge's: every tool and the plan and record tools (`norn::tools::OUTSIDE_TOOLS`).
+    /// A bound outside bridge's: every tool and the plan and record tools (`norn::tools::outside_tool_names`).
     outside_list: ToolList,
     /// A session's, made when first served, by [`set_index`]: with or without the tracker tools, and the debugger's.
     by_sets: [OnceLock<ToolList>; 4],

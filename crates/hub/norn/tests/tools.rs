@@ -1367,7 +1367,7 @@ fn the_outside_tools_reach_the_hub_as_a_bound_agent() {
         let coord = Arc::new(Coord::new(w.db.clone(), hub.clone()));
         let list = norn::tools::records::outside_tools();
         let names: Vec<&str> = list.iter().map(|t| t.name()).collect();
-        assert_eq!(names, norn::tools::OUTSIDE_TOOLS);
+        assert_eq!(names, norn::tools::outside_tool_names());
         let me = bound(w.dir.path(), norn::matrix::Role::Worker);
         let id = me.id().unwrap().to_owned();
         let calls = [

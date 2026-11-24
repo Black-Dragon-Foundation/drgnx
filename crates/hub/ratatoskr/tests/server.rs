@@ -530,6 +530,11 @@ fn a_hub_whose_store_is_slow_at_its_end_closes_its_connections_then_writes_its_q
         .expect("the connections' close is logged");
     let stopping = log.find("runtime.db's thread is still stopping").unwrap();
     assert!(closed < stopping, "the connections close first: {log}");
+    // and it names the request that holds the thread (here the hold's own `read`)
+    assert!(
+        log.contains("running the request from crates/hub/ratatoskr/src/server.rs:"),
+        "the note names what runtime.db's thread runs: {log}"
+    );
     // released: the queued write is written, then the hub ends as asked
     unsafe { libc::kill(hub.pid() as i32, libc::SIGUSR1) };
     let status = hub.wait_exit();

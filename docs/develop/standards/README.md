@@ -19,7 +19,9 @@ right instead of being migrated later.
 | `conformance` | the test that drives the API |
 
 `[crates]` marks crates `clean` (no finding; everything enforced) and `ui` (code on the UI thread). `[[layer]]` rows say
-what a crate may not depend on, directly or through other workspace crates.
+what a crate may not depend on, directly or through other workspace crates. A row with `dev = true` also counts the
+crate's own dev-dependencies (a test back-edge); the dev-dependencies of its dependencies never count. A row whose
+`crate` is not a workspace member is a finding.
 
 ## `cargo xtask standards`
 

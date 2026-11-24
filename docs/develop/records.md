@@ -61,6 +61,22 @@ privacy deny-list refuses it: a file under `~/org` is read only when the user op
   default comes first, then the file's lines. The file is at most 64 KiB; an unknown key, a non-string entry or bad
   TOML fails the import before anything is written, with an error naming the file. A file already adopted that the
   list now ignores is forgotten at the next full import, like a deleted one (its pieces are retired).
+- **The limits.** After the list, a record file over 2 MiB (`MAX_RECORD_BYTES`, by its size: it is never read) and a
+  file the root's git ignore rules exclude are **skipped and listed**: `records/status` answers `skipped: [{path, why:
+  too-big | git-ignored}]`, what the last full import of each root left out (`kv` `records-skipped:ROOT`). The git
+  rules are the root's `.gitignore` files (each folder's, read when the walk first asks about a path under it, deeper
+  ones first, the last matching line of a file deciding so `!` re-includes) and `.git/info/exclude`, read through
+  `gix-ignore` with no `git` process (`records::ignore::GitIgnore`). A git-ignored folder is not entered at all (the
+  org folder's repositories, `.claude/worktrees/`), so its files are not listed one by one. A file already adopted
+  that is now skipped is forgotten at the next full import, like a deleted one; a sync never reads or rewrites a file
+  over the limit. `--path` on a skipped file is refused (`FILE is over 2 MiB` / `FILE is git-ignored`).
+- **Not for this project.** `records/forget-root {root}` (the user only; `ratatoskr graph forget-root ROOT`) retires
+  every record of a file under ROOT, with the links and rulings those files made and their marks (base, view,
+  adoption), and turns ROOT's `records.adopt` off. It answers `{pieces, files}`. No file is read, written or touched:
+  their bytes and times stay as they were. While `records.adopt` is off, an import of ROOT or of a folder inside it is
+  refused (`not-allowed`); `records/import {root, adopt: true}` (`import-records --adopt`) turns it on again and adopts
+  the root afresh (a new backup, a new notice). `records.adopt` is a project setting kept in the graph store
+  (`kv` `setting:records-adopt:ROOT`, absent when on), like the store's other settings.
 
 - **Forgetting moved files.** `ratatoskr graph forget --root DIR [--missing] [--path FILE]... [--dry-run] [--yes]` retires
   what the scan-era (parsed) sources under DIR still hold when their files are gone: `--missing` takes every source whose
@@ -143,6 +159,49 @@ privacy deny-list refuses it: a file under `~/org` is read only when the user op
   now `matrix`); the user may.
 - **Never committed.** The hub runs no git on view files. The files stay modified in the work tree; committing them
   is the user's.
+
+## The seam: text to structure
+
+`ratatoskr::records::structure` is the step from a record file's text to the graph's structure, with no file I/O and
+no three-way merge. The importer and the file sync use it for the graph side; records kept in the stream log call it on
+each take of a document (and `render` to seed one).
+
+- `pieces(db, file) -> Vec<PieceRef {id, key, kind, role, seq, version}>`: the file's live pieces, in `seq` order.
+- `apply_text(db, file, text, meta) -> Applied {tx, created, updated, retired, refused}`: `saga` parses TEXT, a piece
+  the graph knows by an older id keeps it (by its text), and the acts (new, changed and retired pieces, `seq`, the
+  plan links) go in **one transaction as META's actor**. `tx` is none when the graph already holds the text (no `tx`
+  row is added). A caller of class agent or extension never changes a field only the user may set
+  (`saga::merge::USER_ONLY_FIELDS`): a piece that would add, change or drop one is listed in `refused` with the reason
+  and left as it is; the user and the hub's own writes are not screened. The file's kind is its pieces' kind, else its
+  path's (`DEFERRED.md`, `*.ledger.md`, a `plans/`, `specs/`, `decisions/` or `adr/` folder).
+- `render(db, file) -> String`: the pieces' texts in `seq` order. An unchanged graph renders the file byte for byte.
+
+The first adoption of a file goes through `apply_text` as the hub. `Views::sync` keeps the file I/O, the base, the
+three-way merge, the retries and the write; it takes the file's pieces from the seam (`ops_of`: parse and keep older
+ids) and hands the merge's acts back to it (`apply_merged`).
+
+## Scale
+
+`cargo xtask measure records_org_scale [--reps N] [--out FILE]` measures the records system at the size of an org
+folder. It runs ratatoskr's `records_org_scale` example (release), which generates under `target/records_org_scale/`
+a project of 2,000 record files and about 50 MB (900 plans of 20 tasks, 199 ledgers, 600 specs, 300 decision records
+and a 1,500-row `DEFERRED.md`), then, N times (5 by default) on a fresh store, times the cold import, the second
+(idempotent) import, `sync_all` and `records/status`, and removes the tree. The medians and the process's peak RSS
+are written as a `vag` report to `crates/std/vag/baselines/records_org_scale.json`. They are a baseline, not a bar:
+the bars are set from them. Run it on a quiet machine.
+
+The first baseline (5 reps, medians, in a build container on an x86-64 desktop):
+
+| Step | Median |
+|------|--------|
+| cold import | 88.4 s |
+| second (idempotent) import | 28.5 s |
+| `sync_all` | 29.3 s |
+| `records/status` | 1.19 s |
+| peak RSS | 104 MiB |
+
+The idempotent import and `sync_all` cost a third of the cold import although nothing changes: both re-read and
+re-parse every file. That is where a bar will bite first.
 
 ## Writing specs and decisions
 

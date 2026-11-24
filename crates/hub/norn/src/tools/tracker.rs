@@ -573,13 +573,13 @@ struct TaskReadArgs {
     status: Option<String>,
     /// find: only this assignee
     assignee: Option<String>,
-    /// find, ready: only tasks with all of these labels
+    /// find, ready: tasks with all these labels
     labels: Option<Vec<String>>,
     /// ready: at most this many (up to 50)
     limit: Option<i64>,
     /// find, ready, mine: the `next_cursor` of the page before
     cursor: Option<String>,
-    /// find: task (default), plan, spec or decision
+    /// find: task (default), plan, spec, decision, run
     kind: Option<String>,
     /// Full bodies and links
     detail: Option<bool>,
@@ -778,6 +778,7 @@ enum FindKind {
     Plan,
     Spec,
     Decision,
+    Run,
 }
 
 impl FindKind {
@@ -787,8 +788,9 @@ impl FindKind {
             Some("plan") => Ok(FindKind::Plan),
             Some("spec") => Ok(FindKind::Spec),
             Some("decision") => Ok(FindKind::Decision),
+            Some("run") => Ok(FindKind::Run),
             Some(other) => Err(format!(
-                "kind is task, plan, spec or decision, not {other:?}"
+                "kind is task, plan, spec, decision or run, not {other:?}"
             )),
         }
     }
@@ -799,6 +801,7 @@ impl FindKind {
             FindKind::Plan => "plan",
             FindKind::Spec => "spec",
             FindKind::Decision => "decision",
+            FindKind::Run => "run",
         }
     }
 }

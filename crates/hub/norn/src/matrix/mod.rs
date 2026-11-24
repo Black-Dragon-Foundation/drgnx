@@ -113,23 +113,29 @@ pub const OUTSIDE_NEVER: [Action; 15] = [
     Action::UserPrivate,
 ];
 
+/// The rows that are at most Ask for an outside agent on a record it did not create (MP-2): an Allow reads as Ask.
+pub const OUTSIDE_ASK_AT_MOST: [Action; 1] = [Action::GraphChange];
+
 /// An outside agent's cells: E with every [`OUTSIDE_NEVER`] row Never, and, on a record it did not create
-/// (`!own_record`), `graph.change` at most Ask (an Allow becomes Ask with its limit kept; Never stays Never).
+/// (`!own_record`), every [`OUTSIDE_ASK_AT_MOST`] row at most Ask (an Allow becomes Ask with its limit kept; Never
+/// stays Never).
 pub fn outside_effective(e: &Effective, own_record: bool) -> Effective {
     let mut out = e.clone();
     for a in OUTSIDE_NEVER {
         out.cells.insert(a, NEVER);
     }
     if !own_record {
-        let c = out.cell(Action::GraphChange);
-        if c.verdict == Verdict::Allow {
-            out.cells.insert(
-                Action::GraphChange,
-                Cell {
-                    verdict: Verdict::Ask,
-                    limit: c.limit,
-                },
-            );
+        for a in OUTSIDE_ASK_AT_MOST {
+            let c = out.cell(a);
+            if c.verdict == Verdict::Allow {
+                out.cells.insert(
+                    a,
+                    Cell {
+                        verdict: Verdict::Ask,
+                        limit: c.limit,
+                    },
+                );
+            }
         }
     }
     out

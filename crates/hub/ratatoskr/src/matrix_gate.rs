@@ -27,8 +27,8 @@ use norn::store::{CoordError, WTx};
 use norn::write::cards::{MatrixAsk, matrix_card, matrix_card_get};
 use runstav::events::CardChoice;
 use runstav::methods::matrix::{
-    CellRow, CheckAnswer, CheckParams, EffectiveRow, Facts, GetParams, MatrixView, PresenceParams,
-    WhoParam,
+    CellRow, CheckAnswer, CheckParams, EffectiveRow, Facts, GetParams, MatrixView, OutsideCaps,
+    PresenceParams, WhoParam,
 };
 use runstav::types::Bounded;
 use runstav::wire::{Error, ErrorCode};
@@ -195,14 +195,14 @@ fn granted(conn: &urdr::Connection, a: Action, ctx: &ActionCtx, now: f64) -> boo
     })
 }
 
-/// The card of the user's live, unspent yes to exactly CTX's change (an outside agent's `graph.change` Ask), if one
-/// is: a change grant to CTX's session naming the same method, record and argument digest, not expired at NOW, whose
-/// card has not let a call through yet.
+/// The card of the user's live, unspent yes to exactly CTX's change (an outside agent's Ask on an
+/// [`norn::matrix::OUTSIDE_ASK_AT_MOST`] row), if one is: a change grant to CTX's session naming the same method,
+/// record and argument digest, not expired at NOW, whose card has not let a call through yet.
 fn change_grant(conn: &urdr::Connection, a: Action, ctx: &ActionCtx, now: f64) -> Option<i64> {
     let ch = ctx
         .change
         .as_ref()
-        .filter(|_| a == Action::GraphChange && is_outside(ctx))?;
+        .filter(|_| norn::matrix::OUTSIDE_ASK_AT_MOST.contains(&a) && is_outside(ctx))?;
     let found = grants::matrix_grants_for(conn, a.id(), ctx.session.as_deref(), None, now).ok()?;
     found
         .iter()
@@ -771,6 +771,10 @@ impl MatrixGate {
             time_presets: time,
             cells,
             effective: eff,
+            outside: OutsideCaps {
+                never: norn::matrix::OUTSIDE_NEVER.to_vec(),
+                ask_at_most: norn::matrix::OUTSIDE_ASK_AT_MOST.to_vec(),
+            },
         }
     }
 

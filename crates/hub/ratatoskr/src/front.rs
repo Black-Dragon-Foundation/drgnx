@@ -1092,6 +1092,7 @@ impl Front {
             | Params::RecordsResolve(_)
             | Params::RecordsWrite(_)
             | Params::RecordsRead(_)
+            | Params::RecordsForgetRoot(_)
             | Params::OutsideBind(_)
             | Params::OutsideUnbind(_)
             | Params::OutsideBindings(_)
@@ -1346,17 +1347,7 @@ impl Front {
             p @ (Params::MessagesSend(_)
             | Params::MessagesMark(_)
             | Params::EventsAdd(_)
-            | Params::ReviewMark(_)
-            | Params::CoordJobCreate(_)
-            | Params::CoordJobSet(_)
-            | Params::CoordTaskStatus(_)
-            | Params::CoordLeases(_)
-            | Params::CoordDecide(_)
-            | Params::CoordAgent(_)
-            | Params::CoordCardCreate(_)
-            | Params::CoordCardSet(_)
-            | Params::CoordHeld(_)
-            | Params::CoordPrune(_)) => arm!(
+            | Params::ReviewMark(_)) => arm!(
                 coord::serve(&self.writer, &caller, p)
                     .await
                     .unwrap_or_else(|_| unserved(method))
@@ -1682,8 +1673,8 @@ mod tests {
                     assert!(!message.contains("reached no handler"), "{}: {a}", m.name);
                 }
             }
-            // each part is reached: the front's own, the agent core's, the store's and the coordination writes
-            for name in ["ping", "agents/list", "graph/backup", "coord/prune"] {
+            // each part is reached: the front's own, the agent core's, the store's and the coordination notice
+            for name in ["ping", "agents/list", "graph/backup", "coord/notify"] {
                 assert!(tried.contains(&name), "{name} not tried: {tried:?}");
             }
         })
@@ -1721,8 +1712,8 @@ mod tests {
                         .unwrap_or_else(|_| panic!("{} was not answered within 10 s", m.name));
                     answers(&out);
                 }
-                // the dispatchers on the way: the front's, the agent core's, the store's, the coordination writes
-                for name in ["ping", "agents/list", "graph/backup", "coord/prune"] {
+                // the dispatchers on the way: the front's, the agent core's, the store's, the coordination notice
+                for name in ["ping", "agents/list", "graph/backup", "coord/notify"] {
                     assert!(tried.contains(&name), "{name} not tried: {tried:?}");
                 }
             });
@@ -1925,7 +1916,7 @@ mod tests {
         let mut all = Vec::new();
         for (call, src) in handlers {
             let routed = routed(front, call);
-            assert!(routed.len() > 10, "{call}: {routed:?}");
+            assert!(routed.len() > 3, "{call}: {routed:?}");
             assert_eq!(unarmed(&routed, src), Vec::<&str>::new(), "{call}");
             all.extend(routed);
         }

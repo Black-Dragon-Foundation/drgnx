@@ -28,6 +28,7 @@ fn main() -> ExitCode {
 
 const USAGE: &str = "usage:
   cargo xtask measure <scenario> --out FILE [--base FILE] (--pid PID | --spawn CMD [ARGS])
+  cargo xtask measure records_org_scale [--reps N] [--out FILE]
   cargo xtask standards [--write] [--changed FILE…] [--commit-msg MSGFILE FILE…]
   cargo xtask test-sandbox [NEXTEST ARGS…]
   cargo xtask wit-check [--root DIR] [--base REF]";

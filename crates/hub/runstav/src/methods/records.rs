@@ -37,6 +37,10 @@ pub struct ImportParams {
     /// Only this record file, which must lie under `root` and be one the importer would find (not ignored).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<AbsPath>,
+    /// Adopt a root that `records/forget-root` turned off ("not for this project") again: its `records.adopt` goes
+    /// back on first.  Without it, an import of such a root is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopt: Option<bool>,
 }
 
 /// One file the importer read.
@@ -101,6 +105,41 @@ pub struct ViewStatus {
 pub struct Views {
     #[serde(default, deserialize_with = "null_as_empty")]
     pub views: Vec<ViewStatus>,
+    /// The files the last full import of each root left out: over 2 MiB, or git-ignored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<Skipped>,
+}
+
+/// Why the importer left a record file out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SkipWhy {
+    /// Over 2 MiB (by its size; the file is never read).
+    TooBig,
+    /// The root's git ignore rules (`.gitignore` files, `.git/info/exclude`) exclude it.
+    GitIgnored,
+}
+
+/// A record file the importer left out, and why.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Skipped {
+    pub path: String,
+    pub why: SkipWhy,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ForgetRootParams {
+    /// The project root whose records go ("not for this project").
+    pub root: AbsPath,
+}
+
+/// What `records/forget-root` retired: the pieces, and the files they came from (the files themselves are untouched).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Forgotten {
+    pub pieces: u64,
+    pub files: u64,
 }
 
 /// Which version of a conflicted record stays.
@@ -320,6 +359,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "records/resolve", RecordsResolve(ResolveParams) -> Resolved,
             classes: [User], writes: true,
             doc: "a conflicted record resolved: the file's text becomes the record's, or the graph's version is written back to the file",
+        ),
+        method!(
+            "records/forget-root", RecordsForgetRoot(ForgetRootParams) -> Forgotten,
+            classes: [User], writes: true,
+            doc: "not for this project: the root's records retired and its records.adopt turned off (an import refuses it until adopt: true); the files are never touched",
         ),
     ]
 }

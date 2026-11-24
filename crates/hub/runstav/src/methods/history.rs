@@ -171,7 +171,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "history/hunks/head", HistoryHunksHead(HeadHunksParams) -> HeadHunks,
             classes: [User], writes: false,
-            doc: "what the editor's tracked buffer of a file changed against the last commit (HEAD), as hunks numbered as git diff --unified=0 numbers them; for the change marks in the margin",
+            doc: "Emacs-era, re-decide at B1: what the editor's tracked buffer of a file changed against the last commit (HEAD), as hunks numbered as git diff --unified=0 numbers them; for the change marks in the margin",
         ),
         method!(
             "git/stage-hunk", GitStageHunk(StageHunkParams) -> Staged,

@@ -47,7 +47,8 @@ pub const USAGE: &str = "usage: ratatoskr graph export [--project P --out DIR] [
     \x20      ratatoskr graph compact [--dry-run] [--json]\n\
     \x20      ratatoskr graph proposed accept|reject TX... [--json]\n\
     \x20      ratatoskr graph forget --root DIR [--missing] [--path FILE]... [--dry-run] [--yes] [--json]\n\
-    \x20      ratatoskr graph import-records --root DIR [--only specs|plans|ledgers|decisions|deferred|build-board|board] [--path FILE] [--dry-run] [--json]";
+    \x20      ratatoskr graph import-records --root DIR [--only specs|plans|ledgers|decisions|deferred|build-board|board] [--path FILE] [--dry-run] [--adopt] [--json]\n\
+    \x20      ratatoskr graph forget-root ROOT [--json]";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct GraphCommand {
@@ -101,6 +102,12 @@ pub enum Sub {
         only: Option<String>,
         path: Option<PathBuf>,
         dry_run: bool,
+        /// Adopt a root `forget-root` turned off again.
+        adopt: bool,
+    },
+    /// "Not for this project": the root's records retired, the files untouched (`records/forget-root`).
+    ForgetRoot {
+        root: PathBuf,
     },
     /// Retires what files the scan once read held, when the files are gone (moved or deleted) or named.
     Forget {
@@ -247,7 +254,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<GraphCom
             }
         }
         "import-records" => {
-            known(&["root", "only", "path", "dry-run"])
+            known(&["root", "only", "path", "dry-run", "adopt"])
                 .map_err(|e| villa::Error::invalid(e.to_string()))?;
             no_words(0).map_err(|e| villa::Error::invalid(e.to_string()))?;
             let only = get("only");
@@ -266,6 +273,17 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<GraphCom
                 only,
                 path: get("path").map(PathBuf::from),
                 dry_run: flag("dry-run"),
+                adopt: flag("adopt"),
+            }
+        }
+        "forget-root" => {
+            known(&[])?;
+            no_words(1)?;
+            Sub::ForgetRoot {
+                root: words
+                    .first()
+                    .map(PathBuf::from)
+                    .ok_or_else(|| villa::Error::invalid("graph forget-root needs ROOT"))?,
             }
         }
         "backup" => {
@@ -606,8 +624,12 @@ impl GraphCommand {
                 only,
                 path,
                 dry_run,
+                adopt,
             } => {
                 let mut p = json!({"root": absolute(root, cwd)});
+                if *adopt {
+                    p["adopt"] = json!(true);
+                }
                 if let Some(o) = only {
                     p["only"] = json!(o);
                 }
@@ -618,6 +640,9 @@ impl GraphCommand {
                     p["dry_run"] = json!(true);
                 }
                 ("records/import", p)
+            }
+            Sub::ForgetRoot { root } => {
+                ("records/forget-root", json!({"root": absolute(root, cwd)}))
             }
             // the first of its calls: the sources the store holds under ROOT (the second is [`forget_call`])
             Sub::Forget { root, .. } => ("graph/sql", forget_listing(&absolute(root, cwd))),
@@ -984,6 +1009,14 @@ pub fn render(sub: &Sub, a: &Value) -> (String, bool) {
             if let Some(b) = a["backup"].as_str() {
                 out.push_str(&format!("backup {b}\n"));
             }
+        }
+        Sub::ForgetRoot { .. } => {
+            out.push_str(&format!(
+                "not for this project: {} records of {} files retired; the files are untouched \
+                 (import-records --adopt takes them again)\n",
+                n(&a["pieces"]),
+                n(&a["files"])
+            ));
         }
         Sub::Forget { .. } => {
             out.push_str(&format!(
@@ -1416,6 +1449,27 @@ mod tests {
             json!({"root": "/r", "path": "/w/docs/specs/x/a.md"})
         );
         assert!(p(&["import-records", "--root", "/r", "--path"]).is_err());
+    }
+
+    #[test]
+    fn graph_cli_parses_forget_root() {
+        let c = p(&["forget-root", "proj", "--json"]).unwrap();
+        assert!(c.json);
+        assert_eq!(
+            c.request(Path::new("/w"), 0.0).unwrap(),
+            ("records/forget-root", json!({"root": "/w/proj"}))
+        );
+        assert!(p(&["forget-root"]).is_err(), "ROOT is needed");
+        assert!(p(&["forget-root", "/a", "/b"]).is_err());
+        let (text, ok) = render(&c.sub, &json!({"pieces": 12, "files": 3}));
+        assert!(ok);
+        assert!(text.contains("12 records of 3 files retired"), "{text}");
+        // and back on: an import that adopts the root again
+        let again = p(&["import-records", "--root", "/r", "--adopt"]).unwrap();
+        assert_eq!(
+            again.request(Path::new("/w"), 0.0).unwrap().1,
+            json!({"root": "/r", "adopt": true})
+        );
     }
 
     #[test]

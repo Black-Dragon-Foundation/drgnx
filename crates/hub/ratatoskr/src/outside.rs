@@ -26,8 +26,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The methods an outside actor reaches through the tools' `Hub::exec` (every other is refused there).
-pub(crate) const OUTSIDE_METHODS: [&str; 4] =
-    ["plans/get", "plans/write", "records/read", "records/write"];
+pub(crate) const OUTSIDE_RECORD_METHODS: &[&str] =
+    &["plans/get", "plans/write", "records/read", "records/write"];
+
+/// The methods an outside actor reaches: the concatenation of each area's slice ([`OUTSIDE_RECORD_METHODS`] today; an
+/// area adds its own slice and one line here).
+pub(crate) fn outside_methods() -> Vec<&'static str> {
+    OUTSIDE_RECORD_METHODS.to_vec()
+}
 
 /// The refusal of an outside caller with no live binding (or no attached bridge).
 pub(crate) const NOT_BOUND: &str = "this outside agent is not bound here";
