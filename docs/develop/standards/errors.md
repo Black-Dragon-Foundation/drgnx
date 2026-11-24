@@ -17,6 +17,8 @@ fn open_project(path: &Path) -> villa::Result<Project> {
   `cancelled`, `internal`. Their wire names (`not-found`, …) are what a client sees.
 - The message is a sentence for the user. What only a log or a bug report needs goes in `with_detail`; the error
   underneath goes in `with_source`. `Display` prints the message only; `Debug` prints everything.
+- Two errors are equal when their kind, message and detail are equal (the source is not compared), so a test can
+  `assert_eq!` a `Result` against an expected one.
 - `From<std::io::Error>`: `NotFound` → not-found, `PermissionDenied` → refused, `TimedOut` → timeout, the rest → io.
 - A result you mean to ignore is handled anyway: log it (`annall::log_error`) or say why it cannot matter.
 

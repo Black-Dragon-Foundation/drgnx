@@ -51,6 +51,21 @@ fn error_display_is_the_user_sentence() {
 }
 
 #[test]
+fn errors_are_equal_when_kind_sentence_and_detail_are_and_the_source_is_not_compared() {
+    let a = Error::invalid("bad").with_detail("d");
+    assert_eq!(a, Error::invalid("bad").with_detail("d"));
+    assert_eq!(
+        a,
+        Error::invalid("bad")
+            .with_detail("d")
+            .with_source(io::Error::other("x"))
+    );
+    assert_ne!(a, Error::invalid("bad"));
+    assert_ne!(a, Error::refused("bad").with_detail("d"));
+    assert_ne!(a, Error::invalid("worse").with_detail("d"));
+}
+
+#[test]
 fn every_kind_has_its_constructor_and_wire_name() {
     let cases = [
         (Error::not_found("m"), "not-found"),
