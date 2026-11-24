@@ -530,7 +530,7 @@ mod tests {
     ];
 
     /// The agent core's methods that write (agent system part 1, Task 0), besides `agents/*` and `job/*`.
-    const CORE_WRITES: [&str; 17] = [
+    const CORE_WRITES: [&str; 18] = [
         "agents/move",
         "agents/role",
         "exec/bump",
@@ -546,6 +546,7 @@ mod tests {
         "records/import",
         "records/resolve",
         "records/write",
+        "records/forget-root",
         // the user's bindings of outside agents
         "outside/bind",
         "outside/unbind",

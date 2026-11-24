@@ -272,6 +272,7 @@
   "plugins/list": ["user"],
   "presence/set": ["user"],
   "records/conflict": ["user"],
+  "records/forget-root": ["user"],
   "records/import": ["user"],
   "records/read": ["user"],
   "records/resolve": ["user"],

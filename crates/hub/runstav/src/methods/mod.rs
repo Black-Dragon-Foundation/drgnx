@@ -287,6 +287,7 @@ params! {
     RecordsResolve(records::ResolveParams),
     RecordsWrite(records::RecordWrite),
     RecordsRead(records::RecordRead),
+    RecordsForgetRoot(records::ForgetRootParams),
     OutsideBind(outside::BindParams),
     OutsideUnbind(outside::UnbindParams),
     OutsideBindings(Empty),
