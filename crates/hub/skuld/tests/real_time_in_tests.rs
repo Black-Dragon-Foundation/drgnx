@@ -411,12 +411,33 @@ fn scan(src: &str, whole: bool, mods: &mut Vec<String>) -> Vec<(usize, Kind)> {
     sites
 }
 
+/// Every `.rs` file under DIR except what a `REPLACED.md` switches off (reference code that is not compiled): the
+/// whole folder holding it, or the paths (relative to that folder) its `files:` line lists.
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    rust_files_skipping(dir, &mut Vec::new(), out);
+}
+
+fn rust_files_skipping(dir: &Path, skip: &mut Vec<PathBuf>, out: &mut Vec<PathBuf>) {
+    if let Ok(text) = read_text(&dir.join("REPLACED.md")) {
+        match text.lines().find_map(|l| l.strip_prefix("files:")) {
+            None => return,
+            Some(list) => skip.extend(
+                list.split('#')
+                    .next()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .map(|f| dir.join(f)),
+            ),
+        }
+    }
     let Ok(rd) = fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
+        if skip.iter().any(|s| p.starts_with(s)) {
+            continue;
+        }
         if p.is_dir() {
-            rust_files(&p, out);
+            rust_files_skipping(&p, skip, out);
         } else if p.extension().is_some_and(|x| x == "rs") {
             out.push(p);
         }
@@ -525,6 +546,41 @@ fn find(runtime: &Path) -> Vec<String> {
         }
     }
     out
+}
+
+/// A folder holding `REPLACED.md` is reference code that is not compiled: its files are not test code to scan (the
+/// whole folder, or the files its `files:` line names).
+#[test]
+fn rust_files_skips_replaced_folders() {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("replaced-walk");
+    fs::remove_dir_all(&root).ok();
+    let gone = root.join("src/gone");
+    fs::create_dir_all(&gone).unwrap();
+    let put = |p: &Path, text: &str| eitri::replace_file(p, text.as_bytes()).unwrap();
+    put(&root.join("src/live.rs"), "");
+    put(&gone.join("a.rs"), "");
+    put(&gone.join("b.rs"), "");
+    let names = |root: &Path| -> Vec<String> {
+        let mut out = Vec::new();
+        rust_files(&root.join("src"), &mut out);
+        let mut names: Vec<String> = out
+            .iter()
+            .map(|p| p.strip_prefix(root).unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(
+        names(&root),
+        ["src/gone/a.rs", "src/gone/b.rs", "src/live.rs"]
+    );
+    put(&gone.join("REPLACED.md"), "# Replaced: not compiled\n");
+    assert_eq!(names(&root), ["src/live.rs"]);
+    put(
+        &gone.join("REPLACED.md"),
+        "# Replaced: not compiled\nfiles: a.rs   # b.rs stays\n",
+    );
+    assert_eq!(names(&root), ["src/gone/b.rs", "src/live.rs"]);
 }
 
 #[test]
