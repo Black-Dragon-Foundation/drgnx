@@ -3,6 +3,7 @@
 //! - [`lock`]: a mutex's guard, also after a holder panicked (the poison is cleared; the first recovery is logged).
 //! - [`Executor`]: the one tokio runtime of the work pool. [`Executor::spawn`] names each task and gives a [`Task`],
 //!   which cancels the task when dropped; [`Task::detach`] lets it run on and must say why.
+//! - [`Handle`]: spawns on one pool from another runtime's thread.
 //! - [`Cancel`]: a cancellation token; [`Cancel::child`] is cancelled with its parent.
 //! - [`spawn_thread`]: a named OS thread, for what must own one.
 //! - [`ui`]: [`ui::UiQueue::post`], the only way back to the UI thread, and the [`ui::Watchdog`] that times every UI
@@ -93,6 +94,45 @@ impl Executor {
     /// Run FUT to its end on this thread: for a command-line tool or a test, never on the UI thread.
     pub fn block_on<F: Future>(&self, fut: F) -> F::Output {
         self.rt.block_on(fut)
+    }
+
+    /// A [`Handle`] to this pool, for code that spawns on it from another runtime's thread.
+    pub fn handle(&self) -> Handle {
+        Handle(self.rt.handle().clone())
+    }
+
+    /// End the pool without waiting for its tasks: one that never yields (a guest spinning until its deadline) ends on
+    /// its own thread, and this call returns at once. Consumes the pool, so nothing can spawn on it after.
+    pub fn shutdown_background(self) {
+        self.rt.shutdown_background();
+    }
+}
+
+/// A way to spawn on one pool from outside it: the pool the caller was started on ([`Handle::current`]) or one's
+/// [`Executor::handle`]. [`spawn`] goes to the runtime the caller is running in; a handle goes to the one it names.
+#[derive(Clone)]
+pub struct Handle(tokio::runtime::Handle);
+
+impl Handle {
+    /// The pool the calling thread runs in; [`villa::Kind::Invalid`] outside one.
+    pub fn current() -> villa::Result<Handle> {
+        tokio::runtime::Handle::try_current()
+            .map(Handle)
+            .map_err(|e| {
+                villa::Error::invalid("There is no work pool on this thread.").with_source(e)
+            })
+    }
+
+    /// FUT on this handle's pool, as a task named NAME. Dropping the [`Task`] cancels it.
+    pub fn spawn<F>(&self, name: &'static str, fut: F) -> Task<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        Task {
+            name,
+            handle: Some(self.0.spawn(fut)),
+        }
     }
 }
 

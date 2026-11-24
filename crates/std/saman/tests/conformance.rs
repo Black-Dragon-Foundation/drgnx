@@ -239,3 +239,54 @@ fn a_current_thread_run_gives_the_futures_output() {
     });
     assert_eq!(out, 42);
 }
+
+#[test]
+fn a_handle_spawns_on_its_own_pool_from_another() {
+    let pool = Executor::tuned(1, |b| {
+        b.thread_name("handle-pool");
+    })
+    .unwrap();
+    let handle = pool.handle();
+    let other = Executor::new(1).unwrap();
+    // a task of the other pool spawns through the handle: it runs on the handle's pool
+    let ran_on = other
+        .block_on(async move {
+            handle
+                .spawn("on-the-handle", async {
+                    std::thread::current().name().map(str::to_owned)
+                })
+                .await
+        })
+        .unwrap();
+    assert_eq!(ran_on.as_deref(), Some("handle-pool"));
+}
+
+#[test]
+fn a_handle_to_no_pool_is_invalid() {
+    let e = saman::Handle::current().err().unwrap();
+    assert_eq!(e.kind(), villa::Kind::Invalid);
+    let pool = Executor::new(1).unwrap();
+    assert!(pool.block_on(async { saman::Handle::current().is_ok() }));
+}
+
+#[test]
+fn shutting_a_pool_down_does_not_wait_for_a_task_that_never_yields() {
+    let pool = Executor::new(1).unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    pool.spawn("spinner", async move {
+        started_tx.send(()).unwrap_or_default();
+        // holds the pool's one worker thread until the test lets go
+        release_rx.recv().unwrap_or_default();
+    })
+    .detach("the test ends it through the channel");
+    assert_eq!(started_rx.recv_timeout(WAIT), Ok(()));
+    let (done_tx, done_rx) = mpsc::channel();
+    saman::spawn_thread("shutter", move || {
+        pool.shutdown_background();
+        done_tx.send(()).unwrap_or_default();
+    })
+    .unwrap();
+    assert_eq!(done_rx.recv_timeout(WAIT), Ok(()));
+    release_tx.send(()).unwrap_or_default();
+}
