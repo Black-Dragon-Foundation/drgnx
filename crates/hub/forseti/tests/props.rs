@@ -107,6 +107,7 @@ fn running(
             minutes,
             cpu: 0.0,
             mem_p95_mib: Some(0),
+            io_p95_mbps: None,
         },
         restartable: true,
         evicted_once: false,
@@ -245,7 +246,7 @@ proptest! {
         for (t, &x) in l.arrivals.iter().enumerate() {
             let now = t as u64 * TICK;
             add(&mut queue, &mut minutes, x, now);
-            let exp = |j: &JobId| Expected { minutes: minutes[j], cpu: 1.0, mem_p95_mib: Some(512) };
+            let exp = |j: &JobId| Expected { minutes: minutes[j], cpu: 1.0, mem_p95_mib: Some(512), io_p95_mbps: None };
             let order = queue_order(&queue, &HashMap::new(), &exp, now);
             let head = order[0].clone();
             queue.retain(|j| j.id != head);
@@ -325,6 +326,7 @@ impl Two {
             minutes: 10.0,
             cpu: 0.1,
             mem_p95_mib: p95,
+            io_p95_mbps: None,
         };
         if admit(&j, Priority::P3, &exp, &m, &b, &lim).is_err() {
             return false;
@@ -610,6 +612,7 @@ fn run_job(id: JobId, reserve: u64, current: u64, cpu: f64, minutes: f64) -> Run
             minutes,
             cpu,
             mem_p95_mib: Some(reserve),
+            io_p95_mbps: None,
         },
         restartable: true,
         evicted_once: false,
@@ -770,6 +773,7 @@ fn hist(machine: &str, wall_s: f64, warm: bool, at: u64, disturbed: bool) -> His
         at,
         warm,
         disk_gib: None,
+        io_mib: 0,
     }
 }
 

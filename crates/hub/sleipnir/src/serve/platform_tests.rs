@@ -108,6 +108,7 @@ impl Platform for Fake {
             wall_s: 0.0,
             cpu_s: 0.0,
             mem_peak_mib: 0,
+            io_mib: 0,
             mem_overshoot_mib: None,
             disturbed: false,
             log: String::new(),
@@ -780,6 +781,32 @@ fn the_runner_conf_quota_caps_the_hubs() {
     let (s, _, calls, _) = serve(d.path());
     calls.borrow_mut().quota_gb = Some(200);
     assert_eq!(s.disk_rules().quota_gb, Some(200));
+}
+
+/// [D] (Tasks 9, 10b) `runner.conf` sets the slot family's most instances (`[slots] max_slots`, 16 without) and what the
+/// disk moves (`[io] device_mbps`, none without): both read the same table subset as the quota, nothing else counts, and
+/// a runner that does not know its disk counts no IO.
+#[test]
+fn the_runner_conf_sets_slots_and_io() {
+    use super::platform::{io_device_mbps, max_slots};
+    let conf = "[slots]\nmax_slots = 6\n\n[io]\ndevice_mbps = 450\n";
+    assert_eq!(max_slots(conf), 6);
+    assert_eq!(io_device_mbps(conf), Some(450.0));
+    assert_eq!(max_slots(""), crate::sync::slot::DEFAULT_MAX_SLOTS);
+    assert_eq!(
+        max_slots("[slots]\nmax_slots = 0\n"),
+        crate::sync::slot::DEFAULT_MAX_SLOTS
+    );
+    assert_eq!(
+        max_slots("[disk]\nmax_slots = 6\n"),
+        crate::sync::slot::DEFAULT_MAX_SLOTS
+    );
+    assert_eq!(io_device_mbps(""), None);
+    assert_eq!(io_device_mbps("[io]\ndevice_mbps = 0\n"), None);
+    // a platform that does not know the disk leaves admission's limits without a figure
+    let d = tempfile::tempdir().unwrap();
+    let (s, _, _, _) = serve(d.path());
+    assert_eq!(s.limits.io_device_mbps, None);
 }
 
 /// [D] The hub's order: each item re-checked before it goes; a live attempt's folder and an item the register doesn't

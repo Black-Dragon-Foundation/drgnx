@@ -117,9 +117,19 @@ pub struct RunnerMounts {
     /// The slot's target dir.
     pub target: PathBuf,
     pub caches: Vec<CacheMount>,
-    /// `CARGO_BUILD_JOBS` from the job's grant (`forseti::admit::cargo_jobs`); 0: not set.
-    pub cargo_jobs: u32,
+    /// A `git = "ro"` job's read-only git dir, outside the slot: mounted `ro` at [`GIT_DIR_INSIDE`], with `GIT_DIR` and
+    /// `GIT_WORK_TREE` naming it.
+    pub git_ro: Option<PathBuf>,
+    /// The machine's jobserver fifo, for a job that takes part: bind-mounted at [`JOBSERVER_INSIDE`], with `MAKEFLAGS`
+    /// and `CARGO_MAKEFLAGS` naming it.
+    pub jobserver: Option<PathBuf>,
 }
+
+/// Where a `git = "ro"` job sees its git dir.
+pub const GIT_DIR_INSIDE: &str = "/gitdir";
+
+/// Where a job that takes part in the jobserver sees its fifo (`crate::linux::jobserver::INSIDE`).
+pub const JOBSERVER_INSIDE: &str = "/jobserver";
 
 /// A cache the job's suite declares: a folder under the runner's `cache/<project>/<trust>/`, at its path inside.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,9 +174,6 @@ pub struct RunnerArgs {
     /// Who owns the containers: the data-dir tag of a hub (8 hex), or `<prefix>/<hub id>` on a runner. A hub's
     /// containers carry it as `drgnx.owner`, and its sidecar's name.
     pub owner: String,
-    /// The hub's own job: `CARGO_BUILD_JOBS` from its grant (a runner's job carries it in [`RunnerMounts`]); 0: not
-    /// set.
-    pub cargo_jobs: u32,
     /// The job container carries the owner's labels (`drgnx.owner` or `drgnx.runner`, and `drgnx.job`), so a sweep
     /// finds exactly its own.
     pub job_labels: bool,
@@ -188,7 +195,6 @@ impl RunnerArgs {
             name_prefix: LOCAL_PREFIX.to_string(),
             owner: owner_tag.to_string(),
             job_labels: true,
-            cargo_jobs: 0,
             allowed: vec![],
             render_node: None,
         }
@@ -202,7 +208,6 @@ impl RunnerArgs {
             name_prefix: format!("{prefix}-"),
             owner: format!("{prefix}/{hub_id}"),
             job_labels: true,
-            cargo_jobs: 0,
             allowed: vec![],
             render_node: None,
         }
@@ -630,6 +635,9 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
         }
         .into(),
     );
+    // a job never fetches an object a git dir lacks: no network, and a lazy fetch would only wait
+    a.push("-e".into());
+    a.push("GIT_NO_LAZY_FETCH=1".into());
     // a job's deadline passes through from the podman client's environment (job-exec's, the hub's job), so a harness
     // can dump its state before its time box ends (design §5.7)
     if ra.job_labels {
@@ -640,10 +648,6 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
         None => {
             a.push("-v".into());
             a.push(format!("{source}:{WORK}:Z").into());
-            if ra.cargo_jobs > 0 {
-                a.push("-e".into());
-                a.push(format!("CARGO_BUILD_JOBS={}", ra.cargo_jobs).into());
-            }
         }
         Some(m) => {
             a.push("-v".into());
@@ -661,9 +665,21 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
             a.push(format!("{}:{TARGET}:rw,Z", mount_source(&m.target)?).into());
             a.push("-e".into());
             a.push(format!("CARGO_TARGET_DIR={TARGET}").into());
-            if m.cargo_jobs > 0 {
+            if let Some(g) = &m.git_ro {
+                a.push("-v".into());
+                a.push(format!("{}:{GIT_DIR_INSIDE}:ro,z", mount_source(g)?).into());
                 a.push("-e".into());
-                a.push(format!("CARGO_BUILD_JOBS={}", m.cargo_jobs).into());
+                a.push(format!("GIT_DIR={GIT_DIR_INSIDE}").into());
+                a.push("-e".into());
+                a.push(format!("GIT_WORK_TREE={WORK}").into());
+            }
+            if let Some(j) = &m.jobserver {
+                a.push("-v".into());
+                a.push(format!("{}:{JOBSERVER_INSIDE}:rw,Z", mount_source(j)?).into());
+                for var in ["MAKEFLAGS", "CARGO_MAKEFLAGS"] {
+                    a.push("-e".into());
+                    a.push(format!("{var}=--jobserver-auth=fifo:{JOBSERVER_INSIDE}").into());
+                }
             }
             for c in &m.caches {
                 let inside = &c.inside;
@@ -1067,7 +1083,8 @@ mod tests {
                     host: "/r/cache/p/public/cargo".into(),
                     inside: "/cache/cargo".into(),
                 }],
-                cargo_jobs: 2,
+                git_ro: None,
+                jobserver: None,
             }),
             keys: Some(KeyMounts {
                 helper: "/r/bin/0.1.0/drgnx-key".into(),
@@ -1292,6 +1309,8 @@ mod tests {
             "drgnx.job=x1a",
             "--network=none",
             "-e",
+            "GIT_NO_LAZY_FETCH=1",
+            "-e",
             "DRGNX_JOB_DEADLINE",
             "-v",
             "/work/tree:/work:Z",
@@ -1481,6 +1500,89 @@ mod tests {
         }
     }
 
+    /// [D] (Task 10) No argv the builder makes names a build tool's job count: `{jobs}` and the jobserver size a job's
+    /// parallelism, never an env var of the argv builder's own.
+    #[test]
+    fn no_cargo_env_in_any_argv() {
+        let mut served = runner_req(&["make"]);
+        let m = served.runner.as_mut().unwrap();
+        m.git_ro = Some("/r/jobs/x1a.1/git".into());
+        m.jobserver = Some("/r/jobserver/pool".into());
+        for a in [
+            on_runner(&served, &rcaps()).unwrap(),
+            on_runner(&runner_req(&["make"]), &rcaps()).unwrap(),
+            local(&req(&["make"]), &caps()).unwrap(),
+        ] {
+            assert!(!a.iter().any(|s| s.contains("CARGO_BUILD_JOBS")), "{a:?}");
+        }
+    }
+
+    /// [D] (Task 9) A job without `git = "ro"` sees no git dir: no mount and no `GIT_DIR` or `GIT_WORK_TREE`, and the
+    /// slot itself holds no `.git`; the job asks for one only through its pack.
+    #[test]
+    fn a_job_without_git_ro_sees_no_git_dir() {
+        let a = on_runner(&runner_req(&["make"]), &rcaps()).unwrap();
+        assert!(!a.iter().any(|s| s.contains(GIT_DIR_INSIDE)), "{a:?}");
+        assert!(
+            !a.iter()
+                .any(|s| s.starts_with("GIT_DIR") || s.starts_with("GIT_WORK_TREE")),
+            "{a:?}"
+        );
+        // every job stops a lazy fetch from reaching out through a git dir it was given
+        assert!(
+            a.windows(2).any(|w| w == ["-e", "GIT_NO_LAZY_FETCH=1"]),
+            "{a:?}"
+        );
+    }
+
+    /// [D] (Task 9) A `git = "ro"` job gets its git dir read-only and `GIT_DIR`, `GIT_WORK_TREE` naming it and the
+    /// source; no other mount changes.
+    #[test]
+    fn a_git_ro_dir_is_mounted_read_only() {
+        let mut r = runner_req(&["git", "describe"]);
+        r.runner.as_mut().unwrap().git_ro = Some("/r/jobs/x1a.1/git".into());
+        let a = on_runner(&r, &rcaps()).unwrap();
+        assert!(
+            a.windows(2)
+                .any(|w| w == ["-v", "/r/jobs/x1a.1/git:/gitdir:ro,z"]),
+            "{a:?}"
+        );
+        assert!(
+            a.windows(2).any(|w| w == ["-e", "GIT_DIR=/gitdir"]),
+            "{a:?}"
+        );
+        assert!(
+            a.windows(2).any(|w| w == ["-e", "GIT_WORK_TREE=/work"]),
+            "{a:?}"
+        );
+        // a path podman would read as more than one value is refused
+        r.runner.as_mut().unwrap().git_ro = Some("/r/jobs/x1a.1/git:rw".into());
+        assert!(on_runner(&r, &rcaps()).is_err());
+    }
+
+    /// [D] (Task 10a) A job that takes part in the jobserver gets the fifo and the flags that name it, and no other
+    /// job does.
+    #[test]
+    fn a_jobserver_job_gets_the_fifo_and_makeflags() {
+        let mut r = runner_req(&["make"]);
+        r.runner.as_mut().unwrap().jobserver = Some("/r/jobserver/pool".into());
+        let a = on_runner(&r, &rcaps()).unwrap();
+        assert!(
+            a.windows(2)
+                .any(|w| w == ["-v", "/r/jobserver/pool:/jobserver:rw,Z"]),
+            "{a:?}"
+        );
+        for var in ["MAKEFLAGS", "CARGO_MAKEFLAGS"] {
+            assert!(
+                a.windows(2)
+                    .any(|w| w == ["-e", &format!("{var}=--jobserver-auth=fifo:/jobserver")]),
+                "{var}: {a:?}"
+            );
+        }
+        let none = on_runner(&runner_req(&["make"]), &rcaps()).unwrap();
+        assert!(!none.iter().any(|s| s.contains("jobserver")), "{none:?}");
+    }
+
     /// [D] A runner job's mounts are exactly the design's set: the source `ro,z` (`rw,Z` for a private copy), the
     /// target, each cache, the key socket and helper; a grant adds no mount. No other `-v`.
     #[test]
@@ -1504,11 +1606,6 @@ mod tests {
         assert!(
             a.windows(2)
                 .any(|w| w == ["-e", "CARGO_TARGET_DIR=/target"])
-        );
-        // cargo builds as many units at once as the grant allows (design §3 #4)
-        assert!(
-            a.windows(2).any(|w| w == ["-e", "CARGO_BUILD_JOBS=2"]),
-            "{a:?}"
         );
         // the job's deadline passes through from job-exec's environment (design §5.7)
         assert!(
@@ -1678,6 +1775,8 @@ mod tests {
         let net = format!("--network=container:{sidecar}");
         v.push(&net);
         v.extend([
+            "-e",
+            "GIT_NO_LAZY_FETCH=1",
             "-e",
             "DRGNX_JOB_DEADLINE",
             "-v",

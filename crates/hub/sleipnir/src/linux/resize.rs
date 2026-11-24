@@ -335,6 +335,7 @@ mod tests {
                 minutes: 10.0,
                 cpu: 1.0,
                 mem_p95_mib: Some(2000),
+                io_p95_mbps: None,
             },
             restartable: true,
             evicted_once: false,

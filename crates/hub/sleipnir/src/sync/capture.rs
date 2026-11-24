@@ -300,7 +300,7 @@ mod tests {
     use std::fs;
 
     use super::super::SyncError;
-    use super::super::slot::{self, Overlay, SlotId};
+    use super::super::slot::{self, Overlay, SlotFamily};
     use super::super::testutil::{self, DirBlobs, user_git, write};
     use super::*;
 
@@ -451,7 +451,7 @@ mod tests {
         assert_eq!(paths(&i.manifest), want);
 
         let blobs = DirBlobs::of(&t.path().join("blobs"), &repo, &i);
-        let p = slot::paths(&t.path().join("runner"), &key());
+        let p = slot::paths(&t.path().join("runner"), &key(), 0);
         slot::update(&p, &repo.join(".git"), &commit, &Overlay::of(&i, &blobs)).unwrap();
         for (n, name) in odd.iter().enumerate() {
             assert_eq!(
@@ -506,12 +506,13 @@ mod tests {
         assert_eq!(paths(&i.manifest), vec![(&b"kept"[..], false)]);
     }
 
-    fn key() -> SlotId {
-        SlotId {
+    fn key() -> SlotFamily {
+        SlotFamily {
             project: "p".into(),
-            worktree: "w".into(),
             trust: forseti::JobTrust::Private,
             toolchain: "t".into(),
+            cone: String::new(),
+            role: forseti::Role::Author,
         }
     }
 }

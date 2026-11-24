@@ -187,6 +187,7 @@ mod tests {
                     minutes: 2.0,
                     cpu: 1.0,
                     mem_p95_mib: Some(700),
+                    io_p95_mbps: None,
                 }),
             },
             Frame::Admit { r: r(), grant },

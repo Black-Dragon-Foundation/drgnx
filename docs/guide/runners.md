@@ -21,6 +21,11 @@ use: a running job's folder, its checkout and build folder, what a queued job wi
   ```
 
   Over the quota drgnx removes whatever isn't in use or pinned, oldest first, until it is under.
+- **Slots and IO.** Several worktrees of one project each get their own checkout and build folder on a runner, as many
+  as the free disk holds (at most 16; `[slots] max_slots = N` lowers it). To tell drgnx what your disk moves, so it
+  doesn't start jobs that would saturate it, put `[io] device_mbps = N` (MiB/s) in `runner.conf`. IO priority needs the
+  `io.cost` controller: `sleipnir setup io --root <runner folder>`, as root, turns it on, and the runner says when the
+  disk has none.
 - **Removal is gentle.** While the disk is busy (IO pressure above 20 %) the runner waits, up to a minute, before
   each removal.
 - **Your laptop** runs light jobs only and keeps 2 GB of memory for you. When your apps need memory, no job starts;

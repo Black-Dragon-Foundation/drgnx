@@ -29,6 +29,9 @@ pub struct HistRow {
     /// What it left on the disk, GB: its build dir plus its outputs, measured at its end (none: not measured).
     #[serde(default)]
     pub disk_gib: Option<u64>,
+    /// What the job's cgroup read and wrote, MiB (`io.stat`); 0: not measured.
+    #[serde(default)]
+    pub io_mib: u64,
 }
 
 /// The key runs of the same work share: the kind, then the suite (a check's stage), the class of the rows selected
@@ -127,7 +130,24 @@ fn from_rows(rows: &[&HistRow], ratio: f64) -> Expected {
         minutes,
         cpu,
         mem_p95_mib: Some(peaks[rank - 1]),
+        io_p95_mbps: io_p95_mbps(rows),
     }
+}
+
+/// The p95 (nearest rank) of the bandwidth of the `rows` that measured their IO: `io_mib ÷ wall_s`, MiB/s; none when
+/// no row did.
+fn io_p95_mbps(rows: &[&HistRow]) -> Option<f64> {
+    let mut v: Vec<f64> = rows
+        .iter()
+        .filter(|r| r.io_mib > 0 && r.wall_s > 0.0)
+        .map(|r| r.io_mib as f64 / r.wall_s)
+        .collect();
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_by(f64::total_cmp);
+    let rank = (v.len() * 95).div_ceil(100).max(1);
+    Some(v[rank - 1])
 }
 
 /// The expected time, CPU and memory:
@@ -157,6 +177,7 @@ pub fn expected(
         minutes: suite_default.unwrap_or(DEFAULT_MINUTES),
         cpu: 0.0,
         mem_p95_mib: None,
+        io_p95_mbps: None,
     }
 }
 
@@ -238,7 +259,30 @@ mod tests {
             at,
             warm: true,
             disk_gib: None,
+            io_mib: 0,
         }
+    }
+
+    /// [D] pure (Task 10b): the expected IO is the p95 (nearest rank) of the rows' MiB per second; a row that did not
+    /// measure its IO counts for nothing, and a job with none has none.
+    #[test]
+    fn expected_io_is_the_p95_of_the_measured_runs() {
+        let io = |wall_min: f64, io_mib: u64, at: u64| HistRow {
+            io_mib,
+            ..row(wall_min, 1.0, 512, at, false)
+        };
+        let rows = [
+            io(1.0, 600, 1),  // 10 MiB/s
+            io(2.0, 2400, 2), // 20
+            io(1.0, 3000, 3), // 50
+            io(1.0, 0, 4),    // not measured
+        ];
+        let e = expected(&rows, &[], 1.0, None);
+        assert_eq!(e.io_p95_mbps, Some(50.0));
+        let e = expected(&rows[3..], &[], 1.0, None);
+        assert_eq!(e.io_p95_mbps, None);
+        let e = expected(&[], &[], 1.0, None);
+        assert_eq!(e.io_p95_mbps, None);
     }
 
     /// [D] pure (design §5.7, the wall): the p95 of the last 5 undisturbed runs' wall time here, else elsewhere's ×

@@ -143,6 +143,9 @@ carves its share at start.
      and the running jobs' unused need (`DiskLow`). The warm build dir a job would reuse counts once slots are leased
      by tree key.
 
+  8. IO bandwidth: the running jobs' expected MiB/s plus this job's must fit `limits.io_device_mbps` (`runner.conf`
+     `[io] device_mbps`); with no figure, or a job without IO history, nothing is counted (`IoBandwidth`).
+
   `eff` is the job's effective priority; none of F1's checks reads it.
 - **`size(job, exp, budget, waiting_fit)`**, the grant:
   - `cores = clamp(cpu_budget / waiting_fit, cores_min, cores_max)`: a quiet machine gives a large run its maximum,
@@ -155,6 +158,18 @@ carves its share at start.
 - **`head_protection(job, eff, machine, expected_s, reservation, now)`**: the head's reservation applied to a start
   that `admit` allows: while `backfill_ok` refuses it, the job waits as `WaitReason::HeadProtection(head)`. With no
   reservation nothing is held. (F1's version, a hold after 600 s of waiting, is replaced by backfill.)
+
+## Sizing a job's parallelism, the jobserver and IO (`admit::jobs_for`, `jobserver`, `io`)
+
+- `jobs_for(cores, cap_mib, unit_mib)` is `{jobs}`: `max(1, min(cores, cap ÷ unit_mib))`; `DEFAULT_UNIT_MIB` is 1024 and a
+  pack sets `Derived::unit_mib`. No build tool's variable is set by the runner.
+- `jobserver::tokens(&PoolInput)`: the smaller of the CPU and the memory ÷ `unit_mib` the machine can give the pool (the
+  budget plus what the pool's own jobs hold), less the cores a waiting P1-P2 job needs, at least 1. `sleipnir` keeps the
+  fifo (`Derived::jobserver` jobs take part).
+- `io::weight_of` (P1 1000, P2 500, P3 200, P4 100, P5 50), `io::fits(limits, running, exp)` (admission's IO check) and
+  `io::steps(pressure, limit, capped, jobs)` (the live cap: the lowest-priority `io_heavy` job at half its expected IO,
+  one a tick; lifted at half the limit). `Expected::io_p95_mbps` is the p95 of `HistRow::io_mib ÷ wall_s` (`rq_history.io_mib`,
+  migration 15).
 
 ## Backfill (`backfill`)
 

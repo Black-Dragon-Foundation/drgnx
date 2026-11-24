@@ -13,7 +13,7 @@ use super::{Event, Next, Serve};
 use crate::proto::Frame;
 use crate::sync::guard::{self as sg, Df, Evict, Evicted, Pins, Why};
 use crate::sync::register::{Register, blocks_bytes, epoch_s};
-use crate::sync::slot::{self, SlotId};
+use crate::sync::slot::{self, SlotFamily};
 use forseti::disk::{DiskItem, DiskReport, DiskRules, ItemKind, classes, owners_quota};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -332,7 +332,7 @@ impl<W: Write> Serve<W> {
         let Ok(rel) = dir.strip_prefix(&self.cfg.root) else {
             return;
         };
-        let key = SlotId::of(spec);
+        let key = SlotFamily::of(spec);
         let now = epoch_s();
         let item = DiskItem {
             id: rel.display().to_string(),
@@ -350,13 +350,29 @@ impl<W: Write> Serve<W> {
         super::note("the disk register", added);
     }
 
-    /// The slot job SPEC runs on joins the register (or is used again), at its start.
-    pub(super) fn register_slot(&self, spec: &forseti::JobSpec) {
-        let key = SlotId::of(spec);
-        let p = slot::paths(&self.cfg.root, &key);
+    /// Instance N of the slot family job SPEC runs on joins the register (or is used again), at its start.
+    pub(super) fn register_slot(&self, spec: &forseti::JobSpec, n: u32) {
+        let key = SlotFamily::of(spec);
+        let p = slot::paths(&self.cfg.root, &key, n);
         let added = Register::open(&self.cfg.root)
-            .and_then(|mut r| slot::register(&mut r, &p, &key, epoch_s()));
+            .and_then(|mut r| slot::register(&mut r, &p, &key, n, epoch_s()));
         super::note("the disk register", added);
+    }
+
+    /// How many instances a slot family may have here: what the free disk above the evict floor holds at the p95 sizes
+    /// the register measured ([`slot::slot_limit`]), at most the runner's `max_slots`.
+    pub(super) fn slot_limit(&self) -> u32 {
+        let free = self.platform.df(&self.cfg.root).map_or(0, |d| d.avail);
+        let floor = self.disk_rules().evict_below_gb.saturating_mul(sg::GB);
+        let (slot_p95, build_p95) = Register::open(&self.cfg.root).map_or((0, 0), |r| {
+            (r.p95(ItemKind::Slot), r.p95(ItemKind::BuildDir))
+        });
+        slot::slot_limit(
+            free.saturating_sub(floor),
+            slot_p95,
+            build_p95,
+            self.platform.max_slots(),
+        )
     }
 
     /// What the attempt in DIR took on the disk at its end, GiB: its folder and its slot's build dir (`st_blocks`).

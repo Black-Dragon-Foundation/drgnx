@@ -406,7 +406,6 @@ mod relay_keys {
             name_prefix: PREFIX.into(),
             owner: String::new(),
             job_labels: false,
-            cargo_jobs: 0,
             allowed: vec![],
             render_node: None,
         }
@@ -484,7 +483,8 @@ mod relay_keys {
                 writes_tree: false,
                 target: dir.join("target"),
                 caches: vec![],
-                cargo_jobs: 0,
+                git_ro: None,
+                jobserver: None,
             }),
         };
         podman::argv(&req, &caps(id), &ra())

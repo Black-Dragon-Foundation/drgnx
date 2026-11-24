@@ -17,6 +17,8 @@ pub mod drain;
 pub mod evict;
 pub mod fair;
 pub mod history;
+pub mod io;
+pub mod jobserver;
 pub mod learn;
 pub mod model;
 pub mod place;
@@ -30,7 +32,7 @@ pub mod split;
 #[cfg(test)]
 mod testkit;
 
-pub use admit::{Budget, admit, budget, head_protection, oom_rerun, size};
+pub use admit::{Budget, admit, budget, head_protection, jobs_for, oom_rerun, size};
 pub use artifact::{ArtifactKey, Canon, KeyInputs, SCHEDULING_ONLY, artifact_key};
 pub use dialect::{Dialect, DialectSpec};
 pub use row::{Row, RowClass, RowVerdict};

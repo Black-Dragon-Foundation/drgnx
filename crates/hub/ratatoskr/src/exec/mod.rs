@@ -1844,22 +1844,6 @@ impl Inner {
 
     /// The `podman run` of a container job.  The container is the sandbox, so the starter's Gleipnir spec is not used;
     /// the hub pulls the image first, the job never does.
-    /// `CARGO_BUILD_JOBS` for local job ID from its grant (its cores and SPEC's memory cap, design §3 #4); None when
-    /// the queue holds no grant for it.
-    fn cargo_jobs(&self, id: &str, spec: &ExecSpec) -> Option<u32> {
-        let memory = spec
-            .user
-            .memory_max
-            .as_deref()
-            .unwrap_or(self.hooks.memory.as_str());
-        let grant = forseti::Grant {
-            cores: self.queue.local_cores(id)?,
-            mem_cap_mib: mem_mib(memory),
-            reserve_mib: 0,
-        };
-        Some(forseti::admit::cargo_jobs(&grant))
-    }
-
     /// The cgroup folder of local job ID's slice, for the progress guard: the test hook's, else its
     /// `drgnx-job-<id>.slice` when systemd runs the jobs; none: no slice to read.
     fn guard_slice_dir(&self, id: &str) -> Option<PathBuf> {
@@ -1996,13 +1980,7 @@ impl Inner {
         }
         // the container runs in the job's slice beside its scope, so the slice holds all the job uses
         let slice = self.hooks.systemd.then(|| unit::job_slice_name(id));
-        // cargo in the container builds as many units at once as the job's grant allows, unless the job says otherwise
-        let cargo_jobs = if spec.user.env.iter().any(|(k, _)| k == "CARGO_BUILD_JOBS") {
-            0
-        } else {
-            self.cargo_jobs(id, spec).unwrap_or(0)
-        };
-        let args = match container::argv(&req, &caps, &owner, slice.as_deref(), cargo_jobs) {
+        let args = match container::argv(&req, &caps, &owner, slice.as_deref()) {
             Ok(a) => a,
             Err(e) => {
                 if let Some(r) = relay {
@@ -2203,15 +2181,6 @@ impl Inner {
             .memory_max
             .as_deref()
             .unwrap_or(self.hooks.memory.as_str());
-        // cargo builds as many units at once as the job's grant allows (design §3 #4), unless the job says otherwise
-        if status.is_none()
-            && !inner.env.iter().any(|(k, _)| k == "CARGO_BUILD_JOBS")
-            && let Some(n) = self.cargo_jobs(id, &spec)
-        {
-            inner
-                .env
-                .push(("CARGO_BUILD_JOBS".into(), n.to_string().into()));
-        }
         // the job's deadline, so a harness can dump its state before its time box ends (design §5.7); a container
         // job's podman passes it in
         if status.is_none()

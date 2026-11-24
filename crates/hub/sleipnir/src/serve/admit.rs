@@ -48,6 +48,7 @@ pub fn unknown(spec: &JobSpec) -> Expected {
         minutes: 10.0,
         cpu: f64::from(spec.cores.min),
         mem_p95_mib: None,
+        io_p95_mbps: None,
     }
 }
 
@@ -318,6 +319,7 @@ mod tests {
             no_jobs_on_battery: false,
             fixed_slots: None,
             start_gap_s: forseti::admit::START_GAP_S,
+            io_device_mbps: None,
         }
     }
 

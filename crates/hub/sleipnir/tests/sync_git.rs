@@ -14,7 +14,7 @@ mod git {
     use std::path::{Path, PathBuf};
 
     use sleipnir::sync::capture::{self, Entry};
-    use sleipnir::sync::slot::{self, Blobs, Overlay, SlotId};
+    use sleipnir::sync::slot::{self, Blobs, Overlay, SlotFamily};
 
     struct DirBlobs(PathBuf);
 
@@ -127,13 +127,14 @@ mod git {
                 fs::copy(repo.join(OsStr::from_bytes(path)), b).unwrap();
             }
         }
-        let key = SlotId {
+        let key = SlotFamily {
             project: "p".into(),
-            worktree: "w".into(),
             trust: forseti::JobTrust::Private,
             toolchain: "t".into(),
+            cone: String::new(),
+            role: forseti::Role::Author,
         };
-        let p = slot::paths(&t.join("runner"), &key);
+        let p = slot::paths(&t.join("runner"), &key, 0);
         let store = DirBlobs(blobs);
         slot::update(&p, &repo.join(".git"), &i.commit, &Overlay::of(&i, &store)).unwrap();
         slot::update(&p, &repo.join(".git"), &i.commit, &Overlay::of(&i, &store)).unwrap();

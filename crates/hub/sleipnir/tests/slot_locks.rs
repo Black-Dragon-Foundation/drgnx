@@ -5,19 +5,20 @@
 #![cfg(feature = "sync")]
 
 mod slot {
-    use sleipnir::sync::slot::{Locks, SlotId, paths};
+    use sleipnir::sync::slot::{Locks, SlotFamily, paths};
 
     // [D] pure: one open file description per lock, in one process with no other thread
     #[test]
     fn an_update_waits_for_its_readers_and_the_target_is_exclusive() {
         let t = tempfile::tempdir().unwrap();
-        let key = SlotId {
+        let key = SlotFamily {
             project: "p".into(),
-            worktree: "w".into(),
             trust: forseti::JobTrust::Private,
             toolchain: "t".into(),
+            cone: String::new(),
+            role: forseti::Role::Author,
         };
-        let l = Locks::of(&paths(t.path(), &key));
+        let l = Locks::of(&paths(t.path(), &key, 0));
         let r1 = l.read().unwrap();
         let r2 = l.read().unwrap();
         assert!(
@@ -45,12 +46,14 @@ mod slot {
     fn slot_at(t: &std::path::Path) -> sleipnir::sync::slot::SlotPaths {
         paths(
             t,
-            &SlotId {
+            &SlotFamily {
                 project: "p".into(),
-                worktree: "w".into(),
                 trust: forseti::JobTrust::Private,
                 toolchain: "t".into(),
+                cone: String::new(),
+                role: forseti::Role::Author,
             },
+            0,
         )
     }
 

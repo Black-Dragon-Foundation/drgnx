@@ -106,7 +106,8 @@ pub fn argv(image: &str, src: &Path, target: &Path) -> villa::Result<Vec<String>
             writes_tree: false,
             target: target.to_path_buf(),
             caches: vec![],
-            cargo_jobs: 0,
+            git_ro: None,
+            jobserver: None,
         }),
     };
     let ra = RunnerArgs {
@@ -115,7 +116,6 @@ pub fn argv(image: &str, src: &Path, target: &Path) -> villa::Result<Vec<String>
         name_prefix: PREFIX.into(),
         owner: String::new(),
         job_labels: false,
-        cargo_jobs: 0,
         allowed: vec![],
         render_node: None,
     };

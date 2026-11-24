@@ -236,6 +236,7 @@ mod tests {
             at,
             warm,
             disk_gib: None,
+            io_mib: 0,
         }
     }
 

@@ -406,6 +406,11 @@ fn judge(dir: &Path, spec: &JobExec, seen: &Seen, wall_s: f64) -> ResultJson {
         wall_s,
         cpu_s: tv(ru.ru_utime) + tv(ru.ru_stime),
         mem_peak_mib: peak_bytes / (1024 * 1024),
+        // getrusage counts 512-byte blocks the job's processes read and wrote (no per-job io.stat here)
+        io_mib: (u64::try_from(ru.ru_inblock).unwrap_or(0)
+            + u64::try_from(ru.ru_oublock).unwrap_or(0))
+        .saturating_mul(512)
+        .div_ceil(1024 * 1024),
         mem_overshoot_mib: Some(seen.peak.saturating_sub(spec.grant.mem_cap_mib << 20) >> 20),
         disturbed,
         log: spec.log.display().to_string(),

@@ -37,7 +37,7 @@ use crate::sync::blobs::Store;
 use crate::sync::bundle::{BundleRef, Receiver};
 use crate::sync::capture::Entry;
 use crate::sync::mirror::{self, Mirror};
-use crate::sync::slot::{self, Overlay, SlotId};
+use crate::sync::slot::{self, Overlay, SlotFamily};
 use attempts::{CANCELLED, COLLECTED, LOG, Meta};
 use forseti::classify::infra;
 use forseti::safety::Level;
@@ -242,6 +242,15 @@ struct Live {
     slot_held: Option<slot::Held>,
 }
 
+/// What a checkout leaves an attempt: the source it runs on, its slot instance's id, the read lock that keeps the
+/// instance at its inputs (none for a job that reads a private copy) and the read-only git dir of a `git = "ro"` job.
+struct CheckedOut {
+    src: PathBuf,
+    slot: String,
+    held: Option<slot::Held>,
+    git_ro: Option<PathBuf>,
+}
+
 impl Live {
     fn new(dir: PathBuf, meta: Meta) -> Live {
         Live {
@@ -341,8 +350,16 @@ pub struct Serve<W: Write> {
     head: Option<admit::HeadHere>,
     /// The CPU weights set on job slices (the others are at systemd's default).
     weights: BTreeMap<String, u32>,
+    /// The `IOWeight` set on each unit (set once per change).
+    io_weights: BTreeMap<String, u32>,
     /// A P1–P2 offer was refused for CPU since the last `ready`.
     p12_waiting: bool,
+    /// The most cores such a refused offer needs (the jobserver leaves them tokens first).
+    p12_cores: u32,
+    /// The machine's jobserver, made when the first job that takes part starts ([`Serve::jobserver_for`]).
+    jobserver: Option<crate::linux::jobserver::Pool>,
+    /// The jobs whose IO the runner capped under pressure, and the cap's device (`io.max`).
+    io_capped: Vec<JobId>,
     last_ready: Instant,
     last_ping: Instant,
     last_frame: Instant,
@@ -450,10 +467,11 @@ impl<W: Write> Serve<W> {
         fs::create_dir_all(attempts::jobs(&cfg.root))
             .map_err(|e| villa::Error::io(format!("{}: {e}", cfg.root.display())).with_source(e))?;
         let scheduler = cfg.scheduler();
-        let limits = platform
+        let mut limits = platform
             .limits(cfg.profile)
             .with_reserve(cfg.profile, cfg.reserve_mib)
             .map_err(|e| villa::Error::invalid(e.to_string()))?;
+        limits.io_device_mbps = platform.io_device_mbps();
         let exe = std::env::current_exe()
             .map_err(|e| villa::Error::io(format!("this binary's path: {e}")).with_source(e))?;
         let bin = cfg.root.join("bin");
@@ -481,7 +499,11 @@ impl<W: Write> Serve<W> {
             paused: BTreeSet::new(),
             head: None,
             weights: BTreeMap::new(),
+            io_weights: BTreeMap::new(),
             p12_waiting: false,
+            p12_cores: 0,
+            jobserver: None,
+            io_capped: Vec::new(),
             last_ready: now,
             last_ping: now,
             last_frame: now,
@@ -766,7 +788,9 @@ impl<W: Write> Serve<W> {
             .collect();
         self.ladder(&m);
         self.grow(&m.running);
+        self.jobserver_tick(&m, &b);
         self.weigh(&m.running);
+        self.io_tick(&m);
         // what makes a start warm here: the job's slot, and its image
         let images = self.images.iter().cloned().collect();
         self.send(&Frame::Ready {
@@ -939,6 +963,138 @@ impl<W: Write> Serve<W> {
         }
     }
 
+    /// The machine's jobserver fifo for a job of SPEC that takes part in it (its pack says `jobserver`); the pool is
+    /// made with the first such job and sized at once, then on every `ready` ([`Serve::jobserver_tick`]).
+    fn jobserver_for(&mut self, spec: &forseti::JobSpec) -> Option<PathBuf> {
+        if !spec.derived.jobserver {
+            return None;
+        }
+        if self.jobserver.is_none() {
+            match crate::linux::jobserver::Pool::open(&self.cfg.root.join("jobserver")) {
+                Ok(pool) => self.jobserver = Some(pool),
+                Err(e) => {
+                    crate::eline!("sleipnir serve: {e}");
+                    return None;
+                }
+            }
+            if let Ok(m) = self.platform.machine(now_s(), &self.limits) {
+                let mut m = m;
+                m.running = self.running_jobs();
+                let b = forseti::budget(&m, &self.limits);
+                self.jobserver_tick(&m, &b);
+            }
+        }
+        self.jobserver.as_ref().map(|p| p.path().to_path_buf())
+    }
+
+    /// Sizes the jobserver's pool to the budget now ([`forseti::jobserver::tokens`]): the CPU and memory the machine can
+    /// still give it plus what its own jobs hold, less the cores a refused P1–P2 offer needs. A rise is tokens at once;
+    /// a fall takes tokens back only as the jobs return them.
+    fn jobserver_tick(&mut self, m: &forseti::MachineState, b: &forseti::Budget) {
+        let cores = std::mem::take(&mut self.p12_cores);
+        if self.jobserver.is_none() {
+            return;
+        }
+        let mine: BTreeSet<String> = self
+            .live
+            .values()
+            .filter(|l| l.meta.started.is_some() && l.meta.spec.derived.jobserver)
+            .map(|l| l.meta.r.job.clone())
+            .collect();
+        let unit_mib = self
+            .live
+            .values()
+            .filter(|l| l.meta.spec.derived.jobserver)
+            .filter_map(|l| l.meta.spec.derived.unit_mib)
+            .min()
+            .unwrap_or(forseti::admit::DEFAULT_UNIT_MIB);
+        let (mut pool_cpu, mut pool_mib) = (0.0, 0);
+        for r in m.running.iter().filter(|r| mine.contains(&r.id.0)) {
+            pool_cpu += if r.expected.known() {
+                r.expected.cpu
+            } else {
+                f64::from(r.cores)
+            };
+            pool_mib += r.reserve_mib.saturating_sub(r.current_mib);
+        }
+        let n = forseti::jobserver::tokens(&forseti::jobserver::PoolInput {
+            budget: *b,
+            pool_cpu,
+            pool_mib,
+            unit_mib,
+            waiting_p12_cores: cores,
+        });
+        if let Some(pool) = self.jobserver.as_mut()
+            && let Err(e) = pool.set_target(n)
+        {
+            crate::eline!("sleipnir serve: {e}");
+        }
+    }
+
+    /// IO as a budget: every running job's `IOWeight` follows its priority, and under IO pressure the lowest-priority
+    /// `io_heavy` job is capped (`io.max`) until the pressure falls ([`forseti::io::steps`]). A weight or cap the
+    /// platform can't set is said once, never silently dropped.
+    fn io_tick(&mut self, m: &forseti::MachineState) {
+        let running: Vec<(String, forseti::Priority)> = m
+            .running
+            .iter()
+            .filter_map(|r| Some((self.platform.weight_unit(&r.id.0)?, r.priority)))
+            .collect();
+        self.io_weights
+            .retain(|u, _| running.iter().any(|(w, _)| w == u));
+        for (unit, p) in running {
+            let w = forseti::io::weight_of(p);
+            if self.io_weights.get(&unit) == Some(&w) {
+                continue;
+            }
+            if let Err(e) = self.platform.set_io_weight(&unit, w) {
+                crate::eline!("sleipnir serve: {e}");
+            }
+            // tried: a platform without weights is said once, not at every `ready`
+            self.io_weights.insert(unit, w);
+        }
+        let jobs: Vec<forseti::io::IoJob> = m
+            .running
+            .iter()
+            .map(|r| forseti::io::IoJob {
+                id: r.id.clone(),
+                priority: r.priority,
+                io_heavy: self
+                    .live
+                    .values()
+                    .any(|l| l.meta.r.job == r.id.0 && l.meta.spec.derived.io_heavy),
+                expected_mbps: r.expected.io_p95_mbps,
+            })
+            .collect();
+        self.io_capped.retain(|j| jobs.iter().any(|x| x.id == *j));
+        let steps = forseti::io::steps(
+            m.psi.io_full10,
+            self.limits.psi.io_full10,
+            &self.io_capped,
+            &jobs,
+        );
+        for step in steps {
+            match step {
+                forseti::io::IoStep::Cap { job, mbps } => match self
+                    .platform
+                    .io_cap(&job.0, Some(mbps))
+                {
+                    Ok(()) => {
+                        crate::eline!("sleipnir serve: IO pressure caps {job} at {mbps:.0} MiB/s");
+                        self.io_capped.push(job);
+                    }
+                    Err(e) => crate::eline!("sleipnir serve: {e}"),
+                },
+                forseti::io::IoStep::Lift(job) => {
+                    if let Err(e) = self.platform.io_cap(&job.0, None) {
+                        crate::eline!("sleipnir serve: {e}");
+                    }
+                    self.io_capped.retain(|j| *j != job);
+                }
+            }
+        }
+    }
+
     /// Writes REASON in DIR, then kills job ID's command: job-exec sees it end and writes the verdict the reason
     /// names.
     fn kill(&self, dir: &Path, id: &str, reason: &str) {
@@ -969,18 +1125,36 @@ impl<W: Write> Serve<W> {
         if r.job.is_empty() || !r.job.bytes().all(|b| b.is_ascii_alphanumeric()) {
             return self.refuse(r, "a job id is letters and digits");
         }
-        // a slot moves to new inputs only once no running job reads it at others (a writer reads its own copy)
-        let slot = SlotId::of(&spec).id();
-        let busy = !input_key.is_empty()
-            && self.live.values().any(|l| {
+        // a slot instance moves to new inputs only once no running job reads it at others (a writer reads its own
+        // copy); with the family at its limit and every instance read at other inputs, the job waits and holds nothing
+        let family = SlotFamily::of(&spec).id();
+        let holders: Vec<(&str, &str)> = self
+            .live
+            .values()
+            .filter(|l| {
                 l.meta.started.is_some()
                     && !l.meta.spec.writes_tree
-                    && l.meta.slot.as_deref() == Some(slot.as_str())
-                    && l.meta.input_key != input_key
+                    && l.meta
+                        .slot
+                        .as_deref()
+                        .and_then(slot::split_instance)
+                        .is_some_and(|(f, _)| f == family)
                     && !l.dir.join(RESULT).exists()
+            })
+            .map(|l| (l.meta.r.job.as_str(), l.meta.input_key.as_str()))
+            .collect();
+        if !input_key.is_empty()
+            && let Some(holder) = slot::wait_for(&holders, &input_key, self.slot_limit())
+        {
+            let reason = forseti::WaitReason::State {
+                dir: self.cfg.root.join("slots").join(&family),
+                holder: JobId(holder.to_string()),
+            };
+            return self.send(&Frame::Refuse {
+                r,
+                why: format!("every checkout slot of its family is in use by jobs at other inputs ({holder} first)"),
+                reason: Some(reason),
             });
-        if busy {
-            return self.refuse(r, "its checkout slot is in use by a job at other inputs");
         }
         let dir = attempts::dir(&self.cfg.root, &r.job, r.attempt);
         if let Ok(meta) = attempts::read_meta(&dir) {
@@ -1032,6 +1206,7 @@ impl<W: Write> Serve<W> {
                     && matches!(priority, forseti::Priority::P1 | forseti::Priority::P2)
                 {
                     self.p12_waiting = true;
+                    self.p12_cores = self.p12_cores.max(spec.cores.min);
                 }
                 self.send(&Frame::Refuse {
                     r,
@@ -1111,21 +1286,24 @@ impl<W: Write> Serve<W> {
         }
         // synced inputs: the attempt reads its slot (or a private copy of it); none: an empty source
         let mut slot_held = None;
+        let mut git_ro = None;
         let src = match &l.sync {
             Some(s) => self
                 .checkout(&dir, &meta, s)
-                .map(|(src, id, held)| {
-                    meta.slot = Some(id);
-                    slot_held = held;
-                    src
+                .map(|c| {
+                    meta.slot = Some(c.slot);
+                    slot_held = c.held;
+                    git_ro = c.git_ro;
+                    c.src
                 })
                 .map_err(villa::Error::unavailable),
             None => Ok(dir.join("src")),
         };
-        // the slot and its build dir join the disk register, or are used again
-        if meta.slot.is_some() {
-            self.register_slot(&meta.spec);
+        // the slot instance and its build dir join the disk register, or are used again
+        if let Some((_, n)) = meta.slot.as_deref().and_then(slot::split_instance) {
+            self.register_slot(&meta.spec, n);
         }
+        let jobserver = self.jobserver_for(&meta.spec);
         // work leaves the island before the timing job starts on it
         if timing {
             self.island_sync();
@@ -1141,6 +1319,8 @@ impl<W: Write> Serve<W> {
                 net_hosts: &net_hosts,
                 pins,
                 parser,
+                git_ro: git_ro.as_deref(),
+                jobserver: jobserver.as_deref(),
             })
         });
         match launched {
@@ -1179,19 +1359,15 @@ impl<W: Write> Serve<W> {
         }
     }
 
-    /// Moves the attempt's slot to its synced inputs S unless a job of any `serve` reads it at others (`slot::hold`):
-    /// the source it runs on, the slot itself (read-only) or a private copy of it in DIR for a job that writes the tree,
-    /// the slot's id, and for a job that reads the slot its read lock, which this `serve` keeps until the attempt ends
-    /// (its job-exec takes its own: `slot::hold_for_job`, named in DIR).
-    fn checkout(
-        &self,
-        dir: &Path,
-        meta: &Meta,
-        s: &SyncIn,
-    ) -> Result<(PathBuf, String, Option<slot::Held>), String> {
+    /// Leases an instance of the attempt's slot family at its synced inputs S (`slot::lease`: the same tree's, the
+    /// worktree's own, a new one under the limit, else a free one; never one a job of any `serve` reads at others):
+    /// the source it runs on (the slot itself, read-only, or a private copy of it in DIR for a job that writes the
+    /// tree), the instance's id, for a job that reads the slot its read lock, which this `serve` keeps until the
+    /// attempt ends (its job-exec takes its own: `slot::hold_for_job`, named in DIR), and the read-only git dir of a
+    /// `git = "ro"` job.
+    fn checkout(&self, dir: &Path, meta: &Meta, s: &SyncIn) -> Result<CheckedOut, String> {
         let root = &self.cfg.root;
-        let key = SlotId::of(&meta.spec);
-        let p = slot::paths(root, &key);
+        let key = SlotFamily::of(&meta.spec);
         let sync_err = |e: crate::sync::SyncError| format!("the checkout: {e}");
         let m = Mirror::ensure(root, &s.repo).map_err(sync_err)?;
         let store = Store::open(root).map_err(|e| format!("the blob store: {e}"))?;
@@ -1200,11 +1376,25 @@ impl<W: Write> Serve<W> {
             extras: &[],
             blobs: &store,
         };
-        let held = slot::hold(&p, &meta.input_key, || {
-            slot::update(&p, &m.git_dir, &s.commit, &overlay)
-        })
+        let worktree = Some(meta.spec.tree.as_path()).filter(|t| !t.as_os_str().is_empty());
+        let lease = slot::lease(
+            root,
+            &key,
+            &meta.input_key,
+            worktree,
+            self.slot_limit(),
+            |p| slot::update(p, &m.git_dir, &s.commit, &overlay),
+        )
         .map_err(sync_err)?
-        .ok_or("the checkout: its slot is in use by a job at other inputs")?;
+        .ok_or("the checkout: every slot of its family is in use by jobs at other inputs")?;
+        let (p, held, id) = (lease.paths, lease.held, key.instance_id(lease.n));
+        let git_ro = if meta.spec.derived.git_ro {
+            let git = dir.join("git");
+            slot::git_ro(&git, &p, &m.git_dir, &s.commit).map_err(sync_err)?;
+            Some(git)
+        } else {
+            None
+        };
         if meta.spec.writes_tree {
             let copy = dir.join("tree");
             slot::private_copy(&p, &copy).map_err(sync_err)?;
@@ -1214,11 +1404,21 @@ impl<W: Write> Serve<W> {
                 slot::private_copy(&p, &dir.join(BASE)).map_err(sync_err)?;
             }
             // it reads its own copies from here on: the slot may move
-            return Ok((copy, key.id(), None));
+            return Ok(CheckedOut {
+                src: copy,
+                slot: id,
+                held: None,
+                git_ro,
+            });
         }
         slot::write_job_hold(dir, &p, &meta.input_key)
             .map_err(|e| format!("the checkout: {}: {e}", slot::JOB_HOLD))?;
-        Ok((p.slot, key.id(), Some(held)))
+        Ok(CheckedOut {
+            src: p.slot,
+            slot: id,
+            held: Some(held),
+            git_ro,
+        })
     }
 
     /// The attempt's reservation passes to its job-exec (PID), which outlives this `serve`.
@@ -1272,6 +1472,7 @@ impl<W: Write> Serve<W> {
             wall_s: 0.0,
             cpu_s: 0.0,
             mem_peak_mib: 0,
+            io_mib: 0,
             mem_overshoot_mib: None,
             disturbed: false,
             log: dir.join(LOG).display().to_string(),
