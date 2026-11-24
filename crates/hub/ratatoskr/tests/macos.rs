@@ -62,6 +62,7 @@ fn spec(trust: JobTrust, keys: &[&str]) -> JobSpec {
         fresh: false,
         stop_on_red: false,
         project: "alpha".into(),
+        role: Default::default(),
         trust,
         keys: keys.iter().map(|k| k.to_string()).collect(),
         local_only: false,

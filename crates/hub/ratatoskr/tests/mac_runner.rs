@@ -341,6 +341,7 @@ fn job(id: &str, script: &str, frozen: Frozen, mem_mib: u64) -> Submit {
         fresh: false,
         stop_on_red: false,
         project: "p".into(),
+        role: Default::default(),
         trust,
         keys: vec![],
         local_only: false,

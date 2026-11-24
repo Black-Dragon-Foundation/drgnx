@@ -36,3 +36,28 @@ See and steer it from a terminal:
 
 A folder in the runner's folder that drgnx didn't make or record is listed and kept. On a btrfs disk `runner disk`
 also shows the unallocated space, since the free space it reports may not all be usable.
+
+## Projects
+
+A runner takes only jobs of a **registered project**. You register a repository once, through the hub's methods:
+
+| Method | Params | Does |
+|---|---|---|
+| `jobs/project-add` | `{path, name?}` | registers the repository `path` is in |
+| `jobs/project-list` | `{}` | the registered projects: id, name, origin, root commits |
+| `jobs/project-remove` | `{id}` | forgets a project and its clones |
+
+The hub records the repository's root commits (every one: a repository may have several), its origin URL and the name
+(default: the folder's), and gives the project an id. Every clone and worktree of that repository is that project: the
+hub maps a clone (by its git folder, which all its worktrees share) to the project the first time it sees it, by the
+same origin and a shared root commit, and afterwards checks the mapping with one object lookup, so a clone deleted and
+replaced by another repository at the same path is looked up again. A fork with another origin is another project (its
+caches are not the upstream's). Refused: a shallow clone (`git fetch --unshallow` first: its cut-off commit would look
+like a root), the same repository a second time, and a name already taken. Only you register or remove projects; an
+agent's connection is refused.
+
+Feature opt-ins, and later allow-lists, budgets, caches and fairness, name a project by its id. A job's project comes
+only from this registry, never from its folder's name or from what its job pack says (a pack whose `project` is not the
+registered name is refused). A job whose tree is in no registered project still runs on this machine as before; it never
+goes to a runner, and while it waits its row says so, with the command that registers it (or, for a shallow clone or a
+clone that matches two projects, what to do).

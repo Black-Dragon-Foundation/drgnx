@@ -24,6 +24,7 @@ use crate::agents::lock::{Enforced, LaunchPlan};
 use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::runners::local::{Admission, LocalRunner};
+use crate::runners::projects::Projects;
 use crate::runners::queue::{
     self, Machine, Origin, Outcome, Placement, Queue, QueueCfg, Submit, priority_of,
 };
@@ -346,7 +347,12 @@ struct Inner {
     unsettled: Arc<Unsettled>,
     /// Who launches a job a `start` enters: see [`Admit`].
     admit: Mutex<Admit>,
+    /// The project registry, read from `runtime.db` at its first use ([`Inner::projects`]).
+    projects: tokio::sync::OnceCell<Mutex<Projects>>,
 }
+
+/// A job's project id and, when its tree is in no registered project, why ([`crate::runners::projects::Resolved::for_job`]).
+type Who = (forseti::ProjectId, Option<String>);
 
 /// The jobs whose `start` is between entering the queue and its own tick (`owned`: that `start` launches them), and
 /// those another tick (the queue's own, every 2 s) admitted in that window (`claimed`: the `start` takes them back).
@@ -484,9 +490,14 @@ impl Pending {
 }
 
 impl ExecSpec {
-    /// The scheduler's view of this job: its command, folders, time box and memory range, its project (the
-    /// worktree's folder name, until Urdr names projects to the hub) and its placement's marks.
-    fn forseti_spec(&self, id: &str, memory: &str) -> forseti::JobSpec {
+    /// The scheduler's view of this job: its command, folders, time box and memory range, its PROJECT (the
+    /// registry's id for its tree, [`crate::runners::projects`]; empty: none) and its placement's marks.
+    fn forseti_spec(
+        &self,
+        id: &str,
+        memory: &str,
+        project: &forseti::ProjectId,
+    ) -> forseti::JobSpec {
         let mut s = queue::blank_spec(id);
         s.command = self.argv.clone();
         s.tree = self.worktree.clone().unwrap_or_else(|| self.cwd.clone());
@@ -499,13 +510,7 @@ impl ExecSpec {
         (s.derived.stall_s, s.derived.silent_s) = (self.user.stall_s, self.user.silent_s);
         s.mem_mib.max =
             mem_mib(self.user.memory_max.as_deref().unwrap_or(memory)).max(s.mem_mib.min);
-        // the project id is the old folder rule until the project registry (runners Task 46)
-        s.project = forseti::ProjectId(
-            s.tree
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-        );
+        s.project = project.clone();
         s.local_only = self.place.local_only;
         s.lane = self.place.lane.clone();
         s.keys = self.place.keys.clone();
@@ -836,6 +841,7 @@ impl Runner {
                 events: self.events.clone(),
                 unsettled: self.unsettled.clone(),
                 admit: Mutex::default(),
+                projects: tokio::sync::OnceCell::new(),
             });
             fresh = Some(links);
             inner
@@ -859,6 +865,11 @@ impl Runner {
     /// This machine's job slots in the queue: `(all, free)` ([`Queue::local_slots`]); none before the runner is open.
     pub fn slot_counts(&self) -> Option<(usize, usize)> {
         self.inner.get().map(|i| i.queue.local_slots())
+    }
+
+    /// The project registry; none before the runner is open.
+    pub async fn projects(&self) -> Option<&Mutex<Projects>> {
+        Some(self.inner.get()?.projects().await)
     }
 
     /// Every machine's queue (the runners register in it); none before the runner is open.
@@ -1334,6 +1345,23 @@ impl Inner {
         Ok(spec)
     }
 
+    /// The project registry, read from `runtime.db` the first time it is asked for.
+    async fn projects(&self) -> &Mutex<Projects> {
+        self.projects
+            .get_or_init(|| async { Mutex::new(Projects::open(self.hooks.runtime.clone()).await) })
+            .await
+    }
+
+    /// SPEC's project, by the clone its tree is in: the registry's id, or none and why.
+    async fn who(&self, spec: &ExecSpec) -> Who {
+        let tree = spec.worktree.clone().unwrap_or_else(|| spec.cwd.clone());
+        let mut p = saman::lock(self.projects().await);
+        let r = p.resolve(&tree);
+        r.for_job(&tree, &|i| {
+            p.get(i).map_or_else(|| i.0.clone(), |x| x.name.clone())
+        })
+    }
+
     async fn start(self: Arc<Self>, spec: ExecSpec) -> Result<String, Refusal> {
         let facts = if spec.starter == Starter::User && spec.user.no_timebox {
             None
@@ -1389,7 +1417,8 @@ impl Inner {
         // this start owns the job until its own tick: a tick of the queue's in between (its first, before this start
         // runs) leaves it claimed for this start rather than launching it on another task
         saman::lock(&self.admit).owned.insert(id.clone());
-        if let Err(e) = self.enqueue(&id, &dir, &spec) {
+        let who = self.who(&spec).await;
+        if let Err(e) = self.enqueue(&id, &dir, &spec, &who) {
             saman::lock(&self.admit).owned.remove(&id);
             crate::soft::done(std::fs::remove_dir_all(&dir), "std::fs::remove_dir_all");
             return Err(e);
@@ -1425,12 +1454,13 @@ impl Inner {
         r.map(|()| id)
     }
 
-    /// Record job ID as queued: a meta saying it waits, and its place in the queue (what to start is kept there).
-    fn enqueue(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<(), Refusal> {
+    /// Record job ID as queued: a meta saying it waits, and its place in the queue (what to start is kept there). WHO is
+    /// its project and, when its tree is in none, why ([`crate::runners::projects::Resolved::for_job`]).
+    fn enqueue(&self, id: &str, dir: &Path, spec: &ExecSpec, who: &Who) -> Result<(), Refusal> {
         let _only_when_used_elsewhere = &dir;
         // a job may need only jobs the queue knows, never one that waits on it
         self.queue
-            .check_needs(&spec.forseti_spec(id, &self.hooks.memory))
+            .check_needs(&spec.forseti_spec(id, &self.hooks.memory, &who.0))
             .map_err(|e| refusal(e.message()))?;
         let started = now();
         let session = spec.starter.session();
@@ -1459,13 +1489,15 @@ impl Inner {
         self.live
             .describe(id, spec.user.name.as_deref(), &spec.argv, started);
         // the tick wakes after start's own: a job admitted at once is start's to launch
-        self.queue.enter(self.submit_of(id, spec), started as u64);
+        self.queue
+            .enter(self.submit_of(id, spec, who), started as u64);
         Ok(())
     }
 
-    /// Job ID with SPEC as the queue takes it.
-    fn submit_of(&self, id: &str, spec: &ExecSpec) -> Submit {
+    /// Job ID with SPEC, of project WHO, as the queue takes it.
+    fn submit_of(&self, id: &str, spec: &ExecSpec, who: &Who) -> Submit {
         let mut place = spec.place.clone();
+        place.unregistered = who.1.clone();
         if place.image.is_none() {
             place.image = spec.container.as_ref().and_then(|c| {
                 container::resolve(&c.caps, &c.image)
@@ -1482,11 +1514,11 @@ impl Inner {
             tracing::info!("job {id} runs on this machine only: it reaches {h}, a pinned name");
             place.local_only = true;
         }
-        let fspec = spec.forseti_spec(id, &self.hooks.memory);
+        let fspec = spec.forseti_spec(id, &self.hooks.memory, &who.0);
         // inputs frozen at submit, for a job a runner could take: what it syncs, whatever the worktree holds later.
         // One that can't be frozen (not a git worktree, a submodule's change) stays on this machine.
         let mut inputs = None;
-        if self.queue.runners() > 0 && place.may_leave() {
+        if self.queue.runners() > 0 && place.may_leave() && place.unregistered.is_none() {
             let store = self.root.with_file_name("runner-store");
             match sync::freeze(
                 &fspec.tree,
@@ -1552,8 +1584,9 @@ impl Inner {
             };
             let started = self.meta(&id).map_or(now(), |m| m.started);
             let spec = p.into_spec();
+            let who = self.who(&spec).await;
             self.queue
-                .submit(self.submit_of(&id, &spec), started as u64);
+                .submit(self.submit_of(&id, &spec, &who), started as u64);
             if self.hooks.runtime.is_some() {
                 self.queue.flush().await;
                 if let Err(e) = std::fs::remove_file(&file) {
@@ -3052,6 +3085,14 @@ pub fn queue(f: &Front) -> Result<Arc<Queue>, Error> {
         .ok_or_else(|| error(ErrorCode::Internal, "exec: the queue is not open yet"))
 }
 
+/// The project registry, opening the runner first when it is not open yet.
+pub async fn projects(f: &Front) -> Result<&Mutex<Projects>, Error> {
+    runner(f)?
+        .projects()
+        .await
+        .ok_or_else(|| error(ErrorCode::Internal, "exec: the jobs are not open yet"))
+}
+
 fn runner(f: &Front) -> Result<&Runner, Error> {
     let r = &f.core.exec;
     if r.inner.get().is_none() {
@@ -3282,6 +3323,7 @@ async fn placement(
             .map(|n| n.as_str().to_string())
             .collect(),
         lane: lane_of(p)?,
+        unregistered: None,
     })
 }
 

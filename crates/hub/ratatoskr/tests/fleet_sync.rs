@@ -421,6 +421,7 @@ fn job(id: &str, script: &str, frozen: Frozen, image: &str) -> Submit {
         fresh: false,
         stop_on_red: false,
         project: "p".into(),
+        role: Default::default(),
         trust: frozen.trust(&[]),
         keys: vec![],
         local_only: false,

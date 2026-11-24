@@ -42,6 +42,7 @@ fn spec(name: &str) -> JobSpec {
         fresh: false,
         stop_on_red: false,
         project: "alpha".into(),
+        role: Default::default(),
         trust: JobTrust::Private,
         keys: vec![],
         local_only: false,
@@ -928,7 +929,10 @@ proptest! {
         let weights: HashMap<String, f64> = projects.iter().enumerate().map(|(i, (_, w))| (i.to_string(), f64::from(*w) / 2.0)).collect();
         let mut drr = Drr::default();
         let q = drr.quantum_s;
-        let out = drr.order(&order, &eff, &project, &usage, &weights);
+        let owner = |j: &JobId| FairOwner::of(ProjectId(project(j)));
+        let usage_by: HashMap<ProjectId, f64> = usage.iter().map(|(k, v)| (ProjectId(k.clone()), *v)).collect();
+        let weights_by: HashMap<ProjectId, f64> = weights.iter().map(|(k, v)| (ProjectId(k.clone()), *v)).collect();
+        let out = drr.order(&order, &eff, &owner, &usage_by, &weights_by);
         let mut sorted_in = order.clone();
         sorted_in.sort();
         let mut sorted_out = out.clone();

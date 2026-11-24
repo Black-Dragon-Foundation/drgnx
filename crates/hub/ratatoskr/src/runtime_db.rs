@@ -34,6 +34,9 @@
 //! - the disk register (12): `disk_items` (each machine's items as its last report had them: kind, owner, bytes, last
 //!   use, state, who pinned it) and `disk_evictions` (every eviction, carried out or refused, with its reason)
 //!   ([`crate::runners::disk`]).
+//! - the project registry (13): `projects` (the hub-assigned id, the display name, the origin URL and the sorted,
+//!   comma-joined root commits the user registered) and `project_clones` (each clone's git common dir, the project it
+//!   maps to and the root commit its mapping is re-checked by) ([`crate::runners::projects`]).
 //!
 //! A file of a newer schema (left by a newer binary before an `update --back`) is moved aside, with its `-wal` and
 //! `-shm`, as `runtime.db.newer-N-UNIXTIME`, and a new one made.  From migration 2 that loses the sessions it held:
@@ -120,6 +123,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
          primary key(machine, id)); \
          create table disk_evictions(machine text not null, id text not null, kind text not null, \
          owner text not null, bytes integer not null, why text not null, at integer not null, refused text);",
+    ),
+    (
+        13,
+        "create table projects(id text primary key, name text not null unique, origin text not null, \
+         roots text not null); \
+         create table project_clones(common_dir text primary key, project text not null, root text not null);",
     ),
 ];
 
@@ -216,6 +225,13 @@ mod tests {
             .unwrap();
         // an agent session keeps the machine its next jobs go to (11)
         fresh.prepare("select machine from asession").unwrap();
+        // the project registry (12)
+        fresh
+            .prepare("select id, name, origin, roots from projects")
+            .unwrap();
+        fresh
+            .prepare("select common_dir, project, root from project_clones")
+            .unwrap();
     }
 
     // [D] pure (a file): the queue's tables have the design's columns (§7.4), exactly

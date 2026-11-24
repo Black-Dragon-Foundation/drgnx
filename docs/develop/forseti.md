@@ -25,10 +25,16 @@ builds for every target, Android's included, and brings no runtime into jobq. It
 
 `JobSpec` is what a job is and needs. It carries jobq's spec (kind, weight, suite, tree, command, rows selected,
 needs, inputs, features, core and memory ranges, disk, timeout, restartable, `writes_tree`, gate, expect, outputs,
-state locks, pin, lane) plus the runners' fields: `project`, `trust`, `keys` (names only), `local_only` and
+state locks, pin, lane) plus the runners' fields: `project`, `role`, `trust`, `keys` (names only), `local_only` and
 `writes`. A job is heavy only when it is marked so: `weight: Weight::Heavy`, read by `JobSpec::heavy()`; any other job
 is light. `Derived::io_heavy` marks a job that writes the disk hard (the pack declares it): only such a job waits on
 IO pressure.
+
+`project` is a `ProjectId`: the id the hub's project registry assigned (`ratatoskr`'s `runners::projects`),
+never a folder name or a pack's `:project`; empty when the job's tree is in no registered project (such a job never
+goes to a runner and waits as `WaitReason::NotRegistered(why)`). `role` is `Role::Author` (the default: an agent's or
+the user's tip) or `Role::Gate`; warm state and artifacts are partitioned by it, and a gate never reads what an author
+run wrote.
 
 `Job` adds the scheduler's view: its id, its own priority, when it was submitted, its state, attempt, whether it was
 evicted once, disturbed, or has a blocked caller.
@@ -342,7 +348,8 @@ terms whatever was learned, and that the same inputs give the same pick whatever
 ## Fairness (`fair`)
 
 Within a priority, projects share by deficit round robin on machine-seconds over the last hour. `Drr::order(order,
-eff, project_of, usage_last_hour_s, weights)` reorders each run of one priority in the queue order (never across
+eff, project_of, usage_last_hour_s, weights)` charges each job to its `FairOwner { project, submission }` (`submission`
+is `None` until matrices ship, so a project is one flow; use and weights are the project's, by `ProjectId`) and reorders each run of one priority in the queue order (never across
 runs, and P1 not at all): a project starts with its use ÷ its weight (default 1), the project with the least goes
 next (on a tie, the one whose next job comes first), and each job charges it `quantum_s` (600 s) ÷ its weight. A
 project that used less goes first, shares follow the weights, and one project's 400-chunk gate can't starve another
