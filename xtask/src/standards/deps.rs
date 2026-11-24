@@ -1,5 +1,6 @@
 //! The layers: `[[layer]]` rows of standards.toml. A crate may not depend on a named crate, directly or through other
-//! workspace crates (normal and build dependencies, from `cargo metadata`).
+//! workspace crates (normal and build dependencies, from `cargo metadata`). A row with `dev = true` also counts the
+//! crate's own dev-dependencies. A row naming a crate that is not a member is a table finding (`table.rs`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -16,8 +17,13 @@ pub fn check(root: &Path, table: &Table, members: &[Member]) -> Vec<Finding> {
         };
         // every crate reachable from TOP, each with the direct dependency of TOP it came through
         let mut seen: BTreeSet<&str> = BTreeSet::new();
-        let mut stack: Vec<(&str, &str)> =
-            top.deps.iter().map(|d| (d.as_str(), d.as_str())).collect();
+        let dev: &[String] = if layer.dev { &top.dev_deps } else { &[] };
+        let mut stack: Vec<(&str, &str)> = top
+            .deps
+            .iter()
+            .chain(dev)
+            .map(|d| (d.as_str(), d.as_str()))
+            .collect();
         while let Some((name, via)) = stack.pop() {
             if !seen.insert(name) {
                 continue;
