@@ -357,9 +357,10 @@ fn nvidia_smi() -> Vec<SmiRow> {
         .collect()
 }
 
-/// The compute capability (`8.9` as `(8, 9)`) of each NVIDIA card, in `nvidia-smi` order; none when `nvidia-smi` is
-/// missing or too old to say (TEI's support table needs it, [`super::tei_support`]).
-pub fn nvidia_compute_caps() -> Vec<(u32, u32)> {
+/// The compute capability (`8.9` as `(8, 9)`) of each NVIDIA card, in `nvidia-smi` order, none for a card whose row does not
+/// parse (so the rows keep their places); empty when `nvidia-smi` is missing or too old to say (TEI's support table needs it,
+/// [`super::tei_support`]).
+pub fn nvidia_compute_caps() -> Vec<Option<(u32, u32)>> {
     let out = std::process::Command::new("nvidia-smi")
         .args(["--query-gpu=compute_cap", "--format=csv,noheader,nounits"])
         .stdin(std::process::Stdio::null())
@@ -367,7 +368,7 @@ pub fn nvidia_compute_caps() -> Vec<(u32, u32)> {
     let Ok(out) = out else { return Vec::new() };
     String::from_utf8_lossy(&out.stdout)
         .lines()
-        .filter_map(|l| {
+        .map(|l| {
             let (a, b) = l.trim().split_once('.')?;
             Some((a.parse().ok()?, b.parse().ok()?))
         })

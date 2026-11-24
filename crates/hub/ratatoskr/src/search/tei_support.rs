@@ -23,7 +23,7 @@
 //! | Linux CPU x86_64 / aarch64 | supported, but not for indexing | `cpu-1.9`, `cpu-arm64-1.9` |
 //! | Windows, Android | no official build | none |
 
-use super::engine_pick::{Machine, Vendor};
+use super::engine_pick::{HostGpu, Machine, Vendor};
 use serde_json::{Value, json};
 
 /// The TEI release the table is from.
@@ -197,17 +197,25 @@ pub fn verdicts(os: &str, arch: &str, devices: &[Device]) -> Vec<Verdict> {
         }];
     }
     if os == "macos" {
-        return devices
+        // Metal needs Apple Silicon; an Intel Mac has none of it
+        if arch != "aarch64" {
+            return vec![Verdict {
+                device: "this Mac".into(),
+                support: Support::Unsupported,
+                reason: "TEI runs on Apple Silicon (M1 to M4); an Intel Mac is unsupported".into(),
+                command: None,
+            }];
+        }
+        let name = devices
             .iter()
-            .filter(|d| d.vendor == Vendor::Apple)
-            .map(|d| Verdict {
-                device: d.name.clone(),
-                support: Support::Supported,
-                reason: "Apple Silicon M1 to M4 runs TEI on Metal (Docker on macOS is CPU-only)"
-                    .into(),
-                command: Some("brew install text-embeddings-inference".into()),
-            })
-            .collect();
+            .find(|d| d.vendor == Vendor::Apple)
+            .map_or_else(|| "Apple GPU".to_owned(), |d| d.name.clone());
+        return vec![Verdict {
+            device: name,
+            support: Support::Supported,
+            reason: "Apple Silicon M1 to M4 runs TEI on Metal (Docker on macOS is CPU-only)".into(),
+            command: Some("brew install text-embeddings-inference".into()),
+        }];
     }
     let mut out: Vec<Verdict> = devices
         .iter()
@@ -254,7 +262,7 @@ pub fn lines_of(v: &[Verdict]) -> String {
 
 /// The devices of MACHINE for the table; CAPS are the NVIDIA cards' compute capabilities in `nvidia-smi` order. A
 /// software or integrated GPU is not a candidate.
-pub fn devices_of(m: &Machine, caps: &[(u32, u32)]) -> Vec<Device> {
+pub fn devices_of(m: &Machine, caps: &[Option<(u32, u32)>]) -> Vec<Device> {
     let mut nv = 0;
     m.gpus
         .iter()
@@ -262,11 +270,11 @@ pub fn devices_of(m: &Machine, caps: &[(u32, u32)]) -> Vec<Device> {
         .map(|g| {
             let compute_cap = (g.vendor == Vendor::Nvidia).then(|| {
                 nv += 1;
-                caps.get(nv - 1).copied()
+                caps.get(nv - 1).copied().flatten()
             });
             Device {
                 vendor: g.vendor,
-                name: g.name.clone(),
+                name: instinct_name(g),
                 compute_cap: compute_cap.flatten(),
                 driver: (g.vendor == Vendor::Nvidia)
                     .then_some(m.nvidia_driver)
@@ -276,8 +284,20 @@ pub fn devices_of(m: &Machine, caps: &[(u32, u32)]) -> Vec<Device> {
         .collect()
 }
 
+/// The host names every AMD card alike (`AMD GPU`), so an Instinct card is known by its gfx target: MI200 is gfx90a, MI300 is
+/// gfx940 to gfx942.
+fn instinct_name(g: &HostGpu) -> String {
+    match (g.vendor, g.gfx.as_deref()) {
+        (Vendor::Amd, Some("gfx90a")) => "AMD Instinct MI200 (gfx90a)".to_owned(),
+        (Vendor::Amd, Some(x @ ("gfx940" | "gfx941" | "gfx942"))) => {
+            format!("AMD Instinct MI300 ({x})")
+        }
+        _ => g.name.clone(),
+    }
+}
+
 /// The doctor's JSON section: the table's version and date, the verdicts.
-pub fn section(m: &Machine, caps: &[(u32, u32)]) -> Value {
+pub fn section(m: &Machine, caps: &[Option<(u32, u32)>]) -> Value {
     let v = verdicts(&m.os, &m.arch, &devices_of(m, caps));
     json!({
         "version": VERSION, "checked": CHECKED, "source": SOURCE_URL,

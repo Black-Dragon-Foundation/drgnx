@@ -4,9 +4,9 @@
 //!
 //! test-pattern: pure (D). Fake device lists in, verdicts out.
 
-use ratatoskr::search::engine_pick::Vendor;
+use ratatoskr::search::engine_pick::{HostGpu, Machine, Vendor};
 use ratatoskr::search::tei_support::{
-    CHECKED, Device, SOURCE_URL, Support, VERSION, lines_of, verdicts,
+    CHECKED, Device, SOURCE_URL, Support, VERSION, devices_of, lines_of, verdicts,
 };
 
 fn nv(name: &str, cc: (u32, u32), driver: u32) -> Device {
@@ -198,5 +198,103 @@ fn the_text_says_llama_is_built_in_tei_is_optional_and_vectors_are_not_mixed() {
     assert!(
         text.contains("drgnx never installs or starts TEI"),
         "{text}"
+    );
+}
+
+fn host(vendor: Vendor, name: &str, gfx: Option<&str>) -> HostGpu {
+    HostGpu {
+        vendor,
+        name: name.into(),
+        vram_mib: Some(24_000),
+        integrated: false,
+        gfx: gfx.map(str::to_owned),
+    }
+}
+
+#[test]
+fn an_intel_mac_is_unsupported_because_only_apple_silicon_runs_tei() {
+    let apple = other(Vendor::Apple, "Apple GPU");
+    let (s, _, cmd) = one("macos", "x86_64", apple.clone());
+    assert_eq!(s, Support::Unsupported);
+    assert_eq!(cmd, None);
+    let (s, _, cmd) = one("macos", "aarch64", apple);
+    assert_eq!(s, Support::Supported);
+    assert!(cmd.is_some());
+}
+
+#[test]
+fn a_mac_with_no_apple_device_still_gets_a_verdict() {
+    let v = verdicts("macos", "aarch64", &[]);
+    assert_eq!(v.len(), 1, "{v:?}");
+}
+
+#[test]
+fn an_amd_instinct_is_known_by_its_gfx_target_since_the_host_names_every_card_alike() {
+    let m = Machine {
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        gpus: vec![
+            host(Vendor::Amd, "AMD GPU", Some("gfx942")),
+            host(Vendor::Amd, "AMD GPU", Some("gfx90a")),
+            host(Vendor::Amd, "AMD GPU", Some("gfx1100")),
+        ],
+        ..Machine::default()
+    };
+    let v = verdicts("linux", "x86_64", &devices_of(&m, &[]));
+    let s: Vec<_> = v.iter().map(|x| x.support).collect();
+    assert_eq!(
+        s,
+        [
+            Support::Experimental,
+            Support::Experimental,
+            Support::Unsupported
+        ],
+        "{v:?}"
+    );
+}
+
+#[test]
+fn a_card_whose_compute_capability_did_not_parse_keeps_its_place() {
+    let m = Machine {
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        nvidia_driver: Some(580),
+        gpus: vec![
+            host(Vendor::Nvidia, "NVIDIA A", None),
+            host(Vendor::Nvidia, "NVIDIA B", None),
+        ],
+        ..Machine::default()
+    };
+    let d = devices_of(&m, &[None, Some((8, 9))]);
+    assert_eq!(d[0].compute_cap, None);
+    assert_eq!(d[1].compute_cap, Some((8, 9)));
+}
+
+#[test]
+fn four_cards_of_two_vendors_each_get_their_own_verdict_and_the_right_compute_capability() {
+    let m = Machine {
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        nvidia_driver: Some(580),
+        gpus: vec![
+            host(Vendor::Nvidia, "NVIDIA RTX 4090", None),
+            host(Vendor::Amd, "AMD GPU", Some("gfx1100")),
+            host(Vendor::Nvidia, "NVIDIA GTX 1080", None),
+            host(Vendor::Amd, "AMD GPU", Some("gfx942")),
+        ],
+        ..Machine::default()
+    };
+    let d = devices_of(&m, &[Some((8, 9)), Some((6, 1))]);
+    let v = verdicts("linux", "x86_64", &d);
+    let s: Vec<_> = v.iter().map(|x| x.support).collect();
+    assert_eq!(
+        s,
+        [
+            Support::Supported,
+            Support::Unsupported,
+            Support::Unsupported,
+            Support::Experimental
+        ],
+        "{v:?}"
     );
 }
