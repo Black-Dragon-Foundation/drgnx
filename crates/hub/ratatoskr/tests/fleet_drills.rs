@@ -1135,7 +1135,7 @@ mod drill {
             let mut d = Drill::new("guard", "r1", "dedicated");
             let item = |sid: &str| {
                 format!(
-                    r#"{{"item": {{"id": "build:{sid}", "kind": "build-dir", "owner": "p", "machine": "", "bytes": 1000000, "last_used": 1, "created": 1, "name": null, "budget_bytes": null, "trust": "private"}}, "rel": "slots-target/{sid}", "measured": 0}}"#
+                    r#"{{"item": {{"id": "build:{sid}", "kind": "build-dir", "owner": "p", "machine": "", "bytes": 1000000, "last_used": 1, "created": 1, "name": null, "budget_bytes": null, "trust": "Private"}}, "rel": "slots-target/{sid}", "measured": 0}}"#
                 )
             };
             let reg = format!(
