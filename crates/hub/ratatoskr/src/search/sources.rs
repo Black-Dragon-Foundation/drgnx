@@ -96,6 +96,10 @@ pub trait Source: Send + Sync {
     ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>>;
     /// Asks it what its model is now.
     fn probe(&self) -> BoxFuture<'_, Result<Identity, EmbedError>>;
+    /// Why it waits now (a game or a job uses its GPU); none while it works.
+    fn holding(&self) -> Option<String> {
+        None
+    }
 }
 
 /// A source behind the text rule: an `embed` for a source that may not be sent text fails here, before the source.
@@ -137,6 +141,9 @@ impl Source for Guarded {
     }
     fn probe(&self) -> BoxFuture<'_, Result<Identity, EmbedError>> {
         self.0.probe()
+    }
+    fn holding(&self) -> Option<String> {
+        self.0.holding()
     }
 }
 
@@ -290,6 +297,7 @@ impl SourceChain {
         for s in &self.sources {
             let (state, why) = match self.health.entries().iter().find(|(m, _)| m == s.id()) {
                 Some((_, Health::Down { why, .. })) => ("down", Some(why.clone())),
+                _ if s.holding().is_some() => ("held", s.holding()),
                 _ if self.hold_local && !self.overriding && s.kind().local() => ("held", None),
                 _ if s.kind() != SourceKind::Lookup && !s.may_send_text() => ("no text", None),
                 _ => ("answering", None),
@@ -723,5 +731,8 @@ impl Source for DocSource {
     }
     fn probe(&self) -> BoxFuture<'_, Result<Identity, EmbedError>> {
         self.inner.probe()
+    }
+    fn holding(&self) -> Option<String> {
+        self.inner.holding()
     }
 }

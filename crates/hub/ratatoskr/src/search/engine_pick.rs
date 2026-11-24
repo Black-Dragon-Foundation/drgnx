@@ -17,11 +17,15 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// The AMD gfx targets the ROCm build of the pinned release is built for (llama.cpp's `AMDGPU_TARGETS`), checked against
-/// the card's `gfx_target_version`. A card outside the list runs on Vulkan, with the reason.
+/// The AMD gfx targets the ROCm build of the pinned release carries device code for. Source: the code objects
+/// (`amdgcn-amd-amdhsa--gfxNNNN`) inside `libggml-hip.so` of `llama-b12200-bin-ubuntu-rocm-10.0-x64.tar.gz`, read with
+/// `strings` on the desktop (2026-11-24; `gfx1250` appears in the file as text only, with no code object). The asset
+/// bundles no rocBLAS or HIP runtime: those come from the system's ROCm, so a card may still be refused by its own
+/// libraries (`doctor` runs `--list-devices` to see). A card outside the list runs on Vulkan, with the reason.
 pub const ROCM_TARGETS: &[&str] = &[
-    "gfx908", "gfx90a", "gfx942", "gfx1030", "gfx1100", "gfx1101", "gfx1102", "gfx1151", "gfx1200",
-    "gfx1201",
+    "gfx908", "gfx90a", "gfx942", "gfx950", "gfx1010", "gfx1011", "gfx1012", "gfx1030", "gfx1031",
+    "gfx1032", "gfx1033", "gfx1034", "gfx1035", "gfx1036", "gfx1100", "gfx1101", "gfx1102",
+    "gfx1103", "gfx1150", "gfx1151", "gfx1152", "gfx1200", "gfx1201",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

@@ -160,13 +160,13 @@ fn amd_runs_rocm_where_kfd_and_the_target_allow() {
     assert!(p.fallback.as_deref().unwrap().contains("/dev/kfd"));
     let old = machine(
         "x86_64",
-        vec![gpu(Vendor::Amd, "AMD GPU", 8192, false, Some("gfx1010"))],
+        vec![gpu(Vendor::Amd, "AMD GPU", 8192, false, Some("gfx803"))],
         None,
         true,
     );
     let p = &vendor_picks(&old, &no_vis())[0];
     assert_eq!(p.asset.backend, "vulkan", "outside ROCm's list");
-    assert!(p.fallback.as_deref().unwrap().contains("gfx1010"));
+    assert!(p.fallback.as_deref().unwrap().contains("gfx803"));
     let arm = machine("aarch64", vec![amd()], None, true);
     let p = &vendor_picks(&arm, &no_vis())[0];
     assert_eq!((p.asset.backend, p.asset.arch), ("vulkan", "aarch64"));
@@ -452,7 +452,7 @@ fn a_gpu_the_vendor_build_cannot_drive_is_listed_by_its_vulkan_engine() {
     let m = machine(
         "x86_64",
         vec![
-            gpu(Vendor::Amd, "AMD GPU", 8192, false, Some("gfx1010")),
+            gpu(Vendor::Amd, "AMD GPU", 8192, false, Some("gfx803")),
             nvidia(),
         ],
         Some(580),
@@ -490,7 +490,7 @@ fn a_gpu_the_vendor_build_cannot_drive_is_listed_by_its_vulkan_engine() {
         ms.iter()
             .any(|m| m.asset.backend == "vulkan" && m.device.id == "Vulkan0")
     );
-    assert!(notes.iter().any(|n| n.contains("gfx1010")), "{notes:?}");
+    assert!(notes.iter().any(|n| n.contains("gfx803")), "{notes:?}");
 }
 
 #[test]
@@ -913,7 +913,7 @@ fn the_user_guide_states_the_totals() {
         let s = n.to_string();
         let mut out = String::new();
         for (i, c) in s.chars().enumerate() {
-            if i > 0 && (s.len() - i) % 3 == 0 {
+            if i > 0 && (s.len() - i).is_multiple_of(3) {
                 out.push(',');
             }
             out.push(c);

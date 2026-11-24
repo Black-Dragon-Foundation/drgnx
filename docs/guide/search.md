@@ -55,5 +55,13 @@ Each is enforced; hitting one slows indexing and never fails it silently.
 | `drgnx-search-vram-limit` | MiB of video memory: the engine is sized to it and refused when it would pass |
 | `drgnx-search-gpu-busy` | percent the GPU may be busy: batches are paced |
 
+## A game or a job on the GPU
+
+While another program works on the engine's GPU, indexing waits after the batch it is on and goes on when the program
+stops. `ratatoskr search status` names the program (`held`, with the reason). Two things count: a process other than
+our own engines that uses at least 10 percent of the GPU (NVIDIA: `nvidia-smi pmon`; AMD and Intel: the DRM client list in
+`/proc`), and free video memory under what the engine needs. A program that only holds a context open and does nothing
+(a compositor) does not hold the GPU.
+
 The CPU and memory limits are held by a systemd user scope where your user manager runs; without one, `doctor` says the
 limit rests on the engine's thread count alone.

@@ -418,12 +418,10 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
             values.search_battery_gpu = default.search_battery_gpu.clone()
         }
         "drgnx-search-no-gpu" => values.search_no_gpu = default.search_no_gpu.clone(),
-        "drgnx-search-cpu-limit" => values.search_cpu_limit = default.search_cpu_limit.clone(),
-        "drgnx-search-memory-limit" => {
-            values.search_memory_limit = default.search_memory_limit.clone()
-        }
-        "drgnx-search-vram-limit" => values.search_vram_limit = default.search_vram_limit.clone(),
-        "drgnx-search-gpu-busy" => values.search_gpu_busy = default.search_gpu_busy.clone(),
+        "drgnx-search-cpu-limit" => values.search_cpu_limit = default.search_cpu_limit,
+        "drgnx-search-memory-limit" => values.search_memory_limit = default.search_memory_limit,
+        "drgnx-search-vram-limit" => values.search_vram_limit = default.search_vram_limit,
+        "drgnx-search-gpu-busy" => values.search_gpu_busy = default.search_gpu_busy,
         "drgnx-search-ignore-rules" => {
             values.search_ignore_rules = default.search_ignore_rules.clone();
         }

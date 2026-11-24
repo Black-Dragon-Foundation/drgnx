@@ -63,6 +63,10 @@ pub struct SelfCheck {
     pub vector: Vec<f32>,
 }
 
+/// Looks at a device (a llama.cpp device id) for another program using it, given our own engines' pids: the reason it is
+/// held, or none ([`super::engine_hold::Probe::foreign`] on this machine, a test's stand-in in the tests).
+pub type HoldFn = Arc<dyn Fn(&str, &[i32]) -> Option<String> + Send + Sync>;
+
 /// What the engine runs.
 pub struct EngineSpec {
     /// `llama-server`.
@@ -86,6 +90,8 @@ pub struct EngineSpec {
     pub limits: Limits,
     /// `systemd-run`, when the user's manager is there to hold the CPU and memory limits.
     pub systemd: Option<PathBuf>,
+    /// The look for another program on the device (a game, a training job); none: not looked for.
+    pub hold: Option<HoldFn>,
 }
 
 /// A running engine.
@@ -113,6 +119,10 @@ struct Shared {
     pid: Mutex<Option<i32>>,
     last_use: Mutex<tokio::time::Instant>,
     busy: AtomicUsize,
+    /// Why the engine waits now (a program uses the GPU, or its video memory is short); none while it works.
+    held: Mutex<Option<String>>,
+    /// The device's free video memory as last asked, and when.
+    free_seen: Mutex<Option<(tokio::time::Instant, Option<u64>)>>,
 }
 
 impl Shared {
@@ -249,8 +259,89 @@ impl LocalEngine {
                 pid: Mutex::new(None),
                 last_use: Mutex::new(crate::clock::now()),
                 busy: AtomicUsize::new(0),
+                held: Mutex::new(None),
+                free_seen: Mutex::new(None),
             }),
             identity,
+        }
+    }
+
+    /// Why the engine waits now: another program uses the GPU, or the video memory is short. None while it works.
+    pub fn holding(&self) -> Option<String> {
+        self.shared
+            .held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set_held(&self, why: Option<String>) {
+        *self
+            .shared
+            .held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = why;
+    }
+
+    /// Why the device is held at this look: another program uses it, or its free video memory is under the engine's
+    /// need at context CTX.
+    async fn hold_reason(&self, ctx: u32) -> Option<String> {
+        let device = self.spec.device.clone().filter(|d| d != "none")?;
+        if let Some(look) = self.spec.hold.clone() {
+            let own: Vec<i32> = self.pid().into_iter().collect();
+            let d = device.clone();
+            if let Ok(Some(why)) = crate::clock::blocking(move || look(&d, &own)).await {
+                return Some(why);
+            }
+        }
+        // before the engine runs, a start that does not fit is refused with the numbers (`start`); the signal is for the
+        // memory another program takes while it runs
+        self.pid()?;
+        // the device list is a process of its own (it loads the backends): asked once in a poll interval
+        let cached = *self
+            .shared
+            .free_seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let free = match cached {
+            Some((at, free))
+                if crate::clock::now().saturating_duration_since(at)
+                    < super::engine_hold::HOLD_POLL =>
+            {
+                free
+            }
+            _ => {
+                let free = self.device_free(&device).await;
+                *self
+                    .shared
+                    .free_seen
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = Some((crate::clock::now(), free));
+                free
+            }
+        };
+        let need = engine_limits::vram_need_mib(self.gguf_bytes(), ctx);
+        super::engine_hold::vram_short(need, free)
+    }
+
+    /// Returns when nothing holds the device; while something does, says why in [`holding`](Self::holding) and looks
+    /// again every [`HOLD_POLL`](super::engine_hold::HOLD_POLL) on the hub's clock.
+    async fn wait_while_held(&self, ctx: u32) {
+        loop {
+            let why = self.hold_reason(ctx).await;
+            let held = why.is_some();
+            if held {
+                tracing::info!(
+                    "search: {} waits: {}",
+                    self.spec.label,
+                    why.as_deref().unwrap_or_default()
+                );
+            }
+            self.set_held(why);
+            if !held {
+                return;
+            }
+            crate::clock::sleep(super::engine_hold::HOLD_POLL).await;
         }
     }
 
@@ -655,6 +746,7 @@ impl LocalEngine {
             let lengths: Vec<usize> = order[at..].iter().map(|&i| tokens[i]).collect();
             let ids = &order[at..at + pacer.take(&lengths)];
             let batch: Vec<String> = ids.iter().map(|&i| texts[i].clone()).collect();
+            self.wait_while_held(ctx).await;
             let begun = crate::clock::real_now();
             for (&i, v) in ids.iter().zip(self.batch(ctx, &batch).await?) {
                 out[i] = v;
@@ -733,6 +825,10 @@ impl super::DocEmbedder for LocalEngine {
         "llama".into()
     }
 
+    fn holding(&self) -> Option<String> {
+        LocalEngine::holding(self)
+    }
+
     fn source_kind(&self) -> SourceKind {
         SourceKind::LocalEngine
     }
@@ -751,6 +847,10 @@ impl super::DocEmbedder for LocalEngine {
 }
 
 impl super::engine_pool::Lane for LocalEngine {
+    fn holding(&self) -> Option<String> {
+        LocalEngine::holding(self)
+    }
+
     fn embed<'a>(
         &'a self,
         texts: &'a [String],

@@ -108,6 +108,7 @@ impl Rig {
             device: None,
             limits: ratatoskr::search::engine_limits::Limits::default(),
             systemd: None,
+            hold: None,
         }
     }
 
@@ -479,7 +480,11 @@ fn pool_of(
             .map(|(id, f, rate)| {
                 (
                     id.to_string(),
-                    f.clone() as std::sync::Arc<dyn ratatoskr::search::engine_pool::Lane>,
+                    {
+                        let own: std::sync::Arc<Fake> = std::sync::Arc::clone(*f);
+                        let lane: std::sync::Arc<dyn ratatoskr::search::engine_pool::Lane> = own;
+                        lane
+                    },
                     *rate,
                 )
             })
@@ -578,5 +583,133 @@ fn the_only_engine_failing_is_an_error_not_a_silent_loss() {
             p.embed_docs(&numbered(3)).await.is_err(),
             "all dead is an error"
         );
+    });
+}
+
+// The hold (the manager's ruling): another program using the device, or its free video memory under the engine's need,
+// pauses the engine after the batch it is on; `search status` says why; it goes on when both clear.
+
+/// Five texts of different lengths: more than one batch under the budget.
+fn several() -> Vec<String> {
+    texts(&[
+        &"a".repeat(40),
+        "bbbbb",
+        &"c".repeat(30),
+        &"d".repeat(10),
+        &"e".repeat(20),
+    ])
+}
+
+#[test]
+fn a_game_on_the_device_pauses_the_engine_after_its_batch_and_says_why() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    on_hub_runtime(async {
+        let r = rig_with_devices(ROCM_ONE);
+        let game = Arc::new(AtomicBool::new(true));
+        let looks = Arc::new(AtomicUsize::new(0));
+        let mut spec = r.spec();
+        spec.device = Some("ROCm0".into());
+        let (g, l) = (game.clone(), looks.clone());
+        // the first look is before the first batch: the game starts as that batch runs
+        spec.hold = Some(Arc::new(move |device, _own| {
+            assert_eq!(device, "ROCm0", "the look is at the engine's own device");
+            let first = l.fetch_add(1, Ordering::SeqCst) == 0;
+            (!first && g.load(Ordering::SeqCst)).then(|| "game (pid 9) uses the GPU".to_owned())
+        }));
+        let e = Arc::new(LocalEngine::new(spec));
+        assert_eq!(e.holding(), None);
+        let run = tokio::spawn({
+            let e = e.clone();
+            async move { e.embed_docs(&several()).await }
+        });
+        let why =
+            skuld::wait_until_async("the engine says it is held", 30, || async { e.holding() })
+                .await;
+        assert!(why.contains("game (pid 9)"), "{why}");
+        assert_eq!(
+            r.embeds().len(),
+            1,
+            "it finished the batch it was on and no more"
+        );
+        assert!(!run.is_finished());
+        game.store(false, Ordering::SeqCst);
+        clock::advance(ratatoskr::search::engine_hold::HOLD_POLL).await;
+        let out = run.await.unwrap().unwrap();
+        assert_eq!(out.len(), 5, "every text got its vector");
+        assert!(r.embeds().len() > 1);
+        assert_eq!(e.holding(), None, "released once the game stopped");
+        e.close().await;
+    });
+}
+
+#[test]
+fn free_video_memory_under_the_need_pauses_the_engine_until_it_is_back() {
+    use std::sync::Arc;
+    on_hub_runtime(async {
+        let r = rig_with_devices(ROCM_ONE);
+        let mut spec = r.spec();
+        spec.device = Some("ROCm0".into());
+        let e = Arc::new(LocalEngine::new(spec));
+        e.embed_docs(&texts(&["a"])).await.unwrap();
+        let devices = r.dir.path().join("devices.txt");
+        std::fs::write(
+            &devices,
+            "  ROCm0: AMD Radeon RX 7900 XTX (24560 MiB, 50 MiB free)\n",
+        )
+        .unwrap();
+        let before = r.embeds().len();
+        let run = tokio::spawn({
+            let e = e.clone();
+            async move { e.embed_docs(&several()).await }
+        });
+        let why =
+            skuld::wait_until_async("the engine says it is held", 30, || async { e.holding() })
+                .await;
+        assert!(why.contains("50 MiB"), "{why}");
+        assert_eq!(
+            r.embeds().len(),
+            before,
+            "nothing was sent while it was short"
+        );
+        std::fs::write(&devices, ROCM_ONE).unwrap();
+        clock::advance(ratatoskr::search::engine_hold::HOLD_POLL).await;
+        assert_eq!(run.await.unwrap().unwrap().len(), 5);
+        assert_eq!(e.holding(), None);
+        e.close().await;
+    });
+}
+
+#[test]
+fn a_held_engine_shows_as_held_with_its_reason_in_the_chain_status() {
+    use ratatoskr::search::DocEmbedder;
+    use ratatoskr::search::sources::{DocSource, Source, SourceChain};
+    use std::sync::Arc;
+    on_hub_runtime(async {
+        let r = rig_with_devices(ROCM_ONE);
+        let mut spec = r.spec();
+        spec.device = Some("ROCm0".into());
+        spec.hold = Some(Arc::new(|_, _| {
+            Some("train.py (pid 4) uses the GPU".to_owned())
+        }));
+        let e = Arc::new(LocalEngine::new(spec));
+        let fp = DocEmbedder::identity(&*e).unwrap().fp;
+        let chain = SourceChain::new(
+            fp,
+            vec![Arc::new(DocSource::new(e.clone())) as Arc<dyn Source>],
+        );
+        let engine_entry =
+            |c: &SourceChain| c.status().into_iter().find(|s| s.kind != "cache").unwrap();
+        assert_eq!(engine_entry(&chain).state, "answering");
+        let run = tokio::spawn({
+            let e = e.clone();
+            async move { e.embed_docs(&several()).await }
+        });
+        skuld::wait_until_async("held", 30, || async { e.holding() }).await;
+        let entry = engine_entry(&chain);
+        assert_eq!(entry.state, "held");
+        assert!(entry.why.unwrap().contains("train.py (pid 4)"));
+        run.abort();
+        e.close().await;
     });
 }

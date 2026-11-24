@@ -21,6 +21,10 @@ pub trait Lane: Send + Sync + 'static {
         q: &'a str,
         instruction: Option<&'a str>,
     ) -> BoxFuture<'a, Result<Vec<f32>, EmbedError>>;
+    /// Why it waits now (another program uses its GPU); none while it works.
+    fn holding(&self) -> Option<String> {
+        None
+    }
 }
 
 /// How much of a new measurement the rate takes.
@@ -261,6 +265,16 @@ impl super::DocEmbedder for EnginePool {
 
     fn source_id(&self) -> String {
         "llama".into()
+    }
+
+    /// The members that wait, with their devices: `CUDA0: <why>; ROCm1: <why>`.
+    fn holding(&self) -> Option<String> {
+        let held: Vec<String> = self
+            .alive()
+            .iter()
+            .filter_map(|m| m.lane.holding().map(|w| format!("{}: {w}", m.id)))
+            .collect();
+        (!held.is_empty()).then(|| held.join("; "))
     }
 
     fn source_kind(&self) -> SourceKind {

@@ -161,6 +161,11 @@ engine").
 (drgnx-search-gpu-busy 60)
 ```
 
+Beyond the limits, the engine holds itself while another program works on its GPU (`search::engine_hold`): after the
+batch it is on it waits, `search status` shows the source as `held` with the program, and it goes on when the GPU is
+free again. The signals are another process using at least 10 percent of the GPU (NVML's list on NVIDIA, the DRM
+`fdinfo` clients on AMD and Intel; our own engines excluded) and free video memory under the engine's need.
+
 ## Conformance
 
 The two readers are held to each other by four things, all under `test/fixtures/huginn/` and `crates/core/huginn`:

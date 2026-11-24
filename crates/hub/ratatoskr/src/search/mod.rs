@@ -7,6 +7,7 @@ pub mod context;
 pub mod download;
 pub mod engine;
 pub mod engine_doctor;
+pub mod engine_hold;
 pub mod engine_install;
 pub mod engine_limits;
 pub mod engine_pick;
@@ -87,6 +88,11 @@ pub trait DocEmbedder: Send + Sync {
     /// The id its source goes by in a chain and its status: a provider's id, `builtin` for the worker.
     fn source_id(&self) -> String {
         "embed".into()
+    }
+
+    /// Why it waits now (a game or a job uses its GPU); none while it works.
+    fn holding(&self) -> Option<String> {
+        None
     }
 
     /// What kind of source it is in a chain ([`sources::SourceKind`]).
@@ -242,6 +248,10 @@ impl Search {
                 device: Some(device.clone()),
                 limits: settings.limits,
                 systemd: ncpu_systemd.clone(),
+                hold: Some({
+                    let probe = Arc::new(engine_hold::Probe::new());
+                    Arc::new(move |d: &str, own: &[i32]| probe.foreign(d, own))
+                }),
             }));
             identity.get_or_insert_with(|| engine.identity());
             let rate = resolved.pin.rates.get(&device).copied().unwrap_or(0.0);
@@ -389,6 +399,17 @@ pub static TEST_TINY: ModelSpec = ModelSpec {
     licence: "Apache-2.0",
 };
 
+/// `systemd-run`, when the user's systemd manager is there to hold the engine's CPU and memory limits.
+fn engine_systemd() -> Option<PathBuf> {
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)?;
+    runtime.join("systemd").is_dir().then_some(())?;
+    std::env::var_os("PATH")?
+        .to_string_lossy()
+        .split(':')
+        .map(|d| PathBuf::from(d).join("systemd-run"))
+        .find(|p| p.is_file())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,15 +461,4 @@ mod tests {
         let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
         assert_eq!(stored_consent(&db).await, Some(consent));
     }
-}
-
-/// `systemd-run`, when the user's systemd manager is there to hold the engine's CPU and memory limits.
-fn engine_systemd() -> Option<PathBuf> {
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)?;
-    runtime.join("systemd").is_dir().then_some(())?;
-    std::env::var_os("PATH")?
-        .to_string_lossy()
-        .split(':')
-        .map(|d| PathBuf::from(d).join("systemd-run"))
-        .find(|p| p.is_file())
 }
