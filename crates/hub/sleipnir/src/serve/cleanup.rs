@@ -143,14 +143,14 @@ pub fn containers(prefix: &str, hub: &str) -> serde_json::Value {
     let out = match out {
         Ok(o) if o.status.success() => o,
         Ok(o) => {
-            eprintln!(
+            crate::eline!(
                 "sleipnir serve: podman ps: {}",
                 String::from_utf8_lossy(&o.stderr).trim()
             );
             return serde_json::Value::Null;
         }
         Err(e) => {
-            eprintln!("sleipnir serve: podman ps: {e}");
+            crate::eline!("sleipnir serve: podman ps: {e}");
             return serde_json::Value::Null;
         }
     };
@@ -247,13 +247,13 @@ pub fn apply(root: &Path, plan: &[Remove]) {
             )
             .map(|_| ()),
             Remove::Unit(name) => run::systemctl_ok(&["reset-failed", name]).map(|_| ()),
-            Remove::Folder(dir) => fs::remove_dir_all(dir).map_err(|e| e.to_string()),
+            Remove::Folder(dir) => fs::remove_dir_all(dir).map_err(villa::Error::from),
             Remove::Bundle(name) => {
-                fs::remove_dir_all(root.join("bin").join(name)).map_err(|e| e.to_string())
+                fs::remove_dir_all(root.join("bin").join(name)).map_err(villa::Error::from)
             }
         };
         if let Err(e) = done {
-            eprintln!("sleipnir serve: cleanup {r:?}: {e}");
+            crate::eline!("sleipnir serve: cleanup {r:?}: {e}");
         }
     }
 }

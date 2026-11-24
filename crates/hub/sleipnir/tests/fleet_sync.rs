@@ -21,7 +21,7 @@ mod sync {
     const BIN: &str = "/fleet/share/sleipnir";
 
     fn ssh(cmd: &str) -> Command {
-        let home = std::env::var("HOME").unwrap();
+        let home = std::env::var(stig::HOME_VAR).unwrap();
         let mut c = Command::new("ssh");
         c.args([
             "-F",
@@ -127,7 +127,7 @@ mod sync {
                 x as u8
             })
             .collect();
-        std::fs::write(repo.join("noise"), &noise).unwrap();
+        sleipnir::fsio::write(repo.join("noise"), &noise).unwrap();
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-qm", "one"]);
         let commit = git(&repo, &["rev-parse", "HEAD"]);

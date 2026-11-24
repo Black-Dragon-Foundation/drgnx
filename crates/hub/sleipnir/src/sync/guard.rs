@@ -21,7 +21,6 @@ use std::io::{self, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
 use forseti::JobTrust;
@@ -298,6 +297,16 @@ fn remove_slot(root: &Path, id: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// How long a podman call that only reads or removes may take.
+const PODMAN_LIMIT: Duration = Duration::from_secs(120);
+/// How long a pull may take: an image's layers over the runner's link.
+const PULL_LIMIT: Duration = Duration::from_secs(30 * 60);
+
+/// `podman ARGS`, stdin closed, its output captured, ended when it outlives LIMIT.
+fn podman(args: &[&str], limit: Duration) -> io::Result<crate::tool::Output> {
+    crate::tool::limited(Path::new("podman"), args, &[], limit).map_err(io::Error::other)
+}
+
 fn remove_image(id: &str) -> io::Result<()> {
     if id.is_empty() || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(io::Error::new(
@@ -305,10 +314,7 @@ fn remove_image(id: &str) -> io::Result<()> {
             "not an image id",
         ));
     }
-    let out = Command::new("podman")
-        .args(["image", "rm", id])
-        .stdin(Stdio::null())
-        .output()?;
+    let out = podman(&["image", "rm", id], PODMAN_LIMIT)?;
     if out.status.success() {
         Ok(())
     } else {
@@ -403,10 +409,10 @@ fn size(d: &Path) -> u64 {
 /// The images in the runner's podman store, with the references we pulled each by (`<root>/images`).
 pub fn images(root: &Path) -> Result<Vec<Item>> {
     let ours = pulled(root)?;
-    let out = Command::new("podman")
-        .args(["images", "--no-trunc", "--format", "{{.ID}}"])
-        .stdin(Stdio::null())
-        .output()?;
+    let out = podman(
+        &["images", "--no-trunc", "--format", "{{.ID}}"],
+        PODMAN_LIMIT,
+    )?;
     if !out.status.success() {
         return Err(io::Error::other(format!(
             "podman images: {}",
@@ -441,7 +447,7 @@ fn bare_id(s: &str) -> &str {
 
 /// `<root>/images`: one line `<image id> <reference>` per image we pulled.
 fn pulled(root: &Path) -> io::Result<Vec<(String, String)>> {
-    let text = match fs::read_to_string(root.join(IMAGES)) {
+    let text = match crate::fsio::read_to_string(root.join(IMAGES)) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
         r => r?,
     };
@@ -476,10 +482,7 @@ pub fn check_pull(reference: &str, allow: &[String]) -> Result<()> {
 /// Pulls `reference` (checked by `check_pull`) and records it as ours. Jobs run `--pull=never`.
 pub fn pull(root: &Path, reference: &str, allow: &[String]) -> Result<String> {
     check_pull(reference, allow)?;
-    let out = Command::new("podman")
-        .args(["pull", "-q", reference])
-        .stdin(Stdio::null())
-        .output()?;
+    let out = podman(&["pull", "-q", reference], PULL_LIMIT)?;
     let id = bare_id(
         String::from_utf8_lossy(&out.stdout)
             .lines()

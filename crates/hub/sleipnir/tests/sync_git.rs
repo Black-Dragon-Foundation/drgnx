@@ -12,7 +12,6 @@ mod git {
     use std::fs;
     use std::os::unix::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
 
     use sleipnir::sync::capture::{self, Entry};
     use sleipnir::sync::slot::{self, Blobs, Overlay, SlotKey};
@@ -31,26 +30,25 @@ mod git {
     }
 
     fn real_git(dir: &Path, git: &Path, args: &[&str]) {
-        let out = Command::new(git)
-            .current_dir(dir)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .args([
+        let mut spec = sleipnir::tool::spec(
+            git,
+            &[
                 "-c",
                 "user.name=t",
                 "-c",
                 "user.email=t@example.invalid",
                 "-c",
                 "init.defaultBranch=main",
-            ])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
+            ],
+            &[
+                ("GIT_CONFIG_NOSYSTEM", "1"),
+                ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ],
         );
+        spec.args.extend(args.iter().map(std::ffi::OsString::from));
+        spec.cwd = Some(dir.to_path_buf());
+        let out = draugr::run(spec, std::time::Duration::from_secs(120)).unwrap();
+        assert!(out.status.success(), "{args:?}: {}", out.stderr);
     }
 
     fn script(at: &Path, body: &str) {
@@ -72,16 +70,16 @@ mod git {
         let repo = t.join("repo");
         fs::create_dir(&repo).unwrap();
         real_git(&repo, &git, &["init", "-q"]);
-        fs::write(repo.join("a"), "a\n").unwrap();
-        fs::write(repo.join(".gitignore"), "cache/\n").unwrap();
+        sleipnir::fsio::write(repo.join("a"), "a\n").unwrap();
+        sleipnir::fsio::write(repo.join(".gitignore"), "cache/\n").unwrap();
         real_git(&repo, &git, &["add", "-A"]);
         real_git(&repo, &git, &["commit", "-qm", "one"]);
-        fs::write(repo.join("a"), "a in the overlay\n").unwrap();
+        sleipnir::fsio::write(repo.join("a"), "a in the overlay\n").unwrap();
         fs::create_dir(repo.join("cache")).unwrap();
-        fs::write(repo.join("cache/x"), "x\n").unwrap();
+        sleipnir::fsio::write(repo.join("cache/x"), "x\n").unwrap();
         let global = t.join("home/.gitconfig");
         fs::create_dir_all(global.parent().unwrap()).unwrap();
-        fs::write(&global, "[core]\n\texcludesFile = /dev/null\n").unwrap();
+        sleipnir::fsio::write(&global, "[core]\n\texcludesFile = /dev/null\n").unwrap();
 
         let bin = t.join("bin");
         fs::create_dir(&bin).unwrap();
@@ -105,7 +103,7 @@ mod git {
             std::env::set_var("PATH", std::env::join_paths(search).unwrap());
             std::env::set_var("SLEIPNIR_TEST_GIT_LOG", &log);
             std::env::set_var("SLEIPNIR_TEST_REAL_GIT", &git);
-            std::env::set_var("HOME", t.join("home"));
+            std::env::set_var(stig::HOME_VAR, t.join("home"));
             std::env::set_var("GIT_DIR", t.join("not-ours"));
             std::env::set_var("GIT_WORK_TREE", t.join("not-ours"));
             std::env::set_var("GIT_CONFIG_COUNT", "1");
@@ -139,7 +137,7 @@ mod git {
         assert_eq!(fs::read(p.slot.join("a")).unwrap(), b"a in the overlay\n");
         assert_eq!(fs::read(p.slot.join("cache/x")).unwrap(), b"x\n");
 
-        let text = fs::read_to_string(&log).unwrap();
+        let text = sleipnir::fsio::read_to_string(&log).unwrap();
         let calls: Vec<&str> = text.split("CALL\n").filter(|c| !c.is_empty()).collect();
         assert!(
             calls.len() >= 10,

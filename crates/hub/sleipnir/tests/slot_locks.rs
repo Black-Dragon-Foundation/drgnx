@@ -123,7 +123,7 @@ mod slot {
         let serve_b = hold(&p, "k2", || Ok(())).unwrap().unwrap();
         write_job_hold(&b, &p, "k2").unwrap();
         let why = hold_for_job(&a).err().expect("moved");
-        assert!(why.contains("moved to other inputs"), "{why}");
+        assert!(why.message().contains("moved to other inputs"), "{why}");
         assert!(hold_for_job(&b).unwrap().is_some());
         drop(serve_b);
     }

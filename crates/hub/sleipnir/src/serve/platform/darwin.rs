@@ -34,7 +34,7 @@ pub struct DarwinPlatform {
 }
 
 impl DarwinPlatform {
-    pub fn new(cfg: &Config, exe: &Path) -> Result<DarwinPlatform, String> {
+    pub fn new(cfg: &Config, exe: &Path) -> villa::Result<DarwinPlatform> {
         pressure::start();
         Ok(DarwinPlatform {
             root: cfg.root.clone(),
@@ -95,11 +95,14 @@ impl Platform for DarwinPlatform {
         let boot_id = raw.boot_session.clone();
         let disk = rustix::fs::statvfs(&self.root).map_err(io::Error::from)?;
         let gb = |blocks: u64| blocks * disk.f_frsize / 1_000_000_000;
-        let batt = std::process::Command::new("/usr/bin/pmset")
-            .args(["-g", "batt"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-            .unwrap_or_default();
+        let batt = crate::linux::run::limited(
+            Path::new("/usr/bin/pmset"),
+            &["-g", "batt"],
+            &[],
+            crate::linux::run::SYSTEMCTL_LIMIT,
+        )
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
         let others = self
             .reservations()
             .read_others(&self.scheduler())
@@ -190,7 +193,7 @@ impl Platform for DarwinPlatform {
         } else {
             let text = req.net_hosts.join("\n") + "\n";
             crate::net::allow_list(&text)?;
-            fs::write(dir.join(proxy::ALLOW), text)
+            crate::fsio::write(dir.join(proxy::ALLOW), text)
                 .map_err(|e| format!("{}: {e}", proxy::ALLOW))?;
             Some(proxy::bind().map_err(|e| format!("the job's proxy port: {e}"))?)
         };
@@ -224,7 +227,7 @@ impl Platform for DarwinPlatform {
         });
         let env = spec.env.clone();
         let ctx = gleipnir::Context {
-            home: std::env::var_os("HOME")
+            home: std::env::var_os(stig::HOME_VAR)
                 .map(PathBuf::from)
                 .unwrap_or_default(),
             closed: vec![],
@@ -253,7 +256,7 @@ impl Platform for DarwinPlatform {
         let profile = gleipnir::sbpl::profile(&valid, &mac)
             .map_err(|r| format!("the job's profile: {}", r.message))?;
         let sb = dir.join("job.sb");
-        fs::write(&sb, profile).map_err(|e| format!("job.sb: {e}"))?;
+        crate::fsio::write(&sb, profile).map_err(|e| format!("job.sb: {e}"))?;
         let mut argv = vec![
             jobexec::SANDBOX_EXEC.to_string(),
             "-f".into(),

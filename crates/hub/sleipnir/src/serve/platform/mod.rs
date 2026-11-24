@@ -98,8 +98,7 @@ pub trait Platform {
         ))
     }
     /// The island on (its CPU list: timing jobs there, work on the rest) or off (work on every CPU again).
-    fn island(&self, on: Option<&str>) -> Result<(), String> {
-        let _ = on;
+    fn island(&self, _on: Option<&str>) -> Result<(), String> {
         Ok(())
     }
 }

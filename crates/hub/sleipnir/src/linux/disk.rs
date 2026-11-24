@@ -44,7 +44,7 @@ pub fn growth(dir: &Path) -> Option<u64> {
     if dir.join(RESULT).exists() {
         return None;
     }
-    let start: u64 = fs::read_to_string(dir.join(DISK_START))
+    let start: u64 = crate::fsio::read_to_string(dir.join(DISK_START))
         .ok()?
         .trim()
         .parse()
@@ -93,14 +93,19 @@ pub fn check(probe: &Probe, root: &Path, dir: &Path, container: Option<&str>) ->
     if !same {
         return false;
     }
-    let _ = jobexec::kill_reason(dir, &format!("infra: {}", infra::DISK));
-    if let Some(name) = container {
-        let _ = crate::linux::run::limited(
+    // the job is going down either way: a reason or a kill that did not take is only worth a line
+    if let Err(e) = jobexec::kill_reason(dir, &format!("infra: {}", infra::DISK)) {
+        tracing::warn!(error = %e, "the disk watch could not record its reason");
+    }
+    if let Some(name) = container
+        && let Err(e) = crate::linux::run::limited(
             Path::new("podman"),
             &["kill", name],
             &[],
             crate::linux::run::SYSTEMCTL_LIMIT,
-        );
+        )
+    {
+        tracing::warn!(error = %e, "the disk watch could not kill the container");
     }
     true
 }
@@ -109,14 +114,16 @@ pub fn check(probe: &Probe, root: &Path, dir: &Path, container: Option<&str>) ->
 /// Starts the watch of the job in DIR under the runner folder ROOT: its start size recorded now, a reading every
 /// [`EVERY`].
 pub fn watch(root: PathBuf, dir: PathBuf, container: Option<String>) {
-    let _ = fs::write(dir.join(DISK_START), size(&dir).to_string());
-    std::thread::spawn(move || {
+    if let Err(e) = crate::fsio::write(dir.join(DISK_START), size(&dir).to_string()) {
+        tracing::warn!(error = %e, "the disk watch could not record its start size");
+    }
+    let watch = saman::spawn_thread("sleipnir-disk-watch", move || {
         let Ok(probe) = Probe::system("", "", "drgnx-runner", &root, forseti::Profile::Dedicated)
         else {
             return;
         };
         loop {
-            std::thread::sleep(EVERY);
+            stund::sleep_blocking(EVERY);
             if check(&probe, &root, &dir, container.as_deref()) {
                 crate::helper::say(
                     &dir,
@@ -125,6 +132,9 @@ pub fn watch(root: PathBuf, dir: PathBuf, container: Option<String>) {
             }
         }
     });
+    if let Err(e) = watch {
+        tracing::warn!(error = %e, "the disk watch did not start");
+    }
 }
 
 #[cfg(test)]
@@ -140,9 +150,9 @@ mod tests {
         let mk = |n: &str, start: Option<u64>, add: usize| {
             let d = jobs.join(n);
             fs::create_dir_all(d.join("target")).unwrap();
-            fs::write(d.join("target/out"), vec![1u8; add]).unwrap();
+            crate::fsio::write(d.join("target/out"), vec![1u8; add]).unwrap();
             if let Some(s) = start {
-                fs::write(d.join(DISK_START), s.to_string()).unwrap();
+                crate::fsio::write(d.join(DISK_START), s.to_string()).unwrap();
             }
             d
         };
@@ -150,13 +160,13 @@ mod tests {
         let b = mk("b2.1", Some(0), 5000);
         mk("c3.1", None, 90_000);
         let ended = mk("d4.1", Some(0), 80_000);
-        fs::write(ended.join(RESULT), "{}").unwrap();
+        crate::fsio::write(ended.join(RESULT), "{}").unwrap();
         // b's start record counts against it; the record itself is in its size
         assert_eq!(growth(&a), Some(1000 + 1));
         assert_eq!(grew_most(t.path()), Some(b.clone()));
-        fs::write(b.join(DISK_START), "4000").unwrap();
+        crate::fsio::write(b.join(DISK_START), "4000").unwrap();
         assert_eq!(grew_most(t.path()), Some(b));
-        fs::write(jobs.join("b2.1").join(DISK_START), "4999").unwrap();
+        crate::fsio::write(jobs.join("b2.1").join(DISK_START), "4999").unwrap();
         assert_eq!(grew_most(t.path()), Some(a));
     }
 }

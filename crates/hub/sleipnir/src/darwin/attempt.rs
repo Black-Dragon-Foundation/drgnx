@@ -7,8 +7,7 @@
 
 use crate::linux::reserve;
 use std::ffi::OsStr;
-use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::os::fd::{AsRawFd, BorrowedFd};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -31,10 +30,7 @@ pub fn launch(
     keep: &[BorrowedFd<'_>],
 ) -> io::Result<u32> {
     let keep: Vec<_> = keep.iter().map(|fd| fd.as_raw_fd()).collect();
-    let log = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join(EXEC_LOG))?;
+    let log = crate::fsio::append(dir.join(EXEC_LOG), true)?;
     let mut c = Command::new(program);
     c.args(args)
         .stdin(Stdio::null())
@@ -60,20 +56,20 @@ pub fn launch(
     let pid = child.id();
     // read before the reaper runs: an exited child stays a zombie (and readable) until it is waited for
     let start = reserve::start_time(pid).unwrap_or(0);
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    let tmp = dir.join(format!(".{PID}.tmp"));
-    let mut f = fs::File::create(&tmp)?;
-    writeln!(f, "{pid} {start}")?;
-    drop(f);
-    fs::rename(&tmp, dir.join(PID))?;
+    saman::spawn_thread("attempt-reaper", move || {
+        // the exit status is job-exec's own record's to tell; this only reaps the zombie
+        if let Err(e) = child.wait() {
+            tracing::debug!(error = %e, "reaping job-exec");
+        }
+    })
+    .map_err(io::Error::other)?;
+    crate::fsio::write(dir.join(PID), format!("{pid} {start}\n"))?;
     Ok(pid)
 }
 
 /// DIR's job-exec: its pid and start time, from [`PID`].
 pub fn read_pid(dir: &Path) -> Option<(u32, u64)> {
-    let text = fs::read_to_string(dir.join(PID)).ok()?;
+    let text = crate::fsio::read_to_string(dir.join(PID)).ok()?;
     let mut w = text.split_whitespace();
     Some((w.next()?.parse().ok()?, w.next()?.parse().ok()?))
 }
@@ -126,7 +122,7 @@ mod tests {
             // SAFETY: signal 0 only checks that the process exists
             return unsafe { libc::kill(pid as libc::pid_t, 0) } != 0;
         }
-        match fs::read_to_string(format!("/proc/{pid}/stat")) {
+        match crate::fsio::read_to_string(format!("/proc/{pid}/stat")) {
             Err(_) => true,
             Ok(s) => s
                 .rsplit(')')
@@ -155,7 +151,7 @@ mod tests {
             "not this test's session"
         );
         assert!(active(d.path()));
-        fs::write(&done, "").unwrap();
+        crate::fsio::write(&done, "").unwrap();
         skuld::wait_until("the attempt ends", 30, || (!active(d.path())).then_some(()));
     }
 
@@ -171,7 +167,7 @@ mod tests {
             &format!("sleep 300 & echo $! > '{}'; wait", bg.display()),
         );
         let child: u32 = skuld::wait_until("the background child", 30, || {
-            fs::read_to_string(&bg).ok()?.trim().parse().ok()
+            crate::fsio::read_to_string(&bg).ok()?.trim().parse().ok()
         });
         assert!(active(d.path()));
         kill(d.path()).unwrap();
@@ -197,7 +193,7 @@ mod tests {
         )
         .unwrap();
         let prio = rustix::process::getpriority_process(rustix::process::Pid::from_raw(pid as i32));
-        fs::write(&done, "").unwrap();
+        crate::fsio::write(&done, "").unwrap();
         assert_eq!(prio.unwrap(), 10);
         skuld::wait_until("the attempt ends", 30, || (!active(d.path())).then_some(()));
     }
@@ -225,7 +221,7 @@ mod tests {
         )
         .unwrap();
         skuld::wait_until("job-exec ends", 30, || (!active(d.path())).then_some(()));
-        let seen = fs::read_to_string(d.path().join(EXEC_LOG)).unwrap();
+        let seen = crate::fsio::read_to_string(d.path().join(EXEC_LOG)).unwrap();
         assert_eq!(seen, format!("{k}\n"));
     }
 
@@ -236,10 +232,10 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let me = std::process::id();
         let t = reserve::start_time(me).unwrap();
-        fs::write(d.path().join(PID), format!("{me} {}\n", t + 1)).unwrap();
+        crate::fsio::write(d.path().join(PID), format!("{me} {}\n", t + 1)).unwrap();
         assert!(!active(d.path()));
         kill(d.path()).unwrap();
-        fs::write(d.path().join(PID), "garbage").unwrap();
+        crate::fsio::write(d.path().join(PID), "garbage").unwrap();
         assert!(!active(d.path()));
         assert!(read_pid(d.path()).is_none());
     }

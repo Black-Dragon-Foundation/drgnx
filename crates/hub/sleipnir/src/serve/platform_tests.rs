@@ -31,8 +31,7 @@ struct Fake {
 }
 
 impl Platform for Fake {
-    fn machine(&self, now: u64, limits: &Limits) -> io::Result<forseti::MachineState> {
-        let _ = limits;
+    fn machine(&self, now: u64, _limits: &Limits) -> io::Result<forseti::MachineState> {
         Ok(forseti::MachineState {
             name: "fake".into(),
             profile: Profile::Dedicated,
@@ -390,6 +389,10 @@ fn an_attempt_runs_through_the_platform() {
 /// an orphan container never outlives ten minutes plus its sweep (the clock: the last cleanup's time, backdated).
 #[test]
 fn the_cleanup_runs_every_ten_minutes() {
+    // time is the test's: the loop's clock reads this one, an hour past its origin, so a reading can be backdated
+    let clock = stund::Manual::default();
+    clock.advance(Duration::from_secs(3600));
+    let _clock = clock.on_this_thread();
     let d = tempfile::tempdir().unwrap();
     let (mut s, out, calls, _) = serve(d.path());
     s.handle(Frame::Hello {
@@ -400,7 +403,7 @@ fn the_cleanup_runs_every_ten_minutes() {
     let before = calls.borrow().cleanups;
     assert!(s.tick() == Next::Go);
     assert_eq!(calls.borrow().cleanups, before, "not before ten minutes");
-    // backdated from the loop's own last-cleanup reading (taken at its start), so no clock is read here
+    // backdated from the loop's own last-cleanup reading, on the test's clock
     let base = s.last_cleanup;
     s.last_cleanup = base - CLEANUP_EVERY + Duration::from_secs(5);
     assert!(s.tick() == Next::Go);

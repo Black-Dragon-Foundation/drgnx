@@ -72,11 +72,11 @@ impl Probe {
         profile: Profile,
     ) -> io::Result<Probe> {
         let uid = rustix::process::getuid().as_raw();
-        let own = fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+        let own = crate::fsio::read_to_string(format!("/proc/{}/cgroup", std::process::id()))
+            .unwrap_or_default();
         let manager = manager_cgroup(&own, uid);
-        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(format!("/run/user/{uid}")));
+        let runtime_dir =
+            stig::system_runtime_dir().unwrap_or_else(|| PathBuf::from(format!("/run/user/{uid}")));
         Ok(Probe {
             name: name.to_string(),
             proc_root: "/proc".into(),
@@ -193,7 +193,7 @@ impl Probe {
             on_ac: Option<bool>,
         }
         let path = self.folder.join(TEST_MACHINE);
-        let text = match fs::read_to_string(&path) {
+        let text = match crate::fsio::read_to_string(&path) {
             Ok(t) => t,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(m),
             Err(e) => return Err(e),
@@ -224,21 +224,21 @@ impl Probe {
 
     /// `/proc/meminfo`.
     pub fn memory(&self) -> io::Result<Mem> {
-        Ok(parse_meminfo(&fs::read_to_string(
+        Ok(parse_meminfo(&crate::fsio::read_to_string(
             self.proc_root.join("meminfo"),
         )?))
     }
 
     /// `/proc/pressure/WHAT` (`cpu`, `memory`, `io`).
     pub fn pressure(&self, what: &str) -> io::Result<Pressure> {
-        parse_pressure(&fs::read_to_string(
+        parse_pressure(&crate::fsio::read_to_string(
             self.proc_root.join("pressure").join(what),
         )?)
     }
 
     /// The pressure of the user's own work: `app.slice` under the user manager (a workstation's yardstick).
     pub fn app_pressure(&self) -> io::Result<Pressure> {
-        parse_pressure(&fs::read_to_string(
+        parse_pressure(&crate::fsio::read_to_string(
             self.manager.join("app.slice/memory.pressure"),
         )?)
     }
@@ -246,7 +246,7 @@ impl Probe {
     /// `/proc/sys/kernel/random/boot_id`.
     pub fn boot_id(&self) -> io::Result<String> {
         Ok(
-            fs::read_to_string(self.proc_root.join("sys/kernel/random/boot_id"))?
+            crate::fsio::read_to_string(self.proc_root.join("sys/kernel/random/boot_id"))?
                 .trim()
                 .to_string(),
         )
@@ -264,7 +264,9 @@ impl Probe {
             return p;
         };
         for e in dir.flatten() {
-            let read = |f: &str| fs::read_to_string(e.path().join(f)).map(|s| s.trim().to_string());
+            let read = |f: &str| {
+                crate::fsio::read_to_string(e.path().join(f)).map(|s| s.trim().to_string())
+            };
             match read("type").as_deref() {
                 Ok("Battery") => p.battery = true,
                 Ok("Mains") | Ok("USB") => mains_online |= read("online").is_ok_and(|s| s == "1"),
@@ -278,7 +280,7 @@ impl Probe {
 
     /// The CPUs online, as the kernel lists them (`0-7,16`).
     pub fn cpus_online(&self) -> io::Result<Vec<u32>> {
-        parse_cpu_list(&fs::read_to_string(
+        parse_cpu_list(&crate::fsio::read_to_string(
             self.sys_root.join("devices/system/cpu/online"),
         )?)
     }
@@ -286,7 +288,7 @@ impl Probe {
     /// The CPUs our jobs may use: the user manager's `cpuset.cpus.effective`, which is narrower than the CPUs online
     /// when the machine (a container, a pinned session) is itself confined; the CPUs online when it can't be read.
     pub fn cpus_usable(&self) -> io::Result<Vec<u32>> {
-        match fs::read_to_string(self.manager.join("cpuset.cpus.effective")) {
+        match crate::fsio::read_to_string(self.manager.join("cpuset.cpus.effective")) {
             Ok(s) if !s.trim().is_empty() => parse_cpu_list(&s),
             _ => self.cpus_online(),
         }
@@ -383,7 +385,7 @@ impl Probe {
         let mem = self.memory().unwrap_or_default();
         FileFacts {
             arch: std::env::consts::ARCH.to_string(),
-            os: os_release(&fs::read_to_string("/etc/os-release").unwrap_or_default()),
+            os: os_release(&crate::fsio::read_to_string("/etc/os-release").unwrap_or_default()),
             cores: self.cpus_usable().map(|c| c.len() as u32).unwrap_or(0),
             mem_mib: mem.total_mib,
             disk_free_gb: self.disk().map(|d| d.free_gb).unwrap_or(0),
@@ -398,13 +400,13 @@ impl Probe {
     /// Whether systemd applies `AllowedCPUs` on our slices: set it on our own probe slice and read `cpuset.cpus`
     /// back. A user manager started before cpuset was delegated accepts the property and never writes the file (and
     /// `user@.service`'s `cgroup.subtree_control` still says `cpuset`), so only the read-back tells.
-    pub fn cpuset_by_systemd(&self) -> Result<bool, String> {
+    pub fn cpuset_by_systemd(&self) -> villa::Result<bool> {
         let first = self
             .cpus_usable()
-            .map_err(|e| format!("the CPUs usable: {e}"))?
+            .map_err(|e| villa::Error::io(format!("the CPUs usable: {e}")))?
             .first()
             .copied()
-            .ok_or("no CPU usable")?;
+            .ok_or_else(|| villa::Error::unavailable("no CPU usable"))?;
         let slice = format!("{}-probe.slice", self.slice_root);
         run::systemctl_ok(&["start", &slice])?;
         let set = run::systemctl_ok(&[
@@ -413,10 +415,17 @@ impl Probe {
             &slice,
             &format!("AllowedCPUs={first}"),
         ]);
-        let read = fs::read_to_string(self.slice_dir(&slice).join("cpuset.cpus"))
+        let read = crate::fsio::read_to_string(self.slice_dir(&slice).join("cpuset.cpus"))
             .map(|s| s.trim().to_string());
-        let _ = run::systemctl(&["set-property", "--runtime", &slice, "AllowedCPUs="]);
-        let _ = run::systemctl(&["stop", &slice]);
+        // the probe slice is only a probe: if undoing it fails, the next probe sets it again
+        for undo in [
+            &["set-property", "--runtime", &slice, "AllowedCPUs="][..],
+            &["stop", &slice][..],
+        ] {
+            if let Err(e) = run::systemctl(undo) {
+                tracing::debug!(error = %e, "undoing the cpuset probe");
+            }
+        }
         set?;
         Ok(read.is_ok_and(|s| parse_cpu_list(&s).is_ok_and(|c| c == [first])))
     }
@@ -578,7 +587,7 @@ pub struct CgroupStat {
 impl CgroupStat {
     /// Reads the cgroup at DIR.
     pub fn read(dir: &Path) -> io::Result<CgroupStat> {
-        let read = |f: &str| fs::read_to_string(dir.join(f));
+        let read = |f: &str| crate::fsio::read_to_string(dir.join(f));
         let num = |s: &str| s.trim().parse::<u64>().unwrap_or(0);
         let key = |text: &str, k: &str| {
             text.lines()
@@ -907,15 +916,16 @@ const TOOL_LIMIT: Duration = Duration::from_secs(30);
 
 /// Runs the contract on this host with PODMAN: [`judge`] over what the tools answer.
 pub fn contract(probe: &Probe, podman: &Path) -> Result<Facts, Vec<Missing>> {
-    let text = |out: Result<std::process::Output, String>| -> Result<String, String> {
-        let out = out?;
+    let text = |out: villa::Result<run::Output>| -> Result<String, String> {
+        let out = out.map_err(|e| e.message().to_string())?;
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
         } else {
             Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
         }
     };
-    let systemd_user = run::systemctl_ok(&["show", "--property=Version", "--value"]);
+    let systemd_user = run::systemctl_ok(&["show", "--property=Version", "--value"])
+        .map_err(|e| e.message().to_string());
     let podman_info = text(run::limited(
         podman,
         &["info", "--format", "json"],
@@ -1172,7 +1182,7 @@ mod tests {
                 "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=60.00 avg60=0.00 avg300=0.00 total=5\n",
             ),
         ] {
-            fs::write(cg.join(f), s).unwrap();
+            crate::fsio::write(cg.join(f), s).unwrap();
         }
         let s = CgroupStat::read(&cg).unwrap();
         assert_eq!(
@@ -1205,9 +1215,9 @@ mod tests {
         let supply = |sys: &Path, name: &str, kind: &str, online: Option<&str>| {
             let p = sys.join("class/power_supply").join(name);
             fs::create_dir_all(&p).unwrap();
-            fs::write(p.join("type"), format!("{kind}\n")).unwrap();
+            crate::fsio::write(p.join("type"), format!("{kind}\n")).unwrap();
             if let Some(o) = online {
-                fs::write(p.join("online"), format!("{o}\n")).unwrap();
+                crate::fsio::write(p.join("online"), format!("{o}\n")).unwrap();
             }
         };
         let desktop = d.path().join("sys-desktop");
@@ -1229,7 +1239,7 @@ mod tests {
                 on_ac: false
             }
         );
-        fs::write(laptop.join("class/power_supply/AC/online"), "1\n").unwrap();
+        crate::fsio::write(laptop.join("class/power_supply/AC/online"), "1\n").unwrap();
         assert_eq!(
             probe(&laptop).power(),
             Power {
@@ -1242,21 +1252,21 @@ mod tests {
         let pr = d.path().join("proc");
         fs::create_dir_all(pr.join("pressure")).unwrap();
         fs::create_dir_all(pr.join("sys/kernel/random")).unwrap();
-        fs::write(
+        crate::fsio::write(
             pr.join("meminfo"),
             "MemTotal: 8388608 kB\nMemAvailable: 4194304 kB\n",
         )
         .unwrap();
-        fs::write(pr.join("sys/kernel/random/boot_id"), "b1\n").unwrap();
+        crate::fsio::write(pr.join("sys/kernel/random/boot_id"), "b1\n").unwrap();
         for (f, s) in [("memory", "3.00"), ("cpu", "12.50"), ("io", "1.00")] {
-            fs::write(
+            crate::fsio::write(
                 pr.join("pressure").join(f),
                 format!("some avg10={s} avg60=0.00 avg300=0.00 total=1\nfull avg10=0.50 avg60=0.00 avg300=0.00 total=1\n"),
             )
             .unwrap();
         }
         fs::create_dir_all(d.path().join("mgr/app.slice")).unwrap();
-        fs::write(
+        crate::fsio::write(
             d.path().join("mgr/app.slice/memory.pressure"),
             "some avg10=7.00 avg60=0 avg300=0 total=0\n",
         )
@@ -1309,7 +1319,7 @@ mod tests {
             scheduler: "me".into(),
             profile: Profile::Dedicated,
         };
-        let node = |path: &Path| fs::write(path, b"").unwrap();
+        let node = |path: &Path| crate::fsio::write(path, b"").unwrap();
         let driver = |n: &str, name: &str| {
             let at = sys.join("class/drm").join(n).join("device");
             fs::create_dir_all(&at).unwrap();

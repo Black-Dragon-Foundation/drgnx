@@ -239,13 +239,13 @@ mod os {
 
     pub fn proc_of(pid: i32) -> Option<Proc> {
         let dir = format!("/proc/{pid}");
-        let stat = fs::read_to_string(format!("{dir}/stat")).ok()?;
+        let stat = crate::fsio::read_to_string(format!("{dir}/stat")).ok()?;
         let rest: Vec<&str> = stat[stat.rfind(')')? + 1..].split_whitespace().collect();
         // after the name: state, ppid, pgrp, session, …, starttime (the 20th)
         if rest.first() == Some(&"Z") {
             return None;
         }
-        let statm = fs::read_to_string(format!("{dir}/statm")).ok()?;
+        let statm = crate::fsio::read_to_string(format!("{dir}/statm")).ok()?;
         let resident: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
         // SAFETY: sysconf has no failure for this name
         let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(0) as u64;
@@ -357,42 +357,34 @@ mod tests {
     /// no stranger.
     #[test]
     fn a_scan_reads_the_live_process_table() {
-        use std::os::unix::process::CommandExt;
         let me = std::process::id() as i32;
         // SAFETY: getsid(0) of this process
         let sid = unsafe { libc::getsid(0) };
         let marker = format!("{MARKER}=t-{me}");
+        let pool = saman::Executor::new(1).unwrap();
         // one child in this session, one that left it carrying the marker, one that left it without
-        let mut stay = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .unwrap();
-        let away = |marked: bool| {
-            let mut c = std::process::Command::new("sleep");
-            c.arg("30");
-            if marked {
-                c.env(MARKER, format!("t-{me}"));
-            }
-            // SAFETY: setsid is async-signal-safe
-            unsafe {
-                c.pre_exec(|| {
-                    rustix::process::setsid()
-                        .map(|_| ())
-                        .map_err(std::io::Error::from)
-                })
+        let start = |marked: bool, own_session: bool| {
+            let tag = format!("t-{me}");
+            let env: &[(&str, &str)] = if marked {
+                &[(MARKER, tag.as_str())]
+            } else {
+                &[]
             };
-            c.spawn().unwrap()
+            let mut spec = crate::linux::run::spec(std::path::Path::new("sleep"), &["30"], env);
+            spec.new_session = own_session;
+            pool.block_on(draugr::spawn(spec)).unwrap()
         };
-        let (mut marked, mut other) = (away(true), away(false));
+        let mut stay = start(false, false);
+        let (mut marked, mut other) = (start(true, true), start(false, true));
         let s = scan(me, sid, start_of(me), &marker);
         for c in [&mut stay, &mut marked, &mut other] {
-            let _ = c.kill();
-            let _ = c.wait();
+            // the group is killed at once and reaped
+            pool.block_on(c.wait_deadline(Duration::ZERO)).unwrap();
         }
         assert!(!s.pids.contains(&me));
-        assert!(s.pids.contains(&(stay.id() as i32)), "{:?}", s.pids);
-        assert!(s.pids.contains(&(marked.id() as i32)), "{:?}", s.pids);
-        assert!(!s.pids.contains(&(other.id() as i32)), "{:?}", s.pids);
+        assert!(s.pids.contains(&stay.id()), "{:?}", s.pids);
+        assert!(s.pids.contains(&marked.id()), "{:?}", s.pids);
+        assert!(!s.pids.contains(&other.id()), "{:?}", s.pids);
         assert!(s.bytes > 0);
     }
 

@@ -41,7 +41,7 @@ pub struct LinuxPlatform {
 }
 
 impl LinuxPlatform {
-    pub fn new(cfg: &Config, exe: &Path) -> Result<LinuxPlatform, String> {
+    pub fn new(cfg: &Config, exe: &Path) -> villa::Result<LinuxPlatform> {
         let probe = Probe::system(
             &cfg.name,
             &cfg.scheduler(),
@@ -49,7 +49,7 @@ impl LinuxPlatform {
             &cfg.root,
             cfg.profile,
         )
-        .map_err(|e| format!("the probe: {e}"))?;
+        .map_err(|e| villa::Error::unavailable(format!("the probe: {e}")))?;
         Ok(LinuxPlatform {
             probe,
             prefix: cfg.prefix.clone(),
@@ -65,7 +65,7 @@ impl LinuxPlatform {
                     Some((p.to_string(), podman::Feature::parse(f)?))
                 })
                 .collect(),
-            kvm_projects: std::fs::read_to_string(cfg.root.join("runner.conf"))
+            kvm_projects: crate::fsio::read_to_string(cfg.root.join("runner.conf"))
                 .map(|t| podman::kvm_projects(&t))
                 .unwrap_or_default(),
             exe: exe.to_path_buf(),
@@ -92,11 +92,11 @@ impl LinuxPlatform {
 
     /// Job ID's slice: under the timing slice for a timing job (its slice is there), else under the work slice.
     fn slice_of(&self, id: &str) -> Result<String, String> {
-        let timing = slices::timing_job_slice(SLICE_ROOT, id)?;
+        let timing = slices::timing_job_slice(SLICE_ROOT, id).map_err(|e| e.to_string())?;
         if self.probe.slice_dir(&timing).is_dir() {
             return Ok(timing);
         }
-        slices::job_slice(SLICE_ROOT, id)
+        slices::job_slice(SLICE_ROOT, id).map_err(|e| e.to_string())
     }
 
     /// Job ID's container.
@@ -172,14 +172,16 @@ impl Platform for LinuxPlatform {
     fn job_runner(&self) -> (Option<String>, Vec<String>) {
         let env: Vec<(std::ffi::OsString, std::ffi::OsString)> = [
             "PATH",
-            "HOME",
-            "XDG_RUNTIME_DIR",
+            stig::HOME_VAR,
+            stig::SYSTEM_RUNTIME_VAR,
             "DBUS_SESSION_BUS_ADDRESS",
         ]
         .iter()
         .filter_map(|k| Some((k.into(), std::env::var_os(k)?)))
         .collect();
-        let limits = podman::check_limits(Path::new("podman"), &env, run::SYSTEMCTL_LIMIT).err();
+        let limits = podman::check_limits(Path::new("podman"), &env, run::SYSTEMCTL_LIMIT)
+            .err()
+            .map(|e| e.to_string());
         let mut features = if limits.is_none() {
             vec!["podman".to_string()]
         } else {
@@ -249,9 +251,9 @@ impl Platform for LinuxPlatform {
             None
         } else {
             let text = req.net_hosts.join("\n") + "\n";
-            crate::net::allow_list(&text)?;
+            crate::net::allow_list(&text).map_err(|e| e.to_string())?;
             let f = dir.join(NET_ALLOW);
-            fs::write(&f, text).map_err(|e| format!("{NET_ALLOW}: {e}"))?;
+            crate::fsio::write(&f, text).map_err(|e| format!("{NET_ALLOW}: {e}"))?;
             Some(f)
         };
         let parser: Parser =
@@ -261,18 +263,19 @@ impl Platform for LinuxPlatform {
                 req.parser.to_string()
             }))
             .map_err(|_| format!("no row parser {:?}", req.parser))?;
-        slices::ensure_tree(SLICE_ROOT, self.profile)?;
+        slices::ensure_tree(SLICE_ROOT, self.profile).map_err(|e| e.to_string())?;
         // a timing job runs on the island: its slice is under the timing slice, out of the work slice's CPUs
         let slice = if matches!(meta.spec.lane, forseti::Lane::Timing { pinned: Some(_) }) {
-            slices::timing_job_slice(SLICE_ROOT, id)?
+            slices::timing_job_slice(SLICE_ROOT, id).map_err(|e| e.to_string())?
         } else {
-            slices::job_slice(SLICE_ROOT, id)?
+            slices::job_slice(SLICE_ROOT, id).map_err(|e| e.to_string())?
         };
         // the job's slice throttles past its reservation and is killed at its cap, whatever runs in it (§3 #3)
         slices::set(
             &slice,
             &slices::job_props(meta.grant.reserve_mib, meta.grant.mem_cap_mib),
-        )?;
+        )
+        .map_err(|e| e.to_string())?;
         let mut ra = RunnerArgs::runner(&self.prefix, &self.hub_id, &slice);
         // the opt-ins the user gave this job's project here (D2)
         ra.allowed = podman::allowed_for(
@@ -373,7 +376,8 @@ impl Platform for LinuxPlatform {
                 dir.display().to_string(),
             ],
             binds_to: None,
-        })?;
+        })
+        .map_err(|e| e.to_string())?;
         let pid = run::systemctl_ok(&["show", "--property=MainPID", "--value", &unit])
             .ok()
             .and_then(|p| p.parse::<u32>().ok())
@@ -398,11 +402,11 @@ impl Platform for LinuxPlatform {
     }
 
     fn pause(&self, id: &str) -> Result<(), String> {
-        resize::pause(&self.container(id))
+        resize::pause(&self.container(id)).map_err(|e| e.to_string())
     }
 
     fn unpause(&self, id: &str) -> Result<(), String> {
-        resize::unpause(&self.container(id))
+        resize::unpause(&self.container(id)).map_err(|e| e.to_string())
     }
 
     /// The slice's `memory.current` (its container and job-exec) sorts out the jobs well under the cap; the
@@ -431,7 +435,7 @@ impl Platform for LinuxPlatform {
     }
 
     fn resize(&self, r: &Resize) -> Result<(), String> {
-        resize::apply(r)
+        resize::apply(r).map_err(|e| e.to_string())
     }
 
     fn weight_unit(&self, id: &str) -> Option<String> {
@@ -439,7 +443,7 @@ impl Platform for LinuxPlatform {
     }
 
     fn set_weight(&self, unit: &str, w: u32) -> Result<(), String> {
-        resize::set_weight(unit, w)
+        resize::set_weight(unit, w).map_err(|e| e.to_string())
     }
 
     fn hand_key(&self, dir: &Path, name: &str, value: &[u8]) -> io::Result<()> {
@@ -447,7 +451,8 @@ impl Platform for LinuxPlatform {
     }
 
     fn island_check(&self, island: &str) -> Result<(), String> {
-        slices::island_whole_l3(Path::new("/sys/devices/system/cpu"), island)?;
+        slices::island_whole_l3(Path::new("/sys/devices/system/cpu"), island)
+            .map_err(|e| e.to_string())?;
         let usable = self
             .probe
             .cpus_usable()
@@ -465,7 +470,7 @@ impl Platform for LinuxPlatform {
     }
 
     fn island(&self, on: Option<&str>) -> Result<(), String> {
-        let by_systemd = self.probe.cpuset_by_systemd()?;
+        let by_systemd = self.probe.cpuset_by_systemd().map_err(|e| e.to_string())?;
         let rest = match on {
             None => String::new(),
             Some(island) => {
@@ -486,6 +491,7 @@ impl Platform for LinuxPlatform {
             &self.partition_said,
         )
         .map(|_| ())
+        .map_err(|e| e.to_string())
     }
 
     fn cleanup(&self, root: &Path, owner: &cleanup::Owner) {

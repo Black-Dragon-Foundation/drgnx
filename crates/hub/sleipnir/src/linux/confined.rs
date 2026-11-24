@@ -11,7 +11,8 @@ pub fn is_user_t(context: &str) -> bool {
 
 /// This process's SELinux context, or none (no SELinux, or an LSM whose context is not SELinux's).
 pub fn context() -> Option<String> {
-    let c = std::fs::read_to_string("/proc/self/attr/current").ok()?;
+    let c =
+        crate::fsio::read_to_string(format!("/proc/{}/attr/current", std::process::id())).ok()?;
     let c = c.trim_end_matches(['\0', '\n']);
     (c.split(':').count() >= 3).then(|| c.to_string())
 }

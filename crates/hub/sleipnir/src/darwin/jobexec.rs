@@ -124,10 +124,7 @@ fn run_unchecked(dir: &Path, spec: &JobExec, refused: Option<String>) -> (Result
         ..Seen::default()
     };
     if seen.setup.is_none() {
-        let log = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&spec.log);
+        let log = crate::fsio::append(&spec.log, true);
         match log {
             Err(e) => seen.setup = Some(format!("the log {}: {e}", spec.log.display())),
             Ok(log) => {
@@ -181,14 +178,17 @@ fn run_unchecked(dir: &Path, spec: &JobExec, refused: Option<String>) -> (Result
                 // our ends of the pipe closed: the copy ends once the job's processes (killed by `watch`) are gone
                 drop(cmd);
                 if let Some(done) = copier {
-                    let _ = done.recv_timeout(DRAIN);
+                    // a timeout is the stray process holding the pipe, which the group's kill ends; nothing to add
+                    done.recv_timeout(DRAIN).ok();
                 }
             }
         }
     }
     let stop = seen.timed_out || seen.stopped;
     let result = judge(dir, spec, &seen, mono_s() - t0);
-    let _ = result.write(dir);
+    if let Err(e) = result.write(dir) {
+        crate::eline!("sleipnir job-exec: result.json: {e}");
+    }
     (result, stop)
 }
 
@@ -199,18 +199,51 @@ const DRAIN: Duration = Duration::from_secs(2);
 /// What reaches R copied into LOG on a thread of its own; the receiver hears when R reached its end.
 fn copy_into(mut r: std::io::PipeReader, mut log: fs::File) -> std::sync::mpsc::Receiver<()> {
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = std::io::copy(&mut r, &mut log);
-        let _ = tx.send(());
+    let started = saman::spawn_thread("job-log-copy", move || {
+        // the copy ends when the job's processes are gone; how it ended does not change the verdict
+        if let Err(e) = std::io::copy(&mut r, &mut log) {
+            tracing::debug!(error = %e, "copying the job's output into its log");
+        }
+        saman::delivered(tx.send(()), "the log copy's end");
     });
+    if let Err(e) = started {
+        crate::eline!("sleipnir job-exec: the log copy: {e}");
+    }
     rx
+}
+
+/// `caffeinate -i -w <our pid>`: idle sleep held off while job-exec lives. Started on a pool of its own that stays
+/// until [`Awake::end`], since a blocking caller has no runtime to hold the child.
+struct Awake {
+    pool: saman::Executor,
+    child: draugr::Child,
+}
+
+impl Awake {
+    fn start() -> Option<Awake> {
+        let pool = saman::Executor::new(1).ok()?;
+        let pid = std::process::id().to_string();
+        let spec =
+            crate::linux::run::spec(Path::new("/usr/bin/caffeinate"), &["-i", "-w", &pid], &[]);
+        let child = pool.block_on(draugr::spawn(spec)).ok()?;
+        Some(Awake { pool, child })
+    }
+
+    /// Stops it: its group is killed at once, and it is reaped.
+    fn end(mut self) {
+        if let Err(e) = self.pool.block_on(self.child.wait_deadline(Duration::ZERO)) {
+            crate::eline!("sleipnir job-exec: stopping caffeinate: {e}");
+        }
+    }
 }
 
 fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, seen: &mut Seen) {
     // SAFETY: getpid has no failure
     let me = unsafe { libc::getpid() };
     // what the disk watch counts this job's growth from
-    let _ = fs::write(dir.join(disk::DISK_START), disk::size(dir).to_string());
+    if let Err(e) = crate::fsio::write(dir.join(disk::DISK_START), disk::size(dir).to_string()) {
+        crate::eline!("sleipnir job-exec: the disk start record: {e}");
+    }
     let mut child = match cmd.spawn() {
         Err(e) => {
             seen.setup = Some(format!("{}: {e}", spec.argv[0]));
@@ -232,17 +265,7 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, s
         .and_then(|r| Probe::system("", "", "drgnx-runner", r, forseti::Profile::Dedicated).ok());
     let disk_every = (disk::EVERY.as_millis() / TICK.as_millis()).max(1) as u32;
     // idle sleep held off while job-exec lives (a Mac on battery still sleeps at lid close)
-    let awake = cfg!(target_os = "macos")
-        .then(|| {
-            Command::new("/usr/bin/caffeinate")
-                .args(["-i", "-w", &std::process::id().to_string()])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .ok()
-        })
-        .flatten();
+    let awake = cfg!(target_os = "macos").then(Awake::start).flatten();
     let mut tick = 0u32;
     loop {
         if tick > 0
@@ -283,10 +306,11 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, s
             seen.stopped = true;
             break;
         }
-        std::thread::sleep(TICK);
+        stund::sleep_blocking(TICK);
     }
     if seen.timed_out || seen.stopped {
-        let _ = child.kill();
+        // the child may have exited between the last check and now: a failed kill says only that
+        drop(child.kill());
         if let Ok(st) = child.wait() {
             seen.exit_code = st.code();
             seen.signal = st.signal();
@@ -301,9 +325,8 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, s
         unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
     }
     memwatch::kill_all(&memwatch::scan(me, sid, born, marker).pids);
-    if let Some(mut c) = awake {
-        let _ = c.kill();
-        let _ = c.wait();
+    if let Some(a) = awake {
+        a.end();
     }
 }
 
@@ -342,7 +365,7 @@ fn judge(dir: &Path, spec: &JobExec, seen: &Seen, wall_s: f64) -> ResultJson {
         _ => None,
     };
     if let Some(why) = &seen.setup {
-        eprintln!("sleipnir job-exec: {why}");
+        crate::eline!("sleipnir job-exec: {why}");
     }
     // the children's CPU and peak memory (ru_maxrss: bytes on macOS, KiB on Linux)
     // SAFETY: a valid rusage to fill
@@ -521,7 +544,7 @@ mod tests {
         let (r, stop) = run_unchecked(d.path(), &s, None);
         assert_eq!(r.verdict, Verdict::Pass);
         assert!(!stop);
-        let log = fs::read_to_string(d.path().join("log")).unwrap();
+        let log = crate::fsio::read_to_string(d.path().join("log")).unwrap();
         assert!(
             log.contains("out") && log.contains("err") && log.contains("home=unset"),
             "{log}"
@@ -536,7 +559,7 @@ mod tests {
     #[test]
     fn the_job_writes_a_pipe_that_job_exec_copies_into_the_log() {
         let d = tempfile::tempdir().unwrap();
-        fs::write(d.path().join("in.txt"), "from a file\n").unwrap();
+        crate::fsio::write(d.path().join("in.txt"), "from a file\n").unwrap();
         let s = spec(
             d.path(),
             &[
@@ -546,7 +569,7 @@ mod tests {
             ],
         );
         let (r, _) = run_unchecked(d.path(), &s, None);
-        let log = fs::read_to_string(d.path().join("log")).unwrap();
+        let log = crate::fsio::read_to_string(d.path().join("log")).unwrap();
         assert_eq!(r.verdict, Verdict::Pass, "{log}");
         assert_eq!(log, "piped\nfrom a file\nlast\n");
     }
@@ -562,12 +585,15 @@ mod tests {
         let (r, stop) = run_unchecked(d.path(), &s, None);
         assert_eq!(r.verdict, Verdict::Pass, "{r:?}");
         assert!(!stop);
-        let pid = fs::read_to_string(d.path().join("left")).unwrap();
+        let pid = crate::fsio::read_to_string(d.path().join("left")).unwrap();
         // gone, or a zombie its new parent hasn't reaped yet: either way not running
-        let ps = Command::new("ps")
-            .args(["-o", "stat=", "-p", pid.trim()])
-            .output()
-            .unwrap();
+        let ps = crate::linux::run::limited(
+            Path::new("ps"),
+            &["-o", "stat=", "-p", pid.trim()],
+            &[],
+            Duration::from_secs(10),
+        )
+        .unwrap();
         let stat = String::from_utf8_lossy(&ps.stdout);
         assert!(
             stat.trim().is_empty() || stat.trim().starts_with('Z'),
@@ -602,7 +628,7 @@ mod tests {
     #[test]
     fn a_job_below_the_disk_floor_is_stopped() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(
+        crate::fsio::write(
             root.path().join(crate::linux::probe::TEST_MACHINE),
             r#"{"psi": {"mem_some10": 0.0, "cpu_some10": 0.0, "io_full10": 0.0, "app_mem_some10": null},
                 "disk_free_gb": 1, "disk_total_gb": 475, "mem_available_mib": 8192}"#,

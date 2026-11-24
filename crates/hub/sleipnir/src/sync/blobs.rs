@@ -51,7 +51,7 @@ impl Store {
             .open(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
-        fs::rename(&tmp, self.path(sha))?;
+        crate::fsio::rename(&tmp, self.path(sha))?;
         Ok(())
     }
 }

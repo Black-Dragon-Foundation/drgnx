@@ -29,28 +29,30 @@ fn sleipnir_bin() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_sleipnir")))
 }
 
+/// How long one tool call of these rows may take.
+const TOOL_LIMIT: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// The user's git: no system or global config, a fixed identity.
 fn user_git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .args([
+    let mut spec = sleipnir::tool::spec(
+        Path::new("git"),
+        &[
             "-c",
             "user.name=t",
             "-c",
             "user.email=t@example.invalid",
             "-c",
             "init.defaultBranch=main",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
+        ],
+        &[
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ],
     );
+    spec.args.extend(args.iter().map(std::ffi::OsString::from));
+    spec.cwd = Some(dir.to_path_buf());
+    let out = draugr::run(spec, TOOL_LIMIT).unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", out.stderr);
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
@@ -58,7 +60,7 @@ fn user_git(dir: &Path, args: &[&str]) -> String {
 fn repo(dir: &Path) -> String {
     fs::create_dir_all(dir).unwrap();
     user_git(dir, &["init", "-q"]);
-    fs::write(dir.join("a"), "a\n").unwrap();
+    sleipnir::fsio::write(dir.join("a"), "a\n").unwrap();
     user_git(dir, &["add", "-A"]);
     user_git(dir, &["commit", "-qm", "one"]);
     user_git(dir, &["rev-parse", "HEAD"])
@@ -98,11 +100,12 @@ fn origin_server(project_root: PathBuf, auth: String) -> (u16, Arc<AtomicUsize>)
     let port = l.local_addr().unwrap().port();
     let hits = Arc::new(AtomicUsize::new(0));
     let h = hits.clone();
-    std::thread::spawn(move || {
+    saman::spawn_thread("origin-server", move || {
         for s in l.incoming().flatten() {
             serve_one(s, &project_root, &auth, &h);
         }
-    });
+    })
+    .unwrap();
     (port, hits)
 }
 
@@ -241,7 +244,7 @@ fn files_holding(dir: &Path, needles: &[&[u8]], found: &mut Vec<PathBuf>) {
 #[test]
 #[ignore = "runner-host"]
 fn origin_fetch_with_a_token_leaves_no_file() {
-    let home = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+    let home = PathBuf::from(std::env::var_os(stig::HOME_VAR).expect("HOME"));
     let work = tempfile::tempdir().unwrap();
     let origin = work.path().join("origin.git");
     let src = work.path().join("src");
@@ -283,7 +286,8 @@ fn origin_fetch_with_a_token_leaves_no_file() {
     for d in [root.as_path(), Path::new("/tmp"), home.as_path()] {
         files_holding(d, &needles, &mut found);
     }
-    let _ = fs::remove_dir_all(&root);
+    // the folder may never have been made
+    drop(fs::remove_dir_all(&root));
     assert!(found.is_empty(), "the token is in {found:?}");
 }
 
@@ -311,9 +315,9 @@ fn push_into_the_mirror_runs_no_hook() {
         marker_script(&planted.join(h), &marker, h);
     }
     let config = m.git_dir.join("config");
-    let mut text = fs::read_to_string(&config).unwrap();
+    let mut text = sleipnir::fsio::read_to_string(&config).unwrap();
     text.push_str(&format!("[core]\n\thooksPath = {}\n", planted.display()));
-    fs::write(&config, text).unwrap();
+    sleipnir::fsio::write(&config, text).unwrap();
 
     let src = t.path().join("src");
     let commit = repo(&src);
@@ -335,18 +339,23 @@ fn push_into_the_mirror_runs_no_hook() {
     assert!(
         !marker.exists(),
         "a hook ran: {:?}",
-        fs::read_to_string(&marker)
+        sleipnir::fsio::read_to_string(&marker)
     );
     assert!(m.has_commit(&commit).unwrap(), "the push arrived");
 
     // a path outside the runner folder's mirrors is refused
-    let out = Command::new(sleipnir_bin())
-        .args(["git-receive", "--root"])
-        .arg(&root)
-        .arg(t.path().join("src/.git"))
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
+    let out = sleipnir::tool::limited(
+        &sleipnir_bin(),
+        &[
+            std::ffi::OsString::from("git-receive"),
+            "--root".into(),
+            root.clone().into(),
+            t.path().join("src/.git").into(),
+        ],
+        &[],
+        TOOL_LIMIT,
+    )
+    .unwrap();
     assert!(!out.status.success());
 }
 
@@ -387,25 +396,37 @@ fn processes_naming(needle: &str) -> Vec<u32> {
 #[test]
 #[ignore = "runner-host"]
 fn origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent() {
-    let home = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+    let home = PathBuf::from(std::env::var_os(stig::HOME_VAR).expect("HOME"));
     let work = tempfile::tempdir().unwrap();
     let w = work.path();
     let src = w.join("src");
     let commit = repo(&src);
     user_git(w, &["clone", "-q", "--bare", "src", "origin.git"]);
     // a generated deploy key, read into memory; its files go before any fetch
-    let out = Command::new("ssh-keygen")
-        .args(["-q", "-t", "ed25519", "-N", "", "-C", "deploy", "-f"])
-        .arg(w.join("k"))
-        .output()
-        .unwrap();
+    let out = sleipnir::tool::limited(
+        Path::new("ssh-keygen"),
+        &[
+            std::ffi::OsString::from("-q"),
+            "-t".into(),
+            "ed25519".into(),
+            "-N".into(),
+            "".into(),
+            "-C".into(),
+            "deploy".into(),
+            "-f".into(),
+            w.join("k").into(),
+        ],
+        &[],
+        TOOL_LIMIT,
+    )
+    .unwrap();
     assert!(
         out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let private = fs::read_to_string(w.join("k")).unwrap();
-    let public = fs::read_to_string(w.join("k.pub")).unwrap();
+    let private = sleipnir::fsio::read_to_string(w.join("k")).unwrap();
+    let public = sleipnir::fsio::read_to_string(w.join("k.pub")).unwrap();
     fs::remove_file(w.join("k")).unwrap();
     fs::remove_file(w.join("k.pub")).unwrap();
     let blob = public.split_whitespace().nth(1).unwrap().to_string();
@@ -427,10 +448,12 @@ fn origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent() {
     let root = home.join(format!("sync-deploy-{}", std::process::id()));
     let url = format!("ssh://origin.invalid{}", w.join("origin.git").display());
     let fetch = |key: &str, fail: bool| {
-        let _ = fs::remove_file(w.join("ssh.ready"));
-        let _ = fs::remove_file(w.join("go"));
-        let ok = Command::new("mkfifo").arg(w.join("go")).status().unwrap();
-        assert!(ok.success());
+        // left from the last fetch, or not there
+        drop(fs::remove_file(w.join("ssh.ready")));
+        drop(fs::remove_file(w.join("go")));
+        let ok =
+            sleipnir::tool::limited(Path::new("mkfifo"), &[w.join("go")], &[], TOOL_LIMIT).unwrap();
+        assert!(ok.status.success());
         let mut c = Command::new(sleipnir_bin());
         c.args(["sync-fetch", "--root"])
             .arg(&root)
@@ -476,7 +499,7 @@ fn origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent() {
         skuld::wait_until("the fake ssh ready", 120, || {
             w.join("ssh.ready").exists().then_some(())
         });
-        let sock = fs::read_to_string(w.join("agent.path"))
+        let sock = sleipnir::fsio::read_to_string(w.join("agent.path"))
             .unwrap()
             .trim()
             .to_string();
@@ -484,7 +507,7 @@ fn origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent() {
             sock.starts_with(root.to_str().unwrap()),
             "the agent listens in the runner folder"
         );
-        let held = fs::read_to_string(w.join("agent.keys")).unwrap();
+        let held = sleipnir::fsio::read_to_string(w.join("agent.keys")).unwrap();
         assert!(
             held.contains(&blob),
             "the per-fetch agent doesn't hold the deploy key"
@@ -495,7 +518,7 @@ fn origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent() {
             found.is_empty(),
             "the deploy key is in {found:?} during the fetch"
         );
-        fs::write(w.join("go"), "go\n").unwrap();
+        sleipnir::fsio::write(w.join("go"), "go\n").unwrap();
         let out = child.wait_with_output().unwrap();
         assert_eq!(
             out.status.success(),
@@ -522,7 +545,8 @@ fn origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent() {
     );
     let mut found = vec![];
     scan(&mut found);
-    let _ = fs::remove_dir_all(&root);
+    // the folder may never have been made
+    drop(fs::remove_dir_all(&root));
     assert!(
         found.is_empty(),
         "the deploy key is in {found:?} after the fetches"
@@ -549,14 +573,14 @@ mod guard {
         let root = t.path().join("runner");
         let outside = t.path().join("outside");
         fs::create_dir_all(outside.join("public/x")).unwrap();
-        fs::write(outside.join("sentinel"), "keep\n").unwrap();
-        fs::write(outside.join("public/x/sentinel"), "keep\n").unwrap();
+        sleipnir::fsio::write(outside.join("sentinel"), "keep\n").unwrap();
+        sleipnir::fsio::write(outside.join("public/x/sentinel"), "keep\n").unwrap();
         let before = fs::read_dir(&outside).unwrap().count();
 
         // what a job could write into its cache mount: links out of it
         let a = root.join("cache/p/public/a");
         fs::create_dir_all(a.join("sub")).unwrap();
-        fs::write(a.join("sub/f"), "cached\n").unwrap();
+        sleipnir::fsio::write(a.join("sub/f"), "cached\n").unwrap();
         std::os::unix::fs::symlink(&outside, a.join("dir-link")).unwrap();
         std::os::unix::fs::symlink(outside.join("sentinel"), a.join("sub/file-link")).unwrap();
         // links where the runner's own folders belong
@@ -566,7 +590,7 @@ mod guard {
 
         // the filesystem's own now: the mtime of a file written just now
         let probe = t.path().join(".fs-now");
-        fs::write(&probe, b"").unwrap();
+        sleipnir::fsio::write(&probe, b"").unwrap();
         let now = fs::metadata(&probe).unwrap().modified().unwrap();
         let items = guard::scan(&root, now, 10 << 30).unwrap();
         let mut plan = guard::plan(low(), &items, &Needs::default());
@@ -589,18 +613,18 @@ mod guard {
 
         assert!(!a.exists(), "the cache is pruned");
         assert_eq!(
-            fs::read_to_string(outside.join("sentinel")).unwrap(),
+            sleipnir::fsio::read_to_string(outside.join("sentinel")).unwrap(),
             "keep\n"
         );
         assert_eq!(
-            fs::read_to_string(outside.join("public/x/sentinel")).unwrap(),
+            sleipnir::fsio::read_to_string(outside.join("public/x/sentinel")).unwrap(),
             "keep\n"
         );
         assert_eq!(fs::read_dir(&outside).unwrap().count(), before);
     }
 
     fn podman(args: &[&str]) -> (bool, String) {
-        let out = Command::new("podman").args(args).output().unwrap();
+        let out = sleipnir::tool::limited(Path::new("podman"), args, &[], TOOL_LIMIT).unwrap();
         (
             out.status.success(),
             String::from_utf8_lossy(&out.stdout).trim().to_string(),
@@ -621,23 +645,29 @@ mod guard {
         // an image of our own: one file, imported under a name of this test's
         let layer = t.path().join("layer");
         fs::create_dir(&layer).unwrap();
-        fs::write(layer.join("f"), format!("{}\n", std::process::id())).unwrap();
+        sleipnir::fsio::write(layer.join("f"), format!("{}\n", std::process::id())).unwrap();
         let tar = t.path().join("layer.tar");
         assert!(
-            Command::new("tar")
-                .arg("-C")
-                .arg(&layer)
-                .arg("-cf")
-                .arg(&tar)
-                .arg("f")
-                .status()
-                .unwrap()
-                .success()
+            sleipnir::tool::limited(
+                Path::new("tar"),
+                &[
+                    std::ffi::OsString::from("-C"),
+                    layer.clone().into(),
+                    "-cf".into(),
+                    tar.clone().into(),
+                    "f".into(),
+                ],
+                &[],
+                TOOL_LIMIT,
+            )
+            .unwrap()
+            .status
+            .success()
         );
         let name = format!("localhost/sleipnir-guard-test:{}", std::process::id());
         assert!(podman(&["import", "-q", tar.to_str().unwrap(), &name]).0);
         let (_, ours) = podman(&["image", "inspect", "--format", "{{.Id}}", &name]);
-        fs::write(root.join("images"), format!("{ours} {name}\n")).unwrap();
+        sleipnir::fsio::write(root.join("images"), format!("{ours} {name}\n")).unwrap();
 
         let items = guard::images(&root).unwrap();
         let is = |id: &str| {

@@ -234,11 +234,22 @@ impl<'de> Deserialize<'de> for KeyValue {
 
 /// A key the hub sends for a running attempt: never logged, sent only after `started`, and only where the runner's
 /// trust allows it.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(PartialEq, Serialize, Deserialize)]
 pub struct Key {
     pub r: JobRef,
     pub name: String,
     pub value: KeyValue,
+}
+
+impl fmt::Debug for Key {
+    /// Which key and for which job, never the value.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Key")
+            .field("r", &self.r)
+            .field("name", &self.name)
+            .field("value", &"<redacted>")
+            .finish()
+    }
 }
 
 /// A wait reason a newer peer may name differently: one this side can't read is `None`, never a frame that fails.

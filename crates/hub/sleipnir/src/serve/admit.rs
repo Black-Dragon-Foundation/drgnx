@@ -255,21 +255,27 @@ mod tests {
         let proc_root = d.join("proc");
         fs::create_dir_all(proc_root.join("pressure")).unwrap();
         fs::create_dir_all(proc_root.join("sys/kernel/random")).unwrap();
-        fs::write(
+        crate::fsio::write(
             proc_root.join("meminfo"),
             "MemTotal: 16777216 kB\nMemAvailable: 8388608 kB\n",
         )
         .unwrap();
         for what in ["memory", "cpu", "io"] {
-            fs::write(
+            crate::fsio::write(
                 proc_root.join("pressure").join(what),
                 "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
             )
             .unwrap();
         }
-        fs::write(proc_root.join("sys/kernel/random/boot_id"), "b00t\n").unwrap();
+        crate::fsio::write(proc_root.join("sys/kernel/random/boot_id"), "b00t\n").unwrap();
         let me = std::process::id();
-        std::os::unix::fs::symlink(format!("/proc/{me}"), proc_root.join(me.to_string())).unwrap();
+        // this process's own stat line, as the proc root has it (eitri reads through no link)
+        fs::create_dir_all(proc_root.join(me.to_string())).unwrap();
+        crate::fsio::write(
+            proc_root.join(me.to_string()).join("stat"),
+            crate::fsio::read_to_string(format!("/proc/{me}/stat")).unwrap(),
+        )
+        .unwrap();
         fs::create_dir_all(d.join("sys")).unwrap();
         fs::create_dir_all(d.join("run")).unwrap();
         Probe {
@@ -319,7 +325,7 @@ mod tests {
         let s = spec(4096);
         rs.with_admit_lock(|| {
             let s = s.clone();
-            std::thread::spawn(move || {
+            saman::spawn_thread("admit-test", move || {
                 let offer = Offer {
                     id: "a1",
                     attempt: 1,
@@ -338,7 +344,8 @@ mod tests {
                     &offer,
                 ))
                 .unwrap();
-            });
+            })
+            .unwrap();
             skuld::window(
                 Duration::from_millis(300),
                 "the admission returns while the lock is held",
@@ -571,7 +578,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = probe(d.path());
         // the host as the desktop was: IO stalled, 44 GB free of 475
-        fs::write(
+        crate::fsio::write(
             p.proc_root.join("pressure/io"),
             "some avg10=30.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=28.13 avg60=0.00 avg300=0.00 total=0\n",
         )
@@ -586,7 +593,8 @@ mod tests {
             expected: None,
             island: None,
         };
-        let facts = |json: &str| fs::write(d.path().join("test-machine.json"), json).unwrap();
+        let facts =
+            |json: &str| crate::fsio::write(d.path().join("test-machine.json"), json).unwrap();
         let quiet = r#"{"psi": {"mem_some10": 0.0, "cpu_some10": 0.0, "io_full10": 0.0, "app_mem_some10": null},
                         "disk_free_gb": 400, "disk_total_gb": 475, "mem_available_mib": 8192}"#;
         facts(quiet);
@@ -639,7 +647,7 @@ mod tests {
         // (a workstation reads its user's apps' pressure too)
         let apps = d.path().join("manager/app.slice");
         fs::create_dir_all(&apps).unwrap();
-        fs::write(
+        crate::fsio::write(
             apps.join("memory.pressure"),
             "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
         )

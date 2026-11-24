@@ -159,7 +159,7 @@ impl Helper {
 impl Drop for Helper {
     fn drop(&mut self) {
         drop(self.child.stdin.take());
-        let _ = self.child.wait();
+        drop(self.child.wait());
     }
 }
 
@@ -194,22 +194,31 @@ fn helper_is_not_dumpable() {
         fs::read(format!("/proc/{}/environ", h.pid)).is_err(),
         "the helper's environment was readable"
     );
-    let limits = fs::read_to_string(format!("/proc/{}/limits", h.pid)).unwrap();
+    let limits = sleipnir::fsio::read_to_string(format!("/proc/{}/limits", h.pid)).unwrap();
     let core = limits
         .lines()
         .find(|l| l.starts_with("Max core file size"))
         .unwrap();
     let w: Vec<&str> = core.split_whitespace().collect();
     assert_eq!((w[4], w[5]), ("1", "1"), "{core}");
-    let _ = plain.kill();
-    let _ = plain.wait();
+    // already gone is as good as killed
+    drop(plain.kill());
+    drop(plain.wait());
+}
+
+/// How long one tool call of these rows may take.
+const TOOL_LIMIT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// PROGRAM ARGS to its end, its output.
+fn tool<S: AsRef<std::ffi::OsStr>>(program: &str, args: &[S]) -> sleipnir::tool::Output {
+    sleipnir::tool::limited(Path::new(program), args, &[], TOOL_LIMIT).unwrap()
 }
 
 fn base_ref() -> String {
-    let out = Command::new("podman")
-        .args(["image", "inspect", BASE, "--format", "{{.Digest}}"])
-        .output()
-        .unwrap();
+    let out = tool(
+        "podman",
+        &["image", "inspect", BASE, "--format", "{{.Digest}}"],
+    );
     assert!(out.status.success());
     format!(
         "registry.fedoraproject.org/fedora@{}",
@@ -218,7 +227,7 @@ fn base_ref() -> String {
 }
 
 fn podman_out(args: &[&str]) -> Vec<u8> {
-    Command::new("podman").args(args).output().unwrap().stdout
+    tool("podman", args).stdout
 }
 
 fn unit_req(name: &str, s: &JobExec, dir: &Path) -> unit::UnitReq {
@@ -241,7 +250,7 @@ fn unit_req(name: &str, s: &JobExec, dir: &Path) -> unit::UnitReq {
 
 fn helper_pid(dir: &Path) -> u32 {
     skuld::wait_until("the helper's pid", 120, || {
-        fs::read_to_string(dir.join(sleipnir::helper::PID))
+        sleipnir::fsio::read_to_string(dir.join(sleipnir::helper::PID))
             .ok()?
             .trim()
             .parse()
@@ -250,7 +259,7 @@ fn helper_pid(dir: &Path) -> u32 {
 }
 
 fn cgroup_of(pid: u32) -> String {
-    fs::read_to_string(format!("/proc/{pid}/cgroup"))
+    sleipnir::fsio::read_to_string(format!("/proc/{pid}/cgroup"))
         .unwrap_or_default()
         .lines()
         .find_map(|l| l.strip_prefix("0::"))
@@ -273,11 +282,11 @@ fn the_helper_dies_with_the_job_unit() {
     let u = unit::start(&unit_req("slhelp-bind1-1", &s, &a.dir)).unwrap();
     let pid = helper_pid(&a.dir);
     let main: u32 = String::from_utf8_lossy(
-        &Command::new("systemctl")
-            .args(["--user", "show", "-p", "MainPID", "--value", &u])
-            .output()
-            .unwrap()
-            .stdout,
+        &tool(
+            "systemctl",
+            &["--user", "show", "-p", "MainPID", "--value", &u],
+        )
+        .stdout,
     )
     .trim()
     .parse()
@@ -327,7 +336,7 @@ fn a_job_that_grew_most_is_stopped_below_the_floor() {
             d.join("filled").exists().then_some(())
         });
     }
-    fs::write(
+    sleipnir::fsio::write(
         a.root.join("test-machine.json"),
         r#"{"disk_free_gb": 1, "disk_total_gb": 100}"#,
     )
@@ -335,7 +344,8 @@ fn a_job_that_grew_most_is_stopped_below_the_floor() {
     let r = skuld::wait_until("the big job's result", 120, || {
         ResultJson::read(&a.dir).ok()
     });
-    let _ = fs::remove_file(a.root.join("test-machine.json"));
+    // the row wrote it; a missing file is no loss
+    drop(fs::remove_file(a.root.join("test-machine.json")));
     assert_eq!(
         (r.verdict, r.infra.as_deref()),
         (forseti::Verdict::Infra("disk".into()), Some("infra: disk"))
@@ -350,8 +360,9 @@ fn a_job_that_grew_most_is_stopped_below_the_floor() {
             "the small job was stopped before the one that grew most"
         );
     }
-    let _ = unit::stop(&big);
-    let _ = unit::stop(&small);
+    // cleanup of units that may have ended already
+    drop(unit::stop(&big));
+    drop(unit::stop(&small));
 }
 
 /// Keys over the relay (the confined-users addendum, option A): every keyed job has a relay sidecar, and `drgnx-key`
@@ -475,24 +486,28 @@ mod relay_keys {
     }
 
     /// `podman run` of `drgnx-key ARGS…` in the base image on NETWORK (`container:<sidecar>`, or `none`).
-    fn key_cmd(dir: &Path, network: &str, args: &[&str]) -> std::process::Output {
+    fn key_cmd(dir: &Path, network: &str, args: &[&str]) -> sleipnir::tool::Output {
         let key_copy = dir.join("drgnx-key-cmd");
         hlaup::copy(&drgnx_key_bin(), &key_copy).unwrap();
-        let mut c = Command::new("podman");
-        c.args(["run", "--rm", "--pull=never", "--userns=keep-id"])
-            .arg(format!("--network={network}"))
-            .arg("-v")
-            .arg(format!("{}:/run/drgnx/key:ro,Z", key_copy.display()))
-            .args(["--entrypoint", "/run/drgnx/key"])
-            .arg(base_ref())
-            .args(args);
-        c.output().unwrap()
+        let mut argv: Vec<String> = ["run", "--rm", "--pull=never", "--userns=keep-id"]
+            .map(String::from)
+            .into();
+        argv.push(format!("--network={network}"));
+        argv.push("-v".into());
+        argv.push(format!("{}:/run/drgnx/key:ro,Z", key_copy.display()));
+        argv.extend(["--entrypoint".into(), "/run/drgnx/key".into(), base_ref()]);
+        argv.extend(args.iter().map(|a| a.to_string()));
+        tool("podman", &argv)
     }
 
     fn rm(name: &str) {
-        let _ = Command::new("podman")
-            .args(["rm", "-f", "-t", "0", name])
-            .output();
+        // the container may be gone already
+        drop(sleipnir::tool::limited(
+            Path::new("podman"),
+            &["rm", "-f", "-t", "0", name],
+            &[],
+            TOOL_LIMIT,
+        ));
     }
 
     /// [C, VM gate] A keyed job without network reads its key: the command runs with it in its environment only
@@ -523,7 +538,7 @@ mod relay_keys {
             a.dir.join("target/started").exists().then_some(())
         });
         assert_eq!(
-            fs::read_to_string(a.dir.join("target/ifaces"))
+            sleipnir::fsio::read_to_string(a.dir.join("target/ifaces"))
                 .unwrap()
                 .trim(),
             "lo",
@@ -548,9 +563,9 @@ mod relay_keys {
         let mut found = vec![];
         files_holding(&a.root, value.as_bytes(), &mut found);
         rm(&name);
-        let _ = run.wait();
+        drop(run.wait());
         assert!(found.is_empty(), "the key's value is in {found:?}");
-        let uses = fs::read_to_string(a.dir.join(keys::KEY_USE)).unwrap();
+        let uses = sleipnir::fsio::read_to_string(a.dir.join(keys::KEY_USE)).unwrap();
         assert!(
             uses.contains("\"TOKEN\"") && !uses.contains(&value),
             "the key-use record"
@@ -614,10 +629,8 @@ mod relay_keys {
             "{}",
             String::from_utf8_lossy(&out.stderr)
         );
-        let host = Command::new(drgnx_key_bin())
-            .args(["get", "TOKEN"])
-            .output()
-            .unwrap();
+        let host =
+            sleipnir::tool::limited(&drgnx_key_bin(), &["get", "TOKEN"], &[], TOOL_LIMIT).unwrap();
         assert_eq!(
             host.status.code(),
             Some(75),
@@ -654,29 +667,27 @@ mod relay_keys {
         let px_copy = a.dir.join("px-copy");
         hlaup::copy(&ferja::image::binary_for(&dir, "amd64"), &px_copy).unwrap();
         let net = format!("--network=container:{}", sidecar_of("rk5"));
-        let out = Command::new("podman")
-            .args([
+        let out = tool(
+            "podman",
+            &[
                 "run",
                 "--rm",
                 "--pull=never",
                 "--userns=keep-id",
-                &net,
+                net.as_str(),
                 "-v",
-            ])
-            .arg(format!("{}:/px:ro,Z", px_copy.display()))
-            .args(["--entrypoint", "/px"])
-            .arg(base_ref())
-            .args([
+                format!("{}:/px:ro,Z", px_copy.display()).as_str(),
+                "--entrypoint",
+                "/px",
+                base_ref().as_str(),
                 "--listen",
                 "127.0.0.1:0",
                 "--job-ip",
                 "127.0.0.1",
                 "--keys",
                 "drgnx-key",
-            ])
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
+            ],
+        );
         assert_eq!(
             out.status.code(),
             Some(2),
@@ -684,18 +695,22 @@ mod relay_keys {
             String::from_utf8_lossy(&out.stderr)
         );
         assert!(String::from_utf8_lossy(&out.stderr).contains("@drgnx-key"));
-        let out = Command::new("podman")
-            .args(["run", "--rm", "--pull=never", "--userns=keep-id", &net])
-            .arg(base_ref())
-            .args([
+        let out = tool(
+            "podman",
+            &[
+                "run",
+                "--rm",
+                "--pull=never",
+                "--userns=keep-id",
+                net.as_str(),
+                base_ref().as_str(),
                 "bash",
                 "-c",
                 // the key request as a complete head (CRLF), so the proxy judges it at once: a head it has to wait
                 // for ends only at its own 10 s head timeout, which raced this row's
                 "exec 3<>/dev/tcp/127.0.0.1/3128; printf 'get TOKEN\\r\\n\\r\\n' >&3; timeout 10 head -c 300 <&3",
-            ])
-            .output()
-            .unwrap();
+            ],
+        );
         let said = String::from_utf8_lossy(&out.stdout).to_string();
         assert!(
             !said.contains(&value) && !said.starts_with("ok "),
@@ -706,7 +721,7 @@ mod relay_keys {
             "the proxy's refusal: {said:?} ({:?}, stderr {:?}; the helper's log {:?})",
             out.status,
             String::from_utf8_lossy(&out.stderr),
-            fs::read_to_string(a.dir.join(sleipnir::helper::LOG)).unwrap_or_default()
+            sleipnir::fsio::read_to_string(a.dir.join(sleipnir::helper::LOG)).unwrap_or_default()
         );
         rm(&sidecar_of("rk5"));
     }
@@ -727,7 +742,7 @@ mod relay_keys {
         .trim()
         .parse()
         .unwrap();
-        let limits = fs::read_to_string(format!("/proc/{pid}/limits")).unwrap();
+        let limits = sleipnir::fsio::read_to_string(format!("/proc/{pid}/limits")).unwrap();
         let core = limits
             .lines()
             .find(|l| l.starts_with("Max core file size"))
@@ -740,23 +755,28 @@ mod relay_keys {
             uid(),
             "the sidecar is dumpable"
         );
-        let out = Command::new("podman")
-            .args(["run", "--rm", "--pull=never", &px_image()])
-            .args([
+        let out = tool(
+            "podman",
+            &[
+                "run",
+                "--rm",
+                "--pull=never",
+                px_image().as_str(),
                 "--listen",
                 "127.0.0.1:0",
                 "--job-ip",
                 "127.0.0.1",
                 "--test-log-frames",
-            ])
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
+            ],
+        );
         assert_eq!(out.status.code(), Some(1));
         assert!(String::from_utf8_lossy(&out.stderr).contains("unknown argument"));
-        let _ = Command::new("podman")
-            .args(["kill", "--signal", "ABRT", &sidecar_of("rk6")])
-            .output();
+        drop(sleipnir::tool::limited(
+            Path::new("podman"),
+            &["kill", "--signal", "ABRT", sidecar_of("rk6").as_str()],
+            &[],
+            TOOL_LIMIT,
+        ));
         rm(&sidecar_of("rk6"));
     }
 }

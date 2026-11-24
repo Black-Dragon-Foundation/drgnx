@@ -93,7 +93,7 @@ impl Reservations {
             .open(&tmp)?;
         f.write_all(&body)?;
         drop(f);
-        fs::rename(&tmp, &path)
+        crate::fsio::rename(&tmp, &path)
     }
 
     /// SCHEDULER's reservation for JOB.
@@ -164,7 +164,7 @@ pub fn start_time(pid: u32) -> io::Result<u64> {
 }
 
 fn start_time_in(proc_root: &Path, pid: u32) -> io::Result<u64> {
-    let stat = fs::read_to_string(proc_root.join(pid.to_string()).join("stat"))?;
+    let stat = crate::fsio::read_to_string(proc_root.join(pid.to_string()).join("stat"))?;
     parse_start_time(&stat)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "an unreadable /proc stat"))
 }
@@ -212,7 +212,7 @@ mod tests {
         rs.put(&r2).unwrap();
         assert_eq!(rs.read_others("drgnx-hub"), vec![r2]);
         // under the lock, too; and junk next to it is skipped
-        fs::write(rs.files().join("junk.json"), b"{").unwrap();
+        crate::fsio::write(rs.files().join("junk.json"), b"{").unwrap();
         let seen = rs
             .with_admit_lock(|| rs.read_others("drgnx-hub").len())
             .unwrap();
@@ -251,11 +251,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let proc_root = d.path().join("proc");
         fs::create_dir_all(proc_root.join("sys/kernel/random")).unwrap();
-        fs::write(proc_root.join("sys/kernel/random/boot_id"), "b1\n").unwrap();
+        crate::fsio::write(proc_root.join("sys/kernel/random/boot_id"), "b1\n").unwrap();
         let stat = |pid: u32, start: u64| {
             let p = proc_root.join(pid.to_string());
             fs::create_dir_all(&p).unwrap();
-            fs::write(
+            crate::fsio::write(
                 p.join("stat"),
                 format!("{pid} (jobq) S {} {start} 0\n", "0 ".repeat(18)),
             )

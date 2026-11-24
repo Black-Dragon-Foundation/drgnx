@@ -39,11 +39,12 @@ pub fn start_proxy(
         tx,
     );
     h.listen(Listener::Streams(streams), 0);
-    tokio::spawn(async move {
+    saman::spawn("job-helper-proxy-events", async move {
         while let Some(e) = rx.recv().await {
-            eprintln!("sleipnir job-helper: the proxy refused {e:?}");
+            crate::eline!("sleipnir job-helper: the proxy refused {e:?}");
         }
-    });
+    })
+    .detach("it ends with the proxy's event channel");
     h
 }
 
@@ -70,9 +71,11 @@ impl KeySource for KeyServer {
             request.to_string(),
         );
         Box::pin(async move {
-            let a = tokio::task::spawn_blocking(move || keys::answer(&store, &dir, wait, &req))
-                .await
-                .unwrap_or_else(|_| keys::Answer::Text(b"no the helper failed\n".to_vec()));
+            let a = saman::spawn_blocking("job-helper-key-answer", move || {
+                keys::answer(&store, &dir, wait, &req)
+            })
+            .await
+            .unwrap_or_else(|_| keys::Answer::Text(b"no the helper failed\n".to_vec()));
             Box::new(a) as Box<dyn KeyAnswer>
         })
     }
@@ -81,8 +84,8 @@ impl KeySource for KeyServer {
 /// A job's relay in its helper: the sidecar, the channel and the proxy on their own runtime. The helper starts it
 /// before its `ready` line and ends it ([`Relay::end`]) when the job has ended.
 pub struct Relay {
-    runtime: tokio::runtime::Runtime,
-    watch: tokio::task::JoinHandle<()>,
+    runtime: saman::Executor,
+    watch: saman::Task<()>,
     job_ended: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -93,13 +96,15 @@ async fn take_down(
     name: &str,
 ) -> Option<i32> {
     if let Some(c) = container {
-        let _ = tokio::process::Command::new("podman")
-            .args(["rm", "-f", c])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await;
+        let spec = crate::linux::run::spec(Path::new("podman"), &["rm", "-f", c], &[]);
+        match draugr::spawn(spec).await {
+            Ok(mut rm) => {
+                if let Err(e) = rm.wait_deadline(crate::linux::run::SYSTEMCTL_LIMIT).await {
+                    crate::eline!("sleipnir job-helper: removing the job's container: {e}");
+                }
+            }
+            Err(e) => crate::eline!("sleipnir job-helper: removing the job's container: {e}"),
+        }
     }
     sidecar.stop(Path::new("podman"), name, &[]).await
 }
@@ -118,11 +123,7 @@ impl Relay {
         keys: Option<Arc<dyn KeySource>>,
     ) -> Result<Relay, String> {
         use ferja::owner;
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .map_err(|e| format!("the relay's runtime: {e}"))?;
+        let runtime = saman::Executor::new(1).map_err(|e| format!("the relay's runtime: {e}"))?;
         let name = name.to_string();
         let dir = dir.to_path_buf();
         let (job_ended, ended) = tokio::sync::oneshot::channel::<()>();
@@ -143,16 +144,22 @@ impl Relay {
             let (streams_tx, streams_rx) = tokio::sync::mpsc::channel(owner::STREAMS_ROOM);
             let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(16);
             let proxy = start_proxy(allow, None, streams_rx);
-            tokio::spawn(async move {
+            saman::spawn("job-helper-relay-events", async move {
                 while let Some(e) = events_rx.recv().await {
-                    eprintln!("sleipnir job-helper: the relay reports {e:?}");
+                    crate::eline!("sleipnir job-helper: the relay reports {e:?}");
                 }
-            });
+            })
+            .detach("it ends with the relay's event channel");
             let log = ferja::shell::Log::default();
             let drained = log.clone();
-            tokio::spawn(async move { drained.drain_to(tokio::io::stderr()).await });
+            saman::spawn("job-helper-relay-log", async move {
+                drained.drain_to(tokio::io::stderr()).await
+            })
+            .detach("it ends with the relay's log");
             let mut channel = match keys {
-                Some(k) => tokio::spawn(owner::run_keyed(
+                Some(k) => saman::spawn(
+                    "job-helper-relay",
+                    owner::run_keyed(
                     out,
                     inp,
                     streams_tx,
@@ -161,8 +168,11 @@ impl Relay {
                     owner::BEAT,
                     ferja::shell::STALL,
                     log,
-                )),
-                None => tokio::spawn(owner::run(
+                    ),
+                ),
+                None => saman::spawn(
+                    "job-helper-relay",
+                    owner::run(
                     out,
                     inp,
                     streams_tx,
@@ -170,9 +180,10 @@ impl Relay {
                     owner::BEAT,
                     ferja::shell::STALL,
                     log,
-                )),
+                    ),
+                ),
             };
-            Ok(tokio::spawn(async move {
+            Ok(saman::spawn("job-helper-relay-watch", async move {
                 let _proxy = proxy;
                 tokio::select! {
                     end = &mut channel => {
@@ -180,15 +191,20 @@ impl Relay {
                         // the sidecar's stderr before it is stopped; the reason is there before the job is ended
                         let stderr = sidecar.stderr();
                         let first = format!("infra: proxy: {}", owner::end_reason(&end, None, &stderr));
-                        let _ = crate::linux::jobexec::kill_reason(&dir, &first);
+                        if let Err(e) = crate::linux::jobexec::kill_reason(&dir, &first) {
+                            crate::eline!("sleipnir job-helper: the kill reason: {e}");
+                        }
                         let code = take_down(container.as_deref(), sidecar, &name).await;
                         let full = format!("infra: proxy: {}", owner::end_reason(&end, code, &stderr));
-                        let _ = crate::linux::jobexec::kill_reason(&dir, &full);
-                        eprintln!("sleipnir job-helper: {full}");
+                        if let Err(e) = crate::linux::jobexec::kill_reason(&dir, &full) {
+                            crate::eline!("sleipnir job-helper: the kill reason: {e}");
+                        }
+                        crate::eline!("sleipnir job-helper: {full}");
                     }
                     _ = ended => {
                         take_down(container.as_deref(), sidecar, &name).await;
-                        channel.abort();
+                        // dropping the task cancels it
+                        drop(channel);
                     }
                 }
             }))
@@ -203,10 +219,12 @@ impl Relay {
     /// After the job: the job's container, then the sidecar, then the runtime.
     pub fn end(mut self) {
         if let Some(tx) = self.job_ended.take() {
-            let _ = tx.send(());
+            saman::delivered(tx.send(()), "the job's end, to the relay");
         }
         let watch = self.watch;
-        let _ = self.runtime.block_on(watch);
+        if let Err(e) = self.runtime.block_on(watch) {
+            crate::eline!("sleipnir job-helper: the relay's end: {e}");
+        }
         self.runtime.shutdown_background();
     }
 }
@@ -250,8 +268,7 @@ mod tests {
         let ok = allow_list("# packages\ncrates.io:443\n\nstatic.crates.io:443\n").unwrap();
         assert_eq!(ok.len(), 2);
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
+        saman::Executor::new(1).unwrap().block_on(async {
             let (tx, rx) = tokio::sync::mpsc::channel(4);
             let _p = start_proxy(
                 allow_list("meta.example.test:80").unwrap(),

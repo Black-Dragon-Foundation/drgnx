@@ -86,16 +86,18 @@ pub(crate) fn serve(root: &Path, cred: &OriginCred, helper: &Path) -> Result<Ser
             let stop = Arc::new(AtomicBool::new(false));
             let token = SecretString::from(token.expose_secret().to_owned());
             let st = stop.clone();
-            let thread = std::thread::spawn(move || {
+            let thread = saman::spawn_thread("sleipnir-cred", move || {
                 for s in l.incoming() {
                     if st.load(Ordering::SeqCst) {
                         break;
                     }
                     if let Ok(mut s) = s {
-                        let _ = s.write_all(token.expose_secret().as_bytes());
+                        // a fetch that went away before it read the token has nothing to be told
+                        drop(s.write_all(token.expose_secret().as_bytes()));
                     }
                 }
-            });
+            })
+            .map_err(io::Error::other)?;
             Ok(Served {
                 args: vec!["-c".into(), arg],
                 env: vec![],
@@ -115,11 +117,14 @@ pub(crate) fn serve(root: &Path, cred: &OriginCred, helper: &Path) -> Result<Ser
             remove_if_there(&sock)?;
             // ssh-agent forks once its socket listens, and its parent prints the agent's pid and exits: that exit
             // is the handshake
-            let out = Command::new("ssh-agent")
-                .args(["-s", "-t", "600", "-a"])
-                .arg(&sock)
-                .stdin(Stdio::null())
-                .output()?;
+            let sock_arg = sock.to_string_lossy().into_owned();
+            let out = crate::tool::limited(
+                Path::new("ssh-agent"),
+                &["-s", "-t", "600", "-a", sock_arg.as_str()],
+                &[],
+                AGENT_LIMIT,
+            )
+            .map_err(io::Error::other)?;
             let text = String::from_utf8_lossy(&out.stdout);
             let agent = text
                 .split("SSH_AGENT_PID=")
@@ -176,25 +181,41 @@ impl Drop for Served {
         match &mut self.end {
             End::Socket { sock, stop, thread } => {
                 stop.store(true, Ordering::SeqCst);
-                // wakes the accept, which then sees the stop
-                let _ = UnixStream::connect(&*sock);
+                // wakes the accept, which then sees the stop (a failed connect: the thread already ended)
+                drop(UnixStream::connect(&*sock));
                 if let Some(t) = thread.take() {
-                    let _ = t.join();
+                    // a panicked serving thread has nothing more to give
+                    drop(t.join());
                 }
-                let _ = fs::remove_file(&*sock);
+                forget(sock);
             }
             End::Agent { sock, pid } => {
-                let _ = Command::new("ssh-agent")
-                    .arg("-k")
-                    .env("SSH_AGENT_PID", &*pid)
-                    .env("SSH_AUTH_SOCK", &*sock)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-                let _ = fs::remove_file(&*sock);
+                let at = sock.to_string_lossy().into_owned();
+                let killed = crate::tool::limited(
+                    Path::new("ssh-agent"),
+                    &["-k"],
+                    &[
+                        ("SSH_AGENT_PID", pid.as_str()),
+                        ("SSH_AUTH_SOCK", at.as_str()),
+                    ],
+                    AGENT_LIMIT,
+                );
+                if let Err(e) = killed {
+                    tracing::warn!("sleipnir: the fetch's ssh-agent was not stopped: {e}");
+                }
+                forget(sock);
             }
         }
+    }
+}
+
+/// How long `ssh-agent` may take to start or stop.
+const AGENT_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Removes the socket of a fetch that is over; one already gone is as good.
+fn forget(sock: &Path) {
+    if let Err(e) = remove_if_there(sock) {
+        tracing::warn!("sleipnir: {}: {e}", sock.display());
     }
 }
 
@@ -219,9 +240,23 @@ pub fn helper(sock: &Path, op: &str) -> io::Result<()> {
     msg.push(b'\n');
     token.fill(0);
     std::hint::black_box(&token);
-    let mut out = io::stdout().lock();
-    let r = out.write_all(&msg).and_then(|()| out.flush());
-    msg.fill(0);
-    std::hint::black_box(&msg);
-    r
+    // git's credential protocol: the lines, then the newline `cli_out` adds
+    msg.pop();
+    match String::from_utf8(msg) {
+        Ok(text) => {
+            let r = annall::cli_out(&text).map_err(io::Error::other);
+            let mut bytes = text.into_bytes();
+            bytes.fill(0);
+            std::hint::black_box(&bytes);
+            r
+        }
+        Err(e) => {
+            let mut bytes = e.into_bytes();
+            bytes.fill(0);
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the token is not text",
+            ))
+        }
+    }
 }

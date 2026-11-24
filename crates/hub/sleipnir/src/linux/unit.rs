@@ -37,25 +37,25 @@ fn plain(s: &str) -> bool {
 }
 
 /// The `systemd-run` arguments for R (without the program).
-pub fn run_args(r: &UnitReq) -> Result<Vec<String>, String> {
+pub fn run_args(r: &UnitReq) -> villa::Result<Vec<String>> {
     if !plain(&r.unit) || !plain(&r.slice) || !r.slice.ends_with(".slice") {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "a unit and its slice are plain names: {:?} {:?}",
             r.unit, r.slice
-        ));
+        )));
     }
     let log = r
         .log
         .to_str()
         .filter(|l| r.log.is_absolute() && !l.contains(['\n', '\0', ' ']))
         .ok_or_else(|| {
-            format!(
+            villa::Error::invalid(format!(
                 "the attempt's log must be an absolute path without spaces: {}",
                 r.log.display()
-            )
+            ))
         })?;
     if r.argv.is_empty() {
-        return Err("a unit needs a command".into());
+        return Err(villa::Error::invalid("a unit needs a command"));
     }
     let mut a: Vec<String> = [
         "--user",
@@ -83,7 +83,9 @@ pub fn run_args(r: &UnitReq) -> Result<Vec<String>, String> {
     .collect();
     if let Some(b) = &r.binds_to {
         if !plain(b) {
-            return Err(format!("BindsTo names a plain unit: {b:?}"));
+            return Err(villa::Error::invalid(format!(
+                "BindsTo names a plain unit: {b:?}"
+            )));
         }
         a.extend([
             "--property".into(),
@@ -94,7 +96,9 @@ pub fn run_args(r: &UnitReq) -> Result<Vec<String>, String> {
     }
     for (k, v) in &r.env {
         if !plain(k) || k.contains(['.', '@', '-']) || v.contains(['\n', '\0']) {
-            return Err(format!("an environment entry systemd can't carry: {k:?}"));
+            return Err(villa::Error::invalid(format!(
+                "an environment entry systemd can't carry: {k:?}"
+            )));
         }
         a.push(format!("--setenv={k}={v}"));
     }
@@ -104,7 +108,7 @@ pub fn run_args(r: &UnitReq) -> Result<Vec<String>, String> {
 }
 
 /// Starts R; the unit's name.
-pub fn start(r: &UnitReq) -> Result<String, String> {
+pub fn start(r: &UnitReq) -> villa::Result<String> {
     let args = run_args(r)?;
     let out = run::limited(
         std::path::Path::new("systemd-run"),
@@ -113,17 +117,17 @@ pub fn start(r: &UnitReq) -> Result<String, String> {
         run::SYSTEMCTL_LIMIT,
     )?;
     if !out.status.success() {
-        return Err(format!(
+        return Err(villa::Error::io(format!(
             "systemd-run {}: {}",
             r.unit,
             String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        )));
     }
     Ok(format!("{}.service", r.unit))
 }
 
 /// Stops UNIT (and with it the processes in it), without waiting.
-pub fn stop(unit: &str) -> Result<(), String> {
+pub fn stop(unit: &str) -> villa::Result<()> {
     run::systemctl_ok(&["stop", "--no-block", unit]).map(|_| ())
 }
 

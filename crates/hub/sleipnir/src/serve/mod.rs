@@ -47,7 +47,8 @@ use std::fs;
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
+use stund::Instant;
 
 /// `ready` this often.
 pub const READY_EVERY: Duration = Duration::from_secs(2);
@@ -103,7 +104,7 @@ fn plain(s: &str) -> bool {
 impl Config {
     /// `--root DIR --prefix P --hub-id H --profile dedicated|workstation [--watchdog DIR] [--allow-own-account]
     /// [--allow-admin] [--reserve-mib N] [--island CPUS] [--feature PROJECT:FEATURE]…` (a workstation's, at least [`forseti::MIN_RESERVE_MIB`]).
-    pub fn parse(args: &[&str]) -> Result<Config, String> {
+    pub fn parse(args: &[&str]) -> villa::Result<Config> {
         let (mut root, mut prefix, mut hub_id, mut profile) = (None, None, None, None);
         let (mut watchdog, mut reserve_mib, mut island) = (None, None, None);
         let mut features: Vec<String> = vec![];
@@ -113,7 +114,7 @@ impl Config {
             let mut val = || {
                 it.next()
                     .map(|v| v.to_string())
-                    .ok_or_else(|| format!("{a} needs a value"))
+                    .ok_or_else(|| villa::Error::invalid(format!("{a} needs a value")))
             };
             match *a {
                 "--root" => root = Some(PathBuf::from(val()?)),
@@ -123,13 +124,20 @@ impl Config {
                     profile = Some(match val()?.as_str() {
                         "dedicated" => Profile::Dedicated,
                         "workstation" => Profile::Workstation,
-                        p => return Err(format!("--profile is dedicated or workstation, not {p}")),
+                        p => {
+                            return Err(villa::Error::invalid(format!(
+                                "--profile is dedicated or workstation, not {p}"
+                            )));
+                        }
                     })
                 }
                 "--watchdog" => {
                     let d = PathBuf::from(val()?);
                     if !d.is_absolute() {
-                        return Err(format!("--watchdog must be absolute: {}", d.display()));
+                        return Err(villa::Error::invalid(format!(
+                            "--watchdog must be absolute: {}",
+                            d.display()
+                        )));
                     }
                     watchdog = Some(d);
                 }
@@ -140,35 +148,43 @@ impl Config {
                     let v = val()?;
                     match v.split_once(':') {
                         Some((p, f)) if !p.is_empty() && !f.is_empty() => features.push(v),
-                        _ => return Err(format!("--feature is PROJECT:FEATURE, not {v}")),
+                        _ => {
+                            return Err(villa::Error::invalid(format!(
+                                "--feature is PROJECT:FEATURE, not {v}"
+                            )));
+                        }
                     }
                 }
                 "--reserve-mib" => {
                     let v = val()?;
-                    reserve_mib = Some(
-                        v.parse::<u64>()
-                            .map_err(|_| format!("--reserve-mib is a number of MiB, not {v}"))?,
-                    );
+                    reserve_mib = Some(v.parse::<u64>().map_err(|_| {
+                        villa::Error::invalid(format!("--reserve-mib is a number of MiB, not {v}"))
+                    })?);
                 }
-                other => return Err(format!("unknown option {other}")),
+                other => return Err(villa::Error::invalid(format!("unknown option {other}"))),
             }
         }
-        let root = root.ok_or("--root is needed")?;
+        let root = root.ok_or_else(|| villa::Error::invalid("--root is needed"))?;
         if !root.is_absolute() {
-            return Err(format!("--root must be absolute: {}", root.display()));
+            return Err(villa::Error::invalid(format!(
+                "--root must be absolute: {}",
+                root.display()
+            )));
         }
-        let prefix = prefix.ok_or("--prefix is needed")?;
-        let hub_id = hub_id.ok_or("--hub-id is needed")?;
+        let prefix = prefix.ok_or_else(|| villa::Error::invalid("--prefix is needed"))?;
+        let hub_id = hub_id.ok_or_else(|| villa::Error::invalid("--hub-id is needed"))?;
         if !plain(&prefix) || !plain(&hub_id) {
-            return Err("--prefix and --hub-id are letters, digits and inner dashes".into());
+            return Err(villa::Error::invalid(
+                "--prefix and --hub-id are letters, digits and inner dashes",
+            ));
         }
-        let name = fs::read_to_string("/proc/sys/kernel/hostname")
+        let name = crate::fsio::read_to_string("/proc/sys/kernel/hostname")
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|_| "runner".into());
-        let profile = profile.ok_or("--profile is needed")?;
+        let profile = profile.ok_or_else(|| villa::Error::invalid("--profile is needed"))?;
         Limits::for_profile(profile, 0, 1)
             .with_reserve(profile, reserve_mib)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         Ok(Config {
             root,
             prefix,
@@ -189,8 +205,15 @@ impl Config {
     }
 }
 
+/// A write or removal of a mark that failed: said, never fatal to the attempt it belongs to.
+fn note<T, E: std::fmt::Display>(what: &str, done: Result<T, E>) {
+    if let Err(e) = done {
+        crate::eline!("sleipnir serve: {what}: {e}");
+    }
+}
+
 fn now_s() -> u64 {
-    SystemTime::now()
+    stund::wall()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
@@ -341,7 +364,7 @@ pub struct Serve<W: Write> {
 pub fn run<R: Read + Send + 'static, W: Write>(cfg: Config, input: R, output: W) -> i32 {
     let (tx, rx) = mpsc::channel();
     let ended = tx.clone();
-    std::thread::spawn(move || {
+    let reading = saman::spawn_thread("serve-link", move || {
         let mut r = FrameReader::new(BufReader::new(input));
         loop {
             let ev = match r.read() {
@@ -355,10 +378,14 @@ pub fn run<R: Read + Send + 'static, W: Write>(cfg: Config, input: R, output: W)
             }
         }
     });
+    if let Err(e) = reading {
+        crate::eline!("sleipnir serve: {e}");
+        return 2;
+    }
     let mut s = match Serve::new(cfg, output) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("sleipnir serve: {e}");
+            crate::eline!("sleipnir serve: {e}");
             return 2;
         }
     };
@@ -381,7 +408,7 @@ pub fn run<R: Read + Send + 'static, W: Write>(cfg: Config, input: R, output: W)
             // an end without `bye` is the hub's link-lost; the attempts run on in their units
             Ok(Event::End) | Err(mpsc::RecvTimeoutError::Disconnected) => return 0,
             Ok(Event::Broken(e)) => {
-                eprintln!("sleipnir serve: the channel: {e}");
+                crate::eline!("sleipnir serve: the channel: {e}");
                 return 1;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -394,8 +421,9 @@ pub fn run<R: Read + Send + 'static, W: Write>(cfg: Config, input: R, output: W)
 
 impl<W: Write> Serve<W> {
     /// `serve` on this machine's platform.
-    pub fn new(cfg: Config, output: W) -> Result<Serve<W>, String> {
-        let exe = std::env::current_exe().map_err(|e| format!("this binary's path: {e}"))?;
+    pub fn new(cfg: Config, output: W) -> villa::Result<Serve<W>> {
+        let exe = std::env::current_exe()
+            .map_err(|e| villa::Error::io(format!("this binary's path: {e}")).with_source(e))?;
         #[cfg(target_os = "linux")]
         let platform = platform::LinuxPlatform::new(&cfg, &exe)?;
         #[cfg(target_os = "macos")]
@@ -408,15 +436,16 @@ impl<W: Write> Serve<W> {
         cfg: Config,
         output: W,
         platform: Box<dyn Platform>,
-    ) -> Result<Serve<W>, String> {
+    ) -> villa::Result<Serve<W>> {
         fs::create_dir_all(attempts::jobs(&cfg.root))
-            .map_err(|e| format!("{}: {e}", cfg.root.display()))?;
+            .map_err(|e| villa::Error::io(format!("{}: {e}", cfg.root.display())).with_source(e))?;
         let scheduler = cfg.scheduler();
         let limits = platform
             .limits(cfg.profile)
             .with_reserve(cfg.profile, cfg.reserve_mib)
-            .map_err(|e| e.to_string())?;
-        let exe = std::env::current_exe().map_err(|e| format!("this binary's path: {e}"))?;
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
+        let exe = std::env::current_exe()
+            .map_err(|e| villa::Error::io(format!("this binary's path: {e}")).with_source(e))?;
         let bin = cfg.root.join("bin");
         let bundle = exe
             .parent()
@@ -456,7 +485,7 @@ impl<W: Write> Serve<W> {
             island_held: None,
         };
         if let Some(i) = &s.cfg.island {
-            s.platform.island_check(i)?;
+            s.platform.island_check(i).map_err(villa::Error::invalid)?;
         }
         s.load_running();
         // a timing job that ended while no `serve` ran (killed, a restart) gave nothing back: the work slice's CPUs
@@ -523,7 +552,7 @@ impl<W: Write> Serve<W> {
         }
         match self.platform.island(want.then_some(island.as_str())) {
             Ok(()) => self.island_held = Some(want),
-            Err(e) => eprintln!("sleipnir serve: the timing island {island}: {e}"),
+            Err(e) => crate::eline!("sleipnir serve: the timing island {island}: {e}"),
         }
     }
 
@@ -531,7 +560,7 @@ impl<W: Write> Serve<W> {
         match self.w.write(f) {
             Ok(()) => Next::Go,
             Err(e) => {
-                eprintln!("sleipnir serve: the channel: {e}");
+                crate::eline!("sleipnir serve: the channel: {e}");
                 Next::Stop
             }
         }
@@ -542,14 +571,14 @@ impl<W: Write> Serve<W> {
             Frame::Hello { version, hub_id } => self.hello(version, &hub_id),
             Frame::Ping { at } => self.send(&Frame::Pong { at }),
             Frame::Bye { .. } => {
-                let _ = self.send(&Frame::Bye {
+                self.send(&Frame::Bye {
                     why: "the hub said bye".into(),
                 });
                 Next::Stop
             }
             Frame::Pong { .. } | Frame::Unknown => Next::Go,
             _ if !self.hello => {
-                let _ = self.send(&Frame::Bye {
+                self.send(&Frame::Bye {
                     why: "hello first".into(),
                 });
                 Next::Stop
@@ -609,7 +638,7 @@ impl<W: Write> Serve<W> {
             Frame::Key(k) => self.key(k),
             other => {
                 if let Some(line) = other.loggable() {
-                    eprintln!("sleipnir serve: not handled here: {line}");
+                    crate::eline!("sleipnir serve: not handled here: {line}");
                 }
                 Next::Go
             }
@@ -618,13 +647,13 @@ impl<W: Write> Serve<W> {
 
     fn hello(&mut self, version: u32, hub_id: &str) -> Next {
         if hub_id != self.cfg.hub_id {
-            let _ = self.send(&Frame::Bye {
+            self.send(&Frame::Bye {
                 why: format!("this serve is hub {}'s, not {hub_id}'s", self.cfg.hub_id),
             });
             return Next::Stop;
         }
         if version != PROTO_VERSION {
-            eprintln!(
+            crate::eline!(
                 "sleipnir serve: the hub speaks version {version}, this runner {PROTO_VERSION}"
             );
         }
@@ -698,7 +727,7 @@ impl<W: Write> Serve<W> {
         let mut m = match self.platform.machine(now_s(), &self.limits) {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("sleipnir serve: the machine can't be read: {e}");
+                crate::eline!("sleipnir serve: the machine can't be read: {e}");
                 return self.send(&Frame::Ready {
                     free_mib: 0,
                     mem_available_mib: 0,
@@ -748,7 +777,7 @@ impl<W: Write> Serve<W> {
             // the pressure is gone: the paused builds go on
             for id in std::mem::take(&mut self.paused) {
                 if let Err(e) = self.platform.unpause(&id) {
-                    eprintln!("sleipnir serve: {e}");
+                    crate::eline!("sleipnir serve: {e}");
                 }
             }
             return;
@@ -780,9 +809,9 @@ impl<W: Write> Serve<W> {
                 Action::Pause(_) | Action::StopAdmitting => continue,
             };
             if let Some(l) = self.live.values().find(|l| l.meta.r.job == id.0) {
-                eprintln!("sleipnir serve: the ladder at {level:?}: {reason} {}", id.0);
+                crate::eline!("sleipnir serve: the ladder at {level:?}: {reason} {}", id.0);
                 if matches!(a, Action::Evict(_)) {
-                    let _ = jobexec::disturbed(&l.dir, "evicted");
+                    note("evicted mark", jobexec::disturbed(&l.dir, "evicted"));
                 }
                 self.kill(&l.dir.clone(), &l.meta.r.job.clone(), &reason);
                 self.last_kill = Some(Instant::now());
@@ -798,13 +827,13 @@ impl<W: Write> Serve<W> {
         if self.paused.contains(id) {
             return;
         }
-        let _ = jobexec::disturbed(&l.dir, "paused");
+        note("paused mark", jobexec::disturbed(&l.dir, "paused"));
         match self.platform.pause(id) {
             Ok(()) => {
-                eprintln!("sleipnir serve: the ladder pauses {id}");
+                crate::eline!("sleipnir serve: the ladder pauses {id}");
                 self.paused.insert(id.to_string());
             }
-            Err(e) => eprintln!("sleipnir serve: {e}"),
+            Err(e) => crate::eline!("sleipnir serve: {e}"),
         }
     }
 
@@ -847,20 +876,21 @@ impl<W: Write> Serve<W> {
                 |r| self.platform.resize(r),
             ) {
                 Ok(Some(r)) => {
-                    eprintln!(
+                    crate::eline!(
                         "sleipnir serve: {id} grows from {} to {} MiB",
-                        r.from_mib, r.to_mib
+                        r.from_mib,
+                        r.to_mib
                     );
                     if let Some(l) = self.live.get_mut(&key) {
                         l.meta.grant.mem_cap_mib = r.to_mib;
                         l.meta.grant.reserve_mib += r.delta_mib();
                         if let Err(e) = attempts::write_meta(&l.dir, &l.meta) {
-                            eprintln!("sleipnir serve: {id}'s grown grant: {e}");
+                            crate::eline!("sleipnir serve: {id}'s grown grant: {e}");
                         }
                     }
                 }
                 Ok(None) => {}
-                Err(e) => eprintln!("sleipnir serve: {id} can't grow: {}", e.why),
+                Err(e) => crate::eline!("sleipnir serve: {id} can't grow: {}", e.why),
             }
         }
     }
@@ -888,7 +918,7 @@ impl<W: Write> Serve<W> {
                 Ok(()) => {
                     self.weights.insert(unit, w);
                 }
-                Err(e) => eprintln!("sleipnir serve: {e}"),
+                Err(e) => crate::eline!("sleipnir serve: {e}"),
             }
         }
     }
@@ -897,10 +927,10 @@ impl<W: Write> Serve<W> {
     /// names.
     fn kill(&self, dir: &Path, id: &str, reason: &str) {
         if let Err(e) = jobexec::kill_reason(dir, reason) {
-            eprintln!("sleipnir serve: the kill reason of {id}: {e}");
+            crate::eline!("sleipnir serve: the kill reason of {id}: {e}");
         }
         if let Err(e) = self.platform.kill(id) {
-            eprintln!("sleipnir serve: {e}");
+            crate::eline!("sleipnir serve: {e}");
         }
     }
 
@@ -1015,10 +1045,12 @@ impl<W: Write> Serve<W> {
     }
 
     fn unreserve(&self, r: &JobRef) {
-        let _ = self
-            .platform
-            .reservations()
-            .remove(&self.scheduler, &admit::reservation_job(&r.job, r.attempt));
+        note(
+            "reservation",
+            self.platform
+                .reservations()
+                .remove(&self.scheduler, &admit::reservation_job(&r.job, r.attempt)),
+        );
     }
 
     /// The live attempt R names, nonce and hub included.
@@ -1037,7 +1069,7 @@ impl<W: Write> Serve<W> {
         parser: &str,
     ) -> Next {
         let Some(l) = self.find(r) else {
-            eprintln!("sleipnir serve: start for an attempt not admitted here: {r:?}");
+            crate::eline!("sleipnir serve: start for an attempt not admitted here: {r:?}");
             return Next::Go;
         };
         if l.meta.started.is_some() || l.fetching {
@@ -1084,7 +1116,7 @@ impl<W: Write> Serve<W> {
                 meta.unit = Some(unit.clone());
                 meta.started = Some(at);
                 if let Err(e) = attempts::write_meta(&dir, &meta) {
-                    eprintln!("sleipnir serve: the attempt's record: {e}");
+                    crate::eline!("sleipnir serve: the attempt's record: {e}");
                 }
                 self.hand_reservation(&meta, pid);
                 self.last_start = forseti::LastStart {
@@ -1159,7 +1191,7 @@ impl<W: Write> Serve<W> {
     /// The attempt's reservation passes to its job-exec (PID), which outlives this `serve`.
     fn hand_reservation(&self, meta: &Meta, pid: u32) {
         let Ok(start_time) = self.platform.start_time(pid) else {
-            eprintln!(
+            crate::eline!(
                 "sleipnir serve: {}'s job-exec pid {pid}: its reservation stays with this serve",
                 meta.r.job
             );
@@ -1176,18 +1208,18 @@ impl<W: Write> Serve<W> {
             expires: now_s() + meta.spec.timeout_s + admit::RESERVATION_SLACK_S,
         };
         if let Err(e) = self.platform.reservations().put(&r) {
-            eprintln!("sleipnir serve: the reservation of {}: {e}", meta.r.job);
+            crate::eline!("sleipnir serve: the reservation of {}: {e}", meta.r.job);
         }
     }
 
     /// Ends an attempt that couldn't start: `infra: setup`, the reason in its log.
     fn setup_failed(&self, dir: &Path, meta: &Meta, why: &str) {
-        eprintln!("sleipnir serve: {}: {why}", meta.r.job);
-        let _ = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join(LOG))
-            .and_then(|mut f| writeln!(f, "sleipnir serve: the attempt can't start: {why}"));
+        crate::eline!("sleipnir serve: {}: {why}", meta.r.job);
+        note(
+            "attempt log",
+            crate::fsio::append(dir.join(LOG), true)
+                .and_then(|mut f| writeln!(f, "sleipnir serve: the attempt can't start: {why}")),
+        );
         self.write_result(dir, meta, Verdict::Infra(infra::SETUP.into()));
     }
 
@@ -1212,7 +1244,7 @@ impl<W: Write> Serve<W> {
             log: dir.join(LOG).display().to_string(),
         };
         if let Err(e) = r.write(dir) {
-            eprintln!("sleipnir serve: {}'s result: {e}", meta.r.job);
+            crate::eline!("sleipnir serve: {}'s result: {e}", meta.r.job);
         }
     }
 
@@ -1226,7 +1258,7 @@ impl<W: Write> Serve<W> {
                     self.live.insert(key.clone(), Live::new(dir, meta));
                 }
                 _ => {
-                    eprintln!(
+                    crate::eline!(
                         "sleipnir serve: attach for an attempt this runner doesn't hold: {r:?}"
                     );
                     return Next::Go;
@@ -1235,7 +1267,7 @@ impl<W: Write> Serve<W> {
         }
         match self.live.get_mut(&key) {
             Some(l) if l.meta.r == *r => l.pump = Some(offset),
-            _ => eprintln!("sleipnir serve: attach with another nonce: {r:?}"),
+            _ => crate::eline!("sleipnir serve: attach with another nonce: {r:?}"),
         }
         Next::Go
     }
@@ -1245,7 +1277,10 @@ impl<W: Write> Serve<W> {
             return Next::Go;
         };
         let (dir, meta) = (l.dir.clone(), l.meta.clone());
-        let _ = fs::write(dir.join(CANCELLED), b"");
+        note(
+            "cancelled mark",
+            crate::fsio::write(dir.join(CANCELLED), b""),
+        );
         if meta.started.is_some() {
             self.kill(&dir, &meta.r.job, "cancelled");
         } else {
@@ -1262,11 +1297,16 @@ impl<W: Write> Serve<W> {
         let dir = attempts::dir(&self.cfg.root, &r.job, r.attempt);
         match attempts::read_meta(&dir) {
             Ok(meta) if meta.hub_id == self.cfg.hub_id && meta.r == *r => {
-                let _ = fs::write(dir.join(COLLECTED), b"");
+                note(
+                    "collected mark",
+                    crate::fsio::write(dir.join(COLLECTED), b""),
+                );
                 self.live.remove(&(r.job.clone(), r.attempt));
                 self.cleanup();
             }
-            _ => eprintln!("sleipnir serve: done for an attempt this runner doesn't hold: {r:?}"),
+            _ => {
+                crate::eline!("sleipnir serve: done for an attempt this runner doesn't hold: {r:?}")
+            }
         }
         Next::Go
     }
@@ -1284,9 +1324,10 @@ impl<W: Write> Serve<W> {
             Some(l) if l.meta.r == k.r && l.sync.is_some() && !l.fetching => {
                 l.origin_cred = Some(k);
             }
-            _ => eprintln!(
+            _ => crate::eline!(
                 "sleipnir serve: key {} for {:?}: not a started attempt of this hub's",
-                k.name, k.r
+                k.name,
+                k.r
             ),
         }
         Next::Go
@@ -1312,7 +1353,7 @@ impl<W: Write> Serve<W> {
                     true
                 }
                 Err(e) => {
-                    eprintln!("sleipnir serve: key {} for {}: {e}", k.name, k.r.job);
+                    crate::eline!("sleipnir serve: key {} for {}: {e}", k.name, k.r.job);
                     false
                 }
             },
@@ -1321,10 +1362,10 @@ impl<W: Write> Serve<W> {
 
     /// Sends the attempt's new `key-use` lines (names and times only) as `key-use` frames, each once.
     fn send_key_uses(&mut self, dir: &Path, r: &JobRef) -> Next {
-        let Ok(text) = fs::read_to_string(dir.join(KEY_USE)) else {
+        let Ok(text) = crate::fsio::read_to_string(dir.join(KEY_USE)) else {
             return Next::Go;
         };
-        let sent: usize = fs::read_to_string(dir.join(KEY_USE_SENT))
+        let sent: usize = crate::fsio::read_to_string(dir.join(KEY_USE_SENT))
             .ok()
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(0);
@@ -1339,7 +1380,10 @@ impl<W: Write> Serve<W> {
             if self.send(&frame) == Next::Stop {
                 return Next::Stop;
             }
-            let _ = fs::write(dir.join(KEY_USE_SENT), (i + 1).to_string());
+            note(
+                "key-use mark",
+                crate::fsio::write(dir.join(KEY_USE_SENT), (i + 1).to_string()),
+            );
         }
         Next::Go
     }
@@ -1363,7 +1407,7 @@ impl<W: Write> Serve<W> {
         manifest: Vec<ManifestEntry>,
     ) -> Next {
         let Some(key) = self.syncing(&r) else {
-            eprintln!("sleipnir serve: sync-have for an attempt not waiting here: {r:?}");
+            crate::eline!("sleipnir serve: sync-have for an attempt not waiting here: {r:?}");
             return Next::Go;
         };
         if let Err(e) = mirror::check_id(&repo) {
@@ -1419,7 +1463,7 @@ impl<W: Write> Serve<W> {
     /// `sync-need` asks for the blob again.
     fn blob(&mut self, r: &JobRef, sha: Sha256, offset: u64, total: u64, bytes: &[u8]) -> Next {
         if self.syncing(r).is_none() {
-            eprintln!("sleipnir serve: a blob for an attempt not waiting here: {r:?}");
+            crate::eline!("sleipnir serve: a blob for an attempt not waiting here: {r:?}");
             return Next::Go;
         }
         let root = &self.cfg.root;
@@ -1431,14 +1475,13 @@ impl<W: Write> Serve<W> {
             let part = root
                 .join("blobs")
                 .join(format!(".{}.part", crate::sync::hex(&sha.0)));
-            let mut f = if offset == 0 {
-                fs::File::create(&part)?
-            } else {
-                fs::OpenOptions::new().append(true).open(&part)?
-            };
+            if offset == 0 {
+                crate::fsio::write(&part, b"")?;
+            }
+            let mut f = crate::fsio::append(&part, false)?;
             let end = offset + bytes.len() as u64;
             if f.metadata()?.len() != offset || end > total {
-                let _ = fs::remove_file(&part);
+                note("partial blob", fs::remove_file(&part));
                 return Err(crate::sync::refused(
                     part.as_os_str().as_encoded_bytes(),
                     "a blob's chunk out of order",
@@ -1447,13 +1490,13 @@ impl<W: Write> Serve<W> {
             f.write_all(bytes)?;
             if end == total {
                 let whole = fs::read(&part);
-                let _ = fs::remove_file(&part);
+                note("partial blob", fs::remove_file(&part));
                 store.put(&sha.0, &whole?)?;
             }
             Ok(())
         })();
         if let Err(e) = kept {
-            eprintln!("sleipnir serve: {}'s blob: {e}", r.job);
+            crate::eline!("sleipnir serve: {}'s blob: {e}", r.job);
         }
         Next::Go
     }
@@ -1470,7 +1513,7 @@ impl<W: Write> Serve<W> {
         bytes: &[u8],
     ) -> Next {
         let Some(key) = self.syncing(r) else {
-            eprintln!("sleipnir serve: a bundle for an attempt not waiting here: {r:?}");
+            crate::eline!("sleipnir serve: a bundle for an attempt not waiting here: {r:?}");
             return Next::Go;
         };
         let root = self.cfg.root.clone();
@@ -1478,7 +1521,7 @@ impl<W: Write> Serve<W> {
             return Next::Go;
         };
         let (Some(sha), Some(repo)) = (sha, l.sync.as_ref().map(|s| s.repo.clone())) else {
-            eprintln!("sleipnir serve: a bundle chunk without its hash or its inputs: {r:?}");
+            crate::eline!("sleipnir serve: a bundle chunk without its hash or its inputs: {r:?}");
             return Next::Go;
         };
         if l.bundle.as_ref().is_none_or(|(s, _)| *s != sha) {
@@ -1497,7 +1540,7 @@ impl<W: Write> Serve<W> {
         let held = rx.offset();
         if offset > held {
             // a gap: this chunk is dropped; the hub sends the bundle again from its start, and what is held is skipped
-            eprintln!("sleipnir serve: a bundle chunk at {offset}, past the {held} bytes held");
+            crate::eline!("sleipnir serve: a bundle chunk at {offset}, past the {held} bytes held");
             return Next::Go;
         }
         let skip = (held - offset) as usize;
@@ -1523,7 +1566,7 @@ impl<W: Write> Serve<W> {
     /// meanwhile); its end comes back to the loop ([`Serve::fetched`]).
     fn origin_fetch(&mut self, r: JobRef, repo: String, url: String, cred: Option<String>) -> Next {
         let Some(key) = self.syncing(&r) else {
-            eprintln!("sleipnir serve: origin-fetch for an attempt not waiting here: {r:?}");
+            crate::eline!("sleipnir serve: origin-fetch for an attempt not waiting here: {r:?}");
             return Next::Go;
         };
         let Some(l) = self.live.get_mut(&key) else {
@@ -1557,9 +1600,13 @@ impl<W: Write> Serve<W> {
         };
         match self.events.clone() {
             Some(tx) => {
-                std::thread::spawn(move || {
-                    let _ = tx.send(Event::Fetched(r, fetch()));
+                let started = saman::spawn_thread("origin-fetch", move || {
+                    saman::delivered(tx.send(Event::Fetched(r, fetch())), "origin fetch result");
                 });
+                if let Err(e) = started {
+                    crate::eline!("sleipnir serve: origin-fetch: {e}");
+                    return Next::Stop;
+                }
                 Next::Go
             }
             None => {
@@ -1627,14 +1674,10 @@ impl<W: Write> Serve<W> {
             return;
         }
         let path = self.cfg.root.join(crate::watchdog::HEARTBEAT);
-        let tmp = self
-            .cfg
-            .root
-            .join(format!(".{}.tmp", crate::watchdog::HEARTBEAT));
         let body = serde_json::to_vec(&self.heartbeat).unwrap_or_default();
-        match fs::write(&tmp, body).and_then(|()| fs::rename(&tmp, &path)) {
+        match crate::fsio::write(&path, body) {
             Ok(()) => self.heartbeat_written = Some(Instant::now()),
-            Err(e) => eprintln!("sleipnir serve: the heartbeat {}: {e}", path.display()),
+            Err(e) => crate::eline!("sleipnir serve: the heartbeat {}: {e}", path.display()),
         }
     }
 
@@ -1670,7 +1713,7 @@ impl<W: Write> Serve<W> {
 
     fn tick(&mut self) -> Next {
         if self.last_frame.elapsed() >= LINK_LOST_AFTER {
-            eprintln!(
+            crate::eline!(
                 "sleipnir serve: no frame for {} s: the link is lost",
                 LINK_LOST_AFTER.as_secs()
             );
@@ -1732,15 +1775,15 @@ impl<W: Write> Serve<W> {
                 .is_some_and(|u| self.platform.active(u));
             // the unit ended without job-exec's result: killed from outside
             if !up && !dir.join(RESULT).exists() {
-                let _ = fs::OpenOptions::new()
-                    .append(true)
-                    .open(dir.join(LOG))
-                    .and_then(|mut f| {
+                note(
+                    "attempt log",
+                    crate::fsio::append(dir.join(LOG), false).and_then(|mut f| {
                         writeln!(
                             f,
                             "sleipnir serve: the attempt's unit ended without a result"
                         )
-                    });
+                    }),
+                );
                 self.write_result(&dir, &meta, Verdict::Infra(infra::KILLED.into()));
             }
         }
@@ -1814,9 +1857,12 @@ impl<W: Write> Serve<W> {
             // the hub's own cancel: whatever the kill made of it
             o.insert("verdict".into(), serde_json::json!("Cancelled"));
             o.insert("infra".into(), serde_json::Value::Null);
-            let _ = fs::write(
-                dir.join(RESULT),
-                serde_json::to_vec_pretty(&result).unwrap_or_default(),
+            note(
+                "cancelled result",
+                crate::fsio::write(
+                    dir.join(RESULT),
+                    serde_json::to_vec_pretty(&result).unwrap_or_default(),
+                ),
             );
         }
         if self.give_back(&meta.r, dir, &meta.spec) == Next::Stop {
@@ -1879,8 +1925,8 @@ impl<W: Write> Serve<W> {
         let o = returned::outputs(&copy, &spec.outputs).map_or_else(unread, |o| (o.tar, o.left));
         parts.push(("outputs", "returned.tar", OUTPUTS_MAX, o));
         for (what, file, max, (bytes, left)) in parts {
-            if let Err(e) = fs::write(dir.join(file), &bytes) {
-                eprintln!("sleipnir serve: {}: {e}", dir.join(file).display());
+            if let Err(e) = crate::fsio::write(dir.join(file), &bytes) {
+                crate::eline!("sleipnir serve: {}: {e}", dir.join(file).display());
             }
             let total = bytes.len() as u64;
             let kept = total > max;

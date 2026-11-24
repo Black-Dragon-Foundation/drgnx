@@ -41,14 +41,16 @@ pub struct Job<'a> {
 pub fn mac_context(
     developer_dir: &str,
     darwin_user_dir: &str,
-) -> Result<gleipnir::sbpl::MacContext, String> {
+) -> villa::Result<gleipnir::sbpl::MacContext> {
     let u = Path::new(darwin_user_dir.trim());
     let user_dir = u
         .parent()
         .filter(|_| u.is_absolute())
         .and_then(|p| std::fs::canonicalize(p).ok())
         .ok_or_else(|| {
-            format!("the account's per-user folder {darwin_user_dir:?} can't be resolved")
+            villa::Error::unavailable(format!(
+                "the account's per-user folder {darwin_user_dir:?} can't be resolved"
+            ))
         })?;
     Ok(gleipnir::sbpl::MacContext {
         developer_dir: std::fs::canonicalize(developer_dir.trim()).ok(),
@@ -80,7 +82,7 @@ pub fn spec(job: &Job) -> Spec {
         read.push(job.tools_dir.to_path_buf());
     }
     let mut env = vec![
-        ("HOME".into(), home.display().to_string()),
+        (stig::HOME_VAR.into(), home.display().to_string()),
         ("TMPDIR".into(), format!("{}/", tmp.display())),
         // the brew shim first: Homebrew can't answer a package's prefix offline (super::brew)
         (

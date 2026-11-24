@@ -5,7 +5,6 @@ use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::capture::{Entry, Inputs};
 use super::hex;
@@ -13,26 +12,25 @@ use super::slot::Blobs;
 
 /// The user's git in a test: plain git in `dir`, with no system or global config and a fixed identity.
 pub fn user_git(dir: &Path, args: &[&str]) -> Vec<u8> {
-    let out = Command::new("git")
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .args([
+    let mut spec = crate::tool::spec(
+        Path::new("git"),
+        &[
             "-c",
             "user.name=t",
             "-c",
             "user.email=t@example.invalid",
             "-c",
             "init.defaultBranch=main",
-        ])
-        .args(args)
-        .output()
-        .expect("git runs");
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
+        ],
+        &[
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ],
     );
+    spec.args.extend(args.iter().map(std::ffi::OsString::from));
+    spec.cwd = Some(dir.to_path_buf());
+    let out = draugr::run(spec, std::time::Duration::from_secs(120)).expect("git runs");
+    assert!(out.status.success(), "git {args:?}: {}", out.stderr);
     out.stdout
 }
 
@@ -43,14 +41,14 @@ pub fn path(root: &Path, rel: &[u8]) -> PathBuf {
 pub fn write(root: &Path, rel: &[u8], bytes: &[u8]) {
     let p = path(root, rel);
     fs::create_dir_all(p.parent().unwrap()).unwrap();
-    fs::write(p, bytes).unwrap();
+    crate::fsio::write(p, bytes).unwrap();
 }
 
 /// The time as the filesystem under `dir` stamps it now (the mtime of a file written just now): what the files'
 /// ages are measured against, without a read of the process's own clock.
 pub fn fs_now(dir: &Path) -> std::time::SystemTime {
     let probe = dir.join(".fs-now");
-    fs::write(&probe, b"").unwrap();
+    crate::fsio::write(&probe, b"").unwrap();
     fs::metadata(&probe).unwrap().modified().unwrap()
 }
 
@@ -101,7 +99,7 @@ impl DirBlobs {
                 } else {
                     fs::read(&src).unwrap()
                 };
-                fs::write(dir.join(hex(sha256)), bytes).unwrap();
+                crate::fsio::write(dir.join(hex(sha256)), bytes).unwrap();
             }
         }
         DirBlobs {

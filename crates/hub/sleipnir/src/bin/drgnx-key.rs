@@ -62,7 +62,8 @@ fn fetch(name: &str) -> Result<Vec<u8>, Fail> {
     let mut s = connect(&sock).map_err(|e| {
         Fail::NotDelivered(format!("the key socket {}: {e}", sock.to_string_lossy()))
     })?;
-    let _ = s.set_read_timeout(Some(WAIT));
+    s.set_read_timeout(Some(WAIT))
+        .map_err(|e| Fail::NotDelivered(format!("the key socket: {e}")))?;
     s.write_all(format!("get {name}\n").as_bytes())
         .map_err(|e| Fail::NotDelivered(format!("the key socket: {e}")))?;
     let mut r = BufReader::new(s);

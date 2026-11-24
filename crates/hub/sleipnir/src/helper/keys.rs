@@ -23,7 +23,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
+
+use stund::Instant;
 
 use zeroize::Zeroize;
 
@@ -170,15 +172,21 @@ impl KeyStore {
     }
 
     /// Takes NAME's VALUE (locked); a name the job doesn't list, a NUL or an over-long value is refused.
-    pub fn put(&self, name: &str, value: &[u8]) -> Result<(), String> {
+    pub fn put(&self, name: &str, value: &[u8]) -> villa::Result<()> {
         if !self.names.iter().any(|n| n == name) {
-            return Err(format!("the job doesn't name the key {name}"));
+            return Err(villa::Error::refused(format!(
+                "the job doesn't name the key {name}"
+            )));
         }
         if value.len() > MAX_KEY || value.contains(&0) {
-            return Err(format!("key {name}: a NUL in it, or over {MAX_KEY} bytes"));
+            return Err(villa::Error::invalid(format!(
+                "key {name}: a NUL in it, or over {MAX_KEY} bytes"
+            )));
         }
-        let l = Locked::new(value)
-            .map_err(|e| format!("key {name}: memory that can't be locked: {e}"))?;
+        let l = Locked::new(value).map_err(|e| {
+            villa::Error::unavailable(format!("key {name}: memory that can't be locked: {e}"))
+                .with_source(e)
+        })?;
         self.lock().insert(name.to_string(), l);
         self.came.notify_all();
         Ok(())
@@ -222,7 +230,8 @@ impl KeyStore {
 /// can connect.
 pub fn bind(dir: &Path, name: &str) -> io::Result<UnixListener> {
     let tmp = dir.join(format!(".{name}.tmp"));
-    let _ = fs::remove_file(&tmp);
+    // a socket left by an earlier helper of this attempt; none is the usual case
+    drop(fs::remove_file(&tmp));
     let l = UnixListener::bind(&tmp)?;
     fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
     fs::rename(&tmp, dir.join(name))?;
@@ -242,28 +251,29 @@ fn line(r: &mut BufReader<UnixStream>) -> io::Result<String> {
 }
 
 fn now_s() -> u64 {
-    SystemTime::now()
+    stund::wall()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
 
 fn append(path: &Path, text: &str) -> io::Result<()> {
-    fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut f| f.write_all(text.as_bytes()))
+    crate::fsio::append(path, true).and_then(|mut f| f.write_all(text.as_bytes()))
 }
 
 /// Takes keys on L for STORE (`serve`'s side), one thread per connection.
 pub fn serve_hub(l: UnixListener, store: Arc<KeyStore>) {
-    std::thread::spawn(move || {
+    let accept = saman::spawn_thread("job-helper-keys", move || {
         for s in l.incoming().flatten() {
             let store = store.clone();
-            std::thread::spawn(move || take_key(s, &store));
+            if let Err(e) = saman::spawn_thread("job-helper-key", move || take_key(s, &store)) {
+                crate::eline!("sleipnir job-helper: a key connection: {e}");
+            }
         }
     });
+    if let Err(e) = accept {
+        crate::eline!("sleipnir job-helper: the key socket: {e}");
+    }
 }
 
 fn take_key(s: UnixStream, store: &KeyStore) {
@@ -288,14 +298,18 @@ fn take_key(s: UnixStream, store: &KeyStore) {
         let read = r.read_exact(&mut value);
         let put = read
             .map_err(|e| e.to_string())
-            .and_then(|()| store.put(name, &value));
+            .and_then(|()| store.put(name, &value).map_err(|e| e.message().to_string()));
         value.zeroize();
         put
     })();
-    let _ = match answer {
+    let told = match answer {
         Ok(()) => w.write_all(b"ok\n"),
         Err(why) => w.write_all(format!("no {}\n", why.replace('\n', " ")).as_bytes()),
     };
+    if let Err(e) = told {
+        // serve gave up waiting: the key is held (or refused) either way
+        tracing::debug!(error = %e, "the key answer was not delivered");
+    }
 }
 
 /// What a key request is answered: the key, in locked memory, or a line of text.
@@ -326,10 +340,12 @@ pub fn answer(store: &KeyStore, dir: &Path, wait: Duration, req: &str) -> Answer
     });
     match built {
         Ok(Ok(l)) => {
-            let _ = append(
+            if let Err(e) = append(
                 &dir.join(KEY_USE),
                 &format!("{}\n", serde_json::json!({"name": name, "at": now_s()})),
-            );
+            ) {
+                crate::eline!("sleipnir job-helper: the key-use record: {e}");
+            }
             Answer::Key(l)
         }
         Ok(Err(e)) => {
@@ -338,7 +354,9 @@ pub fn answer(store: &KeyStore, dir: &Path, wait: Duration, req: &str) -> Answer
         Err(Miss::NotListed) => Answer::Text(keyline::not_listed(name)),
         Err(Miss::TimedOut) => {
             // recorded first: by the time drgnx-key exits 75, the record that classifies it is there
-            let _ = append(&dir.join(KEY_TIMEOUT), &format!("{name}\n"));
+            if let Err(e) = append(&dir.join(KEY_TIMEOUT), &format!("{name}\n")) {
+                crate::eline!("sleipnir job-helper: the key-timeout record: {e}");
+            }
             Answer::Text(keyline::TIMEOUT.to_vec())
         }
     }
@@ -374,7 +392,7 @@ pub fn hand(sock: &Path, name: &str, value: &[u8]) -> io::Result<()> {
 
 /// The names in DIR's timeout record.
 pub fn timed_out(dir: &Path) -> Vec<String> {
-    fs::read_to_string(dir.join(KEY_TIMEOUT))
+    crate::fsio::read_to_string(dir.join(KEY_TIMEOUT))
         .unwrap_or_default()
         .lines()
         .filter(|l| !l.is_empty())
@@ -438,7 +456,7 @@ mod tests {
         let a = answer(&s, d.path(), Duration::ZERO, "get A");
         assert!(matches!(a, Answer::Key(_)));
         assert_eq!(a.bytes(), b"ok 8\nsecret-a");
-        let uses = fs::read_to_string(d.path().join(KEY_USE)).unwrap();
+        let uses = crate::fsio::read_to_string(d.path().join(KEY_USE)).unwrap();
         assert!(uses.contains("\"A\"") && !uses.contains("secret"), "{uses}");
         for (req, want) in [
             ("get C", "no the job doesn't name the key C\n"),

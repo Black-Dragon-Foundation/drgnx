@@ -28,7 +28,7 @@ const BUNDLE: &str = "test";
 const WAIT: u64 = 120;
 
 fn ssh_config() -> String {
-    format!("{}/.ssh/config", std::env::var("HOME").unwrap())
+    format!("{}/.ssh/config", std::env::var(stig::HOME_VAR).unwrap())
 }
 
 fn ssh(runner: &str) -> Command {
@@ -41,7 +41,7 @@ fn ssh(runner: &str) -> Command {
 fn sh_status(runner: &str, script: &str) -> (bool, Vec<u8>) {
     let out = ssh(runner).arg(script).output().expect("ssh");
     if !out.status.success() {
-        eprintln!(
+        sleipnir::eline!(
             "{runner}: {script}: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         );
@@ -178,20 +178,22 @@ impl Link {
         ))));
         let (tx, rx) = mpsc::channel();
         let pong = w.clone();
-        std::thread::spawn(move || {
+        saman::spawn_thread("fleet-link", move || {
             let mut r = FrameReader::new(BufReader::new(out));
             while let Ok(Some(f)) = r.read() {
                 // the hub answers the runner's ping, as the link does, so an idle row's link stays up
                 if let Frame::Ping { at } = f
                     && let Some(w) = pong.lock().unwrap().as_mut()
                 {
-                    let _ = w.write(&Frame::Pong { at });
+                    // a link already cut has nobody to answer
+                    drop(w.write(&Frame::Pong { at }));
                 }
                 if tx.send(f).is_err() {
                     break;
                 }
             }
-        });
+        })
+        .unwrap();
         Link {
             child,
             w,
@@ -345,8 +347,9 @@ impl Link {
 impl Drop for Link {
     /// The channel is cut: ssh killed, so `serve` gets an EOF without `bye`.
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // already gone is as good as killed
+        drop(self.child.kill());
+        drop(self.child.wait());
     }
 }
 
@@ -658,7 +661,7 @@ mod serve {
         assert!(!a.hello().0, "linger reported on a runner without it");
         assert!(!a.hello().0, "linger reported on the second hello");
         let share = std::env::var("DRGNX_FLEET_SHARE").unwrap();
-        std::fs::write(PathBuf::from(share).join("enable-linger"), b"").unwrap();
+        sleipnir::fsio::write(PathBuf::from(share).join("enable-linger"), b"").unwrap();
         skuld::wait_until("linger on runner 2", WAIT, || {
             (sh(r2, "loginctl show-user $(id -u) --property=Linger --value") == "yes").then_some(())
         });
