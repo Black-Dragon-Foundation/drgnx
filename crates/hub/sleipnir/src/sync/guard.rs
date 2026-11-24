@@ -1,41 +1,46 @@
-//! The runner's disk guard (docs/develop/sleipnir.md, "Disk and caches"; design 6.3).
+//! The runner's disk guard (docs/develop/sleipnir.md, "Disk and caches"; editing-model design §4.8).
 //!
-//! Before every admission it keeps at least 20 GB and 10 % of the runner folder's filesystem free. Below that it
-//! prunes, in the design's order:
+//! It removes only what the disk register ([`super::register`]) holds, never by path pattern. Below the evict floor
+//! ([`DiskRules::evict_below_gb`] free), or while what drgnx keeps is over the owner's quota, it evicts in §4.8's
+//! order:
 //!
-//! 1. collected job folders (or older than 24 h);
+//! 1. job folders the hub has collected (and their outputs);
 //! 2. artifacts no queued job needs;
-//! 3. slots unused for 7 days, target dir first;
-//! 4. caches over their budget, then the others, lowest trust first and least recently used first;
-//! 5. images we pulled that no queued job names.
+//! 3. idle build dirs, least recently used first;
+//! 4. idle slots;
+//! 5. caches over their budget, then the rest, lowest trust first;
+//! 6. unpinned images, keeping the newest two per name.
 //!
-//! Caches over their budget are pruned between jobs even above the floor. `plan` is pure; free space comes from
-//! `statvfs` (`df`), never from adding up sizes, and `apply` re-reads it before every prune it does for the floor.
-//! `apply` never leaves the runner folder and never follows a link: every path is opened component by component with
-//! `O_NOFOLLOW`, and a link is removed as a link. It never removes an image we didn't pull.
+//! Below the floor an item goes only once its kind's age has passed ([`forseti::disk::state_of`]); the quota takes
+//! pinned and young items too, never an active one. The pass stops once the floor is met. Above it, only caches over
+//! their budget are trimmed. `plan` is pure; free space comes from `statvfs` (`df`), never from adding up sizes, and
+//! `apply` re-reads it before every eviction for the floor.
+//!
+//! `apply` re-checks each item before removing it (`live`: a running job, the hub's pins; a slot's and a build dir's
+//! locks) and records every refusal. It waits while IO is under pressure, at most `pace_max_s` per removal. It never
+//! leaves the runner folder and never follows a link: every path is opened component by component with `O_NOFOLLOW`,
+//! and a link is removed as a link. An `unknown` folder is reported and kept. An image the register doesn't hold (one
+//! we didn't pull) is never removed.
 
-use std::collections::BTreeSet;
-use std::ffi::{OsStr, OsString};
-use std::fs;
-use std::io::{self, Write};
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
+use std::io;
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Component, Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::path::{Component, Path};
+use std::time::Duration;
 
-use forseti::JobTrust;
+use forseti::disk::{DiskItem, DiskRules, ItemKind, ItemState, state_of};
 use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, open, openat, statat, unlinkat};
 
-use super::cache::trust_of;
-use super::slot::{Locks, SlotPaths, UNUSED_FOR};
+pub use forseti::disk::{Evict, Evicted, Pins, Why};
+
+use super::register::{Register, epoch_s};
+use super::slot::{Locks, SlotPaths};
 use super::{Result, refused};
 
-/// The floor's fixed part: 20 GB.
-pub const FLOOR_BYTES: u64 = 20_000_000_000;
-/// A job folder this old is pruned like a collected one.
-pub const JOB_FOLDER_AGE: Duration = Duration::from_secs(24 * 3600);
-/// The marker `serve` writes into a job folder once the hub has its results.
-pub const COLLECTED: &str = "collected";
+/// A gigabyte, as §4.8's floors and quotas count it.
+pub const GB: u64 = 1_000_000_000;
 
 /// What `statvfs` says of the runner folder's filesystem, in bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,13 +50,9 @@ pub struct Df {
 }
 
 impl Df {
-    /// The floor: 20 GB and 10 % of the filesystem, whichever is more.
-    pub fn floor(&self) -> u64 {
-        FLOOR_BYTES.max(self.total / 10)
-    }
-
-    pub fn below_floor(&self) -> bool {
-        self.avail < self.floor()
+    /// Whether the filesystem is below R's evict floor.
+    pub fn below_evict(&self, r: &DiskRules) -> bool {
+        self.avail < r.evict_below_gb.saturating_mul(GB)
     }
 }
 
@@ -64,161 +65,244 @@ pub fn df(path: &Path) -> io::Result<Df> {
     })
 }
 
-/// Something under the runner folder the guard may prune. Paths are relative to the folder.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Item {
-    JobFolder {
-        rel: PathBuf,
-        collected: bool,
-    },
-    Artifact {
-        rel: PathBuf,
-        job: String,
-    },
-    /// A slot (`slots/<id>`, `slots-git/<id>`, `slots-target/<id>`).
-    Slot {
-        id: String,
-        unused_for: Duration,
-    },
-    Cache {
-        rel: PathBuf,
-        trust: JobTrust,
-        bytes: u64,
-        budget: u64,
-        last_used: SystemTime,
-    },
-    /// An image in the runner's podman store: its id, and the references we pulled it by (none: not ours).
-    Image {
-        id: String,
-        pulled_as: Vec<String>,
-    },
-}
-
-/// What queued jobs need: artifacts by job id, images by reference.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Needs {
-    pub artifacts: BTreeSet<String>,
-    pub images: BTreeSet<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum What {
-    /// A file or folder under the runner folder, removed whole.
-    Path(PathBuf),
-    /// A slot's checkout and git dir, under its update lock (its target dir is a `Path` before it).
-    Slot(String),
-    /// An image, by id.
-    Image(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Prune {
-    pub what: What,
-    /// Done only while the filesystem is below the floor (otherwise: a cache over its budget).
-    pub for_floor: bool,
-}
-
-/// The prunes for `items`, in the design's order. Above the floor, only caches over their budget.
-pub fn plan(df: Df, items: &[Item], queued_needs: &Needs) -> Vec<Prune> {
-    let floor = df.below_floor();
-    let mut out = Vec::new();
-    let mut push = |what, for_floor| out.push(Prune { what, for_floor });
-    if floor {
-        for i in items {
-            if let Item::JobFolder {
-                rel,
-                collected: true,
-            } = i
-            {
-                push(What::Path(rel.clone()), true);
-            }
-        }
-        for i in items {
-            if let Item::Artifact { rel, job } = i
-                && !queued_needs.artifacts.contains(job)
-            {
-                push(What::Path(rel.clone()), true);
-            }
-        }
-        for i in items {
-            if let Item::Slot { id, unused_for } = i
-                && *unused_for >= UNUSED_FOR
-            {
-                push(What::Path(Path::new("slots-target").join(id)), true);
-                push(What::Slot(id.clone()), true);
-            }
-        }
+/// The step of §4.8's order an item's kind is evicted in (the other lines' kinds, should a runner hold one, last).
+fn step(k: ItemKind) -> u8 {
+    match k {
+        ItemKind::JobFolder | ItemKind::Output => 1,
+        ItemKind::Artifact => 2,
+        ItemKind::BuildDir => 3,
+        ItemKind::Slot => 4,
+        ItemKind::Cache => 5,
+        ItemKind::Image => 6,
+        ItemKind::StreamWorktree
+        | ItemKind::StreamLog
+        | ItemKind::RecordsBackup
+        | ItemKind::StoreBackup
+        | ItemKind::Recording
+        | ItemKind::Unknown => 7,
     }
-    let mut caches: Vec<(u8, SystemTime, &PathBuf, bool)> = items
-        .iter()
-        .filter_map(|i| match i {
-            Item::Cache {
-                rel,
-                trust,
-                bytes,
-                budget,
-                last_used,
-            } => Some((rank(*trust), *last_used, rel, bytes > budget)),
-            _ => None,
-        })
-        .collect();
-    caches.sort();
-    for (_, _, rel, over) in &caches {
-        if *over {
-            push(What::Path((*rel).clone()), false);
-        }
-    }
-    if floor {
-        for (_, _, rel, over) in &caches {
-            if !over {
-                push(What::Path((*rel).clone()), true);
-            }
-        }
-        for i in items {
-            if let Item::Image { id, pulled_as } = i
-                && !pulled_as.is_empty()
-                && !pulled_as.iter().any(|r| queued_needs.images.contains(r))
-            {
-                push(What::Image(id.clone()), true);
-            }
-        }
-    }
-    out
 }
 
 /// Lowest trust first: what a public job wrote is the cheapest to lose.
-fn rank(t: JobTrust) -> u8 {
+fn rank(t: forseti::JobTrust) -> u8 {
     match t {
-        JobTrust::Public => 0,
-        JobTrust::Private => 1,
-        JobTrust::PrivateKeys => 2,
+        forseti::JobTrust::Public => 0,
+        forseti::JobTrust::Private => 1,
+        forseti::JobTrust::PrivateKeys => 2,
     }
 }
 
-/// Does `plan` under the runner folder `root`, re-reading `df` before every prune for the floor and skipping those
-/// once the floor is reached (or `df` fails). Returns each prune tried with its outcome; a failed one (a link in the
-/// way, a slot in use) is skipped.
-pub fn apply(
-    root: &Path,
-    plan: &[Prune],
-    df: &mut dyn FnMut() -> io::Result<Df>,
-) -> Vec<(Prune, io::Result<()>)> {
-    let mut out = Vec::new();
-    for p in plan {
-        if p.for_floor && !df().is_ok_and(|d| d.below_floor()) {
-            continue;
-        }
-        let r = match &p.what {
-            What::Path(rel) => remove_beneath(root, rel),
-            What::Slot(id) => remove_slot(root, id),
-            What::Image(id) => remove_image(id),
-        };
-        out.push((p.clone(), r));
+fn over_budget(i: &DiskItem) -> bool {
+    i.kind == ItemKind::Cache && i.budget_bytes.is_some_and(|b| i.bytes > b)
+}
+
+/// The images that are among the newest `keep` of their name (an image with no name is its own name: kept).
+fn newest_images(items: &[DiskItem], keep: u32) -> BTreeSet<&str> {
+    let mut by_name: BTreeMap<&str, Vec<&DiskItem>> = BTreeMap::new();
+    for i in items.iter().filter(|i| i.kind == ItemKind::Image) {
+        by_name
+            .entry(i.name.as_deref().unwrap_or(&i.id))
+            .or_default()
+            .push(i);
+    }
+    let mut out = BTreeSet::new();
+    for (_, mut v) in by_name {
+        v.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| a.id.cmp(&b.id)));
+        out.extend(v.iter().take(keep as usize).map(|i| i.id.as_str()));
     }
     out
 }
 
-/// Removes `root/rel` whole. Each folder on the way is opened with `O_NOFOLLOW` (a link there fails the prune), and
+/// The evictions for ITEMS at NOW, in §4.8's order: first what the owner's quota needs (OURS, the bytes drgnx keeps,
+/// down to `quota_gb`), then, below the evict floor, every item past its age (`apply` stops these once the floor is
+/// met), then caches over their budget. An active or `unknown` item is never planned.
+pub fn plan(
+    df: Df,
+    ours: u64,
+    items: &[DiskItem],
+    pins: &Pins,
+    r: &DiskRules,
+    now: u64,
+) -> Vec<Evict> {
+    let state = |i: &DiskItem| state_of(i, now, &pins.active, &pins.pinned, r);
+    let newest = newest_images(items, r.keep_images_per_name);
+    let mut order: Vec<&DiskItem> = items
+        .iter()
+        .filter(|i| i.kind != ItemKind::Unknown && state(i) != ItemState::Active)
+        .collect();
+    order.sort_by_key(|i| {
+        let trust = if i.kind == ItemKind::Cache {
+            rank(i.trust)
+        } else {
+            0
+        };
+        let age_key = if i.kind == ItemKind::Image {
+            i.created
+        } else {
+            i.last_used
+        };
+        (step(i.kind), !over_budget(i), trust, age_key, i.id.clone())
+    });
+    let mut out: Vec<Evict> = Vec::new();
+    let mut taken: BTreeSet<&str> = BTreeSet::new();
+    if let Some(q) = r.quota_gb {
+        let cap = q.saturating_mul(GB);
+        let mut kept = ours;
+        for i in &order {
+            if kept <= cap {
+                break;
+            }
+            kept = kept.saturating_sub(i.bytes);
+            taken.insert(&i.id);
+            out.push(Evict {
+                id: i.id.clone(),
+                why: Why::Quota,
+            });
+        }
+    }
+    if df.below_evict(r) {
+        for i in &order {
+            let s = state(i);
+            let may = match i.kind {
+                ItemKind::Image => s != ItemState::Pinned && !newest.contains(i.id.as_str()),
+                ItemKind::Cache if over_budget(i) => s != ItemState::Pinned,
+                _ => s == ItemState::Evictable,
+            };
+            if may && taken.insert(&i.id) {
+                out.push(Evict {
+                    id: i.id.clone(),
+                    why: Why::Floor,
+                });
+            }
+        }
+    }
+    for i in &order {
+        if over_budget(i) && state(i) != ItemState::Pinned && taken.insert(&i.id) {
+            out.push(Evict {
+                id: i.id.clone(),
+                why: Why::CacheBudget,
+            });
+        }
+    }
+    out
+}
+
+/// Carries out PLAN on REG's runner folder. Before an eviction for the floor it re-reads DF and skips the rest of
+/// those once the floor is met (or `df` fails). Before each removal it waits while IO_FULL10 is above
+/// `pace_io_full_pct`, at most `pace_max_s`, then re-checks the item: one not in the register, an `unknown` one, one
+/// LIVE says is in use, a slot or build dir whose lock a job holds, or one behind a link is kept and the refusal
+/// recorded. Every outcome goes to LOG and is returned.
+pub fn apply(
+    reg: &mut Register,
+    plan: &[Evict],
+    live: &dyn Fn(&str) -> bool,
+    df: &mut dyn FnMut() -> villa::Result<Df>,
+    io_full10: &mut dyn FnMut() -> f64,
+    r: &DiskRules,
+    log: &mut dyn FnMut(&Evicted),
+) -> Vec<Evicted> {
+    let mut out = Vec::new();
+    let mut floor_met = false;
+    for e in plan {
+        if e.why == Why::Floor {
+            if floor_met {
+                continue;
+            }
+            if !df().is_ok_and(|d| d.below_evict(r)) {
+                floor_met = true;
+                continue;
+            }
+        }
+        let (kind, bytes, refused) = match reg.get(&e.id) {
+            None => (
+                ItemKind::Unknown,
+                0,
+                Some("not in the disk register".to_string()),
+            ),
+            Some((item, _)) if item.kind == ItemKind::Unknown => (
+                item.kind,
+                item.bytes,
+                Some("an unknown folder: kept".to_string()),
+            ),
+            Some((item, rel)) => {
+                pace(io_full10, r);
+                let refused = if live(&e.id) {
+                    Some("in use".to_string())
+                } else {
+                    remove(reg.root(), &item, &rel).err().map(|e| e.to_string())
+                };
+                (item.kind, item.bytes, refused)
+            }
+        };
+        if refused.is_none() {
+            let mut ids = vec![e.id.clone()];
+            if kind == ItemKind::Slot
+                && let Some(sid) = e.id.strip_prefix("slot:")
+            {
+                ids.push(format!("build:{sid}"));
+            }
+            for id in ids {
+                if let Err(err) = reg.remove(&id) {
+                    tracing::warn!(id, error = %err, "the disk register: an evicted item stays listed");
+                }
+            }
+        }
+        let done = Evicted {
+            id: e.id.clone(),
+            kind,
+            bytes,
+            why: e.why.clone(),
+            at: epoch_s(),
+            refused,
+        };
+        log(&done);
+        out.push(done);
+    }
+    out
+}
+
+/// Waits while IO_FULL10 is above R's pacing threshold, in steps of at most a second, `pace_max_s` at most.
+fn pace(io_full10: &mut dyn FnMut() -> f64, r: &DiskRules) {
+    let max = Duration::from_secs(r.pace_max_s);
+    let start = stund::now();
+    while io_full10() > r.pace_io_full_pct {
+        let waited = stund::now().saturating_sub(start);
+        if waited >= max {
+            break;
+        }
+        stund::sleep_blocking((max - waited).min(Duration::from_secs(1)));
+    }
+}
+
+/// The slot id in REL when REL is `<parent>/<id>`.
+fn slot_id<'a>(rel: &'a Path, parent: &str) -> io::Result<&'a str> {
+    let mut c = rel.components();
+    match (c.next(), c.next(), c.next()) {
+        (Some(Component::Normal(p)), Some(Component::Normal(id)), None) if p == parent => id
+            .to_str()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not a slot id")),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{}: not under {parent}/", rel.display()),
+        )),
+    }
+}
+
+/// Removes ITEM, kept at REL under ROOT. Gone already counts as removed.
+fn remove(root: &Path, item: &DiskItem, rel: &Path) -> io::Result<()> {
+    let r = match item.kind {
+        ItemKind::Image => remove_image(item.id.strip_prefix("image:").unwrap_or("")),
+        ItemKind::Slot => remove_slot(root, slot_id(rel, "slots")?),
+        ItemKind::BuildDir => remove_build_dir(root, slot_id(rel, "slots-target")?),
+        _ => remove_beneath(root, rel),
+    };
+    match r {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        r => r,
+    }
+}
+
+/// Removes `root/rel` whole. Each folder on the way is opened with `O_NOFOLLOW` (a link there fails the removal), and
 /// below it nothing is followed: a link is removed as a link.
 fn remove_beneath(root: &Path, rel: &Path) -> io::Result<()> {
     let names = rel
@@ -272,29 +356,49 @@ fn remove_at(dir: &OwnedFd, name: &OsStr) -> io::Result<()> {
     Ok(())
 }
 
-/// A slot's checkout and git dir, under its update lock: a slot in use is kept.
-fn remove_slot(root: &Path, id: &str) -> io::Result<()> {
+fn slot_paths(root: &Path, id: &str) -> io::Result<SlotPaths> {
     if id.is_empty() || id.contains('/') || id == "." || id == ".." {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a slot id"));
     }
-    let p = SlotPaths {
+    Ok(SlotPaths {
         slot: root.join("slots").join(id),
         git_dir: root.join("slots-git").join(id),
         target: root.join("slots-target").join(id),
-    };
-    let held = Locks::of(&p)
-        .try_update()
-        .map_err(|e| io::Error::other(e.to_string()))?;
-    let Some(_held) = held else {
-        return Err(io::Error::other(format!("slot {id} is in use")));
-    };
-    for d in ["slots", "slots-git"] {
+    })
+}
+
+/// A lock of a slot's, or "in use" when a job holds it.
+fn take(
+    id: &str,
+    what: &str,
+    l: Result<Option<super::slot::Held>>,
+) -> io::Result<super::slot::Held> {
+    l.map_err(|e| io::Error::other(e.to_string()))?
+        .ok_or_else(|| io::Error::other(format!("slot {id}'s {what} is in use")))
+}
+
+/// A slot's checkout, git dir and build dir, under its update and target locks: a slot a job reads or builds in is kept.
+fn remove_slot(root: &Path, id: &str) -> io::Result<()> {
+    let p = slot_paths(root, id)?;
+    let locks = Locks::of(&p);
+    let _update = take(id, "checkout", locks.try_update())?;
+    let _target = take(id, "build dir", locks.try_target())?;
+    for d in ["slots-target", "slots", "slots-git"] {
         match remove_beneath(root, &Path::new(d).join(id)) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
             _ => {}
         }
     }
     Ok(())
+}
+
+/// A slot's build dir, under its update and target locks: one a job reads the slot of or builds into is kept.
+fn remove_build_dir(root: &Path, id: &str) -> io::Result<()> {
+    let p = slot_paths(root, id)?;
+    let locks = Locks::of(&p);
+    let _update = take(id, "checkout", locks.try_update())?;
+    let _target = take(id, "build dir", locks.try_target())?;
+    remove_beneath(root, &Path::new("slots-target").join(id))
 }
 
 /// How long a podman call that only reads or removes may take.
@@ -325,140 +429,10 @@ fn remove_image(id: &str) -> io::Result<()> {
     }
 }
 
-/// The folder's prunable items besides images: job folders, artifacts, slots and caches (each cache's size by a walk
-/// that never follows a link, for its budget only). A link where one of these folders belongs is never followed and
-/// never listed.
-pub fn scan(root: &Path, now: SystemTime, budget: u64) -> Result<Vec<Item>> {
-    let age = |p: &Path| {
-        fs::symlink_metadata(p)
-            .and_then(|m| m.modified())
-            .map(|t| now.duration_since(t).unwrap_or_default())
-    };
-    let mut out = Vec::new();
-    for (name, path) in dirs(&root.join("jobs"))? {
-        let collected =
-            fs::symlink_metadata(path.join(COLLECTED)).is_ok() || age(&path)? >= JOB_FOLDER_AGE;
-        out.push(Item::JobFolder {
-            rel: Path::new("jobs").join(&name),
-            collected,
-        });
-    }
-    for (name, _) in dirs(&root.join("artifacts"))? {
-        let n = name.to_string_lossy();
-        let job = n.rsplit_once('.').map_or(&n[..], |(j, _)| j).to_string();
-        out.push(Item::Artifact {
-            rel: Path::new("artifacts").join(&name),
-            job,
-        });
-    }
-    for (name, path) in dirs(&root.join("slots-git"))? {
-        let unused_for = age(&path.join("used")).or_else(|_| age(&path))?;
-        out.push(Item::Slot {
-            id: name.to_string_lossy().into_owned(),
-            unused_for,
-        });
-    }
-    for (project, pp) in dirs(&root.join("cache"))? {
-        for (t, tp) in dirs(&pp)? {
-            let Some(trust) = t.to_str().and_then(trust_of) else {
-                continue;
-            };
-            for (name, np) in dirs(&tp)? {
-                out.push(Item::Cache {
-                    rel: Path::new("cache").join(&project).join(&t).join(&name),
-                    trust,
-                    bytes: size(&np),
-                    budget,
-                    last_used: fs::symlink_metadata(&np)?.modified()?,
-                });
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// The real folders (never links) in `d`, by name; none when `d` isn't there.
-fn dirs(d: &Path) -> io::Result<Vec<(OsString, PathBuf)>> {
-    let rd = match fs::read_dir(d) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
-        r => r?,
-    };
-    let mut out = Vec::new();
-    for e in rd {
-        let e = e?;
-        if e.file_type()?.is_dir() {
-            out.push((e.file_name(), e.path()));
-        }
-    }
-    out.sort();
-    Ok(out)
-}
-
-/// The bytes of the files under `d`, never following a link.
-fn size(d: &Path) -> u64 {
-    let Ok(rd) = fs::read_dir(d) else { return 0 };
-    rd.flatten()
-        .map(|e| match e.file_type() {
-            Ok(t) if t.is_dir() => size(&e.path()),
-            Ok(t) if t.is_file() => e.metadata().map_or(0, |m| m.len()),
-            _ => 0,
-        })
-        .sum()
-}
-
-/// The images in the runner's podman store, with the references we pulled each by (`<root>/images`).
-pub fn images(root: &Path) -> Result<Vec<Item>> {
-    let ours = pulled(root)?;
-    let out = podman(
-        &["images", "--no-trunc", "--format", "{{.ID}}"],
-        PODMAN_LIMIT,
-    )?;
-    if !out.status.success() {
-        return Err(io::Error::other(format!(
-            "podman images: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ))
-        .into());
-    }
-    let mut ids: Vec<String> = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(|l| bare_id(l).to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
-    ids.sort();
-    ids.dedup();
-    Ok(ids
-        .into_iter()
-        .map(|id| Item::Image {
-            pulled_as: ours
-                .iter()
-                .filter(|(i, _)| *i == id)
-                .map(|(_, r)| r.clone())
-                .collect(),
-            id,
-        })
-        .collect())
-}
-
 fn bare_id(s: &str) -> &str {
     let s = s.trim();
     s.strip_prefix("sha256:").unwrap_or(s)
 }
-
-/// `<root>/images`: one line `<image id> <reference>` per image we pulled.
-fn pulled(root: &Path) -> io::Result<Vec<(String, String)>> {
-    let text = match crate::fsio::read_to_string(root.join(IMAGES)) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
-        r => r?,
-    };
-    Ok(text
-        .lines()
-        .filter_map(|l| l.split_once(' '))
-        .map(|(id, r)| (bare_id(id).to_string(), r.trim().to_string()))
-        .collect())
-}
-
-const IMAGES: &str = "images";
 
 /// An image reference we may pull: `<repository>@sha256:<64 hex>`, its repository on the project's allow-list.
 pub fn check_pull(reference: &str, allow: &[String]) -> Result<()> {
@@ -479,8 +453,30 @@ pub fn check_pull(reference: &str, allow: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Pulls `reference` (checked by `check_pull`) and records it as ours. Jobs run `--pull=never`.
-pub fn pull(root: &Path, reference: &str, allow: &[String]) -> Result<String> {
+/// The register's entry for image ID (podman's id, hex) pulled as REFERENCE for OWNER at NOW: `image:<id>`, named by
+/// its repository, so the guard keeps the newest two per name.
+pub fn image_item(id: &str, reference: &str, owner: &str, now: u64) -> DiskItem {
+    let repo = reference
+        .split_once('@')
+        .map_or(reference, |(r, _)| r)
+        .to_string();
+    DiskItem {
+        id: format!("image:{id}"),
+        kind: ItemKind::Image,
+        owner: owner.to_string(),
+        machine: String::new(),
+        bytes: 0,
+        last_used: now,
+        created: now,
+        name: Some(repo),
+        budget_bytes: None,
+        trust: forseti::JobTrust::PrivateKeys,
+    }
+}
+
+/// Pulls `reference` (checked by `check_pull`) and registers it as ours (`image_item`); returns podman's id. Jobs run
+/// `--pull=never`.
+pub fn pull(reg: &mut Register, reference: &str, allow: &[String], owner: &str) -> Result<String> {
     check_pull(reference, allow)?;
     let out = podman(&["pull", "-q", reference], PULL_LIMIT)?;
     let id = bare_id(
@@ -497,17 +493,22 @@ pub fn pull(root: &Path, reference: &str, allow: &[String]) -> Result<String> {
         ))
         .into());
     }
-    fs::create_dir_all(root)?;
-    let mut f = crate::fsio::append(root.join(IMAGES), true)?;
-    writeln!(f, "{id} {reference}")?;
+    reg.add(image_item(&id, reference, owner, epoch_s()), Path::new(""))
+        .map_err(|e| io::Error::other(e.to_string()))?;
     Ok(id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use forseti::JobTrust;
+    use std::cell::Cell;
+    use std::fs;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
-    const GB: u64 = 1_000_000_000;
+    const NOW: u64 = 10_000_000;
+    const DAY: u64 = 24 * 3600;
 
     fn low() -> Df {
         Df {
@@ -523,154 +524,519 @@ mod tests {
         }
     }
 
-    fn cache(rel: &str, trust: JobTrust, bytes: u64, age_s: u64) -> Item {
-        Item::Cache {
-            rel: rel.into(),
-            trust,
-            bytes,
-            budget: 10 << 30,
-            last_used: SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000 - age_s),
+    fn item(id: &str, kind: ItemKind, age_s: u64) -> DiskItem {
+        DiskItem {
+            id: id.into(),
+            kind,
+            owner: "p".into(),
+            machine: String::new(),
+            bytes: GB,
+            last_used: NOW - age_s,
+            created: NOW - age_s,
+            name: None,
+            budget_bytes: None,
+            trust: JobTrust::Private,
         }
     }
 
-    fn paths(p: &[Prune]) -> Vec<String> {
-        p.iter()
-            .map(|p| match &p.what {
-                What::Path(r) => r.display().to_string(),
-                What::Slot(id) => format!("slot {id}"),
-                What::Image(id) => format!("image {id}"),
-            })
-            .collect()
+    fn cache(id: &str, trust: JobTrust, bytes: u64, age_s: u64) -> DiskItem {
+        DiskItem {
+            trust,
+            bytes,
+            budget_bytes: Some(10 * GB),
+            ..item(id, ItemKind::Cache, age_s)
+        }
     }
 
-    fn mixed() -> Vec<Item> {
-        let week = Duration::from_secs(7 * 24 * 3600);
+    fn image(id: &str, name: &str, created_ago: u64) -> DiskItem {
+        DiskItem {
+            name: Some(name.into()),
+            ..item(id, ItemKind::Image, created_ago)
+        }
+    }
+
+    fn ids(p: &[Evict]) -> Vec<&str> {
+        p.iter().map(|e| e.id.as_str()).collect()
+    }
+
+    fn mixed() -> Vec<DiskItem> {
         vec![
-            Item::Image {
-                id: "ours-needed".into(),
-                pulled_as: vec!["q.io/a@sha256:1".into()],
-            },
-            cache("cache/p/private/old", JobTrust::Private, 1, 500),
-            Item::Slot {
-                id: "fresh".into(),
-                unused_for: week - Duration::from_secs(1),
-            },
-            Item::Artifact {
-                rel: "artifacts/j2.1".into(),
-                job: "j2".into(),
-            },
-            Item::JobFolder {
-                rel: "jobs/run.1".into(),
-                collected: false,
-            },
-            cache("cache/p/public/new", JobTrust::Public, 1, 10),
-            Item::Image {
-                id: "not-ours".into(),
-                pulled_as: vec![],
-            },
-            Item::Slot {
-                id: "stale".into(),
-                unused_for: week,
-            },
-            cache(
-                "cache/p/private+keys/huge",
-                JobTrust::PrivateKeys,
-                11 << 30,
-                1,
-            ),
-            Item::Artifact {
-                rel: "artifacts/j1.1".into(),
-                job: "j1".into(),
-            },
-            Item::JobFolder {
-                rel: "jobs/done.1".into(),
-                collected: true,
-            },
-            cache("cache/p/public/old", JobTrust::Public, 1, 900),
-            Item::Image {
-                id: "ours".into(),
-                pulled_as: vec!["q.io/b@sha256:2".into()],
-            },
+            image("image:a1", "q.io/a", 10),
+            cache("cache:private-old", JobTrust::Private, GB, 4 * DAY),
+            item("slot:fresh", ItemKind::Slot, DAY),
+            item("artifacts/j2.1", ItemKind::Artifact, 4 * DAY),
+            item("jobs/run.1", ItemKind::JobFolder, 10),
+            cache("cache:public-new", JobTrust::Public, GB, 10),
+            image("image:a2", "q.io/a", 20),
+            item("slot:stale", ItemKind::Slot, 4 * DAY),
+            cache("cache:keys-huge", JobTrust::PrivateKeys, 11 * GB, 1),
+            item("artifacts/j1.1", ItemKind::Artifact, 4 * DAY),
+            item("jobs/done.1", ItemKind::JobFolder, 4 * DAY),
+            item("build:old", ItemKind::BuildDir, 2 * DAY),
+            item("build:older", ItemKind::BuildDir, 3 * DAY),
+            item("build:young", ItemKind::BuildDir, 3600),
+            cache("cache:public-old", JobTrust::Public, GB, 5 * DAY),
+            image("image:a3", "q.io/a", 30),
+            item("unknown:jobs/stray", ItemKind::Unknown, 9 * DAY),
         ]
     }
 
-    fn needs() -> Needs {
-        Needs {
-            artifacts: ["j1".to_string()].into(),
-            images: ["q.io/a@sha256:1".to_string()].into(),
+    fn pins() -> Pins {
+        Pins {
+            active: ["jobs/run.1".to_string()].into(),
+            pinned: ["artifacts/j1.1".to_string()].into(),
+            learned_at: None,
         }
     }
 
     // [D] pure
     #[test]
-    fn prunes_in_the_designs_order() {
-        let p = plan(low(), &mixed(), &needs());
+    fn below_the_floor_it_evicts_in_the_designs_order() {
+        let r = DiskRules::standard();
+        let p = plan(low(), 0, &mixed(), &pins(), &r, NOW);
         assert_eq!(
-            paths(&p),
+            ids(&p),
             [
                 "jobs/done.1",
                 "artifacts/j2.1",
-                "slots-target/stale",
-                "slot stale",
-                "cache/p/private+keys/huge",
-                "cache/p/public/old",
-                "cache/p/public/new",
-                "cache/p/private/old",
-                "image ours",
+                "build:older",
+                "build:old",
+                "slot:stale",
+                "cache:keys-huge",
+                "cache:public-old",
+                "cache:private-old",
+                "image:a3",
             ]
         );
-        assert!(!p[4].for_floor, "a cache over its budget goes anyway");
-        assert!(p.iter().enumerate().all(|(i, x)| x.for_floor == (i != 4)));
+        assert!(p.iter().all(|e| e.why == Why::Floor));
+        // above the floor, only a cache over its budget
+        let above = plan(high(), 0, &mixed(), &pins(), &r, NOW);
+        assert_eq!(ids(&above), ["cache:keys-huge"]);
+        assert_eq!(above[0].why, Why::CacheBudget);
+    }
+
+    /// A runner folder with one folder per id, all registered.
+    fn folder(items: &[DiskItem]) -> (tempfile::TempDir, Register) {
+        let t = tempfile::tempdir().unwrap();
+        let mut reg = Register::open(t.path()).unwrap();
+        for i in items {
+            let rel = Path::new("jobs").join(i.id.replace(['/', ':'], "_"));
+            fs::create_dir_all(t.path().join(&rel).join("x")).unwrap();
+            reg.add(i.clone(), &rel).unwrap();
+        }
+        (t, reg)
+    }
+
+    fn calm() -> f64 {
+        0.0
+    }
+
+    // [D] tmpfs root; a fixture df
+    #[test]
+    fn it_stops_once_the_floor_is_met() {
+        let r = DiskRules::standard();
+        let items = [
+            item("jobs/a.1", ItemKind::JobFolder, 4 * DAY),
+            item("jobs/b.1", ItemKind::JobFolder, 4 * DAY),
+            item("jobs/c.1", ItemKind::JobFolder, 4 * DAY),
+        ];
+        let (t, mut reg) = folder(&items);
+        let p = plan(low(), 0, &items, &Pins::default(), &r, NOW);
+        assert_eq!(p.len(), 3);
+        // the first removal frees enough: df reads above the floor from then on
+        let mut reads = vec![high(), high(), low()];
+        let done = apply(
+            &mut reg,
+            &p,
+            &|_| false,
+            &mut || Ok(reads.pop().unwrap()),
+            &mut calm,
+            &r,
+            &mut |_| {},
+        );
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].refused, None);
+        assert!(!t.path().join("jobs/jobs_a.1").exists());
+        assert!(t.path().join("jobs/jobs_b.1/x").exists());
+        assert!(t.path().join("jobs/jobs_c.1/x").exists());
+        assert_eq!(reg.items().len(), 2);
+        // a df that fails stops the floor's evictions too
+        let again = apply(
+            &mut reg,
+            &p[1..],
+            &|_| false,
+            &mut || Err(villa::Error::io("statvfs")),
+            &mut calm,
+            &r,
+            &mut |_| {},
+        );
+        assert!(again.is_empty());
     }
 
     // [D] pure
     #[test]
-    fn trusts_statvfs_not_du() {
-        // the items' sizes add up to far more than the shortfall, or to far less: only df decides
-        let mut items = mixed();
-        items.push(cache("cache/p/public/tiny", JobTrust::Public, 0, 5));
-        let above = plan(high(), &items, &needs());
-        assert_eq!(
-            paths(&above),
-            ["cache/p/private+keys/huge"],
-            "above the floor, budgets only"
-        );
-        let tiny: Vec<Item> = vec![
-            Item::JobFolder {
-                rel: "jobs/a.1".into(),
-                collected: true,
-            },
-            Item::JobFolder {
-                rel: "jobs/b.1".into(),
-                collected: true,
+    fn images_keep_the_newest_two_per_name() {
+        let r = DiskRules::standard();
+        let items = [
+            image("image:a1", "q.io/a", 10),
+            image("image:a2", "q.io/a", 20),
+            image("image:a3", "q.io/a", 30),
+            image("image:a4", "q.io/a", 40),
+            image("image:b1", "q.io/b", 50),
+            image("image:b2", "q.io/b", 60),
+            image("image:c1", "q.io/c", 70),
+            DiskItem {
+                name: None,
+                ..item("image:loose", ItemKind::Image, 80)
             },
         ];
-        assert_eq!(plan(low(), &tiny, &Needs::default()).len(), 2);
-        assert!(high().floor() == 50 * GB && !high().below_floor());
-        assert!(
-            Df {
-                total: 100 * GB,
-                avail: 19 * GB
-            }
-            .below_floor(),
-            "20 GB at least"
+        let mut pinned = Pins::default();
+        assert_eq!(
+            ids(&plan(low(), 0, &items, &pinned, &r, NOW)),
+            ["image:a4", "image:a3"],
+            "the oldest of a name beyond its newest two, oldest first"
         );
+        pinned.pinned.insert("image:a4".into());
+        assert_eq!(ids(&plan(low(), 0, &items, &pinned, &r, NOW)), ["image:a3"]);
+        pinned.active.insert("image:a3".into());
+        assert!(plan(low(), 0, &items, &pinned, &r, NOW).is_empty());
+        assert!(plan(high(), 0, &items, &Pins::default(), &r, NOW).is_empty());
+    }
 
-        // apply re-reads df before each prune for the floor and stops once it is above
-        let t = tempfile::tempdir().unwrap();
-        for d in ["jobs/a.1/x", "jobs/b.1/x"] {
-            std::fs::create_dir_all(t.path().join(d)).unwrap();
-        }
-        let mut reads = vec![high(), low()];
-        let done = apply(
-            t.path(),
-            &plan(low(), &tiny, &Needs::default()),
-            &mut || Ok(reads.pop().unwrap()),
+    // [D] tmpfs root
+    #[test]
+    fn a_cache_over_its_budget_is_trimmed_above_the_floor() {
+        let r = DiskRules::standard();
+        let items = [
+            cache("cache:over", JobTrust::Public, 11 * GB, 10),
+            cache("cache:under", JobTrust::Public, 9 * GB, 9 * DAY),
+            DiskItem {
+                budget_bytes: None,
+                ..cache("cache:unbudgeted", JobTrust::Public, 90 * GB, 10)
+            },
+            cache("cache:over-pinned", JobTrust::Public, 11 * GB, 10),
+        ];
+        let pins = Pins {
+            pinned: ["cache:over-pinned".to_string()].into(),
+            ..Pins::default()
+        };
+        let p = plan(high(), 0, &items, &pins, &r, NOW);
+        assert_eq!(
+            p,
+            [Evict {
+                id: "cache:over".into(),
+                why: Why::CacheBudget
+            }]
         );
-        assert_eq!(done.len(), 1, "the second prune found the floor reached");
-        assert!(done[0].1.is_ok());
-        assert!(!t.path().join("jobs/a.1").exists());
-        assert!(t.path().join("jobs/b.1/x").exists());
+        let (t, mut reg) = folder(&items);
+        // a budget trim does not ask df: it goes above the floor too
+        let done = apply(
+            &mut reg,
+            &p,
+            &|_| false,
+            &mut || panic!("df is not read for a budget trim"),
+            &mut calm,
+            &r,
+            &mut |_| {},
+        );
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].refused, None);
+        assert!(!t.path().join("jobs/cache_over").exists());
+        assert!(t.path().join("jobs/cache_under/x").exists());
+    }
+
+    // [D] pure (RF2)
+    #[test]
+    fn the_owners_quota_evicts_a_pin_but_never_an_active_item() {
+        let r = DiskRules {
+            quota_gb: Some(2),
+            ..DiskRules::standard()
+        };
+        let items = [
+            item("jobs/running.1", ItemKind::JobFolder, 4 * DAY),
+            item("jobs/pinned.1", ItemKind::JobFolder, 10),
+            item("build:young", ItemKind::BuildDir, 10),
+            item("slot:s", ItemKind::Slot, 10),
+        ];
+        let pins = Pins {
+            active: ["jobs/running.1".to_string()].into(),
+            pinned: ["jobs/pinned.1".to_string()].into(),
+            learned_at: None,
+        };
+        // 4 GB kept, a 2 GB quota: two items go, in the order, the pin among them; the running job's never
+        let p = plan(high(), 4 * GB, &items, &pins, &r, NOW);
+        assert_eq!(ids(&p), ["jobs/pinned.1", "build:young"]);
+        assert!(p.iter().all(|e| e.why == Why::Quota));
+        // whatever is over: never the active item
+        let all = plan(low(), 100 * GB, &items, &pins, &r, NOW);
+        assert!(!ids(&all).contains(&"jobs/running.1"), "{all:?}");
+        assert_eq!(all.len(), 3);
+        // under the quota and above the floor: nothing
+        assert!(plan(high(), 2 * GB, &items, &pins, &r, NOW).is_empty());
+    }
+
+    // [D] tmpfs root, real flocks (RF1)
+    #[test]
+    fn a_held_slot_is_never_evicted_even_when_ordered() {
+        let r = DiskRules::standard();
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        let mut reg = Register::open(root).unwrap();
+        for sid in ["read", "built", "live", "free"] {
+            for d in ["slots", "slots-git", "slots-target"] {
+                fs::create_dir_all(root.join(d).join(sid).join("x")).unwrap();
+            }
+            reg.add(
+                item(&format!("slot:{sid}"), ItemKind::Slot, 9 * DAY),
+                &Path::new("slots").join(sid),
+            )
+            .unwrap();
+            reg.add(
+                item(&format!("build:{sid}"), ItemKind::BuildDir, 9 * DAY),
+                &Path::new("slots-target").join(sid),
+            )
+            .unwrap();
+        }
+        let p = |sid: &str| slot_paths(root, sid).unwrap();
+        let reader = Locks::of(&p("read")).read().unwrap();
+        let builder = Locks::of(&p("built")).target().unwrap();
+        let order: Vec<Evict> = ["read", "built", "live", "free"]
+            .iter()
+            .flat_map(|sid| {
+                [
+                    Evict {
+                        id: format!("build:{sid}"),
+                        why: Why::Ordered("test".into()),
+                    },
+                    Evict {
+                        id: format!("slot:{sid}"),
+                        why: Why::Ordered("test".into()),
+                    },
+                ]
+            })
+            .collect();
+        let mut logged = Vec::new();
+        let done = apply(
+            &mut reg,
+            &order,
+            &|id| id.ends_with(":live"),
+            &mut || Ok(low()),
+            &mut calm,
+            &r,
+            &mut |e| logged.push(e.clone()),
+        );
+        drop((reader, builder));
+        assert_eq!(done, logged, "every outcome is logged");
+        let kept: Vec<&str> = done
+            .iter()
+            .filter(|e| e.refused.is_some())
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                "build:read",
+                "slot:read",
+                "build:built",
+                "slot:built",
+                "build:live",
+                "slot:live"
+            ]
+        );
+        for sid in ["read", "built", "live"] {
+            for d in ["slots", "slots-git", "slots-target"] {
+                assert!(root.join(d).join(sid).join("x").exists(), "{d}/{sid}");
+            }
+        }
+        for d in ["slots", "slots-git", "slots-target"] {
+            assert!(!root.join(d).join("free").exists(), "{d}/free");
+        }
+        assert!(reg.get("slot:free").is_none() && reg.get("build:free").is_none());
+        assert!(reg.get("slot:read").is_some());
+    }
+
+    // [D] tmpfs root
+    #[test]
+    fn an_item_behind_a_symlink_or_outside_the_root_is_never_removed() {
+        let r = DiskRules::standard();
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path().join("runner");
+        let outside = t.path().join("outside");
+        fs::create_dir_all(outside.join("x")).unwrap();
+        crate::fsio::write(outside.join("sentinel"), "keep\n").unwrap();
+        crate::fsio::write(outside.join("x/sentinel"), "keep\n").unwrap();
+        fs::create_dir_all(root.join("jobs/a.1")).unwrap();
+        // links a job could leave in its folder: removed as links, never followed
+        std::os::unix::fs::symlink(&outside, root.join("jobs/a.1/dir-link")).unwrap();
+        std::os::unix::fs::symlink(outside.join("sentinel"), root.join("jobs/a.1/file-link"))
+            .unwrap();
+        // a link where the runner's own folder belongs
+        std::os::unix::fs::symlink(&outside, root.join("artifacts")).unwrap();
+        let mut reg = Register::open(&root).unwrap();
+        reg.add(
+            item("jobs/a.1", ItemKind::JobFolder, 9 * DAY),
+            Path::new("jobs/a.1"),
+        )
+        .unwrap();
+        reg.add(
+            item("artifacts/x", ItemKind::Artifact, 9 * DAY),
+            Path::new("artifacts/x"),
+        )
+        .unwrap();
+        reg.add(
+            item("slot:x", ItemKind::Slot, 9 * DAY),
+            Path::new("slots/x"),
+        )
+        .unwrap();
+        // a register edited by hand to name paths outside the folder: the guard refuses them as it finds them
+        let text = crate::fsio::read_to_string(root.join(super::super::register::FILE)).unwrap();
+        let text = text.replacen("\"slots/x\"", "\"../outside/x\"", 1);
+        crate::fsio::write(root.join(super::super::register::FILE), text).unwrap();
+        let mut reg = Register::open(&root).unwrap();
+        let mut hand = reg.get("slot:x").unwrap().0;
+        hand.id = "abs".into();
+        hand.kind = ItemKind::Output;
+        let text = crate::fsio::read_to_string(root.join(super::super::register::FILE)).unwrap();
+        let entry = serde_json::json!({"item": hand, "rel": outside.join("x")});
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        v["items"].as_array_mut().unwrap().push(entry);
+        crate::fsio::write(root.join(super::super::register::FILE), v.to_string()).unwrap();
+        reg = Register::open(&root).unwrap();
+
+        let order: Vec<Evict> = ["jobs/a.1", "artifacts/x", "slot:x", "abs"]
+            .iter()
+            .map(|id| Evict {
+                id: id.to_string(),
+                why: Why::Floor,
+            })
+            .collect();
+        let done = apply(
+            &mut reg,
+            &order,
+            &|_| false,
+            &mut || Ok(low()),
+            &mut calm,
+            &r,
+            &mut |_| {},
+        );
+        let refused: Vec<&str> = done
+            .iter()
+            .filter(|e| e.refused.is_some())
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(refused, ["artifacts/x", "slot:x", "abs"], "{done:?}");
+        assert!(!root.join("jobs/a.1").exists(), "the job folder goes");
+        assert_eq!(
+            crate::fsio::read_to_string(outside.join("sentinel")).unwrap(),
+            "keep\n"
+        );
+        assert_eq!(
+            crate::fsio::read_to_string(outside.join("x/sentinel")).unwrap(),
+            "keep\n"
+        );
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 2);
+    }
+
+    /// A clock whose sleeps pass at once and move it by their length.
+    struct Fast(AtomicU64);
+
+    impl stund::Provider for Fast {
+        fn sleep(
+            &self,
+            d: Duration,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+            self.0.fetch_add(d.as_millis() as u64, Ordering::SeqCst);
+            Box::pin(std::future::ready(()))
+        }
+        fn now(&self) -> Duration {
+            Duration::from_millis(self.0.load(Ordering::SeqCst))
+        }
+    }
+
+    // [D] tmpfs root, a fixture PSI, a test clock
+    #[test]
+    fn removal_waits_on_io_pressure_at_most_60s() {
+        let r = DiskRules::standard();
+        let clock = Arc::new(Fast(AtomicU64::new(0)));
+        let _c = stund::on_this_thread(clock.clone());
+        let items = [
+            item("jobs/a.1", ItemKind::JobFolder, 9 * DAY),
+            item("jobs/b.1", ItemKind::JobFolder, 9 * DAY),
+        ];
+        let (t, mut reg) = folder(&items);
+        // IO stays at 90 %: the removal waits 60 s, then goes
+        let reads = Cell::new(0);
+        let mut hot = || {
+            reads.set(reads.get() + 1);
+            90.0
+        };
+        let p = plan(low(), 0, &items[..1], &Pins::default(), &r, NOW);
+        let done = apply(
+            &mut reg,
+            &p,
+            &|_| false,
+            &mut || Ok(low()),
+            &mut hot,
+            &r,
+            &mut |_| {},
+        );
+        assert_eq!(done[0].refused, None);
+        assert_eq!(stund::now(), Duration::from_secs(60));
+        assert_eq!(reads.get(), 61);
+        assert!(!t.path().join("jobs/jobs_a.1").exists());
+        // IO calms after 3 s: the removal goes then
+        let mut io = [10.0, 30.0, 30.0, 30.0].to_vec();
+        let p = plan(low(), 0, &items[1..], &Pins::default(), &r, NOW);
+        apply(
+            &mut reg,
+            &p,
+            &|_| false,
+            &mut || Ok(low()),
+            &mut || io.pop().unwrap(),
+            &r,
+            &mut |_| {},
+        );
+        assert_eq!(stund::now(), Duration::from_secs(63));
+        assert!(!t.path().join("jobs/jobs_b.1").exists());
+    }
+
+    // [D] tmpfs root
+    #[test]
+    fn an_unknown_item_is_never_removed_even_when_ordered() {
+        let r = DiskRules::standard();
+        let t = tempfile::tempdir().unwrap();
+        fs::create_dir_all(t.path().join("jobs/stray/x")).unwrap();
+        let mut reg = Register::open(t.path()).unwrap();
+        assert_eq!(reg.reconcile().len(), 1);
+        let order = [Evict {
+            id: "unknown:jobs/stray".into(),
+            why: Why::Ordered("test".into()),
+        }];
+        let done = apply(
+            &mut reg,
+            &order,
+            &|_| false,
+            &mut || Ok(low()),
+            &mut calm,
+            &r,
+            &mut |_| {},
+        );
+        assert!(done[0].refused.is_some());
+        assert!(t.path().join("jobs/stray/x").exists());
+        assert!(
+            plan(
+                low(),
+                1 << 50,
+                &reg.items(),
+                &Pins::default(),
+                &DiskRules {
+                    quota_gb: Some(0),
+                    ..r
+                },
+                NOW + 99 * DAY
+            )
+            .is_empty()
+        );
     }
 
     // [D] pure
@@ -696,5 +1062,10 @@ mod tests {
         ] {
             assert!(check_pull(&bad, &allow).is_err(), "{bad}");
         }
+        let i = image_item("ab12", &format!("q.io/x@sha256:{d}"), "p", 5);
+        assert_eq!(
+            (i.id.as_str(), i.name.as_deref()),
+            ("image:ab12", Some("q.io/x"))
+        );
     }
 }

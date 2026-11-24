@@ -8,11 +8,10 @@
 use std::path::{Path, PathBuf};
 
 use forseti::JobTrust;
+use forseti::disk::{DiskItem, ItemKind};
 
+use super::register::Register;
 use super::slot::trust_word;
-
-/// Each writable cache's budget (design 6.3; a setting): above it the guard prunes the cache between jobs.
-pub const BUDGET: u64 = 10 << 30;
 
 /// Where a job's target dir is inside its container.
 pub const TARGET_INSIDE: &str = "/target";
@@ -46,13 +45,6 @@ fn trust_dir(root: &Path, project: &str, trust: JobTrust) -> PathBuf {
         .join(trust_word(trust))
 }
 
-/// The job trust a cache folder's `<trust>` word names.
-pub(crate) fn trust_of(word: &str) -> Option<JobTrust> {
-    [JobTrust::Public, JobTrust::Private, JobTrust::PrivateKeys]
-        .into_iter()
-        .find(|&t| trust_word(t) == word)
-}
-
 /// How a declared cache is shared.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CacheKind {
@@ -68,6 +60,9 @@ pub struct SuiteCache {
     pub name: String,
     pub inside: String,
     pub kind: CacheKind,
+    /// Above this many bytes the guard trims the cache between jobs (the compiler cache:
+    /// [`forseti::disk::COMPILER_CACHE_GB`]); none: only its age and the floor decide.
+    pub budget_bytes: Option<u64>,
 }
 
 /// What `mounts_for` needs to know of a job.
@@ -126,6 +121,41 @@ pub fn mounts_for(job: &CacheJob, suite_caches: &[SuiteCache]) -> Vec<Mount> {
     out
 }
 
+/// Each cache of MOUNTS (`mounts_for`'s for JOB and SUITE_CACHES, in that order after the target dir) in REG's
+/// register, used at NOW, with its declared budget: `cache:<path under the runner folder>`.
+pub fn register(
+    reg: &mut Register,
+    job: &CacheJob,
+    suite_caches: &[SuiteCache],
+    mounts: &[Mount],
+    now: u64,
+) -> villa::Result<()> {
+    let caches = mounts.iter().filter(|m| m.kind == MountKind::Cache);
+    for (m, c) in caches.zip(suite_caches) {
+        let rel = m
+            .host
+            .strip_prefix(reg.root())
+            .map_err(|_| villa::Error::refused("a cache outside the runner folder"))?
+            .to_path_buf();
+        reg.add(
+            DiskItem {
+                id: format!("cache:{}", rel.display()),
+                kind: ItemKind::Cache,
+                owner: job.project.to_string(),
+                machine: String::new(),
+                bytes: 0,
+                last_used: now,
+                created: now,
+                name: Some(c.name.clone()),
+                budget_bytes: c.budget_bytes,
+                trust: job.trust,
+            },
+            &rel,
+        )?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,11 +178,13 @@ mod tests {
                 name: "cargo-home".into(),
                 inside: "/cargo".into(),
                 kind: CacheKind::Shared,
+                budget_bytes: Some(10 << 30),
             },
             SuiteCache {
                 name: "dnf".into(),
                 inside: "/var/cache/dnf".into(),
                 kind: CacheKind::PerJob,
+                budget_bytes: None,
             },
         ]
     }
@@ -244,5 +276,34 @@ mod tests {
         assert!(!at(&a, "/var/cache/dnf").starts_with(at(&b, "/var/cache/dnf")));
         assert!(at(&a, "/var/cache/dnf").starts_with(root.join("cache/drgnx/private")));
         assert_eq!(a.len(), 3);
+    }
+
+    // [D] tmpfs root
+    #[test]
+    fn each_cache_registers_with_its_budget() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        let target = root.join("slots-target/abc");
+        let j = job(root, JobTrust::Public, "a.1", &target);
+        let ms = mounts_for(&j, &caches());
+        let mut reg = Register::open(root).unwrap();
+        register(&mut reg, &j, &caches(), &ms, 7).unwrap();
+        let items = reg.items();
+        assert_eq!(items.len(), 2, "{items:?}");
+        let (cargo, rel) = reg.get("cache:cache/drgnx/public/cargo-home").unwrap();
+        assert_eq!(rel, Path::new("cache/drgnx/public/cargo-home"));
+        assert_eq!(
+            (cargo.kind, cargo.budget_bytes, cargo.trust, cargo.last_used),
+            (ItemKind::Cache, Some(10 << 30), JobTrust::Public, 7)
+        );
+        let dnf = items
+            .iter()
+            .find(|i| i.name.as_deref() == Some("dnf"))
+            .unwrap();
+        assert_eq!(dnf.budget_bytes, None);
+        // a mount outside the runner folder is refused
+        let other = Path::new("/elsewhere");
+        let far = mounts_for(&job(other, JobTrust::Public, "a.1", &target), &caches());
+        assert!(register(&mut reg, &j, &caches(), &far, 8).is_err());
     }
 }

@@ -12,7 +12,7 @@ default = ["runner"]
 # the wire protocol: pure (serde, and `secrecy` for a key's value)
 proto = ["dep:forseti", "dep:serde_json", "dep:secrecy", "dep:zeroize"]
 # input capture, the hardened git and slots: blocking, no tokio
-sync = ["dep:forseti", "dep:sha2", "dep:sha1", "dep:similar", "dep:rustix", "dep:secrecy", "std-owners"]
+sync = ["dep:forseti", "dep:serde_json", "dep:sha2", "dep:sha1", "dep:similar", "dep:rustix", "dep:secrecy", "std-owners"]
 # the probe, the reservation files and the executor: blocking, std, rustix and serde only, no tokio; the probe's
 # facts are the protocol's
 linux = ["proto", "dep:forseti", "dep:serde_json", "dep:rustix", "dep:libc", "std-owners"]

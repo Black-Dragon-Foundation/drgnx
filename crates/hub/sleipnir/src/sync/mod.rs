@@ -5,11 +5,13 @@
 //! - `git`: `Git::cmd`, the only way sleipnir runs git. Hooks and fsmonitor are off, no system or global config is
 //!   read, received objects are checked, and no inherited `GIT_*` variable reaches git.
 //! - `slot`: one checkout per slot key, updated in place through a git dir outside the slot; private copies for
-//!   jobs that write the tree; the locks; the prune of slots unused for 7 days.
+//!   jobs that write the tree; the locks; each slot and its build dir in the disk register.
 //! - `mirror`: the runner's bare mirror per repository, fed by an origin fetch, a bundle or the hub's push
 //!   (`git_receive`); `cred`: the origin's token or deploy key, served to git from memory only.
 //! - `bundle`: a resumable bundle's receiver; `blobs`: the overlay's content-addressed store.
-//! - `cache`: caches partitioned by trust; `guard`: the disk guard's prune plan and its link-proof removal.
+//! - `cache`: caches partitioned by trust, each registered with its budget.
+//! - `register`: the disk register, one entry per item drgnx made under the runner folder; `guard`: the disk guard's
+//!   eviction plan over it (§4.8's order, ages, quota and pins) and its paced, link-proof removal.
 //! - `returned`: what a job that wrote its private copy gives back: its changes as a patch, its outputs as a
 //!   ustar archive, read from the copy as data.
 
@@ -26,6 +28,7 @@ pub mod cred;
 pub mod git;
 pub mod guard;
 pub mod mirror;
+pub mod register;
 pub mod returned;
 pub mod slot;
 

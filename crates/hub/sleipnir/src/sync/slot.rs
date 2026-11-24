@@ -16,18 +16,16 @@ use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
 
 use forseti::JobTrust;
+use forseti::disk::{DiskItem, ItemKind};
 use rustix::fs::FlockOperation;
 use sha2::{Digest, Sha256};
 
 use super::capture::{Entry, Inputs, MODE_EXEC, MODE_FILE, MODE_LINK};
 use super::git::{Git, line, run, spawn};
+use super::register::Register;
 use super::{Result, SyncError, check_path, hex, refused};
-
-/// A slot no job used for this long is pruned (design 6.3).
-pub const UNUSED_FOR: Duration = Duration::from_secs(7 * 24 * 3600);
 
 /// What a slot is shared by: jobs of one project, source worktree, trust and toolchain.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -536,47 +534,35 @@ pub fn hold_for_job(dir: &Path) -> villa::Result<Option<Held>> {
     Ok(Some(held))
 }
 
-/// Removes the slots under `root` unused for `UNUSED_FOR` at `now`, target dir first, except those in `in_use` (slot
-/// directories) and those a lock holds. Returns the slot directories removed.
-pub fn gc(root: &Path, now: SystemTime, in_use: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    let mut removed = Vec::new();
-    let gits = match fs::read_dir(root.join("slots-git")) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(removed),
-        r => r?,
-    };
-    let mut ids: Vec<_> = gits.collect::<io::Result<Vec<_>>>()?;
-    ids.sort_by_key(|e| e.file_name());
-    for e in ids {
-        if !e.file_type()?.is_dir() {
-            continue;
-        }
-        let id = e.file_name();
-        let p = SlotPaths {
-            slot: root.join("slots").join(&id),
-            git_dir: e.path(),
-            target: root.join("slots-target").join(&id),
-        };
-        if in_use.contains(&p.slot) {
-            continue;
-        }
-        let used = fs::metadata(p.git_dir.join("used"))
-            .or_else(|_| fs::metadata(&p.git_dir))?
-            .modified()?;
-        if now.duration_since(used).unwrap_or_default() < UNUSED_FOR {
-            continue;
-        }
-        let Some(_held) = Locks::of(&p).try_update()? else {
-            continue;
-        };
-        for d in [&p.target, &p.slot, &p.git_dir] {
-            match fs::remove_dir_all(d) {
-                Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
-                _ => {}
-            }
-        }
-        removed.push(p.slot);
+/// Slot KEY (its directories P, under REG's runner folder) and its build dir in the disk register, used at NOW: on
+/// lease and on every use, so the guard ages them from their last job (`slot:<id>`, `build:<id>`).
+pub fn register(reg: &mut Register, p: &SlotPaths, key: &SlotId, now: u64) -> villa::Result<()> {
+    let id = key.id();
+    for (kind, item_id, dir) in [
+        (ItemKind::Slot, format!("slot:{id}"), &p.slot),
+        (ItemKind::BuildDir, format!("build:{id}"), &p.target),
+    ] {
+        let rel = dir
+            .strip_prefix(reg.root())
+            .map_err(|_| villa::Error::refused("a slot outside the runner folder"))?
+            .to_path_buf();
+        reg.add(
+            DiskItem {
+                id: item_id,
+                kind,
+                owner: key.project.clone(),
+                machine: String::new(),
+                bytes: 0,
+                last_used: now,
+                created: now,
+                name: None,
+                budget_bytes: None,
+                trust: key.trust,
+            },
+            &rel,
+        )?;
     }
-    Ok(removed)
+    Ok(())
 }
 
 fn touch(path: &Path) -> io::Result<()> {
@@ -595,7 +581,7 @@ fn remove_if_there(path: &Path) -> io::Result<()> {
 mod tests {
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     use super::super::SyncError;
     use super::super::capture::{self, MODE_FILE};
@@ -954,44 +940,29 @@ mod tests {
         assert_eq!(testutil::tree(&p.slot), before);
     }
 
-    // [D] pure (the locks' own test is tests/slot_locks.rs, alone in its binary)
+    // [D] pure (the guard's removal of slots: sync::guard's tests)
     #[test]
-    fn gc_prunes_only_slots_unused_for_seven_days() {
+    fn a_slot_registers_on_lease_and_touches_on_use() {
         let t = tempfile::tempdir().unwrap();
-        let (repo, _) = testutil::repo(t.path(), &[(b"a", b"a\n")]);
         let root = t.path().join("runner");
-        let [old, held, busy, recent] =
-            ["old", "held", "busy", "recent"].map(|n| paths(&root, &key(n)));
-        for p in [&old, &held, &busy, &recent] {
-            sync(t.path(), &repo, p);
-            fs::create_dir_all(p.target.join("debug")).unwrap();
-        }
-        let now = testutil::fs_now(t.path());
-        for p in [&old, &held, &busy] {
-            backdate(
-                &p.git_dir.join("used"),
-                now - UNUSED_FOR - Duration::from_secs(60),
-            );
-        }
-        backdate(
-            &recent.git_dir.join("used"),
-            now - UNUSED_FOR + Duration::from_secs(60),
+        let k = key("w");
+        let p = paths(&root, &k);
+        let mut reg = Register::open(&root).unwrap();
+        register(&mut reg, &p, &k, 100).unwrap();
+        register(&mut reg, &p, &k, 500).unwrap();
+        let id = k.id();
+        let (slot, rel) = reg.get(&format!("slot:{id}")).unwrap();
+        assert_eq!(
+            (slot.kind, slot.created, slot.last_used, slot.trust),
+            (ItemKind::Slot, 100, 500, JobTrust::Private)
         );
-        let reader = Locks::of(&held).read().unwrap();
-        backdate(
-            &held.git_dir.join("used"),
-            now - UNUSED_FOR - Duration::from_secs(60),
-        );
-
-        let removed = gc(&root, now, std::slice::from_ref(&busy.slot)).unwrap();
-        drop(reader);
-        assert_eq!(removed, vec![old.slot.clone()]);
-        for d in [&old.slot, &old.git_dir, &old.target] {
-            assert!(!d.exists(), "{} is removed", d.display());
-        }
-        for p in [&held, &busy, &recent] {
-            assert!(p.slot.join("a").exists() && p.git_dir.exists() && p.target.exists());
-        }
+        assert_eq!(rel, Path::new("slots").join(&id));
+        let (build, rel) = reg.get(&format!("build:{id}")).unwrap();
+        assert_eq!((build.kind, build.last_used), (ItemKind::BuildDir, 500));
+        assert_eq!(rel, Path::new("slots-target").join(&id));
+        // a slot whose paths are not under the register's folder is refused
+        let elsewhere = paths(&t.path().join("other"), &k);
+        assert!(register(&mut reg, &elsewhere, &k, 600).is_err());
     }
 
     // [D] pure

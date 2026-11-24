@@ -616,8 +616,8 @@ mod tests {
             Ok(()),
             "the host's pressure or disk reached a test build"
         );
-        // the facts are the machine: low disk in them is refused under the profile's floor, as on a real runner
-        facts(&quiet.replace("400", "44"));
+        // the facts are the machine: low disk in them is refused under §4.8's stop floor (20 GB), as on a real runner
+        facts(&quiet.replace("\"disk_free_gb\": 400", "\"disk_free_gb\": 19"));
         assert_eq!(
             admit(
                 &lp(&p),

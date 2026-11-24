@@ -1,6 +1,6 @@
-//! A job's disk watch (the job helper's on Linux, job-exec's on a Mac): every [`EVERY`] it reads the runner folder's free space; below the floor (the larger
-//! of 20 GB and 10 % of the folder's filesystem, `forseti`'s disk guard) the job that grew most since its start is
-//! stopped with `kill_reason("infra: disk")`.
+//! A job's disk watch (the job helper's on Linux, job-exec's on a Mac): every [`EVERY`] it reads the runner folder's
+//! free space; below the stop floor (§4.8's `stop_below_gb`, 20 GB: `forseti::disk::DiskRules`) the job that grew most
+//! since its start is stopped with `kill_reason("infra: disk")`.
 //!
 //! Each running job's helper does the same sum over the runner's `jobs/` folder: a job's growth is its attempt
 //! folder's size now less its size when its helper started (`disk-start`), over the attempts that have a start record
