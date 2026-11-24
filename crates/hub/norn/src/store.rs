@@ -193,7 +193,7 @@ impl CoordDb {
     /// changed (dev, inode).  Blocking for the length of an open: call it from a blocking context (the graph writer's
     /// own tick first).
     pub fn tick(&self) {
-        let mut st = self.state.lock().unwrap();
+        let mut st = saman::lock(&self.state);
         let now = file_id(&self.path);
         let keep = st.id.is_some() && st.id == now;
         if !keep {
@@ -242,7 +242,7 @@ impl CoordDb {
 
     async fn reader(&self) -> Result<Handle, CoordError> {
         self.gate(false).await?;
-        let got = self.state.lock().unwrap().handle.clone();
+        let got = saman::lock(&self.state).handle.clone();
         if let Some(h) = got {
             return Ok(h);
         }
@@ -250,7 +250,7 @@ impl CoordDb {
         if let Err(e) = saman::spawn_blocking("work-db-tick", move || db.tick()).await {
             tracing::warn!(error = %e, "the store's tick did not finish");
         }
-        let got = self.state.lock().unwrap().handle.clone();
+        let got = saman::lock(&self.state).handle.clone();
         got.ok_or_else(|| CoordError::NotReady("work.db is not open yet".into()))
     }
 
@@ -270,17 +270,17 @@ impl CoordDb {
             .graph
             .write(meta, move |tx| match f(tx) {
                 Ok(v) => {
-                    *theirs.lock().unwrap() = Some(Ok(v));
+                    *saman::lock(&theirs) = Some(Ok(v));
                     Ok(())
                 }
                 Err(e) => {
                     let text = e.to_string();
-                    *theirs.lock().unwrap() = Some(Err(e));
+                    *saman::lock(&theirs) = Some(Err(e));
                     Err(WriteError::Refused(text))
                 }
             })
             .await;
-        let theirs = slot.lock().unwrap().take();
+        let theirs = saman::lock(&slot).take();
         match (out, theirs) {
             (_, Some(r)) => r,
             (Ok(_), None) => Err(CoordError::Refused(
@@ -310,15 +310,13 @@ async fn run<R: Send + 'static>(
     let theirs = slot.clone();
     let job = move |c: &Tx| {
         f(c).map_err(|e| {
-            *theirs.lock().unwrap() = Some(e);
+            *saman::lock(&theirs) = Some(e);
             urdr::Error::Aborted
         })
     };
     match handle.read(job).await {
         Ok(v) => Ok(v),
-        Err(urdr::Error::Aborted) => Err(slot
-            .lock()
-            .unwrap()
+        Err(urdr::Error::Aborted) => Err(saman::lock(&slot)
             .take()
             .unwrap_or_else(|| CoordError::Sql("rolled back".into()))),
         Err(e) => Err(e.into()),
@@ -420,182 +418,190 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    #[tokio::test]
-    async fn opens_6_by_migrating_and_reopens_a_replaced_file() {
-        use urdr::graph::{Writer, WriterOpts};
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("work.db");
-        let opts = crate::migrate7::MigrateOpts {
-            backup_dir: dir.path().join("backup"),
-            home: dir.path().join("home"),
-            config_dir: dir.path().join("config"),
-        };
-        let six = |path: &Path, task: &str| {
-            make(path, 6);
-            let c = urdr::Connection::open(path).unwrap();
-            c.execute(
+    #[test]
+    fn opens_6_by_migrating_and_reopens_a_replaced_file() {
+        saman::block_on_current(async {
+            use urdr::graph::{Writer, WriterOpts};
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("work.db");
+            let opts = crate::migrate7::MigrateOpts {
+                backup_dir: dir.path().join("backup"),
+                home: dir.path().join("home"),
+                config_dir: dir.path().join("config"),
+            };
+            let six = |path: &Path, task: &str| {
+                make(path, 6);
+                let c = urdr::Connection::open(path).unwrap();
+                c.execute(
                 "insert into jtask (id, job, n, title, status) values (?1, 'j', 1, 't', 'open')",
                 [task],
             )
             .unwrap();
-        };
-        // A schema-6 file: the graph writer migrates it at start, and the store opens schema 7 with its rows.
-        six(&file, "j#1");
-        let (writer, handle) = Writer::spawn(
-            &file,
-            WriterOpts::default(),
-            crate::migrate7::open_rule(opts),
-        )
-        .unwrap();
-        handle.tick().await;
-        let db = CoordDb::with_graph(handle.clone());
-        assert_eq!(jtasks(&db).await, ["j#1"]);
-        db.write(hub_meta(), |tx| {
-            Ok(tx
-                .sql()
-                .execute("insert into event (at, kind) values (1.0, 'x')", [])?)
-        })
-        .await
-        .unwrap();
-        // A schema-6 write on schema 7 fails: `meta` is a read-only view.
-        assert!(
-            db.write(hub_meta(), |tx| Ok(tx
-                .sql()
-                .execute("insert into meta values ('a', '1')", [])?))
+            };
+            // A schema-6 file: the graph writer migrates it at start, and the store opens schema 7 with its rows.
+            six(&file, "j#1");
+            let (writer, handle) = Writer::spawn(
+                &file,
+                WriterOpts::default(),
+                crate::migrate7::open_rule(opts),
+            )
+            .unwrap();
+            handle.tick().await;
+            let db = CoordDb::with_graph(handle.clone());
+            assert_eq!(jtasks(&db).await, ["j#1"]);
+            db.write(hub_meta(), |tx| {
+                Ok(tx
+                    .sql()
+                    .execute("insert into event (at, kind) values (1.0, 'x')", [])?)
+            })
+            .await
+            .unwrap();
+            // A schema-6 write on schema 7 fails: `meta` is a read-only view.
+            assert!(
+                db.write(hub_meta(), |tx| Ok(tx
+                    .sql()
+                    .execute("insert into meta values ('a', '1')", [])?))
+                    .await
+                    .is_err()
+            );
+            // A replaced file: migrated and opened again at the next tick; the old rows are gone. Its `-wal` and `-shm`
+            // go with it (a WAL left beside a new file would be read into it; connections to the old file never remove
+            // the new one's, as SQLite sees their file moved).
+            let next = dir.path().join("next.db");
+            let replace = |next: &Path| {
+                for ext in ["-wal", "-shm"] {
+                    crate::removed(
+                        std::fs::remove_file(dir.path().join(format!("work.db{ext}"))),
+                        "a stale work.db sidecar",
+                    );
+                }
+                eitri::rename_file(next, &file).unwrap();
+            };
+            six(&next, "j#2");
+            replace(&next);
+            handle.tick().await;
+            db.tick();
+            assert_eq!(jtasks(&db).await, ["j#2"], "the store follows the new file");
+            // Schema 5: the rule's text, from the store as from the writer.
+            make(&next, 5);
+            replace(&next);
+            handle.tick().await;
+            db.tick();
+            let e = db.write(hub_meta(), |_| Ok(())).await.unwrap_err();
+            assert_eq!(
+                e.to_string(),
+                "work.db is schema 5; open it once with drgnx 6 first, or remove it (installs are disposable)"
+            );
+            // A newer schema: readable, never written.
+            make(&next, 99);
+            replace(&next);
+            handle.tick().await;
+            db.tick();
+            assert_eq!(
+                db.write(hub_meta(), |_| Ok(())).await.unwrap_err(),
+                CoordError::ReadOnly { schema: 99 }
+            );
+            db.read(|c| Ok(c.query_row("select count(*) from meta", [], |r| r.get::<_, i64>(0))?))
                 .await
-                .is_err()
-        );
-        // A replaced file: migrated and opened again at the next tick; the old rows are gone. Its `-wal` and `-shm`
-        // go with it (a WAL left beside a new file would be read into it; connections to the old file never remove
-        // the new one's, as SQLite sees their file moved).
-        let next = dir.path().join("next.db");
-        let replace = |next: &Path| {
-            for ext in ["-wal", "-shm"] {
-                crate::removed(
-                    std::fs::remove_file(dir.path().join(format!("work.db{ext}"))),
-                    "a stale work.db sidecar",
-                );
-            }
-            eitri::rename_file(next, &file).unwrap();
-        };
-        six(&next, "j#2");
-        replace(&next);
-        handle.tick().await;
-        db.tick();
-        assert_eq!(jtasks(&db).await, ["j#2"], "the store follows the new file");
-        // Schema 5: the rule's text, from the store as from the writer.
-        make(&next, 5);
-        replace(&next);
-        handle.tick().await;
-        db.tick();
-        let e = db.write(hub_meta(), |_| Ok(())).await.unwrap_err();
-        assert_eq!(
-            e.to_string(),
-            "work.db is schema 5; open it once with drgnx 6 first, or remove it (installs are disposable)"
-        );
-        // A newer schema: readable, never written.
-        make(&next, 99);
-        replace(&next);
-        handle.tick().await;
-        db.tick();
-        assert_eq!(
-            db.write(hub_meta(), |_| Ok(())).await.unwrap_err(),
-            CoordError::ReadOnly { schema: 99 }
-        );
-        db.read(|c| Ok(c.query_row("select count(*) from meta", [], |r| r.get::<_, i64>(0))?))
-            .await
-            .unwrap();
-        saman::spawn_blocking("writer-shutdown", move || writer.shutdown())
-            .await
-            .unwrap();
+                .unwrap();
+            saman::spawn_blocking("writer-shutdown", move || writer.shutdown())
+                .await
+                .unwrap();
+        })
     }
 
-    #[tokio::test]
-    async fn spawn_makes_a_missing_file_schema_7_and_moves_a_6() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("work.db");
-        let db = CoordDb::spawn(&file);
-        db.write(hub_meta(), |tx| {
-            Ok(tx
-                .sql()
-                .execute("insert into event (at, kind) values (1.0, 'x')", [])?)
-        })
-        .await
-        .unwrap();
-        assert!(file.exists());
-        let kv: String = db
-            .read(|c| {
-                Ok(
-                    c.query_row("select value from kv where key = 'schema'", [], |r| {
-                        r.get(0)
-                    })?,
-                )
+    #[test]
+    fn spawn_makes_a_missing_file_schema_7_and_moves_a_6() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("work.db");
+            let db = CoordDb::spawn(&file);
+            db.write(hub_meta(), |tx| {
+                Ok(tx
+                    .sql()
+                    .execute("insert into event (at, kind) values (1.0, 'x')", [])?)
             })
             .await
             .unwrap();
-        assert_eq!(kv, "16");
-        let other = dir.path().join("other").join("work.db");
-        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
-        make(&other, 6);
-        let db = CoordDb::spawn(&other);
-        assert_eq!(jtasks(&db).await.len(), 0);
-        db.write(hub_meta(), |_| Ok(())).await.unwrap();
+            assert!(file.exists());
+            let kv: String = db
+                .read(|c| {
+                    Ok(
+                        c.query_row("select value from kv where key = 'schema'", [], |r| {
+                            r.get(0)
+                        })?,
+                    )
+                })
+                .await
+                .unwrap();
+            assert_eq!(kv, "16");
+            let other = dir.path().join("other").join("work.db");
+            std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+            make(&other, 6);
+            let db = CoordDb::spawn(&other);
+            assert_eq!(jtasks(&db).await.len(), 0);
+            db.write(hub_meta(), |_| Ok(())).await.unwrap();
+        })
     }
 
-    #[tokio::test]
-    async fn writes_never_run_on_the_callers_thread_and_carry_their_author() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("work.db");
-        let db = CoordDb::spawn(&file);
-        let me = std::thread::current().id();
-        let there = db
-            .write(hub_meta(), |_| Ok(std::thread::current().id()))
-            .await
-            .unwrap();
-        assert_ne!(there, me);
-        // A refusal rolls back and comes out as itself.
-        let e = db
-            .write(hub_meta(), |tx| {
-                tx.sql().execute("insert into kv values ('z', '1')", [])?;
-                Err::<(), _>(CoordError::Refused("no".into()))
-            })
-            .await
-            .unwrap_err();
-        assert_eq!(e, CoordError::Refused("no".into()));
-        let n: i64 = db
-            .read(|c| Ok(c.query_row("select count(*) from kv where key = 'z'", [], |r| r.get(0))?))
-            .await
-            .unwrap();
-        assert_eq!(n, 0);
-        // The tx row of a write holds its author.
-        let mut meta = TxMeta::new("agent:s-1", Class::Agent, "mcp:report_edit");
-        meta.session = Some("s-1".into());
-        db.write(meta, |tx| {
-            Ok(tx.sql().execute(
-                "insert into event (at, kind, tx) values (1.0, 'x', ?1)",
-                [tx.id()],
-            )?)
-        })
-        .await
-        .unwrap();
-        let (actor, class, tool, session): (String, String, String, Option<String>) = db
-            .read(|c| {
-                Ok(c.query_row(
-                    "select actor, class, tool, session from tx where id = (select tx from event)",
-                    [],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    #[test]
+    fn writes_never_run_on_the_callers_thread_and_carry_their_author() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("work.db");
+            let db = CoordDb::spawn(&file);
+            let me = std::thread::current().id();
+            let there = db
+                .write(hub_meta(), |_| Ok(std::thread::current().id()))
+                .await
+                .unwrap();
+            assert_ne!(there, me);
+            // A refusal rolls back and comes out as itself.
+            let e = db
+                .write(hub_meta(), |tx| {
+                    tx.sql().execute("insert into kv values ('z', '1')", [])?;
+                    Err::<(), _>(CoordError::Refused("no".into()))
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(e, CoordError::Refused("no".into()));
+            let n: i64 = db
+                .read(|c| {
+                    Ok(c.query_row("select count(*) from kv where key = 'z'", [], |r| r.get(0))?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(n, 0);
+            // The tx row of a write holds its author.
+            let mut meta = TxMeta::new("agent:s-1", Class::Agent, "mcp:report_edit");
+            meta.session = Some("s-1".into());
+            db.write(meta, |tx| {
+                Ok(tx.sql().execute(
+                    "insert into event (at, kind, tx) values (1.0, 'x', ?1)",
+                    [tx.id()],
                 )?)
             })
             .await
             .unwrap();
-        assert_eq!(
-            (
-                actor.as_str(),
-                class.as_str(),
-                tool.as_str(),
-                session.as_deref()
-            ),
-            ("agent:s-1", "agent", "mcp:report_edit", Some("s-1"))
-        );
+            let (actor, class, tool, session): (String, String, String, Option<String>) = db
+                .read(|c| {
+                    Ok(c.query_row(
+                    "select actor, class, tool, session from tx where id = (select tx from event)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                (
+                    actor.as_str(),
+                    class.as_str(),
+                    tool.as_str(),
+                    session.as_deref()
+                ),
+                ("agent:s-1", "agent", "mcp:report_edit", Some("s-1"))
+            );
+        })
     }
 }

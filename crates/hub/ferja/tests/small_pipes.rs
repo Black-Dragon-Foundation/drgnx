@@ -438,13 +438,17 @@ async fn saturate(px: Px) {
 }
 
 /// [C, Linux] The sidecar's shell in-process and the owner's `run`, through 4096-byte pipes and the conmon stand-in.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn both_directions_saturated_through_small_pipes_finish() {
-    saturate(Px::Shell).await;
+#[test]
+fn both_directions_saturated_through_small_pipes_finish() {
+    saman::Executor::new(4).unwrap().block_on(async {
+        saturate(Px::Shell).await;
+    })
 }
 
 /// [C, Linux] The same with the built `drgnx-px` as the sidecar.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_built_binary_through_small_pipes_finishes() {
-    saturate(Px::Binary).await;
+#[test]
+fn the_built_binary_through_small_pipes_finishes() {
+    saman::Executor::new(4).unwrap().block_on(async {
+        saturate(Px::Binary).await;
+    })
 }

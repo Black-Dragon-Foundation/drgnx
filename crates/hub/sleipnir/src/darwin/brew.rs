@@ -134,7 +134,29 @@ pub fn run(args: &[String]) -> i32 {
         }
         Answer::Brew => {
             let real = prefix.join("bin/brew");
-            match std::process::Command::new(&real).args(args).status() {
+            // the real brew with the job's own environment and streams
+            let spec = draugr::Spec {
+                program: real.clone(),
+                args: args.iter().map(Into::into).collect(),
+                env: std::env::vars_os().collect(),
+                cwd: None,
+                stdin_null: false,
+                pass_fds: vec![],
+                new_session: false,
+            };
+            let ran = std::os::fd::AsFd::as_fd(&std::io::stdin())
+                .try_clone_to_owned()
+                .and_then(|stdin| {
+                    let opts = draugr::Opts {
+                        stdin: Some(std::sync::Arc::new(stdin)),
+                        stdout: draugr::Redirect::Inherit,
+                        stderr: draugr::Redirect::Inherit,
+                        ..draugr::Opts::default()
+                    };
+                    draugr::spawn_std(&spec, &opts)
+                })
+                .and_then(|mut c| c.wait());
+            match ran {
                 Ok(s) if s.success() => 0,
                 Ok(s) => {
                     let code = s.code().unwrap_or(1);

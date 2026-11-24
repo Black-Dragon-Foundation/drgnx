@@ -164,7 +164,7 @@ pub fn grow(
     ours: &[RunningJob],
     now: u64,
     g: &Grow,
-    apply: impl FnOnce(&Resize) -> Result<(), String>,
+    apply: impl FnOnce(&Resize) -> villa::Result<()>,
 ) -> Result<Option<Resize>, Refused> {
     let rs = probe.reservations();
     rs.with_admit_lock(|| {
@@ -180,7 +180,7 @@ pub fn grow(
         let mut held = rs
             .read(scheduler, &g.reservation)
             .map_err(|e| Refused::because(format!("the job's reservation: {e}")))?;
-        apply(&r).map_err(Refused::because)?;
+        apply(&r).map_err(|e| Refused::because(e.to_string()))?;
         held.reserve_mib += r.delta_mib();
         rs.put(&held)
             .map_err(|e| Refused::because(format!("the reservation can't be written: {e}")))?;
@@ -474,7 +474,7 @@ mod tests {
         assert_eq!(held(), 2048 + 1024);
         // an apply that fails holds nothing more
         let failed = grow(&lp(&p), &limits(), "drgnx-hubA", &ours, now, &g, |_| {
-            Err("podman update: no".into())
+            Err(villa::Error::unavailable("podman update: no"))
         });
         assert!(failed.unwrap_err().why.contains("podman update"));
         assert_eq!(held(), 3072);

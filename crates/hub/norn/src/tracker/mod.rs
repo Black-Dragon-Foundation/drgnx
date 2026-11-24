@@ -379,9 +379,7 @@ pub fn op_or_roll_back(
     if answer.wrote() {
         return Ok(answer);
     }
-    *kept
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(answer);
+    *saman::lock(kept) = Some(answer);
     Err(refused("the op wrote nothing; rolled back"))
 }
 

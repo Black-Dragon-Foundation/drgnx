@@ -30,5 +30,9 @@ hlaup = { path = "../hlaup", version = "0.1.0" }  # stand-in scripts written and
 eitri.workspace = true
 stig.workspace = true
 skuld = { path = "../skuld", version = "0.1.0" }
+stund = { workspace = true, features = ["test-hooks"] }  # `stop`'s deadline moves when a test says
 tempfile.workspace = true
 
+
+[lints]
+workspace = true

@@ -14,7 +14,7 @@ struct Log(Arc<Mutex<Vec<u8>>>);
 
 impl Write for Log {
     fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(b);
+        saman::lock(&self.0).extend_from_slice(b);
         Ok(b.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -104,7 +104,7 @@ fn pty_bytes_never_logged() {
     assert_eq!(exit, Some(Some(0)));
     assert_eq!(status.0, Some(0));
     assert!(seen.contains("secret-typed"), "the screen reached the hub");
-    let log = String::from_utf8_lossy(&log.0.lock().unwrap()).into_owned();
+    let log = String::from_utf8_lossy(&saman::lock(&log.0)).into_owned();
     assert!(
         log.contains("program output"),
         "the loop logged at trace level: {log}"

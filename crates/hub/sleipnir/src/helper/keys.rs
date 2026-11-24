@@ -168,7 +168,7 @@ impl KeyStore {
     }
 
     fn lock(&self) -> MutexGuard<'_, BTreeMap<String, Locked>> {
-        self.keys.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.keys)
     }
 
     /// Takes NAME's VALUE (locked); a name the job doesn't list, a NUL or an over-long value is refused.
@@ -234,7 +234,7 @@ pub fn bind(dir: &Path, name: &str) -> io::Result<UnixListener> {
     drop(fs::remove_file(&tmp));
     let l = UnixListener::bind(&tmp)?;
     fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
-    fs::rename(&tmp, dir.join(name))?;
+    crate::fsio::rename_socket(&tmp, dir.join(name))?;
     Ok(l)
 }
 

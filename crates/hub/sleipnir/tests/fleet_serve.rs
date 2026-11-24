@@ -18,7 +18,9 @@ use sleipnir::proto::{AttemptInfo, AttemptState, Frame, FrameReader, FrameWriter
 use std::collections::BTreeMap;
 use std::io::BufReader;
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin};
+
+mod support;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 
@@ -31,20 +33,20 @@ fn ssh_config() -> String {
     format!("{}/.ssh/config", std::env::var(stig::HOME_VAR).unwrap())
 }
 
-fn ssh(runner: &str) -> Command {
-    let mut c = Command::new("ssh");
-    c.args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner]);
-    c
+/// `ssh RUNNER ARGS…`.
+fn ssh(runner: &str, args: &[&str]) -> draugr::Spec {
+    let mut all = vec!["-F", "", "-o", "BatchMode=yes", runner];
+    let config = ssh_config();
+    all[1] = &config;
+    all.extend_from_slice(args);
+    support::spec("ssh", &all, &[])
 }
 
 /// Runs SCRIPT on RUNNER as `runner`; its stdout, and whether it succeeded.
 fn sh_status(runner: &str, script: &str) -> (bool, Vec<u8>) {
-    let out = ssh(runner).arg(script).output().expect("ssh");
+    let out = support::run(ssh(runner, &[script]));
     if !out.status.success() {
-        sleipnir::eline!(
-            "{runner}: {script}: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+        sleipnir::eline!("{runner}: {script}: {}", out.stderr.trim());
     }
     (out.status.success(), out.stdout)
 }
@@ -164,14 +166,15 @@ struct Link {
 
 impl Link {
     fn open(runner: &str, root: &str, bundle: &str, hub: &str, prefix: &str) -> Link {
-        let mut child = ssh(runner)
-            .arg(format!(
-                "{root}/bin/{bundle}/sleipnir serve --root {root} --prefix {prefix} --hub-id {hub} --profile dedicated"
-            ))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("ssh");
+        let serve = format!(
+            "{root}/bin/{bundle}/sleipnir serve --root {root} --prefix {prefix} --hub-id {hub} --profile dedicated"
+        );
+        let mut child = support::start(
+            &ssh(runner, &[&serve]),
+            true,
+            draugr::Redirect::Pipe,
+            draugr::Redirect::Inherit,
+        );
         let out = child.stdout.take().unwrap();
         let w = Arc::new(Mutex::new(Some(FrameWriter::new(
             child.stdin.take().unwrap(),
@@ -183,7 +186,7 @@ impl Link {
             while let Ok(Some(f)) = r.read() {
                 // the hub answers the runner's ping, as the link does, so an idle row's link stays up
                 if let Frame::Ping { at } = f
-                    && let Some(w) = pong.lock().unwrap().as_mut()
+                    && let Some(w) = saman::lock(&pong).as_mut()
                 {
                     // a link already cut has nobody to answer
                     drop(w.write(&Frame::Pong { at }));
@@ -204,9 +207,7 @@ impl Link {
     }
 
     fn send(&mut self, f: &Frame) {
-        self.w
-            .lock()
-            .unwrap()
+        saman::lock(&self.w)
             .as_mut()
             .expect("the channel is open")
             .write(f)
@@ -334,7 +335,7 @@ impl Link {
 
     /// The local end of the channel closes (EOF for `serve`); the process ends.
     fn close(mut self) {
-        drop(self.w.lock().unwrap().take());
+        drop(saman::lock(&self.w).take());
         self.wait_exit();
     }
 

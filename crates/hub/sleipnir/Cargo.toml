@@ -54,10 +54,12 @@ name = "sleipnir"
 path = "src/main.rs"
 required-features = ["linux"]
 
-# what a keyed job runs in front of its command: std only, so its static build starts in any image
+# what a keyed job runs in front of its command: villa, annall and draugr only (no tokio), so its static build starts
+# in any image
 [[bin]]
 name = "drgnx-key"
 path = "src/bin/drgnx-key.rs"
+required-features = ["std-owners"]
 
 # the job helper's rows inside a fake runner: its keys, its socket, its disk watch, drgnx-key in a container
 [[test]]
@@ -96,3 +98,6 @@ hlaup = { path = "../hlaup", version = "0.1.0" }  # stand-in scripts written and
 skuld = { path = "../skuld", version = "0.1.0" }
 tempfile.workspace = true
 proptest.workspace = true
+
+[lints]
+workspace = true

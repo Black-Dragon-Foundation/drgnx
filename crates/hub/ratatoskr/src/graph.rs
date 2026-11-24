@@ -158,7 +158,7 @@ async fn resolve(dirs: Vec<PathBuf>) -> Result<ProjectCache, Error> {
     crate::clock::blocking(move || {
         let mut cache = ProjectCache::default();
         for d in &dirs {
-            cache.fill(d)?;
+            cache.fill(d).map_err(|e| e.to_string())?;
         }
         Ok::<_, String>(cache)
     })
@@ -1382,7 +1382,8 @@ async fn allow(w: &Writer, tools: Option<&Coord>, caller: &Caller, a: Allowed, n
     let proposed = match tools {
         Some(t) => norn::tools::settings::propose(t, &a.caller, &a.change, req, Duration::ZERO)
             .await
-            .map(drop),
+            .map(drop)
+            .map_err(|e| e.to_string()),
         None => Err("the hub's tools are not open".to_string()),
     };
     let (grant, once, card, actor) = (a.grant, a.once, a.card, a.caller.actor.clone());

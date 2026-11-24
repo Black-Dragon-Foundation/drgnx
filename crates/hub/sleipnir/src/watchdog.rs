@@ -383,20 +383,10 @@ impl Args {
     }
 }
 
-/// A small regular file's text, read without following a link and without blocking on a FIFO; none otherwise.
+/// A small regular file's text, read without following a link and without blocking on a FIFO; none otherwise (a file
+/// above [`MAX_READ`] too).
 pub fn read_small(path: &Path) -> Option<String> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let f = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
-    if !f.metadata().ok()?.is_file() {
-        return None;
-    }
-    let mut s = String::new();
-    f.take(MAX_READ).read_to_string(&mut s).ok()?;
-    Some(s)
+    eitri::read_string(path, MAX_READ).ok()
 }
 
 /// Writes TEXT to DIR/NAME by rename (a new file each time: never through a link).

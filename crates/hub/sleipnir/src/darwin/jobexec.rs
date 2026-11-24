@@ -24,9 +24,8 @@ use forseti::Verdict;
 use forseti::classify::{ExitEvidence, infra};
 use std::fs;
 use std::io::Read;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 /// How often job-exec looks at the command, the clock and the kill reason.
@@ -128,58 +127,59 @@ fn run_unchecked(dir: &Path, spec: &JobExec, refused: Option<String>) -> (Result
         match log {
             Err(e) => seen.setup = Some(format!("the log {}: {e}", spec.log.display())),
             Ok(log) => {
-                let mut cmd = Command::new(&spec.argv[0]);
-                cmd.args(&spec.argv[1..])
-                    .env_clear()
-                    .envs(spec.env.iter().map(|(k, v)| (k, v)))
-                    .stdin(Stdio::null());
+                let mut env: Vec<(std::ffi::OsString, std::ffi::OsString)> =
+                    spec.env.iter().map(|(k, v)| (k.into(), v.into())).collect();
                 // a pipe, copied into the log: under Seatbelt the job can't stat or write its attempt folder's
                 // files, and a pipe has no path
                 let mut copier = None;
+                let mut opts = draugr::Opts::default();
                 match std::io::pipe().and_then(|(r, w)| Ok((r, w.try_clone()?, w))) {
                     Ok((r, out, err)) => {
-                        cmd.stdout(out).stderr(err);
+                        let fd = |w: std::io::PipeWriter| {
+                            std::sync::Arc::new(std::os::fd::OwnedFd::from(w))
+                        };
+                        opts.stdout = draugr::Redirect::To(fd(out));
+                        opts.stderr = draugr::Redirect::To(fd(err));
                         copier = Some(copy_into(r, log));
                     }
                     Err(e) => seen.setup = Some(format!("the log's pipe: {e}")),
-                }
-                if let Some(c) = &spec.cwd {
-                    cmd.current_dir(c);
                 }
                 // the marker, from the spec (`sandbox::spec` sets it) or made here: the attempt's folder, unique
                 let marker = match spec.env.iter().find(|(k, _)| k == MARKER) {
                     Some((_, v)) => v.clone(),
                     None => {
                         let v = dir.display().to_string();
-                        cmd.env(MARKER, &v);
+                        env.push((MARKER.into(), v.clone().into()));
                         v
                     }
                 };
-                if !leads_session() {
-                    // SAFETY: setsid is async-signal-safe and touches nothing of the parent's
-                    unsafe {
-                        cmd.pre_exec(|| {
-                            rustix::process::setsid()
-                                .map(|_| ())
-                                .map_err(std::io::Error::from)
-                        });
-                    }
-                }
                 if seen.setup.is_none() {
+                    // a job-exec that leads no session starts the command in one of its own
+                    let job = draugr::Spec {
+                        program: (&spec.argv[0]).into(),
+                        args: spec.argv[1..].iter().map(Into::into).collect(),
+                        env,
+                        cwd: spec.cwd.clone(),
+                        stdin_null: true,
+                        pass_fds: vec![],
+                        new_session: !leads_session(),
+                    };
                     watch(
                         dir,
                         spec,
-                        &mut cmd,
+                        (job, opts),
                         &format!("{MARKER}={marker}"),
                         t0,
                         &mut seen,
                     );
                 }
-                // our ends of the pipe closed: the copy ends once the job's processes (killed by `watch`) are gone
-                drop(cmd);
+                // our ends of the pipe closed (`watch` dropped them at the spawn): the copy ends once the job's processes
+                // (killed by `watch`) are gone
                 if let Some(done) = copier {
                     // a timeout is the stray process holding the pipe, which the group's kill ends; nothing to add
-                    done.recv_timeout(DRAIN).ok();
+                    if done.recv_timeout(DRAIN).is_err() {
+                        tracing::debug!("the job's log copy did not end within the drain wait");
+                    }
                 }
             }
         }
@@ -237,14 +237,24 @@ impl Awake {
     }
 }
 
-fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, seen: &mut Seen) {
+fn watch(
+    dir: &Path,
+    spec: &JobExec,
+    (job, opts): (draugr::Spec, draugr::Opts),
+    marker: &str,
+    t0: f64,
+    seen: &mut Seen,
+) {
     // SAFETY: getpid has no failure
     let me = unsafe { libc::getpid() };
     // what the disk watch counts this job's growth from
     if let Err(e) = crate::fsio::write(dir.join(disk::DISK_START), disk::size(dir).to_string()) {
         crate::eline!("sleipnir job-exec: the disk start record: {e}");
     }
-    let mut child = match cmd.spawn() {
+    let started = draugr::spawn_std(&job, &opts);
+    // our ends of the log's pipe closed: only the job holds them now
+    drop((job, opts));
+    let mut child = match started {
         Err(e) => {
             seen.setup = Some(format!("{}: {e}", spec.argv[0]));
             return;
@@ -333,7 +343,10 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, s
 fn judge(dir: &Path, spec: &JobExec, seen: &Seen, wall_s: f64) -> ResultJson {
     let mut log = vec![];
     if let Ok(f) = fs::File::open(&spec.log) {
-        let _ = f.take(crate::linux::jobexec::LOG_CAP).read_to_end(&mut log);
+        // what could be read is what the parser gets; a log that ends early is no reason to lose the verdict
+        if let Err(e) = f.take(crate::linux::jobexec::LOG_CAP).read_to_end(&mut log) {
+            tracing::debug!(error = %e, "reading the job's log");
+        }
     }
     let parsed = parse::parse(spec.parser, &log);
     let reason = read_kill_reason(dir);

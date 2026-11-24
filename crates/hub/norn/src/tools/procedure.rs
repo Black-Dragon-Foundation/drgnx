@@ -19,7 +19,7 @@ pub struct ProcedureArgs {
 }
 
 /// The answer for NAME under the job's PACK: the procedure's text, or the names there are.
-pub fn answer(pack: Option<&Pack>, name: Option<&str>) -> Result<String, String> {
+pub(crate) fn answer(pack: Option<&Pack>, name: Option<&str>) -> Result<String, String> {
     let pack = pack.ok_or("your job has no rule pack, so it has no procedures")?;
     let names = || {
         pack.procedures

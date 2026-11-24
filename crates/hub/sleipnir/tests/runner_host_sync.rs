@@ -14,9 +14,10 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+mod support;
 
 use secrecy::SecretString;
 use sleipnir::sync::cred::OriginCred;
@@ -164,33 +165,31 @@ fn serve_one(mut s: TcpStream, root: &Path, auth: &str, hits: &AtomicUsize) {
     }
     hits.fetch_add(1, Ordering::SeqCst);
     let (path, query) = target.split_once('?').unwrap_or((&target, ""));
-    let mut cgi = Command::new("git");
-    cgi.arg("http-backend")
-        .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap())
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_PROJECT_ROOT", root)
-        .env("GIT_HTTP_EXPORT_ALL", "1")
-        .env("PATH_INFO", path)
-        .env("QUERY_STRING", query)
-        .env("REQUEST_METHOD", &method)
-        .env("REMOTE_ADDR", "127.0.0.1")
-        .env("CONTENT_LENGTH", body.len().to_string())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped());
+    let mut vars: Vec<(&str, std::ffi::OsString)> = vec![
+        ("PATH", std::env::var_os("PATH").unwrap()),
+        ("GIT_CONFIG_NOSYSTEM", "1".into()),
+        ("GIT_CONFIG_GLOBAL", "/dev/null".into()),
+        ("GIT_PROJECT_ROOT", root.into()),
+        ("GIT_HTTP_EXPORT_ALL", "1".into()),
+        ("PATH_INFO", path.into()),
+        ("QUERY_STRING", query.into()),
+        ("REQUEST_METHOD", method.as_str().into()),
+        ("REMOTE_ADDR", "127.0.0.1".into()),
+        ("CONTENT_LENGTH", body.len().to_string().into()),
+    ];
     for (h, var) in [
         ("content-type", "CONTENT_TYPE"),
         ("content-encoding", "HTTP_CONTENT_ENCODING"),
         ("git-protocol", "GIT_PROTOCOL"),
     ] {
         if let Some(v) = headers.get(h) {
-            cgi.env(var, v);
+            vars.push((var, v.into()));
         }
     }
-    let mut child = cgi.spawn().unwrap();
-    child.stdin.take().unwrap().write_all(&body).unwrap();
-    let out = child.wait_with_output().unwrap();
+    // exactly these variables: the backend's environment is the request's
+    let mut cgi = support::spec("git", &["http-backend"], &[]);
+    cgi.env = vars.into_iter().map(|(k, v)| (k.into(), v)).collect();
+    let out = support::run_with_input(cgi, &body);
     let o = out.stdout;
     let split = o
         .windows(4)
@@ -244,7 +243,7 @@ fn files_holding(dir: &Path, needles: &[&[u8]], found: &mut Vec<PathBuf>) {
 #[test]
 #[ignore = "runner-host"]
 fn origin_fetch_with_a_token_leaves_no_file() {
-    let home = PathBuf::from(std::env::var_os(stig::HOME_VAR).expect("HOME"));
+    let home = PathBuf::from(std::env::var_os(stig::HOME_VAR).expect("the home variable"));
     let work = tempfile::tempdir().unwrap();
     let origin = work.path().join("origin.git");
     let src = work.path().join("src");
@@ -396,7 +395,7 @@ fn processes_naming(needle: &str) -> Vec<u32> {
 #[test]
 #[ignore = "runner-host"]
 fn origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent() {
-    let home = PathBuf::from(std::env::var_os(stig::HOME_VAR).expect("HOME"));
+    let home = PathBuf::from(std::env::var_os(stig::HOME_VAR).expect("the home variable"));
     let work = tempfile::tempdir().unwrap();
     let w = work.path();
     let src = w.join("src");
@@ -454,19 +453,26 @@ fn origin_fetch_with_a_deploy_key_leaves_no_file_and_no_agent() {
         let ok =
             sleipnir::tool::limited(Path::new("mkfifo"), &[w.join("go")], &[], TOOL_LIMIT).unwrap();
         assert!(ok.status.success());
-        let mut c = Command::new(sleipnir_bin());
-        c.args(["sync-fetch", "--root"])
-            .arg(&root)
-            .args(["--repo", "o", "--url", &url])
-            .env("PATH", &path)
-            .env("FAKE_SSH_DIR", w)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped());
+        let mut extra: Vec<(&str, &std::ffi::OsStr)> =
+            vec![("PATH", path.as_ref()), ("FAKE_SSH_DIR", w.as_os_str())];
         if fail {
-            c.env("FAKE_SSH_FAIL", "1");
+            extra.push(("FAKE_SSH_FAIL", "1".as_ref()));
         }
-        let mut child = c.spawn().unwrap();
+        let args: Vec<&std::ffi::OsStr> = vec![
+            "sync-fetch".as_ref(),
+            "--root".as_ref(),
+            root.as_os_str(),
+            "--repo".as_ref(),
+            "o".as_ref(),
+            "--url".as_ref(),
+            url.as_ref(),
+        ];
+        let mut child = support::start(
+            &support::spec(sleipnir_bin(), &args, &extra),
+            true,
+            draugr::Redirect::Null,
+            draugr::Redirect::Pipe,
+        );
         child
             .stdin
             .take()

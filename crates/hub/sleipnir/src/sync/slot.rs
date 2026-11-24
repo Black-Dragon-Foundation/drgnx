@@ -31,7 +31,7 @@ pub const UNUSED_FOR: Duration = Duration::from_secs(7 * 24 * 3600);
 
 /// What a slot is shared by: jobs of one project, source worktree, trust and toolchain.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct SlotKey {
+pub struct SlotId {
     pub project: String,
     pub worktree: String,
     pub trust: JobTrust,
@@ -77,11 +77,11 @@ pub enum CopyKind {
     Plain,
 }
 
-impl SlotKey {
+impl SlotId {
     /// The slot key of a job: its project, the hub's worktree, its trust; one toolchain for now. The runner names a
     /// slot by it, and the hub knows from it whether a runner's `ready` lists the job's slot.
-    pub fn of(spec: &forseti::JobSpec) -> SlotKey {
-        SlotKey {
+    pub fn of(spec: &forseti::JobSpec) -> SlotId {
+        SlotId {
             project: spec.project.as_str().to_string(),
             worktree: spec.tree.display().to_string(),
             trust: spec.trust,
@@ -130,7 +130,7 @@ pub fn present(root: &Path) -> Vec<String> {
 }
 
 /// The slot's directories under the runner folder `root`.
-pub fn paths(root: &Path, key: &SlotKey) -> SlotPaths {
+pub fn paths(root: &Path, key: &SlotId) -> SlotPaths {
     let id = key.id();
     SlotPaths {
         slot: root.join("slots").join(&id),
@@ -196,7 +196,7 @@ pub fn update(p: &SlotPaths, mirror: &Path, commit: &str, overlay: &Overlay) -> 
     remove_if_there(&next)?;
     let with_next = |args: &[&str]| {
         let mut c = git.cmd(args);
-        c.env("GIT_INDEX_FILE", &next);
+        super::git::set_env(&mut c, "GIT_INDEX_FILE", &next);
         c
     };
     run("read the commit", with_next(&["read-tree", commit]), None)?;
@@ -334,9 +334,9 @@ fn copy_tree(src: &Path, dst: &Path, plain: &mut bool) -> Result<()> {
             let meta = r.metadata()?;
             // a Mac clones by name (APFS `fclonefileat` makes the file), elsewhere into an open file (FICLONE)
             let w = if clone_new(&r, &to) {
-                fs::File::options().write(true).open(&to)?
+                crate::fsio::open_existing(&to)?
             } else {
-                let mut w = fs::File::options().write(true).create_new(true).open(&to)?;
+                let mut w = crate::fsio::create_new(&to, 0o600)?;
                 if !clone(&w, &r) {
                     *plain = true;
                     io::copy(&mut r, &mut w)?;
@@ -441,12 +441,7 @@ impl Locks {
 
     fn lock(&self, name: &str, op: FlockOperation) -> Result<Option<Held>> {
         fs::create_dir_all(&self.git_dir)?;
-        let file = fs::File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(self.git_dir.join(name))?;
+        let file = crate::fsio::open_lock(self.git_dir.join(name), 0o666)?;
         match rustix::fs::flock(&file, op) {
             Ok(()) => Ok(Some(Held { _file: file })),
             Err(rustix::io::Errno::WOULDBLOCK) => Ok(None),
@@ -585,11 +580,7 @@ pub fn gc(root: &Path, now: SystemTime, in_use: &[PathBuf]) -> Result<Vec<PathBu
 }
 
 fn touch(path: &Path) -> io::Result<()> {
-    let f = fs::File::options()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)?;
+    let f = crate::fsio::open_lock(path, 0o666)?;
     f.set_modified(stund::wall())
 }
 
@@ -611,8 +602,8 @@ mod tests {
     use super::super::testutil::{self, DirBlobs, HOOKS, marker_script, user_git, write};
     use super::*;
 
-    fn key(n: &str) -> SlotKey {
-        SlotKey {
+    fn key(n: &str) -> SlotId {
+        SlotId {
             project: "p".into(),
             worktree: n.into(),
             trust: JobTrust::Private,
@@ -632,9 +623,7 @@ mod tests {
     }
 
     fn backdate(p: &Path, to: SystemTime) {
-        fs::File::options()
-            .write(true)
-            .open(p)
+        crate::fsio::open_existing(p)
             .unwrap()
             .set_modified(to)
             .unwrap();
@@ -1011,7 +1000,7 @@ mod tests {
         let root = Path::new("/r");
         let a = paths(root, &key("w"));
         assert_eq!(a, paths(root, &key("w")));
-        let other = SlotKey {
+        let other = SlotId {
             trust: JobTrust::PrivateKeys,
             ..key("w")
         };

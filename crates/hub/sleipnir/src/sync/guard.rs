@@ -498,10 +498,7 @@ pub fn pull(root: &Path, reference: &str, allow: &[String]) -> Result<String> {
         .into());
     }
     fs::create_dir_all(root)?;
-    let mut f = fs::File::options()
-        .append(true)
-        .create(true)
-        .open(root.join(IMAGES))?;
+    let mut f = crate::fsio::append(root.join(IMAGES), true)?;
     writeln!(f, "{id} {reference}")?;
     Ok(id)
 }

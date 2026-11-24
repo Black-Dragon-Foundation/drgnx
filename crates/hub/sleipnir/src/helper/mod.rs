@@ -149,14 +149,17 @@ fn serve(a: &Args) -> Result<(), String> {
                     wait: a.key_wait,
                 }) as Arc<dyn ferja::owner::KeySource>
             });
-            Some(net::Relay::start(
-                &a.dir,
-                allow,
-                &h.sidecar_argv,
-                &n.sidecar,
-                h.container.clone(),
-                keys,
-            )?)
+            Some(
+                net::Relay::start(
+                    &a.dir,
+                    allow,
+                    &h.sidecar_argv,
+                    &n.sidecar,
+                    h.container.clone(),
+                    keys,
+                )
+                .map_err(|e| e.to_string())?,
+            )
         }
     };
     #[cfg(not(feature = "runner"))]

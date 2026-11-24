@@ -44,7 +44,7 @@ const GIT_ENV: [&str; 6] = [
 ];
 
 /// What git said: its output when it succeeded, `None` when it ran and failed (not a repository, no `HEAD`).
-pub(crate) type GitAnswer = Result<Option<String>, String>;
+pub(crate) type GitAnswer = villa::Result<Option<String>>;
 
 /// git ARGS in DIR, blocking: its whole output; `Ok(None)` when it ran and failed, or DIR is not a folder; an error
 /// naming git when git is not the trusted one, cannot start, or takes over [`GIT_TIMEOUT`] (it is killed): no answer
@@ -56,18 +56,24 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> GitAnswer {
         return git_at(Path::new(&program), dir, args, GIT_TIMEOUT);
     }
     let program = draugr::git::git_program().map_err(|e| {
-        format!(
+        villa::Error::unavailable(format!(
             "git {} in {}: no trusted git: {e}",
             args.join(" "),
             dir.display()
-        )
+        ))
     })?;
     git_at(&program.path, dir, args, GIT_TIMEOUT)
 }
 
 fn git_at(program: &Path, dir: &Path, args: &[&str], timeout: Duration) -> GitAnswer {
     use draugr::git::{GitCall, Place, command};
-    let fail = |what: String| format!("git {} in {}: {what}", args.join(" "), dir.display());
+    let fail = |what: String| {
+        villa::Error::unavailable(format!(
+            "git {} in {}: {what}",
+            args.join(" "),
+            dir.display()
+        ))
+    };
     if !dir.is_dir() {
         return Ok(None);
     }
@@ -93,8 +99,10 @@ fn git_at(program: &Path, dir: &Path, args: &[&str], timeout: Duration) -> GitAn
     };
     // draugr ends git's whole process group once the timeout has passed
     let out = run_blocking(spec, timeout).map_err(|e| match e.kind() {
-        std::io::ErrorKind::TimedOut => fail(format!(
-            "no answer within {} ms, git was killed",
+        std::io::ErrorKind::TimedOut => villa::Error::timeout(format!(
+            "git {} in {}: no answer within {} ms, git was killed",
+            args.join(" "),
+            dir.display(),
             timeout.as_millis()
         )),
         _ => fail(format!("cannot run: {e}")),
@@ -157,7 +165,7 @@ pub(crate) fn base36(mut v: u64, len: usize) -> String {
 /// folder itself (a repository of dotfiles holds no project, as `hello` rules). An error, naming git, when git
 /// cannot answer (not trusted, cannot start, over its time): never read as "no project". Blocking (runs git): not on
 /// an async worker, never under the writer's lock.
-pub fn resolve(cwd: &Path) -> Result<Option<ProjectRef>, String> {
+pub fn resolve(cwd: &Path) -> villa::Result<Option<ProjectRef>> {
     resolve_by(cwd, git)
 }
 
@@ -165,14 +173,15 @@ pub fn resolve(cwd: &Path) -> Result<Option<ProjectRef>, String> {
 fn resolve_by(
     cwd: &Path,
     git: impl Fn(&Path, &[&str]) -> GitAnswer,
-) -> Result<Option<ProjectRef>, String> {
+) -> villa::Result<Option<ProjectRef>> {
     let Some(top) = git(cwd, &["rev-parse", "--show-toplevel"])? else {
         return Ok(None);
     };
     let Some(top) = first_line(&top) else {
         return Ok(None);
     };
-    let top = std::fs::canonicalize(top).map_err(|e| format!("git's top-level {top}: {e}"))?;
+    let top = std::fs::canonicalize(top)
+        .map_err(|e| villa::Error::io(format!("git's top-level {top}: {e}")).with_source(e))?;
     // A linked worktree's common dir is its main repository's `.git`: the main top-level is its parent.
     let root = git(
         cwd,
@@ -353,7 +362,7 @@ impl ProjectCache {
     /// Resolve DIR now ([`resolve`]: blocking, runs git) and keep the answer; a known `n` is kept while the
     /// resolved id is unchanged. When git cannot answer, nothing is kept (the next look asks again) and the error
     /// is returned.
-    pub fn fill(&mut self, dir: &Path) -> Result<Option<&ProjectRef>, String> {
+    pub fn fill(&mut self, dir: &Path) -> villa::Result<Option<&ProjectRef>> {
         let resolved = resolve(dir)?;
         let n = match (self.dirs.get(dir), &resolved) {
             (Some(Some((old, n))), Some(new)) if old.id == new.id => *n,
@@ -619,7 +628,9 @@ pub(crate) mod tests {
         hlaup::write(&slow, "#!/bin/sh\nsleep 5\n").unwrap();
         // the error names the 300 ms bound it gave up at: the first call, not the sleep's 5 s
         let r = resolve_by(&dir, |d, a| git_at(&slow, d, a, Duration::from_millis(300)));
-        let e = r.expect_err("a git that does not answer is an error");
+        let e = r
+            .expect_err("a git that does not answer is an error")
+            .to_string();
         assert!(
             e.contains("git rev-parse --show-toplevel") && e.contains("no answer within 300 ms"),
             "{e}"
@@ -627,9 +638,10 @@ pub(crate) mod tests {
         // a git that answers "no" is still no project
         let no = d.path().join("no-git");
         hlaup::write(&no, "#!/bin/sh\nexit 128\n").unwrap();
-        assert_eq!(
-            resolve_by(&dir, |d, a| git_at(&no, d, a, Duration::from_secs(5))),
-            Ok(None)
+        assert!(
+            resolve_by(&dir, |d, a| git_at(&no, d, a, Duration::from_secs(5)))
+                .unwrap()
+                .is_none()
         );
     }
 
@@ -637,12 +649,12 @@ pub(crate) mod tests {
     fn outside_a_repo_is_none() {
         let base = tempfile::tempdir().unwrap();
         // Unless the temp folder itself lies in a repository (then there is nothing to show here).
-        if git(base.path(), &["rev-parse", "--show-toplevel"]) == Ok(None) {
-            assert_eq!(resolve(base.path()), Ok(None));
+        if git(base.path(), &["rev-parse", "--show-toplevel"]).is_ok_and(|a| a.is_none()) {
+            assert!(resolve(base.path()).unwrap().is_none());
         }
-        assert_eq!(resolve(&base.path().join("missing")), Ok(None));
+        assert!(resolve(&base.path().join("missing")).unwrap().is_none());
         let mut cache = ProjectCache::default();
-        assert_eq!(cache.fill(&base.path().join("missing")), Ok(None));
+        assert!(cache.fill(&base.path().join("missing")).unwrap().is_none());
         assert_eq!(cache.project_n(&base.path().join("missing")), None);
     }
 

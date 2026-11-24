@@ -121,9 +121,10 @@ impl Relay {
         name: &str,
         container: Option<String>,
         keys: Option<Arc<dyn KeySource>>,
-    ) -> Result<Relay, String> {
+    ) -> villa::Result<Relay> {
         use ferja::owner;
-        let runtime = saman::Executor::new(1).map_err(|e| format!("the relay's runtime: {e}"))?;
+        let runtime = saman::Executor::new(1)
+            .map_err(|e| villa::Error::unavailable(format!("the relay's runtime: {e}")))?;
         let name = name.to_string();
         let dir = dir.to_path_buf();
         let (job_ended, ended) = tokio::sync::oneshot::channel::<()>();
@@ -136,10 +137,10 @@ impl Relay {
             if let Err(e) = owner::wait_ready(&mut out, LISTEN, owner::READY_LIMIT).await {
                 let stderr = sidecar.stderr();
                 sidecar.stop(Path::new("podman"), &name, &[]).await;
-                return Err(format!(
+                return Err(villa::Error::timeout(format!(
                     "The job's proxy did not start within 10 s: {e:?}: {}",
                     stderr.trim()
-                ));
+                )));
             }
             let (streams_tx, streams_rx) = tokio::sync::mpsc::channel(owner::STREAMS_ROOM);
             let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(16);

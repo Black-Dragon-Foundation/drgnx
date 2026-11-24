@@ -115,14 +115,14 @@ pub fn direct_cpus(manager: &Path, slice: &str, cpus: &str) -> villa::Result<()>
         let has = fsio::read_to_string(&control)
             .map_err(|e| villa::Error::io(format!("{}: {e}", control.display())))?;
         if !has.split_whitespace().any(|c| c == "cpuset") {
-            std::fs::write(&control, "+cpuset").map_err(|e| {
+            fsio::write_in_place(&control, "+cpuset").map_err(|e| {
                 villa::Error::io(format!("enabling cpuset in {}: {e}", control.display()))
             })?;
         }
         dir.push(part);
     }
     let file = dir.join("cpuset.cpus");
-    std::fs::write(&file, format!("{cpus}\n"))
+    fsio::write_in_place(&file, format!("{cpus}\n"))
         .map_err(|e| villa::Error::io(format!("{}: {e}", file.display())))
 }
 
@@ -194,7 +194,7 @@ pub fn set_partition(manager: &Path, slice: &str, said: &AtomicBool) -> Partitio
         .join("cpuset.cpus.partition");
     // the kernel takes a write it can't honour and reads back "<mode> invalid (why)"
     let takes = |mode: &str| {
-        std::fs::write(&file, mode).is_ok()
+        fsio::write_in_place(&file, mode).is_ok()
             && fsio::read_to_string(&file)
                 .is_ok_and(|s| s.trim_start().starts_with(mode) && !s.contains("invalid"))
     };
@@ -204,7 +204,7 @@ pub fn set_partition(manager: &Path, slice: &str, said: &AtomicBool) -> Partitio
         Partition::Root
     } else {
         // a kernel that took neither mode may refuse this too; the slice is a member either way
-        drop(std::fs::write(&file, "member"));
+        drop(fsio::write_in_place(&file, "member"));
         Partition::Member
     };
     if p != Partition::Isolated && !said.swap(true, Ordering::Relaxed) {
@@ -373,6 +373,8 @@ mod tests {
             "cpu memory pids\n",
         )
         .unwrap();
+        // a cgroup's control files are there from the start: the write only changes one in place
+        fsio::write(work.join("cpuset.cpus"), "").unwrap();
         direct_cpus(m, "t-work.slice", "2-3").unwrap();
         // a real cgroup file takes "+cpuset" as an edit; the fixture file just holds what was written
         assert_eq!(

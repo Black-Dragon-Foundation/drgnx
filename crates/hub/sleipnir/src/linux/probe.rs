@@ -639,12 +639,7 @@ pub struct PsiTrigger {
 /// `some|full <stall µs> <window µs>` (`some 150000 1000000`).
 pub fn psi_trigger(path: &Path, spec: &str) -> io::Result<PsiTrigger> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
-        .open(path)?;
+    let mut file = crate::fsio::open_existing(path)?;
     let mut bytes = spec.as_bytes().to_vec();
     bytes.push(0);
     file.write_all(&bytes)?;

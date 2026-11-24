@@ -3,7 +3,7 @@
 //! name, so a slot never checks out bytes other than those captured.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use super::slot::Blobs;
@@ -41,17 +41,7 @@ impl Store {
                 "the bytes don't hash to the blob's name",
             ));
         }
-        let tmp = self
-            .dir
-            .join(format!(".{}.{}.tmp", hex(sha), std::process::id()));
-        let mut f = fs::File::options()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-        crate::fsio::rename(&tmp, self.path(sha))?;
+        crate::fsio::write(self.path(sha), bytes)?;
         Ok(())
     }
 }

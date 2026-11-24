@@ -421,30 +421,32 @@ mod core_tests {
         fn notify(&self) {}
     }
 
-    #[tokio::test]
-    async fn a_manager_tool_without_a_hub_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let coord = Arc::new(Coord::new(
-            CoordDb::spawn(dir.path().join("work.db")),
-            Arc::new(NoHub),
-        ));
-        let who = Identity::Session {
-            agent: "a".into(),
-            sid: "s".into(),
-            profile: None,
-            job: None,
-            task: None,
-            home: dir.path().to_path_buf(),
-        };
-        let all = manager_tools();
-        let stop = all.iter().find(|t| t.name() == "agent_stop").unwrap();
-        let args = serde_json::json!({"id": "s1"});
-        stop.check(&args).unwrap();
-        match stop.call(&(coord, who), args).await {
-            ToolResult::Err(text) => {
-                assert_eq!(text, "managers are the hub's: none here")
+    #[test]
+    fn a_manager_tool_without_a_hub_is_refused() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let coord = Arc::new(Coord::new(
+                CoordDb::spawn(dir.path().join("work.db")),
+                Arc::new(NoHub),
+            ));
+            let who = Identity::Session {
+                agent: "a".into(),
+                sid: "s".into(),
+                profile: None,
+                job: None,
+                task: None,
+                home: dir.path().to_path_buf(),
+            };
+            let all = manager_tools();
+            let stop = all.iter().find(|t| t.name() == "agent_stop").unwrap();
+            let args = serde_json::json!({"id": "s1"});
+            stop.check(&args).unwrap();
+            match stop.call(&(coord, who), args).await {
+                ToolResult::Err(text) => {
+                    assert_eq!(text, "managers are the hub's: none here")
+                }
+                _ => panic!("a hub-less tool answered"),
             }
-            _ => panic!("a hub-less tool answered"),
-        }
+        })
     }
 }

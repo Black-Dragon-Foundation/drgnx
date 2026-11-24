@@ -63,11 +63,7 @@ impl Receiver {
             }
         }
         let path = dir.join(&name);
-        let file = fs::File::options()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(&path)?;
+        let file = crate::fsio::append(&path, true)?;
         rustix::fs::flock(&file, FlockOperation::LockExclusive).map_err(io::Error::from)?;
         let mut offset = file.metadata()?.len();
         if offset > want.size {

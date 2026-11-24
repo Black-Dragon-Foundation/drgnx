@@ -8,8 +8,8 @@
 
 pub use forseti::reserve::Reservation;
 use std::fs;
-use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::io;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 /// The reservation directory of one machine (one user's runtime dir).
@@ -62,12 +62,7 @@ impl Reservations {
     /// its own reservation; nobody else admits meanwhile.
     pub fn with_admit_lock<T>(&self, f: impl FnOnce() -> T) -> io::Result<T> {
         self.ensure()?;
-        let lock = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .mode(0o600)
-            .open(self.dir.join("admit.lock"))?;
+        let lock = crate::fsio::open_lock(self.dir.join("admit.lock"), 0o600)?;
         rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)?;
         let out = f();
         rustix::fs::flock(&lock, rustix::fs::FlockOperation::Unlock)?;
@@ -78,22 +73,8 @@ impl Reservations {
     pub fn put(&self, r: &Reservation) -> io::Result<()> {
         self.ensure()?;
         let path = self.file(&r.scheduler, &r.job)?;
-        let tmp = self.files().join(format!(
-            ".{}.{}.{}.tmp",
-            r.scheduler,
-            r.job,
-            std::process::id()
-        ));
         let body = serde_json::to_vec(r).map_err(io::Error::other)?;
-        let mut f = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        f.write_all(&body)?;
-        drop(f);
-        crate::fsio::rename(&tmp, &path)
+        crate::fsio::write(&path, body)
     }
 
     /// SCHEDULER's reservation for JOB.

@@ -160,7 +160,7 @@ struct LogBuf {
 
 impl Log {
     fn buf(&self) -> MutexGuard<'_, LogBuf> {
-        self.inner.buf.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.inner.buf)
     }
 
     /// Adds `drgnx-px: LINE\n`, or counts it as dropped.
@@ -310,7 +310,7 @@ impl<C: Consumer> Shell<C> {
     }
 
     fn lock(&self) -> MutexGuard<'_, State<C>> {
-        self.inner.state.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.inner.state)
     }
 
     /// The owner's hook for a stream the peer opened: its consumer, or `None` to reset it. Called by the reader:

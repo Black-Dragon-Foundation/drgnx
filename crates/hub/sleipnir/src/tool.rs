@@ -30,7 +30,12 @@ const PASSED: [&str; 8] = [
 /// The environment of a tool: [`PASSED`] and the locale from this process's, then ENV.
 pub fn tool_env(env: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
     let set: Vec<(&str, &OsStr)> = env.iter().map(|(k, v)| (*k, OsStr::new(*v))).collect();
-    draugr::env::build(&PASSED, &["LC_"], &set)
+    tool_env_os(&set)
+}
+
+/// [`tool_env`] with values that are not text (paths).
+pub fn tool_env_os(env: &[(&str, &OsStr)]) -> Vec<(OsString, OsString)> {
+    draugr::env::build(&PASSED, &["LC_"], env)
 }
 
 /// A [`draugr::Spec`] for PROGRAM ARGS with ENV added to [`tool_env`] and stdin closed.
@@ -66,5 +71,61 @@ pub fn limited<S: AsRef<OsStr>>(
         ))
         .with_source(e)),
         Err(e) => Err(villa::Error::from(e).with_detail(format!("running {name}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env_of(extra: &[(&str, &str)]) -> String {
+        let out = limited(
+            Path::new("/usr/bin/env"),
+            &[] as &[&str],
+            extra,
+            Duration::from_secs(30),
+        )
+        .unwrap();
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    /// [D] A tool is given the passed variables, the locale and what the caller sets; any other variable of the runner's
+    /// (a key's, a token's) never reaches it.
+    #[test]
+    fn a_variable_outside_the_passed_list_never_reaches_a_tool() {
+        // SAFETY: nextest runs each test in a process of its own, and nothing else here reads the environment
+        unsafe {
+            std::env::set_var("OPENROUTER_API_KEY", "canary-secret");
+            std::env::set_var("LC_ALL", "C.UTF-8");
+        }
+        let seen = env_of(&[("SLEIPNIR_TOOL_SET", "set")]);
+        assert!(!seen.contains("canary-secret"), "{seen}");
+        assert!(seen.lines().any(|l| l.starts_with("PATH=")), "{seen}");
+        assert!(seen.contains("LC_ALL=C.UTF-8"), "{seen}");
+        assert!(seen.contains("SLEIPNIR_TOOL_SET=set"), "{seen}");
+    }
+
+    /// [D] A tool that outlives its limit is killed with everything it started, and the error says it timed out.
+    #[test]
+    fn a_tool_over_its_limit_is_killed_with_its_whole_group() {
+        let d = tempfile::tempdir().unwrap();
+        let pid_file = d.path().join("grandchild.pid");
+        let script = format!("sleep 600 & echo $! > {}; wait", pid_file.display());
+        let e = limited(
+            Path::new("/bin/sh"),
+            &["-c", script.as_str()],
+            &[],
+            Duration::from_millis(500),
+        )
+        .unwrap_err();
+        assert_eq!(e.kind(), villa::Kind::Timeout, "{e:?}");
+        let pid: i32 = crate::fsio::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        skuld::wait_until("the grandchild is gone", 30, || {
+            (!draugr::alive(pid)).then_some(())
+        });
     }
 }

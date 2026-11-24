@@ -2633,7 +2633,7 @@ impl Queue {
         // the pick (with what placement learned and how warm each start would be; no history: the static rule), the
         // head's reservation, then this machine's own admission: held or refused on one machine, the job may still go
         // to another
-        let slot = sleipnir::sync::slot::SlotKey::of(&job.spec).id();
+        let slot = sleipnir::sync::slot::SlotId::of(&job.spec).id();
         let image = q.s.place.image.clone();
         let warmth = |c: &Candidate| Self::warmth(st, &slot, image.as_deref(), c);
         let expect =
@@ -5530,7 +5530,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (q, _rx) = test_queue(dir.path(), None, true);
         let j = job("x1", Priority::P3, 64);
-        let slot = sleipnir::sync::slot::SlotKey::of(&j.spec).id();
+        let slot = sleipnir::sync::slot::SlotId::of(&j.spec).id();
         for r in ["r1", "r2"] {
             add(&q, r, 600);
             hello(&q, r, true, 100);

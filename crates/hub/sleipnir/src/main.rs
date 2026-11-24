@@ -83,7 +83,7 @@ fn main() -> ExitCode {
 fn serve(args: &[&str]) -> ExitCode {
     match sleipnir::serve::Config::parse(args) {
         Ok(cfg) => ExitCode::from(
-            sleipnir::serve::run(cfg, std::io::stdin(), std::io::stdout()).clamp(0, 255) as u8,
+            sleipnir::serve::run(cfg, std::io::stdin(), annall::raw_out()).clamp(0, 255) as u8,
         ),
         Err(e) => {
             sleipnir::eline!("sleipnir serve: {e}\n{USAGE}");
@@ -319,11 +319,10 @@ mod sync {
     use sleipnir::sync::{cred, mirror};
 
     pub fn git_receive(root: &str, repo: &str) -> ExitCode {
-        use std::os::unix::process::CommandExt;
         match mirror::git_receive(Path::new(root), repo) {
             // exec only returns on failure
-            Ok(mut c) => {
-                let e = c.exec();
+            Ok(spec) => {
+                let e = draugr::exec(&spec);
                 sleipnir::eline!("sleipnir git-receive: {e}");
                 ExitCode::from(2)
             }

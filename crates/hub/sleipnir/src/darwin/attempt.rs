@@ -9,9 +9,7 @@ use crate::linux::reserve;
 use std::ffi::OsStr;
 use std::io;
 use std::os::fd::{AsRawFd, BorrowedFd};
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 /// The attempt's pid file: `<pid> <start time>`.
 pub const PID: &str = "job-exec.pid";
@@ -29,30 +27,34 @@ pub fn launch(
     nice: i32,
     keep: &[BorrowedFd<'_>],
 ) -> io::Result<u32> {
-    let keep: Vec<_> = keep.iter().map(|fd| fd.as_raw_fd()).collect();
     let log = crate::fsio::append(dir.join(EXEC_LOG), true)?;
-    let mut c = Command::new(program);
-    c.args(args)
-        .stdin(Stdio::null())
-        .stdout(log.try_clone()?)
-        .stderr(log);
-    // SAFETY: setsid, setpriority and fcntl are async-signal-safe and touch nothing of the parent's (the kept
-    // descriptors' close-on-exec flags are the child's own copies; KEEP was collected before the fork)
-    unsafe {
-        c.pre_exec(move || {
-            rustix::process::setsid().map_err(io::Error::from)?;
-            if nice != 0 && libc::setpriority(libc::PRIO_PROCESS, 0, nice) != 0 {
-                return Err(io::Error::last_os_error());
-            }
-            for &fd in &keep {
-                if libc::fcntl(fd, libc::F_SETFD, 0) != 0 {
-                    return Err(io::Error::last_os_error());
-                }
-            }
-            Ok(())
-        });
-    }
-    let mut child = c.spawn()?;
+    let log = std::sync::Arc::new(std::os::fd::OwnedFd::from(log));
+    // each kept descriptor goes to the child under its own number
+    let pass_fds = keep
+        .iter()
+        .map(|fd| {
+            Ok(draugr::PassFd {
+                fd: std::sync::Arc::new(fd.try_clone_to_owned()?),
+                target: fd.as_raw_fd(),
+            })
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    let spec = draugr::Spec {
+        program: program.to_path_buf(),
+        args: args.iter().map(|a| (*a).to_os_string()).collect(),
+        env: crate::tool::tool_env(&[]),
+        cwd: None,
+        stdin_null: true,
+        pass_fds,
+        new_session: true,
+    };
+    let opts = draugr::Opts {
+        nice: (nice != 0).then_some(nice),
+        stdout: draugr::Redirect::To(log.clone()),
+        stderr: draugr::Redirect::To(log),
+        ..draugr::Opts::default()
+    };
+    let mut child = draugr::spawn_std(&spec, &opts)?;
     let pid = child.id();
     // read before the reaper runs: an exited child stays a zombie (and readable) until it is waited for
     let start = reserve::start_time(pid).unwrap_or(0);

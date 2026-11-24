@@ -12,7 +12,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
@@ -147,29 +146,22 @@ pub(crate) fn serve(root: &Path, cred: &OriginCred, helper: &Path) -> Result<Ser
                     pid: agent.to_string(),
                 },
             };
-            let mut add = Command::new("ssh-add")
-                .args(["-q", "-"])
-                .env("SSH_AUTH_SOCK", &sock)
-                .env("SSH_ASKPASS_REQUIRE", "never")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .spawn()?;
-            {
-                let mut pipe = add.stdin.take().expect("piped");
-                let k = key.expose_secret();
-                pipe.write_all(k.as_bytes())?;
-                if !k.ends_with('\n') {
-                    pipe.write_all(b"\n")?;
-                }
+            let mut input = key.expose_secret().as_bytes().to_vec();
+            if input.last() != Some(&b'\n') {
+                input.push(b'\n');
             }
-            let out = add.wait_with_output()?;
+            let mut add = crate::tool::spec(
+                Path::new("ssh-add"),
+                &["-q", "-"],
+                &[
+                    ("SSH_AUTH_SOCK", sock_arg.as_str()),
+                    ("SSH_ASKPASS_REQUIRE", "never"),
+                ],
+            );
+            add.stdin_null = false;
+            let out = draugr::run_with_input(add, input, AGENT_LIMIT)?;
             if !out.status.success() {
-                return Err(io::Error::other(format!(
-                    "ssh-add: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ))
-                .into());
+                return Err(io::Error::other(format!("ssh-add: {}", out.stderr.trim())).into());
             }
             Ok(served)
         }

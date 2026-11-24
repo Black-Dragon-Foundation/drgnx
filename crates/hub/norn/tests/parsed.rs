@@ -644,85 +644,87 @@ fn updates_refuse_other_fields() {
     );
 }
 
-#[tokio::test]
-async fn record_with_collected_is_idempotent() {
-    let f = fx();
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("work.db");
-    let db = CoordDb::spawn(&path);
-    let w = db.graph_writer().unwrap().clone();
-    let deny = Arc::new(f.deny);
-    let p = f.plan.clone();
-    let req: PutParsed =
-        serde_json::from_value(json!({"sources": [plan_source(&p)], "collected": ["job j3"]}))
-            .unwrap();
-    let d = deny.clone();
-    w.write(scan(), move |tx| parsed::put(tx, &d, req))
-        .await
-        .unwrap();
-    let repo = Path::new(&p).parent().unwrap().display().to_string();
-    let record = |key: &str| -> (TxMeta, Record) {
-        let mut meta = TxMeta::new("hub", Class::System, "proto:graph/record");
-        meta.req = Some(key.into());
-        let req: Record = serde_json::from_value(json!({
-            "task": format!("task:{p}#1"), "repo": repo, "collected": key,
-            "commits": [{"sha": "aaaa1111", "date": 2.0, "subject": "two", "seq": -1},
-                        {"sha": "bbbb2222", "date": 1.0, "subject": "one", "seq": -2}]
-        }))
-        .unwrap();
-        (meta, req)
-    };
-    let mut answers = Vec::new();
-    for _ in 0..2 {
-        let (meta, req) = record("job j1");
+#[test]
+fn record_with_collected_is_idempotent() {
+    saman::block_on_current(async {
+        let f = fx();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("work.db");
+        let db = CoordDb::spawn(&path);
+        let w = db.graph_writer().unwrap().clone();
+        let deny = Arc::new(f.deny);
+        let p = f.plan.clone();
+        let req: PutParsed =
+            serde_json::from_value(json!({"sources": [plan_source(&p)], "collected": ["job j3"]}))
+                .unwrap();
         let d = deny.clone();
-        answers.push(
-            w.write(meta, move |tx| {
+        w.write(scan(), move |tx| parsed::put(tx, &d, req))
+            .await
+            .unwrap();
+        let repo = Path::new(&p).parent().unwrap().display().to_string();
+        let record = |key: &str| -> (TxMeta, Record) {
+            let mut meta = TxMeta::new("hub", Class::System, "proto:graph/record");
+            meta.req = Some(key.into());
+            let req: Record = serde_json::from_value(json!({
+                "task": format!("task:{p}#1"), "repo": repo, "collected": key,
+                "commits": [{"sha": "aaaa1111", "date": 2.0, "subject": "two", "seq": -1},
+                            {"sha": "bbbb2222", "date": 1.0, "subject": "one", "seq": -2}]
+            }))
+            .unwrap();
+            (meta, req)
+        };
+        let mut answers = Vec::new();
+        for _ in 0..2 {
+            let (meta, req) = record("job j1");
+            let d = deny.clone();
+            answers.push(
+                w.write(meta, move |tx| {
+                    parsed::record(tx, &d, &mut ProjectCache::default(), req)
+                })
+                .await
+                .unwrap(),
+            );
+        }
+        assert_eq!(answers[0].value.ids, ["commit:aaaa1111", "commit:bbbb2222"]);
+        assert!(!answers[0].replayed);
+        assert!(answers[1].replayed);
+        assert_eq!(answers[1].value, answers[0].value);
+        // a key the collector kept before (here through a put) writes nothing
+        let (meta, req) = record("job j3");
+        let d = deny.clone();
+        let third = w
+            .write(meta, move |tx| {
                 parsed::record(tx, &d, &mut ProjectCache::default(), req)
             })
             .await
-            .unwrap(),
+            .unwrap();
+        assert!(third.value.ids.is_empty());
+        let c = Connection::open(&path).unwrap();
+        assert_eq!(
+            count(&c, "select count(*) from entity where kind = 'commit'"),
+            2
         );
-    }
-    assert_eq!(answers[0].value.ids, ["commit:aaaa1111", "commit:bbbb2222"]);
-    assert!(!answers[0].replayed);
-    assert!(answers[1].replayed);
-    assert_eq!(answers[1].value, answers[0].value);
-    // a key the collector kept before (here through a put) writes nothing
-    let (meta, req) = record("job j3");
-    let d = deny.clone();
-    let third = w
-        .write(meta, move |tx| {
-            parsed::record(tx, &d, &mut ProjectCache::default(), req)
-        })
-        .await
-        .unwrap();
-    assert!(third.value.ids.is_empty());
-    let c = Connection::open(&path).unwrap();
-    assert_eq!(
-        count(&c, "select count(*) from entity where kind = 'commit'"),
-        2
-    );
-    assert_eq!(
-        count(
-            &c,
-            "select count(*) from link where kind = 'implements' and origin = 'recorded' and source = 'recorded'"
-        ),
-        2
-    );
-    assert_eq!(count(&c, "select count(*) from tx where req = 'job j1'"), 1);
-    assert_eq!(
-        count(
-            &c,
-            "select count(*) from kv where key in ('job j1', 'job j3') and value = 'collected'"
-        ),
-        2
-    );
-    // the Lisp collector's check reads the same key through the `meta` view
-    assert_eq!(
-        count(&c, "select count(*) from meta where key = 'job j1'"),
-        1
-    );
+        assert_eq!(
+            count(
+                &c,
+                "select count(*) from link where kind = 'implements' and origin = 'recorded' and source = 'recorded'"
+            ),
+            2
+        );
+        assert_eq!(count(&c, "select count(*) from tx where req = 'job j1'"), 1);
+        assert_eq!(
+            count(
+                &c,
+                "select count(*) from kv where key in ('job j1', 'job j3') and value = 'collected'"
+            ),
+            2
+        );
+        // the Lisp collector's check reads the same key through the `meta` view
+        assert_eq!(
+            count(&c, "select count(*) from meta where key = 'job j1'"),
+            1
+        );
+    })
 }
 
 #[test]

@@ -484,7 +484,7 @@ mod tests {
         );
 
         // the account's real home is out of reach: listing it fails (read only; nothing is written there)
-        let real_home = std::env::var(stig::HOME_VAR).expect("HOME");
+        let real_home = std::env::var(stig::HOME_VAR).expect("the home variable");
         let ls = in_job(&["/bin/ls", &real_home]);
         let said = format!("{}{}", String::from_utf8_lossy(&ls.stdout), ls.stderr);
         assert!(

@@ -300,7 +300,7 @@ mod tests {
     use std::fs;
 
     use super::super::SyncError;
-    use super::super::slot::{self, Overlay, SlotKey};
+    use super::super::slot::{self, Overlay, SlotId};
     use super::super::testutil::{self, DirBlobs, user_git, write};
     use super::*;
 
@@ -506,8 +506,8 @@ mod tests {
         assert_eq!(paths(&i.manifest), vec![(&b"kept"[..], false)]);
     }
 
-    fn key() -> SlotKey {
-        SlotKey {
+    fn key() -> SlotId {
+        SlotId {
             project: "p".into(),
             worktree: "w".into(),
             trust: forseti::JobTrust::Private,

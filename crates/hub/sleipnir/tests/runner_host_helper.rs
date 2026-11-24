@@ -26,7 +26,9 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
+
+mod support;
 
 /// The fake runner's base image, preloaded in its store.
 const BASE: &str = "registry.fedoraproject.org/fedora:45";
@@ -135,15 +137,15 @@ struct Helper {
 
 impl Helper {
     fn start(dir: &Path, extra: &[&str]) -> Helper {
-        let mut child = Command::new(sleipnir_bin())
-            .arg("job-helper")
-            .arg("--dir")
-            .arg(dir)
-            .args(extra)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut args: Vec<&std::ffi::OsStr> =
+            vec!["job-helper".as_ref(), "--dir".as_ref(), dir.as_ref()];
+        args.extend(extra.iter().map(|a| std::ffi::OsStr::new(*a)));
+        let mut child = support::start(
+            &support::spec(sleipnir_bin(), &args, &[]),
+            true,
+            draugr::Redirect::Pipe,
+            draugr::Redirect::Inherit,
+        );
         let mut line = String::new();
         BufReader::new(child.stdout.take().unwrap())
             .read_line(&mut line)
@@ -179,7 +181,12 @@ fn helper_is_not_dumpable() {
         .write(&a.dir)
         .unwrap();
     let h = Helper::start(&a.dir, &[]);
-    let mut plain = Command::new("sleep").arg("600").spawn().unwrap();
+    let mut plain = support::start(
+        &support::spec("sleep", &["600"], &[]),
+        false,
+        draugr::Redirect::Inherit,
+        draugr::Redirect::Inherit,
+    );
     let me = uid();
     assert_ne!(me, 0, "the row runs as the runner user");
     let owner = |pid: u32| fs::metadata(format!("/proc/{pid}/environ")).unwrap().uid();
@@ -528,12 +535,12 @@ mod relay_keys {
             "the key is in podman's argv"
         );
         let name = format!("{PREFIX}rk1");
-        let mut run = Command::new("podman")
-            .args(&argv)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut run = support::start(
+            &support::spec("podman", &argv, &[]),
+            false,
+            draugr::Redirect::Null,
+            draugr::Redirect::Pipe,
+        );
         skuld::wait_until("the command started", 120, || {
             a.dir.join("target/started").exists().then_some(())
         });

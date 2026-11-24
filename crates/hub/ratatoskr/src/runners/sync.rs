@@ -25,21 +25,19 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// How long one git call may run before its group is killed.
+const GIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
 /// GIT's output for ARGS, run for WHAT; its failure as words.
 fn git_out<S: AsRef<OsStr>>(git: &Git, what: &str, args: &[S]) -> Result<Vec<u8>, String> {
-    let out = git
-        .cmd(args)
-        .output()
-        .map_err(|e| format!("git ({what}): {e}"))?;
+    let out = draugr::run(git.cmd(args), GIT_LIMIT).map_err(|e| format!("git ({what}): {e}"))?;
     if out.status.success() {
         Ok(out.stdout)
     } else {
-        let err = String::from_utf8_lossy(&out.stderr);
-        let tail = &err[err.len().saturating_sub(500)..];
         Err(format!(
             "git ({what}) exited {}: {}",
             out.status.code().unwrap_or(-1),
-            tail.trim_end()
+            out.stderr.trim_end()
         ))
     }
 }
@@ -65,9 +63,11 @@ fn present(git: &Git, refs: &[String]) -> Vec<String> {
     refs.iter()
         .filter(|r| oid(r))
         .filter(|r| {
-            git.cmd(["cat-file", "-e", &format!("{r}^{{commit}}")])
-                .status()
-                .is_ok_and(|s| s.success())
+            draugr::run(
+                git.cmd(["cat-file", "-e", &format!("{r}^{{commit}}")]),
+                GIT_LIMIT,
+            )
+            .is_ok_and(|o| o.status.success())
         })
         .cloned()
         .collect()
@@ -116,9 +116,7 @@ pub struct Origin {
 /// The origin of the worktree at TOP, read through the hardened git.
 pub fn origin_of(top: &Path) -> Result<Origin, String> {
     let git = user_git(top)?;
-    let url = git
-        .cmd(["config", "--get", "remote.origin.url"])
-        .output()
+    let url = draugr::run(git.cmd(["config", "--get", "remote.origin.url"]), GIT_LIMIT)
         .map_err(|e| format!("git (read the origin): {e}"))?;
     let url = match url.status.code() {
         Some(0) => Some(String::from_utf8_lossy(&url.stdout).trim().to_string()),

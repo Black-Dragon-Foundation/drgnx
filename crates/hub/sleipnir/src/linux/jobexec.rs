@@ -23,7 +23,6 @@ use std::fs;
 use std::io::{self, Read};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 /// The spec's file name in the attempt's folder.
@@ -216,17 +215,28 @@ impl Helper {
         let exe = std::env::current_exe().map_err(|e| format!("this binary's path: {e}"))?;
         let log = crate::fsio::append(dir.join("helper.log"), true)
             .map_err(|e| format!("the helper's log: {e}"))?;
-        let mut cmd = Command::new(exe);
-        cmd.arg("job-helper").arg("--dir").arg(dir);
+        let mut args: Vec<std::ffi::OsString> =
+            vec!["job-helper".into(), "--dir".into(), dir.into()];
         if let Some(f) = &h.hub_allow {
-            cmd.arg("--hub-allow").arg(f);
+            args.push("--hub-allow".into());
+            args.push(f.into());
         }
-        let mut child = cmd
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(log)
-            .spawn()
-            .map_err(|e| format!("the job helper: {e}"))?;
+        let spec = draugr::Spec {
+            program: exe,
+            args,
+            env: crate::tool::tool_env(&[]),
+            cwd: None,
+            stdin_null: false,
+            pass_fds: vec![],
+            new_session: false,
+        };
+        let opts = draugr::Opts {
+            stdout: draugr::Redirect::Pipe,
+            stderr: draugr::Redirect::To(std::sync::Arc::new(std::os::fd::OwnedFd::from(log))),
+            ..draugr::Opts::default()
+        };
+        let mut child =
+            draugr::spawn_std(&spec, &opts).map_err(|e| format!("the job helper: {e}"))?;
         let mut line = String::new();
         let read = child
             .stdout
@@ -332,20 +342,34 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
     let period = Duration::from_secs(period);
     let mut next = period;
     if seen.setup.is_none() {
-        let mut cmd = Command::new(&spec.argv[0]);
         let deadline = stund::wall()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0)
             + spec.timeout_s;
-        cmd.args(&spec.argv[1..])
-            .envs(spec.env.iter().map(|(k, v)| (k, v)))
-            .env(DEADLINE_ENV, deadline.to_string())
-            .stdin(Stdio::null());
-        if let Some(c) = &spec.cwd {
-            cmd.current_dir(c);
-        }
-        match cmd.spawn() {
+        let deadline = deadline.to_string();
+        let env: Vec<(&str, &str)> = spec
+            .env
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .chain([(DEADLINE_ENV, deadline.as_str())])
+            .collect();
+        let job = draugr::Spec {
+            program: (&spec.argv[0]).into(),
+            args: spec.argv[1..].iter().map(Into::into).collect(),
+            env: crate::tool::tool_env(&env),
+            cwd: spec.cwd.clone(),
+            stdin_null: true,
+            pass_fds: vec![],
+            new_session: false,
+        };
+        // the unit's stdout and stderr are the attempt's log: the job writes to them as they are
+        let opts = draugr::Opts {
+            stdout: draugr::Redirect::Inherit,
+            stderr: draugr::Redirect::Inherit,
+            ..draugr::Opts::default()
+        };
+        match draugr::spawn_std(&job, &opts) {
             Err(e) => seen.setup = Some(format!("{}: {e}", spec.argv[0])),
             Ok(mut child) => loop {
                 match child.try_wait() {

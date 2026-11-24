@@ -79,7 +79,7 @@ impl Platform for Fake {
     fn current_mib(&self, _job: &str) -> Option<u64> {
         Some(10)
     }
-    fn launch(&self, req: &LaunchReq) -> Result<(String, u32), String> {
+    fn launch(&self, req: &LaunchReq) -> villa::Result<(String, u32)> {
         let unit = format!("fake-{}", req.meta.r.job);
         self.calls
             .borrow_mut()
@@ -87,7 +87,7 @@ impl Platform for Fake {
             .push((req.meta.r.job.clone(), req.src.to_path_buf()));
         self.calls.borrow_mut().envs.push(req.env.to_vec());
         // what job-exec would leave: its log and its result
-        fs::write(req.dir.join(LOG), b"hello from the fake\n").unwrap();
+        crate::fsio::write(req.dir.join(LOG), b"hello from the fake\n").unwrap();
         ResultJson {
             verdict: Verdict::Pass,
             infra: None,
@@ -111,35 +111,35 @@ impl Platform for Fake {
     fn active(&self, unit: &str) -> bool {
         self.up.borrow().contains(unit)
     }
-    fn kill(&self, id: &str) -> Result<(), String> {
+    fn kill(&self, id: &str) -> villa::Result<()> {
         self.calls.borrow_mut().killed.push(id.to_string());
         Ok(())
     }
-    fn pause(&self, _id: &str) -> Result<(), String> {
+    fn pause(&self, _id: &str) -> villa::Result<()> {
         Ok(())
     }
-    fn unpause(&self, _id: &str) -> Result<(), String> {
+    fn unpause(&self, _id: &str) -> villa::Result<()> {
         Ok(())
     }
     fn grow_candidate(&self, _id: &str, _cap_mib: u64, _max_mib: u64) -> Option<resize::Sized> {
         None
     }
-    fn resize(&self, _r: &resize::Resize) -> Result<(), String> {
+    fn resize(&self, _r: &resize::Resize) -> villa::Result<()> {
         Ok(())
     }
     fn weight_unit(&self, _id: &str) -> Option<String> {
         None
     }
-    fn set_weight(&self, _unit: &str, _w: u32) -> Result<(), String> {
+    fn set_weight(&self, _unit: &str, _w: u32) -> villa::Result<()> {
         Ok(())
     }
     fn hand_key(&self, _dir: &Path, _name: &str, _value: &[u8]) -> io::Result<()> {
         Err(io::ErrorKind::NotFound.into())
     }
-    fn island_check(&self, _island: &str) -> Result<(), String> {
+    fn island_check(&self, _island: &str) -> villa::Result<()> {
         Ok(())
     }
-    fn island(&self, on: Option<&str>) -> Result<(), String> {
+    fn island(&self, on: Option<&str>) -> villa::Result<()> {
         self.calls.borrow_mut().islands.push(on.map(str::to_string));
         Ok(())
     }

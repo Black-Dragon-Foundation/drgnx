@@ -458,48 +458,51 @@ fn cases() -> Vec<(String, Value, Value)> {
         .collect()
 }
 
-#[tokio::test]
-async fn every_writer_fixture_replays() {
-    for (name, input, expect) in cases() {
-        let replayed = run(&input).await;
-        let mut tables = tables_of(&replayed);
-        // Only the tables the case expects are compared.
-        let wanted: Vec<String> = expect["tables"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect();
-        tables
-            .as_object_mut()
-            .unwrap()
-            .retain(|k, _| wanted.contains(k));
-        let got = json!({"results": replayed.results, "tables": tidy(tables)});
-        let mut expect = expand(expect);
-        expect["tables"] = tidy(expect["tables"].take());
-        assert_eq!(norm(got), norm(expect), "case {name}");
-    }
+#[test]
+fn every_writer_fixture_replays() {
+    saman::block_on_current(async {
+        for (name, input, expect) in cases() {
+            let replayed = run(&input).await;
+            let mut tables = tables_of(&replayed);
+            // Only the tables the case expects are compared.
+            let wanted: Vec<String> = expect["tables"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect();
+            tables
+                .as_object_mut()
+                .unwrap()
+                .retain(|k, _| wanted.contains(k));
+            let got = json!({"results": replayed.results, "tables": tidy(tables)});
+            let mut expect = expand(expect);
+            expect["tables"] = tidy(expect["tables"].take());
+            assert_eq!(norm(got), norm(expect), "case {name}");
+        }
+    })
 }
 
 /// Every call of a case is one write of the graph writer: one `tx` row each (the migration's own apart), and every row
 /// a writer made in a kept table names a tx.
-#[tokio::test]
-async fn every_write_has_one_tx_row() {
-    let mut checked = 0;
-    for (name, input, _) in cases() {
-        // the cases whose setup inserts kept rows by hand leave rows with no tx
-        if !input["setup"].as_array().unwrap().is_empty() {
-            continue;
-        }
-        let replayed = run(&input).await;
-        let calls = input["calls"].as_array().unwrap().len() as i64;
-        assert_eq!(
-            replayed.txs.1 - replayed.txs.0,
-            calls,
-            "case {name}: one tx row per call"
-        );
-        for table in ["event", "message", "card", "review_mark", "agent", "job"] {
-            let orphans: i64 = replayed
+#[test]
+fn every_write_has_one_tx_row() {
+    saman::block_on_current(async {
+        let mut checked = 0;
+        for (name, input, _) in cases() {
+            // the cases whose setup inserts kept rows by hand leave rows with no tx
+            if !input["setup"].as_array().unwrap().is_empty() {
+                continue;
+            }
+            let replayed = run(&input).await;
+            let calls = input["calls"].as_array().unwrap().len() as i64;
+            assert_eq!(
+                replayed.txs.1 - replayed.txs.0,
+                calls,
+                "case {name}: one tx row per call"
+            );
+            for table in ["event", "message", "card", "review_mark", "agent", "job"] {
+                let orphans: i64 = replayed
                 .db
                 .read(move |c| {
                     Ok(c.query_row(
@@ -512,11 +515,12 @@ async fn every_write_has_one_tx_row() {
                 })
                 .await
                 .unwrap();
-            assert_eq!(orphans, 0, "case {name}: a {table} row names no tx");
+                assert_eq!(orphans, 0, "case {name}: a {table} row names no tx");
+            }
+            checked += 1;
         }
-        checked += 1;
-    }
-    assert!(checked >= 5, "only {checked} cases were looked at");
+        assert!(checked >= 5, "only {checked} cases were looked at");
+    })
 }
 
 /// Task 5's writers: messages, cards, review marks and agents.  The clock is one reading per call (the cases give

@@ -91,12 +91,12 @@ impl LinuxPlatform {
     }
 
     /// Job ID's slice: under the timing slice for a timing job (its slice is there), else under the work slice.
-    fn slice_of(&self, id: &str) -> Result<String, String> {
-        let timing = slices::timing_job_slice(SLICE_ROOT, id).map_err(|e| e.to_string())?;
+    fn slice_of(&self, id: &str) -> villa::Result<String> {
+        let timing = slices::timing_job_slice(SLICE_ROOT, id)?;
         if self.probe.slice_dir(&timing).is_dir() {
             return Ok(timing);
         }
-        slices::job_slice(SLICE_ROOT, id).map_err(|e| e.to_string())
+        slices::job_slice(SLICE_ROOT, id)
     }
 
     /// Job ID's container.
@@ -106,7 +106,7 @@ impl LinuxPlatform {
 
     /// The relay sidecar's image, imported from the bundle's `drgnx-px-<arch>-linux-musl` beside this binary if it
     /// isn't there yet (tagged by content: a new bundle is a new image).
-    fn px_image(&self) -> Result<String, String> {
+    fn px_image(&self) -> villa::Result<String> {
         let arch = if std::env::consts::ARCH == "aarch64" {
             "arm64"
         } else {
@@ -115,10 +115,10 @@ impl LinuxPlatform {
         let dir = self.exe.parent().unwrap_or(Path::new("."));
         let bin = ferja::image::binary_for(dir, arch);
         let px = fs::read(&bin).map_err(|e| {
-            format!(
+            villa::Error::unavailable(format!(
                 "drgnx could not build its proxy image: {}: {e}",
                 bin.display()
-            )
+            ))
         })?;
         let env: Vec<_> = std::env::vars_os().collect();
         ferja::image::ensure_image(
@@ -127,7 +127,9 @@ impl LinuxPlatform {
             &ferja::image::image_tar(&px),
             PX_IMAGE_LIMIT,
         )
-        .map_err(|e| format!("drgnx could not build its proxy image: {e}"))
+        .map_err(|e| {
+            villa::Error::unavailable(format!("drgnx could not build its proxy image: {e}"))
+        })
     }
 }
 
@@ -212,27 +214,31 @@ impl Platform for LinuxPlatform {
 
     /// The attempt's job slice, its `job.json` (its container's `podman run`), `sleipnir job-exec` in a transient
     /// service.
-    fn launch(&self, req: &LaunchReq) -> Result<(String, u32), String> {
+    fn launch(&self, req: &LaunchReq) -> villa::Result<(String, u32)> {
         let (dir, meta) = (req.dir, req.meta);
         let id = &meta.r.job;
         if !req.env.is_empty() {
-            return Err("variables for the container aren't carried yet".into());
+            return Err(villa::Error::unavailable(
+                "variables for the container aren't carried yet",
+            ));
         }
-        let image = req
-            .image
-            .clone()
-            .ok_or("a runner job is a container job: it needs an image")?;
+        let image = req.image.clone().ok_or_else(|| {
+            villa::Error::invalid("a runner job is a container job: it needs an image")
+        })?;
         if let Some(why) = crate::linux::confined::refusal() {
-            return Err(why);
+            return Err(villa::Error::refused(why));
         }
         // the job's own copy of the bundle's drgnx-key: each container relabels its mounts (`Z`); the container runs it,
         // so its write descriptor is kept out of the runner's other forks (hlaup)
-        let own_copy = |name: &str| -> Result<PathBuf, String> {
+        let own_copy = |name: &str| -> villa::Result<PathBuf> {
             let from = self.exe.with_file_name(name);
             let to = dir.join(name);
-            hlaup::copy(&from, &to)
-                .map(|_| to)
-                .map_err(|e| format!("{name} from the bundle ({}): {e}", from.display()))
+            hlaup::copy(&from, &to).map(|_| to).map_err(|e| {
+                villa::Error::unavailable(format!(
+                    "{name} from the bundle ({}): {e}",
+                    from.display()
+                ))
+            })
         };
         let keys = if meta.spec.keys.is_empty() {
             None
@@ -251,9 +257,10 @@ impl Platform for LinuxPlatform {
             None
         } else {
             let text = req.net_hosts.join("\n") + "\n";
-            crate::net::allow_list(&text).map_err(|e| e.to_string())?;
+            crate::net::allow_list(&text)?;
             let f = dir.join(NET_ALLOW);
-            crate::fsio::write(&f, text).map_err(|e| format!("{NET_ALLOW}: {e}"))?;
+            crate::fsio::write(&f, text)
+                .map_err(|e| villa::Error::unavailable(format!("{NET_ALLOW}: {e}")))?;
             Some(f)
         };
         let parser: Parser =
@@ -262,20 +269,19 @@ impl Platform for LinuxPlatform {
             } else {
                 req.parser.to_string()
             }))
-            .map_err(|_| format!("no row parser {:?}", req.parser))?;
-        slices::ensure_tree(SLICE_ROOT, self.profile).map_err(|e| e.to_string())?;
+            .map_err(|_| villa::Error::unavailable(format!("no row parser {:?}", req.parser)))?;
+        slices::ensure_tree(SLICE_ROOT, self.profile)?;
         // a timing job runs on the island: its slice is under the timing slice, out of the work slice's CPUs
         let slice = if matches!(meta.spec.lane, forseti::Lane::Timing { pinned: Some(_) }) {
-            slices::timing_job_slice(SLICE_ROOT, id).map_err(|e| e.to_string())?
+            slices::timing_job_slice(SLICE_ROOT, id)?
         } else {
-            slices::job_slice(SLICE_ROOT, id).map_err(|e| e.to_string())?
+            slices::job_slice(SLICE_ROOT, id)?
         };
         // the job's slice throttles past its reservation and is killed at its cap, whatever runs in it (§3 #3)
         slices::set(
             &slice,
             &slices::job_props(meta.grant.reserve_mib, meta.grant.mem_cap_mib),
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
         let mut ra = RunnerArgs::runner(&self.prefix, &self.hub_id, &slice);
         // the opt-ins the user gave this job's project here (D2)
         ra.allowed = podman::allowed_for(
@@ -322,12 +328,13 @@ impl Platform for LinuxPlatform {
                 cargo_jobs: forseti::admit::cargo_jobs(&meta.grant),
             }),
         };
-        let container = podman::name_of(&ra.name_prefix, id).map_err(|r| r.message)?;
+        let container =
+            podman::name_of(&ra.name_prefix, id).map_err(|r| villa::Error::invalid(r.message))?;
         let mut argv = vec!["podman".to_string()];
-        for a in podman::argv(&creq, &caps, &ra).map_err(|r| r.message)? {
+        for a in podman::argv(&creq, &caps, &ra).map_err(|r| villa::Error::invalid(r.message))? {
             argv.push(
                 a.into_string()
-                    .map_err(|_| "a podman argument is not UTF-8")?,
+                    .map_err(|_| villa::Error::invalid("a podman argument is not UTF-8"))?,
             );
         }
         let log = dir.join(LOG);
@@ -360,7 +367,7 @@ impl Platform for LinuxPlatform {
             }),
         }
         .write(dir)
-        .map_err(|e| format!("job.json: {e}"))?;
+        .map_err(|e| villa::Error::unavailable(format!("job.json: {e}")))?;
         let name = format!("{}-{id}-{}", self.prefix, meta.r.attempt);
         let unit = unit::start(&unit::UnitReq {
             unit: name,
@@ -376,8 +383,7 @@ impl Platform for LinuxPlatform {
                 dir.display().to_string(),
             ],
             binds_to: None,
-        })
-        .map_err(|e| e.to_string())?;
+        })?;
         let pid = run::systemctl_ok(&["show", "--property=MainPID", "--value", &unit])
             .ok()
             .and_then(|p| p.parse::<u32>().ok())
@@ -389,7 +395,7 @@ impl Platform for LinuxPlatform {
         unit::active(unit)
     }
 
-    fn kill(&self, id: &str) -> Result<(), String> {
+    fn kill(&self, id: &str) -> villa::Result<()> {
         let name = self.container(id);
         run::limited(
             Path::new("podman"),
@@ -398,15 +404,15 @@ impl Platform for LinuxPlatform {
             run::SYSTEMCTL_LIMIT,
         )
         .map(|_| ())
-        .map_err(|e| format!("podman kill {name}: {e}"))
+        .map_err(|e| villa::Error::unavailable(format!("podman kill {name}: {e}")))
     }
 
-    fn pause(&self, id: &str) -> Result<(), String> {
-        resize::pause(&self.container(id)).map_err(|e| e.to_string())
+    fn pause(&self, id: &str) -> villa::Result<()> {
+        resize::pause(&self.container(id))
     }
 
-    fn unpause(&self, id: &str) -> Result<(), String> {
-        resize::unpause(&self.container(id)).map_err(|e| e.to_string())
+    fn unpause(&self, id: &str) -> villa::Result<()> {
+        resize::unpause(&self.container(id))
     }
 
     /// The slice's `memory.current` (its container and job-exec) sorts out the jobs well under the cap; the
@@ -434,51 +440,52 @@ impl Platform for LinuxPlatform {
         })
     }
 
-    fn resize(&self, r: &Resize) -> Result<(), String> {
-        resize::apply(r).map_err(|e| e.to_string())
+    fn resize(&self, r: &Resize) -> villa::Result<()> {
+        resize::apply(r)
     }
 
     fn weight_unit(&self, id: &str) -> Option<String> {
         self.slice_of(id).ok()
     }
 
-    fn set_weight(&self, unit: &str, w: u32) -> Result<(), String> {
-        resize::set_weight(unit, w).map_err(|e| e.to_string())
+    fn set_weight(&self, unit: &str, w: u32) -> villa::Result<()> {
+        resize::set_weight(unit, w)
     }
 
     fn hand_key(&self, dir: &Path, name: &str, value: &[u8]) -> io::Result<()> {
         crate::helper::keys::hand(&dir.join(HELPER_SOCK), name, value)
     }
 
-    fn island_check(&self, island: &str) -> Result<(), String> {
-        slices::island_whole_l3(Path::new("/sys/devices/system/cpu"), island)
-            .map_err(|e| e.to_string())?;
+    fn island_check(&self, island: &str) -> villa::Result<()> {
+        slices::island_whole_l3(Path::new("/sys/devices/system/cpu"), island)?;
         let usable = self
             .probe
             .cpus_usable()
-            .map_err(|e| format!("the usable CPUs: {e}"))?;
-        let cpus = probe::parse_cpu_list(island).map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::unavailable(format!("the usable CPUs: {e}")))?;
+        let cpus = probe::parse_cpu_list(island)?;
         if let Some(c) = cpus.iter().find(|c| !usable.contains(c)) {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "the island {island} has CPU {c}, which this runner may not use"
-            ));
+            )));
         }
         if cpus.len() >= usable.len() {
-            return Err(format!("the island {island} leaves no CPU for work"));
+            return Err(villa::Error::invalid(format!(
+                "the island {island} leaves no CPU for work"
+            )));
         }
         Ok(())
     }
 
-    fn island(&self, on: Option<&str>) -> Result<(), String> {
-        let by_systemd = self.probe.cpuset_by_systemd().map_err(|e| e.to_string())?;
+    fn island(&self, on: Option<&str>) -> villa::Result<()> {
+        let by_systemd = self.probe.cpuset_by_systemd()?;
         let rest = match on {
             None => String::new(),
             Some(island) => {
                 let usable = self
                     .probe
                     .cpus_usable()
-                    .map_err(|e| format!("the usable CPUs: {e}"))?;
-                let isl = probe::parse_cpu_list(island).map_err(|e| e.to_string())?;
+                    .map_err(|e| villa::Error::unavailable(format!("the usable CPUs: {e}")))?;
+                let isl = probe::parse_cpu_list(island)?;
                 let rest: Vec<u32> = usable.into_iter().filter(|c| !isl.contains(c)).collect();
                 slices::cpu_list(&rest)
             }
@@ -491,7 +498,6 @@ impl Platform for LinuxPlatform {
             &self.partition_said,
         )
         .map(|_| ())
-        .map_err(|e| e.to_string())
     }
 
     fn cleanup(&self, root: &Path, owner: &cleanup::Owner) {
@@ -513,14 +519,14 @@ pub(in crate::serve) fn net_helper(
     id: &str,
     image: &str,
     keyed: bool,
-) -> Result<(podman::JobNet, Vec<String>), String> {
-    let names = podman::net_names(ra, id).map_err(|r| r.message)?;
+) -> villa::Result<(podman::JobNet, Vec<String>)> {
+    let names = podman::net_names(ra, id).map_err(|r| villa::Error::invalid(r.message))?;
     let argv = podman::sidecar_argv(&names, ra, image, keyed)
-        .map_err(|r| r.message)?
+        .map_err(|r| villa::Error::invalid(r.message))?
         .into_iter()
         .map(|a| {
             a.into_string()
-                .map_err(|_| "a sidecar argument is not UTF-8".to_string())
+                .map_err(|_| villa::Error::invalid("a sidecar argument is not UTF-8"))
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok((

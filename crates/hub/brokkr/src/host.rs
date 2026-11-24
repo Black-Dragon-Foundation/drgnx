@@ -293,12 +293,7 @@ impl Host {
         wasm: &[u8],
         hash: [u8; 32],
     ) -> Result<Arc<Compiled>, HostError> {
-        if let Some(c) = self
-            .compiled
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&hash)
-        {
+        if let Some(c) = saman::lock(&self.compiled).get(&hash) {
             return Ok(c.clone());
         }
         let component =
@@ -325,10 +320,7 @@ impl Host {
             Some(hook::GuestIndices::new(&pre).map_err(export)?)
         };
         let c = Arc::new(Compiled { pre, ability, hook });
-        self.compiled
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(hash, c.clone());
+        saman::lock(&self.compiled).insert(hash, c.clone());
         Ok(c)
     }
 

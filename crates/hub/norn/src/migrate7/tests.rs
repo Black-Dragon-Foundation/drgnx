@@ -20,10 +20,8 @@ pub(super) mod hooks {
 
     /// The migration reached STEP on DB: traced, and failed when a test asked for it.
     pub(in crate::migrate7) fn reach(db: &Path, step: &'static str) -> Result<(), Stop> {
-        TRACE.lock().unwrap().push((db.to_path_buf(), step));
-        if FAIL
-            .lock()
-            .unwrap()
+        saman::lock(&TRACE).push((db.to_path_buf(), step));
+        if saman::lock(&FAIL)
             .iter()
             .any(|(p, s)| p == db && *s == step)
         {
@@ -34,9 +32,7 @@ pub(super) mod hooks {
 
     /// Before the copy's check: a test that asked for `check` breaks the copy, so the real check fails.
     pub(in crate::migrate7) fn before_check(db: &Path, copy: &Path) {
-        if FAIL
-            .lock()
-            .unwrap()
+        if saman::lock(&FAIL)
             .iter()
             .any(|(p, s)| p == db && *s == "check")
         {
@@ -45,13 +41,11 @@ pub(super) mod hooks {
     }
 
     pub(in crate::migrate7) fn fail_at(db: &Path, step: &'static str) {
-        FAIL.lock().unwrap().push((db.to_path_buf(), step));
+        saman::lock(&FAIL).push((db.to_path_buf(), step));
     }
 
     pub(in crate::migrate7) fn trace(db: &Path) -> Vec<&'static str> {
-        TRACE
-            .lock()
-            .unwrap()
+        saman::lock(&TRACE)
             .iter()
             .filter(|(p, _)| p == db)
             .map(|(_, s)| *s)
@@ -678,7 +672,7 @@ fn a_failed_backup_check_stops_it() {
     hooks::fail_at(&fx.db, "check");
     let mut c = writer_conn(&fx.db);
     let e = run(&mut c, &fx.db, &fx.opts).unwrap_err();
-    assert!(e.contains("failed its check"), "{e}");
+    assert!(e.to_string().contains("failed its check"), "{e}");
     assert_eq!(
         fx.backups(),
         Vec::<String>::new(),
@@ -691,40 +685,42 @@ fn a_failed_backup_check_stops_it() {
     assert!(!hooks::trace(&fx.db).contains(&"begin"));
 }
 
-#[tokio::test]
-async fn a_failed_migration_is_not_retried() {
-    let fx = fixture();
-    hooks::fail_at(&fx.db, "entities");
-    let (writer, handle) =
-        Writer::spawn(&fx.db, WriterOpts::default(), open_rule(fx.opts.clone())).unwrap();
-    handle.tick().await;
-    let failed = |h: &urdr::graph::WriterHandle| match h.status().last_open {
-        Some(OpenOutcome::Failed(r)) => r,
-        other => panic!("{other:?}"),
-    };
-    let reason = failed(&handle);
-    assert!(reason.contains("schema 7 failed"), "{reason}");
-    for _ in 0..3 {
+#[test]
+fn a_failed_migration_is_not_retried() {
+    saman::block_on_current(async {
+        let fx = fixture();
+        hooks::fail_at(&fx.db, "entities");
+        let (writer, handle) =
+            Writer::spawn(&fx.db, WriterOpts::default(), open_rule(fx.opts.clone())).unwrap();
         handle.tick().await;
-    }
-    assert_eq!(failed(&handle), reason);
-    let entities = hooks::trace(&fx.db)
-        .into_iter()
-        .filter(|s| *s == "entities")
-        .count();
-    assert_eq!(entities, 1, "never run again in this process");
-    assert_eq!(fx.backups().len(), 1);
-    let e = handle
-        .write(TxMeta::new("hub", Class::System, "test"), |_| Ok(()))
-        .await
-        .unwrap_err();
-    assert!(matches!(e, WriteError::NotReady(_)), "{e:?}");
-    saman::spawn_blocking("writer-shutdown", move || writer.shutdown())
-        .await
-        .unwrap();
-    let c = Connection::open(&fx.db).unwrap();
-    let schema: String = one(&c, "select value from meta where key = 'schema'");
-    assert_eq!(schema, "6");
+        let failed = |h: &urdr::graph::WriterHandle| match h.status().last_open {
+            Some(OpenOutcome::Failed(r)) => r,
+            other => panic!("{other:?}"),
+        };
+        let reason = failed(&handle);
+        assert!(reason.contains("schema 7 failed"), "{reason}");
+        for _ in 0..3 {
+            handle.tick().await;
+        }
+        assert_eq!(failed(&handle), reason);
+        let entities = hooks::trace(&fx.db)
+            .into_iter()
+            .filter(|s| *s == "entities")
+            .count();
+        assert_eq!(entities, 1, "never run again in this process");
+        assert_eq!(fx.backups().len(), 1);
+        let e = handle
+            .write(TxMeta::new("hub", Class::System, "test"), |_| Ok(()))
+            .await
+            .unwrap_err();
+        assert!(matches!(e, WriteError::NotReady(_)), "{e:?}");
+        saman::spawn_blocking("writer-shutdown", move || writer.shutdown())
+            .await
+            .unwrap();
+        let c = Connection::open(&fx.db).unwrap();
+        let schema: String = one(&c, "select value from meta where key = 'schema'");
+        assert_eq!(schema, "6");
+    })
 }
 
 #[test]
@@ -837,7 +833,7 @@ fn an_edge_whose_own_source_is_denied_is_not_migrated() {
     // Its twin with a project source is kept.
     let fx = empty_fx();
     fs::create_dir_all(fx.home.join("org")).unwrap();
-    fs::write(fx.home.join("org/notes.org"), "* a note\n").unwrap();
+    eitri::replace_file(&fx.home.join("org/notes.org"), b"* a note\n").unwrap();
     let h = fx.home.display().to_string();
     let c = Connection::open(&fx.db).unwrap();
     c.execute_batch(DDL6).unwrap();
@@ -876,7 +872,7 @@ fn an_edge_whose_own_source_is_denied_is_not_migrated() {
 fn door_2_reads_every_path_a_row_carries() {
     let fx = empty_fx();
     fs::create_dir_all(fx.home.join("org")).unwrap();
-    fs::write(fx.home.join("org/notes.org"), "* a note\n").unwrap();
+    eitri::replace_file(&fx.home.join("org/notes.org"), b"* a note\n").unwrap();
     let h = fx.home.display().to_string();
     let c = Connection::open(&fx.db).unwrap();
     c.execute_batch(DDL6).unwrap();
@@ -976,160 +972,164 @@ fn the_spec_form_is_denied() {
 
 /// URDR-HIST-RETIRED-1 on a store Task 11 made: a held job task's migrated version keeps its lease when a later
 /// change moves it into `entity_hist`, so as of the migration the task is held.
-#[tokio::test]
-async fn a_migrated_lease_stays_in_history() {
-    let fx = fixture();
-    let (writer, handle) =
-        Writer::spawn(&fx.db, WriterOpts::default(), open_rule(fx.opts.clone())).unwrap();
-    handle.tick().await;
-    assert_eq!(
-        handle.status().last_open,
-        Some(OpenOutcome::Ready {
-            schema: crate::migrate16::SCHEMA
-        })
-    );
-    let read = || Connection::open(&fx.db).unwrap();
-    let n: i64 = one(&read(), "select n from entity where id = 'task:j1#2'");
-    let migrated: i64 = one(
-        &read(),
-        &format!("select updated_tx from entity where n = {n}"),
-    );
-    handle
-        .write(
-            TxMeta::new("hub", Class::System, "test"),
-            move |tx: &mut Tx<'_>| {
-                entity::update(
-                    tx,
-                    n,
-                    None,
-                    Changes {
-                        lease: Some(Lease::default()),
-                        ..Changes::default()
-                    },
-                )
-                .map(|_| ())
-            },
-        )
-        .await
-        .unwrap();
-    let asof = hist::entity_as_of(&read(), n, migrated).unwrap().unwrap();
-    assert_eq!(
-        asof.ent.lease,
-        Lease {
-            holder: Some("a1".into()),
-            epoch: 1,
-            until: Some(1700009999.0),
-        }
-    );
-    assert_eq!(asof.ent.origin, Origin::Recorded);
-    let now = entity::by_n(&read(), n).unwrap().unwrap();
-    assert_eq!(now.lease.holder, None);
-    saman::spawn_blocking("writer-shutdown", move || writer.shutdown())
-        .await
-        .unwrap();
+#[test]
+fn a_migrated_lease_stays_in_history() {
+    saman::block_on_current(async {
+        let fx = fixture();
+        let (writer, handle) =
+            Writer::spawn(&fx.db, WriterOpts::default(), open_rule(fx.opts.clone())).unwrap();
+        handle.tick().await;
+        assert_eq!(
+            handle.status().last_open,
+            Some(OpenOutcome::Ready {
+                schema: crate::migrate16::SCHEMA
+            })
+        );
+        let read = || Connection::open(&fx.db).unwrap();
+        let n: i64 = one(&read(), "select n from entity where id = 'task:j1#2'");
+        let migrated: i64 = one(
+            &read(),
+            &format!("select updated_tx from entity where n = {n}"),
+        );
+        handle
+            .write(
+                TxMeta::new("hub", Class::System, "test"),
+                move |tx: &mut Tx<'_>| {
+                    entity::update(
+                        tx,
+                        n,
+                        None,
+                        Changes {
+                            lease: Some(Lease::default()),
+                            ..Changes::default()
+                        },
+                    )
+                    .map(|_| ())
+                },
+            )
+            .await
+            .unwrap();
+        let asof = hist::entity_as_of(&read(), n, migrated).unwrap().unwrap();
+        assert_eq!(
+            asof.ent.lease,
+            Lease {
+                holder: Some("a1".into()),
+                epoch: 1,
+                until: Some(1700009999.0),
+            }
+        );
+        assert_eq!(asof.ent.origin, Origin::Recorded);
+        let now = entity::by_n(&read(), n).unwrap().unwrap();
+        assert_eq!(now.lease.holder, None);
+        saman::spawn_blocking("writer-shutdown", move || writer.shutdown())
+            .await
+            .unwrap();
+    })
 }
 
 /// Task 8 on a store Task 11 made: an imported entity's text leaves every version (the imported, approximate one in
 /// `entity_hist` included), the file and its WAL; the pre-migration copy is a kept copy that still holds it.
-#[tokio::test]
-async fn excise_on_a_migrated_store_leaves_no_trace() {
-    use urdr::graph::excise::{self, Target};
-    const TEXT: &str = "EXCISE-MIGRATED-c4n4ry";
-    let fx = fixture();
-    {
-        let c = Connection::open(&fx.db).unwrap();
-        c.execute(
-            "update jtask set title = ?1, data = ?2 where id = 'j1#2'",
-            [
-                format!("{TEXT} title"),
-                json!({ "note": format!("{TEXT} note") }).to_string(),
-            ],
-        )
-        .unwrap();
-    }
-    let (writer, handle) =
-        Writer::spawn(&fx.db, WriterOpts::default(), open_rule(fx.opts.clone())).unwrap();
-    handle.tick().await;
-    assert_eq!(
-        handle.status().last_open,
-        Some(OpenOutcome::Ready {
-            schema: crate::migrate16::SCHEMA
-        })
-    );
-    let read = || Connection::open(&fx.db).unwrap();
-    let n: i64 = one(&read(), "select n from entity where id = 'task:j1#2'");
-    // A change after the migration moves the imported version into entity_hist.
-    handle
-        .write(
-            TxMeta::new("hub", Class::System, "test"),
-            move |tx: &mut Tx<'_>| {
-                entity::update(
-                    tx,
-                    n,
-                    None,
-                    Changes {
-                        body: Some(Some(format!("{TEXT} body"))),
-                        ..Changes::default()
-                    },
-                )
-                .map(|_| ())
-            },
+#[test]
+fn excise_on_a_migrated_store_leaves_no_trace() {
+    saman::block_on_current(async {
+        use urdr::graph::excise::{self, Target};
+        const TEXT: &str = "EXCISE-MIGRATED-c4n4ry";
+        let fx = fixture();
+        {
+            let c = Connection::open(&fx.db).unwrap();
+            c.execute(
+                "update jtask set title = ?1, data = ?2 where id = 'j1#2'",
+                [
+                    format!("{TEXT} title"),
+                    json!({ "note": format!("{TEXT} note") }).to_string(),
+                ],
+            )
+            .unwrap();
+        }
+        let (writer, handle) =
+            Writer::spawn(&fx.db, WriterOpts::default(), open_rule(fx.opts.clone())).unwrap();
+        handle.tick().await;
+        assert_eq!(
+            handle.status().last_open,
+            Some(OpenOutcome::Ready {
+                schema: crate::migrate16::SCHEMA
+            })
+        );
+        let read = || Connection::open(&fx.db).unwrap();
+        let n: i64 = one(&read(), "select n from entity where id = 'task:j1#2'");
+        // A change after the migration moves the imported version into entity_hist.
+        handle
+            .write(
+                TxMeta::new("hub", Class::System, "test"),
+                move |tx: &mut Tx<'_>| {
+                    entity::update(
+                        tx,
+                        n,
+                        None,
+                        Changes {
+                            body: Some(Some(format!("{TEXT} body"))),
+                            ..Changes::default()
+                        },
+                    )
+                    .map(|_| ())
+                },
+            )
+            .await
+            .unwrap();
+        let imported = format!(
+            "select count(*) from entity_hist h join tx t on t.id = h.tx_from where h.n = {n} and t.imported = 1"
+        );
+        let imported_versions: i64 = one(&read(), &imported);
+        assert!(imported_versions >= 1, "an imported version in entity_hist");
+        let first: i64 = one(
+            &read(),
+            &format!("select created_tx from entity where n = {n}"),
+        );
+        let asof = hist::entity_as_of(&read(), n, first).unwrap().unwrap();
+        assert!(asof.approximate, "the imported version is approximate");
+        assert!(file_has(&fx.db, TEXT.as_bytes()) || file_has(&wal_of(&fx.db), TEXT.as_bytes()));
+        let report = excise::excise(
+            &handle,
+            TxMeta::new("user", Class::User, "cli:graph-excise"),
+            Target::Entity("task:j1#2".into()),
+            None,
+            "integration".into(),
+            vec![],
         )
         .await
         .unwrap();
-    let imported = format!(
-        "select count(*) from entity_hist h join tx t on t.id = h.tx_from where h.n = {n} and t.imported = 1"
-    );
-    let imported_versions: i64 = one(&read(), &imported);
-    assert!(imported_versions >= 1, "an imported version in entity_hist");
-    let first: i64 = one(
-        &read(),
-        &format!("select created_tx from entity where n = {n}"),
-    );
-    let asof = hist::entity_as_of(&read(), n, first).unwrap().unwrap();
-    assert!(asof.approximate, "the imported version is approximate");
-    assert!(file_has(&fx.db, TEXT.as_bytes()) || file_has(&wal_of(&fx.db), TEXT.as_bytes()));
-    let report = excise::excise(
-        &handle,
-        TxMeta::new("user", Class::User, "cli:graph-excise"),
-        Target::Entity("task:j1#2".into()),
-        None,
-        "integration".into(),
-        vec![],
-    )
-    .await
-    .unwrap();
-    let scrubbed = excise::scrub(&handle).await.unwrap();
-    assert!(scrubbed.vacuumed && scrubbed.wal_truncated, "{scrubbed:?}");
-    let c = read();
-    let left: i64 = one(
-        &c,
-        &format!(
-            "select count(*) from (select title, body, data from entity_hist where n = {n} \
+        let scrubbed = excise::scrub(&handle).await.unwrap();
+        assert!(scrubbed.vacuumed && scrubbed.wal_truncated, "{scrubbed:?}");
+        let c = read();
+        let left: i64 = one(
+            &c,
+            &format!(
+                "select count(*) from (select title, body, data from entity_hist where n = {n} \
              union all select title, body, data from entity where n = {n}) \
              where title like '%{TEXT}%' or body like '%{TEXT}%' or data like '%{TEXT}%'"
-        ),
-    );
-    assert_eq!(left, 0, "every version blanked");
-    let still_imported: i64 = one(&c, &imported);
-    assert_eq!(still_imported, imported_versions, "the history stays");
-    drop(c);
-    assert!(!file_has(&fx.db, TEXT.as_bytes()), "work.db holds the text");
-    assert!(
-        !file_has(&wal_of(&fx.db), TEXT.as_bytes()),
-        "work.db-wal holds the text"
-    );
-    // The pre-migration copy is a kept copy, and it still holds the text.
-    let pre7 = fx.opts.backup_dir.join(&fx.backups()[0]);
-    assert!(
-        fx.backups()[0].starts_with("work-pre7-"),
-        "{:?}",
-        fx.backups()
-    );
-    let kept = excise::kept_copies(&fx.db);
-    assert!(kept.contains(&pre7), "{kept:?}");
-    assert_eq!(excise::holding(&kept, &report.needles), vec![pre7]);
-    saman::spawn_blocking("writer-shutdown", move || writer.shutdown())
-        .await
-        .unwrap();
+            ),
+        );
+        assert_eq!(left, 0, "every version blanked");
+        let still_imported: i64 = one(&c, &imported);
+        assert_eq!(still_imported, imported_versions, "the history stays");
+        drop(c);
+        assert!(!file_has(&fx.db, TEXT.as_bytes()), "work.db holds the text");
+        assert!(
+            !file_has(&wal_of(&fx.db), TEXT.as_bytes()),
+            "work.db-wal holds the text"
+        );
+        // The pre-migration copy is a kept copy, and it still holds the text.
+        let pre7 = fx.opts.backup_dir.join(&fx.backups()[0]);
+        assert!(
+            fx.backups()[0].starts_with("work-pre7-"),
+            "{:?}",
+            fx.backups()
+        );
+        let kept = excise::kept_copies(&fx.db);
+        assert!(kept.contains(&pre7), "{kept:?}");
+        assert_eq!(excise::holding(&kept, &report.needles), vec![pre7]);
+        saman::spawn_blocking("writer-shutdown", move || writer.shutdown())
+            .await
+            .unwrap();
+    })
 }

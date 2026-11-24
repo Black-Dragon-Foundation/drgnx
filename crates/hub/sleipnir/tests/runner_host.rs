@@ -12,16 +12,28 @@
 
 use sleipnir::linux::reserve::{self, Reservation, Reservations};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::Child;
 use std::time::Duration;
+
+mod support;
 
 /// Starts this test binary as child ENTRY with ENV.
 fn child(entry: &str, env: &[(&str, &str)]) -> Child {
-    Command::new(std::env::current_exe().unwrap())
-        .args(["--ignored", "--exact", entry, "--test-threads=1", "--quiet"])
-        .envs(env.iter().copied())
-        .spawn()
-        .unwrap()
+    let extra: Vec<(&str, &std::ffi::OsStr)> = env
+        .iter()
+        .map(|(k, v)| (*k, std::ffi::OsStr::new(*v)))
+        .collect();
+    let spec = support::spec(
+        std::env::current_exe().unwrap(),
+        &["--ignored", "--exact", entry, "--test-threads=1", "--quiet"],
+        &extra,
+    );
+    support::start(
+        &spec,
+        false,
+        draugr::Redirect::Inherit,
+        draugr::Redirect::Inherit,
+    )
 }
 
 fn exists(p: &Path) -> Option<()> {
@@ -165,10 +177,12 @@ fn a_dead_pids_reservation_is_ignored() {
     let d = tempfile::tempdir().unwrap();
     let rs = Reservations::at(d.path());
     // a real process that parks on its stdin
-    let mut p = Command::new("cat")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut p = support::start(
+        &support::spec("cat", &[] as &[&str], &[]),
+        true,
+        draugr::Redirect::Inherit,
+        draugr::Redirect::Inherit,
+    );
     let pid = p.id();
     let start = reserve::start_time(pid).unwrap();
     let r = |start_time: u64, job: &str| Reservation {
@@ -785,14 +799,24 @@ fn a_container_job_lands_in_its_slice() {
         .into_iter()
         .map(|s| s.into_string().unwrap())
         .collect();
-    let mut scope = Command::new("systemd-run")
-        .args(["--user", "--scope", "--quiet", "--collect"])
-        .arg(format!("--slice={slice}"))
-        .arg("--unit=drgnx-job-h1")
-        .arg("podman")
-        .args(&argv)
-        .spawn()
-        .unwrap();
+    let mut args: Vec<String> = [
+        "--user",
+        "--scope",
+        "--quiet",
+        "--collect",
+        &format!("--slice={slice}"),
+        "--unit=drgnx-job-h1",
+        "podman",
+    ]
+    .map(String::from)
+    .into();
+    args.extend(argv);
+    let mut scope = support::start(
+        &support::spec("systemd-run", &args, &[]),
+        false,
+        draugr::Redirect::Inherit,
+        draugr::Redirect::Inherit,
+    );
     let pid = running_pid("drgnx-job-h1");
     let cg = cgroup_of(pid);
     assert!(cg.contains(&format!("/{slice}/libpod-")), "{cg}");

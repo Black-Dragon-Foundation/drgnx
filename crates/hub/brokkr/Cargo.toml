@@ -44,3 +44,6 @@ wat.workspace = true
 skuld = { path = "../skuld", version = "0.1.0" }
 # a_fault_outside_wasm_still_reaches_the_hubs_handler: a handler of the test's own, installed before wasmtime's
 libc.workspace = true
+
+[lints]
+workspace = true

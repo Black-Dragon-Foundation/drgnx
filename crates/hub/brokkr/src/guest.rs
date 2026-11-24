@@ -65,7 +65,7 @@ impl Guest {
     }
 
     fn plugin_semaphore(&self, plugin: &str) -> Arc<Semaphore> {
-        let mut map = self.per_plugin.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = saman::lock(&self.per_plugin);
         map.entry(plugin.to_string())
             .or_insert_with(|| Arc::new(Semaphore::new(self.calls_per_plugin)))
             .clone()

@@ -67,7 +67,9 @@ fn check(env: &Env, db: &Path, scratch: &Path) -> Result<Value, String> {
         home,
         config_dir: paths::config_dir(env),
     };
-    norn::migrate7::check_copy(db, &opts).map(|r| r.to_json())
+    norn::migrate7::check_copy(db, &opts)
+        .map(|r| r.to_json())
+        .map_err(|e| e.to_string())
 }
 
 /// The report as lines: counts only.

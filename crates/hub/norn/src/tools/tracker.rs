@@ -7,7 +7,7 @@
 //! untrusted text), `resource_link` items for the entities it names, and `_meta["dev.drgnx/notices"]`.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use mimir::{ArgsError, BoxFuture, Tool, ToolResult, typed};
 use schemars::JsonSchema;
@@ -259,9 +259,9 @@ pub(super) async fn caller_of(
     who.check()?;
     if let Some(home) = who.home() {
         let home = home.to_path_buf();
-        let known = coord.projects().lock().unwrap().project_n(&home).is_some();
+        let known = saman::lock(coord.projects()).project_n(&home).is_some();
         if !known {
-            let cached = coord.projects().lock().unwrap().get(&home).cloned();
+            let cached = saman::lock(coord.projects()).get(&home).cloned();
             let found = match cached {
                 Some(p) => Some(p),
                 None => {
@@ -273,11 +273,7 @@ pub(super) async fn caller_of(
                             .await
                             .map_err(|e| format!("the project of {}: {e}", home.display()))?
                             .map_err(|e| format!("the project of {}: {e}", home.display()))?;
-                    coord
-                        .projects()
-                        .lock()
-                        .unwrap()
-                        .insert(home.clone(), p.clone());
+                    saman::lock(coord.projects()).insert(home.clone(), p.clone());
                     p
                 }
             };
@@ -306,15 +302,12 @@ pub(super) async fn caller_of(
                         .flatten()
                 };
                 if let Some(n) = n {
-                    coord.projects().lock().unwrap().set_registered(&p.id, n);
+                    saman::lock(coord.projects()).set_registered(&p.id, n);
                 }
             }
         }
     }
-    Ok(Caller::from_identity(
-        who,
-        &coord.projects().lock().unwrap(),
-    ))
+    Ok(Caller::from_identity(who, &saman::lock(coord.projects())))
 }
 
 /// The entity `n` as an id string, for an `Authored`'s `project`.
@@ -1204,7 +1197,7 @@ async fn task_write(coord: &Coord, who: &Identity, a: TaskWriteArgs) -> Result<A
             }
             written.value
         }
-        Err(e) => match kept.lock().unwrap_or_else(PoisonError::into_inner).take() {
+        Err(e) => match saman::lock(&kept).take() {
             Some(answer) => (answer, 0),
             None => return Err(err(e.into())),
         },

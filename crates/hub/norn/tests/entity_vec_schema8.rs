@@ -58,42 +58,44 @@ async fn rows(db: &CoordDb) -> Vec<(i64, String, Vec<u8>)> {
     .unwrap()
 }
 
-#[tokio::test]
-async fn a_schema_8_file_keeps_its_rows_and_gains_the_second_model() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("work.db");
-    {
-        let db = CoordDb::spawn(&file);
-        rows(&db).await; // the opening rule has made the file
-    }
-    urdr::Connection::open(&file)
-        .unwrap()
-        .execute_batch(SHIPPED)
-        .unwrap();
+#[test]
+fn a_schema_8_file_keeps_its_rows_and_gains_the_second_model() {
+    saman::block_on_current(async {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("work.db");
+        {
+            let db = CoordDb::spawn(&file);
+            rows(&db).await; // the opening rule has made the file
+        }
+        urdr::Connection::open(&file)
+            .unwrap()
+            .execute_batch(SHIPPED)
+            .unwrap();
 
-    let db = CoordDb::spawn(&file);
-    // schema 16 keys the vectors by fingerprint: the row of a fingerprint survives the open, the rows of a label (and of
-    // no model) are dropped for the work graph to embed again (`entity_vec_fingerprint.rs`)
-    assert_eq!(
-        rows(&db).await,
-        vec![(1, HEX_A.into(), vec![1, 2])],
-        "the fingerprint row survives the open"
-    );
-    db.write(meta(), |tx| {
-        vec_put(tx, 1, HEX_B, &[0.6, 0.8])?;
-        Ok(())
-    })
-    .await
-    .unwrap();
-    let models: Vec<String> = rows(&db)
+        let db = CoordDb::spawn(&file);
+        // schema 16 keys the vectors by fingerprint: the row of a fingerprint survives the open, the rows of a label (and of
+        // no model) are dropped for the work graph to embed again (`entity_vec_fingerprint.rs`)
+        assert_eq!(
+            rows(&db).await,
+            vec![(1, HEX_A.into(), vec![1, 2])],
+            "the fingerprint row survives the open"
+        );
+        db.write(meta(), |tx| {
+            vec_put(tx, 1, HEX_B, &[0.6, 0.8])?;
+            Ok(())
+        })
         .await
-        .into_iter()
-        .filter(|r| r.0 == 1)
-        .map(|r| r.1)
-        .collect();
-    assert_eq!(
-        models,
-        [HEX_A, HEX_B],
-        "the second model's vector sits beside the first"
-    );
+        .unwrap();
+        let models: Vec<String> = rows(&db)
+            .await
+            .into_iter()
+            .filter(|r| r.0 == 1)
+            .map(|r| r.1)
+            .collect();
+        assert_eq!(
+            models,
+            [HEX_A, HEX_B],
+            "the second model's vector sits beside the first"
+        );
+    })
 }

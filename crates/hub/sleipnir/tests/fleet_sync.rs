@@ -7,10 +7,13 @@
 //! DRGNX_FLEET_TEST_BIN=<the test binary> fleet.sh test 'sync::'
 //! ```
 
+mod support;
+
 mod sync {
+    use super::support;
     use std::io::{BufRead, BufReader, Write};
     use std::path::Path;
-    use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+    use std::process::{Child, ChildStdin, ChildStdout};
 
     use sha2::{Digest, Sha256};
 
@@ -20,44 +23,42 @@ mod sync {
     const ROOT: &str = "fleet-sync";
     const BIN: &str = "/fleet/share/sleipnir";
 
-    fn ssh(cmd: &str) -> Command {
+    fn ssh(cmd: &str) -> draugr::Spec {
         let home = std::env::var(stig::HOME_VAR).unwrap();
-        let mut c = Command::new("ssh");
-        c.args([
-            "-F",
-            &format!("{home}/.ssh/config"),
-            "-o",
-            "BatchMode=yes",
-            "r1",
-            cmd,
-        ]);
-        c
+        let config = format!("{home}/.ssh/config");
+        support::spec(
+            "ssh",
+            &["-F", &config, "-o", "BatchMode=yes", "r1", cmd],
+            &[],
+        )
     }
 
-    fn ok(mut c: Command) -> String {
-        let out = c.output().unwrap();
-        assert!(
-            out.status.success(),
-            "{c:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+    fn ok(c: draugr::Spec) -> String {
+        let name = format!("{} {:?}", c.program.display(), c.args);
+        let out = support::run(c);
+        assert!(out.status.success(), "{name}: {}", out.stderr);
         String::from_utf8(out.stdout).unwrap().trim().to_string()
     }
 
     fn git(dir: &Path, args: &[&str]) -> String {
-        let mut c = Command::new("git");
-        c.current_dir(dir)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .args([
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@example.invalid",
-                "-c",
-                "init.defaultBranch=main",
-            ])
-            .args(args);
+        let mut all = vec![
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "-c",
+            "init.defaultBranch=main",
+        ];
+        all.extend_from_slice(args);
+        let mut c = support::spec(
+            "git",
+            &all,
+            &[
+                ("GIT_CONFIG_NOSYSTEM", "1".as_ref()),
+                ("GIT_CONFIG_GLOBAL", "/dev/null".as_ref()),
+            ],
+        );
+        c.cwd = Some(dir.to_path_buf());
         ok(c)
     }
 
@@ -70,14 +71,11 @@ mod sync {
 
     impl Link {
         fn open(sha: &str, size: usize) -> Link {
-            let mut c = ssh(&format!(
+            let c = ssh(&format!(
                 "{BIN} sync-bundle --root {ROOT} --repo r --sha256 {sha} --size {size}"
             ));
-            let mut child = c
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap();
+            let mut child =
+                support::start(&c, true, draugr::Redirect::Pipe, draugr::Redirect::Inherit);
             let to = child.stdin.take().unwrap();
             let from = BufReader::new(child.stdout.take().unwrap());
             Link { child, to, from }

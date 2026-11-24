@@ -14,7 +14,7 @@ mod git {
     use std::path::{Path, PathBuf};
 
     use sleipnir::sync::capture::{self, Entry};
-    use sleipnir::sync::slot::{self, Blobs, Overlay, SlotKey};
+    use sleipnir::sync::slot::{self, Blobs, Overlay, SlotId};
 
     struct DirBlobs(PathBuf);
 
@@ -84,11 +84,16 @@ mod git {
         let bin = t.join("bin");
         fs::create_dir(&bin).unwrap();
         let log = t.join("git.log");
+        // the hardened git runs with a closed environment, so the wrapper carries its two paths itself
         script(
             &bin.join("git"),
-            "#!/bin/sh\n{ echo CALL; for a in \"$@\"; do printf 'ARG %s\\n' \"$a\"; done; \
-             env | grep '^GIT_' | sed 's/^/ENV /'; } >> \"$SLEIPNIR_TEST_GIT_LOG\"\n\
-             exec \"$SLEIPNIR_TEST_REAL_GIT\" \"$@\"\n",
+            &format!(
+                "#!/bin/sh\n{{ echo CALL; for a in \"$@\"; do printf 'ARG %s\\n' \"$a\"; done; \
+                 env | grep '^GIT_' | sed 's/^/ENV /'; }} >> '{}'\n\
+                 exec '{}' \"$@\"\n",
+                log.display(),
+                git.display()
+            ),
         );
         let marker = t.join("marker");
         let monitor = t.join("monitor.sh");
@@ -101,8 +106,6 @@ mod git {
         // SAFETY: this binary's only test, before any thread of ours runs
         unsafe {
             std::env::set_var("PATH", std::env::join_paths(search).unwrap());
-            std::env::set_var("SLEIPNIR_TEST_GIT_LOG", &log);
-            std::env::set_var("SLEIPNIR_TEST_REAL_GIT", &git);
             std::env::set_var(stig::HOME_VAR, t.join("home"));
             std::env::set_var("GIT_DIR", t.join("not-ours"));
             std::env::set_var("GIT_WORK_TREE", t.join("not-ours"));
@@ -124,7 +127,7 @@ mod git {
                 fs::copy(repo.join(OsStr::from_bytes(path)), b).unwrap();
             }
         }
-        let key = SlotKey {
+        let key = SlotId {
             project: "p".into(),
             worktree: "w".into(),
             trust: forseti::JobTrust::Private,

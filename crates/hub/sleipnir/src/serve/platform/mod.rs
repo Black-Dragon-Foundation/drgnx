@@ -61,24 +61,24 @@ pub trait Platform {
     fn current_mib(&self, id: &str) -> Option<u64>;
     /// Starts the attempt (its `job.json` written, job-exec running past this `serve`): the name the attempt runs
     /// under (its unit) and job-exec's pid (0 when unknown).
-    fn launch(&self, req: &LaunchReq) -> Result<(String, u32), String>;
+    fn launch(&self, req: &LaunchReq) -> villa::Result<(String, u32)>;
     /// Whether the attempt running under UNIT is still up.
     fn active(&self, unit: &str) -> bool;
     /// Kills job ID's command; job-exec sees it end and writes the verdict the reason written before names.
-    fn kill(&self, id: &str) -> Result<(), String>;
+    fn kill(&self, id: &str) -> villa::Result<()>;
     /// Pauses job ID (the ladder's long builds).
-    fn pause(&self, id: &str) -> Result<(), String>;
+    fn pause(&self, id: &str) -> villa::Result<()>;
     /// Lets a paused job ID go on.
-    fn unpause(&self, id: &str) -> Result<(), String>;
+    fn unpause(&self, id: &str) -> villa::Result<()>;
     /// Job ID as a grow judges it, when it runs near its cap CAP_MIB (MAX_MIB its most); none: not near, or no grow
     /// on this platform.
     fn grow_candidate(&self, id: &str, cap_mib: u64, max_mib: u64) -> Option<Sized>;
     /// Carries a grow out.
-    fn resize(&self, r: &Resize) -> Result<(), String>;
+    fn resize(&self, r: &Resize) -> villa::Result<()>;
     /// What job ID's CPU weight is set on; none: no weights on this platform.
     fn weight_unit(&self, id: &str) -> Option<String>;
     /// Sets the CPU weight of UNIT.
-    fn set_weight(&self, unit: &str, w: u32) -> Result<(), String>;
+    fn set_weight(&self, unit: &str, w: u32) -> villa::Result<()>;
     /// Hands key NAME's VALUE to the job helper of the attempt in DIR. `NotFound` or `ConnectionRefused`: the helper
     /// isn't listening yet (the key waits); any other error ends the key.
     fn hand_key(&self, dir: &Path, name: &str, value: &[u8]) -> io::Result<()>;
@@ -92,13 +92,13 @@ pub trait Platform {
     }
     /// Whether ISLAND (`--island`) may be this machine's timing island: whole L3 groups. A platform without a timing
     /// lane refuses any.
-    fn island_check(&self, island: &str) -> Result<(), String> {
-        Err(format!(
+    fn island_check(&self, island: &str) -> villa::Result<()> {
+        Err(villa::Error::unavailable(format!(
             "this platform has no timing lane (--island {island})"
-        ))
+        )))
     }
     /// The island on (its CPU list: timing jobs there, work on the rest) or off (work on every CPU again).
-    fn island(&self, _on: Option<&str>) -> Result<(), String> {
+    fn island(&self, _on: Option<&str>) -> villa::Result<()> {
         Ok(())
     }
 }

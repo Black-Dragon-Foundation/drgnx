@@ -216,253 +216,384 @@ fn connect(target: &str) -> Vec<u8> {
 }
 
 /// [C] A stream the sidecar opens reaches the proxy behind the owner, is judged, and is spliced to its upstream.
-#[tokio::test]
-async fn a_relayed_connect_reaches_the_proxy() {
-    let up = echo().await;
-    let (mut stand, mut owner) = plain().await;
-    let streams = std::mem::replace(&mut owner.streams, mpsc::channel(1).1);
-    let (_proxy, _events) = proxy_on(streams, up);
-    stand.send(Frame::empty(1, Kind::Open)).await;
-    stand
-        .send(Frame::data(1, connect(&format!("up.test:{}", up.port()))))
-        .await;
-    let head = stand.head(1).await;
-    assert!(head.starts_with("HTTP/1.1 200"), "{head:?}");
-    stand.send(Frame::data(1, b"ping".to_vec())).await;
-    let mut back = Vec::new();
-    while back.len() < 4 {
-        let f = stand.next().await.expect("the echo");
-        if f.kind == Kind::Data && f.stream == 1 {
-            back.extend(f.payload);
+#[test]
+fn a_relayed_connect_reaches_the_proxy() {
+    saman::block_on_current(async {
+        let up = echo().await;
+        let (mut stand, mut owner) = plain().await;
+        let streams = std::mem::replace(&mut owner.streams, mpsc::channel(1).1);
+        let (_proxy, _events) = proxy_on(streams, up);
+        stand.send(Frame::empty(1, Kind::Open)).await;
+        stand
+            .send(Frame::data(1, connect(&format!("up.test:{}", up.port()))))
+            .await;
+        let head = stand.head(1).await;
+        assert!(head.starts_with("HTTP/1.1 200"), "{head:?}");
+        stand.send(Frame::data(1, b"ping".to_vec())).await;
+        let mut back = Vec::new();
+        while back.len() < 4 {
+            let f = stand.next().await.expect("the echo");
+            if f.kind == Kind::Data && f.stream == 1 {
+                back.extend(f.payload);
+            }
         }
-    }
-    assert_eq!(back, b"ping");
-    stand.close();
-    assert_eq!(owner.end().await.0, End::Eof);
+        assert_eq!(back, b"ping");
+        stand.close();
+        assert_eq!(owner.end().await.0, End::Eof);
+    })
 }
 
 /// [C] A frame of an unknown kind ends the channel with `Violation`.
-#[tokio::test]
-async fn a_violation_from_the_sidecar_returns_violation() {
-    let (mut stand, owner) = plain().await;
-    stand.raw(&[0, 0, 0, 0, 99, 0, 0, 0, 0]).await;
-    let (end, _) = owner.end().await;
-    assert!(matches!(end, End::Violation(_)), "{end:?}");
+#[test]
+fn a_violation_from_the_sidecar_returns_violation() {
+    saman::block_on_current(async {
+        let (mut stand, owner) = plain().await;
+        stand.raw(&[0, 0, 0, 0, 99, 0, 0, 0, 0]).await;
+        let (end, _) = owner.end().await;
+        assert!(matches!(end, End::Violation(_)), "{end:?}");
+    })
 }
 
 /// [C] The sidecar's output ends before any frame: `Ready`, with the reason.
-#[tokio::test]
-async fn eof_before_ready_is_ready_end() {
-    let (w, mut out) = tokio::io::duplex(1024);
-    drop(w);
-    let r = wait_ready(&mut out, listen(), READY_LIMIT).await;
-    assert!(matches!(r, Err(End::Ready(_))), "{r:?}");
+#[test]
+fn eof_before_ready_is_ready_end() {
+    saman::block_on_current(async {
+        let (w, mut out) = tokio::io::duplex(1024);
+        drop(w);
+        let r = wait_ready(&mut out, listen(), READY_LIMIT).await;
+        assert!(matches!(r, Err(End::Ready(_))), "{r:?}");
+    })
 }
 
 /// [C] A `READY` naming another address than the one asked for: `Ready`.
-#[tokio::test]
-async fn a_ready_naming_another_address_is_ready_end() {
-    let (mut w, mut out) = tokio::io::duplex(1024);
-    let mut b = Vec::new();
-    encode(&Frame::ready("127.0.0.2:4000".parse().unwrap()), &mut b);
-    w.write_all(&b).await.unwrap();
-    let r = wait_ready(&mut out, listen(), READY_LIMIT).await;
-    assert!(
-        matches!(&r, Err(End::Ready(why)) if why.contains("127.0.0.2:4000")),
-        "{r:?}"
-    );
+#[test]
+fn a_ready_naming_another_address_is_ready_end() {
+    saman::block_on_current(async {
+        let (mut w, mut out) = tokio::io::duplex(1024);
+        let mut b = Vec::new();
+        encode(&Frame::ready("127.0.0.2:4000".parse().unwrap()), &mut b);
+        w.write_all(&b).await.unwrap();
+        let r = wait_ready(&mut out, listen(), READY_LIMIT).await;
+        assert!(
+            matches!(&r, Err(End::Ready(why)) if why.contains("127.0.0.2:4000")),
+            "{r:?}"
+        );
+    })
 }
 
 /// [C] The job CONNECTs to an unlisted host and keeps sending within its credit; the proxy's 403 makes the owner
 /// reset the stream, the late `DATA` is discarded, and a second stream's allowed CONNECT still gets its 200.
-#[tokio::test]
-async fn a_proxy_403_while_the_job_sends_leaves_the_channel_whole() {
-    let up = echo().await;
-    let (mut stand, mut owner) = plain().await;
-    let streams = std::mem::replace(&mut owner.streams, mpsc::channel(1).1);
-    let (_proxy, _events) = proxy_on(streams, up);
-    stand.send(Frame::empty(1, Kind::Open)).await;
-    stand.send(Frame::data(1, connect("x.test:443"))).await;
-    // more than the proxy reads and the stream's duplex holds, so the owner's write fails once the proxy is gone
-    stand.push(1, &vec![7u8; 128 * 1024]).await;
-    let mut answer = Vec::new();
-    loop {
-        let f = stand.next().await.expect("the owner's frames");
-        match (f.stream, f.kind) {
-            (1, Kind::Data) => answer.extend(f.payload),
-            (1, Kind::Rst) => break,
-            _ => {}
+#[test]
+fn a_proxy_403_while_the_job_sends_leaves_the_channel_whole() {
+    saman::block_on_current(async {
+        let up = echo().await;
+        let (mut stand, mut owner) = plain().await;
+        let streams = std::mem::replace(&mut owner.streams, mpsc::channel(1).1);
+        let (_proxy, _events) = proxy_on(streams, up);
+        stand.send(Frame::empty(1, Kind::Open)).await;
+        stand.send(Frame::data(1, connect("x.test:443"))).await;
+        // more than the proxy reads and the stream's duplex holds, so the owner's write fails once the proxy is gone
+        stand.push(1, &vec![7u8; 128 * 1024]).await;
+        let mut answer = Vec::new();
+        loop {
+            let f = stand.next().await.expect("the owner's frames");
+            match (f.stream, f.kind) {
+                (1, Kind::Data) => answer.extend(f.payload),
+                (1, Kind::Rst) => break,
+                _ => {}
+            }
         }
-    }
-    // the RST drops what of the stream still waits for the writer, the 403's bytes among them in some runs
-    let answer = String::from_utf8_lossy(&answer);
-    assert!(
-        answer.is_empty() || answer.starts_with("HTTP/1.1 403"),
-        "{answer:?}"
-    );
-    // late, within the credit the job had: discarded
-    stand.send(Frame::data(1, b"late".to_vec())).await;
-    stand.send(Frame::empty(3, Kind::Open)).await;
-    stand
-        .send(Frame::data(3, connect(&format!("up.test:{}", up.port()))))
-        .await;
-    let head = stand.head(3).await;
-    assert!(head.starts_with("HTTP/1.1 200"), "{head:?}");
-    assert!(!owner.end.is_finished(), "the channel is still up");
+        // the RST drops what of the stream still waits for the writer, the 403's bytes among them in some runs
+        let answer = String::from_utf8_lossy(&answer);
+        assert!(
+            answer.is_empty() || answer.starts_with("HTTP/1.1 403"),
+            "{answer:?}"
+        );
+        // late, within the credit the job had: discarded
+        stand.send(Frame::data(1, b"late".to_vec())).await;
+        stand.send(Frame::empty(3, Kind::Open)).await;
+        stand
+            .send(Frame::data(3, connect(&format!("up.test:{}", up.port()))))
+            .await;
+        let head = stand.head(3).await;
+        assert!(head.starts_with("HTTP/1.1 200"), "{head:?}");
+        assert!(!owner.end.is_finished(), "the channel is still up");
+    })
 }
 
 /// [C] The stand-in never reads its stdin; with a short stall limit and fast beats, `run` returns `Stalled`.
-#[tokio::test]
-async fn a_sidecar_that_stops_reading_is_a_stall() {
-    let (_stand, owner) = start(64, Duration::from_millis(1), Duration::from_millis(100), 16).await;
-    assert_eq!(owner.end().await.0, End::Stalled);
+#[test]
+fn a_sidecar_that_stops_reading_is_a_stall() {
+    saman::block_on_current(async {
+        let (_stand, owner) =
+            start(64, Duration::from_millis(1), Duration::from_millis(100), 16).await;
+        assert_eq!(owner.end().await.0, End::Stalled);
+    })
 }
 
 /// [C] Half a `DATA` frame, then the end: `Eof`, and the log says the relay ended mid-frame.
-#[tokio::test]
-async fn a_partial_frame_at_eof_is_eof() {
-    let (mut stand, owner) = plain().await;
-    stand.send(Frame::empty(1, Kind::Open)).await;
-    let mut b = Vec::new();
-    encode(&Frame::data(1, vec![1u8; 100]), &mut b);
-    stand.raw(&b[..HEADER + 50]).await;
-    stand.close();
-    let (end, log) = owner.end().await;
-    assert_eq!(end, End::Eof);
-    assert!(log.contains("the relay ended mid-frame"), "{log:?}");
+#[test]
+fn a_partial_frame_at_eof_is_eof() {
+    saman::block_on_current(async {
+        let (mut stand, owner) = plain().await;
+        stand.send(Frame::empty(1, Kind::Open)).await;
+        let mut b = Vec::new();
+        encode(&Frame::data(1, vec![1u8; 100]), &mut b);
+        stand.raw(&b[..HEADER + 50]).await;
+        stand.close();
+        let (end, log) = owner.end().await;
+        assert_eq!(end, End::Eof);
+        assert!(log.contains("the relay ended mid-frame"), "{log:?}");
+    })
 }
 
 /// [C] An events channel of one that nobody reads: ten foreign sources (the most a second reports), then a stream's
 /// 1 MiB, which arrives whole; the drops are counted in the log at `run`'s end.
-#[tokio::test]
-async fn a_lagging_event_consumer_never_stalls_the_reader() {
-    const TOTAL: usize = 1 << 20;
-    let (mut stand, mut owner) = start(64 * 1024, BEAT, shell::STALL, 1).await;
-    for i in 1..=10u8 {
-        stand
-            .send(Frame::event(IpAddr::V4(Ipv4Addr::new(10, 0, 0, i))))
-            .await;
-    }
-    stand.send(Frame::empty(1, Kind::Open)).await;
-    let mut r = owner.relayed().await;
-    let reader = saman::spawn("the stream's reader", async move {
-        let mut got = vec![0u8; TOTAL];
-        r.io.read_exact(&mut got).await.map(|_| got)
-    });
-    let pattern: Vec<u8> = (0..TOTAL).map(|i| (i % 251) as u8).collect();
-    stand.push(1, &pattern).await;
-    let got = timeout(WAIT, reader)
-        .await
-        .expect("the stream's bytes arrive")
-        .unwrap()
-        .expect("the whole MiB");
-    assert!(got == pattern, "the bytes arrive whole and in order");
-    assert_eq!(
-        owner.events.try_recv(),
-        Ok(OwnerEvent::ForeignSource(IpAddr::V4(Ipv4Addr::new(
-            10, 0, 0, 1
-        ))))
-    );
-    stand.close();
-    let (end, log) = owner.end().await;
-    assert_eq!(end, End::Eof);
-    assert!(log.contains("9 foreign-source events dropped"), "{log:?}");
+#[test]
+fn a_lagging_event_consumer_never_stalls_the_reader() {
+    saman::block_on_current(async {
+        const TOTAL: usize = 1 << 20;
+        let (mut stand, mut owner) = start(64 * 1024, BEAT, shell::STALL, 1).await;
+        for i in 1..=10u8 {
+            stand
+                .send(Frame::event(IpAddr::V4(Ipv4Addr::new(10, 0, 0, i))))
+                .await;
+        }
+        stand.send(Frame::empty(1, Kind::Open)).await;
+        let mut r = owner.relayed().await;
+        let reader = saman::spawn("the stream's reader", async move {
+            let mut got = vec![0u8; TOTAL];
+            r.io.read_exact(&mut got).await.map(|_| got)
+        });
+        let pattern: Vec<u8> = (0..TOTAL).map(|i| (i % 251) as u8).collect();
+        stand.push(1, &pattern).await;
+        let got = timeout(WAIT, reader)
+            .await
+            .expect("the stream's bytes arrive")
+            .unwrap()
+            .expect("the whole MiB");
+        assert!(got == pattern, "the bytes arrive whole and in order");
+        assert_eq!(
+            owner.events.try_recv(),
+            Ok(OwnerEvent::ForeignSource(IpAddr::V4(Ipv4Addr::new(
+                10, 0, 0, 1
+            ))))
+        );
+        stand.close();
+        let (end, log) = owner.end().await;
+        assert_eq!(end, End::Eof);
+        assert!(log.contains("9 foreign-source events dropped"), "{log:?}");
+    })
 }
 
 /// [C] A `Relayed`'s `gone` resolves after the owner's `RST` and, for every stream, at the channel's end. After both
 /// `FIN`s it waits for the proxy's side to let go (or that end), so the proxy finishes copying.
-#[tokio::test]
-async fn a_closed_stream_fires_its_gone() {
-    let (mut stand, mut owner) = plain().await;
-    // the owner's RST: the proxy dropped the stream, and the job's next bytes can't be written to it
-    stand.send(Frame::empty(1, Kind::Open)).await;
-    let r1 = owner.relayed().await;
-    drop(r1.io);
-    stand.send(Frame::data(1, b"to nobody".to_vec())).await;
-    loop {
-        let f = stand.next().await.expect("the owner's frames");
-        if (f.stream, f.kind) == (1, Kind::Rst) {
-            break;
+#[test]
+fn a_closed_stream_fires_its_gone() {
+    saman::block_on_current(async {
+        let (mut stand, mut owner) = plain().await;
+        // the owner's RST: the proxy dropped the stream, and the job's next bytes can't be written to it
+        stand.send(Frame::empty(1, Kind::Open)).await;
+        let r1 = owner.relayed().await;
+        drop(r1.io);
+        stand.send(Frame::data(1, b"to nobody".to_vec())).await;
+        loop {
+            let f = stand.next().await.expect("the owner's frames");
+            if (f.stream, f.kind) == (1, Kind::Rst) {
+                break;
+            }
         }
-    }
-    timeout(WAIT, r1.gone)
-        .await
-        .expect("gone after the owner's RST")
-        .unwrap_err();
+        timeout(WAIT, r1.gone)
+            .await
+            .expect("gone after the owner's RST")
+            .unwrap_err();
 
-    // both FINs: the proxy's side ends its writing, the job ends its own; the proxy may still be copying what the
-    // stream left in its duplex, so `gone` waits for the proxy to let go, or the channel's end
-    stand.send(Frame::empty(3, Kind::Open)).await;
-    let mut r3 = owner.relayed().await;
-    r3.io.shutdown().await.unwrap();
-    loop {
-        let f = stand.next().await.expect("the owner's frames");
-        if (f.stream, f.kind) == (3, Kind::Fin) {
-            break;
+        // both FINs: the proxy's side ends its writing, the job ends its own; the proxy may still be copying what the
+        // stream left in its duplex, so `gone` waits for the proxy to let go, or the channel's end
+        stand.send(Frame::empty(3, Kind::Open)).await;
+        let mut r3 = owner.relayed().await;
+        r3.io.shutdown().await.unwrap();
+        loop {
+            let f = stand.next().await.expect("the owner's frames");
+            if (f.stream, f.kind) == (3, Kind::Fin) {
+                break;
+            }
         }
-    }
-    stand.send(Frame::empty(3, Kind::Fin)).await;
-    let mut rest = Vec::new();
-    timeout(WAIT, r3.io.read_to_end(&mut rest))
-        .await
-        .expect("the job's FIN reaches the proxy's side")
-        .unwrap();
-    let mut g3 = r3.gone;
-    assert_eq!(
-        g3.try_recv(),
-        Err(oneshot::error::TryRecvError::Empty),
-        "a graceful close leaves the proxy its copy"
-    );
+        stand.send(Frame::empty(3, Kind::Fin)).await;
+        let mut rest = Vec::new();
+        timeout(WAIT, r3.io.read_to_end(&mut rest))
+            .await
+            .expect("the job's FIN reaches the proxy's side")
+            .unwrap();
+        let mut g3 = r3.gone;
+        assert_eq!(
+            g3.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty),
+            "a graceful close leaves the proxy its copy"
+        );
 
-    // the channel's end: every stream still live, and the closed one still held
-    stand.send(Frame::empty(5, Kind::Open)).await;
-    let r5 = owner.relayed().await;
-    stand.close();
-    timeout(WAIT, r5.gone)
-        .await
-        .expect("gone at the channel's end")
-        .unwrap_err();
-    timeout(WAIT, g3)
-        .await
-        .expect("the held one too")
-        .unwrap_err();
-    assert_eq!(owner.end().await.0, End::Eof);
+        // the channel's end: every stream still live, and the closed one still held
+        stand.send(Frame::empty(5, Kind::Open)).await;
+        let r5 = owner.relayed().await;
+        stand.close();
+        timeout(WAIT, r5.gone)
+            .await
+            .expect("gone at the channel's end")
+            .unwrap_err();
+        timeout(WAIT, g3)
+            .await
+            .expect("the held one too")
+            .unwrap_err();
+        assert_eq!(owner.end().await.0, End::Eof);
+    })
 }
 
 /// [C] A stand-in `podman` whose `run` floods stdout and stderr without end: `run` ends by a violation, and `stop`
 /// returns (the timeout only guards a hang).
 #[cfg(unix)]
-#[tokio::test]
-async fn stop_finishes_while_the_sidecar_floods() {
-    let dir = tempfile::Builder::new().prefix("px-").tempdir().unwrap();
-    let podman = dir.path().join("podman");
-    hlaup::write(
+#[test]
+fn stop_finishes_while_the_sidecar_floods() {
+    saman::block_on_current(async {
+        let dir = tempfile::Builder::new().prefix("px-").tempdir().unwrap();
+        let podman = dir.path().join("podman");
+        hlaup::write(
         &podman,
         // the loop ends when a write fails: draugr's children ignore SIGPIPE, so a closed stdout is an error, not a signal
         "#!/bin/sh\ncase \"$1\" in\nrun) while echo flood && echo flood >&2; do :; done ;;\nrm) exit 0 ;;\nesac\n",
     )
     .unwrap();
-    let mut sc = Sidecar::start(&podman, vec!["run".into()], &[])
+        let mut sc = Sidecar::start(&podman, vec!["run".into()], &[])
+            .await
+            .expect("the stand-in starts");
+        let (inp, out) = sc.take_io().expect("its stdio");
+        let (stx, _streams) = mpsc::channel(STREAMS_ROOM);
+        let (etx, _events) = mpsc::channel(16);
+        let end = timeout(
+            WAIT,
+            run(out, inp, stx, etx, BEAT, shell::STALL, Log::default()),
+        )
         .await
-        .expect("the stand-in starts");
-    let (inp, out) = sc.take_io().expect("its stdio");
-    let (stx, _streams) = mpsc::channel(STREAMS_ROOM);
-    let (etx, _events) = mpsc::channel(16);
-    let end = timeout(
-        WAIT,
-        run(out, inp, stx, etx, BEAT, shell::STALL, Log::default()),
-    )
-    .await
-    .expect("run ends");
-    assert!(matches!(end, End::Violation(_)), "{end:?}");
-    skuld::wait_until_async("the stderr drain reads as it comes", WAIT.as_secs(), || {
-        let sc = &sc;
-        async move { sc.stderr().contains("flood").then_some(()) }
+        .expect("run ends");
+        assert!(matches!(end, End::Violation(_)), "{end:?}");
+        skuld::wait_until_async("the stderr drain reads as it comes", WAIT.as_secs(), || {
+            let sc = &sc;
+            async move { sc.stderr().contains("flood").then_some(()) }
+        })
+        .await;
+        timeout(STOP_LIMIT * 3, sc.stop(&podman, "px-test", &[]))
+            .await
+            .expect("stop returns");
     })
-    .await;
-    timeout(STOP_LIMIT * 3, sc.stop(&podman, "px-test", &[]))
-        .await
-        .expect("stop returns");
+}
+
+/// [C] The sidecar's environment is exactly the one it is given: a variable of the runner's own (a key's) never reaches
+/// podman.
+#[cfg(unix)]
+#[test]
+fn the_sidecar_gets_exactly_the_environment_it_is_given() {
+    saman::block_on_current(async {
+        use tokio::io::AsyncReadExt;
+        let dir = tempfile::Builder::new().prefix("px-").tempdir().unwrap();
+        let podman = dir.path().join("podman");
+        hlaup::write(&podman, "#!/bin/sh\nenv\n").unwrap();
+        // the test's own environment holds at least PATH and the cargo variables nextest sets
+        let env = [(OsString::from("PX_ONLY"), OsString::from("1"))];
+        let mut sc = Sidecar::start(&podman, vec!["run".into()], &env)
+            .await
+            .expect("the stand-in starts");
+        let (inp, mut out) = sc.take_io().expect("its stdio");
+        drop(inp);
+        let mut seen = String::new();
+        timeout(WAIT, out.read_to_string(&mut seen))
+            .await
+            .expect("env ends")
+            .unwrap();
+        assert!(seen.lines().any(|l| l == "PX_ONLY=1"), "{seen}");
+        assert!(
+            !seen
+                .lines()
+                .any(|l| l.starts_with("PATH=") || l.starts_with("HOME=")),
+            "{seen}"
+        );
+        sc.stop(&podman, "px-test", &[]).await;
+    })
+}
+
+/// [C] A sidecar dropped before `stop` takes everything podman started with it.
+#[cfg(unix)]
+#[test]
+fn a_dropped_sidecar_takes_its_whole_group_down() {
+    saman::block_on_current(async {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let dir = tempfile::Builder::new().prefix("px-").tempdir().unwrap();
+        let podman = dir.path().join("podman");
+        hlaup::write(&podman, "#!/bin/sh\nsleep 600 &\necho $!\nwait\n").unwrap();
+        let mut sc = Sidecar::start(&podman, vec!["run".into()], &[])
+            .await
+            .expect("the stand-in starts");
+        let (_inp, out) = sc.take_io().expect("its stdio");
+        let mut line = String::new();
+        timeout(WAIT, BufReader::new(out).read_line(&mut line))
+            .await
+            .expect("the pid line")
+            .unwrap();
+        let pid: i32 = line.trim().parse().unwrap();
+        assert!(
+            draugr::alive(pid),
+            "the grandchild runs while the sidecar does"
+        );
+        drop(sc);
+        skuld::wait_until_async("the grandchild is gone", WAIT.as_secs(), || async move {
+            (!draugr::alive(pid)).then_some(())
+        })
+        .await;
+    })
+}
+
+/// [C] A `podman rm` that never answers is given up at the stop deadline: its group is killed, and `stop` returns.
+#[cfg(unix)]
+#[test]
+fn a_podman_rm_that_hangs_is_killed_at_the_stop_deadline() {
+    saman::block_on_current(async {
+        let clock = stund::Manual::default();
+        let _clock = clock.on_this_thread();
+        let dir = tempfile::Builder::new().prefix("px-").tempdir().unwrap();
+        let podman = dir.path().join("podman");
+        let pid_file = dir.path().join("rm.pid");
+        hlaup::write(
+        &podman,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\nrun) exit 0 ;;\nrm) echo $$ > {}; exec sleep 600 ;;\nesac\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+        let sc = Sidecar::start(&podman, vec!["run".into()], &[])
+            .await
+            .expect("the stand-in starts");
+        let stopping = saman::spawn("the stop", {
+            let podman = podman.clone();
+            async move { sc.stop(&podman, "px-test", &[]).await }
+        });
+        // `rm` is running and `stop` waits for it on the (manual) clock: only now does the deadline pass
+        let pid: i32 = skuld::wait_until_async("rm started", WAIT.as_secs(), || async {
+            eitri::read_string(&pid_file, 64).ok()?.trim().parse().ok()
+        })
+        .await;
+        skuld::wait_until_async("stop waits on rm", WAIT.as_secs(), || async {
+            (clock.sleepers() > 0).then_some(())
+        })
+        .await;
+        clock.advance(STOP_LIMIT);
+        timeout(WAIT, stopping)
+            .await
+            .expect("stop returns")
+            .unwrap();
+        skuld::wait_until_async("rm is gone", WAIT.as_secs(), || async move {
+            (!draugr::alive(pid)).then_some(())
+        })
+        .await;
+    })
 }
 
 /// A key source that answers `ok` and the request back, counting its calls.
@@ -537,51 +668,57 @@ impl Stand {
 /// [C] A key stream's one request line reaches the key source and its answer comes back, then the stream's `FIN`;
 /// a second line on the same stream is never read. A stream for the proxy carrying the same line never reaches the
 /// key source: it goes to the proxy's side.
-#[tokio::test]
-async fn a_key_stream_reaches_the_key_source_once_and_a_proxy_stream_never() {
-    let (mut stand, mut owner, calls) = keyed().await;
-    stand.send(Frame::open_key(1)).await;
-    stand.push(1, b"get A\nget B\n").await;
-    stand.send(Frame::empty(1, Kind::Fin)).await;
-    assert_eq!(stand.answer(1).await.as_deref(), Some(&b"ok get A\n"[..]));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    stand.send(Frame::empty(3, Kind::Open)).await;
-    stand.push(3, b"get A\n").await;
-    let r = owner.relayed().await;
-    drop(r);
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        1,
-        "a proxy stream reached the keys"
-    );
-    stand.close();
-    assert_eq!(owner.end().await.0, End::Eof);
+#[test]
+fn a_key_stream_reaches_the_key_source_once_and_a_proxy_stream_never() {
+    saman::block_on_current(async {
+        let (mut stand, mut owner, calls) = keyed().await;
+        stand.send(Frame::open_key(1)).await;
+        stand.push(1, b"get A\nget B\n").await;
+        stand.send(Frame::empty(1, Kind::Fin)).await;
+        assert_eq!(stand.answer(1).await.as_deref(), Some(&b"ok get A\n"[..]));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        stand.send(Frame::empty(3, Kind::Open)).await;
+        stand.push(3, b"get A\n").await;
+        let r = owner.relayed().await;
+        drop(r);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a proxy stream reached the keys"
+        );
+        stand.close();
+        assert_eq!(owner.end().await.0, End::Eof);
+    })
 }
 
 /// [C] A key request longer than [`KEY_REQUEST`] bytes without its newline resets the stream, and the key source
 /// never sees it; nor does a line that isn't UTF-8.
-#[tokio::test]
-async fn an_overlong_key_request_is_reset_unread() {
-    let (mut stand, owner, calls) = keyed().await;
-    stand.send(Frame::open_key(1)).await;
-    stand.push(1, &[b'a'; KEY_REQUEST + 1]).await;
-    assert_eq!(stand.answer(1).await, None, "the stream was reset");
-    stand.send(Frame::open_key(3)).await;
-    stand.push(3, b"get \xff\n").await;
-    assert_eq!(stand.answer(3).await, None, "the stream was reset");
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    stand.close();
-    assert_eq!(owner.end().await.0, End::Eof);
+#[test]
+fn an_overlong_key_request_is_reset_unread() {
+    saman::block_on_current(async {
+        let (mut stand, owner, calls) = keyed().await;
+        stand.send(Frame::open_key(1)).await;
+        stand.push(1, &[b'a'; KEY_REQUEST + 1]).await;
+        assert_eq!(stand.answer(1).await, None, "the stream was reset");
+        stand.send(Frame::open_key(3)).await;
+        stand.push(3, b"get \xff\n").await;
+        assert_eq!(stand.answer(3).await, None, "the stream was reset");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        stand.close();
+        assert_eq!(owner.end().await.0, End::Eof);
+    })
 }
 
 /// [C] A key stream on a channel whose job has no keys ends the channel with a violation.
-#[tokio::test]
-async fn a_key_stream_on_an_unkeyed_channel_ends_it() {
-    let (mut stand, owner) = plain().await;
-    stand.send(Frame::open_key(1)).await;
-    let (end, _) = owner.end().await;
-    assert!(
-        matches!(&end, End::Violation(v) if v.contains("no keys")),
-        "{end:?}"
-    );
+#[test]
+fn a_key_stream_on_an_unkeyed_channel_ends_it() {
+    saman::block_on_current(async {
+        let (mut stand, owner) = plain().await;
+        stand.send(Frame::open_key(1)).await;
+        let (end, _) = owner.end().await;
+        assert!(
+            matches!(&end, End::Violation(v) if v.contains("no keys")),
+            "{end:?}"
+        );
+    })
 }

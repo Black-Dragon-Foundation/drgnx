@@ -61,3 +61,6 @@ path = "tests/main.rs"
 [[test]]
 name = "logging"
 path = "tests/logging.rs"
+
+[lints]
+workspace = true

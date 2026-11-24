@@ -36,6 +36,13 @@ mot = { clean = true }
 hrafn = { clean = true }
 bifrost = { clean = true }
 urdr = { clean = true }
+brokkr = { clean = true }
+sleipnir = { clean = true }
+gleipnir = { clean = true }
+gleipnir-escape = { clean = true }
+norn = { clean = true }
+glugg = { clean = true }
+ferja = { clean = true }
 vor = { clean = true }
 mimir = { clean = true }
 ghostty-vt-sys = { clean = true }

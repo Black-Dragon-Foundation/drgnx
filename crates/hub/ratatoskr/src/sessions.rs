@@ -1479,7 +1479,8 @@ pub fn outside(s: &Session, kind: &str) -> Result<Identity, Error> {
             None,
         ));
     }
-    Identity::outside(kind, parent.pid, parent.start, s.cwd.clone()).map_err(|e| invalid("kind", e))
+    Identity::outside(kind, parent.pid, parent.start, s.cwd.clone())
+        .map_err(|e| invalid("kind", e.to_string()))
 }
 
 /// Close the sessions of gone owners each [`TICK`], for as long as the hub serves.

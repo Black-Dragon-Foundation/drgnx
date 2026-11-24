@@ -414,7 +414,7 @@ impl Sidecar {
         podman: &Path,
         argv: Vec<OsString>,
         env: &[(OsString, OsString)],
-    ) -> Result<Sidecar, String> {
+    ) -> villa::Result<Sidecar> {
         let mut child = draugr::spawn(draugr::Spec {
             program: podman.to_path_buf(),
             args: argv,
@@ -425,9 +425,11 @@ impl Sidecar {
             new_session: false,
         })
         .await
-        .map_err(|e| format!("starting {}: {e}", podman.display()))?;
+        .map_err(|e| {
+            villa::Error::unavailable(format!("starting {}: {e}", podman.display())).with_source(e)
+        })?;
         let (Some(inp), Some(out)) = (child.take_stdin(), child.take_stdout()) else {
-            return Err("the sidecar's stdio isn't piped".into());
+            return Err(villa::Error::internal("the sidecar's stdio isn't piped"));
         };
         Ok(Sidecar {
             child,

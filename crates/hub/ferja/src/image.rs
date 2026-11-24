@@ -67,7 +67,7 @@ pub fn ensure_image(
     env: &[(OsString, OsString)],
     tar: &[u8],
     limit: Duration,
-) -> Result<String, String> {
+) -> villa::Result<String> {
     let image = image_ref(tar);
     let start = stund::Instant::now();
     let exists = podman_run(podman, env, &["image", "exists", &image], &[], limit)?;
@@ -80,10 +80,10 @@ pub fn ensure_image(
     if ok {
         Ok(image)
     } else {
-        Err(format!(
+        Err(villa::Error::unavailable(format!(
             "podman import of the relay's image failed: {}",
             stderr.trim()
-        ))
+        )))
     }
 }
 
@@ -95,7 +95,7 @@ fn podman_run(
     args: &[&str],
     stdin: &[u8],
     limit: Duration,
-) -> Result<(bool, String), String> {
+) -> villa::Result<(bool, String)> {
     let spec = draugr::Spec {
         program: podman.to_path_buf(),
         args: args.iter().map(OsString::from).collect(),
@@ -107,13 +107,14 @@ fn podman_run(
     };
     let out = draugr::run_with_input(spec, stdin.to_vec(), limit).map_err(|e| {
         if e.kind() == std::io::ErrorKind::TimedOut {
-            format!(
+            villa::Error::timeout(format!(
                 "podman {} took longer than {}s",
                 args.first().copied().unwrap_or(""),
                 limit.as_secs().max(1)
-            )
+            ))
+            .with_source(e)
         } else {
-            format!("podman: {e}")
+            villa::Error::unavailable(format!("podman: {e}")).with_source(e)
         }
     })?;
     Ok((out.status.success(), out.stderr))
@@ -279,14 +280,15 @@ mod tests {
             "[ \"$1 $2\" = \"image exists\" ] && exit 1\necho 'no space left' >&2\nexit 125",
         );
         let e = ensure_image(&p, &[], &image_tar(b"px"), Duration::from_secs(20)).unwrap_err();
-        assert!(e.contains("no space left"), "{e}");
+        assert!(e.to_string().contains("no space left"), "{e}");
         let t2 = tempfile::tempdir().unwrap();
         let p = fake_podman(
             t2.path(),
             "[ \"$1 $2\" = \"image exists\" ] && exit 1\nexec sleep 30",
         );
         let e = ensure_image(&p, &[], &image_tar(b"px"), Duration::from_millis(300)).unwrap_err();
-        assert!(e.contains("longer than"), "{e}");
+        assert!(e.to_string().contains("longer than"), "{e}");
+        assert_eq!(e.kind(), villa::Kind::Timeout);
     }
 
     /// Needs rootless podman: the imported image runs the relay.

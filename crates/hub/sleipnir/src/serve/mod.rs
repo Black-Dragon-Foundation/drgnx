@@ -36,7 +36,7 @@ use crate::sync::blobs::Store;
 use crate::sync::bundle::{BundleRef, Receiver};
 use crate::sync::capture::Entry;
 use crate::sync::mirror::{self, Mirror};
-use crate::sync::slot::{self, Overlay, SlotKey};
+use crate::sync::slot::{self, Overlay, SlotId};
 use attempts::{CANCELLED, COLLECTED, LOG, Meta};
 use forseti::classify::infra;
 use forseti::safety::Level;
@@ -485,7 +485,7 @@ impl<W: Write> Serve<W> {
             island_held: None,
         };
         if let Some(i) = &s.cfg.island {
-            s.platform.island_check(i).map_err(villa::Error::invalid)?;
+            s.platform.island_check(i)?;
         }
         s.load_running();
         // a timing job that ended while no `serve` ran (killed, a restart) gave nothing back: the work slice's CPUs
@@ -954,7 +954,7 @@ impl<W: Write> Serve<W> {
             return self.refuse(r, "a job id is letters and digits");
         }
         // a slot moves to new inputs only once no running job reads it at others (a writer reads its own copy)
-        let slot = SlotKey::of(&spec).id();
+        let slot = SlotId::of(&spec).id();
         let busy = !input_key.is_empty()
             && self.live.values().any(|l| {
                 l.meta.started.is_some()
@@ -1086,11 +1086,14 @@ impl<W: Write> Serve<W> {
         // synced inputs: the attempt reads its slot (or a private copy of it); none: an empty source
         let mut slot_held = None;
         let src = match &l.sync {
-            Some(s) => self.checkout(&dir, &meta, s).map(|(src, id, held)| {
-                meta.slot = Some(id);
-                slot_held = held;
-                src
-            }),
+            Some(s) => self
+                .checkout(&dir, &meta, s)
+                .map(|(src, id, held)| {
+                    meta.slot = Some(id);
+                    slot_held = held;
+                    src
+                })
+                .map_err(villa::Error::unavailable),
             None => Ok(dir.join("src")),
         };
         // work leaves the island before the timing job starts on it
@@ -1137,7 +1140,7 @@ impl<W: Write> Serve<W> {
             }
             Err(why) => {
                 // never run some other way: the attempt ends `infra: setup`, with the reason in its log
-                self.setup_failed(&dir, &meta, &why);
+                self.setup_failed(&dir, &meta, &why.to_string());
                 if let Some(l) = self.live.get_mut(&(r.job.clone(), r.attempt)) {
                     l.pump = Some(0);
                 }
@@ -1157,7 +1160,7 @@ impl<W: Write> Serve<W> {
         s: &SyncIn,
     ) -> Result<(PathBuf, String, Option<slot::Held>), String> {
         let root = &self.cfg.root;
-        let key = SlotKey::of(&meta.spec);
+        let key = SlotId::of(&meta.spec);
         let p = slot::paths(root, &key);
         let sync_err = |e: crate::sync::SyncError| format!("the checkout: {e}");
         let m = Mirror::ensure(root, &s.repo).map_err(sync_err)?;

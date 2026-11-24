@@ -219,7 +219,7 @@ impl Output {
 
 /// Hands the stdout and stderr a call wrote to the log, then a note when the call's log was cut.
 pub(crate) fn flush_output(out: &Mutex<Output>, io: &dyn HostIo, plugin: &str) {
-    let mut o = out.lock().unwrap_or_else(|e| e.into_inner());
+    let mut o = saman::lock(out);
     for (i, level) in [(0, Level::Info), (1, Level::Warn)] {
         let bytes = std::mem::take(&mut o.streams[i]);
         if !bytes.is_empty() {
@@ -263,7 +263,7 @@ impl wasmtime_wasi::cli::StdoutStream for Pipe {
 
 impl wasmtime_wasi::p2::OutputStream for Pipe {
     fn write(&mut self, bytes: bytes::Bytes) -> wasmtime_wasi::p2::StreamResult<()> {
-        let mut o = self.out.lock().unwrap_or_else(|e| e.into_inner());
+        let mut o = saman::lock(&self.out);
         let fits = o.take(bytes.len());
         o.streams[self.stream].extend_from_slice(&bytes[..fits]);
         Ok(())
@@ -529,11 +529,7 @@ impl host::Host for State {
     }
 
     async fn log(&mut self, level: types::Level, text: String) -> wasmtime::Result<()> {
-        let fits = self
-            .out
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take(text.len());
+        let fits = saman::lock(&self.out).take(text.len());
         if fits > 0 {
             let mut end = fits;
             while !text.is_char_boundary(end) {

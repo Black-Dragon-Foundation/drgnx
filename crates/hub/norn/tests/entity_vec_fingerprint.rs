@@ -34,47 +34,49 @@ async fn schema(db: &CoordDb) -> String {
     .unwrap()
 }
 
-#[tokio::test]
-async fn migrate16_drops_label_rows_keeps_hex_rows() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("work.db");
-    {
-        let db = CoordDb::spawn(&file);
-        rows(&db).await; // the opening rule has made the file
-    }
-    let conn = urdr::Connection::open(&file).unwrap();
-    let too_short = &HEX_A[..63];
-    let not_hex = "g".repeat(64);
-    // built from pieces so that the graph tables' one-write-path scan (`urdr/tests/one_write_path.rs`) sees no fixture
-    let insert = concat!(
-        "insert",
-        " into entity_vec(n, bits, vec, scale, model) values"
-    );
-    for (n, vec, model) in [
-        (1, "0102", Some("tei:tei")),
-        (1, "0304", Some(HEX_A)),
-        (2, "0506", Some("granite-embedding-small-english-r2")),
-        (3, "0708", Some(HEX_B)),
-        (4, "0909", Some("")), // schema 10 kept the empty name of a row with no model
-        (5, "0101", Some(too_short)),
-        (6, "0202", Some(not_hex.as_str())),
-    ] {
-        let model = model.map_or("null".to_owned(), |m| format!("'{m}'"));
-        conn.execute_batch(&format!("{insert} ({n}, x'01', x'{vec}', 0.5, {model});"))
+#[test]
+fn migrate16_drops_label_rows_keeps_hex_rows() {
+    saman::block_on_current(async {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("work.db");
+        {
+            let db = CoordDb::spawn(&file);
+            rows(&db).await; // the opening rule has made the file
+        }
+        let conn = urdr::Connection::open(&file).unwrap();
+        let too_short = &HEX_A[..63];
+        let not_hex = "g".repeat(64);
+        // built from pieces so that the graph tables' one-write-path scan (`urdr/tests/one_write_path.rs`) sees no fixture
+        let insert = concat!(
+            "insert",
+            " into entity_vec(n, bits, vec, scale, model) values"
+        );
+        for (n, vec, model) in [
+            (1, "0102", Some("tei:tei")),
+            (1, "0304", Some(HEX_A)),
+            (2, "0506", Some("granite-embedding-small-english-r2")),
+            (3, "0708", Some(HEX_B)),
+            (4, "0909", Some("")), // schema 10 kept the empty name of a row with no model
+            (5, "0101", Some(too_short)),
+            (6, "0202", Some(not_hex.as_str())),
+        ] {
+            let model = model.map_or("null".to_owned(), |m| format!("'{m}'"));
+            conn.execute_batch(&format!("{insert} ({n}, x'01', x'{vec}', 0.5, {model});"))
+                .unwrap();
+        }
+        conn.execute("update kv set value = '15' where key = 'schema'", [])
             .unwrap();
-    }
-    conn.execute("update kv set value = '15' where key = 'schema'", [])
-        .unwrap();
-    drop(conn);
+        drop(conn);
 
-    let db = CoordDb::spawn(&file);
-    assert_eq!(
-        rows(&db).await,
-        vec![
-            (1, HEX_A.to_owned(), vec![3, 4]),
-            (3, HEX_B.to_owned(), vec![7, 8]),
-        ],
-        "the label rows go, the fingerprint rows stay"
-    );
-    assert_eq!(schema(&db).await, "16");
+        let db = CoordDb::spawn(&file);
+        assert_eq!(
+            rows(&db).await,
+            vec![
+                (1, HEX_A.to_owned(), vec![3, 4]),
+                (3, HEX_B.to_owned(), vec![7, 8]),
+            ],
+            "the label rows go, the fingerprint rows stay"
+        );
+        assert_eq!(schema(&db).await, "16");
+    })
 }

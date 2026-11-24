@@ -30,14 +30,14 @@ struct MemKv(Mutex<HashMap<String, Vec<u8>>>);
 
 impl Kv for MemKv {
     fn get(&self, key: &str) -> Option<Vec<u8>> {
-        self.0.lock().unwrap().get(key).cloned()
+        saman::lock(&self.0).get(key).cloned()
     }
     fn put(&self, key: &str, value: &[u8]) -> Result<(), String> {
-        self.0.lock().unwrap().insert(key.into(), value.to_vec());
+        saman::lock(&self.0).insert(key.into(), value.to_vec());
         Ok(())
     }
     fn delete(&self, key: &str) -> Result<(), String> {
-        self.0.lock().unwrap().remove(key);
+        saman::lock(&self.0).remove(key);
         Ok(())
     }
 }
@@ -68,13 +68,13 @@ impl TestIo {
         })
     }
     fn requests(&self) -> Vec<(String, HttpReq)> {
-        self.requests.lock().unwrap().clone()
+        saman::lock(&self.requests).clone()
     }
 }
 
 impl HostIo for TestIo {
     fn http(&self, plugin: &str, req: HttpReq) -> BoxFuture<'_, Result<HttpResp, String>> {
-        self.requests.lock().unwrap().push((plugin.into(), req));
+        saman::lock(&self.requests).push((plugin.into(), req));
         let body = vec![b'x'; self.reply_bytes];
         Box::pin(async move {
             Ok(HttpResp {
@@ -85,20 +85,14 @@ impl HostIo for TestIo {
         })
     }
     fn denied(&self, plugin: &str, host: &str, _: &str) -> BoxFuture<'_, ()> {
-        self.denied
-            .lock()
-            .unwrap()
-            .push((plugin.into(), host.into()));
+        saman::lock(&self.denied).push((plugin.into(), host.into()));
         Box::pin(async {})
     }
     fn kv(&self, plugin: &str) -> &dyn Kv {
         self.kv.get(plugin).unwrap_or(&self.nobody)
     }
     fn log(&self, plugin: &str, level: Level, text: &str) {
-        self.logs
-            .lock()
-            .unwrap()
-            .push((plugin.into(), level, text.into()));
+        saman::lock(&self.logs).push((plugin.into(), level, text.into()));
     }
 }
 
@@ -372,10 +366,7 @@ fn http_to_an_undeclared_host_is_refused_before_io() {
         }
         assert_eq!(t.requests(), vec![], "a refused request reached the hub");
         // an undeclared host:port is told to the hub, which records it; a malformed URL names no host
-        let denied: Vec<String> = t
-            .denied
-            .lock()
-            .unwrap()
+        let denied: Vec<String> = saman::lock(&t.denied)
             .iter()
             .map(|(p, h)| {
                 assert_eq!(p, "http-ability");
@@ -577,17 +568,17 @@ fn log_and_stdout_share_64_kib() {
                 .is_ok()
         );
         assert_eq!(
-            t.logs.lock().unwrap().clone(),
+            saman::lock(&t.logs).clone(),
             vec![("http-ability".to_string(), Level::Info, "l".repeat(10))]
         );
-        t.logs.lock().unwrap().clear();
+        saman::lock(&t.logs).clear();
         let loud = json!({"log_bytes": 40_000, "stdout_bytes": 40_000});
         assert!(
             host.call_ability(&p, "chatter", loud, t.clone())
                 .await
                 .is_ok()
         );
-        let logs = t.logs.lock().unwrap().clone();
+        let logs = saman::lock(&t.logs).clone();
         let (cut, text): (Vec<_>, Vec<_>) =
             logs.iter().partition(|(_, _, s)| s.contains("was cut"));
         let total: usize = text.iter().map(|(_, _, s)| s.len()).sum();
