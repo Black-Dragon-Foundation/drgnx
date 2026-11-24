@@ -21,7 +21,6 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::task::JoinHandle;
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -153,7 +152,7 @@ impl<'de> Deserialize<'de> for Script {
 }
 
 /// Whether HAVE contains WANT; the error names the path that differs.
-pub fn contains(have: &Value, want: &Value) -> Result<(), String> {
+pub fn contains(have: &Value, want: &Value) -> villa::Result<()> {
     fn go(have: &Value, want: &Value, path: &str) -> Result<(), String> {
         match (have, want) {
             (Value::Object(h), Value::Object(w)) => {
@@ -179,12 +178,12 @@ pub fn contains(have: &Value, want: &Value) -> Result<(), String> {
             _ => Err(format!("{path}: want {want}, got {have}")),
         }
     }
-    go(have, want, "")
+    go(have, want, "").map_err(villa::Error::invalid)
 }
 
 /// A running mock.
 pub struct Mock {
-    task: JoinHandle<Result<Log, String>>,
+    task: saman::Task<Result<Log, String>>,
 }
 
 impl Mock {
@@ -195,15 +194,13 @@ impl Mock {
         W: AsyncWrite + Unpin + Send + 'static,
     {
         Mock {
-            task: tokio::spawn(play(script, read, write)),
+            task: saman::spawn("vor-mock", play(script, read, write)),
         }
     }
 
     /// Waits for the connection to end: the log, or how the script failed.
-    pub async fn finish(self) -> Result<Log, String> {
-        self.task
-            .await
-            .map_err(|e| format!("the mock panicked: {e}"))?
+    pub async fn finish(self) -> villa::Result<Log> {
+        self.task.await?.map_err(villa::Error::invalid)
     }
 }
 
@@ -307,11 +304,17 @@ where
                 Step::Expect(_) | Step::Any(_) => break,
                 Step::Event { event, body } => {
                     let seq = p.next_seq();
-                    let _ = p.send(Message::Event { seq, event, body }).await;
+                    saman::delivered(
+                        p.send(Message::Event { seq, event, body }).await,
+                        "vor mock: the client is gone",
+                    );
                 }
                 Step::Answer { command, reply } => match p.deferred.remove(&command) {
                     Some((request_seq, cmd)) => {
-                        let _ = p.respond(request_seq, &cmd, &reply).await;
+                        saman::delivered(
+                            p.respond(request_seq, &cmd, &reply).await,
+                            "vor mock: the client is gone",
+                        );
                     }
                     None => p.fail(format!("no deferred {command} to answer")),
                 },
@@ -322,13 +325,15 @@ where
                 } => {
                     let seq = p.next_seq();
                     p.reverse.insert(seq, (command.clone(), answer));
-                    let _ = p
-                        .send(Message::Request {
+                    saman::delivered(
+                        p.send(Message::Request {
                             seq,
                             command,
                             arguments,
                         })
-                        .await;
+                        .await,
+                        "vor mock: the client is gone",
+                    );
                 }
                 Step::Die => {
                     steps.pop_front();
@@ -401,13 +406,18 @@ where
                 };
                 match found {
                     Ok(reply) => {
-                        let _ = p.respond(seq, &command, &reply).await;
+                        saman::delivered(
+                            p.respond(seq, &command, &reply).await,
+                            "vor mock: the client is gone",
+                        );
                     }
                     Err(why) => {
                         p.fail(why);
-                        let _ = p
-                            .respond(seq, &command, &Reply::Fail("mock: not expected".to_owned()))
-                            .await;
+                        saman::delivered(
+                            p.respond(seq, &command, &Reply::Fail("mock: not expected".to_owned()))
+                                .await,
+                            "vor mock: the client is gone",
+                        );
                     }
                 }
             }

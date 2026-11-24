@@ -16,7 +16,6 @@ use norn::write::work::WorktreeBase;
 use runstav::methods::work::Workspace;
 use runstav::registry::Class;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// A branch of a repository.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -27,7 +26,7 @@ pub struct BranchRef {
 
 /// Git's answer in DIR (a trusted folder), or none when it fails or says nothing.
 fn git_in(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")

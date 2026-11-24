@@ -80,7 +80,7 @@ pub fn result(t: &Timings, cores: u32, mem_mib: u64, link_hint: Option<u64>) -> 
 }
 
 /// The `podman run` arguments for the workload in IMAGE, with SRC and TARGET as its mounts.
-pub fn argv(image: &str, src: &Path, target: &Path) -> Result<Vec<String>, String> {
+pub fn argv(image: &str, src: &Path, target: &Path) -> villa::Result<Vec<String>> {
     let caps = Caps {
         images: vec![ContainerImage {
             name: "bench".into(),
@@ -120,23 +120,25 @@ pub fn argv(image: &str, src: &Path, target: &Path) -> Result<Vec<String>, Strin
         render_node: None,
     };
     podman::argv(&req, &caps, &ra)
-        .map_err(|r| r.message)?
+        .map_err(|r| villa::Error::refused(r.message))?
         .into_iter()
         .map(|a| {
             a.into_string()
-                .map_err(|_| "a podman argument is not UTF-8".to_string())
+                .map_err(|_| villa::Error::invalid("a podman argument is not UTF-8"))
         })
         .collect()
 }
 
 /// The default route's interface speed (`/sys/class/net/<if>/speed`), in Mbit/s.
 fn link_hint() -> Option<u64> {
-    let routes = fs::read_to_string("/proc/net/route").ok()?;
+    let routes = crate::fsio::read_to_string("/proc/net/route").ok()?;
     let iface = routes.lines().skip(1).find_map(|l| {
         let w: Vec<&str> = l.split_whitespace().collect();
         (w.get(1) == Some(&"00000000")).then(|| w[0].to_string())
     })?;
-    let speed: i64 = fs::read_to_string(format!("/sys/class/net/{iface}/speed"))
+    // `/sys/class/net/<if>` is a link into the device tree: the read goes to where it points
+    let file = fs::canonicalize(format!("/sys/class/net/{iface}/speed")).ok()?;
+    let speed: i64 = crate::fsio::read_to_string(file)
         .ok()?
         .trim()
         .parse()
@@ -145,11 +147,12 @@ fn link_hint() -> Option<u64> {
 }
 
 /// Runs the bench with ROOT as the runner folder and IMAGE as its image; the result and the caps it ran under.
-pub fn run(root: &Path, image: &str) -> Result<(BenchResult, Timings), String> {
+pub fn run(root: &Path, image: &str) -> villa::Result<(BenchResult, Timings)> {
     let dir = root.join("bench");
     let (src, target) = (dir.join("src"), dir.join("target"));
     for d in [&src, &target] {
-        fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+        fs::create_dir_all(d)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", d.display())).with_source(e))?;
     }
     slices::ensure_tree(crate::serve::SLICE_ROOT, forseti::Profile::Dedicated)?;
     let args = argv(image, &src, &target)?;
@@ -158,24 +161,28 @@ pub fn run(root: &Path, image: &str) -> Result<(BenchResult, Timings), String> {
     let out = match out {
         Ok(o) => o,
         Err(e) => {
-            let _ = run::limited(
+            // the container may be gone already; what is left is the bench's own failure
+            if let Err(rm) = run::limited(
                 Path::new("podman"),
                 &["rm", "-f", "-t", "0", &name],
                 &[],
                 run::SYSTEMCTL_LIMIT,
-            );
-            return Err(format!("the bench: {e}"));
+            ) {
+                tracing::warn!(error = %rm, "removing the bench container");
+            }
+            return Err(villa::Error::new(e.kind(), format!("the bench: {e}")));
         }
     };
     let stdout = String::from_utf8_lossy(&out.stdout);
     if !out.status.success() {
-        return Err(format!(
+        return Err(villa::Error::io(format!(
             "the bench container failed: {}{}",
             stdout.trim(),
             String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        )));
     }
-    let t = parse(&stdout).ok_or_else(|| format!("the bench printed no readings: {stdout}"))?;
+    let t = parse(&stdout)
+        .ok_or_else(|| villa::Error::invalid(format!("the bench printed no readings: {stdout}")))?;
     let probe = Probe::system(
         "runner",
         "drgnx-bench",
@@ -183,7 +190,7 @@ pub fn run(root: &Path, image: &str) -> Result<(BenchResult, Timings), String> {
         root,
         forseti::Profile::Dedicated,
     )
-    .map_err(|e| format!("the probe: {e}"))?;
+    .map_err(|e| villa::Error::io(format!("the probe: {e}")).with_source(e))?;
     let cores = probe.cpus_usable().map(|c| c.len() as u32).unwrap_or(0);
     let mem = probe.memory().map(|m| m.total_mib).unwrap_or(0);
     Ok((result(&t, cores, mem, link_hint()), t))

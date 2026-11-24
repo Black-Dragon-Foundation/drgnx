@@ -11,9 +11,14 @@
 pub mod env;
 pub mod git;
 pub mod reap;
+pub mod run;
 pub mod spawn;
 pub mod starttime;
 
 pub use reap::{RealSignaller, ReapOutcome, Record, Signaller, Skip, alive, kill_group, reap};
-pub use spawn::{Child, PassFd, Spec, StderrTail, spawn, spawn_pinned};
+pub use run::{Output, run, run_with_input};
+pub use spawn::{
+    Child, Opts, PassFd, Redirect, Spec, StderrTail, exec, spawn, spawn_pinned, spawn_std,
+    spawn_with,
+};
 pub use starttime::{boot_id, start_time};

@@ -23,66 +23,64 @@ pub struct WorkDb {
 
 impl WorkDb {
     /// The thread for the `work.db` at PATH (which need not exist).  It ends when the last `WorkDb` is dropped.
-    pub fn spawn(path: PathBuf) -> std::io::Result<WorkDb> {
+    pub fn spawn(path: PathBuf) -> villa::Result<WorkDb> {
         let (tx, mut rx) = mpsc::channel::<Job>(64);
-        std::thread::Builder::new()
-            .name("work-db".into())
-            .spawn(move || {
-                let mut conn: Option<urdr::Connection> = None;
-                while let Some(job) = rx.blocking_recv() {
-                    if conn.is_none() && path.exists() {
-                        match urdr::open_readonly(&path) {
-                            Ok(c) => conn = Some(c),
-                            Err(e) => {
-                                tracing::warn!("cannot open {} read-only: {e}", path.display())
-                            }
+        saman::spawn_thread("work-db", move || {
+            let mut conn: Option<urdr::Connection> = None;
+            while let Some(job) = rx.blocking_recv() {
+                if conn.is_none() && path.exists() {
+                    match urdr::open_readonly(&path) {
+                        Ok(c) => conn = Some(c),
+                        Err(e) => {
+                            tracing::warn!("cannot open {} read-only: {e}", path.display())
                         }
                     }
-                    job(conn.as_ref());
                 }
-            })?;
+                job(conn.as_ref());
+            }
+        })?;
         Ok(WorkDb { tx })
     }
 
     async fn run<R: Send + 'static>(
         &self,
-        f: impl FnOnce(Option<&urdr::Connection>) -> Result<R, String> + Send + 'static,
-    ) -> Result<R, String> {
+        f: impl FnOnce(Option<&urdr::Connection>) -> villa::Result<R> + Send + 'static,
+    ) -> villa::Result<R> {
         let (reply, answer) = oneshot::channel();
         let job: Job = Box::new(move |c| {
-            let _ = reply.send(f(c));
+            crate::soft::done(reply.send(f(c)), "reply send");
         });
         self.tx
             .send(job)
             .await
-            .map_err(|_| "the work.db thread is gone".to_string())?;
+            .map_err(|_| villa::Error::invalid("the work.db thread is gone"))?;
         answer
             .await
-            .map_err(|_| "the work.db thread dropped a read".to_string())?
+            .map_err(|_| villa::Error::invalid("the work.db thread dropped a read"))?
     }
 
     /// `meta.schema` of work.db; 0 when there is no file (or no `meta` yet).
-    pub async fn schema(&self) -> Result<u32, String> {
+    pub async fn schema(&self) -> villa::Result<u32> {
         self.run(|c| match c {
             None => Ok(0),
             Some(c) => urdr::meta(c, "schema")
                 .map(|v| v.and_then(|s| s.trim().parse().ok()).unwrap_or(0))
-                .map_err(|e| e.to_string()),
+                .map_err(|e| villa::Error::invalid(e.to_string())),
         })
         .await
     }
 
     /// `meta.KEY` of work.db (the `kv` table behind schema 7's `meta` view); none without a file or the key.
-    pub async fn meta(&self, key: &'static str) -> Result<Option<String>, String> {
+    pub async fn meta(&self, key: &'static str) -> villa::Result<Option<String>> {
         self.run(move |c| match c {
             None => Ok(None),
-            Some(c) => urdr::meta(c, key).map_err(|e| e.to_string()),
+            Some(c) => urdr::meta(c, key).map_err(|e| villa::Error::invalid(e.to_string())),
         })
         .await
     }
 
     /// The newest event's id: where the front's `events` broadcast starts (0 without a file, a table or a row).
-    pub async fn last_event_id(&self) -> Result<u64, String> {
+    pub async fn last_event_id(&self) -> villa::Result<u64> {
         self.run(|c| match c {
             None => Ok(0),
             Some(c) => match c.query_row("select coalesce(max(id), 0) from event", [], |r| {
@@ -90,7 +88,7 @@ impl WorkDb {
             }) {
                 Ok(n) => Ok(n.max(0) as u64),
                 Err(e) if e.to_string().contains("no such table") => Ok(0),
-                Err(e) => Err(e.to_string()),
+                Err(e) => Err(villa::Error::invalid(e.to_string())),
             },
         })
         .await
@@ -103,7 +101,7 @@ impl WorkDb {
         &self,
         since: Option<u64>,
         limit: Option<u64>,
-    ) -> Result<EventsPage, String> {
+    ) -> villa::Result<EventsPage> {
         let since = since.unwrap_or(0);
         let limit = match limit {
             Some(n) if n > 0 => n.min(EVENTS_MAX),
@@ -112,7 +110,9 @@ impl WorkDb {
         let events = self
             .run(move |c| match c {
                 None => Ok(vec![]),
-                Some(c) => event_rows(c, since, limit).map_err(|e| e.to_string()),
+                Some(c) => {
+                    event_rows(c, since, limit).map_err(|e| villa::Error::invalid(e.to_string()))
+                }
             })
             .await?;
         Ok(EventsPage {
@@ -173,33 +173,36 @@ mod tests {
         path
     }
 
-    #[tokio::test]
-    async fn no_file_is_schema_0_and_no_events_then_the_file_is_read_once_it_is_there() {
-        let dir = tempfile::tempdir().unwrap();
-        let w = WorkDb::spawn(dir.path().join("work.db")).unwrap();
-        assert_eq!(w.schema().await.unwrap(), 0);
-        let page = w.events_since(None, None).await.unwrap();
-        assert_eq!(
-            serde_json::to_value(&page).unwrap(),
-            json!({"since": 0, "last": 0, "events": []})
-        );
-        assert_eq!(w.events_since(Some(7), None).await.unwrap().last, 7);
-        assert_eq!(w.last_event_id().await.unwrap(), 0);
-        assert!(!dir.path().join("work.db").exists(), "a read makes no file");
-        db(
-            dir.path(),
-            "create table meta(key text primary key, value text); insert into meta values ('schema', '6');",
-        );
-        assert_eq!(w.schema().await.unwrap(), 6);
-        // a schema-6 file without an event table yet: no events, not an error
-        assert!(w.events_since(None, None).await.unwrap().events.is_empty());
-        assert_eq!(w.last_event_id().await.unwrap(), 0);
+    #[test]
+    fn no_file_is_schema_0_and_no_events_then_the_file_is_read_once_it_is_there() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let w = WorkDb::spawn(dir.path().join("work.db")).unwrap();
+            assert_eq!(w.schema().await.unwrap(), 0);
+            let page = w.events_since(None, None).await.unwrap();
+            assert_eq!(
+                serde_json::to_value(&page).unwrap(),
+                json!({"since": 0, "last": 0, "events": []})
+            );
+            assert_eq!(w.events_since(Some(7), None).await.unwrap().last, 7);
+            assert_eq!(w.last_event_id().await.unwrap(), 0);
+            assert!(!dir.path().join("work.db").exists(), "a read makes no file");
+            db(
+                dir.path(),
+                "create table meta(key text primary key, value text); insert into meta values ('schema', '6');",
+            );
+            assert_eq!(w.schema().await.unwrap(), 6);
+            // a schema-6 file without an event table yet: no events, not an error
+            assert!(w.events_since(None, None).await.unwrap().events.is_empty());
+            assert_eq!(w.last_event_id().await.unwrap(), 0);
+        })
     }
 
-    #[tokio::test]
-    async fn events_are_paged_oldest_first_with_their_data_parsed() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = db(
+    #[test]
+    fn events_are_paged_oldest_first_with_their_data_parsed() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let path = db(
             dir.path(),
             "create table event (id integer primary key autoincrement, at real, agent text, job text, task text, \
              kind text, summary text, data text);
@@ -207,32 +210,34 @@ mod tests {
              insert into event(at, kind, summary, data) values (2, 'note', 's2', 'not json');
              insert into event(at, agent, kind, data) values ('3', 7, 'note', '[1]');",
         );
-        let w = WorkDb::spawn(path).unwrap();
-        assert_eq!(w.last_event_id().await.unwrap(), 3);
-        let page = serde_json::to_value(w.events_since(Some(0), Some(2)).await.unwrap()).unwrap();
-        assert_eq!(
-            page,
-            json!({"since": 0, "last": 2, "events": [
+            let w = WorkDb::spawn(path).unwrap();
+            assert_eq!(w.last_event_id().await.unwrap(), 3);
+            let page =
+                serde_json::to_value(w.events_since(Some(0), Some(2)).await.unwrap()).unwrap();
+            assert_eq!(
+                page,
+                json!({"since": 0, "last": 2, "events": [
                 {"id": 1, "at": 1.5, "agent": "a", "job": "j", "kind": "job", "summary": "s1", "data": {"status": "stopped"}},
                 {"id": 2, "at": 2.0, "kind": "note", "summary": "s2"}]})
-        );
-        let rest = serde_json::to_value(w.events_since(Some(2), None).await.unwrap()).unwrap();
-        assert_eq!(
-            rest,
-            json!({"since": 2, "last": 3, "events": [{"id": 3, "at": 3.0, "agent": "7", "kind": "note"}]})
-        );
-        // the answer is what the registry says events/since returns
-        let m = runstav::registry::find("events/since").unwrap();
-        assert_eq!((m.check_result)(&page).unwrap(), page);
-        // a limit of 0 is the default, a huge one the maximum
-        assert_eq!(w.events_since(None, Some(0)).await.unwrap().events.len(), 3);
-        assert_eq!(
-            w.events_since(None, Some(u64::MAX))
-                .await
-                .unwrap()
-                .events
-                .len(),
-            3
-        );
+            );
+            let rest = serde_json::to_value(w.events_since(Some(2), None).await.unwrap()).unwrap();
+            assert_eq!(
+                rest,
+                json!({"since": 2, "last": 3, "events": [{"id": 3, "at": 3.0, "agent": "7", "kind": "note"}]})
+            );
+            // the answer is what the registry says events/since returns
+            let m = runstav::registry::find("events/since").unwrap();
+            assert_eq!((m.check_result)(&page).unwrap(), page);
+            // a limit of 0 is the default, a huge one the maximum
+            assert_eq!(w.events_since(None, Some(0)).await.unwrap().events.len(), 3);
+            assert_eq!(
+                w.events_since(None, Some(u64::MAX))
+                    .await
+                    .unwrap()
+                    .events
+                    .len(),
+                3
+            );
+        })
     }
 }

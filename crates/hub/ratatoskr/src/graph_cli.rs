@@ -141,21 +141,21 @@ pub enum GrantsSub {
     },
 }
 
-fn num(v: &str, what: &str) -> Result<u64, String> {
+fn num(v: &str, what: &str) -> villa::Result<u64> {
     v.parse()
-        .map_err(|_| format!("{what} takes a whole number, not {v:?}"))
+        .map_err(|_| villa::Error::invalid(format!("{what} takes a whole number, not {v:?}")))
 }
 
 /// The arguments after `graph`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<GraphCommand> {
     use lexopt::Arg::{Long, Value as Word};
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let name = match p.next().map_err(e)? {
         Some(Word(v)) => v.string().map_err(e)?,
-        Some(other) => return Err(other.unexpected().to_string()),
-        None => return Err("graph needs a subcommand".into()),
+        Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
+        None => return Err(villa::Error::invalid("graph needs a subcommand")),
     };
     let mut json = false;
     // words and options, in order; each subcommand reads what it knows
@@ -176,12 +176,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
             }
             Long(k) => opts.push((k.to_string(), None)),
             Word(v) => words.push(v.string().map_err(e)?),
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
-    let known = |allowed: &[&str]| -> Result<(), String> {
+    let known = |allowed: &[&str]| -> villa::Result<()> {
         match opts.iter().find(|(k, _)| !allowed.contains(&k.as_str())) {
-            Some((k, _)) => Err(format!("graph {name}: unknown option --{k}")),
+            Some((k, _)) => Err(villa::Error::invalid(format!(
+                "graph {name}: unknown option --{k}"
+            ))),
             None => Ok(()),
         }
     };
@@ -192,123 +194,151 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
             .and_then(|(_, v)| v.clone())
     };
     let flag = |k: &str| opts.iter().any(|(o, _)| o == k);
-    let no_words = |n: usize| -> Result<(), String> {
+    let no_words = |n: usize| -> villa::Result<()> {
         if words.len() > n {
-            Err(format!("graph {name}: unexpected argument {:?}", words[n]))
+            Err(villa::Error::invalid(format!(
+                "graph {name}: unexpected argument {:?}",
+                words[n]
+            )))
         } else {
             Ok(())
         }
     };
     let sub = match name.as_str() {
         "export" => {
-            known(&["project", "out", "since", "with", "history"])?;
-            no_words(0)?;
+            known(&["project", "out", "since", "with", "history"])
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            no_words(0).map_err(|e| villa::Error::invalid(e.to_string()))?;
             let project = get("project");
             let out = get("out").map(PathBuf::from);
             if project.is_some() && out.is_none() {
-                return Err(
-                    "graph export --project needs --out DIR (it never writes into a repository unless --out names it)"
-                        .into(),
-                );
+                return Err(villa::Error::invalid(
+                    "graph export --project needs --out DIR (it never writes into a repository unless --out names it)",
+                ));
             }
             let with_activity = match get("with").as_deref() {
                 None => false,
                 Some("activity") => true,
-                Some(other) => return Err(format!("--with takes activity, not {other:?}")),
+                Some(other) => {
+                    return Err(villa::Error::invalid(format!(
+                        "--with takes activity, not {other:?}"
+                    )));
+                }
             };
             Sub::Export {
                 project,
                 out,
-                since: get("since").map(|s| num(&s, "--since")).transpose()?,
+                since: get("since")
+                    .map(|s| num(&s, "--since"))
+                    .transpose()
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?,
                 with_activity,
                 history: flag("history"),
             }
         }
         "import" => {
-            known(&[])?;
-            no_words(1)?;
+            known(&[]).map_err(|e| villa::Error::invalid(e.to_string()))?;
+            no_words(1).map_err(|e| villa::Error::invalid(e.to_string()))?;
             Sub::Import {
                 dir: words
                     .first()
                     .map(PathBuf::from)
-                    .ok_or("graph import needs DIR")?,
+                    .ok_or_else(|| villa::Error::invalid("graph import needs DIR"))?,
             }
         }
         "import-records" => {
-            known(&["root", "only", "path", "dry-run"])?;
-            no_words(0)?;
+            known(&["root", "only", "path", "dry-run"])
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            no_words(0).map_err(|e| villa::Error::invalid(e.to_string()))?;
             let only = get("only");
             if let Some(o) = &only
                 && !RECORD_KINDS.contains(&o.as_str())
             {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "--only takes {}, not {o:?}",
                     RECORD_KINDS.join(", ")
-                ));
+                )));
             }
             Sub::ImportRecords {
-                root: get("root")
-                    .map(PathBuf::from)
-                    .ok_or("graph import-records needs --root DIR")?,
+                root: get("root").map(PathBuf::from).ok_or_else(|| {
+                    villa::Error::invalid("graph import-records needs --root DIR")
+                })?,
                 only,
                 path: get("path").map(PathBuf::from),
                 dry_run: flag("dry-run"),
             }
         }
         "backup" => {
-            known(&[])?;
+            known(&[]).map_err(|e| villa::Error::invalid(e.to_string()))?;
             match words.first().map(String::as_str) {
                 None | Some("now") => {}
-                Some(other) => return Err(format!("graph backup takes `now`, not {other:?}")),
+                Some(other) => {
+                    return Err(villa::Error::invalid(format!(
+                        "graph backup takes `now`, not {other:?}"
+                    )));
+                }
             }
-            no_words(1)?;
+            no_words(1).map_err(|e| villa::Error::invalid(e.to_string()))?;
             Sub::Backup
         }
         "revert" => {
-            known(&["tx", "entity", "to-ver", "cascade"])?;
-            no_words(0)?;
+            known(&["tx", "entity", "to-ver", "cascade"])
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            no_words(0).map_err(|e| villa::Error::invalid(e.to_string()))?;
             let (tx, entity) = (get("tx"), get("entity"));
             match (&tx, &entity) {
                 (Some(_), Some(_)) | (None, None) => {
-                    return Err("graph revert takes --tx N, or --entity ID --to-ver V".into());
+                    return Err(villa::Error::invalid(
+                        "graph revert takes --tx N, or --entity ID --to-ver V",
+                    ));
                 }
                 (None, Some(_)) if get("to-ver").is_none() => {
-                    return Err("graph revert --entity needs --to-ver V".into());
+                    return Err(villa::Error::invalid(
+                        "graph revert --entity needs --to-ver V",
+                    ));
                 }
                 (Some(_), None) if get("to-ver").is_some() => {
-                    return Err("--to-ver goes with --entity".into());
+                    return Err(villa::Error::invalid("--to-ver goes with --entity"));
                 }
                 _ => {}
             }
             Sub::Revert {
-                tx: tx.map(|s| num(&s, "--tx")).transpose()?,
+                tx: tx
+                    .map(|s| num(&s, "--tx"))
+                    .transpose()
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?,
                 entity,
-                to_ver: get("to-ver").map(|s| num(&s, "--to-ver")).transpose()?,
+                to_ver: get("to-ver")
+                    .map(|s| num(&s, "--to-ver"))
+                    .transpose()
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?,
                 cascade: flag("cascade"),
             }
         }
         "excise" => {
-            known(&["field", "reason", "rotate-backups", "transcripts", "yes"])?;
-            no_words(1)?;
+            known(&["field", "reason", "rotate-backups", "transcripts", "yes"])
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            no_words(1).map_err(|e| villa::Error::invalid(e.to_string()))?;
             Sub::Excise {
                 target: words
                     .first()
                     .cloned()
-                    .ok_or("graph excise needs an ID or a TX")?,
+                    .ok_or_else(|| villa::Error::invalid("graph excise needs an ID or a TX"))?,
                 fields: opts
                     .iter()
                     .filter(|(k, _)| k == "field")
                     .filter_map(|(_, v)| v.clone())
                     .collect(),
-                reason: get("reason").ok_or("graph excise needs --reason R")?,
+                reason: get("reason")
+                    .ok_or_else(|| villa::Error::invalid("graph excise needs --reason R"))?,
                 rotate_backups: flag("rotate-backups"),
                 transcripts: flag("transcripts"),
                 yes: flag("yes"),
             }
         }
         "scrub" => {
-            known(&[])?;
-            no_words(0)?;
+            known(&[]).map_err(|e| villa::Error::invalid(e.to_string()))?;
+            no_words(0).map_err(|e| villa::Error::invalid(e.to_string()))?;
             Sub::Scrub
         }
         "grants" => {
@@ -338,21 +368,25 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
                     no_words(3)?;
                     let who = get("who").or_else(|| w.next().map(String::from));
                     let what = get("where").or_else(|| w.next().map(String::from));
-                    let (who, what) = who.zip(what).ok_or(
-                        "graph grants grant needs WHO and WHAT (or --who and --where, with --what OP...)",
-                    )?;
+                    let (who, what) = who.zip(what).ok_or_else(|| {
+                        villa::Error::invalid(
+                            "graph grants grant needs WHO and WHAT (or --who and --where, with --what OP...)",
+                        )
+                    })?;
                     let access = match (get("access"), ops.is_empty()) {
                         (None, false) => "task-write".to_owned(),
                         (Some(a), false) if a != "task-write" => {
-                            return Err(
-                                "--what names a task-write grant's operations, not --access".into(),
-                            );
+                            return Err(villa::Error::invalid(
+                                "--what names a task-write grant's operations, not --access",
+                            ));
                         }
                         (Some(a), _) => a,
                         (None, true) => "read".to_owned(),
                     };
                     if access == "task-write" && ops.is_empty() {
-                        return Err("a task-write grant needs --what OP...".into());
+                        return Err(villa::Error::invalid(
+                            "a task-write grant needs --what OP...",
+                        ));
                     }
                     GrantsSub::Grant {
                         who,
@@ -364,25 +398,43 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
                 }
                 Some("revoke") => {
                     no_words(2)?;
-                    GrantsSub::Revoke(w.next().ok_or("graph grants revoke needs an ID")?.into())
+                    GrantsSub::Revoke(
+                        w.next()
+                            .ok_or_else(|| {
+                                villa::Error::invalid("graph grants revoke needs an ID")
+                            })?
+                            .into(),
+                    )
                 }
                 Some("edit") => {
                     no_words(2)?;
-                    let id = w.next().ok_or("graph grants edit needs an ID")?.to_owned();
+                    let id = w
+                        .next()
+                        .ok_or_else(|| villa::Error::invalid("graph grants edit needs an ID"))?
+                        .to_owned();
                     if ops.is_empty() && until.is_none() {
-                        return Err("graph grants edit needs --what OP... or --until T".into());
+                        return Err(villa::Error::invalid(
+                            "graph grants edit needs --what OP... or --until T",
+                        ));
                     }
                     GrantsSub::Edit { id, ops, until }
                 }
                 Some("show") => {
                     no_words(2)?;
                     GrantsSub::Show {
-                        who: w.next().ok_or("graph grants show needs WHO")?.into(),
+                        who: w
+                            .next()
+                            .ok_or_else(|| villa::Error::invalid("graph grants show needs WHO"))?
+                            .into(),
                         project: get("project"),
                         profile: get("profile"),
                     }
                 }
-                Some(other) => return Err(format!("unknown grants subcommand {other:?}")),
+                Some(other) => {
+                    return Err(villa::Error::invalid(format!(
+                        "unknown grants subcommand {other:?}"
+                    )));
+                }
             };
             Sub::Grants(g)
         }
@@ -395,10 +447,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
                     "on" => true,
                     "off" => false,
                     other => {
-                        return Err(format!("only-user-closes takes on or off, not {other:?}"));
+                        return Err(villa::Error::invalid(format!(
+                            "only-user-closes takes on or off, not {other:?}"
+                        )));
                     }
                 }),
-                _ => return Err("graph settings takes only-user-closes on|off, or nothing".into()),
+                _ => {
+                    return Err(villa::Error::invalid(
+                        "graph settings takes only-user-closes on|off, or nothing",
+                    ));
+                }
             };
             Sub::Settings { only_user_closes }
         }
@@ -412,12 +470,15 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
                 .map(PathBuf::from)
                 .collect();
             if !flag("missing") && paths.is_empty() {
-                return Err(
-                    "graph forget needs --missing, or --path FILE for each source to forget".into(),
-                );
+                return Err(villa::Error::invalid(
+                    "graph forget needs --missing, or --path FILE for each source to forget",
+                ));
             }
             Sub::Forget {
-                root: PathBuf::from(get("root").ok_or("graph forget needs --root DIR")?),
+                root: PathBuf::from(
+                    get("root")
+                        .ok_or_else(|| villa::Error::invalid("graph forget needs --root DIR"))?,
+                ),
                 missing: flag("missing"),
                 paths,
                 dry_run: flag("dry-run"),
@@ -425,27 +486,35 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
             }
         }
         "sql" => {
-            known(&[])?;
-            no_words(1)?;
-            Sub::Sql(words.first().cloned().ok_or("graph sql needs a SELECT")?)
+            known(&[]).map_err(|e| villa::Error::invalid(e.to_string()))?;
+            no_words(1).map_err(|e| villa::Error::invalid(e.to_string()))?;
+            Sub::Sql(
+                words
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| villa::Error::invalid("graph sql needs a SELECT"))?,
+            )
         }
         "compact" => {
-            known(&["dry-run"])?;
-            no_words(0)?;
+            known(&["dry-run"]).map_err(|e| villa::Error::invalid(e.to_string()))?;
+            no_words(0).map_err(|e| villa::Error::invalid(e.to_string()))?;
             Sub::Compact {
                 dry_run: flag("dry-run"),
             }
         }
         "proposed" => {
-            known(&[])?;
+            known(&[]).map_err(|e| villa::Error::invalid(e.to_string()))?;
             let which = words.first().map(String::as_str);
             let ids = words
                 .iter()
                 .skip(1)
                 .map(|s| num(s, "a tx"))
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             if ids.is_empty() {
-                return Err("graph proposed accept|reject needs at least one TX".into());
+                return Err(villa::Error::invalid(
+                    "graph proposed accept|reject needs at least one TX",
+                ));
             }
             match which {
                 Some("accept") => Sub::Proposed {
@@ -456,22 +525,37 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
                     accept: Vec::new(),
                     reject: ids,
                 },
-                _ => return Err("graph proposed takes accept or reject, then TX...".into()),
+                _ => {
+                    return Err(villa::Error::invalid(
+                        "graph proposed takes accept or reject, then TX...",
+                    ));
+                }
             }
         }
-        other => return Err(format!("unknown graph subcommand {other:?}")),
+        other => {
+            return Err(villa::Error::invalid(format!(
+                "unknown graph subcommand {other:?}"
+            )));
+        }
     };
     Ok(GraphCommand { sub, json })
 }
 
 /// `--expires T`: unix seconds, or a time from NOW such as `90s`, `30m`, `12h`, `7d`.
-fn expires_at(text: &str, now: f64) -> Result<f64, String> {
-    let bad = || format!("--expires takes unix seconds or a span like 12h or 7d, not {text:?}");
+fn expires_at(text: &str, now: f64) -> villa::Result<f64> {
+    let bad = || {
+        villa::Error::invalid(format!(
+            "--expires takes unix seconds or a span like 12h or 7d, not {text:?}"
+        ))
+    };
     if let Ok(secs) = text.parse::<f64>() {
         return Ok(secs);
     }
     let (n, unit) = text.split_at(text.len().saturating_sub(1));
-    let n: f64 = n.parse().map_err(|_| bad())?;
+    let n: f64 = n
+        .parse()
+        .map_err(|_| bad())
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let unit = match unit {
         "s" => 1.0,
         "m" => 60.0,
@@ -489,7 +573,7 @@ fn absolute(p: &Path, cwd: &Path) -> String {
 impl GraphCommand {
     /// The hub method and its params.  CWD makes `--out` and `import DIR` absolute; NOW (unix seconds) is the base of
     /// a relative `--expires`.
-    pub fn request(&self, cwd: &Path, now: f64) -> Result<(&'static str, Value), String> {
+    pub fn request(&self, cwd: &Path, now: f64) -> villa::Result<(&'static str, Value)> {
         Ok(match &self.sub {
             Sub::Export {
                 project,
@@ -598,7 +682,9 @@ impl GraphCommand {
             }) => {
                 let mut g = json!({"who": who, "what": what, "access": access});
                 if let Some(t) = expires {
-                    g["expires"] = json!(expires_at(t, now)?);
+                    g["expires"] = json!(
+                        expires_at(t, now).map_err(|e| villa::Error::invalid(e.to_string()))?
+                    );
                 }
                 if !ops.is_empty() {
                     g["ops"] = json!(ops);
@@ -716,7 +802,7 @@ fn forget_run(env: &Env, cmd: &GraphCommand) -> i32 {
     let (_, listing) = match cmd.request(&cwd, 0.0) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("ratatoskr graph: {e}");
+            crate::soft::err_line(&format!("ratatoskr graph: {e}"));
             return 2;
         }
     };
@@ -727,14 +813,14 @@ fn forget_run(env: &Env, cmd: &GraphCommand) -> i32 {
     let mut client = match Client::user(env, Duration::from_secs(5)) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("ratatoskr graph: {e}");
+            crate::soft::err_line(&format!("ratatoskr graph: {e}"));
             return 1;
         }
     };
     let rows = match client.call("graph/sql", listing, LONG) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("ratatoskr graph: {e}");
+            crate::soft::err_line(&format!("ratatoskr graph: {e}"));
             return 1;
         }
     };
@@ -747,21 +833,23 @@ fn forget_run(env: &Env, cmd: &GraphCommand) -> i32 {
     let named: Vec<String> = paths.iter().map(|p| absolute(p, &cwd)).collect();
     let (picked, unknown) = forget_pick(&known, &named, *missing, &|p| Path::new(p).exists());
     for u in &unknown {
-        eprintln!("not in the store: {u}");
+        crate::soft::err_line(&format!("not in the store: {u}"));
     }
     if cmd.json && *dry_run {
-        println!(
-            "{}",
-            json!({"dry_run": true, "gone": picked, "unknown": unknown})
+        crate::soft::out_line(
+            &json!({"dry_run": true, "gone": picked, "unknown": unknown}).to_string(),
         );
         return 0;
     }
     if picked.is_empty() {
-        println!("nothing to forget");
+        crate::soft::out_line("nothing to forget");
         return 0;
     }
     for p in &picked {
-        println!("{} {p}", if *dry_run { "would forget" } else { "forget" });
+        crate::soft::out_line(&format!(
+            "{} {p}",
+            if *dry_run { "would forget" } else { "forget" }
+        ));
     }
     if *dry_run {
         return 0;
@@ -770,8 +858,8 @@ fn forget_run(env: &Env, cmd: &GraphCommand) -> i32 {
     match confirm(*yes, stdin.is_terminal()) {
         Confirm::Go => {}
         Confirm::Refuse => {
-            eprintln!(
-                "ratatoskr graph forget: it retires what these files held; run it in a terminal to confirm, or pass --yes"
+            crate::soft::err_line(
+                "ratatoskr graph forget: it retires what these files held; run it in a terminal to confirm, or pass --yes",
             );
             return 2;
         }
@@ -780,8 +868,8 @@ fn forget_run(env: &Env, cmd: &GraphCommand) -> i32 {
                 "Forget {} sources: what they hold is retired (history is kept)?",
                 picked.len()
             );
-            if !ask(&q, &mut stdin.lock(), &mut std::io::stderr()) {
-                eprintln!("nothing changed");
+            if !ask(&q, &mut stdin.lock(), &mut annall::raw_err()) {
+                crate::soft::err_line("nothing changed");
                 return 1;
             }
         }
@@ -789,14 +877,14 @@ fn forget_run(env: &Env, cmd: &GraphCommand) -> i32 {
     let mut code = 0;
     for call in forget_call(&picked) {
         match client.call("graph/put-parsed", call, LONG) {
-            Ok(a) if cmd.json => println!("{a}"),
+            Ok(a) if cmd.json => crate::soft::out_line(&a.to_string()),
             Ok(a) => {
                 let (text, ok) = render(&cmd.sub, &a);
-                print!("{text}");
+                crate::soft::out_text(&text);
                 code |= i32::from(!ok);
             }
             Err(e) => {
-                eprintln!("ratatoskr graph: {e}");
+                crate::soft::err_line(&format!("ratatoskr graph: {e}"));
                 return 1;
             }
         }
@@ -823,8 +911,8 @@ pub fn confirm(yes: bool, terminal: bool) -> Confirm {
 
 /// Ask QUESTION on OUT and read one line from INPUT: only `y` or `yes` goes ahead.
 pub fn ask(question: &str, input: &mut impl BufRead, out: &mut impl Write) -> bool {
-    let _ = write!(out, "{question} [y/N] ");
-    let _ = out.flush();
+    crate::soft::done(write!(out, "{question} [y/N] "), "write");
+    crate::soft::done(out.flush(), "graph_cli");
     let mut line = String::new();
     if input.read_line(&mut line).is_err() {
         return false;
@@ -1085,7 +1173,7 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("ratatoskr graph: no working directory: {e}");
+            crate::soft::err_line(&format!("ratatoskr graph: no working directory: {e}"));
             return 1;
         }
     };
@@ -1096,7 +1184,7 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
     let (method, params) = match cmd.request(&cwd, now) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("ratatoskr graph: {e}");
+            crate::soft::err_line(&format!("ratatoskr graph: {e}"));
             return 2;
         }
     };
@@ -1111,8 +1199,8 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
         match confirm(*yes, stdin.is_terminal()) {
             Confirm::Go => {}
             Confirm::Refuse => {
-                eprintln!(
-                    "ratatoskr graph excise: it cannot be undone; run it in a terminal to confirm, or pass --yes"
+                crate::soft::err_line(
+                    "ratatoskr graph excise: it cannot be undone; run it in a terminal to confirm, or pass --yes",
                 );
                 return 2;
             }
@@ -1120,8 +1208,8 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
                 let q = format!(
                     "Excise {target} for good (reason: {reason}); the text is blanked in every version and copy?"
                 );
-                if !ask(&q, &mut stdin.lock(), &mut std::io::stderr()) {
-                    eprintln!("nothing changed");
+                if !ask(&q, &mut stdin.lock(), &mut annall::raw_err()) {
+                    crate::soft::err_line("nothing changed");
                     return 1;
                 }
             }
@@ -1136,15 +1224,15 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
     match answer {
         Ok(a) => {
             if cmd.json {
-                println!("{a}");
+                crate::soft::out_line(&a.to_string());
                 return 0;
             }
             let (text, ok) = render(&cmd.sub, &a);
-            print!("{text}");
+            crate::soft::out_text(&text);
             i32::from(!ok)
         }
         Err(e) => {
-            eprintln!("ratatoskr graph: {e}");
+            crate::soft::err_line(&format!("ratatoskr graph: {e}"));
             1
         }
     }
@@ -1154,14 +1242,14 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
 mod tests {
     use super::*;
 
-    fn p(args: &[&str]) -> Result<GraphCommand, String> {
+    fn p(args: &[&str]) -> villa::Result<GraphCommand> {
         parse(args.iter().map(OsString::from))
     }
 
     #[test]
     fn project_export_needs_out() {
         let e = p(&["export", "--project", "demo"]).unwrap_err();
-        assert!(e.contains("--out"), "{e}");
+        assert!(e.message().contains("--out"), "{e}");
         let ok = p(&["export", "--project", "demo", "--out", "rel/dir"]).unwrap();
         let (method, params) = ok.request(Path::new("/work"), 0.0).unwrap();
         assert_eq!(method, "graph/export");
@@ -1307,7 +1395,7 @@ mod tests {
             "build-board",
             "board",
         ] {
-            assert!(e.contains(k), "{e}");
+            assert!(e.message().contains(k), "{e}");
         }
     }
 
@@ -1502,7 +1590,7 @@ mod tests {
             format!("{root}/docs/plans/kept.md"),
         );
         std::fs::create_dir_all(dir.path().join("docs/plans")).unwrap();
-        std::fs::write(&kept, "# K\n").unwrap();
+        crate::fsio::write(&kept, "# K\n").unwrap();
         let mut c = urdr::Connection::open_in_memory().unwrap();
         c.execute_batch(GRAPH_DDL).unwrap();
         c.execute_batch(

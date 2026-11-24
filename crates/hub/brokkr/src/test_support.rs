@@ -7,11 +7,15 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
+use draugr::Spec;
 use rustix::fs::{FlockOperation, flock};
+
+/// How long one fixture build may run before its process group is ended.
+const BUILD_DEADLINE: Duration = Duration::from_secs(30 * 60);
 
 /// How many times this process ran the fixtures' build.
 static BUILDS: AtomicUsize = AtomicUsize::new(0);
@@ -99,10 +103,31 @@ fn copy(from: &Path, to: &Path) -> Result<(), String> {
         .parent()
         .ok_or_else(|| format!("{}: no folder", to.display()))?;
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let name = to.file_name().unwrap_or_default().to_string_lossy();
-    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-    fs::write(&tmp, &new).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    fs::rename(&tmp, to).map_err(|e| format!("{}: {e}", to.display()))
+    eitri::replace_file(to, &new).map_err(|e| format!("{}: {e}", to.display()))
+}
+
+/// The environment of a child a test starts (the fixtures' build, a test binary run again): the toolchain's and the cache's
+/// variables of SOURCE, nothing else of the test run's environment (a key in it never reaches the child), then SET.
+pub fn child_env(
+    source: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    set: &[(&str, &std::ffi::OsStr)],
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    draugr::env::build_from(
+        source,
+        &[
+            "PATH",
+            stig::HOME_VAR,
+            "TMPDIR",
+            "USER",
+            "RUSTC",
+            "RUSTFLAGS",
+            "RUSTDOC",
+        ],
+        &[
+            "CARGO", "RUSTUP", "SCCACHE", "MISE_", "DRGNX_", "LC_", "LANG",
+        ],
+        set,
+    )
 }
 
 /// Builds the crate at `crate_dir` into `<out>/<label>`, then runs `install` on that folder, all under the lock.
@@ -118,35 +143,49 @@ fn build(
         root.join(label)
     };
     fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
-    let lock = fs::File::create(root.join(format!("{label}.lock"))).map_err(|e| e.to_string())?;
+    let lock = eitri::open_lock(&root.join(format!("{label}.lock")), 0o644)
+        .map_err(|e| format!("{label}.lock: {e}"))?;
     flock(&lock, FlockOperation::LockExclusive).map_err(|e| format!("lock: {e}"))?;
     // DRGNX_WASM_CARGO: a cargo that has the wasm32-wasip2 standard library, when the one running the tests (a
     // distribution's packaged Rust, say) has none
-    let mut cargo = Command::new(
-        std::env::var_os("DRGNX_WASM_CARGO")
-            .or_else(|| std::env::var_os("CARGO"))
-            .unwrap_or_else(|| "cargo".into()),
-    );
-    cargo
-        .args([
-            "build",
-            "--release",
-            "--target",
-            "wasm32-wasip2",
-            "--manifest-path",
-        ])
-        .arg(crate_dir.join("Cargo.toml"))
-        .arg("--target-dir")
-        .arg(out.join("build"));
+    let program = std::env::var_os("DRGNX_WASM_CARGO")
+        .or_else(|| std::env::var_os("CARGO"))
+        .unwrap_or_else(|| "cargo".into());
+    let mut args: Vec<std::ffi::OsString> = [
+        "build",
+        "--release",
+        "--target",
+        "wasm32-wasip2",
+        "--manifest-path",
+    ]
+    .map(Into::into)
+    .into();
+    args.push(crate_dir.join("Cargo.toml").into());
+    args.push("--target-dir".into());
+    args.push(out.join("build").into());
     if crate_dir.join("Cargo.lock").is_file() {
-        cargo.arg("--locked");
+        args.push("--locked".into());
     }
-    let run = cargo.output().map_err(|e| format!("running cargo: {e}"))?;
+    let env = child_env(std::env::vars_os(), &[]);
+    let spec = Spec {
+        program: program.into(),
+        args,
+        env,
+        cwd: None,
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: false,
+    };
+    // on a thread of its own: `fixture` is also called from inside a test's runtime, which `draugr::run` cannot start in
+    let run = saman::spawn_thread("fixtures-build", move || draugr::run(spec, BUILD_DEADLINE))
+        .map_err(|e| format!("starting the build: {e}"))?
+        .join()
+        .map_err(|_| "the fixtures' build thread panicked".to_string())?
+        .map_err(|e| format!("running cargo: {e}"))?;
     if !run.status.success() {
         return Err(format!(
             "cargo build of {label} failed ({}); is the wasm32-wasip2 target installed?\n{}",
-            run.status,
-            String::from_utf8_lossy(&run.stderr)
+            run.status, run.stderr
         ));
     }
     install(&out)
@@ -156,6 +195,27 @@ fn build(
 mod tests {
     use super::*;
     use crate::{parse, scan};
+
+    // Pattern D (pure): a made-up environment in, the child's out; no process.
+    #[test]
+    fn a_variable_outside_the_allowlist_never_reaches_a_test_child() {
+        use std::ffi::{OsStr, OsString};
+        let source = [
+            ("OPENROUTER_API_KEY", "canary"),
+            ("CARGO_HOME", "/cargo"),
+            ("PATH", "/bin"),
+        ]
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)));
+        let env = child_env(source, &[("BROKKR_CHILD", OsStr::new("1"))]);
+        let names: Vec<_> = env.iter().map(|(k, _)| k.to_string_lossy()).collect();
+        assert!(
+            !names.iter().any(|k| k == "OPENROUTER_API_KEY"),
+            "{names:?}"
+        );
+        assert!(names.iter().any(|k| k == "CARGO_HOME"), "{names:?}");
+        assert!(names.iter().any(|k| k == "PATH"), "{names:?}");
+        assert!(names.iter().any(|k| k == "BROKKR_CHILD"), "{names:?}");
+    }
 
     // Pattern D (pure): reads files and parses them; no build, no clock.
     #[test]

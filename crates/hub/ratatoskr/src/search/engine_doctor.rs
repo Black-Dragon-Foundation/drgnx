@@ -5,9 +5,9 @@
 //! `ldd` for the libraries; the machine's facts (device nodes, groups, Vulkan drivers) come in as a [`Host`] so a test
 //! states them. A GPU that is not used is never silent: a CPU engine would index at a fraction of the speed.
 
+use crate::proc::Command;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 /// How long `--list-devices` and `ldd` may take.
@@ -36,11 +36,12 @@ impl Host {
             .filter(|e| e.file_name().to_string_lossy().starts_with("renderD"))
             .map(|e| {
                 let p = e.path();
-                let ok = std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&p)
-                    .is_ok();
+                // whether this user may open the node read-write, asked without opening the device
+                let ok = rustix::fs::access(
+                    &p,
+                    rustix::fs::Access::READ_OK | rustix::fs::Access::WRITE_OK,
+                )
+                .is_ok();
                 (p, ok)
             })
             .collect();
@@ -295,31 +296,14 @@ pub fn section_lines(v: &Value) -> String {
     out
 }
 
-/// Runs CMD with a limit of [`ASK_WAIT`]: its stdout and stderr, or none when it could not start or did not finish.
+/// Runs CMD with a limit of [`ASK_WAIT`]: its stdout and (the tail of) its stderr, or none when it could not start or
+/// did not finish (its process group is ended at the limit).
 fn ask(cmd: &mut Command) -> Option<(String, String)> {
-    let child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
-    let pid = child.id();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(child.wait_with_output());
-    });
-    match rx.recv_timeout(ASK_WAIT) {
-        Ok(Ok(out)) => Some((
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )),
-        Ok(Err(_)) => None,
-        Err(_) => {
-            // SAFETY: kill(2) of the child this function started, which nothing else has waited for
-            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-            None
-        }
-    }
+    let out = cmd.deadline(ASK_WAIT).output().ok()?;
+    Some((
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
 }
 
 /// The GPU backend a device line names (`ROCm0: ...` is `ROCm`), none for `CPU`.
@@ -447,7 +431,7 @@ mod tests {
     /// A script named NAME in DIR that prints BODY's lines (a fake engine or `ldd`).
     fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
         let p = dir.join(name);
-        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        crate::fsio::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         p
     }

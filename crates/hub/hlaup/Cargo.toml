@@ -7,8 +7,16 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[dependencies]
+eitri.workspace = true
+stund.workspace = true
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+saman.workspace = true
+
+[lints]
+workspace = true

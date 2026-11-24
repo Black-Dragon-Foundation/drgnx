@@ -242,7 +242,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           cargo build --locked -p ratatoskr -p domr -p gleipnir-escape --features ratatoskr/test-hooks
-          cargo build --locked -p sleipnir --no-default-features --bin drgnx-key
+          cargo build --locked -p sleipnir --no-default-features --features std-owners --bin drgnx-key
       # gleipnir's test hooks (landlock_omit, abi_cap) must never be on in a build without --features (review M5).
       # The inverted form: the forward `cargo tree` does not show gleipnir's feature even when it is on (Task 0).
       # `shell: bash` adds pipefail (a failed `cargo tree` fails the step), and the tree must name gleipnir at all, so
@@ -730,11 +730,11 @@ jobs:
       - id: build
         run: |
           cargo build --locked --manifest-path Cargo.toml -p ratatoskr -p domr --features ratatoskr/test-hooks
-          cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --bin drgnx-key
+          cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --features std-owners --bin drgnx-key
           rustup target add x86_64-unknown-linux-musl
           cargo build --locked --manifest-path Cargo.toml -p ferja --bin drgnx-px --target x86_64-unknown-linux-musl --target-dir target/fwd
           cp target/fwd/x86_64-unknown-linux-musl/debug/drgnx-px target/debug/drgnx-px-x86_64-linux-musl
-          cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --bin drgnx-key --target x86_64-unknown-linux-musl --target-dir target/fwd
+          cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --features std-owners --bin drgnx-key --target x86_64-unknown-linux-musl --target-dir target/fwd
           cp target/fwd/x86_64-unknown-linux-musl/debug/drgnx-key target/debug/drgnx-key-x86_64-linux-musl
       # sleipnir in jobq's shape (`linux,sync`: docs/develop/sleipnir.md) builds static too, in the same musl target dir
       - if: ${{ !cancelled() }}
@@ -1310,7 +1310,7 @@ jobs:
           env "CARGO_TARGET_${l}_LINKER=rust-lld" "CARGO_TARGET_${l}_RUSTFLAGS=-C link-self-contained=yes" \
             cargo build --locked --manifest-path Cargo.toml -p ferja --bin drgnx-px --target "$arch-unknown-linux-musl"
           env "CARGO_TARGET_${l}_LINKER=rust-lld" "CARGO_TARGET_${l}_RUSTFLAGS=-C link-self-contained=yes" \
-            cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --bin drgnx-key --target "$arch-unknown-linux-musl"
+            cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --features std-owners --bin drgnx-key --target "$arch-unknown-linux-musl"
       # (clippy on darwin runs in conformance 1/2: here it was cut at this job's 45 minutes)
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.setup.outputs.target-hit != 'true' && steps.test.outcome == 'success' }}
@@ -1360,7 +1360,7 @@ jobs:
       - id: build
         run: |
           cargo build --locked --manifest-path Cargo.toml -p ratatoskr -p domr -p gleipnir-escape --features ratatoskr/test-hooks
-          cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --bin drgnx-key
+          cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --features std-owners --bin drgnx-key
       # the hub parses code with the pack-built grammars: built once with the build's own hub (the pack job, `packs sync
       # --builtin`, as the Linux job does with cargo run) and handed to the tests as DRGNX_PACK_LOCK / DRGNX_PACK_GRAMMARS
       - name: Pack grammars for the tests

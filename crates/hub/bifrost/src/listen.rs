@@ -50,14 +50,14 @@ pub async fn serve_tcp(gw: Arc<Gateway>, listener: TcpListener, port: u16) {
             );
             continue;
         };
-        let _ = stream.set_nodelay(true);
-        tokio::spawn(connection(
-            gw.clone(),
-            stream,
-            ListenerId::Loopback,
-            port,
-            slot,
-        ));
+        if let Err(e) = stream.set_nodelay(true) {
+            tracing::debug!("gateway: no TCP_NODELAY: {e}");
+        }
+        saman::spawn(
+            "gateway-connection",
+            connection(gw.clone(), stream, ListenerId::Loopback, port, slot),
+        )
+        .detach("a connection ends with its peer");
     }
 }
 
@@ -78,14 +78,18 @@ pub async fn serve_unix(gw: Arc<Gateway>, listener: UnixListener, id: ListenerId
             );
             continue;
         };
-        tokio::spawn(connection(gw.clone(), stream, id.clone(), 0, slot));
+        saman::spawn(
+            "gateway-connection",
+            connection(gw.clone(), stream, id.clone(), 0, slot),
+        )
+        .detach("a connection ends with its peer");
     }
 }
 
 /// A failed accept (out of descriptors, say): logged, and a pause so the loop does not spin.
 async fn accept_failed(e: &io::Error) {
     tracing::warn!("gateway: accept failed: {e}");
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    stund::sleep(Duration::from_millis(50)).await;
 }
 
 /// One connection, holding its `slot` until it ends.

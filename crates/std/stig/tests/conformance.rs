@@ -72,6 +72,18 @@ fn init_for_test_roots_every_dir() {
     stig::reset_for_test();
 }
 
+/// `HOME_VAR` names the one variable a child gets to find its home; reading it is still stig's alone.
+#[test]
+fn the_home_variable_is_named_for_children() {
+    assert_eq!(stig::HOME_VAR, "HOME");
+}
+
+#[test]
+fn the_system_search_paths_are_named_by_the_xdg_variables() {
+    assert_eq!(stig::SYSTEM_DATA_DIRS_VAR, "XDG_DATA_DIRS");
+    assert_eq!(stig::SYSTEM_CONFIG_DIRS_VAR, "XDG_CONFIG_DIRS");
+}
+
 #[test]
 fn the_system_runtime_dir_is_the_xdg_one_and_absolute() {
     assert_eq!(stig::SYSTEM_RUNTIME_VAR, "XDG_RUNTIME_DIR");

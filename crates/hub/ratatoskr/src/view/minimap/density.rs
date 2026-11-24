@@ -235,7 +235,11 @@ mod tests {
     /// A log of LINES lines, every 7th an ERROR, every 11th a WARN, every 13th blank.
     fn log(dir: &Path, lines: usize) -> std::path::PathBuf {
         let p = dir.join("big.log");
-        let mut f = std::io::BufWriter::new(File::create(&p).unwrap());
+        let mut f = std::io::BufWriter::new(
+            eitri::create_exclusive(&p, 0o666)
+                .map_err(std::io::Error::from)
+                .unwrap(),
+        );
         for i in 0..lines {
             if i % 13 == 0 {
                 writeln!(f).unwrap();
@@ -359,9 +363,9 @@ mod tests {
         let st = stamp(&p).unwrap();
         assert!(st.len >= 200 << 20, "the log is 200 MB: {}", st.len);
         let (error, warning) = (re("ERROR|FATAL"), re("WARN"));
-        let t0 = Instant::now();
+        let t0 = crate::clock::real_now();
         let (mut first, mut parts) = (None, 0u32);
-        let r = scan(&p, st, &error, &warning, Instant::now, |part| {
+        let r = scan(&p, st, &error, &warning, crate::clock::real_now, |part| {
             if part.is_some() {
                 parts += 1;
                 first.get_or_insert(t0.elapsed());
@@ -381,13 +385,15 @@ mod tests {
         assert_eq!(spans, st.len, "the buckets tile the file");
         assert_eq!(b.iter().map(|x| x.1).sum::<u32>(), grep_c(&p, &error));
         assert_eq!(b.iter().map(|x| x.2).sum::<u32>(), grep_c(&p, &warning));
-        eprintln!("density-200mb: first part {first:?}, {parts} parts, whole scan {whole:?}");
+        crate::soft::err_line(&format!(
+            "density-200mb: first part {first:?}, {parts} parts, whole scan {whole:?}"
+        ));
         if let Some(first) = first {
             assert!(first <= FIRST_PART, "the first part at {first:?}");
         }
-        let t1 = Instant::now();
+        let t1 = crate::clock::real_now();
         let mut blocks = 0;
-        let r = scan(&p, st, &error, &warning, Instant::now, |part| {
+        let r = scan(&p, st, &error, &warning, crate::clock::real_now, |part| {
             blocks += 1;
             part.is_none() && blocks < 3
         })
@@ -433,9 +439,7 @@ mod tests {
             crate::clock::real_now,
             |_| {
                 if std::mem::take(&mut first) {
-                    std::fs::OpenOptions::new()
-                        .append(true)
-                        .open(&p)
+                    crate::fsio::append(&p, false)
                         .unwrap()
                         .write_all(b"more\n")
                         .unwrap();
@@ -470,7 +474,7 @@ mod tests {
         }
         text.push_str(&long);
         text.push('\n');
-        std::fs::write(&p, &text).unwrap();
+        crate::fsio::write(&p, &text).unwrap();
         let (size, count) = geometry(text.len() as u64);
         let (t, start, n) = peek(&p, 3, 2).unwrap();
         assert_eq!(n, count);

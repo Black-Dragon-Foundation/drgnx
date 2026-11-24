@@ -8,9 +8,12 @@ license.workspace = true
 publish = false
 
 [dependencies]
+stig.workspace = true
+tracing.workspace = true
 eitri = { path = "../eitri", version = "0.1.0" }
 tokio.workspace = true
 libc.workspace = true
+saman.workspace = true  # `run`: a blocking caller's runtime
 stund = { path = "../stund", version = "0.1.0" }  # the grace and the probes wait on the installed clock
 hlaup = { path = "../hlaup", version = "0.1.0" }  # every spawn goes through its lock where unshare is refused (ETXTBSY)
 
@@ -18,3 +21,6 @@ hlaup = { path = "../hlaup", version = "0.1.0" }  # every spawn goes through its
 stund = { path = "../stund", version = "0.1.0", features = ["test-hooks"] }
 skuld = { path = "../skuld", version = "0.1.0" }
 tempfile.workspace = true
+
+[lints]
+workspace = true

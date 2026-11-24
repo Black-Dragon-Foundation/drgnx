@@ -68,7 +68,7 @@ impl LocalRunner {
             Admission::Fixed(_) => None,
         };
         #[cfg(not(target_os = "linux"))]
-        let _ = folder;
+        let _only_when_used_elsewhere = &folder;
         LocalRunner {
             admission,
             #[cfg(target_os = "linux")]
@@ -213,7 +213,7 @@ impl LocalRunner {
             let b = forseti::budget(&m, &limits);
             return Some((m, b));
         }
-        let _ = (running, last, now);
+        let _only_when_used_elsewhere = (&running, &last, &now);
         None
     }
 
@@ -226,7 +226,7 @@ impl LocalRunner {
             tracing::debug!("runners: job {id}'s reservation: {e}");
         }
         #[cfg(not(target_os = "linux"))]
-        let _ = id;
+        let _only_when_used_elsewhere = &id;
     }
 }
 
@@ -251,7 +251,7 @@ pub fn local_use() -> crate::runners::queue::LocalUse {
 #[cfg(target_os = "linux")]
 fn own_manager() -> PathBuf {
     let uid = rustix::process::getuid().as_raw();
-    let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    let own = crate::fsio::read_to_string("/proc/self/cgroup").unwrap_or_default();
     Path::new("/sys/fs/cgroup").join(sleipnir::linux::probe::manager_cgroup(&own, uid))
 }
 

@@ -75,7 +75,7 @@ impl Fx {
     fn write(&self, rel: &str, text: &str) {
         let path = self.home.join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, text).unwrap();
+        crate::put_file(path, text);
     }
 
     fn at(&self, rel: &str) -> String {
@@ -92,14 +92,13 @@ impl Fx {
 
     /// A schema-6 `work.db` holding canary nodes from `org/` (the fixture, with this HOME and these canaries).
     fn schema_6(&self) {
-        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../test/fixtures");
-        let canaries = fs::read_to_string(fixtures.join("work-db-6-canary.sql"))
-            .unwrap()
+        let fixtures = crate::fixtures();
+        let canaries = crate::read_file(fixtures.join("work-db-6-canary.sql"))
             .replace("@HOME@", &self.home.to_string_lossy())
             .replace("@NOTES@", &self.notes)
             .replace("@OTHER@", &self.other);
         let c = Connection::open(self.db()).unwrap();
-        c.execute_batch(&fs::read_to_string(fixtures.join("work-db-6.sql")).unwrap())
+        c.execute_batch(&crate::read_file(fixtures.join("work-db-6.sql")))
             .unwrap();
         c.execute_batch(&canaries).unwrap();
     }
@@ -150,7 +149,7 @@ impl Embedder for Recorder {
         &'a self,
         texts: &'a [String],
     ) -> urdr::graph::search::BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
-        self.sent.lock().unwrap().extend(texts.iter().cloned());
+        saman::lock(&self.sent).extend(texts.iter().cloned());
         let n = texts.len();
         Box::pin(async move { Ok(vec![vec![1.0, 0.0, 0.5, 0.25]; n]) })
     }
@@ -336,7 +335,7 @@ async fn run_doors(fx: &Fx) -> Ran {
             None,
         ),
     ];
-    fs::write(tampered.join("entities.jsonl"), lines.join("\n") + "\n").unwrap();
+    crate::put_file(tampered.join("entities.jsonl"), lines.join("\n") + "\n");
     let writer = db.graph_writer().unwrap().clone();
     let import_deny = Arc::clone(&deny);
     let allow: Allow =
@@ -377,11 +376,10 @@ async fn run_doors(fx: &Fx) -> Ran {
         .await
         .unwrap();
     let config = fx.root.join("config/personal-notes-deny.json");
-    fs::write(
+    crate::put_file(
         &config,
         json!({"version": 1, "entries": [{"kind": "folder", "path": "~/docs"}]}).to_string(),
-    )
-    .unwrap();
+    );
     fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
     let now_deny = fx.deny();
     let export_dir = fx.root.join("export").join("all");
@@ -419,105 +417,108 @@ fn count(db: &Path, sql: &str, args: [String; 2]) -> i64 {
         .unwrap()
 }
 
-#[tokio::test]
-async fn rust_doors_never_store_the_canary() {
-    let fx = Fx::new();
-    let ran = run_doors(&fx).await;
-    let db = fx.db();
+#[test]
+fn rust_doors_never_store_the_canary() {
+    saman::block_on_current(async {
+        let fx = Fx::new();
+        let ran = run_doors(&fx).await;
+        let db = fx.db();
 
-    // The doors refused what they had to, and let the rest through (so the absence below means something).
-    for (i, a) in ran.refused.iter().enumerate() {
+        // The doors refused what they had to, and let the rest through (so the absence below means something).
+        for (i, a) in ran.refused.iter().enumerate() {
+            assert_eq!(
+                a.refused.iter().map(|r| r.why.as_str()).collect::<Vec<_>>(),
+                vec![DENIED],
+                "crafted payload {i} was not refused by the deny-list: {a:?}"
+            );
+            assert_eq!(a.changed, 0, "crafted payload {i} changed the store");
+        }
+        assert!(ran.allowed.refused.is_empty(), "{:?}", ran.allowed);
+        assert!(ran.allowed.changed >= 2);
         assert_eq!(
-            a.refused.iter().map(|r| r.why.as_str()).collect::<Vec<_>>(),
-            vec![DENIED],
-            "crafted payload {i} was not refused by the deny-list: {a:?}"
+            (
+                ran.imported.entities,
+                ran.imported.skipped,
+                ran.imported.error.as_deref()
+            ),
+            (1, 4, None),
+            "import: {:?}",
+            ran.imported
         );
-        assert_eq!(a.changed, 0, "crafted payload {i} changed the store");
-    }
-    assert!(ran.allowed.refused.is_empty(), "{:?}", ran.allowed);
-    assert!(ran.allowed.changed >= 2);
-    assert_eq!(
-        (
-            ran.imported.entities,
-            ran.imported.skipped,
-            ran.imported.error.as_deref()
-        ),
-        (1, 4, None),
-        "import: {:?}",
-        ran.imported
-    );
-    assert_eq!(ran.exported.error, None);
-    assert_eq!(
-        count(
-            &db,
-            "select count(*) from entity where id in (?1, ?2, 'note:plain', 'note:recorded')",
-            [
-                format!("plan:{}", fx.at("proj/plans/old.md")),
-                format!("task:{}#1", fx.at("proj/plans/old.md")),
-            ],
-        ),
-        4,
-        "the migrated plan and task, the imported note and the recorded note are kept"
-    );
-    let exported = fs::read_to_string(ran.export_dir.join("entities.jsonl")).unwrap();
-    assert!(exported.contains("note:recorded") && exported.contains("note:plain"));
-    assert!(!exported.contains("note:kept-out"));
+        assert_eq!(ran.exported.error, None);
+        assert_eq!(
+            count(
+                &db,
+                "select count(*) from entity where id in (?1, ?2, 'note:plain', 'note:recorded')",
+                [
+                    format!("plan:{}", fx.at("proj/plans/old.md")),
+                    format!("task:{}#1", fx.at("proj/plans/old.md")),
+                ],
+            ),
+            4,
+            "the migrated plan and task, the imported note and the recorded note are kept"
+        );
+        let exported = crate::read_file(ran.export_dir.join("entities.jsonl"));
+        assert!(exported.contains("note:recorded") && exported.contains("note:plain"));
+        assert!(!exported.contains("note:kept-out"));
 
-    // The canaries are nowhere: not in work.db, its WAL, or the export.
-    let mut places = vec![db.clone(), fx.root.join("work.db-wal")];
-    places.extend(files_under(&ran.export_dir));
-    for place in &places {
-        for (name, c) in [("notes.org", &fx.notes), ("org/other.md", &fx.other)] {
+        // The canaries are nowhere: not in work.db, its WAL, or the export.
+        let mut places = vec![db.clone(), fx.root.join("work.db-wal")];
+        places.extend(files_under(&ran.export_dir));
+        for place in &places {
+            for (name, c) in [("notes.org", &fx.notes), ("org/other.md", &fx.other)] {
+                assert!(
+                    !holds(place, c),
+                    "the canary of {name} is in {}",
+                    place.display()
+                );
+            }
+        }
+        // …nor any path into org/ but the board's.
+        assert_eq!(
+            count(
+                &db,
+                "select count(*) from entity where instr(id || ' ' || coalesce(source, '') || ' ' || data, ?1) > 0 \
+             and instr(id, ?2) = 0",
+                [fx.at("org/"), fx.at("org/board.org")],
+            ),
+            0,
+            "an entity names a path into org/"
+        );
+        // The migration's own copy (`backup/`) still holds them by design: the doctor lists it, nothing reads it.
+
+        // Door 4, the embedder: a round over every stale entity sends none of the canaries, nor the record the user's deny
+        // file kept out after it was stored (it stays in the store, unsent), and the allowed ones are sent.
+        let recorder = Recorder::default();
+        let out = ratatoskr::embed::fill(&ran.db, &recorder, &fx.deny()).await;
+        assert!(
+            matches!(out, ratatoskr::embed::Outcome::Filled { embedded, denied: 1 } if embedded >= 4),
+            "door 4: {out:?}"
+        );
+        let sent = saman::lock(&recorder.sent).join("\n");
+        for (name, c) in [
+            ("notes.org", &fx.notes),
+            ("org/other.md", &fx.other),
+            ("docs/private.txt", &ran.kept_out),
+        ] {
             assert!(
-                !holds(place, c),
-                "the canary of {name} is in {}",
-                place.display()
+                !sent.contains(c.as_str()),
+                "door 4 sent the canary of {name}"
             );
         }
-    }
-    // …nor any path into org/ but the board's.
-    assert_eq!(
-        count(
-            &db,
-            "select count(*) from entity where instr(id || ' ' || coalesce(source, '') || ' ' || data, ?1) > 0 \
-             and instr(id, ?2) = 0",
-            [fx.at("org/"), fx.at("org/board.org")],
-        ),
-        0,
-        "an entity names a path into org/"
-    );
-    // The migration's own copy (`backup/`) still holds them by design: the doctor lists it, nothing reads it.
-
-    // Door 4, the embedder: a round over every stale entity sends none of the canaries, nor the record the user's deny
-    // file kept out after it was stored (it stays in the store, unsent), and the allowed ones are sent.
-    let recorder = Recorder::default();
-    let out = ratatoskr::embed::fill(&ran.db, &recorder, &fx.deny()).await;
-    assert!(
-        matches!(out, ratatoskr::embed::Outcome::Filled { embedded, denied: 1 } if embedded >= 4),
-        "door 4: {out:?}"
-    );
-    let sent = recorder.sent.lock().unwrap().join("\n");
-    for (name, c) in [
-        ("notes.org", &fx.notes),
-        ("org/other.md", &fx.other),
-        ("docs/private.txt", &ran.kept_out),
-    ] {
-        assert!(
-            !sent.contains(c.as_str()),
-            "door 4 sent the canary of {name}"
-        );
-    }
-    assert!(sent.contains("a recorded note") && sent.contains("a plain imported note"));
+        assert!(sent.contains("a recorded note") && sent.contains("a plain imported note"));
+    })
 }
 
-#[tokio::test]
-async fn the_hub_never_writes_org() {
-    let fx = Fx::new();
-    let before = fx.org_snapshot();
-    let ran = run_doors(&fx).await;
-    let todo = format!("todo:{}#1", fx.at("org/board.org"));
-    let row = || {
-        Connection::open(fx.db())
+#[test]
+fn the_hub_never_writes_org() {
+    saman::block_on_current(async {
+        let fx = Fx::new();
+        let before = fx.org_snapshot();
+        let ran = run_doors(&fx).await;
+        let todo = format!("todo:{}#1", fx.at("org/board.org"));
+        let row = || {
+            Connection::open(fx.db())
             .unwrap()
             .query_row(
                 "select kind, coalesce(status, ''), coalesce(assignee, ''), ver from entity where id = ?1",
@@ -525,40 +526,41 @@ async fn the_hub_never_writes_org() {
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?)),
             )
             .unwrap()
-    };
-    let read = row();
-    assert_eq!(read.0, "todo", "the board is read");
-    // An agent's task_write on the board's TODO is refused (parsed entities are read-only, call 6).
-    let agent = Identity::Session {
-        agent: "s1".into(),
-        sid: "s1".into(),
-        profile: None,
-        job: None,
-        task: None,
-        home: fx.home.join("proj"),
-    };
-    let list = tools();
-    let task_write = list.iter().find(|t| t.name() == "task_write").unwrap();
-    for args in [
-        json!({"op": "claim", "id": todo}),
-        json!({"op": "update", "id": todo, "ver": read.3, "status": "done"}),
-    ] {
-        let answer = match task_write.check(&args) {
-            Err(e) => ToolResult::Err(e.to_string()),
-            Ok(()) => {
-                task_write
-                    .call(&(Arc::clone(&ran.coord), agent.clone()), args.clone())
-                    .await
-            }
         };
-        assert!(
-            matches!(answer, ToolResult::Err(_)),
-            "task_write {args} was not refused"
-        );
-    }
-    assert_eq!(row(), read, "the board's TODO is as the scan left it");
-    // No file under HOME/org changed: the same files, bytes, times and modes.
-    assert_eq!(fx.org_snapshot(), before);
+        let read = row();
+        assert_eq!(read.0, "todo", "the board is read");
+        // An agent's task_write on the board's TODO is refused (parsed entities are read-only, call 6).
+        let agent = Identity::Session {
+            agent: "s1".into(),
+            sid: "s1".into(),
+            profile: None,
+            job: None,
+            task: None,
+            home: fx.home.join("proj"),
+        };
+        let list = tools();
+        let task_write = list.iter().find(|t| t.name() == "task_write").unwrap();
+        for args in [
+            json!({"op": "claim", "id": todo}),
+            json!({"op": "update", "id": todo, "ver": read.3, "status": "done"}),
+        ] {
+            let answer = match task_write.check(&args) {
+                Err(e) => ToolResult::Err(e.to_string()),
+                Ok(()) => {
+                    task_write
+                        .call(&(Arc::clone(&ran.coord), agent.clone()), args.clone())
+                        .await
+                }
+            };
+            assert!(
+                matches!(answer, ToolResult::Err(_)),
+                "task_write {args} was not refused"
+            );
+        }
+        assert_eq!(row(), read, "the board's TODO is as the scan left it");
+        // No file under HOME/org changed: the same files, bytes, times and modes.
+        assert_eq!(fx.org_snapshot(), before);
+    })
 }
 
 /// Door 6, `history.db`: the edit history registers a file only when the deny-list lets it, so the notes never reach a
@@ -570,13 +572,17 @@ fn history_db_is_the_sixth_door() {
 
     let fx = Fx::new();
     let git = |args: &[&str]| {
-        let ok = std::process::Command::new("git")
-            .args(args)
-            .current_dir(&fx.home)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .status()
-            .unwrap()
+        let env = draugr::env::build(
+            &["PATH"],
+            &[],
+            &[
+                ("GIT_CONFIG_GLOBAL", std::ffi::OsStr::new("/dev/null")),
+                ("GIT_CONFIG_NOSYSTEM", std::ffi::OsStr::new("1")),
+            ],
+        );
+        let program = draugr::git::git_program().unwrap().path;
+        let ok = crate::run_child(program, args, &fx.home, env)
+            .status
             .success();
         assert!(ok, "git {args:?}");
     };

@@ -2,7 +2,6 @@
 //! `cargo test`; docs/develop/hub.md, "Pair mode").
 
 use ratatoskr::pair::writes::hunks;
-use std::time::Instant;
 
 /// A 5,000-line file and a whole-file write of it with 20 lines changed in 5 places, one line added and one gone.
 fn texts() -> (String, String) {
@@ -28,7 +27,7 @@ fn whole_file_5000_lines_within_2_ms() {
     assert_eq!(hunks(&old, &new).len(), 7);
     let mut times = Vec::new();
     for _ in 0..100 {
-        let t = Instant::now();
+        let t = stund::real::instant();
         std::hint::black_box(hunks(
             std::hint::black_box(&old),
             std::hint::black_box(&new),
@@ -38,9 +37,9 @@ fn whole_file_5000_lines_within_2_ms() {
     times.sort_unstable();
     let p95 = times[times.len() * 95 / 100];
     // the reading, for the timing lane's report (the verdict is the assert)
-    eprintln!(
+    ratatoskr::soft::err_line(&format!(
         "whole-file diff of 5,000 lines: p50 {} ns, p95 {p95} ns",
         times[times.len() / 2]
-    );
+    ));
     assert!(p95 <= 2_000_000, "whole-file diff p95 {p95} ns");
 }

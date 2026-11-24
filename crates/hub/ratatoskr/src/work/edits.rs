@@ -19,8 +19,10 @@ use std::path::{Path, PathBuf};
 
 /// TREE's files the edit history says the agent changed against the branch's base, with the base commit; none while
 /// the history holds no branch for the tree.
-pub fn from_history(hub: &Hub, tree: &Tree) -> Result<Option<(String, Vec<FileCount>)>, String> {
-    let found = hub.edits_against_base(tree).map_err(|e| e.to_string())?;
+pub fn from_history(hub: &Hub, tree: &Tree) -> villa::Result<Option<(String, Vec<FileCount>)>> {
+    let found = hub
+        .edits_against_base(tree)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     Ok(found.map(|(base, files)| {
         let files = files
             .into_iter()
@@ -36,8 +38,8 @@ pub fn from_history(hub: &Hub, tree: &Tree) -> Result<Option<(String, Vec<FileCo
 }
 
 /// PATH's bytes in TREE.
-pub fn file_blob(root: &Path, worktree: &Path, tree: &str, path: &str) -> Result<Vec<u8>, String> {
-    check_path(path)?;
+pub fn file_blob(root: &Path, worktree: &Path, tree: &str, path: &str) -> villa::Result<Vec<u8>> {
+    check_path(path).map_err(|e| villa::Error::invalid(e.to_string()))?;
     snapshot::blob(root, worktree, tree, path)
 }
 
@@ -73,7 +75,7 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-fn fail(message: impl Into<String>) -> Error {
+fn fail(message: impl ToString) -> Error {
     crate::runner::invalid(message)
 }
 
@@ -175,11 +177,16 @@ pub async fn edited(f: &Front, session: &str) -> Result<Option<Changed>, Error> 
     let (hub, tree) = history_of(f, session)?;
     let (sid, now) = (session.to_owned(), crate::clock::wall_secs());
     let found = crate::clock::blocking(move || {
-        if hub.shared_with(&tree, &sid).map_err(|e| e.to_string())? {
-            let base = hub.base_commit(&tree).map_err(|e| e.to_string())?;
+        if hub
+            .shared_with(&tree, &sid)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?
+        {
+            let base = hub
+                .base_commit(&tree)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let files = hub
                 .session_edits(&tree, &sid, now)
-                .map_err(|e| e.to_string())?
+                .map_err(|e| villa::Error::invalid(e.to_string()))?
                 .into_iter()
                 .map(|c| FileCount {
                     path: c.path,
@@ -367,7 +374,7 @@ mod tests {
     }
 
     fn git(dir: &std::path::Path, args: &[&str]) -> String {
-        let out = std::process::Command::new("git")
+        let out = crate::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -398,7 +405,7 @@ mod tests {
         for (p, t) in files {
             let f = repo.path().join(p);
             std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-            std::fs::write(f, t).unwrap();
+            crate::fsio::write(f, t).unwrap();
         }
         git(repo.path(), &["add", "."]);
         git(repo.path(), &["commit", "-q", "-m", "base"]);
@@ -418,7 +425,7 @@ mod tests {
     fn write(f: &Fx, rel: &str, text: &str, step: &str, at: f64) {
         let p = f.repo.path().join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, text).unwrap();
+        crate::fsio::write(p, text).unwrap();
         let cause = verdandi::Cause {
             session: Some("s1".into()),
             step: Some(step.into()),
@@ -472,9 +479,9 @@ mod tests {
     fn shared_tree_lists_only_the_sessions_own_lines() {
         let f = fx(&[("a.txt", "one\ntwo\n")]);
         // yours before the session: a changed line and an untracked file, as the watcher records them
-        std::fs::write(f.repo.path().join("a.txt"), "one\ntwo\nmine\n").unwrap();
+        crate::fsio::write(f.repo.path().join("a.txt"), "one\ntwo\nmine\n").unwrap();
         f.hub.on_disk_change(&f.tree, "a.txt", 5.0).unwrap();
-        std::fs::write(f.repo.path().join("NOTES.txt"), "new\n").unwrap();
+        crate::fsio::write(f.repo.path().join("NOTES.txt"), "new\n").unwrap();
         f.hub.on_disk_change(&f.tree, "NOTES.txt", 6.0).unwrap();
         // the agent's line below yours
         write(&f, "a.txt", "one\ntwo\nmine\nagent\n", "1", 10.0);
@@ -515,11 +522,11 @@ mod tests {
     #[test]
     fn hunks_of_one_file_against_the_base() {
         let (_d, root, wt) = dirs();
-        std::fs::write(wt.join("a.txt"), "one\ntwo\n").unwrap();
-        std::fs::write(wt.join("b.txt"), "x\n").unwrap();
+        crate::fsio::write(wt.join("a.txt"), "one\ntwo\n").unwrap();
+        crate::fsio::write(wt.join("b.txt"), "x\n").unwrap();
         let base = take_base(&root, &wt, "k").unwrap();
-        std::fs::write(wt.join("a.txt"), "one\n2\n").unwrap();
-        std::fs::write(wt.join("b.txt"), "y\n").unwrap();
+        crate::fsio::write(wt.join("a.txt"), "one\n2\n").unwrap();
+        crate::fsio::write(wt.join("b.txt"), "y\n").unwrap();
         let t = take(&root, &wt, "s1", 1, &[]).unwrap();
         std::fs::remove_dir_all(&wt).unwrap();
         let d = snapshot::patch(&root, &wt, &base, &t, "a.txt").unwrap();
@@ -546,9 +553,9 @@ mod tests {
     #[test]
     fn file_at_a_step_is_the_snapshot_blob() {
         let (_d, root, wt) = dirs();
-        std::fs::write(wt.join("a.bin"), [0u8, 159, 146, 150, 10]).unwrap();
+        crate::fsio::write(wt.join("a.bin"), [0u8, 159, 146, 150, 10]).unwrap();
         let t1 = take(&root, &wt, "s1", 1, &[]).unwrap();
-        std::fs::write(wt.join("a.bin"), "later\n").unwrap();
+        crate::fsio::write(wt.join("a.bin"), "later\n").unwrap();
         let t2 = take(&root, &wt, "s1", 2, &[]).unwrap();
         assert_eq!(
             file_blob(&root, &wt, &t1, "a.bin").unwrap(),

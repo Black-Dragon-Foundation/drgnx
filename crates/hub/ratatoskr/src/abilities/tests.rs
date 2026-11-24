@@ -81,7 +81,7 @@ impl Rig {
     /// Setting NAME to VALUE, the others set so far kept (`set_overrides` takes the whole set at once).
     async fn set(&self, name: &str, value: serde_json::Value) {
         let all: Vec<Override> = {
-            let mut kept = self.overrides.lock().unwrap();
+            let mut kept = saman::lock(&self.overrides);
             kept.insert(name.to_owned(), value);
             kept.iter()
                 .map(|(name, value)| Override {
@@ -163,7 +163,7 @@ impl Rig {
 /// Until one call waits on a card; a call that ends first (it panicked, say) fails the test instead of hanging it.
 async fn until_waiting<T: std::fmt::Debug>(
     waiting: &mut tokio::sync::watch::Receiver<usize>,
-    call: &mut tokio::task::JoinHandle<T>,
+    call: &mut crate::clock::Spawned<T>,
 ) {
     skuld::while_running("the call's card", call, waiting.wait_for(|n| *n == 1))
         .await
@@ -226,265 +226,295 @@ async fn served(path: &Path) -> Vec<String> {
 }
 
 // [D] pure: abilities/listed-for-every-profile
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn listed_for_every_profile() {
-    let r = rig(&["echo-ability"]).await;
-    for who in profiles() {
-        let list = offered(&r.f, "s1", &who).await;
-        assert_eq!(names(&list), ["echo-ability_echo"]);
-        assert_eq!(list[0].description(), "Returns its arguments.");
-        assert_eq!(list[0].input_schema(), json!({"type": "object"}));
-    }
+#[test]
+fn listed_for_every_profile() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["echo-ability"]).await;
+        for who in profiles() {
+            let list = offered(&r.f, "s1", &who).await;
+            assert_eq!(names(&list), ["echo-ability_echo"]);
+            assert_eq!(list[0].description(), "Returns its arguments.");
+            assert_eq!(list[0].input_schema(), json!({"type": "object"}));
+        }
+    })
 }
 
 // [C] handshake: abilities/call-round-trips
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn call_round_trips() {
-    let r = rig(&["echo-ability"]).await;
-    for who in profiles() {
-        let list = offered(&r.f, "s1", &who).await;
-        let got = run(&list, &r.ctx("s1", &who), json!({"a": [1, "b"]})).await;
-        assert_eq!(got, Ok(json!({"a": [1, "b"]})));
-    }
+#[test]
+fn call_round_trips() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["echo-ability"]).await;
+        for who in profiles() {
+            let list = offered(&r.f, "s1", &who).await;
+            let got = run(&list, &r.ctx("s1", &who), json!({"a": [1, "b"]})).await;
+            assert_eq!(got, Ok(json!({"a": [1, "b"]})));
+        }
+    })
 }
 
 // [D] pure: abilities/never-cell-hides-it, and a call outside the grants is refused
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn never_cell_hides_it_and_refuses_a_call() {
-    let r = rig(&["echo-ability"]).await;
-    let who = worker("claude", None);
-    // offered while the cell lets it, then the user's matrix says never
-    let list = offered(&r.f, "s1", &who).await;
-    assert_eq!(names(&list), ["echo-ability_echo"]);
-    r.cell("never").await;
-    assert!(offered(&r.f, "s1", &who).await.is_empty());
-    // a client that listed before can still name it: the call is refused, and nothing ran
-    let got = run(&list, &r.ctx("s1", &who), json!({"a": 1})).await;
-    let why = got.unwrap_err();
-    assert!(why.contains("plugin.abilities is never allowed"), "{why}");
-    // another column is unaffected
-    let chat = Who {
-        role: Some(Role::Chat),
-        ..who.clone()
-    };
-    assert_eq!(
-        names(&offered(&r.f, "s2", &chat).await),
-        ["echo-ability_echo"]
-    );
+#[test]
+fn never_cell_hides_it_and_refuses_a_call() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["echo-ability"]).await;
+        let who = worker("claude", None);
+        // offered while the cell lets it, then the user's matrix says never
+        let list = offered(&r.f, "s1", &who).await;
+        assert_eq!(names(&list), ["echo-ability_echo"]);
+        r.cell("never").await;
+        assert!(offered(&r.f, "s1", &who).await.is_empty());
+        // a client that listed before can still name it: the call is refused, and nothing ran
+        let got = run(&list, &r.ctx("s1", &who), json!({"a": 1})).await;
+        let why = got.unwrap_err();
+        assert!(why.contains("plugin.abilities is never allowed"), "{why}");
+        // another column is unaffected
+        let chat = Who {
+            role: Some(Role::Chat),
+            ..who.clone()
+        };
+        assert_eq!(
+            names(&offered(&r.f, "s2", &chat).await),
+            ["echo-ability_echo"]
+        );
+    })
 }
 
 // [D] pure: a plugin that is not enabled is not offered, and a call after it was switched off is refused
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_plugin_that_is_not_enabled_is_not_offered_or_run() {
-    let r = rig(&["echo-ability", "http-ability"]).await;
-    let who = worker("claude", None);
-    r.set("drgnx-agents-plugins", json!(["echo-ability"])).await;
-    let list = offered(&r.f, "s1", &who).await;
-    assert_eq!(
-        names(&list),
-        ["echo-ability_echo"],
-        "http-ability is approved but not enabled"
-    );
-    r.set("drgnx-agents-plugins", json!([])).await;
-    assert!(offered(&r.f, "s1", &who).await.is_empty());
-    let why = run(&list, &r.ctx("s1", &who), json!({})).await.unwrap_err();
-    assert!(why.contains("not enabled"), "{why}");
+#[test]
+fn a_plugin_that_is_not_enabled_is_not_offered_or_run() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["echo-ability", "http-ability"]).await;
+        let who = worker("claude", None);
+        r.set("drgnx-agents-plugins", json!(["echo-ability"])).await;
+        let list = offered(&r.f, "s1", &who).await;
+        assert_eq!(
+            names(&list),
+            ["echo-ability_echo"],
+            "http-ability is approved but not enabled"
+        );
+        r.set("drgnx-agents-plugins", json!([])).await;
+        assert!(offered(&r.f, "s1", &who).await.is_empty());
+        let why = run(&list, &r.ctx("s1", &who), json!({})).await.unwrap_err();
+        assert!(why.contains("not enabled"), "{why}");
+    })
 }
 
 // [D] pure: arguments outside the manifest's schema never reach the plugin
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn arguments_are_checked_against_the_schema() {
-    let r = rig(&["http-ability"]).await;
-    let who = worker("claude", None);
-    let list = offered(&r.f, "s1", &who).await;
-    let fetch = list
-        .iter()
-        .find(|t| t.name() == "http-ability_fetch")
-        .unwrap();
-    let e = fetch.check(&json!({"url": 3})).unwrap_err();
-    assert_eq!(e.path, "url");
-    let e = fetch.check(&json!({})).unwrap_err();
-    assert_eq!(
-        (e.path.as_str(), e.message.as_str()),
-        ("url", "required, missing")
-    );
-    assert!(
-        fetch
-            .check(&json!({"url": "https://api.example.com/"}))
-            .is_ok()
-    );
+#[test]
+fn arguments_are_checked_against_the_schema() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["http-ability"]).await;
+        let who = worker("claude", None);
+        let list = offered(&r.f, "s1", &who).await;
+        let fetch = list
+            .iter()
+            .find(|t| t.name() == "http-ability_fetch")
+            .unwrap();
+        let e = fetch.check(&json!({"url": 3})).unwrap_err();
+        assert_eq!(e.path, "url");
+        let e = fetch.check(&json!({})).unwrap_err();
+        assert_eq!(
+            (e.path.as_str(), e.message.as_str()),
+            ("url", "required, missing")
+        );
+        assert!(
+            fetch
+                .check(&json!({"url": "https://api.example.com/"}))
+                .is_ok()
+        );
+    })
 }
 
 // [C] handshake: abilities/http-to-an-undeclared-host-fails
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn http_to_an_undeclared_host_fails() {
-    let r = rig(&["http-ability"]).await;
-    let who = worker("claude", None);
-    let list = offered(&r.f, "s1", &who).await;
-    let t = list
-        .iter()
-        .find(|t| t.name() == "http-ability_fetch")
-        .unwrap();
-    let args = json!({"url": "https://other.example.com/x"});
-    match t.call(&r.ctx("s1", &who), args).await {
-        ToolResult::Err(e) => assert!(e.contains("not a host this plugin declared"), "{e}"),
-        _ => panic!("a host the manifest does not name was reached"),
-    }
+#[test]
+fn http_to_an_undeclared_host_fails() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["http-ability"]).await;
+        let who = worker("claude", None);
+        let list = offered(&r.f, "s1", &who).await;
+        let t = list
+            .iter()
+            .find(|t| t.name() == "http-ability_fetch")
+            .unwrap();
+        let args = json!({"url": "https://other.example.com/x"});
+        match t.call(&r.ctx("s1", &who), args).await {
+            ToolResult::Err(e) => assert!(e.contains("not a host this plugin declared"), "{e}"),
+            _ => panic!("a host the manifest does not name was reached"),
+        }
+    })
 }
 
 // [C] handshake: abilities/ask-cell-makes-a-card
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ask_cell_makes_a_card_and_waits_for_the_answer() {
-    let r = rig(&["echo-ability"]).await;
-    r.cell("ask").await;
-    let who = worker("claude", None);
-    let list = offered(&r.f, "s1", &who).await;
-    assert_eq!(names(&list), ["echo-ability_echo"], "an Ask is offered");
-    let mut waiting = r.f.core.plugins.waiting();
-    let ctx = r.ctx("s1", &who);
-    let mut call = tokio::spawn(async move { run(&list, &ctx, json!({"x": 1})).await });
-    until_waiting(&mut waiting, &mut call).await;
-    let cards = r.cards().await;
-    assert_eq!(cards.len(), 1, "{cards:?}");
-    let (id, state, title) = &cards[0];
-    assert_eq!(state, "open");
-    assert!(
-        title.contains("echo-ability_echo") && title.contains(r#"{"x":1}"#),
-        "the card names the tool and shows the arguments: {title}"
-    );
-    assert!(!call.is_finished(), "the call waits for the user");
-    r.allow(*id).await;
-    let got = call.await.unwrap();
-    assert_eq!(got, Ok(json!({"x": 1})));
+#[test]
+fn ask_cell_makes_a_card_and_waits_for_the_answer() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["echo-ability"]).await;
+        r.cell("ask").await;
+        let who = worker("claude", None);
+        let list = offered(&r.f, "s1", &who).await;
+        assert_eq!(names(&list), ["echo-ability_echo"], "an Ask is offered");
+        let mut waiting = r.f.core.plugins.waiting();
+        let ctx = r.ctx("s1", &who);
+        let mut call = crate::clock::spawn_untracked(module_path!(), async move {
+            run(&list, &ctx, json!({"x": 1})).await
+        });
+        until_waiting(&mut waiting, &mut call).await;
+        let cards = r.cards().await;
+        assert_eq!(cards.len(), 1, "{cards:?}");
+        let (id, state, title) = &cards[0];
+        assert_eq!(state, "open");
+        assert!(
+            title.contains("echo-ability_echo") && title.contains(r#"{"x":1}"#),
+            "the card names the tool and shows the arguments: {title}"
+        );
+        assert!(!call.is_finished(), "the call waits for the user");
+        r.allow(*id).await;
+        let got = call.await.unwrap();
+        assert_eq!(got, Ok(json!({"x": 1})));
+    })
 }
 
 // [C] handshake: abilities/an-ask-waits-past-30-s (the 30 s deadline is the WASM call's only)
-#[tokio::test(flavor = "current_thread")]
-async fn an_ask_waits_past_30_s() {
-    let r = rig(&["echo-ability"]).await;
-    r.cell("ask").await;
-    let who = worker("claude", None);
-    let list = offered(&r.f, "s1", &who).await;
-    let mut waiting = r.f.core.plugins.waiting();
-    let ctx = r.ctx("s1", &who);
-    let mut call = tokio::spawn(async move { run(&list, &ctx, json!({})).await });
-    until_waiting(&mut waiting, &mut call).await;
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(95)).await;
-    assert!(
-        !call.is_finished(),
-        "a minute and a half later it still waits"
-    );
-    tokio::time::resume();
-    let id = r.cards().await[0].0;
-    r.allow(id).await;
-    assert_eq!(call.await.unwrap(), Ok(json!({})));
+#[test]
+fn an_ask_waits_past_30_s() {
+    saman::block_on_current(async move {
+        let r = rig(&["echo-ability"]).await;
+        r.cell("ask").await;
+        let who = worker("claude", None);
+        let list = offered(&r.f, "s1", &who).await;
+        let mut waiting = r.f.core.plugins.waiting();
+        let ctx = r.ctx("s1", &who);
+        let mut call = crate::clock::spawn_untracked(module_path!(), async move {
+            run(&list, &ctx, json!({})).await
+        });
+        until_waiting(&mut waiting, &mut call).await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(95)).await;
+        assert!(
+            !call.is_finished(),
+            "a minute and a half later it still waits"
+        );
+        tokio::time::resume();
+        let id = r.cards().await[0].0;
+        r.allow(id).await;
+        assert_eq!(call.await.unwrap(), Ok(json!({})));
+    })
 }
 
 // [C] handshake: abilities/ask-card-is-withdrawn-when-the-call-ends
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_ask_card_is_withdrawn_when_the_call_ends() {
-    let r = rig(&["echo-ability"]).await;
-    r.cell("ask").await;
-    let who = worker("claude", None);
-    let list = offered(&r.f, "s1", &who).await;
-    let mut waiting = r.f.core.plugins.waiting();
-    let mut withdrawn = r.f.core.plugins.withdrawn();
-    let ctx = r.ctx("s1", &who);
-    let mut call = tokio::spawn(async move { run(&list, &ctx, json!({})).await });
-    until_waiting(&mut waiting, &mut call).await;
-    // the client cancels the MCP call: the server drops the call's future
-    call.abort();
-    let _ = call.await;
-    waiting.wait_for(|n| *n == 0).await.unwrap();
-    withdrawn.wait_for(|n| *n == 1).await.unwrap();
-    let cards = r.cards().await;
-    assert_eq!(cards.len(), 1);
-    assert_eq!(cards[0].1, "withdrawn", "{cards:?}");
+#[test]
+fn the_ask_card_is_withdrawn_when_the_call_ends() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["echo-ability"]).await;
+        r.cell("ask").await;
+        let who = worker("claude", None);
+        let list = offered(&r.f, "s1", &who).await;
+        let mut waiting = r.f.core.plugins.waiting();
+        let mut withdrawn = r.f.core.plugins.withdrawn();
+        let ctx = r.ctx("s1", &who);
+        let mut call = crate::clock::spawn_untracked(module_path!(), async move {
+            run(&list, &ctx, json!({})).await
+        });
+        until_waiting(&mut waiting, &mut call).await;
+        // the client cancels the MCP call: the server drops the call's future
+        call.abort();
+        crate::soft::done(call.await, "tests");
+        waiting.wait_for(|n| *n == 0).await.unwrap();
+        withdrawn.wait_for(|n| *n == 1).await.unwrap();
+        let cards = r.cards().await;
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].1, "withdrawn", "{cards:?}");
+    })
 }
 
 // [D] pure: abilities/first-ability-needs-a-restart
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn first_ability_needs_a_restart() {
-    let r = rig(&[]).await;
-    let who = worker("claude", None);
-    r.open("s1", &who).await;
-    assert!(
-        r.f.mcp.plugins_socket_of("s1").is_none(),
-        "no ability when it started"
-    );
-    assert!(!r.f.mcp.plugins_changed("s1"));
-    // a plugin is installed, approved and enabled afterwards
-    install(&r.dir.path().join("plugins"), "echo-ability");
-    let rows = r.f.core.plugins.sync().await.unwrap().rows;
-    let hash = rows[0].hash.as_ref().unwrap().as_str().to_owned();
-    r.f.core
-        .plugins
-        .approve("echo-ability", &hash)
-        .await
-        .unwrap();
-    r.set("drgnx-agents-plugins", json!(["echo-ability"])).await;
-    r.f.mcp.plugins_refresh();
-    assert!(
-        r.f.mcp.plugins_socket_of("s1").is_none(),
-        "mcpServers are fixed at session/new"
-    );
-    assert!(
-        r.f.mcp.plugins_changed("s1"),
-        "the snapshot says the set moved"
-    );
-    // a session started now has the server
-    r.open("s2", &who).await;
-    assert!(r.f.mcp.plugins_socket_of("s2").is_some());
-    assert!(!r.f.mcp.plugins_changed("s2"));
+#[test]
+fn first_ability_needs_a_restart() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&[]).await;
+        let who = worker("claude", None);
+        r.open("s1", &who).await;
+        assert!(
+            r.f.mcp.plugins_socket_of("s1").is_none(),
+            "no ability when it started"
+        );
+        assert!(!r.f.mcp.plugins_changed("s1"));
+        // a plugin is installed, approved and enabled afterwards
+        install(&r.dir.path().join("plugins"), "echo-ability");
+        let rows = r.f.core.plugins.sync().await.unwrap().rows;
+        let hash = rows[0].hash.as_ref().unwrap().as_str().to_owned();
+        r.f.core
+            .plugins
+            .approve("echo-ability", &hash)
+            .await
+            .unwrap();
+        r.set("drgnx-agents-plugins", json!(["echo-ability"])).await;
+        r.f.mcp.plugins_refresh();
+        assert!(
+            r.f.mcp.plugins_socket_of("s1").is_none(),
+            "mcpServers are fixed at session/new"
+        );
+        assert!(
+            r.f.mcp.plugins_changed("s1"),
+            "the snapshot says the set moved"
+        );
+        // a session started now has the server
+        r.open("s2", &who).await;
+        assert!(r.f.mcp.plugins_socket_of("s2").is_some());
+        assert!(!r.f.mcp.plugins_changed("s2"));
+    })
 }
 
 // [D] pure: a change of the plugin list alone (the editor's `config/settings`) moves a running session's flag
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_settings_change_alone_moves_the_sessions_flag() {
-    let r = rig(&["echo-ability"]).await;
-    r.set("drgnx-agents-plugins", json!([])).await;
-    r.f.mcp.plugins_refresh();
-    let who = worker("claude", None);
-    r.open("s1", &who).await;
-    assert!(!r.f.mcp.plugins_changed("s1"));
-    let params: runstav::methods::config::SettingsParams = runstav::decode::typed(&json!({
+#[test]
+fn a_settings_change_alone_moves_the_sessions_flag() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["echo-ability"]).await;
+        r.set("drgnx-agents-plugins", json!([])).await;
+        r.f.mcp.plugins_refresh();
+        let who = worker("claude", None);
+        r.open("s1", &who).await;
+        assert!(!r.f.mcp.plugins_changed("s1"));
+        let params: runstav::methods::config::SettingsParams = runstav::decode::typed(&json!({
         "overrides": [{"name": "drgnx-agents-plugins", "value": ["echo-ability"], "source": "test"}]
     }))
     .unwrap()
     .0;
-    r.f.config_settings(params).await.unwrap();
-    assert!(
-        r.f.mcp.plugins_changed("s1"),
-        "the set moved with the setting alone"
-    );
+        r.f.config_settings(params).await.unwrap();
+        assert!(
+            r.f.mcp.plugins_changed("s1"),
+            "the set moved with the setting alone"
+        );
+    })
 }
 
 // [D] pure: abilities/list-changed-on-enable (a client of a running session sees the new set at its next list)
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_running_sessions_list_follows_the_enabled_set() {
-    let r = rig(&["echo-ability", "http-ability"]).await;
-    r.set("drgnx-agents-plugins", json!(["echo-ability"])).await;
-    let who = worker("claude", None);
-    r.open("s1", &who).await;
-    let sock = r.f.mcp.plugins_socket_of("s1").expect("a plugins.sock");
-    assert_eq!(
-        sock.file_name().unwrap(),
-        runstav::paths::SESSION_PLUGINS_SOCKET
-    );
-    assert_eq!(served(&sock).await, ["echo-ability_echo"]);
-    r.set(
-        "drgnx-agents-plugins",
-        json!(["echo-ability", "http-ability"]),
-    )
-    .await;
-    r.f.mcp.plugins_refresh();
-    let now = served(&sock).await;
-    assert_eq!(now.len(), 4, "{now:?}");
-    assert!(r.f.mcp.plugins_changed("s1"));
-    // the cell of the session's column hides what it may not run
-    r.cell("never").await;
-    assert!(served(&sock).await.is_empty());
+#[test]
+fn a_running_sessions_list_follows_the_enabled_set() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["echo-ability", "http-ability"]).await;
+        r.set("drgnx-agents-plugins", json!(["echo-ability"])).await;
+        let who = worker("claude", None);
+        r.open("s1", &who).await;
+        let sock = r.f.mcp.plugins_socket_of("s1").expect("a plugins.sock");
+        assert_eq!(
+            sock.file_name().unwrap(),
+            runstav::paths::SESSION_PLUGINS_SOCKET
+        );
+        assert_eq!(served(&sock).await, ["echo-ability_echo"]);
+        r.set(
+            "drgnx-agents-plugins",
+            json!(["echo-ability", "http-ability"]),
+        )
+        .await;
+        r.f.mcp.plugins_refresh();
+        let now = served(&sock).await;
+        assert_eq!(now.len(), 4, "{now:?}");
+        assert!(r.f.mcp.plugins_changed("s1"));
+        // the cell of the session's column hides what it may not run
+        r.cell("never").await;
+        assert!(served(&sock).await.is_empty());
+    })
 }
 
 // [D] pure: abilities::tests::annotation_keywords_are_accepted
@@ -532,59 +562,67 @@ fn note_rule() -> serde_json::Value {
 
 // [D] pure: hooks/an-ability-call-is-hooked-once. The seam and the panel's adapter site both skip
 // `mcp__drgnx-plugins__*`, so the ability server's own `before_tool` is the only place the call is hooked: one row.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_ability_call_is_hooked_once() {
-    let r = rig(&["echo-ability"]).await;
-    r.set("drgnx-agents-hook-rules", note_rule()).await;
-    let who = worker("claude", None);
-    let list = offered(&r.f, "s1", &who).await;
-    let got = run(&list, &r.ctx("s1", &who), json!({"x": 1})).await;
-    assert_eq!(got, Ok(json!({"x": 1})));
-    let rows = hook_rows(&r).await;
-    assert_eq!(rows.len(), 1, "one row for one call: {rows:?}");
-    assert_eq!(rows[0]["at"], "hub-server");
-    assert_eq!(rows[0]["tool"], "mcp__drgnx-plugins__echo-ability_echo");
-    assert_eq!(rows[0]["records"][0]["source"], "rule:seen");
+#[test]
+fn an_ability_call_is_hooked_once() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["echo-ability"]).await;
+        r.set("drgnx-agents-hook-rules", note_rule()).await;
+        let who = worker("claude", None);
+        let list = offered(&r.f, "s1", &who).await;
+        let got = run(&list, &r.ctx("s1", &who), json!({"x": 1})).await;
+        assert_eq!(got, Ok(json!({"x": 1})));
+        let rows = hook_rows(&r).await;
+        assert_eq!(rows.len(), 1, "one row for one call: {rows:?}");
+        assert_eq!(rows[0]["at"], "hub-server");
+        assert_eq!(rows[0]["tool"], "mcp__drgnx-plugins__echo-ability_echo");
+        assert_eq!(rows[0]["records"][0]["source"], "rule:seen");
+    })
 }
 
 // [D] pure: hooks/change-rewrites-an-ability-argument. A plugin's `change` at before-tool, named for this ability,
 // is what the ability runs with (the schema is checked again on the changed arguments).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn change_rewrites_an_ability_argument() {
-    let r = rig(&["echo-ability", "change-tool-arg"]).await;
-    let who = worker("claude", None);
-    let list = offered(&r.f, "s1", &who).await;
-    let got = run(&list, &r.ctx("s1", &who), json!({"a": 1})).await;
-    assert_eq!(
-        got,
-        Ok(json!({"changed": true})),
-        "the ability ran with the hook's arguments"
-    );
-    let rows = hook_rows(&r).await;
-    assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["outcome"], "change");
-    assert_eq!(rows[0]["records"][0]["verdict"], "change");
+#[test]
+fn change_rewrites_an_ability_argument() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["echo-ability", "change-tool-arg"]).await;
+        let who = worker("claude", None);
+        let list = offered(&r.f, "s1", &who).await;
+        let got = run(&list, &r.ctx("s1", &who), json!({"a": 1})).await;
+        assert_eq!(
+            got,
+            Ok(json!({"changed": true})),
+            "the ability ran with the hook's arguments"
+        );
+        let rows = hook_rows(&r).await;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0]["outcome"], "change");
+        assert_eq!(rows[0]["records"][0]["verdict"], "change");
+    })
 }
 
 // [C] handshake: hooks/change-before-an-ability-is-shown-on-its-card. The matrix's Ask comes after the hooks, so the
 // card shows the arguments that will run, never the ones the agent sent.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn change_before_an_ability_is_shown_on_its_card() {
-    let r = rig(&["echo-ability", "change-tool-arg"]).await;
-    r.cell("ask").await;
-    let who = worker("claude", None);
-    let list = offered(&r.f, "s1", &who).await;
-    let mut waiting = r.f.core.plugins.waiting();
-    let ctx = r.ctx("s1", &who);
-    let mut call = tokio::spawn(async move { run(&list, &ctx, json!({"a": 1})).await });
-    until_waiting(&mut waiting, &mut call).await;
-    let cards = r.cards().await;
-    assert_eq!(cards.len(), 1, "{cards:?}");
-    let (id, _, title) = &cards[0];
-    assert!(
-        title.contains(r#"{"changed":true}"#) && !title.contains(r#"{"a":1}"#),
-        "the card shows what will run: {title}"
-    );
-    r.allow(*id).await;
-    assert_eq!(call.await.unwrap(), Ok(json!({"changed": true})));
+#[test]
+fn change_before_an_ability_is_shown_on_its_card() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["echo-ability", "change-tool-arg"]).await;
+        r.cell("ask").await;
+        let who = worker("claude", None);
+        let list = offered(&r.f, "s1", &who).await;
+        let mut waiting = r.f.core.plugins.waiting();
+        let ctx = r.ctx("s1", &who);
+        let mut call = crate::clock::spawn_untracked(module_path!(), async move {
+            run(&list, &ctx, json!({"a": 1})).await
+        });
+        until_waiting(&mut waiting, &mut call).await;
+        let cards = r.cards().await;
+        assert_eq!(cards.len(), 1, "{cards:?}");
+        let (id, _, title) = &cards[0];
+        assert!(
+            title.contains(r#"{"changed":true}"#) && !title.contains(r#"{"a":1}"#),
+            "the card shows what will run: {title}"
+        );
+        r.allow(*id).await;
+        assert_eq!(call.await.unwrap(), Ok(json!({"changed": true})));
+    })
 }

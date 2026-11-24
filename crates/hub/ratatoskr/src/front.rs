@@ -52,7 +52,7 @@ const END_FLUSH: Duration = Duration::from_secs(1);
 fn lock_conns(
     m: &Mutex<HashMap<u64, Arc<Outbox>>>,
 ) -> std::sync::MutexGuard<'_, HashMap<u64, Arc<Outbox>>> {
-    m.lock().expect("the connections lock")
+    saman::lock(m)
 }
 
 /// What every connection shares.
@@ -293,7 +293,7 @@ impl Front {
                     .collect()
             })
             .unwrap_or_default();
-        *self.migration.lock().expect("migration") = (at, copies);
+        *saman::lock(&self.migration) = (at, copies);
     }
 
     pub fn read_only(&self) -> Option<u32> {
@@ -378,7 +378,7 @@ impl Front {
                 version: env!("CARGO_PKG_VERSION").into(),
                 commit: COMMIT.into(),
             }),
-            refusals: Some(self.refusals.lock().expect("refusals").status()),
+            refusals: Some(saman::lock(&self.refusals).status()),
             job_agents: Some(JOB_AGENTS.into()),
             gateway: Some(self.gate.status()),
             gateway_port: None,
@@ -456,7 +456,7 @@ impl Front {
     /// `status.store`: with the hub's graph writer, its opening rule's last answer (a failed migration's reason in
     /// `failed`) and the WAL's size; without one (the tests' fronts), from the schema at the last tick.
     fn store_status(&self, schema: u32) -> StoreStatus {
-        let (migrated_at, denied_in) = self.migration.lock().expect("migration").clone();
+        let (migrated_at, denied_in) = saman::lock(&self.migration).clone();
         let mut st = StoreStatus {
             schema: u64::from(schema),
             writer: match schema {
@@ -505,13 +505,7 @@ impl Front {
 
     /// Count and log a refusal on connection CONN of CLASS.
     fn refused(&self, conn: u64, class: Class, method: Option<&str>, error: &Error) {
-        self.refusals.lock().expect("refusals").note(
-            crate::log::rfc3339(now()),
-            conn,
-            class,
-            method,
-            error,
-        );
+        saman::lock(&self.refusals).note(crate::log::rfc3339(now()), conn, class, method, error);
     }
 
     /// One line of the connection S, whose answers go to OUT: the dispatcher's checks, then the handler (a failure
@@ -592,7 +586,7 @@ impl Front {
                 .events_since(p.since, p.limit)
                 .await
                 .map(|page| json!(page))
-                .map_err(internal),
+                .map_err(|e| internal(e.message().to_owned())),
             Params::CoordNotify(_) => {
                 self.writer.signals.events_soon();
                 self.writer.signals.notify_soon();
@@ -1555,130 +1549,138 @@ mod tests {
         assert_eq!(f.read_only(), None);
     }
 
-    #[tokio::test]
-    async fn subscribe_adds_the_connection_to_the_broadcast() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let mut s = Session::new(f.next_conn(), Socket::Main);
-        s.class = Class::User;
-        let (a, b) = (Arc::new(Outbox::new(s.conn)), Arc::new(Outbox::new(99)));
-        f.broadcast("events", json!({"n": 0}));
-        f.line(&mut s, &a, r#"{"id":1,"method":"subscribe"}"#).await;
-        assert_eq!(answers(&a), vec![json!({"id": 1, "result": true})]);
-        f.broadcast("events", json!({"n": 1}));
-        assert_eq!(
-            answers(&a),
-            vec![json!({"event": "events", "data": {"n": 1}})]
-        );
-        assert!(answers(&b).is_empty(), "b never subscribed");
-        f.gone(s.conn);
-        f.broadcast("events", json!({"n": 2}));
-        assert!(answers(&a).is_empty(), "a is gone");
+    #[test]
+    fn subscribe_adds_the_connection_to_the_broadcast() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let mut s = Session::new(f.next_conn(), Socket::Main);
+            s.class = Class::User;
+            let (a, b) = (Arc::new(Outbox::new(s.conn)), Arc::new(Outbox::new(99)));
+            f.broadcast("events", json!({"n": 0}));
+            f.line(&mut s, &a, r#"{"id":1,"method":"subscribe"}"#).await;
+            assert_eq!(answers(&a), vec![json!({"id": 1, "result": true})]);
+            f.broadcast("events", json!({"n": 1}));
+            assert_eq!(
+                answers(&a),
+                vec![json!({"event": "events", "data": {"n": 1}})]
+            );
+            assert!(answers(&b).is_empty(), "b never subscribed");
+            f.gone(s.conn);
+            f.broadcast("events", json!({"n": 2}));
+            assert!(answers(&a).is_empty(), "a is gone");
+        })
     }
 
-    #[tokio::test]
-    async fn the_front_serves_ping_events_env_jobs_and_shutdown() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let mut s = Session::new(f.next_conn(), Socket::Main);
-        s.class = Class::User;
-        let out = Arc::new(Outbox::new(s.conn));
-        f.line(&mut s, &out, r#"{"id":1,"method":"ping"}"#).await;
-        f.line(
-            &mut s,
-            &out,
-            r#"{"id":2,"method":"events/since","params":{"since":3}}"#,
-        )
-        .await;
-        f.line(
-            &mut s,
-            &out,
-            r#"{"id":3,"method":"env/set","params":{"env":[]}}"#,
-        )
-        .await;
-        f.line(&mut s, &out, r#"{"method":"ping"}"#).await;
-        f.line(&mut s, &out, r#"{"id":5,"method":"job/status"}"#)
+    #[test]
+    fn the_front_serves_ping_events_env_jobs_and_shutdown() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let mut s = Session::new(f.next_conn(), Socket::Main);
+            s.class = Class::User;
+            let out = Arc::new(Outbox::new(s.conn));
+            f.line(&mut s, &out, r#"{"id":1,"method":"ping"}"#).await;
+            f.line(
+                &mut s,
+                &out,
+                r#"{"id":2,"method":"events/since","params":{"since":3}}"#,
+            )
             .await;
-        assert_eq!(
-            answers(&out),
-            vec![
-                json!({"id": 1, "result": {"pid": std::process::id()}}),
-                json!({"id": 2, "result": {"since": 3, "last": 3, "events": []}}),
-                json!({"id": 3, "result": {"applied": []}}),
-                json!({"id": 5, "result": {"jobs": []}}),
-            ]
-        );
-        // shutdown: answered, then the hub is asked to stop
-        let stop = f.stopped();
-        tokio::pin!(stop);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), &mut stop)
+            f.line(
+                &mut s,
+                &out,
+                r#"{"id":3,"method":"env/set","params":{"env":[]}}"#,
+            )
+            .await;
+            f.line(&mut s, &out, r#"{"method":"ping"}"#).await;
+            f.line(&mut s, &out, r#"{"id":5,"method":"job/status"}"#)
+                .await;
+            assert_eq!(
+                answers(&out),
+                vec![
+                    json!({"id": 1, "result": {"pid": std::process::id()}}),
+                    json!({"id": 2, "result": {"since": 3, "last": 3, "events": []}}),
+                    json!({"id": 3, "result": {"applied": []}}),
+                    json!({"id": 5, "result": {"jobs": []}}),
+                ]
+            );
+            // shutdown: answered, then the hub is asked to stop
+            let stop = f.stopped();
+            tokio::pin!(stop);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), &mut stop)
+                    .await
+                    .is_err(),
+                "nothing asked to stop yet"
+            );
+            f.line(&mut s, &out, r#"{"id":4,"method":"shutdown"}"#)
+                .await;
+            assert_eq!(answers(&out), vec![json!({"id": 4, "result": true})]);
+            tokio::time::timeout(Duration::from_secs(5), stop)
                 .await
-                .is_err(),
-            "nothing asked to stop yet"
-        );
-        f.line(&mut s, &out, r#"{"id":4,"method":"shutdown"}"#)
-            .await;
-        assert_eq!(answers(&out), vec![json!({"id": 4, "result": true})]);
-        tokio::time::timeout(Duration::from_secs(5), stop)
-            .await
-            .unwrap();
+                .unwrap();
+        })
     }
 
-    #[tokio::test]
-    async fn restart_answers_true_then_ends_the_hub_with_75() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let mut s = Session::new(f.next_conn(), Socket::Main);
-        s.class = Class::User;
-        let out = Arc::new(Outbox::new(s.conn));
-        f.line(&mut s, &out, r#"{"id":1,"method":"restart"}"#).await;
-        assert_eq!(answers(&out), vec![json!({"id": 1, "result": true})]);
-        let how = tokio::time::timeout(Duration::from_secs(5), f.stopped())
-            .await
-            .unwrap();
-        assert_eq!(how, Exit::Restart);
-        // a plain shutdown is still a plain stop
-        let g = front(dir.path());
-        g.line(&mut s, &out, r#"{"id":2,"method":"shutdown"}"#)
-            .await;
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(5), g.stopped())
+    #[test]
+    fn restart_answers_true_then_ends_the_hub_with_75() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let mut s = Session::new(f.next_conn(), Socket::Main);
+            s.class = Class::User;
+            let out = Arc::new(Outbox::new(s.conn));
+            f.line(&mut s, &out, r#"{"id":1,"method":"restart"}"#).await;
+            assert_eq!(answers(&out), vec![json!({"id": 1, "result": true})]);
+            let how = tokio::time::timeout(Duration::from_secs(5), f.stopped())
                 .await
-                .unwrap(),
-            Exit::Stopped
-        );
+                .unwrap();
+            assert_eq!(how, Exit::Restart);
+            // a plain shutdown is still a plain stop
+            let g = front(dir.path());
+            g.line(&mut s, &out, r#"{"id":2,"method":"shutdown"}"#)
+                .await;
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(5), g.stopped())
+                    .await
+                    .unwrap(),
+                Exit::Stopped
+            );
+        })
     }
 
     /// Every method that takes empty params reaches its handler: the routing `match` hands no part a method it does
     /// not serve (a part hands such params back, and the answer would be "reached no handler").
-    #[tokio::test]
-    async fn every_method_reaches_its_handler() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let mut s = Session::new(f.next_conn(), Socket::Main);
-        s.class = Class::User;
-        let out = Arc::new(Outbox::new(s.conn));
-        let mut tried = Vec::new();
-        for m in registry::registry() {
-            // the stops have a test of their own; a method that needs params is refused before any handler
-            if ["shutdown", "restart"].contains(&m.name) || (m.decode)(&json!({})).is_err() {
-                continue;
+    #[test]
+    fn every_method_reaches_its_handler() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let mut s = Session::new(f.next_conn(), Socket::Main);
+            s.class = Class::User;
+            let out = Arc::new(Outbox::new(s.conn));
+            let mut tried = Vec::new();
+            for m in registry::registry() {
+                // the stops have a test of their own; a method that needs params is refused before any handler
+                if ["shutdown", "restart"].contains(&m.name) || (m.decode)(&json!({})).is_err() {
+                    continue;
+                }
+                tried.push(m.name);
+                let line = json!({"id": 1, "method": m.name, "params": {}}).to_string();
+                tokio::time::timeout(Duration::from_secs(10), f.line(&mut s, &out, &line))
+                    .await
+                    .unwrap_or_else(|_| panic!("{} was not answered within 10 s", m.name));
+                for a in answers(&out) {
+                    let message = a["error"]["message"].as_str().unwrap_or_default();
+                    assert!(!message.contains("reached no handler"), "{}: {a}", m.name);
+                }
             }
-            tried.push(m.name);
-            let line = json!({"id": 1, "method": m.name, "params": {}}).to_string();
-            tokio::time::timeout(Duration::from_secs(10), f.line(&mut s, &out, &line))
-                .await
-                .unwrap_or_else(|_| panic!("{} was not answered within 10 s", m.name));
-            for a in answers(&out) {
-                let message = a["error"]["message"].as_str().unwrap_or_default();
-                assert!(!message.contains("reached no handler"), "{}: {a}", m.name);
+            // each part is reached: the front's own, the agent core's, the store's and the coordination writes
+            for name in ["ping", "agents/list", "graph/backup", "coord/prune"] {
+                assert!(tried.contains(&name), "{name} not tried: {tried:?}");
             }
-        }
-        // each part is reached: the front's own, the agent core's, the store's and the coordination writes
-        for name in ["ping", "agents/list", "graph/backup", "coord/prune"] {
-            assert!(tried.contains(&name), "{name} not tried: {tried:?}");
-        }
+        })
     }
 
     /// The stack the guard below serves every method on.  A hub's tokio workers have 2 MiB, and a debug build gives
@@ -1693,43 +1695,35 @@ mod tests {
     /// coordination servers) runs with its whole frame on it.
     #[test]
     fn every_method_is_served_within_a_small_stack() {
-        std::thread::Builder::new()
-            .name("small-stack".into())
-            .stack_size(DISPATCH_STACK)
-            .spawn(|| {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap();
-                rt.block_on(async {
-                    let dir = tempfile::tempdir().unwrap();
-                    let f = front(dir.path());
-                    let mut s = Session::new(f.next_conn(), Socket::Main);
-                    s.class = Class::User;
-                    let out = Arc::new(Outbox::new(s.conn));
-                    let mut tried = Vec::new();
-                    for m in registry::registry() {
-                        if ["shutdown", "restart"].contains(&m.name)
-                            || (m.decode)(&json!({})).is_err()
-                        {
-                            continue;
-                        }
-                        tried.push(m.name);
-                        let line = json!({"id": 1, "method": m.name, "params": {}}).to_string();
-                        tokio::time::timeout(Duration::from_secs(10), f.line(&mut s, &out, &line))
-                            .await
-                            .unwrap_or_else(|_| panic!("{} was not answered within 10 s", m.name));
-                        let _ = answers(&out);
+        saman::spawn_thread_with_stack("small-stack", Some(DISPATCH_STACK), || {
+            saman::block_on_current(async {
+                let dir = tempfile::tempdir().unwrap();
+                let f = front(dir.path());
+                let mut s = Session::new(f.next_conn(), Socket::Main);
+                s.class = Class::User;
+                let out = Arc::new(Outbox::new(s.conn));
+                let mut tried = Vec::new();
+                for m in registry::registry() {
+                    if ["shutdown", "restart"].contains(&m.name) || (m.decode)(&json!({})).is_err()
+                    {
+                        continue;
                     }
-                    // the dispatchers on the way: the front's, the agent core's, the store's, the coordination writes
-                    for name in ["ping", "agents/list", "graph/backup", "coord/prune"] {
-                        assert!(tried.contains(&name), "{name} not tried: {tried:?}");
-                    }
-                });
-            })
-            .unwrap()
-            .join()
-            .unwrap();
+                    tried.push(m.name);
+                    let line = json!({"id": 1, "method": m.name, "params": {}}).to_string();
+                    tokio::time::timeout(Duration::from_secs(10), f.line(&mut s, &out, &line))
+                        .await
+                        .unwrap_or_else(|_| panic!("{} was not answered within 10 s", m.name));
+                    answers(&out);
+                }
+                // the dispatchers on the way: the front's, the agent core's, the store's, the coordination writes
+                for name in ["ping", "agents/list", "graph/backup", "coord/prune"] {
+                    assert!(tried.contains(&name), "{name} not tried: {tried:?}");
+                }
+            });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
     }
 
     #[test]
@@ -1754,109 +1748,121 @@ mod tests {
         assert_eq!((m.check_result)(&v).unwrap(), v);
     }
 
-    #[tokio::test]
-    async fn attach_is_the_peers_parent_and_hands_the_connection_on() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        // the peer is a child of this process (a test runner may itself be pid 1's child, or pid 1)
-        let mut peer = std::process::Command::new("sleep")
-            .arg("60")
-            .spawn()
-            .unwrap();
-        let attach = r#"{"id":1,"method":"mcp/attach","params":{"kind":"claude"}}"#;
-        let mut s = Session::new(f.next_conn(), Socket::Main);
-        s.peer_pid = Some(peer.id() as i32);
-        s.cwd = Some(PathBuf::from("/w"));
-        let out = Arc::new(Outbox::new(s.conn));
-        f.line(&mut s, &out, attach).await;
-        let a = answers(&out);
-        let id = a[0]["result"]["identity"].as_str().unwrap_or_default();
-        let hash = norn::tools::identity::start_hash(
-            crate::peer::parent_of(peer.id() as i32)
-                .unwrap()
-                .start
-                .unwrap(),
-        );
-        assert_eq!(
-            id,
-            format!("ext:claude:{}-{hash}", std::process::id()),
-            "{a:?}"
-        );
-        let who = &s
-            .attach
-            .as_ref()
-            .expect("the connection is handed to MCP")
-            .who;
-        assert_eq!(
-            (who.id(), who.home(), who.job()),
-            (Some(id), Some(std::path::Path::new("/w")), None)
-        );
-        // a user connection never attaches, and a kind is the bin/drgnx rule
-        let mut u = Session::new(f.next_conn(), Socket::Main);
-        u.class = Class::User;
-        u.peer_pid = s.peer_pid;
-        f.line(&mut u, &out, attach).await;
-        let bad = r#"{"id":2,"method":"mcp/attach","params":{"kind":"Claude"}}"#;
-        let mut t = Session::new(f.next_conn(), Socket::Main);
-        t.peer_pid = s.peer_pid;
-        f.line(&mut t, &out, bad).await;
-        let a = answers(&out);
-        assert_eq!(a[0]["error"]["code"], "not-allowed", "{a:?}");
-        assert_eq!(
-            (a[1]["error"]["code"].clone(), a[1]["error"]["path"].clone()),
-            (json!("invalid-params"), json!("kind"))
-        );
-        assert!(u.attach.is_none() && t.attach.is_none());
-        peer.kill().unwrap();
-        peer.wait().unwrap();
+    #[test]
+    fn attach_is_the_peers_parent_and_hands_the_connection_on() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            // the peer is a child of this process (a test runner may itself be pid 1's child, or pid 1)
+            let mut peer = crate::proc::Command::new("sleep")
+                .arg("60")
+                .spawn(
+                    crate::proc::Io::Inherit,
+                    crate::proc::Io::Inherit,
+                    crate::proc::Io::Inherit,
+                )
+                .unwrap();
+            let attach = r#"{"id":1,"method":"mcp/attach","params":{"kind":"claude"}}"#;
+            let mut s = Session::new(f.next_conn(), Socket::Main);
+            s.peer_pid = Some(peer.id() as i32);
+            s.cwd = Some(PathBuf::from("/w"));
+            let out = Arc::new(Outbox::new(s.conn));
+            f.line(&mut s, &out, attach).await;
+            let a = answers(&out);
+            let id = a[0]["result"]["identity"].as_str().unwrap_or_default();
+            let hash = norn::tools::identity::start_hash(
+                crate::peer::parent_of(peer.id() as i32)
+                    .unwrap()
+                    .start
+                    .unwrap(),
+            );
+            assert_eq!(
+                id,
+                format!("ext:claude:{}-{hash}", std::process::id()),
+                "{a:?}"
+            );
+            let who = &s
+                .attach
+                .as_ref()
+                .expect("the connection is handed to MCP")
+                .who;
+            assert_eq!(
+                (who.id(), who.home(), who.job()),
+                (Some(id), Some(std::path::Path::new("/w")), None)
+            );
+            // a user connection never attaches, and a kind is the bin/drgnx rule
+            let mut u = Session::new(f.next_conn(), Socket::Main);
+            u.class = Class::User;
+            u.peer_pid = s.peer_pid;
+            f.line(&mut u, &out, attach).await;
+            let bad = r#"{"id":2,"method":"mcp/attach","params":{"kind":"Claude"}}"#;
+            let mut t = Session::new(f.next_conn(), Socket::Main);
+            t.peer_pid = s.peer_pid;
+            f.line(&mut t, &out, bad).await;
+            let a = answers(&out);
+            assert_eq!(a[0]["error"]["code"], "not-allowed", "{a:?}");
+            assert_eq!(
+                (a[1]["error"]["code"].clone(), a[1]["error"]["path"].clone()),
+                (json!("invalid-params"), json!("kind"))
+            );
+            assert!(u.attach.is_none() && t.attach.is_none());
+            peer.kill().unwrap();
+            peer.wait().unwrap();
+        })
     }
 
-    #[tokio::test]
-    async fn a_hello_is_answered_and_sets_the_session() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let mut s = Session::new(f.next_conn(), Socket::Main);
-        s.hub_nonce = runstav::proof::nonce().unwrap();
-        let nonce = runstav::proof::nonce().unwrap();
-        let p = runstav::proof::client_proof(&f.cap, &s.hub_nonce, &nonce);
-        let out = Arc::new(Outbox::new(s.conn));
-        let line =
-            json!({"id": 1, "method": "hello", "params": {"proto": 1, "nonce": nonce, "proof": p}});
-        f.line(&mut s, &out, &line.to_string()).await;
-        let a = answers(&out);
-        assert_eq!(a[0]["result"]["class"], "user", "{a:?}");
-        assert_eq!(s.class, Class::User);
-        // a wrong proof is a refusal: counted
-        let mut t = Session::new(f.next_conn(), Socket::Main);
-        t.hub_nonce = runstav::proof::nonce().unwrap();
-        f.line(&mut t, &out, &line.to_string()).await;
-        assert_eq!(answers(&out)[0]["error"]["code"], "not-allowed");
-        assert_eq!(f.status().refusals.map(|r| r.count), Some(1));
+    #[test]
+    fn a_hello_is_answered_and_sets_the_session() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let mut s = Session::new(f.next_conn(), Socket::Main);
+            s.hub_nonce = runstav::proof::nonce().unwrap();
+            let nonce = runstav::proof::nonce().unwrap();
+            let p = runstav::proof::client_proof(&f.cap, &s.hub_nonce, &nonce);
+            let out = Arc::new(Outbox::new(s.conn));
+            let line = json!({"id": 1, "method": "hello", "params": {"proto": 1, "nonce": nonce, "proof": p}});
+            f.line(&mut s, &out, &line.to_string()).await;
+            let a = answers(&out);
+            assert_eq!(a[0]["result"]["class"], "user", "{a:?}");
+            assert_eq!(s.class, Class::User);
+            // a wrong proof is a refusal: counted
+            let mut t = Session::new(f.next_conn(), Socket::Main);
+            t.hub_nonce = runstav::proof::nonce().unwrap();
+            f.line(&mut t, &out, &line.to_string()).await;
+            assert_eq!(answers(&out)[0]["error"]["code"], "not-allowed");
+            assert_eq!(f.status().refusals.map(|r| r.count), Some(1));
+        })
     }
 
-    #[tokio::test]
-    async fn the_hubs_end_closes_a_connection_handed_to_mcp() {
-        use tokio::io::AsyncReadExt;
-        let dir = tempfile::tempdir().unwrap();
-        let f = Arc::new(front(dir.path()));
-        // a connection `mcp/attach` handed on: no longer in the front's registry, served as MCP
-        let (hub_side, mut bridge) = tokio::net::UnixStream::pair().unwrap();
-        let (r, w) = hub_side.into_split();
-        let who = norn::tools::Identity::outside("claude", std::process::id(), None, None).unwrap();
-        let served = {
-            let f = f.clone();
-            tokio::spawn(async move { f.mcp.serve_outside(who, None, r, w).await })
-        };
-        f.end_connections().await;
-        // the bridge reads its end of file at the hub's end, not at the process's exit (the bound is only the failure)
-        let mut buf = [0u8; 64];
-        let n = tokio::time::timeout(Duration::from_secs(10), bridge.read(&mut buf))
-            .await
-            .expect("the hub's end closes the bridge's connection")
-            .unwrap();
-        assert_eq!(n, 0, "{:?}", &buf[..n]);
-        served.await.unwrap();
-        assert_eq!(f.mcp.status().outside, 0);
+    #[test]
+    fn the_hubs_end_closes_a_connection_handed_to_mcp() {
+        saman::block_on_current(async move {
+            use tokio::io::AsyncReadExt;
+            let dir = tempfile::tempdir().unwrap();
+            let f = Arc::new(front(dir.path()));
+            // a connection `mcp/attach` handed on: no longer in the front's registry, served as MCP
+            let (hub_side, mut bridge) = tokio::net::UnixStream::pair().unwrap();
+            let (r, w) = hub_side.into_split();
+            let who =
+                norn::tools::Identity::outside("claude", std::process::id(), None, None).unwrap();
+            let served = {
+                let f = f.clone();
+                crate::clock::spawn_untracked(module_path!(), async move {
+                    f.mcp.serve_outside(who, None, r, w).await
+                })
+            };
+            f.end_connections().await;
+            // the bridge reads its end of file at the hub's end, not at the process's exit (the bound is only the failure)
+            let mut buf = [0u8; 64];
+            let n = tokio::time::timeout(Duration::from_secs(10), bridge.read(&mut buf))
+                .await
+                .expect("the hub's end closes the bridge's connection")
+                .unwrap();
+            assert_eq!(n, 0, "{:?}", &buf[..n]);
+            served.await.unwrap();
+            assert_eq!(f.mcp.status().outside, 0);
+        })
     }
 
     /// The `Params` variants `Front::line` (in FRONT, its source) hands to the handler it calls as CALL: the

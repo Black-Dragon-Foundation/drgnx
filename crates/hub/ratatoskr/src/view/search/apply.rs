@@ -87,7 +87,7 @@ struct St {
 }
 
 fn lock(m: &Mutex<St>) -> std::sync::MutexGuard<'_, St> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(m)
 }
 
 impl Changes {
@@ -536,7 +536,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().canonicalize().unwrap();
         let f = root.join("a.txt");
-        std::fs::write(&f, "x pending y\r\n").unwrap();
+        crate::fsio::write(&f, "x pending y\r\n").unwrap();
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o640)).unwrap();
         let read = xxh3_64(b"x pending y\r\n");
         let es = [edit("m:1:0", 1, 2, "pending", "queued")];
@@ -544,10 +544,10 @@ mod tests {
             write_disk(&root, &f, read ^ 1, &es).unwrap_err(),
             CHANGED_SINCE_PREVIEW
         );
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "x pending y\r\n");
+        assert_eq!(crate::fsio::read_to_string(&f).unwrap(), "x pending y\r\n");
         let (after, inverse, _) = write_disk(&root, &f, read, &es).unwrap();
         assert_eq!(
-            std::fs::read_to_string(&f).unwrap(),
+            crate::fsio::read_to_string(&f).unwrap(),
             "x queued y\r\n",
             "CRLF kept as it was"
         );
@@ -557,7 +557,7 @@ mod tests {
             0o640
         );
         write_disk(&root, &f, after, &inverse).unwrap();
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "x pending y\r\n");
+        assert_eq!(crate::fsio::read_to_string(&f).unwrap(), "x pending y\r\n");
         assert_eq!(
             write_disk(&root, &root.join("none"), 0, &es).unwrap_err(),
             GONE

@@ -539,7 +539,7 @@ fn migrate_legacy(tx: &mut Tx<'_>, held: &HashSet<String>) -> Result<(), WriteEr
                 _ => Origin::Recorded,
             };
             // an end retired meanwhile cannot take a link: that link was dead already
-            let _ = link::add(
+            if let Err(e) = link::add(
                 tx,
                 from,
                 &lkind,
@@ -547,7 +547,9 @@ fn migrate_legacy(tx: &mut Tx<'_>, held: &HashSet<String>) -> Result<(), WriteEr
                 data.and_then(|d| serde_json::from_str(&d).ok()),
                 origin,
                 source.as_deref(),
-            );
+            ) {
+                tracing::debug!(error = ?e, "a link to a retired end was not carried over");
+            }
         }
     }
     for (n, ..) in &legacy {

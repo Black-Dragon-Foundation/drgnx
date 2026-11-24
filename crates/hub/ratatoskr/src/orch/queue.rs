@@ -62,7 +62,7 @@ impl Queue {
         clash: impl Fn(&Ready, &Ready) -> bool,
     ) -> Vec<Ready> {
         let ready = {
-            let mut jobs = self.jobs.lock().unwrap();
+            let mut jobs = saman::lock(&self.jobs);
             let line = jobs.entry(job.to_owned()).or_default();
             line.ready.retain(|x| live.contains(&x.task));
             match line.ready.iter_mut().find(|x| x.task == r.task) {
@@ -82,7 +82,7 @@ impl Queue {
             line.ready.clone()
         };
         let formed = form(&ready, size, clash);
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = saman::lock(&self.jobs);
         let line = jobs.entry(job.to_owned()).or_default();
         if line.batch.is_empty() && line.ready == ready {
             line.batch = formed;
@@ -92,7 +92,7 @@ impl Queue {
 
     /// TASK of JOB merged (or left): out of its queue.
     pub fn forget(&self, job: &str, task: &str) {
-        if let Some(line) = self.jobs.lock().unwrap().get_mut(job) {
+        if let Some(line) = saman::lock(&self.jobs).get_mut(job) {
             line.ready.retain(|x| x.task != task);
             line.batch.retain(|x| x.task != task);
             line.seen.said.remove(task);
@@ -102,36 +102,34 @@ impl Queue {
 
     /// The merge-notes check found WORDS on TASK of JOB.
     pub fn audit(&self, job: &str, task: &str, words: &str) {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = saman::lock(&self.jobs);
         let line = jobs.entry(job.to_owned()).or_default();
         line.seen.audited.insert(task.to_owned(), words.to_owned());
     }
 
     /// The queue said WORDS to TASK of JOB (its turn: merge, wait or back).
     pub fn say(&self, job: &str, task: &str, words: &str) {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = saman::lock(&self.jobs);
         let line = jobs.entry(job.to_owned()).or_default();
         line.seen.said.insert(task.to_owned(), words.to_owned());
     }
 
     /// JOB's groups gate judged the combined tree TREE, which needs GROUPS.
     pub fn at_groups(&self, job: &str, tree: &str, groups: Vec<vordr::pack::Check>) {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = saman::lock(&self.jobs);
         jobs.entry(job.to_owned()).or_default().seen.groups = Some((tree.to_owned(), groups));
     }
 
     /// JOB's push gate judged the commit HEAD, of tree TREE.
     pub fn at_push(&self, job: &str, head: &str, tree: &str) {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = saman::lock(&self.jobs);
         jobs.entry(job.to_owned()).or_default().seen.push =
             Some((head.to_owned(), tree.to_owned()));
     }
 
     /// What the Flow shows of JOB's queue.
     pub fn seen(&self, job: &str) -> Seen {
-        self.jobs
-            .lock()
-            .unwrap()
+        saman::lock(&self.jobs)
             .get(job)
             .map(|l| l.seen.clone())
             .unwrap_or_default()
@@ -140,7 +138,7 @@ impl Queue {
     /// JOB's queue as a test hub seeds it: READY all ready and in one batch.
     #[cfg(feature = "test-hooks")]
     pub(crate) fn seed(&self, job: &str, ready: Vec<Ready>) {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = saman::lock(&self.jobs);
         let line = jobs.entry(job.to_owned()).or_default();
         line.batch = ready.clone();
         line.ready = ready;
@@ -148,9 +146,7 @@ impl Queue {
 
     /// JOB's ready tasks, in readiness order.
     pub fn ready(&self, job: &str) -> Vec<Ready> {
-        self.jobs
-            .lock()
-            .unwrap()
+        saman::lock(&self.jobs)
             .get(job)
             .map(|l| l.ready.clone())
             .unwrap_or_default()
@@ -158,9 +154,7 @@ impl Queue {
 
     /// JOB's current batch.
     pub fn batch(&self, job: &str) -> Vec<Ready> {
-        self.jobs
-            .lock()
-            .unwrap()
+        saman::lock(&self.jobs)
             .get(job)
             .map(|l| l.batch.clone())
             .unwrap_or_default()
@@ -169,7 +163,7 @@ impl Queue {
 
 /// Whether tips A and B conflict (`git merge-tree` exits 1).  Blocking.
 fn conflict(dir: &Path, a: &str, b: &str) -> bool {
-    std::process::Command::new("git")
+    crate::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["merge-tree", "--write-tree", "--name-only", a, b])
@@ -194,7 +188,7 @@ pub struct Entry<'a> {
 
 /// E's turn in its job's queue, in DIR (the job's tree, HEAD its line).  With shared paths, a clean merge onto the
 /// line joining shared files both sides changed sends the task back for notes.  Blocking (git).
-pub fn turn(queue: &Queue, dir: &Path, e: Entry<'_>) -> Result<Turn, String> {
+pub fn turn(queue: &Queue, dir: &Path, e: Entry<'_>) -> villa::Result<Turn> {
     let (job, task) = (e.job, e.task);
     let t = turn_of(queue, dir, e)?;
     match &t {
@@ -206,7 +200,7 @@ pub fn turn(queue: &Queue, dir: &Path, e: Entry<'_>) -> Result<Turn, String> {
     Ok(t)
 }
 
-fn turn_of(queue: &Queue, dir: &Path, e: Entry<'_>) -> Result<Turn, String> {
+fn turn_of(queue: &Queue, dir: &Path, e: Entry<'_>) -> villa::Result<Turn> {
     let Entry {
         job,
         task,

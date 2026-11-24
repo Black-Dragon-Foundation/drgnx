@@ -172,7 +172,7 @@ mod tests {
     fn every_case_in_the_shared_table() {
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../test/fixtures/secret-cases.json");
-        let table: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let table: Value = serde_json::from_str(&crate::testfs::read(path).unwrap()).unwrap();
         let mut wrong = Vec::new();
         let cases = table["cases"].as_array().unwrap();
         for case in cases {

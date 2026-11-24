@@ -1,10 +1,8 @@
 //! The map core's and the layout's budgets (design §13, `work-layout-hub-p95`): timing tests, run by the timing lane
 //! on the optimized build (`test/timing-rust.txt`), never by the other Rust jobs.
 
-use std::time::Instant;
-
 use vegvisir::{
-    Core, Event, Mode, PresenceEntry, PresenceFact, StepFact, ViewKey, ViewOp, ViewState, fixture,
+    Core, Event, Mode, PresenceEntry, PresenceFact, StepFact, ViewId, ViewOp, ViewState, fixture,
 };
 
 fn p95(mut v: Vec<u128>) -> u128 {
@@ -62,7 +60,7 @@ fn core_step_within_50_us() {
         core.step(e);
     }
     core.step(Event::View(ViewOp::Open {
-        view: ViewKey {
+        view: ViewId {
             conn: 1,
             view: "map".into(),
         },
@@ -74,7 +72,7 @@ fn core_step_within_50_us() {
     }));
     let mut times = Vec::new();
     for e in live_events(2000) {
-        let start = Instant::now();
+        let start = stund::real::instant();
         let effects = core.step(e);
         times.push(start.elapsed().as_nanos());
         std::hint::black_box(effects);
@@ -103,7 +101,7 @@ fn layout_200_items_within_2_ms() {
     let mut times = Vec::new();
     for i in 0..300 {
         let v = if i % 3 == 1 { &overlaps } else { &plain };
-        let start = Instant::now();
+        let start = stund::real::instant();
         let l = vegvisir::layout::layout(m, v, if i % 3 == 2 { Some(&prev) } else { None });
         times.push(start.elapsed().as_nanos());
         if i % 3 == 0 {
@@ -119,7 +117,6 @@ mod timeline_schedule {
     use super::p95;
     use rodd::fit::Measure;
     use rodd::svg::Palette;
-    use std::time::Instant;
     use vegvisir::render::Env;
     use vegvisir::schedule::{self, BarFacts, SchedRow};
     use vegvisir::trail::{self, Detail, Lane, NowLine, Step, TrailFilter, Window, Zone};
@@ -257,7 +254,7 @@ mod timeline_schedule {
             from: 0.0,
             to: 10_000.0,
         };
-        let t = Instant::now();
+        let t = stund::real::instant();
         let rows = timeline(&l, &e, &win, 9_000.0);
         let ms = t.elapsed().as_millis();
         assert_eq!(rows.len(), 31);
@@ -274,7 +271,7 @@ mod timeline_schedule {
             from: 0.0,
             to: 4_000.0,
         };
-        let t = Instant::now();
+        let t = stund::real::instant();
         let rows = sched_rows(&r, &e, &win, 2_000.0);
         let ms = t.elapsed().as_millis();
         assert!(rows.len() > 300);
@@ -294,7 +291,7 @@ mod timeline_schedule {
                 from: 2_000.0 - span / 2.0,
                 to: 2_000.0 + span / 2.0,
             };
-            let t = Instant::now();
+            let t = stund::real::instant();
             let rows = sched_rows(&r, &e, &win, 2_000.0);
             ms.push(t.elapsed().as_millis());
             assert!(rows.len() > 300);
@@ -338,7 +335,7 @@ mod timeline_schedule {
         let mut us = Vec::new();
         for i in 1..=40 {
             let now = 2_000.0 + 5.0 * f64::from(i);
-            let t = Instant::now();
+            let t = stund::real::instant();
             let after = sched_rows(&r, &e, &win, now);
             let ops = rodd::diff(&before, &after);
             us.push(t.elapsed().as_micros());

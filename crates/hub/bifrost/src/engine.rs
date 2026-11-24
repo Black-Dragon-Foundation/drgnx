@@ -35,7 +35,8 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard};
 use std::task::{Context, Poll, ready};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 use bytes::Bytes;
 use http::header::{CONNECTION, CONTENT_TYPE, EXPECT, RETRY_AFTER};
@@ -46,7 +47,6 @@ use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::body::{Body, Frame, Incoming, SizeHint};
 use secrecy::SecretString;
 use tokio::sync::mpsc;
-use tokio::time::Sleep;
 
 use crate::admit::{self, MAX_BODY, Refusal, Registry, Route};
 use crate::budget::{self, Price};
@@ -232,12 +232,7 @@ struct Committing {
 
 impl Pending {
     fn begin(self: &Arc<Self>, job: &str) -> Committing {
-        *self
-            .jobs
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(job.to_owned())
-            .or_default() += 1;
+        *saman::lock(&self.jobs).entry(job.to_owned()).or_default() += 1;
         Committing {
             pending: self.clone(),
             job: job.to_owned(),
@@ -250,12 +245,7 @@ impl Pending {
             let note = self.done.notified();
             let mut note = std::pin::pin!(note);
             note.as_mut().enable();
-            let busy = self
-                .jobs
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .get(job)
-                .is_some_and(|n| *n > 0);
+            let busy = saman::lock(&self.jobs).get(job).is_some_and(|n| *n > 0);
             if !busy {
                 return;
             }
@@ -269,11 +259,7 @@ impl Pending {
 impl Drop for Committing {
     fn drop(&mut self) {
         {
-            let mut jobs = self
-                .pending
-                .jobs
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut jobs = saman::lock(&self.pending.jobs);
             if let Some(n) = jobs.get_mut(&self.job) {
                 *n -= 1;
                 if *n == 0 {
@@ -542,7 +528,7 @@ impl Gateway {
             }
             let uri = match rewrite::upstream_uri(&provider.base, target) {
                 Ok(uri) => uri,
-                Err(e) => return Attempt::Next(format!("cannot send ({e})")),
+                Err(e) => return Attempt::Next(format!("cannot send ({})", e.message())),
             };
             let body = match rewrite::body(
                 body.clone(),
@@ -641,7 +627,7 @@ impl Gateway {
             }
             let uri = match rewrite::provider_uri(&provider.base, rest) {
                 Ok(uri) => uri,
-                Err(e) => return failed(format!("cannot send ({e})")),
+                Err(e) => return failed(format!("cannot send ({})", e.message())),
             };
             match upstream_request(parts, &provider, key, uri, body.clone()) {
                 Ok(request) => request,
@@ -704,7 +690,7 @@ impl Gateway {
     fn need_keys(&self, id: &str) {
         let now = Instant::now();
         {
-            let mut told = self.told.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut told = saman::lock(&self.told);
             if told
                 .get(id)
                 .is_some_and(|at| now.duration_since(*at) < NEED_KEYS_EVERY)
@@ -720,7 +706,7 @@ impl Gateway {
 
     fn emit(&self, event: GatewayEvent) {
         // the receiver gone means the hub is stopping; nothing to tell
-        let _ = self.events.send(event);
+        saman::delivered(self.events.send(event), "gateway event");
     }
 }
 
@@ -779,7 +765,7 @@ fn refuse(r: &Refusal, parts: &Parts, incoming: Incoming) -> Response<ReplyBody>
         first: Some(r.body()),
         unread,
         taken: 0,
-        until: Box::pin(tokio::time::sleep(DRAIN_FOR)),
+        until: Box::pin(stund::sleep(DRAIN_FOR)),
     };
     let mut response = answer(r, true);
     *response.body_mut() = drain.boxed_unsync();
@@ -792,7 +778,7 @@ struct Drain {
     first: Option<Bytes>,
     unread: Option<Incoming>,
     taken: usize,
-    until: Pin<Box<Sleep>>,
+    until: Pin<Box<dyn Future<Output = ()> + Send>>,
 }
 
 impl Body for Drain {
@@ -998,17 +984,20 @@ impl Drop for Spend {
             ledger.record(row.clone()).await;
             drop(committing);
             let job = row.job.clone();
-            let _ = events.send(GatewayEvent::Request(row));
+            saman::delivered(events.send(GatewayEvent::Request(row)), "gateway event");
             // the request that spends the budget ends the job's work now, not at the next refusal
             if let (Some(job), Some(limit)) = (job, limit)
                 && let Ok(spent) = ledger.spent(&job).await
                 && budget::over(spent, limit)
             {
-                let _ = events.send(GatewayEvent::Budget {
-                    job,
-                    spent,
-                    budget: limit,
-                });
+                saman::delivered(
+                    events.send(GatewayEvent::Budget {
+                        job,
+                        spent,
+                        budget: limit,
+                    }),
+                    "gateway event",
+                );
             }
         });
     }

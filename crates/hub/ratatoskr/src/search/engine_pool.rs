@@ -9,7 +9,7 @@ use super::engine::ENGINE_BATCH;
 use super::sources::SourceKind;
 use hrafn_embed::fingerprint::Identity;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use urdr::graph::search::{BoxFuture, EmbedError};
 
 /// One engine of the pool.
@@ -113,12 +113,7 @@ impl EnginePool {
     pub fn rates(&self) -> Vec<(String, f64)> {
         self.members
             .iter()
-            .map(|m| {
-                (
-                    m.id.clone(),
-                    *m.rate.lock().unwrap_or_else(PoisonError::into_inner),
-                )
-            })
+            .map(|m| (m.id.clone(), *saman::lock(&m.rate)))
             .collect()
     }
 
@@ -143,10 +138,7 @@ impl EnginePool {
             if alive.is_empty() {
                 return Err(EmbedError("every engine of the pool failed".into()));
             }
-            let weights: Vec<f64> = alive
-                .iter()
-                .map(|m| *m.rate.lock().unwrap_or_else(PoisonError::into_inner))
-                .collect();
+            let weights: Vec<f64> = alive.iter().map(|m| *saman::lock(&m.rate)).collect();
             let shares = split_weighted(todo.len(), &weights);
             let mut jobs = Vec::new();
             let mut at = 0;
@@ -219,7 +211,7 @@ impl EnginePool {
         }
         let new = n as f64 / took.as_secs_f64();
         let rate = {
-            let mut r = m.rate.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut r = saman::lock(&m.rate);
             *r = *r * (1.0 - NEW_WEIGHT) + new * NEW_WEIGHT;
             *r
         };
@@ -238,7 +230,7 @@ impl EnginePool {
         let best = alive
             .iter()
             .max_by(|a, b| {
-                let r = |m: &Member| *m.rate.lock().unwrap_or_else(PoisonError::into_inner);
+                let r = |m: &Member| *saman::lock(&m.rate);
                 r(a).total_cmp(&r(b))
             })
             .ok_or_else(|| EmbedError("every engine of the pool failed".into()))?;

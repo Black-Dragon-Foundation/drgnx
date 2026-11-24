@@ -53,6 +53,7 @@ name = "fleet_cloud"
 required-features = ["fleet", "test-hooks"]
 
 [dependencies]
+hulda.workspace = true
 runstav = { path = "../runstav", version = "0.1.0" }
 # background tasks' problem-matcher patterns (already in the tree)
 regex.workspace = true
@@ -116,6 +117,10 @@ serde_json.workspace = true
 rustix.workspace = true
 libc.workspace = true
 stund = { path = "../stund", version = "0.1.0" }  # the crates' timers read the hub's virtual clock through it
+saman.workspace = true   # tasks, locks and results the hub means to go on past (saman::spawn, saman::delivered)
+villa.workspace = true   # the error type of every public fallible function
+annall.workspace = true  # a command's lines on stdout and stderr (crate::soft)
+stig.workspace = true    # the user's directories, never a HOME read
 hlaup = { path = "../hlaup", version = "0.1.0" }  # files written or copied and then run, never busy (ETXTBSY)
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -170,6 +175,7 @@ urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
 # `fixture`: the 30-agent fixture, for the map model's chain golden (work::map::tests)
 vegvisir = { path = "../vegvisir", version = "0.1.0", features = ["fixture"] }
 tokio = { workspace = true, features = ["test-util"] }  # paused time: the pacer's tests take their instants from it
+saman = { workspace = true, features = ["test-util"] }  # block_on_paused: the tests' runtimes start on a paused clock
 vor = { path = "../vor", version = "0.1.0", features = ["mock"] }  # the mock adapter for the debug sessions' tests
 skuld = { path = "../skuld", version = "0.1.0" }  # waits in tests; every order of a pure core (the connection's, a session's turn)
 rmcp = { workspace = true, features = ["client", "transport-async-rw"] }  # the MCP client of tests/search_query.rs (as mimir's interop test)
@@ -217,3 +223,12 @@ name = "search_index"
 # the local engine's rows: the process-wide virtual clock, as search_index
 [[test]]
 name = "search_engine"
+
+# the build script's output (cargo directives) goes through annall, its errors are villa's, its stamp is stund's
+[build-dependencies]
+annall.workspace = true
+villa.workspace = true
+stund = { path = "../stund", version = "0.1.0" }
+
+[lints]
+workspace = true

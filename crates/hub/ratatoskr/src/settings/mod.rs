@@ -209,14 +209,18 @@ pub const RUNTIME: &[RuntimeSetting] = &[
 /// refused.
 pub(crate) fn search_rules(
     pairs: Vec<(String, Vec<String>)>,
-) -> Result<hrafn::rules::RuleSet, String> {
+) -> villa::Result<hrafn::rules::RuleSet> {
     let mut out = hrafn::rules::RuleSet::default();
     for (key, globs) in pairs {
         match key.as_str() {
             "include" => out.include = globs,
             "ignore" => out.ignore = globs,
             "no-embed" => out.no_embed = globs,
-            other => return Err(format!("{other:?} is not include, ignore or no-embed")),
+            other => {
+                return Err(villa::Error::invalid(format!(
+                    "{other:?} is not include, ignore or no-embed"
+                )));
+            }
         }
     }
     Ok(out)
@@ -378,23 +382,25 @@ pub(crate) fn hook_rules(v: &Value) -> Result<Value, (String, String)> {
 }
 
 /// The browser program setting: absolute, or none.
-pub(crate) fn check_browser_program(p: &Option<String>) -> Result<(), String> {
+pub(crate) fn check_browser_program(p: &Option<String>) -> villa::Result<()> {
     match p {
-        Some(p) if !p.starts_with('/') => Err(format!("{p:?} is not an absolute path")),
+        Some(p) if !p.starts_with('/') => Err(villa::Error::invalid(format!(
+            "{p:?} is not an absolute path"
+        ))),
         _ => Ok(()),
     }
 }
 
 /// The local ports setting: each 1 to 65535 (a u16 already holds the upper bound).
-pub(crate) fn check_browser_ports(ports: &[u16]) -> Result<(), String> {
+pub(crate) fn check_browser_ports(ports: &[u16]) -> villa::Result<()> {
     match ports.iter().find(|p| **p == 0) {
-        Some(_) => Err("a port is 1 to 65535, not 0".into()),
+        Some(_) => Err(villa::Error::invalid("a port is 1 to 65535, not 0")),
         None => Ok(()),
     }
 }
 
 /// A memory cap like `4G` or `512M`: digits (no leading 0) and an optional K, M, G or T.
-pub(crate) fn check_memory(m: &str) -> Result<(), String> {
+pub(crate) fn check_memory(m: &str) -> villa::Result<()> {
     let digits = m.strip_suffix(['K', 'M', 'G', 'T']).unwrap_or(m);
     let ok = !digits.is_empty()
         && !digits.starts_with('0')
@@ -402,25 +408,29 @@ pub(crate) fn check_memory(m: &str) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
-        Err(format!("{m:?} is not a size like \"4G\" or \"512M\""))
+        Err(villa::Error::invalid(format!(
+            "{m:?} is not a size like \"4G\" or \"512M\""
+        )))
     }
 }
 
 /// The high mark: a percent from 1 to 99.
-pub(crate) fn check_memory_high(n: u32) -> Result<(), String> {
+pub(crate) fn check_memory_high(n: u32) -> villa::Result<()> {
     if (1..=99).contains(&n) {
         Ok(())
     } else {
-        Err(format!("{n} is not a percent from 1 to 99"))
+        Err(villa::Error::invalid(format!(
+            "{n} is not a percent from 1 to 99"
+        )))
     }
 }
 
 /// The browser max message: at least 1 byte.
-pub(crate) fn check_max_message(n: u64) -> Result<(), String> {
+pub(crate) fn check_max_message(n: u64) -> villa::Result<()> {
     if n >= 1 {
         Ok(())
     } else {
-        Err("a message limit is at least 1 byte".into())
+        Err(villa::Error::invalid("a message limit is at least 1 byte"))
     }
 }
 
@@ -457,7 +467,7 @@ pub struct ModelPrice {
 }
 
 /// The rows of the price table with their keys, each price a finite number of 0 or more.
-pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> Result<Vec<ModelPrice>, String> {
+pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> villa::Result<Vec<ModelPrice>> {
     pairs
         .into_iter()
         .map(|(key, mut p)| {
@@ -474,10 +484,10 @@ pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> Result<Vec<ModelPrice>
                 .flatten()
                 .find(|x| !(x.is_finite() && *x >= 0.0))
             {
-                Some(_) => Err(format!(
+                Some(_) => Err(villa::Error::invalid(format!(
                     "{}: a price is dollars per million tokens, a number of 0 or more",
                     p.key
-                )),
+                ))),
                 None => Ok(p),
             }
         })
@@ -485,7 +495,7 @@ pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> Result<Vec<ModelPrice>
 }
 
 /// An `agents-matrix` value that is valid, as a message when it is not.
-pub(crate) fn check_matrix(v: &Value) -> Result<(), String> {
+pub(crate) fn check_matrix(v: &Value) -> villa::Result<()> {
     matrix::decode(v).map(drop)
 }
 
@@ -560,7 +570,7 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-ai-roles" => values.ai_roles = providers::roles(node)?,
         "drgnx-agents-matrix" => {
             let v: Value = de(node)?;
-            check_matrix(&v).map_err(|m| Bad::at(node, None, m))?;
+            check_matrix(&v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_matrix = v;
         }
         "drgnx-agents-away-after" => values.agents_away_after = de(node)?,
@@ -586,7 +596,8 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-manager-context" => values.agents_manager_context = de(node)?,
         "drgnx-agents-model-prices" => {
             let profiles::Alist(pairs) = de::<profiles::Alist<ModelPrice>>(node)?;
-            values.agents_model_prices = prices(pairs).map_err(|m| Bad::at(node, None, m))?;
+            values.agents_model_prices =
+                prices(pairs).map_err(|m| Bad::at(node, None, m.message()))?;
         }
         "drgnx-runners-send" => {
             let v: String = de(node)?;
@@ -618,7 +629,8 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-search-builtin" => values.search_builtin = de(node)?,
         "drgnx-search-rules" => {
             let profiles::Alist(pairs) = de::<profiles::Alist<Vec<String>>>(node)?;
-            values.search_rules = search_rules(pairs).map_err(|why| Bad::at(node, None, why))?;
+            values.search_rules =
+                search_rules(pairs).map_err(|why| Bad::at(node, None, why.message()))?;
         }
         "drgnx-search-off" => values.search_off = de(node)?,
         "drgnx-search-base" => values.search_base = de(node)?,
@@ -651,30 +663,30 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-hook-rules-off" => values.agents_hook_rules_off = de(node)?,
         "drgnx-agents-browser-program" => {
             let v = de(node)?;
-            check_browser_program(&v).map_err(|m| Bad::at(node, None, m))?;
+            check_browser_program(&v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_browser_program = v;
         }
         "drgnx-agents-browser-local-ports" => {
             let v: Vec<u16> = de(node)?;
-            check_browser_ports(&v).map_err(|m| Bad::at(node, None, m))?;
+            check_browser_ports(&v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_browser_local_ports = v;
         }
         "drgnx-agents-browser-deny-hosts" => values.agents_browser_deny_hosts = de(node)?,
         "drgnx-agents-browser-max-message" => {
             let v = de(node)?;
-            check_max_message(v).map_err(|m| Bad::at(node, None, m))?;
+            check_max_message(v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_browser_max_message = v;
         }
         "drgnx-agents-browser-idle" => values.agents_browser_idle = de(node)?,
         "drgnx-agents-browser-once-window" => values.agents_browser_once_window = de(node)?,
         "drgnx-agents-session-memory" => {
             let v: String = de(node)?;
-            check_memory(&v).map_err(|m| Bad::at(node, None, m))?;
+            check_memory(&v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_session_memory = v;
         }
         "drgnx-agents-browser-memory-high" => {
             let v = de(node)?;
-            check_memory_high(v).map_err(|m| Bad::at(node, None, m))?;
+            check_memory_high(v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_browser_memory_high = v;
         }
         other => {
@@ -862,11 +874,11 @@ impl Settings {
 
     /// Read from CONFIG_DIR, keeping the last good values in RUNTIME (`runtime.db`).
     pub fn open(&self, config_dir: PathBuf, runtime: urdr::Handle) {
-        let _ = self.store.set((config_dir, runtime));
+        crate::soft::done(self.store.set((config_dir, runtime)), "mod");
     }
 
     pub fn current(&self) -> Arc<Current> {
-        self.current.lock().expect("settings").clone()
+        saman::lock(&self.current).clone()
     }
 
     /// Whether [`Settings::open`] was called (the hub; a test front has no config folder).
@@ -877,8 +889,8 @@ impl Settings {
     /// Put the global overrides over the file's values: what is in effect now. The file is copied under the overrides'
     /// lock, which is held until the result is published.
     fn compose(&self) {
-        let overrides = self.overrides.lock().expect("settings");
-        let file = self.file.lock().expect("settings").clone();
+        let overrides = saman::lock(&self.overrides);
+        let file = saman::lock(&self.file).clone();
         let current = match overrides.scope(None) {
             None | Some([]) => file,
             Some(list) => {
@@ -897,14 +909,14 @@ impl Settings {
                 })
             }
         };
-        *self.current.lock().expect("settings") = current;
+        *saman::lock(&self.current) = current;
     }
 
     /// NAME's value in effect for PROJECT (none: global), as JSON of its runtime type, and whether PROJECT has ever
     /// sent its values (phase 6's card asks).  The project's override, else the global one, else `settings.el`, else
     /// the shipped default.  None for a name that is not a runtime setting.
     pub fn effective(&self, name: &str, project: Option<&str>) -> Option<(Value, bool)> {
-        let overrides = self.overrides.lock().expect("settings");
+        let overrides = saman::lock(&self.overrides);
         let seen = project.is_none_or(|p| overrides.scope(Some(p)).is_some());
         let own = project
             .and_then(|p| overrides.scope(Some(p)))
@@ -919,7 +931,7 @@ impl Settings {
     /// NAME's value in PROJECT's own set, or none when PROJECT never sent one for it (unlike [`Self::effective`], which
     /// falls back to the global value): a setting a project's value is added to, not put in place of.
     pub fn project_value(&self, name: &str, project: &str) -> Option<Value> {
-        let overrides = self.overrides.lock().expect("settings");
+        let overrides = saman::lock(&self.overrides);
         overrides
             .scope(Some(project))?
             .iter()
@@ -932,7 +944,7 @@ impl Settings {
     /// nothing): what a runner set up for all projects at once needs (a Mac's toolchains).
     pub fn values_everywhere(&self, name: &str) -> Vec<Value> {
         let projects: Vec<String> = {
-            let overrides = self.overrides.lock().expect("settings");
+            let overrides = saman::lock(&self.overrides);
             overrides.projects().map(String::from).collect()
         };
         self.effective(name, None)
@@ -944,9 +956,7 @@ impl Settings {
 
     /// The global set of overrides now (empty when the editor never sent one).
     pub fn global_overrides(&self) -> Vec<overrides::Override> {
-        self.overrides
-            .lock()
-            .expect("settings")
+        saman::lock(&self.overrides)
             .scope(None)
             .map(<[_]>::to_vec)
             .unwrap_or_default()
@@ -982,7 +992,7 @@ impl Settings {
                 .await;
         }
         let n = list.len() as u64;
-        self.overrides.lock().expect("settings").set(project, list);
+        saman::lock(&self.overrides).set(project, list);
         self.compose();
         Ok(n)
     }
@@ -996,7 +1006,7 @@ impl Settings {
         let _one = self.reading.lock().await;
         if !self.overrides_loaded.swap(true, Ordering::Relaxed) {
             let kept = overrides::Overrides::load(db).await;
-            let mut mine = self.overrides.lock().expect("settings");
+            let mut mine = saman::lock(&self.overrides);
             // a set sent before the first read stays
             for scope in std::iter::once(None).chain(kept.projects().map(Some)) {
                 if mine.scope(scope).is_none()
@@ -1006,7 +1016,7 @@ impl Settings {
                 }
             }
         }
-        let before = self.file.lock().expect("settings").clone();
+        let before = saman::lock(&self.file).clone();
         let stamp = load::stamp(&dir.join(load::FILE));
         if before.stamp.is_some() && before.stamp == Some(stamp) {
             self.compose();
@@ -1037,7 +1047,7 @@ impl Settings {
             .filter(|p| !before.loaded.problems.contains(p))
             .map(notice)
             .collect();
-        *self.file.lock().expect("settings") = Arc::new(Current {
+        *saman::lock(&self.file) = Arc::new(Current {
             stamp: Some(stamp),
             loaded,
         });

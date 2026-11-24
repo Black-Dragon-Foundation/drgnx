@@ -86,11 +86,11 @@ fn net(
     .with_no_client_auth();
     let net = Net {
         resolve: Arc::new(move |name: &str| {
-            a.resolved.lock().unwrap().push(name.to_string());
+            saman::lock(&a.resolved).push(name.to_string());
             vec![ip]
         }),
         connect: Arc::new(move |addr: SocketAddr| {
-            b.connected.lock().unwrap().push(addr);
+            saman::lock(&b.connected).push(addr);
             Box::pin(async move {
                 match port {
                     Some(p) => TcpStream::connect(("127.0.0.1", p)).await,
@@ -126,14 +126,14 @@ fn plugin(host: &Host, r: &Rig, extra: Option<&str>) -> Plugin {
             let root = r.dir.path().join("plugins");
             let dir = root.join("http-ability");
             std::fs::create_dir_all(&dir).unwrap();
-            let manifest = std::fs::read_to_string(from.join("plugin.json"))
+            let manifest = crate::fsio::read_to_string(from.join("plugin.json"))
                 .unwrap()
                 .replace(
                     r#""hosts": ["api.example.com"]"#,
                     &format!(r#""hosts": ["api.example.com"], {extra}"#),
                 );
             assert!(manifest.contains(extra), "the fixture's manifest moved");
-            std::fs::write(dir.join("plugin.json"), manifest).unwrap();
+            crate::fsio::write(dir.join("plugin.json"), manifest).unwrap();
             std::fs::copy(from.join("plugin.wasm"), dir.join("plugin.wasm")).unwrap();
             root
         }
@@ -185,8 +185,9 @@ fn refused(r: Result<Value, CallError>, why: &str) {
 }
 
 // [C] handshake: hub_io_an_undeclared_host_is_denied_with_the_event
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_undeclared_host_is_denied_with_the_event_and_nothing_leaves() {
+#[test]
+fn an_undeclared_host_is_denied_with_the_event_and_nothing_leaves() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let r = rig(&["other.example.com:443"]).await;
     let host = Host::new(Limits::default()).unwrap();
     let p = plugin(&host, &r, None);
@@ -254,14 +255,15 @@ async fn an_undeclared_host_is_denied_with_the_event_and_nothing_leaves() {
         ]
     );
     assert_eq!(
-        *asked.resolved.lock().unwrap(),
+        *saman::lock(&asked.resolved),
         ["api.example.com"],
         "one lookup, in `open` only"
     );
     assert!(
-        asked.connected.lock().unwrap().is_empty(),
+        saman::lock(&asked.connected).is_empty(),
         "a refused request connected"
     );
+})
 }
 
 /// A CA, and a server certificate for `api.example.com` it signed.
@@ -313,7 +315,7 @@ async fn server(
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let (tx, rx) = tokio::sync::oneshot::channel();
-    tokio::spawn(async move {
+    crate::clock::spawn_untracked(module_path!(), async move {
         let (tcp, _) = listener.accept().await.unwrap();
         let mut tls = acceptor.accept(tcp).await.unwrap();
         let mut head = Vec::new();
@@ -325,18 +327,22 @@ async fn server(
             }
             head.extend_from_slice(&b[..n]);
         }
-        let _ = tx.send(String::from_utf8_lossy(&head).into_owned());
+        crate::soft::done(
+            tx.send(String::from_utf8_lossy(&head).into_owned()),
+            "tx send",
+        );
         tls.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello")
             .await
             .unwrap();
-        let _ = tls.shutdown().await;
+        crate::soft::done(tls.shutdown().await, "tests");
     });
     (port, rx)
 }
 
 // [C] handshake: hub_io_a_declared_host_is_fetched_through_the_hub
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_declared_host_is_fetched_at_the_address_the_hub_judged() {
+#[test]
+fn a_declared_host_is_fetched_at_the_address_the_hub_judged() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let r = rig(&["api.example.com:443"]).await;
     let host = Host::new(Limits::default()).unwrap();
     let p = plugin(&host, &r, None);
@@ -362,66 +368,69 @@ async fn a_declared_host_is_fetched_at_the_address_the_hub_judged() {
     assert!(head.contains("\r\nhost: api.example.com\r\n"), "{head}");
     assert!(head.contains("\r\naccept: text/plain\r\n"), "{head}");
     // the one lookup's public answer is the one address connected to
-    assert_eq!(*asked.resolved.lock().unwrap(), ["api.example.com"]);
+    assert_eq!(*saman::lock(&asked.resolved), ["api.example.com"]);
     assert_eq!(
-        *asked.connected.lock().unwrap(),
+        *saman::lock(&asked.connected),
         ["93.184.216.34:443".parse::<SocketAddr>().unwrap()]
     );
     assert!(denials(&r.writer).await.is_empty());
+})
 }
 
 // [C] handshake: hub_io_the_kv_quota_holds_across_calls
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_kv_quota_holds_across_calls() {
-    let r = rig(&[]).await;
-    let host = Host::new(Limits::default()).unwrap();
-    let p = plugin(&host, &r, Some(r#""kv_bytes": 16"#));
-    let (net, _) = net("127.0.0.1", None, Vec::new());
-    let io_for = |sid: &str| {
-        Arc::new(HubIo::new(
-            session(sid, NetCell::ProviderOnly),
-            &[p.manifest()],
-            parts(&r, net.clone()),
-        ))
-    };
-    let (a, b) = (io_for("s1"), io_for("s2"));
-    let put = |k: &str, v: &str| json!({"op": "put", "key": k, "value": v});
-    // 2 + 8 bytes of 16
-    assert_eq!(
-        call(&host, &p, &a, "kv", put("k1", "12345678")).await,
-        Ok(json!({}))
-    );
-    // another call, another session: 2 + 9 more is over, and nothing is written
-    refused(
-        call(&host, &p, &b, "kv", put("k2", "123456789")).await,
-        "the plugin's store is full (16 bytes)",
-    );
-    let get = |k: &str| json!({"op": "get", "key": k});
-    assert_eq!(call(&host, &p, &b, "kv", get("k2")).await, Ok(Value::Null));
-    assert_eq!(
-        call(&host, &p, &b, "kv", get("k1")).await,
-        Ok(json!("12345678"))
-    );
-    // a replaced value counts at its new size
-    assert_eq!(
-        call(&host, &p, &a, "kv", put("k1", "12345678901234")).await,
-        Ok(json!({}))
-    );
-    refused(
-        call(&host, &p, &a, "kv", put("k1", "123456789012345")).await,
-        "the plugin's store is full (16 bytes)",
-    );
-    assert_eq!(
-        super::super::io::kv_get(&r.db, "http-ability", "k1").await,
-        Ok(Some(b"12345678901234".to_vec()))
-    );
-    // a delete frees the room
-    assert_eq!(
-        call(&host, &p, &b, "kv", json!({"op": "delete", "key": "k1"})).await,
-        Ok(json!({}))
-    );
-    assert_eq!(
-        call(&host, &p, &b, "kv", put("k2", "123456789")).await,
-        Ok(json!({}))
-    );
+#[test]
+fn the_kv_quota_holds_across_calls() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&[]).await;
+        let host = Host::new(Limits::default()).unwrap();
+        let p = plugin(&host, &r, Some(r#""kv_bytes": 16"#));
+        let (net, _) = net("127.0.0.1", None, Vec::new());
+        let io_for = |sid: &str| {
+            Arc::new(HubIo::new(
+                session(sid, NetCell::ProviderOnly),
+                &[p.manifest()],
+                parts(&r, net.clone()),
+            ))
+        };
+        let (a, b) = (io_for("s1"), io_for("s2"));
+        let put = |k: &str, v: &str| json!({"op": "put", "key": k, "value": v});
+        // 2 + 8 bytes of 16
+        assert_eq!(
+            call(&host, &p, &a, "kv", put("k1", "12345678")).await,
+            Ok(json!({}))
+        );
+        // another call, another session: 2 + 9 more is over, and nothing is written
+        refused(
+            call(&host, &p, &b, "kv", put("k2", "123456789")).await,
+            "the plugin's store is full (16 bytes)",
+        );
+        let get = |k: &str| json!({"op": "get", "key": k});
+        assert_eq!(call(&host, &p, &b, "kv", get("k2")).await, Ok(Value::Null));
+        assert_eq!(
+            call(&host, &p, &b, "kv", get("k1")).await,
+            Ok(json!("12345678"))
+        );
+        // a replaced value counts at its new size
+        assert_eq!(
+            call(&host, &p, &a, "kv", put("k1", "12345678901234")).await,
+            Ok(json!({}))
+        );
+        refused(
+            call(&host, &p, &a, "kv", put("k1", "123456789012345")).await,
+            "the plugin's store is full (16 bytes)",
+        );
+        assert_eq!(
+            super::super::io::kv_get(&r.db, "http-ability", "k1").await,
+            Ok(Some(b"12345678901234".to_vec()))
+        );
+        // a delete frees the room
+        assert_eq!(
+            call(&host, &p, &b, "kv", json!({"op": "delete", "key": "k1"})).await,
+            Ok(json!({}))
+        );
+        assert_eq!(
+            call(&host, &p, &b, "kv", put("k2", "123456789")).await,
+            Ok(json!({}))
+        );
+    })
 }

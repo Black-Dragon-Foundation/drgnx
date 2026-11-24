@@ -20,6 +20,7 @@ pub mod map;
 mod memo;
 pub mod notebook;
 pub mod overlay;
+mod proc;
 pub mod query;
 pub mod rank;
 pub mod refs;

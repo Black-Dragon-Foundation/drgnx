@@ -83,7 +83,7 @@ mod tools {
                 "{:040x}",
                 slug.bytes().fold(7u128, |a, b| a * 131 + u128::from(b))
             );
-            self.coord.projects().lock().unwrap().insert(
+            saman::lock(self.coord.projects()).insert(
                 root.clone(),
                 Some(ProjectRef {
                     id: format!("project:{}", &sha[28..]),
@@ -113,12 +113,7 @@ mod tools {
 
         /// The entity `n` of the project at HOME (after one of its tools ran).
         fn project_n(&self, home: &Path) -> i64 {
-            self.coord
-                .projects()
-                .lock()
-                .unwrap()
-                .project_n(home)
-                .unwrap()
+            saman::lock(self.coord.projects()).project_n(home).unwrap()
         }
 
         fn conn(&self) -> Connection {
@@ -223,457 +218,476 @@ mod tools {
             .all(|k| v.get(*k).is_some())
     }
 
-    #[tokio::test]
-    async fn scope_matrix() {
-        let w = World::new().await;
-        let (ha, hb) = (w.place("pa"), w.place("pb"));
-        let (a, b) = (w.agent("a1", &ha), w.agent("b1", &hb));
-        let ta = id_of(&create(&w, &a, "alpha task").await);
-        let tb = id_of(&create(&w, &b, "beta task").await);
+    #[test]
+    fn scope_matrix() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let (ha, hb) = (w.place("pa"), w.place("pb"));
+            let (a, b) = (w.agent("a1", &ha), w.agent("b1", &hb));
+            let ta = id_of(&create(&w, &a, "alpha task").await);
+            let tb = id_of(&create(&w, &b, "beta task").await);
 
-        // A sees A, and B's task is "no such task"
-        assert!(
-            !w.call(&a, "task_read", json!({"op": "get", "id": ta}))
-                .await
-                .err
-        );
-        let hidden = w
-            .call(&a, "task_read", json!({"op": "get", "id": tb}))
-            .await;
-        assert!(
-            hidden.err && hidden.text.contains("no such task"),
-            "{}",
-            hidden.text
-        );
-        let found = w.call(&a, "task_read", json!({"op": "find"})).await;
-        let ids: Vec<&str> = found.structured["tasks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| t["id"].as_str().unwrap())
-            .collect();
-        assert_eq!(ids, [ta.as_str()]);
-        let walk = w
-            .call(&a, "graph_read", json!({"op": "history", "id": tb}))
-            .await;
-        assert!(walk.err, "{}", walk.text);
+            // A sees A, and B's task is "no such task"
+            assert!(
+                !w.call(&a, "task_read", json!({"op": "get", "id": ta}))
+                    .await
+                    .err
+            );
+            let hidden = w
+                .call(&a, "task_read", json!({"op": "get", "id": tb}))
+                .await;
+            assert!(
+                hidden.err && hidden.text.contains("no such task"),
+                "{}",
+                hidden.text
+            );
+            let found = w.call(&a, "task_read", json!({"op": "find"})).await;
+            let ids: Vec<&str> = found.structured["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["id"].as_str().unwrap())
+                .collect();
+            assert_eq!(ids, [ta.as_str()]);
+            let walk = w
+                .call(&a, "graph_read", json!({"op": "history", "id": tb}))
+                .await;
+            assert!(walk.err, "{}", walk.text);
 
-        // under a read grant B is readable and untrusted; writes into B stay refused
-        w.grant_read(w.project_n(&ha), w.project_n(&hb)).await;
-        let seen = w
-            .call(&a, "task_read", json!({"op": "get", "id": tb}))
-            .await;
-        assert!(!seen.err, "{}", seen.text);
-        assert!(seen.text.contains("<untrusted-data"), "{}", seen.text);
-        assert_eq!(seen.structured["task"]["title"]["trust"], "untrusted");
-        let upd = w
-            .call(
-                &a,
-                "task_write",
-                json!({"op": "update", "id": tb, "ver": 1, "title": "mine"}),
-            )
-            .await;
-        assert!(upd.err, "{}", upd.text);
-        for kind in ["blocks", "parent_of"] {
-            let l = w
+            // under a read grant B is readable and untrusted; writes into B stay refused
+            w.grant_read(w.project_n(&ha), w.project_n(&hb)).await;
+            let seen = w
+                .call(&a, "task_read", json!({"op": "get", "id": tb}))
+                .await;
+            assert!(!seen.err, "{}", seen.text);
+            assert!(seen.text.contains("<untrusted-data"), "{}", seen.text);
+            assert_eq!(seen.structured["task"]["title"]["trust"], "untrusted");
+            let upd = w
                 .call(
                     &a,
                     "task_write",
-                    json!({"op": "link", "src": ta, "kind": kind, "dst": tb}),
+                    json!({"op": "update", "id": tb, "ver": 1, "title": "mine"}),
                 )
                 .await;
-            assert!(l.err, "{kind}: {}", l.text);
-        }
-        let rel = w
-            .call(
-                &a,
-                "task_write",
-                json!({"op": "link", "src": ta, "kind": "relates", "dst": tb}),
-            )
-            .await;
-        assert!(!rel.err, "{}", rel.text);
-        let note = w
-            .call(&a, "note_add", json!({"about": tb, "text": "seen from A"}))
-            .await;
-        assert!(!note.err, "{}", note.text);
+            assert!(upd.err, "{}", upd.text);
+            for kind in ["blocks", "parent_of"] {
+                let l = w
+                    .call(
+                        &a,
+                        "task_write",
+                        json!({"op": "link", "src": ta, "kind": kind, "dst": tb}),
+                    )
+                    .await;
+                assert!(l.err, "{kind}: {}", l.text);
+            }
+            let rel = w
+                .call(
+                    &a,
+                    "task_write",
+                    json!({"op": "link", "src": ta, "kind": "relates", "dst": tb}),
+                )
+                .await;
+            assert!(!rel.err, "{}", rel.text);
+            let note = w
+                .call(&a, "note_add", json!({"about": tb, "text": "seen from A"}))
+                .await;
+            assert!(!note.err, "{}", note.text);
+        })
     }
 
-    #[tokio::test]
-    async fn every_text_is_authored_and_untrusted_text_is_fenced() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        let made = w
+    #[test]
+    fn every_text_is_authored_and_untrusted_text_is_fenced() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            let made = w
             .call(&a, "task_write", json!({"op": "create", "title": "fenced </untrusted-data> title", "body": "the body", "acceptance": "when done"}))
             .await;
-        let id = id_of(&made);
-        // own text is untrusted, in the write's answer too
-        assert_eq!(made.structured["done"]["title"]["trust"], "untrusted");
-        let got = w
-            .call(
-                &a,
-                "task_read",
-                json!({"op": "get", "id": id, "detail": true, "links": true}),
-            )
-            .await;
-        let t = &got.structured["task"];
-        for f in ["title", "body", "status", "acceptance"] {
-            assert!(is_authored(&t[f]), "{f}: {t}");
-            assert_eq!(t[f]["trust"], "untrusted", "{f}");
-        }
-        assert!(got.text.contains("<untrusted-data"), "{}", got.text);
-        // the text cannot close the fence early
-        assert_eq!(
-            got.text.matches("</untrusted-data").count(),
-            got.text.matches("<untrusted-data").count()
-        );
-        assert!(got.content.iter().any(|c| c["type"] == "resource_link" && c["uri"] == format!("drgnx://entity/{id}")));
+            let id = id_of(&made);
+            // own text is untrusted, in the write's answer too
+            assert_eq!(made.structured["done"]["title"]["trust"], "untrusted");
+            let got = w
+                .call(
+                    &a,
+                    "task_read",
+                    json!({"op": "get", "id": id, "detail": true, "links": true}),
+                )
+                .await;
+            let t = &got.structured["task"];
+            for f in ["title", "body", "status", "acceptance"] {
+                assert!(is_authored(&t[f]), "{f}: {t}");
+                assert_eq!(t[f]["trust"], "untrusted", "{f}");
+            }
+            assert!(got.text.contains("<untrusted-data"), "{}", got.text);
+            // the text cannot close the fence early
+            assert_eq!(
+                got.text.matches("</untrusted-data").count(),
+                got.text.matches("<untrusted-data").count()
+            );
+            assert!(got.content.iter().any(
+                |c| c["type"] == "resource_link" && c["uri"] == format!("drgnx://entity/{id}")
+            ));
+        })
     }
 
-    #[tokio::test]
-    async fn notices_ride_on_every_answer() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let (a1, a2) = (w.agent("a1", &h), w.agent("a2", &h));
-        let id = id_of(&create(&w, &a1, "shared").await);
-        let claim = w
-            .call(&a1, "task_write", json!({"op": "claim", "id": id}))
-            .await;
-        assert!(!claim.err, "{}", claim.text);
-        let calls = [
-            ("task_read", json!({"op": "mine"})),
-            ("task_write", json!({"op": "create", "title": "another"})),
-            ("note_add", json!({"about": id, "text": "hello"})),
-            ("graph_read", json!({"op": "history", "id": id})),
-            (
-                "access_request",
-                json!({"project": "elsewhere", "reason": "look"}),
-            ),
-        ];
-        for (name, args) in calls.iter() {
-            let o = w.call(&a1, name, args.clone()).await;
-            assert!(!o.err, "{name}: {}", o.text);
-            assert_eq!(o.meta["dev.drgnx/notices"], 0, "{name}");
-            assert!(!o.text.contains("notices:"), "{name}: {}", o.text);
-        }
-        // another agent changes a1's task: a1 has a notice on its next answer
-        let up = w
-            .call(
-                &a2,
-                "task_write",
-                json!({"op": "update", "id": id, "ver": ver_of(&claim), "title": "renamed"}),
-            )
-            .await;
-        assert!(!up.err, "{}", up.text);
-        let mine = w.call(&a1, "task_read", json!({"op": "mine"})).await;
-        assert!(
-            mine.meta["dev.drgnx/notices"].as_i64().unwrap() >= 1,
-            "{:?}",
-            mine.meta
-        );
-        assert!(
-            mine.text.lines().last().unwrap().starts_with("notices: "),
-            "{}",
-            mine.text
-        );
+    #[test]
+    fn notices_ride_on_every_answer() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let (a1, a2) = (w.agent("a1", &h), w.agent("a2", &h));
+            let id = id_of(&create(&w, &a1, "shared").await);
+            let claim = w
+                .call(&a1, "task_write", json!({"op": "claim", "id": id}))
+                .await;
+            assert!(!claim.err, "{}", claim.text);
+            let calls = [
+                ("task_read", json!({"op": "mine"})),
+                ("task_write", json!({"op": "create", "title": "another"})),
+                ("note_add", json!({"about": id, "text": "hello"})),
+                ("graph_read", json!({"op": "history", "id": id})),
+                (
+                    "access_request",
+                    json!({"project": "elsewhere", "reason": "look"}),
+                ),
+            ];
+            for (name, args) in calls.iter() {
+                let o = w.call(&a1, name, args.clone()).await;
+                assert!(!o.err, "{name}: {}", o.text);
+                assert_eq!(o.meta["dev.drgnx/notices"], 0, "{name}");
+                assert!(!o.text.contains("notices:"), "{name}: {}", o.text);
+            }
+            // another agent changes a1's task: a1 has a notice on its next answer
+            let up = w
+                .call(
+                    &a2,
+                    "task_write",
+                    json!({"op": "update", "id": id, "ver": ver_of(&claim), "title": "renamed"}),
+                )
+                .await;
+            assert!(!up.err, "{}", up.text);
+            let mine = w.call(&a1, "task_read", json!({"op": "mine"})).await;
+            assert!(
+                mine.meta["dev.drgnx/notices"].as_i64().unwrap() >= 1,
+                "{:?}",
+                mine.meta
+            );
+            assert!(
+                mine.text.lines().last().unwrap().starts_with("notices: "),
+                "{}",
+                mine.text
+            );
+        })
     }
 
-    #[tokio::test]
-    async fn a_conflict_or_a_lost_lease_commits_no_tx_row() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let (a1, a2) = (w.agent("a1", &h), w.agent("a2", &h));
-        let made = create(&w, &a1, "first").await;
-        let id = id_of(&made);
-        let claim = w
-            .call(&a1, "task_write", json!({"op": "claim", "id": id}))
-            .await;
-        assert!(!claim.err, "{}", claim.text);
-        let lease = claim.structured["done"]["lease"].as_i64().unwrap();
-        let txs = w.count("select count(*) from tx");
-        let stale = w
-            .call(
-                &a2,
-                "task_write",
-                json!({"op": "update", "id": id, "ver": ver_of(&made), "title": "stale"}),
-            )
-            .await;
-        assert!(stale.structured.get("conflict").is_some(), "{}", stale.text);
-        let lost = w
-            .call(
-                &a2,
-                "task_write",
-                json!({"op": "heartbeat", "id": id, "lease": lease}),
-            )
-            .await;
-        assert!(lost.structured.get("lease_lost").is_some(), "{}", lost.text);
-        assert_eq!(w.count("select count(*) from tx"), txs);
-        // and the holder's own heartbeat still writes
-        let beat = w
-            .call(
-                &a1,
-                "task_write",
-                json!({"op": "heartbeat", "id": id, "lease": lease}),
-            )
-            .await;
-        assert!(
-            !beat.err && beat.structured.get("done").is_some(),
-            "{}",
-            beat.text
-        );
-        assert_eq!(w.count("select count(*) from tx"), txs + 1);
+    #[test]
+    fn a_conflict_or_a_lost_lease_commits_no_tx_row() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let (a1, a2) = (w.agent("a1", &h), w.agent("a2", &h));
+            let made = create(&w, &a1, "first").await;
+            let id = id_of(&made);
+            let claim = w
+                .call(&a1, "task_write", json!({"op": "claim", "id": id}))
+                .await;
+            assert!(!claim.err, "{}", claim.text);
+            let lease = claim.structured["done"]["lease"].as_i64().unwrap();
+            let txs = w.count("select count(*) from tx");
+            let stale = w
+                .call(
+                    &a2,
+                    "task_write",
+                    json!({"op": "update", "id": id, "ver": ver_of(&made), "title": "stale"}),
+                )
+                .await;
+            assert!(stale.structured.get("conflict").is_some(), "{}", stale.text);
+            let lost = w
+                .call(
+                    &a2,
+                    "task_write",
+                    json!({"op": "heartbeat", "id": id, "lease": lease}),
+                )
+                .await;
+            assert!(lost.structured.get("lease_lost").is_some(), "{}", lost.text);
+            assert_eq!(w.count("select count(*) from tx"), txs);
+            // and the holder's own heartbeat still writes
+            let beat = w
+                .call(
+                    &a1,
+                    "task_write",
+                    json!({"op": "heartbeat", "id": id, "lease": lease}),
+                )
+                .await;
+            assert!(
+                !beat.err && beat.structured.get("done").is_some(),
+                "{}",
+                beat.text
+            );
+            assert_eq!(w.count("select count(*) from tx"), txs + 1);
+        })
     }
 
-    #[tokio::test]
-    async fn lists_cap_at_50_with_a_cursor() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        for i in 0..55 {
-            create(&w, &a, &format!("task {i}")).await;
-        }
-        let first = w.call(&a, "task_read", json!({"op": "find"})).await;
-        assert_eq!(first.structured["tasks"].as_array().unwrap().len(), 50);
-        let cursor = first.structured["next_cursor"].as_str().unwrap().to_owned();
-        let second = w
-            .call(&a, "task_read", json!({"op": "find", "cursor": cursor}))
-            .await;
-        assert_eq!(second.structured["tasks"].as_array().unwrap().len(), 5);
-        assert!(second.structured.get("next_cursor").is_none());
-        let bad = w
-            .call(&a, "task_read", json!({"op": "find", "cursor": "zz"}))
-            .await;
-        assert!(bad.err);
+    #[test]
+    fn lists_cap_at_50_with_a_cursor() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            for i in 0..55 {
+                create(&w, &a, &format!("task {i}")).await;
+            }
+            let first = w.call(&a, "task_read", json!({"op": "find"})).await;
+            assert_eq!(first.structured["tasks"].as_array().unwrap().len(), 50);
+            let cursor = first.structured["next_cursor"].as_str().unwrap().to_owned();
+            let second = w
+                .call(&a, "task_read", json!({"op": "find", "cursor": cursor}))
+                .await;
+            assert_eq!(second.structured["tasks"].as_array().unwrap().len(), 5);
+            assert!(second.structured.get("next_cursor").is_none());
+            let bad = w
+                .call(&a, "task_read", json!({"op": "find", "cursor": "zz"}))
+                .await;
+            assert!(bad.err);
+        })
     }
 
-    #[tokio::test]
-    async fn find_says_when_vectors_lag() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        create(&w, &a, "tracker words here").await;
-        let o = w
-            .call(&a, "task_read", json!({"op": "find", "query": "tracker"}))
-            .await;
-        assert_eq!(o.structured["tasks"].as_array().unwrap().len(), 1);
-        assert!(
-            o.structured["vectors"]
-                .as_str()
-                .unwrap()
-                .starts_with("behind "),
-            "{}",
-            o.structured
-        );
-        assert!(o.text.contains("vectors: behind"));
+    #[test]
+    fn find_says_when_vectors_lag() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            create(&w, &a, "tracker words here").await;
+            let o = w
+                .call(&a, "task_read", json!({"op": "find", "query": "tracker"}))
+                .await;
+            assert_eq!(o.structured["tasks"].as_array().unwrap().len(), 1);
+            assert!(
+                o.structured["vectors"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("behind "),
+                "{}",
+                o.structured
+            );
+            assert!(o.text.contains("vectors: behind"));
+        })
     }
 
     /// Review finding 11: `vectors: behind N` counts the caller's scope only; another project's texts are not its lag
     /// (nor its business: the count would tell how much another project writes).
-    #[tokio::test]
-    async fn vectors_behind_counts_the_callers_scope_only() {
-        let w = World::new().await;
-        let (ha, hb) = (w.place("pa"), w.place("pb"));
-        let (a, b) = (w.agent("a1", &ha), w.agent("b1", &hb));
-        create(&w, &a, "tracker words here").await;
-        for i in 0..3 {
-            create(&w, &b, &format!("beta task {i}")).await;
-        }
-        let o = w
-            .call(&a, "task_read", json!({"op": "find", "query": "tracker"}))
-            .await;
-        let pa = w.project_n(&ha);
-        let mine = w.count(&format!(
+    #[test]
+    fn vectors_behind_counts_the_callers_scope_only() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let (ha, hb) = (w.place("pa"), w.place("pb"));
+            let (a, b) = (w.agent("a1", &ha), w.agent("b1", &hb));
+            create(&w, &a, "tracker words here").await;
+            for i in 0..3 {
+                create(&w, &b, &format!("beta task {i}")).await;
+            }
+            let o = w
+                .call(&a, "task_read", json!({"op": "find", "query": "tracker"}))
+                .await;
+            let pa = w.project_n(&ha);
+            let mine = w.count(&format!(
             "select count(*) from entity where project = {pa} and (title is not null or body is not null)"
         ));
-        assert_eq!(
-            o.structured["vectors"],
-            format!("behind {mine}"),
-            "{}",
-            o.structured
-        );
-        // under a read grant of B, B's texts are in A's scope and count
-        w.grant_read(pa, w.project_n(&hb)).await;
-        let o = w
-            .call(&a, "task_read", json!({"op": "find", "query": "tracker"}))
-            .await;
-        let pb = w.project_n(&hb);
-        let both = w.count(&format!(
+            assert_eq!(
+                o.structured["vectors"],
+                format!("behind {mine}"),
+                "{}",
+                o.structured
+            );
+            // under a read grant of B, B's texts are in A's scope and count
+            w.grant_read(pa, w.project_n(&hb)).await;
+            let o = w
+                .call(&a, "task_read", json!({"op": "find", "query": "tracker"}))
+                .await;
+            let pb = w.project_n(&hb);
+            let both = w.count(&format!(
             "select count(*) from entity where project in ({pa}, {pb}) and (title is not null or body is not null)"
         ));
-        assert!(both > mine);
-        assert_eq!(o.structured["vectors"], format!("behind {both}"));
+            assert!(both > mine);
+            assert_eq!(o.structured["vectors"], format!("behind {both}"));
+        })
     }
 
     /// Review finding 8 (Task 10: "a caller with no project … writes nothing"): `note_add` from a folder that is no
     /// project is refused, as `create` is, and writes no note (one would be a stub every agent sees).
-    #[tokio::test]
-    async fn note_add_without_a_project_writes_nothing() {
-        let w = World::new().await;
-        let nowhere = w.dir.path().join("nowhere");
-        std::fs::create_dir_all(&nowhere).unwrap();
-        w.coord
-            .projects()
-            .lock()
-            .unwrap()
-            .insert(nowhere.clone(), None);
-        let homeless = w.agent("h1", &nowhere);
-        let stub = w
-            .user_write(|tx| {
-                Ok(entity::create(
-                    tx,
-                    EntityNew {
-                        id: "task:stub".into(),
-                        kind: "task".into(),
-                        project: None,
-                        title: Some("a task of no project".into()),
-                        status: Some("open".into()),
-                        body: None,
-                        priority: None,
-                        assignee: None,
-                        data: json!({}),
-                        origin: Origin::Recorded,
-                        source: None,
-                    },
-                )?
-                .id)
-            })
-            .await;
-        let txs = w.count("select count(*) from tx");
-        let o = w
-            .call(
-                &homeless,
-                "note_add",
-                json!({"about": stub, "text": "a note of no project"}),
-            )
-            .await;
-        assert!(o.err && o.text.contains("no project"), "{}", o.text);
-        assert_eq!(
-            w.count("select count(*) from entity where kind = 'note'"),
-            0
-        );
-        assert_eq!(w.count("select count(*) from tx"), txs, "no tx was written");
+    #[test]
+    fn note_add_without_a_project_writes_nothing() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let nowhere = w.dir.path().join("nowhere");
+            std::fs::create_dir_all(&nowhere).unwrap();
+            saman::lock(w.coord.projects()).insert(nowhere.clone(), None);
+            let homeless = w.agent("h1", &nowhere);
+            let stub = w
+                .user_write(|tx| {
+                    Ok(entity::create(
+                        tx,
+                        EntityNew {
+                            id: "task:stub".into(),
+                            kind: "task".into(),
+                            project: None,
+                            title: Some("a task of no project".into()),
+                            status: Some("open".into()),
+                            body: None,
+                            priority: None,
+                            assignee: None,
+                            data: json!({}),
+                            origin: Origin::Recorded,
+                            source: None,
+                        },
+                    )?
+                    .id)
+                })
+                .await;
+            let txs = w.count("select count(*) from tx");
+            let o = w
+                .call(
+                    &homeless,
+                    "note_add",
+                    json!({"about": stub, "text": "a note of no project"}),
+                )
+                .await;
+            assert!(o.err && o.text.contains("no project"), "{}", o.text);
+            assert_eq!(
+                w.count("select count(*) from entity where kind = 'note'"),
+                0
+            );
+            assert_eq!(w.count("select count(*) from tx"), txs, "no tx was written");
+        })
     }
 
     /// `note_add` about a `file:` or `sym:` id nobody recorded makes it a bare entity of the caller's project, so the
     /// note has an end; any other unknown id is refused and writes nothing. A new note tells the hub once, its replay
     /// never.
-    #[tokio::test]
-    async fn note_add_makes_unrecorded_code_and_refuses_other_unknown_ids() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        let told = || w.hub.told.load(std::sync::atomic::Ordering::SeqCst);
-        for (about, kind) in [("file:src/new.rs", "file"), ("sym:new_fn", "symbol")] {
-            let before = told();
-            let args = json!({"about": about, "text": "seen", "req": format!("n-{kind}")});
-            let o = w.call(&a, "note_add", args.clone()).await;
-            assert!(!o.err, "{about}: {}", o.text);
-            assert_eq!(o.structured["note"]["about"], about);
-            assert_eq!(told(), before + 1, "{about}: the new note tells the hub");
-            let (k, p): (String, i64) = w
-                .conn()
-                .query_row(
-                    "select kind, project from entity where id = ?1",
-                    [about],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+    #[test]
+    fn note_add_makes_unrecorded_code_and_refuses_other_unknown_ids() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            let told = || w.hub.told.load(std::sync::atomic::Ordering::SeqCst);
+            for (about, kind) in [("file:src/new.rs", "file"), ("sym:new_fn", "symbol")] {
+                let before = told();
+                let args = json!({"about": about, "text": "seen", "req": format!("n-{kind}")});
+                let o = w.call(&a, "note_add", args.clone()).await;
+                assert!(!o.err, "{about}: {}", o.text);
+                assert_eq!(o.structured["note"]["about"], about);
+                assert_eq!(told(), before + 1, "{about}: the new note tells the hub");
+                let (k, p): (String, i64) = w
+                    .conn()
+                    .query_row(
+                        "select kind, project from entity where id = ?1",
+                        [about],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .unwrap();
+                assert_eq!((k.as_str(), p), (kind, w.project_n(&h)), "{about}");
+                let again = w.call(&a, "note_add", args).await;
+                assert_eq!(again.structured, o.structured, "{about}");
+                assert_eq!(told(), before + 1, "{about}: a replay tells nobody");
+            }
+            let entities = w.count("select count(*) from entity");
+            let o = w
+                .call(&a, "note_add", json!({"about": "task:nope", "text": "x"}))
+                .await;
+            assert!(o.err, "{}", o.text);
+            assert_eq!(w.count("select count(*) from entity"), entities);
+            assert_eq!(
+                w.count("select count(*) from entity where kind = 'note'"),
+                2
+            );
+        })
+    }
+
+    #[test]
+    fn access_request_never_blocks_and_merges() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let (ha, _hb) = (w.place("pa"), w.place("pb"));
+            let a = w.agent("a1", &ha);
+            let first = w
+                .call(
+                    &a,
+                    "access_request",
+                    json!({"project": "pb", "reason": "need its api"}),
                 )
+                .await;
+            let again = w
+                .call(
+                    &a,
+                    "access_request",
+                    json!({"project": "pb", "reason": "still"}),
+                )
+                .await;
+            assert!(!first.err && !again.err);
+            assert_eq!(first.structured, again.structured);
+            assert_eq!(
+                w.count("select count(*) from card where kind = 'access' and state = 'open'"),
+                1
+            );
+            let title: String = w
+                .conn()
+                .query_row("select title from card where kind = 'access'", [], |r| {
+                    r.get(0)
+                })
                 .unwrap();
-            assert_eq!((k.as_str(), p), (kind, w.project_n(&h)), "{about}");
-            let again = w.call(&a, "note_add", args).await;
-            assert_eq!(again.structured, o.structured, "{about}");
-            assert_eq!(told(), before + 1, "{about}: a replay tells nobody");
-        }
-        let entities = w.count("select count(*) from entity");
-        let o = w
-            .call(&a, "note_add", json!({"about": "task:nope", "text": "x"}))
-            .await;
-        assert!(o.err, "{}", o.text);
-        assert_eq!(w.count("select count(*) from entity"), entities);
-        assert_eq!(
-            w.count("select count(*) from entity where kind = 'note'"),
-            2
-        );
+            assert!(
+                title.contains("a1") && title.contains("asks to read pb"),
+                "{title}"
+            );
+            let secret = w
+                .call(
+                    &a,
+                    "access_request",
+                    json!({"project": "pb", "reason": format!("key AKIA{}", "ABCDEFGHIJKLMNOP")}),
+                )
+                .await;
+            assert!(secret.err, "{}", secret.text);
+        })
     }
 
-    #[tokio::test]
-    async fn access_request_never_blocks_and_merges() {
-        let w = World::new().await;
-        let (ha, _hb) = (w.place("pa"), w.place("pb"));
-        let a = w.agent("a1", &ha);
-        let first = w
-            .call(
-                &a,
-                "access_request",
-                json!({"project": "pb", "reason": "need its api"}),
-            )
-            .await;
-        let again = w
-            .call(
-                &a,
-                "access_request",
-                json!({"project": "pb", "reason": "still"}),
-            )
-            .await;
-        assert!(!first.err && !again.err);
-        assert_eq!(first.structured, again.structured);
-        assert_eq!(
-            w.count("select count(*) from card where kind = 'access' and state = 'open'"),
-            1
-        );
-        let title: String = w
-            .conn()
-            .query_row("select title from card where kind = 'access'", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert!(
-            title.contains("a1") && title.contains("asks to read pb"),
-            "{title}"
-        );
-        let secret = w
-            .call(
-                &a,
-                "access_request",
-                json!({"project": "pb", "reason": format!("key AKIA{}", "ABCDEFGHIJKLMNOP")}),
-            )
-            .await;
-        assert!(secret.err, "{}", secret.text);
-    }
-
-    #[tokio::test]
-    async fn access_request_answers_alike_for_known_and_unknown() {
-        let w = World::new().await;
-        let (ha, _hb) = (w.place("pa"), w.place("pb"));
-        let a = w.agent("a1", &ha);
-        let known = w
-            .call(
-                &a,
-                "access_request",
-                json!({"project": "pb", "reason": "r"}),
-            )
-            .await;
-        let unknown = w
-            .call(
-                &a,
-                "access_request",
-                json!({"project": "no-such-project", "reason": "r"}),
-            )
-            .await;
-        let shape = |o: &Out| {
-            (
-                o.err,
-                o.structured
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<_>>(),
-                o.structured["requested"].is_i64(),
-                o.text.split(':').next().unwrap().to_owned(),
-            )
-        };
-        assert_eq!(shape(&known), shape(&unknown));
-        let t: String = w
+    #[test]
+    fn access_request_answers_alike_for_known_and_unknown() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let (ha, _hb) = (w.place("pa"), w.place("pb"));
+            let a = w.agent("a1", &ha);
+            let known = w
+                .call(
+                    &a,
+                    "access_request",
+                    json!({"project": "pb", "reason": "r"}),
+                )
+                .await;
+            let unknown = w
+                .call(
+                    &a,
+                    "access_request",
+                    json!({"project": "no-such-project", "reason": "r"}),
+                )
+                .await;
+            let shape = |o: &Out| {
+                (
+                    o.err,
+                    o.structured
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    o.structured["requested"].is_i64(),
+                    o.text.split(':').next().unwrap().to_owned(),
+                )
+            };
+            assert_eq!(shape(&known), shape(&unknown));
+            let t: String = w
             .conn()
             .query_row(
                 "select title from card where json_extract(data, '$.target') = 'no-such-project'",
@@ -681,514 +695,545 @@ mod tools {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(t.contains("unknown project"), "{t}");
+            assert!(t.contains("unknown project"), "{t}");
+        })
     }
 
-    #[tokio::test]
-    async fn access_card_has_no_job() {
-        let w = World::new().await;
-        let ha = w.place("pa");
-        let job = Identity::Session {
-            agent: "j1".into(),
-            sid: "j1".into(),
-            profile: Some("p".into()),
-            job: Some("JOB1".into()),
-            task: None,
-            home: ha,
-        };
-        let o = w
-            .call(
-                &job,
-                "access_request",
-                json!({"project": "pb", "reason": "r"}),
-            )
-            .await;
-        assert!(!o.err, "{}", o.text);
-        assert_eq!(
-            w.count("select count(*) from card where kind = 'access' and job is not null"),
-            0
-        );
-        assert_eq!(
-            w.count("select count(*) from card where kind = 'access'"),
-            1
-        );
+    #[test]
+    fn access_card_has_no_job() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let ha = w.place("pa");
+            let job = Identity::Session {
+                agent: "j1".into(),
+                sid: "j1".into(),
+                profile: Some("p".into()),
+                job: Some("JOB1".into()),
+                task: None,
+                home: ha,
+            };
+            let o = w
+                .call(
+                    &job,
+                    "access_request",
+                    json!({"project": "pb", "reason": "r"}),
+                )
+                .await;
+            assert!(!o.err, "{}", o.text);
+            assert_eq!(
+                w.count("select count(*) from card where kind = 'access' and job is not null"),
+                0
+            );
+            assert_eq!(
+                w.count("select count(*) from card where kind = 'access'"),
+                1
+            );
+        })
     }
 
-    #[tokio::test]
-    async fn req_retry_returns_the_first_answer() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        let args = json!({"op": "create", "title": "once", "req": "r-1"});
-        let first = w.call(&a, "task_write", args.clone()).await;
-        let second = w.call(&a, "task_write", args).await;
-        assert_eq!(id_of(&first), id_of(&second));
-        assert_eq!(
-            w.count("select count(*) from entity where kind = 'task'"),
-            1
-        );
-        let bad = w
-            .call(
-                &a,
-                "task_write",
-                json!({"op": "create", "title": "x", "req": "has space"}),
-            )
-            .await;
-        assert!(bad.err);
-        let n1 = w
-            .call(
-                &a,
-                "note_add",
-                json!({"about": id_of(&first), "text": "n", "req": "n-1"}),
-            )
-            .await;
-        let n2 = w
-            .call(
-                &a,
-                "note_add",
-                json!({"about": id_of(&first), "text": "n", "req": "n-1"}),
-            )
-            .await;
-        assert_eq!(n1.structured, n2.structured);
-        assert_eq!(
-            w.count("select count(*) from entity where kind = 'note'"),
-            1
-        );
+    #[test]
+    fn req_retry_returns_the_first_answer() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            let args = json!({"op": "create", "title": "once", "req": "r-1"});
+            let first = w.call(&a, "task_write", args.clone()).await;
+            let second = w.call(&a, "task_write", args).await;
+            assert_eq!(id_of(&first), id_of(&second));
+            assert_eq!(
+                w.count("select count(*) from entity where kind = 'task'"),
+                1
+            );
+            let bad = w
+                .call(
+                    &a,
+                    "task_write",
+                    json!({"op": "create", "title": "x", "req": "has space"}),
+                )
+                .await;
+            assert!(bad.err);
+            let n1 = w
+                .call(
+                    &a,
+                    "note_add",
+                    json!({"about": id_of(&first), "text": "n", "req": "n-1"}),
+                )
+                .await;
+            let n2 = w
+                .call(
+                    &a,
+                    "note_add",
+                    json!({"about": id_of(&first), "text": "n", "req": "n-1"}),
+                )
+                .await;
+            assert_eq!(n1.structured, n2.structured);
+            assert_eq!(
+                w.count("select count(*) from entity where kind = 'note'"),
+                1
+            );
+        })
     }
 
     /// Excise leaves no trace in a replay: a keyed `task_write` that wrote no version of the target (a link with it
     /// as the source, a label no-op) answers the marker on a repeat, never its title, even one too short to search
     /// for (call 3).
-    #[tokio::test]
-    async fn a_replay_after_excise_names_nothing_of_the_target() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        let x = id_of(&create(&w, &a, "Xsecret-71fc2e9d").await);
-        let z = id_of(&create(&w, &a, "Zq9").await);
-        let y = id_of(&create(&w, &a, "the other one").await);
-        let link = json!({"op": "link", "src": x, "kind": "blocks", "dst": y, "req": "l-1"});
-        let label = json!({"op": "label", "id": z, "remove": ["none"], "req": "b-1"});
-        let first = w.call(&a, "task_write", link.clone()).await;
-        assert!(first.structured.to_string().contains("Xsecret-71fc2e9d"));
-        let first = w.call(&a, "task_write", label.clone()).await;
-        assert!(first.structured.to_string().contains("Zq9"));
-        let writer = w.db.graph_writer().unwrap().clone();
-        for id in [&x, &z] {
-            urdr::graph::excise::excise(
-                &writer,
-                TxMeta::new("user", Class::User, "test"),
-                urdr::graph::excise::Target::Entity(id.clone()),
-                None,
-                "r".into(),
-                norn::write::blankers(),
-            )
-            .await
-            .unwrap();
-        }
-        for args in [link, label] {
-            let again = w.call(&a, "task_write", args).await;
-            assert!(
-                again.err && again.text.contains("excised"),
-                "{}",
-                again.text
-            );
-            assert!(
-                !again.text.contains("Xsecret") && !again.text.contains("Zq9"),
-                "{}",
-                again.text
-            );
-        }
-        assert_eq!(
+    #[test]
+    fn a_replay_after_excise_names_nothing_of_the_target() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            let x = id_of(&create(&w, &a, "Xsecret-71fc2e9d").await);
+            let z = id_of(&create(&w, &a, "Zq9").await);
+            let y = id_of(&create(&w, &a, "the other one").await);
+            let link = json!({"op": "link", "src": x, "kind": "blocks", "dst": y, "req": "l-1"});
+            let label = json!({"op": "label", "id": z, "remove": ["none"], "req": "b-1"});
+            let first = w.call(&a, "task_write", link.clone()).await;
+            assert!(first.structured.to_string().contains("Xsecret-71fc2e9d"));
+            let first = w.call(&a, "task_write", label.clone()).await;
+            assert!(first.structured.to_string().contains("Zq9"));
+            let writer = w.db.graph_writer().unwrap().clone();
+            for id in [&x, &z] {
+                urdr::graph::excise::excise(
+                    &writer,
+                    TxMeta::new("user", Class::User, "test"),
+                    urdr::graph::excise::Target::Entity(id.clone()),
+                    None,
+                    "r".into(),
+                    norn::write::blankers(),
+                )
+                .await
+                .unwrap();
+            }
+            for args in [link, label] {
+                let again = w.call(&a, "task_write", args).await;
+                assert!(
+                    again.err && again.text.contains("excised"),
+                    "{}",
+                    again.text
+                );
+                assert!(
+                    !again.text.contains("Xsecret") && !again.text.contains("Zq9"),
+                    "{}",
+                    again.text
+                );
+            }
+            assert_eq!(
             w.count(
                 "select count(*) from tx where instr(coalesce(answer, '') || coalesce(note, ''), 'Xsecret') > 0 \
                  or instr(coalesce(answer, '') || coalesce(note, ''), 'Zq9') > 0"
             ),
             0
         );
+        })
     }
 
-    #[tokio::test]
-    async fn hello_brief_keeps_the_first_item() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        let id = id_of(&create(&w, &a, "ready one").await);
-        let on = w.call(&a, "hello", json!({})).await;
-        let off_tools = tools_for(ToolSets {
-            tracker: false,
-            debug: false,
-        });
-        let off = call_in(&off_tools, &w.coord, &a, "hello", json!({})).await;
-        assert!(!on.err && !off.err, "{} / {}", on.text, off.text);
-        assert_eq!(on.text, off.text, "the first item is the same");
-        assert!(on.structured["brief"]["project"].is_string());
-        assert!(
-            on.structured["brief"]["ready"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|t| t["id"] == id)
-        );
-        assert!(off.structured["brief"].get("ready").is_none());
-        assert!(
-            !serde_json::to_string(&off.structured)
-                .unwrap()
-                .contains("task_read")
-        );
-        assert!(
-            on.content[0]["text"]
-                .as_str()
-                .unwrap()
-                .contains("task_read")
-        );
+    #[test]
+    fn hello_brief_keeps_the_first_item() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            let id = id_of(&create(&w, &a, "ready one").await);
+            let on = w.call(&a, "hello", json!({})).await;
+            let off_tools = tools_for(ToolSets {
+                tracker: false,
+                debug: false,
+            });
+            let off = call_in(&off_tools, &w.coord, &a, "hello", json!({})).await;
+            assert!(!on.err && !off.err, "{} / {}", on.text, off.text);
+            assert_eq!(on.text, off.text, "the first item is the same");
+            assert!(on.structured["brief"]["project"].is_string());
+            assert!(
+                on.structured["brief"]["ready"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|t| t["id"] == id)
+            );
+            assert!(off.structured["brief"].get("ready").is_none());
+            assert!(
+                !serde_json::to_string(&off.structured)
+                    .unwrap()
+                    .contains("task_read")
+            );
+            assert!(
+                on.content[0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("task_read")
+            );
+        })
     }
 
-    #[tokio::test]
-    async fn record_decision_about_links() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        let id = id_of(&create(&w, &a, "subject").await);
-        let o = w
+    #[test]
+    fn record_decision_about_links() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            let id = id_of(&create(&w, &a, "subject").await);
+            let o = w
             .call(&a, "record_decision", json!({"kind": "build", "subject": "use x", "reason": "because", "seen_version": 0, "about": [id]}))
             .await;
-        assert!(!o.err, "{}", o.text);
-        assert_eq!(
+            assert!(!o.err, "{}", o.text);
+            assert_eq!(
             w.count("select count(*) from link l join entity s on s.n = l.src where l.kind = 'about' and s.kind = 'decision'"),
             1
         );
-        let bad = w
+            let bad = w
             .call(&a, "record_decision", json!({"kind": "build", "subject": "use y", "reason": "because", "seen_version": 1, "about": ["task:nope-00000"]}))
             .await;
-        assert!(
-            bad.err && bad.text.contains("no such entity"),
-            "{}",
-            bad.text
-        );
+            assert!(
+                bad.err && bad.text.contains("no such entity"),
+                "{}",
+                bad.text
+            );
+        })
     }
 
     /// Pattern D: the sources are in the decision view and the finding's data.
-    #[tokio::test]
-    async fn record_decision_keeps_sources() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        let sources =
-            json!([{"path": "src/a.rs", "lines": [3, 9]}, {"url": "https://example.test/x"}]);
-        let o = w
+    #[test]
+    fn record_decision_keeps_sources() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            let sources =
+                json!([{"path": "src/a.rs", "lines": [3, 9]}, {"url": "https://example.test/x"}]);
+            let o = w
             .call(&a, "record_decision", json!({"kind": "build", "subject": "use x", "reason": "because", "seen_version": 0, "sources": sources}))
             .await;
-        assert!(!o.err, "{}", o.text);
-        assert_eq!(
+            assert!(!o.err, "{}", o.text);
+            assert_eq!(
             w.count("select count(*) from decision where json_array_length(sources) = 2 and json_extract(sources, '$[0].lines[1]') = 9"),
             1
         );
-        let many: Vec<_> = (0..13).map(|i| json!({"path": format!("f{i}")})).collect();
-        let bad = w
+            let many: Vec<_> = (0..13).map(|i| json!({"path": format!("f{i}")})).collect();
+            let bad = w
             .call(&a, "record_decision", json!({"kind": "build", "subject": "use y", "reason": "because", "seen_version": 1, "sources": many}))
             .await;
-        assert!(bad.err && bad.text.contains("at most 12"), "{}", bad.text);
-        assert_eq!(w.count("select count(*) from decision"), 1);
+            assert!(bad.err && bad.text.contains("at most 12"), "{}", bad.text);
+            assert_eq!(w.count("select count(*) from decision"), 1);
+        })
     }
 
     /// Pattern D: a decision's step is the hub's stamp, never the agent's claim; its origin and session stay.
-    #[tokio::test]
-    async fn the_agents_step_argument_is_ignored() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        let o = w
+    #[test]
+    fn the_agents_step_argument_is_ignored() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            let o = w
             .call(&a, "record_decision", json!({"kind": "build", "subject": "use x", "reason": "because", "seen_version": 0, "step": 7, "origin": "own"}))
             .await;
-        assert!(!o.err, "{}", o.text);
-        assert_eq!(
+            assert!(!o.err, "{}", o.text);
+            assert_eq!(
             w.count("select count(*) from entity where kind = 'decision' and json_extract(data, '$.step') is null and json_extract(data, '$.origin') = 'own'"),
             1
         );
+        })
     }
 
-    #[tokio::test]
-    async fn note_add_sources_only_on_a_finding() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        let id = id_of(&create(&w, &a, "subject").await);
-        let sources = json!([{"path": "src/a.rs"}]);
-        let ok = w
-            .call(
-                &a,
-                "note_add",
-                json!({"about": id, "text": "it is so", "kind": "finding", "sources": sources}),
-            )
-            .await;
-        assert!(!ok.err, "{}", ok.text);
-        assert_eq!(
+    #[test]
+    fn note_add_sources_only_on_a_finding() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            let id = id_of(&create(&w, &a, "subject").await);
+            let sources = json!([{"path": "src/a.rs"}]);
+            let ok = w
+                .call(
+                    &a,
+                    "note_add",
+                    json!({"about": id, "text": "it is so", "kind": "finding", "sources": sources}),
+                )
+                .await;
+            assert!(!ok.err, "{}", ok.text);
+            assert_eq!(
             w.count("select count(*) from entity where kind = 'note' and json_extract(data, '$.sources[0].path') = 'src/a.rs'"),
             1
         );
-        let bad = w
+            let bad = w
             .call(
                 &a,
                 "note_add",
                 json!({"about": id, "text": "progress", "kind": "progress", "sources": sources}),
             )
             .await;
-        assert!(bad.err && bad.text.contains("finding"), "{}", bad.text);
-        assert_eq!(
-            w.count("select count(*) from entity where kind = 'note'"),
-            1
-        );
-    }
-
-    #[tokio::test]
-    async fn who_touched_resolves_moved_and_gone() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        create(&w, &a, "registers the project").await;
-        let p = w.project_n(&h);
-        w.user_write(move |tx| {
-            let mk = |tx: &mut norn::store::WTx<'_>, id: &str, kind: &str| {
-                entity::create(
-                    tx,
-                    EntityNew {
-                        id: id.into(),
-                        kind: kind.into(),
-                        project: Some(p),
-                        title: Some(id.into()),
-                        status: None,
-                        body: None,
-                        priority: None,
-                        assignee: None,
-                        data: json!({}),
-                        origin: Origin::Inferred,
-                        source: None,
-                    },
-                )
-            };
-            let (old, new, s, ag) = (
-                mk(tx, "file:old.rs", "file")?,
-                mk(tx, "file:new.rs", "file")?,
-                mk(tx, "session:s9", "session")?,
-                mk(tx, "agent:x", "agent")?,
+            assert!(bad.err && bad.text.contains("finding"), "{}", bad.text);
+            assert_eq!(
+                w.count("select count(*) from entity where kind = 'note'"),
+                1
             );
-            link::add(tx, old.n, "renamed_to", new.n, None, Origin::Inferred, None)?;
-            link::add(tx, s.n, "touched", new.n, None, Origin::Inferred, None)?;
-            link::add(tx, s.n, "run_by", ag.n, None, Origin::Inferred, None)?;
-            Ok(())
         })
-        .await;
-        let moved = w
-            .call(
-                &a,
-                "graph_read",
-                json!({"op": "who_touched", "path": "old.rs"}),
-            )
-            .await;
-        assert_eq!(moved.structured["state"], "moved");
-        assert_eq!(moved.structured["moved_to"], "file:new.rs");
-        let current = w
-            .call(
-                &a,
-                "graph_read",
-                json!({"op": "who_touched", "path": "new.rs"}),
-            )
-            .await;
-        assert_eq!(current.structured["state"], "current");
-        assert_eq!(current.structured["touched"][0]["session"], "session:s9");
-        assert_eq!(current.structured["touched"][0]["agent"], "agent:x");
-        let gone = w
-            .call(
-                &a,
-                "graph_read",
-                json!({"op": "who_touched", "path": "never.rs"}),
-            )
-            .await;
-        assert_eq!(gone.structured["state"], "gone");
-        assert!(
-            gone.structured.get("hidden").is_some() && gone.structured.get("truncated").is_some()
-        );
     }
 
-    #[tokio::test]
-    async fn neighbors_and_path_say_truncated_and_hidden() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        let t1 = id_of(&create(&w, &a, "one").await);
-        let t2 = id_of(&create(&w, &a, "two").await);
-        let l = w
-            .call(
-                &a,
-                "task_write",
-                json!({"op": "link", "src": t1, "kind": "blocks", "dst": t2}),
-            )
-            .await;
-        assert!(!l.err, "{}", l.text);
-        let n = w
-            .call(
-                &a,
-                "graph_read",
-                json!({"op": "neighbors", "id": t1, "depth": 2}),
-            )
-            .await;
-        assert!(!n.err, "{}", n.text);
-        assert!(
-            n.structured["nodes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|x| x["id"] == t2)
-        );
-        assert!(n.structured.get("hidden").is_some() && n.structured.get("truncated").is_some());
-        let p = w
-            .call(
-                &a,
-                "graph_read",
-                json!({"op": "path", "start": t1, "end": t2}),
-            )
-            .await;
-        assert!(!p.err, "{}", p.text);
-        assert_eq!(p.structured["links"][0]["kind"], "blocks");
-        let deep = w
-            .call(
-                &a,
-                "graph_read",
-                json!({"op": "neighbors", "id": t1, "depth": 5}),
-            )
-            .await;
-        assert!(deep.err);
-    }
-
-    #[tokio::test]
-    async fn the_agent_reaches_no_grant_through_the_tools() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        create(&w, &a, "registers the project").await;
-        let (p, q) = (w.project_n(&h), w.place("pq"));
-        let _ = q;
-        let g = w
-            .user_write(move |tx| {
-                Ok(grants::create(tx, Who::Project(p), What::All, Access::Read, None)?.id)
+    #[test]
+    fn who_touched_resolves_moved_and_gone() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            create(&w, &a, "registers the project").await;
+            let p = w.project_n(&h);
+            w.user_write(move |tx| {
+                let mk = |tx: &mut norn::store::WTx<'_>, id: &str, kind: &str| {
+                    entity::create(
+                        tx,
+                        EntityNew {
+                            id: id.into(),
+                            kind: kind.into(),
+                            project: Some(p),
+                            title: Some(id.into()),
+                            status: None,
+                            body: None,
+                            priority: None,
+                            assignee: None,
+                            data: json!({}),
+                            origin: Origin::Inferred,
+                            source: None,
+                        },
+                    )
+                };
+                let (old, new, s, ag) = (
+                    mk(tx, "file:old.rs", "file")?,
+                    mk(tx, "file:new.rs", "file")?,
+                    mk(tx, "session:s9", "session")?,
+                    mk(tx, "agent:x", "agent")?,
+                );
+                link::add(tx, old.n, "renamed_to", new.n, None, Origin::Inferred, None)?;
+                link::add(tx, s.n, "touched", new.n, None, Origin::Inferred, None)?;
+                link::add(tx, s.n, "run_by", ag.n, None, Origin::Inferred, None)?;
+                Ok(())
             })
             .await;
-        for args in [
-            json!({"op": "update", "id": g, "ver": 1, "title": "x"}),
-            json!({"op": "label", "id": g, "add": ["x"]}),
-            json!({"op": "claim", "id": g}),
-        ] {
-            let o = w.call(&a, "task_write", args).await;
-            assert!(o.err, "{}", o.text);
-        }
+            let moved = w
+                .call(
+                    &a,
+                    "graph_read",
+                    json!({"op": "who_touched", "path": "old.rs"}),
+                )
+                .await;
+            assert_eq!(moved.structured["state"], "moved");
+            assert_eq!(moved.structured["moved_to"], "file:new.rs");
+            let current = w
+                .call(
+                    &a,
+                    "graph_read",
+                    json!({"op": "who_touched", "path": "new.rs"}),
+                )
+                .await;
+            assert_eq!(current.structured["state"], "current");
+            assert_eq!(current.structured["touched"][0]["session"], "session:s9");
+            assert_eq!(current.structured["touched"][0]["agent"], "agent:x");
+            let gone = w
+                .call(
+                    &a,
+                    "graph_read",
+                    json!({"op": "who_touched", "path": "never.rs"}),
+                )
+                .await;
+            assert_eq!(gone.structured["state"], "gone");
+            assert!(
+                gone.structured.get("hidden").is_some()
+                    && gone.structured.get("truncated").is_some()
+            );
+        })
+    }
+
+    #[test]
+    fn neighbors_and_path_say_truncated_and_hidden() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            let t1 = id_of(&create(&w, &a, "one").await);
+            let t2 = id_of(&create(&w, &a, "two").await);
+            let l = w
+                .call(
+                    &a,
+                    "task_write",
+                    json!({"op": "link", "src": t1, "kind": "blocks", "dst": t2}),
+                )
+                .await;
+            assert!(!l.err, "{}", l.text);
+            let n = w
+                .call(
+                    &a,
+                    "graph_read",
+                    json!({"op": "neighbors", "id": t1, "depth": 2}),
+                )
+                .await;
+            assert!(!n.err, "{}", n.text);
+            assert!(
+                n.structured["nodes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|x| x["id"] == t2)
+            );
+            assert!(
+                n.structured.get("hidden").is_some() && n.structured.get("truncated").is_some()
+            );
+            let p = w
+                .call(
+                    &a,
+                    "graph_read",
+                    json!({"op": "path", "start": t1, "end": t2}),
+                )
+                .await;
+            assert!(!p.err, "{}", p.text);
+            assert_eq!(p.structured["links"][0]["kind"], "blocks");
+            let deep = w
+                .call(
+                    &a,
+                    "graph_read",
+                    json!({"op": "neighbors", "id": t1, "depth": 5}),
+                )
+                .await;
+            assert!(deep.err);
+        })
+    }
+
+    #[test]
+    fn the_agent_reaches_no_grant_through_the_tools() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            create(&w, &a, "registers the project").await;
+            let (p, _other_place) = (w.project_n(&h), w.place("pq"));
+            let g = w
+                .user_write(move |tx| {
+                    Ok(grants::create(tx, Who::Project(p), What::All, Access::Read, None)?.id)
+                })
+                .await;
+            for args in [
+                json!({"op": "update", "id": g, "ver": 1, "title": "x"}),
+                json!({"op": "label", "id": g, "add": ["x"]}),
+                json!({"op": "claim", "id": g}),
+            ] {
+                let o = w.call(&a, "task_write", args).await;
+                assert!(o.err, "{}", o.text);
+            }
+        })
     }
 
     // ---- answers once, and `find` by kind ----
 
-    #[tokio::test]
-    async fn a_list_answer_has_its_rows_once() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        let mut ids = Vec::new();
-        for t in ["one", "two", "three"] {
-            ids.push(id_of(&create(&w, &a, t).await));
-        }
-        let o = w.call(&a, "task_read", json!({"op": "find"})).await;
-        assert!(!o.err, "{}", o.text);
-        assert_eq!(o.structured["tasks"].as_array().unwrap().len(), 3);
-        assert!(
-            o.content.is_empty(),
-            "no resource links by default: {:?}",
-            o.content
-        );
-        // MP-7 follow-up: the rows are in `structuredContent` once each, and the text is the header
-        let rows = o.structured.to_string();
-        for id in &ids {
-            assert_eq!(rows.matches(id.as_str()).count(), 1, "{id}: {rows}");
+    #[test]
+    fn a_list_answer_has_its_rows_once() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            let mut ids = Vec::new();
+            for t in ["one", "two", "three"] {
+                ids.push(id_of(&create(&w, &a, t).await));
+            }
+            let o = w.call(&a, "task_read", json!({"op": "find"})).await;
+            assert!(!o.err, "{}", o.text);
+            assert_eq!(o.structured["tasks"].as_array().unwrap().len(), 3);
             assert!(
-                !o.text.contains(id.as_str()),
-                "{id} in the text: {}",
-                o.text
+                o.content.is_empty(),
+                "no resource links by default: {:?}",
+                o.content
             );
-        }
-        assert!(o.text.starts_with("3 tasks"), "{}", o.text);
-        assert!(o.text.contains("structured result"), "{}", o.text);
+            // MP-7 follow-up: the rows are in `structuredContent` once each, and the text is the header
+            let rows = o.structured.to_string();
+            for id in &ids {
+                assert_eq!(rows.matches(id.as_str()).count(), 1, "{id}: {rows}");
+                assert!(
+                    !o.text.contains(id.as_str()),
+                    "{id} in the text: {}",
+                    o.text
+                );
+            }
+            assert!(o.text.starts_with("3 tasks"), "{}", o.text);
+            assert!(o.text.contains("structured result"), "{}", o.text);
+        })
     }
 
     /// Every list or read tool whose text is a header declares an `outputSchema` (or its rows would vanish: mimir sends
     /// `structuredContent` only for a tool that has one), and its `structuredContent` validates against it.
-    #[tokio::test]
-    async fn header_only_tools_declare_a_schema_their_rows_validate_against() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        let t1 = id_of(&create(&w, &a, "one").await);
-        let t2 = id_of(&create(&w, &a, "two").await);
-        let l = w
-            .call(
-                &a,
-                "task_write",
-                json!({"op": "link", "src": t1, "kind": "blocks", "dst": t2}),
-            )
-            .await;
-        assert!(!l.err, "{}", l.text);
-        let list = tools();
-        for (name, args) in [
-            ("task_read", json!({"op": "find"})),
-            ("task_read", json!({"op": "ready"})),
-            ("task_read", json!({"op": "mine"})),
-            (
-                "graph_read",
-                json!({"op": "neighbors", "id": t1, "depth": 2}),
-            ),
-            ("graph_read", json!({"op": "path", "start": t1, "end": t2})),
-            ("graph_read", json!({"op": "history", "id": t1})),
-            ("graph_read", json!({"op": "who_touched", "path": "a.rs"})),
-        ] {
-            let tool = list.iter().find(|t| t.name() == name).unwrap();
-            let schema = tool
-                .output_schema()
-                .unwrap_or_else(|| panic!("{name} has no outputSchema"));
-            let o = w.call(&a, name, args.clone()).await;
-            assert!(!o.err, "{name} {args}: {}", o.text);
-            brokkr::schema::check(&schema, &o.structured)
-                .unwrap_or_else(|e| panic!("{name} {args}: {e:?}"));
-            for id in [&t1, &t2] {
-                assert!(!o.text.contains(id.as_str()), "{name} {args}: {}", o.text);
+    #[test]
+    fn header_only_tools_declare_a_schema_their_rows_validate_against() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            let t1 = id_of(&create(&w, &a, "one").await);
+            let t2 = id_of(&create(&w, &a, "two").await);
+            let l = w
+                .call(
+                    &a,
+                    "task_write",
+                    json!({"op": "link", "src": t1, "kind": "blocks", "dst": t2}),
+                )
+                .await;
+            assert!(!l.err, "{}", l.text);
+            let list = tools();
+            for (name, args) in [
+                ("task_read", json!({"op": "find"})),
+                ("task_read", json!({"op": "ready"})),
+                ("task_read", json!({"op": "mine"})),
+                (
+                    "graph_read",
+                    json!({"op": "neighbors", "id": t1, "depth": 2}),
+                ),
+                ("graph_read", json!({"op": "path", "start": t1, "end": t2})),
+                ("graph_read", json!({"op": "history", "id": t1})),
+                ("graph_read", json!({"op": "who_touched", "path": "a.rs"})),
+            ] {
+                let tool = list.iter().find(|t| t.name() == name).unwrap();
+                let schema = tool
+                    .output_schema()
+                    .unwrap_or_else(|| panic!("{name} has no outputSchema"));
+                let o = w.call(&a, name, args.clone()).await;
+                assert!(!o.err, "{name} {args}: {}", o.text);
+                brokkr::schema::check(&schema, &o.structured)
+                    .unwrap_or_else(|e| panic!("{name} {args}: {e:?}"));
+                for id in [&t1, &t2] {
+                    assert!(!o.text.contains(id.as_str()), "{name} {args}: {}", o.text);
+                }
+                assert!(
+                    o.text.contains("structured result"),
+                    "{name} {args}: {}",
+                    o.text
+                );
             }
-            assert!(
-                o.text.contains("structured result"),
-                "{name} {args}: {}",
-                o.text
-            );
-        }
+        })
     }
 
-    #[tokio::test]
-    async fn links_true_adds_resource_links() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        for t in ["one", "two", "three"] {
-            create(&w, &a, t).await;
-        }
-        let o = w
-            .call(&a, "task_read", json!({"op": "find", "links": true}))
-            .await;
-        assert!(!o.err, "{}", o.text);
-        assert_eq!(
-            o.content
-                .iter()
-                .filter(|c| c["type"] == "resource_link")
-                .count(),
-            3
-        );
-        let bad = w
-            .call(&a, "task_read", json!({"op": "find", "links": "yes"}))
-            .await;
-        assert!(bad.err, "{}", bad.text);
+    #[test]
+    fn links_true_adds_resource_links() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            for t in ["one", "two", "three"] {
+                create(&w, &a, t).await;
+            }
+            let o = w
+                .call(&a, "task_read", json!({"op": "find", "links": true}))
+                .await;
+            assert!(!o.err, "{}", o.text);
+            assert_eq!(
+                o.content
+                    .iter()
+                    .filter(|c| c["type"] == "resource_link")
+                    .count(),
+                3
+            );
+            let bad = w
+                .call(&a, "task_read", json!({"op": "find", "links": "yes"}))
+                .await;
+            assert!(bad.err, "{}", bad.text);
+        })
     }
 
     /// A plan of the project at HOME, and a spec head of no project (as an import makes it).
@@ -1226,69 +1271,77 @@ mod tools {
             .collect()
     }
 
-    #[tokio::test]
-    async fn find_kind_plan_returns_plans() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        create(&w, &a, "a task").await;
-        let (plan, _) = plan_and_spec(&w, &h).await;
-        let o = w
-            .call(&a, "task_read", json!({"op": "find", "kind": "plan"}))
-            .await;
-        assert!(!o.err, "{}", o.text);
-        assert_eq!(kinds_of(&o), ["plan"]);
-        assert_eq!(o.structured["tasks"][0]["id"], plan);
-    }
-
-    #[tokio::test]
-    async fn find_kind_spec_and_decision() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        create(&w, &a, "a task").await;
-        plan_and_spec(&w, &h).await;
-        for (kind, id) in [("spec", "spec:menus"), ("decision", "decision:menus")] {
+    #[test]
+    fn find_kind_plan_returns_plans() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            create(&w, &a, "a task").await;
+            let (plan, _) = plan_and_spec(&w, &h).await;
             let o = w
-                .call(&a, "task_read", json!({"op": "find", "kind": kind}))
+                .call(&a, "task_read", json!({"op": "find", "kind": "plan"}))
                 .await;
             assert!(!o.err, "{}", o.text);
-            assert_eq!(o.structured["tasks"][0]["id"], id, "{kind}");
-            // of no project: to an agent a stub (its reference, no status or version)
-            assert!(o.structured["tasks"][0].get("ver").is_none(), "{kind}");
-        }
-        let words = w
-            .call(
-                &a,
-                "task_read",
-                json!({"op": "find", "kind": "spec", "query": "menus"}),
-            )
-            .await;
-        assert!(!words.err, "{}", words.text);
-        assert_eq!(kinds_of(&words), ["spec"]);
+            assert_eq!(kinds_of(&o), ["plan"]);
+            assert_eq!(o.structured["tasks"][0]["id"], plan);
+        })
     }
 
-    #[tokio::test]
-    async fn find_without_kind_is_tasks() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        create(&w, &a, "a task").await;
-        plan_and_spec(&w, &h).await;
-        let o = w.call(&a, "task_read", json!({"op": "find"})).await;
-        assert_eq!(kinds_of(&o), ["task"]);
+    #[test]
+    fn find_kind_spec_and_decision() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            create(&w, &a, "a task").await;
+            plan_and_spec(&w, &h).await;
+            for (kind, id) in [("spec", "spec:menus"), ("decision", "decision:menus")] {
+                let o = w
+                    .call(&a, "task_read", json!({"op": "find", "kind": kind}))
+                    .await;
+                assert!(!o.err, "{}", o.text);
+                assert_eq!(o.structured["tasks"][0]["id"], id, "{kind}");
+                // of no project: to an agent a stub (its reference, no status or version)
+                assert!(o.structured["tasks"][0].get("ver").is_none(), "{kind}");
+            }
+            let words = w
+                .call(
+                    &a,
+                    "task_read",
+                    json!({"op": "find", "kind": "spec", "query": "menus"}),
+                )
+                .await;
+            assert!(!words.err, "{}", words.text);
+            assert_eq!(kinds_of(&words), ["spec"]);
+        })
     }
 
-    #[tokio::test]
-    async fn find_kind_grant_is_refused() {
-        let w = World::new().await;
-        let h = w.place("pa");
-        let a = w.agent("a1", &h);
-        create(&w, &a, "registers the project").await;
-        let o = w
-            .call(&a, "task_read", json!({"op": "find", "kind": "grant"}))
-            .await;
-        assert!(o.err && o.text.contains("kind"), "{}", o.text);
+    #[test]
+    fn find_without_kind_is_tasks() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            create(&w, &a, "a task").await;
+            plan_and_spec(&w, &h).await;
+            let o = w.call(&a, "task_read", json!({"op": "find"})).await;
+            assert_eq!(kinds_of(&o), ["task"]);
+        })
+    }
+
+    #[test]
+    fn find_kind_grant_is_refused() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            create(&w, &a, "registers the project").await;
+            let o = w
+                .call(&a, "task_read", json!({"op": "find", "kind": "grant"}))
+                .await;
+            assert!(o.err && o.text.contains("kind"), "{}", o.text);
+        })
     }
 
     #[test]

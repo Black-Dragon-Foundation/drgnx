@@ -9,7 +9,7 @@ use hrafn::{Class, Lang, classify};
 
 fn fixture(name: &str) -> String {
     let p = format!("{}/tests/fixtures/langs/{name}", env!("CARGO_MANIFEST_DIR"));
-    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p}: {e}"))
+    eitri::read_string(std::path::Path::new(&p), 4 << 20).unwrap_or_else(|e| panic!("{p}: {e}"))
 }
 
 /// The chunks put together give back the text.

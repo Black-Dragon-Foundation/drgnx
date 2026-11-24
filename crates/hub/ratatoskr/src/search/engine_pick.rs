@@ -281,7 +281,11 @@ impl Machine {
             .map(|e| e.path())
             .collect();
         cards.sort();
-        let read = |p: &Path| std::fs::read_to_string(p).ok().map(|s| s.trim().to_owned());
+        let read = |p: &Path| {
+            crate::fsio::read_to_string(p)
+                .ok()
+                .map(|s| s.trim().to_owned())
+        };
         let smi = nvidia_smi();
         m.nvidia_driver = smi.first().and_then(|r| r.driver);
         let (mut nv, mut amd) = (0, 0);
@@ -336,7 +340,7 @@ struct SmiRow {
 }
 
 fn nvidia_smi() -> Vec<SmiRow> {
-    let out = std::process::Command::new("nvidia-smi")
+    let out = crate::proc::Command::new("nvidia-smi")
         .args([
             "--query-gpu=name,memory.total,driver_version",
             "--format=csv,noheader,nounits",
@@ -361,7 +365,7 @@ fn nvidia_smi() -> Vec<SmiRow> {
 /// parse (so the rows keep their places); empty when `nvidia-smi` is missing or too old to say (TEI's support table needs it,
 /// [`super::tei_support`]).
 pub fn nvidia_compute_caps() -> Vec<Option<(u32, u32)>> {
-    let out = std::process::Command::new("nvidia-smi")
+    let out = crate::proc::Command::new("nvidia-smi")
         .args(["--query-gpu=compute_cap", "--format=csv,noheader,nounits"])
         .stdin(std::process::Stdio::null())
         .output();
@@ -390,7 +394,7 @@ fn kfd_gfx() -> Vec<String> {
     });
     nodes
         .iter()
-        .filter_map(|n| std::fs::read_to_string(n.join("properties")).ok())
+        .filter_map(|n| crate::fsio::read_to_string(n.join("properties")).ok())
         .filter_map(|props| {
             props.lines().find_map(|l| {
                 l.strip_prefix("gfx_target_version ")
@@ -495,7 +499,7 @@ pub enum GpuSet {
 }
 
 /// `all`, `top:N` or `ids:ROCm0,CUDA1`; unset is the fastest only.
-pub fn parse_gpu_set(v: Option<&str>) -> Result<GpuSet, String> {
+pub fn parse_gpu_set(v: Option<&str>) -> villa::Result<GpuSet> {
     let Some(v) = v.map(str::trim).filter(|v| !v.is_empty()) else {
         return Ok(GpuSet::Fastest);
     };
@@ -508,7 +512,11 @@ pub fn parse_gpu_set(v: Option<&str>) -> Result<GpuSet, String> {
             .ok()
             .filter(|n| *n > 0)
             .map(GpuSet::Count)
-            .ok_or_else(|| format!("drgnx-search-gpus: top:N needs a number over 0, not {n:?}"));
+            .ok_or_else(|| {
+                villa::Error::invalid(format!(
+                    "drgnx-search-gpus: top:N needs a number over 0, not {n:?}"
+                ))
+            });
     }
     if let Some(ids) = v.strip_prefix("ids:") {
         let ids: Vec<String> = ids
@@ -520,9 +528,9 @@ pub fn parse_gpu_set(v: Option<&str>) -> Result<GpuSet, String> {
             return Ok(GpuSet::Ids(ids));
         }
     }
-    Err(format!(
+    Err(villa::Error::invalid(format!(
         "drgnx-search-gpus: {v:?} is none of \"all\", \"top:N\", \"ids:DEVICE,DEVICE\""
-    ))
+    )))
 }
 
 /// `drgnx-search-battery-gpu`: what the engine does on battery.
@@ -537,14 +545,14 @@ pub enum BatteryGpu {
     Discrete,
 }
 
-pub fn parse_battery_gpu(v: Option<&str>) -> Result<BatteryGpu, String> {
+pub fn parse_battery_gpu(v: Option<&str>) -> villa::Result<BatteryGpu> {
     match v.map(str::trim).filter(|v| !v.is_empty()) {
         None | Some("pause") => Ok(BatteryGpu::Pause),
         Some("igpu") => Ok(BatteryGpu::Integrated),
         Some("dgpu") => Ok(BatteryGpu::Discrete),
-        Some(o) => Err(format!(
+        Some(o) => Err(villa::Error::invalid(format!(
             "drgnx-search-battery-gpu: {o:?} is none of \"pause\", \"igpu\", \"dgpu\""
-        )),
+        ))),
     }
 }
 
@@ -562,15 +570,15 @@ pub enum NoGpu {
     Pack,
 }
 
-pub fn parse_no_gpu(v: Option<&str>) -> Result<NoGpu, String> {
+pub fn parse_no_gpu(v: Option<&str>) -> villa::Result<NoGpu> {
     match v.map(str::trim).filter(|v| !v.is_empty()) {
         None => Ok(NoGpu::Ask),
         Some("cpu") => Ok(NoGpu::Cpu),
         Some("cpu-idle") => Ok(NoGpu::CpuIdle),
         Some("pack") => Ok(NoGpu::Pack),
-        Some(o) => Err(format!(
+        Some(o) => Err(villa::Error::invalid(format!(
             "drgnx-search-no-gpu: {o:?} is none of \"cpu\", \"cpu-idle\", \"pack\""
-        )),
+        ))),
     }
 }
 
@@ -843,11 +851,11 @@ impl Pin {
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let tmp = path.with_extension("json.new");
-        std::fs::write(
+        crate::fsio::write(
             &tmp,
             json!({"key": self.key, "rates": self.rates}).to_string(),
         )?;
-        std::fs::rename(tmp, path)
+        crate::fsio::rename(tmp, path)
     }
 }
 

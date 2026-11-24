@@ -12,7 +12,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// git's empty tree: what an unborn branch's files are taken against.
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -90,7 +90,7 @@ fn git<S: AsRef<std::ffi::OsStr>>(dir: &Path, args: &[S]) -> Result<Vec<u8>, Sco
         args: args.iter().map(|a| a.as_ref().to_owned()).collect(),
     };
     let (argv, env) = command(&call).map_err(|e| ScopeError::Git(format!("{e:?}")))?;
-    let out = Command::new(&program.path)
+    let out = crate::proc::Command::new(&program.path)
         .args(argv)
         .envs(env)
         .env("GIT_OPTIONAL_LOCKS", "0")

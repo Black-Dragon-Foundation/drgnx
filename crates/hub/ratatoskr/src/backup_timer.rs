@@ -74,7 +74,7 @@ static EXCISING: AtomicUsize = AtomicUsize::new(0);
 
 /// The record, as it is now.
 pub fn last() -> Last {
-    *LAST.lock().unwrap_or_else(|e| e.into_inner())
+    *saman::lock(&LAST)
 }
 
 /// The last night's copies of the edit histories: when, and whether every project's copy was good.
@@ -82,17 +82,17 @@ static HISTORY: Mutex<Option<(u64, bool)>> = Mutex::new(None);
 
 /// The edit histories were copied (or failed to be) at AT.
 pub fn record_history(at: u64, ok: bool) {
-    *HISTORY.lock().unwrap_or_else(|e| e.into_inner()) = Some((at, ok));
+    *saman::lock(&HISTORY) = Some((at, ok));
 }
 
 /// The last copy of the edit histories, as it is now.
 pub fn last_history() -> Option<(u64, bool)> {
-    *HISTORY.lock().unwrap_or_else(|e| e.into_inner())
+    *saman::lock(&HISTORY)
 }
 
 /// A copy made (or failed) at AT.
 pub fn record(at: u64, ok: bool) {
-    let mut l = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let mut l = saman::lock(&LAST);
     l.attempt = Some((at, ok));
     if ok {
         l.ok_at = Some(at);
@@ -121,9 +121,9 @@ fn newest_copy(dir: &Path) -> Option<u64> {
 static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
 pub fn seed(dir: &Path) {
-    STARTED.get_or_init(std::time::Instant::now);
+    STARTED.get_or_init(crate::clock::real_now);
     if let Some(at) = newest_copy(dir) {
-        let mut l = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        let mut l = saman::lock(&LAST);
         if l.attempt.is_none() {
             l.attempt = Some((at, true));
             l.ok_at = Some(at);
@@ -184,7 +184,7 @@ pub fn due_at(now: u64) -> bool {
 /// counts a hub settled after N seconds instead of [`SETTLE`] (a live row does not wait five minutes for its copy).
 fn up_secs() -> u64 {
     let up = STARTED
-        .get_or_init(std::time::Instant::now)
+        .get_or_init(crate::clock::real_now)
         .elapsed()
         .as_secs();
     #[cfg(feature = "test-hooks")]
@@ -243,12 +243,14 @@ mod tests {
     /// Pattern D (pure): no clock, no order; one task whose copy panics.
     #[test]
     fn a_panicking_copy_does_not_stop_the_next_nightly() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
+        let rt = saman::Executor::new(1).unwrap();
         rt.block_on(async {
             assert!(begin(), "the first nightly starts");
-            let panicked = tokio::spawn(guarded(async { panic!("the copy panicked") })).await;
+            let panicked = crate::clock::spawn_untracked(
+                module_path!(),
+                guarded(async { panic!("the copy panicked") }),
+            )
+            .await;
             assert!(panicked.is_err(), "the copy task panicked");
             assert!(begin(), "the next nightly can start after a panic");
             finish();
@@ -266,10 +268,10 @@ mod tests {
     #[test]
     fn the_newest_copy_skips_the_pre_migration_one() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("work-pre7-1.db"), b"x").unwrap();
-        std::fs::write(dir.path().join("notes.txt"), b"x").unwrap();
+        crate::fsio::write(dir.path().join("work-pre7-1.db"), b"x").unwrap();
+        crate::fsio::write(dir.path().join("notes.txt"), b"x").unwrap();
         assert_eq!(newest_copy(dir.path()), None);
-        std::fs::write(dir.path().join("work-20261023.db"), b"x").unwrap();
+        crate::fsio::write(dir.path().join("work-20261023.db"), b"x").unwrap();
         assert!(newest_copy(dir.path()).is_some());
     }
 }

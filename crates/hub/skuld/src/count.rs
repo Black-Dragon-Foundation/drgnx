@@ -181,6 +181,8 @@ impl Graph {
 
 /// The number of orders consistent with `p`, exactly up to `cap` (`cap` itself when there are more). `Err` when the
 /// edges form a cycle.
-pub fn count<E>(p: &Partial<E>, cap: u64) -> Result<u64, String> {
-    Ok(Graph::new(p)?.count(None, cap))
+pub fn count<E>(p: &Partial<E>, cap: u64) -> villa::Result<u64> {
+    Ok(Graph::new(p)
+        .map_err(villa::Error::invalid)?
+        .count(None, cap))
 }

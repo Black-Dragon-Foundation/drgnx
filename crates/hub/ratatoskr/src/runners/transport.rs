@@ -393,17 +393,11 @@ mod openssh_impl {
         }
 
         fn link(&self, name: &str) -> Option<Arc<Mutex<Link>>> {
-            self.links
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(name)
-                .cloned()
+            saman::lock(&self.links).get(name).cloned()
         }
 
         fn link_for(&self, r: &RunnerCfg) -> Arc<Mutex<Link>> {
-            self.links
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
+            saman::lock(&self.links)
                 .entry(r.name.clone())
                 .or_insert_with(|| {
                     Arc::new(Mutex::new(Link {
@@ -454,7 +448,7 @@ mod openssh_impl {
                 if let Ok(mut l) = link.try_lock()
                     && let Some(m) = l.master.take()
                 {
-                    let _ = m.owner.detach();
+                    m.owner.detach();
                 }
             }
         }
@@ -563,7 +557,8 @@ mod openssh_impl {
     impl Transport for OpensshTransport {
         fn open<'a>(&'a self, r: &'a RunnerCfg) -> BoxFuture<'a, Result<Channels, LinkError>> {
             Box::pin(async move {
-                r.check().map_err(LinkError::Refused)?;
+                r.check()
+                    .map_err(|e| LinkError::Refused(e.message().to_owned()))?;
                 let link = self.link_for(r);
                 let mut l = link.lock().await;
                 let mut permits =
@@ -643,11 +638,7 @@ mod openssh_impl {
 
         fn stop<'a>(&'a self, r: &'a str) -> BoxFuture<'a, ()> {
             Box::pin(async move {
-                let link = self
-                    .links
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .remove(r);
+                let link = saman::lock(&self.links).remove(r);
                 let master = match link {
                     Some(link) => link.lock().await.master.take(),
                     None => None,
@@ -667,13 +658,13 @@ mod openssh_impl {
                 "the host {host:?} reads as an option"
             )));
         }
-        let out = tokio::process::Command::new("ssh")
+        let out = crate::proc::Command::new("ssh")
             .arg("-G")
             .arg("-F")
             .arg(config)
             .arg(host)
             .stdin(std::process::Stdio::null())
-            .output()
+            .output_async()
             .await
             .map_err(|e| LinkError::Refused(format!("ssh -G: {e}")))?;
         if !out.status.success() {

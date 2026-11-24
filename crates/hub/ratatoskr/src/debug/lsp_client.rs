@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
@@ -170,7 +170,7 @@ pub struct Client {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(m)
 }
 
 impl Client {
@@ -205,9 +205,9 @@ impl Client {
                     Err(f) => break f,
                 }
             };
-            let _ = closed_tx.send(Some(end.clone()));
+            crate::soft::done(closed_tx.send(Some(end.clone())), "closed_tx send");
             for (_, tx) in lock(&pending).drain() {
-                let _ = tx.send(Err(end.clone()));
+                crate::soft::done(tx.send(Err(end.clone())), "tx send");
             }
         });
         client
@@ -235,15 +235,17 @@ impl Client {
                         }),
                         None => Ok(msg.get("result").cloned().unwrap_or(Value::Null)),
                     };
-                    let _ = tx.send(r);
+                    crate::soft::done(tx.send(r), "tx send");
                 }
             }
             // a request of the server's (`workspace/configuration`, `client/registerCapability`, progress): answered null,
             // so it never waits on us
             (Some(id), Some(_)) => {
-                let _ = self
-                    .send(&json!({"jsonrpc": "2.0", "id": id, "result": Value::Null}))
-                    .await;
+                crate::soft::done(
+                    self.send(&json!({"jsonrpc": "2.0", "id": id, "result": Value::Null}))
+                        .await,
+                    "self send",
+                );
             }
             // a notification
             (None, Some(method)) => {
@@ -259,7 +261,7 @@ impl Client {
                         }
                         if matches!(t, Some("ServiceReady" | "Started")) {
                             lock(&self.side).ready = true;
-                            let _ = ready.send(true);
+                            crate::soft::done(ready.send(true), "ready send");
                         }
                     }
                     "window/logMessage" | "window/showMessage" => {

@@ -158,8 +158,11 @@ fn half_a_million_styled_lines_cost_only_the_rows_shown() {
     // built on a thread that is waited for with a deadline: a build that walks every line fails the test instead of hanging it
     let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
     let s2 = slot.clone();
-    std::thread::spawn(move || *s2.lock().unwrap() = Some(build("c", &run, 1)));
-    let t = skuld::wait_until("the tail", 20, || slot.lock().unwrap().take());
+    saman::spawn_thread("ratatoskr:tests", move || {
+        *saman::lock(&s2) = Some(build("c", &run, 1))
+    })
+    .unwrap();
+    let t = skuld::wait_until("the tail", 20, || saman::lock(&slot).take());
     assert_eq!(t.more_lines, 400_001 - MAX_ROWS);
     assert!(
         t.text

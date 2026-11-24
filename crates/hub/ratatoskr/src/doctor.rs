@@ -246,6 +246,7 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
                 &crate::exec::container::podman_env(&crate::shell_env::ShellEnv::default()),
                 std::time::Duration::from_secs(10),
             )
+            .map_err(|e| e.to_string())
         })
     ));
     let values =
@@ -279,7 +280,7 @@ pub fn container_net_verdict(
         Some(Err(e)) => e,
         Some(Ok(i)) => match sleipnir::linux::netcheck::net_ready(&i) {
             Ok(()) => "ok (rootless podman 5.0 or newer)".into(),
-            Err(e) => e,
+            Err(e) => e.to_string(),
         },
     }
 }
@@ -532,7 +533,11 @@ fn store_files(env: &Env, v: &mut Value, now: u64) {
     v["store"]["history_size"] = json!(history_rows(env, &mut history_warnings));
     v["store"]["history_warnings"] = json!(history_warnings);
     // the personal-notes opt-in file, as it loads now
-    if let Some(home) = env.vars.get("HOME").filter(|h| Path::new(h).is_absolute()) {
+    if let Some(home) = env
+        .vars
+        .get(stig::HOME_VAR)
+        .filter(|h| Path::new(h).is_absolute())
+    {
         let deny = norn::deny::DenyList::load(Path::new(home), &paths::config_dir(env));
         v["store"]["deny_list"] = json!({
             "opted_in": deny.opt_ins().len(),
@@ -658,9 +663,9 @@ pub fn status(env: &Env, json_out: bool) -> i32 {
     let socket = paths::socket_path(env);
     if let Some(why) = client::refused(&socket) {
         if json_out {
-            println!("{}", json!({"running": false, "error": why}));
+            crate::soft::out_line(&(json!({"running": false, "error": why})).to_string());
         }
-        eprintln!("ratatoskr status: {why}");
+        crate::soft::err_line(&format!("ratatoskr status: {why}"));
         return 1;
     }
     let asked = Client::user(env, ASK).and_then(|mut c| c.call("status", json!({}), ASK));
@@ -668,9 +673,9 @@ pub fn status(env: &Env, json_out: bool) -> i32 {
         Ok(mut v) => {
             if json_out {
                 v["running"] = json!(true);
-                println!("{v}");
+                crate::soft::out_line(&v.to_string());
             } else {
-                println!("{}", summary(&v));
+                crate::soft::out_line(&(summary(&v)).to_string());
             }
             0
         }
@@ -678,17 +683,19 @@ pub fn status(env: &Env, json_out: bool) -> i32 {
             // a hub answers but would not tell: say so rather than "not running"
             Some(pid) => {
                 if json_out {
-                    println!("{}", json!({"running": true, "pid": pid, "error": e}));
+                    crate::soft::out_line(
+                        &(json!({"running": true, "pid": pid, "error": e.message()})).to_string(),
+                    );
                 } else {
-                    println!("running (pid {pid}), but status failed: {e}");
+                    crate::soft::out_line(&format!("running (pid {pid}), but status failed: {e}"));
                 }
                 1
             }
             None => {
                 if json_out {
-                    println!("{}", json!({"running": false}));
+                    crate::soft::out_line(&(json!({"running": false})).to_string());
                 } else {
-                    println!("not running");
+                    crate::soft::out_line("not running");
                 }
                 1
             }
@@ -731,9 +738,12 @@ struct BoundedCheck {
 fn bounded(limit: Duration, f: impl FnOnce() -> Check + Send + 'static) -> BoundedCheck {
     let (tx, rx) = std::sync::mpsc::channel();
     let started = crate::clock::real_now();
-    std::thread::spawn(move || {
-        let _ = tx.send(f());
-    });
+    crate::soft::done(
+        saman::spawn_thread("ratatoskr:doctor", move || {
+            crate::soft::done(tx.send(f()), "tx send");
+        }),
+        "thread",
+    );
     BoundedCheck { rx, started, limit }
 }
 
@@ -789,9 +799,9 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
     let sandbox = check.wait();
     let v = report(env, &binary, running, &sandbox);
     if json_out {
-        println!("{v}");
+        crate::soft::out_line(&v.to_string());
     } else {
-        println!("{}", text(&v, &sandbox));
+        crate::soft::out_line(&(text(&v, &sandbox)).to_string());
     }
     0
 }
@@ -992,11 +1002,11 @@ fn keys_refused_line(gateway: &Value) -> String {
 pub fn restart(env: &Env) -> i32 {
     match Client::user(env, ASK).and_then(|mut c| c.call("restart", json!({}), ASK)) {
         Ok(_) => {
-            println!("restarting");
+            crate::soft::out_line("restarting");
             0
         }
         Err(e) => {
-            eprintln!("ratatoskr restart: {e}");
+            crate::soft::err_line(&format!("ratatoskr restart: {e}"));
             1
         }
     }
@@ -1013,7 +1023,7 @@ mod tests {
     fn a_slow_check_is_a_failed_one_at_the_bound() {
         let (release, held) = std::sync::mpsc::channel::<()>();
         let slow = bounded(Duration::from_millis(20), move || {
-            let _ = held.recv();
+            crate::soft::done(held.recv(), "doctor");
             Check::failed("late".into(), None)
         })
         .wait();
@@ -1053,10 +1063,10 @@ mod tests {
         let p = |s: &str| dir.path().join(s).to_string_lossy().into_owned();
         let env = Env::new(
             &[
-                ("XDG_RUNTIME_DIR", &p("r")),
+                (stig::SYSTEM_RUNTIME_VAR, &p("r")),
                 ("DRGNX_DATA_DIR", &p("d")),
-                ("XDG_STATE_HOME", &p("s")),
-                ("HOME", &p("h")),
+                (stig::Xdg::State.var(), &p("s")),
+                (stig::HOME_VAR, &p("h")),
             ],
             uid,
         );
@@ -1143,15 +1153,15 @@ mod tests {
         let state = dir.path().join("s");
         let env = Env::new(
             &[
-                ("XDG_STATE_HOME", &state.to_string_lossy()),
-                ("HOME", &dir.path().to_string_lossy()),
+                (stig::Xdg::State.var(), &state.to_string_lossy()),
+                (stig::HOME_VAR, &dir.path().to_string_lossy()),
             ],
             1000,
         );
         for (p, size) in [("p1", 1_900_000_000u64), ("p2", 5_000)] {
             let d = paths::state_dir(&env).join("hub/history").join(p);
             std::fs::create_dir_all(&d).unwrap();
-            std::fs::write(
+            crate::fsio::write(
                 d.join("size-report.json"),
                 json!({"size": size, "cap": 2u64 << 30, "pins": [
                     {"kind": "frozen", "name": "wt-x", "bytes": 1_500_000_000u64},
@@ -1198,22 +1208,24 @@ mod tests {
         std::fs::create_dir_all(data.join("backup")).unwrap();
         std::fs::create_dir_all(home.join("org")).unwrap();
         std::fs::create_dir_all(&config).unwrap();
-        std::fs::write(data.join("work.db"), b"x").unwrap();
-        let wal = std::fs::File::create(data.join("work.db-wal")).unwrap();
+        crate::fsio::write(data.join("work.db"), b"x").unwrap();
+        let wal = eitri::create_exclusive(&data.join("work.db-wal"), 0o666)
+            .map_err(std::io::Error::from)
+            .unwrap();
         wal.set_len(WAL_WARN + (1 << 20)).unwrap();
-        std::fs::write(data.join("work.db.schema5"), b"x").unwrap();
-        std::fs::write(data.join("backup/work-pre7-1.db"), b"x").unwrap();
-        std::fs::write(data.join("backup/work-20200101.db"), b"x").unwrap();
+        crate::fsio::write(data.join("work.db.schema5"), b"x").unwrap();
+        crate::fsio::write(data.join("backup/work-pre7-1.db"), b"x").unwrap();
+        crate::fsio::write(data.join("backup/work-20200101.db"), b"x").unwrap();
         // an opt-in file anyone can write is refused with a warning
         let allow = config.join("personal-notes-allow.json");
-        std::fs::write(&allow, "[]").unwrap();
+        crate::fsio::write(&allow, "[]").unwrap();
         std::fs::set_permissions(&allow, std::fs::Permissions::from_mode(0o666)).unwrap();
         let path = |p: &Path| p.to_string_lossy().into_owned();
         let env = Env::new(
             &[
                 ("DRGNX_DATA_DIR", &path(&data)),
                 ("DRGNX_CONFIG_DIR", &path(&config)),
-                ("HOME", &path(&home)),
+                (stig::HOME_VAR, &path(&home)),
             ],
             1000,
         );
@@ -1245,8 +1257,8 @@ mod tests {
     fn a_missing_socket_dir_is_fine_until_the_first_start() {
         let env = Env::new(
             &[
-                ("XDG_STATE_HOME", "/nonexistent/s"),
-                ("HOME", "/nonexistent/h"),
+                (stig::Xdg::State.var(), "/nonexistent/s"),
+                (stig::HOME_VAR, "/nonexistent/h"),
             ],
             1000,
         );
@@ -1293,7 +1305,7 @@ mod tests {
     }
 
     fn report_of(c: &Check) -> Value {
-        let env = Env::new(&[("HOME", "/nonexistent/h")], 1000);
+        let env = Env::new(&[(stig::HOME_VAR, "/nonexistent/h")], 1000);
         report(&env, Path::new("/b"), None, c)
     }
 
@@ -1481,8 +1493,8 @@ mod tests {
     fn a_hub_that_refuses_keys_says_so() {
         let env = Env::new(
             &[
-                ("XDG_STATE_HOME", "/nonexistent/s"),
-                ("HOME", "/nonexistent/h"),
+                (stig::Xdg::State.var(), "/nonexistent/s"),
+                (stig::HOME_VAR, "/nonexistent/h"),
             ],
             1000,
         );

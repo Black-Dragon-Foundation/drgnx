@@ -741,7 +741,7 @@ fn open_pages_are_bounded_and_closed_pages_let_their_elements_go() {
     let mut t = Tree::default();
     let mut o = Opened::default();
     let page = |i: usize| format!("v:s1:Locals/arr/[0..99999]/[{}..{}]", i * 100, i * 100 + 99);
-    let el = |i: usize| vec![Var::of(&v(&format!("{i}"), "1", 0))];
+    let el = |i: usize| vec![Var::of(&v(&i.to_string(), "1", 0))];
     for i in 0..PAGE_CAP {
         assert!(o.set(&page(i), true).is_empty());
         t.kids.insert(page(i), el(i));
@@ -770,7 +770,7 @@ fn open_pages_are_bounded_and_closed_pages_let_their_elements_go() {
 #[test]
 fn a_subtree_spliced_is_what_the_whole_walk_draws() {
     let mut locals: Vec<Value> = (0..5)
-        .map(|i| v(&format!("v{i}"), &format!("{i}"), 0))
+        .map(|i| v(&format!("v{i}"), &i.to_string(), 0))
         .collect();
     locals.push(v("obj", "Obj", 3));
     locals.push(
@@ -786,7 +786,7 @@ fn a_subtree_spliced_is_what_the_whole_walk_draws() {
     s.tree.kids.insert(
         page.into(),
         (300..400)
-            .map(|i| Var::of(&v(&format!("{i}"), &format!("{}", i * 3), 0)))
+            .map(|i| Var::of(&v(&i.to_string(), &(i * 3).to_string(), 0)))
             .collect(),
     );
     let sessions = [s];

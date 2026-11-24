@@ -65,21 +65,21 @@ fn setup(what: &str, e: io::Error) -> Refusal {
     }
 }
 
-/// The test hooks, into the inner spec. Without the feature there is nothing to set.
+/// The test hooks, into the inner spec.
+#[cfg(feature = "test-hooks")]
 fn apply(inner: &mut InnerSpec, hooks: Hooks) {
-    #[cfg(feature = "test-hooks")]
+    inner.landlock_omit = hooks.landlock_omit;
+    inner.abi_cap = hooks.abi_cap;
+    if let Some(b) = inner.browser.as_mut()
+        && !hooks.browser_argv.is_empty()
     {
-        inner.landlock_omit = hooks.landlock_omit;
-        inner.abi_cap = hooks.abi_cap;
-        if let Some(b) = inner.browser.as_mut()
-            && !hooks.browser_argv.is_empty()
-        {
-            b.argv = hooks.browser_argv;
-        }
+        b.argv = hooks.browser_argv;
     }
-    #[cfg(not(feature = "test-hooks"))]
-    let _ = (inner, hooks);
 }
+
+/// Without the feature there is nothing to set.
+#[cfg(not(feature = "test-hooks"))]
+fn apply(_inner: &mut InnerSpec, _hooks: Hooks) {}
 
 /// The full tier: every source opened without links (`bwrap::open_sources`), the inner spec (Landlock for the
 /// inside paths, the relay and the browser host run as [`HELPER_INSIDE`]) on a sealed memfd at fd 3, the status

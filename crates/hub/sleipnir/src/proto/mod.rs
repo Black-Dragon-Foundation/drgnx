@@ -432,11 +432,11 @@ mod tests {
         /// [D] Whatever bytes arrive, the reader returns frames or an error, and never panics.
         #[test]
         fn codec_never_panics_on_any_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
-            let _ = read_all(&bytes);
+            drop(read_all(&bytes));
             // and the same bytes after a valid frame
             let mut s = wire(&[Frame::Ping { at: 1 }]);
             s.extend_from_slice(&bytes);
-            let _ = read_all(&s);
+            drop(read_all(&s));
         }
     }
 }

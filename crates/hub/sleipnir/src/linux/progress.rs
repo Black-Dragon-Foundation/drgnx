@@ -220,7 +220,7 @@ pub fn stuck_report(dir: &Path, stop: &Stop, slice: Option<&Path>, log: &Path) -
     // /proc counts in USER_HZ, 100 on every Linux the runner supports
     let tick = 100.0;
     for pid in &procs {
-        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let stat = crate::fsio::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
         // `pid (comm) state …`, comm may hold spaces: the fields after its closing parenthesis
         let (name, rest) = match (stat.find('('), stat.rfind(')')) {
             (Some(a), Some(b)) if a < b => (&stat[a + 1..b], &stat[b + 1..]),
@@ -256,16 +256,14 @@ pub fn stuck_report(dir: &Path, stop: &Stop, slice: Option<&Path>, log: &Path) -
     }
     t.push_str("\n== memory.events\n");
     if let Some(s) = slice {
-        t.push_str(&fs::read_to_string(s.join("memory.events")).unwrap_or_default());
+        t.push_str(&crate::fsio::read_to_string(s.join("memory.events")).unwrap_or_default());
     }
-    let tmp = dir.join(format!(".{STUCK}.tmp"));
-    fs::write(&tmp, t)?;
-    fs::rename(&tmp, dir.join(STUCK))
+    crate::fsio::write(dir.join(STUCK), t)
 }
 
 /// The pids under cgroup DIR, and the containers (podman's `libpod-<id>.scope`).
 fn walk(dir: &Path, procs: &mut Vec<u32>, containers: &mut Vec<String>) {
-    if let Ok(t) = fs::read_to_string(dir.join("cgroup.procs")) {
+    if let Ok(t) = crate::fsio::read_to_string(dir.join("cgroup.procs")) {
         procs.extend(t.lines().filter_map(|l| l.trim().parse::<u32>().ok()));
     }
     let Ok(entries) = fs::read_dir(dir) else {
@@ -513,11 +511,11 @@ mod tests {
                 "8:0 rbytes=10 wbytes=20 rios=1 wios=1 dbytes=0 dios=0\n",
             ),
         ] {
-            std::fs::write(slice.join(f), s).unwrap();
+            crate::fsio::write(slice.join(f), s).unwrap();
         }
         let (a, b) = (d.path().join("a.log"), d.path().join("b.log"));
-        std::fs::write(&a, "12345").unwrap();
-        std::fs::write(&b, "678").unwrap();
+        crate::fsio::write(&a, "12345").unwrap();
+        crate::fsio::write(&b, "678").unwrap();
         let prev = Reading {
             at: Duration::from_secs(60),
             cpu_usec: 1,
@@ -556,21 +554,21 @@ mod tests {
         let slice = d.path().join("slice");
         let svc = slice.join("job.service");
         std::fs::create_dir_all(&svc).unwrap();
-        std::fs::write(
+        crate::fsio::write(
             svc.join("cgroup.procs"),
             format!("{}\n", std::process::id()),
         )
         .unwrap();
-        std::fs::write(slice.join("memory.events"), "oom 0\noom_kill 0\n").unwrap();
+        crate::fsio::write(slice.join("memory.events"), "oom 0\noom_kill 0\n").unwrap();
         let log = d.path().join("job.log");
         let lines: String = (1..=100).map(|i| format!("line {i}\n")).collect();
-        std::fs::write(&log, lines).unwrap();
+        crate::fsio::write(&log, lines).unwrap();
         let stop = Stop {
             rule: Rule::Stall,
             minutes: 20,
         };
         stuck_report(d.path(), &stop, Some(&slice), &log).unwrap();
-        let t = std::fs::read_to_string(d.path().join(STUCK)).unwrap();
+        let t = crate::fsio::read_to_string(d.path().join(STUCK)).unwrap();
         assert!(
             t.starts_with("stuck (stall): no progress for 20 min\n"),
             "{t}"

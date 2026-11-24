@@ -217,56 +217,31 @@ pub use cli::{GitCli, ignored_dirs, is_ignored_dir};
 #[cfg(feature = "host")]
 pub(crate) mod cli {
     use super::Git;
-    use std::io::{self, Write};
+    use crate::proc;
+    use std::io;
     use std::path::Path;
-    use std::process::{Command, Stdio};
 
     /// The `git` executable.
     pub struct GitCli;
 
+    fn failed(args: &[&str], out: &draugr::Output) -> io::Error {
+        io::Error::other(format!("git {}: {}", args.join(" "), out.stderr.trim()))
+    }
+
     /// `git` with no input whose exit 1 means "no answer" (`symbolic-ref -q`, `rev-parse -q --verify`, `config`).
     pub(crate) fn try_run(root: &Path, args: &[&str]) -> io::Result<Option<Vec<u8>>> {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(args)
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .stdin(Stdio::null())
-            .output()?;
+        let out = proc::git(root, args, Vec::new())?;
         match out.status.code() {
             Some(0) => Ok(Some(out.stdout)),
             Some(1) => Ok(None),
-            _ => Err(io::Error::other(format!(
-                "git {}: {}",
-                args.join(" "),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ))),
+            _ => Err(failed(args, &out)),
         }
     }
 
     pub(crate) fn run(root: &Path, args: &[&str], input: Vec<u8>) -> io::Result<Vec<u8>> {
-        let mut child = Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(args)
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let mut stdin = child.stdin.take().expect("piped");
-        // Written from a thread: git answers while it reads, and both pipes are finite.
-        let writer = std::thread::spawn(move || {
-            let _ = stdin.write_all(&input);
-        });
-        let out = child.wait_with_output()?;
-        let _ = writer.join();
+        let out = proc::git(root, args, input)?;
         if !out.status.success() {
-            return Err(io::Error::other(format!(
-                "git {}: {}",
-                args.join(" "),
-                String::from_utf8_lossy(&out.stderr).trim()
-            )));
+            return Err(failed(args, &out));
         }
         Ok(out.stdout)
     }
@@ -295,16 +270,8 @@ pub(crate) mod cli {
     pub fn is_ignored_dir(root: &Path, rel: &Path) -> bool {
         let mut dir = rel.to_string_lossy().into_owned();
         dir.push('/');
-        Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(["check-ignore", "-q", "--", &dir])
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
+        proc::git(root, &["check-ignore", "-q", "--", &dir], Vec::new())
+            .is_ok_and(|o| o.status.success())
     }
 
     pub(crate) fn nul_list(bytes: &[u8]) -> Vec<String> {
@@ -781,7 +748,7 @@ pub(crate) fn read_repo_fd(root_fd: &eitri::Pinned) -> io::Result<RuleSet> {
         return Err(bad("it is empty".into()));
     }
     let text = String::from_utf8(bytes).map_err(|_| bad("it is not UTF-8".into()))?;
-    crate::rules::parse_toml(&text).map_err(bad)
+    crate::rules::parse_toml(&text).map_err(|e| bad(e.to_string()))
 }
 
 /// [`read_repo_fd`] for the checkout at ROOT.
@@ -926,7 +893,7 @@ pub fn list_with(
     allow: &dyn Fn(&str) -> bool,
     snap: &mut Snapshot,
 ) -> io::Result<Vec<Listed>> {
-    let began = std::time::SystemTime::now()
+    let began = stund::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .saturating_sub(RACY)

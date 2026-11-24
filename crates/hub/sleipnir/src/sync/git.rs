@@ -12,10 +12,9 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use super::{Result, SyncError};
 
@@ -72,31 +71,43 @@ impl Git {
         })
     }
 
-    /// A git command with `args`, hardened as the module says. Its stdin is null unless the caller sets it.
-    pub fn cmd<I, S>(&self, args: I) -> Command
+    /// A git command with `args`, hardened as the module says: the runner's tool environment (no `GIT_*` variable of its
+    /// own comes through) and the variables below. Its stdin is null unless the caller gives it input ([`spawn`]).
+    pub fn cmd<I, S>(&self, args: I) -> draugr::Spec
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut c = Command::new("git");
-        for (name, _) in std::env::vars_os() {
-            if name.as_bytes().starts_with(b"GIT_") {
-                c.env_remove(&name);
-            }
-        }
-        c.env("GIT_DIR", &self.git_dir)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .args(HARDENING);
+        let mut a: Vec<OsString> = HARDENING.iter().map(OsString::from).collect();
         if let Some(w) = &self.work_tree {
-            let mut a = OsString::from("--work-tree=");
-            a.push(w);
-            c.arg(a);
+            let mut o = OsString::from("--work-tree=");
+            o.push(w);
+            a.push(o);
         }
-        c.args(args).stdin(Stdio::null());
-        c
+        a.extend(args.into_iter().map(|s| s.as_ref().to_os_string()));
+        draugr::Spec {
+            program: "git".into(),
+            args: a,
+            env: crate::tool::tool_env_os(&[
+                ("GIT_DIR", self.git_dir.as_os_str()),
+                ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+                ("GIT_CONFIG_GLOBAL", OsStr::new("/dev/null")),
+                ("GIT_TERMINAL_PROMPT", OsStr::new("0")),
+            ]),
+            cwd: None,
+            stdin_null: true,
+            pass_fds: vec![],
+            new_session: false,
+        }
     }
+}
+
+/// `spec` with the variable KEY set to VALUE (replacing one of that name).
+pub(crate) fn set_env(spec: &mut draugr::Spec, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) {
+    let key = key.as_ref();
+    spec.env.retain(|(k, _)| k != key);
+    spec.env
+        .push((key.to_os_string(), value.as_ref().to_os_string()));
 }
 
 /// What a finished git command left: its exit code, stdout and stderr.
@@ -117,30 +128,23 @@ impl Ran {
     }
 }
 
-/// Runs `cmd`, feeding it `input` on stdin from another thread (so a full stdout pipe never blocks the feed).
-pub(crate) fn spawn(mut cmd: Command, input: Option<&[u8]>) -> io::Result<Ran> {
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    if input.is_some() {
-        cmd.stdin(Stdio::piped());
-    }
-    let mut child = cmd.spawn()?;
-    let stdin = child.stdin.take();
-    let out = std::thread::scope(|s| {
-        if let (Some(data), Some(mut pipe)) = (input, stdin) {
-            // a git that exits early closes the pipe; its exit code says why
-            s.spawn(move || pipe.write_all(data));
-        }
-        child.wait_with_output()
-    })?;
+/// How long one git command may run (a fetch of a big origin over a slow link is the longest) before its group is killed.
+const GIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Runs `cmd`, feeding it `input` on stdin (the feed and the reads run together, so a full stdout pipe never blocks it).
+pub(crate) fn spawn(mut cmd: draugr::Spec, input: Option<&[u8]>) -> io::Result<Ran> {
+    cmd.stdin_null = input.is_none();
+    // a git that exits early closes the pipe; its exit code says why
+    let out = draugr::run_with_input(cmd, input.unwrap_or_default().to_vec(), GIT_LIMIT)?;
     Ok(Ran {
         code: out.status.code(),
         stdout: out.stdout,
-        stderr: out.stderr,
+        stderr: out.stderr.into_bytes(),
     })
 }
 
 /// Runs `cmd` and returns its stdout, or the failure when it exits non-zero.
-pub(crate) fn run(what: &'static str, cmd: Command, input: Option<&[u8]>) -> Result<Vec<u8>> {
+pub(crate) fn run(what: &'static str, cmd: draugr::Spec, input: Option<&[u8]>) -> Result<Vec<u8>> {
     let ran = spawn(cmd, input)?;
     if ran.code == Some(0) {
         Ok(ran.stdout)

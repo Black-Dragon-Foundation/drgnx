@@ -247,7 +247,7 @@ fn name(rule: Rule) -> String {
 impl Supervisor {
     /// The rules of FOUND (for session SID) that did not hold at the last look; the others are remembered.
     fn fresh(&self, sid: &str, found: Vec<(Rule, String)>) -> Vec<(Rule, String)> {
-        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held = saman::lock(&self.held);
         held.retain(|(s, r)| s != sid || found.iter().any(|(f, _)| &name(*f) == r));
         found
             .into_iter()
@@ -257,7 +257,7 @@ impl Supervisor {
 
     /// Sessions the hub no longer holds are forgotten.
     fn only(&self, sids: &HashSet<&str>) {
-        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held = saman::lock(&self.held);
         held.retain(|(s, _)| sids.contains(s.as_str()));
     }
 
@@ -341,7 +341,7 @@ async fn facts_of(f: &Front, o: &Obs, t: &Thresholds) -> Facts {
 async fn changed_lines(cwd: &std::path::Path) -> Option<u64> {
     let cwd = cwd.to_path_buf();
     crate::clock::blocking(move || {
-        let out = std::process::Command::new("git")
+        let out = crate::proc::Command::new("git")
             .args(["diff", "--numstat", "HEAD"])
             .current_dir(cwd)
             .output()
@@ -384,10 +384,12 @@ async fn act(f: &Front, o: &Obs, rule: Rule, text: &str) {
         };
         text = format!("{text}; {said}");
     } else {
-        let _ = f
-            .core
-            .agents
-            .cancel_after_tool(&o.sid, HoldSource::Supervisor);
+        crate::soft::done(
+            f.core
+                .agents
+                .cancel_after_tool(&o.sid, HoldSource::Supervisor),
+            "supervisor",
+        );
     }
     let text = text.as_str();
     if rule == Rule::Silent {

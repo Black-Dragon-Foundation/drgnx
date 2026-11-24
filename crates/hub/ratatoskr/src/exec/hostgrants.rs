@@ -11,6 +11,7 @@
 //!
 //! [`Core`] is the pure part (events in, effects out); [`start`] runs it against the store.
 
+use crate::clock::Spawned;
 use crate::coord::Writer;
 use crate::matrix_gate::{ActionCtx, Gate, MatrixGate};
 use crate::settings::Settings;
@@ -24,7 +25,6 @@ use serde_json::json;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
-use tokio::task::JoinHandle;
 
 /// What the loop hears.
 #[derive(Debug, Clone, PartialEq)]
@@ -128,10 +128,12 @@ pub(crate) async fn start(
     sid: &str,
     web: Arc<WebState>,
     mut events: mpsc::Receiver<ProxyEvent>,
-) -> (JoinHandle<()>, watch::Receiver<u64>) {
+) -> (Spawned<()>, watch::Receiver<u64>) {
     let (steps_tx, steps) = watch::channel(0);
     let Some((who, mut ctx)) = (hub.session)(sid) else {
-        let task = tokio::spawn(async move { while events.recv().await.is_some() {} });
+        let task = crate::clock::spawn_untracked(module_path!(), async move {
+            while events.recv().await.is_some() {}
+        });
         return (task, steps);
     };
     ctx.session = Some(sid.to_string());

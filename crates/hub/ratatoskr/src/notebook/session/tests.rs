@@ -63,71 +63,75 @@ async fn recv_decoded(sock: &mut RouterSocket, key: &Key) -> (Vec<u8>, Message) 
     (identity, wire::decode(key, &f).unwrap())
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_shell_request_reaches_the_kernel_signed_and_its_reply_comes_back() {
-    let mut p = peer().await;
-    let mut s = Session::connect(&p.conn, "ident-1", Limits::default())
-        .await
-        .unwrap();
-    let req = Message::request("sess", "kernel_info_request", json!({}));
-    s.send(Channel::Shell, &req).unwrap();
-    let (id, got) = recv_decoded(&mut p.shell, &p.conn.key).await;
-    assert_eq!(id, b"ident-1");
-    assert_eq!(got.header.msg_type, "kernel_info_request");
-    assert_eq!(got.header.msg_id, req.header.msg_id);
-    let mut rep = reply(&got.header, "kernel_info_reply", json!({"status": "ok"}));
-    rep.idents = vec![id];
-    p.shell.send(zmq(&p.conn.key, &rep)).await.unwrap();
-    let Some(Event::Message {
-        channel,
-        message,
-        bytes,
-    }) = s.next().await
-    else {
-        panic!("no message")
-    };
-    assert_eq!(channel, Channel::Shell);
-    assert_eq!(message.header.msg_type, "kernel_info_reply");
-    assert_eq!(message.parent["msg_id"], req.header.msg_id);
-    assert!(bytes > 0);
+#[test]
+fn a_shell_request_reaches_the_kernel_signed_and_its_reply_comes_back() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let mut p = peer().await;
+        let mut s = Session::connect(&p.conn, "ident-1", Limits::default())
+            .await
+            .unwrap();
+        let req = Message::request("sess", "kernel_info_request", json!({}));
+        s.send(Channel::Shell, &req).unwrap();
+        let (id, got) = recv_decoded(&mut p.shell, &p.conn.key).await;
+        assert_eq!(id, b"ident-1");
+        assert_eq!(got.header.msg_type, "kernel_info_request");
+        assert_eq!(got.header.msg_id, req.header.msg_id);
+        let mut rep = reply(&got.header, "kernel_info_reply", json!({"status": "ok"}));
+        rep.idents = vec![id];
+        p.shell.send(zmq(&p.conn.key, &rep)).await.unwrap();
+        let Some(Event::Message {
+            channel,
+            message,
+            bytes,
+        }) = s.next().await
+        else {
+            panic!("no message")
+        };
+        assert_eq!(channel, Channel::Shell);
+        assert_eq!(message.header.msg_type, "kernel_info_reply");
+        assert_eq!(message.parent["msg_id"], req.header.msg_id);
+        assert!(bytes > 0);
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn stdin_and_shell_share_one_routing_identity_and_control_is_its_own() {
-    let mut p = peer().await;
-    let s = Session::connect(&p.conn, "ident-2", Limits::default())
-        .await
+#[test]
+fn stdin_and_shell_share_one_routing_identity_and_control_is_its_own() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let mut p = peer().await;
+        let s = Session::connect(&p.conn, "ident-2", Limits::default())
+            .await
+            .unwrap();
+        s.send(
+            Channel::Shell,
+            &Message::request("sess", "execute_request", json!({})),
+        )
         .unwrap();
-    s.send(
-        Channel::Shell,
-        &Message::request("sess", "execute_request", json!({})),
-    )
-    .unwrap();
-    s.send(
-        Channel::Stdin,
-        &Message::request("sess", "input_reply", json!({"value": "x"})),
-    )
-    .unwrap();
-    s.send(
-        Channel::Control,
-        &Message::request("sess", "interrupt_request", json!({})),
-    )
-    .unwrap();
-    let (shell_id, _) = recv_decoded(&mut p.shell, &p.conn.key).await;
-    let (stdin_id, m) = recv_decoded(&mut p.stdin, &p.conn.key).await;
-    assert_eq!(shell_id, b"ident-2");
-    assert_eq!(
-        stdin_id, shell_id,
-        "the kernel finds the stdin peer by the shell's identity"
-    );
-    assert_eq!(m.content["value"], "x");
-    let (control_id, m) = recv_decoded(&mut p.control, &p.conn.key).await;
-    assert_ne!(control_id, shell_id);
-    assert_eq!(m.header.msg_type, "interrupt_request");
-    assert!(
-        s.send(Channel::Iopub, &Message::request("s", "x", json!({})))
-            .is_err()
-    );
+        s.send(
+            Channel::Stdin,
+            &Message::request("sess", "input_reply", json!({"value": "x"})),
+        )
+        .unwrap();
+        s.send(
+            Channel::Control,
+            &Message::request("sess", "interrupt_request", json!({})),
+        )
+        .unwrap();
+        let (shell_id, _) = recv_decoded(&mut p.shell, &p.conn.key).await;
+        let (stdin_id, m) = recv_decoded(&mut p.stdin, &p.conn.key).await;
+        assert_eq!(shell_id, b"ident-2");
+        assert_eq!(
+            stdin_id, shell_id,
+            "the kernel finds the stdin peer by the shell's identity"
+        );
+        assert_eq!(m.content["value"], "x");
+        let (control_id, m) = recv_decoded(&mut p.control, &p.conn.key).await;
+        assert_ne!(control_id, shell_id);
+        assert_eq!(m.header.msg_type, "interrupt_request");
+        assert!(
+            s.send(Channel::Iopub, &Message::request("s", "x", json!({})))
+                .is_err()
+        );
+    })
 }
 
 /// Publish until the subscription has taken hold (a PUB drops what it sends before the SUB's subscription arrives): the
@@ -147,157 +151,166 @@ async fn until_iopub(
     .await
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn iopub_messages_arrive_and_one_that_does_not_verify_is_dropped_and_counted() {
-    let p = peer().await;
-    let s = Session::connect(&p.conn, "ident-3", Limits::default())
-        .await
-        .unwrap();
-    let (good_key, other) = (p.conn.key.clone(), Key::generate().unwrap());
-    let (p, s) = (Mutex::new(p), Mutex::new(s));
-    let msgs = || {
+#[test]
+fn iopub_messages_arrive_and_one_that_does_not_verify_is_dropped_and_counted() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let p = peer().await;
+        let s = Session::connect(&p.conn, "ident-3", Limits::default())
+            .await
+            .unwrap();
+        let (good_key, other) = (p.conn.key.clone(), Key::generate().unwrap());
+        let (p, s) = (Mutex::new(p), Mutex::new(s));
+        let msgs = || {
+            let st = Message::request("kernel", "status", json!({"execution_state": "idle"}));
+            vec![zmq(&other, &st), zmq(&good_key, &st)]
+        };
+        let Event::Message {
+            channel, message, ..
+        } = until_iopub(&p, &s, msgs).await
+        else {
+            panic!("not a message")
+        };
+        assert_eq!(channel, Channel::Iopub);
+        assert_eq!(message.content["execution_state"], "idle");
+        // the round whose good one arrived may have lost its badly signed one: the subscription took hold between the
+        // two. It holds now, so one more badly signed message reaches the reader, which counts it.
         let st = Message::request("kernel", "status", json!({"execution_state": "idle"}));
-        vec![zmq(&other, &st), zmq(&good_key, &st)]
-    };
-    let Event::Message {
-        channel, message, ..
-    } = until_iopub(&p, &s, msgs).await
-    else {
-        panic!("not a message")
-    };
-    assert_eq!(channel, Channel::Iopub);
-    assert_eq!(message.content["execution_state"], "idle");
-    // the round whose good one arrived may have lost its badly signed one: the subscription took hold between the
-    // two. It holds now, so one more badly signed message reaches the reader, which counts it.
-    let st = Message::request("kernel", "status", json!({"execution_state": "idle"}));
-    p.lock().await.iopub.send(zmq(&other, &st)).await.unwrap();
-    skuld::wait_until_async("the badly signed one counted", 30, || async {
-        (s.lock().await.bad() >= 1).then_some(())
+        p.lock().await.iopub.send(zmq(&other, &st)).await.unwrap();
+        skuld::wait_until_async("the badly signed one counted", 30, || async {
+            (s.lock().await.bad() >= 1).then_some(())
+        })
+        .await;
     })
-    .await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_flood_unread_stops_the_reader_and_is_reported() {
-    let p = peer().await;
-    let limits = Limits {
-        flood_bytes: 200_000,
-        ..Limits::default()
-    };
-    let s = Session::connect(&p.conn, "ident-4", limits).await.unwrap();
-    let key = p.conn.key.clone();
-    let (p, s) = (Mutex::new(p), Mutex::new(s));
-    let big = json!({"name": "stdout", "text": "x".repeat(60_000)});
-    // nothing is taken by the test until the flood has been seen: the queue only grows
-    // a reader that has said so has returned: it is the only task that ends by itself
-    skuld::wait_until_async("the flood", 30, || async {
-        let mut pp = p.lock().await;
-        for _ in 0..4 {
+#[test]
+fn a_flood_unread_stops_the_reader_and_is_reported() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let p = peer().await;
+        let limits = Limits {
+            flood_bytes: 200_000,
+            ..Limits::default()
+        };
+        let s = Session::connect(&p.conn, "ident-4", limits).await.unwrap();
+        let key = p.conn.key.clone();
+        let (p, s) = (Mutex::new(p), Mutex::new(s));
+        let big = json!({"name": "stdout", "text": "x".repeat(60_000)});
+        // nothing is taken by the test until the flood has been seen: the queue only grows
+        // a reader that has said so has returned: it is the only task that ends by itself
+        skuld::wait_until_async("the flood", 30, || async {
+            let mut pp = p.lock().await;
+            for _ in 0..4 {
+                pp.iopub
+                    .send(zmq(
+                        &key,
+                        &Message::request("kernel", "stream", big.clone()),
+                    ))
+                    .await
+                    .unwrap();
+            }
+            drop(pp);
+            s.lock()
+                .await
+                .tasks
+                .iter()
+                .any(|t| t.is_finished())
+                .then_some(())
+        })
+        .await;
+        let mut ss = s.lock().await;
+        let mut flooded = false;
+        while let Some(e) = ss.try_next() {
+            flooded |= matches!(e, Event::Flood);
+        }
+        assert!(flooded, "the reader said so");
+    })
+}
+
+#[test]
+fn a_flood_of_badly_signed_messages_is_a_flood_too() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let p = peer().await;
+        let limits = Limits {
+            bad_count: 20,
+            ..Limits::default()
+        };
+        let s = Session::connect(&p.conn, "ident-5", limits).await.unwrap();
+        let other = Key::generate().unwrap();
+        let (p, s) = (Mutex::new(p), Mutex::new(s));
+        skuld::wait_until_async("the flood of bad messages", 30, || async {
+            let mut pp = p.lock().await;
+            for _ in 0..30 {
+                pp.iopub
+                    .send(zmq(
+                        &other,
+                        &Message::request("kernel", "status", json!({})),
+                    ))
+                    .await
+                    .unwrap();
+            }
+            drop(pp);
+            s.lock()
+                .await
+                .tasks
+                .iter()
+                .any(|t| t.is_finished())
+                .then_some(())
+        })
+        .await;
+        let mut ss = s.lock().await;
+        let mut flooded = false;
+        while let Some(e) = ss.try_next() {
+            flooded |= matches!(e, Event::Flood);
+        }
+        assert!(flooded);
+    })
+}
+
+#[test]
+fn a_message_small_on_the_wire_but_large_decoded_is_counted_by_what_it_holds() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let p = peer().await;
+        // 450 KB on the wire each: 37 of them would pass 16 MiB by wire bytes alone, four by what they hold
+        let limits = Limits {
+            flood_bytes: 16 << 20,
+            ..Limits::default()
+        };
+        let s = Session::connect(&p.conn, "ident-6", limits).await.unwrap();
+        let sent = std::sync::atomic::AtomicUsize::new(0);
+        let key = p.conn.key.clone();
+        let (p, s) = (Mutex::new(p), Mutex::new(s));
+        // `[],` is three bytes on the wire and a value of its own in memory
+        let content = json!({"a": vec![json!([]); 150_000]});
+        skuld::wait_until_async("the weighted flood", 30, || async {
+            sent.fetch_add(1, Ordering::SeqCst);
+            let mut pp = p.lock().await;
             pp.iopub
                 .send(zmq(
                     &key,
-                    &Message::request("kernel", "stream", big.clone()),
+                    &Message::request("kernel", "stream", content.clone()),
                 ))
                 .await
                 .unwrap();
-        }
-        drop(pp);
-        s.lock()
-            .await
-            .tasks
-            .iter()
-            .any(|t| t.is_finished())
-            .then_some(())
-    })
-    .await;
-    let mut ss = s.lock().await;
-    let mut flooded = false;
-    while let Some(e) = ss.try_next() {
-        flooded |= matches!(e, Event::Flood);
-    }
-    assert!(flooded, "the reader said so");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_flood_of_badly_signed_messages_is_a_flood_too() {
-    let p = peer().await;
-    let limits = Limits {
-        bad_count: 20,
-        ..Limits::default()
-    };
-    let s = Session::connect(&p.conn, "ident-5", limits).await.unwrap();
-    let other = Key::generate().unwrap();
-    let (p, s) = (Mutex::new(p), Mutex::new(s));
-    skuld::wait_until_async("the flood of bad messages", 30, || async {
-        let mut pp = p.lock().await;
-        for _ in 0..30 {
-            pp.iopub
-                .send(zmq(
-                    &other,
-                    &Message::request("kernel", "status", json!({})),
-                ))
+            drop(pp);
+            s.lock()
                 .await
-                .unwrap();
-        }
-        drop(pp);
-        s.lock()
-            .await
-            .tasks
-            .iter()
-            .any(|t| t.is_finished())
-            .then_some(())
+                .tasks
+                .iter()
+                .any(|t| t.is_finished())
+                .then_some(())
+        })
+        .await;
+        assert!(
+            sent.load(Ordering::SeqCst) <= 30,
+            "flooded by what it holds, not by wire bytes: {} sent",
+            sent.load(Ordering::SeqCst)
+        );
     })
-    .await;
-    let mut ss = s.lock().await;
-    let mut flooded = false;
-    while let Some(e) = ss.try_next() {
-        flooded |= matches!(e, Event::Flood);
-    }
-    assert!(flooded);
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_message_small_on_the_wire_but_large_decoded_is_counted_by_what_it_holds() {
-    let p = peer().await;
-    // 450 KB on the wire each: 37 of them would pass 16 MiB by wire bytes alone, four by what they hold
-    let limits = Limits {
-        flood_bytes: 16 << 20,
-        ..Limits::default()
-    };
-    let s = Session::connect(&p.conn, "ident-6", limits).await.unwrap();
-    let sent = std::sync::atomic::AtomicUsize::new(0);
-    let key = p.conn.key.clone();
-    let (p, s) = (Mutex::new(p), Mutex::new(s));
-    // `[],` is three bytes on the wire and a value of its own in memory
-    let content = json!({"a": vec![json!([]); 150_000]});
-    skuld::wait_until_async("the weighted flood", 30, || async {
-        sent.fetch_add(1, Ordering::SeqCst);
-        let mut pp = p.lock().await;
-        pp.iopub
-            .send(zmq(
-                &key,
-                &Message::request("kernel", "stream", content.clone()),
-            ))
-            .await
-            .unwrap();
-        drop(pp);
-        s.lock()
-            .await
-            .tasks
-            .iter()
-            .any(|t| t.is_finished())
-            .then_some(())
-    })
-    .await;
-    assert!(
-        sent.load(Ordering::SeqCst) <= 30,
-        "flooded by what it holds, not by wire bytes: {} sent",
-        sent.load(Ordering::SeqCst)
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn one_large_message_is_shown_as_a_note_and_the_kernel_carries_on() {
+#[test]
+fn one_large_message_is_shown_as_a_note_and_the_kernel_carries_on() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let p = peer().await;
     let limits = Limits {
         flood_bytes: 1 << 20,
@@ -358,6 +371,7 @@ async fn one_large_message_is_shown_as_a_note_and_the_kernel_carries_on() {
         !s.lock().await.tasks.iter().any(|t| t.is_finished()),
         "no reader stopped"
     );
+})
 }
 
 #[test]

@@ -67,7 +67,7 @@ pub fn context_for(env: &Env, helper: Option<&Path>) -> Context {
     let state = paths::state_dir(env);
     let socket = paths::socket_path(env);
     let socket_dir = socket.parent().unwrap_or(Path::new("/")).to_path_buf();
-    let runtime = var("XDG_RUNTIME_DIR");
+    let runtime = var(stig::SYSTEM_RUNTIME_VAR);
     let mut closed = vec![
         paths::data_dir(env),
         paths::config_dir(env),
@@ -90,7 +90,7 @@ pub fn context_for(env: &Env, helper: Option<&Path>) -> Context {
         .get("PATH")
         .map(|p| p.split(':').map(PathBuf::from).collect::<Vec<_>>())
         .unwrap_or_default();
-    let home = var("HOME")
+    let home = var(stig::HOME_VAR)
         .or_else(|| passwd_home(uid))
         .unwrap_or_else(|| PathBuf::from("/"));
     Context {
@@ -319,10 +319,12 @@ pub async fn run_probe(prepared: Prepared, timeout: Duration) -> Ran {
     if !finished {
         // The group cannot go while its leader is an unreaped zombie (a start that failed at once): reap it while
         // the group is ended.
-        let _ = tokio::join!(
+
+        let (_reaped, waited) = tokio::join!(
             draugr::kill_group(child.id(), draugr::reap::GRACE, &draugr::RealSignaller),
             crate::clock::timeout(Duration::from_secs(7), child.wait())
         );
+        crate::soft::done(waited, "the zombie's wait");
     }
     Ran {
         layers: report,
@@ -337,10 +339,7 @@ pub fn check_blocking(tier: Tier, bwrap: Option<PathBuf>, timeout: Duration) -> 
         Ok(h) => h,
         Err(e) => return Check::failed(format!("the helper's own path: {e}"), None),
     };
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build();
+    let runtime = saman::Executor::new(1);
     match runtime {
         Ok(rt) => rt.block_on(gleipnir::check::check(
             helper, tier, bwrap, timeout, run_probe,
@@ -356,9 +355,9 @@ pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 pub fn check_command(args: SandboxCheckArgs) -> i32 {
     let check = check_blocking(args.tier, args.bwrap, CHECK_TIMEOUT);
     if args.json {
-        println!("{}", check_json(&check));
+        crate::soft::out_line(&(check_json(&check)).to_string());
     } else {
-        println!("{}", check_text(&check));
+        crate::soft::out_line(&(check_text(&check)).to_string());
     }
     i32::from(!check.ok)
 }
@@ -407,10 +406,7 @@ mod run {
     /// [`REFUSED`] when refused, else with the child's code. The child's stdout is passed through; its stderr tail is
     /// written to stderr once it has exited. Rows judge by the result file only: the child may exit 3 itself.
     pub fn run(args: SandboxRunArgs) -> i32 {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build();
+        let runtime = saman::Executor::new(1);
         let outcome = match runtime {
             Ok(rt) => rt.block_on(run_in(&args)),
             Err(e) => Outcome {
@@ -430,12 +426,15 @@ mod run {
             "layers": outcome.layers,
             "exit": outcome.exit,
         });
-        if let Err(e) = std::fs::write(&args.result, format!("{result}\n")) {
-            eprintln!("ratatoskr sandbox run: {}: {e}", args.result.display());
+        if let Err(e) = crate::fsio::write(&args.result, format!("{result}\n")) {
+            crate::soft::err_line(&format!(
+                "ratatoskr sandbox run: {}: {e}",
+                args.result.display()
+            ));
             return REFUSED;
         }
         if let Some(r) = &outcome.refused {
-            eprintln!("ratatoskr sandbox run: refused: {r}");
+            crate::soft::err_line(&format!("ratatoskr sandbox run: refused: {r}"));
             return REFUSED;
         }
         outcome.exit.unwrap_or(REFUSED)
@@ -486,12 +485,12 @@ mod run {
         };
         let stdout = child.take_stdout();
         // The child's stdout, passed through (tokio's own stdout is not built here: small writes to ours).
-        let pump = tokio::spawn(async move {
+        let pump = crate::clock::spawn_untracked(module_path!(), async move {
             use tokio::io::AsyncReadExt;
             let Some(mut out) = stdout else { return };
             let mut buf = [0u8; 8192];
             while let Ok(n @ 1..) = out.read(&mut buf).await {
-                let mut o = io::stdout().lock();
+                let mut o = annall::raw_out();
                 if o.write_all(&buf[..n]).and_then(|()| o.flush()).is_err() {
                     return;
                 }
@@ -533,9 +532,12 @@ mod run {
         if out.refused.is_some() {
             out.exit = refused_start_exit(out.exit);
         }
-        let _ = crate::clock::timeout(Duration::from_secs(2), pump).await;
+        crate::soft::done(
+            crate::clock::timeout(Duration::from_secs(2), pump).await,
+            "crate::clock::timeout",
+        );
         let tail = child.stderr_tail();
-        let _ = io::stderr().write_all(tail.as_bytes());
+        crate::soft::done(annall::raw_err().write_all(tail.as_bytes()), "io::stderr");
         out
     }
 
@@ -549,7 +551,7 @@ mod run {
         let sandbox = Sandbox::detect(a.tier, helper, a.bwrap.clone())?;
         #[cfg(target_os = "macos")]
         let sandbox = sandbox.with_mac(mac_context());
-        let text = std::fs::read_to_string(&a.spec).map_err(|e| Refusal {
+        let text = crate::fsio::read_to_string(&a.spec).map_err(|e| Refusal {
             rule: Rule::Malformed,
             path: Some(a.spec.clone()),
             message: format!("{}: {e}", a.spec.display()),
@@ -594,10 +596,13 @@ mod run {
 
     /// Say `opened` on `fifo`, then wait for one line back.
     fn pause(fifo: &Path) -> io::Result<()> {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(fifo)?
-            .write_all(b"opened\n")?;
+        // a FIFO is not a regular file: eitri refuses it
+        std::fs::File::from(rustix::fs::open(
+            fifo,
+            rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )?)
+        .write_all(b"opened\n")?;
         let mut line = String::new();
         io::BufReader::new(std::fs::File::open(fifo)?).read_line(&mut line)?;
         Ok(())
@@ -655,7 +660,7 @@ fn pin_protected(
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| crate::agents::lock::PROTECTED_FILES.contains(&n));
             let made = if is_file {
-                std::fs::write(&p, b"")
+                crate::fsio::write(&p, b"")
             } else {
                 std::fs::create_dir(&p)
             };
@@ -681,17 +686,17 @@ fn stubs_file(scratch: &Path) -> PathBuf {
 /// the session ends, so an empty `.envrc` or `mise.toml` never lingers in a checkout.
 pub fn remove_stubs(scratch: &Path, worktree: &Path) {
     let list = stubs_file(scratch);
-    let Ok(text) = std::fs::read_to_string(&list) else {
+    let Ok(text) = crate::fsio::read_to_string(&list) else {
         return;
     };
     remove_listed(text.lines(), worktree);
-    let _ = std::fs::remove_file(list);
+    crate::soft::done(std::fs::remove_file(list), "std::fs::remove_file");
 }
 
 /// How many stubs SCRATCH's list names now: a one-shot run in the session's tree (a commit) takes this mark before its
 /// launch and removes what it added after it ([`remove_stubs_since`]).
 pub fn stubs_mark(scratch: &Path) -> usize {
-    std::fs::read_to_string(stubs_file(scratch)).map_or(0, |t| t.lines().count())
+    crate::fsio::read_to_string(stubs_file(scratch)).map_or(0, |t| t.lines().count())
 }
 
 /// Remove the stubs SCRATCH's list names after its first MARK lines (those one run made), as [`remove_stubs`] does,
@@ -699,7 +704,7 @@ pub fn stubs_mark(scratch: &Path) -> usize {
 /// session's own stubs, made at its launch, stay: its sandbox may still have them bound.
 pub fn remove_stubs_since(scratch: &Path, worktree: &Path, mark: usize) {
     let list = stubs_file(scratch);
-    let Ok(text) = std::fs::read_to_string(&list) else {
+    let Ok(text) = crate::fsio::read_to_string(&list) else {
         return;
     };
     let lines: Vec<&str> = text.lines().collect();
@@ -708,11 +713,14 @@ pub fn remove_stubs_since(scratch: &Path, worktree: &Path, mark: usize) {
     }
     remove_listed(lines[mark..].iter().copied(), worktree);
     let kept: String = lines[..mark].iter().map(|l| format!("{l}\n")).collect();
-    let _ = if kept.is_empty() {
-        std::fs::remove_file(&list)
-    } else {
-        std::fs::write(&list, kept)
-    };
+    crate::soft::done(
+        if kept.is_empty() {
+            std::fs::remove_file(&list)
+        } else {
+            crate::fsio::write(&list, kept)
+        },
+        "sandbox",
+    );
 }
 
 /// The protected paths of PROTECTED missing now, which a launch pinning them in WORKTREE ([`pin_protected`]) would make
@@ -727,7 +735,7 @@ pub fn note_missing(list: &Path, worktree: &Path, protected: &[PathBuf]) -> std:
     if missing.is_empty() {
         return Ok(());
     }
-    std::fs::write(
+    crate::fsio::write(
         list,
         format!("{}\n{}", worktree.display(), missing.concat()),
     )
@@ -735,14 +743,14 @@ pub fn note_missing(list: &Path, worktree: &Path, protected: &[PathBuf]) -> std:
 
 /// Remove what LIST ([`note_missing`]) names, as [`remove_stubs`] does (still empty, not in the git index), and LIST.
 pub fn remove_made(list: &Path) {
-    let Ok(text) = std::fs::read_to_string(list) else {
+    let Ok(text) = crate::fsio::read_to_string(list) else {
         return;
     };
     let mut lines = text.lines();
     if let Some(worktree) = lines.next() {
         remove_listed(lines, Path::new(worktree));
     }
-    let _ = std::fs::remove_file(list);
+    crate::soft::done(std::fs::remove_file(list), "std::fs::remove_file");
 }
 
 /// The stubs LINES name in WORKTREE removed, when still empty and not in the git index.
@@ -765,13 +773,16 @@ fn remove_listed<'a>(lines: impl Iterator<Item = &'a str>, worktree: &Path) {
         if tracked {
             continue;
         }
-        let _ = if m.is_file() && m.len() == 0 {
-            std::fs::remove_file(p)
-        } else if m.is_dir() {
-            std::fs::remove_dir(p)
-        } else {
-            Ok(())
-        };
+        crate::soft::done(
+            if m.is_file() && m.len() == 0 {
+                std::fs::remove_file(p)
+            } else if m.is_dir() {
+                std::fs::remove_dir(p)
+            } else {
+                Ok(())
+            },
+            "sandbox",
+        );
     }
 }
 
@@ -795,10 +806,10 @@ pub fn git_dirs(worktree: &Path) -> Option<GitDirs> {
             common: d,
         });
     }
-    let text = std::fs::read_to_string(&dot).ok()?;
+    let text = crate::fsio::read_to_string(&dot).ok()?;
     let path = text.lines().next()?.strip_prefix("gitdir:")?.trim();
     let gitdir = std::fs::canonicalize(worktree.join(path)).ok()?;
-    let common = match std::fs::read_to_string(gitdir.join("commondir")) {
+    let common = match crate::fsio::read_to_string(gitdir.join("commondir")) {
         Ok(c) => std::fs::canonicalize(gitdir.join(c.trim())).ok()?,
         Err(_) => gitdir.clone(),
     };
@@ -827,7 +838,7 @@ pub fn git_access(worktree: &Path) -> Vec<PathBuf> {
     // a repository always has a hooks folder; make it if it is gone, so a hook cannot be added later
     let hooks = g.common.join("hooks");
     if !hooks.exists() {
-        let _ = std::fs::create_dir(&hooks);
+        crate::soft::done(std::fs::create_dir(&hooks), "std::fs::create_dir");
     }
     for dir in [&g.common, &g.gitdir] {
         for n in ["hooks", "config", "config.worktree"] {
@@ -887,7 +898,7 @@ pub const CDP_PORT: u16 = 9222;
 /// Fontconfig's cache, read by the browser when the host has one.
 pub const FONTCONFIG_CACHE: &str = "/var/cache/fontconfig";
 /// What a browser session's environment never carries: a display, the user's runtime dir.
-pub const NO_DISPLAY_ENV: [&str; 3] = ["WAYLAND_DISPLAY", "DISPLAY", "XDG_RUNTIME_DIR"];
+pub const NO_DISPLAY_ENV: [&str; 3] = ["WAYLAND_DISPLAY", "DISPLAY", stig::SYSTEM_RUNTIME_VAR];
 
 /// The browser a session gets (design §6.1): the program found (`browser::resolve`), the relay ports, the agent's
 /// local servers it may reach, the largest CDP message and the session's CDP secret (never shown by `Debug`).
@@ -1035,7 +1046,7 @@ pub fn toolchain(
         (Some(dir), Some(name)) => dir.join(name),
         _ => return Err(refused(&hit, "its folder cannot be named")),
     };
-    let real = std::fs::canonicalize(&program).map_err(|e| refused(&program, &format!("{e}")))?;
+    let real = std::fs::canonicalize(&program).map_err(|e| refused(&program, &e.to_string()))?;
     let mut dirs = path_dirs;
     if let Some(dir) = program.parent().filter(|d| !dirs.iter().any(|p| p == d)) {
         dirs.push(dir.to_path_buf());
@@ -1054,7 +1065,7 @@ pub fn toolchain(
         .map(PathBuf::from)
         .or_else(|| {
             env.vars
-                .get("XDG_DATA_HOME")
+                .get(stig::Xdg::Data.var())
                 .filter(|v| v.starts_with('/'))
                 .map(|d| Path::new(d).join("mise"))
         });
@@ -1155,10 +1166,10 @@ fn login_grants(
 ) -> Result<LoginGrants, Refusal> {
     let mut g = login_grants_base(dir, shape, scratch, target)?;
     if let Some(r) = crate::agents::past::grant(&shape.sid) {
-        resume_grant(&r, dir, shape, scratch, target, &mut g).map_err(|message| Refusal {
+        resume_grant(&r, dir, shape, scratch, target, &mut g).map_err(|e| Refusal {
             rule: Rule::Setup,
             path: Some(r.file.clone()),
-            message,
+            message: e.message().to_owned(),
         })?;
     }
     Ok(g)
@@ -1176,26 +1187,33 @@ fn resume_grant(
     scratch: &Path,
     target: gleipnir::Target,
     g: &mut LoginGrants,
-) -> Result<(), String> {
+) -> villa::Result<()> {
     use crate::agents::past::checked_file;
     use runstav::methods::past::PastRoute;
     let real_dir = dir
         .canonicalize()
-        .map_err(|e| format!("{}: {e}", dir.display()))?;
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", dir.display())))?;
     let root = r
         .root
         .canonicalize()
-        .map_err(|e| format!("{}: {e}", r.root.display()))?;
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", r.root.display())))?;
     if real_dir != root {
-        return Err("the session's CLI folder is not the one the past session is in".into());
+        return Err(villa::Error::invalid(
+            "the session's CLI folder is not the one the past session is in",
+        ));
     }
     let file = checked_file(&root, &r.file)?;
-    let name = file.file_name().ok_or("no file name")?.to_owned();
+    let name = file
+        .file_name()
+        .ok_or_else(|| villa::Error::invalid("no file name"))?
+        .to_owned();
     // where the CLI looks (REAL, under the login dir) and the session's own folder bound there (OWN)
     let (real, own, rel): (PathBuf, PathBuf, PathBuf) = match r.provider {
         minni::Provider::Claude => {
-            let project = crate::agents::lock::claude_project(dir, &shape.cwd)
-                .ok_or("the session's cwd has no Claude project folder")?;
+            let project =
+                crate::agents::lock::claude_project(dir, &shape.cwd).ok_or_else(|| {
+                    villa::Error::invalid("the session's cwd has no Claude project folder")
+                })?;
             (
                 project,
                 scratch.join("claude-project"),
@@ -1214,11 +1232,11 @@ fn resume_grant(
                     let d = n
                         .strip_prefix("rollout-")
                         .and_then(|t| t.get(..10))
-                        .ok_or("not a rollout file")?;
+                        .ok_or_else(|| villa::Error::invalid("not a rollout file"))?;
                     let mut parts = d.split('-');
                     let (y, m, day) = (parts.next(), parts.next(), parts.next());
                     let (Some(y), Some(m), Some(day)) = (y, m, day) else {
-                        return Err("not a rollout file".into());
+                        return Err(villa::Error::invalid("not a rollout file"));
                     };
                     PathBuf::from(y).join(m).join(day).join(&name)
                 }
@@ -1232,25 +1250,28 @@ fn resume_grant(
         minni::Provider::Gemini => {
             let rel = file
                 .strip_prefix(root.join("tmp"))
-                .map_err(|_| "not under the CLI's tmp folder".to_string())?
+                .map_err(|_| villa::Error::invalid("not under the CLI's tmp folder"))?
                 .to_path_buf();
             (dir.join("tmp"), scratch.join("login").join("tmp"), rel)
         }
     };
     let bwrap = target == gleipnir::Target::LinuxBwrap;
-    let made = |p: &Path| -> Result<(), String> {
+    let made = |p: &Path| -> villa::Result<()> {
         if let Some(parent) = p.parent() {
-            paths::private_dir(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            paths::private_dir(parent)
+                .map_err(|e| villa::Error::invalid(format!("{}: {e}", parent.display())))?;
         }
         Ok(())
     };
     match r.route {
         PastRoute::Copy => {
             if !bwrap {
-                return Err("resuming on a copy needs the full sandbox tier: resume in the original file, or in a terminal".into());
+                return Err(villa::Error::invalid(
+                    "resuming on a copy needs the full sandbox tier: resume in the original file, or in a terminal",
+                ));
             }
             let to = own.join(&rel);
-            made(&to)?;
+            made(&to).map_err(|e| villa::Error::invalid(e.to_string()))?;
             copy_private(&file, &to)?;
             if r.provider == minni::Provider::Claude
                 && let Some(stem) = file.file_stem()
@@ -1260,7 +1281,8 @@ fn resume_grant(
                     let into = own.join(stem).join("subagents");
                     for e in rd.flatten() {
                         if e.file_type().is_ok_and(|t| t.is_file()) {
-                            made(&into.join(e.file_name()))?;
+                            made(&into.join(e.file_name()))
+                                .map_err(|e| villa::Error::invalid(e.to_string()))?;
                             copy_private(&e.path(), &into.join(e.file_name()))?;
                         }
                     }
@@ -1270,12 +1292,9 @@ fn resume_grant(
         PastRoute::Original => {
             if bwrap {
                 let stand_in = own.join(&rel);
-                made(&stand_in)?;
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&stand_in)
-                    .map_err(|e| format!("{}: {e}", stand_in.display()))?;
+                made(&stand_in).map_err(|e| villa::Error::invalid(e.to_string()))?;
+                crate::fsio::append(&stand_in, true)
+                    .map_err(|e| villa::Error::io(format!("{}: {e}", stand_in.display())))?;
                 g.binds.push(gleipnir::Bind {
                     mode: gleipnir::Mode::Rw,
                     source: file,
@@ -1284,7 +1303,9 @@ fn resume_grant(
             } else if real.join(&rel) == file {
                 g.write.push(file);
             } else {
-                return Err("that file is not where the CLI looks for it: resume on a copy, or in a terminal".into());
+                return Err(villa::Error::invalid(
+                    "that file is not where the CLI looks for it: resume on a copy, or in a terminal",
+                ));
             }
         }
     }
@@ -1292,23 +1313,15 @@ fn resume_grant(
 }
 
 /// FROM copied to TO (made with mode 0600, never through a link).
-fn copy_private(from: &Path, to: &Path) -> Result<(), String> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut src = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(from)
-        .map_err(|e| format!("{}: {e}", from.display()))?;
-    let mut dst = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(to)
-        .map_err(|e| format!("{}: {e}", to.display()))?;
-    std::io::copy(&mut src, &mut dst).map_err(|e| format!("{}: {e}", to.display()))?;
-    Ok(())
+fn copy_private(from: &Path, to: &Path) -> villa::Result<()> {
+    use std::io::Read as _;
+    let mut src =
+        eitri::open_read(from).map_err(|e| villa::Error::io(format!("{}: {e}", from.display())))?;
+    let mut bytes = Vec::new();
+    src.read_to_end(&mut bytes)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", from.display())))?;
+    eitri::replace_file_mode(to, &bytes, 0o600)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", to.display())))
 }
 
 /// [`login_grants`] before a resumed session's file.
@@ -1451,8 +1464,8 @@ fn lock_files(
                 .map_err(|e| setup(parent, format!("{}: {e}", parent.display())))?;
         }
         let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, bytes)
-            .and_then(|()| std::fs::rename(&tmp, path))
+        crate::fsio::write(&tmp, bytes)
+            .and_then(|()| crate::fsio::rename(&tmp, path))
             .map_err(|e| setup(path, format!("{}: {e}", path.display())))
     };
     let mut binds = Vec::new();
@@ -1552,15 +1565,11 @@ pub fn session_spec(
     let (pinned, made_here) = pin_protected(&shape.cwd, &plan.protected_ro)?;
     if !made_here.is_empty() {
         use std::io::Write;
-        let record = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(stubs_file(scratch))
-            .and_then(|mut f| {
-                made_here
-                    .iter()
-                    .try_for_each(|p| writeln!(f, "{}", p.display()))
-            });
+        let record = crate::fsio::append(stubs_file(scratch), true).and_then(|mut f| {
+            made_here
+                .iter()
+                .try_for_each(|p| writeln!(f, "{}", p.display()))
+        });
         record.map_err(|e| malformed(format!("{}: {e}", scratch.display())))?;
     }
     read.extend(pinned.iter().cloned());
@@ -1582,7 +1591,10 @@ pub fn session_spec(
     sockets.extend(shape.sockets.iter().cloned());
     let mut vars: Vec<(String, String)> = vec![
         ("PATH".into(), path),
-        ("HOME".into(), ctx.home.to_string_lossy().into_owned()),
+        (
+            stig::HOME_VAR.into(),
+            ctx.home.to_string_lossy().into_owned(),
+        ),
         ("TMPDIR".into(), tmp.to_string_lossy().into_owned()),
     ];
     // the browser's web relay port, once its relays are made

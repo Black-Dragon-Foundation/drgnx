@@ -19,12 +19,11 @@ use std::io;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use stund::Instant;
 use tokio::io::{
     AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf,
 };
 use tokio::sync::Notify;
-use tokio::task::AbortHandle;
-use tokio::time::Instant;
 use zeroize::Zeroize;
 
 use crate::frame::{Decoder, Frame, HEADER, Kind, MAX_DATA, MAX_STREAMS, encode};
@@ -161,7 +160,7 @@ struct LogBuf {
 
 impl Log {
     fn buf(&self) -> MutexGuard<'_, LogBuf> {
-        self.inner.buf.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.inner.buf)
     }
 
     /// Adds `drgnx-px: LINE\n`, or counts it as dropped.
@@ -254,7 +253,8 @@ struct Ctl {
     eof: bool,
     down: Arc<Notify>,
     up: Arc<Notify>,
-    tasks: Vec<AbortHandle>,
+    /// Dropped with the stream: a task is cancelled when its handle is.
+    tasks: Vec<saman::Task<()>>,
     abort: Option<Abort>,
     alive: u8,
 }
@@ -264,8 +264,9 @@ impl Ctl {
         if let Some(abort) = self.abort.take() {
             abort();
         }
-        for t in &self.tasks {
-            t.abort();
+        // a task is cancelled when its handle is dropped
+        for t in self.tasks.drain(..) {
+            drop(t);
         }
     }
 }
@@ -309,7 +310,7 @@ impl<C: Consumer> Shell<C> {
     }
 
     fn lock(&self) -> MutexGuard<'_, State<C>> {
-        self.inner.state.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.inner.state)
     }
 
     /// The owner's hook for a stream the peer opened: its consumer, or `None` to reset it. Called by the reader:
@@ -469,7 +470,7 @@ impl<C: Consumer> Shell<C> {
             }
             let now = Instant::now();
             let mut st = self.lock();
-            st.mux.set_now(now - self.inner.started);
+            st.mux.set_now(now.duration_since(self.inner.started));
             for f in frames {
                 #[cfg(feature = "test-hooks")]
                 {
@@ -556,12 +557,12 @@ impl<C: Consumer> Shell<C> {
             let now = Instant::now();
             let st = self.lock();
             if let Some(since) = st.writing_since
-                && stalled(now - since, limit)
+                && stalled(now.duration_since(since), limit)
             {
                 return End::Stalled;
             }
             if let Some(beat) = self.inner.cfg.beat_limit
-                && beat_lost(now - st.last_beat, beat)
+                && beat_lost(now.duration_since(st.last_beat), beat)
             {
                 return End::BeatLost;
             }
@@ -639,8 +640,8 @@ impl<C: Consumer> Shell<C> {
         let (r, w, abort) = c.split();
         let down = Arc::new(Notify::new());
         let up = Arc::new(Notify::new());
-        let t_down = tokio::spawn(down_task(self.clone(), id, w, down.clone()));
-        let t_up = tokio::spawn(up_task(self.clone(), id, r, up.clone()));
+        let t_down = saman::spawn("stream-down", down_task(self.clone(), id, w, down.clone()));
+        let t_up = saman::spawn("stream-up", up_task(self.clone(), id, r, up.clone()));
         st.streams.insert(
             id,
             Ctl {
@@ -648,7 +649,7 @@ impl<C: Consumer> Shell<C> {
                 eof: false,
                 down,
                 up,
-                tasks: vec![t_down.abort_handle(), t_up.abort_handle()],
+                tasks: vec![t_down, t_up],
                 abort: Some(abort),
                 alive: 2,
             },
@@ -685,7 +686,10 @@ async fn down_task<C: Consumer>(shell: Shell<C>, id: u32, mut w: C::W, wake: Arc
             Next::Gone => return,
             Next::Wait => wake.notified().await,
             Next::Eof => {
-                let _ = w.shutdown().await;
+                // a consumer that is already gone has nothing to shut: the stream's end is the same
+                if let Err(e) = w.shutdown().await {
+                    tracing::debug!(error = %e, stream = id, "a consumer's shutdown failed");
+                }
                 shell.task_done(id);
                 return;
             }

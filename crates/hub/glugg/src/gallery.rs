@@ -121,7 +121,7 @@ enum Job {
 
 enum Done {
     /// A decoded sequence: the engine's bytes, or why it was refused.
-    Engine(Result<Vec<u8>, String>),
+    Engine(villa::Result<Vec<u8>>),
     Canvas {
         key: CanvasKey,
         bytes: Option<u64>,
@@ -144,8 +144,20 @@ fn work(job: Job) -> Done {
             cap,
         } => {
             let bytes = image::canvas(&placement, &image, key.cell, cap).and_then(|c| {
-                let png = image::encode_png(&c);
-                write_private(&path, &png).ok().map(|_| png.len() as u64)
+                let png = match image::encode_png(&c) {
+                    Ok(png) => png,
+                    Err(e) => {
+                        annall::log_error(&e);
+                        return None;
+                    }
+                };
+                match write_private(&path, &png) {
+                    Ok(()) => Some(png.len() as u64),
+                    Err(e) => {
+                        annall::log_error(&e);
+                        None
+                    }
+                }
             });
             Done::Canvas { key, bytes }
         }
@@ -153,17 +165,14 @@ fn work(job: Job) -> Done {
 }
 
 /// Write BYTES to PATH, mode 0600, through a rename (Emacs never reads half a file).
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let tmp = path.with_extension("tmp");
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)?;
-    f.write_all(bytes)?;
-    std::fs::rename(&tmp, path)
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> villa::Result<()> {
+    use std::os::fd::AsFd;
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(villa::Error::invalid("The image has no file name."));
+    };
+    let dir = eitri::open_path(parent, eitri::Kind::Dir)?;
+    eitri::write_regular(dir.fd.as_fd(), std::path::Path::new(name), bytes, 0o600)?;
+    Ok(())
 }
 
 /// The one helper thread: jobs in, results out in order, a byte on WAKE per result.
@@ -174,22 +183,24 @@ struct Helper {
 }
 
 impl Helper {
-    fn start() -> std::io::Result<Helper> {
+    fn start() -> villa::Result<Helper> {
         let (wake, ping) = UnixStream::pair()?;
         wake.set_nonblocking(true)?;
         let (jobs, jobs_rx) = mpsc::channel::<Job>();
         let (done_tx, done) = mpsc::channel::<Done>();
-        std::thread::Builder::new()
-            .name("images".into())
-            .spawn(move || {
-                let mut ping = ping;
-                for job in jobs_rx {
-                    if done_tx.send(work(job)).is_err() {
-                        break;
-                    }
-                    let _ = ping.write_all(&[1]);
+        // the thread ends with the jobs channel (the gallery dropped), so its handle is not kept
+        saman::spawn_thread("images", move || {
+            let mut ping = ping;
+            for job in jobs_rx {
+                if done_tx.send(work(job)).is_err() {
+                    break;
                 }
-            })?;
+                // a full wake pipe already says "a result is waiting": the byte is only a nudge
+                if let Err(e) = ping.write_all(&[1]) {
+                    tracing::debug!(error = %e, "the image helper's wake byte was not written");
+                }
+            }
+        })?;
         Ok(Helper { jobs, done, wake })
     }
 }
@@ -200,15 +211,26 @@ enum Queued {
     Iterm(ItermArgs, Vec<u8>),
 }
 
+/// The most a cgroup file is read for (they hold a line or a number).
+const CGROUP_CAP: u64 = 64 << 10;
+
 /// The memory a terminal's scope may use (`memory.max` of its cgroup), when there is one.
 fn memory_max() -> Option<u64> {
-    let cg = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    // /proc/self is a link, which eitri never follows: the process is named by its pid
+    let cg = eitri::read_string(
+        std::path::Path::new(&format!("/proc/{}/cgroup", std::process::id())),
+        CGROUP_CAP,
+    )
+    .ok()?;
     let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?;
-    std::fs::read_to_string(format!("/sys/fs/cgroup{path}/memory.max"))
-        .ok()?
-        .trim()
-        .parse()
-        .ok()
+    eitri::read_string(
+        std::path::Path::new(&format!("/sys/fs/cgroup{path}/memory.max")),
+        CGROUP_CAP,
+    )
+    .ok()?
+    .trim()
+    .parse()
+    .ok()
 }
 
 pub struct Gallery {
@@ -410,7 +432,7 @@ impl Gallery {
                 Done::Engine(r) => {
                     match r {
                         Ok(bytes) => engine.write(&bytes),
-                        Err(why) => tracing::info!(%why, "an image refused"),
+                        Err(why) => tracing::info!(?why, "an image refused"),
                     }
                     self.waiting = false;
                     self.drain(engine);
@@ -642,7 +664,7 @@ impl Gallery {
     }
 
     fn delete(&mut self, file: &str) {
-        let _ = std::fs::remove_file(file);
+        crate::removed(std::fs::remove_file(file), "an image file");
         let disk = &mut self.disk;
         self.canvases.retain(|_, c| match c {
             Canvas::Ready { file: f, bytes, .. } if f == file => {
@@ -704,7 +726,7 @@ fn make_private_dir(d: &std::path::Path) -> std::io::Result<()> {
 impl Drop for Gallery {
     fn drop(&mut self) {
         if let Some(d) = &self.dir {
-            let _ = std::fs::remove_dir_all(d);
+            crate::removed(std::fs::remove_dir_all(d), "the image directory");
         }
     }
 }

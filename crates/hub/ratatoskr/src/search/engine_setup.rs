@@ -23,9 +23,9 @@ pub struct EngineSettings {
 impl EngineSettings {
     pub fn from_values(v: &Values) -> EngineSettings {
         let mut s = EngineSettings::default();
-        let mut keep = |r: Result<(), String>| {
+        let mut keep = |r: villa::Result<()>| {
             if let Err(e) = r {
-                s.errors.push(e);
+                s.errors.push(e.to_string());
             }
         };
         let mut cfg = Config::default();
@@ -44,7 +44,7 @@ impl EngineSettings {
         let limits = match limits.check() {
             Ok(()) => limits,
             Err(e) => {
-                s.errors.push(e);
+                s.errors.push(e.to_string());
                 Limits::default()
             }
         };

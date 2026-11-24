@@ -14,8 +14,15 @@ use gleipnir_escape::row::{self, Row};
 use gleipnir_escape::run::{self, Opts, Outcome};
 use std::path::PathBuf;
 
+/// A line on stderr.
+fn say(line: &str) {
+    if let Err(e) = annall::cli_err(line) {
+        tracing::debug!(error = %e, "stderr is gone");
+    }
+}
+
 fn die(msg: &str) -> ! {
-    eprintln!("gleipnir-escape: {msg}");
+    say(&format!("gleipnir-escape: {msg}"));
     std::process::exit(2);
 }
 
@@ -76,7 +83,7 @@ fn main() {
     for d in &dirs {
         match row::load_dir(d) {
             Ok(r) => rows.extend(r),
-            Err(e) => die(&e),
+            Err(e) => die(&e.to_string()),
         }
     }
     if !only.is_empty() {
@@ -95,11 +102,11 @@ fn main() {
             Outcome::Fail(w) => ("FAIL", format!(": {w}")),
             Outcome::Skip(w) => ("skip", format!(": {w}")),
         };
-        eprintln!("{word} {}{why}", r.row);
+        say(&format!("{word} {}{why}", r.row));
         entries.push(Entry::new(&r.row, outcome));
     }
     let (pass, fail, skip) = report::counts(&entries);
-    eprintln!("{pass} passed, {fail} failed, {skip} skipped");
+    say(&format!("{pass} passed, {fail} failed, {skip} skipped"));
     if let Err(e) = report::write(&report_path, &entries) {
         die(&format!("{}: {e}", report_path.display()));
     }

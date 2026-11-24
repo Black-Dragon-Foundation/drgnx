@@ -474,7 +474,9 @@ impl<Ctx: Send + Sync + 'static> Conn<Ctx> {
         }
         let structured_allowed = tool.output_schema().is_some();
         let (ctx, tools) = (self.ctx.clone(), self.tools.clone());
-        let run = tokio::spawn(async move { tools[i].call(&*ctx, args).await });
+        let run = saman::spawn("mimir-tool-call", async move {
+            tools[i].call(&*ctx, args).await
+        });
         match run.await {
             Ok(ToolResult::Ok { text, structured }) => {
                 let mut result = json!({"content": [{"type": "text", "text": text}]});
@@ -680,8 +682,8 @@ mod tests {
         let serving = serve(ctx.clone(), tools(), ServerInfo::default(), sr, sw, limits);
         let feeding = async move {
             // the server may end first (a line too long): the write then fails
-            let _ = cw.write_all(input.as_bytes()).await;
-            let _ = cw.shutdown().await;
+            cw.write_all(input.as_bytes()).await.unwrap_or_default();
+            cw.shutdown().await.unwrap_or_default();
         };
         let reading = async move {
             let mut out = String::new();
@@ -710,404 +712,449 @@ mod tests {
 
     /// A live list: the server says it can change, tells the client when it does, and serves the new list (a tool
     /// that left is unknown from then on).
-    #[tokio::test]
-    async fn a_live_list_tells_the_client_when_it_changes() {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-        let (client, server) = tokio::io::duplex(1 << 16);
-        let (sr, sw) = tokio::io::split(server);
-        let (cr, mut cw) = tokio::io::split(client);
-        let (tx, rx) = watch::channel(tools());
-        let serving = tokio::spawn(serve_live(
-            Arc::new(Calls::default()),
-            rx,
-            ServerInfo::default(),
-            sr,
-            sw,
-            Limits::default(),
-        ));
-        let mut lines = tokio::io::BufReader::new(cr).lines();
-        let send = async |cw: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>, line: String| {
-            cw.write_all(format!("{line}\n").as_bytes()).await.unwrap();
-        };
-        let mut next = async || -> Value {
-            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap()
-        };
-        send(&mut cw, init("2025-11-25")).await;
-        assert_eq!(
-            next().await["result"]["capabilities"]["tools"]["listChanged"],
-            true
-        );
-        send(&mut cw, req(1, "tools/list", json!({}))).await;
-        assert_eq!(next().await["result"]["tools"].as_array().unwrap().len(), 4);
-        let one: Vec<Box<dyn Tool<Calls>>> = vec![Box::new(Echo)];
-        tx.send(Arc::from(one)).unwrap();
-        assert_eq!(
-            next().await,
-            json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
-        );
-        send(&mut cw, req(2, "tools/list", json!({}))).await;
-        assert_eq!(next().await["result"]["tools"].as_array().unwrap().len(), 1);
-        send(&mut cw, call(3, "fail", json!({}))).await;
-        let a = next().await;
-        assert!(
-            a["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("Unknown tool"),
-            "{a}"
-        );
-        // a write half dropped leaves the duplex open (the read half holds it): end it as a client does
-        cw.shutdown().await.unwrap();
-        assert_eq!(serving.await.unwrap(), End::ClientClosed);
-    }
-
-    #[tokio::test]
-    async fn legacy_handshake_echoes_a_known_version_else_the_latest() {
-        let a = session(&[init("2025-06-18")]).await;
-        assert_eq!(
-            a[0],
-            json!({"jsonrpc": "2.0", "id": 0, "result": {
-                "protocolVersion": "2025-06-18",
-                "capabilities": {"tools": {"listChanged": false}},
-                "serverInfo": {"name": "drgnx", "version": CRATE_VERSION},
-            }})
-        );
-        let a = session(&[init("2099-01-01")]).await;
-        assert_eq!(a[0]["result"]["protocolVersion"], "2025-11-25");
-        let a = session(&[req(1, "initialize", json!({}))]).await;
-        assert_eq!(a[0]["error"]["code"], INVALID_PARAMS);
-    }
-
-    #[tokio::test]
-    async fn a_request_before_initialize_is_an_error_not_silence() {
-        let a = session(&[
-            req(1, "tools/list", json!({})),
-            req(2, "ping", json!({})),
-            call(3, "echo", json!({"text": "x"})),
-        ])
-        .await;
-        assert_eq!(a.len(), 3);
-        assert_eq!(
-            a[0],
-            json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -32600, "message": "initialize first"}})
-        );
-        assert_eq!(a[1], json!({"jsonrpc": "2.0", "id": 2, "result": {}}));
-        assert_eq!(a[2]["error"]["code"], INVALID_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn a_modern_request_needs_no_initialize() {
-        let a = session(&[req(1, "tools/list", json!({"_meta": meta()}))]).await;
-        let r = &a[0]["result"];
-        assert_eq!(r["tools"].as_array().map(Vec::len), Some(4));
-        assert_eq!(r["resultType"], "complete");
-        assert_eq!(r["ttlMs"], TTL_MS);
-        assert_eq!(r["cacheScope"], "public");
-    }
-
-    #[tokio::test]
-    async fn modern_requests_are_stateless_and_carry_result_type() {
-        let a = session(&[
-            req(1, "server/discover", json!({"_meta": meta()})),
-            req(
-                2,
-                "tools/call",
-                json!({"name": "echo", "arguments": {"text": "hi"}, "_meta": meta()}),
-            ),
-            req(3, "ping", json!({"_meta": meta()})),
-            // no handshake happened: a request without the version is still refused
-            req(4, "tools/list", json!({})),
-            req(5, "resources/list", json!({"_meta": meta()})),
-        ])
-        .await;
-        assert_eq!(
-            a[0]["result"],
-            json!({
-                "resultType": "complete",
-                "supportedVersions": ["2026-07-28"],
-                "capabilities": {"tools": {}},
-                "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "drgnx", "version": CRATE_VERSION}},
-                "ttlMs": 3_600_000,
-                "cacheScope": "public",
-            })
-        );
-        assert_eq!(a[1]["result"]["resultType"], "complete", "{}", a[1]);
-        assert_eq!(a[1]["result"]["content"][0]["text"], "hi");
-        assert_eq!(a[2]["result"], json!({"resultType": "complete"}));
-        assert_eq!(a[3]["error"]["message"], "initialize first");
-        assert_eq!(a[4]["error"]["code"], METHOD_NOT_FOUND);
-        // after initialize the connection is legacy: no resultType, even with the modern _meta
-        let a = session(&[
-            init("2025-11-25"),
-            req(1, "tools/list", json!({"_meta": meta()})),
-        ])
-        .await;
-        assert!(a[1]["result"].get("resultType").is_none(), "{}", a[1]);
-        assert!(a[1]["result"].get("ttlMs").is_none());
-    }
-
-    #[tokio::test]
-    async fn unknown_version_is_32022_with_supported() {
-        let mut m = meta();
-        m["io.modelcontextprotocol/protocolVersion"] = json!("2099-01-01");
-        let a = session(&[req(7, "server/discover", json!({"_meta": m}))]).await;
-        assert_eq!(
-            a[0],
-            json!({"jsonrpc": "2.0", "id": 7, "error": {
-                "code": -32022,
-                "message": "unsupported protocol version",
-                "data": {"supported": ["2026-07-28", "2025-11-25"], "requested": "2099-01-01"},
-            }})
-        );
-    }
-
-    #[tokio::test]
-    async fn missing_client_capabilities_is_32602() {
-        let m = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28"});
-        let a = session(&[req(1, "tools/list", json!({"_meta": m}))]).await;
-        assert_eq!(a[0]["error"]["code"], INVALID_PARAMS);
-        assert_eq!(
-            a[0]["error"]["message"],
-            "params._meta needs io.modelcontextprotocol/clientCapabilities"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_bad_argument_is_a_tool_error_with_its_path() {
-        let (a, end, ctx) = session_with(
-            &[
-                init("2025-11-25"),
-                call(1, "echo", json!({"text": 3})),
-                call(2, "echo", json!({"text": "a", "extra": 1})),
-                call(3, "echo", json!({})),
-                call(4, "noargs", json!({"agent": "me"})),
-            ],
-            Limits::default(),
-        )
-        .await;
-        assert_eq!(end, End::ClientClosed);
-        let expect = [
-            ("text", "text: invalid type: integer `3`, expected a string"),
-            ("extra", "extra: unknown key"),
-            ("text", "text: required, missing"),
-            ("agent", "agent: unknown key"),
-        ];
-        for (answer, (path, text)) in a[1..].iter().zip(expect) {
-            assert_eq!(
-                answer["result"],
-                json!({
-                    "content": [{"type": "text", "text": text}],
-                    "isError": true,
-                    "_meta": {"dev.drgnx/error": {"code": "invalid-arguments", "path": path}},
-                }),
-                "{answer}"
+    #[test]
+    fn a_live_list_tells_the_client_when_it_changes() {
+        saman::block_on_current(async {
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+            let (client, server) = tokio::io::duplex(1 << 16);
+            let (sr, sw) = tokio::io::split(server);
+            let (cr, mut cw) = tokio::io::split(client);
+            let (tx, rx) = watch::channel(tools());
+            let serving = saman::spawn(
+                "mimir-serve-live",
+                serve_live(
+                    Arc::new(Calls::default()),
+                    rx,
+                    ServerInfo::default(),
+                    sr,
+                    sw,
+                    Limits::default(),
+                ),
             );
-        }
-        assert_eq!(calls(&ctx), 0, "the tool never ran");
-        // the same in the stateless era
-        let (a, _, ctx) = session_with(
-            &[req(
-                1,
-                "tools/call",
-                json!({"name": "echo", "arguments": {"text": 3}, "_meta": meta()}),
-            )],
-            Limits::default(),
-        )
-        .await;
-        assert_eq!(a[0]["result"]["isError"], true);
-        assert_eq!(a[0]["result"]["_meta"]["dev.drgnx/error"]["path"], "text");
-        assert_eq!(calls(&ctx), 0);
+            let mut lines = tokio::io::BufReader::new(cr).lines();
+            let send = async |cw: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>,
+                              line: String| {
+                cw.write_all(format!("{line}\n").as_bytes()).await.unwrap();
+            };
+            let mut next = async || -> Value {
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap()
+            };
+            send(&mut cw, init("2025-11-25")).await;
+            assert_eq!(
+                next().await["result"]["capabilities"]["tools"]["listChanged"],
+                true
+            );
+            send(&mut cw, req(1, "tools/list", json!({}))).await;
+            assert_eq!(next().await["result"]["tools"].as_array().unwrap().len(), 4);
+            let one: Vec<Box<dyn Tool<Calls>>> = vec![Box::new(Echo)];
+            tx.send(Arc::from(one)).unwrap();
+            assert_eq!(
+                next().await,
+                json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+            );
+            send(&mut cw, req(2, "tools/list", json!({}))).await;
+            assert_eq!(next().await["result"]["tools"].as_array().unwrap().len(), 1);
+            send(&mut cw, call(3, "fail", json!({}))).await;
+            let a = next().await;
+            assert!(
+                a["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Unknown tool"),
+                "{a}"
+            );
+            // a write half dropped leaves the duplex open (the read half holds it): end it as a client does
+            cw.shutdown().await.unwrap();
+            assert_eq!(serving.await.unwrap(), End::ClientClosed);
+        });
     }
 
-    #[tokio::test]
-    async fn tool_results_and_tool_errors() {
-        let (a, _, ctx) = session_with(
-            &[
-                init("2025-11-25"),
-                call(1, "echo", json!({"text": "hi"})),
-                call(2, "fail", json!({})),
-                req(3, "tools/call", json!({"name": "noargs"})),
-            ],
-            Limits::default(),
-        )
-        .await;
-        assert_eq!(
-            a[1]["result"],
-            json!({"content": [{"type": "text", "text": "hi"}], "structuredContent": {"text": "hi"}})
-        );
-        assert_eq!(
-            a[2]["result"],
-            json!({"content": [{"type": "text", "text": "it failed"}], "isError": true})
-        );
-        // no outputSchema, so no structuredContent
-        assert_eq!(
-            a[3]["result"],
-            json!({"content": [{"type": "text", "text": "ok"}]})
-        );
-        assert_eq!(calls(&ctx), 1);
+    #[test]
+    fn legacy_handshake_echoes_a_known_version_else_the_latest() {
+        saman::block_on_current(async {
+            let a = session(&[init("2025-06-18")]).await;
+            assert_eq!(
+                a[0],
+                json!({"jsonrpc": "2.0", "id": 0, "result": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {"listChanged": false}},
+                    "serverInfo": {"name": "drgnx", "version": CRATE_VERSION},
+                }})
+            );
+            let a = session(&[init("2099-01-01")]).await;
+            assert_eq!(a[0]["result"]["protocolVersion"], "2025-11-25");
+            let a = session(&[req(1, "initialize", json!({}))]).await;
+            assert_eq!(a[0]["error"]["code"], INVALID_PARAMS);
+        });
     }
 
-    #[tokio::test]
-    async fn an_unknown_tool_is_32602() {
-        let a = session(&[
-            init("2025-11-25"),
-            call(1, "nope", json!({})),
-            req(2, "tools/call", json!({"arguments": {}})),
-            req(3, "tools/call", json!({"name": "echo", "arguments": [1]})),
-        ])
-        .await;
-        assert_eq!(
-            a[1],
-            json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -32602, "message": "Unknown tool: nope"}})
-        );
-        assert_eq!(a[2]["error"]["code"], INVALID_PARAMS);
-        assert_eq!(a[3]["error"]["code"], INVALID_PARAMS);
-    }
-
-    #[tokio::test]
-    async fn an_unknown_method_is_32601() {
-        let a = session(&[init("2025-11-25"), req(1, "resources/list", json!({}))]).await;
-        assert_eq!(a[1]["error"]["code"], METHOD_NOT_FOUND);
-        assert_eq!(a[1]["id"], 1);
-    }
-
-    #[tokio::test]
-    async fn a_parse_error_is_32700_with_null_id() {
-        let a = session(&["{\"id\": 4, nope".to_string()]).await;
-        assert_eq!(
-            a[0],
-            json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": "invalid JSON"}})
-        );
-    }
-
-    #[tokio::test]
-    async fn a_batch_is_32600() {
-        let a = session(&[r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#.to_string()]).await;
-        assert_eq!(
-            a[0],
-            json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32600, "message": "batches are not supported"}})
-        );
-        // an invalid request whose id can be read is answered on it
-        let a = session(&[r#"{"jsonrpc":"1.0","id":9,"method":"ping"}"#.to_string()]).await;
-        assert_eq!(
-            (a[0]["id"].clone(), a[0]["error"]["code"].clone()),
-            (json!(9), json!(-32600))
-        );
-    }
-
-    #[tokio::test]
-    async fn input_schema_is_the_types() {
-        let a = session(&[init("2025-11-25"), req(1, "tools/list", json!({}))]).await;
-        let echo = &a[1]["result"]["tools"][1];
-        assert_eq!(echo["name"], "echo");
-        assert_eq!(echo["description"], "Say TEXT back.");
-        assert_eq!(echo["inputSchema"], typed::<EchoArgs>().schema());
-        assert_eq!(
-            echo["inputSchema"],
-            json!({
-                "type": "object",
-                "properties": {"text": {"type": "string"}},
-                "required": ["text"],
-                "additionalProperties": false,
-            })
-        );
-        assert_eq!(echo["outputSchema"]["type"], "object");
-        assert!(a[1]["result"]["tools"][2].get("outputSchema").is_none());
-    }
-
-    #[tokio::test]
-    async fn tools_list_is_sorted_and_stable() {
-        let lines = [
-            init("2025-11-25"),
-            req(1, "tools/list", json!({})),
-            req(2, "tools/list", json!({})),
-        ];
-        let a = session(&lines).await;
-        let names: Vec<&str> = a[1]["result"]["tools"]
-            .as_array()
-            .expect("tools")
-            .iter()
-            .filter_map(|t| t["name"].as_str())
-            .collect();
-        assert_eq!(names, ["boom", "echo", "fail", "noargs"]);
-        assert_eq!(a[1]["result"], a[2]["result"]);
-        assert_eq!(session(&lines).await[1], a[1]);
-    }
-
-    #[tokio::test]
-    async fn noargs_schema_is_closed() {
-        let a = session(&[init("2025-11-25"), req(1, "tools/list", json!({}))]).await;
-        assert_eq!(
-            a[1]["result"]["tools"][3]["inputSchema"],
-            json!({"type": "object", "additionalProperties": false})
-        );
-    }
-
-    #[tokio::test]
-    async fn a_line_over_1_mib_ends_the_connection() {
-        let mib = 1 << 20;
-        // exactly 1 MiB is still a line
-        let mut fits = req(1, "ping", json!({}));
-        fits.push_str(&" ".repeat(mib - fits.len()));
-        let (a, end, _) = session_with(
-            &[
-                init("2025-11-25"),
-                fits,
-                "x".repeat(mib + 1),
+    #[test]
+    fn a_request_before_initialize_is_an_error_not_silence() {
+        saman::block_on_current(async {
+            let a = session(&[
+                req(1, "tools/list", json!({})),
                 req(2, "ping", json!({})),
-            ],
-            Limits::default(),
-        )
-        .await;
-        assert_eq!(end, End::LineTooLong);
-        assert_eq!(a.len(), 2, "answered up to the long line, nothing after");
-        assert_eq!(a[1], json!({"jsonrpc": "2.0", "id": 1, "result": {}}));
+                call(3, "echo", json!({"text": "x"})),
+            ])
+            .await;
+            assert_eq!(a.len(), 3);
+            assert_eq!(
+                a[0],
+                json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -32600, "message": "initialize first"}})
+            );
+            assert_eq!(a[1], json!({"jsonrpc": "2.0", "id": 2, "result": {}}));
+            assert_eq!(a[2]["error"]["code"], INVALID_REQUEST);
+        });
     }
 
-    #[tokio::test]
-    async fn a_panicking_tool_is_32603_and_the_connection_goes_on() {
-        let a = session(&[
-            init("2025-11-25"),
-            call(1, "boom", json!({})),
-            req(2, "ping", json!({})),
-        ])
-        .await;
-        assert_eq!(a[1]["error"]["code"], INTERNAL_ERROR);
-        assert_eq!(a[1]["id"], 1);
-        assert_eq!(a[2]["result"], json!({}));
+    #[test]
+    fn a_modern_request_needs_no_initialize() {
+        saman::block_on_current(async {
+            let a = session(&[req(1, "tools/list", json!({"_meta": meta()}))]).await;
+            let r = &a[0]["result"];
+            assert_eq!(r["tools"].as_array().map(Vec::len), Some(4));
+            assert_eq!(r["resultType"], "complete");
+            assert_eq!(r["ttlMs"], TTL_MS);
+            assert_eq!(r["cacheScope"], "public");
+        });
     }
 
-    #[tokio::test]
-    async fn notifications_get_no_answer_and_answers_keep_request_order() {
-        let a = session(&[
-            init("2025-11-25"),
-            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}).to_string(),
-            json!({"jsonrpc": "2.0", "method": "notifications/whatever", "params": {}}).to_string(),
-            json!({"jsonrpc": "2.0", "id": 99, "result": {}}).to_string(),
-            String::new(),
-            call(5, "echo", json!({"text": "a"})),
-            req(3, "ping", json!({})),
-            call(4, "echo", json!({"text": "b"})),
-        ])
-        .await;
-        let ids: Vec<i64> = a.iter().filter_map(|x| x["id"].as_i64()).collect();
-        assert_eq!(ids, [0i64, 5, 3, 4]);
+    #[test]
+    fn modern_requests_are_stateless_and_carry_result_type() {
+        saman::block_on_current(async {
+            let a = session(&[
+                req(1, "server/discover", json!({"_meta": meta()})),
+                req(
+                    2,
+                    "tools/call",
+                    json!({"name": "echo", "arguments": {"text": "hi"}, "_meta": meta()}),
+                ),
+                req(3, "ping", json!({"_meta": meta()})),
+                // no handshake happened: a request without the version is still refused
+                req(4, "tools/list", json!({})),
+                req(5, "resources/list", json!({"_meta": meta()})),
+            ])
+            .await;
+            assert_eq!(
+                a[0]["result"],
+                json!({
+                    "resultType": "complete",
+                    "supportedVersions": ["2026-07-28"],
+                    "capabilities": {"tools": {}},
+                    "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "drgnx", "version": CRATE_VERSION}},
+                    "ttlMs": 3_600_000,
+                    "cacheScope": "public",
+                })
+            );
+            assert_eq!(a[1]["result"]["resultType"], "complete", "{}", a[1]);
+            assert_eq!(a[1]["result"]["content"][0]["text"], "hi");
+            assert_eq!(a[2]["result"], json!({"resultType": "complete"}));
+            assert_eq!(a[3]["error"]["message"], "initialize first");
+            assert_eq!(a[4]["error"]["code"], METHOD_NOT_FOUND);
+            // after initialize the connection is legacy: no resultType, even with the modern _meta
+            let a = session(&[
+                init("2025-11-25"),
+                req(1, "tools/list", json!({"_meta": meta()})),
+            ])
+            .await;
+            assert!(a[1]["result"].get("resultType").is_none(), "{}", a[1]);
+            assert!(a[1]["result"].get("ttlMs").is_none());
+        });
     }
 
-    #[tokio::test]
-    async fn an_answer_over_the_limit_is_32603() {
-        let big = "y".repeat(200);
-        let (a, end, _) = session_with(
-            &[init("2025-11-25"), call(1, "echo", json!({"text": big}))],
-            Limits {
-                max_in: 1 << 20,
-                max_out: 300,
-            },
-        )
-        .await;
-        assert_eq!(end, End::ClientClosed);
-        assert_eq!(a[1]["id"], 1);
-        assert_eq!(a[1]["error"]["code"], INTERNAL_ERROR);
+    #[test]
+    fn unknown_version_is_32022_with_supported() {
+        saman::block_on_current(async {
+            let mut m = meta();
+            m["io.modelcontextprotocol/protocolVersion"] = json!("2099-01-01");
+            let a = session(&[req(7, "server/discover", json!({"_meta": m}))]).await;
+            assert_eq!(
+                a[0],
+                json!({"jsonrpc": "2.0", "id": 7, "error": {
+                    "code": -32022,
+                    "message": "unsupported protocol version",
+                    "data": {"supported": ["2026-07-28", "2025-11-25"], "requested": "2099-01-01"},
+                }})
+            );
+        });
+    }
+
+    #[test]
+    fn missing_client_capabilities_is_32602() {
+        saman::block_on_current(async {
+            let m = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28"});
+            let a = session(&[req(1, "tools/list", json!({"_meta": m}))]).await;
+            assert_eq!(a[0]["error"]["code"], INVALID_PARAMS);
+            assert_eq!(
+                a[0]["error"]["message"],
+                "params._meta needs io.modelcontextprotocol/clientCapabilities"
+            );
+        });
+    }
+
+    #[test]
+    fn a_bad_argument_is_a_tool_error_with_its_path() {
+        saman::block_on_current(async {
+            let (a, end, ctx) = session_with(
+                &[
+                    init("2025-11-25"),
+                    call(1, "echo", json!({"text": 3})),
+                    call(2, "echo", json!({"text": "a", "extra": 1})),
+                    call(3, "echo", json!({})),
+                    call(4, "noargs", json!({"agent": "me"})),
+                ],
+                Limits::default(),
+            )
+            .await;
+            assert_eq!(end, End::ClientClosed);
+            let expect = [
+                ("text", "text: invalid type: integer `3`, expected a string"),
+                ("extra", "extra: unknown key"),
+                ("text", "text: required, missing"),
+                ("agent", "agent: unknown key"),
+            ];
+            for (answer, (path, text)) in a[1..].iter().zip(expect) {
+                assert_eq!(
+                    answer["result"],
+                    json!({
+                        "content": [{"type": "text", "text": text}],
+                        "isError": true,
+                        "_meta": {"dev.drgnx/error": {"code": "invalid-arguments", "path": path}},
+                    }),
+                    "{answer}"
+                );
+            }
+            assert_eq!(calls(&ctx), 0, "the tool never ran");
+            // the same in the stateless era
+            let (a, _, ctx) = session_with(
+                &[req(
+                    1,
+                    "tools/call",
+                    json!({"name": "echo", "arguments": {"text": 3}, "_meta": meta()}),
+                )],
+                Limits::default(),
+            )
+            .await;
+            assert_eq!(a[0]["result"]["isError"], true);
+            assert_eq!(a[0]["result"]["_meta"]["dev.drgnx/error"]["path"], "text");
+            assert_eq!(calls(&ctx), 0);
+        });
+    }
+
+    #[test]
+    fn tool_results_and_tool_errors() {
+        saman::block_on_current(async {
+            let (a, _, ctx) = session_with(
+                &[
+                    init("2025-11-25"),
+                    call(1, "echo", json!({"text": "hi"})),
+                    call(2, "fail", json!({})),
+                    req(3, "tools/call", json!({"name": "noargs"})),
+                ],
+                Limits::default(),
+            )
+            .await;
+            assert_eq!(
+                a[1]["result"],
+                json!({"content": [{"type": "text", "text": "hi"}], "structuredContent": {"text": "hi"}})
+            );
+            assert_eq!(
+                a[2]["result"],
+                json!({"content": [{"type": "text", "text": "it failed"}], "isError": true})
+            );
+            // no outputSchema, so no structuredContent
+            assert_eq!(
+                a[3]["result"],
+                json!({"content": [{"type": "text", "text": "ok"}]})
+            );
+            assert_eq!(calls(&ctx), 1);
+        });
+    }
+
+    #[test]
+    fn an_unknown_tool_is_32602() {
+        saman::block_on_current(async {
+            let a = session(&[
+                init("2025-11-25"),
+                call(1, "nope", json!({})),
+                req(2, "tools/call", json!({"arguments": {}})),
+                req(3, "tools/call", json!({"name": "echo", "arguments": [1]})),
+            ])
+            .await;
+            assert_eq!(
+                a[1],
+                json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -32602, "message": "Unknown tool: nope"}})
+            );
+            assert_eq!(a[2]["error"]["code"], INVALID_PARAMS);
+            assert_eq!(a[3]["error"]["code"], INVALID_PARAMS);
+        });
+    }
+
+    #[test]
+    fn an_unknown_method_is_32601() {
+        saman::block_on_current(async {
+            let a = session(&[init("2025-11-25"), req(1, "resources/list", json!({}))]).await;
+            assert_eq!(a[1]["error"]["code"], METHOD_NOT_FOUND);
+            assert_eq!(a[1]["id"], 1);
+        });
+    }
+
+    #[test]
+    fn a_parse_error_is_32700_with_null_id() {
+        saman::block_on_current(async {
+            let a = session(&["{\"id\": 4, nope".to_string()]).await;
+            assert_eq!(
+                a[0],
+                json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": "invalid JSON"}})
+            );
+        });
+    }
+
+    #[test]
+    fn a_batch_is_32600() {
+        saman::block_on_current(async {
+            let a = session(&[r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#.to_string()]).await;
+            assert_eq!(
+                a[0],
+                json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32600, "message": "batches are not supported"}})
+            );
+            // an invalid request whose id can be read is answered on it
+            let a = session(&[r#"{"jsonrpc":"1.0","id":9,"method":"ping"}"#.to_string()]).await;
+            assert_eq!(
+                (a[0]["id"].clone(), a[0]["error"]["code"].clone()),
+                (json!(9), json!(-32600))
+            );
+        });
+    }
+
+    #[test]
+    fn input_schema_is_the_types() {
+        saman::block_on_current(async {
+            let a = session(&[init("2025-11-25"), req(1, "tools/list", json!({}))]).await;
+            let echo = &a[1]["result"]["tools"][1];
+            assert_eq!(echo["name"], "echo");
+            assert_eq!(echo["description"], "Say TEXT back.");
+            assert_eq!(echo["inputSchema"], typed::<EchoArgs>().schema());
+            assert_eq!(
+                echo["inputSchema"],
+                json!({
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                    "additionalProperties": false,
+                })
+            );
+            assert_eq!(echo["outputSchema"]["type"], "object");
+            assert!(a[1]["result"]["tools"][2].get("outputSchema").is_none());
+        });
+    }
+
+    #[test]
+    fn tools_list_is_sorted_and_stable() {
+        saman::block_on_current(async {
+            let lines = [
+                init("2025-11-25"),
+                req(1, "tools/list", json!({})),
+                req(2, "tools/list", json!({})),
+            ];
+            let a = session(&lines).await;
+            let names: Vec<&str> = a[1]["result"]["tools"]
+                .as_array()
+                .expect("tools")
+                .iter()
+                .filter_map(|t| t["name"].as_str())
+                .collect();
+            assert_eq!(names, ["boom", "echo", "fail", "noargs"]);
+            assert_eq!(a[1]["result"], a[2]["result"]);
+            assert_eq!(session(&lines).await[1], a[1]);
+        });
+    }
+
+    #[test]
+    fn noargs_schema_is_closed() {
+        saman::block_on_current(async {
+            let a = session(&[init("2025-11-25"), req(1, "tools/list", json!({}))]).await;
+            assert_eq!(
+                a[1]["result"]["tools"][3]["inputSchema"],
+                json!({"type": "object", "additionalProperties": false})
+            );
+        });
+    }
+
+    #[test]
+    fn a_line_over_1_mib_ends_the_connection() {
+        saman::block_on_current(async {
+            let mib = 1 << 20;
+            // exactly 1 MiB is still a line
+            let mut fits = req(1, "ping", json!({}));
+            fits.push_str(&" ".repeat(mib - fits.len()));
+            let (a, end, _) = session_with(
+                &[
+                    init("2025-11-25"),
+                    fits,
+                    "x".repeat(mib + 1),
+                    req(2, "ping", json!({})),
+                ],
+                Limits::default(),
+            )
+            .await;
+            assert_eq!(end, End::LineTooLong);
+            assert_eq!(a.len(), 2, "answered up to the long line, nothing after");
+            assert_eq!(a[1], json!({"jsonrpc": "2.0", "id": 1, "result": {}}));
+        });
+    }
+
+    #[test]
+    fn a_panicking_tool_is_32603_and_the_connection_goes_on() {
+        saman::block_on_current(async {
+            let a = session(&[
+                init("2025-11-25"),
+                call(1, "boom", json!({})),
+                req(2, "ping", json!({})),
+            ])
+            .await;
+            assert_eq!(a[1]["error"]["code"], INTERNAL_ERROR);
+            assert_eq!(a[1]["id"], 1);
+            assert_eq!(a[2]["result"], json!({}));
+        });
+    }
+
+    #[test]
+    fn notifications_get_no_answer_and_answers_keep_request_order() {
+        saman::block_on_current(async {
+            let a = session(&[
+                init("2025-11-25"),
+                json!({"jsonrpc": "2.0", "method": "notifications/initialized"}).to_string(),
+                json!({"jsonrpc": "2.0", "method": "notifications/whatever", "params": {}})
+                    .to_string(),
+                json!({"jsonrpc": "2.0", "id": 99, "result": {}}).to_string(),
+                String::new(),
+                call(5, "echo", json!({"text": "a"})),
+                req(3, "ping", json!({})),
+                call(4, "echo", json!({"text": "b"})),
+            ])
+            .await;
+            let ids: Vec<i64> = a.iter().filter_map(|x| x["id"].as_i64()).collect();
+            assert_eq!(ids, [0i64, 5, 3, 4]);
+        });
+    }
+
+    #[test]
+    fn an_answer_over_the_limit_is_32603() {
+        saman::block_on_current(async {
+            let big = "y".repeat(200);
+            let (a, end, _) = session_with(
+                &[init("2025-11-25"), call(1, "echo", json!({"text": big}))],
+                Limits {
+                    max_in: 1 << 20,
+                    max_out: 300,
+                },
+            )
+            .await;
+            assert_eq!(end, End::ClientClosed);
+            assert_eq!(a[1]["id"], 1);
+            assert_eq!(a[1]["error"]["code"], INTERNAL_ERROR);
+        });
     }
 
     /// A tool whose name and description are made at run time, as a plugin's ability is.
@@ -1140,57 +1187,59 @@ mod tests {
     }
 
     // [D] pure: the names of a served list need not be 'static
-    #[tokio::test]
-    async fn dynamic_names_listed() {
-        let made = |n: &str| -> Box<dyn Tool<Calls>> {
-            Box::new(Dynamic {
-                name: format!("plug-{n}_run"),
-                description: format!("what {n} does"),
-            })
-        };
-        let all: Vec<Box<dyn Tool<Calls>>> = vec![made("b"), made("a")];
-        let (client, server) = tokio::io::duplex(1 << 16);
-        let (sr, sw) = tokio::io::split(server);
-        let (mut cr, mut cw) = tokio::io::split(client);
-        let input = [
-            init("2025-11-25"),
-            req(1, "tools/list", json!({})),
-            call(2, "plug-b_run", json!({})),
-            call(3, "plug-c_run", json!({})),
-        ]
-        .join("\n")
-            + "\n";
-        let serving = serve(
-            Arc::new(Calls::default()),
-            all.into(),
-            ServerInfo::default(),
-            sr,
-            sw,
-            Limits::default(),
-        );
-        let feeding = async move {
-            let _ = cw.write_all(input.as_bytes()).await;
-            let _ = cw.shutdown().await;
-        };
-        let reading = async move {
-            let mut out = String::new();
-            cr.read_to_string(&mut out).await.expect("UTF-8");
-            out
-        };
-        let (_, (), out) = tokio::join!(serving, feeding, reading);
-        let a: Vec<Value> = out
-            .lines()
-            .map(|l| serde_json::from_str(l).expect("JSON"))
-            .collect();
-        let listed: Vec<&str> = a[1]["result"]["tools"]
-            .as_array()
-            .expect("tools")
-            .iter()
-            .filter_map(|t| t["name"].as_str())
-            .collect();
-        assert_eq!(listed, ["plug-a_run", "plug-b_run"]);
-        assert_eq!(a[1]["result"]["tools"][0]["description"], "what a does");
-        assert_eq!(a[2]["result"]["content"][0]["text"], "ran plug-b_run");
-        assert_eq!(a[3]["error"]["code"], INVALID_PARAMS);
+    #[test]
+    fn dynamic_names_listed() {
+        saman::block_on_current(async {
+            let made = |n: &str| -> Box<dyn Tool<Calls>> {
+                Box::new(Dynamic {
+                    name: format!("plug-{n}_run"),
+                    description: format!("what {n} does"),
+                })
+            };
+            let all: Vec<Box<dyn Tool<Calls>>> = vec![made("b"), made("a")];
+            let (client, server) = tokio::io::duplex(1 << 16);
+            let (sr, sw) = tokio::io::split(server);
+            let (mut cr, mut cw) = tokio::io::split(client);
+            let input = [
+                init("2025-11-25"),
+                req(1, "tools/list", json!({})),
+                call(2, "plug-b_run", json!({})),
+                call(3, "plug-c_run", json!({})),
+            ]
+            .join("\n")
+                + "\n";
+            let serving = serve(
+                Arc::new(Calls::default()),
+                all.into(),
+                ServerInfo::default(),
+                sr,
+                sw,
+                Limits::default(),
+            );
+            let feeding = async move {
+                cw.write_all(input.as_bytes()).await.unwrap_or_default();
+                cw.shutdown().await.unwrap_or_default();
+            };
+            let reading = async move {
+                let mut out = String::new();
+                cr.read_to_string(&mut out).await.expect("UTF-8");
+                out
+            };
+            let (_, (), out) = tokio::join!(serving, feeding, reading);
+            let a: Vec<Value> = out
+                .lines()
+                .map(|l| serde_json::from_str(l).expect("JSON"))
+                .collect();
+            let listed: Vec<&str> = a[1]["result"]["tools"]
+                .as_array()
+                .expect("tools")
+                .iter()
+                .filter_map(|t| t["name"].as_str())
+                .collect();
+            assert_eq!(listed, ["plug-a_run", "plug-b_run"]);
+            assert_eq!(a[1]["result"]["tools"][0]["description"], "what a does");
+            assert_eq!(a[2]["result"]["content"][0]["text"], "ran plug-b_run");
+            assert_eq!(a[3]["error"]["code"], INVALID_PARAMS);
+        });
     }
 }

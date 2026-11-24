@@ -13,10 +13,10 @@ struct Env {
 }
 
 fn sh(env: &Path, dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args(args)
         .current_dir(dir)
-        .env("HOME", env)
+        .env(stig::HOME_VAR, env)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
@@ -40,7 +40,7 @@ fn env() -> Env {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&repo).unwrap();
     sh(&home, &repo, &["init", "-q", "-b", "main"]);
-    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    crate::fsio::write(repo.join("a.txt"), "one\n").unwrap();
     sh(&home, &repo, &["add", "-A"]);
     sh(&home, &repo, &["commit", "-q", "-m", "base"]);
     Env {
@@ -77,17 +77,20 @@ fn hub(e: &Env, mode: TreeMode) -> (HubGit, Rows) {
     let rows: Rows = Arc::default();
     let sink = rows.clone();
     let h = HubGit::new(e.trees.clone(), mode, Box::new(NoPolicy), None)
-        .with_env(vec![("HOME".into(), e.home.to_string_lossy().into_owned())])
+        .with_env(vec![(
+            stig::HOME_VAR.into(),
+            e.home.to_string_lossy().into_owned(),
+        )])
         .with_bases(
             e.snaps.clone(),
-            Arc::new(move |r| sink.lock().unwrap().push(r)),
+            Arc::new(move |r| saman::lock(&sink).push(r)),
         );
     (h, rows)
 }
 
 fn listing(snaps: &Path, wt: &Path, tree: &str) -> Vec<String> {
     let shadow = snapshot::repo_of(snaps, wt);
-    let out = Command::new("git")
+    let out = crate::proc::Command::new("git")
         .env("GIT_DIR", shadow)
         .args(["ls-tree", "-r", "--name-only", tree])
         .output()
@@ -99,67 +102,69 @@ fn listing(snaps: &Path, wt: &Path, tree: &str) -> Vec<String> {
 }
 
 /// Pattern D (real git and files, no clock): both tree modes record the base when they make the tree.
-#[tokio::test]
-async fn recorded_at_creation_with_its_tree() {
-    for mode in [TreeMode::Worktree, TreeMode::Snapshot] {
-        let e = env();
-        let head = sh(&e.home, &e.repo, &["rev-parse", "HEAD"]);
-        let (h, rows) = hub(&e, mode);
-        let tree = h.task_worktree(&e.repo, "run1", "1", "main").await.unwrap();
-        let rows = rows.lock().unwrap();
-        assert_eq!(rows.len(), 1, "{mode:?}");
-        let r = &rows[0];
-        assert_eq!(r.worktree, tree.path.to_string_lossy());
-        assert_eq!(r.repo, e.repo.to_string_lossy());
-        assert_eq!(r.base_commit.as_deref(), Some(head.as_str()));
-        let t = r.base_tree.as_deref().expect("a base tree");
-        assert_eq!(listing(&e.snaps, &tree.path, t), ["a.txt"]);
-    }
+#[test]
+fn recorded_at_creation_with_its_tree() {
+    saman::block_on_current(async move {
+        for mode in [TreeMode::Worktree, TreeMode::Snapshot] {
+            let e = env();
+            let head = sh(&e.home, &e.repo, &["rev-parse", "HEAD"]);
+            let (h, rows) = hub(&e, mode);
+            let tree = h.task_worktree(&e.repo, "run1", "1", "main").await.unwrap();
+            let rows = saman::lock(&rows);
+            assert_eq!(rows.len(), 1, "{mode:?}");
+            let r = &rows[0];
+            assert_eq!(r.worktree, tree.path.to_string_lossy());
+            assert_eq!(r.repo, e.repo.to_string_lossy());
+            assert_eq!(r.base_commit.as_deref(), Some(head.as_str()));
+            let t = r.base_tree.as_deref().expect("a base tree");
+            assert_eq!(listing(&e.snaps, &tree.path, t), ["a.txt"]);
+        }
+    })
 }
 
 /// Pattern D: the branch is the one the tree was cut from, never `main` because it is the default.
-#[tokio::test]
-async fn never_main_by_default() {
-    let e = env();
-    sh(&e.home, &e.repo, &["checkout", "-q", "-b", "rp-i6"]);
-    std::fs::write(e.repo.join("b.txt"), "two\n").unwrap();
-    sh(&e.home, &e.repo, &["add", "-A"]);
-    sh(&e.home, &e.repo, &["commit", "-q", "-m", "second"]);
-    let tip = sh(&e.home, &e.repo, &["rev-parse", "HEAD"]);
-    sh(&e.home, &e.repo, &["checkout", "-q", "main"]);
-    let (h, rows) = hub(&e, TreeMode::Worktree);
-    // named by its commit: the one branch that points there
-    h.task_worktree(&e.repo, "run1", "1", &tip).await.unwrap();
-    // named by its branch, with the repository on main (the tree above now points there too)
-    h.task_worktree(&e.repo, "run1", "2", "rp-i6")
-        .await
-        .unwrap();
-    let main_tip = sh(&e.home, &e.repo, &["rev-parse", "main"]);
-    // a commit two branches point at: not guessed
-    sh(&e.home, &e.repo, &["branch", "twin", "main"]);
-    h.task_worktree(&e.repo, "run1", "3", &main_tip)
-        .await
-        .unwrap();
-    // a plan run's own branch, at the same commit as main: the tree `job/run2-1` was cut from `job/run2`
-    sh(&e.home, &e.repo, &["branch", "job/run2", "main"]);
-    h.task_worktree(&e.repo, "run2", "1", &main_tip)
-        .await
-        .unwrap();
-    let got: Vec<Option<String>> = rows
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|r| r.base_branch.clone())
-        .collect();
-    assert_eq!(
-        got,
-        [
-            Some("rp-i6".into()),
-            Some("rp-i6".into()),
-            None,
-            Some("job/run2".into())
-        ]
-    );
+#[test]
+fn never_main_by_default() {
+    saman::block_on_current(async move {
+        let e = env();
+        sh(&e.home, &e.repo, &["checkout", "-q", "-b", "rp-i6"]);
+        crate::fsio::write(e.repo.join("b.txt"), "two\n").unwrap();
+        sh(&e.home, &e.repo, &["add", "-A"]);
+        sh(&e.home, &e.repo, &["commit", "-q", "-m", "second"]);
+        let tip = sh(&e.home, &e.repo, &["rev-parse", "HEAD"]);
+        sh(&e.home, &e.repo, &["checkout", "-q", "main"]);
+        let (h, rows) = hub(&e, TreeMode::Worktree);
+        // named by its commit: the one branch that points there
+        h.task_worktree(&e.repo, "run1", "1", &tip).await.unwrap();
+        // named by its branch, with the repository on main (the tree above now points there too)
+        h.task_worktree(&e.repo, "run1", "2", "rp-i6")
+            .await
+            .unwrap();
+        let main_tip = sh(&e.home, &e.repo, &["rev-parse", "main"]);
+        // a commit two branches point at: not guessed
+        sh(&e.home, &e.repo, &["branch", "twin", "main"]);
+        h.task_worktree(&e.repo, "run1", "3", &main_tip)
+            .await
+            .unwrap();
+        // a plan run's own branch, at the same commit as main: the tree `job/run2-1` was cut from `job/run2`
+        sh(&e.home, &e.repo, &["branch", "job/run2", "main"]);
+        h.task_worktree(&e.repo, "run2", "1", &main_tip)
+            .await
+            .unwrap();
+        let got: Vec<Option<String>> = saman::lock(&rows)
+            .iter()
+            .map(|r| r.base_branch.clone())
+            .collect();
+        assert_eq!(
+            got,
+            [
+                Some("rp-i6".into()),
+                Some("rp-i6".into()),
+                None,
+                Some("job/run2".into())
+            ]
+        );
+    })
 }
 
 /// Pattern D.

@@ -227,7 +227,7 @@ fn scan_file(root: &Path, table: &Table, file: &Path, krate: &str) -> Vec<Findin
         reactive: table.is_ui(krate) || rel.starts_with("crates/ui/"),
         ..Default::default()
     };
-    for s in table.standard.iter().filter(|s| s.owner != krate) {
+    for s in table.standard.iter().filter(|s| !s.owned_by(krate)) {
         for p in &s.clippy {
             rules
                 .methods

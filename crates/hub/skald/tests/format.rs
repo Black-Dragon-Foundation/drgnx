@@ -352,7 +352,7 @@ fn highlights_use_only_the_portable_subset() {
 fn write(dir: &std::path::Path, rel: &str, text: &str) {
     let p = dir.join(rel);
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-    std::fs::write(p, text).unwrap();
+    eitri::replace_file(&p, text.as_bytes()).unwrap();
 }
 
 #[test]

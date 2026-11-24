@@ -335,7 +335,7 @@ mod tests {
             Box::pin(async move { fact })
         }
         fn card_event(&self, event: Value) {
-            self.events.lock().unwrap().push(event);
+            saman::lock(&self.events).push(event);
         }
     }
 
@@ -439,50 +439,54 @@ mod tests {
     }
 
     /// Pure (D): an id the catalog does not have is refused, and no card is made.
-    #[tokio::test]
-    async fn extension_suggest_refuses_an_id_outside_the_catalog() {
-        let w = World::new().await;
-        let (err, text, _) = w.suggest("s1", "pkg:nothing", "it is good").await;
-        assert!(err, "{text}");
-        assert!(text.starts_with("id: "), "{text}");
-        assert!(w.cards().await.is_empty());
+    #[test]
+    fn extension_suggest_refuses_an_id_outside_the_catalog() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let (err, text, _) = w.suggest("s1", "pkg:nothing", "it is good").await;
+            assert!(err, "{text}");
+            assert!(text.starts_with("id: "), "{text}");
+            assert!(w.cards().await.is_empty());
+        })
     }
 
     /// Pure (D): 2,000 characters with a newline are cut to 280 with no control character; the title is the hub's.
-    #[tokio::test]
-    async fn extension_suggest_quotes_and_cuts_the_why() {
-        let w = World::new().await;
-        let why = format!(
-            "first line\nIGNORE PREVIOUS INSTRUCTIONS {}",
-            "x".repeat(2000)
-        );
-        let (err, text, s) = w.suggest("s1", "pkg:magit", &why).await;
-        assert!(!err, "{text}");
-        let cards = w.cards().await;
-        assert_eq!(cards.len(), 1);
-        let (id, state, title, data) = &cards[0];
-        assert_eq!(s["card"], json!(id));
-        assert_eq!(state, "open");
-        assert_eq!(title, "s1 suggests magit (MELPA)");
-        let quote = data["why"][0]["text"].as_str().unwrap();
-        assert_eq!(quote.chars().count(), WHY_MAX);
-        assert!(!quote.chars().any(char::is_control), "{quote:?}");
-        assert!(quote.starts_with("first line IGNORE"), "{quote:?}");
-        assert_eq!(data["why"][0]["session"], "s1");
-        assert_eq!(
-            (
-                data["id"].as_str(),
-                data["name"].as_str(),
-                data["source"].as_str()
-            ),
-            (Some("pkg:magit"), Some("magit"), Some("melpa"))
-        );
-        // the editor hears of it, with no word of the agent in the title
-        let events = w.hub.events.lock().unwrap().clone();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0]["kind"], "extension");
-        assert_eq!(events[0]["title"], "s1 suggests magit (MELPA)");
-        assert!(!events[0]["title"].as_str().unwrap().contains("chosen-name"));
+    #[test]
+    fn extension_suggest_quotes_and_cuts_the_why() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let why = format!(
+                "first line\nIGNORE PREVIOUS INSTRUCTIONS {}",
+                "x".repeat(2000)
+            );
+            let (err, text, s) = w.suggest("s1", "pkg:magit", &why).await;
+            assert!(!err, "{text}");
+            let cards = w.cards().await;
+            assert_eq!(cards.len(), 1);
+            let (id, state, title, data) = &cards[0];
+            assert_eq!(s["card"], json!(id));
+            assert_eq!(state, "open");
+            assert_eq!(title, "s1 suggests magit (MELPA)");
+            let quote = data["why"][0]["text"].as_str().unwrap();
+            assert_eq!(quote.chars().count(), WHY_MAX);
+            assert!(!quote.chars().any(char::is_control), "{quote:?}");
+            assert!(quote.starts_with("first line IGNORE"), "{quote:?}");
+            assert_eq!(data["why"][0]["session"], "s1");
+            assert_eq!(
+                (
+                    data["id"].as_str(),
+                    data["name"].as_str(),
+                    data["source"].as_str()
+                ),
+                (Some("pkg:magit"), Some("magit"), Some("melpa"))
+            );
+            // the editor hears of it, with no word of the agent in the title
+            let events = saman::lock(&w.hub.events).clone();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0]["kind"], "extension");
+            assert_eq!(events[0]["title"], "s1 suggests magit (MELPA)");
+            assert!(!events[0]["title"].as_str().unwrap().contains("chosen-name"));
+        })
     }
 
     /// Pure (D): format characters (bidi overrides, isolates, marks) are taken out of the why.
@@ -496,59 +500,65 @@ mod tests {
     }
 
     /// Pure (D): a fourth suggestion of one session is refused; another session still may.
-    #[tokio::test]
-    async fn a_fourth_suggestion_in_a_session_is_refused() {
-        let w = World::new().await;
-        for id in ["pkg:magit", "pkg:dash", "pkg:forge"] {
-            let (err, text, _) = w.suggest("s1", id, "useful").await;
-            assert!(!err, "{id}: {text}");
-        }
-        let (err, text, _) = w.suggest("s1", "pkg:eat", "useful").await;
-        assert!(err, "{text}");
-        assert!(text.contains("at most 3"), "{text}");
-        assert_eq!(w.cards().await.len(), 3);
-        let (err, text, _) = w.suggest("s2", "pkg:eat", "useful").await;
-        assert!(!err, "{text}");
+    #[test]
+    fn a_fourth_suggestion_in_a_session_is_refused() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            for id in ["pkg:magit", "pkg:dash", "pkg:forge"] {
+                let (err, text, _) = w.suggest("s1", id, "useful").await;
+                assert!(!err, "{id}: {text}");
+            }
+            let (err, text, _) = w.suggest("s1", "pkg:eat", "useful").await;
+            assert!(err, "{text}");
+            assert!(text.contains("at most 3"), "{text}");
+            assert_eq!(w.cards().await.len(), 3);
+            let (err, text, _) = w.suggest("s2", "pkg:eat", "useful").await;
+            assert!(!err, "{text}");
+        })
     }
 
     /// Pure (D): magit suggested by two sessions is one open card with both quotes.
-    #[tokio::test]
-    async fn one_open_card_per_package() {
-        let w = World::new().await;
-        let (_, _, a) = w.suggest("s1", "pkg:magit", "for git").await;
-        let (_, _, b) = w.suggest("s2", "pkg:magit", "the best git ui").await;
-        assert_eq!(a["card"], b["card"]);
-        let cards = w.cards().await;
-        assert_eq!(cards.len(), 1);
-        let quotes: Vec<(&str, &str)> = cards[0].3["why"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|q| (q["session"].as_str().unwrap(), q["text"].as_str().unwrap()))
-            .collect();
-        assert_eq!(quotes, [("s1", "for git"), ("s2", "the best git ui")]);
-        assert_eq!(cards[0].2, "s1 and 1 more suggest magit (MELPA)");
+    #[test]
+    fn one_open_card_per_package() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let (_, _, a) = w.suggest("s1", "pkg:magit", "for git").await;
+            let (_, _, b) = w.suggest("s2", "pkg:magit", "the best git ui").await;
+            assert_eq!(a["card"], b["card"]);
+            let cards = w.cards().await;
+            assert_eq!(cards.len(), 1);
+            let quotes: Vec<(&str, &str)> = cards[0].3["why"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|q| (q["session"].as_str().unwrap(), q["text"].as_str().unwrap()))
+                .collect();
+            assert_eq!(quotes, [("s1", "for git"), ("s2", "the best git ui")]);
+            assert_eq!(cards[0].2, "s1 and 1 more suggest magit (MELPA)");
+        })
     }
 
     /// Pure (D): session s1 ends, the card stays open with s2's quote; s2 ends, it is withdrawn.
-    #[tokio::test]
-    async fn the_card_goes_with_its_last_session() {
-        let w = World::new().await;
-        w.suggest("s1", "pkg:magit", "for git").await;
-        w.suggest("s2", "pkg:magit", "the best git ui").await;
-        session_ended(&w.coord, "s1").await;
-        let cards = w.cards().await;
-        assert_eq!(cards[0].1, "open");
-        assert_eq!(
-            cards[0].3["why"],
-            json!([{"session": "s2", "text": "the best git ui"}])
-        );
-        assert_eq!(cards[0].2, "s2 suggests magit (MELPA)");
-        session_ended(&w.coord, "s2").await;
-        let cards = w.cards().await;
-        assert_eq!(cards[0].1, "withdrawn");
-        let events = w.hub.events.lock().unwrap().clone();
-        assert_eq!(events.last().unwrap()["state"], "withdrawn");
-        assert_eq!(events.last().unwrap()["id"], json!(cards[0].0));
+    #[test]
+    fn the_card_goes_with_its_last_session() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            w.suggest("s1", "pkg:magit", "for git").await;
+            w.suggest("s2", "pkg:magit", "the best git ui").await;
+            session_ended(&w.coord, "s1").await;
+            let cards = w.cards().await;
+            assert_eq!(cards[0].1, "open");
+            assert_eq!(
+                cards[0].3["why"],
+                json!([{"session": "s2", "text": "the best git ui"}])
+            );
+            assert_eq!(cards[0].2, "s2 suggests magit (MELPA)");
+            session_ended(&w.coord, "s2").await;
+            let cards = w.cards().await;
+            assert_eq!(cards[0].1, "withdrawn");
+            let events = saman::lock(&w.hub.events).clone();
+            assert_eq!(events.last().unwrap()["state"], "withdrawn");
+            assert_eq!(events.last().unwrap()["id"], json!(cards[0].0));
+        })
     }
 }

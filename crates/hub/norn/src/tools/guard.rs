@@ -34,7 +34,7 @@ pub fn identity_arg(args: &Value) -> Option<&'static str> {
 }
 
 /// The guard's refusal of ARGS for WHO, with the Lisp text.
-pub fn refuse_identity_args(args: &Value, who: &Identity) -> Result<(), String> {
+pub(crate) fn refuse_identity_args(args: &Value, who: &Identity) -> Result<(), String> {
     match identity_arg(args) {
         Some(k) => Err(format!(
             "No tool takes `{k}': you are {}, from the process that started this server",
@@ -208,7 +208,7 @@ impl Coord {
     pub async fn held_report(&self, me: &str, job: Option<&str>) -> Option<String> {
         let now = self.now();
         let tell = {
-            let mut rates = self.rates.lock().unwrap();
+            let mut rates = saman::lock(&self.rates);
             if rates.reports.len() > PRUNE_AT {
                 rates.prune(now);
             }
@@ -268,7 +268,7 @@ impl Coord {
             .await;
         match told {
             Ok(Some(last)) => {
-                self.rates.lock().unwrap().told.insert(me.to_owned(), last);
+                saman::lock(&self.rates).told.insert(me.to_owned(), last);
             }
             Ok(None) => self.hub.notify(),
             Err(e) => tracing::debug!("the rate card for {me} was not written: {e}"),
@@ -315,7 +315,7 @@ pub const TEXT_MAX: usize = 2000;
 /// TEXT (WHAT names it in the error) cleaned for the user to read and how many characters were cut off
 /// (`drgnx-coord-mcp--text-cut`): control characters other than newline and tab become spaces, trimmed, at most
 /// [`TEXT_MAX`] characters.  An error when it is absent or blank.
-pub fn text_cut(text: Option<&str>, what: &str) -> Result<(String, usize), String> {
+pub(crate) fn text_cut(text: Option<&str>, what: &str) -> Result<(String, usize), String> {
     let clean: String = text
         .unwrap_or("")
         .chars()
@@ -379,77 +379,81 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn refuses_identity_names_even_if_a_schema_allowed_them() {
-        let dir = tempfile::tempdir().unwrap();
-        let coord = Coord::new(CoordDb::spawn(dir.path().join("work.db")), Arc::new(NoHub));
-        let tool = guarded(Ran);
-        assert_eq!(tool.description(), "a tool that would take an identity");
-        assert!(tool.input_schema().to_string().contains("agent"));
-        let who = Identity::Session {
-            agent: "s-1".into(),
-            sid: "s1".into(),
-            profile: None,
-            job: None,
-            task: None,
-            home: PathBuf::from("/w"),
-        };
-        let ctx = (Arc::new(coord), who);
-        // the schema takes `agent`, so the typed check alone would let it through
-        assert!(typed::<Loose>().check(&json!({"agent": "s-2"})).is_ok());
-        let e = tool.check(&json!({"agent": "s-2"})).unwrap_err();
-        assert_eq!(
-            (e.path.as_str(), e.message.as_str()),
-            ("agent", NO_IDENTITY_ARG)
-        );
-        match tool.call(&ctx, json!({"agent": "s-2"})).await {
-            ToolResult::Err(text) => assert_eq!(
-                text,
-                "No tool takes `agent': you are s-1, from the process that started this server"
-            ),
-            ToolResult::Ok { text, .. } | ToolResult::Rich { text, .. } => {
-                panic!("the guard let it run: {text}")
+    #[test]
+    fn refuses_identity_names_even_if_a_schema_allowed_them() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let coord = Coord::new(CoordDb::spawn(dir.path().join("work.db")), Arc::new(NoHub));
+            let tool = guarded(Ran);
+            assert_eq!(tool.description(), "a tool that would take an identity");
+            assert!(tool.input_schema().to_string().contains("agent"));
+            let who = Identity::Session {
+                agent: "s-1".into(),
+                sid: "s1".into(),
+                profile: None,
+                job: None,
+                task: None,
+                home: PathBuf::from("/w"),
+            };
+            let ctx = (Arc::new(coord), who);
+            // the schema takes `agent`, so the typed check alone would let it through
+            assert!(typed::<Loose>().check(&json!({"agent": "s-2"})).is_ok());
+            let e = tool.check(&json!({"agent": "s-2"})).unwrap_err();
+            assert_eq!(
+                (e.path.as_str(), e.message.as_str()),
+                ("agent", NO_IDENTITY_ARG)
+            );
+            match tool.call(&ctx, json!({"agent": "s-2"})).await {
+                ToolResult::Err(text) => assert_eq!(
+                    text,
+                    "No tool takes `agent': you are s-1, from the process that started this server"
+                ),
+                ToolResult::Ok { text, .. } | ToolResult::Rich { text, .. } => {
+                    panic!("the guard let it run: {text}")
+                }
             }
-        }
-        for k in IDENTITY_ARGS {
-            let mut args = serde_json::Map::new();
-            args.insert(k.into(), Value::Null);
-            assert!(tool.check(&Value::Object(args)).is_err(), "{k}");
-        }
-        // without an identity name the tool runs
-        assert!(tool.check(&json!({})).is_ok());
-        assert!(matches!(
-            tool.call(&ctx, json!({})).await,
-            ToolResult::Ok { .. }
-        ));
+            for k in IDENTITY_ARGS {
+                let mut args = serde_json::Map::new();
+                args.insert(k.into(), Value::Null);
+                assert!(tool.check(&Value::Object(args)).is_err(), "{k}");
+            }
+            // without an identity name the tool runs
+            assert!(tool.check(&json!({})).is_ok());
+            assert!(matches!(
+                tool.call(&ctx, json!({})).await,
+                ToolResult::Ok { .. }
+            ));
+        })
     }
 
     /// The report limit's memory is bounded: past [`PRUNE_AT`] identities a report forgets those a minute quiet whose
     /// notice has expired, and keeps a recent reporter and a recent notice.
-    #[tokio::test]
-    async fn the_report_memory_forgets_what_can_no_longer_matter() {
-        let dir = tempfile::tempdir().unwrap();
-        let coord = Coord::new(CoordDb::spawn(dir.path().join("work.db")), Arc::new(NoHub));
-        let now = coord.now();
-        {
-            let mut r = coord.rates.lock().unwrap();
-            for n in 0..=PRUNE_AT {
-                r.reports
-                    .insert(format!("old-{n}"), VecDeque::from([now - 3600.0]));
-                r.told.insert(format!("old-{n}"), now - 2.0 * TELL_EVERY);
+    #[test]
+    fn the_report_memory_forgets_what_can_no_longer_matter() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let coord = Coord::new(CoordDb::spawn(dir.path().join("work.db")), Arc::new(NoHub));
+            let now = coord.now();
+            {
+                let mut r = saman::lock(&coord.rates);
+                for n in 0..=PRUNE_AT {
+                    r.reports
+                        .insert(format!("old-{n}"), VecDeque::from([now - 3600.0]));
+                    r.told.insert(format!("old-{n}"), now - 2.0 * TELL_EVERY);
+                }
+                r.reports.insert("busy".into(), VecDeque::from([now - 1.0]));
+                r.told.insert("busy".into(), now - 1.0);
             }
-            r.reports.insert("busy".into(), VecDeque::from([now - 1.0]));
-            r.told.insert("busy".into(), now - 1.0);
-        }
-        assert!(coord.held_report("me", None).await.is_none());
-        let r = coord.rates.lock().unwrap();
-        let mut kept: Vec<&str> = r.reports.keys().map(String::as_str).collect();
-        kept.sort_unstable();
-        assert_eq!(kept, ["busy", "me"]);
-        assert_eq!(
-            r.told.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["busy"]
-        );
+            assert!(coord.held_report("me", None).await.is_none());
+            let r = saman::lock(&coord.rates);
+            let mut kept: Vec<&str> = r.reports.keys().map(String::as_str).collect();
+            kept.sort_unstable();
+            assert_eq!(kept, ["busy", "me"]);
+            assert_eq!(
+                r.told.keys().map(String::as_str).collect::<Vec<_>>(),
+                ["busy"]
+            );
+        })
     }
 
     #[test]

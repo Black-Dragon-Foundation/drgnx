@@ -31,10 +31,11 @@ impl Hub {
             winsize(40, 4, (0, 0)),
         )
         .unwrap();
-        let t = std::thread::spawn(move || {
+        let t = saman::spawn_thread("hub-loop", move || {
             let w = Worker::new(&Opts::default()).expect("engine");
             run(w, pty, Some(ctl), None)
-        });
+        })
+        .unwrap();
         hub.set_read_timeout(Some(Duration::from_millis(200)))
             .unwrap();
         Hub {
@@ -79,7 +80,12 @@ impl Hub {
 
     fn close(mut self) {
         self.send(In::Close { signal: Some(9) });
-        let _ = self.loop_.take().unwrap().join();
+        self.loop_
+            .take()
+            .unwrap()
+            .join()
+            .expect("the worker's loop")
+            .expect("the worker's loop ended well");
     }
 }
 
@@ -170,10 +176,11 @@ fn the_socket_is_private_and_another_uid_is_dropped() {
         winsize(40, 4, (0, 0)),
     )
     .unwrap();
-    let t = std::thread::spawn(move || {
+    let t = saman::spawn_thread("path-loop", move || {
         let w = Worker::new(&Opts::default()).expect("engine");
         run(w, pty, None, Some(l))
-    });
+    })
+    .unwrap();
     let me = UnixStream::connect(&socket).unwrap();
     let mut r = BufReader::new(me.try_clone().unwrap());
     let mut line = String::new();
@@ -192,12 +199,17 @@ fn the_socket_is_private_and_another_uid_is_dropped() {
             "another uid's connection is dropped unread"
         );
     } else {
-        eprintln!("another uid's connection: not checked (needs root, as in the test container)");
+        annall::cli_err(
+            "another uid's connection: not checked (needs root, as in the test container)",
+        )
+        .unwrap();
     }
     // this user's connection is still the worker's hub
     let mut w = me;
     let mut msg = serde_json::to_vec(&In::Close { signal: Some(9) }).unwrap();
     msg.push(b'\n');
     w.write_all(&msg).unwrap();
-    let _ = t.join();
+    t.join()
+        .expect("the worker's loop")
+        .expect("the worker's loop ended well");
 }

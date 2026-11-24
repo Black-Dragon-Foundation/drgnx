@@ -10,6 +10,7 @@
 //! - [`backend`]: the one platform boundary (`linux`, `macos`, `none`) and [`Sandbox`], which detects a backend and
 //!   prepares a run; [`inner`], [`landlock`], [`seccomp`]: the Linux layers. Every `cfg(target_os)` sits inside
 //!   these module files, never here.
+//! - [`probe`]: the escape probes' raw attempts, which `gleipnir-probe` runs against the layers above (raw on purpose).
 //! - [`check`]: whether the sandbox can start here, and the fix when it cannot.
 //! - [`trace`]: seeing the files a shell step opens (a seccomp user-notification listener that only records), the
 //!   `gleipnir-trace` wrapper and the hand-off of its fd to a supervisor outside.
@@ -20,12 +21,16 @@ pub mod check;
 pub mod inner;
 pub mod landlock;
 pub mod net;
+pub mod probe;
 pub mod sbpl;
 pub mod seccomp;
 pub mod spec;
 pub mod toolchain;
 pub mod trace;
 pub mod validate;
+
+mod say;
+pub(crate) use say::say;
 
 // What a caller needs to run something in the sandbox (docs/develop/gleipnir.md, "Using it").
 #[cfg(feature = "test-hooks")]

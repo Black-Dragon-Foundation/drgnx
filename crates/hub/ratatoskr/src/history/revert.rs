@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 /// A preview made against an older state of the files or the session.
 pub(crate) const STALE: &str = "stale";
@@ -119,7 +119,7 @@ async fn goes_on(f: &Front, at: RevertStep) -> bool {
         }
     };
     let Some(p) = park else { return true };
-    let _ = p.reached.send(());
+    crate::soft::done(p.reached.send(()), "reached send");
     p.go.await.unwrap_or(false)
 }
 
@@ -222,7 +222,7 @@ impl Drop for Held<'_> {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(m)
 }
 
 impl Reverts {
@@ -711,7 +711,7 @@ type Wrote = (Vec<PathBuf>, Vec<(PathBuf, String)>);
 
 /// The files written by S's mode and choices, by content (a second run writes the same): the written paths and the
 /// skipped ones.
-fn write_files(s: &Saved) -> Result<Wrote, String> {
+fn write_files(s: &Saved) -> villa::Result<Wrote> {
     use std::os::fd::AsFd;
     let p = &s.plan;
     let mut skipped = p.skipped.clone();
@@ -721,7 +721,8 @@ fn write_files(s: &Saved) -> Result<Wrote, String> {
         take.extend(p.merges.iter().map(|m| m.path.clone()));
         take.extend(p.overlaps.iter().map(|(path, _)| path.clone()));
     } else {
-        let dir = std::fs::File::open(&p.cwd).map_err(|e| format!("{}: {e}", p.cwd.display()))?;
+        let dir = std::fs::File::open(&p.cwd)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", p.cwd.display())))?;
         let mut puts: Vec<(&Path, &[u8], u32)> = p
             .merges
             .iter()
@@ -800,20 +801,24 @@ fn written_by(s: &Saved) -> Vec<(String, Seen)> {
 /// step, or one record standing for those steps when the history has none), with the revert's writes as the user's
 /// operations on the documents (so the history holds the files as the revert leaves them), its pending record, and
 /// the files as they were kept under `refs/drgnx/undone/<op>`.
-async fn record(f: &Front, s: &Saved) -> Result<i64, String> {
-    let dirs = f.dirs.get().ok_or("the hub has no state folder")?;
+async fn record(f: &Front, s: &Saved) -> villa::Result<i64> {
+    let dirs = f
+        .dirs
+        .get()
+        .ok_or_else(|| villa::Error::invalid("the hub has no state folder"))?;
     let (hub, tree) = f
         .core
         .history
         .of_tree(&dirs.hub, &s.plan.cwd)
-        .map_err(|e| e.message)?;
-    let json = serde_json::to_string(s).map_err(|e| e.to_string())?;
+        .map_err(|e| e.message)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let json = serde_json::to_string(s).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let (s2, now) = (s.clone(), crate::clock::wall_secs());
     let h2 = hub.clone();
     let (op, versions) = crate::clock::blocking(move || {
         use verdandi::{Cause, Kind, Record};
         let p = &s2.plan;
-        let e = |e: verdandi::Error| e.to_string();
+        let e = |e: verdandi::Error| villa::Error::internal(e.to_string());
         let writes = written_by(&s2);
         let mut g = h2.lock();
         let author = g.user_peer(&tree).map_err(e)?;
@@ -867,10 +872,10 @@ async fn record(f: &Front, s: &Saved) -> Result<i64, String> {
             &p.now,
         )?;
         h.mark_pending(op, &json, now).map_err(e)?;
-        Ok::<_, String>((op.0, capture::versions(&tree, staged, op.0)))
+        Ok::<_, villa::Error>((op.0, capture::versions(&tree, staged, op.0)))
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| villa::Error::internal(e.to_string()))??;
     hub.publish(&versions);
     Ok(op)
 }
@@ -918,37 +923,40 @@ async fn expect(f: &Front, s: &Saved, path: &Path) {
         return;
     }
     let (p, rel) = (s.plan.clone(), path.to_string_lossy().into_owned());
-    let _ = crate::clock::blocking(move || {
-        let hash = match what {
-            Goes::Text(t) => {
-                match super::blob::hash_object(&tree.git_dir, &tree.root, &rel, t.as_bytes()) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        tracing::warn!(rel, "the revert's text is not announced: {e}");
-                        return;
+    crate::soft::done(
+        crate::clock::blocking(move || {
+            let hash = match what {
+                Goes::Text(t) => {
+                    match super::blob::hash_object(&tree.git_dir, &tree.root, &rel, t.as_bytes()) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            tracing::warn!(rel, "the revert's text is not announced: {e}");
+                            return;
+                        }
                     }
                 }
-            }
-            _ => snapshot::blob_id(&p.root, &p.cwd, &p.checkpoint, &rel)
-                .unwrap_or_else(|| "gone".into()),
-        };
-        hub.lock().origin.step(
-            &tree.id.0,
-            super::origin::OriginEv::HubWrite { path: rel, hash },
-        );
-    })
-    .await;
+                _ => snapshot::blob_id(&p.root, &p.cwd, &p.checkpoint, &rel)
+                    .unwrap_or_else(|| "gone".into()),
+            };
+            hub.lock().origin.step(
+                &tree.id.0,
+                super::origin::OriginEv::HubWrite { path: rel, hash },
+            );
+        })
+        .await,
+        "crate::clock::blocking",
+    );
 }
 
 /// The steps after the target marked undone by OP, and the session's conclusions after it withdrawn.
-async fn graph(f: &Front, p: &Plan, op: i64) -> Result<(), String> {
+async fn graph(f: &Front, p: &Plan, op: i64) -> villa::Result<()> {
     let (sid, seq) = (p.sid.clone(), p.seq);
     let after = f
         .writer
         .db
         .read(move |c| crate::work::conclusions::after(c, &sid, seq))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::internal(e.to_string()))?;
     let (key, seq, now) = (
         format!("session:{}", p.sid),
         p.seq,
@@ -975,7 +983,7 @@ async fn graph(f: &Front, p: &Plan, op: i64) -> Result<(), String> {
             },
         )
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| villa::Error::internal(e.to_string()))
 }
 
 /// The session's jobs stopped: every one it runs or queued here or on a runner.
@@ -1043,7 +1051,10 @@ async fn run(f: &Front, s: Saved, op: Option<i64>) -> Result<w::Applied, Error> 
             E::Detach => {
                 if let Ok(sess) = f.core.agents.find(&p.sid) {
                     sess.detach();
-                    let _ = f.core.agents.cancel_after_tool(&p.sid, HoldSource::Revert);
+                    crate::soft::done(
+                        f.core.agents.cancel_after_tool(&p.sid, HoldSource::Revert),
+                        "revert",
+                    );
                 }
                 continue;
             }
@@ -1079,7 +1090,7 @@ async fn run(f: &Front, s: Saved, op: Option<i64>) -> Result<w::Applied, Error> 
                     V::Done(S::Record)
                 }
                 Err(e) => {
-                    why = e;
+                    why = e.message().to_owned();
                     V::Failed(S::Record)
                 }
             },
@@ -1091,7 +1102,7 @@ async fn run(f: &Front, s: Saved, op: Option<i64>) -> Result<w::Applied, Error> 
                 let s2 = s.clone();
                 match crate::clock::blocking(move || write_files(&s2))
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| villa::Error::internal(e.to_string()))
                     .and_then(|r| r)
                 {
                     Ok((_, skipped)) => {
@@ -1100,7 +1111,7 @@ async fn run(f: &Front, s: Saved, op: Option<i64>) -> Result<w::Applied, Error> 
                     }
                     Err(e) => {
                         tracing::warn!(sid = p.sid, "the revert's files are not written: {e}");
-                        why = e;
+                        why = e.message().to_owned();
                         V::Failed(S::Files)
                     }
                 }
@@ -1248,17 +1259,20 @@ fn tell_manager(f: &Front, p: &Plan, out: &w::Applied) {
 }
 
 /// Record OP's pending record cleared.
-async fn clear(f: &Front, p: &Plan, op: i64) -> Result<(), String> {
-    let dirs = f.dirs.get().ok_or("the hub has no state folder")?;
+async fn clear(f: &Front, p: &Plan, op: i64) -> villa::Result<()> {
+    let dirs = f
+        .dirs
+        .get()
+        .ok_or_else(|| villa::Error::unavailable("the hub has no state folder"))?;
     let (hub, _) = f
         .core
         .history
         .of_tree(&dirs.hub, &p.cwd)
-        .map_err(|e| e.message)?;
+        .map_err(|e| villa::Error::internal(e.message))?;
     crate::clock::blocking(move || hub.lock().h.clear_pending(verdandi::OpId(op)).map(drop))
         .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+        .map_err(|e| villa::Error::internal(e.to_string()))?
+        .map_err(|e| villa::Error::internal(e.to_string()))
 }
 
 /// At start-up, before the sessions resume: every revert a crash left pending finished from its record (the files by

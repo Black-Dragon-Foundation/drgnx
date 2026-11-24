@@ -48,11 +48,11 @@ pub(crate) struct Shared {
 
 impl Shared {
     fn lock_v2(&self) -> std::sync::MutexGuard<'_, v2::V2> {
-        self.v2.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.v2)
     }
 
     fn lock_pending(&self) -> std::sync::MutexGuard<'_, HashMap<Id, oneshot::Sender<Answer>>> {
-        self.pending.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.pending)
     }
 }
 
@@ -109,40 +109,44 @@ impl Conn {
         let (etx, erx) = mpsc::channel(EVENT_QUEUE);
 
         let wtap = opts.tap.clone();
-        tokio::spawn(async move {
+        saman::spawn("hermod-writer", async move {
             while let Some(mut line) = wrx.recv().await {
                 if let Some(t) = &wtap {
-                    t.line(Dir::In, &line, std::time::Instant::now());
+                    t.line(Dir::In, &line, stund::real::instant());
                 }
                 line.push('\n');
                 if stdin.write_all(line.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
                     break;
                 }
             }
-        });
+        })
+        .detach("the writer ends with its queue, or when the agent's stdin closes");
 
-        let reader = tokio::spawn(read_loop(
-            stdout,
-            shared.clone(),
-            tx.downgrade(),
-            etx.clone(),
-            opts.tap.clone(),
-        ));
+        let reader = saman::spawn(
+            "hermod-reader",
+            read_loop(
+                stdout,
+                shared.clone(),
+                tx.downgrade(),
+                etx.clone(),
+                opts.tap.clone(),
+            ),
+        );
 
         let sh = shared.clone();
         let (tail_max, xtap) = (opts.stderr_tail, opts.tap.clone());
-        tokio::spawn(async move {
+        saman::spawn("hermod-watchdog", async move {
             let status = child.wait().await.ok().flatten();
             let mut reader = reader;
             if tokio::time::timeout(DRAIN, &mut reader).await.is_err() {
-                reader.abort();
+                drop(reader);
             }
             sh.closed.send_replace(true);
             // a turn waiting for an `idle` that will not come ends with the child
             sh.lock_v2().close_all();
             let waiting: Vec<_> = sh.lock_pending().drain().collect();
             for (_, w) in waiting {
-                let _ = w.send(Err(Error::Closed));
+                saman::delivered(w.send(Err(Error::Closed)), "w receiver");
             }
             let (code, signal) = status.map_or((None, None), |s| {
                 use std::os::unix::process::ExitStatusExt;
@@ -154,14 +158,17 @@ impl Conn {
             if let Some(t) = &xtap {
                 t.exit(code, signal, &stderr);
             }
-            let _ = etx
-                .send(Event::Exit {
+            saman::delivered(
+                etx.send(Event::Exit {
                     code,
                     signal,
                     stderr,
                 })
-                .await;
-        });
+                .await,
+                "etx receiver",
+            );
+        })
+        .detach("the watchdog ends with the child");
 
         Ok((
             Conn {
@@ -508,11 +515,7 @@ impl Conn {
         self.remember(sid, cwd);
         self.note_mode(sid, mode);
         self.note_model(sid, model);
-        let mut opts = self
-            .shared
-            .mode_opts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut opts = saman::lock(&self.shared.mode_opts);
         match opt {
             Some(o) => opts.insert(sid.0.to_string(), o),
             None => opts.remove(&*sid.0),
@@ -522,33 +525,19 @@ impl Conn {
     /// The model session SID uses: the one the answer that opened it on this connection reported, then each
     /// `session/set_model` (or `model` config option) the agent accepted; `None` when it reported none.
     pub fn reported_model(&self, sid: &SessionId) -> Option<String> {
-        self.shared
-            .models
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&*sid.0)
-            .cloned()
+        saman::lock(&self.shared.models).get(&*sid.0).cloned()
     }
 
     /// The mode session SID is in, as the agent's answer that opened it on this connection (`session/new`,
     /// `session/load`, `session/resume` or `session/fork`) reported it; `None` when it reported none.
     pub fn reported_mode(&self, sid: &SessionId) -> Option<String> {
-        self.shared
-            .modes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&*sid.0)
-            .cloned()
+        saman::lock(&self.shared.modes).get(&*sid.0).cloned()
     }
 
     pub async fn close_session(&self, sid: &SessionId) -> Result<(), Error> {
         self.typed::<Value>("session/close", json!({"sessionId": sid}))
             .await?;
-        self.shared
-            .cwds
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&*sid.0);
+        saman::lock(&self.shared.cwds).remove(&*sid.0);
         self.note_mode(sid, None);
         Ok(())
     }
@@ -556,13 +545,7 @@ impl Conn {
     pub async fn set_mode(&self, sid: &SessionId, mode: &str) -> Result<(), Error> {
         if self.proto() == Proto::V2 {
             // v2 has no modes: the mode is a config option, the one the agent reported
-            let opt = self
-                .shared
-                .mode_opts
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(&*sid.0)
-                .cloned();
+            let opt = saman::lock(&self.shared.mode_opts).get(&*sid.0).cloned();
             return match opt {
                 Some(o) => self.set_config_option(sid, &o, mode).await,
                 None => Err(Error::Rpc {
@@ -738,16 +721,12 @@ impl Conn {
     }
 
     fn remember(&self, sid: &SessionId, cwd: &Path) {
-        self.shared
-            .cwds
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(sid.0.to_string(), cwd.to_path_buf());
+        saman::lock(&self.shared.cwds).insert(sid.0.to_string(), cwd.to_path_buf());
     }
 
     /// SID's reported MODE (none: forgotten, so an earlier answer's mode is never taken for this one's).
     fn note_mode(&self, sid: &SessionId, mode: Option<String>) {
-        let mut modes = self.shared.modes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut modes = saman::lock(&self.shared.modes);
         match mode {
             Some(m) => modes.insert(sid.0.to_string(), m),
             None => modes.remove(&*sid.0),
@@ -758,7 +737,7 @@ impl Conn {
 impl Conn {
     /// SID's reported MODEL (none: forgotten, as [`Conn::note_mode`] forgets a mode).
     fn note_model(&self, sid: &SessionId, model: Option<String>) {
-        let mut models = self.shared.models.lock().unwrap_or_else(|e| e.into_inner());
+        let mut models = saman::lock(&self.shared.models);
         match model {
             Some(m) => models.insert(sid.0.to_string(), m),
             None => models.remove(&*sid.0),
@@ -833,7 +812,7 @@ async fn read_loop(
     let mut buf = BytesMut::with_capacity(8192);
     let seen = |line: &str| {
         if let Some(t) = &tap {
-            t.line(Dir::Out, line, std::time::Instant::now());
+            t.line(Dir::Out, line, stund::real::instant());
         }
     };
     loop {
@@ -861,7 +840,7 @@ async fn read_loop(
 fn reply_error(wtx: &WeakUnboundedSender<String>, id: &Id, code: i64, message: &str) {
     if let Some(tx) = wtx.upgrade() {
         let line = json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}});
-        let _ = tx.send(line.to_string());
+        saman::delivered(tx.send(line.to_string()), "tx receiver");
     }
 }
 
@@ -883,7 +862,7 @@ async fn handle(
         Message::Result { id, result } => {
             shared.lock_v2().answered(&id, true);
             if let Some(w) = shared.lock_pending().remove(&id) {
-                let _ = w.send(Ok(result));
+                saman::delivered(w.send(Ok(result)), "w receiver");
             }
         }
         Message::Error {
@@ -892,11 +871,14 @@ async fn handle(
         } => {
             shared.lock_v2().answered(&id, false);
             if let Some(w) = shared.lock_pending().remove(&id) {
-                let _ = w.send(Err(Error::Rpc {
-                    code: error.code,
-                    message: error.message,
-                    data: error.data,
-                }));
+                saman::delivered(
+                    w.send(Err(Error::Rpc {
+                        code: error.code,
+                        message: error.message,
+                        data: error.data,
+                    })),
+                    "w receiver",
+                );
             }
         }
         Message::Error { id: None, .. } => {}
@@ -904,7 +886,10 @@ async fn handle(
             if method != "session/update" {
                 if method.starts_with('_') {
                     let params = params.unwrap_or(Value::Null);
-                    let _ = etx.send(Event::Ext { method, params }).await;
+                    saman::delivered(
+                        etx.send(Event::Ext { method, params }).await,
+                        "etx receiver",
+                    );
                 }
                 return;
             }
@@ -922,7 +907,7 @@ async fn handle(
                     .lock_v2()
                     .translate(at, &SessionId::new(sid.clone()), update);
                 for ev in out.events {
-                    let _ = etx.send(ev).await;
+                    saman::delivered(etx.send(ev).await, "etx receiver");
                 }
                 // the turn ends after every update it has had: the owner reads those first
                 if let Some(result) = out.ended {
@@ -944,14 +929,16 @@ async fn handle(
                 }
                 _ => None,
             };
-            let _ = etx
-                .send(Event::Update {
+            saman::delivered(
+                etx.send(Event::Update {
                     at,
                     sid: n.session_id,
                     update: n.update,
                     message_id,
                 })
-                .await;
+                .await,
+                "etx receiver",
+            );
         }
         Message::Request { id, method, params } => {
             let mut params = params.unwrap_or(Value::Null);
@@ -967,7 +954,7 @@ async fn handle(
                 );
                 let (v1, events) = shared.lock_v2().permission(at, &sid, &id, &params);
                 for ev in events {
-                    let _ = etx.send(ev).await;
+                    saman::delivered(etx.send(ev).await, "etx receiver");
                 }
                 params = v1;
             }
@@ -993,7 +980,7 @@ async fn handle(
             };
             match incoming {
                 Ok(i) => {
-                    let _ = etx.send(Event::Request(i)).await;
+                    saman::delivered(etx.send(Event::Request(i)).await, "etx receiver");
                 }
                 Err(m) => reply_error(wtx, &id, jsonrpc::INVALID_PARAMS, &m),
             }

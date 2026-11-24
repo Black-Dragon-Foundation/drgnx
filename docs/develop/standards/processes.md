@@ -22,9 +22,13 @@ let status = child.wait_deadline(Duration::from_secs(30)).await?;
 - The child leads its own process group. `wait_deadline` kills the whole group (grandchildren too) once the deadline
   passes on the installed clock; `kill_group` and `reap` end a group by hand.
 - Only descriptors 0–2 and the `pass_fds` reach the child; stderr is kept as a bounded tail.
+- `Opts::deny_syscall` runs the child under an outer seccomp filter that refuses one syscall with `EPERM`: only for a
+  harness that tests what a sandbox does when the system refuses a call it needs. `Opts::inherit_group` leaves the child
+  in the parent's process group, for a harness that tests a helper which must make its own session (a group leader
+  cannot).
 
 **Enforced by:** clippy's `disallowed-methods` on `std::process::Command::new` and `tokio::process::Command::new`.
-Owner: `draugr` (in `crates/hub/draugr` until it moves into `crates/std`). Conformance:
+Owner: `draugr`, over `hlaup` (the fork lock and exec; its own tests start raw children to prove ETXTBSY), declared as `co_owners` in `standards.toml`. `draugr` lives in `crates/hub/draugr` until it moves into `crates/std`. Conformance:
 `crates/hub/draugr/tests/conformance.rs`.
 
 **Why.** A child that inherits the editor's environment leaks tokens; one without a group outlives its parent; one

@@ -273,14 +273,14 @@ pub struct AgentSocket {
     pub job: Option<String>,
 }
 
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<Command> {
     use lexopt::prelude::*;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let command = match p.next().map_err(e)? {
         Some(Value(v)) => v.string().map_err(e)?,
-        Some(other) => return Err(other.unexpected().to_string()),
-        None => return Err("a command is needed".into()),
+        Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
+        None => return Err(villa::Error::invalid("a command is needed")),
     };
     match command.as_str() {
         "serve" => {
@@ -291,7 +291,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                     Long("parent-pid") => {
                         let pid: u32 = p.value().map_err(e)?.parse().map_err(e)?;
                         if pid == 0 {
-                            return Err("--parent-pid takes a pid above 0".into());
+                            return Err(villa::Error::invalid("--parent-pid takes a pid above 0"));
                         }
                         a.parent_pid = Some(pid);
                     }
@@ -301,9 +301,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                             "self" => Supervisor::SelfDetached,
                             "launchd" => Supervisor::Launchd,
                             other => {
-                                return Err(format!(
+                                return Err(villa::Error::invalid(format!(
                                     "--supervisor takes none, self or launchd, not {other:?}"
-                                ));
+                                )));
                             }
                         };
                     }
@@ -311,20 +311,26 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                     Long("idle-tick-ms") => {
                         let ms: u64 = p.value().map_err(e)?.parse().map_err(e)?;
                         if ms == 0 {
-                            return Err("--idle-tick-ms takes a number above 0".into());
+                            return Err(villa::Error::invalid(
+                                "--idle-tick-ms takes a number above 0",
+                            ));
                         }
                         a.idle_tick_ms = Some(ms);
                     }
                     #[cfg(feature = "test-hooks")]
                     Long("agent-socket") => {
                         let v = p.value().map_err(e)?.string().map_err(e)?;
-                        a.agent_sockets.push(agent_socket(&v)?);
+                        a.agent_sockets.push(
+                            agent_socket(&v).map_err(|e| villa::Error::invalid(e.to_string()))?,
+                        );
                     }
                     #[cfg(feature = "test-hooks")]
                     Long("gateway-port") => {
                         let port: u16 = p.value().map_err(e)?.parse().map_err(e)?;
                         if port == 0 {
-                            return Err("--gateway-port takes a port above 0".into());
+                            return Err(villa::Error::invalid(
+                                "--gateway-port takes a port above 0",
+                            ));
                         }
                         a.gateway_port = Some(port);
                     }
@@ -343,11 +349,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                     Long("test-slow-stop-ms") => {
                         a.test_slow_stop_ms = Some(p.value().map_err(e)?.parse().map_err(e)?);
                     }
-                    other => return Err(other.unexpected().to_string()),
+                    other => return Err(villa::Error::invalid(other.unexpected().to_string())),
                 }
             }
             if !a.agent_sockets.is_empty() && !a.foreground {
-                return Err("--agent-socket needs --foreground".into());
+                return Err(villa::Error::invalid("--agent-socket needs --foreground"));
             }
             Ok(Command::Serve(a))
         }
@@ -363,7 +369,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                         let secs: u64 = p.value().map_err(e)?.parse().map_err(e)?;
                         timeout = Duration::from_secs(secs);
                     }
-                    other => return Err(other.unexpected().to_string()),
+                    other => return Err(villa::Error::invalid(other.unexpected().to_string())),
                 }
             }
             Ok(if command == "ensure" {
@@ -377,7 +383,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             while let Some(arg) = p.next().map_err(e)? {
                 match arg {
                     Long("json") => json = true,
-                    other => return Err(other.unexpected().to_string()),
+                    other => return Err(villa::Error::invalid(other.unexpected().to_string())),
                 }
             }
             Ok(Command::Status { json })
@@ -387,21 +393,21 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             while let Some(arg) = p.next().map_err(e)? {
                 match arg {
                     Long("json") => json = true,
-                    other => return Err(other.unexpected().to_string()),
+                    other => return Err(villa::Error::invalid(other.unexpected().to_string())),
                 }
             }
             Ok(Command::Doctor { json })
         }
         "restart" => match p.next().map_err(e)? {
             None => Ok(Command::Restart),
-            Some(other) => Err(other.unexpected().to_string()),
+            Some(other) => Err(villa::Error::invalid(other.unexpected().to_string())),
         },
         "version" => {
             let mut json = false;
             while let Some(arg) = p.next().map_err(e)? {
                 match arg {
                     Long("json") => json = true,
-                    other => return Err(other.unexpected().to_string()),
+                    other => return Err(villa::Error::invalid(other.unexpected().to_string())),
                 }
             }
             Ok(Command::Version { json })
@@ -412,10 +418,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 match arg {
                     Long("json") if markdown.is_none() => markdown = Some(false),
                     Long("markdown") if markdown.is_none() => markdown = Some(true),
-                    other => return Err(other.unexpected().to_string()),
+                    other => return Err(villa::Error::invalid(other.unexpected().to_string())),
                 }
             }
-            let markdown = markdown.ok_or("methods takes --json or --markdown")?;
+            let markdown = markdown
+                .ok_or_else(|| villa::Error::invalid("methods takes --json or --markdown"))?;
             Ok(Command::Methods { markdown })
         }
         // The helper reads its own arguments (`--spec-fd N -- CMD…`): nothing here may interpret the command's.
@@ -433,8 +440,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "sandbox" => {
             let sub = match p.next().map_err(e)? {
                 Some(Value(v)) => v.string().map_err(e)?,
-                Some(other) => return Err(other.unexpected().to_string()),
-                None => return Err("sandbox needs a subcommand".into()),
+                Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
+                None => return Err(villa::Error::invalid("sandbox needs a subcommand")),
             };
             match sub.as_str() {
                 "check" => sandbox_check(&mut p).map(Command::SandboxCheck),
@@ -442,8 +449,12 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 "run" => sandbox_run(&mut p).map(Command::SandboxRun),
                 // Without the test hooks there is no `sandbox run`: a release build cannot run a spec from a file.
                 #[cfg(not(feature = "test-hooks"))]
-                "run" => Err("sandbox run exists only in a test-hooks build".into()),
-                other => Err(format!("unknown sandbox subcommand {other:?}")),
+                "run" => Err(villa::Error::invalid(
+                    "sandbox run exists only in a test-hooks build",
+                )),
+                other => Err(villa::Error::invalid(format!(
+                    "unknown sandbox subcommand {other:?}"
+                ))),
             }
         }
         "mcp-bridge" => mcp_bridge(&mut p).map(Command::McpBridge),
@@ -464,7 +475,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         #[cfg(feature = "test-hooks")]
         "debug-mock" => match p.next().map_err(e)? {
             Some(Value(v)) => Ok(Command::DebugMock { script: v }),
-            _ => Err("debug-mock takes SCRIPT.json".into()),
+            _ => Err(villa::Error::invalid("debug-mock takes SCRIPT.json")),
         },
         #[cfg(feature = "test-hooks")]
         "debug-lsp-mock" => {
@@ -483,7 +494,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                     mode: text(mode),
                     arg: Some(format!("{} {}", text(port), text(file))),
                 }),
-                _ => Err("debug-lsp-mock takes MODE [ARG] or stranger PORT FILE".into()),
+                _ => Err(villa::Error::invalid(
+                    "debug-lsp-mock takes MODE [ARG] or stranger PORT FILE",
+                )),
             }
         }
         "embed-worker" => embed_worker(&mut p).map(Command::EmbedWorker),
@@ -491,21 +504,21 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "recording" => {
             crate::recording_cli::parse(p.raw_args().map_err(e)?).map(Command::Recording)
         }
-        other => Err(format!("unknown command {other:?}")),
+        other => Err(villa::Error::invalid(format!("unknown command {other:?}"))),
     }
 }
 
 /// `hrafn-parse --lib FILE --grammar NAME --sha256 HASH`: all three, once each.
-fn hrafn_parse(p: &mut lexopt::Parser) -> Result<Command, String> {
+fn hrafn_parse(p: &mut lexopt::Parser) -> villa::Result<Command> {
     use lexopt::prelude::*;
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let (mut lib, mut grammar, mut sha256) = (None, None, None);
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
             Long("lib") => lib = Some(PathBuf::from(p.value().map_err(e)?)),
             Long("grammar") => grammar = Some(p.value().map_err(e)?.string().map_err(e)?),
             Long("sha256") => sha256 = Some(p.value().map_err(e)?.string().map_err(e)?),
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     match (lib, grammar, sha256) {
@@ -514,17 +527,19 @@ fn hrafn_parse(p: &mut lexopt::Parser) -> Result<Command, String> {
             grammar,
             sha256,
         }),
-        _ => Err("hrafn-parse takes --lib FILE --grammar NAME --sha256 HASH".into()),
+        _ => Err(villa::Error::invalid(
+            "hrafn-parse takes --lib FILE --grammar NAME --sha256 HASH",
+        )),
     }
 }
 
 /// `embed-worker --model ID --dir D --threads N --device auto|cpu --device-cache FILE [--idle-ms N]`, and with
 /// test-hooks `--device gpu:NAME`, `--test-park`, `--test-crash-once FILE`, `--test-crash-always`,
 /// `--test-rss-cap-mb N`, `--test-power-root DIR`. A repeated option: the last counts.
-fn embed_worker(p: &mut lexopt::Parser) -> Result<crate::search::worker::WorkerArgs, String> {
+fn embed_worker(p: &mut lexopt::Parser) -> villa::Result<crate::search::worker::WorkerArgs> {
     use crate::search::worker::{DeviceArg, WorkerArgs, WorkerTest};
     use lexopt::prelude::*;
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let (mut model, mut dir, mut threads, mut device, mut cache, mut idle_ms) =
         (None, None, None, DeviceArg::Auto, None, None);
     #[allow(unused_mut)] // only the test-hooks switches change it
@@ -536,7 +551,7 @@ fn embed_worker(p: &mut lexopt::Parser) -> Result<crate::search::worker::WorkerA
             Long("threads") => {
                 let n: usize = p.value().map_err(e)?.parse().map_err(e)?;
                 if n == 0 {
-                    return Err("--threads takes a number above 0".into());
+                    return Err(villa::Error::invalid("--threads takes a number above 0"));
                 }
                 threads = Some(n);
             }
@@ -550,7 +565,9 @@ fn embed_worker(p: &mut lexopt::Parser) -> Result<crate::search::worker::WorkerA
                     ("cpu", _) => DeviceArg::Cpu,
                     (_, Some(name)) => DeviceArg::Gpu(name.to_string()),
                     (other, None) => {
-                        return Err(format!("--device takes auto or cpu, not {other:?}"));
+                        return Err(villa::Error::invalid(format!(
+                            "--device takes auto or cpu, not {other:?}"
+                        )));
                     }
                 }
             }
@@ -558,7 +575,7 @@ fn embed_worker(p: &mut lexopt::Parser) -> Result<crate::search::worker::WorkerA
             Long("idle-ms") => {
                 let ms: u64 = p.value().map_err(e)?.parse().map_err(e)?;
                 if ms == 0 {
-                    return Err("--idle-ms takes a number above 0".into());
+                    return Err(villa::Error::invalid("--idle-ms takes a number above 0"));
                 }
                 idle_ms = Some(ms);
             }
@@ -574,28 +591,33 @@ fn embed_worker(p: &mut lexopt::Parser) -> Result<crate::search::worker::WorkerA
             }
             #[cfg(feature = "test-hooks")]
             Long("test-power-root") => test.power_root = Some(PathBuf::from(p.value().map_err(e)?)),
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     Ok(WorkerArgs {
-        model: model.ok_or("embed-worker needs --model ID")?,
-        dir: dir.ok_or("embed-worker needs --dir D")?,
+        model: model.ok_or_else(|| villa::Error::invalid("embed-worker needs --model ID"))?,
+        dir: dir.ok_or_else(|| villa::Error::invalid("embed-worker needs --dir D"))?,
         threads: threads.unwrap_or_else(crate::search::worker::threads),
         device,
-        device_cache: cache.ok_or("embed-worker needs --device-cache FILE")?,
+        device_cache: cache
+            .ok_or_else(|| villa::Error::invalid("embed-worker needs --device-cache FILE"))?,
         idle_ms,
         test,
     })
 }
 
 /// `store migrate-check --db FILE --scratch DIR [--json]`, or `store restore-pre7 [--yes]`.
-fn store(p: &mut lexopt::Parser) -> Result<StoreCommand, String> {
+fn store(p: &mut lexopt::Parser) -> villa::Result<StoreCommand> {
     use lexopt::prelude::*;
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let sub = match p.next().map_err(e)? {
         Some(Value(v)) => v.string().map_err(e)?,
-        Some(other) => return Err(other.unexpected().to_string()),
-        None => return Err("store needs a subcommand: migrate-check or restore-pre7".into()),
+        Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
+        None => {
+            return Err(villa::Error::invalid(
+                "store needs a subcommand: migrate-check or restore-pre7",
+            ));
+        }
     };
     match sub.as_str() {
         "migrate-check" => {
@@ -605,12 +627,15 @@ fn store(p: &mut lexopt::Parser) -> Result<StoreCommand, String> {
                     Long("db") => db = Some(PathBuf::from(p.value().map_err(e)?)),
                     Long("scratch") => scratch = Some(PathBuf::from(p.value().map_err(e)?)),
                     Long("json") => json = true,
-                    other => return Err(other.unexpected().to_string()),
+                    other => return Err(villa::Error::invalid(other.unexpected().to_string())),
                 }
             }
             Ok(StoreCommand::MigrateCheck {
-                db: db.ok_or("store migrate-check needs --db FILE")?,
-                scratch: scratch.ok_or("store migrate-check needs --scratch DIR")?,
+                db: db
+                    .ok_or_else(|| villa::Error::invalid("store migrate-check needs --db FILE"))?,
+                scratch: scratch.ok_or_else(|| {
+                    villa::Error::invalid("store migrate-check needs --scratch DIR")
+                })?,
                 json,
             })
         }
@@ -619,19 +644,21 @@ fn store(p: &mut lexopt::Parser) -> Result<StoreCommand, String> {
             while let Some(arg) = p.next().map_err(e)? {
                 match arg {
                     Long("yes") => yes = true,
-                    other => return Err(other.unexpected().to_string()),
+                    other => return Err(villa::Error::invalid(other.unexpected().to_string())),
                 }
             }
             Ok(StoreCommand::RestorePre7 { yes })
         }
-        other => Err(format!("unknown store subcommand {other:?}")),
+        other => Err(villa::Error::invalid(format!(
+            "unknown store subcommand {other:?}"
+        ))),
     }
 }
 
 /// `sandbox check [--json] [--tier full|reduced]`, and with test-hooks `[--bwrap PATH]`.
-fn sandbox_check(p: &mut lexopt::Parser) -> Result<SandboxCheckArgs, String> {
+fn sandbox_check(p: &mut lexopt::Parser) -> villa::Result<SandboxCheckArgs> {
     use lexopt::prelude::*;
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let mut a = SandboxCheckArgs {
         json: false,
         tier: gleipnir::Tier::Full,
@@ -644,12 +671,16 @@ fn sandbox_check(p: &mut lexopt::Parser) -> Result<SandboxCheckArgs, String> {
                 a.tier = match p.value().map_err(e)?.string().map_err(e)?.as_str() {
                     "full" => gleipnir::Tier::Full,
                     "reduced" => gleipnir::Tier::Reduced,
-                    other => return Err(format!("--tier takes full or reduced, not {other:?}")),
+                    other => {
+                        return Err(villa::Error::invalid(format!(
+                            "--tier takes full or reduced, not {other:?}"
+                        )));
+                    }
                 }
             }
             #[cfg(feature = "test-hooks")]
             Long("bwrap") => a.bwrap = Some(PathBuf::from(p.value().map_err(e)?)),
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     Ok(a)
@@ -658,9 +689,9 @@ fn sandbox_check(p: &mut lexopt::Parser) -> Result<SandboxCheckArgs, String> {
 /// `sandbox run`'s options, then the command: everything from the first argument that is not an option (after
 /// `--`) is the command's, untouched.
 #[cfg(feature = "test-hooks")]
-fn sandbox_run(p: &mut lexopt::Parser) -> Result<SandboxRunArgs, String> {
+fn sandbox_run(p: &mut lexopt::Parser) -> villa::Result<SandboxRunArgs> {
     use lexopt::prelude::*;
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let (mut spec, mut result, mut tier) = (None, None, gleipnir::Tier::Full);
     let (mut bwrap, mut pause, mut omit, mut cap) = (None, None, Vec::new(), None);
     let mut settings_guards = false;
@@ -674,7 +705,11 @@ fn sandbox_run(p: &mut lexopt::Parser) -> Result<SandboxRunArgs, String> {
                 tier = match p.value().map_err(e)?.string().map_err(e)?.as_str() {
                     "full" => gleipnir::Tier::Full,
                     "reduced" => gleipnir::Tier::Reduced,
-                    other => return Err(format!("--tier takes full or reduced, not {other:?}")),
+                    other => {
+                        return Err(villa::Error::invalid(format!(
+                            "--tier takes full or reduced, not {other:?}"
+                        )));
+                    }
                 }
             }
             Long("bwrap") => bwrap = Some(PathBuf::from(p.value().map_err(e)?)),
@@ -689,19 +724,19 @@ fn sandbox_run(p: &mut lexopt::Parser) -> Result<SandboxRunArgs, String> {
                 command.extend(p.raw_args().map_err(e)?);
                 break;
             }
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     let command = command
         .into_iter()
         .map(|a| {
             a.into_string()
-                .map_err(|a| format!("the command is not UTF-8: {a:?}"))
+                .map_err(|a| villa::Error::invalid(format!("the command is not UTF-8: {a:?}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(SandboxRunArgs {
-        spec: spec.ok_or("sandbox run needs --spec FILE")?,
-        result: result.ok_or("sandbox run needs --result FILE")?,
+        spec: spec.ok_or_else(|| villa::Error::invalid("sandbox run needs --spec FILE"))?,
+        result: result.ok_or_else(|| villa::Error::invalid("sandbox run needs --result FILE"))?,
         tier,
         bwrap,
         pause_before_spawn: pause,
@@ -711,15 +746,15 @@ fn sandbox_run(p: &mut lexopt::Parser) -> Result<SandboxRunArgs, String> {
         browser_probe,
         command: (!command.is_empty())
             .then_some(command)
-            .ok_or("sandbox run needs a command after --")?,
+            .ok_or_else(|| villa::Error::invalid("sandbox run needs a command after --"))?,
     })
 }
 
 /// `mcp-bridge --socket PATH`, or `mcp-bridge --outside --kind KIND [--cwd DIR]`; with test-hooks also
 /// `[--bridge-backoff-ms N] [--bridge-give-up-ms N]`.
-fn mcp_bridge(p: &mut lexopt::Parser) -> Result<BridgeArgs, String> {
+fn mcp_bridge(p: &mut lexopt::Parser) -> villa::Result<BridgeArgs> {
     use lexopt::prelude::*;
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let (mut socket, mut outside, mut kind, mut cwd) = (None, false, None, None);
     #[cfg_attr(not(feature = "test-hooks"), allow(unused_mut))]
     let (mut backoff_ms, mut give_up_ms) = (None, None);
@@ -733,41 +768,46 @@ fn mcp_bridge(p: &mut lexopt::Parser) -> Result<BridgeArgs, String> {
             Long("bridge-backoff-ms") => backoff_ms = Some(millis_above_0(p, "bridge-backoff-ms")?),
             #[cfg(feature = "test-hooks")]
             Long("bridge-give-up-ms") => give_up_ms = Some(millis_above_0(p, "bridge-give-up-ms")?),
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     let target = match (socket, outside) {
         (Some(_), true) => {
-            return Err("mcp-bridge takes --socket PATH or --outside, not both".into());
+            return Err(villa::Error::invalid(
+                "mcp-bridge takes --socket PATH or --outside, not both",
+            ));
         }
         (None, false) => {
-            return Err("mcp-bridge needs --socket PATH or --outside --kind KIND".into());
+            return Err(villa::Error::invalid(
+                "mcp-bridge needs --socket PATH or --outside --kind KIND",
+            ));
         }
         (Some(_), false) if kind.is_some() || cwd.is_some() => {
-            return Err("--kind and --cwd go with --outside".into());
+            return Err(villa::Error::invalid("--kind and --cwd go with --outside"));
         }
         (Some(s), false) if !s.is_absolute() => {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "--socket takes an absolute path, not {}",
                 s.display()
-            ));
+            )));
         }
         (Some(s), false) => BridgeTarget::Socket(s),
         (None, true) => {
-            let kind = kind.ok_or("mcp-bridge --outside needs --kind KIND")?;
+            let kind = kind
+                .ok_or_else(|| villa::Error::invalid("mcp-bridge --outside needs --kind KIND"))?;
             if serde_json::from_value::<runstav::types::AgentKind>(serde_json::json!(kind)).is_err()
             {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "--kind takes lowercase letters, digits, _ and - (a letter or digit first, at most 32), not {kind:?}"
-                ));
+                )));
             }
             if let Some(c) = &cwd
                 && !abs_path(c)
             {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "--cwd takes an absolute local path, not {}",
                     c.display()
-                ));
+                )));
             }
             BridgeTarget::Outside { kind, cwd }
         }
@@ -787,19 +827,21 @@ pub fn abs_path(p: &std::path::Path) -> bool {
 }
 
 #[cfg(feature = "test-hooks")]
-fn millis_above_0(p: &mut lexopt::Parser, name: &str) -> Result<u64, String> {
+fn millis_above_0(p: &mut lexopt::Parser, name: &str) -> villa::Result<u64> {
     use lexopt::prelude::*;
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let ms: u64 = p.value().map_err(e)?.parse().map_err(e)?;
     if ms == 0 {
-        return Err(format!("--{name} takes a number above 0"));
+        return Err(villa::Error::invalid(format!(
+            "--{name} takes a number above 0"
+        )));
     }
     Ok(ms)
 }
 
 /// `SID[:JOB]`, each a name of letters, digits, `-` and `_` (it becomes part of a socket's file name).
 #[cfg(feature = "test-hooks")]
-fn agent_socket(v: &str) -> Result<AgentSocket, String> {
+fn agent_socket(v: &str) -> villa::Result<AgentSocket> {
     let name_ok = |s: &str| {
         !s.is_empty()
             && s.bytes()
@@ -810,9 +852,9 @@ fn agent_socket(v: &str) -> Result<AgentSocket, String> {
         None => (v, None),
     };
     if !name_ok(sid) || job.is_some_and(|j| !name_ok(j)) {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "--agent-socket takes SID[:JOB] (letters, digits, - and _), not {v:?}"
-        ));
+        )));
     }
     Ok(AgentSocket {
         sid: sid.to_string(),
@@ -824,7 +866,7 @@ fn agent_socket(v: &str) -> Result<AgentSocket, String> {
 mod tests {
     use super::*;
 
-    fn p(args: &[&str]) -> Result<Command, String> {
+    fn p(args: &[&str]) -> villa::Result<Command> {
         parse(args.iter().map(OsString::from))
     }
 

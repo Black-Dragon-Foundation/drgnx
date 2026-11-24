@@ -45,18 +45,18 @@ pub struct Move {
 }
 
 /// A view: connection and the editor's view id.
-pub type ViewKey = (u64, String);
+pub type ViewId = (u64, String);
 
 /// What the core is told; NOW is the hub's clock in ms.
 #[derive(Clone, Debug)]
 pub enum Ev {
     Follow {
-        key: ViewKey,
+        key: ViewId,
         session: String,
         now: u64,
     },
     Unfollow {
-        key: ViewKey,
+        key: ViewId,
     },
     Moved {
         m: Move,
@@ -100,7 +100,7 @@ struct View {
 /// The follow feed's rules (see the module).
 #[derive(Debug, Default)]
 pub struct Core {
-    views: HashMap<ViewKey, View>,
+    views: HashMap<ViewId, View>,
     /// Each session's latest move: a view that starts following gets it at once.
     last: HashMap<String, Move>,
 }
@@ -246,7 +246,7 @@ impl View {
     }
 
     /// The move due, sent when the throttle allows; else a tick when it will.
-    fn flush(&mut self, key: &ViewKey, now: u64, fx: &mut Vec<Fx>) {
+    fn flush(&mut self, key: &ViewId, now: u64, fx: &mut Vec<Fx>) {
         if self.due.is_none() {
             return;
         }
@@ -311,7 +311,7 @@ impl Core {
     }
 
     /// Whether VIEW of connection CONN follows a session.
-    pub fn follows(&self, key: &ViewKey) -> bool {
+    pub fn follows(&self, key: &ViewId) -> bool {
         self.views.contains_key(key)
     }
 
@@ -322,7 +322,7 @@ impl Core {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(m)
 }
 
 /// The shell: the core under a lock, the hub's clock in ms from its start, the events and the deadlines.
@@ -426,7 +426,7 @@ mod tests {
         }
     }
 
-    fn key() -> ViewKey {
+    fn key() -> ViewId {
         (7, "f1".into())
     }
 

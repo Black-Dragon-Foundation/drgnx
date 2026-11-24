@@ -187,7 +187,7 @@ async fn fetch(
         fs::remove_file(&part).await.map_err(disk)?;
         return Err(DownloadError::Corrupt(file.name.to_string()));
     }
-    fs::rename(&part, &dest).await.map_err(disk)
+    crate::fsio::rename(&part, &dest).map_err(disk)
 }
 
 /// The start of a 206's `Content-Range: bytes START-END/SIZE`.
@@ -210,14 +210,11 @@ async fn receive(
     file: &ModelFile,
     progress: &(dyn Fn(u64) + Sync),
 ) -> Result<u64, DownloadError> {
-    let mut out = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(have > 0)
-        .truncate(have == 0)
-        .open(part)
-        .await
-        .map_err(disk)?;
+    if have == 0 {
+        // a fresh start: whatever a failed run left is gone
+        crate::fsio::write(part, b"").map_err(disk)?;
+    }
+    let mut out = fs::File::from_std(crate::fsio::append(part, have == 0).map_err(disk)?);
     let ended = loop {
         match stalls(response.chunk()).await {
             Err(e) => break Err(e),

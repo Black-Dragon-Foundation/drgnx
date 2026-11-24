@@ -1,9 +1,8 @@
 use super::*;
-use std::process::Command;
 
 /// Run the shell SCRIPT in DIR (a fresh repository's git config names its author), panicking on failure.
 fn sh(dir: &Path, script: &str) {
-    let out = Command::new("/bin/sh")
+    let out = crate::proc::Command::new("/bin/sh")
         .arg("-c")
         .arg(script)
         .current_dir(dir)
@@ -262,7 +261,7 @@ fn discard_restores_the_index_text() {
     )
     .unwrap();
     assert_eq!(
-        std::fs::read_to_string(r.join("a.txt")).unwrap(),
+        crate::fsio::read_to_string(r.join("a.txt")).unwrap(),
         "staged\n"
     );
     let st = status_of(&r);
@@ -316,18 +315,20 @@ fn commit_takes_the_message_on_stdin_and_runs_the_hooks() {
 #[test]
 fn deadline_and_cancel_stop_a_hung_git() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut c = Command::new("/bin/sh");
+    let mut c = crate::proc::Command::new("/bin/sh");
     c.args(["-c", "sleep 30"]);
     // the deadline stopped it: the command would run 30 s, and the error says it was cut at the deadline
     let e = run::run(c, tmp.path(), None, Some(Duration::from_millis(200)), None).unwrap_err();
-    assert!(e.contains("longer than"), "{e}");
+    assert!(e.message().contains("longer than"), "{e}");
     // a cancel already set: the run stops at its first look instead of running the 30 s
     let cancel = Arc::new(AtomicBool::new(true));
-    let mut c = Command::new("/bin/sh");
+    let mut c = crate::proc::Command::new("/bin/sh");
     c.args(["-c", "sleep 30"]);
     assert_eq!(
-        run::run(c, tmp.path(), None, None, Some(&cancel)).unwrap_err(),
-        run::STOPPED
+        run::run(c, tmp.path(), None, None, Some(&cancel))
+            .unwrap_err()
+            .kind(),
+        villa::Kind::Cancelled
     );
 }
 
@@ -466,25 +467,27 @@ fn ages() {
 
 /// [D] A commit answers its sha from the same pass as the commit (one read of the repository by the views after it, not
 /// one per git command), with the message on stdin and `all` staging first.
-#[tokio::test]
-async fn commit_answers_the_sha_of_the_commit_it_made() {
-    let tmp = tempfile::tempdir().unwrap();
-    let r = repo(tmp.path(), "app");
-    sh(&r, "printf 'edited\\n' > a.txt");
-    let p: Commit = serde_json::from_value(serde_json::json!({
-        "root": r.to_string_lossy(), "message": "edit a", "all": true
-    }))
-    .unwrap();
-    let done = commit_quiet(&r, &p).await.unwrap();
-    let head = run::git(
-        &r,
-        As::Reader,
-        &["rev-parse", "HEAD"],
-        None,
-        Some(LOCAL),
-        None,
-    )
-    .unwrap();
-    assert_eq!(done.sha, String::from_utf8_lossy(&head).trim());
-    assert!(status_of(&r).changes.is_empty());
+#[test]
+fn commit_answers_the_sha_of_the_commit_it_made() {
+    saman::block_on_current(async move {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = repo(tmp.path(), "app");
+        sh(&r, "printf 'edited\\n' > a.txt");
+        let p: Commit = serde_json::from_value(serde_json::json!({
+            "root": r.to_string_lossy(), "message": "edit a", "all": true
+        }))
+        .unwrap();
+        let done = commit_quiet(&r, &p).await.unwrap();
+        let head = run::git(
+            &r,
+            As::Reader,
+            &["rev-parse", "HEAD"],
+            None,
+            Some(LOCAL),
+            None,
+        )
+        .unwrap();
+        assert_eq!(done.sha, String::from_utf8_lossy(&head).trim());
+        assert!(status_of(&r).changes.is_empty());
+    })
 }

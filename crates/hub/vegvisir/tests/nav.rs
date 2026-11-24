@@ -70,7 +70,7 @@ fn links_match_the_frozen_lisp_on_the_30_agent_fixture() {
     let frame = serde_json::to_string_pretty(&frame_json(&m, &l, &ids)).expect("a frame") + "\n";
     let frame_path = golden_path("nav-thirty-1600-frame");
     if std::env::var_os("UPDATE_VEGVISIR_GOLDEN").is_some() {
-        std::fs::write(&frame_path, &frame).expect("the frame is written");
+        eitri::replace_file(&frame_path, frame.as_bytes()).expect("the frame is written");
         // the editor's navigation this was recorded from is gone: its links, as the layout of this crate gives them,
         // are rewritten with the frame (a layout metric moved)
         let name = |i: &Option<ItemId>| i.as_ref().map(|i| i.0.clone());
@@ -85,23 +85,24 @@ fn links_match_the_frozen_lisp_on_the_30_agent_fixture() {
         let ids_of = |v: Vec<ItemId>| v.into_iter().map(|i| i.0).collect::<Vec<_>>();
         let golden = json!({"links": links, "outline": ids_of(nav::outline(&m, &ids)),
                             "team": ids_of(nav::team(&m, &ids)), "needs-you": ids_of(nav::needs_you(&m, &ids))});
-        std::fs::write(
-            golden_path("nav-thirty-1600"),
-            serde_json::to_string_pretty(&golden).expect("a golden") + "\n",
+        eitri::replace_file(
+            &golden_path("nav-thirty-1600"),
+            (serde_json::to_string_pretty(&golden).expect("a golden") + "\n").as_bytes(),
         )
         .expect("the links are written");
     }
     // compared as JSON, not as text: serde_json keeps a map's insertion order when another crate of the build turns on
     // `preserve_order` (a workspace test run does, `-p vegvisir` alone does not), and that is the same frame
-    let recorded: Value =
-        serde_json::from_str(&std::fs::read_to_string(&frame_path).expect("the recorded frame"))
-            .expect("the recorded frame is JSON");
+    let recorded: Value = serde_json::from_str(
+        &eitri::read_string(&frame_path, 1 << 26).expect("the recorded frame"),
+    )
+    .expect("the recorded frame is JSON");
     assert!(
         recorded == serde_json::from_str::<Value>(&frame).expect("a frame"),
         "the fixture's frame moved: record the golden again from the editor's navigation\n{frame}"
     );
     let golden: Value = serde_json::from_str(
-        &std::fs::read_to_string(golden_path("nav-thirty-1600")).expect("the golden"),
+        &eitri::read_string(&golden_path("nav-thirty-1600"), 1 << 26).expect("the golden"),
     )
     .expect("golden JSON");
     let opt = |v: &Value| v.as_str().map(id);

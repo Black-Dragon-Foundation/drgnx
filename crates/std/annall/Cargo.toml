@@ -17,6 +17,7 @@ tracing-appender.workspace = true
 
 [dev-dependencies]
 raun.workspace = true
+libc.workspace = true   # the stderr sink test points descriptor 2 at a pipe
 
 [lints]
 workspace = true

@@ -5,14 +5,13 @@
 //! test-pattern: pure (D).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_ratatoskr")
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = ratatoskr::proc::Command::new("git")
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -60,9 +59,9 @@ fn repo(root: &Path) -> (PathBuf, String) {
 
 fn plan(root: &Path, repo: &Path, commit: &str, tree: &str, query: &str) -> PathBuf {
     let q = root.join("tags.scm");
-    std::fs::write(&q, query).unwrap();
+    ratatoskr::fsio::write(&q, query).unwrap();
     let p = root.join("plan.eld");
-    std::fs::write(
+    ratatoskr::fsio::write(
         &p,
         format!(
             "(:version 1 :staging \"{}\" :min-abi 14\n :units ((:name \"json\" :repo \"{}\" :commit \"{commit}\" :tree-sha256 \"{tree}\"))\n :queries ((:grammar \"json\" :file \"queries/tags.scm\" :path \"{}\")))",
@@ -77,7 +76,7 @@ fn plan(root: &Path, repo: &Path, commit: &str, tree: &str, query: &str) -> Path
 
 fn sync(plan: &Path) -> (i32, String) {
     let out = plan.with_extension("out");
-    let status = Command::new(bin())
+    let status = ratatoskr::proc::Command::new(bin())
         .args(["packs", "sync", "--plan"])
         .arg(plan)
         .arg("--out")
@@ -86,7 +85,7 @@ fn sync(plan: &Path) -> (i32, String) {
         .unwrap();
     (
         status.code().unwrap(),
-        std::fs::read_to_string(out).unwrap(),
+        ratatoskr::fsio::read_to_string(out).unwrap(),
     )
 }
 
@@ -156,7 +155,7 @@ fn a_wrong_hash_or_query_answers_not_ok_and_stages_nothing() {
 fn a_bad_plan_is_an_error_answer() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("plan.eld");
-    std::fs::write(&p, "(:version 1 :staging \"/x\" :bogus 1)").unwrap();
+    ratatoskr::fsio::write(&p, "(:version 1 :staging \"/x\" :bogus 1)").unwrap();
     let (code, answer) = sync(&p);
     assert_eq!(code, 1);
     assert!(answer.contains("bogus"), "{answer}");
@@ -172,14 +171,14 @@ fn load_check_answers_one_line_and_a_crash_is_the_childs() {
         "staging/grammars/json/{commit}/libtree-sitter-json.{}",
         skald::job::LIB_EXT
     ));
-    let out = Command::new(bin())
+    let out = ratatoskr::proc::Command::new(bin())
         .args(["packs", "load-check"])
         .arg(&lib)
         .args(["json", "14"])
         .output()
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "ok 14");
-    let out = Command::new(bin())
+    let out = ratatoskr::proc::Command::new(bin())
         .args(["packs", "load-check"])
         .arg(&lib)
         .args(["json", "15"])
@@ -189,8 +188,8 @@ fn load_check_answers_one_line_and_a_crash_is_the_childs() {
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "abi 14 15");
     // a file that is no library is a load answer, not a crash
     let junk = d.path().join("junk.so");
-    std::fs::write(&junk, "not a library").unwrap();
-    let out = Command::new(bin())
+    ratatoskr::fsio::write(&junk, "not a library").unwrap();
+    let out = ratatoskr::proc::Command::new(bin())
         .args(["packs", "load-check"])
         .arg(&junk)
         .args(["json", "14"])
@@ -204,7 +203,7 @@ fn load_check_answers_one_line_and_a_crash_is_the_childs() {
 fn pin_prints_a_grammar_entry_and_refuses_a_commit_without_a_parser() {
     let d = tempfile::tempdir().unwrap();
     let (repo, commit) = repo(d.path());
-    let out = Command::new(bin())
+    let out = ratatoskr::proc::Command::new(bin())
         .args(["packs", "pin"])
         .arg(&repo)
         .arg(&commit)
@@ -220,7 +219,7 @@ fn pin_prints_a_grammar_entry_and_refuses_a_commit_without_a_parser() {
         "{line}"
     );
     assert!(line.trim_end().ends_with("; ABI 14"), "{line}");
-    let out = Command::new(bin())
+    let out = ratatoskr::proc::Command::new(bin())
         .args(["packs", "pin"])
         .arg(&repo)
         .arg(&commit)

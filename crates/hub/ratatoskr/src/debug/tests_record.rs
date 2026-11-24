@@ -249,10 +249,10 @@ pub(super) struct Store(pub(super) Mutex<Vec<RunMeta>>, Mutex<Vec<String>>);
 
 impl RunSink for Store {
     fn put(&self, meta: &RunMeta) {
-        self.0.lock().unwrap().push(meta.clone());
+        saman::lock(&self.0).push(meta.clone());
     }
     fn gone(&self, id: &str) {
-        self.1.lock().unwrap().push(id.to_owned());
+        saman::lock(&self.1).push(id.to_owned());
     }
 }
 
@@ -261,19 +261,17 @@ pub(super) struct Events(Mutex<Vec<(String, Value)>>);
 
 impl Sink for Events {
     fn broadcast(&self, event: &str, data: Value, _: Option<u64>) {
-        self.0.lock().unwrap().push((event.to_owned(), data));
+        saman::lock(&self.0).push((event.to_owned(), data));
     }
     fn send(&self, _: u64, event: &str, data: Value) -> bool {
-        self.0.lock().unwrap().push((event.to_owned(), data));
+        saman::lock(&self.0).push((event.to_owned(), data));
         true
     }
 }
 
 impl Events {
     pub(super) fn named(&self, name: &str) -> Vec<Value> {
-        self.0
-            .lock()
-            .unwrap()
+        saman::lock(&self.0)
             .iter()
             .filter(|e| e.0 == name)
             .map(|e| e.1.clone())
@@ -293,69 +291,73 @@ fn meta(id: &str, root: &str, ended_days_ago: Option<f64>, now: f64) -> RunMeta 
 
 fn put_run(dir: &Path, m: &RunMeta, bytes: usize) {
     std::fs::create_dir_all(dir).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         dir.join(format!("{}.json", m.id)),
         serde_json::to_string(m).unwrap(),
     )
     .unwrap();
-    std::fs::write(dir.join(format!("{}.drun", m.id)), vec![0u8; bytes]).unwrap();
+    crate::fsio::write(dir.join(format!("{}.drun", m.id)), vec![0u8; bytes]).unwrap();
 }
 
-#[tokio::test]
-async fn runs_are_kept_14_days_unless_pinned_or_their_task_is_open() {
-    let d = tempfile::tempdir().unwrap();
-    let runs = d.path().join("runs");
-    let now = 2_000_000_000.0;
-    let store = Arc::new(Store::default());
-    let mut opts = Opts::new(runs.clone(), d.path().join("cp"));
-    opts.store = store.clone();
-    opts.task_open = Arc::new(|t| Box::pin(async move { t == "task:open" }));
-    opts.project_cap = 1000;
-    let mut pinned = meta("r-pinned", "/p", Some(20.0), now);
-    pinned.pinned = true;
-    let mut open = meta("r-open", "/p", Some(20.0), now);
-    open.task = Some("task:open".into());
-    let mut closed = meta("r-closed", "/p", Some(20.0), now);
-    closed.task = Some("task:done".into());
-    for (m, b) in [
-        (meta("r-old", "/p", Some(15.0), now), 10),
-        (meta("r-new", "/p", Some(1.0), now), 10),
-        (meta("r-live", "/p", None, now), 10),
-        (pinned, 10),
-        (open, 10),
-        (closed, 10),
-    ] {
-        put_run(&runs, &m, b);
-    }
-    let rec = record::Records::new(opts, Arc::new(Events::default()));
-    let mut gone = rec.prune(now).await;
-    gone.sort();
-    assert_eq!(gone, ["r-closed", "r-old"]);
-    assert!(!runs.join("r-old.drun").exists() && !runs.join("r-old.json").exists());
-    assert!(runs.join("r-new.drun").exists() && runs.join("r-pinned.drun").exists());
-    let mut told = store.1.lock().unwrap().clone();
-    told.sort();
-    assert_eq!(told, ["r-closed", "r-old"]);
+#[test]
+fn runs_are_kept_14_days_unless_pinned_or_their_task_is_open() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let runs = d.path().join("runs");
+        let now = 2_000_000_000.0;
+        let store = Arc::new(Store::default());
+        let mut opts = Opts::new(runs.clone(), d.path().join("cp"));
+        opts.store = store.clone();
+        opts.task_open = Arc::new(|t| Box::pin(async move { t == "task:open" }));
+        opts.project_cap = 1000;
+        let mut pinned = meta("r-pinned", "/p", Some(20.0), now);
+        pinned.pinned = true;
+        let mut open = meta("r-open", "/p", Some(20.0), now);
+        open.task = Some("task:open".into());
+        let mut closed = meta("r-closed", "/p", Some(20.0), now);
+        closed.task = Some("task:done".into());
+        for (m, b) in [
+            (meta("r-old", "/p", Some(15.0), now), 10),
+            (meta("r-new", "/p", Some(1.0), now), 10),
+            (meta("r-live", "/p", None, now), 10),
+            (pinned, 10),
+            (open, 10),
+            (closed, 10),
+        ] {
+            put_run(&runs, &m, b);
+        }
+        let rec = record::Records::new(opts, Arc::new(Events::default()));
+        let mut gone = rec.prune(now).await;
+        gone.sort();
+        assert_eq!(gone, ["r-closed", "r-old"]);
+        assert!(!runs.join("r-old.drun").exists() && !runs.join("r-old.json").exists());
+        assert!(runs.join("r-new.drun").exists() && runs.join("r-pinned.drun").exists());
+        let mut told = saman::lock(&store.1).clone();
+        told.sort();
+        assert_eq!(told, ["r-closed", "r-old"]);
+    })
 }
 
-#[tokio::test]
-async fn a_project_past_its_cap_loses_its_oldest_runs() {
-    let d = tempfile::tempdir().unwrap();
-    let runs = d.path().join("runs");
-    let now = 2_000_000_000.0;
-    let mut opts = Opts::new(runs.clone(), d.path().join("cp"));
-    opts.project_cap = 250;
-    for (i, id) in ["r1", "r2", "r3", "r4"].iter().enumerate() {
-        let mut m = meta(id, "/p", Some(1.0), now);
-        m.started = now - 86400.0 + i as f64;
-        put_run(&runs, &m, 100);
-    }
-    // another project's runs count for it alone
-    put_run(&runs, &meta("q1", "/q", Some(1.0), now), 200);
-    let rec = record::Records::new(opts, Arc::new(Events::default()));
-    let mut gone = rec.prune(now).await;
-    gone.sort();
-    assert_eq!(gone, ["r1", "r2"]);
+#[test]
+fn a_project_past_its_cap_loses_its_oldest_runs() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let runs = d.path().join("runs");
+        let now = 2_000_000_000.0;
+        let mut opts = Opts::new(runs.clone(), d.path().join("cp"));
+        opts.project_cap = 250;
+        for (i, id) in ["r1", "r2", "r3", "r4"].iter().enumerate() {
+            let mut m = meta(id, "/p", Some(1.0), now);
+            m.started = now - 86400.0 + i as f64;
+            put_run(&runs, &m, 100);
+        }
+        // another project's runs count for it alone
+        put_run(&runs, &meta("q1", "/q", Some(1.0), now), 200);
+        let rec = record::Records::new(opts, Arc::new(Events::default()));
+        let mut gone = rec.prune(now).await;
+        gone.sort();
+        assert_eq!(gone, ["r1", "r2"]);
+    })
 }
 
 // A whole run through the hub, with the mock adapter.
@@ -378,8 +380,8 @@ impl Terminals for NoTerms {
         _: String,
         _: Vec<String>,
         _: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<Opened, String>> {
-        Box::pin(async { Err("no terminals".into()) })
+    ) -> BoxFut<'_, villa::Result<Opened>> {
+        Box::pin(async { Err(villa::Error::invalid("no terminals")) })
     }
 }
 
@@ -390,22 +392,17 @@ pub(super) struct Mocks {
 }
 
 impl Launcher for Mocks {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
-            let steps = self
-                .scripts
-                .lock()
-                .unwrap()
+            let steps = saman::lock(&self.scripts)
                 .pop_front()
-                .ok_or("no script left")?;
+                .ok_or("no script left")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let script: Script = serde_json::from_value(Value::Array(steps)).unwrap();
             let (a, b) = tokio::io::duplex(1 << 20);
             let (cr, cw) = tokio::io::split(a);
             let (mr, mw) = tokio::io::split(b);
-            self.running
-                .lock()
-                .unwrap()
-                .push(Mock::start(script, mr, mw));
+            saman::lock(&self.running).push(Mock::start(script, mr, mw));
             let (client, incoming) = vor::Client::new(cr, cw);
             Ok(Connected {
                 client,
@@ -440,327 +437,274 @@ fn hit(probe: &str, value: &str) -> Value {
     json!({"event": "output", "body": {"category": "console", "output": format!("\u{1e}drgnx:{probe}:140:{value}\n")}})
 }
 
-#[tokio::test]
-async fn a_run_is_recorded_against_the_files_that_ran() {
-    let d = tempfile::tempdir().unwrap();
-    let project = d.path().join("proj");
-    std::fs::create_dir_all(&project).unwrap();
-    let file = project.join("stock.py");
-    std::fs::write(&file, "shortfall = 16\nprint(shortfall)\nprint('done')\n").unwrap();
-    let other = project.join("other.py");
-    std::fs::write(&other, "x = 1\n").unwrap();
-    let root = project.to_string_lossy().into_owned();
-    let path = file.to_string_lossy().into_owned();
+#[test]
+fn a_run_is_recorded_against_the_files_that_ran() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let project = d.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let file = project.join("stock.py");
+        crate::fsio::write(&file, "shortfall = 16\nprint(shortfall)\nprint('done')\n").unwrap();
+        let other = project.join("other.py");
+        crate::fsio::write(&other, "x = 1\n").unwrap();
+        let root = project.to_string_lossy().into_owned();
+        let path = file.to_string_lossy().into_owned();
 
-    let ev = Arc::new(Events::default());
-    let dbg = Debug::new(ev.clone(), Arc::new(NoTerms));
-    let store = Arc::new(Store::default());
-    let mut opts = Opts::new(d.path().join("runs"), d.path().join("checkpoints"));
-    opts.store = store.clone();
-    let rec = dbg.record_into(opts);
-    // "Probe the result" of line 1: the probe sits on line 2
-    rec.probes(&root, |p| {
-        p.apply(super::probes::Op::Result {
-            path: path.clone(),
-            line: 1,
-            expr: "shortfall".into(),
-            text: std::fs::read_to_string(&file).unwrap(),
-            lang: super::probes::Lang::Python,
-        })
-        .unwrap()
-    });
+        let ev = Arc::new(Events::default());
+        let dbg = Debug::new(ev.clone(), Arc::new(NoTerms));
+        let store = Arc::new(Store::default());
+        let mut opts = Opts::new(d.path().join("runs"), d.path().join("checkpoints"));
+        opts.store = store.clone();
+        let rec = dbg.record_into(opts);
+        // "Probe the result" of line 1: the probe sits on line 2
+        rec.probes(&root, |p| {
+            p.apply(super::probes::Op::Result {
+                path: path.clone(),
+                line: 1,
+                expr: "shortfall".into(),
+                text: crate::fsio::read_to_string(&file).unwrap(),
+                lang: super::probes::Lang::Python,
+            })
+            .unwrap()
+        });
 
-    let mut script = vec![
-        json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true, "supportsLogPoints": true}}),
-        json!({"expect": "launch", "args": {"program": path}, "ok": {}}),
-        json!({"event": "initialized"}),
-        json!({"expect": "setBreakpoints", "args": {"source": {"path": path},
+        let mut script = vec![
+            json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true, "supportsLogPoints": true}}),
+            json!({"expect": "launch", "args": {"program": path}, "ok": {}}),
+            json!({"event": "initialized"}),
+            json!({"expect": "setBreakpoints", "args": {"source": {"path": path},
             "breakpoints": [{"line": 2, "logMessage": super::probes::log_message("debugpy", "p1", "shortfall")}]},
             "ok": {"breakpoints": [{"verified": true, "line": 2}]}}),
-        json!({"expect": "configurationDone"}),
-        hit("p1", "16"),
-        json!({"event": "output", "body": {"category": "stdout", "output": "16\n"}}),
-        hit("p1", "11"),
-    ];
-    script.extend(stopped("breakpoint", 3, &path));
-    script.push(json!({"expect": "next", "ok": {}}));
-    script.extend(stopped("step", 4, &path));
-    script.push(hit("p1", "12"));
-    script.extend([
-        json!({"expect": "disconnect", "ok": {}}),
-        json!({"die": true}),
-    ]);
-    let mocks = Arc::new(Mocks {
-        scripts: Mutex::new(vec![script].into()),
-        ..Mocks::default()
-    });
-    let start = Start {
-        name: "Python: stock".into(),
-        adapter_id: "debugpy".into(),
-        request: Request::Launch,
-        arguments: json!({"program": path}),
-        breakpoints: vec![],
-        functions: vec![],
-        exception_filters: None,
-    };
-    let launch = Launch {
-        config_hash: Some("abc".into()),
-        start: json!({"root": root, "config": "launch:0"}),
-        unsaved: vec![other.to_string_lossy().into_owned()],
-        ..Launch::default()
-    };
-    let id = dbg
-        .start_with(7, &root, start, mocks.clone(), launch)
-        .await
-        .unwrap();
-    until("the first stop", || dbg.stop_of(&id).is_some()).await;
-    // a heap graph read at this stop goes with it, the last read of each graph kept
-    let epoch = dbg.stop_of(&id).unwrap().epoch;
-    rec.heap(&id, epoch, json!({"graph": "h1", "nodes": [], "n": 1}));
-    rec.heap(&id, epoch, json!({"graph": "h1", "nodes": [], "n": 2}));
-    rec.heap(&id, epoch, json!({"graph": "h2", "nodes": []}));
-    // the file changes on disk after the launch: the run keeps the launch's text
-    std::fs::write(&file, "changed\n").unwrap();
-    dbg.control(&id, Op::Next { thread: None }).await.unwrap();
-    until("the step stop", || {
-        dbg.stop_of(&id).is_some_and(|s| s.reason == "step")
-    })
-    .await;
-    until("the last hit", || {
-        ev.named("debug-probe-hits")
-            .iter()
-            .flat_map(|e| e["hits"].as_array().cloned().unwrap_or_default())
-            .count()
-            == 3
-    })
-    .await;
-    dbg.control(
-        &id,
-        Op::Stop {
-            kill_debuggee: None,
-        },
-    )
-    .await
-    .unwrap();
-    let running = std::mem::take(&mut *mocks.running.lock().unwrap());
-    for m in running {
-        m.finish().await.unwrap();
-    }
-    // the session's events are recorded off the workers, in order: all of them now
-    rec.written().await;
-
-    // the record: put at the start and at the end
-    let metas = store.0.lock().unwrap().clone();
-    let last = metas.last().unwrap();
-    assert!(metas.len() >= 2);
-    assert_eq!((last.stops, last.hits, last.n), (2, 3, 1));
-    assert!(last.ended.is_some());
-    assert_eq!(last.config_hash.as_deref(), Some("abc"));
-    // the hub picked a PYTHONHASHSEED and kept it
-    let seed = last.hash_seed.unwrap();
-    assert!(seed > 0);
-    let runs = rec.list(&root);
-    assert_eq!(runs.len(), 1);
-    let run = runs[0].id.clone();
-
-    let info = rec.run(&run).unwrap();
-    assert_eq!(info.adapter_id, "debugpy");
-    assert_eq!(info.request, "launch");
-    assert!(info.snapshot.is_some());
-    assert_eq!(info.probes.len(), 1);
-    assert_eq!(info.probes[0].line, 2);
-    // one counter: hit, hit, stop, stop, hit
-    let seqs: Vec<u64> = info.hits.iter().map(|h| h.seq).collect();
-    assert_eq!(seqs, [1, 2, 5]);
-    assert_eq!(info.hits[0].thread, "140");
-    assert_eq!(info.hits[1].value, "11");
-    assert_eq!(
-        info.stops
-            .iter()
-            .map(|s| (s.index, s.reason.as_str(), s.line))
-            .collect::<Vec<_>>(),
-        [(3, "breakpoint", 3), (4, "step", 4)]
-    );
-    assert_eq!(info.stops[0].bp_hit, Some(1));
-    assert_eq!(info.stops[1].steps, ["next"]);
-    assert!(info.to_stop_ms.is_some());
-
-    // a past stop: its capture and the file as it ran
-    let past = rec.past_stop(&run, 3, None).unwrap();
-    assert_eq!(past["capture"]["scopes"][0]["variables"][0]["value"], "16");
-    assert_eq!(
-        past["source"]["text"],
-        "shortfall = 16\nprint(shortfall)\nprint('done')\n"
-    );
-    assert_eq!(past["source"]["not_what_ran"], false);
-    assert_eq!(
-        past["heaps"],
-        json!([{"graph": "h1", "nodes": [], "n": 2}, {"graph": "h2", "nodes": []}]),
-        "the graphs read at the stop"
-    );
-    assert_eq!(rec.past_stop(&run, 4, None).unwrap()["heaps"], json!([]));
-    let other_past = rec
-        .past_stop(&run, 3, Some(&other.to_string_lossy()))
-        .unwrap();
-    assert_eq!(other_past["source"]["not_what_ran"], true);
-    // the strip: stops and the probe's lane
-    let strip = rec.get(&run, 0, 50).unwrap();
-    assert_eq!(strip["total"], 2);
-    assert_eq!(strip["lanes"][0]["hits"].as_array().unwrap().len(), 3);
-    // the events
-    let runs_ev = ev.named("debug-run");
-    assert_eq!(runs_ev.first().unwrap()["state"], "recording");
-    assert_eq!(runs_ev.last().unwrap()["state"], "ended");
-    assert!(runs_ev.iter().any(|e| e["stop"]["reason"] == "step"));
-}
-
-#[tokio::test]
-async fn an_unknown_run_is_refused() {
-    let d = tempfile::tempdir().unwrap();
-    let rec = record::Records::new(
-        Opts::new(d.path().join("runs"), d.path().join("cp")),
-        Arc::new(Events::default()),
-    );
-    assert!(rec.get("../../etc/passwd", 0, 10).is_err());
-    assert!(rec.past_stop("r1", 1, None).is_err());
-    assert!(rec.run("nope").is_none());
-}
-
-/// The FIFO's reader, at the end (or a failed assert): the write waiting on it goes on, and every later one.
-struct ReadAtEnd(std::path::PathBuf);
-
-impl Drop for ReadAtEnd {
-    fn drop(&mut self) {
-        // every writer from here on: each open of the run file is a writer of its own, and each close an end of
-        // file; the loop ends with the test's directory (the process ends with the test)
-        let p = self.0.clone();
-        std::thread::spawn(move || while std::fs::read(&p).is_ok() {});
-    }
-}
-
-/// The FIFO's reader, once let go, reads every writer that opens it after, not only the first: a run file is opened
-/// again for each write, and a writer left without a reader would hold the blocking pool (and the runtime's
-/// shutdown) for good.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_fifos_reader_reads_every_writer() {
-    use std::io::Write;
-    let d = tempfile::tempdir().unwrap();
-    let fifo = d.path().join("run.drun");
-    let made = std::process::Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .unwrap();
-    assert!(made.success());
-    drop(ReadAtEnd(fifo.clone()));
-    // writers on threads of their own: one left waiting for a reader holds nothing the test waits on
-    let write = |p: std::path::PathBuf| {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        std::thread::spawn(move || {
-            let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
-            f.write_all(b"frame").unwrap();
-            let _ = tx.send(());
+            json!({"expect": "configurationDone"}),
+            hit("p1", "16"),
+            json!({"event": "output", "body": {"category": "stdout", "output": "16\n"}}),
+            hit("p1", "11"),
+        ];
+        script.extend(stopped("breakpoint", 3, &path));
+        script.push(json!({"expect": "next", "ok": {}}));
+        script.extend(stopped("step", 4, &path));
+        script.push(hit("p1", "12"));
+        script.extend([
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ]);
+        let mocks = Arc::new(Mocks {
+            scripts: Mutex::new(vec![script].into()),
+            ..Mocks::default()
         });
-        rx
-    };
-    let within = Duration::from_secs(5);
-    assert!(
-        crate::clock::timeout(within, write(fifo.clone()))
+        let start = Start {
+            name: "Python: stock".into(),
+            adapter_id: "debugpy".into(),
+            request: Request::Launch,
+            arguments: json!({"program": path}),
+            breakpoints: vec![],
+            functions: vec![],
+            exception_filters: None,
+        };
+        let launch = Launch {
+            config_hash: Some("abc".into()),
+            start: json!({"root": root, "config": "launch:0"}),
+            unsaved: vec![other.to_string_lossy().into_owned()],
+            ..Launch::default()
+        };
+        let id = dbg
+            .start_with(7, &root, start, mocks.clone(), launch)
             .await
-            .is_ok(),
-        "the first writer is read"
-    );
-    // the first writer's close is the reader's end of file; the next opens after it
-    crate::clock::sleep(Duration::from_millis(100)).await;
-    assert!(
-        crate::clock::timeout(within, write(fifo.clone()))
-            .await
-            .is_ok(),
-        "a writer that opens after the first is read too"
-    );
-}
-
-/// A stop's write that waits on the disk (here the run file swapped for a FIFO nobody reads) holds no async worker
-/// and no lock the session's events wait for: the step's frame is still published.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_run_write_that_waits_on_the_disk_holds_no_worker() {
-    let d = tempfile::tempdir().unwrap();
-    let project = d.path().join("proj");
-    std::fs::create_dir_all(&project).unwrap();
-    let file = project.join("app.py");
-    std::fs::write(&file, "a = 1\nb = 2\nc = 3\nd = 4\n").unwrap();
-    let root = project.to_string_lossy().into_owned();
-    let path = file.to_string_lossy().into_owned();
-    let ev = Arc::new(Events::default());
-    let dbg = Debug::new(ev.clone(), Arc::new(NoTerms));
-    let runs = d.path().join("runs");
-    let rec = dbg.record_into(Opts::new(runs.clone(), d.path().join("checkpoints")));
-    let mut script = vec![
-        json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}),
-        json!({"expect": "launch", "ok": {}}),
-        json!({"event": "initialized"}),
-        json!({"expect": "configurationDone"}),
-    ];
-    script.extend(stopped("breakpoint", 3, &path));
-    script.push(json!({"expect": "next", "ok": {}}));
-    script.extend(stopped("step", 4, &path));
-    script.extend([
-        json!({"expect": "disconnect", "ok": {}}),
-        json!({"die": true}),
-    ]);
-    let mocks = Arc::new(Mocks {
-        scripts: Mutex::new(vec![script].into()),
-        ..Mocks::default()
-    });
-    let start = Start {
-        name: "Python: app".into(),
-        adapter_id: "debugpy".into(),
-        request: Request::Launch,
-        arguments: json!({"program": path}),
-        breakpoints: vec![],
-        functions: vec![],
-        exception_filters: None,
-    };
-    let launch = Launch {
-        start: json!({"root": root, "config": "launch:0"}),
-        ..Launch::default()
-    };
-    let id = dbg
-        .start_with(7, &root, start, mocks.clone(), launch)
+            .unwrap();
+        until("the first stop", || dbg.stop_of(&id).is_some()).await;
+        // a heap graph read at this stop goes with it, the last read of each graph kept
+        let epoch = dbg.stop_of(&id).unwrap().epoch;
+        rec.heap(&id, epoch, json!({"graph": "h1", "nodes": [], "n": 1}));
+        rec.heap(&id, epoch, json!({"graph": "h1", "nodes": [], "n": 2}));
+        rec.heap(&id, epoch, json!({"graph": "h2", "nodes": []}));
+        // the file changes on disk after the launch: the run keeps the launch's text
+        crate::fsio::write(&file, "changed\n").unwrap();
+        dbg.control(&id, Op::Next { thread: None }).await.unwrap();
+        until("the step stop", || {
+            dbg.stop_of(&id).is_some_and(|s| s.reason == "step")
+        })
+        .await;
+        until("the last hit", || {
+            ev.named("debug-probe-hits")
+                .iter()
+                .flat_map(|e| e["hits"].as_array().cloned().unwrap_or_default())
+                .count()
+                == 3
+        })
+        .await;
+        dbg.control(
+            &id,
+            Op::Stop {
+                kill_debuggee: None,
+            },
+        )
         .await
         .unwrap();
-    until("the first stop recorded", || {
-        ev.named("debug-run")
-            .iter()
-            .any(|e| e["stop"]["reason"] == "breakpoint")
+        let running = std::mem::take(&mut *saman::lock(&mocks.running));
+        for m in running {
+            m.finish().await.unwrap();
+        }
+        // the session's events are recorded off the workers, in order: all of them now
+        rec.written().await;
+
+        // the record: put at the start and at the end
+        let metas = saman::lock(&store.0).clone();
+        let last = metas.last().unwrap();
+        assert!(metas.len() >= 2);
+        assert_eq!((last.stops, last.hits, last.n), (2, 3, 1));
+        assert!(last.ended.is_some());
+        assert_eq!(last.config_hash.as_deref(), Some("abc"));
+        // the hub picked a PYTHONHASHSEED and kept it
+        let seed = last.hash_seed.unwrap();
+        assert!(seed > 0);
+        let runs = rec.list(&root);
+        assert_eq!(runs.len(), 1);
+        let run = runs[0].id.clone();
+
+        let info = rec.run(&run).unwrap();
+        assert_eq!(info.adapter_id, "debugpy");
+        assert_eq!(info.request, "launch");
+        assert!(info.snapshot.is_some());
+        assert_eq!(info.probes.len(), 1);
+        assert_eq!(info.probes[0].line, 2);
+        // one counter: hit, hit, stop, stop, hit
+        let seqs: Vec<u64> = info.hits.iter().map(|h| h.seq).collect();
+        assert_eq!(seqs, [1, 2, 5]);
+        assert_eq!(info.hits[0].thread, "140");
+        assert_eq!(info.hits[1].value, "11");
+        assert_eq!(
+            info.stops
+                .iter()
+                .map(|s| (s.index, s.reason.as_str(), s.line))
+                .collect::<Vec<_>>(),
+            [(3, "breakpoint", 3), (4, "step", 4)]
+        );
+        assert_eq!(info.stops[0].bp_hit, Some(1));
+        assert_eq!(info.stops[1].steps, ["next"]);
+        assert!(info.to_stop_ms.is_some());
+
+        // a past stop: its capture and the file as it ran
+        let past = rec.past_stop(&run, 3, None).unwrap();
+        assert_eq!(past["capture"]["scopes"][0]["variables"][0]["value"], "16");
+        assert_eq!(
+            past["source"]["text"],
+            "shortfall = 16\nprint(shortfall)\nprint('done')\n"
+        );
+        assert_eq!(past["source"]["not_what_ran"], false);
+        assert_eq!(
+            past["heaps"],
+            json!([{"graph": "h1", "nodes": [], "n": 2}, {"graph": "h2", "nodes": []}]),
+            "the graphs read at the stop"
+        );
+        assert_eq!(rec.past_stop(&run, 4, None).unwrap()["heaps"], json!([]));
+        let other_past = rec
+            .past_stop(&run, 3, Some(&other.to_string_lossy()))
+            .unwrap();
+        assert_eq!(other_past["source"]["not_what_ran"], true);
+        // the strip: stops and the probe's lane
+        let strip = rec.get(&run, 0, 50).unwrap();
+        assert_eq!(strip["total"], 2);
+        assert_eq!(strip["lanes"][0]["hits"].as_array().unwrap().len(), 3);
+        // the events
+        let runs_ev = ev.named("debug-run");
+        assert_eq!(runs_ev.first().unwrap()["state"], "recording");
+        assert_eq!(runs_ev.last().unwrap()["state"], "ended");
+        assert!(runs_ev.iter().any(|e| e["stop"]["reason"] == "step"));
     })
-    .await;
-    let run = rec.list(&root)[0].id.clone();
-    let drun = runs.join(format!("{run}.drun"));
-    std::fs::remove_file(&drun).unwrap();
-    let made = std::process::Command::new("mkfifo")
-        .arg(&drun)
-        .status()
+}
+
+#[test]
+fn an_unknown_run_is_refused() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let rec = record::Records::new(
+            Opts::new(d.path().join("runs"), d.path().join("cp")),
+            Arc::new(Events::default()),
+        );
+        assert!(rec.get("../../etc/passwd", 0, 10).is_err());
+        assert!(rec.past_stop("r1", 1, None).is_err());
+        assert!(rec.run("nope").is_none());
+    })
+}
+
+/// A stop's write that waits on the disk (here the run file held: `fsio::disk`) holds no async worker
+/// and no lock the session's events wait for: the step's frame is still published.
+#[test]
+fn a_run_write_that_waits_on_the_disk_holds_no_worker() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let d = tempfile::tempdir().unwrap();
+        let project = d.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let file = project.join("app.py");
+        crate::fsio::write(&file, "a = 1\nb = 2\nc = 3\nd = 4\n").unwrap();
+        let root = project.to_string_lossy().into_owned();
+        let path = file.to_string_lossy().into_owned();
+        let ev = Arc::new(Events::default());
+        let dbg = Debug::new(ev.clone(), Arc::new(NoTerms));
+        let runs = d.path().join("runs");
+        let rec = dbg.record_into(Opts::new(runs.clone(), d.path().join("checkpoints")));
+        let mut script = vec![
+            json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}),
+            json!({"expect": "launch", "ok": {}}),
+            json!({"event": "initialized"}),
+            json!({"expect": "configurationDone"}),
+        ];
+        script.extend(stopped("breakpoint", 3, &path));
+        script.push(json!({"expect": "next", "ok": {}}));
+        script.extend(stopped("step", 4, &path));
+        script.extend([
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ]);
+        let mocks = Arc::new(Mocks {
+            scripts: Mutex::new(vec![script].into()),
+            ..Mocks::default()
+        });
+        let start = Start {
+            name: "Python: app".into(),
+            adapter_id: "debugpy".into(),
+            request: Request::Launch,
+            arguments: json!({"program": path}),
+            breakpoints: vec![],
+            functions: vec![],
+            exception_filters: None,
+        };
+        let launch = Launch {
+            start: json!({"root": root, "config": "launch:0"}),
+            ..Launch::default()
+        };
+        let id = dbg
+            .start_with(7, &root, start, mocks.clone(), launch)
+            .await
+            .unwrap();
+        until("the first stop recorded", || {
+            ev.named("debug-run")
+                .iter()
+                .any(|e| e["stop"]["reason"] == "breakpoint")
+        })
+        .await;
+        let run = rec.list(&root)[0].id.clone();
+        let drun = runs.join(format!("{run}.drun"));
+        let slow = crate::fsio::disk::slow(&drun);
+        // the step's stop is written to the run file, which waits for the disk
+        dbg.control(&id, Op::Next { thread: None }).await.unwrap();
+        until(
+            "the step's frame published while its record waits on the disk",
+            || ev.named("debug-frame").iter().any(|f| f["line"] == 4),
+        )
+        .await;
+        slow.release();
+        dbg.control(
+            &id,
+            Op::Stop {
+                kill_debuggee: None,
+            },
+        )
+        .await
         .unwrap();
-    assert!(made.success());
-    let _unblock = ReadAtEnd(drun.clone());
-    // the step's stop is written to the run file, which waits for a reader
-    dbg.control(&id, Op::Next { thread: None }).await.unwrap();
-    until(
-        "the step's frame published while its record waits on the disk",
-        || ev.named("debug-frame").iter().any(|f| f["line"] == 4),
-    )
-    .await;
-    drop(_unblock);
-    dbg.control(
-        &id,
-        Op::Stop {
-            kill_debuggee: None,
-        },
-    )
-    .await
-    .unwrap();
-    let running = std::mem::take(&mut *mocks.running.lock().unwrap());
-    for m in running {
-        m.finish().await.unwrap();
-    }
+        let running = std::mem::take(&mut *saman::lock(&mocks.running));
+        for m in running {
+            m.finish().await.unwrap();
+        }
+    })
 }

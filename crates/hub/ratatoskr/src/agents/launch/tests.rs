@@ -40,8 +40,8 @@ impl Fx {
         let s = |rel: &str| self.p(rel).to_str().unwrap().to_owned();
         Env::new(
             &[
-                ("HOME", &s("home")),
-                ("XDG_RUNTIME_DIR", &s("run")),
+                (stig::HOME_VAR, &s("home")),
+                (stig::SYSTEM_RUNTIME_VAR, &s("run")),
                 ("TMPDIR", &s("t")),
                 ("PATH", "/usr/bin:/bin"),
             ],
@@ -133,7 +133,7 @@ fn a_worker_reads_and_writes_only_what_its_cli_needs_in_its_login_dir() {
         "projects/-other/t.jsonl",
         "history.jsonl",
     ] {
-        fs::write(login.join(f), "{}").unwrap();
+        crate::fsio::write(login.join(f), "{}").unwrap();
     }
     let spec = fx.spec(&fx.plan(".claude"), &fx.shape(NetCell::ProviderOnly));
     assert_eq!(
@@ -177,7 +177,7 @@ fn a_worker_reads_and_writes_only_what_its_cli_needs_in_its_login_dir() {
 fn a_linked_settings_file_is_read_where_it_really_is() {
     let fx = Fx::new();
     fs::create_dir_all(fx.p("home/dotfiles")).unwrap();
-    fs::write(fx.p("home/dotfiles/settings.json"), "{}").unwrap();
+    crate::fsio::write(fx.p("home/dotfiles/settings.json"), "{}").unwrap();
     let link = fx.p("home/.claude/settings.json");
     std::os::unix::fs::symlink(fx.p("home/dotfiles/settings.json"), &link).unwrap();
     let shape = fx.shape(NetCell::ProviderOnly);
@@ -202,12 +202,12 @@ fn a_linked_settings_file_is_read_where_it_really_is() {
 #[test]
 fn each_cli_keeps_its_sessions_in_a_folder_of_its_own() {
     let fx = Fx::new();
-    fs::write(fx.p("home/.codex/auth.json"), "{}").unwrap();
-    fs::write(fx.p("home/.codex/config.toml"), "").unwrap();
+    crate::fsio::write(fx.p("home/.codex/auth.json"), "{}").unwrap();
+    crate::fsio::write(fx.p("home/.codex/config.toml"), "").unwrap();
     fs::create_dir_all(fx.p("home/.codex/sessions")).unwrap();
     fs::create_dir_all(fx.p("home/.gemini/tmp")).unwrap();
-    fs::write(fx.p("home/.gemini/oauth_creds.json"), "{}").unwrap();
-    fs::write(fx.p("home/.gemini/settings.json"), "{}").unwrap();
+    crate::fsio::write(fx.p("home/.gemini/oauth_creds.json"), "{}").unwrap();
+    crate::fsio::write(fx.p("home/.gemini/settings.json"), "{}").unwrap();
     let shape = fx.shape(NetCell::ProviderOnly);
     let (c, g) = (fx.p("home/.codex"), fx.p("home/.gemini"));
     let own = scratch_path(&fx.env(), "S1").join("login");
@@ -429,10 +429,12 @@ fn a_chat_is_not_a_worker_and_a_bad_session_id_is_refused() {
         net: NetCell::ProviderOnly,
         role: Role::Chat,
     };
-    let refused = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap()
-        .block_on(spawn(&fx.env(), &fx.plan(".claude"), &req, None));
+    let refused = saman::Executor::new(1).unwrap().block_on(spawn(
+        &fx.env(),
+        &fx.plan(".claude"),
+        &req,
+        None,
+    ));
     assert!(refused.is_err());
     assert!(scratch_dir(&fx.env(), "../x").is_err());
 }
@@ -447,7 +449,7 @@ fn a_chat_in_a_project_reads_it_and_writes_only_its_scratch() {
     let env = fx.env();
     let project = fx.p("proj");
     fs::create_dir_all(project.join(".git/hooks")).unwrap();
-    fs::write(project.join(".git/config"), "[core]\n").unwrap();
+    crate::fsio::write(project.join(".git/config"), "[core]\n").unwrap();
     let mut plan = fx.plan(".claude");
     plan.protected_ro = PROTECTED_RO.iter().map(PathBuf::from).collect();
     let given = PathBuf::from(format!("{}/", project.display()));
@@ -503,10 +505,10 @@ fn a_chat_in_a_project_reads_it_and_writes_only_its_scratch() {
         fs::create_dir_all(common.join(d)).unwrap();
     }
     fs::create_dir_all(&own).unwrap();
-    fs::write(own.join("commondir"), "../..\n").unwrap();
+    crate::fsio::write(own.join("commondir"), "../..\n").unwrap();
     let linked = fx.p("lw");
     fs::create_dir_all(&linked).unwrap();
-    fs::write(linked.join(".git"), format!("gitdir: {}\n", own.display())).unwrap();
+    crate::fsio::write(linked.join(".git"), format!("gitdir: {}\n", own.display())).unwrap();
     let (plan, shape) = chat_launch(&env, &fx.plan(".claude"), "C2", &linked).unwrap();
     let spec = fx.spec(&plan, &shape);
     assert_eq!(spec.chdir, linked);
@@ -529,7 +531,7 @@ fn a_chat_in_a_project_reads_it_and_writes_only_its_scratch() {
             .all(|b| !b.source.starts_with(fx.p("repo")))
     );
     // a `.git` file whose folder does not resolve is refused
-    fs::write(linked.join(".git"), "gitdir: /nowhere/at/all\n").unwrap();
+    crate::fsio::write(linked.join(".git"), "gitdir: /nowhere/at/all\n").unwrap();
     let refused = chat_launch(&env, &fx.plan(".claude"), "C2", &linked).unwrap_err();
     assert_eq!(refused.path, Some(linked.join(".git")), "{refused}");
     // a project that is not a folder is refused, and a chat still never takes the worktree launch
@@ -605,7 +607,7 @@ fn the_real_protected_list_is_pinned_in_the_worktree() {
 fn a_linked_worktrees_missing_hooks_dir_is_left_out() {
     use crate::agents::lock::PROTECTED_RO;
     let fx = Fx::new();
-    fs::write(fx.p("wt/.git"), "gitdir: /elsewhere").unwrap();
+    crate::fsio::write(fx.p("wt/.git"), "gitdir: /elsewhere").unwrap();
     let mut plan = fx.plan(".claude");
     plan.protected_ro = PROTECTED_RO.iter().map(PathBuf::from).collect();
     let spec = fx.spec(&plan, &fx.shape(NetCell::ProviderOnly));
@@ -697,8 +699,8 @@ fn a_snapshot_workers_git_folder_is_its_own_and_the_source_repo_is_not_given() {
     for d in ["objects", "refs/heads", "hooks", "modules/sub/hooks"] {
         fs::create_dir_all(wt.join(".git").join(d)).unwrap();
     }
-    fs::write(wt.join(".git/config"), "[core]\n").unwrap();
-    fs::write(wt.join(".git/modules/sub/config"), "[core]\n").unwrap();
+    crate::fsio::write(wt.join(".git/config"), "[core]\n").unwrap();
+    crate::fsio::write(wt.join(".git/modules/sub/config"), "[core]\n").unwrap();
     let mut plan = fx.plan(".claude");
     plan.protected_ro = PROTECTED_RO.iter().map(PathBuf::from).collect();
     let req = SandboxReq {
@@ -745,10 +747,10 @@ fn a_snapshot_workers_git_folder_is_its_own_and_the_source_repo_is_not_given() {
     // the same for a linked worktree of the source (a session the user started in one): its common folder is the
     // user's repository, so nothing of it is opened or pinned
     fs::create_dir_all(source.join("worktrees/w2")).unwrap();
-    fs::write(source.join("worktrees/w2/commondir"), "../..\n").unwrap();
+    crate::fsio::write(source.join("worktrees/w2/commondir"), "../..\n").unwrap();
     let linked = paths::state_dir(&env).join("hub/runs/w2");
     fs::create_dir_all(&linked).unwrap();
-    fs::write(
+    crate::fsio::write(
         linked.join(".git"),
         format!("gitdir: {}\n", source.join("worktrees/w2").display()),
     )
@@ -766,7 +768,7 @@ fn a_snapshot_workers_git_folder_is_its_own_and_the_source_repo_is_not_given() {
     );
     // the stubs the hub made for the lock's files go with the session, unless the agent filled them
     assert!(wt.join(".envrc").is_file() && wt.join("mise.toml").is_file());
-    fs::write(wt.join("mise.toml"), "[tools]\n").unwrap();
+    crate::fsio::write(wt.join("mise.toml"), "[tools]\n").unwrap();
     crate::sandbox::remove_stubs(&scratch_path(&env, "S1"), &wt);
     assert!(!wt.join(".envrc").exists(), "an empty stub is removed");
     assert!(wt.join("mise.toml").exists(), "a file with content stays");
@@ -786,7 +788,7 @@ impl Tools {
         let file = |rel: &str, mode: u32| {
             let p = fx.p(rel);
             fs::create_dir_all(p.parent().unwrap()).unwrap();
-            fs::write(&p, "x").unwrap();
+            crate::fsio::write(&p, "x").unwrap();
             fs::set_permissions(&p, fs::Permissions::from_mode(mode)).unwrap();
             p
         };
@@ -822,8 +824,8 @@ impl Tools {
         dirs.extend(["/usr/bin".to_string(), "/bin".to_string()]);
         Env::new(
             &[
-                ("HOME", &s("home")),
-                ("XDG_RUNTIME_DIR", &s("run")),
+                (stig::HOME_VAR, &s("home")),
+                (stig::SYSTEM_RUNTIME_VAR, &s("run")),
                 ("TMPDIR", &s("t")),
                 ("PATH", &dirs.join(":")),
             ],
@@ -995,7 +997,7 @@ fn a_macos_program_outside_seatbelts_system_reads_is_refused() {
     assert_eq!(tool("sh").unwrap().program, system_sh());
     let outside = t.fx.p("opt/agent");
     fs::create_dir_all(outside.parent().unwrap()).unwrap();
-    fs::write(&outside, "x").unwrap();
+    crate::fsio::write(&outside, "x").unwrap();
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
@@ -1024,8 +1026,7 @@ fn the_launch_takes_the_tier_whose_check_passes() {
         )
     };
     let block = |f: &dyn Fn(Tier) -> Check| {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
+        saman::Executor::new(1)
             .unwrap()
             .block_on(pick(|t| std::future::ready(f(t))))
     };
@@ -1055,7 +1056,7 @@ fn the_cdp_secret_is_never_in_argv_or_logs() {
     let fx = Fx::new();
     let program = fx.p("chrome/chrome");
     fs::create_dir_all(program.parent().unwrap()).unwrap();
-    fs::write(&program, "#!/bin/sh\n").unwrap();
+    crate::fsio::write(&program, "#!/bin/sh\n").unwrap();
     let secret = crate::browser::Secret([0xc3; 32]);
     let hex = secret.hex();
     let shape = SessionShape {
@@ -1098,7 +1099,7 @@ fn the_cdp_secret_is_never_in_argv_or_logs() {
     // the prepared launch's argv (bwrap's, the helper's): where this host has a full tier to prepare it on
     let helper = crate::sandbox::helper_at(&std::env::current_exe().unwrap());
     let Ok(sb) = Sandbox::detect(Tier::Full, helper, None) else {
-        eprintln!("no bubblewrap here: the argv half is the sandbox lane's");
+        crate::soft::err_line("no bubblewrap here: the argv half is the sandbox lane's");
         return;
     };
     // macOS's one backend is Seatbelt, whatever the tier, and the browser is bubblewrap's alone: the launch is

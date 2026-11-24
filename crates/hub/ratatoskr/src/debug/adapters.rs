@@ -89,14 +89,16 @@ pub struct Table(pub Vec<Adapter>);
 
 impl Table {
     /// The table in BYTES (an `.eld` list of plists).
-    pub fn read(bytes: &[u8]) -> Result<Table, String> {
-        let nodes =
-            read_all(bytes, Limits::default()).map_err(|r| format!("the adapter table: {r:?}"))?;
+    pub fn read(bytes: &[u8]) -> villa::Result<Table> {
+        let nodes = read_all(bytes, Limits::default())
+            .map_err(|r| villa::Error::invalid(format!("the adapter table: {r:?}")))?;
         let [node] = nodes.as_slice() else {
-            return Err("the adapter table: one list of adapters".into());
+            return Err(villa::Error::invalid(
+                "the adapter table: one list of adapters",
+            ));
         };
-        let list: Vec<Adapter> =
-            huginn::de::from_node(node).map_err(|e| format!("the adapter table: {e}"))?;
+        let list: Vec<Adapter> = huginn::de::from_node(node)
+            .map_err(|e| villa::Error::invalid(format!("the adapter table: {e}")))?;
         Ok(Table(list))
     }
 
@@ -131,12 +133,12 @@ impl Table {
     }
 
     /// The adapter for the launch.json type TY; an unknown or not built-in type says what to do.
-    pub fn for_type(&self, ty: &str) -> Result<&Adapter, String> {
+    pub fn for_type(&self, ty: &str) -> villa::Result<&Adapter> {
         match self.0.iter().find(|a| a.types.iter().any(|t| t == ty)) {
-            Some(a) if a.not_built_in => Err(format!(
+            Some(a) if a.not_built_in => Err(villa::Error::invalid(format!(
                 "the debug type \"{ty}\" ({}) is not built in: add its adapter in the setting debug.adapters",
                 a.name
-            )),
+            ))),
             Some(a) => Ok(a),
             None => {
                 let known: Vec<&str> = self
@@ -145,10 +147,10 @@ impl Table {
                     .filter(|a| !a.not_built_in)
                     .flat_map(|a| a.types.iter().map(String::as_str))
                     .collect();
-                Err(format!(
+                Err(villa::Error::invalid(format!(
                     "no debug adapter for the type \"{ty}\"; drgnx knows {} (debugpy among them); add one in the setting debug.adapters",
                     known.join(", ")
-                ))
+                )))
             }
         }
     }
@@ -226,24 +228,32 @@ pub fn command(
     found: &Found,
     env: &Env,
     port: Option<u16>,
-) -> Result<(Transport, Vec<String>), String> {
+) -> villa::Result<(Transport, Vec<String>)> {
     let start = adapter
         .start
         .as_ref()
-        .ok_or_else(|| format!("{}: no way to start it", adapter.id))?;
+        .ok_or_else(|| villa::Error::invalid(format!("{}: no way to start it", adapter.id)))?;
     let (how, argv) = match (&start.stdio, &start.tcp) {
         (Some(a), _) => (Transport::Stdio, a),
         (None, Some(a)) => (Transport::Tcp, a),
         (None, None) if start.lsp_command.is_some() => {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{}: started through its language server, not a command line",
                 adapter.id
-            ));
+            )));
         }
-        (None, None) => return Err(format!("{}: no way to start it", adapter.id)),
+        (None, None) => {
+            return Err(villa::Error::invalid(format!(
+                "{}: no way to start it",
+                adapter.id
+            )));
+        }
     };
     if how == Transport::Tcp && port.is_none() {
-        return Err(format!("{}: a TCP adapter needs a port", adapter.id));
+        return Err(villa::Error::invalid(format!(
+            "{}: a TCP adapter needs a port",
+            adapter.id
+        )));
     }
     let (program, python) = match found {
         Found::Program(p) => (p.display().to_string(), "python3".to_owned()),
@@ -283,7 +293,7 @@ pub fn parts(adapter: &Adapter, tools: &Path) -> Vec<PartStatus> {
     let one = |v: &Value| -> Option<PartStatus> {
         let part = v.get("into")?.as_str()?.to_owned();
         let installed = tools.join(&part).is_dir().then(|| {
-            std::fs::read_to_string(tools.join(&part).join(super::install::INSTALLED_MARKER))
+            crate::fsio::read_to_string(tools.join(&part).join(super::install::INSTALLED_MARKER))
                 .ok()
                 .and_then(|t| t.lines().next().map(str::to_owned))
                 .unwrap_or_else(|| "unknown".into())
@@ -391,7 +401,7 @@ mod pack_tests {
         let dir = std::env::temp_dir().join(format!("fixture-dap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let prog = dir.join("fixture-dap");
-        std::fs::write(&prog, "#!/bin/sh\n").unwrap();
+        crate::fsio::write(&prog, "#!/bin/sh\n").unwrap();
         std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
         let env = Env {
             path: vec![dir.clone()],

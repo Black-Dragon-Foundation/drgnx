@@ -62,7 +62,7 @@ fn canonical(v: &Value, out: &mut Vec<u8>) {
                 if i > 0 {
                     out.push(b',');
                 }
-                let _ = serde_json::to_writer(&mut *out, k);
+                crate::soft::done(serde_json::to_writer(&mut *out, k), "serde_json::to_writer");
                 out.push(b':');
                 canonical(&m[k], out);
             }
@@ -79,7 +79,7 @@ fn canonical(v: &Value, out: &mut Vec<u8>) {
             out.push(b']');
         }
         _ => {
-            let _ = serde_json::to_writer(&mut *out, v);
+            crate::soft::done(serde_json::to_writer(&mut *out, v), "serde_json::to_writer");
         }
     }
 }
@@ -399,7 +399,7 @@ pub struct Records {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(m)
 }
 
 /// A name safe as a file name and in a ref.
@@ -827,7 +827,10 @@ impl Records {
 
     /// META to its record on disk; false: no key to seal it with.
     fn write_meta(&self, meta: &RunMeta) -> bool {
-        let _ = std::fs::create_dir_all(&self.opts.runs);
+        crate::soft::done(
+            std::fs::create_dir_all(&self.opts.runs),
+            "std::fs::create_dir_all",
+        );
         let Some(key) = lock(&self.key).clone() else {
             return false;
         };
@@ -847,7 +850,7 @@ impl Records {
         if let Some(l) = lock(&self.live).get(id) {
             return Some(l.meta.clone());
         }
-        let t = std::fs::read_to_string(self.file(id, "json")).ok()?;
+        let t = crate::fsio::read_to_string(self.file(id, "json")).ok()?;
         serde_json::from_str(&t).ok().map(|m| self.opened(m))
     }
 
@@ -889,7 +892,7 @@ impl Records {
             .flatten()
             .flatten()
             .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+            .filter_map(|e| crate::fsio::read_to_string(e.path()).ok())
             .filter_map(|t| serde_json::from_str::<RunMeta>(&t).ok())
             .filter(|m| root.is_empty() || m.root == root)
             .map(|mut m| {
@@ -903,29 +906,33 @@ impl Records {
     }
 
     /// Run ID's file read back (a live run's pending frames written first).
-    fn reader(&self, id: &str) -> Result<Reader, String> {
+    fn reader(&self, id: &str) -> villa::Result<Reader> {
         if !safe(id) {
-            return Err(format!("no run {id}"));
+            return Err(villa::Error::not_found(format!("no run {id}")));
         }
         if let Some(l) = lock(&self.live).get_mut(id) {
             l.file.flush();
         }
         let Some(key) = lock(&self.key).clone() else {
-            return Err(format!("run {id} cannot be read until the keyring unlocks"));
+            return Err(villa::Error::unavailable(format!(
+                "run {id} cannot be read until the keyring unlocks"
+            )));
         };
         Reader::open(&self.file(id, "drun"), &key).map_err(|e| match e {
-            runfile::Unread::Io(_) => format!("run {id} has no file"),
-            e @ runfile::Unread::Sealed => format!("run {id} {e}"),
+            runfile::Unread::Io(_) => villa::Error::not_found(format!("run {id} has no file")),
+            e @ runfile::Unread::Sealed => villa::Error::refused(format!("run {id} {e}")),
         })
     }
 
     /// Pin or unpin run ID (a pinned run is kept past the retention).
-    pub fn pin(&self, id: &str, pinned: bool) -> Result<(), String> {
-        let mut meta = self.read_meta(id).ok_or_else(|| format!("no run {id}"))?;
+    pub fn pin(&self, id: &str, pinned: bool) -> villa::Result<()> {
+        let mut meta = self
+            .read_meta(id)
+            .ok_or_else(|| villa::Error::invalid(format!("no run {id}")))?;
         if lock(&self.key).is_none() {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "run {id} cannot be changed until the keyring unlocks"
-            ));
+            )));
         }
         meta.pinned = pinned;
         if let Some(l) = lock(&self.live).get_mut(id) {
@@ -939,10 +946,14 @@ impl Records {
     /// Run ID for the strip: its record, its stops FROM (0-based) up to COUNT, and the probes' lanes with the hits
     /// between the first and the last of those stops (all of them when the page reaches the run's end), at most
     /// LANE_MAX a probe (the newest).
-    pub fn get(&self, id: &str, from: usize, count: usize) -> Result<Value, String> {
+    pub fn get(&self, id: &str, from: usize, count: usize) -> villa::Result<Value> {
         const LANE_MAX: usize = 2000;
-        let meta = self.read_meta(id).ok_or_else(|| format!("no run {id}"))?;
-        let r = self.reader(id)?;
+        let meta = self
+            .read_meta(id)
+            .ok_or_else(|| villa::Error::invalid(format!("no run {id}")))?;
+        let r = self
+            .reader(id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let all = &r.index.stops;
         let page: Vec<&RunStop> = all.iter().skip(from).take(count).collect();
         let lo = if from == 0 {
@@ -995,12 +1006,16 @@ impl Records {
 
     /// Stop INDEX of run ID: its capture, the snapshot's tree, and FILE's text as it ran (the stop's top frame's file
     /// when none), marked when it was unsaved in the editor at the launch.
-    pub fn past_stop(&self, id: &str, index: u64, file: Option<&str>) -> Result<Value, String> {
-        let meta = self.read_meta(id).ok_or_else(|| format!("no run {id}"))?;
-        let r = self.reader(id)?;
+    pub fn past_stop(&self, id: &str, index: u64, file: Option<&str>) -> villa::Result<Value> {
+        let meta = self
+            .read_meta(id)
+            .ok_or_else(|| villa::Error::invalid(format!("no run {id}")))?;
+        let r = self
+            .reader(id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let (stop, capture) = r
             .stop(index)
-            .ok_or_else(|| format!("run {id} has no stop {index}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("run {id} has no stop {index}")))?;
         let path = file.map_or_else(|| stop.path.clone(), str::to_owned);
         let source = meta.snapshot.as_ref().and_then(|s| {
             let rel = Path::new(&path).strip_prefix(&s.source).ok()?;
@@ -1070,13 +1085,19 @@ impl Records {
         for id in &gone {
             let meta = all.iter().find(|m| &m.id == id);
             for ext in ["drun", "drun.idx", "json"] {
-                let _ = std::fs::remove_file(self.file(id, ext));
+                crate::soft::done(
+                    std::fs::remove_file(self.file(id, ext)),
+                    "std::fs::remove_file",
+                );
             }
             if let Some(s) = meta.and_then(|m| m.snapshot.as_ref()) {
-                let _ = crate::timeline::snapshot::drop_kept(
-                    &s.checkpoints,
-                    &s.source,
-                    &format!("refs/drgnx/debug/{id}"),
+                crate::soft::done(
+                    crate::timeline::snapshot::drop_kept(
+                        &s.checkpoints,
+                        &s.source,
+                        &format!("refs/drgnx/debug/{id}"),
+                    ),
+                    "crate::timeline::snapshot::drop_kept",
                 );
             }
             self.opts.store.gone(id);

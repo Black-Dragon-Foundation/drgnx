@@ -11,8 +11,9 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use super::run::Output;
 
 /// Why a container job is not run.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -739,32 +740,29 @@ pub fn run_limited(
     args: &[&str],
     env: &[(OsString, OsString)],
     limit: Duration,
-) -> Result<Output, String> {
-    let mut child = Command::new(podman)
-        .args(args)
-        .env_clear()
-        .envs(env.iter().map(|(k, v)| (k, v)))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("podman: {e}"))?;
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return child.wait_with_output().map_err(|e| format!("podman: {e}")),
-            Ok(None) if start.elapsed() < limit => std::thread::sleep(Duration::from_millis(25)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "podman {} took longer than {}s; the job is refused",
-                    args.first().copied().unwrap_or(""),
-                    limit.as_secs()
-                ));
-            }
-            Err(e) => return Err(format!("podman: {e}")),
-        }
+) -> villa::Result<Output> {
+    let spec = draugr::Spec {
+        program: podman.to_path_buf(),
+        args: args.iter().map(OsString::from).collect(),
+        env: env.to_vec(),
+        cwd: None,
+        stdin_null: true,
+        pass_fds: vec![],
+        new_session: false,
+    };
+    match draugr::run(spec, limit) {
+        Ok(o) => Ok(Output {
+            status: o.status,
+            stdout: o.stdout,
+            stderr: o.stderr.into_bytes(),
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(villa::Error::timeout(format!(
+            "podman {} took longer than {}s; the job is refused",
+            args.first().copied().unwrap_or(""),
+            limit.as_secs()
+        ))
+        .with_source(e)),
+        Err(e) => Err(villa::Error::io(format!("podman: {e}")).with_source(e)),
     }
 }
 
@@ -775,21 +773,21 @@ pub const CONTROLLERS: [&str; 3] = ["memory", "pids", "cpu"];
 /// does not. Rootless podman applies limits only on cgroup v2 through the systemd cgroup manager, with the controllers
 /// delegated to the user. Without a systemd user session it falls back to `cgroupfs`, where a rootless container may
 /// get no cgroup of its own and its limits are dropped with no more than a warning.
-pub fn limits_enforced(info: &serde_json::Value) -> Result<(), String> {
+pub fn limits_enforced(info: &serde_json::Value) -> villa::Result<()> {
     let host = &info["host"];
     let version = host["cgroupVersion"].as_str().unwrap_or("unknown");
     let manager = host["cgroupManager"].as_str().unwrap_or("unknown");
     if version != "v2" {
-        return Err(format!(
+        return Err(villa::Error::unavailable(format!(
             "podman runs on cgroup {version}, and the caps need cgroup v2"
-        ));
+        )));
     }
     if manager != "systemd" {
-        return Err(format!(
+        return Err(villa::Error::unavailable(format!(
             "podman's cgroup manager is {manager}, which cannot enforce a rootless container's caps: \
              it needs a systemd user session (log in, or `loginctl enable-linger`) and the hub its \
              XDG_RUNTIME_DIR or DBUS_SESSION_BUS_ADDRESS"
-        ));
+        )));
     }
     let have: Vec<&str> = host["cgroupControllers"]
         .as_array()
@@ -801,10 +799,10 @@ pub fn limits_enforced(info: &serde_json::Value) -> Result<(), String> {
         .filter(|c| !have.contains(c))
         .collect();
     if !missing.is_empty() {
-        return Err(format!(
+        return Err(villa::Error::unavailable(format!(
             "the cgroup controllers {} are not delegated to this user, so podman cannot enforce the caps",
             missing.join(", ")
-        ));
+        )));
     }
     Ok(())
 }
@@ -816,8 +814,9 @@ pub fn check_limits(
     podman: &Path,
     env: &[(OsString, OsString)],
     limit: Duration,
-) -> Result<serde_json::Value, String> {
-    let refused = |m: String| format!("container jobs are refused here: {m}");
+) -> villa::Result<serde_json::Value> {
+    let refused =
+        |m: String| villa::Error::unavailable(format!("container jobs are refused here: {m}"));
     let out = run_limited(podman, &["info", "--format", "json"], env, limit)?;
     if !out.status.success() {
         return Err(refused(format!(
@@ -827,7 +826,7 @@ pub fn check_limits(
     }
     let info: serde_json::Value = serde_json::from_slice(&out.stdout)
         .map_err(|e| refused(format!("podman info is not JSON: {e}")))?;
-    limits_enforced(&info).map_err(refused)?;
+    limits_enforced(&info).map_err(|e| refused(e.message().to_string()))?;
     Ok(info)
 }
 
@@ -1182,7 +1181,7 @@ mod tests {
         let local_key_server = ["ratatoskr/src/exec/keys.rs", "ratatoskr/src/exec/tests.rs"];
         let mut hits = vec![];
         for f in files {
-            let text = std::fs::read_to_string(&f).unwrap();
+            let text = crate::fsio::read_to_string(&f).unwrap();
             let local = local_key_server.iter().any(|s| f.ends_with(s));
             for (i, l) in text.lines().enumerate() {
                 if needles
@@ -2003,13 +2002,16 @@ mod tests {
     fn caps_hold_only_on_v2_with_systemd_and_the_controllers() {
         let info = |v: &str, m: &str, c: &[&str]| serde_json::json!({"host": {"cgroupVersion": v, "cgroupManager": m, "cgroupControllers": c}});
         let all = ["cpuset", "cpu", "io", "memory", "pids"];
-        assert_eq!(limits_enforced(&info("v2", "systemd", &all)), Ok(()));
+        limits_enforced(&info("v2", "systemd", &all)).unwrap();
         let e = limits_enforced(&info("v2", "cgroupfs", &all)).unwrap_err();
-        assert!(e.contains("cgroupfs") && e.contains("enable-linger"), "{e}");
+        assert!(
+            e.message().contains("cgroupfs") && e.message().contains("enable-linger"),
+            "{e}"
+        );
         let e = limits_enforced(&info("v1", "systemd", &all)).unwrap_err();
-        assert!(e.contains("cgroup v1"), "{e}");
+        assert!(e.message().contains("cgroup v1"), "{e}");
         let e = limits_enforced(&info("v2", "systemd", &["cpu", "memory"])).unwrap_err();
-        assert!(e.contains("pids"), "{e}");
+        assert!(e.message().contains("pids"), "{e}");
         assert!(limits_enforced(&serde_json::json!({})).is_err());
     }
 
@@ -2020,6 +2022,9 @@ mod tests {
         let p = d.path().join("podman");
         hlaup::write(&p, "#!/bin/sh\necho 'no session' >&2; exit 125\n").unwrap();
         let e = check_limits(&p, &[], Duration::from_secs(10)).unwrap_err();
-        assert!(e.contains("no session") && e.contains("refused"), "{e}");
+        assert!(
+            e.message().contains("no session") && e.message().contains("refused"),
+            "{e}"
+        );
     }
 }

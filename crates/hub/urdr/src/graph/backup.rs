@@ -4,7 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use stund::Instant;
 
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,18 @@ pub(crate) fn tmp_of(dest: &Path) -> PathBuf {
     dest.with_file_name(name)
 }
 
+/// Remove the file at PATH if it is there; a file that cannot be removed is logged, never the caller's error (the
+/// caller is already reporting the failure that made it a leftover).
+pub(crate) fn discard(path: &Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "a leftover file could not be removed")
+        }
+    }
+}
+
 fn size(path: &Path) -> u64 {
     std::fs::metadata(path).map_or(0, |m| m.len())
 }
@@ -80,14 +92,14 @@ const INTERRUPTED: &str = "interrupted: the hub is stopping";
 /// after.
 pub fn interrupt_all() {
     STOPPING.store(true, Ordering::SeqCst);
-    for (_, h) in RUNNING.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+    for (_, h) in saman::lock(&RUNNING).iter() {
         h.interrupt();
     }
 }
 
 /// The copy to DEST, interrupted: the connection that runs it is told to stop at its next step.
 pub fn interrupt(dest: &Path) {
-    for (d, h) in RUNNING.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+    for (d, h) in saman::lock(&RUNNING).iter() {
         if d == dest {
             h.interrupt();
         }
@@ -99,17 +111,14 @@ struct Running(PathBuf);
 
 impl Running {
     fn new(dest: &Path, conn: &Connection) -> Running {
-        RUNNING
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push((dest.to_path_buf(), conn.get_interrupt_handle()));
+        saman::lock(&RUNNING).push((dest.to_path_buf(), conn.get_interrupt_handle()));
         Running(dest.to_path_buf())
     }
 }
 
 impl Drop for Running {
     fn drop(&mut self) {
-        let mut r = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+        let mut r = saman::lock(&RUNNING);
         if let Some(i) = r.iter().position(|(d, _)| *d == self.0) {
             r.remove(i);
         }
@@ -161,9 +170,9 @@ async fn vacuum_verified(
                         verify(&tmp)
                     }
                 })
-                .and_then(|_| std::fs::rename(&tmp, &target).map_err(|e| e.to_string()));
+                .and_then(|_| eitri::rename_file(&tmp, &target).map_err(|e| e.to_string()));
             if copied.is_err() {
-                let _ = std::fs::remove_file(&tmp);
+                discard(&tmp);
             }
             copied
         })
@@ -221,7 +230,7 @@ pub fn check(dest: &Path) -> Report {
     let started = Instant::now();
     let result = check_inner(dest);
     if result.is_err() {
-        let _ = std::fs::remove_file(dest);
+        discard(dest);
     }
     report(dest.to_path_buf(), started, result)
 }
@@ -299,9 +308,7 @@ mod tests {
     pub(super) static HOLDS: Mutex<Vec<(PathBuf, std::sync::Arc<Hold>)>> = Mutex::new(Vec::new());
 
     pub(super) fn hold_if_hooked(conn: &mut Connection, dest: &Path) {
-        let Some(h) = HOLDS
-            .lock()
-            .unwrap()
+        let Some(h) = saman::lock(&HOLDS)
             .iter()
             .find(|(d, _)| d == dest)
             .map(|(_, h)| h.clone())
@@ -313,9 +320,9 @@ mod tests {
             1,
             Some(move || {
                 if first.swap(false, Ordering::SeqCst) {
-                    let _ = h.started.send(());
+                    saman::delivered(h.started.send(()), "test: the copy started");
                     let (m, c) = &*h.go;
-                    let mut go = m.lock().unwrap();
+                    let mut go = saman::lock(m);
                     while !*go {
                         go = c.wait(go).unwrap();
                     }
@@ -329,151 +336,161 @@ mod tests {
     use crate::graph::writer::Writer;
     use crate::graph::writer::tests::{opts, rule};
 
-    #[tokio::test]
-    async fn vacuum_into_from_a_read_connection_under_writes() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("work.db");
-        let (w, h) = Writer::spawn(&path, opts(256, 1), rule()).unwrap();
-        h.write(TxMeta::new("u", Class::User, "t"), |tx| {
-            tx.sql().execute(
-                "insert into t (v, tx) values (0, ?1)",
-                rusqlite::params![tx.id()],
-            )?;
-            Ok(())
-        })
-        .await
-        .unwrap();
-        let pool = ReadPool::open(&path, 2);
-        let writes = {
-            let h = h.clone();
-            tokio::spawn(async move {
-                for i in 0..1_000i64 {
-                    h.write(TxMeta::new("u", Class::User, "t"), move |tx| {
-                        tx.sql().execute(
-                            "insert into t (v, tx) values (?1, ?2)",
-                            rusqlite::params![i, tx.id()],
-                        )?;
-                        Ok(())
-                    })
-                    .await
-                    .unwrap();
-                }
+    #[test]
+    fn vacuum_into_from_a_read_connection_under_writes() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("work.db");
+            let (w, h) = Writer::spawn(&path, opts(256, 1), rule()).unwrap();
+            h.write(TxMeta::new("u", Class::User, "t"), |tx| {
+                tx.sql().execute(
+                    "insert into t (v, tx) values (0, ?1)",
+                    rusqlite::params![tx.id()],
+                )?;
+                Ok(())
             })
-        };
-        let dest = dir.path().join("backup").join("work-20261023.db");
-        let r = vacuum_into(&pool, dest.clone()).await;
-        assert!(r.ok, "{r:?}");
-        assert!(r.bytes > 0);
-        writes.await.unwrap();
-        let c = check(&dest);
-        assert!(c.ok, "{c:?}");
-        assert!(dest.exists());
-        assert!(!tmp_of(&dest).exists());
-        let mode = std::fs::metadata(dest.parent().unwrap())
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o700);
-        let copy = Connection::open(&dest).unwrap();
-        let n: i64 = copy
-            .query_row("select count(*) from t", [], |r| r.get(0))
+            .await
             .unwrap();
-        assert!((1..=1_001).contains(&n));
-        drop(h);
-        w.shutdown();
+            let pool = ReadPool::open(&path, 2);
+            let writes = {
+                let h = h.clone();
+                saman::spawn("urdr-test", async move {
+                    for i in 0..1_000i64 {
+                        h.write(TxMeta::new("u", Class::User, "t"), move |tx| {
+                            tx.sql().execute(
+                                "insert into t (v, tx) values (?1, ?2)",
+                                rusqlite::params![i, tx.id()],
+                            )?;
+                            Ok(())
+                        })
+                        .await
+                        .unwrap();
+                    }
+                })
+            };
+            let dest = dir.path().join("backup").join("work-20261023.db");
+            let r = vacuum_into(&pool, dest.clone()).await;
+            assert!(r.ok, "{r:?}");
+            assert!(r.bytes > 0);
+            writes.await.unwrap();
+            let c = check(&dest);
+            assert!(c.ok, "{c:?}");
+            assert!(dest.exists());
+            assert!(!tmp_of(&dest).exists());
+            let mode = std::fs::metadata(dest.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o700);
+            let copy = Connection::open(&dest).unwrap();
+            let n: i64 = copy
+                .query_row("select count(*) from t", [], |r| r.get(0))
+                .unwrap();
+            assert!((1..=1_001).contains(&n));
+            drop(h);
+            w.shutdown();
+        })
     }
 
     /// A copy that runs long (held in its first step here) is interrupted by `interrupt`: it returns at once as failed
     /// and leaves nothing behind, no `.tmp` and no half copy at its destination; the stop does not wait for it.
-    #[tokio::test]
-    async fn an_interrupted_copy_ends_at_once_and_leaves_no_partial_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("work.db");
-        let (w, h) = Writer::spawn(&path, opts(256, 1), rule()).unwrap();
-        h.tick().await;
-        let pool = ReadPool::open(&path, 1);
-        let dest = dir.path().join("backup").join("work-20261024.db");
-        let (started, seen) = std::sync::mpsc::channel();
-        let go = std::sync::Arc::new((Mutex::new(false), std::sync::Condvar::new()));
-        HOLDS.lock().unwrap().push((
-            dest.clone(),
-            std::sync::Arc::new(Hold {
-                started,
-                go: go.clone(),
-            }),
-        ));
-        let d = dest.clone();
-        let p = pool.clone();
-        let copy = tokio::spawn(async move { vacuum_into(&p, d).await });
-        // the copy is in its first step, held: it cannot finish by itself now
-        tokio::task::spawn_blocking(move || seen.recv().unwrap())
-            .await
-            .unwrap();
-        interrupt(&dest);
-        {
-            let (m, c) = &*go;
-            *m.lock().unwrap() = true;
-            c.notify_all();
-        }
-        let r = copy.await.unwrap();
-        assert!(!r.ok, "{r:?}");
-        assert!(
-            r.error.as_deref().unwrap_or("").contains("interrupt"),
-            "{r:?}"
-        );
-        assert!(!dest.exists(), "no copy at the destination");
-        assert!(!tmp_of(&dest).exists(), "no partial file");
-        drop(h);
-        w.shutdown();
+    #[test]
+    fn an_interrupted_copy_ends_at_once_and_leaves_no_partial_file() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("work.db");
+            let (w, h) = Writer::spawn(&path, opts(256, 1), rule()).unwrap();
+            h.tick().await;
+            let pool = ReadPool::open(&path, 1);
+            let dest = dir.path().join("backup").join("work-20261024.db");
+            let (started, seen) = std::sync::mpsc::channel();
+            let go = std::sync::Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+            saman::lock(&HOLDS).push((
+                dest.clone(),
+                std::sync::Arc::new(Hold {
+                    started,
+                    go: go.clone(),
+                }),
+            ));
+            let d = dest.clone();
+            let p = pool.clone();
+            let copy = saman::spawn("urdr-test", async move { vacuum_into(&p, d).await });
+            // the copy is in its first step, held: it cannot finish by itself now
+            saman::spawn_blocking("urdr-test", move || seen.recv().unwrap())
+                .await
+                .unwrap();
+            interrupt(&dest);
+            {
+                let (m, c) = &*go;
+                *saman::lock(m) = true;
+                c.notify_all();
+            }
+            let r = copy.await.unwrap();
+            assert!(!r.ok, "{r:?}");
+            assert!(
+                r.error.as_deref().unwrap_or("").contains("interrupt"),
+                "{r:?}"
+            );
+            assert!(!dest.exists(), "no copy at the destination");
+            assert!(!tmp_of(&dest).exists(), "no partial file");
+            drop(h);
+            w.shutdown();
+        })
     }
 
-    #[tokio::test]
-    async fn a_failed_check_keeps_the_previous_copy() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("work.db");
-        let (w, h) = Writer::spawn(&path, opts(256, 1), rule()).unwrap();
-        h.tick().await;
-        let pool = ReadPool::open(&path, 1);
-        let backups = dir.path().join("backup");
-        let old = backups.join("work-20261022.db");
-        let new = backups.join("work-20261023.db");
-        assert!(vacuum_into(&pool, old.clone()).await.ok);
-        assert!(check(&old).ok);
-        assert!(vacuum_into(&pool, new.clone()).await.ok);
-        // Damage the new copy: zero a run of pages after the header.
-        {
-            use std::io::{Seek, SeekFrom, Write};
-            let mut f = std::fs::OpenOptions::new().write(true).open(&new).unwrap();
-            f.seek(SeekFrom::Start(4096)).unwrap();
-            f.write_all(&vec![0xAB; 8192]).unwrap();
-        }
-        let c = check(&new);
-        assert!(!c.ok);
-        assert!(c.error.is_some());
-        assert!(!new.exists(), "the failed copy is deleted");
-        assert!(old.exists(), "the previous copy stays");
-        assert!(check(&old).ok);
-        drop(h);
-        w.shutdown();
+    #[test]
+    fn a_failed_check_keeps_the_previous_copy() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("work.db");
+            let (w, h) = Writer::spawn(&path, opts(256, 1), rule()).unwrap();
+            h.tick().await;
+            let pool = ReadPool::open(&path, 1);
+            let backups = dir.path().join("backup");
+            let old = backups.join("work-20261022.db");
+            let new = backups.join("work-20261023.db");
+            assert!(vacuum_into(&pool, old.clone()).await.ok);
+            assert!(check(&old).ok);
+            assert!(vacuum_into(&pool, new.clone()).await.ok);
+            // Damage the new copy: zero a run of pages after the header.
+            {
+                let mut bytes = eitri::read_file(&new, crate::graph::READ_CAP).unwrap();
+                if bytes.len() < 4096 + 8192 {
+                    bytes.resize(4096 + 8192, 0);
+                }
+                bytes[4096..4096 + 8192].fill(0xAB);
+                eitri::replace_file(&new, &bytes).unwrap();
+            }
+            let c = check(&new);
+            assert!(!c.ok);
+            assert!(c.error.is_some());
+            assert!(!new.exists(), "the failed copy is deleted");
+            assert!(old.exists(), "the previous copy stays");
+            assert!(check(&old).ok);
+            drop(h);
+            w.shutdown();
+        })
     }
 
-    #[tokio::test]
-    async fn a_same_day_backup_that_fails_its_check_keeps_the_existing_copy() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("work.db");
-        let (w, h) = Writer::spawn(&path, opts(256, 1), rule()).unwrap();
-        h.tick().await;
-        let pool = ReadPool::open(&path, 1);
-        let dest = dir.path().join("backup").join("work-20261023.db");
-        assert!(vacuum_into(&pool, dest.clone()).await.ok);
-        let before = std::fs::read(&dest).unwrap();
-        let r = vacuum_verified(&pool, dest.clone(), |_| Err("bad copy".into())).await;
-        assert!(!r.ok);
-        assert_eq!(r.error.as_deref(), Some("bad copy"));
-        assert_eq!(std::fs::read(&dest).unwrap(), before);
-        assert!(!tmp_of(&dest).exists());
-        drop(h);
-        w.shutdown();
+    #[test]
+    fn a_same_day_backup_that_fails_its_check_keeps_the_existing_copy() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("work.db");
+            let (w, h) = Writer::spawn(&path, opts(256, 1), rule()).unwrap();
+            h.tick().await;
+            let pool = ReadPool::open(&path, 1);
+            let dest = dir.path().join("backup").join("work-20261023.db");
+            assert!(vacuum_into(&pool, dest.clone()).await.ok);
+            let before = std::fs::read(&dest).unwrap();
+            let r = vacuum_verified(&pool, dest.clone(), |_| Err("bad copy".into())).await;
+            assert!(!r.ok);
+            assert_eq!(r.error.as_deref(), Some("bad copy"));
+            assert_eq!(std::fs::read(&dest).unwrap(), before);
+            assert!(!tmp_of(&dest).exists());
+            drop(h);
+            w.shutdown();
+        })
     }
 
     #[test]
@@ -490,10 +507,10 @@ mod tests {
             names.push(format!("work-{y:04}{m:02}{dd:02}.db"));
         }
         for n in &names {
-            std::fs::write(backups.join(n), b"x").unwrap();
+            eitri::replace_file(&backups.join(n), b"x").unwrap();
         }
-        std::fs::write(backups.join("work-pre7-20261001.db"), b"x").unwrap();
-        std::fs::write(backups.join("notes.txt"), b"x").unwrap();
+        eitri::replace_file(&backups.join("work-pre7-20261001.db"), b"x").unwrap();
+        eitri::replace_file(&backups.join("notes.txt"), b"x").unwrap();
         let removed = rotate(&backups, Policy::default()).unwrap();
         let mut left: Vec<String> = std::fs::read_dir(&backups)
             .unwrap()

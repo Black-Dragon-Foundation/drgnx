@@ -127,23 +127,28 @@ impl FingerprintRecord {
     }
 
     /// A record from [`to_json`](Self::to_json)'s text: every key present, no other.
-    pub fn from_json(text: &str) -> Result<FingerprintRecord, String> {
-        let v: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
-        let obj = v.as_object().ok_or("a record is a JSON object")?;
+    pub fn from_json(text: &str) -> villa::Result<FingerprintRecord> {
+        let bad = |what: String| {
+            villa::Error::invalid("The fingerprint record is not valid.").with_detail(what)
+        };
+        let v: Value = serde_json::from_str(text).map_err(|e| bad(format!("not JSON: {e}")))?;
+        let obj = v
+            .as_object()
+            .ok_or_else(|| bad("a record is a JSON object".into()))?;
         if let Some(k) = obj.keys().find(|k| !RECORD_KEYS.contains(&k.as_str())) {
-            return Err(format!("a record has no field {k:?}"));
+            return Err(bad(format!("a record has no field {k:?}")));
         }
-        let text_of = |k: &str| -> Result<String, String> {
+        let text_of = |k: &str| -> villa::Result<String> {
             obj.get(k)
                 .and_then(Value::as_str)
                 .map(str::to_owned)
-                .ok_or_else(|| format!("field {k:?} is missing or not text"))
+                .ok_or_else(|| bad(format!("field {k:?} is missing or not text")))
         };
-        let num_of = |k: &str| -> Result<u32, String> {
+        let num_of = |k: &str| -> villa::Result<u32> {
             obj.get(k)
                 .and_then(Value::as_u64)
                 .and_then(|n| u32::try_from(n).ok())
-                .ok_or_else(|| format!("field {k:?} is missing or not a number"))
+                .ok_or_else(|| bad(format!("field {k:?} is missing or not a number")))
         };
         Ok(FingerprintRecord {
             model_id: text_of("model_id")?,
@@ -153,7 +158,7 @@ impl FingerprintRecord {
             normalized: obj
                 .get("normalized")
                 .and_then(Value::as_bool)
-                .ok_or("field \"normalized\" is missing or not a flag")?,
+                .ok_or_else(|| bad("field \"normalized\" is missing or not a flag".into()))?,
             dims: num_of("dims")?,
             max_tokens: num_of("max_tokens")?,
             doc_prefix: text_of("doc_prefix")?,

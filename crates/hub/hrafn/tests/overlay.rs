@@ -12,28 +12,10 @@ use hrafn::{
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn git_out(dir: &Path, args: &[&str]) -> String {
-    let o = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args([
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        o.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&o.stderr)
-    );
+    let o = crate::gitfx::out(dir, args);
+    assert!(o.status.success(), "git {args:?}: {}", o.stderr.trim());
     String::from_utf8_lossy(&o.stdout).trim().to_string()
 }
 
@@ -41,7 +23,7 @@ fn write(root: &Path, files: &[(&str, &str)]) {
     for (p, c) in files {
         let f = root.join(p);
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-        std::fs::write(f, c).unwrap();
+        eitri::replace_file(&f, c.as_bytes()).unwrap();
     }
 }
 
@@ -254,7 +236,7 @@ fn overlay_matches_blob_diff_in_every_order() {
     });
 
     struct Probe {
-        rt: tokio::runtime::Runtime,
+        rt: saman::Executor,
         f: Fixture,
     }
 
@@ -311,10 +293,7 @@ fn overlay_matches_blob_diff_in_every_order() {
         &p,
         skuld::Bound::default(),
         || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
+            let rt = saman::Executor::new(1).unwrap();
             let f = rt.block_on(async {
                 let f = fixture().await;
                 // T's own committed change and an untracked file, there before any event
@@ -332,24 +311,26 @@ fn overlay_matches_blob_diff_in_every_order() {
 
 /// Pattern D. A base change of p under a tree with no row for p: the base's batch inserts T's row naming the old
 /// content (one `file` insert, no read of T's file), and the old content's chunks stay as they were.
-#[tokio::test]
-async fn transition_inserts_row_without_reading() {
-    let f = fixture().await;
-    overlay::seed(&f.cx(&GitCli)).await.unwrap();
-    assert!(f.rows().await.is_empty(), "T equals the base");
-    let old = git_out(&f.main, &["rev-parse", "HEAD:b.txt"]);
-    let ids_before = chunk_ids(&f.store, "b.txt", &old).await;
-    assert!(!ids_before.is_empty());
-    // T's copy can't be read: a transition must not try
-    std::fs::rename(f.t.join("b.txt"), f.t.join("b.moved")).unwrap();
-    write(&f.main, &[("b.txt", "beta-main\n")]);
-    f.refresh_base().await;
-    assert_eq!(
-        f.rows().await,
-        BTreeMap::from([("b.txt".to_string(), Some(old.clone()))])
-    );
-    assert_eq!(chunk_ids(&f.store, "b.txt", &old).await, ids_before);
-    f.content_complete().await.unwrap();
+#[test]
+fn transition_inserts_row_without_reading() {
+    saman::block_on_current(async {
+        let f = fixture().await;
+        overlay::seed(&f.cx(&GitCli)).await.unwrap();
+        assert!(f.rows().await.is_empty(), "T equals the base");
+        let old = git_out(&f.main, &["rev-parse", "HEAD:b.txt"]);
+        let ids_before = chunk_ids(&f.store, "b.txt", &old).await;
+        assert!(!ids_before.is_empty());
+        // T's copy can't be read: a transition must not try
+        eitri::rename_file(&f.t.join("b.txt"), &f.t.join("b.moved")).unwrap();
+        write(&f.main, &[("b.txt", "beta-main\n")]);
+        f.refresh_base().await;
+        assert_eq!(
+            f.rows().await,
+            BTreeMap::from([("b.txt".to_string(), Some(old.clone()))])
+        );
+        assert_eq!(chunk_ids(&f.store, "b.txt", &old).await, ids_before);
+        f.content_complete().await.unwrap();
+    })
 }
 
 async fn chunk_ids(s: &CodeStore, path: &str, blob: &str) -> Vec<i64> {
@@ -368,254 +349,273 @@ async fn chunk_ids(s: &CodeStore, path: &str, blob: &str) -> Vec<i64> {
 
 /// Pattern D. Admission runs on each view's own bytes: p over 1 MiB in T but not in the base is a tombstone in T; q
 /// over 1 MiB in the base but not in T is a row.
-#[tokio::test]
-async fn content_admission_per_view() {
-    let big = "x\n".repeat(600 * 1024);
-    let f = Fixture::new(
-        &[("p.txt", "small p\n"), ("q.txt", &big)],
-        Config::default(),
-        ALLOW_ALL,
-    )
-    .await;
-    write(&f.t, &[("p.txt", &big), ("q.txt", "small q\n")]);
-    overlay::seed(&f.cx(&GitCli)).await.unwrap();
-    let rows = f.rows().await;
-    assert_eq!(rows.get("p.txt"), Some(&None), "{rows:?}");
-    assert!(matches!(rows.get("q.txt"), Some(Some(_))), "{rows:?}");
-    f.at_invariant().await.unwrap();
+#[test]
+fn content_admission_per_view() {
+    saman::block_on_current(async {
+        let big = "x\n".repeat(600 * 1024);
+        let f = Fixture::new(
+            &[("p.txt", "small p\n"), ("q.txt", &big)],
+            Config::default(),
+            ALLOW_ALL,
+        )
+        .await;
+        write(&f.t, &[("p.txt", &big), ("q.txt", "small q\n")]);
+        overlay::seed(&f.cx(&GitCli)).await.unwrap();
+        let rows = f.rows().await;
+        assert_eq!(rows.get("p.txt"), Some(&None), "{rows:?}");
+        assert!(matches!(rows.get("q.txt"), Some(Some(_))), "{rows:?}");
+        f.at_invariant().await.unwrap();
+    })
 }
 
 /// Pattern D. p deleted in main's working tree (still in the commit the base was built from, and in T): T gets a row.
-#[tokio::test]
-async fn main_working_tree_deletion_overlaid() {
-    let f = fixture().await;
-    remove(&f.main, "c.txt");
-    f.refresh_base().await;
-    overlay::seed(&f.cx(&GitCli)).await.unwrap();
-    let rows = f.rows().await;
-    assert!(matches!(rows.get("c.txt"), Some(Some(_))), "{rows:?}");
-    f.at_invariant().await.unwrap();
+#[test]
+fn main_working_tree_deletion_overlaid() {
+    saman::block_on_current(async {
+        let f = fixture().await;
+        remove(&f.main, "c.txt");
+        f.refresh_base().await;
+        overlay::seed(&f.cx(&GitCli)).await.unwrap();
+        let rows = f.rows().await;
+        assert!(matches!(rows.get("c.txt"), Some(Some(_))), "{rows:?}");
+        f.at_invariant().await.unwrap();
+    })
 }
 
 /// Pattern D. T edits p, then `git checkout -- p` (HEAD stays): after the re-diff, no row.
-#[tokio::test]
-async fn clean_again_without_head_move() {
-    let f = fixture().await;
-    write(&f.t, &[("b.txt", "beta-t\n")]);
-    overlay::seed(&f.cx(&GitCli)).await.unwrap();
-    assert!(f.rows().await.contains_key("b.txt"));
-    git_out(&f.t, &["checkout", "--", "b.txt"]);
-    overlay::rediff(&f.cx(&GitCli)).await.unwrap();
-    assert!(f.rows().await.is_empty(), "{:?}", f.rows().await);
-    assert_eq!(f.state().await, TreeState::Live);
+#[test]
+fn clean_again_without_head_move() {
+    saman::block_on_current(async {
+        let f = fixture().await;
+        write(&f.t, &[("b.txt", "beta-t\n")]);
+        overlay::seed(&f.cx(&GitCli)).await.unwrap();
+        assert!(f.rows().await.contains_key("b.txt"));
+        git_out(&f.t, &["checkout", "--", "b.txt"]);
+        overlay::rediff(&f.cx(&GitCli)).await.unwrap();
+        assert!(f.rows().await.is_empty(), "{:?}", f.rows().await);
+        assert_eq!(f.state().await, TreeState::Live);
+    })
 }
 
 /// Pattern D. T edited back to the base's content: no row.
-#[tokio::test]
-async fn equal_content_drops_the_row() {
-    let f = fixture().await;
-    write(&f.t, &[("b.txt", "beta-t\n")]);
-    overlay::seed(&f.cx(&GitCli)).await.unwrap();
-    assert!(f.rows().await.contains_key("b.txt"));
-    write(&f.t, &[("b.txt", "beta\n")]);
-    overlay::recheck(&f.cx(&GitCli), &["b.txt".to_string()])
-        .await
-        .unwrap();
-    assert!(f.rows().await.is_empty(), "{:?}", f.rows().await);
+#[test]
+fn equal_content_drops_the_row() {
+    saman::block_on_current(async {
+        let f = fixture().await;
+        write(&f.t, &[("b.txt", "beta-t\n")]);
+        overlay::seed(&f.cx(&GitCli)).await.unwrap();
+        assert!(f.rows().await.contains_key("b.txt"));
+        write(&f.t, &[("b.txt", "beta\n")]);
+        overlay::recheck(&f.cx(&GitCli), &["b.txt".to_string()])
+            .await
+            .unwrap();
+        assert!(f.rows().await.is_empty(), "{:?}", f.rows().await);
+    })
 }
 
 /// Pattern D. A path `.gitattributes` names a conversion for, in a touched tree (the gix door hashes raw bytes): its
 /// row is written even where its content equals the base's, and it names the bytes T has.
-#[tokio::test]
-async fn uncertain_blob_writes_the_row() {
-    let f = Fixture::new(
-        &[
-            (".gitattributes", "*.txt text eol=lf\n"),
-            ("a.txt", "alpha\n"),
-            ("b.txt", "beta\n"),
-        ],
-        Config::default(),
-        ALLOW_ALL,
-    )
-    .await;
-    // the checkout's index is racy (files as new as it): backdate them and refresh it, so b.txt is stat-clean
-    let then = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
-    for p in ["a.txt", "b.txt"] {
-        let file = std::fs::File::options()
-            .write(true)
-            .open(f.t.join(p))
+#[test]
+fn uncertain_blob_writes_the_row() {
+    saman::block_on_current(async {
+        let f = Fixture::new(
+            &[
+                (".gitattributes", "*.txt text eol=lf\n"),
+                ("a.txt", "alpha\n"),
+                ("b.txt", "beta\n"),
+            ],
+            Config::default(),
+            ALLOW_ALL,
+        )
+        .await;
+        // the checkout's index is racy (files as new as it): backdate them and refresh it, so b.txt is stat-clean
+        let then =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        for p in ["a.txt", "b.txt"] {
+            let file = eitri::open_lock(&f.t.join(p), 0o600).unwrap();
+            file.set_modified(then).unwrap();
+        }
+        git_out(&f.t, &["update-index", "-q", "--refresh"]);
+        write(&f.t, &[("a.txt", "alpha-t\n")]);
+        overlay::seed(&f.cx(&GixDoor)).await.unwrap();
+        let rows = f.rows().await;
+        assert!(rows.contains_key("a.txt"), "{rows:?}");
+        // b.txt is stat-clean and committed: its blob is the index's, certain
+        assert!(!rows.contains_key("b.txt"), "{rows:?}");
+        let raw = git_out(&f.t, &["hash-object", "--no-filters", "a.txt"]);
+        assert_eq!(rows["a.txt"].as_deref(), Some(raw.as_str()));
+        // b.txt edited back to the base's content, read through the gix door: uncertain, so a row
+        write(&f.t, &[("b.txt", "beta-t\n")]);
+        write(&f.t, &[("b.txt", "beta\n")]);
+        overlay::recheck(&f.cx(&GixDoor), &["b.txt".to_string()])
+            .await
             .unwrap();
-        file.set_modified(then).unwrap();
-    }
-    git_out(&f.t, &["update-index", "-q", "--refresh"]);
-    write(&f.t, &[("a.txt", "alpha-t\n")]);
-    overlay::seed(&f.cx(&GixDoor)).await.unwrap();
-    let rows = f.rows().await;
-    assert!(rows.contains_key("a.txt"), "{rows:?}");
-    // b.txt is stat-clean and committed: its blob is the index's, certain
-    assert!(!rows.contains_key("b.txt"), "{rows:?}");
-    let raw = git_out(&f.t, &["hash-object", "--no-filters", "a.txt"]);
-    assert_eq!(rows["a.txt"].as_deref(), Some(raw.as_str()));
-    // b.txt edited back to the base's content, read through the gix door: uncertain, so a row
-    write(&f.t, &[("b.txt", "beta-t\n")]);
-    write(&f.t, &[("b.txt", "beta\n")]);
-    overlay::recheck(&f.cx(&GixDoor), &["b.txt".to_string()])
-        .await
-        .unwrap();
-    assert!(f.rows().await.contains_key("b.txt"));
-    f.content_complete().await.unwrap();
+        assert!(f.rows().await.contains_key("b.txt"));
+        f.content_complete().await.unwrap();
+    })
 }
 
 /// Pattern D. A seed stopped after its first batch (its rows written, its final transaction not, one of them stale by
 /// the time it resumes): on open the tree is `seeding`; the seed runs again and ends at the invariant.
-#[tokio::test]
-async fn crash_mid_seed_reseeds() {
-    let f = fixture().await;
-    write(&f.t, &[("b.txt", "beta-t\n"), ("c.txt", "gamma-t\n")]);
-    // the first batch's rows as a seed wrote them: b.txt right, c.txt from an older edit
-    overlay::recheck(&f.cx(&GitCli), &["b.txt".to_string(), "c.txt".to_string()])
-        .await
-        .unwrap();
-    assert_eq!(f.rows().await.len(), 2);
-    write(&f.t, &[("c.txt", "gamma-t2\n")]);
-    // a restart: the registry and the rows persist
-    let Fixture {
-        _dir,
-        main,
-        t,
-        store,
-        tree,
-        config,
-        repo,
-        allow,
-    } = f;
-    let path = _dir.path().join("code.db");
-    std::thread::spawn(move || store.shutdown()).join().unwrap();
-    let store = CodeStore::open(&path).unwrap();
-    let f = Fixture {
-        _dir,
-        main,
-        t,
-        store,
-        tree,
-        config,
-        repo,
-        allow,
-    };
-    assert_eq!(f.state().await, TreeState::Seeding);
-    overlay::seed(&f.cx(&GitCli)).await.unwrap();
-    assert_eq!(f.state().await, TreeState::Live);
-    f.at_invariant().await.unwrap();
+#[test]
+fn crash_mid_seed_reseeds() {
+    saman::block_on_current(async {
+        let f = fixture().await;
+        write(&f.t, &[("b.txt", "beta-t\n"), ("c.txt", "gamma-t\n")]);
+        // the first batch's rows as a seed wrote them: b.txt right, c.txt from an older edit
+        overlay::recheck(&f.cx(&GitCli), &["b.txt".to_string(), "c.txt".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(f.rows().await.len(), 2);
+        write(&f.t, &[("c.txt", "gamma-t2\n")]);
+        // a restart: the registry and the rows persist
+        let Fixture {
+            _dir,
+            main,
+            t,
+            store,
+            tree,
+            config,
+            repo,
+            allow,
+        } = f;
+        let path = _dir.path().join("code.db");
+        saman::spawn_thread("hrafn-test-shutdown", move || store.shutdown())
+            .unwrap()
+            .join()
+            .unwrap();
+        let store = CodeStore::open(&path).unwrap();
+        let f = Fixture {
+            _dir,
+            main,
+            t,
+            store,
+            tree,
+            config,
+            repo,
+            allow,
+        };
+        assert_eq!(f.state().await, TreeState::Seeding);
+        overlay::seed(&f.cx(&GitCli)).await.unwrap();
+        assert_eq!(f.state().await, TreeState::Live);
+        f.at_invariant().await.unwrap();
+    })
 }
 
 /// Pattern D. A deny-listed file and a `Config`-excluded file that differ in T get no row in any view; a plain file
 /// that differs does.
-#[tokio::test]
-async fn excluded_file_absent_in_every_view() {
-    let f = Fixture::new(
-        &[
-            ("ok.txt", "ok\n"),
-            ("deny.txt", "deny\n"),
-            ("skip/x.txt", "skip\n"),
-        ],
-        Config {
-            user: hrafn::rules::RuleSet {
-                ignore: vec!["skip/**".into()],
-                ..Default::default()
+#[test]
+fn excluded_file_absent_in_every_view() {
+    saman::block_on_current(async {
+        let f = Fixture::new(
+            &[
+                ("ok.txt", "ok\n"),
+                ("deny.txt", "deny\n"),
+                ("skip/x.txt", "skip\n"),
+            ],
+            Config {
+                user: hrafn::rules::RuleSet {
+                    ignore: vec!["skip/**".into()],
+                    ..Default::default()
+                },
+                ..Config::default()
             },
-            ..Config::default()
-        },
-        |p| p != "deny.txt",
-    )
-    .await;
-    write(
-        &f.t,
-        &[
-            ("ok.txt", "ok-t\n"),
-            ("deny.txt", "deny-t\n"),
-            ("skip/x.txt", "skip-t\n"),
-            ("skip/new.txt", "new\n"),
-        ],
-    );
-    overlay::seed(&f.cx(&GitCli)).await.unwrap();
-    let rows = f.rows().await;
-    assert_eq!(rows.keys().collect::<Vec<_>>(), ["ok.txt"], "{rows:?}");
-    let base: Vec<String> = f
-        .store
-        .handle()
-        .read(|c| {
-            let mut st = c.prepare("select path from file where tree = 0 order by path")?;
-            Ok(st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?)
-        })
-        .await
-        .unwrap();
-    assert_eq!(base, ["ok.txt"]);
-    f.at_invariant().await.unwrap();
+            |p| p != "deny.txt",
+        )
+        .await;
+        write(
+            &f.t,
+            &[
+                ("ok.txt", "ok-t\n"),
+                ("deny.txt", "deny-t\n"),
+                ("skip/x.txt", "skip-t\n"),
+                ("skip/new.txt", "new\n"),
+            ],
+        );
+        overlay::seed(&f.cx(&GitCli)).await.unwrap();
+        let rows = f.rows().await;
+        assert_eq!(rows.keys().collect::<Vec<_>>(), ["ok.txt"], "{rows:?}");
+        let base: Vec<String> = f
+            .store
+            .handle()
+            .read(|c| {
+                let mut st = c.prepare("select path from file where tree = 0 order by path")?;
+                Ok(st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(base, ["ok.txt"]);
+        f.at_invariant().await.unwrap();
+    })
 }
 
 /// Pattern D. A link is never admitted, in any view, through either door (the CLI's `hash-object` would hash the
 /// target's content, gix the target's name): the rule is decided from the entry's mode or `lstat` before any hash. A
 /// file T turned into a link is a tombstone; a new link is no row; a committed link is no row.
-#[tokio::test]
-async fn links_are_never_admitted_by_either_door() {
-    for (name, door) in [
-        ("cli", Box::new(GitCli) as Box<dyn TreeGit + Sync>),
-        ("gix", Box::new(GixDoor)),
-    ] {
-        let f = fixture().await;
-        std::os::unix::fs::symlink("a.txt", f.main.join("l1")).unwrap();
-        commit(&f.main, "a link");
-        f.refresh_base().await;
-        git_out(&f.t, &["merge", "-q", "--ff-only", "main"]);
-        remove(&f.t, "b.txt");
-        std::os::unix::fs::symlink("a.txt", f.t.join("b.txt")).unwrap();
-        std::os::unix::fs::symlink("c.txt", f.t.join("l2")).unwrap();
-        write(&f.t, &[("d.txt", "delta-t\n")]);
-        overlay::seed(&f.cx(door.as_ref())).await.unwrap();
-        let rows = f.rows().await;
-        assert_eq!(rows.get("b.txt"), Some(&None), "{name}: {rows:?}");
-        assert!(!rows.contains_key("l1"), "{name}: {rows:?}");
-        assert!(!rows.contains_key("l2"), "{name}: {rows:?}");
-        assert!(rows.contains_key("d.txt"), "{name}: {rows:?}");
-        f.at_invariant().await.unwrap();
-    }
+#[test]
+fn links_are_never_admitted_by_either_door() {
+    saman::block_on_current(async {
+        for (name, door) in [
+            ("cli", Box::new(GitCli) as Box<dyn TreeGit + Sync>),
+            ("gix", Box::new(GixDoor)),
+        ] {
+            let f = fixture().await;
+            std::os::unix::fs::symlink("a.txt", f.main.join("l1")).unwrap();
+            commit(&f.main, "a link");
+            f.refresh_base().await;
+            git_out(&f.t, &["merge", "-q", "--ff-only", "main"]);
+            remove(&f.t, "b.txt");
+            std::os::unix::fs::symlink("a.txt", f.t.join("b.txt")).unwrap();
+            std::os::unix::fs::symlink("c.txt", f.t.join("l2")).unwrap();
+            write(&f.t, &[("d.txt", "delta-t\n")]);
+            overlay::seed(&f.cx(door.as_ref())).await.unwrap();
+            let rows = f.rows().await;
+            assert_eq!(rows.get("b.txt"), Some(&None), "{name}: {rows:?}");
+            assert!(!rows.contains_key("l1"), "{name}: {rows:?}");
+            assert!(!rows.contains_key("l2"), "{name}: {rows:?}");
+            assert!(rows.contains_key("d.txt"), "{name}: {rows:?}");
+            f.at_invariant().await.unwrap();
+        }
+    })
 }
 
 /// Pattern D. The base moves p to content a tree already stores: tier 1 neither reads p nor chunks it again (the
 /// tree's chunk ids stay), and the tree's row, now equal to the base, goes.
-#[tokio::test]
-async fn base_refresh_reuses_tree_content() {
-    let f = fixture().await;
-    write(&f.t, &[("b.txt", "beta-shared\n")]);
-    overlay::seed(&f.cx(&GitCli)).await.unwrap();
-    let rows = f.rows().await;
-    let Some(Some(blob)) = rows.get("b.txt").cloned() else {
-        panic!("T's row of b.txt: {rows:?}");
-    };
-    let ids = chunk_ids(&f.store, "b.txt", &blob).await;
-    assert!(!ids.is_empty());
-    write(&f.main, &[("b.txt", "beta-shared\n")]);
-    let listed = f.listed(&f.main);
-    let main = f.main.clone();
-    let reads = std::sync::Mutex::new(Vec::new());
-    refresh(
-        &f.store,
-        &listed,
-        &|p: &str| {
-            reads.lock().unwrap().push(p.to_string());
-            std::fs::read(main.join(p))
-        },
-        &[],
-    )
-    .await
-    .unwrap();
-    assert!(
-        !reads.lock().unwrap().contains(&"b.txt".to_string()),
-        "{:?}",
-        reads.lock().unwrap()
-    );
-    assert_eq!(chunk_ids(&f.store, "b.txt", &blob).await, ids);
-    assert!(f.rows().await.is_empty(), "{:?}", f.rows().await);
+#[test]
+fn base_refresh_reuses_tree_content() {
+    saman::block_on_current(async {
+        let f = fixture().await;
+        write(&f.t, &[("b.txt", "beta-shared\n")]);
+        overlay::seed(&f.cx(&GitCli)).await.unwrap();
+        let rows = f.rows().await;
+        let Some(Some(blob)) = rows.get("b.txt").cloned() else {
+            panic!("T's row of b.txt: {rows:?}");
+        };
+        let ids = chunk_ids(&f.store, "b.txt", &blob).await;
+        assert!(!ids.is_empty());
+        write(&f.main, &[("b.txt", "beta-shared\n")]);
+        let listed = f.listed(&f.main);
+        let main = f.main.clone();
+        let reads = std::sync::Mutex::new(Vec::new());
+        refresh(
+            &f.store,
+            &listed,
+            &|p: &str| {
+                saman::lock(&reads).push(p.to_string());
+                std::fs::read(main.join(p))
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+        assert!(
+            !saman::lock(&reads).contains(&"b.txt".to_string()),
+            "{:?}",
+            saman::lock(&reads)
+        );
+        assert_eq!(chunk_ids(&f.store, "b.txt", &blob).await, ids);
+        assert!(f.rows().await.is_empty(), "{:?}", f.rows().await);
+    })
 }
 
 /// A door that rewrites PATH (once) just before it hashes: the file changes between the overlay's read and the hash.
@@ -644,7 +644,7 @@ impl TreeGit for Racing<'_> {
     }
     fn blobs(&self, root: &Path, paths: &[String]) -> std::io::Result<Vec<hrafn::Blob>> {
         if !self.done.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            std::fs::write(&self.file, self.text).unwrap();
+            eitri::replace_file(&self.file, self.text.as_bytes()).unwrap();
         }
         self.inner.blobs(root, paths)
     }
@@ -658,33 +658,35 @@ impl TreeGit for Racing<'_> {
 
 /// Pattern D. A file written between the overlay's read and the door's hash: the row's blob and its chunks are of the
 /// same bytes (the ones on disk last), never a blob of new bytes over chunks of old ones.
-#[tokio::test]
-async fn row_blob_matches_the_bytes_chunked() {
-    let f = fixture().await;
-    write(&f.t, &[("b.txt", "beta-before\n")]);
-    let door = Racing {
-        inner: &GitCli,
-        file: f.t.join("b.txt"),
-        text: "beta-after\n",
-        done: false.into(),
-    };
-    overlay::seed(&f.cx(&door)).await.unwrap();
-    f.at_invariant().await.unwrap();
-    let rows = f.rows().await;
-    let Some(Some(blob)) = rows.get("b.txt").cloned() else {
-        panic!("T's row of b.txt: {rows:?}");
-    };
-    let text: String = f
-        .store
-        .handle()
-        .read(move |c| {
-            Ok(c.query_row(
-                "select group_concat(embed_text, '') from chunk where path = 'b.txt' and blob = ?1",
-                [blob],
-                |r| r.get(0),
-            )?)
-        })
-        .await
-        .unwrap();
-    assert!(text.contains("beta-after"), "{text:?}");
+#[test]
+fn row_blob_matches_the_bytes_chunked() {
+    saman::block_on_current(async {
+        let f = fixture().await;
+        write(&f.t, &[("b.txt", "beta-before\n")]);
+        let door = Racing {
+            inner: &GitCli,
+            file: f.t.join("b.txt"),
+            text: "beta-after\n",
+            done: false.into(),
+        };
+        overlay::seed(&f.cx(&door)).await.unwrap();
+        f.at_invariant().await.unwrap();
+        let rows = f.rows().await;
+        let Some(Some(blob)) = rows.get("b.txt").cloned() else {
+            panic!("T's row of b.txt: {rows:?}");
+        };
+        let text: String = f
+            .store
+            .handle()
+            .read(move |c| {
+                Ok(c.query_row(
+                    "select group_concat(embed_text, '') from chunk where path = 'b.txt' and blob = ?1",
+                    [blob],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert!(text.contains("beta-after"), "{text:?}");
+    })
 }

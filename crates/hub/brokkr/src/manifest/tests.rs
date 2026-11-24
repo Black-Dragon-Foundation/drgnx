@@ -377,8 +377,8 @@ fn hash_changes_with_either_file() {
 fn install(root: &std::path::Path, dir: &str, manifest: &Value, wasm: &[u8]) {
     let d = root.join(dir);
     fs::create_dir_all(&d).unwrap();
-    fs::write(d.join("plugin.json"), bytes(manifest)).unwrap();
-    fs::write(d.join("plugin.wasm"), wasm).unwrap();
+    eitri::replace_file(&d.join("plugin.json"), &bytes(manifest)).unwrap();
+    eitri::replace_file(&d.join("plugin.wasm"), wasm).unwrap();
 }
 
 #[test]
@@ -390,7 +390,7 @@ fn scan_skips_a_link_out_of_root() {
     install(&root, "deny-rm", &base(), b"\0asm");
     symlink(outside.path().join("evil"), root.join("evil")).unwrap();
     symlink(outside.path().join("evil/plugin.wasm"), root.join("stray")).unwrap();
-    fs::write(root.join("a-file"), b"x").unwrap();
+    eitri::replace_file(&root.join("a-file"), b"x").unwrap();
 
     let found = scan(&root);
     assert_eq!(found.len(), 1, "{found:?}");

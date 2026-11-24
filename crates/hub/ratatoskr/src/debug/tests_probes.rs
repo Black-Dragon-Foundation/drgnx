@@ -93,58 +93,60 @@ fn the_rate_cap_thins_per_second_and_a_fork_keeps_every_hit() {
     assert_eq!(fork.thinned, 0);
 }
 
-#[tokio::test]
-async fn the_table_adds_places_edits_and_saves_probes() {
-    let d = tempfile::tempdir().unwrap();
-    let f = d.path().join("p.json");
-    let mut p = Probes::open(Some(f.clone()));
-    let (path, id) = p
-        .apply(Op::Result {
+#[test]
+fn the_table_adds_places_edits_and_saves_probes() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("p.json");
+        let mut p = Probes::open(Some(f.clone()));
+        let (path, id) = p
+            .apply(Op::Result {
+                path: "/p/stock.py".into(),
+                line: 1,
+                expr: "shortfall".into(),
+                text: "shortfall = 3\n\nprint(shortfall)\n".into(),
+                lang: Lang::Python,
+            })
+            .unwrap();
+        assert_eq!((path.as_str(), id.as_deref()), ("/p/stock.py", Some("p1")));
+        assert_eq!(p.list()[0].line, 3);
+        p.apply(Op::Add {
             path: "/p/stock.py".into(),
-            line: 1,
-            expr: "shortfall".into(),
-            text: "shortfall = 3\n\nprint(shortfall)\n".into(),
-            lang: Lang::Python,
+            line: 5,
+            expr: "n".into(),
         })
         .unwrap();
-    assert_eq!((path.as_str(), id.as_deref()), ("/p/stock.py", Some("p1")));
-    assert_eq!(p.list()[0].line, 3);
-    p.apply(Op::Add {
-        path: "/p/stock.py".into(),
-        line: 5,
-        expr: "n".into(),
+        p.apply(Op::Edit {
+            id: "p2".into(),
+            expr: None,
+            enabled: Some(false),
+            line: None,
+        })
+        .unwrap();
+        assert!(p.apply(Op::Remove { id: "p9".into() }).is_err());
+        p.disk().unwrap().written().await;
+        // saved: the next open has them
+        let again = Probes::open(Some(f));
+        assert_eq!(again.list().len(), 2);
+        assert!(!again.list()[1].enabled);
+        let caps = json!({"supportsLogPoints": true});
+        // the disabled probe is not sent; a line the user's breakpoint takes is not either
+        assert_eq!(
+            again.source_bps("/p/stock.py", "debugpy", &caps, &[]).len(),
+            1
+        );
+        assert!(
+            again
+                .source_bps("/p/stock.py", "debugpy", &caps, &[3])
+                .is_empty()
+        );
+        // no logpoints: no probes at all
+        assert!(
+            again
+                .source_bps("/p/stock.py", "debugpy", &json!({}), &[])
+                .is_empty()
+        );
     })
-    .unwrap();
-    p.apply(Op::Edit {
-        id: "p2".into(),
-        expr: None,
-        enabled: Some(false),
-        line: None,
-    })
-    .unwrap();
-    assert!(p.apply(Op::Remove { id: "p9".into() }).is_err());
-    p.disk().unwrap().written().await;
-    // saved: the next open has them
-    let again = Probes::open(Some(f));
-    assert_eq!(again.list().len(), 2);
-    assert!(!again.list()[1].enabled);
-    let caps = json!({"supportsLogPoints": true});
-    // the disabled probe is not sent; a line the user's breakpoint takes is not either
-    assert_eq!(
-        again.source_bps("/p/stock.py", "debugpy", &caps, &[]).len(),
-        1
-    );
-    assert!(
-        again
-            .source_bps("/p/stock.py", "debugpy", &caps, &[3])
-            .is_empty()
-    );
-    // no logpoints: no probes at all
-    assert!(
-        again
-            .source_bps("/p/stock.py", "debugpy", &json!({}), &[])
-            .is_empty()
-    );
 }
 
 #[test]

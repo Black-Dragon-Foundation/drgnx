@@ -5,7 +5,7 @@
 use super::engine::{DocKind, Spec};
 use super::ts::Kind;
 use skald::manifest::DocMember;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, OnceLock};
 
 /// (pack.eld, queries/chunks.scm) of each kind's pack.
 fn source(kind: Kind) -> (&'static str, &'static str) {
@@ -108,7 +108,9 @@ static SAID: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Install the function that says a pack's grammar is not built (the hub's log). Only the first call counts.
 pub fn on_missing(hook: MissingHook) {
-    let _ = HOOK.set(hook);
+    if HOOK.set(hook).is_err() {
+        tracing::debug!("the missing-grammar hook was installed already; the first one stays");
+    }
 }
 
 fn say_missing(kind: Kind, reason: &str) {
@@ -117,7 +119,7 @@ fn say_missing(kind: Kind, reason: &str) {
 
 /// PACK (built in or fetched) reads as text, REASON: said once per pack, to the hub's log.
 pub(super) fn say_pack(pack: &str, reason: &str) {
-    let mut said = SAID.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut said = saman::lock(&SAID);
     if !said.iter().any(|p| p == pack) {
         said.push(pack.to_owned());
         if let Some(h) = HOOK.get() {
@@ -141,7 +143,7 @@ pub(super) fn language(kind: Kind) -> Option<tree_sitter::Language> {
 /// then, so a grammar built later is found). A pack that does not compile against its grammar is a bug a test pins.
 pub(super) fn spec(kind: Kind) -> Option<&'static Spec> {
     static SPECS: Mutex<Vec<(Kind, &'static Spec)>> = Mutex::new(Vec::new());
-    let mut specs = SPECS.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut specs = saman::lock(&SPECS);
     if let Some((_, s)) = specs.iter().find(|(k, _)| *k == kind) {
         return Some(s);
     }

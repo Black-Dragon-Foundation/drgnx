@@ -97,6 +97,15 @@ impl From<std::io::Error> for Error {
     }
 }
 
+impl From<eitri::FsError> for Error {
+    fn from(e: eitri::FsError) -> Self {
+        match e {
+            eitri::FsError::Io(e) => Error::Io(e),
+            other => Error::Io(std::io::Error::other(other.to_string())),
+        }
+    }
+}
+
 /// SQLite's own error type, for callers that convert it (`From<SqliteError>`).
 pub use rusqlite::Error as SqliteError;
 

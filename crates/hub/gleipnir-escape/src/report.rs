@@ -47,10 +47,17 @@ pub fn exit_code(entries: &[Entry], require_all: bool) -> i32 {
 }
 
 pub fn write(path: &Path, entries: &[Entry]) -> std::io::Result<()> {
-    std::fs::write(
-        path,
-        serde_json::to_string_pretty(entries).expect("serializable") + "\n",
-    )
+    let text = serde_json::to_string_pretty(entries).expect("serializable") + "\n";
+    // the directory by its true name: eitri refuses a link in any component
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .canonicalize()?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("the report path names no file"))?;
+    eitri::replace_file(&dir.join(name), text.as_bytes()).map_err(std::io::Error::other)
 }
 
 #[cfg(test)]

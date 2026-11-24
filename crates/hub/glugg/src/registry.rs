@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// The most a record file is read for (a record is a few hundred bytes plus its command line).
+const RECORD_CAP: u64 = 1 << 20;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
     pub id: String,
@@ -47,17 +50,15 @@ impl Record {
 
     pub fn write(&self, dir: &Path) -> io::Result<()> {
         std::fs::create_dir_all(dir)?;
-        let path = Record::path(dir, &self.id);
-        let tmp = dir.join(format!(".{}.json.tmp", self.id));
-        std::fs::write(
-            &tmp,
-            serde_json::to_vec_pretty(self).map_err(io::Error::other)?,
-        )?;
-        std::fs::rename(tmp, path)
+        let bytes = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
+        eitri::replace_file(&Record::path(dir, &self.id), &bytes).map_err(io::Error::other)
     }
 
     pub fn remove(dir: &Path, id: &str) {
-        let _ = std::fs::remove_file(Record::path(dir, id));
+        crate::removed(
+            std::fs::remove_file(Record::path(dir, id)),
+            "a worker record",
+        );
     }
 }
 
@@ -73,7 +74,7 @@ pub fn read_all(dir: &Path) -> Vec<Record> {
                 .to_str()
                 .is_some_and(|n| n.ends_with(".json") && !n.starts_with('.'))
         })
-        .filter_map(|e| serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok())
+        .filter_map(|e| serde_json::from_slice(&eitri::read_file(&e.path(), RECORD_CAP).ok()?).ok())
         .collect();
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out
@@ -97,7 +98,7 @@ mod tests {
             ..Record::default()
         };
         r.write(&dir).unwrap();
-        std::fs::write(dir.join("junk.json"), "{").unwrap();
+        eitri::replace_file(&dir.join("junk.json"), b"{").unwrap();
         assert_eq!(read_all(&dir), vec![r.clone()]);
         Record::remove(&dir, "a1");
         std::fs::remove_dir_all(&dir).unwrap();

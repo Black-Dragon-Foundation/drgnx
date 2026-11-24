@@ -102,3 +102,20 @@ fn a_test_child_that_quits_gives_its_status() {
     assert_eq!(child.wait().unwrap().code(), Some(3));
     assert!(child.wait().is_err(), "the status is given once");
 }
+
+#[test]
+fn a_test_child_gives_its_stdout_to_a_reader_of_the_tests_own() {
+    use std::ffi::OsStr;
+    use std::io::BufRead;
+    let mut child = raun::proc::TestChild::start(
+        std::path::Path::new("/bin/sh"),
+        &[OsStr::new("-c"), OsStr::new("echo one; echo two")],
+        &[],
+    )
+    .expect("starts");
+    assert_eq!(child.read_line().unwrap(), "one\n");
+    let rest = child.take_stdout().expect("taken once");
+    assert_eq!(rest.lines().next().unwrap().unwrap(), "two");
+    assert!(child.read_line().is_err(), "the stdout is the reader's now");
+    assert!(child.take_stdout().is_err(), "taken once");
+}

@@ -116,7 +116,7 @@ struct Recorder {
 
 impl Stage for Recorder {
     fn shown(&self, _: u64, view: &str) -> bool {
-        self.shown.lock().unwrap().contains(view)
+        saman::lock(&self.shown).contains(view)
     }
     fn window(&self, _: u64, _: &str) -> usize {
         self.from.load(std::sync::atomic::Ordering::SeqCst)
@@ -125,14 +125,14 @@ impl Stage for Recorder {
         0
     }
     fn publish(&self, conn: u64, view: &str, rows: Vec<Row>) {
-        self.marked.lock().unwrap().push(
+        saman::lock(&self.marked).push(
             rows.iter()
                 .enumerate()
                 .filter(|(_, r)| r.props.iter().any(|p| p.2 == "drgnx-notebook-current"))
                 .map(|(i, _)| i)
                 .collect(),
         );
-        self.got.lock().unwrap().push((
+        saman::lock(&self.got).push((
             conn,
             view.into(),
             rows.into_iter().map(|r| r.text).collect(),
@@ -160,7 +160,7 @@ async fn world() -> World {
         .unwrap();
     let folder = private_folder(&d.path().join("s")).unwrap();
     let path = d.path().join("n.ipynb");
-    std::fs::write(&path, NB).unwrap();
+    crate::fsio::write(&path, NB).unwrap();
     let views = Arc::new(NbViews::default());
     let sink = Arc::new(WatchSink {
         inner: Arc::new(Quiet),
@@ -184,67 +184,73 @@ async fn world() -> World {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_shown_outline_is_built_from_the_notebook_and_a_view_nobody_shows_is_not() {
-    let w = world().await;
-    let view = w
-        .views
-        .register(1, &w.id, NotebookViewKind::Outline, None)
-        .unwrap();
-    assert_eq!(view, format!("notebook-outline:{}", w.id));
-    w.views.mark(1, &w.id);
-    w.views.flush().await;
-    assert!(w.stage.got.lock().unwrap().is_empty(), "no class shows it");
-    w.stage.shown.lock().unwrap().insert(view.clone());
-    w.views.mark(1, &w.id);
-    w.views.flush().await;
-    let got = w.stage.got.lock().unwrap().clone();
-    assert_eq!(got.len(), 1);
-    assert_eq!(got[0].0, 1);
-    assert_eq!(got[0].1, view);
-    assert_eq!(
-        got[0].2,
-        vec!["1  code    [3]    print(1)", "2  markdown       # Hi"]
-    );
+#[test]
+fn a_shown_outline_is_built_from_the_notebook_and_a_view_nobody_shows_is_not() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let w = world().await;
+        let view = w
+            .views
+            .register(1, &w.id, NotebookViewKind::Outline, None)
+            .unwrap();
+        assert_eq!(view, format!("notebook-outline:{}", w.id));
+        w.views.mark(1, &w.id);
+        w.views.flush().await;
+        assert!(saman::lock(&w.stage.got).is_empty(), "no class shows it");
+        saman::lock(&w.stage.shown).insert(view.clone());
+        w.views.mark(1, &w.id);
+        w.views.flush().await;
+        let got = saman::lock(&w.stage.got).clone();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, 1);
+        assert_eq!(got[0].1, view);
+        assert_eq!(
+            got[0].2,
+            vec!["1  code    [3]    print(1)", "2  markdown       # Hi"]
+        );
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn only_the_owner_gets_a_view_and_a_close_forgets_it() {
-    let w = world().await;
-    assert!(w.nb.owns(1, &w.id));
-    assert!(
-        !w.nb.owns(2, &w.id),
-        "an id says nothing to another connection"
-    );
-    w.views
-        .register(1, &w.id, NotebookViewKind::Outline, None)
-        .unwrap();
-    assert_eq!(w.views.watched().len(), 1);
-    w.views.closed(1, &w.id);
-    assert!(w.views.watched().is_empty());
-    w.views
-        .register(1, &w.id, NotebookViewKind::Outline, None)
-        .unwrap();
-    w.views.gone(1);
-    assert!(w.views.watched().is_empty());
+#[test]
+fn only_the_owner_gets_a_view_and_a_close_forgets_it() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let w = world().await;
+        assert!(w.nb.owns(1, &w.id));
+        assert!(
+            !w.nb.owns(2, &w.id),
+            "an id says nothing to another connection"
+        );
+        w.views
+            .register(1, &w.id, NotebookViewKind::Outline, None)
+            .unwrap();
+        assert_eq!(w.views.watched().len(), 1);
+        w.views.closed(1, &w.id);
+        assert!(w.views.watched().is_empty());
+        w.views
+            .register(1, &w.id, NotebookViewKind::Outline, None)
+            .unwrap();
+        w.views.gone(1);
+        assert!(w.views.watched().is_empty());
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn an_env_for_a_view_nobody_asked_for_builds_nothing() {
-    let w = world().await;
-    assert!(
-        !w.views.env_build(1, &outline_view(&w.id)),
-        "not registered"
-    );
-    assert!(!w.views.env_build(1, "extensions"));
-    w.views
-        .register(1, &w.id, NotebookViewKind::Outline, None)
-        .unwrap();
-    assert!(
-        !w.views.env_build(2, &outline_view(&w.id)),
-        "another connection's"
-    );
-    assert!(w.views.env_build(1, &outline_view(&w.id)));
+#[test]
+fn an_env_for_a_view_nobody_asked_for_builds_nothing() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let w = world().await;
+        assert!(
+            !w.views.env_build(1, &outline_view(&w.id)),
+            "not registered"
+        );
+        assert!(!w.views.env_build(1, "extensions"));
+        w.views
+            .register(1, &w.id, NotebookViewKind::Outline, None)
+            .unwrap();
+        assert!(
+            !w.views.env_build(2, &outline_view(&w.id)),
+            "another connection's"
+        );
+        assert!(w.views.env_build(1, &outline_view(&w.id)));
+    })
 }
 
 #[cfg(feature = "test-hooks")]
@@ -257,18 +263,15 @@ fn changes_are_rebuilt_once_after_the_pause_on_the_virtual_clock() {
             .views
             .register(1, &w.id, NotebookViewKind::Outline, None)
             .unwrap();
-        w.stage.shown.lock().unwrap().insert(view);
+        saman::lock(&w.stage.shown).insert(view);
         for _ in 0..5 {
             w.views.changed(1, &w.id);
         }
         crate::clock::advance(VIEW_EVERY / 2).await;
-        assert!(
-            w.stage.got.lock().unwrap().is_empty(),
-            "not before the pause"
-        );
+        assert!(saman::lock(&w.stage.got).is_empty(), "not before the pause");
         crate::clock::advance(VIEW_EVERY).await;
         assert_eq!(
-            w.stage.got.lock().unwrap().len(),
+            saman::lock(&w.stage.got).len(),
             1,
             "five changes, one rebuild"
         );
@@ -441,50 +444,48 @@ const NB_OUT: &str = r##"{"cells": [
    {"output_type": "stream", "name": "stdout", "text": ["one\n", "two\n"]}], "source": ["x"]}
  ], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}"##;
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_shown_full_output_is_built_from_the_notebook_in_the_editors_window_and_a_gone_cell_says_so()
- {
-    let w = world().await;
-    std::fs::write(w._d.path().join("o.ipynb"), NB_OUT).unwrap();
-    let id =
-        w.nb.open(1, &w._d.path().join("o.ipynb"), None)
-            .await
-            .unwrap()
-            .id;
-    let view = w
-        .views
-        .register(1, &id, NotebookViewKind::Output, Some("a"))
-        .unwrap();
-    assert!(!w.views.env_build(2, &view), "another connection's");
-    // shown, and the window moved, before the env: its rebuild runs at once on a task of its own
-    w.stage.shown.lock().unwrap().insert(view.clone());
-    w.stage.from.store(1, std::sync::atomic::Ordering::SeqCst);
-    assert!(w.views.env_build(1, &view));
-    let got = skuld::wait_until("the output is built", 30, || {
-        w.stage.got.lock().unwrap().last().cloned()
-    });
-    assert_eq!(got.1, view);
-    assert_eq!(
-        got.2,
-        vec!["▲ 1 lines above   M-p earlier lines", "two", ""]
-    );
-    assert!(w.views.window(1, &view), "a moved window builds it again");
-    // a cell that is not in the notebook
-    let gone = w
-        .views
-        .register(1, &id, NotebookViewKind::Output, Some("zz"))
-        .unwrap();
-    w.stage.shown.lock().unwrap().insert(gone.clone());
-    assert!(w.views.env_build(1, &gone));
-    skuld::wait_until("the gone cell is said", 30, || {
-        (w.stage
-            .got
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|g| g.1 == gone && g.2 == vec!["the cell is gone"]))
-        .then_some(())
-    });
+#[test]
+fn a_shown_full_output_is_built_from_the_notebook_in_the_editors_window_and_a_gone_cell_says_so() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let w = world().await;
+        crate::fsio::write(w._d.path().join("o.ipynb"), NB_OUT).unwrap();
+        let id =
+            w.nb.open(1, &w._d.path().join("o.ipynb"), None)
+                .await
+                .unwrap()
+                .id;
+        let view = w
+            .views
+            .register(1, &id, NotebookViewKind::Output, Some("a"))
+            .unwrap();
+        assert!(!w.views.env_build(2, &view), "another connection's");
+        // shown, and the window moved, before the env: its rebuild runs at once on a task of its own
+        saman::lock(&w.stage.shown).insert(view.clone());
+        w.stage.from.store(1, std::sync::atomic::Ordering::SeqCst);
+        assert!(w.views.env_build(1, &view));
+        let got = skuld::wait_until("the output is built", 30, || {
+            saman::lock(&w.stage.got).last().cloned()
+        });
+        assert_eq!(got.1, view);
+        assert_eq!(
+            got.2,
+            vec!["▲ 1 lines above   M-p earlier lines", "two", ""]
+        );
+        assert!(w.views.window(1, &view), "a moved window builds it again");
+        // a cell that is not in the notebook
+        let gone = w
+            .views
+            .register(1, &id, NotebookViewKind::Output, Some("zz"))
+            .unwrap();
+        saman::lock(&w.stage.shown).insert(gone.clone());
+        assert!(w.views.env_build(1, &gone));
+        skuld::wait_until("the gone cell is said", 30, || {
+            (saman::lock(&w.stage.got)
+                .iter()
+                .any(|g| g.1 == gone && g.2 == vec!["the cell is gone"]))
+            .then_some(())
+        });
+    })
 }
 
 // ---- the kernel log ----
@@ -555,29 +556,31 @@ fn log_rows_show_the_type_and_the_text_a_bounded_number_of_lines_and_say_what_is
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_shown_log_is_built_on_its_env_and_a_notebook_log_event_rebuilds_it_only_for_its_owner() {
-    let w = world().await;
-    let view = w
-        .views
-        .register(1, &w.id, NotebookViewKind::Log, None)
-        .unwrap();
-    assert_eq!(view, format!("notebook-log:{}", w.id));
-    assert!(!w.views.env_build(2, &view), "another connection's");
-    // shown before the env, whose rebuild runs at once on a task of its own
-    w.stage.shown.lock().unwrap().insert(view.clone());
-    assert!(w.views.env_build(1, &view));
-    w.views.flush().await;
-    skuld::wait_until("the log is built", 30, || {
-        w.stage.got.lock().unwrap().last().cloned()
-    });
-    let got = w.stage.got.lock().unwrap().clone();
-    assert_eq!(got.last().unwrap().2, vec!["the kernel has logged nothing"]);
-    // an event of another connection marks nothing
-    w.views
-        .event(2, "notebook-log", &json!({"id": w.id, "seq": 1}));
-    assert!(w.views.dirty_is_empty());
-    assert!(!w.views.env_build(1, "notebook-log:nb-other"));
+#[test]
+fn a_shown_log_is_built_on_its_env_and_a_notebook_log_event_rebuilds_it_only_for_its_owner() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let w = world().await;
+        let view = w
+            .views
+            .register(1, &w.id, NotebookViewKind::Log, None)
+            .unwrap();
+        assert_eq!(view, format!("notebook-log:{}", w.id));
+        assert!(!w.views.env_build(2, &view), "another connection's");
+        // shown before the env, whose rebuild runs at once on a task of its own
+        saman::lock(&w.stage.shown).insert(view.clone());
+        assert!(w.views.env_build(1, &view));
+        w.views.flush().await;
+        skuld::wait_until("the log is built", 30, || {
+            saman::lock(&w.stage.got).last().cloned()
+        });
+        let got = saman::lock(&w.stage.got).clone();
+        assert_eq!(got.last().unwrap().2, vec!["the kernel has logged nothing"]);
+        // an event of another connection marks nothing
+        w.views
+            .event(2, "notebook-log", &json!({"id": w.id, "seq": 1}));
+        assert!(w.views.dirty_is_empty());
+        assert!(!w.views.env_build(1, "notebook-log:nb-other"));
+    })
 }
 
 // ---- the look: chips, cut rows, error rows, the current cell ----
@@ -806,25 +809,27 @@ fn the_logs_type_is_a_chip_and_an_error_entry_is_an_error_row() {
     assert!(faces_at(&rows[1], 0, 5).contains(&FaceId::KitChipErrorSoft.name()));
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn the_editors_current_cell_marks_its_outline_row() {
-    let w = world().await;
-    let view = w
-        .views
-        .register(1, &w.id, NotebookViewKind::Outline, None)
-        .unwrap();
-    w.stage.shown.lock().unwrap().insert(view);
-    assert!(w.views.focus(1, &w.id, Some("b")), "a change");
-    assert!(
-        !w.views.focus(1, &w.id, Some("b")),
-        "the same again is none"
-    );
-    w.views.flush().await;
-    assert_eq!(w.stage.marked.lock().unwrap().last(), Some(&vec![1]));
-    assert!(
-        w.views.focus(1, &w.id, None),
-        "the editor left the notebook's cells"
-    );
-    w.views.flush().await;
-    assert_eq!(w.stage.marked.lock().unwrap().last(), Some(&vec![]));
+#[test]
+fn the_editors_current_cell_marks_its_outline_row() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let w = world().await;
+        let view = w
+            .views
+            .register(1, &w.id, NotebookViewKind::Outline, None)
+            .unwrap();
+        saman::lock(&w.stage.shown).insert(view);
+        assert!(w.views.focus(1, &w.id, Some("b")), "a change");
+        assert!(
+            !w.views.focus(1, &w.id, Some("b")),
+            "the same again is none"
+        );
+        w.views.flush().await;
+        assert_eq!(saman::lock(&w.stage.marked).last(), Some(&vec![1]));
+        assert!(
+            w.views.focus(1, &w.id, None),
+            "the editor left the notebook's cells"
+        );
+        w.views.flush().await;
+        assert_eq!(saman::lock(&w.stage.marked).last(), Some(&vec![]));
+    })
 }

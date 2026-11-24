@@ -42,7 +42,6 @@ use serde_json::{Value, json};
 use sleipnir::proto::Frame;
 use std::hash::{BuildHasher, Hasher};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -103,11 +102,11 @@ const SERVE_PIDS: &str = "for c in /proc/[0-9]*/cmdline; do
 done";
 
 fn ssh_config() -> String {
-    format!("{}/.ssh/config", std::env::var("HOME").unwrap())
+    format!("{}/.ssh/config", std::env::var(stig::HOME_VAR).unwrap())
 }
 
-fn ssh(runner: &str, script: &str) -> std::process::Output {
-    Command::new("ssh")
+fn ssh(runner: &str, script: &str) -> ratatoskr::proc::Output {
+    ratatoskr::proc::Command::new("ssh")
         .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
         .arg(script)
         .output()
@@ -159,13 +158,13 @@ struct UserConfig {
 impl UserConfig {
     /// A home under DIR whose known hosts are KNOWN_HOSTS, a copy of the fleet's.
     fn new(dir: &Path, known_hosts: &Path) -> UserConfig {
-        let fleet_home = std::env::var("HOME").unwrap();
+        let fleet_home = std::env::var(stig::HOME_VAR).unwrap();
         let home = PathBuf::from(&fleet_home);
         assert!(
             Path::new("/run/.containerenv").exists() && fleet_home.contains("/fleet/"),
             "the drills run only in a fleet's harness container (fleet.sh test)"
         );
-        let base = std::fs::read_to_string(home.join(".ssh/config")).unwrap();
+        let base = ratatoskr::fsio::read_to_string(home.join(".ssh/config")).unwrap();
         std::fs::copy(home.join(".ssh/known_hosts"), known_hosts).unwrap();
         let ssh = dir.join("home/.ssh");
         std::fs::create_dir_all(&ssh).unwrap();
@@ -176,9 +175,9 @@ impl UserConfig {
                 known_hosts.display()
             ));
         }
-        std::fs::write(ssh.join("config"), format!("{text}{base}")).unwrap();
+        ratatoskr::fsio::write(ssh.join("config"), format!("{text}{base}")).unwrap();
         // SAFETY: the rows run one at a time (--test-threads=1) and set HOME before any task or child reads it
-        unsafe { std::env::set_var("HOME", dir.join("home")) };
+        unsafe { std::env::set_var(stig::HOME_VAR, dir.join("home")) };
         UserConfig { fleet_home }
     }
 }
@@ -186,7 +185,7 @@ impl UserConfig {
 impl Drop for UserConfig {
     fn drop(&mut self) {
         // SAFETY: as in `new`: the row's tasks and children are done with HOME by its end
-        unsafe { std::env::set_var("HOME", &self.fleet_home) };
+        unsafe { std::env::set_var(stig::HOME_VAR, &self.fleet_home) };
     }
 }
 
@@ -275,7 +274,7 @@ impl Drill {
         let told = Arc::new(Mutex::new(vec![]));
         let to = told.clone();
         q.keys()
-            .set_tell(move |e, d| to.lock().unwrap().push((e.to_string(), d)));
+            .set_tell(move |e, d| saman::lock(&to).push((e.to_string(), d)));
         Drill {
             runner: runner.into(),
             root,
@@ -736,7 +735,7 @@ impl Drill {
         self.unlink().await;
         self.t.stop(&self.runner).await;
         if let Some(s) = self.store.take() {
-            tokio::task::spawn_blocking(move || s.shutdown())
+            saman::spawn_blocking("shut-store", move || s.shutdown())
                 .await
                 .unwrap();
         }
@@ -780,59 +779,61 @@ mod drill {
     /// [C] `-O stop` on the hub's master (a second hub replacing it, or the user): the master stops listening and
     /// its sessions run on, so the link stays up; the hub's next link dials a new master, and the job, running all
     /// along, reattaches by its nonce and ends with its own verdict.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn o_stop_on_the_master() {
-        let mut d = Drill::new("ostop", "r1", "dedicated");
-        d.link().await;
-        d.submit(d.job("xostop", PARK, &[]));
-        d.parked("xostop").await;
-        d.sessions();
-        let before = d.masters();
-        assert_eq!(before.len(), 1, "{before:?}");
-        let config = generated::path(&d.dir.path().join("run"), "r1");
-        let stop = Command::new("ssh")
-            .arg("-F")
-            .arg(&config)
-            .arg("-o")
-            .arg(format!(
-                "ControlPath={}",
-                before[0].join("master").display()
-            ))
-            .args(["-O", "stop", "r1"])
-            .output()
-            .unwrap();
-        assert!(stop.status.success(), "-O stop: {stop:?}");
-        // the old master's sessions still carry the link: the runner's next ping comes through it
-        let target = d.clocks + 1;
-        skuld::wait_until_async("a ping after -O stop", WAIT, || {
-            d.pump();
-            std::future::ready((d.clocks >= target).then_some(()))
+    fn o_stop_on_the_master() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let mut d = Drill::new("ostop", "r1", "dedicated");
+            d.link().await;
+            d.submit(d.job("xostop", PARK, &[]));
+            d.parked("xostop").await;
+            d.sessions();
+            let before = d.masters();
+            assert_eq!(before.len(), 1, "{before:?}");
+            let config = generated::path(&d.dir.path().join("run"), "r1");
+            let stop = ratatoskr::proc::Command::new("ssh")
+                .arg("-F")
+                .arg(&config)
+                .arg("-o")
+                .arg(format!(
+                    "ControlPath={}",
+                    before[0].join("master").display()
+                ))
+                .args(["-O", "stop", "r1"])
+                .output()
+                .unwrap();
+            assert!(stop.status.success(), "-O stop: {stop:?}");
+            // the old master's sessions still carry the link: the runner's next ping comes through it
+            let target = d.clocks + 1;
+            skuld::wait_until_async("a ping after -O stop", WAIT, || {
+                d.pump();
+                std::future::ready((d.clocks >= target).then_some(()))
+            })
+            .await;
+            assert!(d.lost.is_empty(), "the link was lost: {:?}", d.lost);
+            assert_eq!(d.q.runner("r1").unwrap().state, "ready");
+            d.sessions();
+            // the hub's next link: the stopped master answers no `-O check`, so a new one is dialed
+            d.unlink().await;
+            d.relink().await;
+            let after = d.masters();
+            assert_eq!(after.len(), 1, "{after:?}");
+            assert_ne!(before, after, "a new master");
+            let k = d.kept_as("xostop", "running").await;
+            assert_eq!(k.attempt, 1);
+            assert_eq!(
+                k.nonce,
+                d.runner_nonce("xostop", 1),
+                "reattached by its nonce"
+            );
+            d.sessions();
+            d.release("xostop");
+            let theirs = d.runner_log("xostop", 1).await;
+            let (attempt, result) = d.done("xostop").await;
+            d.the_jobs_own_verdict("xostop", attempt, &result, &theirs);
+            assert!(d.lost.is_empty(), "{:?}", d.lost);
+            d.end().await;
         })
-        .await;
-        assert!(d.lost.is_empty(), "the link was lost: {:?}", d.lost);
-        assert_eq!(d.q.runner("r1").unwrap().state, "ready");
-        d.sessions();
-        // the hub's next link: the stopped master answers no `-O check`, so a new one is dialed
-        d.unlink().await;
-        d.relink().await;
-        let after = d.masters();
-        assert_eq!(after.len(), 1, "{after:?}");
-        assert_ne!(before, after, "a new master");
-        let k = d.kept_as("xostop", "running").await;
-        assert_eq!(k.attempt, 1);
-        assert_eq!(
-            k.nonce,
-            d.runner_nonce("xostop", 1),
-            "reattached by its nonce"
-        );
-        d.sessions();
-        d.release("xostop");
-        let theirs = d.runner_log("xostop", 1).await;
-        let (attempt, result) = d.done("xostop").await;
-        d.the_jobs_own_verdict("xostop", attempt, &result, &theirs);
-        assert!(d.lost.is_empty(), "{:?}", d.lost);
-        d.end().await;
     }
 
     /// [C] The network cut for 3 minutes under a keyed job with a network grant: the hub's connection to the runner
@@ -841,123 +842,127 @@ mod drill {
     /// connection goes and the hub dials again. The job's helper kept its key and its proxy through it: the job ends
     /// with its own verdict, its key was sent once and no file on the runner holds it, and before and after the cut its
     /// proxy refuses a host the grant doesn't list (403) and lets one it lists through.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn network_cut_3_minutes_with_a_keyed_job() {
-        let mut d = Drill::new("cut", "r1", "dedicated");
-        let v = throwaway();
-        d.link().await;
-        d.hold(&v);
-        let probes = format!("{NET_PROBE}probe {UNLISTED}; probe {LISTED}");
-        let script = format!("test -n \"${KEY}\" && echo keyed; {probes}; {PARK}; {probes}");
-        let mut job = d.job("xcut", &script, &[KEY]);
-        job.place.net_hosts = vec![LISTED.into()];
-        d.submit(job);
-        d.parked("xcut").await;
-        assert_eq!(sent(&d.q, "xcut"), 1);
-        d.sessions();
-        let (_, sshd) = d.the_serve();
-        sh("r1", &format!("kill -STOP {sshd}"));
-        let why = d
-            .drive("the link lost", |_, _, lost| lost.first().cloned())
-            .await;
-        assert!(why.contains("no frame for 45 s"), "{why}");
-        // 3 minutes of the cut on the queue's clock
-        d.jump += 180;
-        d.pump();
-        let k = d.kept("xcut").await;
-        assert_eq!(k.len(), 1, "{k:?}");
-        assert_eq!((k[0].attempt, k[0].state.as_str()), (1, "detached"));
-        let row = d.q.row("xcut").unwrap();
-        assert_eq!((row.machine.as_deref(), row.attempt), (Some("r1"), Some(1)));
-        assert!(d.outcomes.is_empty(), "{:?}", d.outcomes);
-        // the cut ends: the frozen connection is dead by now (ssh's keep-alive gave up on it), the hub dials again
-        if let Some(s) = d.q.session("r1") {
-            s.close().await;
-        }
-        sh("r1", &format!("kill -KILL {sshd}"));
-        d.serve_gone().await;
-        d.relink().await;
-        let k = d.kept_as("xcut", "running").await;
-        assert_eq!(
-            k.nonce,
-            d.runner_nonce("xcut", 1),
-            "reattached by its nonce"
-        );
-        d.sessions();
-        d.release("xcut");
-        let theirs = d.runner_log("xcut", 1).await;
-        let (attempt, result) = d.done("xcut").await;
-        d.the_jobs_own_verdict("xcut", attempt, &result, &theirs);
-        assert!(theirs.starts_with(b"keyed\n"), "the job had its key");
-        // the proxy's answers, before the cut and after it
-        let log = String::from_utf8_lossy(&theirs);
-        let answers = |target: &str| -> Vec<String> {
-            let line = format!("net {target} ");
-            log.lines()
-                .filter_map(|l| l.strip_prefix(line.as_str()).map(String::from))
-                .collect()
-        };
-        assert_eq!(
-            answers(UNLISTED),
-            ["403", "403"],
-            "an unlisted host is refused"
-        );
-        let listed = answers(LISTED);
-        assert_eq!(listed.len(), 2, "{listed:?}");
-        assert!(
-            listed.iter().all(|c| !c.is_empty() && c != "403"),
-            "a listed host passes the allow-list: {listed:?}"
-        );
-        assert_eq!(sent(&d.q, "xcut"), 1, "its key was sent once");
-        assert_eq!(d.lost.len(), 1, "{:?}", d.lost);
-        d.no_key_bytes(&v);
-        d.end().await;
+    fn network_cut_3_minutes_with_a_keyed_job() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let mut d = Drill::new("cut", "r1", "dedicated");
+            let v = throwaway();
+            d.link().await;
+            d.hold(&v);
+            let probes = format!("{NET_PROBE}probe {UNLISTED}; probe {LISTED}");
+            let script = format!("test -n \"${KEY}\" && echo keyed; {probes}; {PARK}; {probes}");
+            let mut job = d.job("xcut", &script, &[KEY]);
+            job.place.net_hosts = vec![LISTED.into()];
+            d.submit(job);
+            d.parked("xcut").await;
+            assert_eq!(sent(&d.q, "xcut"), 1);
+            d.sessions();
+            let (_, sshd) = d.the_serve();
+            sh("r1", &format!("kill -STOP {sshd}"));
+            let why = d
+                .drive("the link lost", |_, _, lost| lost.first().cloned())
+                .await;
+            assert!(why.contains("no frame for 45 s"), "{why}");
+            // 3 minutes of the cut on the queue's clock
+            d.jump += 180;
+            d.pump();
+            let k = d.kept("xcut").await;
+            assert_eq!(k.len(), 1, "{k:?}");
+            assert_eq!((k[0].attempt, k[0].state.as_str()), (1, "detached"));
+            let row = d.q.row("xcut").unwrap();
+            assert_eq!((row.machine.as_deref(), row.attempt), (Some("r1"), Some(1)));
+            assert!(d.outcomes.is_empty(), "{:?}", d.outcomes);
+            // the cut ends: the frozen connection is dead by now (ssh's keep-alive gave up on it), the hub dials again
+            if let Some(s) = d.q.session("r1") {
+                s.close().await;
+            }
+            sh("r1", &format!("kill -KILL {sshd}"));
+            d.serve_gone().await;
+            d.relink().await;
+            let k = d.kept_as("xcut", "running").await;
+            assert_eq!(
+                k.nonce,
+                d.runner_nonce("xcut", 1),
+                "reattached by its nonce"
+            );
+            d.sessions();
+            d.release("xcut");
+            let theirs = d.runner_log("xcut", 1).await;
+            let (attempt, result) = d.done("xcut").await;
+            d.the_jobs_own_verdict("xcut", attempt, &result, &theirs);
+            assert!(theirs.starts_with(b"keyed\n"), "the job had its key");
+            // the proxy's answers, before the cut and after it
+            let log = String::from_utf8_lossy(&theirs);
+            let answers = |target: &str| -> Vec<String> {
+                let line = format!("net {target} ");
+                log.lines()
+                    .filter_map(|l| l.strip_prefix(line.as_str()).map(String::from))
+                    .collect()
+            };
+            assert_eq!(
+                answers(UNLISTED),
+                ["403", "403"],
+                "an unlisted host is refused"
+            );
+            let listed = answers(LISTED);
+            assert_eq!(listed.len(), 2, "{listed:?}");
+            assert!(
+                listed.iter().all(|c| !c.is_empty() && c != "403"),
+                "a listed host passes the allow-list: {listed:?}"
+            );
+            assert_eq!(sent(&d.q, "xcut"), 1, "its key was sent once");
+            assert_eq!(d.lost.len(), 1, "{:?}", d.lost);
+            d.no_key_bytes(&v);
+            d.end().await;
+        })
     }
 
     /// [C] `serve` stopped for 5 minutes (a suspend): the hub calls the link lost after 45 s without a frame; 5
     /// minutes pass on the queue's clock within the grace; `serve` goes on, finds its channel closed and ends; the
     /// hub dials again and the job reattaches.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn serve_sigstopped_5_minutes() {
-        let mut d = Drill::new("suspend", "r1", "dedicated");
-        d.link().await;
-        d.submit(d.job("xsusp", PARK, &[]));
-        d.parked("xsusp").await;
-        d.sessions();
-        let (serve, _) = d.the_serve();
-        sh("r1", &format!("kill -STOP {serve}"));
-        let why = d
-            .drive("the link lost", |_, _, lost| lost.first().cloned())
-            .await;
-        assert!(why.contains("no frame for 45 s"), "{why}");
-        d.jump += 300;
-        d.pump();
-        let k = d.kept("xsusp").await;
-        assert_eq!(k.len(), 1, "{k:?}");
-        assert_eq!((k[0].attempt, k[0].state.as_str()), (1, "detached"));
-        assert!(d.outcomes.is_empty(), "{:?}", d.outcomes);
-        // the machine wakes: the hub has closed the old link, so `serve` finds its channel ended
-        if let Some(s) = d.q.session("r1") {
-            s.close().await;
-        }
-        sh("r1", &format!("kill -CONT {serve}"));
-        d.serve_gone().await;
-        d.relink().await;
-        let k = d.kept_as("xsusp", "running").await;
-        assert_eq!(
-            k.nonce,
-            d.runner_nonce("xsusp", 1),
-            "reattached by its nonce"
-        );
-        d.sessions();
-        d.release("xsusp");
-        let theirs = d.runner_log("xsusp", 1).await;
-        let (attempt, result) = d.done("xsusp").await;
-        d.the_jobs_own_verdict("xsusp", attempt, &result, &theirs);
-        assert_eq!(d.lost.len(), 1, "{:?}", d.lost);
-        d.end().await;
+    fn serve_sigstopped_5_minutes() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let mut d = Drill::new("suspend", "r1", "dedicated");
+            d.link().await;
+            d.submit(d.job("xsusp", PARK, &[]));
+            d.parked("xsusp").await;
+            d.sessions();
+            let (serve, _) = d.the_serve();
+            sh("r1", &format!("kill -STOP {serve}"));
+            let why = d
+                .drive("the link lost", |_, _, lost| lost.first().cloned())
+                .await;
+            assert!(why.contains("no frame for 45 s"), "{why}");
+            d.jump += 300;
+            d.pump();
+            let k = d.kept("xsusp").await;
+            assert_eq!(k.len(), 1, "{k:?}");
+            assert_eq!((k[0].attempt, k[0].state.as_str()), (1, "detached"));
+            assert!(d.outcomes.is_empty(), "{:?}", d.outcomes);
+            // the machine wakes: the hub has closed the old link, so `serve` finds its channel ended
+            if let Some(s) = d.q.session("r1") {
+                s.close().await;
+            }
+            sh("r1", &format!("kill -CONT {serve}"));
+            d.serve_gone().await;
+            d.relink().await;
+            let k = d.kept_as("xsusp", "running").await;
+            assert_eq!(
+                k.nonce,
+                d.runner_nonce("xsusp", 1),
+                "reattached by its nonce"
+            );
+            d.sessions();
+            d.release("xsusp");
+            let theirs = d.runner_log("xsusp", 1).await;
+            let (attempt, result) = d.done("xsusp").await;
+            d.the_jobs_own_verdict("xsusp", attempt, &result, &theirs);
+            assert_eq!(d.lost.len(), 1, "{:?}", d.lost);
+            d.end().await;
+        })
     }
 
     /// The hub stops (its queue, links and store) with a keyed job running, and starts again: a new transport resumes
@@ -983,7 +988,7 @@ mod drill {
         d.unlink().await;
         d.q.flush().await;
         let store = d.store.take().unwrap();
-        tokio::task::spawn_blocking(move || store.shutdown())
+        saman::spawn_blocking("shut-store", move || store.shutdown())
             .await
             .unwrap();
         let masters = d.masters();
@@ -998,7 +1003,7 @@ mod drill {
         let (q, events) = Drill::queue(d.dir.path(), &d.hub, db.clone());
         let to = d.told.clone();
         q.keys()
-            .set_tell(move |e, data| to.lock().unwrap().push((e.to_string(), data)));
+            .set_tell(move |e, data| saman::lock(&to).push((e.to_string(), data)));
         q.restore(jobs, attempts, d.now());
         (d.q, d.events, d.store, d.db) = (q, events, Some(store), db);
         if editor {
@@ -1016,8 +1021,7 @@ mod drill {
             // the job's log and result wait for its keys, and the user is asked for them
             let told = d.told.clone();
             d.drive("the hub asks for the keys", |_, _, _| {
-                told.lock()
-                    .unwrap()
+                saman::lock(&told)
                     .iter()
                     .any(|(e, data)| e == "runners/need-keys" && data == &json!({"names": [KEY]}))
                     .then_some(())
@@ -1036,112 +1040,122 @@ mod drill {
     }
 
     /// [C] A dev-hub restart while a keyed job runs, the editor connected: it gives the keys back at once.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn dev_hub_restart() {
-        restart("restart", true).await;
+    fn dev_hub_restart() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            restart("restart", true).await;
+        })
     }
 
     /// [C] A dev-hub restart while a keyed job runs, with no editor: "needs your keys", and the job's log and verdict
     /// wait for them.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn dev_hub_restart_without_the_editor() {
-        restart("restartne", false).await;
+    fn dev_hub_restart_without_the_editor() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            restart("restartne", false).await;
+        })
     }
 
     /// [C] Four jobs at once on one runner (`fleet.sh up --max-sessions 3`, the cap Tailscale SSH sets): they all run
     /// over the one link's three sessions, a round trip rides the control channel with all three taken, and every
     /// job ends with its own verdict.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn max_sessions_3() {
-        let mut d = Drill::new("maxs", "r1", "dedicated");
-        d.link().await;
-        let ids = ["xmax1", "xmax2", "xmax3", "xmax4"];
-        for id in ids {
-            d.submit(d.job(id, PARK, &[]));
-        }
-        for id in ids {
-            d.parked(id).await;
-        }
-        assert_eq!(d.q.runner_jobs("r1"), 4);
-        assert_eq!(d.sessions(), 3, "the link's three sessions");
-        d.t.round_trip("r1")
-            .await
-            .expect("a round trip with the three sessions taken");
-        let mut theirs = vec![];
-        for id in ids {
-            d.release(id);
-            theirs.push(d.runner_log(id, 1).await);
-        }
-        for (id, log) in ids.iter().zip(theirs) {
-            let (attempt, result) = d.done(id).await;
-            d.the_jobs_own_verdict(id, attempt, &result, &log);
-        }
-        assert!(d.lost.is_empty(), "{:?}", d.lost);
-        d.end().await;
+    fn max_sessions_3() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let mut d = Drill::new("maxs", "r1", "dedicated");
+            d.link().await;
+            let ids = ["xmax1", "xmax2", "xmax3", "xmax4"];
+            for id in ids {
+                d.submit(d.job(id, PARK, &[]));
+            }
+            for id in ids {
+                d.parked(id).await;
+            }
+            assert_eq!(d.q.runner_jobs("r1"), 4);
+            assert_eq!(d.sessions(), 3, "the link's three sessions");
+            d.t.round_trip("r1")
+                .await
+                .expect("a round trip with the three sessions taken");
+            let mut theirs = vec![];
+            for id in ids {
+                d.release(id);
+                theirs.push(d.runner_log(id, 1).await);
+            }
+            for (id, log) in ids.iter().zip(theirs) {
+                let (attempt, result) = d.done(id).await;
+                d.the_jobs_own_verdict(id, attempt, &result, &log);
+            }
+            assert!(d.lost.is_empty(), "{:?}", d.lost);
+            d.end().await;
+        })
     }
 
     /// [C] The runner's disk falls below its floor during a job (its folder's figures, as a test build reads them):
     /// the job's helper stops it with `infra: disk`, the guard's verdict, never `red`; the link stays up.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn disk_full_during_a_job() {
-        let mut d = Drill::new("disk", "r1", "dedicated");
-        d.link().await;
-        d.submit(d.job(
-            "xdisk",
-            "echo parked; while :; do echo grows; sleep 1; done",
-            &[],
-        ));
-        d.parked("xdisk").await;
-        let full = QUIET_MACHINE.replace("\"disk_free_gb\": 100", "\"disk_free_gb\": 5");
-        sh(
-            "r1",
-            &format!("printf %s '{full}' > {}/test-machine.json", d.root),
-        );
-        let (attempt, result) = d.done("xdisk").await;
-        assert_eq!(
-            (attempt, &result["verdict"]),
-            (1, &json!({"Infra": forseti::classify::infra::DISK})),
-            "{result}"
-        );
-        assert!(d.lost.is_empty(), "{:?}", d.lost);
-        d.sessions();
-        assert!(d.sessions_max <= 3);
-        d.end().await;
+    fn disk_full_during_a_job() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let mut d = Drill::new("disk", "r1", "dedicated");
+            d.link().await;
+            d.submit(d.job(
+                "xdisk",
+                "echo parked; while :; do echo grows; sleep 1; done",
+                &[],
+            ));
+            d.parked("xdisk").await;
+            let full = QUIET_MACHINE.replace("\"disk_free_gb\": 100", "\"disk_free_gb\": 5");
+            sh(
+                "r1",
+                &format!("printf %s '{full}' > {}/test-machine.json", d.root),
+            );
+            let (attempt, result) = d.done("xdisk").await;
+            assert_eq!(
+                (attempt, &result["verdict"]),
+                (1, &json!({"Infra": forseti::classify::infra::DISK})),
+                "{result}"
+            );
+            assert!(d.lost.is_empty(), "{:?}", d.lost);
+            d.sessions();
+            assert!(d.sessions_max <= 3);
+            d.end().await;
+        })
     }
 
     /// [C] The runner's memory falls into danger during a job on a `workstation` runner (its folder's figures): its
     /// ladder kills our newest job, `infra: killed`, never `red`; the link stays up.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn ladder_kill_is_infra_not_red() {
-        let mut d = Drill::new("ladder", "r1", "workstation");
-        d.link().await;
-        d.submit(d.job(
-            "xladder",
-            "echo parked; mkfifo /tmp/gate; read x < /tmp/gate",
-            &[],
-        ));
-        d.parked("xladder").await;
-        let danger =
-            QUIET_MACHINE.replace("\"mem_available_mib\": 8192", "\"mem_available_mib\": 512");
-        sh(
-            "r1",
-            &format!("printf %s '{danger}' > {}/test-machine.json", d.root),
-        );
-        let (attempt, result) = d.done("xladder").await;
-        assert_eq!(
-            (attempt, &result["verdict"]),
-            (1, &json!({"Infra": forseti::classify::infra::KILLED})),
-            "{result}"
-        );
-        assert!(d.lost.is_empty(), "{:?}", d.lost);
-        d.sessions();
-        assert!(d.sessions_max <= 3);
-        d.end().await;
+    fn ladder_kill_is_infra_not_red() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let mut d = Drill::new("ladder", "r1", "workstation");
+            d.link().await;
+            d.submit(d.job(
+                "xladder",
+                "echo parked; mkfifo /tmp/gate; read x < /tmp/gate",
+                &[],
+            ));
+            d.parked("xladder").await;
+            let danger =
+                QUIET_MACHINE.replace("\"mem_available_mib\": 8192", "\"mem_available_mib\": 512");
+            sh(
+                "r1",
+                &format!("printf %s '{danger}' > {}/test-machine.json", d.root),
+            );
+            let (attempt, result) = d.done("xladder").await;
+            assert_eq!(
+                (attempt, &result["verdict"]),
+                (1, &json!({"Infra": forseti::classify::infra::KILLED})),
+                "{result}"
+            );
+            assert!(d.lost.is_empty(), "{:?}", d.lost);
+            d.sessions();
+            assert!(d.sessions_max <= 3);
+            d.end().await;
+        })
     }
 
     /// The other hub's job and its reservation on r1 go at the end of the row, failed or not: a live one would stand
@@ -1150,7 +1164,7 @@ mod drill {
 
     impl Drop for OtherHubGoes {
         fn drop(&mut self) {
-            let _ = ssh(
+            ssh(
                 "r1",
                 "systemctl --user stop dr-other-hub; \
                  rm -f $XDG_RUNTIME_DIR/forseti/reservations/drgnx-hub-other.xother-1.json",
@@ -1162,9 +1176,10 @@ mod drill {
     /// than ours (and more than our job uses yet): our hub holds the most memory by the counting rule, so its ladder
     /// is the one that acts, and kills our newest job (`infra: killed`). The other job is a live `sleep` of the
     /// runner's user with a reservation file, as another hub's `serve` writes one.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn ladder_beside_another_hub_acts_by_the_counting_rule() {
+    fn ladder_beside_another_hub_acts_by_the_counting_rule() {
+        saman::Executor::new(2).unwrap().block_on(async move {
         let mut d = Drill::new("ladder2", "r1", "workstation");
         d.link().await;
         d.submit(d.job(
@@ -1208,86 +1223,89 @@ mod drill {
             "{result}"
         );
         d.end().await;
+})
     }
 
     /// [C] The runner's host key changes while a job runs there: its connection ends (the hub hears the channel end),
     /// and every new dial is refused as a changed host key, never accepted: the runner shows `needs a login` with the
     /// command to run, and the attempt stays detached. Once the user has checked and accepted the key at a terminal,
     /// the hub dials again and the job reattaches.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn host_key_change_needs_login() {
-        let mut d = Drill::new("hostkey", "r1", "dedicated");
-        d.link().await;
-        d.submit(d.job("xhost", PARK, &[]));
-        d.parked("xhost").await;
-        d.sessions();
-        let known = d.dir.path().join("known_hosts");
-        let good = std::fs::read_to_string(&known).unwrap();
-        let other = d.dir.path().join("other");
-        let made = Command::new("ssh-keygen")
-            .args(["-q", "-t", "ed25519", "-N", ""])
-            .arg("-f")
-            .arg(&other)
-            .status()
-            .unwrap();
-        assert!(made.success());
-        let key = std::fs::read_to_string(other.with_extension("pub")).unwrap();
-        let key: Vec<&str> = key.split_whitespace().take(2).collect();
-        let changed: String = good
-            .lines()
-            .map(|l| match l.split_whitespace().next() {
-                Some(h) if h.split(',').any(|h| h == "r1") => format!("r1 {}\n", key.join(" ")),
-                _ => format!("{l}\n"),
-            })
-            .collect();
-        // the runner's connection ends under the link
-        let (_, sshd) = d.the_serve();
-        sh("r1", &format!("kill -KILL {sshd}"));
-        let why = d
-            .drive("the link lost", |_, _, lost| lost.first().cloned())
-            .await;
-        assert!(why.contains("without bye"), "{why}");
-        d.serve_gone().await;
-        if let Some(s) = d.q.session("r1") {
-            s.close().await;
-        }
-        // the runner comes back with another host key (here: the hub's known key no longer matches it; this row's own
-        // ssh, which shares the known hosts, waits until the key is accepted again)
-        std::fs::write(&known, &changed).unwrap();
-        // the hub's dial, as the registry's: refused, and the runner waits for the user
-        match d.q.dial(&*d.t, &d.cfg(), d.remote()).await {
-            Err(LinkError::HostKeyChanged) => {}
-            Err(e) => panic!("{e}"),
-            Ok(()) => panic!("a changed host key was accepted"),
-        }
-        assert_eq!(
-            std::fs::read_to_string(&known).unwrap(),
-            changed,
-            "never accepted"
-        );
-        d.pump();
-        assert_eq!(
-            d.q.runner("r1").unwrap().state,
-            "needs a login: ssh r1 true"
-        );
-        let k = d.kept("xhost").await;
-        assert_eq!((k.len(), k[0].state.as_str()), (1, "detached"), "{k:?}");
-        // the user logs in and accepts the runner's key
-        std::fs::write(&known, &good).unwrap();
-        d.relink().await;
-        let k = d.kept_as("xhost", "running").await;
-        assert_eq!(
-            k.nonce,
-            d.runner_nonce("xhost", 1),
-            "reattached by its nonce"
-        );
-        d.release("xhost");
-        let theirs = d.runner_log("xhost", 1).await;
-        let (attempt, result) = d.done("xhost").await;
-        d.the_jobs_own_verdict("xhost", attempt, &result, &theirs);
-        assert_eq!(d.lost.len(), 1, "{:?}", d.lost);
-        d.end().await;
+    fn host_key_change_needs_login() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let mut d = Drill::new("hostkey", "r1", "dedicated");
+            d.link().await;
+            d.submit(d.job("xhost", PARK, &[]));
+            d.parked("xhost").await;
+            d.sessions();
+            let known = d.dir.path().join("known_hosts");
+            let good = ratatoskr::fsio::read_to_string(&known).unwrap();
+            let other = d.dir.path().join("other");
+            let made = ratatoskr::proc::Command::new("ssh-keygen")
+                .args(["-q", "-t", "ed25519", "-N", ""])
+                .arg("-f")
+                .arg(&other)
+                .status()
+                .unwrap();
+            assert!(made.success());
+            let key = ratatoskr::fsio::read_to_string(other.with_extension("pub")).unwrap();
+            let key: Vec<&str> = key.split_whitespace().take(2).collect();
+            let changed: String = good
+                .lines()
+                .map(|l| match l.split_whitespace().next() {
+                    Some(h) if h.split(',').any(|h| h == "r1") => format!("r1 {}\n", key.join(" ")),
+                    _ => format!("{l}\n"),
+                })
+                .collect();
+            // the runner's connection ends under the link
+            let (_, sshd) = d.the_serve();
+            sh("r1", &format!("kill -KILL {sshd}"));
+            let why = d
+                .drive("the link lost", |_, _, lost| lost.first().cloned())
+                .await;
+            assert!(why.contains("without bye"), "{why}");
+            d.serve_gone().await;
+            if let Some(s) = d.q.session("r1") {
+                s.close().await;
+            }
+            // the runner comes back with another host key (here: the hub's known key no longer matches it; this row's own
+            // ssh, which shares the known hosts, waits until the key is accepted again)
+            ratatoskr::fsio::write(&known, &changed).unwrap();
+            // the hub's dial, as the registry's: refused, and the runner waits for the user
+            match d.q.dial(&*d.t, &d.cfg(), d.remote()).await {
+                Err(LinkError::HostKeyChanged) => {}
+                Err(e) => panic!("{e}"),
+                Ok(()) => panic!("a changed host key was accepted"),
+            }
+            assert_eq!(
+                ratatoskr::fsio::read_to_string(&known).unwrap(),
+                changed,
+                "never accepted"
+            );
+            d.pump();
+            assert_eq!(
+                d.q.runner("r1").unwrap().state,
+                "needs a login: ssh r1 true"
+            );
+            let k = d.kept("xhost").await;
+            assert_eq!((k.len(), k[0].state.as_str()), (1, "detached"), "{k:?}");
+            // the user logs in and accepts the runner's key
+            ratatoskr::fsio::write(&known, &good).unwrap();
+            d.relink().await;
+            let k = d.kept_as("xhost", "running").await;
+            assert_eq!(
+                k.nonce,
+                d.runner_nonce("xhost", 1),
+                "reattached by its nonce"
+            );
+            d.release("xhost");
+            let theirs = d.runner_log("xhost", 1).await;
+            let (attempt, result) = d.done("xhost").await;
+            d.the_jobs_own_verdict("xhost", attempt, &result, &theirs);
+            assert_eq!(d.lost.len(), 1, "{:?}", d.lost);
+            d.end().await;
+        })
     }
 
     /// The runners' linger turned on or off (WORD `enable` or `disable`) through the fleet's share, as the image's
@@ -1296,10 +1314,13 @@ mod drill {
     async fn set_linger(word: &str) {
         let share = PathBuf::from(std::env::var("DRGNX_FLEET_SHARE").unwrap());
         for w in ["enable", "disable"] {
-            let _ = std::fs::remove_file(share.join(format!("{w}-linger")));
+            ratatoskr::soft::done(
+                std::fs::remove_file(share.join(format!("{w}-linger"))),
+                "std::fs::remove_file",
+            );
         }
         let file = share.join(format!("{word}-linger"));
-        std::fs::write(&file, b"").unwrap();
+        ratatoskr::fsio::write(&file, b"").unwrap();
         let want = if word == "enable" { "yes" } else { "no" };
         skuld::wait_until_async(&format!("linger {want} on r1"), WAIT, || {
             let said = sh(
@@ -1321,8 +1342,14 @@ mod drill {
                 return;
             }
             let share = PathBuf::from(std::env::var("DRGNX_FLEET_SHARE").unwrap());
-            let _ = std::fs::remove_file(share.join("disable-linger"));
-            let _ = std::fs::write(share.join("enable-linger"), b"");
+            ratatoskr::soft::done(
+                std::fs::remove_file(share.join("disable-linger")),
+                "std::fs::remove_file",
+            );
+            ratatoskr::soft::done(
+                ratatoskr::fsio::write(share.join("enable-linger"), b""),
+                "ratatoskr::fsio::write",
+            );
         }
     }
 
@@ -1330,40 +1357,42 @@ mod drill {
     /// job's attempt has no grace (its job ends with the login), so the link lost afterwards puts it back in the queue
     /// at once, with no time passed on the queue's clock and no verdict. Linger is put back at the end, and the job's
     /// container, if it outlived the login, goes.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn linger_removed_between_two_hellos() {
-        let mut d = Drill::new("nolinger", "r1", "dedicated");
-        let _back = LingerBack;
-        d.link().await;
-        d.submit(d.job("xnolinger", PARK, &[]));
-        d.parked("xnolinger").await;
-        let k = d.kept("xnolinger").await;
-        assert_eq!((k.len(), k[0].state.as_str()), (1, "running"), "{k:?}");
-        // linger goes; the hub's next link (on the same master: the login stays) says so at its hello
-        set_linger("disable").await;
-        d.unlink().await;
-        d.relink().await;
-        // the login ends: the link is lost, and the attempt goes back to the queue at once
-        let (_, sshd) = d.the_serve();
-        sh("r1", &format!("kill -KILL {sshd}"));
-        let why = d
-            .drive("the link lost", |_, _, lost| lost.first().cloned())
-            .await;
-        assert!(why.contains("without bye"), "{why}");
-        let k = d.kept_as("xnolinger", "requeued").await;
-        assert_eq!(k.attempt, 1);
-        assert_eq!(d.jump, 0, "no time passed on the queue's clock");
-        assert!(d.outcomes.is_empty(), "no verdict: {:?}", d.outcomes);
-        set_linger("enable").await;
-        sh(
-            "r1",
-            &format!(
-                "podman rm -f -t 0 {}-xnolinger >/dev/null 2>&1; true",
-                d.prefix
-            ),
-        );
-        d.end().await;
+    fn linger_removed_between_two_hellos() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let mut d = Drill::new("nolinger", "r1", "dedicated");
+            let _back = LingerBack;
+            d.link().await;
+            d.submit(d.job("xnolinger", PARK, &[]));
+            d.parked("xnolinger").await;
+            let k = d.kept("xnolinger").await;
+            assert_eq!((k.len(), k[0].state.as_str()), (1, "running"), "{k:?}");
+            // linger goes; the hub's next link (on the same master: the login stays) says so at its hello
+            set_linger("disable").await;
+            d.unlink().await;
+            d.relink().await;
+            // the login ends: the link is lost, and the attempt goes back to the queue at once
+            let (_, sshd) = d.the_serve();
+            sh("r1", &format!("kill -KILL {sshd}"));
+            let why = d
+                .drive("the link lost", |_, _, lost| lost.first().cloned())
+                .await;
+            assert!(why.contains("without bye"), "{why}");
+            let k = d.kept_as("xnolinger", "requeued").await;
+            assert_eq!(k.attempt, 1);
+            assert_eq!(d.jump, 0, "no time passed on the queue's clock");
+            assert!(d.outcomes.is_empty(), "no verdict: {:?}", d.outcomes);
+            set_linger("enable").await;
+            sh(
+                "r1",
+                &format!(
+                    "podman rm -f -t 0 {}-xnolinger >/dev/null 2>&1; true",
+                    d.prefix
+                ),
+            );
+            d.end().await;
+        })
     }
 
     /// The wall time of SET jobs (each a few seconds of the shell's own work) over RUNNERS, from the first submit to
@@ -1449,62 +1478,68 @@ mod drill {
     /// the same run (so the bound needs no wall-clock constant). A runner runs one job at a time and the jobs are
     /// short, so the set is bound by the gap between two starts on a machine ([`forseti::admit::START_GAP_S`]): one
     /// runner needs (SET − 1) gaps, two about half as many. SET keeps one runner's gaps within half of the row's wait.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "timing: fleet throughput"]
-    async fn a_set_spreads_over_two_runners_within_its_bound() {
-        const SET: usize = (WAIT / 2 / forseti::admit::START_GAP_S) as usize + 1;
-        let clock = std::time::Instant::now;
-        let one = set_wall("set1", &["r1"], SET, &clock).await;
-        let two = set_wall("set2", &["r1", "r2"], SET, &clock).await;
-        println!("the set of {SET}: one runner {one:?}, two {two:?}");
-        assert!(
-            two.as_secs_f64() <= 0.6 * one.as_secs_f64(),
-            "two runners took {two:?}, one took {one:?}"
-        );
+    fn a_set_spreads_over_two_runners_within_its_bound() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            const SET: usize = (WAIT / 2 / forseti::admit::START_GAP_S) as usize + 1;
+            let clock = stund::real::instant;
+            let one = set_wall("set1", &["r1"], SET, &clock).await;
+            let two = set_wall("set2", &["r1", "r2"], SET, &clock).await;
+            ratatoskr::soft::out_line(&format!(
+                "the set of {SET}: one runner {one:?}, two {two:?}"
+            ));
+            assert!(
+                two.as_secs_f64() <= 0.6 * one.as_secs_f64(),
+                "two runners took {two:?}, one took {one:?}"
+            );
+        })
     }
 
     /// [C] (design §5.2 item 2, the repin deadlock of 2026-11-17): a runner with room for two, an image job and four
     /// jobs that need it, the four submitted first. Without `needs` the four took both places and waited on an image
     /// that never got one; with it, the image job starts first, every consumer starts after it passed, and all pass.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn the_repin_deadlock_cannot_happen() {
-        let mut d = Drill::new("needs", "r1", "dedicated");
-        d.link().await;
-        let cores: u32 = sh("r1", "nproc").parse().unwrap();
-        let half = Range {
-            min: (cores / 2).max(1),
-            max: (cores / 2).max(1),
-        };
-        for i in 0..4 {
-            let mut consumer = d.job(&format!("use{i}"), "echo used", &[]);
-            consumer.spec.cores = half.clone();
-            consumer.spec.needs = vec![forseti::JobId("img".into())];
-            d.submit(consumer);
-        }
-        let mut img = d.job("img", "sleep 20; echo built", &[]);
-        img.spec.cores = half.clone();
-        d.submit(img);
-        let ended: Vec<String> = d
-            .drive("every verdict", |_, o, _| {
-                let ended: Vec<String> = o
-                    .iter()
-                    .filter_map(|o| match o {
-                        Outcome::Done { id, result, .. } => {
-                            assert_eq!(result["verdict"], "Pass", "{id}: {result}");
-                            Some(id.clone())
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                (ended.len() == 5).then_some(ended)
-            })
-            .await;
-        assert_eq!(
-            ended[0], "img",
-            "a consumer ended before the job it needs: {ended:?}"
-        );
-        d.end().await;
+    fn the_repin_deadlock_cannot_happen() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let mut d = Drill::new("needs", "r1", "dedicated");
+            d.link().await;
+            let cores: u32 = sh("r1", "nproc").parse().unwrap();
+            let half = Range {
+                min: (cores / 2).max(1),
+                max: (cores / 2).max(1),
+            };
+            for i in 0..4 {
+                let mut consumer = d.job(&format!("use{i}"), "echo used", &[]);
+                consumer.spec.cores = half.clone();
+                consumer.spec.needs = vec![forseti::JobId("img".into())];
+                d.submit(consumer);
+            }
+            let mut img = d.job("img", "sleep 20; echo built", &[]);
+            img.spec.cores = half.clone();
+            d.submit(img);
+            let ended: Vec<String> = d
+                .drive("every verdict", |_, o, _| {
+                    let ended: Vec<String> = o
+                        .iter()
+                        .filter_map(|o| match o {
+                            Outcome::Done { id, result, .. } => {
+                                assert_eq!(result["verdict"], "Pass", "{id}: {result}");
+                                Some(id.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    (ended.len() == 5).then_some(ended)
+                })
+                .await;
+            assert_eq!(
+                ended[0], "img",
+                "a consumer ended before the job it needs: {ended:?}"
+            );
+            d.end().await;
+        })
     }
 }
 
@@ -1547,9 +1582,10 @@ mod net {
     /// [C] A networked runner job reaches the hosts its grant lists through its proxy and nothing else: an unlisted
     /// host is refused (403), a listed one passes the allow-list, the container has the loopback only, and an address
     /// dialled directly is unreachable.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn a_networked_runner_job_reaches_only_its_list() {
+    fn a_networked_runner_job_reaches_only_its_list() {
+        saman::Executor::new(2).unwrap().block_on(async move {
         let mut d = Drill::new("netl", "r1", "dedicated");
         d.link().await;
         let script = format!(
@@ -1566,48 +1602,53 @@ mod net {
         assert!(log.lines().any(|l| l.trim_end() == "ifaces lo"), "{log}");
         assert!(log.lines().any(|l| l == "direct refused"), "{log}");
         d.end().await;
+})
     }
 
     /// [C] While a networked runner job runs, its sidecar runs beside it; once it ended, neither the job's
     /// container nor its sidecar is left on the runner.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn the_runner_job_leaves_no_sidecar() {
-        let mut d = Drill::new("nets", "r1", "dedicated");
-        d.link().await;
-        let (during, _) = run_parked(&mut d, "xnets", "true").await;
-        let job = format!("{}-xnets", d.prefix);
-        assert!(during.contains(&job), "{during:?}");
-        assert!(
-            during
-                .iter()
-                .any(|n| n.contains("-px-") && n.ends_with("xnets")),
-            "the sidecar ran beside the job: {during:?}"
-        );
-        let mine = |n: &String| n.ends_with("xnets");
-        skuld::wait_until("the job's containers are gone", 60, || {
-            (!names(&d.runner).iter().any(mine)).then_some(())
-        });
-        d.end().await;
+    fn the_runner_job_leaves_no_sidecar() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let mut d = Drill::new("nets", "r1", "dedicated");
+            d.link().await;
+            let (during, _) = run_parked(&mut d, "xnets", "true").await;
+            let job = format!("{}-xnets", d.prefix);
+            assert!(during.contains(&job), "{during:?}");
+            assert!(
+                during
+                    .iter()
+                    .any(|n| n.contains("-px-") && n.ends_with("xnets")),
+                "the sidecar ran beside the job: {during:?}"
+            );
+            let mine = |n: &String| n.ends_with("xnets");
+            skuld::wait_until("the job's containers are gone", 60, || {
+                (!names(&d.runner).iter().any(mine)).then_some(())
+            });
+            d.end().await;
+        })
     }
 
     /// [C] A runner job never reaches the reserved host: its proxy refuses `host.drgnx.internal` (a runner has no
     /// host grants), whatever the port.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
     #[ignore = "fleet"]
-    async fn reserved_host_is_refused_on_a_runner() {
-        let mut d = Drill::new("netr", "r1", "dedicated");
-        d.link().await;
-        let script =
-            format!("{NET_PROBE}probe host.drgnx.internal:22; probe host.drgnx.internal:8080");
-        let (_, log) = run_parked(&mut d, "xnetr", &script).await;
-        for p in ["22", "8080"] {
-            assert_eq!(
-                answers(&log, &format!("host.drgnx.internal:{p}")),
-                ["403"],
-                "{log}"
-            );
-        }
-        d.end().await;
+    fn reserved_host_is_refused_on_a_runner() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let mut d = Drill::new("netr", "r1", "dedicated");
+            d.link().await;
+            let script =
+                format!("{NET_PROBE}probe host.drgnx.internal:22; probe host.drgnx.internal:8080");
+            let (_, log) = run_parked(&mut d, "xnetr", &script).await;
+            for p in ["22", "8080"] {
+                assert_eq!(
+                    answers(&log, &format!("host.drgnx.internal:{p}")),
+                    ["403"],
+                    "{log}"
+                );
+            }
+            d.end().await;
+        })
     }
 }

@@ -78,9 +78,7 @@ pub struct PlanHooks(Arc<Mutex<State>>);
 
 impl PlanHooks {
     fn st(&self) -> MutexGuard<'_, State> {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        saman::lock(&self.0)
     }
 
     /// Log LINE, what the gates say of task TID of JOB, unless it is what they said last.
@@ -591,7 +589,7 @@ impl PlanHooks {
             if !is_free(w) {
                 return self.review_wait(front, job, tid).await;
             }
-            let _ = front.core.agents.kill(&w.id).await;
+            crate::soft::done(front.core.agents.kill(&w.id).await, "review");
             front.core.runs.session_finished(front, &w.id);
         }
         self.st().since.remove(tid);
@@ -894,7 +892,7 @@ impl PlanHooks {
             return Ok(());
         }
         self.st().seen.insert(s.id.clone(), n);
-        let _ = front.core.agents.kill(&s.id).await;
+        crate::soft::done(front.core.agents.kill(&s.id).await, "review");
         self.st().reviewers.remove(tid);
         match end {
             Ended::Limit(why) => {
@@ -1750,7 +1748,7 @@ fn actions_of(kind: &str, data: &Value) -> Vec<String> {
 async fn end_task_sessions(front: &Front, job: &str, task: &str) {
     for s in front.core.agents.snapshots() {
         if s.job.as_deref() == Some(job) && s.task.as_deref() == Some(task) && is_alive(&s) {
-            let _ = front.core.agents.kill(&s.id).await;
+            crate::soft::done(front.core.agents.kill(&s.id).await, "review");
             front.core.runs.session_finished(front, &s.id);
         }
     }
@@ -1837,7 +1835,10 @@ async fn manager_hook_card(
         _ => String::new(),
     };
     if !text.is_empty() {
-        let _ = front.core.agents.prompt(manager, text, Origin::Hub);
+        crate::soft::done(
+            front.core.agents.prompt(manager, text, Origin::Hub),
+            "review",
+        );
     }
     serde_json::from_value(json!({"id": manager})).map_err(|e| invalid(e.to_string()))
 }
@@ -1908,30 +1909,36 @@ pub async fn card_act(front: &Front, caller: &Caller, p: CardParams) -> Result<J
     }
     if let Err(e) = act(front, caller, &l, &card, &action, &p.arg).await {
         // it did not happen: still the user's
-        let _ = front
-            .writer
-            .write(caller, "cards/settle", move |tx| {
-                card_set(
-                    tx,
-                    cid,
-                    CardSet {
-                        title: None,
-                        data: None,
-                        state: Some("open".into()),
-                    },
-                    now(),
-                )
-            })
-            .await;
+        crate::soft::done(
+            front
+                .writer
+                .write(caller, "cards/settle", move |tx| {
+                    card_set(
+                        tx,
+                        cid,
+                        CardSet {
+                            title: None,
+                            data: None,
+                            state: Some("open".into()),
+                        },
+                        now(),
+                    )
+                })
+                .await,
+            "review",
+        );
         return Err(e);
     }
     if let Some(m) = data.get("message").and_then(Value::as_i64) {
-        let _ = front
-            .writer
-            .write(caller, "messages/mark", move |tx| {
-                mark(tx, m, "acted", now())
-            })
-            .await;
+        crate::soft::done(
+            front
+                .writer
+                .write(caller, "messages/mark", move |tx| {
+                    mark(tx, m, "acted", now())
+                })
+                .await,
+            "review",
+        );
     }
     front.core.runs.wake();
     changed(front, &job).await;
@@ -2203,7 +2210,7 @@ async fn settle_clash(front: &Front, l: &Loaded, card: &Card, side: &str) -> Res
             .map_err(fail)?;
     }
     if let Some(sid) = d.get("reviewer").and_then(Value::as_str) {
-        let _ = front.core.agents.kill(sid).await;
+        crate::soft::done(front.core.agents.kill(sid).await, "review");
     }
     Ok(())
 }
@@ -2413,7 +2420,7 @@ mod tests {
     }
 
     fn sh(dir: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
+        let out = crate::proc::Command::new("git")
             .args(["-c", "user.name=t", "-c", "user.email=t@t"])
             .args(args)
             .current_dir(dir)
@@ -2429,36 +2436,38 @@ mod tests {
     /// [D] The job's tree is made once whoever asks: two merges of the run asking at once both get it (a second
     /// `worktree add` failing removed the first one's tree and left it registered, macOS CI), and a tree registered
     /// but missing is made again rather than refused at every merge.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_jobs_tree_is_made_once_and_made_again_when_missing() {
-        let d = tempfile::tempdir().unwrap();
-        let repo = d.path().join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        sh(&repo, &["init", "-q", "-b", "main"]);
-        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
-        for i in 0..8 {
-            let job = format!("J{i}");
-            sh(&repo, &["branch", &format!("job/{job}")]);
-            let tree = |n: &str| TaskTree {
-                path: d.path().join("runs").join(&job).join(n),
-                branch: String::new(),
-                base: String::new(),
-                mode: crate::runner::TreeMode::Snapshot,
-            };
-            let (t1, t2) = (tree("1"), tree("2"));
-            let (a, b) = tokio::join!(job_tree(&repo, &job, &t1), job_tree(&repo, &job, &t2));
-            let (a, b) = (a.unwrap(), b.unwrap());
-            assert_eq!(a, b);
-            assert!(a.join(".git").exists(), "{job}: the tree is there");
-            // its folder gone while git still lists it: made again
-            std::fs::remove_dir_all(&a).unwrap();
-            assert!(
-                job_tree(&repo, &job, &t1)
-                    .await
-                    .unwrap()
-                    .join(".git")
-                    .exists()
-            );
-        }
+    #[test]
+    fn the_jobs_tree_is_made_once_and_made_again_when_missing() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let d = tempfile::tempdir().unwrap();
+            let repo = d.path().join("repo");
+            std::fs::create_dir_all(&repo).unwrap();
+            sh(&repo, &["init", "-q", "-b", "main"]);
+            sh(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+            for i in 0..8 {
+                let job = format!("J{i}");
+                sh(&repo, &["branch", &format!("job/{job}")]);
+                let tree = |n: &str| TaskTree {
+                    path: d.path().join("runs").join(&job).join(n),
+                    branch: String::new(),
+                    base: String::new(),
+                    mode: crate::runner::TreeMode::Snapshot,
+                };
+                let (t1, t2) = (tree("1"), tree("2"));
+                let (a, b) = tokio::join!(job_tree(&repo, &job, &t1), job_tree(&repo, &job, &t2));
+                let (a, b) = (a.unwrap(), b.unwrap());
+                assert_eq!(a, b);
+                assert!(a.join(".git").exists(), "{job}: the tree is there");
+                // its folder gone while git still lists it: made again
+                std::fs::remove_dir_all(&a).unwrap();
+                assert!(
+                    job_tree(&repo, &job, &t1)
+                        .await
+                        .unwrap()
+                        .join(".git")
+                        .exists()
+                );
+            }
+        })
     }
 }

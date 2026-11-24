@@ -398,9 +398,7 @@ pub fn op_or_roll_back(
     if answer.wrote() {
         return Ok(answer);
     }
-    *kept
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(answer);
+    *saman::lock(kept) = Some(answer);
     Err(refused("the op wrote nothing; rolled back"))
 }
 
@@ -520,7 +518,7 @@ pub(crate) fn is_ready(conn: &Connection, n: i64, now: f64) -> Result<bool, urdr
 }
 
 fn now_secs() -> f64 {
-    std::time::SystemTime::now()
+    stund::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
 }
@@ -713,7 +711,7 @@ pub fn new_id(tx: &Tx<'_>, kind: &str, project: Option<i64>) -> Result<String, W
         prefix.push('x');
     }
     let state = RandomState::new();
-    let nanos = std::time::SystemTime::now()
+    let nanos = stund::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
     for attempt in 0..32u32 {

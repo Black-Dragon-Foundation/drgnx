@@ -60,14 +60,17 @@ async fn one(lifecycle: ClientLifecycleMode, version: ProtocolVersion, expect: P
     let (client, server) = tokio::net::UnixStream::pair().expect("a socket pair");
     let (sr, sw) = server.into_split();
     let tools: Vec<Box<dyn Tool<()>>> = vec![Box::new(Echo)];
-    let serving = tokio::spawn(mimir::serve(
-        Arc::new(()),
-        Arc::from(tools),
-        ServerInfo::default(),
-        sr,
-        sw,
-        Limits::default(),
-    ));
+    let serving = saman::spawn(
+        "interop-server",
+        mimir::serve(
+            Arc::new(()),
+            Arc::from(tools),
+            ServerInfo::default(),
+            sr,
+            sw,
+            Limits::default(),
+        ),
+    );
 
     let config = ClientConfig::new(
         ClientCapabilities::default(),
@@ -140,32 +143,34 @@ async fn one(lifecycle: ClientLifecycleMode, version: ProtocolVersion, expect: P
     assert_eq!(end, End::ClientClosed, "{case}");
 }
 
-#[tokio::test]
-async fn rmcp_client_per_version() {
-    for v in [
-        ProtocolVersion::V_2024_11_05,
-        ProtocolVersion::V_2025_03_26,
-        ProtocolVersion::V_2025_06_18,
-        ProtocolVersion::V_2025_11_25,
-    ] {
-        // InitializeRequestParams defaults to LATEST (2026-07-28), so the legacy cases set their version
-        one(ClientLifecycleMode::Initialize, v.clone(), v).await;
-    }
-    one(
-        ClientLifecycleMode::Discover {
-            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
-        },
-        ProtocolVersion::V_2025_11_25,
-        ProtocolVersion::V_2026_07_28,
-    )
-    .await;
-    one(
-        ClientLifecycleMode::Auto {
-            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
-            legacy_version: Some(ProtocolVersion::V_2025_06_18),
-        },
-        ProtocolVersion::V_2025_06_18,
-        ProtocolVersion::V_2026_07_28,
-    )
-    .await;
+#[test]
+fn rmcp_client_per_version() {
+    saman::block_on_current(async {
+        for v in [
+            ProtocolVersion::V_2024_11_05,
+            ProtocolVersion::V_2025_03_26,
+            ProtocolVersion::V_2025_06_18,
+            ProtocolVersion::V_2025_11_25,
+        ] {
+            // InitializeRequestParams defaults to LATEST (2026-07-28), so the legacy cases set their version
+            one(ClientLifecycleMode::Initialize, v.clone(), v).await;
+        }
+        one(
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+            ProtocolVersion::V_2025_11_25,
+            ProtocolVersion::V_2026_07_28,
+        )
+        .await;
+        one(
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_06_18),
+            },
+            ProtocolVersion::V_2025_06_18,
+            ProtocolVersion::V_2026_07_28,
+        )
+        .await;
+    });
 }

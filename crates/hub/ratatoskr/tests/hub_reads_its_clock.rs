@@ -106,7 +106,7 @@ fn hub_sources() -> Vec<(String, String)> {
                 .unwrap()
                 .to_string_lossy()
                 .replace('\\', "/");
-            (!exempt(&rel)).then(|| (rel, fs::read_to_string(&f).unwrap()))
+            (!exempt(&rel)).then(|| (rel, ratatoskr::fsio::read_to_string(&f).unwrap()))
         })
         .collect()
 }
@@ -129,7 +129,7 @@ fn no_raw_time_outside_the_clock() {
 }
 
 /// A raw spawn: a task without an origin.
-const RAW_SPAWN: &[&str] = &["tokio::spawn(", "tokio::task::spawn("];
+const RAW_SPAWN: &[&str] = &["tokio::spawn(", "tokio::task::spawn(", "spawn_untracked("];
 
 /// The raw spawns each file may hold, and why.  A task that writes to a client is started by `clock::spawn`: under
 /// the sequencer a write from a task without an origin is counted as unnamed, and a gated test fails on it.

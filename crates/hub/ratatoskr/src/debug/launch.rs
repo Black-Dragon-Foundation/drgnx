@@ -104,7 +104,7 @@ pub fn listed(configs: &[Value]) -> Vec<usize> {
 /// COMPOUND's configurations, as indices into CONFIGS in the compound's order: each named by its `name` (a string, or
 /// `{name, folder}`: one folder here, so the name decides). A name not in CONFIGS, or none, is an error naming the
 /// compound.
-pub fn compound_members(compound: &Value, configs: &[Value]) -> Result<Vec<usize>, String> {
+pub fn compound_members(compound: &Value, configs: &[Value]) -> villa::Result<Vec<usize>> {
     let title = compound.get("name").and_then(Value::as_str).unwrap_or("");
     let names: Vec<&str> = compound
         .get("configurations")
@@ -116,7 +116,9 @@ pub fn compound_members(compound: &Value, configs: &[Value]) -> Result<Vec<usize
         })
         .unwrap_or_default();
     if names.is_empty() {
-        return Err(format!("compound {title} names no configuration"));
+        return Err(villa::Error::invalid(format!(
+            "compound {title} names no configuration"
+        )));
     }
     names
         .into_iter()
@@ -124,7 +126,9 @@ pub fn compound_members(compound: &Value, configs: &[Value]) -> Result<Vec<usize
             configs
                 .iter()
                 .position(|c| c.get("name").and_then(Value::as_str) == Some(n))
-                .ok_or_else(|| format!("compound {title}: no configuration named {n}"))
+                .ok_or_else(|| {
+                    villa::Error::invalid(format!("compound {title}: no configuration named {n}"))
+                })
         })
         .collect()
 }
@@ -261,14 +265,15 @@ pub fn needs(
     config: &Value,
     inputs: &[Value],
     answers: &HashMap<String, String>,
-) -> Result<Vec<Need>, String> {
+) -> villa::Result<Vec<Need>> {
     let mut all = vec![];
     names(config, &mut all);
     let mut out: Vec<Need> = vec![];
     for n in all {
         if let Some(id) = n.strip_prefix("input:") {
-            let d = input_decl(inputs, id)
-                .ok_or_else(|| format!("${{input:{id}}}: no input \"{id}\" in launch.json"))?;
+            let d = input_decl(inputs, id).ok_or_else(|| {
+                villa::Error::invalid(format!("${{input:{id}}}: no input \"{id}\" in launch.json"))
+            })?;
             let need = Need::Input {
                 id: id.to_owned(),
                 kind: s(d, "type").unwrap_or_else(|| "promptString".into()),
@@ -303,7 +308,7 @@ pub fn check_answers(
     config: &Value,
     inputs: &[Value],
     answers: &HashMap<String, String>,
-) -> Result<(), String> {
+) -> villa::Result<()> {
     for n in needs(config, inputs, &HashMap::new())? {
         if let Need::Input {
             id, kind, options, ..
@@ -312,10 +317,10 @@ pub fn check_answers(
             && let Some(a) = answers.get(&id)
             && !options.contains(a)
         {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{a} is not one of {id}'s options ({})",
                 options.join(", ")
-            ));
+            )));
         }
     }
     Ok(())
@@ -336,22 +341,21 @@ fn show(p: &Path) -> String {
 }
 
 impl Vars {
-    fn root(&self) -> Result<PathBuf, String> {
+    fn root(&self) -> villa::Result<PathBuf> {
         self.roots
             .first()
             .map(|(_, p)| true_name(p))
-            .ok_or_else(|| "no workspace folder".to_owned())
+            .ok_or_else(|| villa::Error::invalid("no workspace folder"))
     }
 
-    fn file(&self, name: &str) -> Result<PathBuf, String> {
-        self.file
-            .as_deref()
-            .map(true_name)
-            .ok_or_else(|| format!("${{{name}}} needs a file: no file is current"))
+    fn file(&self, name: &str) -> villa::Result<PathBuf> {
+        self.file.as_deref().map(true_name).ok_or_else(|| {
+            villa::Error::invalid(format!("${{{name}}} needs a file: no file is current"))
+        })
     }
 
     /// The root that holds the current file (else the first).
-    fn file_root(&self) -> Result<PathBuf, String> {
+    fn file_root(&self) -> villa::Result<PathBuf> {
         let f = self.file("fileWorkspaceFolder")?;
         self.roots
             .iter()
@@ -361,22 +365,22 @@ impl Vars {
     }
 
     /// The value of the variable NAME (`${NAME}`).
-    fn value(&self, name: &str, answers: &HashMap<String, String>) -> Result<String, String> {
+    fn value(&self, name: &str, answers: &HashMap<String, String>) -> villa::Result<String> {
         if let Some(id) = name.strip_prefix("input:") {
             return answers
                 .get(id)
                 .cloned()
-                .ok_or_else(|| format!("${{input:{id}}} was not answered"));
+                .ok_or_else(|| villa::Error::invalid(format!("${{input:{id}}} was not answered")));
         }
         if let Some(cmd) = name.strip_prefix("command:") {
             return match cmd {
                 "pickProcess" | "PickProcess" => answers
                     .get("pickProcess")
                     .cloned()
-                    .ok_or_else(|| "no process was picked".to_owned()),
-                _ => Err(format!(
+                    .ok_or_else(|| villa::Error::invalid("no process was picked")),
+                _ => Err(villa::Error::invalid(format!(
                     "${{command:{cmd}}}: drgnx runs no VS Code command but pickProcess"
-                )),
+                ))),
             };
         }
         if let Some(var) = name.strip_prefix("env:") {
@@ -390,14 +394,14 @@ impl Vars {
             return match self.config.get(drgnx) {
                 Some(Value::String(s)) => Ok(s.clone()),
                 Some(v) => Ok(v.to_string()),
-                None => Err(format!(
+                None => Err(villa::Error::invalid(format!(
                     "${{config:{key}}}: no drgnx setting by that name (known VS Code names: {})",
                     CONFIG_NAMES
                         .iter()
                         .map(|(v, _)| *v)
                         .collect::<Vec<_>>()
                         .join(", ")
-                )),
+                ))),
             };
         }
         if let Some(folder) = name.strip_prefix("workspaceFolder:") {
@@ -407,7 +411,9 @@ impl Vars {
                 .find(|(n, _)| n == folder)
                 .map(|(_, p)| show(&true_name(p)))
                 .ok_or_else(|| {
-                    format!("${{workspaceFolder:{folder}}}: no workspace folder named {folder}")
+                    villa::Error::not_found(format!(
+                        "${{workspaceFolder:{folder}}}: no workspace folder named {folder}"
+                    ))
                 });
         }
         let rel = |f: &Path, r: &Path| {
@@ -449,20 +455,23 @@ impl Vars {
             "lineNumber" => self
                 .line
                 .map(|l| l.to_string())
-                .ok_or("${lineNumber}: no line is current")?,
+                .ok_or_else(|| villa::Error::invalid("${lineNumber}: no line is current"))?,
             "columnNumber" => self
                 .col
                 .map(|c| c.to_string())
-                .ok_or("${columnNumber}: no column is current")?,
+                .ok_or_else(|| villa::Error::invalid("${columnNumber}: no column is current"))?,
             "selectedText" => self.selection.clone().unwrap_or_default(),
             "execPath" => show(&self.exec_path),
             "pathSeparator" | "/" => "/".to_owned(),
             "userHome" => show(&self.home),
-            "defaultBuildTask" => self
-                .default_build_task
-                .clone()
-                .ok_or("${defaultBuildTask}: tasks.json has no default build task")?,
-            _ => return Err(format!("${{{name}}} is not a variable drgnx knows")),
+            "defaultBuildTask" => self.default_build_task.clone().ok_or_else(|| {
+                villa::Error::invalid("${defaultBuildTask}: tasks.json has no default build task")
+            })?,
+            _ => {
+                return Err(villa::Error::invalid(format!(
+                    "${{{name}}} is not a variable drgnx knows"
+                )));
+            }
         })
     }
 }
@@ -472,7 +481,7 @@ pub fn substitute(
     config: &Value,
     vars: &Vars,
     answers: &HashMap<String, String>,
-) -> Result<Value, String> {
+) -> villa::Result<Value> {
     Ok(match config {
         Value::String(text) => {
             let mut out = String::with_capacity(text.len());
@@ -481,7 +490,11 @@ pub fn substitute(
                 let after = &rest[i + 2..];
                 let Some(j) = after.find('}') else { break };
                 out.push_str(&rest[..i]);
-                out.push_str(&vars.value(&after[..j], answers)?);
+                out.push_str(
+                    &vars
+                        .value(&after[..j], answers)
+                        .map_err(|e| villa::Error::invalid(e.to_string()))?,
+                );
                 rest = &after[j + 1..];
             }
             out.push_str(rest);
@@ -495,33 +508,38 @@ pub fn substitute(
         Value::Object(m) => Value::Object(
             m.iter()
                 .map(|(k, v)| Ok((k.clone(), substitute(v, vars, answers)?)))
-                .collect::<Result<_, String>>()?,
+                .collect::<villa::Result<_>>()
+                .map_err(|e| villa::Error::invalid(e.to_string()))?,
         ),
         v => v.clone(),
     })
 }
 
 /// `debugServer`: a port on this machine (a number, or `localhost:N` / `127.0.0.1:N`); other hosts are refused.
-pub fn debug_server(config: &Value) -> Result<Option<SocketAddr>, String> {
+pub fn debug_server(config: &Value) -> villa::Result<Option<SocketAddr>> {
     let port = match config.get("debugServer") {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::Number(n)) => n.as_u64(),
         Some(Value::String(s)) => {
             let (host, port) = s.rsplit_once(':').unwrap_or(("localhost", s.as_str()));
             if !matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1") {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "debugServer {s}: drgnx connects to this machine only, not {host}"
-                ));
+                )));
             }
             port.parse().ok()
         }
-        Some(v) => return Err(format!("debugServer {v}: a port number")),
+        Some(v) => {
+            return Err(villa::Error::invalid(format!(
+                "debugServer {v}: a port number"
+            )));
+        }
     };
     match port {
         Some(p) if (1..=65535).contains(&p) => {
             Ok(Some(SocketAddr::from((Ipv4Addr::LOCALHOST, p as u16))))
         }
-        _ => Err("debugServer: a port from 1 to 65535".into()),
+        _ => Err(villa::Error::invalid("debugServer: a port from 1 to 65535")),
     }
 }
 

@@ -13,6 +13,8 @@ fuzzing = []
 
 [dependencies]
 runstav = { path = "../runstav", version = "0.1.0" }
+saman.workspace = true
+stund.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 serde.workspace = true
@@ -22,8 +24,11 @@ serde_path_to_error.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-# the bridge's tests run on tokio's paused clock (`start_paused`): a feature of a crate already here, no new crate
-tokio = { workspace = true, features = ["test-util"] }
+# the bridge's tests move a `stund::Manual` clock by hand
+stund = { workspace = true, features = ["test-hooks"] }
 rmcp = { workspace = true, features = ["client", "transport-async-rw"] }
 tempfile.workspace = true
 proptest.workspace = true
+
+[lints]
+workspace = true

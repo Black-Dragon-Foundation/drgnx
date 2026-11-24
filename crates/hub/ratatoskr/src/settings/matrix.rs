@@ -48,11 +48,12 @@ pub fn layer(rows: &[CellRow]) -> Matrix {
 }
 
 /// Decode V (`null` is the empty setting); the error names what does not fit.
-pub fn decode(v: &Value) -> Result<Decoded, String> {
+pub fn decode(v: &Value) -> villa::Result<Decoded> {
     if v.is_null() {
         return Ok(Decoded::default());
     }
-    let raw: Raw = serde_json::from_value(v.clone()).map_err(|e| format!("agents-matrix: {e}"))?;
+    let raw: Raw = serde_json::from_value(v.clone())
+        .map_err(|e| villa::Error::invalid(format!("agents-matrix: {e}")))?;
     Ok(Decoded {
         preset: raw.preset,
         time_presets: raw.time,
@@ -61,9 +62,9 @@ pub fn decode(v: &Value) -> Result<Decoded, String> {
 }
 
 /// A plan's `matrix` field: only cells (a plan changes no preset).
-pub fn decode_cells(v: &Value) -> Result<Matrix, String> {
-    let rows: Vec<CellRow> =
-        serde_json::from_value(v.clone()).map_err(|e| format!("matrix: {e}"))?;
+pub fn decode_cells(v: &Value) -> villa::Result<Matrix> {
+    let rows: Vec<CellRow> = serde_json::from_value(v.clone())
+        .map_err(|e| villa::Error::invalid(format!("matrix: {e}")))?;
     Ok(layer(&rows))
 }
 

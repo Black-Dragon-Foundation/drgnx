@@ -71,7 +71,7 @@ struct State {
     bases: HashMap<PathBuf, Bases>,
     /// Path -> its lock: one merge of a file at a time.
     gates: HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>,
-    timers: HashMap<PathBuf, tokio::task::JoinHandle<()>>,
+    timers: HashMap<PathBuf, crate::clock::Spawned<()>>,
     #[cfg(test)]
     before_write: Option<BeforeWrite>,
 }
@@ -86,10 +86,10 @@ fn now() -> f64 {
     crate::clock::wall_secs()
 }
 
-fn err(msg: impl Into<String>) -> Error {
+fn err(msg: impl ToString) -> Error {
     Error {
         code: ErrorCode::Internal,
-        message: msg.into(),
+        message: msg.to_string(),
         path: None,
     }
 }
@@ -99,7 +99,7 @@ fn meta() -> TxMeta {
 }
 
 fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }
 
 fn kind_name(k: RecordKind) -> String {
@@ -276,7 +276,7 @@ fn classify(file: &Path, root: &Path) -> Option<RecordKind> {
         return None;
     }
     if parts.iter().any(|p| p == "plans") {
-        let text = std::fs::read_to_string(file).ok()?;
+        let text = crate::fsio::read_to_string(file).ok()?;
         return has_tasks(&text).then_some(RecordKind::Plans);
     }
     parts
@@ -629,8 +629,8 @@ async fn import_one(
     back: bool,
     meta: TxMeta,
 ) -> Result<ImportedFile, Error> {
-    let text =
-        std::fs::read_to_string(&f.path).map_err(|e| err(format!("{}: {e}", f.path.display())))?;
+    let text = crate::fsio::read_to_string(&f.path)
+        .map_err(|e| err(format!("{}: {e}", f.path.display())))?;
     let doc: AnyDoc = import::parse(f.parse, view::strip_header(&text))
         .ok_or_else(|| err("unknown record kind"))?;
     let ops = import::ops(&doc, &f.path);
@@ -787,14 +787,9 @@ async fn sync_bodies(db: &CoordDb, path: &Path) -> Result<bool, Error> {
 /// TEXT to PATH: a temporary file beside it, synced, then a rename (the old file is never truncated, so an editor's
 /// own atomic save cannot interleave with half of ours).
 pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
-    use std::io::Write;
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".drgnx-tmp");
-    let tmp = PathBuf::from(tmp);
-    let mut f = std::fs::File::create(&tmp)?;
-    f.write_all(text.as_bytes())?;
-    f.sync_all()?;
-    std::fs::rename(&tmp, path)
+    crate::fsio::write_via(PathBuf::from(tmp), path, text)
 }
 
 /// What the records tell the editors.
@@ -1036,7 +1031,7 @@ impl Views {
     /// The file at PATH differs from what the hub last wrote or read there (false when it knows nothing of it yet).
     pub fn changed(&self, path: &Path) -> bool {
         let last = lock(&self.state).written.get(path).map(|w| w.0.clone());
-        match (last, std::fs::read_to_string(path)) {
+        match (last, crate::fsio::read_to_string(path)) {
             (Some(h), Ok(t)) => view::digest(&t) != h,
             (Some(_), Err(_)) => true,
             (None, _) => false,
@@ -1156,7 +1151,7 @@ impl Views {
         let mut flagged: Vec<String> = Vec::new();
         for _ in 0..TRIES {
             // a missing file retires nothing: its records stay until the project forgets them
-            let Ok(raw) = std::fs::read_to_string(path) else {
+            let Ok(raw) = crate::fsio::read_to_string(path) else {
                 return Ok((Flush::Unchanged, acts, flagged));
             };
             let doc = import::parse(parse_of(kind), view::strip_header(&raw))
@@ -1206,7 +1201,7 @@ impl Views {
             if let Some(h) = self.hook() {
                 h(path);
             }
-            if std::fs::read_to_string(path).ok().as_deref() != Some(raw.as_str()) {
+            if crate::fsio::read_to_string(path).ok().as_deref() != Some(raw.as_str()) {
                 base = on_disk;
                 continue;
             }
@@ -1216,7 +1211,7 @@ impl Views {
             self.keep(db, path, written, hash.clone()).await?;
             return Ok((Flush::Written(hash), acts, flagged));
         }
-        let h = std::fs::read_to_string(path)
+        let h = crate::fsio::read_to_string(path)
             .map(|t| view::digest(&t))
             .unwrap_or_default();
         self.keep(db, path, base, h).await?;
@@ -1297,7 +1292,7 @@ fn is_sdd_progress(path: &Path) -> bool {
 /// its ancestors (the repository, or the nearest folder holding `docs/`: the first that exists), never to the scanning
 /// process's folder.  None when it names none that exists.
 fn sdd_plan_named_by(ledger: &Path) -> Option<PathBuf> {
-    let text = std::fs::read_to_string(ledger).ok()?;
+    let text = crate::fsio::read_to_string(ledger).ok()?;
     let name = text.lines().next()?.strip_prefix(SDD_FIRST)?.trim();
     if name.is_empty() {
         return None;
@@ -1397,7 +1392,7 @@ async fn ledger_marks(db: &CoordDb, path: &Path) -> Result<(), Error> {
         // a plan with no ledger now: what a ledger that went said of its tasks goes with it
         return clear_ledger_marks(db, path).await;
     };
-    let marks = std::fs::read_to_string(&ledger)
+    let marks = crate::fsio::read_to_string(&ledger)
         .map(|t| saga::ledger::done_marks(&t))
         .unwrap_or_default();
     let file = ledger.to_string_lossy().into_owned();
@@ -1451,7 +1446,7 @@ async fn ledger_marks(db: &CoordDb, path: &Path) -> Result<(), Error> {
     ledger_rulings(db, &plan, &ledger, &tasks).await?;
     // git is asked again only when the ledger or the plan's task numbers changed since the last time
     let stamp = {
-        let text = std::fs::read_to_string(&ledger).unwrap_or_default();
+        let text = crate::fsio::read_to_string(&ledger).unwrap_or_default();
         let ids: Vec<String> = tasks
             .iter()
             .map(|t| format!("{}:{}", t.n, t.data["number"].as_str().unwrap_or("")))
@@ -1487,7 +1482,7 @@ async fn ledger_commit_links(
     // a link has one source: when this ledger stopped naming a commit another ledger of the plan still names, that
     // ledger's link is made again (a commit two ledgers name stays when either goes)
     for other in other_ledgers(plan, ledger) {
-        let text = std::fs::read_to_string(&other).unwrap_or_default();
+        let text = crate::fsio::read_to_string(&other).unwrap_or_default();
         ledger_commits(db, plan, &other, &saga::ledger::done_marks(&text), tasks).await?;
     }
     kv_put(db, vec![(key, Some(stamp))]).await
@@ -1509,7 +1504,7 @@ fn other_ledgers(plan: &Path, ledger: &Path) -> Vec<PathBuf> {
 /// The spec a plan's `**Spec:** \`path\`` line names: the file `path` is, seen from the plan's folder or one of its
 /// ancestors (the root, a repository, the folder holding `docs/`): the first that exists (`drgnx-work--resolve`).
 fn plan_spec_of(plan: &Path) -> Option<PathBuf> {
-    let text = std::fs::read_to_string(plan).ok()?;
+    let text = crate::fsio::read_to_string(plan).ok()?;
     let line = text
         .lines()
         .find(|l| l.trim_start().starts_with("**Spec:**"))?;
@@ -1598,7 +1593,7 @@ async fn board_plan_links(db: &CoordDb, path: &Path) -> Result<(), Error> {
     if path.extension().and_then(|e| e.to_str()) != Some("org") {
         return Ok(());
     }
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return Ok(());
     };
     let doc = saga::org::parse(&text);
@@ -1830,20 +1825,21 @@ async fn commits_reachable(db: &CoordDb, tasks: &[Piece]) -> Result<(), Error> {
 /// The shas of SHAS that REPO does not have (`git cat-file --batch-check`).
 fn git_batch_missing(repo: &Path, shas: &[&str]) -> Vec<String> {
     use std::io::Write;
-    let Ok(mut child) = std::process::Command::new("git")
+    let Ok(mut child) = crate::proc::Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(["cat-file", "--batch-check"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+        .spawn(
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Null,
+        )
     else {
         return Vec::new();
     };
     if let Some(mut si) = child.stdin.take() {
-        let _ = si.write_all(shas.join("\n").as_bytes());
-        let _ = si.write_all(b"\n");
+        crate::soft::done(si.write_all(shas.join("\n").as_bytes()), "records");
+        crate::soft::done(si.write_all(b"\n"), "records");
     }
     let Ok(out) = child.wait_with_output() else {
         return Vec::new();
@@ -1868,7 +1864,7 @@ async fn ledger_rulings(
     tasks: &[Piece],
 ) -> Result<(), Error> {
     let file = ledger.to_string_lossy().into_owned();
-    let text = std::fs::read_to_string(ledger).unwrap_or_default();
+    let text = crate::fsio::read_to_string(ledger).unwrap_or_default();
     let re =
         regex::Regex::new(r"^(?:Task ([0-9]+)[^:]*: )?Ruling: (.*)$").expect("a fixed pattern");
     let wanted: Vec<(usize, Option<String>, String)> = text
@@ -2054,7 +2050,7 @@ async fn ledger_branch(
         let merged = all_done
             && main.is_some_and(|m| {
                 !exists
-                    || std::process::Command::new("git")
+                    || crate::proc::Command::new("git")
                         .arg("-C")
                         .arg(&repo)
                         .args(["merge-base", "--is-ancestor", &name, m])
@@ -2162,7 +2158,7 @@ struct GitCommit {
 
 /// What `git ARGS` prints in REPO, or none when it fails.
 fn git_out(repo: &Path, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -2764,7 +2760,7 @@ pub async fn import_core(
 fn status_warnings(found: &[Found]) -> Vec<String> {
     let mut out = Vec::new();
     for f in found.iter().filter(|f| f.kind == RecordKind::Plans) {
-        let Ok(text) = std::fs::read_to_string(&f.path) else {
+        let Ok(text) = crate::fsio::read_to_string(&f.path) else {
             continue;
         };
         for (task, word) in status::unknown_status_words(&text) {
@@ -2827,7 +2823,7 @@ pub async fn status_core(
     }
     let mut out = Vec::new();
     for (path, kind, entity, conflicts) in by_file {
-        let _ = views.bases(db, &path).await?;
+        views.bases(db, &path).await?;
         let last = lock(&views.state).written.get(&path).cloned();
         out.push(ViewStatus {
             path: path.to_string_lossy().into_owned(),
@@ -2911,10 +2907,10 @@ pub async fn resolve(f: &Front, _: &Caller, p: ResolveParams) -> Result<Resolved
     Ok(r)
 }
 
-fn refuse(msg: impl Into<String>) -> Error {
+fn refuse(msg: impl ToString) -> Error {
     Error {
         code: ErrorCode::NotAllowed,
-        message: msg.into(),
+        message: msg.to_string(),
         path: None,
     }
 }
@@ -2933,7 +2929,7 @@ pub fn install_tool(front: &Arc<Front>) {
                 .map_err(|e| e.message)
         })
     });
-    let _ = front.writer.signals.records_tool.set(door);
+    crate::soft::done(front.writer.signals.records_tool.set(door), "records");
 }
 
 /// `record_conflict_read` (KEEP_FILE none) and `record_conflict_resolve` of an agent: resolving needs the matrix's
@@ -3059,7 +3055,7 @@ pub(crate) mod tests {
         for (rel, text) in FILES {
             let p = root.join(rel);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(p, text).unwrap();
+            crate::fsio::write(p, text).unwrap();
         }
         let db = CoordDb::spawn(dir.path().join("work.db"));
         Fix {
@@ -3083,7 +3079,7 @@ pub(crate) mod tests {
         ) -> (ImportReport, Vec<ViewEvent>) {
             let heard = Arc::new(Mutex::new(Vec::new()));
             let h = heard.clone();
-            let emit = move |e: ViewEvent| h.lock().unwrap().push(e);
+            let emit = move |e: ViewEvent| saman::lock(&h).push(e);
             let r = import_core(
                 &self.db,
                 &self.views,
@@ -3099,7 +3095,7 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
-            let heard = heard.lock().unwrap().clone();
+            let heard = saman::lock(&heard).clone();
             (r, heard)
         }
         pub(crate) async fn sync(&self, p: &Path) -> Flush {
@@ -3116,55 +3112,58 @@ pub(crate) mod tests {
     const TX: &str = "select count(*) from tx";
     const RECS: &str = "select count(*) from entity where source like 'records:%'";
 
-    #[tokio::test]
-    async fn import_then_view_equals_the_file() {
-        let f = fix();
-        f.import(None, false).await;
-        f.import(Some(RecordKind::Board), false).await;
-        for (rel, text) in FILES {
-            let written = std::fs::read_to_string(f.root.join(rel)).unwrap();
-            assert_eq!(written, text, "{rel}: adopting rewrites nothing");
-        }
+    #[test]
+    fn import_then_view_equals_the_file() {
+        saman::block_on_current(async move {
+            let f = fix();
+            f.import(None, false).await;
+            f.import(Some(RecordKind::Board), false).await;
+            for (rel, text) in FILES {
+                let written = crate::fsio::read_to_string(f.root.join(rel)).unwrap();
+                assert_eq!(written, text, "{rel}: adopting rewrites nothing");
+            }
+        })
     }
 
-    #[tokio::test]
-    async fn an_imported_plan_reads_with_its_tasks() {
-        let f = fix();
-        let rel = "docs/plans/drgnx/q.md";
-        std::fs::write(
+    #[test]
+    fn an_imported_plan_reads_with_its_tasks() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let rel = "docs/plans/drgnx/q.md";
+            crate::fsio::write(
             f.root.join(rel),
             "# Q plan\n\n**Repo:** ../../..\n\n### Task 1: first\n\n**Role:** implement\n\n- [ ] **Step 1: a**\n\n\
              ### Task 2: second\n\n**Depends:** Task 1\n\n### Task 3b: third\n\n**Depends:** Task 1, Task 2\n",
         )
         .unwrap();
-        f.import(Some(RecordKind::Plans), false).await;
-        // the plan entity with its tasks under it, by number, and each task's waits (what plan_read and job/propose read)
-        let q = "select p.id, t.data from link l join entity p on p.n = l.src join entity t on t.n = l.dst \
+            f.import(Some(RecordKind::Plans), false).await;
+            // the plan entity with its tasks under it, by number, and each task's waits (what plan_read and job/propose read)
+            let q = "select p.id, t.data from link l join entity p on p.n = l.src join entity t on t.n = l.dst \
                  where l.kind = 'parent_of' and p.title = 'Q plan' and l.tx_to = ?1 order by l.id";
-        let rows: Vec<(String, String)> =
-            f.db.read(move |c| {
-                let mut st = c.prepare(q)?;
-                let r = st
-                    .query_map([urdr::graph::schema::SENTINEL], |r| {
-                        Ok((r.get(0)?, r.get(1)?))
-                    })?
-                    .collect::<Result<_, _>>()?;
-                Ok(r)
-            })
-            .await
-            .unwrap();
-        assert_eq!(rows.len(), 3);
-        let numbers: Vec<String> = rows
-            .iter()
-            .map(|(_, d)| {
-                serde_json::from_str::<Value>(d).unwrap()["number"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned()
-            })
-            .collect();
-        assert_eq!(numbers, ["1", "2", "3b"]);
-        let deps: Vec<(String, String)> = f
+            let rows: Vec<(String, String)> =
+                f.db.read(move |c| {
+                    let mut st = c.prepare(q)?;
+                    let r = st
+                        .query_map([urdr::graph::schema::SENTINEL], |r| {
+                            Ok((r.get(0)?, r.get(1)?))
+                        })?
+                        .collect::<Result<_, _>>()?;
+                    Ok(r)
+                })
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 3);
+            let numbers: Vec<String> = rows
+                .iter()
+                .map(|(_, d)| {
+                    serde_json::from_str::<Value>(d).unwrap()["number"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect();
+            assert_eq!(numbers, ["1", "2", "3b"]);
+            let deps: Vec<(String, String)> = f
             .db
             .read(|c| {
                 let mut st = c.prepare(
@@ -3179,92 +3178,99 @@ pub(crate) mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(
-            deps,
-            [
-                ("1".into(), "2".into()),
-                ("1".into(), "3b".into()),
-                ("2".into(), "3b".into())
-            ]
-        );
-        let repo: String =
-            f.db.read(|c| {
-                Ok(c.query_row(
-                    "select json_extract(data, '$.repo') from entity where title = 'Q plan'",
-                    [],
-                    |r| r.get(0),
-                )?)
-            })
-            .await
-            .unwrap();
-        assert!(repo.ends_with("docs/plans/drgnx/../../.."), "{repo}");
-        // importing again links nothing twice
-        let again = f.import(Some(RecordKind::Plans), false).await;
-        assert!(again.files.iter().all(|x| x.ops == 0));
-    }
-
-    #[tokio::test]
-    async fn import_is_idempotent() {
-        let f = fix();
-        let first = f.import(None, false).await;
-        assert!(first.files.iter().all(|x| x.ops > 0));
-        let (txs, ents) = (f.count(TX).await, f.count(RECS).await);
-        let again = f.import(None, false).await;
-        assert!(
-            again.files.iter().all(|x| x.ops == 0 && x.entities == 0),
-            "{again:?}"
-        );
-        assert_eq!((f.count(TX).await, f.count(RECS).await), (txs, ents));
-    }
-
-    #[tokio::test]
-    async fn the_backup_is_written_first() {
-        let f = fix();
-        let r = f.import(None, false).await;
-        let b = PathBuf::from(r.backup.unwrap());
-        assert!(b.starts_with(f.hub.join("records-backup")));
-        for (rel, text) in FILES.iter().filter(|(r, _)| *r != "board.org") {
             assert_eq!(
-                std::fs::read_to_string(b.join(rel)).unwrap(),
-                *text,
-                "{rel}"
+                deps,
+                [
+                    ("1".into(), "2".into()),
+                    ("1".into(), "3b".into()),
+                    ("2".into(), "3b".into())
+                ]
             );
-        }
-        assert!(
-            !b.join("board.org").exists(),
-            "board.org is not imported unless named"
-        );
-        // the first adoption copies the graph store too, a readable SQLite file
-        assert!(
-            rusqlite_open(&b.join("work.db")) > 0,
-            "the store copy has its tables"
-        );
-        // opening Work imports every time: a second import with nothing new backs nothing up (a backup of every
-        // record file per open would fill the disk), and one with a new file backs up again, never over the first
-        let r2 = f.import(None, false).await;
-        assert!(r2.backup.is_none(), "{:?}", r2.backup);
-        std::fs::create_dir_all(f.root.join("docs/specs")).unwrap();
-        std::fs::write(f.root.join("docs/specs/new.md"), "# New spec\n\nText.\n").unwrap();
-        let r3 = f.import(None, false).await;
-        assert_ne!(r3.backup.unwrap(), b.to_string_lossy());
+            let repo: String =
+                f.db.read(|c| {
+                    Ok(c.query_row(
+                        "select json_extract(data, '$.repo') from entity where title = 'Q plan'",
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            assert!(repo.ends_with("docs/plans/drgnx/../../.."), "{repo}");
+            // importing again links nothing twice
+            let again = f.import(Some(RecordKind::Plans), false).await;
+            assert!(again.files.iter().all(|x| x.ops == 0));
+        })
     }
 
-    #[tokio::test]
-    async fn dry_run_writes_nothing() {
-        let f = fix();
-        let txs = f.count(TX).await;
-        let r = f.import(None, true).await;
-        assert!(r.dry_run && r.backup.is_none());
-        assert!(r.files.iter().all(|x| x.ops > 0));
-        for (rel, text) in FILES {
-            assert_eq!(std::fs::read_to_string(f.root.join(rel)).unwrap(), text);
-        }
-        assert!(!f.hub.exists());
-        assert_eq!((f.count(TX).await, f.count(RECS).await), (txs, 0));
+    #[test]
+    fn import_is_idempotent() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let first = f.import(None, false).await;
+            assert!(first.files.iter().all(|x| x.ops > 0));
+            let (txs, ents) = (f.count(TX).await, f.count(RECS).await);
+            let again = f.import(None, false).await;
+            assert!(
+                again.files.iter().all(|x| x.ops == 0 && x.entities == 0),
+                "{again:?}"
+            );
+            assert_eq!((f.count(TX).await, f.count(RECS).await), (txs, ents));
+        })
+    }
+
+    #[test]
+    fn the_backup_is_written_first() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let r = f.import(None, false).await;
+            let b = PathBuf::from(r.backup.unwrap());
+            assert!(b.starts_with(f.hub.join("records-backup")));
+            for (rel, text) in FILES.iter().filter(|(r, _)| *r != "board.org") {
+                assert_eq!(
+                    crate::fsio::read_to_string(b.join(rel)).unwrap(),
+                    *text,
+                    "{rel}"
+                );
+            }
+            assert!(
+                !b.join("board.org").exists(),
+                "board.org is not imported unless named"
+            );
+            // the first adoption copies the graph store too, a readable SQLite file
+            assert!(
+                rusqlite_open(&b.join("work.db")) > 0,
+                "the store copy has its tables"
+            );
+            // opening Work imports every time: a second import with nothing new backs nothing up (a backup of every
+            // record file per open would fill the disk), and one with a new file backs up again, never over the first
+            let r2 = f.import(None, false).await;
+            assert!(r2.backup.is_none(), "{:?}", r2.backup);
+            std::fs::create_dir_all(f.root.join("docs/specs")).unwrap();
+            crate::fsio::write(f.root.join("docs/specs/new.md"), "# New spec\n\nText.\n").unwrap();
+            let r3 = f.import(None, false).await;
+            assert_ne!(r3.backup.unwrap(), b.to_string_lossy());
+        })
+    }
+
+    #[test]
+    fn dry_run_writes_nothing() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let txs = f.count(TX).await;
+            let r = f.import(None, true).await;
+            assert!(r.dry_run && r.backup.is_none());
+            assert!(r.files.iter().all(|x| x.ops > 0));
+            for (rel, text) in FILES {
+                assert_eq!(crate::fsio::read_to_string(f.root.join(rel)).unwrap(), text);
+            }
+            assert!(!f.hub.exists());
+            assert_eq!((f.count(TX).await, f.count(RECS).await), (txs, 0));
+        })
     }
 
     fn git(dir: &Path, args: &[&str]) -> String {
-        let out = std::process::Command::new("git")
+        let out = crate::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -3283,24 +3289,26 @@ pub(crate) mod tests {
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
-    #[tokio::test]
-    async fn the_hub_never_commits() {
-        let f = fix();
-        git(&f.root, &["init", "-q"]);
-        git(&f.root, &["add", "-A"]);
-        git(&f.root, &["commit", "-q", "-m", "records"]);
-        let (log, index) = (
-            git(&f.root, &["log", "--format=%H"]),
-            std::fs::read(f.root.join(".git/index")).unwrap(),
-        );
-        f.import(None, false).await;
-        // a changed file, imported again: the graph changes and the view is rewritten
-        let p = f.root.join("DEFERRED.md");
-        let t = std::fs::read_to_string(&p).unwrap();
-        std::fs::write(&p, format!("{t}\nmore\n")).unwrap();
-        f.import(None, false).await;
-        assert_eq!(git(&f.root, &["log", "--format=%H"]), log);
-        assert_eq!(std::fs::read(f.root.join(".git/index")).unwrap(), index);
+    #[test]
+    fn the_hub_never_commits() {
+        saman::block_on_current(async move {
+            let f = fix();
+            git(&f.root, &["init", "-q"]);
+            git(&f.root, &["add", "-A"]);
+            git(&f.root, &["commit", "-q", "-m", "records"]);
+            let (log, index) = (
+                git(&f.root, &["log", "--format=%H"]),
+                std::fs::read(f.root.join(".git/index")).unwrap(),
+            );
+            f.import(None, false).await;
+            // a changed file, imported again: the graph changes and the view is rewritten
+            let p = f.root.join("DEFERRED.md");
+            let t = crate::fsio::read_to_string(&p).unwrap();
+            crate::fsio::write(&p, format!("{t}\nmore\n")).unwrap();
+            f.import(None, false).await;
+            assert_eq!(git(&f.root, &["log", "--format=%H"]), log);
+            assert_eq!(std::fs::read(f.root.join(".git/index")).unwrap(), index);
+        })
     }
 
     // ---- statuses, files that follow the graph, hand edits and conflicts ----
@@ -3312,10 +3320,10 @@ pub(crate) mod tests {
 
     /// P's text with FROM replaced by TO, written back.  Returns the new text.
     fn edit(p: &Path, from: &str, to: &str) -> String {
-        let t = std::fs::read_to_string(p).unwrap();
+        let t = crate::fsio::read_to_string(p).unwrap();
         assert!(t.contains(from), "{from:?} not in the view");
         let n = t.replacen(from, to, 1);
-        std::fs::write(p, &n).unwrap();
+        crate::fsio::write(p, &n).unwrap();
         n
     }
 
@@ -3346,11 +3354,12 @@ pub(crate) mod tests {
         .unwrap();
     }
 
-    #[tokio::test]
-    async fn statuses_are_the_graphs_words() {
-        let f = fix();
-        f.import(None, false).await;
-        let all: Vec<String> = f
+    #[test]
+    fn statuses_are_the_graphs_words() {
+        saman::block_on_current(async move {
+            let f = fix();
+            f.import(None, false).await;
+            let all: Vec<String> = f
             .db
             .read(|c| {
                 let mut st = c.prepare(
@@ -3362,13 +3371,14 @@ pub(crate) mod tests {
             })
             .await
             .unwrap();
-        assert!(!all.is_empty());
-        for s in &all {
-            assert!(status::STATUSES.contains(&s.as_str()), "{s}");
-        }
-        assert_eq!(row_status(&f, "M1-1%").await, "done");
-        assert_eq!(row_status(&f, "M1-2%").await, "open");
-        assert_eq!(row_status(&f, "M2-1%").await, "done");
+            assert!(!all.is_empty());
+            for s in &all {
+                assert!(status::STATUSES.contains(&s.as_str()), "{s}");
+            }
+            assert_eq!(row_status(&f, "M1-1%").await, "done");
+            assert_eq!(row_status(&f, "M1-2%").await, "open");
+            assert_eq!(row_status(&f, "M2-1%").await, "done");
+        })
     }
 
     /// A task's `data.ledger` (as text), or "none".
@@ -3389,40 +3399,42 @@ pub(crate) mod tests {
     /// The scan's other ledger: `.superpowers/sdd/<plan>/progress.md`, named for its plan by its first line (a path
     /// relative to the repository, here the project root).  Found by the import, it marks its plan's tasks as a
     /// `X.ledger.md` beside the plan does (the Lisp scan's `drgnx-work--classify` and `drgnx-work--ledger-plan`).
-    #[tokio::test]
-    async fn an_sdd_progress_ledger_is_named_for_its_plan_by_its_first_line() {
-        let f = fix();
-        let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [x] b\n";
-        let pp = f.root.join("docs/plans/drgnx/pair.md");
-        std::fs::write(&pp, plan).unwrap();
-        let dir = f.root.join(".superpowers/sdd/pair");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
+    #[test]
+    fn an_sdd_progress_ledger_is_named_for_its_plan_by_its_first_line() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [x] b\n";
+            let pp = f.root.join("docs/plans/drgnx/pair.md");
+            crate::fsio::write(&pp, plan).unwrap();
+            let dir = f.root.join(".superpowers/sdd/pair");
+            std::fs::create_dir_all(&dir).unwrap();
+            crate::fsio::write(
             dir.join("progress.md"),
             "# SDD ledger — plan: docs/plans/drgnx/pair.md\nTask 1: complete (commit abc1234, tests ok)\n",
         )
         .unwrap();
-        // a progress.md outside .superpowers/sdd is no ledger
-        std::fs::create_dir_all(f.root.join("notes")).unwrap();
-        std::fs::write(
+            // a progress.md outside .superpowers/sdd is no ledger
+            std::fs::create_dir_all(f.root.join("notes")).unwrap();
+            crate::fsio::write(
             f.root.join("notes/progress.md"),
             "# SDD ledger — plan: docs/plans/drgnx/pair.md\nTask 2: complete (commit 1234567)\n",
         )
         .unwrap();
-        f.import(None, false).await;
-        let one: Value = serde_json::from_str(&ledger_of(&f, "1").await).unwrap();
-        assert_eq!(one["done"], true, "{one}");
-        assert_eq!(one["commits"], json!(["abc1234"]));
-        assert!(
-            one["file"]
-                .as_str()
-                .unwrap()
-                .ends_with(".superpowers/sdd/pair/progress.md"),
-            "{one}"
-        );
-        assert_eq!(ledger_of(&f, "2").await, "none");
-        // the plan's text is untouched
-        assert_eq!(std::fs::read_to_string(&pp).unwrap(), plan);
+            f.import(None, false).await;
+            let one: Value = serde_json::from_str(&ledger_of(&f, "1").await).unwrap();
+            assert_eq!(one["done"], true, "{one}");
+            assert_eq!(one["commits"], json!(["abc1234"]));
+            assert!(
+                one["file"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with(".superpowers/sdd/pair/progress.md"),
+                "{one}"
+            );
+            assert_eq!(ledger_of(&f, "2").await, "none");
+            // the plan's text is untouched
+            assert_eq!(crate::fsio::read_to_string(&pp).unwrap(), plan);
+        })
     }
 
     /// `(title, parent's role and number)` of the live rulings, by title.
@@ -3446,88 +3458,92 @@ pub(crate) mod tests {
 
     /// `Ruling:` lines of a ledger (bare, or after `Task N...: `) are rulings under their task, else under the plan;
     /// one that goes from the ledger is retired (`drgnx-work--parse-ledger`).
-    #[tokio::test]
-    async fn a_ledgers_ruling_lines_are_rulings_under_their_task_or_plan() {
-        let f = fix();
-        let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [ ] b\n";
-        let (pp, lp) = (
-            f.root.join("docs/plans/drgnx/pair.md"),
-            f.root.join("docs/plans/drgnx/pair.ledger.md"),
-        );
-        std::fs::write(&pp, plan).unwrap();
-        std::fs::write(
+    #[test]
+    fn a_ledgers_ruling_lines_are_rulings_under_their_task_or_plan() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [ ] b\n";
+            let (pp, lp) = (
+                f.root.join("docs/plans/drgnx/pair.md"),
+                f.root.join("docs/plans/drgnx/pair.ledger.md"),
+            );
+            crate::fsio::write(&pp, plan).unwrap();
+            crate::fsio::write(
             &lp,
             "# SDD ledger — plan: pair.md\nRuling: the tables stay\nTask 2 (b): Ruling: no cache\nTask 9: Ruling: no such task\n",
         )
         .unwrap();
-        f.import(None, false).await;
-        let got = rulings(&f).await;
-        let titles: Vec<&str> = got.iter().map(|r| r.0.as_str()).collect();
-        assert_eq!(
-            titles,
-            ["no cache", "no such task", "the tables stay"],
-            "{got:?}"
-        );
-        // a ruling under a task the plan has is under that task; any other is under the plan's head
-        assert_eq!(got[0].1, "task", "{got:?}");
-        assert_eq!(got[0].2, "2", "{got:?}");
-        assert_eq!(got[1].1, got[2].1, "{got:?}");
-        assert_ne!(got[1].1, "task", "{got:?}");
-        // the line goes: its ruling is retired, the others stay, a second import changes nothing
-        std::fs::write(
-            &lp,
-            "# SDD ledger — plan: pair.md\nRuling: the tables stay\n",
-        )
-        .unwrap();
-        f.import(None, false).await;
-        let got = rulings(&f).await;
-        assert_eq!(got.len(), 1, "{got:?}");
-        assert_eq!(got[0].0, "the tables stay");
+            f.import(None, false).await;
+            let got = rulings(&f).await;
+            let titles: Vec<&str> = got.iter().map(|r| r.0.as_str()).collect();
+            assert_eq!(
+                titles,
+                ["no cache", "no such task", "the tables stay"],
+                "{got:?}"
+            );
+            // a ruling under a task the plan has is under that task; any other is under the plan's head
+            assert_eq!(got[0].1, "task", "{got:?}");
+            assert_eq!(got[0].2, "2", "{got:?}");
+            assert_eq!(got[1].1, got[2].1, "{got:?}");
+            assert_ne!(got[1].1, "task", "{got:?}");
+            // the line goes: its ruling is retired, the others stay, a second import changes nothing
+            crate::fsio::write(
+                &lp,
+                "# SDD ledger — plan: pair.md\nRuling: the tables stay\n",
+            )
+            .unwrap();
+            f.import(None, false).await;
+            let got = rulings(&f).await;
+            assert_eq!(got.len(), 1, "{got:?}");
+            assert_eq!(got[0].0, "the tables stay");
+        })
     }
 
     /// The plans' board items: a board TODO whose `:PLAN_FILE:` names a plan the import holds is `parent_of`-linked from
     /// that plan (a relative name is read from the nearest `:PROJECT_ROOT:` above it); drop the property and the link
     /// is retired (`drgnx-work--parse-board`).
-    #[tokio::test]
-    async fn a_board_todo_with_a_plan_file_is_linked_from_its_plan() {
-        let f = fix();
-        let pp = f.root.join("docs/plans/drgnx/pair.md");
-        std::fs::write(&pp, "# Pair\n\n### Task 1: one\n\n- [ ] a\n").unwrap();
-        let board = |plan_line: &str| {
-            format!(
-                "* Proj\n:PROPERTIES:\n:PROJECT_ROOT: {}\n:END:\n** TODO build it\n:PROPERTIES:\n{plan_line}:END:\n** TODO unrelated\n** TODO absolute\n:PROPERTIES:\n:PLAN_FILE: {}\n:END:\n",
-                f.root.display(),
-                pp.display()
-            )
-        };
-        let bp = f.root.join("board.org");
-        std::fs::write(&bp, board(":PLAN_FILE: docs/plans/drgnx/pair.md\n")).unwrap();
-        f.import(Some(RecordKind::Plans), false).await;
-        f.import(Some(RecordKind::Board), false).await;
-        let linked = |f: &Fix| {
-            let q = "select e.title from link l join entity p on p.n = l.src join entity e on e.n = l.dst \
+    #[test]
+    fn a_board_todo_with_a_plan_file_is_linked_from_its_plan() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let pp = f.root.join("docs/plans/drgnx/pair.md");
+            crate::fsio::write(&pp, "# Pair\n\n### Task 1: one\n\n- [ ] a\n").unwrap();
+            let board = |plan_line: &str| {
+                format!(
+                    "* Proj\n:PROPERTIES:\n:PROJECT_ROOT: {}\n:END:\n** TODO build it\n:PROPERTIES:\n{plan_line}:END:\n** TODO unrelated\n** TODO absolute\n:PROPERTIES:\n:PLAN_FILE: {}\n:END:\n",
+                    f.root.display(),
+                    pp.display()
+                )
+            };
+            let bp = f.root.join("board.org");
+            crate::fsio::write(&bp, board(":PLAN_FILE: docs/plans/drgnx/pair.md\n")).unwrap();
+            f.import(Some(RecordKind::Plans), false).await;
+            f.import(Some(RecordKind::Board), false).await;
+            let linked = |f: &Fix| {
+                let q = "select e.title from link l join entity p on p.n = l.src join entity e on e.n = l.dst \
                      where l.kind = 'parent_of' and l.tx_to = ?1 and p.title = 'Pair' and e.kind = 'task' \
                      and json_extract(e.data, '$.records.role') = 'item' order by e.title";
-            let db = f.db.clone();
-            async move {
-                db.read(move |c| {
-                    let mut st = c.prepare(q)?;
-                    let r = st
-                        .query_map([urdr::graph::schema::SENTINEL], |r| r.get::<_, String>(0))?
-                        .collect::<Result<Vec<_>, _>>()?;
-                    Ok(r)
-                })
-                .await
-                .unwrap()
-            }
-        };
-        assert_eq!(linked(&f).await, ["absolute", "build it"]);
-        // a second import writes nothing, and the property going retires its link
-        let again = f.import(Some(RecordKind::Board), false).await;
-        assert!(again.files.iter().all(|x| x.ops == 0), "{again:?}");
-        std::fs::write(&bp, board("")).unwrap();
-        f.import(Some(RecordKind::Board), false).await;
-        assert_eq!(linked(&f).await, ["absolute"]);
+                let db = f.db.clone();
+                async move {
+                    db.read(move |c| {
+                        let mut st = c.prepare(q)?;
+                        let r = st
+                            .query_map([urdr::graph::schema::SENTINEL], |r| r.get::<_, String>(0))?
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok(r)
+                    })
+                    .await
+                    .unwrap()
+                }
+            };
+            assert_eq!(linked(&f).await, ["absolute", "build it"]);
+            // a second import writes nothing, and the property going retires its link
+            let again = f.import(Some(RecordKind::Board), false).await;
+            assert!(again.files.iter().all(|x| x.ops == 0), "{again:?}");
+            crate::fsio::write(&bp, board("")).unwrap();
+            f.import(Some(RecordKind::Board), false).await;
+            assert_eq!(linked(&f).await, ["absolute"]);
+        })
     }
 
     /// The files the import finds in a tree that holds what the Lisp scan's walk met: plans and specs outside `docs/`, a
@@ -3541,7 +3557,7 @@ pub(crate) mod tests {
         let w = |rel: &str, text: &str| {
             let p = root.join(rel);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(p, text).unwrap();
+            crate::fsio::write(p, text).unwrap();
         };
         let plan = "# P\n\n### Task 1: a\n\n- [ ] x\n";
         let ledger = "# SDD ledger — plan: x.md\n";
@@ -3580,7 +3596,7 @@ pub(crate) mod tests {
         w("wt/docs/plans/copy.ledger.md", ledger);
         // a link is not followed
         std::fs::create_dir_all(dir.path().join("outside/plans")).unwrap();
-        std::fs::write(dir.path().join("outside/plans/o.md"), plan).unwrap();
+        crate::fsio::write(dir.path().join("outside/plans/o.md"), plan).unwrap();
         std::os::unix::fs::symlink(dir.path().join("outside"), root.join("linked")).unwrap();
         let mut got: Vec<String> = discover(&root, None, &Ignore::load(&root).unwrap())
             .into_iter()
@@ -3606,51 +3622,53 @@ pub(crate) mod tests {
         assert_eq!(got, want, "{got:#?}");
     }
 
-    #[tokio::test]
-    async fn a_ledger_marks_its_plans_tasks_without_ticking_the_plan() {
-        let f = fix();
-        let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [x] b\n\n### Task 3: three\n\n- [ ] c\n";
-        let ledger = "# SDD ledger — plan: pair.md\nTask 1: complete (commit abc1234, tests ok)\nTask 2: complete (commits 1111111..2222222)\n";
-        let (pp, lp) = (
-            f.root.join("docs/plans/drgnx/pair.md"),
-            f.root.join("docs/plans/drgnx/pair.ledger.md"),
-        );
-        std::fs::write(&pp, plan).unwrap();
-        std::fs::write(&lp, ledger).unwrap();
-        f.import(Some(RecordKind::Plans), false).await;
-        f.import(Some(RecordKind::Ledgers), false).await;
-        // task 1: the ledger is ahead of its unchecked steps; task 2: both agree; task 3: unmarked
-        let one: Value = serde_json::from_str(&ledger_of(&f, "1").await).unwrap();
-        assert_eq!(one["done"], true);
-        assert_eq!(one["ahead"], true);
-        assert_eq!(one["commits"], json!(["abc1234"]));
-        let two: Value = serde_json::from_str(&ledger_of(&f, "2").await).unwrap();
-        assert_eq!(
-            (two["done"].clone(), two["ahead"].clone()),
-            (json!(true), json!(false))
-        );
-        assert_eq!(two["commits"], json!(["1111111", "2222222"]));
-        assert_eq!(ledger_of(&f, "3").await, "none");
-        // the ledger never ticks the plan's boxes, and a second import changes nothing
-        assert_eq!(std::fs::read_to_string(&pp).unwrap(), plan);
-        let again = f.import(None, false).await;
-        assert!(
-            again
-                .files
-                .iter()
-                .filter(|r| r.path.contains("/pair"))
-                .all(|r| r.ops == 0),
-            "{again:?}"
-        );
-        // the ledger loses its first line: that task has no mark any more, found by a sync of the ledger alone
-        std::fs::write(
-            &lp,
-            "# SDD ledger — plan: pair.md\nTask 2: complete (commits 1111111..2222222)\n",
-        )
-        .unwrap();
-        f.sync(&lp).await;
-        assert_eq!(ledger_of(&f, "1").await, "none");
-        assert_ne!(ledger_of(&f, "2").await, "none");
+    #[test]
+    fn a_ledger_marks_its_plans_tasks_without_ticking_the_plan() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [x] b\n\n### Task 3: three\n\n- [ ] c\n";
+            let ledger = "# SDD ledger — plan: pair.md\nTask 1: complete (commit abc1234, tests ok)\nTask 2: complete (commits 1111111..2222222)\n";
+            let (pp, lp) = (
+                f.root.join("docs/plans/drgnx/pair.md"),
+                f.root.join("docs/plans/drgnx/pair.ledger.md"),
+            );
+            crate::fsio::write(&pp, plan).unwrap();
+            crate::fsio::write(&lp, ledger).unwrap();
+            f.import(Some(RecordKind::Plans), false).await;
+            f.import(Some(RecordKind::Ledgers), false).await;
+            // task 1: the ledger is ahead of its unchecked steps; task 2: both agree; task 3: unmarked
+            let one: Value = serde_json::from_str(&ledger_of(&f, "1").await).unwrap();
+            assert_eq!(one["done"], true);
+            assert_eq!(one["ahead"], true);
+            assert_eq!(one["commits"], json!(["abc1234"]));
+            let two: Value = serde_json::from_str(&ledger_of(&f, "2").await).unwrap();
+            assert_eq!(
+                (two["done"].clone(), two["ahead"].clone()),
+                (json!(true), json!(false))
+            );
+            assert_eq!(two["commits"], json!(["1111111", "2222222"]));
+            assert_eq!(ledger_of(&f, "3").await, "none");
+            // the ledger never ticks the plan's boxes, and a second import changes nothing
+            assert_eq!(crate::fsio::read_to_string(&pp).unwrap(), plan);
+            let again = f.import(None, false).await;
+            assert!(
+                again
+                    .files
+                    .iter()
+                    .filter(|r| r.path.contains("/pair"))
+                    .all(|r| r.ops == 0),
+                "{again:?}"
+            );
+            // the ledger loses its first line: that task has no mark any more, found by a sync of the ledger alone
+            crate::fsio::write(
+                &lp,
+                "# SDD ledger — plan: pair.md\nTask 2: complete (commits 1111111..2222222)\n",
+            )
+            .unwrap();
+            f.sync(&lp).await;
+            assert_eq!(ledger_of(&f, "1").await, "none");
+            assert_ne!(ledger_of(&f, "2").await, "none");
+        })
     }
 
     /// The live `implements` links: (commit id, task title, origin, source).
@@ -3671,61 +3689,63 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    #[tokio::test]
-    async fn a_ledgers_commits_become_implements_links_of_the_importers_task() {
-        let f = fix();
-        let repo = f.root.clone();
-        let git = |args: &[&str]| {
-            let o = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&repo)
-                .args(["-c", "user.name=t", "-c", "user.email=t@t.invalid"])
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(o.status.success(), "git {args:?}: {o:?}");
-            String::from_utf8_lossy(&o.stdout).trim().to_owned()
-        };
-        git(&["init", "-q"]);
-        std::fs::write(repo.join("a"), "1").unwrap();
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "first"]);
-        let first = git(&["rev-parse", "HEAD"]);
-        std::fs::write(repo.join("a"), "2").unwrap();
-        git(&["commit", "-q", "-am", "second"]);
-        let second = git(&["rev-parse", "HEAD"]);
-        let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [ ] b\n";
-        let ledger = format!(
-            "# SDD ledger — plan: pair.md\nTask 1: complete (commits {}..{}, tests ok)\n",
-            &first[..9],
-            &second[..9]
-        );
-        let (pp, lp) = (
-            f.root.join("docs/plans/drgnx/pair.md"),
-            f.root.join("docs/plans/drgnx/pair.ledger.md"),
-        );
-        std::fs::write(&pp, plan).unwrap();
-        std::fs::write(&lp, &ledger).unwrap();
-        f.import(Some(RecordKind::Plans), false).await;
-        f.import(Some(RecordKind::Ledgers), false).await;
-        // the range A..B is the commits after A up to B: the second commit, on task 1, from the ledger
-        let got = implements_of(&f).await;
-        assert_eq!(got.len(), 1, "{got:?}");
-        assert_eq!(got[0].0, format!("commit:{second}"));
-        assert!(got[0].1.starts_with("1 "), "{got:?}");
-        assert_eq!(got[0].2, "inferred");
-        assert_eq!(got[0].3, lp.to_string_lossy());
-        // a second import asks nothing and changes nothing
-        f.import(None, false).await;
-        assert_eq!(implements_of(&f).await.len(), 1);
-        // the ledger no longer names it: the link goes
-        std::fs::write(&lp, "# SDD ledger — plan: pair.md\n").unwrap();
-        f.sync(&lp).await;
-        assert!(implements_of(&f).await.is_empty());
+    #[test]
+    fn a_ledgers_commits_become_implements_links_of_the_importers_task() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let repo = f.root.clone();
+            let git = |args: &[&str]| {
+                let o = crate::proc::Command::new("git")
+                    .arg("-C")
+                    .arg(&repo)
+                    .args(["-c", "user.name=t", "-c", "user.email=t@t.invalid"])
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(o.status.success(), "git {args:?}: {o:?}");
+                String::from_utf8_lossy(&o.stdout).trim().to_owned()
+            };
+            git(&["init", "-q"]);
+            crate::fsio::write(repo.join("a"), "1").unwrap();
+            git(&["add", "-A"]);
+            git(&["commit", "-q", "-m", "first"]);
+            let first = git(&["rev-parse", "HEAD"]);
+            crate::fsio::write(repo.join("a"), "2").unwrap();
+            git(&["commit", "-q", "-am", "second"]);
+            let second = git(&["rev-parse", "HEAD"]);
+            let plan = "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [ ] b\n";
+            let ledger = format!(
+                "# SDD ledger — plan: pair.md\nTask 1: complete (commits {}..{}, tests ok)\n",
+                &first[..9],
+                &second[..9]
+            );
+            let (pp, lp) = (
+                f.root.join("docs/plans/drgnx/pair.md"),
+                f.root.join("docs/plans/drgnx/pair.ledger.md"),
+            );
+            crate::fsio::write(&pp, plan).unwrap();
+            crate::fsio::write(&lp, &ledger).unwrap();
+            f.import(Some(RecordKind::Plans), false).await;
+            f.import(Some(RecordKind::Ledgers), false).await;
+            // the range A..B is the commits after A up to B: the second commit, on task 1, from the ledger
+            let got = implements_of(&f).await;
+            assert_eq!(got.len(), 1, "{got:?}");
+            assert_eq!(got[0].0, format!("commit:{second}"));
+            assert!(got[0].1.starts_with("1 "), "{got:?}");
+            assert_eq!(got[0].2, "inferred");
+            assert_eq!(got[0].3, lp.to_string_lossy());
+            // a second import asks nothing and changes nothing
+            f.import(None, false).await;
+            assert_eq!(implements_of(&f).await.len(), 1);
+            // the ledger no longer names it: the link goes
+            crate::fsio::write(&lp, "# SDD ledger — plan: pair.md\n").unwrap();
+            f.sync(&lp).await;
+            assert!(implements_of(&f).await.is_empty());
+        })
     }
 
     fn gitc(repo: &Path, args: &[&str]) -> String {
-        let o = std::process::Command::new("git")
+        let o = crate::proc::Command::new("git")
             .arg("-C")
             .arg(repo)
             .args(["-c", "user.name=t", "-c", "user.email=t@t.invalid"])
@@ -3754,49 +3774,52 @@ pub(crate) mod tests {
 
     /// A spec two plans name is derived by both; a plan with no spec derives nothing and stays a root
     /// (`plans-without-a-spec-and-specs-of-two-plans`).
-    #[tokio::test]
-    async fn a_spec_of_two_plans_and_a_plan_without_one() {
-        let f = fix();
-        let w = |rel: &str, text: &str| {
-            let p = f.root.join(rel);
-            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(p, text).unwrap();
-        };
-        w("docs/specs/drgnx/s.md", "# The spec\n");
-        w(
-            "docs/plans/drgnx/one.md",
-            "# One\n\n**Spec:** `docs/specs/drgnx/s.md`\n\n### Task 1: a\n\n- [ ] x\n",
-        );
-        w(
-            "docs/plans/drgnx/two.md",
-            "# Two\n\n**Spec:** `docs/specs/drgnx/s.md`\n\n### Task 1: a\n\n- [ ] x\n",
-        );
-        w(
-            "docs/plans/drgnx/lone.md",
-            "# Lone\n\n### Task 1: a\n\n- [ ] x\n",
-        );
-        f.import(None, false).await;
-        let got = derives_of(&f).await;
-        assert!(got.contains(&("One".into(), "The spec".into())), "{got:?}");
-        assert!(got.contains(&("Two".into(), "The spec".into())), "{got:?}");
-        assert!(!got.iter().any(|(p, _)| p == "Lone"), "{got:?}");
+    #[test]
+    fn a_spec_of_two_plans_and_a_plan_without_one() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let w = |rel: &str, text: &str| {
+                let p = f.root.join(rel);
+                std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+                crate::fsio::write(p, text).unwrap();
+            };
+            w("docs/specs/drgnx/s.md", "# The spec\n");
+            w(
+                "docs/plans/drgnx/one.md",
+                "# One\n\n**Spec:** `docs/specs/drgnx/s.md`\n\n### Task 1: a\n\n- [ ] x\n",
+            );
+            w(
+                "docs/plans/drgnx/two.md",
+                "# Two\n\n**Spec:** `docs/specs/drgnx/s.md`\n\n### Task 1: a\n\n- [ ] x\n",
+            );
+            w(
+                "docs/plans/drgnx/lone.md",
+                "# Lone\n\n### Task 1: a\n\n- [ ] x\n",
+            );
+            f.import(None, false).await;
+            let got = derives_of(&f).await;
+            assert!(got.contains(&("One".into(), "The spec".into())), "{got:?}");
+            assert!(got.contains(&("Two".into(), "The spec".into())), "{got:?}");
+            assert!(!got.iter().any(|(p, _)| p == "Lone"), "{got:?}");
+        })
     }
 
     /// A plan task's status line is its status; a word that is no status stays text, the ticks decide, and the import
     /// report names the file, the task and the word.
-    #[tokio::test]
-    async fn a_status_line_sets_the_status_and_an_unknown_word_is_reported() {
-        let f = fix();
-        std::fs::write(
+    #[test]
+    fn a_status_line_sets_the_status_and_an_unknown_word_is_reported() {
+        saman::block_on_current(async move {
+            let f = fix();
+            crate::fsio::write(
             f.root.join("docs/plans/drgnx/lines.md"),
             "# Lines\n\n### Task 1: a\n\n**Status:** blocked \u{2014} waits\n\n- [ ] a\n\n### Task 2: b\n\n**Status:** wibble\n\n- [ ] a\n\n### Task 3: c\n\n**Status:** accepted\n\nProse.\n",
         )
         .unwrap();
-        let r = f.import(None, false).await;
-        let status = |n: &'static str| {
-            let db = f.db.clone();
-            async move {
-                db.read(move |c| {
+            let r = f.import(None, false).await;
+            let status = |n: &'static str| {
+                let db = f.db.clone();
+                async move {
+                    db.read(move |c| {
                     Ok(c.query_row(
                         "select coalesce(status, '') from entity where kind = 'task' and retired_tx is null \
                          and json_extract(data, '$.number') = ?1 and json_extract(data, '$.records.file') like '%/lines.md'",
@@ -3806,35 +3829,37 @@ pub(crate) mod tests {
                 })
                 .await
                 .unwrap()
-            }
-        };
-        assert_eq!(status("1").await, "blocked");
-        assert_eq!(status("2").await, "open");
-        assert_eq!(status("3").await, "accepted");
-        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
-        assert!(
-            r.warnings[0].contains("lines.md")
-                && r.warnings[0].contains("task 2")
-                && r.warnings[0].contains("wibble"),
-            "{:?}",
-            r.warnings
-        );
+                }
+            };
+            assert_eq!(status("1").await, "blocked");
+            assert_eq!(status("2").await, "open");
+            assert_eq!(status("3").await, "accepted");
+            assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+            assert!(
+                r.warnings[0].contains("lines.md")
+                    && r.warnings[0].contains("task 2")
+                    && r.warnings[0].contains("wibble"),
+                "{:?}",
+                r.warnings
+            );
+        })
     }
 
     /// A task whose steps are all ticked is done, one with an open step is not (`steps-of-a-completed-task-count-as-done`).
-    #[tokio::test]
-    async fn a_task_with_every_step_ticked_is_done() {
-        let f = fix();
-        std::fs::write(
+    #[test]
+    fn a_task_with_every_step_ticked_is_done() {
+        saman::block_on_current(async move {
+            let f = fix();
+            crate::fsio::write(
             f.root.join("docs/plans/drgnx/steps.md"),
             "# Steps\n\n### Task 1: all\n\n- [x] a\n- [x] b\n\n### Task 2: some\n\n- [x] a\n- [ ] b\n",
         )
         .unwrap();
-        f.import(None, false).await;
-        let status = |n: &'static str| {
-            let db = f.db.clone();
-            async move {
-                db.read(move |c| {
+            f.import(None, false).await;
+            let status = |n: &'static str| {
+                let db = f.db.clone();
+                async move {
+                    db.read(move |c| {
                     Ok(c.query_row(
                         "select coalesce(status, '') from entity where kind = 'task' and retired_tx is null \
                          and json_extract(data, '$.number') = ?1 and json_extract(data, '$.records.file') like '%/steps.md'",
@@ -3844,10 +3869,11 @@ pub(crate) mod tests {
                 })
                 .await
                 .unwrap()
-            }
-        };
-        assert_eq!(status("1").await, "done");
-        assert_ne!(status("2").await, "done");
+                }
+            };
+            assert_eq!(status("1").await, "done");
+            assert_ne!(status("2").await, "done");
+        })
     }
 
     /// A repository with two commits, a plan of two tasks, and a ledger marking task 1 with the second commit; the
@@ -3855,20 +3881,20 @@ pub(crate) mod tests {
     async fn two_commit_fix(f: &Fix, ledger_name: &str) -> (String, String, PathBuf) {
         let repo = f.root.clone();
         gitc(&repo, &["init", "-q"]);
-        std::fs::write(repo.join("a"), "1").unwrap();
+        crate::fsio::write(repo.join("a"), "1").unwrap();
         gitc(&repo, &["add", "-A"]);
         gitc(&repo, &["commit", "-q", "-m", "first"]);
         let first = gitc(&repo, &["rev-parse", "HEAD"]);
-        std::fs::write(repo.join("a"), "2").unwrap();
+        crate::fsio::write(repo.join("a"), "2").unwrap();
         gitc(&repo, &["commit", "-q", "-am", "second"]);
         let second = gitc(&repo, &["rev-parse", "HEAD"]);
-        std::fs::write(
+        crate::fsio::write(
             f.root.join("docs/plans/drgnx/pair.md"),
             "# Pair\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [ ] b\n",
         )
         .unwrap();
         let lp = f.root.join("docs/plans/drgnx").join(ledger_name);
-        std::fs::write(
+        crate::fsio::write(
             &lp,
             format!(
                 "# SDD ledger — plan: pair.md\nTask 1: complete (commits {}..{}, tests ok)\n",
@@ -3882,62 +3908,66 @@ pub(crate) mod tests {
 
     /// A link the hub recorded (origin recorded: a job's commit, a user's) is never retired by a ledger that stops
     /// naming a commit: only the links the ledger made are its to retire (`a-ledger-never-downgrades-a-recorded-link`).
-    #[tokio::test]
-    async fn a_ledger_never_retires_a_recorded_link() {
-        let f = fix();
-        let (_first, second, lp) = two_commit_fix(&f, "pair.ledger.md").await;
-        f.import(None, false).await;
-        // the commit is recorded as well: a link of origin recorded, with the hub as its source
-        let id = format!("commit:{second}");
-        f.db.write(meta(), move |tx| {
-            let c = entity::by_id(tx.sql(), &id)?.unwrap().n;
-            let t: i64 = tx.sql().query_row(
-                "select dst from link where src = ?1 and kind = 'implements' and tx_to = ?2",
-                (c, urdr::graph::schema::SENTINEL),
-                |r| r.get(0),
-            )?;
-            link::add(tx, c, "implements", t, None, Origin::Recorded, Some("job"))?;
-            Ok(())
+    #[test]
+    fn a_ledger_never_retires_a_recorded_link() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let (_first, second, lp) = two_commit_fix(&f, "pair.ledger.md").await;
+            f.import(None, false).await;
+            // the commit is recorded as well: a link of origin recorded, with the hub as its source
+            let id = format!("commit:{second}");
+            f.db.write(meta(), move |tx| {
+                let c = entity::by_id(tx.sql(), &id)?.unwrap().n;
+                let t: i64 = tx.sql().query_row(
+                    "select dst from link where src = ?1 and kind = 'implements' and tx_to = ?2",
+                    (c, urdr::graph::schema::SENTINEL),
+                    |r| r.get(0),
+                )?;
+                link::add(tx, c, "implements", t, None, Origin::Recorded, Some("job"))?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+            crate::fsio::write(&lp, "# SDD ledger — plan: pair.md\n").unwrap();
+            f.sync(&lp).await;
+            let got = implements_of(&f).await;
+            assert_eq!(got.len(), 1, "{got:?}");
+            assert_eq!(got[0].2, "recorded", "{got:?}");
         })
-        .await
-        .unwrap();
-        std::fs::write(&lp, "# SDD ledger — plan: pair.md\n").unwrap();
-        f.sync(&lp).await;
-        let got = implements_of(&f).await;
-        assert_eq!(got.len(), 1, "{got:?}");
-        assert_eq!(got[0].2, "recorded", "{got:?}");
     }
 
     /// A commit two ledgers name keeps its link from the one that still does when the other stops
     /// (`a-commit-two-ledgers-name-stays-when-either-goes`).
-    #[tokio::test]
-    async fn a_commit_two_ledgers_name_stays_when_either_goes() {
-        let f = fix();
-        let (_first, second, lp) = two_commit_fix(&f, "pair.ledger.md").await;
-        let sdd = f.root.join(".superpowers/sdd/pair");
-        std::fs::create_dir_all(&sdd).unwrap();
-        let text = std::fs::read_to_string(&lp).unwrap();
-        let named = text.replacen(
-            "plan: pair.md",
-            &format!(
-                "plan: {}",
-                f.root.join("docs/plans/drgnx/pair.md").display()
-            ),
-            1,
-        );
-        std::fs::write(sdd.join("progress.md"), named).unwrap();
-        f.import(None, false).await;
-        let got = implements_of(&f).await;
-        assert_eq!(got.len(), 1, "one link (a link has one source): {got:?}");
-        std::fs::write(&lp, "# SDD ledger — plan: pair.md\n").unwrap();
-        f.sync(&lp).await;
-        let got = implements_of(&f).await;
-        assert_eq!(got.len(), 1, "{got:?}");
-        assert!(
-            got[0].3.ends_with(".superpowers/sdd/pair/progress.md"),
-            "{got:?}"
-        );
-        assert_eq!(got[0].0, format!("commit:{second}"));
+    #[test]
+    fn a_commit_two_ledgers_name_stays_when_either_goes() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let (_first, second, lp) = two_commit_fix(&f, "pair.ledger.md").await;
+            let sdd = f.root.join(".superpowers/sdd/pair");
+            std::fs::create_dir_all(&sdd).unwrap();
+            let text = crate::fsio::read_to_string(&lp).unwrap();
+            let named = text.replacen(
+                "plan: pair.md",
+                &format!(
+                    "plan: {}",
+                    f.root.join("docs/plans/drgnx/pair.md").display()
+                ),
+                1,
+            );
+            crate::fsio::write(sdd.join("progress.md"), named).unwrap();
+            f.import(None, false).await;
+            let got = implements_of(&f).await;
+            assert_eq!(got.len(), 1, "one link (a link has one source): {got:?}");
+            crate::fsio::write(&lp, "# SDD ledger — plan: pair.md\n").unwrap();
+            f.sync(&lp).await;
+            let got = implements_of(&f).await;
+            assert_eq!(got.len(), 1, "{got:?}");
+            assert!(
+                got[0].3.ends_with(".superpowers/sdd/pair/progress.md"),
+                "{got:?}"
+            );
+            assert_eq!(got[0].0, format!("commit:{second}"));
+        })
     }
 
     /// Live entities (not retired) whose source is FILE's.
@@ -3956,47 +3986,50 @@ pub(crate) mod tests {
 
     /// A file that left (deleted, or no longer a record) is forgotten: its entities are retired
     /// (`a-rescan-reads-only-what-changed-and-forgets-what-left`).
-    #[tokio::test]
-    async fn a_file_that_left_is_forgotten() {
-        let f = fix();
-        let p = f.root.join("docs/plans/drgnx/gone.md");
-        std::fs::write(&p, "# Gone\n\n### Task 1: a\n\n- [ ] x\n").unwrap();
-        f.import(None, false).await;
-        assert!(live_of(&f, &p).await > 0);
-        std::fs::remove_file(&p).unwrap();
-        f.import(None, false).await;
-        assert_eq!(live_of(&f, &p).await, 0);
+    #[test]
+    fn a_file_that_left_is_forgotten() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let p = f.root.join("docs/plans/drgnx/gone.md");
+            crate::fsio::write(&p, "# Gone\n\n### Task 1: a\n\n- [ ] x\n").unwrap();
+            f.import(None, false).await;
+            assert!(live_of(&f, &p).await > 0);
+            std::fs::remove_file(&p).unwrap();
+            f.import(None, false).await;
+            assert_eq!(live_of(&f, &p).await, 0);
+        })
     }
 
     /// A file written again within the clock tick of its last read (the same size and time) is read again: the
     /// hash of its text decides (`a-file-changed-while-it-is-read-is-read-again`).
-    #[tokio::test]
-    async fn a_file_changed_inside_one_tick_is_read_again() {
-        let f = fix();
-        let p = f.root.join("docs/plans/drgnx/tick.md");
-        std::fs::write(&p, "# Tick\n\n### Task 1: a\n\n- [ ] x\n").unwrap();
-        f.import(None, false).await;
-        let before = std::fs::metadata(&p).unwrap().modified().unwrap();
-        std::fs::write(&p, "# Tick\n\n### Task 1: b\n\n- [ ] x\n").unwrap();
-        std::fs::File::options()
-            .write(true)
-            .open(&p)
-            .unwrap()
-            .set_modified(before)
-            .unwrap();
-        f.views.sync_all(&f.db).await.unwrap();
-        let title: String =
-            f.db.read(|c| {
-                Ok(c.query_row(
-                    "select title from entity where kind = 'task' and retired_tx is null \
+    #[test]
+    fn a_file_changed_inside_one_tick_is_read_again() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let p = f.root.join("docs/plans/drgnx/tick.md");
+            crate::fsio::write(&p, "# Tick\n\n### Task 1: a\n\n- [ ] x\n").unwrap();
+            f.import(None, false).await;
+            let before = std::fs::metadata(&p).unwrap().modified().unwrap();
+            crate::fsio::write(&p, "# Tick\n\n### Task 1: b\n\n- [ ] x\n").unwrap();
+            eitri::open_existing(&p)
+                .map_err(std::io::Error::from)
+                .unwrap()
+                .set_modified(before)
+                .unwrap();
+            f.views.sync_all(&f.db).await.unwrap();
+            let title: String =
+                f.db.read(|c| {
+                    Ok(c.query_row(
+                        "select title from entity where kind = 'task' and retired_tx is null \
                      and json_extract(data, '$.records.file') like '%/tick.md'",
-                    [],
-                    |r| r.get(0),
-                )?)
-            })
-            .await
-            .unwrap();
-        assert!(title.contains('b'), "{title}");
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            assert!(title.contains('b'), "{title}");
+        })
     }
 
     /// `(task number, stale)` of the live tasks of `pair.md`.
@@ -4017,197 +4050,206 @@ pub(crate) mod tests {
     /// A range git does not have marks its task stale, never wrong; commits no branch reaches any more (a rebase,
     /// an amend) are gone and their tasks stale until reachable again
     /// (`a-range-git-no-longer-has-is-stale-never-wrong`, `rewritten-commits-turn-stale-on-the-next-scan`).
-    #[tokio::test]
-    async fn a_range_git_lost_and_rewritten_commits_make_a_task_stale() {
-        let f = fix();
-        let (first, second, lp) = two_commit_fix(&f, "pair.ledger.md").await;
-        let _ = (&first, &second);
-        f.import(None, false).await;
-        assert_eq!(
-            stale_of(&f).await,
-            [("1".into(), "no".into()), ("2".into(), "no".into())]
-        );
-        // the commits are rewritten away: unreachable from every ref
-        gitc(&f.root, &["reset", "-q", "--hard", &first]);
-        f.sync(&lp).await;
-        assert_eq!(
-            stale_of(&f).await,
-            [("1".into(), "1".into()), ("2".into(), "no".into())]
-        );
-        // reachable again: the task is current
-        gitc(&f.root, &["reset", "-q", "--hard", &second]);
-        f.sync(&lp).await;
-        assert_eq!(
-            stale_of(&f).await,
-            [("1".into(), "no".into()), ("2".into(), "no".into())]
-        );
-        // a range git never had: stale at once
-        std::fs::write(
-            &lp,
-            "# SDD ledger — plan: pair.md\nTask 2: complete (commits 1111111..2222222)\n",
-        )
-        .unwrap();
-        f.sync(&lp).await;
-        assert_eq!(
-            stale_of(&f).await,
-            [("1".into(), "no".into()), ("2".into(), "1".into())]
-        );
+    #[test]
+    fn a_range_git_lost_and_rewritten_commits_make_a_task_stale() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let (first, second, lp) = two_commit_fix(&f, "pair.ledger.md").await;
+            let _only_when_used_elsewhere = (&first, &second);
+            f.import(None, false).await;
+            assert_eq!(
+                stale_of(&f).await,
+                [("1".into(), "no".into()), ("2".into(), "no".into())]
+            );
+            // the commits are rewritten away: unreachable from every ref
+            gitc(&f.root, &["reset", "-q", "--hard", &first]);
+            f.sync(&lp).await;
+            assert_eq!(
+                stale_of(&f).await,
+                [("1".into(), "1".into()), ("2".into(), "no".into())]
+            );
+            // reachable again: the task is current
+            gitc(&f.root, &["reset", "-q", "--hard", &second]);
+            f.sync(&lp).await;
+            assert_eq!(
+                stale_of(&f).await,
+                [("1".into(), "no".into()), ("2".into(), "no".into())]
+            );
+            // a range git never had: stale at once
+            crate::fsio::write(
+                &lp,
+                "# SDD ledger — plan: pair.md\nTask 2: complete (commits 1111111..2222222)\n",
+            )
+            .unwrap();
+            f.sync(&lp).await;
+            assert_eq!(
+                stale_of(&f).await,
+                [("1".into(), "no".into()), ("2".into(), "1".into())]
+            );
+        })
     }
 
     /// A ledger that goes (its worktree removed) takes its own links with it and keeps what was recorded; its plan is
     /// read again from what is left (`a-removed-worktree-re-reads-its-plan-and-keeps-recorded-commits`).
-    #[tokio::test]
-    async fn a_ledger_that_goes_keeps_what_was_recorded() {
-        let f = fix();
-        let (_first, second, lp) = two_commit_fix(&f, "pair.ledger.md").await;
-        f.import(None, false).await;
-        let id = format!("commit:{second}");
-        f.db.write(meta(), move |tx| {
-            let c = entity::by_id(tx.sql(), &id)?.unwrap().n;
-            let t: i64 = tx.sql().query_row(
-                "select dst from link where src = ?1 and kind = 'implements' and tx_to = ?2",
-                (c, urdr::graph::schema::SENTINEL),
-                |r| r.get(0),
-            )?;
-            link::add(tx, c, "implements", t, None, Origin::Recorded, Some("job"))?;
-            Ok(())
+    #[test]
+    fn a_ledger_that_goes_keeps_what_was_recorded() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let (_first, second, lp) = two_commit_fix(&f, "pair.ledger.md").await;
+            f.import(None, false).await;
+            let id = format!("commit:{second}");
+            f.db.write(meta(), move |tx| {
+                let c = entity::by_id(tx.sql(), &id)?.unwrap().n;
+                let t: i64 = tx.sql().query_row(
+                    "select dst from link where src = ?1 and kind = 'implements' and tx_to = ?2",
+                    (c, urdr::graph::schema::SENTINEL),
+                    |r| r.get(0),
+                )?;
+                link::add(tx, c, "implements", t, None, Origin::Recorded, Some("job"))?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+            std::fs::remove_file(&lp).unwrap();
+            // the plan alone is read again (a hub change event, not an import): the marks of the ledger that went are gone
+            f.sync(&f.root.join("docs/plans/drgnx/pair.md")).await;
+            assert_eq!(ledger_of(&f, "1").await, "none");
+            f.import(None, false).await;
+            f.views.sync_all(&f.db).await.unwrap();
+            let got = implements_of(&f).await;
+            assert_eq!(got.len(), 1, "{got:?}");
+            assert_eq!(got[0].2, "recorded", "{got:?}");
+            // and the plan no longer says its tasks are marked
+            assert_eq!(ledger_of(&f, "1").await, "none");
         })
-        .await
-        .unwrap();
-        std::fs::remove_file(&lp).unwrap();
-        // the plan alone is read again (a hub change event, not an import): the marks of the ledger that went are gone
-        f.sync(&f.root.join("docs/plans/drgnx/pair.md")).await;
-        assert_eq!(ledger_of(&f, "1").await, "none");
-        f.import(None, false).await;
-        f.views.sync_all(&f.db).await.unwrap();
-        let got = implements_of(&f).await;
-        assert_eq!(got.len(), 1, "{got:?}");
-        assert_eq!(got[0].2, "recorded", "{got:?}");
-        // and the plan no longer says its tasks are marked
-        assert_eq!(ledger_of(&f, "1").await, "none");
     }
 
     /// A plan whose spec is deleted is a root again; a spec outside `specs/` is read while a plan names it and goes
     /// with its last plan; a spec of a sub-repository (named from the plan's own root) is found
     /// (`a-plan-whose-spec-is-deleted-becomes-a-root`, `a-spec-outside-specs-is-read-again-and-goes-with-its-last-plan`,
     /// `a-single-commit-and-a-spec-in-a-sub-repository`).
-    #[tokio::test]
-    async fn a_spec_outside_specs_follows_its_plans() {
-        let f = fix();
-        let w = |rel: &str, text: &str| {
-            let p = f.root.join(rel);
-            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(p, text).unwrap();
-        };
-        w("sub/docs/design/s.md", "# Loose spec\n");
-        w(
-            "sub/docs/plans/x.md",
-            "# Sub plan\n\n**Spec:** `docs/design/s.md`\n\n### Task 1: a\n\n- [ ] x\n",
-        );
-        f.import(None, false).await;
-        assert_eq!(
-            derives_of(&f).await,
-            [("Sub plan".to_owned(), "Loose spec".to_owned())]
-        );
-        // the spec is deleted: the plan is a root
-        std::fs::remove_file(f.root.join("sub/docs/design/s.md")).unwrap();
-        f.import(None, false).await;
-        assert!(derives_of(&f).await.is_empty());
-        // back again, then the plan goes: the spec goes with its last plan
-        w("sub/docs/design/s.md", "# Loose spec\n");
-        f.import(None, false).await;
-        assert_eq!(derives_of(&f).await.len(), 1);
-        std::fs::remove_file(f.root.join("sub/docs/plans/x.md")).unwrap();
-        f.import(None, false).await;
-        assert_eq!(live_of(&f, &f.root.join("sub/docs/design/s.md")).await, 0);
+    #[test]
+    fn a_spec_outside_specs_follows_its_plans() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let w = |rel: &str, text: &str| {
+                let p = f.root.join(rel);
+                std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+                crate::fsio::write(p, text).unwrap();
+            };
+            w("sub/docs/design/s.md", "# Loose spec\n");
+            w(
+                "sub/docs/plans/x.md",
+                "# Sub plan\n\n**Spec:** `docs/design/s.md`\n\n### Task 1: a\n\n- [ ] x\n",
+            );
+            f.import(None, false).await;
+            assert_eq!(
+                derives_of(&f).await,
+                [("Sub plan".to_owned(), "Loose spec".to_owned())]
+            );
+            // the spec is deleted: the plan is a root
+            std::fs::remove_file(f.root.join("sub/docs/design/s.md")).unwrap();
+            f.import(None, false).await;
+            assert!(derives_of(&f).await.is_empty());
+            // back again, then the plan goes: the spec goes with its last plan
+            w("sub/docs/design/s.md", "# Loose spec\n");
+            f.import(None, false).await;
+            assert_eq!(derives_of(&f).await.len(), 1);
+            std::fs::remove_file(f.root.join("sub/docs/plans/x.md")).unwrap();
+            f.import(None, false).await;
+            assert_eq!(live_of(&f, &f.root.join("sub/docs/design/s.md")).await, 0);
+        })
     }
 
     /// A project inside `~/org` is refused whatever was opted in: the user's personal notes are never read, and nothing
     /// of them reaches the graph (`a-root-inside-org-is-refused`).
-    #[tokio::test]
-    async fn a_root_inside_the_users_org_is_refused_and_nothing_is_read() {
-        let f = fix();
-        let home = f._dir.path().join("home");
-        let proj = home.join("org/proj");
-        std::fs::create_dir_all(proj.join("docs/plans")).unwrap();
-        std::fs::write(
-            proj.join("docs/plans/p.md"),
-            "# P\n\n### Task 1: a\n\n- [ ] x\n",
-        )
-        .unwrap();
-        let deny = DenyList::load(&home, &f._dir.path().join("config"));
-        let heard = |_e: ViewEvent| {};
-        let got = import_core(
-            &f.db,
-            &f.views,
-            &f.hub,
-            &proj,
-            None,
-            None,
-            false,
-            Ears {
-                emit: &heard,
-                deny: &deny,
-            },
-        )
-        .await;
-        assert_eq!(got.unwrap_err().message, PERSONAL_NOTES_REFUSAL);
-        assert_eq!(f.count(RECS).await, 0);
-        // a project outside it is read
-        let ok = import_core(
-            &f.db,
-            &f.views,
-            &f.hub,
-            &f.root,
-            None,
-            None,
-            false,
-            Ears {
-                emit: &heard,
-                deny: &deny,
-            },
-        )
-        .await;
-        assert!(ok.is_ok());
+    #[test]
+    fn a_root_inside_the_users_org_is_refused_and_nothing_is_read() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let home = f._dir.path().join("home");
+            let proj = home.join("org/proj");
+            std::fs::create_dir_all(proj.join("docs/plans")).unwrap();
+            crate::fsio::write(
+                proj.join("docs/plans/p.md"),
+                "# P\n\n### Task 1: a\n\n- [ ] x\n",
+            )
+            .unwrap();
+            let deny = DenyList::load(&home, &f._dir.path().join("config"));
+            let heard = |_e: ViewEvent| {};
+            let got = import_core(
+                &f.db,
+                &f.views,
+                &f.hub,
+                &proj,
+                None,
+                None,
+                false,
+                Ears {
+                    emit: &heard,
+                    deny: &deny,
+                },
+            )
+            .await;
+            assert_eq!(got.unwrap_err().message, PERSONAL_NOTES_REFUSAL);
+            assert_eq!(f.count(RECS).await, 0);
+            // a project outside it is read
+            let ok = import_core(
+                &f.db,
+                &f.views,
+                &f.hub,
+                &f.root,
+                None,
+                None,
+                false,
+                Ears {
+                    emit: &heard,
+                    deny: &deny,
+                },
+            )
+            .await;
+            assert!(ok.is_ok());
+        })
     }
 
     /// A spec a plan names inside the user's `~/org` (by its path, or through a link) is not read: the hard tier
     /// denies the file whatever names it (`a-spec-into-org-is-not-sent`, `a-spec-symlink-into-org-is-not-sent`).
-    #[tokio::test]
-    async fn a_spec_a_plan_names_inside_org_is_never_read() {
-        let f = fix();
-        let home = f._dir.path().join("home");
-        std::fs::create_dir_all(home.join("org")).unwrap();
-        let secret = home.join("org/secret.md");
-        std::fs::write(&secret, "# Secret spec\n").unwrap();
-        std::fs::create_dir_all(f.root.join("docs/specs")).unwrap();
-        std::os::unix::fs::symlink(&secret, f.root.join("docs/specs/link.md")).unwrap();
-        std::fs::write(
-            f.root.join("docs/plans/drgnx/named.md"),
-            format!(
-                "# Names it\n\n**Spec:** `{}`\n\n### Task 1: a\n\n- [ ] x\n",
-                secret.display()
-            ),
-        )
-        .unwrap();
-        let deny = DenyList::load(&home, &f._dir.path().join("config"));
-        let heard = |_e: ViewEvent| {};
-        import_core(
-            &f.db,
-            &f.views,
-            &f.hub,
-            &f.root,
-            None,
-            None,
-            false,
-            Ears {
-                emit: &heard,
-                deny: &deny,
-            },
-        )
-        .await
-        .unwrap();
-        let titles: Vec<String> =
+    #[test]
+    fn a_spec_a_plan_names_inside_org_is_never_read() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let home = f._dir.path().join("home");
+            std::fs::create_dir_all(home.join("org")).unwrap();
+            let secret = home.join("org/secret.md");
+            crate::fsio::write(&secret, "# Secret spec\n").unwrap();
+            std::fs::create_dir_all(f.root.join("docs/specs")).unwrap();
+            std::os::unix::fs::symlink(&secret, f.root.join("docs/specs/link.md")).unwrap();
+            crate::fsio::write(
+                f.root.join("docs/plans/drgnx/named.md"),
+                format!(
+                    "# Names it\n\n**Spec:** `{}`\n\n### Task 1: a\n\n- [ ] x\n",
+                    secret.display()
+                ),
+            )
+            .unwrap();
+            let deny = DenyList::load(&home, &f._dir.path().join("config"));
+            let heard = |_e: ViewEvent| {};
+            import_core(
+                &f.db,
+                &f.views,
+                &f.hub,
+                &f.root,
+                None,
+                None,
+                false,
+                Ears {
+                    emit: &heard,
+                    deny: &deny,
+                },
+            )
+            .await
+            .unwrap();
+            let titles: Vec<String> =
             f.db.read(|c| {
                 // a piece without a title (a step, a body) is null: the spec's text would be in either column
                 let mut q = c.prepare(
@@ -4218,118 +4260,125 @@ pub(crate) mod tests {
             })
             .await
             .unwrap();
-        assert!(titles.iter().all(|t| !t.contains("Secret")), "{titles:?}");
-        assert!(
-            titles.iter().any(|t| t.starts_with("Names it ")),
-            "{titles:?}"
-        );
+            assert!(titles.iter().all(|t| !t.contains("Secret")), "{titles:?}");
+            assert!(
+                titles.iter().any(|t| t.starts_with("Names it ")),
+                "{titles:?}"
+            );
+        })
     }
 
     /// A spec in `~/org` the user opted in (`personal-notes-allow.json`) and a plan names is read, as any spec is
     /// (`an-opted-in-spec-in-org-is-read`); the hard tier around it still holds.
-    #[tokio::test]
-    async fn an_opted_in_spec_in_org_that_a_plan_names_is_read() {
-        use std::os::unix::fs::PermissionsExt;
-        let f = fix();
-        let home = f._dir.path().join("home");
-        std::fs::create_dir_all(home.join("org")).unwrap();
-        let reading = home.join("org/reading.md");
-        std::fs::write(&reading, "# Reading spec\n").unwrap();
-        let config = f._dir.path().join("config");
-        std::fs::create_dir_all(&config).unwrap();
-        let allow = config.join("personal-notes-allow.json");
-        std::fs::write(
-            &allow,
-            serde_json::json!({"version": 1, "paths": [reading]}).to_string(),
-        )
-        .unwrap();
-        std::fs::set_permissions(&allow, std::fs::Permissions::from_mode(0o600)).unwrap();
-        std::fs::write(
-            f.root.join("docs/plans/drgnx/reads.md"),
-            format!(
-                "# Reads it\n\n**Spec:** `{}`\n\n### Task 1: a\n\n- [ ] x\n",
-                reading.display()
-            ),
-        )
-        .unwrap();
-        let deny = DenyList::load(&home, &config);
-        assert_eq!(deny.check(&reading), Verdict::OptedIn);
-        let heard = |_e: ViewEvent| {};
-        import_core(
-            &f.db,
-            &f.views,
-            &f.hub,
-            &f.root,
-            None,
-            None,
-            false,
-            Ears {
-                emit: &heard,
-                deny: &deny,
-            },
-        )
-        .await
-        .unwrap();
-        let got = derives_of(&f).await;
-        assert!(
-            got.contains(&("Reads it".into(), "Reading spec".into())),
-            "{got:?}"
-        );
+    #[test]
+    fn an_opted_in_spec_in_org_that_a_plan_names_is_read() {
+        saman::block_on_current(async move {
+            use std::os::unix::fs::PermissionsExt;
+            let f = fix();
+            let home = f._dir.path().join("home");
+            std::fs::create_dir_all(home.join("org")).unwrap();
+            let reading = home.join("org/reading.md");
+            crate::fsio::write(&reading, "# Reading spec\n").unwrap();
+            let config = f._dir.path().join("config");
+            std::fs::create_dir_all(&config).unwrap();
+            let allow = config.join("personal-notes-allow.json");
+            crate::fsio::write(
+                &allow,
+                serde_json::json!({"version": 1, "paths": [reading]}).to_string(),
+            )
+            .unwrap();
+            std::fs::set_permissions(&allow, std::fs::Permissions::from_mode(0o600)).unwrap();
+            crate::fsio::write(
+                f.root.join("docs/plans/drgnx/reads.md"),
+                format!(
+                    "# Reads it\n\n**Spec:** `{}`\n\n### Task 1: a\n\n- [ ] x\n",
+                    reading.display()
+                ),
+            )
+            .unwrap();
+            let deny = DenyList::load(&home, &config);
+            assert_eq!(deny.check(&reading), Verdict::OptedIn);
+            let heard = |_e: ViewEvent| {};
+            import_core(
+                &f.db,
+                &f.views,
+                &f.hub,
+                &f.root,
+                None,
+                None,
+                false,
+                Ears {
+                    emit: &heard,
+                    deny: &deny,
+                },
+            )
+            .await
+            .unwrap();
+            let got = derives_of(&f).await;
+            assert!(
+                got.contains(&("Reads it".into(), "Reading spec".into())),
+                "{got:?}"
+            );
+        })
     }
 
     /// A spec a plan names in Org (`.org`) is followed as a Markdown one is (`an-org-spec-is-followed`).
-    #[tokio::test]
-    async fn an_org_spec_a_plan_names_is_followed() {
-        let f = fix();
-        std::fs::create_dir_all(f.root.join("notes")).unwrap();
-        std::fs::write(f.root.join("notes/s.org"), "# Org spec\n").unwrap();
-        std::fs::write(
-            f.root.join("docs/plans/drgnx/org.md"),
-            "# Org plan\n\n**Spec:** `notes/s.org`\n\n### Task 1: a\n\n- [ ] x\n",
-        )
-        .unwrap();
-        f.import(None, false).await;
-        let got = derives_of(&f).await;
-        assert!(
-            got.contains(&("Org plan".into(), "Org spec".into())),
-            "{got:?}"
-        );
+    #[test]
+    fn an_org_spec_a_plan_names_is_followed() {
+        saman::block_on_current(async move {
+            let f = fix();
+            std::fs::create_dir_all(f.root.join("notes")).unwrap();
+            crate::fsio::write(f.root.join("notes/s.org"), "# Org spec\n").unwrap();
+            crate::fsio::write(
+                f.root.join("docs/plans/drgnx/org.md"),
+                "# Org plan\n\n**Spec:** `notes/s.org`\n\n### Task 1: a\n\n- [ ] x\n",
+            )
+            .unwrap();
+            f.import(None, false).await;
+            let got = derives_of(&f).await;
+            assert!(
+                got.contains(&("Org plan".into(), "Org spec".into())),
+                "{got:?}"
+            );
+        })
     }
 
     /// A spec outside the root keeps its text: its backup goes under `outside/` in the backup folder, never onto the
     /// file itself, and the spec's title and body are what the file says (`a-spec-outside-the-root-keeps-its-text`).
-    #[tokio::test]
-    async fn a_spec_outside_the_root_keeps_its_text_and_is_backed_up_beside() {
-        let f = fix();
-        let elsewhere = f._dir.path().join("elsewhere/s.md");
-        std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
-        std::fs::write(&elsewhere, "# Far spec\n\nIts text.\n").unwrap();
-        std::fs::write(
-            f.root.join("docs/plans/drgnx/far.md"),
-            format!(
-                "# Far plan\n\n**Spec:** `{}`\n\n### Task 1: a\n\n- [ ] x\n",
-                elsewhere.display()
-            ),
-        )
-        .unwrap();
-        let report = f.import(None, false).await;
-        assert_eq!(
-            std::fs::read_to_string(&elsewhere).unwrap(),
-            "# Far spec\n\nIts text.\n"
-        );
-        let backup = PathBuf::from(report.backup.expect("a first import backs up"));
-        let copy = backup
-            .join("outside")
-            .join(elsewhere.strip_prefix("/").unwrap());
-        assert_eq!(
-            std::fs::read_to_string(&copy).unwrap(),
-            "# Far spec\n\nIts text.\n"
-        );
-        let got = derives_of(&f).await;
-        assert!(
-            got.contains(&("Far plan".into(), "Far spec".into())),
-            "{got:?}"
-        );
+    #[test]
+    fn a_spec_outside_the_root_keeps_its_text_and_is_backed_up_beside() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let elsewhere = f._dir.path().join("elsewhere/s.md");
+            std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
+            crate::fsio::write(&elsewhere, "# Far spec\n\nIts text.\n").unwrap();
+            crate::fsio::write(
+                f.root.join("docs/plans/drgnx/far.md"),
+                format!(
+                    "# Far plan\n\n**Spec:** `{}`\n\n### Task 1: a\n\n- [ ] x\n",
+                    elsewhere.display()
+                ),
+            )
+            .unwrap();
+            let report = f.import(None, false).await;
+            assert_eq!(
+                crate::fsio::read_to_string(&elsewhere).unwrap(),
+                "# Far spec\n\nIts text.\n"
+            );
+            let backup = PathBuf::from(report.backup.expect("a first import backs up"));
+            let copy = backup
+                .join("outside")
+                .join(elsewhere.strip_prefix("/").unwrap());
+            assert_eq!(
+                crate::fsio::read_to_string(&copy).unwrap(),
+                "# Far spec\n\nIts text.\n"
+            );
+            let got = derives_of(&f).await;
+            assert!(
+                got.contains(&("Far plan".into(), "Far spec".into())),
+                "{got:?}"
+            );
+        })
     }
 
     /// A backup target that is not inside the backup folder, or is its own source, stops the backup before anything is
@@ -4340,7 +4389,7 @@ pub(crate) mod tests {
         let f = fix();
         let elsewhere = f._dir.path().join("elsewhere/s.md");
         std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
-        std::fs::write(&elsewhere, "# Far spec\n\nIts text.\n").unwrap();
+        crate::fsio::write(&elsewhere, "# Far spec\n\nIts text.\n").unwrap();
         let climbing = f
             .root
             .join("docs")
@@ -4353,7 +4402,7 @@ pub(crate) mod tests {
         ];
         assert!(backup(&f.hub, &f.root, &found, 0.0).is_err());
         assert_eq!(
-            std::fs::read_to_string(&elsewhere).unwrap(),
+            crate::fsio::read_to_string(&elsewhere).unwrap(),
             "# Far spec\n\nIts text.\n"
         );
         assert!(!f.hub.join("records-backup").exists());
@@ -4361,105 +4410,110 @@ pub(crate) mod tests {
 
     /// A spec a plan names through `..` is the record of its plain path, the one a scan finds
     /// (`a-spec-named-through-dot-dot-is-its-plain-path`).
-    #[tokio::test]
-    async fn a_spec_named_through_dot_dot_is_its_plain_path() {
-        let f = fix();
-        std::fs::create_dir_all(f.root.join("notes")).unwrap();
-        std::fs::write(f.root.join("notes/s.md"), "# Dot spec\n").unwrap();
-        std::fs::write(
-            f.root.join("docs/plans/drgnx/dot.md"),
-            "# Dot plan\n\n**Spec:** `../../../notes/s.md`\n\n### Task 1: a\n\n- [ ] x\n",
-        )
-        .unwrap();
-        f.import(None, false).await;
-        let file = f.root.join("notes/s.md").to_string_lossy().into_owned();
-        let n: i64 =
-            f.db.read(move |c| {
-                Ok(c.query_row(
-                    "select count(*) from entity where kind = 'spec' and retired_tx is null \
-                     and json_extract(data, '$.records.file') = ?1",
-                    [file],
-                    |r| r.get(0),
-                )?)
-            })
-            .await
+    #[test]
+    fn a_spec_named_through_dot_dot_is_its_plain_path() {
+        saman::block_on_current(async move {
+            let f = fix();
+            std::fs::create_dir_all(f.root.join("notes")).unwrap();
+            crate::fsio::write(f.root.join("notes/s.md"), "# Dot spec\n").unwrap();
+            crate::fsio::write(
+                f.root.join("docs/plans/drgnx/dot.md"),
+                "# Dot plan\n\n**Spec:** `../../../notes/s.md`\n\n### Task 1: a\n\n- [ ] x\n",
+            )
             .unwrap();
-        assert_eq!(n, 1);
-        let got = derives_of(&f).await;
-        assert!(
-            got.contains(&("Dot plan".into(), "Dot spec".into())),
-            "{got:?}"
-        );
+            f.import(None, false).await;
+            let file = f.root.join("notes/s.md").to_string_lossy().into_owned();
+            let n: i64 =
+                f.db.read(move |c| {
+                    Ok(c.query_row(
+                        "select count(*) from entity where kind = 'spec' and retired_tx is null \
+                     and json_extract(data, '$.records.file') = ?1",
+                        [file],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(n, 1);
+            let got = derives_of(&f).await;
+            assert!(
+                got.contains(&("Dot plan".into(), "Dot spec".into())),
+                "{got:?}"
+            );
+        })
     }
 
     /// The one file of `~/org` the product reads is `board.org` (named by `only: board`): its items are imported,
     /// nothing else of `~/org` is, and a full import of `~/org` stays refused.
-    #[tokio::test]
-    async fn the_board_in_the_users_org_is_read_and_nothing_else_of_it() {
-        let f = fix();
-        let home = f._dir.path().join("home");
-        let org = home.join("org");
-        std::fs::create_dir_all(org.join("docs/plans")).unwrap();
-        std::fs::write(
-            org.join("docs/plans/p.md"),
-            "# P\n\n### Task 1: a\n\n- [ ] x\n",
-        )
-        .unwrap();
-        std::fs::write(org.join("notes.org"), "* private\n").unwrap();
-        std::fs::write(org.join("board.org"), "* TODO a board item\n").unwrap();
-        let deny = DenyList::load(&home, &f._dir.path().join("config"));
-        let heard = |_e: ViewEvent| {};
-        let full = import_core(
-            &f.db,
-            &f.views,
-            &f.hub,
-            &org,
-            None,
-            None,
-            false,
-            Ears {
-                emit: &heard,
-                deny: &deny,
-            },
-        )
-        .await;
-        assert_eq!(full.unwrap_err().message, PERSONAL_NOTES_REFUSAL);
-        let got = import_core(
-            &f.db,
-            &f.views,
-            &f.hub,
-            &org,
-            Some(RecordKind::Board),
-            None,
-            false,
-            Ears {
-                emit: &heard,
-                deny: &deny,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(got.files.len(), 1, "{got:?}");
-        assert!(got.files[0].path.ends_with("org/board.org"));
-        assert!(live_of(&f, &org.join("board.org")).await > 0);
-        assert_eq!(live_of(&f, &org.join("docs/plans/p.md")).await, 0);
-        assert_eq!(live_of(&f, &org.join("notes.org")).await, 0);
+    #[test]
+    fn the_board_in_the_users_org_is_read_and_nothing_else_of_it() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let home = f._dir.path().join("home");
+            let org = home.join("org");
+            std::fs::create_dir_all(org.join("docs/plans")).unwrap();
+            crate::fsio::write(
+                org.join("docs/plans/p.md"),
+                "# P\n\n### Task 1: a\n\n- [ ] x\n",
+            )
+            .unwrap();
+            crate::fsio::write(org.join("notes.org"), "* private\n").unwrap();
+            crate::fsio::write(org.join("board.org"), "* TODO a board item\n").unwrap();
+            let deny = DenyList::load(&home, &f._dir.path().join("config"));
+            let heard = |_e: ViewEvent| {};
+            let full = import_core(
+                &f.db,
+                &f.views,
+                &f.hub,
+                &org,
+                None,
+                None,
+                false,
+                Ears {
+                    emit: &heard,
+                    deny: &deny,
+                },
+            )
+            .await;
+            assert_eq!(full.unwrap_err().message, PERSONAL_NOTES_REFUSAL);
+            let got = import_core(
+                &f.db,
+                &f.views,
+                &f.hub,
+                &org,
+                Some(RecordKind::Board),
+                None,
+                false,
+                Ears {
+                    emit: &heard,
+                    deny: &deny,
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(got.files.len(), 1, "{got:?}");
+            assert!(got.files[0].path.ends_with("org/board.org"));
+            assert!(live_of(&f, &org.join("board.org")).await > 0);
+            assert_eq!(live_of(&f, &org.join("docs/plans/p.md")).await, 0);
+            assert_eq!(live_of(&f, &org.join("notes.org")).await, 0);
+        })
     }
 
     /// `### Task 14b:` is a task of its own, not Task 14; `### Task A1 (now): …` is one; a heading inside a code fence
     /// is none, and nor are the steps in it
     /// (`task-headings-14b-and-a1-are-tasks-and-fenced-ones-are-not`).
-    #[tokio::test]
-    async fn task_headings_14b_and_a1_are_tasks_and_fenced_ones_are_not() {
-        let f = fix();
-        std::fs::write(
+    #[test]
+    fn task_headings_14b_and_a1_are_tasks_and_fenced_ones_are_not() {
+        saman::block_on_current(async move {
+            let f = fix();
+            crate::fsio::write(
             f.root.join("docs/plans/drgnx/heads.md"),
             "# Plan\n\n### Task 14: fourteen\n- [ ] a\n\n### Task 14b: between\n- [ ] b\n\n\
              ### Task A1 (now): lettered\n- [ ] c\n\n```\n### Task 99: only an example\n- [ ] x\n```\n",
         )
         .unwrap();
-        f.import(None, false).await;
-        let numbers: Vec<String> = f
+            f.import(None, false).await;
+            let numbers: Vec<String> = f
             .db
             .read(|c| {
                 let mut q = c.prepare(
@@ -4471,20 +4525,21 @@ pub(crate) mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(numbers, ["14", "14b", "A1"]);
-        let steps: i64 =
-            f.db.read(|c| {
-                Ok(c.query_row(
-                    "select coalesce(sum(json_array_length(data, '$.steps')), 0) from entity \
+            assert_eq!(numbers, ["14", "14b", "A1"]);
+            let steps: i64 =
+                f.db.read(|c| {
+                    Ok(c.query_row(
+                        "select coalesce(sum(json_array_length(data, '$.steps')), 0) from entity \
                      where kind = 'task' and retired_tx is null \
                      and json_extract(data, '$.records.file') like '%/heads.md'",
-                    [],
-                    |r| r.get(0),
-                )?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(steps, 3);
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(steps, 3);
+        })
     }
 
     /// A root that is itself named `plans` or `specs` classifies by the paths under it alone
@@ -4494,9 +4549,9 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("plans");
         std::fs::create_dir_all(root.join("notes")).unwrap();
-        std::fs::write(root.join("notes/n.md"), "# Notes\n\n### Task 1: a\n").unwrap();
+        crate::fsio::write(root.join("notes/n.md"), "# Notes\n\n### Task 1: a\n").unwrap();
         std::fs::create_dir_all(root.join("sub/plans")).unwrap();
-        std::fs::write(root.join("sub/plans/p.md"), "# P\n\n### Task 1: a\n").unwrap();
+        crate::fsio::write(root.join("sub/plans/p.md"), "# P\n\n### Task 1: a\n").unwrap();
         let got: Vec<String> = discover(&root, None, &Ignore::load(&root).unwrap())
             .into_iter()
             .map(|f| f.path.strip_prefix(&root).unwrap().display().to_string())
@@ -4520,118 +4575,122 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    #[tokio::test]
-    async fn a_ledger_in_a_linked_worktree_gives_its_plan_the_branch_and_whether_it_is_merged() {
-        let f = fix();
-        let repo = f.root.clone();
-        let git = |dir: &Path, args: &[&str]| {
-            let o = std::process::Command::new("git")
-                .arg("-C")
-                .arg(dir)
-                .args(["-c", "user.name=t", "-c", "user.email=t@t.invalid"])
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(o.status.success(), "git {args:?}: {o:?}");
-        };
-        git(&repo, &["init", "-q", "-b", "main"]);
-        std::fs::write(repo.join("a"), "1").unwrap();
-        git(&repo, &["add", "-A"]);
-        git(&repo, &["commit", "-q", "-m", "first"]);
-        let wt = f.root.parent().unwrap().join("wt");
-        git(
-            &repo,
-            &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()],
-        );
-        let dir = wt.join("docs/plans/drgnx");
-        std::fs::create_dir_all(&dir).unwrap();
-        let (pp, lp) = (dir.join("pair.md"), dir.join("pair.ledger.md"));
-        std::fs::write(&pp, "# Pair\n\n### Task 1: one\n\n- [ ] a\n").unwrap();
-        std::fs::write(&lp, "# SDD ledger — plan: pair.md\n").unwrap();
-        let heard = |_e: ViewEvent| {};
-        import_core(
-            &f.db,
-            &f.views,
-            &f.hub,
-            &wt,
-            Some(RecordKind::Plans),
-            None,
-            false,
-            Ears {
-                emit: &heard,
-                deny: &f.deny,
-            },
-        )
-        .await
-        .unwrap();
-        import_core(
-            &f.db,
-            &f.views,
-            &f.hub,
-            &wt,
-            Some(RecordKind::Ledgers),
-            None,
-            false,
-            Ears {
-                emit: &heard,
-                deny: &f.deny,
-            },
-        )
-        .await
-        .unwrap();
-        let g: Value = serde_json::from_str(&git_of(&f).await).unwrap();
-        assert_eq!(g["branch"], "feat");
-        assert_eq!(g["merged"], false, "{g}");
-        assert!(
-            g["worktree"].as_str().is_some_and(|w| w.ends_with("/wt")),
-            "{g}"
-        );
-        let on = f
+    #[test]
+    fn a_ledger_in_a_linked_worktree_gives_its_plan_the_branch_and_whether_it_is_merged() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let repo = f.root.clone();
+            let git = |dir: &Path, args: &[&str]| {
+                let o = crate::proc::Command::new("git")
+                    .arg("-C")
+                    .arg(dir)
+                    .args(["-c", "user.name=t", "-c", "user.email=t@t.invalid"])
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(o.status.success(), "git {args:?}: {o:?}");
+            };
+            git(&repo, &["init", "-q", "-b", "main"]);
+            crate::fsio::write(repo.join("a"), "1").unwrap();
+            git(&repo, &["add", "-A"]);
+            git(&repo, &["commit", "-q", "-m", "first"]);
+            let wt = f.root.parent().unwrap().join("wt");
+            git(
+                &repo,
+                &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()],
+            );
+            let dir = wt.join("docs/plans/drgnx");
+            std::fs::create_dir_all(&dir).unwrap();
+            let (pp, lp) = (dir.join("pair.md"), dir.join("pair.ledger.md"));
+            crate::fsio::write(&pp, "# Pair\n\n### Task 1: one\n\n- [ ] a\n").unwrap();
+            crate::fsio::write(&lp, "# SDD ledger — plan: pair.md\n").unwrap();
+            let heard = |_e: ViewEvent| {};
+            import_core(
+                &f.db,
+                &f.views,
+                &f.hub,
+                &wt,
+                Some(RecordKind::Plans),
+                None,
+                false,
+                Ears {
+                    emit: &heard,
+                    deny: &f.deny,
+                },
+            )
+            .await
+            .unwrap();
+            import_core(
+                &f.db,
+                &f.views,
+                &f.hub,
+                &wt,
+                Some(RecordKind::Ledgers),
+                None,
+                false,
+                Ears {
+                    emit: &heard,
+                    deny: &f.deny,
+                },
+            )
+            .await
+            .unwrap();
+            let g: Value = serde_json::from_str(&git_of(&f).await).unwrap();
+            assert_eq!(g["branch"], "feat");
+            assert_eq!(g["merged"], false, "{g}");
+            assert!(
+                g["worktree"].as_str().is_some_and(|w| w.ends_with("/wt")),
+                "{g}"
+            );
+            let on = f
             .count(
                 "select count(*) from link l join entity b on b.n = l.dst join entity a on a.n = l.src \
                  where l.kind = 'on_branch' and l.tx_to = 4611686018427387904 and b.kind = 'branch' \
                  and b.title = 'feat' and json_extract(a.data, '$.records.file') like '%/pair.md'",
             )
             .await;
-        assert_eq!(on, 1);
-        // every task done by the ledger, and feat has nothing main lacks: merged
-        std::fs::write(
-            &lp,
-            "# SDD ledger — plan: pair.md\nTask 1: complete (tests ok)\n",
-        )
-        .unwrap();
-        f.sync(&lp).await;
-        let g: Value = serde_json::from_str(&git_of(&f).await).unwrap();
-        assert_eq!(g["merged"], true, "{g}");
-        // a commit on feat that main lacks: not merged
-        std::fs::write(wt.join("b"), "2").unwrap();
-        git(&wt, &["add", "-A"]);
-        git(&wt, &["commit", "-q", "-m", "more"]);
-        f.sync(&lp).await;
-        let g: Value = serde_json::from_str(&git_of(&f).await).unwrap();
-        assert_eq!(g["merged"], false, "{g}");
+            assert_eq!(on, 1);
+            // every task done by the ledger, and feat has nothing main lacks: merged
+            crate::fsio::write(
+                &lp,
+                "# SDD ledger — plan: pair.md\nTask 1: complete (tests ok)\n",
+            )
+            .unwrap();
+            f.sync(&lp).await;
+            let g: Value = serde_json::from_str(&git_of(&f).await).unwrap();
+            assert_eq!(g["merged"], true, "{g}");
+            // a commit on feat that main lacks: not merged
+            crate::fsio::write(wt.join("b"), "2").unwrap();
+            git(&wt, &["add", "-A"]);
+            git(&wt, &["commit", "-q", "-m", "more"]);
+            f.sync(&lp).await;
+            let g: Value = serde_json::from_str(&git_of(&f).await).unwrap();
+            assert_eq!(g["merged"], false, "{g}");
+        })
     }
 
-    #[tokio::test]
-    async fn a_graph_status_change_rewrites_the_view() {
-        let f = fix();
-        let p = imported(&f).await;
-        set_row(
-            &f,
-            "M2-1%",
-            Changes {
-                status: Some(Some("open".into())),
-                ..Default::default()
-            },
-        )
-        .await;
-        assert!(matches!(f.sync(&p).await, Flush::Written(_)));
-        let t = std::fs::read_to_string(&p).unwrap();
-        assert!(t.contains("bold** text | open |"), "{t}");
-        // the other rows are as they were, and the file imports back to the same graph
-        assert!(t.contains("| fixed in M2 |"));
-        let again = f.import(Some(RecordKind::Deferred), false).await;
-        assert!(again.files.iter().all(|x| x.ops == 0), "{again:?}");
+    #[test]
+    fn a_graph_status_change_rewrites_the_view() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let p = imported(&f).await;
+            set_row(
+                &f,
+                "M2-1%",
+                Changes {
+                    status: Some(Some("open".into())),
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert!(matches!(f.sync(&p).await, Flush::Written(_)));
+            let t = crate::fsio::read_to_string(&p).unwrap();
+            assert!(t.contains("bold** text | open |"), "{t}");
+            // the other rows are as they were, and the file imports back to the same graph
+            assert!(t.contains("| fixed in M2 |"));
+            let again = f.import(Some(RecordKind::Deferred), false).await;
+            assert!(again.files.iter().all(|x| x.ops == 0), "{again:?}");
+        })
     }
 
     fn rusqlite_open(p: &Path) -> i64 {
@@ -4685,262 +4744,277 @@ pub(crate) mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn a_hand_edit_survives_a_regeneration() {
-        let f = fix();
-        let p = imported(&f).await;
-        // someone edits a row in the file while the graph reopens another
-        edit(
-            &p,
-            "Retry budget is hard-coded",
-            "Retry budget is a setting",
-        );
-        set_row(&f, "M2-1%", closed()).await;
-        assert!(matches!(f.sync(&p).await, Flush::Written(_)));
-        let t = std::fs::read_to_string(&p).unwrap();
-        assert!(
-            t.contains("Retry budget is a setting"),
-            "the hand edit stays: {t}"
-        );
-        assert!(
-            t.contains("bold** text | open |"),
-            "the graph's change lands: {t}"
-        );
-        assert!(
-            row_body(&f, "M1-2%").await.contains("is a setting"),
-            "the graph took the edit"
-        );
-        assert!(conflicts(&f, &p).await.is_empty());
-        // and nothing more to do
-        assert_eq!(f.sync(&p).await, Flush::Unchanged);
+    #[test]
+    fn a_hand_edit_survives_a_regeneration() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let p = imported(&f).await;
+            // someone edits a row in the file while the graph reopens another
+            edit(
+                &p,
+                "Retry budget is hard-coded",
+                "Retry budget is a setting",
+            );
+            set_row(&f, "M2-1%", closed()).await;
+            assert!(matches!(f.sync(&p).await, Flush::Written(_)));
+            let t = crate::fsio::read_to_string(&p).unwrap();
+            assert!(
+                t.contains("Retry budget is a setting"),
+                "the hand edit stays: {t}"
+            );
+            assert!(
+                t.contains("bold** text | open |"),
+                "the graph's change lands: {t}"
+            );
+            assert!(
+                row_body(&f, "M1-2%").await.contains("is a setting"),
+                "the graph took the edit"
+            );
+            assert!(conflicts(&f, &p).await.is_empty());
+            // and nothing more to do
+            assert_eq!(f.sync(&p).await, Flush::Unchanged);
+        })
     }
 
-    #[tokio::test]
-    async fn two_writers_on_different_pieces_lose_nothing() {
-        let f = fix();
-        let p = imported(&f).await;
-        // a file writer adds a row while the graph closes another
-        edit(
-            &p,
-            "| M2-1 |",
-            "| M1-3 | sync | A row added by hand | open |\n| M2-1 |",
-        );
-        set_row(&f, "M2-1%", closed()).await;
-        f.sync(&p).await;
-        let t = std::fs::read_to_string(&p).unwrap();
-        assert!(
-            t.contains("| M1-3 | sync | A row added by hand | open |"),
-            "{t}"
-        );
-        assert!(t.contains("bold** text | open |"), "{t}");
-        assert_eq!(
-            row_status(&f, "M1-3%").await,
-            "open",
-            "the new row is a record"
-        );
-        // the file changes again between the merge's read and its write: the merge starts over and keeps it
-        set_row(&f, "M1-1%", closed()).await;
-        let late = p.clone();
-        lock(&f.views.state).before_write = Some(Arc::new(move |_| {
-            let t = std::fs::read_to_string(&late).unwrap();
-            if !t.contains("written meanwhile") {
-                std::fs::write(
-                    &late,
-                    t.replace("Closing note", "Closing note written meanwhile"),
-                )
-                .unwrap();
-            }
-        }));
-        assert!(matches!(f.sync(&p).await, Flush::Written(_)));
-        let t = std::fs::read_to_string(&p).unwrap();
-        assert!(
-            t.contains("written meanwhile"),
-            "the late edit is kept: {t}"
-        );
-        assert!(
-            t.contains("shown as `a\\|b` | open |"),
-            "the graph's change too: {t}"
-        );
-    }
-
-    #[tokio::test]
-    async fn the_same_piece_on_both_sides_keeps_the_file_and_flags_it() {
-        let f = fix();
-        let p = imported(&f).await;
-        // (a one-line row: the graph's status reaches its text)
-        set_row(&f, "M1-1%", closed()).await;
-        let mine = edit(&p, "A failed `measure`", "A failed measure, edited by hand");
-        let (_, _, flagged) = f.views.sync_flagged(&f.db, &p).await.unwrap();
-        assert_eq!(flagged.len(), 1, "the new conflict is told once");
-        assert_eq!(
-            std::fs::read_to_string(&p).unwrap(),
-            mine,
-            "the file's text is kept"
-        );
-        let id = row_id(&f, "M1-1%").await;
-        assert_eq!(conflicts(&f, &p).await, std::slice::from_ref(&id));
-        assert!(
-            row_body(&f, "M1-1%").await.contains("A failed `measure`"),
-            "the graph keeps its own"
-        );
-        let c = conflict_of(&f.db, &id).await.unwrap();
-        assert!(
-            c.file.contains("edited by hand") && c.graph.contains("| open |"),
-            "{c:?}"
-        );
-        // a second sync changes nothing, loses nothing and tells nothing again
-        assert!(f.views.sync_flagged(&f.db, &p).await.unwrap().2.is_empty());
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), mine);
-        // keep the graph's: written back into the file, flag cleared
-        resolve_core(&f.db, &f.views, &id, Keep::Graph)
-            .await
-            .unwrap();
-        let t = std::fs::read_to_string(&p).unwrap();
-        assert!(
-            t.contains("A failed `measure`") && t.contains("`a\\|b` | open |"),
-            "{t}"
-        );
-        assert!(conflicts(&f, &p).await.is_empty());
-        // again, and keep the file's this time
-        set_row(
-            &f,
-            "M1-1%",
-            Changes {
-                status: Some(Some("done".into())),
-                ..Default::default()
-            },
-        )
-        .await;
-        edit(&p, "A failed `measure`", "A failed thing, the file wins");
-        f.sync(&p).await;
-        assert_eq!(conflicts(&f, &p).await, std::slice::from_ref(&id));
-        resolve_core(&f.db, &f.views, &id, Keep::File)
-            .await
-            .unwrap();
-        assert!(row_body(&f, "M1-1%").await.contains("the file wins"));
-        assert!(
-            std::fs::read_to_string(&p)
-                .unwrap()
-                .contains("the file wins")
-        );
-        assert!(conflicts(&f, &p).await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_stale_editor_save_is_flagged_not_applied() {
-        let f = fix();
-        let p = imported(&f).await;
-        let old = std::fs::read_to_string(&p).unwrap();
-        set_row(&f, "M2-1%", closed()).await;
-        assert!(matches!(f.sync(&p).await, Flush::Written(_)));
-        // an editor that loaded the file before that write saves it
-        std::fs::write(&p, &old).unwrap();
-        f.sync(&p).await;
-        assert_eq!(
-            row_status(&f, "M2-1%").await,
-            "open",
-            "the graph's change is not undone"
-        );
-        assert_eq!(conflicts(&f, &p).await, [row_id(&f, "M2-1%").await]);
-        assert_eq!(
-            std::fs::read_to_string(&p).unwrap(),
-            old,
-            "the file is kept"
-        );
-    }
-
-    #[tokio::test]
-    async fn an_insert_in_the_middle_of_a_plan_keeps_every_id_and_link() {
-        let f = fix();
-        f.import(None, false).await;
-        let p = f.root.join("docs/plans/drgnx/p.md");
-        const IDS: &str =
-            "select id from entity where kind = 'task' and retired_tx is null order by id";
-        const LINKS: &str =
-            "select count(*) from link where kind = 'parent_of' and tx_to = 4611686018427387904"; // urdr's SENTINEL, 1 << 62
-        async fn ids(f: &Fix) -> Result<Vec<String>, norn::store::CoordError> {
-            f.db.read(|c| {
-                let mut st = c.prepare(IDS)?;
-                Ok(st
-                    .query_map([], |r| r.get::<_, String>(0))?
-                    .collect::<Result<Vec<_>, _>>()?)
-            })
-            .await
-        }
-        let before: Vec<String> = ids(&f).await.unwrap();
-        let links = f.count(LINKS).await;
-        edit(
-            &p,
-            "## Task 1: `basket`",
-            "## Task 0b: a task added in the middle\n\n- [ ] **Step 1: do it**\n\n## Task 1: `basket`",
-        );
-        f.sync(&p).await;
-        let after: Vec<String> = ids(&f).await.unwrap();
-        assert_eq!(after.len(), before.len() + 1);
-        assert!(
-            before.iter().all(|i| after.contains(i)),
-            "every task keeps its id"
-        );
-        assert_eq!(f.count(LINKS).await, links + 1);
-    }
-
-    #[tokio::test]
-    async fn adoption_alone_writes_no_byte() {
-        let f = fix();
-        let stamp = |f: &Fix| -> Vec<(String, std::time::SystemTime)> {
-            FILES
-                .iter()
-                .map(|(rel, _)| {
-                    let p = f.root.join(rel);
-                    (
-                        std::fs::read_to_string(&p).unwrap(),
-                        std::fs::metadata(&p).unwrap().modified().unwrap(),
+    #[test]
+    fn two_writers_on_different_pieces_lose_nothing() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let p = imported(&f).await;
+            // a file writer adds a row while the graph closes another
+            edit(
+                &p,
+                "| M2-1 |",
+                "| M1-3 | sync | A row added by hand | open |\n| M2-1 |",
+            );
+            set_row(&f, "M2-1%", closed()).await;
+            f.sync(&p).await;
+            let t = crate::fsio::read_to_string(&p).unwrap();
+            assert!(
+                t.contains("| M1-3 | sync | A row added by hand | open |"),
+                "{t}"
+            );
+            assert!(t.contains("bold** text | open |"), "{t}");
+            assert_eq!(
+                row_status(&f, "M1-3%").await,
+                "open",
+                "the new row is a record"
+            );
+            // the file changes again between the merge's read and its write: the merge starts over and keeps it
+            set_row(&f, "M1-1%", closed()).await;
+            let late = p.clone();
+            lock(&f.views.state).before_write = Some(Arc::new(move |_| {
+                let t = crate::fsio::read_to_string(&late).unwrap();
+                if !t.contains("written meanwhile") {
+                    crate::fsio::write(
+                        &late,
+                        t.replace("Closing note", "Closing note written meanwhile"),
                     )
+                    .unwrap();
+                }
+            }));
+            assert!(matches!(f.sync(&p).await, Flush::Written(_)));
+            let t = crate::fsio::read_to_string(&p).unwrap();
+            assert!(
+                t.contains("written meanwhile"),
+                "the late edit is kept: {t}"
+            );
+            assert!(
+                t.contains("shown as `a\\|b` | open |"),
+                "the graph's change too: {t}"
+            );
+        })
+    }
+
+    #[test]
+    fn the_same_piece_on_both_sides_keeps_the_file_and_flags_it() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let p = imported(&f).await;
+            // (a one-line row: the graph's status reaches its text)
+            set_row(&f, "M1-1%", closed()).await;
+            let mine = edit(&p, "A failed `measure`", "A failed measure, edited by hand");
+            let (_, _, flagged) = f.views.sync_flagged(&f.db, &p).await.unwrap();
+            assert_eq!(flagged.len(), 1, "the new conflict is told once");
+            assert_eq!(
+                crate::fsio::read_to_string(&p).unwrap(),
+                mine,
+                "the file's text is kept"
+            );
+            let id = row_id(&f, "M1-1%").await;
+            assert_eq!(conflicts(&f, &p).await, std::slice::from_ref(&id));
+            assert!(
+                row_body(&f, "M1-1%").await.contains("A failed `measure`"),
+                "the graph keeps its own"
+            );
+            let c = conflict_of(&f.db, &id).await.unwrap();
+            assert!(
+                c.file.contains("edited by hand") && c.graph.contains("| open |"),
+                "{c:?}"
+            );
+            // a second sync changes nothing, loses nothing and tells nothing again
+            assert!(f.views.sync_flagged(&f.db, &p).await.unwrap().2.is_empty());
+            assert_eq!(crate::fsio::read_to_string(&p).unwrap(), mine);
+            // keep the graph's: written back into the file, flag cleared
+            resolve_core(&f.db, &f.views, &id, Keep::Graph)
+                .await
+                .unwrap();
+            let t = crate::fsio::read_to_string(&p).unwrap();
+            assert!(
+                t.contains("A failed `measure`") && t.contains("`a\\|b` | open |"),
+                "{t}"
+            );
+            assert!(conflicts(&f, &p).await.is_empty());
+            // again, and keep the file's this time
+            set_row(
+                &f,
+                "M1-1%",
+                Changes {
+                    status: Some(Some("done".into())),
+                    ..Default::default()
+                },
+            )
+            .await;
+            edit(&p, "A failed `measure`", "A failed thing, the file wins");
+            f.sync(&p).await;
+            assert_eq!(conflicts(&f, &p).await, std::slice::from_ref(&id));
+            resolve_core(&f.db, &f.views, &id, Keep::File)
+                .await
+                .unwrap();
+            assert!(row_body(&f, "M1-1%").await.contains("the file wins"));
+            assert!(
+                crate::fsio::read_to_string(&p)
+                    .unwrap()
+                    .contains("the file wins")
+            );
+            assert!(conflicts(&f, &p).await.is_empty());
+        })
+    }
+
+    #[test]
+    fn a_stale_editor_save_is_flagged_not_applied() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let p = imported(&f).await;
+            let old = crate::fsio::read_to_string(&p).unwrap();
+            set_row(&f, "M2-1%", closed()).await;
+            assert!(matches!(f.sync(&p).await, Flush::Written(_)));
+            // an editor that loaded the file before that write saves it
+            crate::fsio::write(&p, &old).unwrap();
+            f.sync(&p).await;
+            assert_eq!(
+                row_status(&f, "M2-1%").await,
+                "open",
+                "the graph's change is not undone"
+            );
+            assert_eq!(conflicts(&f, &p).await, [row_id(&f, "M2-1%").await]);
+            assert_eq!(
+                crate::fsio::read_to_string(&p).unwrap(),
+                old,
+                "the file is kept"
+            );
+        })
+    }
+
+    #[test]
+    fn an_insert_in_the_middle_of_a_plan_keeps_every_id_and_link() {
+        saman::block_on_current(async move {
+            let f = fix();
+            f.import(None, false).await;
+            let p = f.root.join("docs/plans/drgnx/p.md");
+            const IDS: &str =
+                "select id from entity where kind = 'task' and retired_tx is null order by id";
+            const LINKS: &str = "select count(*) from link where kind = 'parent_of' and tx_to = 4611686018427387904"; // urdr's SENTINEL, 1 << 62
+            async fn ids(f: &Fix) -> Result<Vec<String>, norn::store::CoordError> {
+                f.db.read(|c| {
+                    let mut st = c.prepare(IDS)?;
+                    Ok(st
+                        .query_map([], |r| r.get::<_, String>(0))?
+                        .collect::<Result<Vec<_>, _>>()?)
                 })
-                .collect()
-        };
-        let before = stamp(&f);
-        let (r, heard) = f.import_heard(None, false).await;
-        assert_eq!(stamp(&f), before);
-        // the notice went out once, listing the files, with the backup
-        let notices: Vec<&RecordsNotice> = heard
-            .iter()
-            .filter_map(|e| match e {
-                ViewEvent::Notice(n) => Some(n),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(notices.len(), 1);
-        assert_eq!(notices[0].files.len(), r.files.len());
-        assert_eq!(notices[0].backup, r.backup);
-        let (_, again) = f.import_heard(None, false).await;
-        assert!(again.is_empty(), "{again:?}");
+                .await
+            }
+            let before: Vec<String> = ids(&f).await.unwrap();
+            let links = f.count(LINKS).await;
+            edit(
+                &p,
+                "## Task 1: `basket`",
+                "## Task 0b: a task added in the middle\n\n- [ ] **Step 1: do it**\n\n## Task 1: `basket`",
+            );
+            f.sync(&p).await;
+            let after: Vec<String> = ids(&f).await.unwrap();
+            assert_eq!(after.len(), before.len() + 1);
+            assert!(
+                before.iter().all(|i| after.contains(i)),
+                "every task keeps its id"
+            );
+            assert_eq!(f.count(LINKS).await, links + 1);
+        })
     }
 
-    #[tokio::test]
-    async fn no_rewrite_before_the_notice() {
-        let f = fix();
-        let p = imported(&f).await;
-        kv_put(&f.db, vec![(adopted_key(&p), None)]).await.unwrap();
-        let before = std::fs::read_to_string(&p).unwrap();
-        set_row(&f, "M2-1%", closed()).await;
-        assert_eq!(f.sync(&p).await, Flush::Waiting);
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), before);
+    #[test]
+    fn adoption_alone_writes_no_byte() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let stamp = |f: &Fix| -> Vec<(String, std::time::SystemTime)> {
+                FILES
+                    .iter()
+                    .map(|(rel, _)| {
+                        let p = f.root.join(rel);
+                        (
+                            crate::fsio::read_to_string(&p).unwrap(),
+                            std::fs::metadata(&p).unwrap().modified().unwrap(),
+                        )
+                    })
+                    .collect()
+            };
+            let before = stamp(&f);
+            let (r, heard) = f.import_heard(None, false).await;
+            assert_eq!(stamp(&f), before);
+            // the notice went out once, listing the files, with the backup
+            let notices: Vec<&RecordsNotice> = heard
+                .iter()
+                .filter_map(|e| match e {
+                    ViewEvent::Notice(n) => Some(n),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(notices.len(), 1);
+            assert_eq!(notices[0].files.len(), r.files.len());
+            assert_eq!(notices[0].backup, r.backup);
+            let (_, again) = f.import_heard(None, false).await;
+            assert!(again.is_empty(), "{again:?}");
+        })
     }
 
-    #[tokio::test]
-    async fn a_hub_restart_reads_its_own_writes_as_its_own() {
-        let f = fix();
-        let p = imported(&f).await;
-        set_row(&f, "M2-1%", closed()).await;
-        assert!(matches!(f.sync(&p).await, Flush::Written(_)));
-        let written = std::fs::read_to_string(&p).unwrap();
-        // a new hub: the bases come from the store
-        let fresh = Views::default();
-        assert_eq!(fresh.sync(&f.db, &p).await.unwrap().0, Flush::Unchanged);
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), written);
-        assert!(conflicts(&f, &p).await.is_empty());
-        assert!(!fresh.changed(&p));
+    #[test]
+    fn no_rewrite_before_the_notice() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let p = imported(&f).await;
+            kv_put(&f.db, vec![(adopted_key(&p), None)]).await.unwrap();
+            let before = crate::fsio::read_to_string(&p).unwrap();
+            set_row(&f, "M2-1%", closed()).await;
+            assert_eq!(f.sync(&p).await, Flush::Waiting);
+            assert_eq!(crate::fsio::read_to_string(&p).unwrap(), before);
+        })
+    }
+
+    #[test]
+    fn a_hub_restart_reads_its_own_writes_as_its_own() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let p = imported(&f).await;
+            set_row(&f, "M2-1%", closed()).await;
+            assert!(matches!(f.sync(&p).await, Flush::Written(_)));
+            let written = crate::fsio::read_to_string(&p).unwrap();
+            // a new hub: the bases come from the store
+            let fresh = Views::default();
+            assert_eq!(fresh.sync(&f.db, &p).await.unwrap().0, Flush::Unchanged);
+            assert_eq!(crate::fsio::read_to_string(&p).unwrap(), written);
+            assert!(conflicts(&f, &p).await.is_empty());
+            assert!(!fresh.changed(&p));
+        })
     }
 
     // ---- the importer's ignore list (.drgnx/records.toml) ----
@@ -4950,7 +5024,7 @@ pub(crate) mod tests {
     fn put(f: &Fix, rel: &str, text: &str) {
         let p = f.root.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, text).unwrap();
+        crate::fsio::write(p, text).unwrap();
     }
 
     fn found_rels(f: &Fix) -> Vec<String> {
@@ -5002,48 +5076,52 @@ pub(crate) mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn an_ignored_file_already_adopted_is_forgotten() {
-        let f = fix();
-        f.import(None, false).await;
-        let live = "select count(*) from entity where source like 'records:%' and retired_tx is null \
+    #[test]
+    fn an_ignored_file_already_adopted_is_forgotten() {
+        saman::block_on_current(async move {
+            let f = fix();
+            f.import(None, false).await;
+            let live = "select count(*) from entity where source like 'records:%' and retired_tx is null \
                     and json_extract(data, '$.records.file') like '%/docs/plans/drgnx/p.md'";
-        assert!(f.count(live).await > 0);
-        put(
-            &f,
-            ".drgnx/records.toml",
-            "ignore = [\"docs/plans/drgnx/p.md\"]\n",
-        );
-        f.import(None, false).await;
-        assert_eq!(f.count(live).await, 0);
+            assert!(f.count(live).await > 0);
+            put(
+                &f,
+                ".drgnx/records.toml",
+                "ignore = [\"docs/plans/drgnx/p.md\"]\n",
+            );
+            f.import(None, false).await;
+            assert_eq!(f.count(live).await, 0);
+        })
     }
 
-    #[tokio::test]
-    async fn a_bad_records_toml_fails_the_import_and_writes_nothing() {
-        for text in ["nope = 1\n", &format!("# {}\n", "x".repeat(65 * 1024))] {
-            let f = fix();
-            put(&f, ".drgnx/records.toml", text);
-            let before = f.count(TX).await;
-            let heard = |_e: ViewEvent| {};
-            let e = import_core(
-                &f.db,
-                &f.views,
-                &f.hub,
-                &f.root,
-                None,
-                None,
-                false,
-                Ears {
-                    emit: &heard,
-                    deny: &f.deny,
-                },
-            )
-            .await
-            .unwrap_err();
-            assert!(e.message.contains(".drgnx/records.toml"), "{}", e.message);
-            assert_eq!(f.count(TX).await, before);
-            assert!(!f.hub.join("records-backup").exists());
-        }
+    #[test]
+    fn a_bad_records_toml_fails_the_import_and_writes_nothing() {
+        saman::block_on_current(async move {
+            for text in ["nope = 1\n", &format!("# {}\n", "x".repeat(65 * 1024))] {
+                let f = fix();
+                put(&f, ".drgnx/records.toml", text);
+                let before = f.count(TX).await;
+                let heard = |_e: ViewEvent| {};
+                let e = import_core(
+                    &f.db,
+                    &f.views,
+                    &f.hub,
+                    &f.root,
+                    None,
+                    None,
+                    false,
+                    Ears {
+                        emit: &heard,
+                        deny: &f.deny,
+                    },
+                )
+                .await
+                .unwrap_err();
+                assert!(e.message.contains(".drgnx/records.toml"), "{}", e.message);
+                assert_eq!(f.count(TX).await, before);
+                assert!(!f.hub.join("records-backup").exists());
+            }
+        })
     }
 
     // ---- one file: `--path` ----
@@ -5066,63 +5144,71 @@ pub(crate) mod tests {
         .await
     }
 
-    #[tokio::test]
-    async fn import_path_reads_only_that_file() {
-        let f = fix();
-        put(&f, "docs/plans/x/a.md", PLAN);
-        put(&f, "docs/plans/x/b.md", "# B\n\n### Task 1: b\n\n- [ ] y\n");
-        let r = import_path(&f, &f.root.join("docs/plans/x/a.md"))
-            .await
-            .unwrap();
-        assert_eq!(r.files.len(), 1, "{:?}", r.files);
-        assert!(r.files[0].path.ends_with("docs/plans/x/a.md"));
-        let of = |name: &'static str| match name {
-            "a" => {
-                "select count(*) from entity where source like 'records:%' and json_extract(data, '$.records.file') like '%/x/a.md'"
+    #[test]
+    fn import_path_reads_only_that_file() {
+        saman::block_on_current(async move {
+            let f = fix();
+            put(&f, "docs/plans/x/a.md", PLAN);
+            put(&f, "docs/plans/x/b.md", "# B\n\n### Task 1: b\n\n- [ ] y\n");
+            let r = import_path(&f, &f.root.join("docs/plans/x/a.md"))
+                .await
+                .unwrap();
+            assert_eq!(r.files.len(), 1, "{:?}", r.files);
+            assert!(r.files[0].path.ends_with("docs/plans/x/a.md"));
+            let of = |name: &'static str| match name {
+                "a" => {
+                    "select count(*) from entity where source like 'records:%' and json_extract(data, '$.records.file') like '%/x/a.md'"
+                }
+                _ => {
+                    "select count(*) from entity where source like 'records:%' and json_extract(data, '$.records.file') like '%/x/b.md'"
+                }
+            };
+            assert!(f.count(of("a")).await > 0);
+            assert_eq!(f.count(of("b")).await, 0);
+        })
+    }
+
+    #[test]
+    fn a_path_outside_the_root_is_refused() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let other = f._dir.path().join("elsewhere/docs/plans/x/a.md");
+            std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+            crate::fsio::write(&other, PLAN).unwrap();
+            for p in [other, f.root.join("docs/plans/../../../org2/a.md")] {
+                let e = import_path(&f, &p).await.unwrap_err();
+                assert!(e.message.contains("is not under"), "{}", e.message);
             }
-            _ => {
-                "select count(*) from entity where source like 'records:%' and json_extract(data, '$.records.file') like '%/x/b.md'"
-            }
-        };
-        assert!(f.count(of("a")).await > 0);
-        assert_eq!(f.count(of("b")).await, 0);
+            assert_eq!(f.count(RECS).await, 0);
+        })
     }
 
-    #[tokio::test]
-    async fn a_path_outside_the_root_is_refused() {
-        let f = fix();
-        let other = f._dir.path().join("elsewhere/docs/plans/x/a.md");
-        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
-        std::fs::write(&other, PLAN).unwrap();
-        for p in [other, f.root.join("docs/plans/../../../org2/a.md")] {
-            let e = import_path(&f, &p).await.unwrap_err();
-            assert!(e.message.contains("is not under"), "{}", e.message);
-        }
-        assert_eq!(f.count(RECS).await, 0);
+    #[test]
+    fn a_path_that_is_no_record_is_refused() {
+        saman::block_on_current(async move {
+            let f = fix();
+            put(&f, "src/main.rs", "fn main() {}\n");
+            let e = import_path(&f, &f.root.join("src/main.rs"))
+                .await
+                .unwrap_err();
+            assert!(e.message.contains("is not a record file"), "{}", e.message);
+        })
     }
 
-    #[tokio::test]
-    async fn a_path_that_is_no_record_is_refused() {
-        let f = fix();
-        put(&f, "src/main.rs", "fn main() {}\n");
-        let e = import_path(&f, &f.root.join("src/main.rs"))
-            .await
-            .unwrap_err();
-        assert!(e.message.contains("is not a record file"), "{}", e.message);
-    }
-
-    #[tokio::test]
-    async fn an_ignored_path_is_refused() {
-        let f = fix();
-        put(&f, "archive/docs/plans/x.md", PLAN);
-        let e = import_path(&f, &f.root.join("archive/docs/plans/x.md"))
-            .await
-            .unwrap_err();
-        assert!(
-            e.message.contains("is ignored by .drgnx/records.toml"),
-            "{}",
-            e.message
-        );
-        assert_eq!(f.count(RECS).await, 0);
+    #[test]
+    fn an_ignored_path_is_refused() {
+        saman::block_on_current(async move {
+            let f = fix();
+            put(&f, "archive/docs/plans/x.md", PLAN);
+            let e = import_path(&f, &f.root.join("archive/docs/plans/x.md"))
+                .await
+                .unwrap_err();
+            assert!(
+                e.message.contains("is ignored by .drgnx/records.toml"),
+                "{}",
+                e.message
+            );
+            assert_eq!(f.count(RECS).await, 0);
+        })
     }
 }

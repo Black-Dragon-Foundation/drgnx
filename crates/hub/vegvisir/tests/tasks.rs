@@ -151,13 +151,13 @@ fn a_job_chip_links_to_its_agent() {
 
 #[test]
 fn a_session_changing_state_changes_its_tasks_row() {
-    use vegvisir::{Effect, ViewKey, ViewOp, ViewState};
+    use vegvisir::{Effect, ViewId, ViewOp, ViewState};
     let mut c = core(vec![
         plan("p"),
         task("t", "p", false),
         Event::Session(sess("a1", Some("t"), State::Running)),
     ]);
-    let key = ViewKey {
+    let key = ViewId {
         conn: 1,
         view: "v".into(),
     };

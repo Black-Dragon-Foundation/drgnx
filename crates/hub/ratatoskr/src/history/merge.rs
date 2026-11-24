@@ -26,7 +26,7 @@ impl Hub {
         now: f64,
     ) -> Result<Option<OpId>> {
         let paths = blob::changed_paths(&target.git_dir, &target.root, old, new)
-            .map_err(verdandi::Error::Refused)?;
+            .map_err(|e| verdandi::Error::Refused(e.message().to_owned()))?;
         let mut merged = HashMap::new();
         for rel in paths {
             if rel.starts_with(".git/") || super::capture::is_secret(&rel) {

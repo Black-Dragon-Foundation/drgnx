@@ -63,7 +63,7 @@ impl Signaller for RealSignaller {
         &self,
         d: Duration,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
-        Box::pin(tokio::time::sleep(d))
+        Box::pin(stund::real::sleep(d))
     }
 
     fn kill(&self, target: i32, sig: i32) -> io::Result<()> {
@@ -185,13 +185,14 @@ fn group_left(sig: &dyn Signaller, pgid: i32) -> bool {
 fn only_zombies(pgid: i32) -> bool {
     // only a leader that is itself an unreaped zombie: a group whose members were killed and wait for init to reap them
     // is still going (its leader is gone), and is waited for as before
-    let leader_is_zombie = std::fs::read_to_string(format!("/proc/{pgid}/stat"))
-        .ok()
-        .and_then(|s| {
-            s.rsplit_once(')')
-                .map(|(_, r)| r.trim_start().starts_with('Z'))
-        })
-        .unwrap_or(false);
+    let leader_is_zombie =
+        eitri::read_string(std::path::Path::new(&format!("/proc/{pgid}/stat")), 1 << 16)
+            .ok()
+            .and_then(|s| {
+                s.rsplit_once(')')
+                    .map(|(_, r)| r.trim_start().starts_with('Z'))
+            })
+            .unwrap_or(false);
     if !leader_is_zombie {
         return false;
     }
@@ -208,7 +209,7 @@ fn only_zombies(pgid: i32) -> bool {
             continue;
         }
         // "PID (comm) STATE PPID PGRP ...": comm may hold spaces and parentheses, so cut at the last `)`
-        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+        let Ok(stat) = eitri::read_string(&entry.path().join("stat"), 1 << 16) else {
             continue; // gone since the listing
         };
         let Some(rest) = stat.rsplit_once(')').map(|(_, r)| r) else {

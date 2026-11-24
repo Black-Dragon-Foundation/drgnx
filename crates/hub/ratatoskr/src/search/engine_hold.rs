@@ -170,7 +170,7 @@ impl Probe {
     /// The processes other than OWN that work on DEVICE (a llama.cpp device id: `CUDA0`, `ROCm0`, `Vulkan1`), as a
     /// reason; none when none does or when this machine cannot tell. Blocking.
     pub fn foreign(&self, device: &str, own: &[i32]) -> Option<String> {
-        let mut said = self.said.lock().unwrap_or_else(|e| e.into_inner());
+        let mut said = saman::lock(&self.said);
         if let Some((t, r)) = said.as_ref()
             && t.elapsed() < LOOK_EVERY
         {
@@ -187,7 +187,7 @@ impl Probe {
             .parse()
             .ok()?;
         if device.starts_with("CUDA") {
-            let out = std::process::Command::new("nvidia-smi")
+            let out = crate::proc::Command::new("nvidia-smi")
                 .args(["pmon", "-c", "1", "-s", "u"])
                 .output()
                 .ok()?;
@@ -200,7 +200,7 @@ impl Probe {
         let pdev = drm_pdev(index)?;
         let now = crate::clock::real_now();
         let after = read_clients();
-        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        let mut last = saman::lock(&self.last);
         let reason = match last.as_ref() {
             Some((t, before)) => busy_reason(&busy_clients(
                 before,
@@ -243,12 +243,12 @@ fn read_clients() -> Vec<Client> {
         let Some(pid) = p.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else {
             continue;
         };
-        let name = std::fs::read_to_string(p.path().join("comm")).unwrap_or_default();
+        let name = crate::fsio::read_to_string(p.path().join("comm")).unwrap_or_default();
         let Ok(fds) = std::fs::read_dir(p.path().join("fdinfo")) else {
             continue;
         };
         for fd in fds.flatten() {
-            if let Ok(text) = std::fs::read_to_string(fd.path())
+            if let Ok(text) = crate::fsio::read_to_string(fd.path())
                 && let Some(c) = parse_fdinfo(pid, name.trim(), &text)
             {
                 out.push(c);

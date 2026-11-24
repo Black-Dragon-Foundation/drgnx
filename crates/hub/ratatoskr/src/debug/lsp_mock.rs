@@ -39,9 +39,9 @@ fn read_frame(r: &mut impl BufRead) -> Option<Value> {
 
 fn write_frame(w: &mut impl Write, v: &Value) {
     let body = serde_json::to_vec(v).expect("json");
-    let _ = write!(w, "Content-Length: {}\r\n\r\n", body.len());
-    let _ = w.write_all(&body);
-    let _ = w.flush();
+    crate::soft::done(write!(w, "Content-Length: {}\r\n\r\n", body.len()), "write");
+    crate::soft::done(w.write_all(&body), "lsp_mock");
+    crate::soft::done(w.flush(), "lsp_mock");
 }
 
 /// The DAP server on LISTENER: every connection (a child session is a second one) gets a thread that answers each request
@@ -49,15 +49,18 @@ fn write_frame(w: &mut impl Write, v: &Value) {
 fn serve_dap(listener: std::net::TcpListener) {
     for conn in listener.incoming() {
         let Ok(s) = conn else { return };
-        std::thread::spawn(move || {
-            let mut r = std::io::BufReader::new(s.try_clone().expect("clone"));
-            let mut w = s;
-            while let Some(req) = read_frame(&mut r) {
-                let reply = json!({"seq": 1, "type": "response", "request_seq": req["seq"], "success": true,
+        crate::soft::done(
+            saman::spawn_thread("ratatoskr:lsp_mock", move || {
+                let mut r = std::io::BufReader::new(s.try_clone().expect("clone"));
+                let mut w = s;
+                while let Some(req) = read_frame(&mut r) {
+                    let reply = json!({"seq": 1, "type": "response", "request_seq": req["seq"], "success": true,
                                    "command": req["command"], "body": {"supportsConfigurationDoneRequest": true}});
-                write_frame(&mut w, &reply);
-            }
-        });
+                    write_frame(&mut w, &reply);
+                }
+            }),
+            "thread",
+        );
     }
 }
 
@@ -71,21 +74,20 @@ pub fn main(mode: &str, arg: Option<&str>) -> i32 {
     };
     let stdin = std::io::stdin();
     let mut input = std::io::BufReader::new(stdin.lock());
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
+    let mut out = annall::raw_out();
     while let Some(msg) = read_frame(&mut input) {
         let method = msg["method"].as_str().unwrap_or_default().to_owned();
         let id = msg.get("id").cloned();
         match method.as_str() {
             "initialize" => {
                 if mode == "exit-init" {
-                    eprintln!("the mock server cannot start");
+                    crate::soft::err_line("the mock server cannot start");
                     return 3;
                 }
                 if mode == "oversized" {
-                    let _ = write!(out, "Content-Length: {}\r\n\r\n", 20 << 20);
-                    let _ = out.flush();
-                    std::thread::sleep(std::time::Duration::from_secs(120));
+                    crate::soft::done(write!(out, "Content-Length: {}\r\n\r\n", 20 << 20), "write");
+                    crate::soft::done(out.flush(), "lsp_mock");
+                    stund::real::sleep_blocking(std::time::Duration::from_secs(120));
                     return 0;
                 }
                 write_frame(
@@ -112,7 +114,10 @@ pub fn main(mode: &str, arg: Option<&str>) -> i32 {
                         _ => {
                             let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
                             let port = l.local_addr().expect("addr").port();
-                            std::thread::spawn(move || serve_dap(l));
+                            crate::soft::done(
+                                saman::spawn_thread("ratatoskr:lsp_mock", move || serve_dap(l)),
+                                "thread",
+                            );
                             json!(port)
                         }
                     },

@@ -17,10 +17,18 @@ test-hooks = []
 rusqlite = { workspace = true, features = ["hooks", "limits"] }
 serde.workspace = true
 serde_json.workspace = true
+saman.workspace = true
+stund.workspace = true
+eitri.workspace = true
+tracing.workspace = true
 # `rt`: `spawn_blocking`, so the read pool and graph/sql never run SQLite on an async worker
 tokio = { workspace = true, features = ["sync", "rt"] }
 
 [dev-dependencies]
 tempfile.workspace = true
 skuld = { path = "../skuld", version = "0.1.0" }   # waits in tests
-tokio = { workspace = true, features = ["rt", "macros"] }
+draugr.workspace = true   # the crash test's child
+annall.workspace = true   # the benches print through it
+
+[lints]
+workspace = true

@@ -25,6 +25,12 @@ ghostty = ["ghostty-vt-sys/ghostty"]
 [dependencies]
 ghostty-vt-sys = { path = "../ghostty-vt-sys", version = "0.1.0", default-features = false }
 rodd = { path = "../../core/rodd", version = "0.1.0" }
+villa.workspace = true
+annall.workspace = true  # the worker's failure line and its logged errors
+saman.workspace = true
+stund.workspace = true
+eitri.workspace = true
+draugr = { path = "../draugr", version = "0.1.0" }   # the shell on the pty (Pty::spawn)
 serde.workspace = true
 serde_json.workspace = true
 rustix = { workspace = true, features = ["pty", "termios", "event", "process", "fs", "net"] }
@@ -39,6 +45,7 @@ base64 = "0.23"
 
 [dev-dependencies]
 skuld = { path = "../skuld", version = "0.1.0" }  # bounded waits in the tests
+mot = { path = "../../std/mot", version = "0.1.0" }  # the colours the tests give the worker come from the tokens
 tempfile.workspace = true
 
 
@@ -54,3 +61,6 @@ path = "tests/main.rs"
 [[test]]
 name = "logging"
 path = "tests/logging.rs"
+
+[lints]
+workspace = true

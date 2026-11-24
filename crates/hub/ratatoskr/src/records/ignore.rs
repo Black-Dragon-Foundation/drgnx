@@ -23,38 +23,46 @@ pub(crate) struct Ignore {
 impl Ignore {
     /// The list of ROOT: the default, then the file's lines.  A missing file is the default alone; a file over
     /// 64 KiB, bad TOML, an unknown key or a non-string entry is an error naming the file.
-    pub(crate) fn load(root: &Path) -> Result<Ignore, String> {
+    pub(crate) fn load(root: &Path) -> villa::Result<Ignore> {
         let mut lines: Vec<String> = DEFAULT_IGNORE.iter().map(|s| (*s).to_owned()).collect();
         let file = root.join(RECORDS_TOML);
         match std::fs::read(&file) {
-            Ok(bytes) => lines.extend(Self::file_lines(&bytes)?),
+            Ok(bytes) => lines.extend(
+                Self::file_lines(&bytes).map_err(|e| villa::Error::invalid(e.to_string()))?,
+            ),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("{RECORDS_TOML}: {e}")),
+            Err(e) => return Err(villa::Error::io(format!("{RECORDS_TOML}: {e}"))),
         }
         Ok(Self::from_lines(&lines))
     }
 
-    fn file_lines(bytes: &[u8]) -> Result<Vec<String>, String> {
+    fn file_lines(bytes: &[u8]) -> villa::Result<Vec<String>> {
         if bytes.len() > MAX_BYTES {
-            return Err(format!("{RECORDS_TOML} is over 64 KiB"));
+            return Err(villa::Error::invalid(format!(
+                "{RECORDS_TOML} is over 64 KiB"
+            )));
         }
-        let text = std::str::from_utf8(bytes).map_err(|e| format!("{RECORDS_TOML}: {e}"))?;
-        let doc: toml_edit::DocumentMut =
-            text.parse().map_err(|e| format!("{RECORDS_TOML}: {e}"))?;
+        let text = std::str::from_utf8(bytes)
+            .map_err(|e| villa::Error::invalid(format!("{RECORDS_TOML}: {e}")))?;
+        let doc: toml_edit::DocumentMut = text
+            .parse()
+            .map_err(|e| villa::Error::invalid(format!("{RECORDS_TOML}: {e}")))?;
         let mut out = Vec::new();
         for (key, item) in doc.as_table() {
             if key != "ignore" {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "{RECORDS_TOML}: unknown key `{key}` (only `ignore`)"
-                ));
+                )));
             }
-            let arr = item
-                .as_array()
-                .ok_or_else(|| format!("{RECORDS_TOML}: `ignore` must be an array of strings"))?;
+            let arr = item.as_array().ok_or_else(|| {
+                villa::Error::invalid(format!(
+                    "{RECORDS_TOML}: `ignore` must be an array of strings"
+                ))
+            })?;
             for v in arr {
-                let s = v
-                    .as_str()
-                    .ok_or_else(|| format!("{RECORDS_TOML}: `ignore` holds only strings"))?;
+                let s = v.as_str().ok_or_else(|| {
+                    villa::Error::invalid(format!("{RECORDS_TOML}: `ignore` holds only strings"))
+                })?;
                 out.push(s.to_owned());
             }
         }
@@ -65,9 +73,10 @@ impl Ignore {
         let mut search = Search::default();
         let text = lines.join("\n");
         // an in-memory buffer cannot fail to read
-        search
-            .add_patterns_buffer(text.as_bytes(), RECORDS_TOML, None, Parse::default())
-            .ok();
+        crate::soft::done(
+            search.add_patterns_buffer(text.as_bytes(), RECORDS_TOML, None, Parse::default()),
+            "ignore patterns",
+        );
         Ignore { search }
     }
 

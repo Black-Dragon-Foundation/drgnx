@@ -8,8 +8,8 @@
 
 pub use forseti::reserve::Reservation;
 use std::fs;
-use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::io;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 /// The reservation directory of one machine (one user's runtime dir).
@@ -62,12 +62,7 @@ impl Reservations {
     /// its own reservation; nobody else admits meanwhile.
     pub fn with_admit_lock<T>(&self, f: impl FnOnce() -> T) -> io::Result<T> {
         self.ensure()?;
-        let lock = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .mode(0o600)
-            .open(self.dir.join("admit.lock"))?;
+        let lock = crate::fsio::open_lock(self.dir.join("admit.lock"), 0o600)?;
         rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)?;
         let out = f();
         rustix::fs::flock(&lock, rustix::fs::FlockOperation::Unlock)?;
@@ -78,22 +73,8 @@ impl Reservations {
     pub fn put(&self, r: &Reservation) -> io::Result<()> {
         self.ensure()?;
         let path = self.file(&r.scheduler, &r.job)?;
-        let tmp = self.files().join(format!(
-            ".{}.{}.{}.tmp",
-            r.scheduler,
-            r.job,
-            std::process::id()
-        ));
         let body = serde_json::to_vec(r).map_err(io::Error::other)?;
-        let mut f = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        f.write_all(&body)?;
-        drop(f);
-        fs::rename(&tmp, &path)
+        crate::fsio::write(&path, body)
     }
 
     /// SCHEDULER's reservation for JOB.
@@ -164,7 +145,7 @@ pub fn start_time(pid: u32) -> io::Result<u64> {
 }
 
 fn start_time_in(proc_root: &Path, pid: u32) -> io::Result<u64> {
-    let stat = fs::read_to_string(proc_root.join(pid.to_string()).join("stat"))?;
+    let stat = crate::fsio::read_to_string(proc_root.join(pid.to_string()).join("stat"))?;
     parse_start_time(&stat)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "an unreadable /proc stat"))
 }
@@ -212,7 +193,7 @@ mod tests {
         rs.put(&r2).unwrap();
         assert_eq!(rs.read_others("drgnx-hub"), vec![r2]);
         // under the lock, too; and junk next to it is skipped
-        fs::write(rs.files().join("junk.json"), b"{").unwrap();
+        crate::fsio::write(rs.files().join("junk.json"), b"{").unwrap();
         let seen = rs
             .with_admit_lock(|| rs.read_others("drgnx-hub").len())
             .unwrap();
@@ -251,11 +232,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let proc_root = d.path().join("proc");
         fs::create_dir_all(proc_root.join("sys/kernel/random")).unwrap();
-        fs::write(proc_root.join("sys/kernel/random/boot_id"), "b1\n").unwrap();
+        crate::fsio::write(proc_root.join("sys/kernel/random/boot_id"), "b1\n").unwrap();
         let stat = |pid: u32, start: u64| {
             let p = proc_root.join(pid.to_string());
             fs::create_dir_all(&p).unwrap();
-            fs::write(
+            crate::fsio::write(
                 p.join("stat"),
                 format!("{pid} (jobq) S {} {start} 0\n", "0 ".repeat(18)),
             )

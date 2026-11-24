@@ -5,38 +5,44 @@
 
 /// Whether the podman that INFO (`podman info --format json`) describes can run a networked job; the refusal's text
 /// (design §6) when it can't. On macOS, INFO is the machine's server, reached through its rootless connection.
-pub fn net_ready(info: &serde_json::Value) -> Result<(), String> {
+pub fn net_ready(info: &serde_json::Value) -> villa::Result<()> {
     judge(info, cfg!(target_os = "macos"))
 }
 
 /// [`net_ready`] for a hub on macOS (MAC) or Linux; split out so both texts are tested on either.
-fn judge(info: &serde_json::Value, mac: bool) -> Result<(), String> {
+fn judge(info: &serde_json::Value, mac: bool) -> villa::Result<()> {
     let version = info["version"]["Version"].as_str().unwrap_or("unknown");
     let major = version
         .split('.')
         .next()
         .and_then(|m| m.parse::<u32>().ok());
     if major.is_none_or(|m| m < 5) {
-        return Err(if mac {
+        return Err(villa::Error::unavailable(if mac {
             format!(
                 "Networked container jobs need podman 5.0 or newer inside podman machine; this machine runs \
                  `{version}`: update its OS image (`podman machine os upgrade`), or remove and re-create the machine."
             )
         } else {
             format!("Networked container jobs need podman 5.0 or newer; this host has `{version}`.")
-        });
+        }));
     }
     // on a Mac the hub names the machine's rootless connection itself, and says so when there is none
     if !mac && info["host"]["security"]["rootless"].as_bool() != Some(true) {
-        return Err("drgnx runs containers rootless; this podman is rootful.".into());
+        return Err(villa::Error::unavailable(
+            "drgnx runs containers rootless; this podman is rootful.",
+        ));
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    /// The refusal's sentence, for the rows that compare it.
+    fn judge(info: &serde_json::Value, mac: bool) -> Result<(), String> {
+        super::judge(info, mac).map_err(|e| e.message().to_string())
+    }
 
     fn info(version: &str, rootless: bool) -> serde_json::Value {
         json!({"version": {"Version": version}, "host": {"security": {"rootless": rootless}}})

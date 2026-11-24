@@ -18,10 +18,10 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-fn err(message: impl Into<String>) -> Error {
+fn err(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::InvalidParams,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
@@ -31,10 +31,13 @@ struct Graph(mpsc::UnboundedSender<(String, Option<RunMeta>)>);
 
 impl RunSink for Graph {
     fn put(&self, meta: &RunMeta) {
-        let _ = self.0.send((meta.id.clone(), Some(meta.clone())));
+        crate::soft::done(
+            self.0.send((meta.id.clone(), Some(meta.clone()))),
+            "self send",
+        );
     }
     fn gone(&self, id: &str) {
-        let _ = self.0.send((id.to_owned(), None));
+        crate::soft::done(self.0.send((id.to_owned(), None)), "self send");
     }
 }
 
@@ -258,7 +261,7 @@ pub async fn serve(
     ) && let Ok(r) = records(front)
     {
         // a keyring unlocked since the hub started: the runs read from now on
-        let _ = r.unlock().await;
+        crate::soft::done(r.unlock().await, "runs_wire");
         // what the sessions recorded so far is in the files read
         r.written().await;
     }

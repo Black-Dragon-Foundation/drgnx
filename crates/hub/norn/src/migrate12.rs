@@ -45,12 +45,12 @@ pub fn upgrade(conn: &mut Connection) -> Result<bool, urdr::SqliteError> {
     match out {
         Ok(done) => {
             conn.execute_batch("commit").inspect_err(|_| {
-                let _ = conn.execute_batch("rollback");
+                crate::rollback(conn);
             })?;
             Ok(done)
         }
         Err(e) => {
-            let _ = conn.execute_batch("rollback");
+            crate::rollback(conn);
             Err(e)
         }
     }

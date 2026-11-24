@@ -70,7 +70,7 @@ pub(super) struct Spec {
 /// A kind as a `&'static str`: the distinct kinds of all packs, interned (a few dozen).
 fn intern(s: &str) -> &'static str {
     static KINDS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
-    let mut k = KINDS.lock().expect("the kinds lock");
+    let mut k = saman::lock(&KINDS);
     if let Some(found) = k.iter().find(|x| **x == s) {
         return found;
     }

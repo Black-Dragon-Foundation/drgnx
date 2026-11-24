@@ -366,7 +366,9 @@ pub struct ServeAnswer {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ServeToken {
-    pub token: String,
+    #[serde(with = "crate::secret_text")]
+    #[schemars(with = "String")]
+    pub token: hulda::Secret<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -1980,4 +1982,24 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "a new token for the vector server, shown once; the old one is refused from the next request",
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_serve_token_never_prints() {
+        let t = ServeToken {
+            token: hulda::Secret::new("tok-0123456789".into()),
+        };
+        for shown in [format!("{t:?}"), format!("{:#?}", t), t.token.to_string()] {
+            assert!(!shown.contains("tok-0123456789"), "{shown}");
+        }
+        assert!(format!("{t:?}").contains(hulda::REDACTED));
+        let wire = serde_json::to_value(&t).unwrap();
+        assert_eq!(wire["token"], "tok-0123456789");
+        let back: ServeToken = serde_json::from_value(wire).unwrap();
+        assert_eq!(back.token.expose(), "tok-0123456789");
+    }
 }

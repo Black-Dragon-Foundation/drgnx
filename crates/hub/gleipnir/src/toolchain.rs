@@ -326,7 +326,7 @@ mod tests {
         fn file(&self, rel: &str, mode: u32) -> PathBuf {
             let p = self.p(rel);
             fs::create_dir_all(p.parent().unwrap()).unwrap();
-            fs::write(&p, "x").unwrap();
+            eitri::replace_file(&p, b"x").unwrap();
             fs::set_permissions(&p, fs::Permissions::from_mode(mode)).unwrap();
             p
         }

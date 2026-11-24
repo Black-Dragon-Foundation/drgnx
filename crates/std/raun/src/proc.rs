@@ -66,6 +66,13 @@ impl TestChild {
         Ok(line)
     }
 
+    /// The rest of the child's stdout, to read on a thread of the test's own (`read_line` gives an error from then on).
+    pub fn take_stdout(&mut self) -> villa::Result<BufReader<File>> {
+        self.out
+            .take()
+            .ok_or_else(|| villa::Error::invalid("the child's stdout was taken"))
+    }
+
     /// Wait for the child to exit on its own and give its status; an error when it was already waited for.
     pub fn wait(&mut self) -> villa::Result<std::process::ExitStatus> {
         let child = &mut self.child;

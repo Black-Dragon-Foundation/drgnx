@@ -37,20 +37,17 @@ impl FakeProc {
         }
     }
     fn signals(&self) -> Vec<(Sig, Duration)> {
-        self.signals.lock().unwrap().clone()
+        saman::lock(&self.signals).clone()
     }
     fn die(&self) {
-        *self.dead.lock().unwrap() = true;
+        *saman::lock(&self.dead) = true;
         self.gone.notify_waiters();
     }
 }
 
 impl Proc for FakeProc {
     fn signal(&mut self, sig: Sig) {
-        self.signals
-            .lock()
-            .unwrap()
-            .push((sig, crate::clock::now().duration_since(self.t0)));
+        saman::lock(&self.signals).push((sig, crate::clock::now().duration_since(self.t0)));
         if (sig == Sig::Term && self.exit == Exit::OnTerm) || sig == Sig::Kill {
             self.die();
         }
@@ -59,7 +56,7 @@ impl Proc for FakeProc {
         Box::pin(async move {
             loop {
                 let n = self.gone.notified();
-                if *self.dead.lock().unwrap() || self.exit == Exit::Itself {
+                if *saman::lock(&self.dead) || self.exit == Exit::Itself {
                     return;
                 }
                 n.await;
@@ -188,141 +185,150 @@ fn polite_end() -> Vec<Value> {
     ]
 }
 
-#[tokio::test(start_paused = true)]
-async fn the_launch_sequence_sends_breakpoints_and_configuration_done_before_the_launch_answer() {
-    let mut start = start_of(Request::Launch, json!({"program": "/p/a.py"}));
-    start.breakpoints = vec![
-        session::SourceBps {
-            path: "/p/a.py".into(),
-            breakpoints: vec![json!({"line": 9})],
-        },
-        session::SourceBps {
-            path: "/p/b.py".into(),
-            breakpoints: vec![json!({"line": 3, "condition": "x > 1"})],
-        },
-    ];
-    start.exception_filters = Some(vec!["uncaught".into()]);
-    let steps = vec![
-        json!({"expect": INIT, "ok": {"supportsConfigurationDoneRequest": true, "supportsTerminateRequest": true,
+#[test]
+fn the_launch_sequence_sends_breakpoints_and_configuration_done_before_the_launch_answer() {
+    saman::block_on_paused(async move {
+        let mut start = start_of(Request::Launch, json!({"program": "/p/a.py"}));
+        start.breakpoints = vec![
+            session::SourceBps {
+                path: "/p/a.py".into(),
+                breakpoints: vec![json!({"line": 9})],
+            },
+            session::SourceBps {
+                path: "/p/b.py".into(),
+                breakpoints: vec![json!({"line": 3, "condition": "x > 1"})],
+            },
+        ];
+        start.exception_filters = Some(vec!["uncaught".into()]);
+        let steps = vec![
+            json!({"expect": INIT, "ok": {"supportsConfigurationDoneRequest": true, "supportsTerminateRequest": true,
                "supportsConditionalBreakpoints": true,
                "exceptionBreakpointFilters": [{"filter": "uncaught", "label": "Uncaught"}]}}),
-        json!({"expect": "launch", "args": {"program": "/p/a.py"}, "defer": true}),
-        json!({"event": "initialized"}),
-        json!({"any": [
-            {"expect": "setBreakpoints", "args": {"source": {"path": "/p/a.py"}, "breakpoints": [{"line": 9}]},
-             "ok": {"breakpoints": [{"verified": true, "line": 9}]}},
-            {"expect": "setBreakpoints", "args": {"source": {"path": "/p/b.py"}, "breakpoints": [{"line": 3, "condition": "x > 1"}]},
-             "ok": {"breakpoints": [{"verified": true, "line": 3}]}},
-        ]}),
-        json!({"expect": "setExceptionBreakpoints", "args": {"filters": ["uncaught"]}, "ok": {}}),
-        json!({"expect": "configurationDone"}),
-        json!({"answer": "launch"}),
-    ];
-    let mut steps = steps;
-    steps.extend(polite_end());
-    let mut r = run(start, steps, Exit::Itself);
-    assert!(matches!(r.next().await, Update::Caps(c) if c["supportsTerminateRequest"] == true));
-    // the session is running once the launch is answered
-    loop {
-        if let Update::Running { .. } = r.next().await {
-            break;
+            json!({"expect": "launch", "args": {"program": "/p/a.py"}, "defer": true}),
+            json!({"event": "initialized"}),
+            json!({"any": [
+                {"expect": "setBreakpoints", "args": {"source": {"path": "/p/a.py"}, "breakpoints": [{"line": 9}]},
+                 "ok": {"breakpoints": [{"verified": true, "line": 9}]}},
+                {"expect": "setBreakpoints", "args": {"source": {"path": "/p/b.py"}, "breakpoints": [{"line": 3, "condition": "x > 1"}]},
+                 "ok": {"breakpoints": [{"verified": true, "line": 3}]}},
+            ]}),
+            json!({"expect": "setExceptionBreakpoints", "args": {"filters": ["uncaught"]}, "ok": {}}),
+            json!({"expect": "configurationDone"}),
+            json!({"answer": "launch"}),
+        ];
+        let mut steps = steps;
+        steps.extend(polite_end());
+        let mut r = run(start, steps, Exit::Itself);
+        assert!(matches!(r.next().await, Update::Caps(c) if c["supportsTerminateRequest"] == true));
+        // the session is running once the launch is answered
+        loop {
+            if let Update::Running { .. } = r.next().await {
+                break;
+            }
         }
-    }
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
+        r.h.op(Op::Stop {
+            kill_debuggee: None,
+        })
+        .await
+        .unwrap();
+        let (end, log, proc) = r.finish().await;
+        assert_eq!(end.restart, None);
+        assert!(proc.signals().is_empty(), "a polite adapter gets no signal");
+        let cmds = log.commands();
+        let pos = |c: &str| cmds.iter().position(|x| *x == c).unwrap();
+        assert!(pos("setExceptionBreakpoints") < pos("configurationDone"));
     })
-    .await
-    .unwrap();
-    let (end, log, proc) = r.finish().await;
-    assert_eq!(end.restart, None);
-    assert!(proc.signals().is_empty(), "a polite adapter gets no signal");
-    let cmds = log.commands();
-    let pos = |c: &str| cmds.iter().position(|x| *x == c).unwrap();
-    assert!(pos("setExceptionBreakpoints") < pos("configurationDone"));
 }
 
 /// js-debug sends `initialized` at once after its `initialize` answer; on a loaded machine both are read before the
 /// session looks, and the event may even come first. It is kept for after the answer, never dropped: dropped, the
 /// session never configures and the adapter never answers the attach (DBG-JS-WATCHDOG-1's hang).
-#[tokio::test(start_paused = true)]
-async fn an_initialized_event_before_the_initialize_answer_still_configures() {
-    let steps = vec![
-        json!({"expect": INIT, "defer": true}),
-        json!({"event": "initialized"}),
-        json!({"answer": INIT, "ok": {"supportsConfigurationDoneRequest": true, "supportsTerminateRequest": true}}),
-        json!({"expect": "attach", "defer": true}),
-        json!({"expect": "configurationDone"}),
-        json!({"answer": "attach"}),
-        json!({"expect": "disconnect", "ok": {}}),
-        json!({"die": true}),
-    ];
-    let mut r = run(
-        start_of(Request::Attach, json!({"port": 9229})),
-        steps,
-        Exit::Itself,
-    );
-    crate::clock::timeout(Duration::from_secs(30), r.running())
+#[test]
+fn an_initialized_event_before_the_initialize_answer_still_configures() {
+    saman::block_on_paused(async move {
+        let steps = vec![
+            json!({"expect": INIT, "defer": true}),
+            json!({"event": "initialized"}),
+            json!({"answer": INIT, "ok": {"supportsConfigurationDoneRequest": true, "supportsTerminateRequest": true}}),
+            json!({"expect": "attach", "defer": true}),
+            json!({"expect": "configurationDone"}),
+            json!({"answer": "attach"}),
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ];
+        let mut r = run(
+            start_of(Request::Attach, json!({"port": 9229})),
+            steps,
+            Exit::Itself,
+        );
+        crate::clock::timeout(Duration::from_secs(30), r.running())
+            .await
+            .expect("the session never configured: the initialized event was lost");
+        r.h.op(Op::Stop {
+            kill_debuggee: None,
+        })
         .await
-        .expect("the session never configured: the initialized event was lost");
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
+        .unwrap();
+        r.finish().await;
     })
-    .await
-    .unwrap();
-    r.finish().await;
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_failed_launch_ends_the_session_with_its_message() {
-    let steps = vec![
-        json!({"expect": INIT, "ok": {}}),
-        json!({"expect": "launch", "fail": "No such file: /p/a.py"}),
-        json!({"expect": "disconnect", "ok": {}}),
-        json!({"die": true}),
-    ];
-    let r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
-    let (end, _, _) = r.finish().await;
-    assert!(
-        end.reason.contains("No such file: /p/a.py"),
-        "{}",
-        end.reason
-    );
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_stop_fetches_threads_frames_scopes_and_the_cheap_variables_in_one_epoch() {
-    let mut steps = launch_steps(json!({"supportsTerminateRequest": true}));
-    steps.extend(stop_fetch(1));
-    steps.extend(polite_end());
-    let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
-    let s = r.stopped().await;
-    assert_eq!((s.epoch, s.thread, s.reason.as_str()), (1, 1, "breakpoint"));
-    assert_eq!(s.threads.len(), 2);
-    assert_eq!(s.frames.len(), 2);
-    assert_eq!(s.frame, 1000);
-    assert_eq!(s.scopes.len(), 2);
-    assert_eq!(s.scopes[0].variables.as_ref().unwrap()[0]["name"], "total");
-    assert!(
-        s.scopes[1].variables.is_none(),
-        "an expensive scope waits to be opened"
-    );
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
+#[test]
+fn a_failed_launch_ends_the_session_with_its_message() {
+    saman::block_on_paused(async move {
+        let steps = vec![
+            json!({"expect": INIT, "ok": {}}),
+            json!({"expect": "launch", "fail": "No such file: /p/a.py"}),
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ];
+        let r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+        let (end, _, _) = r.finish().await;
+        assert!(
+            end.reason.contains("No such file: /p/a.py"),
+            "{}",
+            end.reason
+        );
     })
-    .await
-    .unwrap();
-    let (_, log, _) = r.finish().await;
-    assert!(
-        !log.requests
-            .iter()
-            .any(|(c, a)| c == "variables" && a["variablesReference"] == 8)
-    );
 }
 
-#[tokio::test(start_paused = true)]
-async fn more_frames_come_twenty_at_a_time_while_total_frames_says_there_are_more() {
-    let mut steps = launch_steps(json!({"supportsDelayedStackTraceLoading": true}));
-    steps.extend([
+#[test]
+fn a_stop_fetches_threads_frames_scopes_and_the_cheap_variables_in_one_epoch() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({"supportsTerminateRequest": true}));
+        steps.extend(stop_fetch(1));
+        steps.extend(polite_end());
+        let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+        let s = r.stopped().await;
+        assert_eq!((s.epoch, s.thread, s.reason.as_str()), (1, 1, "breakpoint"));
+        assert_eq!(s.threads.len(), 2);
+        assert_eq!(s.frames.len(), 2);
+        assert_eq!(s.frame, 1000);
+        assert_eq!(s.scopes.len(), 2);
+        assert_eq!(s.scopes[0].variables.as_ref().unwrap()[0]["name"], "total");
+        assert!(
+            s.scopes[1].variables.is_none(),
+            "an expensive scope waits to be opened"
+        );
+        r.h.op(Op::Stop {
+            kill_debuggee: None,
+        })
+        .await
+        .unwrap();
+        let (_, log, _) = r.finish().await;
+        assert!(
+            !log.requests
+                .iter()
+                .any(|(c, a)| c == "variables" && a["variablesReference"] == 8)
+        );
+    })
+}
+
+#[test]
+fn more_frames_come_twenty_at_a_time_while_total_frames_says_there_are_more() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({"supportsDelayedStackTraceLoading": true}));
+        steps.extend([
         json!({"event": "stopped", "body": {"reason": "step", "threadId": 1}}),
         json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}),
         json!({"expect": "stackTrace", "args": {"levels": 20},
@@ -335,60 +341,64 @@ async fn more_frames_come_twenty_at_a_time_while_total_frames_says_there_are_mor
         json!({"expect": "disconnect", "ok": {}}),
         json!({"die": true}),
     ]);
-    let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
-    let s = r.stopped().await;
-    assert_eq!((s.frames.len(), s.total_frames), (20, Some(45)));
-    let frames = r.h.more_frames(s.epoch, 1).await.unwrap();
-    assert_eq!(frames.len(), 20);
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
+        let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+        let s = r.stopped().await;
+        assert_eq!((s.frames.len(), s.total_frames), (20, Some(45)));
+        let frames = r.h.more_frames(s.epoch, 1).await.unwrap();
+        assert_eq!(frames.len(), 20);
+        r.h.op(Op::Stop {
+            kill_debuggee: None,
+        })
+        .await
+        .unwrap();
+        r.finish().await;
     })
-    .await
-    .unwrap();
-    r.finish().await;
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_variables_reference_from_an_old_epoch_is_never_sent() {
-    let mut steps = launch_steps(json!({}));
-    steps.extend(stop_fetch(1));
-    steps.extend([
+#[test]
+fn a_variables_reference_from_an_old_epoch_is_never_sent() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({}));
+        steps.extend(stop_fetch(1));
+        steps.extend([
         json!({"expect": "continue", "args": {"threadId": 1}, "ok": {"allThreadsContinued": true}}),
         json!({"event": "continued", "body": {"threadId": 1, "allThreadsContinued": true}}),
     ]);
-    steps.extend(stop_fetch(1));
-    steps.extend([
+        steps.extend(stop_fetch(1));
+        steps.extend([
         json!({"expect": "variables", "args": {"variablesReference": 8}, "ok": {"variables": []}}),
         json!({"expect": "disconnect", "ok": {}}),
         json!({"die": true}),
     ]);
-    let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
-    let first = r.stopped().await;
-    r.h.op(Op::Continue { thread: None }).await.unwrap();
-    let second = r.stopped().await;
-    assert_eq!((first.epoch, second.epoch), (1, 2));
-    let old = r.h.variables(first.epoch, 8).await;
-    assert!(old.is_err(), "an old epoch's reference is refused here");
-    assert!(r.h.variables(second.epoch, 8).await.is_ok());
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
+        let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+        let first = r.stopped().await;
+        r.h.op(Op::Continue { thread: None }).await.unwrap();
+        let second = r.stopped().await;
+        assert_eq!((first.epoch, second.epoch), (1, 2));
+        let old = r.h.variables(first.epoch, 8).await;
+        assert!(old.is_err(), "an old epoch's reference is refused here");
+        assert!(r.h.variables(second.epoch, 8).await.is_ok());
+        r.h.op(Op::Stop {
+            kill_debuggee: None,
+        })
+        .await
+        .unwrap();
+        let (_, log, _) = r.finish().await;
+        let n8 = log
+            .requests
+            .iter()
+            .filter(|(c, a)| c == "variables" && a["variablesReference"] == 8)
+            .count();
+        assert_eq!(n8, 1);
     })
-    .await
-    .unwrap();
-    let (_, log, _) = r.finish().await;
-    let n8 = log
-        .requests
-        .iter()
-        .filter(|(c, a)| c == "variables" && a["variablesReference"] == 8)
-        .count();
-    assert_eq!(n8, 1);
 }
 
-#[tokio::test(start_paused = true)]
-async fn invalidated_areas_are_fetched_again_in_the_same_epoch() {
-    let mut steps = launch_steps(json!({}));
-    steps.extend(stop_fetch(1));
-    steps.extend([
+#[test]
+fn invalidated_areas_are_fetched_again_in_the_same_epoch() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({}));
+        steps.extend(stop_fetch(1));
+        steps.extend([
         json!({"event": "invalidated", "body": {"areas": ["variables"]}}),
         json!({"expect": "scopes", "args": {"frameId": 1000},
                "ok": {"scopes": [{"name": "Locals", "variablesReference": 9, "expensive": false}]}}),
@@ -397,298 +407,324 @@ async fn invalidated_areas_are_fetched_again_in_the_same_epoch() {
         json!({"expect": "disconnect", "ok": {}}),
         json!({"die": true}),
     ]);
-    let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
-    let a = r.stopped().await;
-    let b = r.stopped().await;
-    assert_eq!(a.epoch, b.epoch);
-    assert_eq!(b.scopes[0].variables.as_ref().unwrap()[0]["value"], "11");
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
+        let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+        let a = r.stopped().await;
+        let b = r.stopped().await;
+        assert_eq!(a.epoch, b.epoch);
+        assert_eq!(b.scopes[0].variables.as_ref().unwrap()[0]["value"], "11");
+        r.h.op(Op::Stop {
+            kill_debuggee: None,
+        })
+        .await
+        .unwrap();
+        r.finish().await;
     })
-    .await
-    .unwrap();
-    r.finish().await;
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_silent_adapter_gets_terminate_disconnect_sigterm_then_sigkill_on_time() {
-    let mut steps = launch_steps(json!({"supportsTerminateRequest": true}));
-    steps.extend([
-        json!({"expect": "terminate", "silent": true}),
-        json!({"expect": "disconnect", "args": {"terminateDebuggee": true}, "silent": true}),
-    ]);
-    let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::OnKill);
-    loop {
-        if let Update::Running { .. } = r.next().await {
-            break;
+#[test]
+fn a_silent_adapter_gets_terminate_disconnect_sigterm_then_sigkill_on_time() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({"supportsTerminateRequest": true}));
+        steps.extend([
+            json!({"expect": "terminate", "silent": true}),
+            json!({"expect": "disconnect", "args": {"terminateDebuggee": true}, "silent": true}),
+        ]);
+        let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::OnKill);
+        loop {
+            if let Update::Running { .. } = r.next().await {
+                break;
+            }
         }
-    }
-    let t0 = crate::clock::now().duration_since(r.proc.t0);
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
+        let t0 = crate::clock::now().duration_since(r.proc.t0);
+        r.h.op(Op::Stop {
+            kill_debuggee: None,
+        })
+        .await
+        .unwrap();
+        let end = r.end().await;
+        let sig = r.proc.signals();
+        assert_eq!(
+            sig.len(),
+            2,
+            "{:?}",
+            sig.iter().map(|s| s.0).collect::<Vec<_>>()
+        );
+        assert_eq!(sig[0].0, Sig::Term);
+        assert_eq!(
+            sig[0].1 - t0,
+            Duration::from_secs(4),
+            "terminate 2 s, disconnect 2 s"
+        );
+        assert_eq!(sig[1].0, Sig::Kill);
+        assert_eq!(sig[1].1 - sig[0].1, Duration::from_secs(1));
+        assert!(end.reason.contains("stopped"), "{}", end.reason);
+        drop(r.h);
+        drop(r.up);
+        // the mock never saw its connection end cleanly: it is not checked here
     })
-    .await
-    .unwrap();
-    let end = r.end().await;
-    let sig = r.proc.signals();
-    assert_eq!(
-        sig.len(),
-        2,
-        "{:?}",
-        sig.iter().map(|s| s.0).collect::<Vec<_>>()
-    );
-    assert_eq!(sig[0].0, Sig::Term);
-    assert_eq!(
-        sig[0].1 - t0,
-        Duration::from_secs(4),
-        "terminate 2 s, disconnect 2 s"
-    );
-    assert_eq!(sig[1].0, Sig::Kill);
-    assert_eq!(sig[1].1 - sig[0].1, Duration::from_secs(1));
-    assert!(end.reason.contains("stopped"), "{}", end.reason);
-    drop(r.h);
-    drop(r.up);
-    // the mock never saw its connection end cleanly: it is not checked here
 }
 
-#[tokio::test(start_paused = true)]
-async fn an_attach_session_disconnects_and_leaves_the_debuggee_running() {
-    let mut steps = vec![
-        json!({"expect": INIT, "ok": {"supportsTerminateRequest": true, "supportsConfigurationDoneRequest": true}}),
-        json!({"expect": "attach", "args": {"processId": 42}, "ok": {}}),
-        json!({"event": "initialized"}),
-        json!({"expect": "configurationDone"}),
-    ];
-    steps.extend([
-        json!({"expect": "disconnect", "args": {"terminateDebuggee": false}, "ok": {}}),
-        json!({"die": true}),
-    ]);
-    let mut r = run(
-        start_of(Request::Attach, json!({"processId": 42})),
-        steps,
-        Exit::Itself,
-    );
-    loop {
-        if let Update::Running { .. } = r.next().await {
-            break;
+#[test]
+fn an_attach_session_disconnects_and_leaves_the_debuggee_running() {
+    saman::block_on_paused(async move {
+        let mut steps = vec![
+            json!({"expect": INIT, "ok": {"supportsTerminateRequest": true, "supportsConfigurationDoneRequest": true}}),
+            json!({"expect": "attach", "args": {"processId": 42}, "ok": {}}),
+            json!({"event": "initialized"}),
+            json!({"expect": "configurationDone"}),
+        ];
+        steps.extend([
+            json!({"expect": "disconnect", "args": {"terminateDebuggee": false}, "ok": {}}),
+            json!({"die": true}),
+        ]);
+        let mut r = run(
+            start_of(Request::Attach, json!({"processId": 42})),
+            steps,
+            Exit::Itself,
+        );
+        loop {
+            if let Update::Running { .. } = r.next().await {
+                break;
+            }
         }
-    }
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
+        r.h.op(Op::Stop {
+            kill_debuggee: None,
+        })
+        .await
+        .unwrap();
+        let (_, log, proc) = r.finish().await;
+        assert!(!log.commands().contains(&"terminate"));
+        assert!(proc.signals().is_empty());
     })
-    .await
-    .unwrap();
-    let (_, log, proc) = r.finish().await;
-    assert!(!log.commands().contains(&"terminate"));
-    assert!(proc.signals().is_empty());
 }
 
-#[tokio::test(start_paused = true)]
-async fn without_terminate_support_a_stop_starts_at_disconnect() {
-    let mut steps = launch_steps(json!({}));
-    steps.extend([
-        json!({"expect": "disconnect", "args": {"terminateDebuggee": true}, "ok": {}}),
-        json!({"die": true}),
-    ]);
-    let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
-    r.running().await;
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
+#[test]
+fn without_terminate_support_a_stop_starts_at_disconnect() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({}));
+        steps.extend([
+            json!({"expect": "disconnect", "args": {"terminateDebuggee": true}, "ok": {}}),
+            json!({"die": true}),
+        ]);
+        let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+        r.running().await;
+        r.h.op(Op::Stop {
+            kill_debuggee: None,
+        })
+        .await
+        .unwrap();
+        r.finish().await;
     })
-    .await
-    .unwrap();
-    r.finish().await;
 }
 
-#[tokio::test(start_paused = true)]
-async fn restart_uses_the_request_when_the_adapter_has_it() {
-    let mut steps = launch_steps(json!({"supportsRestartRequest": true}));
-    steps.extend([
-        json!({"expect": "restart", "args": {"arguments": {"program": "/p/a.py"}}, "ok": {}}),
-        json!({"expect": "disconnect", "ok": {}}),
-        json!({"die": true}),
-    ]);
-    let mut r = run(
-        start_of(Request::Launch, json!({"program": "/p/a.py"})),
-        steps,
-        Exit::Itself,
-    );
-    r.running().await;
-    r.h.op(Op::Restart).await.unwrap();
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
+#[test]
+fn restart_uses_the_request_when_the_adapter_has_it() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({"supportsRestartRequest": true}));
+        steps.extend([
+            json!({"expect": "restart", "args": {"arguments": {"program": "/p/a.py"}}, "ok": {}}),
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ]);
+        let mut r = run(
+            start_of(Request::Launch, json!({"program": "/p/a.py"})),
+            steps,
+            Exit::Itself,
+        );
+        r.running().await;
+        r.h.op(Op::Restart).await.unwrap();
+        r.h.op(Op::Stop {
+            kill_debuggee: None,
+        })
+        .await
+        .unwrap();
+        let (end, _, _) = r.finish().await;
+        assert_eq!(end.restart, None);
     })
-    .await
-    .unwrap();
-    let (end, _, _) = r.finish().await;
-    assert_eq!(end.restart, None);
 }
 
-#[tokio::test(start_paused = true)]
-async fn restart_without_the_request_stops_and_asks_for_a_new_start() {
-    let mut steps = launch_steps(json!({}));
-    steps.extend([
-        json!({"expect": "disconnect", "args": {"terminateDebuggee": true}, "ok": {}}),
-        json!({"die": true}),
-    ]);
-    let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
-    r.running().await;
-    r.h.op(Op::Restart).await.unwrap();
-    let (end, _, _) = r.finish().await;
-    assert_eq!(
-        end.restart,
-        Some(Value::Null),
-        "start again, with no `__restart` value"
-    );
+#[test]
+fn restart_without_the_request_stops_and_asks_for_a_new_start() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({}));
+        steps.extend([
+            json!({"expect": "disconnect", "args": {"terminateDebuggee": true}, "ok": {}}),
+            json!({"die": true}),
+        ]);
+        let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+        r.running().await;
+        r.h.op(Op::Restart).await.unwrap();
+        let (end, _, _) = r.finish().await;
+        assert_eq!(
+            end.restart,
+            Some(Value::Null),
+            "start again, with no `__restart` value"
+        );
+    })
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_terminated_event_with_restart_passes_its_value_on() {
-    let mut steps = launch_steps(json!({}));
-    steps.extend([
-        json!({"event": "terminated", "body": {"restart": {"port": 9229}}}),
-        json!({"expect": "disconnect", "ok": {}}),
-        json!({"die": true}),
-    ]);
-    let r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
-    let (end, _, _) = r.finish().await;
-    assert_eq!(end.restart, Some(json!({"port": 9229})));
-    let mut again = start_of(Request::Launch, json!({"program": "x"}));
-    again.restart_with(end.restart.unwrap());
-    assert_eq!(again.arguments["__restart"], json!({"port": 9229}));
+#[test]
+fn a_terminated_event_with_restart_passes_its_value_on() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({}));
+        steps.extend([
+            json!({"event": "terminated", "body": {"restart": {"port": 9229}}}),
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ]);
+        let r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+        let (end, _, _) = r.finish().await;
+        assert_eq!(end.restart, Some(json!({"port": 9229})));
+        let mut again = start_of(Request::Launch, json!({"program": "x"}));
+        again.restart_with(end.restart.unwrap());
+        assert_eq!(again.arguments["__restart"], json!({"port": 9229}));
+    })
 }
 
-#[tokio::test(start_paused = true)]
-async fn exited_then_terminated_ends_the_session_once() {
-    let mut steps = launch_steps(json!({}));
-    steps.extend([
-        json!({"event": "exited", "body": {"exitCode": 3}}),
-        json!({"event": "terminated"}),
-        json!({"expect": "disconnect", "ok": {}}),
-        json!({"die": true}),
-    ]);
-    let r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
-    let (end, _, _) = r.finish().await;
-    assert_eq!(end.exit_code, Some(3));
+#[test]
+fn exited_then_terminated_ends_the_session_once() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({}));
+        steps.extend([
+            json!({"event": "exited", "body": {"exitCode": 3}}),
+            json!({"event": "terminated"}),
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ]);
+        let r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+        let (end, _, _) = r.finish().await;
+        assert_eq!(end.exit_code, Some(3));
+    })
 }
 
-#[tokio::test(start_paused = true)]
-async fn an_adapter_that_dies_ends_the_session_once_and_is_reaped() {
-    let mut steps = launch_steps(json!({}));
-    steps.push(json!({"die": true}));
-    let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::OnTerm);
-    let end = r.end().await;
-    assert!(end.reason.contains("adapter"), "{}", end.reason);
-    let sig = r.proc.signals();
-    assert_eq!(
-        sig.iter().map(|s| s.0).collect::<Vec<_>>(),
-        [Sig::Term],
-        "reaped: SIGTERM after its 2 s"
-    );
-    while let Some(u) = r.up.recv().await {
-        assert!(!matches!(u, Update::Ended(_)));
-    }
+#[test]
+fn an_adapter_that_dies_ends_the_session_once_and_is_reaped() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({}));
+        steps.push(json!({"die": true}));
+        let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::OnTerm);
+        let end = r.end().await;
+        assert!(end.reason.contains("adapter"), "{}", end.reason);
+        let sig = r.proc.signals();
+        assert_eq!(
+            sig.iter().map(|s| s.0).collect::<Vec<_>>(),
+            [Sig::Term],
+            "reaped: SIGTERM after its 2 s"
+        );
+        while let Some(u) = r.up.recv().await {
+            assert!(!matches!(u, Update::Ended(_)));
+        }
+    })
 }
 
-#[tokio::test(start_paused = true)]
-async fn run_in_terminal_is_handed_up_and_answered_with_the_pid() {
-    let mut steps = launch_steps(json!({}));
-    steps.extend([
+#[test]
+fn run_in_terminal_is_handed_up_and_answered_with_the_pid() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({}));
+        steps.extend([
         json!({"reverse": "runInTerminal", "arguments": {"kind": "integrated", "cwd": "/p", "args": ["python3", "a.py"]},
                "answer": {"processId": 4242}}),
         json!({"expect": "disconnect", "ok": {}}),
         json!({"die": true}),
     ]);
-    let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
-    loop {
-        match r.next().await {
-            Update::RunInTerminal { arguments, reply } => {
-                assert_eq!(arguments["args"][0], "python3");
-                reply.send(Ok(4242)).unwrap();
-                break;
+        let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+        loop {
+            match r.next().await {
+                Update::RunInTerminal { arguments, reply } => {
+                    assert_eq!(arguments["args"][0], "python3");
+                    reply.send(Ok(4242)).unwrap();
+                    break;
+                }
+                Update::Caps(_) | Update::Running { .. } => {}
+                u => panic!("{u:?}"),
             }
-            Update::Caps(_) | Update::Running { .. } => {}
-            u => panic!("{u:?}"),
         }
-    }
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
+        r.h.op(Op::Stop {
+            kill_debuggee: None,
+        })
+        .await
+        .unwrap();
+        r.finish().await;
     })
-    .await
-    .unwrap();
-    r.finish().await;
 }
 
-#[tokio::test(start_paused = true)]
-async fn start_debugging_is_handed_up_and_answered() {
-    let mut steps = launch_steps(json!({}));
-    steps.extend([
+#[test]
+fn start_debugging_is_handed_up_and_answered() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({}));
+        steps.extend([
         json!({"reverse": "startDebugging", "arguments": {"request": "launch", "configuration": {"__pendingTargetId": "t1"}},
                "answer": {}}),
         json!({"expect": "disconnect", "ok": {}}),
         json!({"die": true}),
     ]);
-    let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
-    loop {
-        match r.next().await {
-            Update::StartDebugging { arguments, reply } => {
-                assert_eq!(arguments["configuration"]["__pendingTargetId"], "t1");
-                reply.send(Ok(())).unwrap();
-                break;
+        let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+        loop {
+            match r.next().await {
+                Update::StartDebugging { arguments, reply } => {
+                    assert_eq!(arguments["configuration"]["__pendingTargetId"], "t1");
+                    reply.send(Ok(())).unwrap();
+                    break;
+                }
+                Update::Caps(_) | Update::Running { .. } => {}
+                u => panic!("{u:?}"),
             }
-            Update::Caps(_) | Update::Running { .. } => {}
-            u => panic!("{u:?}"),
         }
-    }
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
+        r.h.op(Op::Stop {
+            kill_debuggee: None,
+        })
+        .await
+        .unwrap();
+        r.finish().await;
     })
-    .await
-    .unwrap();
-    r.finish().await;
 }
 
-#[tokio::test(start_paused = true)]
-async fn dropping_the_handle_stops_the_session() {
-    let mut steps = launch_steps(json!({}));
-    steps.extend([
-        json!({"expect": "disconnect", "ok": {}}),
-        json!({"die": true}),
-    ]);
-    let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
-    loop {
-        if let Update::Running { .. } = r.next().await {
-            break;
+#[test]
+fn dropping_the_handle_stops_the_session() {
+    saman::block_on_paused(async move {
+        let mut steps = launch_steps(json!({}));
+        steps.extend([
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ]);
+        let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+        loop {
+            if let Update::Running { .. } = r.next().await {
+                break;
+            }
         }
-    }
-    let Run {
-        h, mut up, mock, ..
-    } = r;
-    drop(h);
-    loop {
-        if let Update::Ended(_) = up.recv().await.expect("an end") {
-            break;
+        let Run {
+            h, mut up, mock, ..
+        } = r;
+        drop(h);
+        loop {
+            if let Update::Ended(_) = up.recv().await.expect("an end") {
+                break;
+            }
         }
-    }
-    mock.finish().await.unwrap();
+        mock.finish().await.unwrap();
+    })
 }
 
 /// The Run and Debug view's fetch (`view::debug::fill`): a chunk of a long array is fetched only when its leaf is
 /// opened, with `start` and `count`, and nothing for the chunks around it; at a stop with many open paths at most 200
 /// `variables` calls go, breadth first, and the rest are capped (closed, "expand again").
-#[tokio::test(start_paused = true)]
-async fn the_view_fetches_open_paths_within_the_cap() {
-    use crate::view::debug::fill;
-    use crate::view::debug::model::{Opened, SessionView, Tree};
-    let mut locals: Vec<Value> = (0..250)
-        .map(|i| json!({"name": format!("o{i}"), "value": "Obj", "variablesReference": 100 + i}))
-        .collect();
-    locals.push(
-        json!({"name": "arr", "value": "array", "variablesReference": 9,
+#[test]
+fn the_view_fetches_open_paths_within_the_cap() {
+    saman::block_on_paused(async move {
+        use crate::view::debug::fill;
+        use crate::view::debug::model::{Opened, SessionView, Tree};
+        let mut locals: Vec<Value> = (0..250)
+            .map(
+                |i| json!({"name": format!("o{i}"), "value": "Obj", "variablesReference": 100 + i}),
+            )
+            .collect();
+        locals.push(
+            json!({"name": "arr", "value": "array", "variablesReference": 9,
                        "indexedVariables": 100_000, "namedVariables": 0}),
-    );
-    let mut steps = launch_steps(json!({}));
-    steps.extend([
+        );
+        let mut steps = launch_steps(json!({}));
+        steps.extend([
         json!({"event": "stopped", "body": {"reason": "breakpoint", "threadId": 1, "allThreadsStopped": true}}),
         json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "MainThread"}]}}),
         json!({"expect": "stackTrace", "ok": {"stackFrames": [{"id": 1000, "name": "main", "line": 9}], "totalFrames": 1}}),
@@ -698,63 +734,64 @@ async fn the_view_fetches_open_paths_within_the_cap() {
                "args": {"variablesReference": 9, "filter": "indexed", "start": 10_100, "count": 100},
                "ok": {"variables": [{"name": "10100", "value": "1", "variablesReference": 0}]}}),
     ]);
-    for i in 0..200 {
-        steps.push(
-            json!({"expect": "variables", "args": {"variablesReference": 100 + i},
+        for i in 0..200 {
+            steps.push(
+                json!({"expect": "variables", "args": {"variablesReference": 100 + i},
                           "ok": {"variables": []}}),
+            );
+        }
+        steps.extend([
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ]);
+        let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
+        let stop = r.stopped().await;
+        let view = |stop: &Stop| SessionView {
+            id: "d1".into(),
+            state: "stopped".into(),
+            tree: Tree::of_stop("d1", stop),
+            stop: Some(stop.clone()),
+            ..SessionView::default()
+        };
+        // the array: three levels opened, one call
+        let mut opened = Opened::default();
+        for p in [
+            "v:d1:Locals/arr",
+            "v:d1:Locals/arr/[10000..19999]",
+            "v:d1:Locals/arr/[10000..19999]/[10100..10199]",
+        ] {
+            opened.set(p, true);
+        }
+        let mut v = view(&stop);
+        let mut calls = 0;
+        fill(&r.h, &mut v, &mut calls, &opened).await;
+        assert_eq!(calls, 1);
+        assert_eq!(
+            v.tree.kids["v:d1:Locals/arr/[10000..19999]/[10100..10199]"].len(),
+            1
         );
-    }
-    steps.extend([
-        json!({"expect": "disconnect", "ok": {}}),
-        json!({"die": true}),
-    ]);
-    let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::Itself);
-    let stop = r.stopped().await;
-    let view = |stop: &Stop| SessionView {
-        id: "d1".into(),
-        state: "stopped".into(),
-        tree: Tree::of_stop("d1", stop),
-        stop: Some(stop.clone()),
-        ..SessionView::default()
-    };
-    // the array: three levels opened, one call
-    let mut opened = Opened::default();
-    for p in [
-        "v:d1:Locals/arr",
-        "v:d1:Locals/arr/[10000..19999]",
-        "v:d1:Locals/arr/[10000..19999]/[10100..10199]",
-    ] {
-        opened.set(p, true);
-    }
-    let mut v = view(&stop);
-    let mut calls = 0;
-    fill(&r.h, &mut v, &mut calls, &opened).await;
-    assert_eq!(calls, 1);
-    assert_eq!(
-        v.tree.kids["v:d1:Locals/arr/[10000..19999]/[10100..10199]"].len(),
-        1
-    );
-    // every object opened: 200 calls, the other 50 capped
-    let mut opened = Opened::default();
-    for i in 0..250 {
-        opened.set(&format!("v:d1:Locals/o{i}"), true);
-    }
-    let mut v = view(&stop);
-    let mut calls = 0;
-    fill(&r.h, &mut v, &mut calls, &opened).await;
-    assert_eq!(calls, 200);
-    assert_eq!(v.tree.capped.len(), 50);
-    assert!(v.tree.capped.contains("v:d1:Locals/o249"));
-    r.h.op(Op::Stop {
-        kill_debuggee: None,
+        // every object opened: 200 calls, the other 50 capped
+        let mut opened = Opened::default();
+        for i in 0..250 {
+            opened.set(&format!("v:d1:Locals/o{i}"), true);
+        }
+        let mut v = view(&stop);
+        let mut calls = 0;
+        fill(&r.h, &mut v, &mut calls, &opened).await;
+        assert_eq!(calls, 200);
+        assert_eq!(v.tree.capped.len(), 50);
+        assert!(v.tree.capped.contains("v:d1:Locals/o249"));
+        r.h.op(Op::Stop {
+            kill_debuggee: None,
+        })
+        .await
+        .unwrap();
+        let (_, log, _) = r.finish().await;
+        let vars = log.commands().iter().filter(|c| **c == "variables").count();
+        assert_eq!(
+            vars,
+            1 + 1 + 200,
+            "the scope's page, the chunk, the objects"
+        );
     })
-    .await
-    .unwrap();
-    let (_, log, _) = r.finish().await;
-    let vars = log.commands().iter().filter(|c| **c == "variables").count();
-    assert_eq!(
-        vars,
-        1 + 1 + 200,
-        "the scope's page, the chunk, the objects"
-    );
 }

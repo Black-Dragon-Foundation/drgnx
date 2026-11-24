@@ -8,7 +8,6 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
 
 use ratatoskr::extensions::catalog::{Inputs, build, parse_catalog};
 use ratatoskr::extensions::rank;
@@ -136,14 +135,14 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 #[ignore]
 fn catalog_load() {
     let bytes = catalog();
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "catalog-load: {} packages, {} kB of JSON",
         ARCHIVES.iter().map(|a| a.1).sum::<usize>(),
         bytes.len() / 1024
-    );
+    ));
     let mut times = Vec::new();
     for _ in 0..21 {
-        let t = Instant::now();
+        let t = stund::real::instant();
         let file = parse_catalog(&bytes).unwrap();
         let index = build(Inputs {
             catalog: Some(&file),
@@ -153,12 +152,12 @@ fn catalog_load() {
         assert!(index.entries.len() >= 7000);
     }
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "catalog-load: p50 {:.1} ms, p95 {:.1} ms, max {:.1} ms (budget 100 ms)",
         percentile(&times, 0.5),
         percentile(&times, 0.95),
         times.last().unwrap()
-    );
+    ));
     // what the hub keeps: its cache holds the parsed file beside the index; the file's bytes are dropped once parsed
     let before = live_bytes();
     let (file, index) = {
@@ -175,12 +174,12 @@ fn catalog_load() {
         drop(file);
         live_bytes().saturating_sub(before)
     };
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "catalog-load: index of {} rows and the parsed file kept: {} kB live (budget 15360 kB; the index alone {} kB)",
         index.entries.len(),
         kept / 1024,
         index_only / 1024
-    );
+    ));
     assert!(
         percentile(&times, 0.95) <= 100.0,
         "catalog-load p95 over its 100 ms budget"
@@ -228,7 +227,7 @@ fn search() {
                 } else {
                     w::Sort::Relevance
                 };
-                let t = Instant::now();
+                let t = stund::real::instant();
                 let hits = rank::search(&index.entries, q, f, None, sort);
                 times.push(t.elapsed().as_secs_f64() * 1000.0);
                 std::hint::black_box(hits);
@@ -236,14 +235,14 @@ fn search() {
         }
     }
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "search: {} searches over {} rows: p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms (budget p95 3 ms)",
         times.len(),
         index.entries.len(),
         percentile(&times, 0.5),
         percentile(&times, 0.95),
         times.last().unwrap()
-    );
+    ));
     assert!(
         percentile(&times, 0.95) <= 3.0,
         "search p95 over its 3 ms budget"

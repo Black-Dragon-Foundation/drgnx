@@ -87,7 +87,7 @@ impl V2 {
             } else if let Some(early) = q[i].early.take() {
                 // the turn ended before its answer came
                 if let Some(w) = q.remove(i) {
-                    let _ = w.tx.send(early);
+                    saman::delivered(w.tx.send(early), "w.tx receiver");
                 }
             } else {
                 q[i].acked = true;
@@ -118,7 +118,7 @@ impl V2 {
         let mut keep = VecDeque::new();
         for mut w in std::mem::take(q) {
             if w.acked {
-                let _ = w.tx.send(copy(result, first));
+                saman::delivered(w.tx.send(copy(result, first)), "w.tx receiver");
                 first = false;
             } else {
                 if w.started && w.early.is_none() {

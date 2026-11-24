@@ -372,8 +372,7 @@ mod tests {
         // every method of the registry is in the committed methods.json, and nothing else is: the count is
         // whatever that file says, so a new method breaks nothing here
         let committed: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(repo("crates/hub/protocol/methods.json"))
-                .expect("methods.json"),
+            &crate::testfs::read(repo("crates/hub/protocol/methods.json")).expect("methods.json"),
         )
         .expect("methods.json is JSON");
         let listed: Vec<&str> = committed["methods"]
@@ -638,9 +637,9 @@ mod tests {
         let now = methods_json_text();
         if update() {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(&path, &now).unwrap();
+            crate::testfs::write(&path, &now).unwrap();
         }
-        let committed = std::fs::read_to_string(&path).unwrap_or_default();
+        let committed = crate::testfs::read(&path).unwrap_or_default();
         assert!(
             committed == now,
             "{} is out of date: UPDATE_METHODS_JSON=1 cargo test -p runstav registry",
@@ -652,7 +651,7 @@ mod tests {
     fn the_docs_table_is_the_registry() {
         let path = repo("docs/develop/hub.md");
         let (begin, end) = ("<!-- hub-methods:begin -->\n", "<!-- hub-methods:end -->");
-        let text = std::fs::read_to_string(&path).unwrap();
+        let text = crate::testfs::read(&path).unwrap();
         let (b, e) = (text.find(begin), text.find(end));
         assert!(
             b.is_some() && e.is_some(),
@@ -661,7 +660,7 @@ mod tests {
         let (b, e) = (b.unwrap() + begin.len(), e.unwrap());
         let table = markdown_table();
         if update() && text[b..e] != table {
-            std::fs::write(&path, format!("{}{table}{}", &text[..b], &text[e..])).unwrap();
+            crate::testfs::write(&path, format!("{}{table}{}", &text[..b], &text[e..])).unwrap();
             return;
         }
         assert!(
@@ -673,7 +672,7 @@ mod tests {
 
     #[test]
     fn classes_match_the_hand_written_matrix() {
-        let text = std::fs::read_to_string(repo("test/conformance/class-matrix.json")).unwrap();
+        let text = crate::testfs::read(repo("test/conformance/class-matrix.json")).unwrap();
         let matrix: BTreeMap<String, Vec<Class>> = serde_json::from_str(&text).unwrap();
         let ours: BTreeMap<String, Vec<Class>> = registry()
             .iter()

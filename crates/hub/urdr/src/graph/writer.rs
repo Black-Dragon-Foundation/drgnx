@@ -5,14 +5,14 @@
 //! transaction.
 
 use std::fmt;
-use std::fs::OpenOptions;
-use std::io::ErrorKind;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
+
+use stund::Instant;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::de::DeserializeOwned;
@@ -229,9 +229,11 @@ impl Writer {
 
     /// Stop the thread and wait for it, which closes the connection. Blocking: not for an async worker.
     pub fn shutdown(mut self) {
-        let _ = self.stop.send(Msg::Stop);
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
+        saman::delivered(self.stop.send(Msg::Stop), "urdr writer stop");
+        if let Some(t) = self.thread.take()
+            && t.join().is_err()
+        {
+            tracing::warn!("the urdr writer thread panicked outside a request");
         }
     }
 }
@@ -239,7 +241,7 @@ impl Writer {
 impl Drop for Writer {
     fn drop(&mut self) {
         if self.thread.is_some() {
-            let _ = self.stop.send(Msg::Stop);
+            saman::delivered(self.stop.send(Msg::Stop), "urdr writer stop");
         }
     }
 }
@@ -272,12 +274,11 @@ fn spawn(
         last_at: 0.0,
         status: status.clone(),
     };
-    let thread = std::thread::Builder::new()
-        .name("urdr-writer".into())
-        .spawn(move || {
-            state.open();
-            state.serve(rx);
-        })?;
+    let thread = saman::spawn_thread("urdr-writer", move || {
+        state.open();
+        state.serve(rx);
+    })
+    .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
     let handle = WriterHandle {
         path: Arc::new(path),
         tx: tx.clone(),
@@ -348,16 +349,13 @@ impl WriterHandle {
         #[cfg(feature = "test-hooks")]
         let _waiting = crate::wait::begin();
         let (reply, answer) = oneshot::channel();
-        if self.tx.send(Msg::Tick(reply)).is_ok() {
-            let _ = answer.await;
+        if self.tx.send(Msg::Tick(reply)).is_ok() && answer.await.is_err() {
+            tracing::debug!("the urdr writer ended before it answered a tick");
         }
     }
 
     pub fn status(&self) -> WriterStatus {
-        self.status
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        saman::lock(&self.status).clone()
     }
 
     /// The database file the writer owns.
@@ -460,7 +458,7 @@ where
                 .ok_or_else(|| WriteError::Sql("a request finished without a value".into()))
         });
         if let Some(reply) = self.reply.take() {
-            let _ = reply.send(answer);
+            saman::delivered(reply.send(answer), "urdr write reply");
         }
     }
 }
@@ -502,18 +500,8 @@ fn file_id(path: &Path) -> Option<(u64, u64)> {
 
 /// The write connection: a missing file is made 0600 first; WAL, `synchronous`, `secure_delete=ON`, busy timeout.
 fn open_conn(path: &Path, synchronous_full: bool) -> Result<Connection, String> {
-    match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-    {
-        Ok(f) => f
-            .set_permissions(std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| e.to_string())?,
-        Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(e.to_string()),
-    }
+    // a taken name is fine: the file exists already
+    eitri::create_new(path, 0o600).map_err(|e| e.to_string())?;
     let s = |e: rusqlite::Error| e.to_string();
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = Connection::open_with_flags(path, flags).map_err(s)?;
@@ -545,7 +533,7 @@ fn is_busy(e: &rusqlite::Error) -> bool {
 pub(super) fn next_at(last_at: &mut f64, clock: Option<&Clock>) -> f64 {
     let now = match clock {
         Some(c) => c(),
-        None => SystemTime::now()
+        None => stund::wall()
             .duration_since(UNIX_EPOCH)
             .map_or(0.0, |d| d.as_secs_f64()),
     };
@@ -628,7 +616,7 @@ fn fail(ran: Vec<Ran>, text: &str) {
 
 impl State {
     fn set_status(&self, f: impl FnOnce(&mut WriterStatus)) {
-        f(&mut self.status.lock().unwrap_or_else(|e| e.into_inner()));
+        f(&mut saman::lock(&self.status));
     }
 
     /// Open the file at the path and run the rule; keep the connection only when it answers `Ready`.
@@ -721,10 +709,10 @@ impl State {
                 Msg::Stop => return,
                 Msg::Tick(reply) => {
                     self.tick();
-                    let _ = reply.send(());
+                    saman::delivered(reply.send(()), "urdr writer reply");
                 }
                 Msg::Maintain(m, reply) => {
-                    let _ = reply.send(self.maintain(m));
+                    saman::delivered(reply.send(self.maintain(m)), "urdr maintenance reply");
                 }
                 Msg::Write {
                     meta,
@@ -825,7 +813,7 @@ impl State {
         let started = Instant::now();
         if let Err(e) = conn.execute_batch("COMMIT") {
             // A failed COMMIT can leave the transaction open (a deferred constraint): end it.
-            let _ = conn.execute_batch("ROLLBACK");
+            crate::thread::rollback(conn);
             fail(ran, &e.to_string());
             return;
         }
@@ -891,6 +879,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::graph::schema::GRAPH_DDL;
     use crate::graph::tx::Class;
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     /// What the tests write besides the graph tables: `t` rows carry their tx; `child` → `parent` is a deferred
@@ -962,7 +951,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn stop(w: Writer) {
-        tokio::task::spawn_blocking(move || w.shutdown())
+        saman::spawn_blocking("urdr-test", move || w.shutdown())
             .await
             .unwrap();
     }
@@ -988,10 +977,10 @@ pub(crate) mod tests {
         let h = g.clone();
         let hooks = Hooks {
             before_commit: Some(Arc::new(move |n| {
-                h.sizes.lock().unwrap().push(n);
+                saman::lock(&h.sizes).push(n);
                 if h.armed.swap(false, Ordering::SeqCst) {
-                    h.reached.lock().unwrap().send(()).unwrap();
-                    h.release.lock().unwrap().recv().unwrap();
+                    saman::lock(&h.reached).send(()).unwrap();
+                    saman::lock(&h.release).recv().unwrap();
                 }
             })),
             ..Hooks::default()
@@ -1001,7 +990,7 @@ pub(crate) mod tests {
 
     /// Wait on a std channel without blocking the test's runtime (spawned writes still get to run).
     async fn reached(rx: mpsc::Receiver<()>) {
-        tokio::task::spawn_blocking(move || rx.recv().unwrap())
+        saman::spawn_blocking("urdr-test", move || rx.recv().unwrap())
             .await
             .unwrap();
     }
@@ -1023,589 +1012,648 @@ pub(crate) mod tests {
         (w, h, path)
     }
 
-    #[tokio::test]
-    async fn no_answer_before_commit() {
-        let dir = tempfile::tempdir().unwrap();
-        let (_g, hooks, at_commit, release) = gate();
-        let (w, h, path) = spawn_at(&dir, opts(256, 5), hooks);
-        let write = tokio::spawn({
-            let h = h.clone();
-            async move { h.write(meta(), put(1)).await }
-        });
-        reached(at_commit).await;
-        settle().await;
-        assert!(!write.is_finished(), "answered before COMMIT");
-        assert_eq!(
-            count(&path, "select count(*) from t"),
-            0,
-            "not committed yet"
-        );
-        release.send(()).unwrap();
-        let done = write.await.unwrap().unwrap();
-        assert_eq!(done.value, 1);
-        assert!(!done.replayed);
-        assert_eq!(count(&path, "select count(*) from t"), 1);
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn a_failed_request_rolls_back_only_its_savepoint() {
-        let dir = tempfile::tempdir().unwrap();
-        let (g, hooks, at_commit, release) = gate();
-        let (w, h, path) = spawn_at(&dir, opts(3, 2000), hooks);
-        // Hold a first batch so the next three share one.
-        let first = tokio::spawn({
-            let h = h.clone();
-            async move { h.write(meta(), put(0)).await }
-        });
-        reached(at_commit).await;
-        let a = tokio::spawn({
-            let h = h.clone();
-            async move { h.write(meta(), put(1)).await }
-        });
-        let b = tokio::spawn({
-            let h = h.clone();
-            async move {
-                h.write(meta(), |tx: &mut Tx<'_>| {
-                    tx.sql()
-                        .execute("insert into t (v, tx) values (2, ?1)", [tx.id()])?;
-                    Err::<i64, _>(WriteError::Refused("no".into()))
-                })
-                .await
-            }
-        });
-        let c = tokio::spawn({
-            let h = h.clone();
-            async move { h.write(meta(), put(3)).await }
-        });
-        settle().await;
-        release.send(()).unwrap();
-        first.await.unwrap().unwrap();
-        assert_eq!(a.await.unwrap().unwrap().value, 1);
-        assert_eq!(b.await.unwrap(), Err(WriteError::Refused("no".into())));
-        assert_eq!(c.await.unwrap().unwrap().value, 3);
-        assert_eq!(*g.sizes.lock().unwrap(), vec![1, 3], "one batch of three");
-        assert_eq!(values(&path), vec![0, 1, 3]);
-        assert_eq!(
-            count(&path, "select count(*) from tx"),
-            3,
-            "the failed request's tx row is gone too"
-        );
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn a_panicking_request_is_its_own_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let (g, hooks, at_commit, release) = gate();
-        let (w, h, path) = spawn_at(&dir, opts(3, 2000), hooks);
-        let first = tokio::spawn({
-            let h = h.clone();
-            async move { h.write(meta(), put(0)).await }
-        });
-        reached(at_commit).await;
-        let a = tokio::spawn({
-            let h = h.clone();
-            async move { h.write(meta(), put(1)).await }
-        });
-        let b = tokio::spawn({
-            let h = h.clone();
-            async move {
-                h.write(meta(), |tx: &mut Tx<'_>| -> Result<i64, WriteError> {
-                    tx.sql()
-                        .execute("insert into t (v, tx) values (2, ?1)", [tx.id()])?;
-                    panic!("boom")
-                })
-                .await
-            }
-        });
-        let c = tokio::spawn({
-            let h = h.clone();
-            async move { h.write(meta(), put(3)).await }
-        });
-        settle().await;
-        release.send(()).unwrap();
-        first.await.unwrap().unwrap();
-        assert_eq!(a.await.unwrap().unwrap().value, 1);
-        match b.await.unwrap() {
-            Err(WriteError::Sql(text)) => assert!(text.contains("panicked: boom"), "{text}"),
-            other => panic!("{other:?}"),
-        }
-        assert_eq!(c.await.unwrap().unwrap().value, 3);
-        assert_eq!(*g.sizes.lock().unwrap(), vec![1, 3]);
-        assert_eq!(values(&path), vec![0, 1, 3]);
-        // The writer thread survived the panic.
-        assert_eq!(h.write(meta(), put(4)).await.unwrap().value, 4);
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn a_failed_commit_fails_the_whole_batch_retryable() {
-        let dir = tempfile::tempdir().unwrap();
-        let (g, hooks, at_commit, release) = gate();
-        let (w, h, path) = spawn_at(&dir, opts(4, 2000), hooks);
-        let first = tokio::spawn({
-            let h = h.clone();
-            async move { h.write(meta(), put(0)).await }
-        });
-        reached(at_commit).await;
-        let mut writes = Vec::new();
-        for v in 1..=3 {
-            let h = h.clone();
-            writes.push(tokio::spawn(async move { h.write(meta(), put(v)).await }));
-        }
-        // A deferred foreign-key violation: every statement succeeds, COMMIT fails.
-        let orphan = tokio::spawn({
-            let h = h.clone();
-            async move {
-                h.write(meta(), |tx: &mut Tx<'_>| {
-                    tx.sql().execute("insert into child (p) values (99)", [])?;
-                    Ok(())
-                })
-                .await
-            }
-        });
-        settle().await;
-        release.send(()).unwrap();
-        first.await.unwrap().unwrap();
-        for j in writes {
-            assert!(
-                matches!(j.await.unwrap(), Err(WriteError::Retryable(t)) if t.contains("FOREIGN KEY")),
-                "every request of the batch is retryable"
+    #[test]
+    fn no_answer_before_commit() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (_g, hooks, at_commit, release) = gate();
+            let (w, h, path) = spawn_at(&dir, opts(256, 5), hooks);
+            let write = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.write(meta(), put(1)).await }
+            });
+            reached(at_commit).await;
+            settle().await;
+            assert!(!write.is_finished(), "answered before COMMIT");
+            assert_eq!(
+                count(&path, "select count(*) from t"),
+                0,
+                "not committed yet"
             );
-        }
-        assert!(matches!(
-            orphan.await.unwrap(),
-            Err(WriteError::Retryable(_))
-        ));
-        assert_eq!(*g.sizes.lock().unwrap(), vec![1, 4]);
-        assert_eq!(values(&path), vec![0], "nothing of the batch was written");
-        assert_eq!(count(&path, "select count(*) from tx"), 1);
-        // The transaction was ended: the next batch commits.
-        assert_eq!(h.write(meta(), put(5)).await.unwrap().value, 5);
-        assert_eq!(values(&path), vec![0, 5]);
-        stop(w).await;
+            release.send(()).unwrap();
+            let done = write.await.unwrap().unwrap();
+            assert_eq!(done.value, 1);
+            assert!(!done.replayed);
+            assert_eq!(count(&path, "select count(*) from t"), 1);
+            stop(w).await;
+        })
     }
 
-    #[tokio::test]
-    async fn batches_are_bounded_by_size_and_time() {
-        let dir = tempfile::tempdir().unwrap();
-        let (g, hooks, at_commit, release) = gate();
-        let (w, h, path) = spawn_at(&dir, opts(4, 300), hooks);
-        let first = tokio::spawn({
-            let h = h.clone();
-            async move { h.write(meta(), put(0)).await }
-        });
-        reached(at_commit).await;
-        let mut writes = Vec::new();
-        for v in 1..=10 {
-            let h = h.clone();
-            writes.push(tokio::spawn(async move { h.write(meta(), put(v)).await }));
-        }
-        settle().await;
-        release.send(()).unwrap();
-        first.await.unwrap().unwrap();
-        for j in writes {
-            j.await.unwrap().unwrap();
-        }
-        // Size: ten queued requests go in batches of at most four.
-        assert_eq!(*g.sizes.lock().unwrap(), vec![1, 4, 4, 2]);
-        // Time: a lone request waits for company at most max_wait, then commits alone.
-        h.write(meta(), put(11)).await.unwrap();
-        assert_eq!(g.sizes.lock().unwrap().last(), Some(&1));
-        assert_eq!(count(&path, "select count(*) from t"), 12);
-        assert_eq!(h.status().batches, 5);
-        assert_eq!(h.status().writes, 12);
-        stop(w).await;
+    #[test]
+    fn a_failed_request_rolls_back_only_its_savepoint() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (g, hooks, at_commit, release) = gate();
+            let (w, h, path) = spawn_at(&dir, opts(3, 2000), hooks);
+            // Hold a first batch so the next three share one.
+            let first = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.write(meta(), put(0)).await }
+            });
+            reached(at_commit).await;
+            let a = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.write(meta(), put(1)).await }
+            });
+            let b = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move {
+                    h.write(meta(), |tx: &mut Tx<'_>| {
+                        tx.sql()
+                            .execute("insert into t (v, tx) values (2, ?1)", [tx.id()])?;
+                        Err::<i64, _>(WriteError::Refused("no".into()))
+                    })
+                    .await
+                }
+            });
+            let c = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.write(meta(), put(3)).await }
+            });
+            settle().await;
+            release.send(()).unwrap();
+            first.await.unwrap().unwrap();
+            assert_eq!(a.await.unwrap().unwrap().value, 1);
+            assert_eq!(b.await.unwrap(), Err(WriteError::Refused("no".into())));
+            assert_eq!(c.await.unwrap().unwrap().value, 3);
+            assert_eq!(*saman::lock(&g.sizes), vec![1, 3], "one batch of three");
+            assert_eq!(values(&path), vec![0, 1, 3]);
+            assert_eq!(
+                count(&path, "select count(*) from tx"),
+                3,
+                "the failed request's tx row is gone too"
+            );
+            stop(w).await;
+        })
+    }
+
+    #[test]
+    fn a_panicking_request_is_its_own_error() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (g, hooks, at_commit, release) = gate();
+            let (w, h, path) = spawn_at(&dir, opts(3, 2000), hooks);
+            let first = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.write(meta(), put(0)).await }
+            });
+            reached(at_commit).await;
+            let a = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.write(meta(), put(1)).await }
+            });
+            let b = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move {
+                    h.write(meta(), |tx: &mut Tx<'_>| -> Result<i64, WriteError> {
+                        tx.sql()
+                            .execute("insert into t (v, tx) values (2, ?1)", [tx.id()])?;
+                        panic!("boom")
+                    })
+                    .await
+                }
+            });
+            let c = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.write(meta(), put(3)).await }
+            });
+            settle().await;
+            release.send(()).unwrap();
+            first.await.unwrap().unwrap();
+            assert_eq!(a.await.unwrap().unwrap().value, 1);
+            match b.await.unwrap() {
+                Err(WriteError::Sql(text)) => assert!(text.contains("panicked: boom"), "{text}"),
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(c.await.unwrap().unwrap().value, 3);
+            assert_eq!(*saman::lock(&g.sizes), vec![1, 3]);
+            assert_eq!(values(&path), vec![0, 1, 3]);
+            // The writer thread survived the panic.
+            assert_eq!(h.write(meta(), put(4)).await.unwrap().value, 4);
+            stop(w).await;
+        })
+    }
+
+    #[test]
+    fn a_failed_commit_fails_the_whole_batch_retryable() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (g, hooks, at_commit, release) = gate();
+            let (w, h, path) = spawn_at(&dir, opts(4, 2000), hooks);
+            let first = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.write(meta(), put(0)).await }
+            });
+            reached(at_commit).await;
+            let mut writes = Vec::new();
+            for v in 1..=3 {
+                let h = h.clone();
+                writes.push(saman::spawn("urdr-test", async move {
+                    h.write(meta(), put(v)).await
+                }));
+            }
+            // A deferred foreign-key violation: every statement succeeds, COMMIT fails.
+            let orphan = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move {
+                    h.write(meta(), |tx: &mut Tx<'_>| {
+                        tx.sql().execute("insert into child (p) values (99)", [])?;
+                        Ok(())
+                    })
+                    .await
+                }
+            });
+            settle().await;
+            release.send(()).unwrap();
+            first.await.unwrap().unwrap();
+            for j in writes {
+                assert!(
+                    matches!(j.await.unwrap(), Err(WriteError::Retryable(t)) if t.contains("FOREIGN KEY")),
+                    "every request of the batch is retryable"
+                );
+            }
+            assert!(matches!(
+                orphan.await.unwrap(),
+                Err(WriteError::Retryable(_))
+            ));
+            assert_eq!(*saman::lock(&g.sizes), vec![1, 4]);
+            assert_eq!(values(&path), vec![0], "nothing of the batch was written");
+            assert_eq!(count(&path, "select count(*) from tx"), 1);
+            // The transaction was ended: the next batch commits.
+            assert_eq!(h.write(meta(), put(5)).await.unwrap().value, 5);
+            assert_eq!(values(&path), vec![0, 5]);
+            stop(w).await;
+        })
+    }
+
+    #[test]
+    fn batches_are_bounded_by_size_and_time() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (g, hooks, at_commit, release) = gate();
+            let (w, h, path) = spawn_at(&dir, opts(4, 300), hooks);
+            let first = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.write(meta(), put(0)).await }
+            });
+            reached(at_commit).await;
+            let mut writes = Vec::new();
+            for v in 1..=10 {
+                let h = h.clone();
+                writes.push(saman::spawn("urdr-test", async move {
+                    h.write(meta(), put(v)).await
+                }));
+            }
+            settle().await;
+            release.send(()).unwrap();
+            first.await.unwrap().unwrap();
+            for j in writes {
+                j.await.unwrap().unwrap();
+            }
+            // Size: ten queued requests go in batches of at most four.
+            assert_eq!(*saman::lock(&g.sizes), vec![1, 4, 4, 2]);
+            // Time: a lone request waits for company at most max_wait, then commits alone.
+            h.write(meta(), put(11)).await.unwrap();
+            assert_eq!(saman::lock(&g.sizes).last(), Some(&1));
+            assert_eq!(count(&path, "select count(*) from t"), 12);
+            assert_eq!(h.status().batches, 5);
+            assert_eq!(h.status().writes, 12);
+            stop(w).await;
+        })
     }
 
     /// A lone request waits for company for max_wait, then commits alone: a timing test (the elapsed time is the
     /// assertion).
-    #[tokio::test]
     #[ignore = "timing: a lone write waits max_wait for company"]
-    async fn a_lone_write_waits_max_wait_for_company() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, _path) = spawn_at(&dir, opts(4, 300), Hooks::default());
-        let started = Instant::now();
-        h.write(meta(), put(1)).await.unwrap();
-        let took = started.elapsed();
-        assert!(took >= Duration::from_millis(300), "{took:?}");
-        assert!(took < Duration::from_secs(5), "{took:?}");
-        stop(w).await;
+    #[test]
+    fn a_lone_write_waits_max_wait_for_company() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, _path) = spawn_at(&dir, opts(4, 300), Hooks::default());
+            let started = Instant::now();
+            h.write(meta(), put(1)).await.unwrap();
+            let took = started.elapsed();
+            assert!(took >= Duration::from_millis(300), "{took:?}");
+            assert!(took < Duration::from_secs(5), "{took:?}");
+            stop(w).await;
+        })
     }
 
-    #[tokio::test]
-    async fn tx_at_is_monotonic_under_a_clock_step_back() {
-        let dir = tempfile::tempdir().unwrap();
-        let times = Arc::new(Mutex::new(vec![100.0, 200.0, 150.0, 50.0, 300.0]));
-        let t = times.clone();
-        let hooks = Hooks {
-            clock: Some(Arc::new(move || t.lock().unwrap().remove(0))),
-            ..Hooks::default()
-        };
-        let (w, h, path) = spawn_at(&dir, opts(1, 0), hooks);
-        for v in 0..5 {
-            h.write(meta(), put(v)).await.unwrap();
-        }
-        let c = crate::open_readonly(&path).unwrap();
-        let ats: Vec<f64> = c
-            .prepare("select at from tx order by id")
-            .unwrap()
-            .query_map([], |r| r.get(0))
-            .unwrap()
-            .map(|v| v.unwrap())
-            .collect();
-        assert_eq!(ats, vec![100.0, 200.0, 200.0, 200.0, 300.0]);
-        drop(c);
-        stop(w).await;
-        // A new writer reads the file's last time once at open: a clock behind it never goes back.
-        let hooks = Hooks {
-            clock: Some(Arc::new(|| 10.0)),
-            ..Hooks::default()
-        };
-        let (w, h, path) = spawn_at(&dir, opts(1, 0), hooks);
-        let done = h.write(meta(), put(5)).await.unwrap();
-        let at: f64 = crate::open_readonly(&path)
-            .unwrap()
-            .query_row("select at from tx where id = ?1", [done.tx], |r| r.get(0))
-            .unwrap();
-        assert_eq!(at, 300.0);
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn a_repeated_req_returns_the_first_answer() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn_at(&dir, opts(256, 1), Hooks::default());
-        let first = h.write(keyed("agent:s1", "r-1"), put(1)).await.unwrap();
-        assert!(!first.replayed);
-        let again = h.write(keyed("agent:s1", "r-1"), put(2)).await.unwrap();
-        assert_eq!(
-            again,
-            Written {
-                tx: first.tx,
-                value: 1,
-                replayed: true
+    #[test]
+    fn tx_at_is_monotonic_under_a_clock_step_back() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let times = Arc::new(Mutex::new(vec![100.0, 200.0, 150.0, 50.0, 300.0]));
+            let t = times.clone();
+            let hooks = Hooks {
+                clock: Some(Arc::new(move || saman::lock(&t).remove(0))),
+                ..Hooks::default()
+            };
+            let (w, h, path) = spawn_at(&dir, opts(1, 0), hooks);
+            for v in 0..5 {
+                h.write(meta(), put(v)).await.unwrap();
             }
-        );
-        assert_eq!(values(&path), vec![1], "the repeat ran nothing");
-        // The key is the actor's: another actor's same key is its own request.
-        let other = h.write(keyed("agent:s2", "r-1"), put(3)).await.unwrap();
-        assert!(!other.replayed);
-        assert_ne!(other.tx, first.tx);
-        // A failed request leaves no answer: its repeat runs.
-        let failed = h
-            .write(keyed("agent:s1", "r-2"), |_: &mut Tx<'_>| {
-                Err::<i64, _>(WriteError::Refused("not now".into()))
-            })
-            .await;
-        assert!(failed.is_err());
-        let retried = h.write(keyed("agent:s1", "r-2"), put(4)).await.unwrap();
-        assert!(!retried.replayed);
-        assert_eq!(values(&path), vec![1, 3, 4]);
-        assert_eq!(h.status().replays, 1);
-        stop(w).await;
+            let c = crate::open_readonly(&path).unwrap();
+            let ats: Vec<f64> = c
+                .prepare("select at from tx order by id")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .map(|v| v.unwrap())
+                .collect();
+            assert_eq!(ats, vec![100.0, 200.0, 200.0, 200.0, 300.0]);
+            drop(c);
+            stop(w).await;
+            // A new writer reads the file's last time once at open: a clock behind it never goes back.
+            let hooks = Hooks {
+                clock: Some(Arc::new(|| 10.0)),
+                ..Hooks::default()
+            };
+            let (w, h, path) = spawn_at(&dir, opts(1, 0), hooks);
+            let done = h.write(meta(), put(5)).await.unwrap();
+            let at: f64 = crate::open_readonly(&path)
+                .unwrap()
+                .query_row("select at from tx where id = ?1", [done.tx], |r| r.get(0))
+                .unwrap();
+            assert_eq!(at, 300.0);
+            stop(w).await;
+        })
     }
 
-    #[tokio::test]
-    async fn the_same_req_twice_in_one_batch_writes_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let (g, hooks, at_commit, release) = gate();
-        let (w, h, path) = spawn_at(&dir, opts(256, 200), hooks);
-        let first = tokio::spawn({
-            let h = h.clone();
-            async move { h.write(meta(), put(0)).await }
-        });
-        reached(at_commit).await;
-        let a = tokio::spawn({
-            let h = h.clone();
-            async move { h.write(keyed("agent:s1", "r-1"), put(1)).await }
-        });
-        let b = tokio::spawn({
-            let h = h.clone();
-            async move { h.write(keyed("agent:s1", "r-1"), put(2)).await }
-        });
-        settle().await;
-        release.send(()).unwrap();
-        first.await.unwrap().unwrap();
-        let (a, b) = (a.await.unwrap().unwrap(), b.await.unwrap().unwrap());
-        assert_eq!(*g.sizes.lock().unwrap(), vec![1, 2], "both in one batch");
-        assert_eq!(a.tx, b.tx);
-        assert_eq!(a.value, b.value);
-        assert!(
-            a.replayed != b.replayed,
-            "one ran, one was answered from it"
-        );
-        assert_eq!(count(&path, "select count(*) from t where v in (1, 2)"), 1);
-        assert_eq!(count(&path, "select count(*) from tx where req = 'r-1'"), 1);
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn an_answer_over_64k_replays_as_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn_at(&dir, opts(256, 1), Hooks::default());
-        let big = "x".repeat(70_000);
-        let first = h
-            .write(keyed("agent:s1", "big"), {
-                let big = big.clone();
-                move |_: &mut Tx<'_>| Ok(big)
-            })
-            .await
-            .unwrap();
-        assert_eq!(first.value, big, "the first answer is whole");
-        let stored: String = crate::open_readonly(&path)
-            .unwrap()
-            .query_row("select answer from tx where req = 'big'", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(stored, TRUNCATED);
-        let again = h
-            .write(keyed("agent:s1", "big"), |_: &mut Tx<'_>| {
-                Ok("ran again".to_string())
-            })
-            .await;
-        assert_eq!(
-            again,
-            Err(WriteError::Refused(
-                "the first answer was too large to replay; read the entity".into()
-            ))
-        );
-        assert_eq!(count(&path, "select count(*) from tx"), 1);
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn writes_never_run_on_the_callers_thread() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, _path) = spawn_at(&dir, opts(256, 1), Hooks::default());
-        let me = std::thread::current().id();
-        let seen = Arc::new(Mutex::new(None));
-        let s = seen.clone();
-        let name = h
-            .write(meta(), move |_: &mut Tx<'_>| {
-                *s.lock().unwrap() = Some(std::thread::current().id());
-                Ok(std::thread::current().name().map(str::to_string))
-            })
-            .await
-            .unwrap();
-        assert_eq!(name.value.as_deref(), Some("urdr-writer"));
-        assert_ne!(seen.lock().unwrap().unwrap(), me);
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn no_req_stores_no_answer() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn_at(&dir, opts(256, 1), Hooks::default());
-        let done = h.write(meta(), put(1)).await.unwrap();
-        let (req, answer): (Option<String>, Option<String>) = crate::open_readonly(&path)
-            .unwrap()
-            .query_row("select req, answer from tx where id = ?1", [done.tx], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
-            .unwrap();
-        assert_eq!((req, answer), (None, None));
-        let keyed_done = h.write(keyed("agent:s1", "k"), put(2)).await.unwrap();
-        let answer: Option<String> = crate::open_readonly(&path)
-            .unwrap()
-            .query_row(
-                "select answer from tx where id = ?1",
-                [keyed_done.tx],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(answer.as_deref(), Some("2"));
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn secure_delete_is_on() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn_at(&dir, WriterOpts::default(), Hooks::default());
-        let pragmas = h
-            .write(meta(), |tx: &mut Tx<'_>| {
-                let q = |p: &str| -> Result<String, WriteError> {
-                    Ok(tx
-                        .sql()
-                        .query_row(&format!("pragma {p}"), [], |r| {
-                            r.get::<_, rusqlite::types::Value>(0)
-                        })
-                        .map(|v| match v {
-                            rusqlite::types::Value::Integer(i) => i.to_string(),
-                            rusqlite::types::Value::Text(t) => t,
-                            other => format!("{other:?}"),
-                        })?)
-                };
-                Ok((q("secure_delete")?, q("journal_mode")?, q("synchronous")?))
-            })
-            .await
-            .unwrap()
-            .value;
-        // secure_delete on; WAL; synchronous FULL (2) by default.
-        assert_eq!(pragmas, ("1".into(), "wal".into(), "2".into()));
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "a file the writer makes is the user's only");
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn maintain_runs_between_batches() {
-        let dir = tempfile::tempdir().unwrap();
-        let (_g, hooks, at_commit, release) = gate();
-        let (w, h, path) = spawn_at(&dir, opts(256, 50), hooks);
-        let first = tokio::spawn({
-            let h = h.clone();
-            async move { h.write(meta(), put(0)).await }
-        });
-        reached(at_commit).await;
-        let scrub = tokio::spawn({
-            let h = h.clone();
-            async move { h.maintain(Maintenance::Scrub).await }
-        });
-        settle().await;
-        assert!(!scrub.is_finished(), "maintenance waits for the open batch");
-        release.send(()).unwrap();
-        first.await.unwrap().unwrap();
-        // VACUUM fails inside a transaction: vacuumed means it ran between batches.
-        assert_eq!(
-            scrub.await.unwrap().unwrap(),
-            ScrubReport {
-                vacuumed: true,
-                wal_truncated: true,
-                blocked_by: None
-            }
-        );
-        assert_eq!(values(&path), vec![0]);
-        // A checkpoint alone vacuums nothing. (A reader blocking TRUNCATE is Task 8's
-        // `a_reader_blocks_truncate_and_the_report_says_so`: it waits out the 5 s busy timeout.)
-        h.write(meta(), put(1)).await.unwrap();
-        assert_eq!(
-            h.maintain(Maintenance::Checkpoint).await.unwrap(),
-            ScrubReport {
-                vacuumed: false,
-                wal_truncated: true,
-                blocked_by: None
-            }
-        );
-        assert_eq!(values(&path), vec![0, 1]);
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn failed_open_is_not_retried() {
-        let dir = tempfile::tempdir().unwrap();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let c = calls.clone();
-        let rule: OpenRule = Arc::new(move |_: &mut Connection, _: &Path| {
-            c.fetch_add(1, Ordering::SeqCst);
-            OpenOutcome::Failed("the migration failed: disk full".into())
-        });
-        let (w, h) = Writer::spawn(dir.path().join("work.db"), opts(256, 1), rule).unwrap();
-        let e = h.write(meta(), put(1)).await;
-        assert_eq!(
-            e,
-            Err(WriteError::NotReady(
-                "the migration failed: disk full".into()
-            ))
-        );
-        for _ in 0..3 {
-            h.tick().await;
-        }
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "Failed is never re-tried");
-        assert!(matches!(
-            h.maintain(Maintenance::Checkpoint).await,
-            Err(WriteError::NotReady(_))
-        ));
-        let st = h.status();
-        assert!(!st.open);
-        assert_eq!(
-            st.last_open,
-            Some(OpenOutcome::Failed(
-                "the migration failed: disk full".into()
-            ))
-        );
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn not_ready_is_retried_at_each_tick() {
-        let dir = tempfile::tempdir().unwrap();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let c = calls.clone();
-        let inner = rule();
-        let rule: OpenRule = Arc::new(move |conn: &mut Connection, p: &Path| {
-            if c.fetch_add(1, Ordering::SeqCst) < 2 {
-                OpenOutcome::NotReady("not yet".into())
-            } else {
-                inner(conn, p)
-            }
-        });
-        let (w, h) = Writer::spawn(dir.path().join("work.db"), opts(256, 1), rule).unwrap();
-        assert_eq!(
-            h.write(meta(), put(1)).await,
-            Err(WriteError::NotReady("not yet".into()))
-        );
-        h.tick().await;
-        assert!(!h.status().open);
-        h.tick().await;
-        assert!(h.status().open);
-        assert_eq!(h.status().schema, 7);
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
-        // Ready and unchanged: the tick runs nothing.
-        h.tick().await;
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
-        assert_eq!(h.write(meta(), put(1)).await.unwrap().value, 1);
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn a_replaced_file_is_opened_again_at_the_tick() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn_at(&dir, opts(256, 1), Hooks::default());
-        h.write(meta(), put(1)).await.unwrap();
-        // Moved aside together, as `restore-pre7` does: a WAL never meets another file's database.
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::rename(
-                dir.path().join(format!("work.db{suffix}")),
-                dir.path().join(format!("old.db{suffix}")),
+    #[test]
+    fn a_repeated_req_returns_the_first_answer() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn_at(&dir, opts(256, 1), Hooks::default());
+            let first = h.write(keyed("agent:s1", "r-1"), put(1)).await.unwrap();
+            assert!(!first.replayed);
+            let again = h.write(keyed("agent:s1", "r-1"), put(2)).await.unwrap();
+            assert_eq!(
+                again,
+                Written {
+                    tx: first.tx,
+                    value: 1,
+                    replayed: true
+                }
             );
-        }
-        h.tick().await;
-        assert!(h.status().open);
-        h.write(meta(), put(2)).await.unwrap();
-        assert_eq!(
-            values(&path),
-            vec![2],
-            "the new file at the path is written"
-        );
-        stop(w).await;
+            assert_eq!(values(&path), vec![1], "the repeat ran nothing");
+            // The key is the actor's: another actor's same key is its own request.
+            let other = h.write(keyed("agent:s2", "r-1"), put(3)).await.unwrap();
+            assert!(!other.replayed);
+            assert_ne!(other.tx, first.tx);
+            // A failed request leaves no answer: its repeat runs.
+            let failed = h
+                .write(keyed("agent:s1", "r-2"), |_: &mut Tx<'_>| {
+                    Err::<i64, _>(WriteError::Refused("not now".into()))
+                })
+                .await;
+            assert!(failed.is_err());
+            let retried = h.write(keyed("agent:s1", "r-2"), put(4)).await.unwrap();
+            assert!(!retried.replayed);
+            assert_eq!(values(&path), vec![1, 3, 4]);
+            assert_eq!(h.status().replays, 1);
+            stop(w).await;
+        })
     }
 
-    #[tokio::test]
-    async fn a_newer_schema_is_read_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let rule: OpenRule =
-            Arc::new(|_: &mut Connection, _: &Path| OpenOutcome::ReadOnly { schema: 8 });
-        let (w, h) = Writer::spawn(dir.path().join("work.db"), opts(256, 1), rule).unwrap();
-        assert_eq!(
-            h.write(meta(), put(1)).await,
-            Err(WriteError::ReadOnly { schema: 8 })
-        );
-        assert_eq!(h.status().schema, 8);
-        assert!(!h.status().open);
-        stop(w).await;
+    #[test]
+    fn the_same_req_twice_in_one_batch_writes_once() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (g, hooks, at_commit, release) = gate();
+            let (w, h, path) = spawn_at(&dir, opts(256, 200), hooks);
+            let first = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.write(meta(), put(0)).await }
+            });
+            reached(at_commit).await;
+            let a = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.write(keyed("agent:s1", "r-1"), put(1)).await }
+            });
+            let b = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.write(keyed("agent:s1", "r-1"), put(2)).await }
+            });
+            settle().await;
+            release.send(()).unwrap();
+            first.await.unwrap().unwrap();
+            let (a, b) = (a.await.unwrap().unwrap(), b.await.unwrap().unwrap());
+            assert_eq!(*saman::lock(&g.sizes), vec![1, 2], "both in one batch");
+            assert_eq!(a.tx, b.tx);
+            assert_eq!(a.value, b.value);
+            assert!(
+                a.replayed != b.replayed,
+                "one ran, one was answered from it"
+            );
+            assert_eq!(count(&path, "select count(*) from t where v in (1, 2)"), 1);
+            assert_eq!(count(&path, "select count(*) from tx where req = 'r-1'"), 1);
+            stop(w).await;
+        })
     }
 
-    #[tokio::test]
-    async fn a_stopped_writer_answers_closed() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, _path) = spawn_at(&dir, opts(256, 1), Hooks::default());
-        stop(w).await;
-        assert_eq!(h.write(meta(), put(1)).await, Err(WriteError::Closed));
-        assert_eq!(
-            h.maintain(Maintenance::Checkpoint).await,
-            Err(WriteError::Closed)
-        );
+    #[test]
+    fn an_answer_over_64k_replays_as_refused() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn_at(&dir, opts(256, 1), Hooks::default());
+            let big = "x".repeat(70_000);
+            let first = h
+                .write(keyed("agent:s1", "big"), {
+                    let big = big.clone();
+                    move |_: &mut Tx<'_>| Ok(big)
+                })
+                .await
+                .unwrap();
+            assert_eq!(first.value, big, "the first answer is whole");
+            let stored: String = crate::open_readonly(&path)
+                .unwrap()
+                .query_row("select answer from tx where req = 'big'", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(stored, TRUNCATED);
+            let again = h
+                .write(keyed("agent:s1", "big"), |_: &mut Tx<'_>| {
+                    Ok("ran again".to_string())
+                })
+                .await;
+            assert_eq!(
+                again,
+                Err(WriteError::Refused(
+                    "the first answer was too large to replay; read the entity".into()
+                ))
+            );
+            assert_eq!(count(&path, "select count(*) from tx"), 1);
+            stop(w).await;
+        })
+    }
+
+    #[test]
+    fn writes_never_run_on_the_callers_thread() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, _path) = spawn_at(&dir, opts(256, 1), Hooks::default());
+            let me = std::thread::current().id();
+            let seen = Arc::new(Mutex::new(None));
+            let s = seen.clone();
+            let name = h
+                .write(meta(), move |_: &mut Tx<'_>| {
+                    *saman::lock(&s) = Some(std::thread::current().id());
+                    Ok(std::thread::current().name().map(str::to_string))
+                })
+                .await
+                .unwrap();
+            assert_eq!(name.value.as_deref(), Some("urdr-writer"));
+            assert_ne!(saman::lock(&seen).unwrap(), me);
+            stop(w).await;
+        })
+    }
+
+    #[test]
+    fn no_req_stores_no_answer() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn_at(&dir, opts(256, 1), Hooks::default());
+            let done = h.write(meta(), put(1)).await.unwrap();
+            let (req, answer): (Option<String>, Option<String>) = crate::open_readonly(&path)
+                .unwrap()
+                .query_row("select req, answer from tx where id = ?1", [done.tx], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .unwrap();
+            assert_eq!((req, answer), (None, None));
+            let keyed_done = h.write(keyed("agent:s1", "k"), put(2)).await.unwrap();
+            let answer: Option<String> = crate::open_readonly(&path)
+                .unwrap()
+                .query_row(
+                    "select answer from tx where id = ?1",
+                    [keyed_done.tx],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(answer.as_deref(), Some("2"));
+            stop(w).await;
+        })
+    }
+
+    #[test]
+    fn secure_delete_is_on() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn_at(&dir, WriterOpts::default(), Hooks::default());
+            let pragmas = h
+                .write(meta(), |tx: &mut Tx<'_>| {
+                    let q = |p: &str| -> Result<String, WriteError> {
+                        Ok(tx
+                            .sql()
+                            .query_row(&format!("pragma {p}"), [], |r| {
+                                r.get::<_, rusqlite::types::Value>(0)
+                            })
+                            .map(|v| match v {
+                                rusqlite::types::Value::Integer(i) => i.to_string(),
+                                rusqlite::types::Value::Text(t) => t,
+                                other => format!("{other:?}"),
+                            })?)
+                    };
+                    Ok((q("secure_delete")?, q("journal_mode")?, q("synchronous")?))
+                })
+                .await
+                .unwrap()
+                .value;
+            // secure_delete on; WAL; synchronous FULL (2) by default.
+            assert_eq!(pragmas, ("1".into(), "wal".into(), "2".into()));
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "a file the writer makes is the user's only");
+            stop(w).await;
+        })
+    }
+
+    #[test]
+    fn maintain_runs_between_batches() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (_g, hooks, at_commit, release) = gate();
+            let (w, h, path) = spawn_at(&dir, opts(256, 50), hooks);
+            let first = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.write(meta(), put(0)).await }
+            });
+            reached(at_commit).await;
+            let scrub = saman::spawn("urdr-test", {
+                let h = h.clone();
+                async move { h.maintain(Maintenance::Scrub).await }
+            });
+            settle().await;
+            assert!(!scrub.is_finished(), "maintenance waits for the open batch");
+            release.send(()).unwrap();
+            first.await.unwrap().unwrap();
+            // VACUUM fails inside a transaction: vacuumed means it ran between batches.
+            assert_eq!(
+                scrub.await.unwrap().unwrap(),
+                ScrubReport {
+                    vacuumed: true,
+                    wal_truncated: true,
+                    blocked_by: None
+                }
+            );
+            assert_eq!(values(&path), vec![0]);
+            // A checkpoint alone vacuums nothing. (A reader blocking TRUNCATE is Task 8's
+            // `a_reader_blocks_truncate_and_the_report_says_so`: it waits out the 5 s busy timeout.)
+            h.write(meta(), put(1)).await.unwrap();
+            assert_eq!(
+                h.maintain(Maintenance::Checkpoint).await.unwrap(),
+                ScrubReport {
+                    vacuumed: false,
+                    wal_truncated: true,
+                    blocked_by: None
+                }
+            );
+            assert_eq!(values(&path), vec![0, 1]);
+            stop(w).await;
+        })
+    }
+
+    #[test]
+    fn failed_open_is_not_retried() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let c = calls.clone();
+            let rule: OpenRule = Arc::new(move |_: &mut Connection, _: &Path| {
+                c.fetch_add(1, Ordering::SeqCst);
+                OpenOutcome::Failed("the migration failed: disk full".into())
+            });
+            let (w, h) = Writer::spawn(dir.path().join("work.db"), opts(256, 1), rule).unwrap();
+            let e = h.write(meta(), put(1)).await;
+            assert_eq!(
+                e,
+                Err(WriteError::NotReady(
+                    "the migration failed: disk full".into()
+                ))
+            );
+            for _ in 0..3 {
+                h.tick().await;
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), 1, "Failed is never re-tried");
+            assert!(matches!(
+                h.maintain(Maintenance::Checkpoint).await,
+                Err(WriteError::NotReady(_))
+            ));
+            let st = h.status();
+            assert!(!st.open);
+            assert_eq!(
+                st.last_open,
+                Some(OpenOutcome::Failed(
+                    "the migration failed: disk full".into()
+                ))
+            );
+            stop(w).await;
+        })
+    }
+
+    #[test]
+    fn not_ready_is_retried_at_each_tick() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let c = calls.clone();
+            let inner = rule();
+            let rule: OpenRule = Arc::new(move |conn: &mut Connection, p: &Path| {
+                if c.fetch_add(1, Ordering::SeqCst) < 2 {
+                    OpenOutcome::NotReady("not yet".into())
+                } else {
+                    inner(conn, p)
+                }
+            });
+            let (w, h) = Writer::spawn(dir.path().join("work.db"), opts(256, 1), rule).unwrap();
+            assert_eq!(
+                h.write(meta(), put(1)).await,
+                Err(WriteError::NotReady("not yet".into()))
+            );
+            h.tick().await;
+            assert!(!h.status().open);
+            h.tick().await;
+            assert!(h.status().open);
+            assert_eq!(h.status().schema, 7);
+            assert_eq!(calls.load(Ordering::SeqCst), 3);
+            // Ready and unchanged: the tick runs nothing.
+            h.tick().await;
+            assert_eq!(calls.load(Ordering::SeqCst), 3);
+            assert_eq!(h.write(meta(), put(1)).await.unwrap().value, 1);
+            stop(w).await;
+        })
+    }
+
+    /// Dropping the writer stops its thread even while a handle lives: the handle's writes then fail as closed.
+    #[test]
+    fn dropping_the_writer_closes_it_for_the_handles() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, _path) = spawn_at(&dir, opts(256, 1), Hooks::default());
+            h.write(meta(), put(1)).await.unwrap();
+            drop(w);
+            let e = h.write(meta(), put(2)).await;
+            assert!(matches!(e, Err(WriteError::Closed)), "{e:?}");
+        })
+    }
+
+    #[test]
+    fn a_replaced_file_is_opened_again_at_the_tick() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn_at(&dir, opts(256, 1), Hooks::default());
+            h.write(meta(), put(1)).await.unwrap();
+            // Moved aside together, as `restore-pre7` does: a WAL never meets another file's database.
+            for suffix in ["", "-wal", "-shm"] {
+                // a suffix with no file (no -wal after a checkpoint) is not an error here
+                if dir.path().join(format!("work.db{suffix}")).exists() {
+                    eitri::rename_file(
+                        &dir.path().join(format!("work.db{suffix}")),
+                        &dir.path().join(format!("old.db{suffix}")),
+                    )
+                    .unwrap();
+                }
+            }
+            h.tick().await;
+            assert!(h.status().open);
+            h.write(meta(), put(2)).await.unwrap();
+            assert_eq!(
+                values(&path),
+                vec![2],
+                "the new file at the path is written"
+            );
+            stop(w).await;
+        })
+    }
+
+    #[test]
+    fn a_newer_schema_is_read_only() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let rule: OpenRule =
+                Arc::new(|_: &mut Connection, _: &Path| OpenOutcome::ReadOnly { schema: 8 });
+            let (w, h) = Writer::spawn(dir.path().join("work.db"), opts(256, 1), rule).unwrap();
+            assert_eq!(
+                h.write(meta(), put(1)).await,
+                Err(WriteError::ReadOnly { schema: 8 })
+            );
+            assert_eq!(h.status().schema, 8);
+            assert!(!h.status().open);
+            stop(w).await;
+        })
+    }
+
+    #[test]
+    fn a_stopped_writer_answers_closed() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, _path) = spawn_at(&dir, opts(256, 1), Hooks::default());
+            stop(w).await;
+            assert_eq!(h.write(meta(), put(1)).await, Err(WriteError::Closed));
+            assert_eq!(
+                h.maintain(Maintenance::Checkpoint).await,
+                Err(WriteError::Closed)
+            );
+        })
     }
 
     /// xorshift64: the random cases without a dependency.
@@ -1616,61 +1664,63 @@ pub(crate) mod tests {
         *state
     }
 
-    #[tokio::test]
-    async fn random_batches_commit_exactly_the_ok_requests() {
-        for seed in 1..=24u64 {
-            let dir = tempfile::tempdir().unwrap();
-            let (w, h, path) = spawn_at(&dir, opts(8, 20), Hooks::default());
-            let mut rng = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
-            let n = 1 + next(&mut rng) % 40;
-            let mut ok = Vec::new();
-            let mut writes = Vec::new();
-            for v in 0..n as i64 {
-                let kind = next(&mut rng) % 3;
-                if kind == 0 {
-                    ok.push(v);
+    #[test]
+    fn random_batches_commit_exactly_the_ok_requests() {
+        saman::block_on_current(async {
+            for seed in 1..=24u64 {
+                let dir = tempfile::tempdir().unwrap();
+                let (w, h, path) = spawn_at(&dir, opts(8, 20), Hooks::default());
+                let mut rng = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+                let n = 1 + next(&mut rng) % 40;
+                let mut ok = Vec::new();
+                let mut writes = Vec::new();
+                for v in 0..n as i64 {
+                    let kind = next(&mut rng) % 3;
+                    if kind == 0 {
+                        ok.push(v);
+                    }
+                    let h = h.clone();
+                    writes.push((
+                        kind,
+                        saman::spawn("urdr-test", async move {
+                            h.write(meta(), move |tx: &mut Tx<'_>| {
+                                tx.sql().execute(
+                                    "insert into t (v, tx) values (?1, ?2)",
+                                    params![v, tx.id()],
+                                )?;
+                                match kind {
+                                    0 => Ok(v),
+                                    1 => Err(WriteError::Refused("refused".into())),
+                                    _ => panic!("random panic"),
+                                }
+                            })
+                            .await
+                        }),
+                    ));
+                    if next(&mut rng).is_multiple_of(4) {
+                        tokio::task::yield_now().await;
+                    }
                 }
-                let h = h.clone();
-                writes.push((
-                    kind,
-                    tokio::spawn(async move {
-                        h.write(meta(), move |tx: &mut Tx<'_>| {
-                            tx.sql().execute(
-                                "insert into t (v, tx) values (?1, ?2)",
-                                params![v, tx.id()],
-                            )?;
-                            match kind {
-                                0 => Ok(v),
-                                1 => Err(WriteError::Refused("refused".into())),
-                                _ => panic!("random panic"),
-                            }
-                        })
-                        .await
-                    }),
-                ));
-                if next(&mut rng).is_multiple_of(4) {
-                    tokio::task::yield_now().await;
+                for (kind, j) in writes {
+                    assert_eq!(j.await.unwrap().is_ok(), kind == 0, "seed {seed}");
                 }
+                assert_eq!(values(&path), ok, "seed {seed}");
+                assert_eq!(
+                    count(&path, "select count(*) from tx") as usize,
+                    ok.len(),
+                    "seed {seed}: one tx row per ok request"
+                );
+                assert_eq!(
+                    count(
+                        &path,
+                        "select count(distinct t.tx) from t join tx on tx.id = t.tx"
+                    ) as usize,
+                    ok.len(),
+                    "seed {seed}"
+                );
+                stop(w).await;
             }
-            for (kind, j) in writes {
-                assert_eq!(j.await.unwrap().is_ok(), kind == 0, "seed {seed}");
-            }
-            assert_eq!(values(&path), ok, "seed {seed}");
-            assert_eq!(
-                count(&path, "select count(*) from tx") as usize,
-                ok.len(),
-                "seed {seed}: one tx row per ok request"
-            );
-            assert_eq!(
-                count(
-                    &path,
-                    "select count(distinct t.tx) from t join tx on tx.id = t.tx"
-                ) as usize,
-                ok.len(),
-                "seed {seed}"
-            );
-            stop(w).await;
-        }
+        })
     }
 }
 
@@ -1680,8 +1730,26 @@ pub(crate) mod tests {
 mod crash {
     use super::tests::{keyed, opts, rule, stop};
     use super::*;
+    use draugr::Spec;
     use std::os::unix::process::ExitStatusExt;
-    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    /// SPEC's program with ARGS, no stdin, in a session of its own (`draugr::run`).
+    fn spec(
+        program: impl Into<PathBuf>,
+        args: &[&str],
+        env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+    ) -> Spec {
+        Spec {
+            program: program.into(),
+            args: args.iter().map(std::ffi::OsString::from).collect(),
+            env,
+            cwd: None,
+            stdin_null: true,
+            pass_fds: Vec::new(),
+            new_session: true,
+        }
+    }
 
     const CHILD: &str = "URDR_WRITER_CRASH_CHILD";
     const NAME: &str = "graph::writer::crash::kill_between_commit_and_answer";
@@ -1707,14 +1775,16 @@ mod crash {
             child(PathBuf::from(dir));
         }
         let dir = tempfile::tempdir().unwrap();
-        let status = Command::new(std::env::current_exe().unwrap())
-            .args([NAME, "--exact", "--test-threads=1"])
-            .env(CHILD, dir.path())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .unwrap();
+        let status = draugr::run(
+            spec(
+                std::env::current_exe().unwrap(),
+                &[NAME, "--exact", "--test-threads=1"],
+                vec![(CHILD.into(), dir.path().into())],
+            ),
+            Duration::from_secs(120),
+        )
+        .unwrap()
+        .status;
         assert_eq!(
             status.signal(),
             Some(9),
@@ -1722,11 +1792,7 @@ mod crash {
         );
         let path = dir.path().join("work.db");
         assert_eq!(count(&path), 1, "the write committed");
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
+        saman::block_on_current(async {
             let (w, h) = Writer::spawn(&path, opts(256, 1), rule()).unwrap();
             let again = h
                 .write(keyed("agent:s1", "r-1"), |tx: &mut Tx<'_>| {
@@ -1743,17 +1809,18 @@ mod crash {
 
     /// The child: one keyed write; the after-COMMIT hook kills this process before any answer is sent.
     fn child(dir: PathBuf) -> ! {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
+        saman::block_on_current(async {
             let hooks = Hooks {
                 after_commit: Some(Arc::new(|| {
-                    let _ = Command::new("sh")
-                        .arg("-c")
-                        .arg(format!("kill -KILL {}", std::process::id()))
-                        .status();
+                    let killed = draugr::run(
+                        spec(
+                            "/bin/sh",
+                            &["-c", &format!("kill -KILL {}", std::process::id())],
+                            Vec::new(),
+                        ),
+                        Duration::from_secs(30),
+                    );
+                    drop(killed);
                     // Not killed: exit plainly, so the parent's signal check fails instead of hanging.
                     std::process::exit(3);
                 })),
@@ -1761,11 +1828,13 @@ mod crash {
             };
             let (_w, h) =
                 Writer::spawn_with_hooks(dir.join("work.db"), opts(256, 1), rule(), hooks).unwrap();
-            let _ = h
-                .write(keyed("agent:s1", "r-1"), |tx: &mut Tx<'_>| {
+            // never answered: the hook ends this process first
+            drop(
+                h.write(keyed("agent:s1", "r-1"), |tx: &mut Tx<'_>| {
                     first(tx, "first")
                 })
-                .await;
+                .await,
+            );
         });
         std::process::exit(4)
     }

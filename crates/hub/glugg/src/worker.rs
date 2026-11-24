@@ -105,7 +105,7 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn new(opts: &Opts) -> Result<Worker, String> {
+    pub fn new(opts: &Opts) -> villa::Result<Worker> {
         let mut engine = Engine::new(
             opts.cols,
             opts.rows,
@@ -453,7 +453,9 @@ impl Worker {
 
     /// A new size: the lines rewrap, so the next patch is a reset.
     pub fn resize(&mut self, cols: u16, rows: u16, cell_px: (u32, u32)) {
-        let _ = self.engine.resize(cols, rows, cell_px);
+        if let Err(e) = self.engine.resize(cols, rows, cell_px) {
+            annall::log_error(&e);
+        }
         self.reset_due = true;
         self.clock.touch();
     }

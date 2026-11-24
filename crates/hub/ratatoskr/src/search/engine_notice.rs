@@ -62,7 +62,7 @@ impl Offer {
         if answered == Some(key.as_str()) {
             return None;
         }
-        let mut shown = self.shown.lock().unwrap_or_else(|e| e.into_inner());
+        let mut shown = saman::lock(&self.shown);
         if shown.as_deref() == Some(key.as_str()) {
             return None;
         }

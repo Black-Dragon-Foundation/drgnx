@@ -48,8 +48,16 @@ mod os {
     use super::{Stat, parse_linux_stat};
     use std::io;
 
+    /// The text of a procfs file (an `io::Error` as `std::fs::read_to_string` would give).
+    pub(super) fn proc_text(path: &str) -> io::Result<String> {
+        eitri::read_string(std::path::Path::new(path), 1 << 20).map_err(|e| match e {
+            eitri::FsError::Io(e) => e,
+            other => io::Error::other(other.to_string()),
+        })
+    }
+
     pub(super) fn stat(pid: i32) -> io::Result<Stat> {
-        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        match proc_text(&format!("/proc/{pid}/stat")) {
             Ok(line) => parse_linux_stat(&line),
             // A read that races the exit fails with ESRCH.
             Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Err(io::ErrorKind::NotFound.into()),
@@ -58,7 +66,7 @@ mod os {
     }
 
     pub(super) fn boot_id() -> io::Result<String> {
-        Ok(std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?
+        Ok(proc_text("/proc/sys/kernel/random/boot_id")?
             .trim()
             .to_owned())
     }
@@ -181,7 +189,7 @@ mod tests {
         let start = start_time(pid).unwrap() as f64;
         #[cfg(target_os = "linux")]
         {
-            let uptime: f64 = std::fs::read_to_string("/proc/uptime")
+            let uptime: f64 = super::os::proc_text("/proc/uptime")
                 .unwrap()
                 .split_whitespace()
                 .next()

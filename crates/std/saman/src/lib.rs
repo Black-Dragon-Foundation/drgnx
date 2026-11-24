@@ -3,6 +3,7 @@
 //! - [`lock`]: a mutex's guard, also after a holder panicked (the poison is cleared; the first recovery is logged).
 //! - [`Executor`]: the one tokio runtime of the work pool. [`Executor::spawn`] names each task and gives a [`Task`],
 //!   which cancels the task when dropped; [`Task::detach`] lets it run on and must say why.
+//! - [`Handle`]: spawns on one pool from another runtime's thread.
 //! - [`Cancel`]: a cancellation token; [`Cancel::child`] is cancelled with its parent.
 //! - [`spawn_thread`]: a named OS thread, for what must own one.
 //! - [`ui`]: [`ui::UiQueue::post`], the only way back to the UI thread, and the [`ui::Watchdog`] that times every UI
@@ -39,14 +40,29 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    std::thread::Builder::new()
-        .name(name.to_string())
-        .spawn(f)
-        .map_err(|e| {
-            villa::Error::unavailable("The editor could not start a thread.")
-                .with_detail(format!("starting thread {name}"))
-                .with_source(e)
-        })
+    spawn_thread_with_stack(name, None, f)
+}
+
+/// [`spawn_thread`] with a stack of STACK bytes (`None`: the system's default), for a thread that needs a deep or a
+/// deliberately small stack.
+pub fn spawn_thread_with_stack<F, T>(
+    name: &str,
+    stack: Option<usize>,
+    f: F,
+) -> villa::Result<std::thread::JoinHandle<T>>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let mut b = std::thread::Builder::new().name(name.to_string());
+    if let Some(bytes) = stack {
+        b = b.stack_size(bytes);
+    }
+    b.spawn(f).map_err(|e| {
+        villa::Error::unavailable("The editor could not start a thread.")
+            .with_detail(format!("starting thread {name}"))
+            .with_source(e)
+    })
 }
 
 /// The work pool's runtime.
@@ -57,10 +73,22 @@ pub struct Executor {
 impl Executor {
     /// A pool of WORKERS threads (at least one), named `saman-worker`.
     pub fn new(workers: usize) -> villa::Result<Executor> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
+        Executor::tuned(workers, |_| {})
+    }
+
+    /// [`Executor::new`], with TUNE applied to the runtime's builder first: for a test that must watch the pool's
+    /// threads come and go (`thread_keep_alive`, `on_thread_stop`).
+    pub fn tuned(
+        workers: usize,
+        tune: impl FnOnce(&mut tokio::runtime::Builder),
+    ) -> villa::Result<Executor> {
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder
             .worker_threads(workers.max(1))
             .thread_name("saman-worker")
-            .enable_all()
+            .enable_all();
+        tune(&mut builder);
+        let rt = builder
             .build()
             .map_err(|e| villa::Error::from(e).with_detail("starting the work pool"))?;
         Ok(Executor { rt })
@@ -82,6 +110,114 @@ impl Executor {
     pub fn block_on<F: Future>(&self, fut: F) -> F::Output {
         self.rt.block_on(fut)
     }
+
+    /// A [`Handle`] to this pool, for code that spawns on it from another runtime's thread.
+    pub fn handle(&self) -> Handle {
+        Handle(self.rt.handle().clone())
+    }
+
+    /// End the pool without waiting for its tasks: one that never yields (a guest spinning until its deadline) ends on
+    /// its own thread, and this call returns at once. Consumes the pool, so nothing can spawn on it after.
+    pub fn shutdown_background(self) {
+        self.rt.shutdown_background();
+    }
+
+    /// End the pool, waiting at most WITHIN for its tasks to stop (a task that never yields is left on its thread):
+    /// for a test that must see the pool's threads gone.
+    pub fn shutdown_timeout(self, within: std::time::Duration) {
+        self.rt.shutdown_timeout(within);
+    }
+}
+
+/// A way to spawn on one pool from outside it: the pool the caller was started on ([`Handle::current`]) or one's
+/// [`Executor::handle`]. [`spawn`] goes to the runtime the caller is running in; a handle goes to the one it names.
+#[derive(Clone)]
+pub struct Handle(tokio::runtime::Handle);
+
+impl Handle {
+    /// The pool the calling thread runs in; [`villa::Kind::Invalid`] outside one.
+    pub fn current() -> villa::Result<Handle> {
+        tokio::runtime::Handle::try_current()
+            .map(Handle)
+            .map_err(|e| {
+                villa::Error::invalid("There is no work pool on this thread.").with_source(e)
+            })
+    }
+
+    /// FUT on this handle's pool, as a task named NAME. Dropping the [`Task`] cancels it.
+    pub fn spawn<F>(&self, name: &'static str, fut: F) -> Task<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        Task {
+            name,
+            handle: Some(self.0.spawn(fut)),
+        }
+    }
+}
+
+/// Whether SENT, the result of a send on a channel (`mpsc`, `oneshot`, `watch`), reached a receiver. A receiver that is
+/// gone is the ordinary end of a task whose listener left, so it is logged at debug under WHAT and never an error.
+pub fn delivered<T, E>(sent: Result<T, E>, what: &str) -> bool {
+    let ok = sent.is_ok();
+    if !ok {
+        tracing::debug!(what, "nobody was listening");
+    }
+    ok
+}
+
+/// FUT to its end on a new current-thread runtime: what `#[tokio::test]` gives a test, for a test that must not name the
+/// runtime builder itself. Never from a runtime thread nor the UI thread.
+pub fn block_on_current<F: Future>(fut: F) -> F::Output {
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt.block_on(fut),
+        Err(e) => panic!("no current-thread runtime: {e}"),
+    }
+}
+
+/// FUT to its end on a new current-thread runtime whose clock starts paused: what `#[tokio::test(start_paused = true)]`
+/// gives a test. The clock is paused before the runtime starts, so timers fire on exact millisecond marks. A
+/// `tokio::time::pause()` inside FUT pauses part-way into a millisecond, and every timer then rounds up by 1 ms.
+#[cfg(feature = "test-util")]
+pub fn block_on_paused<F: Future>(fut: F) -> F::Output {
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+    {
+        Ok(rt) => rt.block_on(fut),
+        Err(e) => panic!("no current-thread runtime: {e}"),
+    }
+}
+
+/// FUT as a task named NAME on the runtime the caller is running in (an [`Executor`] task, a `#[tokio::test]`, a
+/// server's accept loop): for code that has no [`Executor`] of its own to call. Panics outside a runtime, as tokio's
+/// own spawn does. Dropping the [`Task`] cancels it.
+pub fn spawn<F>(name: &'static str, fut: F) -> Task<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    Task {
+        name,
+        handle: Some(tokio::spawn(fut)),
+    }
+}
+
+/// F on a blocking thread of the runtime the caller is running in, as a task named NAME.
+pub fn spawn_blocking<F, T>(name: &'static str, f: F) -> Task<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    Task {
+        name,
+        handle: Some(tokio::task::spawn_blocking(f)),
+    }
 }
 
 /// A spawned task. Awaiting it gives its output, or an error: [`villa::Kind::Cancelled`] when it was cancelled,
@@ -94,6 +230,11 @@ pub struct Task<T> {
 impl<T> Task<T> {
     pub fn name(&self) -> &'static str {
         self.name
+    }
+
+    /// Whether the task has ended (finished, panicked or been cancelled). A detached task reports `true`.
+    pub fn is_finished(&self) -> bool {
+        self.handle.as_ref().is_none_or(|h| h.is_finished())
     }
 
     /// Let the task run on with no one awaiting it. WHY is logged: a detached task is a decision, never a default.

@@ -391,7 +391,7 @@ pub(crate) fn map_trail() -> (Vec<vegvisir::trail::Step>, Vec<vegvisir::trail::C
 }
 
 /// Write the run into FRONT's store and its merge queue.  Each write is the hub's (class system), as the gates' are.
-pub async fn seed(front: &Front, map: bool) -> Result<(), String> {
+pub async fn seed(front: &Front, map: bool) -> villa::Result<()> {
     if map {
         // the Work map's scene is the map's graph, trail and strip alone: no plan run, so no held gate, no job and no
         // queue beside the mockup's three cards
@@ -477,8 +477,7 @@ pub async fn seed(front: &Front, map: bool) -> Result<(), String> {
             }
             Ok(())
         })
-        .await
-        .map_err(|e| e.to_string())?;
+        .await.map_err(|e| villa::Error::invalid(e.to_string()))?;
     // the batch as the queue holds it: the first member's trial merge was clean, the others wait for it
     let ready: Vec<Ready> = batch
         .iter()

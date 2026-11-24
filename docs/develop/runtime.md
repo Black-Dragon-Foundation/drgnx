@@ -1971,7 +1971,7 @@ Users get the binary from install.sh and `drgnx update`; both call `drgnx runtim
   `DRGNX_CHECKOUT` the checkout, so `ratatoskr version --json` says what it was built from. On Linux with a user systemd
   the build runs in `systemd-run --user --scope` with `MemoryMax` min(jobs x 1536 MiB + 1 GiB, available - 1 GiB) and
   `MemorySwapMax=0`; without one, `-j` alone and a note. macOS has no cap. It then builds `drgnx-key` the same way
-  (`-p sleipnir --no-default-features --bin drgnx-key`; a failure fails the build), and the relay sidecar and a static
+  (`-p sleipnir --no-default-features --features std-owners --bin drgnx-key`; a failure fails the build), and the relay sidecar and a static
   `drgnx-key` for `<arch>-unknown-linux-musl` into `<cache>/ratatoskr-px-target` (a failure there only warns).
 - `drgnx runtime install [--prefix DIR]`: refuses a binary whose `version --json` says `"test_hooks": true` (or says
   nothing), copies it to `<data>/bin/ratatoskr.new` and renames it to `ratatoskr` (a running hub sees a new inode at

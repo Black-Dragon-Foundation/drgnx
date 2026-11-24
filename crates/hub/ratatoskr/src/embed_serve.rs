@@ -356,16 +356,16 @@ pub enum EmbedCommand {
 }
 
 /// The arguments after `embed`.
-pub fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<EmbedCommand, String> {
+pub fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> villa::Result<EmbedCommand> {
     use lexopt::Arg::{Long, Value as Word};
     use lexopt::ValueExt;
     const USE: &str =
         "embed serve --listen ADDR:PORT [--plain] [--no-embed] | --stop | --new-token";
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     match p.next().map_err(e)? {
         Some(Word(v)) if v == "serve" => {}
-        _ => return Err(format!("usage: ratatoskr {USE}")),
+        _ => return Err(villa::Error::invalid(format!("usage: ratatoskr {USE}"))),
     }
     let (mut listen, mut plain, mut no_embed, mut stop, mut new_token) =
         (None, false, false, false, false);
@@ -376,7 +376,7 @@ pub fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Embed
             Long("no-embed") => no_embed = true,
             Long("stop") => stop = true,
             Long("new-token") => new_token = true,
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     match (listen, stop, new_token) {
@@ -387,7 +387,7 @@ pub fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Embed
         }),
         (None, true, false) if !plain && !no_embed => Ok(EmbedCommand::Stop),
         (None, false, true) if !plain && !no_embed => Ok(EmbedCommand::NewToken),
-        _ => Err(format!("usage: ratatoskr {USE}")),
+        _ => Err(villa::Error::invalid(format!("usage: ratatoskr {USE}"))),
     }
 }
 
@@ -414,37 +414,38 @@ pub fn run(env: &runstav::paths::Env, cmd: EmbedCommand) -> i32 {
     let a = match answer {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("ratatoskr embed serve: {e}");
+            crate::soft::err_line(&format!("ratatoskr embed serve: {e}"));
             return 1;
         }
     };
     let text = |k: &str| a.get(k).and_then(serde_json::Value::as_str);
     match cmd {
         EmbedCommand::Start { .. } => {
-            println!("serving on {}", text("url").unwrap_or_default());
+            crate::soft::out_line(&format!("serving on {}", text("url").unwrap_or_default()));
             if let Some(c) = text("cert_sha256") {
-                println!("certificate sha256 {c} (the client pins it on first use)");
+                crate::soft::out_line(&format!(
+                    "certificate sha256 {c} (the client pins it on first use)"
+                ));
             }
             match text("token") {
-                Some(t) => println!("token {t}\n(shown once: put it in the client's key_env)"),
-                None => println!(
-                    "the token is the one shown before (embed serve --new-token makes another)"
+                Some(t) => crate::soft::out_line(&format!(
+                    "token {t}\n(shown once: put it in the client's key_env)"
+                )),
+                None => crate::soft::out_line(
+                    "the token is the one shown before (embed serve --new-token makes another)",
                 ),
             }
         }
-        EmbedCommand::Stop => println!(
-            "{}",
-            if a.as_bool() == Some(true) {
-                "stopped"
-            } else {
-                "no vector server was running"
-            }
-        ),
+        EmbedCommand::Stop => crate::soft::out_line(if a.as_bool() == Some(true) {
+            "stopped"
+        } else {
+            "no vector server was running"
+        }),
         EmbedCommand::NewToken => {
-            println!(
+            crate::soft::out_line(&format!(
                 "token {}\n(shown once; the old one is refused from now)",
                 text("token").unwrap_or_default()
-            );
+            ));
         }
     }
     0
@@ -471,7 +472,7 @@ pub struct Running {
     cert_sha256: Option<String>,
     dir: PathBuf,
     token_sha: Arc<Mutex<[u8; 32]>>,
-    task: tokio::task::JoinHandle<()>,
+    task: crate::clock::Spawned<()>,
 }
 
 impl Running {
@@ -488,7 +489,7 @@ impl Running {
     /// A new token, shown once: the old one is refused from the next request.
     pub fn new_token(&self) -> std::io::Result<String> {
         let (token, sha) = mint_token(&self.dir)?;
-        *self.token_sha.lock().unwrap_or_else(|p| p.into_inner()) = sha;
+        *saman::lock(&self.token_sha) = sha;
         Ok(token)
     }
 
@@ -511,17 +512,12 @@ fn sha256(b: &[u8]) -> [u8; 32] {
 /// BYTES written to DIR/NAME, 0600, replacing it whole (a new file renamed over the old).
 fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
     let tmp = dir.join(format!(".{name}.new"));
-    let _ = std::fs::remove_file(&tmp);
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)?;
+    crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
+    let mut f = eitri::create_exclusive(&tmp, 0o600).map_err(std::io::Error::from)?;
     f.write_all(bytes)?;
     f.sync_all()?;
-    std::fs::rename(&tmp, dir.join(name))
+    crate::fsio::rename(&tmp, dir.join(name))
 }
 
 /// A new token (32 random bytes, hex), its sha256 kept in DIR.
@@ -576,50 +572,51 @@ struct Shared {
 pub async fn start(
     spec: ServeSpec,
     serve: Arc<dyn Serve>,
-) -> Result<(Running, Option<String>), String> {
+) -> villa::Result<(Running, Option<String>)> {
     if spec.plain && !plain_allowed(spec.listen.ip()) {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "plain HTTP is served only on loopback or a Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48), not {}; \
              leave out --plain for TLS",
             spec.listen.ip()
-        ));
+        )));
     }
     let listener = crate::clock::real(tokio::net::TcpListener::bind(spec.listen))
         .await
-        .map_err(|e| format!("{}: {e}", spec.listen))?;
-    let addr = listener.local_addr().map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", spec.listen)))?;
+    let addr = listener.local_addr()?;
     {
         use std::os::unix::fs::DirBuilderExt as _;
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(&spec.dir)
-            .map_err(|e| format!("{}: {e}", spec.dir.display()))?;
+            .map_err(|e| villa::Error::io(format!("{}: {e}", spec.dir.display())))?;
     }
-    let kept = std::fs::read_to_string(spec.dir.join(TOKEN_FILE))
+    let kept = crate::fsio::read_to_string(spec.dir.join(TOKEN_FILE))
         .ok()
         .and_then(|t| key_of(t.trim()));
     let (token_sha, token) = match kept {
         Some(sha) => (sha, None),
         None => {
-            let (t, sha) =
-                mint_token(&spec.dir).map_err(|e| format!("{}: {e}", spec.dir.display()))?;
+            let (t, sha) = mint_token(&spec.dir)
+                .map_err(|e| villa::Error::invalid(format!("{}: {e}", spec.dir.display())))?;
             (sha, Some(t))
         }
     };
     let (acceptor, cert_sha256) = if spec.plain {
         (None, None)
     } else {
-        let (cert, key) = certificate(&spec.dir, addr.ip())?;
+        let (cert, key) =
+            certificate(&spec.dir, addr.ip()).map_err(|e| villa::Error::invalid(e.to_string()))?;
         let fp = key_hex(&sha256(cert.as_ref()));
         let config = rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
         ))
         .with_safe_default_protocol_versions()
-        .map_err(|e| e.to_string())?
+        .map_err(|e| villa::Error::invalid(e.to_string()))?
         .with_no_client_auth()
         .with_single_cert(vec![cert], key)
-        .map_err(|e| format!("the certificate: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("the certificate: {e}")))?;
         (
             Some(tokio_rustls::TlsAcceptor::from(Arc::new(config))),
             Some(fp),
@@ -688,7 +685,10 @@ where
     let mut b = hyper::server::conn::http1::Builder::new();
     b.timer(TokioTimer::new())
         .header_read_timeout(HEADER_READ_TIMEOUT);
-    let _ = b.serve_connection(TokioIo::new(s), svc).await;
+    crate::soft::done(
+        b.serve_connection(TokioIo::new(s), svc).await,
+        "embed_serve",
+    );
 }
 
 type Reply = hyper::Response<http_body_util::Full<bytes::Bytes>>;
@@ -726,7 +726,7 @@ fn authorized(sh: &Shared, req: &hyper::Request<hyper::body::Incoming>) -> bool 
     else {
         return false;
     };
-    let want = *sh.token_sha.lock().unwrap_or_else(|p| p.into_inner());
+    let want = *saman::lock(&sh.token_sha);
     bool::from(sha256(token.trim().as_bytes()).ct_eq(&want))
 }
 
@@ -875,7 +875,7 @@ fn to_json<T: Serialize>(v: &T) -> serde_json::Value {
 mod tests {
     use super::*;
 
-    fn p(args: &[&str]) -> Result<EmbedCommand, String> {
+    fn p(args: &[&str]) -> villa::Result<EmbedCommand> {
         parse(args.iter().map(std::ffi::OsString::from))
     }
 

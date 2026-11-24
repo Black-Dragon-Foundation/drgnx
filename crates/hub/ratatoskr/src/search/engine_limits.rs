@@ -24,13 +24,15 @@ pub struct Limits {
 
 impl Limits {
     /// A percent is 1 to 100; anything else is an error naming the setting.
-    pub fn check(&self) -> Result<(), String> {
+    pub fn check(&self) -> villa::Result<()> {
         for (name, v) in [
             ("drgnx-search-cpu-limit", self.cpu_percent),
             ("drgnx-search-gpu-busy", self.gpu_busy),
         ] {
             if v.is_some_and(|p| !(1..=100).contains(&p)) {
-                return Err(format!("{name}: a percent from 1 to 100"));
+                return Err(villa::Error::invalid(format!(
+                    "{name}: a percent from 1 to 100"
+                )));
             }
         }
         for (name, v) in [
@@ -38,7 +40,7 @@ impl Limits {
             ("drgnx-search-vram-limit", self.vram_mib),
         ] {
             if v == Some(0) {
-                return Err(format!("{name}: MiB over 0"));
+                return Err(villa::Error::invalid(format!("{name}: MiB over 0")));
             }
         }
         Ok(())
@@ -121,20 +123,20 @@ pub fn vram_need_mib(gguf_bytes: u64, ctx: u32) -> u64 {
 }
 
 /// Whether NEED MiB may start on a device with FREE MiB (unknown: not checked) under the user's CEILING.
-pub fn vram_check(need: u64, free: Option<u64>, ceiling: Option<u64>) -> Result<(), String> {
+pub fn vram_check(need: u64, free: Option<u64>, ceiling: Option<u64>) -> villa::Result<()> {
     if let Some(c) = ceiling
         && need > c
     {
-        return Err(format!(
+        return Err(villa::Error::refused(format!(
             "the engine needs about {need} MiB of video memory for this context and the limit is {c} MiB (drgnx-search-vram-limit): it is not started"
-        ));
+        )));
     }
     if let Some(f) = free
         && need > f
     {
-        return Err(format!(
+        return Err(villa::Error::unavailable(format!(
             "the engine needs about {need} MiB of video memory and the device has {f} MiB free: it is not started (another program holds the rest)"
-        ));
+        )));
     }
     Ok(())
 }

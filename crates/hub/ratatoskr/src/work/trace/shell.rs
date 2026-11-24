@@ -9,10 +9,10 @@ use gleipnir::trace::{self as gt, Handed, ListenOptions, Offer, Scope};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(m)
 }
 
 /// How a session's shell steps are traced.
@@ -106,15 +106,15 @@ impl Probe for FsProbe {
 /// The PATHS git ignores in ROOT's repository (none when ROOT is not in one, or git fails).
 fn check_ignore(root: &Path, paths: &[PathBuf]) -> BTreeSet<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
-    use std::process::{Command, Stdio};
-    let child = Command::new("git")
+    let child = crate::proc::Command::new("git")
         .arg("-C")
         .arg(root)
         .args(["check-ignore", "-z", "--stdin"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
+        .spawn(
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Null,
+        );
     let Ok(mut child) = child else {
         return BTreeSet::new();
     };
@@ -125,17 +125,17 @@ fn check_ignore(root: &Path, paths: &[PathBuf]) -> BTreeSet<PathBuf> {
     }
     // written from a thread: git answers as it reads, and a full stdout pipe would stop it
     let stdin = child.stdin.take();
-    let writer = std::thread::spawn(move || {
+    let writer = saman::spawn_thread("ratatoskr:shell", move || {
         if let Some(mut s) = stdin {
-            let _ = s.write_all(&input);
+            crate::soft::done(s.write_all(&input), "shell");
         }
     });
     let mut out = Vec::new();
     if let Some(mut s) = child.stdout.take() {
-        let _ = s.read_to_end(&mut out);
+        crate::soft::done(s.read_to_end(&mut out), "shell");
     }
-    let _ = writer.join();
-    let _ = child.wait();
+    crate::soft::done(writer.map(|w| w.join()), "shell");
+    crate::soft::done(child.wait(), "shell");
     out.split(|b| *b == 0)
         .filter(|s| !s.is_empty())
         .map(|s| PathBuf::from(std::ffi::OsStr::from_bytes(s)))
@@ -158,7 +158,7 @@ pub struct SessionTrace {
     writer: crate::coord::Writer,
     front: Weak<Front>,
     socket: Option<PathBuf>,
-    server: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    server: Mutex<Option<crate::clock::Spawned<()>>>,
 }
 
 /// Every session's tracing, and each worktree's learned skips.
@@ -181,7 +181,7 @@ impl Traces {
     ) -> io::Result<Arc<SessionTrace>> {
         self.end(sid);
         let root = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let home = std::env::var_os(stig::HOME_VAR).map(PathBuf::from);
         let learned = lock(&self.learned).entry(root.clone()).or_default().clone();
         let socket = mode
             .scope()
@@ -204,7 +204,10 @@ impl Traces {
         if let Some(sock) = &socket {
             let listener = crate::sessions::bind_socket(sock)?;
             let me = st.clone();
-            *lock(&st.server) = Some(tokio::spawn(serve(listener, me)));
+            *lock(&st.server) = Some(crate::clock::spawn_untracked(
+                module_path!(),
+                serve(listener, me),
+            ));
         }
         lock(&self.sessions).insert(sid.to_string(), st.clone());
         Ok(st)
@@ -221,7 +224,7 @@ impl Traces {
                 h.abort();
             }
             if let Some(s) = &st.socket {
-                let _ = std::fs::remove_file(s);
+                crate::soft::done(std::fs::remove_file(s), "std::fs::remove_file");
             }
         }
     }
@@ -238,8 +241,11 @@ impl Traces {
             }
             return;
         }
-        let _ = crate::clock::blocking(move || st.apply(TraceEv::StepClosed { step, command, at }))
-            .await;
+        crate::soft::done(
+            crate::clock::blocking(move || st.apply(TraceEv::StepClosed { step, command, at }))
+                .await,
+            "crate::clock::blocking",
+        );
     }
 }
 
@@ -254,11 +260,12 @@ async fn serve(listener: tokio::net::UnixListener, st: Arc<SessionTrace>) {
         };
         let open = st.open_command();
         let me = st.clone();
-        tokio::task::spawn_blocking(move || {
+        saman::spawn_blocking("trace:offer", move || {
             if stream.set_nonblocking(false).is_ok() {
                 me.offered(stream, open);
             }
-        });
+        })
+        .detach("the offer is answered on its own thread");
     }
 }
 
@@ -344,7 +351,7 @@ impl SessionTrace {
             (Scope::Step, TraceMode::PerStep) => self.per_step(offer, open),
             (Scope::Tree, TraceMode::Tree) => self.tree(offer),
             _ => {
-                let _ = offer.skip();
+                crate::soft::done(offer.skip(), "shell");
             }
         }
     }
@@ -356,7 +363,7 @@ impl SessionTrace {
         let command = match open {
             Some(c) if command_matches(&offer.hello.command, &c) => c,
             Some(_) => {
-                let _ = offer.skip();
+                crate::soft::done(offer.skip(), "shell");
                 return;
             }
             None => offer.hello.command.clone(),
@@ -369,7 +376,7 @@ impl SessionTrace {
                 tree: false,
                 label: Some(LABEL_BUILD.into()),
             });
-            let _ = offer.skip();
+            crate::soft::done(offer.skip(), "shell");
             return;
         }
         self.apply(TraceEv::Started {
@@ -412,7 +419,7 @@ impl SessionTrace {
                 });
             }
         }
-        let _ = listener.join();
+        listener.join();
         self.apply(TraceEv::Ended { trace });
     }
 
@@ -461,7 +468,7 @@ impl SessionTrace {
                 });
             }
         }
-        let _ = listener.join();
+        listener.join();
     }
 
     /// O's path, unless it can be dropped now: a system or toolchain path, or a read of a file that is not there (a

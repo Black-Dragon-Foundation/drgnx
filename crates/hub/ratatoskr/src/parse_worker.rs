@@ -20,15 +20,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 /// The runtime the spawns and the reaping run on: the chunker calls the launcher from threads that have none of their own.
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+fn runtime() -> &'static saman::Executor {
+    static RT: OnceLock<saman::Executor> = OnceLock::new();
     RT.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("hrafn-parse-launch")
-            .enable_all()
-            .build()
-            .expect("the worker launcher's runtime")
+        saman::Executor::tuned(1, |b| {
+            b.thread_name("hrafn-parse-launch");
+        })
+        .expect("the worker launcher's runtime")
     })
 }
 
@@ -176,19 +174,21 @@ impl Launch for Sandboxed {
                 stdout,
                 kill: Box::new(move || {
                     // the group: the worker and anything it started; then reap it
-                    let _ = runtime().block_on(draugr::kill_group(
+
+                    runtime().block_on(draugr::kill_group(
                         pid,
                         draugr::reap::GRACE,
                         &draugr::RealSignaller,
                     ));
-                    let mut c = ender.lock().unwrap_or_else(|e| e.into_inner());
-                    let _ = runtime().block_on(async {
-                        crate::clock::timeout(Duration::from_secs(5), c.wait()).await
-                    });
+                    let mut c = saman::lock(&ender);
+                    crate::soft::done(
+                        runtime().block_on(async {
+                            crate::clock::timeout(Duration::from_secs(5), c.wait()).await
+                        }),
+                        "runtime",
+                    );
                 }),
-                stderr: Box::new(move || {
-                    tail.lock().unwrap_or_else(|e| e.into_inner()).stderr_tail()
-                }),
+                stderr: Box::new(move || saman::lock(&tail).stderr_tail()),
             })
         })
     }
@@ -230,14 +230,15 @@ pub fn fetched(env: &runstav::paths::Env) -> Vec<hrafn::chunk::worker::Fetched> 
             continue;
         };
         let (Ok(chunks_scm), true) = (
-            std::fs::read_to_string(dir.join(chunks)),
+            crate::fsio::read_to_string(dir.join(chunks)),
             entry.lib.is_file(),
         ) else {
             continue;
         };
         // the references' queries are `queries/tags.scm` unless the manifest names another file; a pack may have none
         let tags_scm =
-            std::fs::read_to_string(dir.join(h.tags.as_deref().unwrap_or("queries/tags.scm"))).ok();
+            crate::fsio::read_to_string(dir.join(h.tags.as_deref().unwrap_or("queries/tags.scm")))
+                .ok();
         out.push(Fetched {
             spec: hrafn::chunk::worker::WorkerSpec {
                 pack: p.name.clone(),
@@ -247,7 +248,7 @@ pub fn fetched(env: &runstav::paths::Env) -> Vec<hrafn::chunk::worker::Fetched> 
             },
             init: Init {
                 // the fold ranges' query is `queries/folds.scm` when the pack has one, else its `tags.scm`'s definitions
-                folds_scm: std::fs::read_to_string(dir.join("queries/folds.scm")).ok(),
+                folds_scm: crate::fsio::read_to_string(dir.join("queries/folds.scm")).ok(),
                 ..Init::from_manifest(&m, chunks_scm, tags_scm)
             },
             extensions: m.files.extensions.clone(),
@@ -307,10 +308,13 @@ pub mod fixture {
             let (req_r, req_w) = std::io::pipe().map_err(|e| e.to_string())?;
             let (rep_r, rep_w) = std::io::pipe().map_err(|e| e.to_string())?;
             let (lib, grammar, sha) = (s.lib.clone(), s.grammar.clone(), s.sha256.clone());
-            std::thread::spawn(move || {
-                let (mut r, mut w) = (req_r, rep_w);
-                serve(&lib, &grammar, &sha, &mut r, &mut w);
-            });
+            crate::soft::done(
+                saman::spawn_thread("ratatoskr:parse_worker", move || {
+                    let (mut r, mut w) = (req_r, rep_w);
+                    serve(&lib, &grammar, &sha, &mut r, &mut w);
+                }),
+                "thread",
+            );
             Ok(Started {
                 stdin: Box::new(req_w),
                 stdout: Box::new(rep_r),
@@ -333,7 +337,7 @@ pub mod fixture {
     }
 
     pub fn install_csharp(pack: &str, ext: &str) -> Installed {
-        let guard = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = saman::lock(&ONE_AT_A_TIME);
         let lock = PathBuf::from(std::env::var_os("DRGNX_PACK_LOCK").expect("DRGNX_PACK_LOCK"));
         let grammars =
             PathBuf::from(std::env::var_os("DRGNX_PACK_GRAMMARS").expect("DRGNX_PACK_GRAMMARS"));
@@ -344,7 +348,7 @@ pub mod fixture {
             .expect("c-sharp is in the lock");
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packs/csharp");
         let m = skald::builtin::get("csharp").expect("the csharp pack");
-        let read = |f: &str| std::fs::read_to_string(dir.join(f)).unwrap();
+        let read = |f: &str| crate::fsio::read_to_string(dir.join(f)).unwrap();
         hrafn::chunk::worker::install(
             vec![Fetched {
                 spec: WorkerSpec {

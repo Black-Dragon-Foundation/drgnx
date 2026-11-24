@@ -312,7 +312,7 @@ pub fn plan(p: &AgentProfile, role: Role, _e: &Effective) -> LaunchPlan {
             Provider::Kimi => return hub_home(KIMI_HOME),
             Provider::DeepSeek => return hub_home(DSH_HOME),
         };
-        std::env::var_os("HOME")
+        std::env::var_os(stig::HOME_VAR)
             .filter(|h| !h.is_empty())
             .map(|h| PathBuf::from(h).join(name))
     });
@@ -755,7 +755,7 @@ impl LaunchPlan {
         runstav::paths::private_dir(home)?;
         for (path, _) in self.ro_files.iter().filter(|(p, _)| p.starts_with(home)) {
             if path.symlink_metadata().is_err() {
-                std::fs::write(path, b"")?;
+                crate::fsio::write(path, b"")?;
             }
         }
         Ok(())

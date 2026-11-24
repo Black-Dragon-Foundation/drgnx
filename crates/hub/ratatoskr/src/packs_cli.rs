@@ -61,10 +61,10 @@ pub enum PacksCommand {
 }
 
 /// The arguments after `packs`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<PacksCommand, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<PacksCommand> {
     use lexopt::Arg::{Long, Value as Word};
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     match p.next().map_err(e)? {
         Some(Word(v)) if v == "check" => {}
         Some(Word(v)) if v == "sync" => {
@@ -75,14 +75,17 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<PacksCommand, S
                     Long("out") => out = Some(PathBuf::from(p.value().map_err(e)?)),
                     Long("builtin") => builtin = Some(PathBuf::from(p.value().map_err(e)?)),
                     Word(v) if builtin.is_some() => packs.push(v.to_string_lossy().into_owned()),
-                    other => return Err(other.unexpected().to_string()),
+                    other => return Err(villa::Error::invalid(other.unexpected().to_string())),
                 }
             }
             if let Some(out) = builtin {
                 return Ok(PacksCommand::SyncBuiltin { out, packs });
             }
-            let plan =
-                plan.ok_or("usage: packs sync --plan FILE [--out FILE] | --builtin OUT [PACK…]")?;
+            let plan = plan.ok_or_else(|| {
+                villa::Error::invalid(
+                    "usage: packs sync --plan FILE [--out FILE] | --builtin OUT [PACK…]",
+                )
+            })?;
             return Ok(PacksCommand::Sync { plan, out });
         }
         Some(Word(v)) if v == "pin" => {
@@ -91,11 +94,13 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<PacksCommand, S
                 match arg {
                     Word(v) => words.push(v.to_string_lossy().into_owned()),
                     Long("src") => src = p.value().map_err(e)?.to_string_lossy().into_owned(),
-                    other => return Err(other.unexpected().to_string()),
+                    other => return Err(villa::Error::invalid(other.unexpected().to_string())),
                 }
             }
             let [repo, commit] = words.as_slice() else {
-                return Err("usage: packs pin REPO COMMIT [--src DIR]".into());
+                return Err(villa::Error::invalid(
+                    "usage: packs pin REPO COMMIT [--src DIR]",
+                ));
             };
             return Ok(PacksCommand::Pin {
                 repo: repo.clone(),
@@ -107,24 +112,41 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<PacksCommand, S
             let words: Vec<OsString> = p.raw_args().map_err(e)?.collect();
             let usage = "usage: packs load-check LIB NAME MIN_ABI [FILE=PATH]…";
             let [lib, name, abi, rest @ ..] = words.as_slice() else {
-                return Err(usage.into());
+                return Err(villa::Error::invalid(usage));
             };
-            let min_abi = abi.to_str().and_then(|a| a.parse().ok()).ok_or(usage)?;
+            let min_abi = abi
+                .to_str()
+                .and_then(|a| a.parse().ok())
+                .ok_or_else(|| villa::Error::invalid(usage))?;
             let mut queries = Vec::new();
             for q in rest {
-                let q = q.to_str().ok_or(usage)?;
-                let (file, path) = q.split_once('=').ok_or(usage)?;
+                let q = q.to_str().ok_or_else(|| villa::Error::invalid(usage))?;
+                let (file, path) = q
+                    .split_once('=')
+                    .ok_or_else(|| villa::Error::invalid(usage))?;
                 queries.push((file.to_string(), PathBuf::from(path)));
             }
             return Ok(PacksCommand::LoadCheck {
                 lib: PathBuf::from(lib),
-                name: name.to_str().ok_or(usage)?.to_string(),
+                name: name
+                    .to_str()
+                    .ok_or(usage)
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?
+                    .to_string(),
                 min_abi,
                 queries,
             });
         }
-        Some(Word(v)) => return Err(format!("unknown packs subcommand {v:?}")),
-        _ => return Err("packs needs a subcommand (check, sync, load-check)".into()),
+        Some(Word(v)) => {
+            return Err(villa::Error::invalid(format!(
+                "unknown packs subcommand {v:?}"
+            )));
+        }
+        _ => {
+            return Err(villa::Error::invalid(
+                "packs needs a subcommand (check, sync, load-check)",
+            ));
+        }
     }
     let (mut dir, mut builtin, mut others) = (None, false, Vec::new());
     while let Some(arg) = p.next().map_err(e)? {
@@ -132,11 +154,17 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<PacksCommand, S
             Word(v) if dir.is_none() => dir = Some(PathBuf::from(v)),
             Long("builtin") => builtin = true,
             Long("other") => others.push(PathBuf::from(p.value().map_err(e)?)),
-            Long(name) => return Err(format!("packs check: unknown option --{name}")),
-            other => return Err(other.unexpected().to_string()),
+            Long(name) => {
+                return Err(villa::Error::invalid(format!(
+                    "packs check: unknown option --{name}"
+                )));
+            }
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
-    let dir = dir.ok_or("usage: packs check DIR [--builtin] [--other DIR]…")?;
+    let dir = dir.ok_or_else(|| {
+        villa::Error::invalid("usage: packs check DIR [--builtin] [--other DIR]…")
+    })?;
     Ok(PacksCommand::Check {
         dir,
         builtin,
@@ -157,18 +185,18 @@ pub fn run(cmd: PacksCommand) -> i32 {
         PacksCommand::Pin { repo, commit, src } => {
             return match skald::job::pin(&repo, &commit, &src) {
                 Ok((tree, abi)) => {
-                    println!(
+                    crate::soft::out_line(&format!(
                         "(:repo {} :commit {} :tree-sha256 {} :src {})  ; ABI {}",
                         lisp_string(&repo),
                         lisp_string(&commit),
                         lisp_string(&tree),
                         lisp_string(&src),
                         abi.map_or("?".to_string(), |a| a.to_string())
-                    );
+                    ));
                     0
                 }
                 Err(e) => {
-                    eprintln!("{e}");
+                    crate::soft::err_line(&e.to_string());
                     1
                 }
             };
@@ -191,18 +219,18 @@ pub fn run(cmd: PacksCommand) -> i32 {
         match r.manifest {
             Some(m) => claims.add_pack(&m),
             None => {
-                eprintln!("{}: not a readable pack", o.display());
+                crate::soft::err_line(&format!("{}: not a readable pack", o.display()));
                 return 1;
             }
         }
     }
     let report = check_dir(&dir, source, &claims);
     for q in &report.problems {
-        eprintln!("{}: {:?}: {}", q.path, q.kind, q.message);
+        crate::soft::err_line(&format!("{}: {:?}: {}", q.path, q.kind, q.message));
     }
     if report.problems.is_empty() {
         let name = report.manifest.map(|m| m.pack).unwrap_or_default();
-        println!("{name}: ok");
+        crate::soft::out_line(&format!("{name}: ok"));
         0
     } else {
         1
@@ -213,16 +241,16 @@ pub fn run(cmd: PacksCommand) -> i32 {
 fn load_check(lib: &Path, name: &str, min_abi: u32, queries: &[(String, PathBuf)]) -> i32 {
     let mut texts = Vec::new();
     for (file, path) in queries {
-        match std::fs::read_to_string(path) {
+        match crate::fsio::read_to_string(path) {
             Ok(t) => texts.push((file.clone(), t)),
             Err(e) => {
-                println!("load {file}: {e}");
+                crate::soft::out_line(&format!("load {file}: {e}"));
                 return 4;
             }
         }
     }
     let r = skald::job::check_library(lib, name, min_abi, &texts);
-    println!("{}", skald::job::check_answer(&r));
+    crate::soft::out_line(&(skald::job::check_answer(&r)).to_string());
     match r {
         Ok(_) => 0,
         Err(skald::job::JobError::Abi { .. }) => 2,
@@ -275,27 +303,30 @@ fn lisp_string(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn read_plan(path: &Path) -> Result<Plan, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+fn read_plan(path: &Path) -> villa::Result<Plan> {
+    let bytes =
+        std::fs::read(path).map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
     let nodes = huginn::read::read_all(&bytes, huginn::read::Limits::default())
-        .map_err(|e| format!("the plan: {e}"))?;
+        .map_err(|e| villa::Error::io(format!("the plan: {e}")))?;
     let [node] = nodes.as_slice() else {
-        return Err("the plan is one plist".into());
+        return Err(villa::Error::invalid("the plan is one plist"));
     };
     let plan: Plan = serde_path_to_error::deserialize(huginn::de::Deserializer::new(node))
-        .map_err(|e| format!("the plan: {}: {}", e.path(), e.inner().message))?;
+        .map_err(|e| {
+            villa::Error::invalid(format!("the plan: {}: {}", e.path(), e.inner().message))
+        })?;
     if plan.version != 1 {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "plan version {} is not one this drgnx reads (1)",
             plan.version
-        ));
+        )));
     }
     Ok(plan)
 }
 
 /// `packs sync --plan`: the answer is `(:ok t :staged …)` or `(:ok nil :error …)`.
 fn sync(plan_path: &Path, out: Option<&Path>) -> i32 {
-    let answer = (|| -> Result<String, String> {
+    let answer = (|| -> villa::Result<String> {
         let plan = read_plan(plan_path)?;
         let units: Vec<skald::job::Unit> = plan
             .units
@@ -310,8 +341,8 @@ fn sync(plan_path: &Path, out: Option<&Path>) -> i32 {
             .collect();
         let mut queries = Vec::new();
         for q in plan.queries {
-            let text = std::fs::read_to_string(&q.path)
-                .map_err(|e| format!("{}: {e}", q.path.display()))?;
+            let text = crate::fsio::read_to_string(&q.path)
+                .map_err(|e| villa::Error::io(format!("{}: {e}", q.path.display())))?;
             queries.push(skald::job::Query {
                 grammar: q.grammar,
                 file: q.file,
@@ -319,8 +350,9 @@ fn sync(plan_path: &Path, out: Option<&Path>) -> i32 {
             });
         }
         let mut opts = skald::job::Options::new(plan.staging, plan.min_abi);
-        opts.checker = Some(std::env::current_exe().map_err(|e| e.to_string())?);
-        let staged = skald::job::run(&units, &queries, &opts).map_err(|e| e.to_string())?;
+        opts.checker = Some(std::env::current_exe().map_err(|e| villa::Error::io(e.to_string()))?);
+        let staged = skald::job::run(&units, &queries, &opts)
+            .map_err(|e| villa::Error::internal(e.to_string()))?;
         let rows: Vec<String> = staged
             .iter()
             .map(|s| {
@@ -339,16 +371,19 @@ fn sync(plan_path: &Path, out: Option<&Path>) -> i32 {
     })();
     let (text, code) = match answer {
         Ok(t) => (t, 0),
-        Err(e) => (format!("(:ok nil :error {})\n", lisp_string(&e)), 1),
+        Err(e) => (
+            format!("(:ok nil :error {})\n", lisp_string(e.message())),
+            1,
+        ),
     };
     match out {
         Some(p) => {
-            if let Err(e) = std::fs::write(p, &text) {
-                eprintln!("{}: {e}", p.display());
+            if let Err(e) = crate::fsio::write(p, &text) {
+                crate::soft::err_line(&format!("{}: {e}", p.display()));
                 return 1;
             }
         }
-        None => print!("{text}"),
+        None => crate::soft::out_text(&text),
     }
     code
 }
@@ -373,7 +408,7 @@ const HUB_PACKS: [&str; 11] = [
 /// whose `:grammars` are what the hub's registry reads (`skald::registry`). The tests of every crate that parses
 /// code run against this; its key is the packs' pins (`test/packs/hub-grammars.sh`).
 fn sync_builtin(out: &Path, packs: &[String]) -> i32 {
-    let run = || -> Result<(), String> {
+    let run = || -> villa::Result<()> {
         let names: Vec<String> = if packs.is_empty() {
             HUB_PACKS.iter().map(|s| (*s).to_owned()).collect()
         } else {
@@ -381,7 +416,8 @@ fn sync_builtin(out: &Path, packs: &[String]) -> i32 {
         };
         let mut units: Vec<skald::job::Unit> = Vec::new();
         for n in &names {
-            let m = skald::builtin::get(n).ok_or(format!("{n} is not a built-in pack"))?;
+            let m = skald::builtin::get(n)
+                .ok_or_else(|| villa::Error::not_found(format!("{n} is not a built-in pack")))?;
             for g in &m.grammars {
                 let (Some(repo), Some(commit), Some(tree)) = (&g.repo, &g.commit, &g.tree_sha256)
                 else {
@@ -401,15 +437,20 @@ fn sync_builtin(out: &Path, packs: &[String]) -> i32 {
         }
         let staging = out.join("staging");
         let mut opts = skald::job::Options::new(staging.clone(), 14);
-        opts.checker = Some(std::env::current_exe().map_err(|e| e.to_string())?);
-        let staged = skald::job::run(&units, &[], &opts).map_err(|e| e.to_string())?;
+        opts.checker = Some(std::env::current_exe().map_err(|e| villa::Error::io(e.to_string()))?);
+        let staged = skald::job::run(&units, &[], &opts)
+            .map_err(|e| villa::Error::internal(e.to_string()))?;
         let mut rows = Vec::new();
         for s in &staged {
             let dir = out.join("grammars").join(&s.name).join(&s.commit);
-            std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            let name = s.lib.file_name().ok_or("a library with no name")?;
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| villa::Error::io(format!("{}: {e}", dir.display())))?;
+            let name = s
+                .lib
+                .file_name()
+                .ok_or_else(|| villa::Error::invalid("a library with no name"))?;
             std::fs::copy(&s.lib, dir.join(name))
-                .map_err(|e| format!("{}: {e}", s.lib.display()))?;
+                .map_err(|e| villa::Error::io(format!("{}: {e}", s.lib.display())))?;
             rows.push(format!(
                 "({} :commit {} :lib-sha256 {})",
                 s.name,
@@ -417,21 +458,21 @@ fn sync_builtin(out: &Path, packs: &[String]) -> i32 {
                 lisp_string(&s.lib_sha256)
             ));
         }
-        std::fs::write(
+        crate::fsio::write(
             out.join("drgnx.lock.eld"),
             format!(
                 "(:version 1 :packages nil :grammars ({}))\n",
                 rows.join("\n  ")
             ),
         )
-        .map_err(|e| e.to_string())?;
-        std::fs::remove_dir_all(&staging).ok();
+        .map_err(|e| villa::Error::io(e.to_string()))?;
+        crate::soft::done(std::fs::remove_dir_all(&staging), "remove_dir_all");
         Ok(())
     };
     match run() {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("packs sync --builtin: {e}");
+            crate::soft::err_line(&format!("packs sync --builtin: {e}"));
             1
         }
     }
@@ -494,7 +535,7 @@ mod tests {
             others: vec![],
         };
         assert_eq!(run(cmd(&d)), 1);
-        std::fs::write(
+        crate::fsio::write(
             d.join("pack.eld"),
             r#"(:pack "scala" :schema 1 :version "1" :name "Scala" :summary "s" :license "MIT")"#,
         )

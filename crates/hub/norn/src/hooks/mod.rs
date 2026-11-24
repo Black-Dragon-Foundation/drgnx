@@ -146,8 +146,8 @@ pub trait HookHost: Sync {
     fn refresh(&self, input: &mut HookInput);
 
     /// The clock the point's budget is measured on (the hub's, so its test clock decides).
-    fn now(&self) -> tokio::time::Instant {
-        tokio::time::Instant::now()
+    fn now(&self) -> stund::Instant {
+        stund::Instant::now()
     }
 }
 

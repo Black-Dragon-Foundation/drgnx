@@ -620,7 +620,7 @@ mod tests {
         let a = put(&mut c, "task:a", Some("a"), None);
         let b = put(&mut c, "task:b", Some("b"), None);
         let d = put(&mut c, "task:d", Some("d"), None);
-        let blank = put(&mut c, "task:blank", None, None);
+        let _blank_has_no_text = put(&mut c, "task:blank", None, None);
         {
             let mut tx = Tx::for_test(
                 &mut c,
@@ -639,7 +639,6 @@ mod tests {
         assert_eq!(vec_stale(&c, "m2", 10).unwrap(), [a]);
         assert_eq!(vec_stale(&c, "m3", 10).unwrap(), [a, b]);
         assert_eq!(vec_stale(&c, "m3", 1).unwrap(), [a]);
-        let _ = (d, blank);
         // vec_put stores the quantizer's output, and a second put replaces the first.
         {
             let mut tx = Tx::for_test(

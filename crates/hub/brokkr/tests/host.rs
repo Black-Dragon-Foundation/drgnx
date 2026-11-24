@@ -5,18 +5,24 @@
 //! host's own, and the one wait is `skuld::wait_until_async` for calls to be admitted.
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use brokkr::limits::{MAX_JSON_BYTES, MAX_LOG_BYTES};
-use brokkr::test_support::fixture;
+use brokkr::test_support::{child_env, fixture};
 use brokkr::{
     BoxFuture, CallError, Host, HostError, HostIo, HttpReq, HttpResp, Installed, Kv, Level, Limits,
     Plugin, Point, REFUSED_HEADERS, Verdict, scan,
 };
 use serde_json::{Value, json};
+
+/// The most a fixture manifest read back by a test may be.
+const MANIFEST_CAP: u64 = 1 << 20;
+/// How long a test binary run again for one test may take before its process group is ended.
+const CHILD_DEADLINE: Duration = Duration::from_secs(120);
 
 /// A key-value store in memory.
 #[derive(Default)]
@@ -24,14 +30,14 @@ struct MemKv(Mutex<HashMap<String, Vec<u8>>>);
 
 impl Kv for MemKv {
     fn get(&self, key: &str) -> Option<Vec<u8>> {
-        self.0.lock().unwrap().get(key).cloned()
+        saman::lock(&self.0).get(key).cloned()
     }
     fn put(&self, key: &str, value: &[u8]) -> Result<(), String> {
-        self.0.lock().unwrap().insert(key.into(), value.to_vec());
+        saman::lock(&self.0).insert(key.into(), value.to_vec());
         Ok(())
     }
     fn delete(&self, key: &str) -> Result<(), String> {
-        self.0.lock().unwrap().remove(key);
+        saman::lock(&self.0).remove(key);
         Ok(())
     }
 }
@@ -62,13 +68,13 @@ impl TestIo {
         })
     }
     fn requests(&self) -> Vec<(String, HttpReq)> {
-        self.requests.lock().unwrap().clone()
+        saman::lock(&self.requests).clone()
     }
 }
 
 impl HostIo for TestIo {
     fn http(&self, plugin: &str, req: HttpReq) -> BoxFuture<'_, Result<HttpResp, String>> {
-        self.requests.lock().unwrap().push((plugin.into(), req));
+        saman::lock(&self.requests).push((plugin.into(), req));
         let body = vec![b'x'; self.reply_bytes];
         Box::pin(async move {
             Ok(HttpResp {
@@ -79,20 +85,14 @@ impl HostIo for TestIo {
         })
     }
     fn denied(&self, plugin: &str, host: &str, _: &str) -> BoxFuture<'_, ()> {
-        self.denied
-            .lock()
-            .unwrap()
-            .push((plugin.into(), host.into()));
+        saman::lock(&self.denied).push((plugin.into(), host.into()));
         Box::pin(async {})
     }
     fn kv(&self, plugin: &str) -> &dyn Kv {
         self.kv.get(plugin).unwrap_or(&self.nobody)
     }
     fn log(&self, plugin: &str, level: Level, text: &str) {
-        self.logs
-            .lock()
-            .unwrap()
-            .push((plugin.into(), level, text.into()));
+        saman::lock(&self.logs).push((plugin.into(), level, text.into()));
     }
 }
 
@@ -126,7 +126,7 @@ fn load(host: &Host, name: &str) -> Plugin {
 /// The fixture `name` installed again under `root` as `new`: a second plugin with the same code.
 fn renamed(name: &str, new: &str, root: &Path) -> Installed {
     let from = fixture(name);
-    let manifest = fs::read_to_string(from.join("plugin.json"))
+    let manifest = eitri::read_string(&from.join("plugin.json"), MANIFEST_CAP)
         .unwrap()
         .replace(
             &format!("\"name\": \"{name}\""),
@@ -134,7 +134,7 @@ fn renamed(name: &str, new: &str, root: &Path) -> Installed {
         );
     let dir = root.join(new);
     fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("plugin.json"), manifest).unwrap();
+    eitri::replace_file(&dir.join("plugin.json"), manifest.as_bytes()).unwrap();
     fs::copy(from.join("plugin.wasm"), dir.join("plugin.wasm")).unwrap();
     find(root, new)
 }
@@ -173,8 +173,8 @@ fn text_plugin(root: &Path, name: &str, handles: u32, extra: &str) -> Installed 
     fs::create_dir_all(&dir).unwrap();
     let manifest = json!({"name": name, "version": "0.1.0", "abilities": [
         {"name": "echo", "description": "Answers {}.", "input_schema": {"type": "object"}}]});
-    fs::write(dir.join("plugin.json"), manifest.to_string()).unwrap();
-    fs::write(dir.join("plugin.wasm"), wasm).unwrap();
+    eitri::replace_file(&dir.join("plugin.json"), manifest.to_string().as_bytes()).unwrap();
+    eitri::replace_file(&dir.join("plugin.wasm"), &wasm).unwrap();
     find(root, name)
 }
 
@@ -188,13 +188,9 @@ async fn fetch(
     host.call_ability(p, "fetch", args, io).await
 }
 
-fn spin(
-    host: &Arc<Host>,
-    p: &Plugin,
-    secs: u64,
-) -> tokio::task::JoinHandle<Result<Verdict, CallError>> {
+fn spin(host: &Arc<Host>, p: &Plugin, secs: u64) -> saman::Task<Result<Verdict, CallError>> {
     let (host, p) = (host.clone(), p.clone());
-    tokio::spawn(async move {
+    saman::spawn("spin", async move {
         host.run_hook(
             &p,
             Point::BeforeTool,
@@ -215,217 +211,230 @@ async fn running(host: &Arc<Host>, n: usize) {
 }
 
 // Pattern C (handshake): one call, its answer is the only wait.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn echo_ability_round_trips() {
-    let host = host();
-    let p = load(&host, "echo-ability");
-    let args = json!({"a": [1, "two", {"three": null}], "b": "é"});
-    let got = host.call_ability(&p, "echo", args.clone(), io()).await;
-    assert_eq!(got, Ok(args));
-    // an ability the manifest does not declare is never called
-    let other = host.call_ability(&p, "nope", json!({}), io()).await;
-    assert!(matches!(other, Err(CallError::Refused(_))), "{other:?}");
+#[test]
+fn echo_ability_round_trips() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = host();
+        let p = load(&host, "echo-ability");
+        let args = json!({"a": [1, "two", {"three": null}], "b": "é"});
+        let got = host.call_ability(&p, "echo", args.clone(), io()).await;
+        assert_eq!(got, Ok(args));
+        // an ability the manifest does not declare is never called
+        let other = host.call_ability(&p, "nope", json!({}), io()).await;
+        assert!(matches!(other, Err(CallError::Refused(_))), "{other:?}");
+    });
 }
 
 // Pattern C (handshake): the fixtures that must load all do, so the WASI list covers what Rust's std imports.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn every_fixture_that_needs_only_the_provided_interfaces_loads() {
-    let host = host();
-    for name in [
-        "echo-ability",
-        "deny-rm-hook",
-        "rewrite-commit-msg",
-        "annotate-edit",
-        "slow-hook",
-        "trap-hook",
-        "big-alloc",
-        "fs-importer",
-        "http-ability",
-    ] {
-        let i = installed(name);
-        host.load(&i, i.hash)
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
-    }
+#[test]
+fn every_fixture_that_needs_only_the_provided_interfaces_loads() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = host();
+        for name in [
+            "echo-ability",
+            "deny-rm-hook",
+            "rewrite-commit-msg",
+            "annotate-edit",
+            "slow-hook",
+            "trap-hook",
+            "big-alloc",
+            "fs-importer",
+            "http-ability",
+        ] {
+            let i = installed(name);
+            host.load(&i, i.hash)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+    });
 }
 
 // Pattern C (handshake): the epoch deadline ends a guest that never returns.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_spinning_hook_is_stopped_at_its_deadline() {
-    let host = host();
-    let p = load(&host, "slow-hook");
-    let got = host
-        .run_hook(
-            &p,
-            Point::BeforeTool,
-            json!({}),
-            Duration::from_millis(200),
-            io(),
-        )
-        .await;
-    assert_eq!(got, Err(CallError::Timeout));
-    // the host goes on
-    let deny = load(&host, "deny-rm-hook");
-    let v = host
-        .run_hook(
-            &deny,
-            Point::BeforeTool,
-            json!({"tool": {"command": "rm -rf /"}}),
-            Duration::from_secs(2),
-            io(),
-        )
-        .await;
-    assert_eq!(v, Ok(Verdict::Deny("no rm -rf".into())));
+#[test]
+fn a_spinning_hook_is_stopped_at_its_deadline() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = host();
+        let p = load(&host, "slow-hook");
+        let got = host
+            .run_hook(
+                &p,
+                Point::BeforeTool,
+                json!({}),
+                Duration::from_millis(200),
+                io(),
+            )
+            .await;
+        assert_eq!(got, Err(CallError::Timeout));
+        // the host goes on
+        let deny = load(&host, "deny-rm-hook");
+        let v = host
+            .run_hook(
+                &deny,
+                Point::BeforeTool,
+                json!({"tool": {"command": "rm -rf /"}}),
+                Duration::from_secs(2),
+                io(),
+            )
+            .await;
+        assert_eq!(v, Ok(Verdict::Deny("no rm -rf".into())));
+    });
 }
 
 // Pattern C (handshake).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_trap_is_trap_not_panic() {
-    let host = host();
-    let p = load(&host, "trap-hook");
-    let got = host
-        .run_hook(
-            &p,
-            Point::BeforeTool,
-            json!({}),
-            Duration::from_secs(2),
-            io(),
-        )
-        .await;
-    assert!(matches!(got, Err(CallError::Trap(_))), "{got:?}");
-    let again = host
-        .run_hook(
-            &p,
-            Point::BeforeTool,
-            json!({}),
-            Duration::from_secs(2),
-            io(),
-        )
-        .await;
-    assert!(
-        matches!(again, Err(CallError::Trap(_))),
-        "a fresh instance traps again: {again:?}"
-    );
+#[test]
+fn a_trap_is_trap_not_panic() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = host();
+        let p = load(&host, "trap-hook");
+        let got = host
+            .run_hook(
+                &p,
+                Point::BeforeTool,
+                json!({}),
+                Duration::from_secs(2),
+                io(),
+            )
+            .await;
+        assert!(matches!(got, Err(CallError::Trap(_))), "{got:?}");
+        let again = host
+            .run_hook(
+                &p,
+                Point::BeforeTool,
+                json!({}),
+                Duration::from_secs(2),
+                io(),
+            )
+            .await;
+        assert!(
+            matches!(again, Err(CallError::Trap(_))),
+            "a fresh instance traps again: {again:?}"
+        );
+    });
 }
 
 // Pattern C (handshake).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn memory_over_the_limit_traps() {
-    let host = host();
-    let p = load(&host, "big-alloc");
-    let small = host
-        .call_ability(&p, "alloc", json!({"mib": 8}), io())
-        .await;
-    assert_eq!(small, Ok(json!(8 << 20)));
-    let big = host
-        .call_ability(&p, "alloc", json!({"mib": 128}), io())
-        .await;
-    assert!(matches!(big, Err(CallError::Trap(_))), "{big:?}");
+#[test]
+fn memory_over_the_limit_traps() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = host();
+        let p = load(&host, "big-alloc");
+        let small = host
+            .call_ability(&p, "alloc", json!({"mib": 8}), io())
+            .await;
+        assert_eq!(small, Ok(json!(8 << 20)));
+        let big = host
+            .call_ability(&p, "alloc", json!({"mib": 128}), io())
+            .await;
+        assert!(matches!(big, Err(CallError::Trap(_))), "{big:?}");
+    });
 }
 
 // Pattern C (handshake): every refusal is the import's error, and nothing reaches the hub's HTTP.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn http_to_an_undeclared_host_is_refused_before_io() {
-    let host = host();
-    let p = load(&host, "http-ability");
-    let t = TestIo::new(&[], 2);
-    for (url, why) in [
-        (
-            "https://evil.example.org/x",
-            "not a host this plugin declared",
-        ),
-        ("http://api.example.com/x", "only https"),
-        (
-            "https://api.example.com:8443/x",
-            "not a host this plugin declared",
-        ),
-        ("https://user@api.example.com/x", "credentials"),
-        (
-            "https://api.example.com.evil.org/x",
-            "not a host this plugin declared",
-        ),
-        (
-            "https://api.example.com./x",
-            "not a host this plugin declared",
-        ),
-        ("https://evil.org\\@api.example.com/x", "backslash"),
-        ("https://[::1]/x", "IP literal"),
-        ("ftp://api.example.com/x", "only https"),
-    ] {
-        let got = fetch(&host, &p, t.clone(), json!({"url": url})).await;
-        match got {
-            Err(CallError::Plugin(m)) => assert!(m.contains(why), "{url}: {m}"),
-            other => panic!("{url}: {other:?}"),
+#[test]
+fn http_to_an_undeclared_host_is_refused_before_io() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = host();
+        let p = load(&host, "http-ability");
+        let t = TestIo::new(&[], 2);
+        for (url, why) in [
+            (
+                "https://evil.example.org/x",
+                "not a host this plugin declared",
+            ),
+            ("http://api.example.com/x", "only https"),
+            (
+                "https://api.example.com:8443/x",
+                "not a host this plugin declared",
+            ),
+            ("https://user@api.example.com/x", "credentials"),
+            (
+                "https://api.example.com.evil.org/x",
+                "not a host this plugin declared",
+            ),
+            (
+                "https://api.example.com./x",
+                "not a host this plugin declared",
+            ),
+            ("https://evil.org\\@api.example.com/x", "backslash"),
+            ("https://[::1]/x", "IP literal"),
+            ("ftp://api.example.com/x", "only https"),
+        ] {
+            let got = fetch(&host, &p, t.clone(), json!({"url": url})).await;
+            match got {
+                Err(CallError::Plugin(m)) => assert!(m.contains(why), "{url}: {m}"),
+                other => panic!("{url}: {other:?}"),
+            }
         }
-    }
-    assert_eq!(t.requests(), vec![], "a refused request reached the hub");
-    // an undeclared host:port is told to the hub, which records it; a malformed URL names no host
-    let denied: Vec<String> = t
-        .denied
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|(p, h)| {
-            assert_eq!(p, "http-ability");
-            h.clone()
-        })
-        .collect();
-    assert_eq!(
-        denied,
-        [
-            "evil.example.org:443",
-            "api.example.com:8443",
-            "api.example.com.evil.org:443",
-            "api.example.com.:443"
-        ]
-    );
-    let ok = fetch(
-        &host,
-        &p,
-        t.clone(),
-        json!({"url": "https://API.example.com/v1?q=1"}),
-    )
-    .await;
-    assert_eq!(ok, Ok(json!({"status": 200, "body": "xx"})));
-    let reqs = t.requests();
-    assert_eq!(reqs.len(), 1);
-    assert_eq!(reqs[0].0, "http-ability");
-    assert_eq!(
-        (reqs[0].1.host.as_str(), reqs[0].1.port),
-        ("api.example.com", 443)
-    );
+        assert_eq!(t.requests(), vec![], "a refused request reached the hub");
+        // an undeclared host:port is told to the hub, which records it; a malformed URL names no host
+        let denied: Vec<String> = saman::lock(&t.denied)
+            .iter()
+            .map(|(p, h)| {
+                assert_eq!(p, "http-ability");
+                h.clone()
+            })
+            .collect();
+        assert_eq!(
+            denied,
+            [
+                "evil.example.org:443",
+                "api.example.com:8443",
+                "api.example.com.evil.org:443",
+                "api.example.com.:443"
+            ]
+        );
+        let ok = fetch(
+            &host,
+            &p,
+            t.clone(),
+            json!({"url": "https://API.example.com/v1?q=1"}),
+        )
+        .await;
+        assert_eq!(ok, Ok(json!({"status": 200, "body": "xx"})));
+        let reqs = t.requests();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].0, "http-ability");
+        assert_eq!(
+            (reqs[0].1.host.as_str(), reqs[0].1.port),
+            ("api.example.com", 443)
+        );
+    });
 }
 
 // Pattern C (handshake).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn refused_headers_never_leave() {
-    let host = host();
-    let p = load(&host, "http-ability");
-    let t = TestIo::new(&[], 2);
-    let mut bad: Vec<(String, String)> = REFUSED_HEADERS
-        .iter()
-        .map(|h| (h.to_string(), "x".to_string()))
-        .collect();
-    bad.push(("Proxy-Authorization".into(), "Basic eA==".into()));
-    bad.push(("HOST".into(), "evil.org".into()));
-    bad.push(("x-ok".into(), "a\r\nhost: evil.org".into()));
-    bad.push(("bad name".into(), "x".into()));
-    for (name, value) in bad {
-        let args = json!({"url": "https://api.example.com/", "headers": [[name, value]]});
-        let got = fetch(&host, &p, t.clone(), args).await;
-        assert!(matches!(&got, Err(CallError::Plugin(_))), "{name}: {got:?}");
-    }
-    assert_eq!(t.requests(), vec![], "a refused header reached the hub");
-    let args = json!({"url": "https://api.example.com/", "headers": [["Accept", "text/plain"]]});
-    assert!(fetch(&host, &p, t.clone(), args).await.is_ok());
-    assert_eq!(
-        t.requests()[0].1.headers,
-        vec![("accept".to_string(), "text/plain".to_string())]
-    );
+#[test]
+fn refused_headers_never_leave() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = host();
+        let p = load(&host, "http-ability");
+        let t = TestIo::new(&[], 2);
+        let mut bad: Vec<(String, String)> = REFUSED_HEADERS
+            .iter()
+            .map(|h| (h.to_string(), "x".to_string()))
+            .collect();
+        bad.push(("Proxy-Authorization".into(), "Basic eA==".into()));
+        bad.push(("HOST".into(), "evil.org".into()));
+        bad.push(("x-ok".into(), "a\r\nhost: evil.org".into()));
+        bad.push(("bad name".into(), "x".into()));
+        for (name, value) in bad {
+            let args = json!({"url": "https://api.example.com/", "headers": [[name, value]]});
+            let got = fetch(&host, &p, t.clone(), args).await;
+            assert!(matches!(&got, Err(CallError::Plugin(_))), "{name}: {got:?}");
+        }
+        assert_eq!(t.requests(), vec![], "a refused header reached the hub");
+        let args =
+            json!({"url": "https://api.example.com/", "headers": [["Accept", "text/plain"]]});
+        assert!(fetch(&host, &p, t.clone(), args).await.is_ok());
+        assert_eq!(
+            t.requests()[0].1.headers,
+            vec![("accept".to_string(), "text/plain".to_string())]
+        );
+    });
 }
 
 // Pattern C (handshake).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn http_bodies_are_capped_at_1_mib() {
+#[test]
+fn http_bodies_are_capped_at_1_mib() {
+    saman::Executor::new(2).unwrap().block_on(async {
     let host = host();
     let p = load(&host, "http-ability");
     let t = TestIo::new(&[], 2);
@@ -446,268 +455,288 @@ async fn http_bodies_are_capped_at_1_mib() {
         matches!(&got, Err(CallError::Plugin(m)) if m.contains("response body")),
         "{got:?}"
     );
+    });
 }
 
 // Pattern C (handshake).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn json_over_256_kib_is_refused_both_ways() {
-    let host = host();
-    let echo = load(&host, "echo-ability");
-    let big = json!({"s": "a".repeat(MAX_JSON_BYTES)});
-    let got = host.call_ability(&echo, "echo", big, io()).await;
-    assert!(
-        matches!(&got, Err(CallError::Refused(m)) if m.contains("arguments")),
-        "{got:?}"
-    );
-    let input = json!({"s": "a".repeat(MAX_JSON_BYTES)});
-    let deny = load(&host, "deny-rm-hook");
-    let got = host
-        .run_hook(
-            &deny,
-            Point::BeforeTool,
-            input,
-            Duration::from_secs(2),
-            io(),
+#[test]
+fn json_over_256_kib_is_refused_both_ways() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = host();
+        let echo = load(&host, "echo-ability");
+        let big = json!({"s": "a".repeat(MAX_JSON_BYTES)});
+        let got = host.call_ability(&echo, "echo", big, io()).await;
+        assert!(
+            matches!(&got, Err(CallError::Refused(m)) if m.contains("arguments")),
+            "{got:?}"
+        );
+        let input = json!({"s": "a".repeat(MAX_JSON_BYTES)});
+        let deny = load(&host, "deny-rm-hook");
+        let got = host
+            .run_hook(
+                &deny,
+                Point::BeforeTool,
+                input,
+                Duration::from_secs(2),
+                io(),
+            )
+            .await;
+        assert!(
+            matches!(&got, Err(CallError::Refused(m)) if m.contains("input")),
+            "{got:?}"
+        );
+        // a reply of 300 KiB makes a result past the cap
+        let p = load(&host, "http-ability");
+        let got = fetch(
+            &host,
+            &p,
+            TestIo::new(&[], 300 << 10),
+            json!({"url": "https://api.example.com/"}),
         )
         .await;
-    assert!(
-        matches!(&got, Err(CallError::Refused(m)) if m.contains("input")),
-        "{got:?}"
-    );
-    // a reply of 300 KiB makes a result past the cap
-    let p = load(&host, "http-ability");
-    let got = fetch(
-        &host,
-        &p,
-        TestIo::new(&[], 300 << 10),
-        json!({"url": "https://api.example.com/"}),
-    )
-    .await;
-    assert!(
-        matches!(&got, Err(CallError::Refused(m)) if m.contains("result")),
-        "{got:?}"
-    );
-}
-
-// Pattern C (handshake).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kv_is_per_plugin() {
-    let tmp = tempfile::tempdir().unwrap();
-    let host = host();
-    let a = load(&host, "http-ability");
-    let i = renamed("http-ability", "http-ability-b", tmp.path());
-    let b = host.load(&i, i.hash).unwrap();
-    let t = TestIo::new(&["http-ability", "http-ability-b"], 2);
-    let put = json!({"op": "put", "key": "k", "value": "from a"});
-    assert_eq!(
-        host.call_ability(&a, "kv", put, t.clone()).await,
-        Ok(json!({}))
-    );
-    let get = json!({"op": "get", "key": "k"});
-    assert_eq!(
-        host.call_ability(&b, "kv", get.clone(), t.clone()).await,
-        Ok(Value::Null)
-    );
-    assert_eq!(
-        host.call_ability(&a, "kv", get, t.clone()).await,
-        Ok(json!("from a"))
-    );
-}
-
-// Pattern C (handshake).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kv_writes_per_call_are_capped() {
-    let host = host();
-    let p = load(&host, "http-ability");
-    let t = TestIo::new(&["http-ability"], 2);
-    let many = json!({"op": "put", "key": "k", "value": "v", "repeat": 70});
-    let got = host.call_ability(&p, "kv", many, t.clone()).await.unwrap();
-    assert_eq!(got["done"], json!(64), "{got}");
-    assert!(got["error"].as_str().unwrap().contains("64"), "{got}");
-    // the count is per call
-    let one = json!({"op": "delete", "key": "k0"});
-    assert_eq!(
-        host.call_ability(&p, "kv", one, t.clone()).await,
-        Ok(json!({}))
-    );
-    let long = json!({"op": "put", "key": "k".repeat(257), "value": "v"});
-    let got = host.call_ability(&p, "kv", long, t).await;
-    assert!(
-        matches!(&got, Err(CallError::Plugin(m)) if m.contains("key")),
-        "{got:?}"
-    );
-}
-
-// Pattern C (handshake).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn log_and_stdout_share_64_kib() {
-    let host = host();
-    let p = load(&host, "http-ability");
-    let t = TestIo::new(&[], 2);
-    let small = json!({"log_bytes": 10});
-    assert!(
-        host.call_ability(&p, "chatter", small, t.clone())
-            .await
-            .is_ok()
-    );
-    assert_eq!(
-        t.logs.lock().unwrap().clone(),
-        vec![("http-ability".to_string(), Level::Info, "l".repeat(10))]
-    );
-    t.logs.lock().unwrap().clear();
-    let loud = json!({"log_bytes": 40_000, "stdout_bytes": 40_000});
-    assert!(
-        host.call_ability(&p, "chatter", loud, t.clone())
-            .await
-            .is_ok()
-    );
-    let logs = t.logs.lock().unwrap().clone();
-    let (cut, text): (Vec<_>, Vec<_>) = logs.iter().partition(|(_, _, s)| s.contains("was cut"));
-    let total: usize = text.iter().map(|(_, _, s)| s.len()).sum();
-    assert_eq!(
-        total,
-        MAX_LOG_BYTES,
-        "{:?}",
-        logs.iter().map(|l| (l.1, l.2.len())).collect::<Vec<_>>()
-    );
-    assert_eq!(cut.len(), 1);
-}
-
-// Pattern C (handshake).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_hash_mismatch_never_instantiates() {
-    let tmp = tempfile::tempdir().unwrap();
-    let host = host();
-    let i = renamed("echo-ability", "echo-copy", tmp.path());
-    assert!(matches!(
-        host.load(&i, [0; 32]),
-        Err(HostError::NotApproved(_))
-    ));
-    // the code swapped on disk after the scan, approved hash in hand
-    fs::copy(
-        fixture("trap-hook").join("plugin.wasm"),
-        i.dir.join("plugin.wasm"),
-    )
-    .unwrap();
-    let got = host.load(&i, i.hash);
-    assert!(
-        matches!(&got, Err(HostError::NotApproved(m)) if m.contains("changed on disk")),
-        "{got:?}"
-    );
-    // the manifest swapped: one more host
-    let j = renamed("http-ability", "http-copy", tmp.path());
-    let wider = fs::read_to_string(j.dir.join("plugin.json"))
-        .unwrap()
-        .replace(
-            "\"api.example.com\"",
-            "\"api.example.com\", \"evil.example.org\"",
+        assert!(
+            matches!(&got, Err(CallError::Refused(m)) if m.contains("result")),
+            "{got:?}"
         );
-    fs::write(j.dir.join("plugin.json"), wider).unwrap();
-    assert!(matches!(
-        host.load(&j, j.hash),
-        Err(HostError::NotApproved(_))
-    ));
+    });
+}
+
+// Pattern C (handshake).
+#[test]
+fn kv_is_per_plugin() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = host();
+        let a = load(&host, "http-ability");
+        let i = renamed("http-ability", "http-ability-b", tmp.path());
+        let b = host.load(&i, i.hash).unwrap();
+        let t = TestIo::new(&["http-ability", "http-ability-b"], 2);
+        let put = json!({"op": "put", "key": "k", "value": "from a"});
+        assert_eq!(
+            host.call_ability(&a, "kv", put, t.clone()).await,
+            Ok(json!({}))
+        );
+        let get = json!({"op": "get", "key": "k"});
+        assert_eq!(
+            host.call_ability(&b, "kv", get.clone(), t.clone()).await,
+            Ok(Value::Null)
+        );
+        assert_eq!(
+            host.call_ability(&a, "kv", get, t.clone()).await,
+            Ok(json!("from a"))
+        );
+    });
+}
+
+// Pattern C (handshake).
+#[test]
+fn kv_writes_per_call_are_capped() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = host();
+        let p = load(&host, "http-ability");
+        let t = TestIo::new(&["http-ability"], 2);
+        let many = json!({"op": "put", "key": "k", "value": "v", "repeat": 70});
+        let got = host.call_ability(&p, "kv", many, t.clone()).await.unwrap();
+        assert_eq!(got["done"], json!(64), "{got}");
+        assert!(got["error"].as_str().unwrap().contains("64"), "{got}");
+        // the count is per call
+        let one = json!({"op": "delete", "key": "k0"});
+        assert_eq!(
+            host.call_ability(&p, "kv", one, t.clone()).await,
+            Ok(json!({}))
+        );
+        let long = json!({"op": "put", "key": "k".repeat(257), "value": "v"});
+        let got = host.call_ability(&p, "kv", long, t).await;
+        assert!(
+            matches!(&got, Err(CallError::Plugin(m)) if m.contains("key")),
+            "{got:?}"
+        );
+    });
+}
+
+// Pattern C (handshake).
+#[test]
+fn log_and_stdout_share_64_kib() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = host();
+        let p = load(&host, "http-ability");
+        let t = TestIo::new(&[], 2);
+        let small = json!({"log_bytes": 10});
+        assert!(
+            host.call_ability(&p, "chatter", small, t.clone())
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            saman::lock(&t.logs).clone(),
+            vec![("http-ability".to_string(), Level::Info, "l".repeat(10))]
+        );
+        saman::lock(&t.logs).clear();
+        let loud = json!({"log_bytes": 40_000, "stdout_bytes": 40_000});
+        assert!(
+            host.call_ability(&p, "chatter", loud, t.clone())
+                .await
+                .is_ok()
+        );
+        let logs = saman::lock(&t.logs).clone();
+        let (cut, text): (Vec<_>, Vec<_>) =
+            logs.iter().partition(|(_, _, s)| s.contains("was cut"));
+        let total: usize = text.iter().map(|(_, _, s)| s.len()).sum();
+        assert_eq!(
+            total,
+            MAX_LOG_BYTES,
+            "{:?}",
+            logs.iter().map(|l| (l.1, l.2.len())).collect::<Vec<_>>()
+        );
+        assert_eq!(cut.len(), 1);
+    });
+}
+
+// Pattern C (handshake).
+#[test]
+fn a_hash_mismatch_never_instantiates() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = host();
+        let i = renamed("echo-ability", "echo-copy", tmp.path());
+        assert!(matches!(
+            host.load(&i, [0; 32]),
+            Err(HostError::NotApproved(_))
+        ));
+        // the code swapped on disk after the scan, approved hash in hand
+        fs::copy(
+            fixture("trap-hook").join("plugin.wasm"),
+            i.dir.join("plugin.wasm"),
+        )
+        .unwrap();
+        let got = host.load(&i, i.hash);
+        assert!(
+            matches!(&got, Err(HostError::NotApproved(m)) if m.contains("changed on disk")),
+            "{got:?}"
+        );
+        // the manifest swapped: one more host
+        let j = renamed("http-ability", "http-copy", tmp.path());
+        let wider = eitri::read_string(&j.dir.join("plugin.json"), MANIFEST_CAP)
+            .unwrap()
+            .replace(
+                "\"api.example.com\"",
+                "\"api.example.com\", \"evil.example.org\"",
+            );
+        eitri::replace_file(&j.dir.join("plugin.json"), wider.as_bytes()).unwrap();
+        assert!(matches!(
+            host.load(&j, j.hash),
+            Err(HostError::NotApproved(_))
+        ));
+    });
 }
 
 // Pattern C (handshake): two calls are admitted, then the third waits for a permit until its deadline.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn two_calls_of_one_plugin_a_third_is_busy_after_its_queue_deadline() {
-    let host = host();
-    let p = load(&host, "slow-hook");
-    let (a, b) = (spin(&host, &p, 3), spin(&host, &p, 3));
-    running(&host, 2).await;
-    let third = host
-        .run_hook(
-            &p,
-            Point::BeforeTool,
-            json!({}),
-            Duration::from_millis(200),
-            io(),
-        )
-        .await;
-    assert_eq!(third, Err(CallError::Busy));
-    assert_eq!(a.await.unwrap(), Err(CallError::Timeout));
-    assert_eq!(b.await.unwrap(), Err(CallError::Timeout));
-    // the permits came back: the next call runs, and is stopped by its own deadline
-    running(&host, 0).await;
-    let next = host
-        .run_hook(
-            &p,
-            Point::BeforeTool,
-            json!({}),
-            Duration::from_millis(200),
-            io(),
-        )
-        .await;
-    assert_eq!(next, Err(CallError::Timeout));
+#[test]
+fn two_calls_of_one_plugin_a_third_is_busy_after_its_queue_deadline() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = host();
+        let p = load(&host, "slow-hook");
+        let (a, b) = (spin(&host, &p, 3), spin(&host, &p, 3));
+        running(&host, 2).await;
+        let third = host
+            .run_hook(
+                &p,
+                Point::BeforeTool,
+                json!({}),
+                Duration::from_millis(200),
+                io(),
+            )
+            .await;
+        assert_eq!(third, Err(CallError::Busy));
+        assert_eq!(a.await.unwrap(), Err(CallError::Timeout));
+        assert_eq!(b.await.unwrap(), Err(CallError::Timeout));
+        // the permits came back: the next call runs, and is stopped by its own deadline
+        running(&host, 0).await;
+        let next = host
+            .run_hook(
+                &p,
+                Point::BeforeTool,
+                json!({}),
+                Duration::from_millis(200),
+                io(),
+            )
+            .await;
+        assert_eq!(next, Err(CallError::Timeout));
+    });
 }
 
 // Pattern C (handshake): four calls of two plugins are admitted; a third plugin, whose own cap is free, waits for a
 // global permit.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_global_cap_holds_across_plugins() {
-    let tmp = tempfile::tempdir().unwrap();
-    let host = host();
-    let a = load(&host, "slow-hook");
-    let ib = renamed("slow-hook", "slow-b", tmp.path());
-    let b = host.load(&ib, ib.hash).unwrap();
-    let ic = renamed("slow-hook", "slow-c", tmp.path());
-    let c = host.load(&ic, ic.hash).unwrap();
-    let calls = [
-        spin(&host, &a, 3),
-        spin(&host, &a, 3),
-        spin(&host, &b, 3),
-        spin(&host, &b, 3),
-    ];
-    running(&host, 4).await;
-    let fifth = host
-        .run_hook(
-            &c,
-            Point::BeforeTool,
-            json!({}),
-            Duration::from_millis(200),
-            io(),
-        )
-        .await;
-    assert_eq!(fifth, Err(CallError::Busy));
-    for call in calls {
-        assert_eq!(call.await.unwrap(), Err(CallError::Timeout));
-    }
+#[test]
+fn the_global_cap_holds_across_plugins() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = host();
+        let a = load(&host, "slow-hook");
+        let ib = renamed("slow-hook", "slow-b", tmp.path());
+        let b = host.load(&ib, ib.hash).unwrap();
+        let ic = renamed("slow-hook", "slow-c", tmp.path());
+        let c = host.load(&ic, ic.hash).unwrap();
+        let calls = [
+            spin(&host, &a, 3),
+            spin(&host, &a, 3),
+            spin(&host, &b, 3),
+            spin(&host, &b, 3),
+        ];
+        running(&host, 4).await;
+        let fifth = host
+            .run_hook(
+                &c,
+                Point::BeforeTool,
+                json!({}),
+                Duration::from_millis(200),
+                io(),
+            )
+            .await;
+        assert_eq!(fifth, Err(CallError::Busy));
+        for call in calls {
+            assert_eq!(call.await.unwrap(), Err(CallError::Timeout));
+        }
+    });
 }
 
 // Pattern C (handshake): both hooks hold their guest threads; a task on this 2-worker runtime (the hub's shape) must
 // finish while both still spin. On the caller's workers they would hold both until their deadline.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn two_spinning_hooks_leave_the_hub_responsive() {
-    let host = host();
-    let p = load(&host, "slow-hook");
-    let (a, b) = (spin(&host, &p, 3), spin(&host, &p, 3));
-    running(&host, 2).await;
-    tokio::spawn(async {
-        for _ in 0..100 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    assert!(
-        !a.is_finished() && !b.is_finished(),
-        "the hub's runtime waited for the guests"
-    );
-    assert_eq!(a.await.unwrap(), Err(CallError::Timeout));
-    assert_eq!(b.await.unwrap(), Err(CallError::Timeout));
+#[test]
+fn two_spinning_hooks_leave_the_hub_responsive() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = host();
+        let p = load(&host, "slow-hook");
+        let (a, b) = (spin(&host, &p, 3), spin(&host, &p, 3));
+        running(&host, 2).await;
+        saman::spawn("yielder", async {
+            for _ in 0..100 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            !a.is_finished() && !b.is_finished(),
+            "the hub's runtime waited for the guests"
+        );
+        assert_eq!(a.await.unwrap(), Err(CallError::Timeout));
+        assert_eq!(b.await.unwrap(), Err(CallError::Timeout));
+    });
 }
 
 // Pattern C (handshake).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_filesystem_import_finds_no_directory() {
-    let host = host();
-    let p = load(&host, "fs-importer");
-    let got = host.call_ability(&p, "probe", json!({}), io()).await;
-    assert_eq!(
-        got,
-        Ok(json!({"opened": false, "root_entries": null, "cwd_entries": null}))
-    );
+#[test]
+fn a_filesystem_import_finds_no_directory() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = host();
+        let p = load(&host, "fs-importer");
+        let got = host.call_ability(&p, "probe", json!({}), io()).await;
+        assert_eq!(
+            got,
+            Ok(json!({"opened": false, "root_entries": null, "cwd_entries": null}))
+        );
+    });
 }
 
 // Pattern D (pure): a load, no call.
@@ -735,46 +764,50 @@ fn a_socket_import_fails_to_load() {
 }
 
 // Pattern C (handshake): component text, loaded and called.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_disabled_proposal_fails_to_load() {
-    let tmp = tempfile::tempdir().unwrap();
-    let host = host();
-    let plain = text_plugin(tmp.path(), "plain", 0, "");
-    let p = host.load(&plain, plain.hash).unwrap();
-    assert_eq!(
-        host.call_ability(&p, "echo", json!({}), io()).await,
-        Ok(json!({}))
-    );
-    for (name, module) in [
-        ("tail-call", "(core module (func $f (return_call $f)))"),
-        ("memory64", "(core module (memory i64 1))"),
-        ("multi-memory", "(core module (memory 1) (memory 1))"),
-    ] {
-        let i = text_plugin(tmp.path(), name, 0, module);
-        // the same component as `plain` but for one module the engine refuses
-        let got = host.load(&i, i.hash);
-        assert!(
-            matches!(&got, Err(HostError::Invalid(_))),
-            "{name}: {got:?}"
+#[test]
+fn a_disabled_proposal_fails_to_load() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = host();
+        let plain = text_plugin(tmp.path(), "plain", 0, "");
+        let p = host.load(&plain, plain.hash).unwrap();
+        assert_eq!(
+            host.call_ability(&p, "echo", json!({}), io()).await,
+            Ok(json!({}))
         );
-    }
+        for (name, module) in [
+            ("tail-call", "(core module (func $f (return_call $f)))"),
+            ("memory64", "(core module (memory i64 1))"),
+            ("multi-memory", "(core module (memory 1) (memory 1))"),
+        ] {
+            let i = text_plugin(tmp.path(), name, 0, module);
+            // the same component as `plain` but for one module the engine refuses
+            let got = host.load(&i, i.hash);
+            assert!(
+                matches!(&got, Err(HostError::Invalid(_))),
+                "{name}: {got:?}"
+            );
+        }
+    });
 }
 
 // Pattern C (handshake): the handles are made by the start function, in the call's fresh instance.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn too_many_handles_trap() {
-    let tmp = tempfile::tempdir().unwrap();
-    let host = host();
-    let under = text_plugin(tmp.path(), "handles-990", 990, "");
-    let p = host.load(&under, under.hash).unwrap();
-    assert_eq!(
-        host.call_ability(&p, "echo", json!({}), io()).await,
-        Ok(json!({}))
-    );
-    let over = text_plugin(tmp.path(), "handles-1001", 1001, "");
-    let p = host.load(&over, over.hash).unwrap();
-    let got = host.call_ability(&p, "echo", json!({}), io()).await;
-    assert!(matches!(got, Err(CallError::Trap(_))), "{got:?}");
+#[test]
+fn too_many_handles_trap() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = host();
+        let under = text_plugin(tmp.path(), "handles-990", 990, "");
+        let p = host.load(&under, under.hash).unwrap();
+        assert_eq!(
+            host.call_ability(&p, "echo", json!({}), io()).await,
+            Ok(json!({}))
+        );
+        let over = text_plugin(tmp.path(), "handles-1001", 1001, "");
+        let p = host.load(&over, over.hash).unwrap();
+        let got = host.call_ability(&p, "echo", json!({}), io()).await;
+        assert!(matches!(got, Err(CallError::Trap(_))), "{got:?}");
+    });
 }
 
 // Pattern C (handshake): the test runs itself again in a child process, which installs a SIGSEGV handler, starts the
@@ -785,24 +818,34 @@ fn a_fault_outside_wasm_still_reaches_the_hubs_handler() {
     if std::env::var_os("BROKKR_FAULT_CHILD").is_some() {
         fault_child();
     }
-    let out = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "a_fault_outside_wasm_still_reaches_the_hubs_handler",
-            "--nocapture",
-            "--test-threads",
-            "1",
-        ])
-        .env("BROKKR_FAULT_CHILD", "1")
-        .output()
-        .unwrap();
+    let out = run_self(
+        "a_fault_outside_wasm_still_reaches_the_hubs_handler",
+        "BROKKR_FAULT_CHILD",
+    );
     assert_eq!(
         out.status.code(),
         Some(42),
         "{:?}\n{}",
         out.status,
-        String::from_utf8_lossy(&out.stderr)
+        out.stderr
     );
+}
+
+/// This test binary run again for the one test NAME with `CHILD_VAR` set, to its end.
+fn run_self(name: &str, child_var: &str) -> draugr::Output {
+    let env = child_env(std::env::vars_os(), &[(child_var, OsStr::new("1"))]);
+    let spec = draugr::Spec {
+        program: std::env::current_exe().unwrap(),
+        args: ["--exact", name, "--nocapture", "--test-threads", "1"]
+            .map(Into::into)
+            .into(),
+        env,
+        cwd: None,
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: false,
+    };
+    draugr::run(spec, CHILD_DEADLINE).unwrap()
 }
 
 fn fault_child() -> ! {
@@ -817,11 +860,7 @@ fn fault_child() -> ! {
         libc::sigemptyset(&mut sa.sa_mask);
         assert_eq!(libc::sigaction(libc::SIGSEGV, &sa, std::ptr::null_mut()), 0);
     }
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = saman::Executor::new(2).unwrap();
     rt.block_on(async {
         let host = host();
         let p = load(&host, "echo-ability");
@@ -851,8 +890,8 @@ fn fault_plugin(root: &Path) -> Installed {
     fs::create_dir_all(&dir).unwrap();
     let manifest = json!({"name": "fault", "version": "0.1.0", "abilities": [
         {"name": "echo", "description": "Faults.", "input_schema": {"type": "object"}}]});
-    fs::write(dir.join("plugin.json"), manifest.to_string()).unwrap();
-    fs::write(dir.join("plugin.wasm"), wat::parse_str(text).unwrap()).unwrap();
+    eitri::replace_file(&dir.join("plugin.json"), manifest.to_string().as_bytes()).unwrap();
+    eitri::replace_file(&dir.join("plugin.wasm"), &wat::parse_str(text).unwrap()).unwrap();
     find(root, "fault")
 }
 
@@ -868,23 +907,16 @@ fn a_handled_signal_on_any_thread_leaves_the_host_running() {
     if std::env::var_os("BROKKR_SIGNAL_CHILD").is_some() {
         signal_child();
     }
-    let out = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "a_handled_signal_on_any_thread_leaves_the_host_running",
-            "--nocapture",
-            "--test-threads",
-            "1",
-        ])
-        .env("BROKKR_SIGNAL_CHILD", "1")
-        .output()
-        .unwrap();
+    let out = run_self(
+        "a_handled_signal_on_any_thread_leaves_the_host_running",
+        "BROKKR_SIGNAL_CHILD",
+    );
     assert_eq!(
         out.status.code(),
         Some(42),
         "{:?}\n{}",
         out.status,
-        String::from_utf8_lossy(&out.stderr)
+        out.stderr
     );
 }
 
@@ -900,11 +932,7 @@ fn signal_child() -> ! {
         RAN.fetch_add(1, Ordering::SeqCst);
     }
     let tmp = tempfile::tempdir().unwrap();
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = saman::Executor::new(2).unwrap();
     rt.block_on(async {
         let host = host();
         let f = fault_plugin(tmp.path());

@@ -320,9 +320,21 @@ async fn bare(p: Prepared, _t: Duration) -> Ran {
         .expect("the command follows --");
     let cmd = &args[at + 1..];
     assert_eq!(cmd[0], "/bin/sh");
-    let status = std::process::Command::new(&cmd[0])
-        .args(&cmd[1..])
-        .status()
+    let mut child = draugr::spawn(draugr::Spec {
+        program: PathBuf::from(&cmd[0]),
+        args: cmd[1..].to_vec(),
+        env: draugr::env::build(&["PATH"], &[], &[]),
+        cwd: None,
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: false,
+    })
+    .await
+    .unwrap();
+    let status = child
+        .wait_deadline(Duration::from_secs(30))
+        .await
+        .unwrap()
         .unwrap();
     Ran {
         layers: Ok(report()),
@@ -331,106 +343,112 @@ async fn bare(p: Prepared, _t: Duration) -> Ran {
     }
 }
 
-#[tokio::test]
-async fn a_sandbox_that_reads_the_canary_fails_the_check() {
-    let c = run_check(bare).await;
-    assert!(!c.ok);
-    assert_eq!(
-        c.reason.as_deref(),
-        Some("the sandbox ran but did not block a read")
-    );
-    assert!(c.fix.is_some());
-    assert_eq!(c.backend, BackendKind::Reduced);
-    assert!(
-        c.text()
-            .starts_with("not available: the sandbox ran but did not block a read\nfix: ")
-    );
+#[test]
+fn a_sandbox_that_reads_the_canary_fails_the_check() {
+    saman::block_on_current(async {
+        let c = run_check(bare).await;
+        assert!(!c.ok);
+        assert_eq!(
+            c.reason.as_deref(),
+            Some("the sandbox ran but did not block a read")
+        );
+        assert!(c.fix.is_some());
+        assert_eq!(c.backend, BackendKind::Reduced);
+        assert!(
+            c.text()
+                .starts_with("not available: the sandbox ran but did not block a read\nfix: ")
+        );
+    });
 }
 
-#[tokio::test]
-async fn the_probe_passes_when_the_read_is_blocked_and_fails_otherwise() {
-    let ok = run_check(|_p, _t| async {
-        Ran {
-            layers: Ok(report()),
-            exit: Some(0),
-            stderr: String::new(),
-        }
-    })
-    .await;
-    assert!(ok.ok, "{:?}", ok.reason);
-    assert_eq!(ok.reason, None);
-    assert_eq!(ok.fix, None);
-    assert_eq!(ok.text(), "backend reduced: ok (Landlock ABI 9, seccomp)");
-    assert_eq!(ok.to_json()["ok"], true);
-    assert_eq!(ok.to_json()["layers"]["seccomp"], true);
-
-    let late = run_check(|_p, _t| async {
-        Ran {
-            layers: Ok(report()),
-            exit: None,
-            stderr: String::new(),
-        }
-    })
-    .await;
-    assert!(!late.ok);
-    assert!(
-        late.reason
-            .unwrap()
-            .contains("did not finish within 5000 ms")
-    );
-
-    let other = run_check(|_p, _t| async {
-        Ran {
-            layers: Ok(report()),
-            exit: Some(127),
-            stderr: String::new(),
-        }
-    })
-    .await;
-    assert_eq!(
-        other.reason.as_deref(),
-        Some("the sandbox's probe ended with exit 127")
-    );
-
-    // a start that failed: its stderr is explained
-    let failed = run_check(|_p, _t| async {
-        Ran {
-            layers: Err(setup("sandbox setup failed: x".into())),
-            exit: Some(1),
-            stderr: "helper: weird\n".into(),
-        }
-    })
-    .await;
-    assert!(!failed.ok);
-    let reason = failed.reason.unwrap();
-    assert!(
-        reason.starts_with("the sandbox cannot start here: helper: weird"),
-        "{reason}"
-    );
-}
-
-#[tokio::test]
-async fn the_probe_is_the_real_spec_and_its_dir_is_removed() {
-    let seen = std::sync::Mutex::new(None::<(Vec<std::ffi::OsString>, PathBuf)>);
-    let c = run_check(|p, _t| {
-        let args = p.invocation.args.clone();
-        let canary = PathBuf::from(args.last().unwrap());
-        *seen.lock().unwrap() = Some((args, canary));
-        async {
+#[test]
+fn the_probe_passes_when_the_read_is_blocked_and_fails_otherwise() {
+    saman::block_on_current(async {
+        let ok = run_check(|_p, _t| async {
             Ran {
                 layers: Ok(report()),
                 exit: Some(0),
                 stderr: String::new(),
             }
-        }
-    })
-    .await;
-    assert!(c.ok);
-    let (args, canary) = seen.lock().unwrap().take().unwrap();
-    assert!(args.iter().any(|a| a == "--"));
-    assert!(canary.ends_with("outside/canary"));
-    assert!(
-        !canary.exists(),
-        "the probe's directory is removed after the run"
-    );
+        })
+        .await;
+        assert!(ok.ok, "{:?}", ok.reason);
+        assert_eq!(ok.reason, None);
+        assert_eq!(ok.fix, None);
+        assert_eq!(ok.text(), "backend reduced: ok (Landlock ABI 9, seccomp)");
+        assert_eq!(ok.to_json()["ok"], true);
+        assert_eq!(ok.to_json()["layers"]["seccomp"], true);
+
+        let late = run_check(|_p, _t| async {
+            Ran {
+                layers: Ok(report()),
+                exit: None,
+                stderr: String::new(),
+            }
+        })
+        .await;
+        assert!(!late.ok);
+        assert!(
+            late.reason
+                .unwrap()
+                .contains("did not finish within 5000 ms")
+        );
+
+        let other = run_check(|_p, _t| async {
+            Ran {
+                layers: Ok(report()),
+                exit: Some(127),
+                stderr: String::new(),
+            }
+        })
+        .await;
+        assert_eq!(
+            other.reason.as_deref(),
+            Some("the sandbox's probe ended with exit 127")
+        );
+
+        // a start that failed: its stderr is explained
+        let failed = run_check(|_p, _t| async {
+            Ran {
+                layers: Err(setup("sandbox setup failed: x".into())),
+                exit: Some(1),
+                stderr: "helper: weird\n".into(),
+            }
+        })
+        .await;
+        assert!(!failed.ok);
+        let reason = failed.reason.unwrap();
+        assert!(
+            reason.starts_with("the sandbox cannot start here: helper: weird"),
+            "{reason}"
+        );
+    });
+}
+
+#[test]
+fn the_probe_is_the_real_spec_and_its_dir_is_removed() {
+    saman::block_on_current(async {
+        let seen = std::sync::Mutex::new(None::<(Vec<std::ffi::OsString>, PathBuf)>);
+        let c = run_check(|p, _t| {
+            let args = p.invocation.args.clone();
+            let canary = PathBuf::from(args.last().unwrap());
+            *saman::lock(&seen) = Some((args, canary));
+            async {
+                Ran {
+                    layers: Ok(report()),
+                    exit: Some(0),
+                    stderr: String::new(),
+                }
+            }
+        })
+        .await;
+        assert!(c.ok);
+        let (args, canary) = saman::lock(&seen).take().unwrap();
+        assert!(args.iter().any(|a| a == "--"));
+        assert!(canary.ends_with("outside/canary"));
+        assert!(
+            !canary.exists(),
+            "the probe's directory is removed after the run"
+        );
+    });
 }

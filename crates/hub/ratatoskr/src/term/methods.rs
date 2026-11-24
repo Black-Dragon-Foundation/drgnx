@@ -15,10 +15,10 @@ const ANSWER_WITHIN: Duration = Duration::from_secs(5);
 /// How long `term/list` waits for each worker: one that does not answer counts as running.
 const LIST_WITHIN: Duration = Duration::from_millis(200);
 
-fn error(code: ErrorCode, message: impl Into<String>, path: Option<&str>) -> Error {
+fn error(code: ErrorCode, message: impl ToString, path: Option<&str>) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: path.map(str::to_owned),
     }
 }

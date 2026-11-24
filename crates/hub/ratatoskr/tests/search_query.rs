@@ -14,7 +14,6 @@ use rmcp::model::{
 use rmcp::{ClientLifecycleMode, ClientServiceExt};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use support::{Client, FAILED_AFTER, Hub, Root};
 
 /// The built-in model, as the wire names it: by its fingerprint (the label is `hrafn_embed::default_model().id`).
@@ -25,7 +24,7 @@ fn model() -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = ratatoskr::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -42,7 +41,7 @@ fn repo(dir: &Path, files: &[(&str, &str)]) {
     for (p, text) in files {
         let f = dir.join(p);
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-        std::fs::write(f, text).unwrap();
+        ratatoskr::fsio::write(f, text).unwrap();
     }
     git(dir, &["add", "-A"]);
     git(dir, &["commit", "-q", "-m", "one"]);
@@ -132,7 +131,7 @@ fn project(root: &Root, name: &str) -> PathBuf {
 fn settings(root: &Root, body: &str) {
     let dir = root.dir.path().join("h/c");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
+    ratatoskr::fsio::write(
         dir.join("settings.el"),
         format!("(drgnx-settings\n :version 1\n {body})\n"),
     )
@@ -230,56 +229,59 @@ fn agent_class_reaches_no_search_method() {
 
 /// Pattern C. The tool answers a name with its definition and ends with the lag line; with no model it says so, and
 /// never waits for a download.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_search_answers_with_lag_line() {
-    let root = Root::new();
-    settings(&root, "(drgnx-agents-mcp (coordination search))");
-    let proj = project(&root, "proj");
-    let (_hub, mut c) = ready(&root, 1);
-    let (_sid, sock) = session(&mut c, 1, &proj);
-    let search_sock = sock.with_file_name("search.sock");
-    assert!(search_sock.exists(), "{}", search_sock.display());
-    let client = mcp!(&search_sock);
-    let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(
-        tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>(),
-        [
-            "find_usages",
-            "index_list",
-            "index_status",
-            "outline",
-            "repo_map",
-            "search",
-            "search_results",
-            "symbols"
-        ]
-    );
-    let r = client
-        .call_tool(
-            CallToolRequestParams::new("search")
-                .with_arguments(args(json!({"query": "drgnx-hub-call"}))),
-        )
-        .await
-        .unwrap();
-    assert_ne!(r.is_error, Some(true), "{}", text_of(&r));
-    let text = text_of(&r);
-    assert!(text.starts_with("core/hub.el:"), "{text}");
-    let last = text.trim_end().lines().last().unwrap();
-    assert!(
-        last.starts_with("vectors: not used (built-in model not downloaded"),
-        "{last}"
-    );
-    assert!(
-        last.contains("keyword and symbol results are current"),
-        "{last}"
-    );
-    client.cancel().await.unwrap();
+#[test]
+fn mcp_search_answers_with_lag_line() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let root = Root::new();
+        settings(&root, "(drgnx-agents-mcp (coordination search))");
+        let proj = project(&root, "proj");
+        let (_hub, mut c) = ready(&root, 1);
+        let (_sid, sock) = session(&mut c, 1, &proj);
+        let search_sock = sock.with_file_name("search.sock");
+        assert!(search_sock.exists(), "{}", search_sock.display());
+        let client = mcp!(&search_sock);
+        let tools = client.list_all_tools().await.unwrap();
+        assert_eq!(
+            tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>(),
+            [
+                "find_usages",
+                "index_list",
+                "index_status",
+                "outline",
+                "repo_map",
+                "search",
+                "search_results",
+                "symbols"
+            ]
+        );
+        let r = client
+            .call_tool(
+                CallToolRequestParams::new("search")
+                    .with_arguments(args(json!({"query": "drgnx-hub-call"}))),
+            )
+            .await
+            .unwrap();
+        assert_ne!(r.is_error, Some(true), "{}", text_of(&r));
+        let text = text_of(&r);
+        assert!(text.starts_with("core/hub.el:"), "{text}");
+        let last = text.trim_end().lines().last().unwrap();
+        assert!(
+            last.starts_with("vectors: not used (built-in model not downloaded"),
+            "{last}"
+        );
+        assert!(
+            last.contains("keyword and symbol results are current"),
+            "{last}"
+        );
+        client.cancel().await.unwrap();
+    })
 }
 
 /// Pattern C. The tool is pinned to the session's working folder: a name that only another project has finds nothing, and
 /// the tool takes no root of its own.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_search_is_pinned_to_the_jobs_root() {
+#[test]
+fn mcp_search_is_pinned_to_the_jobs_root() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let root = Root::new();
     settings(&root, "(drgnx-agents-mcp (coordination search))");
     let mine = project(&root, "mine");
@@ -343,52 +345,57 @@ async fn mcp_search_is_pinned_to_the_jobs_root() {
         text_of(&refused)
     );
     client.cancel().await.unwrap();
+})
 }
 
 /// Pattern C. The session has the search server from `mcp/session` on, and when the hub stops and starts again it is bound
 /// again at the same path and answers.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn session_gets_the_search_server_and_keeps_it_over_a_restart() {
-    let root = Root::new();
-    settings(&root, "(drgnx-agents-mcp (coordination search))");
-    let proj = project(&root, "proj");
-    let (mut hub, mut c) = ready(&root, 1);
-    let (_sid, sock) = session(&mut c, 1, &proj);
-    let search_sock = sock.with_file_name("search.sock");
-    assert!(search_sock.exists());
-    drop(c);
-    hub.term();
-    assert!(hub.wait_exit().success());
-    assert!(!search_sock.exists(), "a stop unbinds the socket");
-    let mut second = Hub::start(&root, 2);
-    second.wait_ready(&root.socket());
-    skuld::wait_until(
-        "the session's search.sock is bound again",
-        FAILED_AFTER.as_secs(),
-        || search_sock.exists().then_some(()),
-    );
-    let client = mcp!(&search_sock);
-    let r = client
-        .call_tool(
-            CallToolRequestParams::new("search")
-                .with_arguments(args(json!({"query": "drgnx-json-parse"}))),
-        )
-        .await
-        .unwrap();
-    assert!(text_of(&r).starts_with("core/json.el:"), "{}", text_of(&r));
-    client.cancel().await.unwrap();
+#[test]
+fn session_gets_the_search_server_and_keeps_it_over_a_restart() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let root = Root::new();
+        settings(&root, "(drgnx-agents-mcp (coordination search))");
+        let proj = project(&root, "proj");
+        let (mut hub, mut c) = ready(&root, 1);
+        let (_sid, sock) = session(&mut c, 1, &proj);
+        let search_sock = sock.with_file_name("search.sock");
+        assert!(search_sock.exists());
+        drop(c);
+        hub.term();
+        assert!(hub.wait_exit().success());
+        assert!(!search_sock.exists(), "a stop unbinds the socket");
+        let mut second = Hub::start(&root, 2);
+        second.wait_ready(&root.socket());
+        skuld::wait_until(
+            "the session's search.sock is bound again",
+            FAILED_AFTER.as_secs(),
+            || search_sock.exists().then_some(()),
+        );
+        let client = mcp!(&search_sock);
+        let r = client
+            .call_tool(
+                CallToolRequestParams::new("search")
+                    .with_arguments(args(json!({"query": "drgnx-json-parse"}))),
+            )
+            .await
+            .unwrap();
+        assert!(text_of(&r).starts_with("core/json.el:"), "{}", text_of(&r));
+        client.cancel().await.unwrap();
+    })
 }
 
 /// Pattern C. With `search` not in `drgnx-agents-mcp` (the default is the coordination tools alone), the session has no
 /// search socket, so the agent's MCP servers do not list one.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn agents_mcp_without_search_leaves_it_out() {
-    let root = Root::new();
-    let proj = project(&root, "proj");
-    let (_hub, mut c) = ready(&root, 1);
-    let (_sid, sock) = session(&mut c, 1, &proj);
-    assert!(sock.exists(), "the coordination tools are there");
-    assert!(!sock.with_file_name("search.sock").exists());
+#[test]
+fn agents_mcp_without_search_leaves_it_out() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let root = Root::new();
+        let proj = project(&root, "proj");
+        let (_hub, mut c) = ready(&root, 1);
+        let (_sid, sock) = session(&mut c, 1, &proj);
+        assert!(sock.exists(), "the coordination tools are there");
+        assert!(!sock.with_file_name("search.sock").exists());
+    })
 }
 
 /// Pattern C. The editor's typing signal holds the vectors back between requests: tier 2 (the real built-in model, on
@@ -436,7 +443,7 @@ fn typing_method_holds_tier2() {
 #[test]
 fn a_full_stand_in_disk_holds_tier2_at_the_disk_floor() {
     let root = Root::new();
-    std::fs::write(
+    ratatoskr::fsio::write(
         root.dir.path().join("q/statvfs"),
         "1000000000 2199023255552\n",
     )
@@ -492,7 +499,8 @@ fn plant_engine(root: &Root) -> PathBuf {
     let gguf = hrafn_embed::default_gguf();
     let file = engine_install::gguf_path(&cache.join("models"), gguf);
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-    std::fs::File::create(&file)
+    eitri::create_exclusive(&file, 0o666)
+        .map_err(std::io::Error::from)
         .unwrap()
         .set_len(gguf.bytes)
         .unwrap();
@@ -501,13 +509,13 @@ fn plant_engine(root: &Root) -> PathBuf {
     let exe = dir.join("bin").join(asset.binary);
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
     let ran = root.dir.path().join("engine-ran");
-    std::fs::write(
+    ratatoskr::fsio::write(
         &exe,
         format!("#!/bin/sh\necho \"$@\" >> '{}'\nexit 1\n", ran.display()),
     )
     .unwrap();
     std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    std::fs::write(dir.join(engine_install::MARKER), asset.sha256).unwrap();
+    ratatoskr::fsio::write(dir.join(engine_install::MARKER), asset.sha256).unwrap();
     ran
 }
 
@@ -552,7 +560,7 @@ fn engine_not_started_without_consent() {
     assert!(
         !ran.exists(),
         "the engine never ran: {:?}",
-        std::fs::read_to_string(&ran)
+        ratatoskr::fsio::read_to_string(&ran)
     );
 }
 
@@ -642,7 +650,7 @@ fn project_with_tree(root: &Root) -> (PathBuf, PathBuf) {
         &proj,
         &["worktree", "add", "-q", "-b", "topic", wt.to_str().unwrap()],
     );
-    std::fs::write(
+    ratatoskr::fsio::write(
         wt.join("core/branch.el"),
         ";;; branch.el\n\n(defun drgnx-branch-only (x)\n  \"Only the branch has this.\"\n  x)\n",
     )

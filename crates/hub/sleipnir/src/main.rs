@@ -43,7 +43,7 @@ fn main() -> ExitCode {
             #[cfg(feature = "sync")]
             let _slot = match sleipnir::sync::slot::hold_for_job(dir) {
                 Ok(held) => held,
-                Err(why) => return job_setup_failed(dir, &why),
+                Err(why) => return job_setup_failed(dir, &why.to_string()),
             };
             job_exec(dir)
         }
@@ -73,7 +73,7 @@ fn main() -> ExitCode {
             sync::fetch(root, repo, url)
         }
         _ => {
-            eprintln!("{USAGE}");
+            sleipnir::eline!("{USAGE}");
             ExitCode::from(2)
         }
     }
@@ -83,10 +83,10 @@ fn main() -> ExitCode {
 fn serve(args: &[&str]) -> ExitCode {
     match sleipnir::serve::Config::parse(args) {
         Ok(cfg) => ExitCode::from(
-            sleipnir::serve::run(cfg, std::io::stdin(), std::io::stdout()).clamp(0, 255) as u8,
+            sleipnir::serve::run(cfg, std::io::stdin(), annall::raw_out()).clamp(0, 255) as u8,
         ),
         Err(e) => {
-            eprintln!("sleipnir serve: {e}\n{USAGE}");
+            sleipnir::eline!("sleipnir serve: {e}\n{USAGE}");
             ExitCode::from(2)
         }
     }
@@ -96,7 +96,7 @@ fn serve(args: &[&str]) -> ExitCode {
 /// feature.
 #[cfg(not(all(feature = "runner", any(target_os = "linux", target_os = "macos"))))]
 fn serve(_args: &[&str]) -> ExitCode {
-    eprintln!(
+    sleipnir::eline!(
         "sleipnir serve: runners serve only on Linux with a systemd user manager, or on a Mac"
     );
     ExitCode::from(2)
@@ -107,7 +107,7 @@ fn watchdog(args: &[&str]) -> ExitCode {
     match sleipnir::watchdog::Args::parse(args) {
         Ok(a) => ExitCode::from(sleipnir::watchdog::run(a).clamp(0, 255) as u8),
         Err(e) => {
-            eprintln!("sleipnir watchdog: {e}\n{USAGE}");
+            sleipnir::eline!("sleipnir watchdog: {e}\n{USAGE}");
             ExitCode::from(2)
         }
     }
@@ -116,7 +116,7 @@ fn watchdog(args: &[&str]) -> ExitCode {
 /// A watchdog runs only in drgnx's Linux images, built with the `runner` feature; anywhere else it refuses.
 #[cfg(not(all(feature = "runner", target_os = "linux")))]
 fn watchdog(_args: &[&str]) -> ExitCode {
-    eprintln!("sleipnir watchdog: only in drgnx's Linux cloud images");
+    sleipnir::eline!("sleipnir watchdog: only in drgnx's Linux cloud images");
     ExitCode::from(2)
 }
 
@@ -125,28 +125,31 @@ fn watchdog(_args: &[&str]) -> ExitCode {
 fn bench(root: &str, image: &str) -> ExitCode {
     let root = std::path::Path::new(root);
     if !root.is_absolute() {
-        eprintln!("sleipnir bench: --root must be absolute");
+        sleipnir::eline!("sleipnir bench: --root must be absolute");
         return ExitCode::from(2);
     }
     match sleipnir::bench::run(root, image) {
         Ok((result, t)) => {
-            eprintln!(
+            sleipnir::eline!(
                 "sleipnir bench: cpu {:.2} s, io {:.2} s, inside memory.max={} cpu.max={}",
-                t.cpu_s, t.io_s, t.memory_max, t.cpu_max
+                t.cpu_s,
+                t.io_s,
+                t.memory_max,
+                t.cpu_max
             );
             match serde_json::to_string(&result) {
                 Ok(json) => {
-                    println!("{json}");
+                    sleipnir::oline!("{json}");
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
-                    eprintln!("sleipnir bench: {e}");
+                    sleipnir::eline!("sleipnir bench: {e}");
                     ExitCode::FAILURE
                 }
             }
         }
         Err(e) => {
-            eprintln!("sleipnir bench: {e}");
+            sleipnir::eline!("sleipnir bench: {e}");
             ExitCode::FAILURE
         }
     }
@@ -154,7 +157,7 @@ fn bench(root: &str, image: &str) -> ExitCode {
 
 #[cfg(not(all(feature = "runner", target_os = "linux")))]
 fn bench(_root: &str, _image: &str) -> ExitCode {
-    eprintln!("sleipnir bench: runners run only on Linux with a systemd user manager");
+    sleipnir::eline!("sleipnir bench: runners run only on Linux with a systemd user manager");
     ExitCode::from(2)
 }
 
@@ -165,17 +168,17 @@ fn tools(root: &str, pins: &[&str]) -> ExitCode {
     use sleipnir::darwin::tools;
     let root = std::path::Path::new(root);
     if !root.is_absolute() {
-        eprintln!("sleipnir tools: --root must be absolute");
+        sleipnir::eline!("sleipnir tools: --root must be absolute");
         return ExitCode::from(2);
     }
     let Some(mise) = tools::find_mise() else {
-        eprintln!("sleipnir tools: no mise: run `brew install mise` in your own account");
+        sleipnir::eline!("sleipnir tools: no mise: run `brew install mise` in your own account");
         return ExitCode::from(2);
     };
     let pins: Vec<String> = pins.iter().map(|p| p.to_string()).collect();
     let outcomes = tools::install(&mise, root, sleipnir::darwin::sandbox::PATH, &pins);
     let features = tools::features(&tools::installed(root));
-    println!(
+    sleipnir::oline!(
         "{}",
         serde_json::json!({ "outcomes": outcomes, "features": features })
     );
@@ -184,7 +187,7 @@ fn tools(root: &str, pins: &[&str]) -> ExitCode {
 
 #[cfg(not(all(feature = "runner", target_os = "macos")))]
 fn tools(_root: &str, _pins: &[&str]) -> ExitCode {
-    eprintln!("sleipnir tools: a Mac runner's step");
+    sleipnir::eline!("sleipnir tools: a Mac runner's step");
     ExitCode::from(2)
 }
 
@@ -195,15 +198,15 @@ fn job_setup_failed(dir: &std::path::Path, why: &str) -> ExitCode {
     use forseti::classify::infra;
     use sleipnir::linux::{jobexec::JobExec, result::ResultJson};
     use std::io::Write;
-    eprintln!("sleipnir job-exec: {}: {why}", dir.display());
+    sleipnir::eline!("sleipnir job-exec: {}: {why}", dir.display());
     let Ok(spec) = JobExec::read(dir) else {
         return ExitCode::from(2);
     };
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&spec.log)
-        .and_then(|mut f| writeln!(f, "sleipnir job-exec: the attempt can't start: {why}"));
+    if let Err(e) = sleipnir::fsio::append(&spec.log, true)
+        .and_then(|mut f| writeln!(f, "sleipnir job-exec: the attempt can't start: {why}"))
+    {
+        sleipnir::eline!("sleipnir job-exec: {}: {e}", spec.log.display());
+    }
     let r = ResultJson {
         verdict: Verdict::Infra(infra::SETUP.into()),
         infra: Some(format!("infra: {}", infra::SETUP)),
@@ -228,7 +231,7 @@ fn job_setup_failed(dir: &std::path::Path, why: &str) -> ExitCode {
 /// no job spec reader here (Android): the reason goes to stderr only
 #[cfg(all(feature = "sync", not(any(target_os = "linux", target_os = "macos"))))]
 fn job_setup_failed(dir: &std::path::Path, why: &str) -> ExitCode {
-    eprintln!("sleipnir job-exec: {}: {why}", dir.display());
+    sleipnir::eline!("sleipnir job-exec: {}: {why}", dir.display());
     ExitCode::from(2)
 }
 
@@ -240,7 +243,7 @@ fn job_exec(dir: &std::path::Path) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("sleipnir job-exec: {}: {e}", dir.display());
+            sleipnir::eline!("sleipnir job-exec: {}: {e}", dir.display());
             ExitCode::from(2)
         }
     }
@@ -275,7 +278,7 @@ fn job_exec(dir: &std::path::Path) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("sleipnir job-exec: {}: {e}", dir.display());
+            sleipnir::eline!("sleipnir job-exec: {}: {e}", dir.display());
             ExitCode::from(2)
         }
     }
@@ -285,7 +288,9 @@ fn job_exec(dir: &std::path::Path) -> ExitCode {
 /// refused, never run unconfined.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn job_exec(_dir: &std::path::Path) -> ExitCode {
-    eprintln!("sleipnir job-exec: jobs run only on Linux with a systemd user manager, or on a Mac");
+    sleipnir::eline!(
+        "sleipnir job-exec: jobs run only on Linux with a systemd user manager, or on a Mac"
+    );
     ExitCode::from(2)
 }
 
@@ -294,7 +299,7 @@ fn job_helper(args: &[&str]) -> ExitCode {
     match sleipnir::helper::Args::parse(args) {
         Ok(a) => ExitCode::from(sleipnir::helper::run(&a).clamp(0, 255) as u8),
         Err(e) => {
-            eprintln!("sleipnir job-helper: {e}\n{USAGE}");
+            sleipnir::eline!("sleipnir job-helper: {e}\n{USAGE}");
             ExitCode::from(2)
         }
     }
@@ -302,7 +307,7 @@ fn job_helper(args: &[&str]) -> ExitCode {
 
 #[cfg(not(target_os = "linux"))]
 fn job_helper(_args: &[&str]) -> ExitCode {
-    eprintln!("sleipnir job-helper: jobs run only on Linux with a systemd user manager");
+    sleipnir::eline!("sleipnir job-helper: jobs run only on Linux with a systemd user manager");
     ExitCode::from(2)
 }
 
@@ -314,16 +319,15 @@ mod sync {
     use sleipnir::sync::{cred, mirror};
 
     pub fn git_receive(root: &str, repo: &str) -> ExitCode {
-        use std::os::unix::process::CommandExt;
         match mirror::git_receive(Path::new(root), repo) {
             // exec only returns on failure
-            Ok(mut c) => {
-                let e = c.exec();
-                eprintln!("sleipnir git-receive: {e}");
+            Ok(spec) => {
+                let e = draugr::exec(&spec);
+                sleipnir::eline!("sleipnir git-receive: {e}");
                 ExitCode::from(2)
             }
             Err(e) => {
-                eprintln!("sleipnir git-receive: {e}");
+                sleipnir::eline!("sleipnir git-receive: {e}");
                 ExitCode::from(2)
             }
         }
@@ -333,7 +337,7 @@ mod sync {
         match cred::helper(Path::new(sock), op) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("sleipnir credential-helper: {e}");
+                sleipnir::eline!("sleipnir credential-helper: {e}");
                 ExitCode::from(2)
             }
         }
@@ -345,16 +349,14 @@ mod sync {
     #[cfg(feature = "test-hooks")]
     pub fn bundle(root: &str, repo: &str, sha: &str, size: &str) -> ExitCode {
         use sleipnir::sync::bundle::{BundleRef, CHUNK, Receiver};
-        use std::io::{Read, Write};
+        use std::io::Read;
         let run = || -> Result<bool, Box<dyn std::error::Error>> {
             let want = BundleRef {
                 sha256: sleipnir::sync::unhex32(sha).ok_or("--sha256: 64 hex digits")?,
                 size: size.parse()?,
             };
             let mut r = Receiver::open(Path::new(root), repo, want)?;
-            let mut out = std::io::stdout().lock();
-            writeln!(out, "at {}", r.offset())?;
-            out.flush()?;
+            sleipnir::oline!("at {}", r.offset());
             let mut buf = vec![0; CHUNK];
             let mut input = std::io::stdin().lock();
             while r.offset() < want.size {
@@ -363,17 +365,16 @@ mod sync {
                     return Ok(false);
                 }
                 r.append(&buf[..n])?;
-                writeln!(out, "at {}", r.offset())?;
-                out.flush()?;
+                sleipnir::oline!("at {}", r.offset());
             }
             r.finish()?;
-            writeln!(out, "done")?;
+            sleipnir::oline!("done");
             Ok(true)
         };
         match run() {
             Ok(_) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("sleipnir sync-bundle: {e}");
+                sleipnir::eline!("sleipnir sync-bundle: {e}");
                 ExitCode::from(2)
             }
         }
@@ -388,7 +389,7 @@ mod sync {
         use std::io::Read;
         let mut key = String::new();
         if let Err(e) = std::io::stdin().read_to_string(&mut key) {
-            eprintln!("sleipnir sync-fetch: stdin: {e}");
+            sleipnir::eline!("sleipnir sync-fetch: stdin: {e}");
             return ExitCode::from(2);
         }
         let key = OriginCred::SshKey(SecretString::from(key));
@@ -397,7 +398,7 @@ mod sync {
         match r {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("sleipnir sync-fetch: {e}");
+                sleipnir::eline!("sleipnir sync-fetch: {e}");
                 ExitCode::from(1)
             }
         }

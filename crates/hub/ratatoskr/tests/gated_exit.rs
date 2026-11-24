@@ -33,7 +33,7 @@ fn a_hub_that_ends_writes_what_it_held_first() {
     // the update: another build at the path the hub runs from
     let other = root.dir.path().join("other");
     hlaup::write(&other, "#!/bin/sh\necho '{\"commit\":\"another\"}'\n").unwrap();
-    std::fs::rename(&other, &live).unwrap();
+    ratatoskr::fsio::rename(&other, &live).unwrap();
     let mut control = Client::gated(&socket, &seq);
     assert_eq!(control.line().unwrap()["event"], "challenge");
     control.send(json!({"id": 1, "method": "__test_advance", "params": {"ms": 200}}));

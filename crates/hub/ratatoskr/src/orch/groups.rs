@@ -41,12 +41,12 @@ pub enum Gate {
 }
 
 /// The combined commit of BATCH on DIR's HEAD and its tree: (head, commit, tree).  Blocking.
-pub fn combined(dir: &Path, batch: &[Ready]) -> Result<(String, String, String), String> {
+pub fn combined(dir: &Path, batch: &[Ready]) -> villa::Result<(String, String, String)> {
     let head = git(dir, &["rev-parse", "HEAD"])?.trim().to_owned();
     let mut prev = head.clone();
     for m in batch {
         let tree = git(dir, &["merge-tree", "--write-tree", &prev, &m.tip])
-            .map_err(|e| format!("the batch's members don't merge: {e}"))?;
+            .map_err(|e| villa::Error::invalid(format!("the batch's members don't merge: {e}")))?;
         let tree = tree.lines().next().unwrap_or("").trim().to_owned();
         prev = git(
             dir,
@@ -153,29 +153,32 @@ async fn listing(
     head: &str,
     commit: &str,
     tree: &str,
-) -> Result<Result<Vec<Check>, Gate>, String> {
+) -> villa::Result<Result<Vec<Check>, Gate>> {
     let wt = listing_tree(dir, commit);
-    let running = front.groups.running.lock().unwrap().get(tree).cloned();
+    let running = saman::lock(&front.groups.running).get(tree).cloned();
     if let Some(id) = running {
         let Some(done) = front.core.exec.done(&id) else {
             return Ok(Err(Gate::Wait(
                 "the batch's groups are being listed".into(),
             )));
         };
-        front.groups.running.lock().unwrap().remove(tree);
-        let text = std::fs::read_to_string(wt.join(LISTING_OUT)).ok();
+        saman::lock(&front.groups.running).remove(tree);
+        let text = crate::fsio::read_to_string(wt.join(LISTING_OUT)).ok();
         let end = listing_end(done.status, done.exit, text.as_deref());
         let (d, w) = (dir.to_owned(), wt.clone());
-        let _ = crate::clock::blocking(move || remove_tree(&d, &w)).await;
+        crate::soft::done(
+            crate::clock::blocking(move || remove_tree(&d, &w)).await,
+            "crate::clock::blocking",
+        );
         match end {
             Ok(g) => {
-                front.groups.ends.lock().unwrap().remove(tree);
+                saman::lock(&front.groups.ends).remove(tree);
                 return Ok(Ok(g));
             }
             Err(class) => {
                 let said = front.core.exec.log_slice(&id, 0, 3).join(" / ");
                 let hold = {
-                    let mut ends = front.groups.ends.lock().unwrap();
+                    let mut ends = saman::lock(&front.groups.ends);
                     let e = ends.entry(tree.to_owned()).or_default();
                     e.push((class, said));
                     listing_hold(e)
@@ -202,39 +205,40 @@ async fn listing(
         .map(|_| ())
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| villa::Error::invalid(e.to_string()))??;
     let params =
         serde_json::from_value(listing_params(&wt, template, &format!("{head}..{commit}")))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let gate = crate::exec::Sealed {
         label: gate_sid("groups", &wt),
         tree: wt.clone(),
     };
     match crate::exec::start_sealed(front, &gate, params).await {
         Ok(s) => {
-            front
-                .groups
-                .running
-                .lock()
-                .unwrap()
-                .insert(tree.to_owned(), s.id);
+            saman::lock(&front.groups.running).insert(tree.to_owned(), s.id);
             Ok(Err(Gate::Wait(
                 "the batch's groups are being listed".into(),
             )))
         }
         Err(e) => {
             let d = dir.to_owned();
-            let _ = crate::clock::blocking(move || remove_tree(&d, &wt)).await;
-            Err(e.message)
+            crate::soft::done(
+                crate::clock::blocking(move || remove_tree(&d, &wt)).await,
+                "crate::clock::blocking",
+            );
+            Err(villa::Error::unavailable(e.message))
         }
     }
 }
 
 /// Remove the listing's detached tree WT of the line's tree DIR.  Blocking.
 fn remove_tree(dir: &Path, wt: &Path) {
-    let _ = git(
-        dir,
-        &["worktree", "remove", "--force", &wt.to_string_lossy()],
+    crate::soft::done(
+        git(
+            dir,
+            &["worktree", "remove", "--force", &wt.to_string_lossy()],
+        ),
+        "git",
     );
 }
 
@@ -247,15 +251,15 @@ pub async fn gate(
     dir: &Path,
     pack: &Pack,
     batch: &[Ready],
-) -> Result<Gate, String> {
+) -> villa::Result<Gate> {
     if pack.groups.is_empty() || !pack.on("affected-groups") || batch.is_empty() {
         return Ok(Gate::Pass);
     }
     let (d, b) = (dir.to_owned(), batch.to_vec());
     let (head, commit, tree) = crate::clock::blocking(move || combined(&d, &b))
         .await
-        .map_err(|e| e.to_string())??;
-    let cached = front.groups.by_tree.lock().unwrap().get(&tree).cloned();
+        .map_err(|e| villa::Error::invalid(e.to_string()))??;
+    let cached = saman::lock(&front.groups.by_tree).get(&tree).cloned();
     let groups = match cached {
         Some(g) => g,
         None => {
@@ -281,7 +285,7 @@ pub async fn gate(
                             Ok(w)
                         })
                         .await
-                        .map_err(|e| e.to_string())?;
+                        .map_err(|e| villa::Error::invalid(e.to_string()))?;
                     if vordr::gates::waived(&waivers, &tree).is_some() {
                         return Ok(Gate::Pass);
                     }
@@ -289,12 +293,7 @@ pub async fn gate(
                 }
                 Err(gate) => return Ok(gate),
             };
-            front
-                .groups
-                .by_tree
-                .lock()
-                .unwrap()
-                .insert(tree.clone(), g.clone());
+            saman::lock(&front.groups.by_tree).insert(tree.clone(), g.clone());
             g
         }
     };
@@ -315,7 +314,7 @@ pub async fn gate(
             Ok((norn::read::evidence::of_task(c, &k)?, w))
         })
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if let Some(why) = vordr::gates::waived(&waivers, &tree) {
         tracing::info!("batch {key}: waived by the user: {why}");
         return Ok(Gate::Pass);
@@ -353,7 +352,10 @@ pub async fn gate(
         }
         Outcome::Missing(missing) => {
             for g in &missing {
-                if let Some(why) = start(front, &key, dir, &commit, &tree, &run_of(g)).await? {
+                if let Some(why) = start(front, &key, dir, &commit, &tree, &run_of(g))
+                    .await
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?
+                {
                     return Ok(Gate::Hold(format!("the group {}: {why}", g.name), tree));
                 }
             }
@@ -398,7 +400,7 @@ async fn reruns(
     red: &[Check],
     tree: &str,
     known: &(dyn Fn(&str) -> bool + Sync),
-) -> Result<Gate, String> {
+) -> villa::Result<Gate> {
     use vordr::gates::{State, selector_of, state_after};
     use vordr::reruns::{Verdict, verdict};
     // (task, commit, tree): the line's first ("" its task), then each tip alone
@@ -412,10 +414,10 @@ async fn reruns(
             let (_, c, t) = combined(&d, std::slice::from_ref(m))?;
             out.push((m.task.clone(), c, t));
         }
-        Ok::<_, String>(out)
+        Ok::<_, villa::Error>(out)
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| villa::Error::internal(e.to_string()))??;
     let keys: Vec<String> = runs
         .iter()
         .map(|(_, _, t)| format!("batch:{job}@{t}"))
@@ -430,7 +432,7 @@ async fn reruns(
                 .collect::<Result<Vec<_>, _>>()
         })
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let evidence: Vec<_> = evidence.iter().map(|e| here(e)).collect();
     let mut rows: Vec<Option<Vec<String>>> = Vec::new();
     // a one-member batch's tip alone is the batch's tree: its red groups run there once more first (a pass then is a
@@ -448,7 +450,10 @@ async fn reruns(
                     }
                 }
                 State::Missing => {
-                    if let Some(why) = start(front, &keys[i], dir, commit, t, &run_of(g)).await? {
+                    if let Some(why) = start(front, &keys[i], dir, commit, t, &run_of(g))
+                        .await
+                        .map_err(|e| villa::Error::invalid(e.to_string()))?
+                    {
                         return Ok(Gate::Hold(
                             format!("the group {}: {why}", g.name),
                             t.clone(),
@@ -507,7 +512,6 @@ async fn reruns(
 mod tests {
     use super::*;
     use runstav::methods::exec::ExecStatus;
-    use std::process::Command;
     use vordr::rows::Class;
 
     #[test]
@@ -561,7 +565,7 @@ mod tests {
     }
 
     fn sh(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
+        let out = crate::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -579,7 +583,7 @@ mod tests {
     }
 
     fn commit(dir: &Path, file: &str, text: &str) -> String {
-        std::fs::write(dir.join(file), text).unwrap();
+        crate::fsio::write(dir.join(file), text).unwrap();
         sh(dir, &["add", "-A"]);
         sh(dir, &["commit", "-q", "-m", file]);
         sh(dir, &["rev-parse", "HEAD"])

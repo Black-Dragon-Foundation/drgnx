@@ -18,6 +18,8 @@
 pub mod bench;
 #[cfg(feature = "linux")]
 pub mod darwin;
+#[cfg(any(feature = "linux", feature = "sync"))]
+pub mod fsio;
 #[cfg(all(feature = "linux", target_os = "linux"))]
 pub mod helper;
 pub mod keyline;
@@ -27,9 +29,13 @@ pub mod linux;
 pub mod net;
 #[cfg(feature = "proto")]
 pub mod proto;
+#[cfg(any(feature = "linux", feature = "sync"))]
+pub mod say;
 #[cfg(all(feature = "runner", any(target_os = "linux", target_os = "macos")))]
 pub mod serve;
 #[cfg(feature = "sync")]
 pub mod sync;
+#[cfg(any(feature = "linux", feature = "sync"))]
+pub mod tool;
 #[cfg(all(feature = "runner", any(target_os = "linux", target_os = "macos")))]
 pub mod watchdog;

@@ -41,7 +41,7 @@ fn restart_while_held_stays_held() {
     // `--state`: the mock keeps its sessions on disk, so the second hub's mock can resume the first one's (a Claude-kind
     // mock without it answers a resume of an unknown conversation with -32002, as Claude Code does)
     let state = root.dir.path().join("h/mock-state");
-    std::fs::write(
+    ratatoskr::fsio::write(
         &settings,
         format!(
             "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock\" :command ({:?} \"acp\" \"--as\" \"claude\" \"--state\" {:?})))))\n",

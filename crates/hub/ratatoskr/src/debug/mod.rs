@@ -130,17 +130,14 @@ pub fn mock_main(script: &std::ffi::OsStr) -> std::process::ExitCode {
     {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("debug-mock: {shown}: {e}");
+            crate::soft::err_line(&format!("debug-mock: {shown}: {e}"));
             return ExitCode::from(2);
         }
     };
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
+    let rt = match saman::Executor::new(1) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("debug-mock: no runtime: {e}");
+            crate::soft::err_line(&format!("debug-mock: no runtime: {e}"));
             return ExitCode::from(2);
         }
     };
@@ -153,7 +150,7 @@ pub fn mock_main(script: &std::ffi::OsStr) -> std::process::ExitCode {
     match r {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("debug-mock: {e}");
+            crate::soft::err_line(&format!("debug-mock: {e}"));
             ExitCode::from(1)
         }
     }
@@ -210,14 +207,14 @@ pub struct Connected {
 /// How a session's adapter is reached: started (stdio, or TCP on a port it was given) or connected to.
 pub trait Launcher: Send + Sync {
     /// A new adapter for a session.
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>>;
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>>;
     /// The adapter for a child session (`startDebugging`): for a TCP adapter a second connection to the same port,
     /// otherwise a new adapter.
-    fn child(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn child(&self) -> BoxFut<'_, villa::Result<Connected>> {
         self.connect()
     }
     /// The launch arguments completed from what the adapter's server knows (`lsp-command`); the same by default.
-    fn fill(&self, arguments: Value) -> BoxFut<'_, Result<Value, String>> {
+    fn fill(&self, arguments: Value) -> BoxFut<'_, villa::Result<Value>> {
         Box::pin(async move { Ok(arguments) })
     }
     /// The request a session's first start sends: a launcher that starts the program beside the adapter
@@ -254,13 +251,13 @@ pub trait Terminals: Send + Sync {
         cwd: String,
         args: Vec<String>,
         env: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<Opened, String>>;
+    ) -> BoxFut<'_, villa::Result<Opened>>;
 
     /// Let terminal TERM's task run (its wrapper waits for a line, so this waits from before it can end) and give its
     /// exit status (the first command end with one, or its program's exit; none when it is gone) and, when that is not
     /// 0, its text.
     fn run_task(&self, term: String) -> BoxFut<'_, (Option<i32>, String)> {
-        let _ = term;
+        let _only_when_used_elsewhere = &term;
         Box::pin(async { (None, String::new()) })
     }
 }
@@ -363,7 +360,7 @@ pub struct Debug {
 }
 
 fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(m)
 }
 
 impl Debug {
@@ -398,12 +395,12 @@ impl Debug {
 
     /// Call HOOK with the live sessions' roots whenever they change (once; a later hook is ignored).
     pub fn on_state(&self, hook: StateHook) {
-        let _ = self.inner.on_state.set(hook);
+        crate::soft::done(self.inner.on_state.set(hook), "mod");
     }
 
     /// Use HOOK to put the editor's buffer positions on the breakpoints sent for a file (once; a later hook is ignored).
     pub fn on_lines(&self, hook: LinesHook) {
-        let _ = self.inner.lines.set(hook);
+        crate::soft::done(self.inner.lines.set(hook), "mod");
     }
 
     /// Give each breakpoint of V (PATH's view) the buffer positions of its line when the editor holds PATH's text.
@@ -498,11 +495,7 @@ impl Debug {
 
     /// F on ROOT's breakpoint store.
     fn store<R>(&self, root: &str, f: impl FnOnce(&mut Store) -> R) -> R {
-        let mut stores = self
-            .inner
-            .stores
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stores = saman::lock(&self.inner.stores);
         let s = stores.entry(root.to_owned()).or_insert_with(|| {
             let file = self.inner.store_dir.as_ref().map(|d| {
                 d.join(format!(
@@ -517,11 +510,7 @@ impl Debug {
 
     /// Every breakpoint store's saves queued so far have landed (or failed).
     pub async fn written(&self) {
-        let disks: Vec<_> = self
-            .inner
-            .stores
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        let disks: Vec<_> = saman::lock(&self.inner.stores)
             .values()
             .filter_map(Store::disk)
             .collect();
@@ -554,11 +543,7 @@ impl Debug {
             e.caps.get("supportsANSIStyling").and_then(Value::as_bool) == Some(true)
         });
         let full = {
-            let mut c = self
-                .inner
-                .consoles
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut c = saman::lock(&self.inner.consoles);
             let con = c.entry(id.to_owned()).or_default();
             con.set_time(wall_ms());
             con.output(body, ansi);
@@ -566,13 +551,7 @@ impl Debug {
         };
         if full {
             self.console_flush(id, false);
-        } else if self
-            .inner
-            .armed
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id.to_owned())
-        {
+        } else if saman::lock(&self.inner.armed).insert(id.to_owned()) {
             let d = self.clone();
             let id = id.to_owned();
             crate::clock::spawn("debug:console", async move {
@@ -585,17 +564,9 @@ impl Debug {
     /// Send ID's console batch (`debug-output {session, lines, skipped?}`) to every editor; END: the session is over
     /// (its last line goes without its newline, and its console with it).
     pub fn console_flush(&self, id: &str, end: bool) {
-        self.inner
-            .armed
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(id);
+        saman::lock(&self.inner.armed).remove(id);
         let batch = {
-            let mut c = self
-                .inner
-                .consoles
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut c = saman::lock(&self.inner.consoles);
             let b = c.get_mut(id).and_then(|con| con.take(end));
             if end {
                 c.remove(id);
@@ -624,20 +595,11 @@ impl Debug {
 
     /// Tell F of every change of a session or a breakpoint from now on.
     pub fn on_change(&self, f: Listener) {
-        self.inner
-            .listeners
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(f);
+        saman::lock(&self.inner.listeners).push(f);
     }
 
     fn changed(&self) {
-        let ls = self
-            .inner
-            .listeners
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let ls = saman::lock(&self.inner.listeners).clone();
         for f in ls {
             f();
         }
@@ -919,8 +881,10 @@ impl Debug {
         reference: i64,
         name: &str,
         access: Option<String>,
-    ) -> Result<Vec<Value>, String> {
-        let (h, root, caps) = self.data_target(id)?;
+    ) -> villa::Result<Vec<Value>> {
+        let (h, root, caps) = self
+            .data_target(id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let info = h
             .request(
                 "dataBreakpointInfo",
@@ -929,13 +893,15 @@ impl Debug {
             .await?;
         let description = info["description"].as_str().unwrap_or(name).to_owned();
         let Some(data_id) = info["dataId"].as_str().map(str::to_owned) else {
-            return Err(description);
+            return Err(villa::Error::invalid(description));
         };
         let a = access.unwrap_or_else(|| "write".to_owned());
         if let Some(types) = info["accessTypes"].as_array()
             && !types.iter().any(|t| *t == a)
         {
-            return Err(format!("{description} cannot be watched for {a}"));
+            return Err(villa::Error::invalid(format!(
+                "{description} cannot be watched for {a}"
+            )));
         }
         let bp = breakpoints::DataBp {
             data_id,
@@ -952,8 +918,10 @@ impl Debug {
         &self,
         id: &str,
         data_id: &str,
-    ) -> Result<Vec<Value>, String> {
-        let (h, root, caps) = self.data_target(id)?;
+    ) -> villa::Result<Vec<Value>> {
+        let (h, root, caps) = self
+            .data_target(id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         if self.store(&root, |s| s.data_remove(id, data_id)) {
             self.send_data(id, &h, &root, &caps).await;
         }
@@ -966,10 +934,10 @@ impl Debug {
         &self,
         id: &str,
         op: Option<breakpoints::InstrOp>,
-    ) -> Result<Value, String> {
+    ) -> villa::Result<Value> {
         let root = self
             .root_of(id)
-            .ok_or_else(|| format!("no debug session {id}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no debug session {id}")))?;
         let Some(op) = op else {
             return Ok(self.instr_view(&root, id));
         };
@@ -979,7 +947,9 @@ impl Debug {
             .and_then(Value::as_bool)
             != Some(true)
         {
-            return Err("this adapter has no instruction breakpoints".into());
+            return Err(villa::Error::invalid(
+                "this adapter has no instruction breakpoints",
+            ));
         }
         self.store(&root, |s| s.instr_op(id, op))?;
         let list = self.store(&root, |s| s.instr_list(id, &caps));
@@ -1008,21 +978,23 @@ impl Debug {
     }
 
     /// Session ID's data breakpoints as the view shows them.
-    pub fn data_breakpoints(&self, id: &str) -> Result<Vec<Value>, String> {
+    pub fn data_breakpoints(&self, id: &str) -> villa::Result<Vec<Value>> {
         let root = self
             .root_of(id)
-            .ok_or_else(|| format!("no debug session {id}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no debug session {id}")))?;
         Ok(self.data_of(&root, id))
     }
 
-    fn data_target(&self, id: &str) -> Result<(Handle, String, Value), String> {
+    fn data_target(&self, id: &str) -> villa::Result<(Handle, String, Value)> {
         let (h, root, caps) = lock(&self.inner.state)
             .sessions
             .get(id)
             .map(|e| (e.handle.clone(), e.root.clone(), e.caps.clone()))
-            .ok_or_else(|| format!("no debug session {id}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no debug session {id}")))?;
         if caps.get("supportsDataBreakpoints").and_then(Value::as_bool) != Some(true) {
-            return Err("this adapter has no data breakpoints".into());
+            return Err(villa::Error::invalid(
+                "this adapter has no data breakpoints",
+            ));
         }
         Ok((h, root, caps))
     }
@@ -1052,10 +1024,10 @@ impl Debug {
 
     /// Run to Cursor: session ID stops at PATH's LINE once (a breakpoint for it alone, gone at its next stop or end),
     /// continuing it when it is stopped.
-    pub async fn run_to_cursor(&self, id: &str, path: &str, line: u32) -> Result<(), String> {
+    pub async fn run_to_cursor(&self, id: &str, path: &str, line: u32) -> villa::Result<()> {
         let root = self
             .root_of(id)
-            .ok_or_else(|| format!("no debug session {id}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no debug session {id}")))?;
         self.store(&root, |s| s.add_temp(id, path, line));
         self.resend(id, path).await;
         if let Some(stop) = self.stop_of(id) {
@@ -1077,7 +1049,7 @@ impl Debug {
         root: &str,
         start: Start,
         launcher: Arc<dyn Launcher>,
-    ) -> Result<String, String> {
+    ) -> villa::Result<String> {
         self.start_with(conn, root, start, launcher, record::Launch::default())
             .await
     }
@@ -1090,7 +1062,7 @@ impl Debug {
         start: Start,
         launcher: Arc<dyn Launcher>,
         launch: record::Launch,
-    ) -> Result<String, String> {
+    ) -> villa::Result<String> {
         self.start_as(conn, root, start, launcher, None, launch)
             .await
     }
@@ -1104,7 +1076,7 @@ impl Debug {
         launcher: Arc<dyn Launcher>,
         parent: Option<String>,
         launch: record::Launch,
-    ) -> BoxFut<'static, Result<String, String>> {
+    ) -> BoxFut<'static, villa::Result<String>> {
         let me = self.clone();
         let root = root.to_owned();
         Box::pin(async move {
@@ -1121,11 +1093,11 @@ impl Debug {
         launcher: Arc<dyn Launcher>,
         parent: Option<String>,
         launch: record::Launch,
-    ) -> Result<String, String> {
+    ) -> villa::Result<String> {
         let id = {
             let mut st = lock(&self.inner.state);
             if st.shut {
-                return Err("the hub is stopping".into());
+                return Err(villa::Error::invalid("the hub is stopping"));
             }
             st.next += 1;
             format!("d{}", st.next)
@@ -1141,9 +1113,15 @@ impl Debug {
             self.add_probes(&root, &mut start);
         }
         let mut c = if parent.is_some() {
-            launcher.child().await?
+            launcher
+                .child()
+                .await
+                .map_err(|e| villa::Error::invalid(e.to_string()))?
         } else {
-            launcher.connect().await?
+            launcher
+                .connect()
+                .await
+                .map_err(|e| villa::Error::invalid(e.to_string()))?
         };
         if parent.is_none() {
             match launcher.fill(std::mem::take(&mut start.arguments)).await {
@@ -1184,7 +1162,7 @@ impl Debug {
         let sid = id.clone();
         crate::clock::spawn("debug:updates", async move {
             me.updates(sid, rx).await;
-            let _ = ended_tx.send(true);
+            crate::soft::done(ended_tx.send(true), "ended_tx send");
         });
         Ok(id)
     }
@@ -1279,14 +1257,16 @@ impl Debug {
     /// The text of SESSION's source REFERENCE (a frame with no file): `{text, mime?}`.
     /// Session ID's handle and its adapter's capabilities; refused while the adapter has not given them (the
     /// session is starting: the editors offer what needs them once `debug-state` shows them).
-    pub fn handle_caps(&self, id: &str) -> Result<(Handle, Value), String> {
+    pub fn handle_caps(&self, id: &str) -> villa::Result<(Handle, Value)> {
         let (h, caps) = lock(&self.inner.state)
             .sessions
             .get(id)
             .map(|e| (e.handle.clone(), e.caps.clone()))
-            .ok_or_else(|| format!("no debug session {id}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no debug session {id}")))?;
         if caps.is_null() {
-            return Err(format!("debug session {id} is still starting"));
+            return Err(villa::Error::invalid(format!(
+                "debug session {id} is still starting"
+            )));
         }
         Ok((h, caps))
     }
@@ -1298,7 +1278,7 @@ impl Debug {
         id: &str,
         path: &str,
         line: u32,
-    ) -> Result<Vec<Value>, String> {
+    ) -> villa::Result<Vec<Value>> {
         let (h, caps) = self.handle_caps(id)?;
         if caps
             .get("supportsBreakpointLocationsRequest")
@@ -1319,10 +1299,10 @@ impl Debug {
             .unwrap_or_default())
     }
 
-    pub async fn source(&self, id: &str, reference: i64) -> Result<Value, String> {
+    pub async fn source(&self, id: &str, reference: i64) -> villa::Result<Value> {
         let h = self
             .handle(id)
-            .ok_or_else(|| format!("no debug session {id}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no debug session {id}")))?;
         let b = h
             .request(
                 "source",
@@ -1336,21 +1316,24 @@ impl Debug {
         Ok(out)
     }
 
-    pub async fn control(&self, id: &str, op: Op) -> Result<(), String> {
+    pub async fn control(&self, id: &str, op: Op) -> villa::Result<()> {
         let h = self
             .handle(id)
-            .ok_or_else(|| format!("no debug session {id}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no debug session {id}")))?;
         if let Some(rec) = self.records() {
             let (id, op) = (id.to_owned(), op.clone());
             rec.later("run step", move |r| r.op(&id, &op));
         }
         if matches!(op, Op::Stop { .. } | Op::Disconnect) {
             for child in self.children(id) {
-                Box::pin(self.control(&child, op.clone())).await.ok();
+                crate::soft::done(
+                    Box::pin(self.control(&child, op.clone())).await,
+                    "debug control",
+                );
             }
             match h.op(op).await {
                 // it ended while its children stopped (js-debug ends its root session once the program is gone)
-                Err(e) if e == session::ENDED => {}
+                Err(e) if e.kind() == villa::Kind::Cancelled => {}
                 r => r?,
             }
             self.wait_end(id).await;
@@ -1375,7 +1358,7 @@ impl Debug {
             .get(id)
             .map(|e| e.ended.clone());
         if let Some(mut rx) = rx {
-            let _ = rx.wait_for(|e| *e).await;
+            crate::soft::done(rx.wait_for(|e| *e).await, "mod");
         }
     }
 
@@ -1391,14 +1374,16 @@ impl Debug {
                 .collect()
         };
         for id in roots {
-            let _ = self
-                .control(
+            crate::soft::done(
+                self.control(
                     &id,
                     Op::Stop {
                         kill_debuggee: None,
                     },
                 )
-                .await;
+                .await,
+                "mod",
+            );
         }
     }
 
@@ -1520,7 +1505,10 @@ impl Debug {
                 Update::RunInTerminal { arguments, reply } => {
                     let conn = lock(&self.inner.state).sessions.get(&id).map(|e| e.conn);
                     let Some(conn) = conn else {
-                        let _ = reply.send(Err("the session has ended".into()));
+                        crate::soft::done(
+                            reply.send(Err(villa::Error::invalid("the session has ended"))),
+                            "reply send",
+                        );
                         continue;
                     };
                     let terms = self.inner.terms.clone();
@@ -1535,10 +1523,10 @@ impl Debug {
                                     conn,
                                     json!({"session": sid, "term": o.term, "view": o.view, "editor": o.editor}),
                                 );
-                                let _ = reply.send(Ok(o.pid));
+                                crate::soft::done(reply.send(Ok(o.pid)), "reply send");
                             }
                             Err(e) => {
-                                let _ = reply.send(Err(e));
+                                crate::soft::done(reply.send(Err(e)), "reply send");
                             }
                         }
                     });
@@ -1549,7 +1537,10 @@ impl Debug {
                         .get(&id)
                         .map(|e| (e.conn, e.root.clone(), e.start.clone(), e.launcher.clone()));
                     let Some((conn, root, mut start, launcher)) = parent else {
-                        let _ = reply.send(Err("the session has ended".into()));
+                        crate::soft::done(
+                            reply.send(Err(villa::Error::invalid("the session has ended"))),
+                            "reply send",
+                        );
                         continue;
                     };
                     start.arguments = arguments
@@ -1584,7 +1575,7 @@ impl Debug {
                                 record::Launch::default(),
                             )
                             .await;
-                        let _ = reply.send(r.map(|_| ()));
+                        crate::soft::done(reply.send(r.map(|_| ())), "reply send");
                     });
                 }
                 Update::Breakpoints { path, breakpoints } => {
@@ -1620,7 +1611,7 @@ impl Debug {
                     if let Some((root, mut start)) = entry {
                         self.fill(&root, &id, &mut start);
                         self.add_probes(&root, &mut start);
-                        let _ = reply.send(start);
+                        crate::soft::done(reply.send(start), "reply send");
                     }
                 }
                 Update::Ended(end) => {
@@ -1665,7 +1656,7 @@ impl Debug {
             start.restart_with(value);
             let me = self.clone();
             crate::clock::spawn("debug:restart", async move {
-                let _ = me.start(e.conn, &e.root, start, e.launcher).await;
+                crate::soft::done(me.start(e.conn, &e.root, start, e.launcher).await, "mod");
             });
         }
     }

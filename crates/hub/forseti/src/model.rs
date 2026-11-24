@@ -583,23 +583,19 @@ impl Limits {
     /// These limits with a workstation's reserve for its user set to RESERVE_MIB (`runner add --reserve-mib`); none
     /// keeps the profile's. Refused below [`MIN_RESERVE_MIB`], and on any profile but a workstation (a dedicated
     /// machine keeps no reserve).
-    pub fn with_reserve(
-        self,
-        profile: Profile,
-        reserve_mib: Option<u64>,
-    ) -> Result<Limits, String> {
+    pub fn with_reserve(self, profile: Profile, reserve_mib: Option<u64>) -> villa::Result<Limits> {
         let Some(n) = reserve_mib else {
             return Ok(self);
         };
         if profile != Profile::Workstation {
-            return Err(
-                "a reserve for the user is a workstation's; a dedicated runner keeps none".into(),
-            );
+            return Err(villa::Error::invalid(
+                "a reserve for the user is a workstation's; a dedicated runner keeps none",
+            ));
         }
         if n < MIN_RESERVE_MIB {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "a workstation's reserve is at least {MIN_RESERVE_MIB} MiB, not {n}"
-            ));
+            )));
         }
         Ok(Limits {
             reserve_user_mib: n,
@@ -671,10 +667,10 @@ mod tests {
         let e = w
             .with_reserve(Profile::Workstation, Some(MIN_RESERVE_MIB - 1))
             .unwrap_err();
-        assert!(e.contains("1024"), "{e}");
+        assert!(e.message().contains("1024"), "{e}");
         let d = Limits::for_profile(Profile::Dedicated, 7168, 4);
         let e = d.with_reserve(Profile::Dedicated, Some(2048)).unwrap_err();
-        assert!(e.contains("workstation"), "{e}");
+        assert!(e.message().contains("workstation"), "{e}");
 
         // the CI Mac of round 17: 5376 MiB available
         let m = MachineState {

@@ -32,6 +32,11 @@ pub mod tx;
 pub mod walk;
 pub mod writer;
 
+/// The most `eitri` reads of one file here: an export's file, a copy of the database that held a secret. Above it the
+/// read is refused (`FsError::TooLarge`), never truncated.
+#[cfg(test)]
+pub(crate) const READ_CAP: u64 = 1 << 30;
+
 pub use pool::ReadPool;
 pub use tx::{Class, Tx, TxMeta, TxState};
 pub use writer::{

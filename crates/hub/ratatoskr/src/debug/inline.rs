@@ -82,7 +82,7 @@ fn lists() -> &'static Lists {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(m)
 }
 
 /// TEXT cut to MAX characters, its last an ellipsis when cut.
@@ -287,7 +287,7 @@ impl Inline {
             .collect();
         last.insert(session.to_owned(), now);
         drop(last);
-        let shown = match path.map(|p| (p, std::fs::read_to_string(p))) {
+        let shown = match path.map(|p| (p, crate::fsio::read_to_string(p))) {
             Some((p, Ok(text))) if line > 0 => self.lines(p, &text, line, &vars, before.as_ref()),
             _ => vec![],
         };

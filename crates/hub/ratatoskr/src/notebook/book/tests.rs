@@ -121,7 +121,7 @@ fn the_buffers_cells_make_the_notebooks_cells_removed_moved_added_and_edited() {
 fn saving_writes_the_runs_outputs_and_leaves_stale_ones_as_the_file_had_them() {
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("n.ipynb");
-    std::fs::write(&path, NB).unwrap();
+    crate::fsio::write(&path, NB).unwrap();
     let mut b = Book::open(&path, NB.to_string()).unwrap();
     let minted = b.cells()[2].id.clone();
     b.sync(&[
@@ -165,7 +165,7 @@ fn a_file_over_the_size_limit_is_refused_before_it_is_parsed() {
     )
     .err()
     .unwrap();
-    assert!(e.contains("too large"), "{e}");
+    assert!(e.message().contains("too large"), "{e}");
 }
 
 #[test]
@@ -222,7 +222,7 @@ fn a_notebook_with_too_many_cells_is_refused_and_the_language_is_read_once_and_s
         vec![cell; MAX_CELLS + 1].join(",")
     );
     let e = Book::open(Path::new("/x/many.ipynb"), many).err().unwrap();
-    assert!(e.contains("too many cells"), "{e}");
+    assert!(e.message().contains("too many cells"), "{e}");
     let lang = "p".repeat(500);
     let text = format!(
         r#"{{"cells": [], "metadata": {{"kernelspec": {{"name": "{lang}", "language": "{lang}"}}}}, "nbformat": 4, "nbformat_minor": 5}}"#
@@ -245,7 +245,7 @@ fn a_notebook_of_ten_thousand_cells_is_opened_synced_and_given_tails_by_index() 
     // on a thread waited for with a deadline: quadratic work here would fail the test, not hang it
     let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
     let s2 = slot.clone();
-    std::thread::spawn(move || {
+    saman::spawn_thread("ratatoskr:tests", move || {
         let mut b = Book::open(Path::new("/x/big.ipynb"), text).unwrap();
         let tails = (0..MAX_CELLS)
             .filter_map(|i| b.tail(&format!("c{i}")))
@@ -272,7 +272,7 @@ fn a_notebook_of_ten_thousand_cells_is_opened_synced_and_given_tails_by_index() 
         );
         b.sync(&plan);
         let cells = b.cells();
-        *s2.lock().unwrap() = Some((
+        *saman::lock(&s2) = Some((
             tails,
             cells.len(),
             cells[0].id.clone(),
@@ -280,9 +280,10 @@ fn a_notebook_of_ten_thousand_cells_is_opened_synced_and_given_tails_by_index() 
             b.tail("c4").is_none(),
             b.tail("added").is_some(),
         ));
-    });
+    })
+    .unwrap();
     let (tails, n, first, seventh, c5_gone, added) =
-        skuld::wait_until("the notebook", 60, || slot.lock().unwrap().take());
+        skuld::wait_until("the notebook", 60, || saman::lock(&slot).take());
     assert_eq!((tails, n), (MAX_CELLS, MAX_CELLS));
     assert_eq!(
         (first.as_str(), seventh.as_str(), c5_gone, added),

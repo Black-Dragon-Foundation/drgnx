@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -51,7 +51,13 @@ const REQUEST_WAIT: Duration = Duration::from_secs(600);
 /// After a request broke off, how long the process has to be seen gone before the break counts as the engine's answer.
 const REAP_WAIT: Duration = Duration::from_secs(2);
 /// The hub's variables the engine gets: the loader's, and the GPU drivers' (Vulkan, Mesa, NVIDIA) and ggml's by prefix.
-const ENV: &[&str] = &["PATH", "HOME", "XDG_RUNTIME_DIR", "LANG", "LC_ALL"];
+const ENV: &[&str] = &[
+    "PATH",
+    stig::HOME_VAR,
+    stig::SYSTEM_RUNTIME_VAR,
+    "LANG",
+    "LC_ALL",
+];
 const ENV_PREFIXES: &[&str] = &[
     "VK_", "MESA_", "GGML_", "RADV_", "__NV_", "__GLX_", "CUDA_", "HIP_", "HSA_", "ROCR_", "ROCM_",
 ];
@@ -129,11 +135,11 @@ struct Shared {
 
 impl Shared {
     fn touch(&self) {
-        *self.last_use.lock().unwrap_or_else(PoisonError::into_inner) = crate::clock::now();
+        *saman::lock(&self.last_use) = crate::clock::now();
     }
 
     fn set_pid(&self, was: Option<i32>, now: Option<i32>) {
-        let mut p = self.pid.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut p = saman::lock(&self.pid);
         if was.is_none() || *p == was {
             *p = now;
         }
@@ -271,19 +277,11 @@ impl LocalEngine {
 
     /// Why the engine waits now: another program uses the GPU, or the video memory is short. None while it works.
     pub fn holding(&self) -> Option<String> {
-        self.shared
-            .held
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        saman::lock(&self.shared.held).clone()
     }
 
     fn set_held(&self, why: Option<String>) {
-        *self
-            .shared
-            .held
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = why;
+        *saman::lock(&self.shared.held) = why;
     }
 
     /// Why the device is held at this look: another program uses it, or its free video memory is under the engine's
@@ -301,11 +299,7 @@ impl LocalEngine {
         // memory another program takes while it runs
         self.pid()?;
         // the device list is a process of its own (it loads the backends): asked once in a poll interval
-        let cached = *self
-            .shared
-            .free_seen
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let cached = *saman::lock(&self.shared.free_seen);
         let free = match cached {
             Some((at, free))
                 if crate::clock::now().saturating_duration_since(at)
@@ -315,20 +309,12 @@ impl LocalEngine {
             }
             _ => {
                 let free = self.device_free(&device).await;
-                *self
-                    .shared
-                    .free_seen
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner) = Some((crate::clock::now(), free));
+                *saman::lock(&self.shared.free_seen) = Some((crate::clock::now(), free));
                 free
             }
         };
         let need = engine_limits::vram_need_mib(self.gguf_bytes(), ctx);
-        let baseline = *self
-            .shared
-            .free_baseline
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let baseline = *saman::lock(&self.shared.free_baseline);
         super::engine_hold::vram_taken(baseline, free, need)
     }
 
@@ -355,11 +341,7 @@ impl LocalEngine {
 
     /// The running process's pid; none while none runs.
     pub fn pid(&self) -> Option<i32> {
-        *self
-            .shared
-            .pid
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        *saman::lock(&self.shared.pid)
     }
 
     /// The fingerprint of its vectors, which it knows without a start.
@@ -432,7 +414,8 @@ impl LocalEngine {
         };
         if gpu.is_some() {
             let need = engine_limits::vram_need_mib(self.gguf_bytes(), ctx);
-            engine_limits::vram_check(need, before, s.limits.vram_mib).map_err(EmbedError)?;
+            engine_limits::vram_check(need, before, s.limits.vram_mib)
+                .map_err(|e| EmbedError(e.to_string()))?;
         }
         let ncpu = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
         let threads = s.limits.threads(ncpu).map(|t| t.to_string());
@@ -502,7 +485,7 @@ impl LocalEngine {
             let status = child.wait().await;
             gone.store(true, Ordering::SeqCst);
             tracing::debug!("search: the engine (pid {pid}) exited: {status:?}");
-            let _ = reaped_tx.send(true);
+            crate::soft::done(reaped_tx.send(true), "reaped_tx send");
         });
         let r = Running {
             port: 0,
@@ -555,11 +538,7 @@ impl LocalEngine {
                 return Err(EmbedError(why));
             }
             // the free memory with this engine in it: what the hold measures another program's grab against
-            *self
-                .shared
-                .free_baseline
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = after;
+            *saman::lock(&self.shared.free_baseline) = after;
         }
         tracing::info!(
             "search: the engine started (pid {pid}, port {port}, context {ctx}, device {})",
@@ -597,7 +576,7 @@ impl LocalEngine {
                     if s.busy.load(Ordering::SeqCst) > 0 {
                         idle
                     } else {
-                        let last = *s.last_use.lock().unwrap_or_else(PoisonError::into_inner);
+                        let last = *saman::lock(&s.last_use);
                         (last + idle).saturating_duration_since(crate::clock::now())
                     }
                 };
@@ -812,7 +791,10 @@ impl LocalEngine {
 async fn end(shared: &Shared, mut r: Running) {
     // SAFETY: kill(2) on the engine's own process group (draugr made the engine the leader of a new one)
     unsafe { libc::kill(-r.pid, libc::SIGKILL) };
-    let _ = crate::clock::real(r.reaped.wait_for(|done| *done)).await;
+    crate::soft::done(
+        crate::clock::real(r.reaped.wait_for(|done| *done)).await,
+        "crate::clock::real",
+    );
     shared.set_pid(Some(r.pid), None);
 }
 

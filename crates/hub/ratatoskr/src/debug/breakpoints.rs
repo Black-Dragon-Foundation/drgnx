@@ -336,12 +336,12 @@ impl Store {
     /// `FILE.damaged` and the store starts empty.
     pub fn open(file: Option<PathBuf>) -> Store {
         let data = match &file {
-            Some(f) => match std::fs::read_to_string(f) {
+            Some(f) => match crate::fsio::read_to_string(f) {
                 Ok(t) => serde_json::from_str(&t).unwrap_or_else(|e| {
                     tracing::warn!(target: "drgnx::debug", "breakpoints {}: {e}; kept aside", f.display());
                     let mut aside = f.as_os_str().to_owned();
                     aside.push(".damaged");
-                    let _ = std::fs::rename(f, PathBuf::from(aside));
+                    crate::soft::done(crate::fsio::rename(f, PathBuf::from(aside)), "crate::fsio::rename");
                     Data::default()
                 }),
                 Err(_) => Data::default(),
@@ -649,7 +649,7 @@ impl Store {
     }
 
     /// OP on SESSION's instruction breakpoints; refused for a number it does not have.
-    pub fn instr_op(&mut self, session: &str, op: InstrOp) -> Result<(), String> {
+    pub fn instr_op(&mut self, session: &str, op: InstrOp) -> villa::Result<()> {
         let set = self.instrs.entry(session.to_owned()).or_default();
         let text = |t: Option<String>| t.filter(|t| !t.is_empty());
         match op {
@@ -674,7 +674,9 @@ impl Store {
                 let before = set.list.len();
                 set.list.retain(|(b, _)| b.n != n);
                 if before == set.list.len() {
-                    return Err(format!("no instruction breakpoint {n}"));
+                    return Err(villa::Error::invalid(format!(
+                        "no instruction breakpoint {n}"
+                    )));
                 }
             }
             InstrOp::Edit {
@@ -683,11 +685,9 @@ impl Store {
                 condition,
                 hit,
             } => {
-                let (b, _) = set
-                    .list
-                    .iter_mut()
-                    .find(|(b, _)| b.n == n)
-                    .ok_or_else(|| format!("no instruction breakpoint {n}"))?;
+                let (b, _) = set.list.iter_mut().find(|(b, _)| b.n == n).ok_or_else(|| {
+                    villa::Error::invalid(format!("no instruction breakpoint {n}"))
+                })?;
                 if let Some(e) = enabled {
                     b.enabled = e;
                 }

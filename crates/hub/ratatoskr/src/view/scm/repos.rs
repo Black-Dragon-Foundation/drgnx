@@ -138,7 +138,7 @@ pub fn worktrees_of(main: &Path) -> Vec<PathBuf> {
     };
     let mut out: Vec<PathBuf> = rd
         .flatten()
-        .filter_map(|e| std::fs::read_to_string(e.path().join("gitdir")).ok())
+        .filter_map(|e| crate::fsio::read_to_string(e.path().join("gitdir")).ok())
         .filter_map(|t| Path::new(t.trim()).parent().map(Path::to_path_buf))
         .collect();
     out.sort();

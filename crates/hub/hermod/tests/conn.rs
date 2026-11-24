@@ -73,215 +73,232 @@ async fn next(rx: &mut Receiver<Event>) -> Event {
         .expect("the channel is open")
 }
 
-#[tokio::test]
-async fn initialize_then_session() {
-    let (conn, mut rx) = start(&script("cat >/dev/null"), opts()).await;
-    let info = conn.initialize(ClientCaps::default()).await.unwrap();
-    assert!(info.auth.is_empty());
-    assert!(info.meta.is_none());
-    let sid = conn
-        .new_session(Path::new("/work"), vec![], None)
-        .await
-        .unwrap();
-    assert_eq!(&*sid.0, "s1");
-    drop(conn);
-    assert!(matches!(
-        next(&mut rx).await,
-        Event::Exit { code: Some(0), .. }
-    ));
+#[test]
+fn initialize_then_session() {
+    saman::block_on_current(async {
+        let (conn, mut rx) = start(&script("cat >/dev/null"), opts()).await;
+        let info = conn.initialize(ClientCaps::default()).await.unwrap();
+        assert!(info.auth.is_empty());
+        assert!(info.meta.is_none());
+        let sid = conn
+            .new_session(Path::new("/work"), vec![], None)
+            .await
+            .unwrap();
+        assert_eq!(&*sid.0, "s1");
+        drop(conn);
+        assert!(matches!(
+            next(&mut rx).await,
+            Event::Exit { code: Some(0), .. }
+        ));
+    })
 }
 
 // [C] handshake: the mode an answer that opens a session reports is the session's; a later one that reports none
 // forgets it, so an earlier answer's mode is never taken for the last one's.
-#[tokio::test]
-async fn the_reported_mode_is_the_opening_answers() {
-    let new = r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s1","modes":{"currentModeId":"read-only","availableModes":[]}}}"#;
-    let resume = r#"{"jsonrpc":"2.0","id":3,"result":{}}"#;
-    let script = format!(
-        "read a; printf '%s\\n' '{INIT}'; read b; printf '%s\\n' '{new}'; read c; printf '%s\\n' '{resume}'; \
+#[test]
+fn the_reported_mode_is_the_opening_answers() {
+    saman::block_on_current(async {
+        let new = r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s1","modes":{"currentModeId":"read-only","availableModes":[]}}}"#;
+        let resume = r#"{"jsonrpc":"2.0","id":3,"result":{}}"#;
+        let script = format!(
+            "read a; printf '%s\\n' '{INIT}'; read b; printf '%s\\n' '{new}'; read c; printf '%s\\n' '{resume}'; \
          cat >/dev/null"
-    );
-    let (conn, _rx) = start(&script, opts()).await;
-    let sid = open(&conn).await;
-    assert_eq!(conn.reported_mode(&sid).as_deref(), Some("read-only"));
-    conn.resume_session(&sid, Path::new("/work"), vec![], None)
-        .await
-        .unwrap();
-    assert_eq!(conn.reported_mode(&sid), None);
+        );
+        let (conn, _rx) = start(&script, opts()).await;
+        let sid = open(&conn).await;
+        assert_eq!(conn.reported_mode(&sid).as_deref(), Some("read-only"));
+        conn.resume_session(&sid, Path::new("/work"), vec![], None)
+            .await
+            .unwrap();
+        assert_eq!(conn.reported_mode(&sid), None);
+    })
 }
 
 // [C] handshake: the model an answer that opens a session reports (`models.currentModelId`) is the session's, and a
 // `session/set_model` the agent accepted changes it; one it refused leaves it.
-#[tokio::test]
-async fn the_reported_model_is_the_opening_answers_and_follows_set_model() {
-    let new = r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s1","models":{"currentModelId":"opus","availableModels":[]}}}"#;
-    let set = r#"{"jsonrpc":"2.0","id":3,"result":{}}"#;
-    let refused = r#"{"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"no such model"}}"#;
-    let script = format!(
-        "read a; printf '%s\\n' '{INIT}'; read b; printf '%s\\n' '{new}'; read c; printf '%s\\n' '{set}'; \
+#[test]
+fn the_reported_model_is_the_opening_answers_and_follows_set_model() {
+    saman::block_on_current(async {
+        let new = r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s1","models":{"currentModelId":"opus","availableModels":[]}}}"#;
+        let set = r#"{"jsonrpc":"2.0","id":3,"result":{}}"#;
+        let refused =
+            r#"{"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"no such model"}}"#;
+        let script = format!(
+            "read a; printf '%s\\n' '{INIT}'; read b; printf '%s\\n' '{new}'; read c; printf '%s\\n' '{set}'; \
          read d; printf '%s\\n' '{refused}'; cat >/dev/null"
-    );
-    let (conn, _rx) = start(&script, opts()).await;
-    let sid = open(&conn).await;
-    assert_eq!(conn.reported_model(&sid).as_deref(), Some("opus"));
-    conn.set_model(&sid, "sonnet").await.unwrap();
-    assert_eq!(conn.reported_model(&sid).as_deref(), Some("sonnet"));
-    assert!(conn.set_model(&sid, "nothing").await.is_err());
-    assert_eq!(conn.reported_model(&sid).as_deref(), Some("sonnet"));
+        );
+        let (conn, _rx) = start(&script, opts()).await;
+        let sid = open(&conn).await;
+        assert_eq!(conn.reported_model(&sid).as_deref(), Some("opus"));
+        conn.set_model(&sid, "sonnet").await.unwrap();
+        assert_eq!(conn.reported_model(&sid).as_deref(), Some("sonnet"));
+        assert!(conn.set_model(&sid, "nothing").await.is_err());
+        assert_eq!(conn.reported_model(&sid).as_deref(), Some("sonnet"));
+    })
 }
 
-#[tokio::test]
-async fn every_update_is_stamped_on_receipt() {
-    let rest = format!(
-        "printf '%s\\n' '{}' '{}' '{}'; cat >/dev/null",
-        chunk("a", None),
-        chunk("b", None),
-        chunk("c", None)
-    );
-    let (conn, mut rx) = start(&script(&rest), opts()).await;
-    let before = hermod::stamp::now();
-    open(&conn).await;
-    let mut stamps = vec![];
-    while stamps.len() < 3 {
-        if let Event::Update { at, sid, .. } = next(&mut rx).await {
-            assert_eq!(&*sid.0, "s1");
-            stamps.push(at);
+#[test]
+fn every_update_is_stamped_on_receipt() {
+    saman::block_on_current(async {
+        let rest = format!(
+            "printf '%s\\n' '{}' '{}' '{}'; cat >/dev/null",
+            chunk("a", None),
+            chunk("b", None),
+            chunk("c", None)
+        );
+        let (conn, mut rx) = start(&script(&rest), opts()).await;
+        let before = hermod::stamp::now();
+        open(&conn).await;
+        let mut stamps = vec![];
+        while stamps.len() < 3 {
+            if let Event::Update { at, sid, .. } = next(&mut rx).await {
+                assert_eq!(&*sid.0, "s1");
+                stamps.push(at);
+            }
         }
-    }
-    let after = hermod::stamp::now();
-    assert!(
-        stamps.windows(2).all(|w| w[0] <= w[1]),
-        "stamps never go back: {stamps:?}"
-    );
-    assert!(
-        stamps[0] >= before && stamps[2] <= after,
-        "{before} <= {stamps:?} <= {after}"
-    );
+        let after = hermod::stamp::now();
+        assert!(
+            stamps.windows(2).all(|w| w[0] <= w[1]),
+            "stamps never go back: {stamps:?}"
+        );
+        assert!(
+            stamps[0] >= before && stamps[2] <= after,
+            "{before} <= {stamps:?} <= {after}"
+        );
+    })
 }
 
-#[tokio::test]
-async fn message_ids_are_kept() {
-    let rest = format!(
-        "printf '%s\\n' '{}' '{}'; cat >/dev/null",
-        chunk("a", Some("m1")),
-        chunk("b", None)
-    );
-    let (conn, mut rx) = start(&script(&rest), opts()).await;
-    open(&conn).await;
-    let mut ids = vec![];
-    while ids.len() < 2 {
-        if let Event::Update {
-            message_id, update, ..
+#[test]
+fn message_ids_are_kept() {
+    saman::block_on_current(async {
+        let rest = format!(
+            "printf '%s\\n' '{}' '{}'; cat >/dev/null",
+            chunk("a", Some("m1")),
+            chunk("b", None)
+        );
+        let (conn, mut rx) = start(&script(&rest), opts()).await;
+        open(&conn).await;
+        let mut ids = vec![];
+        while ids.len() < 2 {
+            if let Event::Update {
+                message_id, update, ..
+            } = next(&mut rx).await
+            {
+                assert!(matches!(update, SessionUpdate::AgentMessageChunk(_)));
+                ids.push(message_id);
+            }
+        }
+        assert_eq!(ids, vec![Some("m1".to_string()), None]);
+    })
+}
+
+#[test]
+fn a_request_gets_a_responder_and_an_unanswered_one_is_cancelled_at_exit() {
+    saman::block_on_current(async {
+        let req = |id: u32| {
+            format!(
+                r#"{{"jsonrpc":"2.0","id":{id},"method":"session/request_permission","params":{{"sessionId":"s1","toolCall":{{"toolCallId":"t{id}"}},"options":[{{"optionId":"yes","name":"Yes","kind":"allow_once"}}]}}}}"#
+            )
+        };
+        // the first reply is echoed to stderr; the second request is never answered
+        let rest = format!(
+            "printf '%s\\n' '{}'; read r; echo \"$r\" >&2; printf '%s\\n' '{}'; sleep 0.3",
+            req(100),
+            req(101)
+        );
+        let (conn, mut rx) = start(&script(&rest), opts()).await;
+        open(&conn).await;
+        let Event::Request(Incoming::Permission(p, responder)) = next(&mut rx).await else {
+            panic!("a permission request")
+        };
+        assert_eq!(&*p.tool_call.tool_call_id.0, "t100");
+        let outcome = RequestPermissionOutcome::Selected(
+            hermod::schema::v1::SelectedPermissionOutcome::new(PermissionOptionId::new("yes")),
+        );
+        responder
+            .respond(RequestPermissionResponse::new(outcome))
+            .unwrap();
+        let Event::Request(Incoming::Permission(_, mut second)) = next(&mut rx).await else {
+            panic!("the second request")
+        };
+        assert!(!second.is_cancelled());
+        let Event::Exit { stderr, .. } = next(&mut rx).await else {
+            panic!("exit")
+        };
+        assert!(
+            stderr.contains(r#""id":100"#) && stderr.contains("selected"),
+            "{stderr}"
+        );
+        assert!(second.is_cancelled());
+        second.cancelled().await;
+        assert!(matches!(
+            second.respond(RequestPermissionResponse::new(
+                RequestPermissionOutcome::Cancelled
+            )),
+            Err(Error::Closed)
+        ));
+    })
+}
+
+#[test]
+fn exit_comes_once_with_the_stderr_tail() {
+    saman::block_on_current(async {
+        let rest = "echo 'a long first line that gets cut off, then boom' >&2; exit 3";
+        let o = ConnOpts {
+            stderr_tail: 10,
+            ..opts()
+        };
+        let (conn, mut rx) = start(&script(rest), o).await;
+        open(&conn).await;
+        let Event::Exit {
+            code,
+            signal,
+            stderr,
         } = next(&mut rx).await
-        {
-            assert!(matches!(update, SessionUpdate::AgentMessageChunk(_)));
-            ids.push(message_id);
-        }
-    }
-    assert_eq!(ids, vec![Some("m1".to_string()), None]);
+        else {
+            panic!("exit")
+        };
+        assert_eq!((code, signal), (Some(3), None));
+        assert!(
+            stderr.chars().count() <= 10 && stderr.trim_end().ends_with("boom"),
+            "{stderr:?}"
+        );
+        assert!(
+            rx.recv().await.is_none(),
+            "no second Exit, nothing after it"
+        );
+        assert!(matches!(
+            conn.set_mode(&hermod::SessionId::new("s1"), "code").await,
+            Err(Error::Closed)
+        ));
+    })
 }
 
-#[tokio::test]
-async fn a_request_gets_a_responder_and_an_unanswered_one_is_cancelled_at_exit() {
-    let req = |id: u32| {
-        format!(
-            r#"{{"jsonrpc":"2.0","id":{id},"method":"session/request_permission","params":{{"sessionId":"s1","toolCall":{{"toolCallId":"t{id}"}},"options":[{{"optionId":"yes","name":"Yes","kind":"allow_once"}}]}}}}"#
-        )
-    };
-    // the first reply is echoed to stderr; the second request is never answered
-    let rest = format!(
-        "printf '%s\\n' '{}'; read r; echo \"$r\" >&2; printf '%s\\n' '{}'; sleep 0.3",
-        req(100),
-        req(101)
-    );
-    let (conn, mut rx) = start(&script(&rest), opts()).await;
-    open(&conn).await;
-    let Event::Request(Incoming::Permission(p, responder)) = next(&mut rx).await else {
-        panic!("a permission request")
-    };
-    assert_eq!(&*p.tool_call.tool_call_id.0, "t100");
-    let outcome = RequestPermissionOutcome::Selected(
-        hermod::schema::v1::SelectedPermissionOutcome::new(PermissionOptionId::new("yes")),
-    );
-    responder
-        .respond(RequestPermissionResponse::new(outcome))
-        .unwrap();
-    let Event::Request(Incoming::Permission(_, mut second)) = next(&mut rx).await else {
-        panic!("the second request")
-    };
-    assert!(!second.is_cancelled());
-    let Event::Exit { stderr, .. } = next(&mut rx).await else {
-        panic!("exit")
-    };
-    assert!(
-        stderr.contains(r#""id":100"#) && stderr.contains("selected"),
-        "{stderr}"
-    );
-    assert!(second.is_cancelled());
-    second.cancelled().await;
-    assert!(matches!(
-        second.respond(RequestPermissionResponse::new(
-            RequestPermissionOutcome::Cancelled
-        )),
-        Err(Error::Closed)
-    ));
-}
-
-#[tokio::test]
-async fn exit_comes_once_with_the_stderr_tail() {
-    let rest = "echo 'a long first line that gets cut off, then boom' >&2; exit 3";
-    let o = ConnOpts {
-        stderr_tail: 10,
-        ..opts()
-    };
-    let (conn, mut rx) = start(&script(rest), o).await;
-    open(&conn).await;
-    let Event::Exit {
-        code,
-        signal,
-        stderr,
-    } = next(&mut rx).await
-    else {
-        panic!("exit")
-    };
-    assert_eq!((code, signal), (Some(3), None));
-    assert!(
-        stderr.chars().count() <= 10 && stderr.trim_end().ends_with("boom"),
-        "{stderr:?}"
-    );
-    assert!(
-        rx.recv().await.is_none(),
-        "no second Exit, nothing after it"
-    );
-    assert!(matches!(
-        conn.set_mode(&hermod::SessionId::new("s1"), "code").await,
-        Err(Error::Closed)
-    ));
-}
-
-#[tokio::test]
-async fn a_deadline_fails_the_call_not_the_conn() {
-    // the first session/new is never answered; the second is
-    let rest = format!(
-        "read c; read d; printf '%s\\n' '{}'; cat >/dev/null",
-        r#"{"jsonrpc":"2.0","id":4,"result":{"sessionId":"s9"}}"#
-    );
-    let o = ConnOpts {
-        deadline: Duration::from_millis(300),
-        ..opts()
-    };
-    let (conn, _rx) = start(&script(&rest), o).await;
-    open(&conn).await;
-    let r = conn.new_session(Path::new("/work"), vec![], None).await;
-    assert!(
-        matches!(r, Err(Error::Deadline(ref m)) if m == "session/new"),
-        "{r:?}"
-    );
-    let sid = conn
-        .new_session(Path::new("/work"), vec![], None)
-        .await
-        .unwrap();
-    assert_eq!(&*sid.0, "s9");
+#[test]
+fn a_deadline_fails_the_call_not_the_conn() {
+    saman::block_on_current(async {
+        // the first session/new is never answered; the second is
+        let rest = format!(
+            "read c; read d; printf '%s\\n' '{}'; cat >/dev/null",
+            r#"{"jsonrpc":"2.0","id":4,"result":{"sessionId":"s9"}}"#
+        );
+        let o = ConnOpts {
+            deadline: Duration::from_millis(300),
+            ..opts()
+        };
+        let (conn, _rx) = start(&script(&rest), o).await;
+        open(&conn).await;
+        let r = conn.new_session(Path::new("/work"), vec![], None).await;
+        assert!(
+            matches!(r, Err(Error::Deadline(ref m)) if m == "session/new"),
+            "{r:?}"
+        );
+        let sid = conn
+            .new_session(Path::new("/work"), vec![], None)
+            .await
+            .unwrap();
+        assert_eq!(&*sid.0, "s9");
+    })
 }
 
 /// A line tap that keeps what it sees: each line with its direction and instant, and the exit.
@@ -293,65 +310,67 @@ struct Kept {
 
 impl LineTap for Kept {
     fn line(&self, dir: Dir, line: &str, at: std::time::Instant) {
-        self.lines.lock().unwrap().push((dir, line.to_owned(), at));
+        saman::lock(&self.lines).push((dir, line.to_owned(), at));
     }
     fn exit(&self, code: Option<i32>, _signal: Option<i32>, stderr: &str) {
-        self.exits.lock().unwrap().push((code, stderr.to_owned()));
+        saman::lock(&self.exits).push((code, stderr.to_owned()));
     }
 }
 
 // Pattern C (handshake): every line the tap is asked about was answered or seen as an event first, and the exit comes
 // after the child's own Exit event.
-#[tokio::test]
-async fn a_tap_sees_both_directions_in_order() {
-    let tap = std::sync::Arc::new(Kept::default());
-    let o = ConnOpts {
-        tap: Some(tap.clone()),
-        ..opts()
-    };
-    let rest = format!(
-        "printf '%s\\n' '{}'; read p; echo tapped >&2; exit 0",
-        chunk("a", None)
-    );
-    let (conn, mut rx) = start(&script(&rest), o).await;
-    open(&conn).await;
-    while !matches!(next(&mut rx).await, Event::Update { .. }) {}
-    conn.cancel(&hermod::SessionId::new("s1")).unwrap();
-    let Event::Exit { code, .. } = next(&mut rx).await else {
-        panic!("exit")
-    };
-    assert_eq!(code, Some(0));
-    let lines = tap.lines.lock().unwrap().clone();
-    let seen: Vec<(Dir, String)> = lines
-        .iter()
-        .map(|(d, l, _)| {
-            let v: Value = serde_json::from_str(l).expect("a JSON line");
-            let what = v["method"]
-                .as_str()
-                .map_or_else(|| format!("answer {}", v["id"]), str::to_owned);
-            (*d, what)
-        })
-        .collect();
-    assert_eq!(
-        seen,
-        vec![
-            (Dir::In, "initialize".to_string()),
-            (Dir::Out, "answer 1".to_string()),
-            (Dir::In, "session/new".to_string()),
-            (Dir::Out, "answer 2".to_string()),
-            (Dir::Out, "session/update".to_string()),
-            (Dir::In, "session/cancel".to_string()),
-        ]
-    );
-    assert!(
-        lines.windows(2).all(|w| w[0].2 <= w[1].2),
-        "the instants never go back"
-    );
-    let exits = tap.exits.lock().unwrap().clone();
-    assert!(
-        matches!(&exits[..], [(Some(0), stderr)] if stderr.contains("tapped")),
-        "{exits:?}"
-    );
+#[test]
+fn a_tap_sees_both_directions_in_order() {
+    saman::block_on_current(async {
+        let tap = std::sync::Arc::new(Kept::default());
+        let o = ConnOpts {
+            tap: Some(tap.clone()),
+            ..opts()
+        };
+        let rest = format!(
+            "printf '%s\\n' '{}'; read p; echo tapped >&2; exit 0",
+            chunk("a", None)
+        );
+        let (conn, mut rx) = start(&script(&rest), o).await;
+        open(&conn).await;
+        while !matches!(next(&mut rx).await, Event::Update { .. }) {}
+        conn.cancel(&hermod::SessionId::new("s1")).unwrap();
+        let Event::Exit { code, .. } = next(&mut rx).await else {
+            panic!("exit")
+        };
+        assert_eq!(code, Some(0));
+        let lines = saman::lock(&tap.lines).clone();
+        let seen: Vec<(Dir, String)> = lines
+            .iter()
+            .map(|(d, l, _)| {
+                let v: Value = serde_json::from_str(l).expect("a JSON line");
+                let what = v["method"]
+                    .as_str()
+                    .map_or_else(|| format!("answer {}", v["id"]), str::to_owned);
+                (*d, what)
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                (Dir::In, "initialize".to_string()),
+                (Dir::Out, "answer 1".to_string()),
+                (Dir::In, "session/new".to_string()),
+                (Dir::Out, "answer 2".to_string()),
+                (Dir::Out, "session/update".to_string()),
+                (Dir::In, "session/cancel".to_string()),
+            ]
+        );
+        assert!(
+            lines.windows(2).all(|w| w[0].2 <= w[1].2),
+            "the instants never go back"
+        );
+        let exits = saman::lock(&tap.exits).clone();
+        assert!(
+            matches!(&exits[..], [(Some(0), stderr)] if stderr.contains("tapped")),
+            "{exits:?}"
+        );
+    })
 }
 
 fn fork_of(source: &hermod::SessionId, cwd: &str, at: Option<&str>) -> ForkInto {
@@ -366,33 +385,35 @@ fn fork_of(source: &hermod::SessionId, cwd: &str, at: Option<&str>) -> ForkInto 
     }
 }
 
-#[tokio::test]
-async fn fork_sends_the_jetbrains_meta() {
-    let rest = r#"read f; echo "$f" >&2; printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"sessionId":"s2"}}'; cat >/dev/null"#;
-    let (conn, mut rx) = start(&script(rest), opts()).await;
-    let sid = open(&conn).await;
-    let mut f = fork_of(&sid, "/elsewhere", Some("m7"));
-    // a meta of the caller's own under `jetbrains` stays beside the fork point
-    f.meta = Some(json!({"jetbrains": {"other": 1}, "claudeCode": {"options": {"x": 1}}}));
-    let forked = conn.fork_into(f).await.unwrap();
-    assert_eq!(&*forked.0, "s2");
-    drop(conn);
-    let Event::Exit { stderr, .. } = next(&mut rx).await else {
-        panic!("exit")
-    };
-    let sent: Value = serde_json::from_str(stderr.trim()).unwrap();
-    assert_eq!(sent["method"], "session/fork");
-    assert_eq!(sent["params"]["sessionId"], "s1");
-    assert_eq!(sent["params"]["cwd"], "/elsewhere");
-    assert_eq!(sent["params"]["mcpServers"], json!([]));
-    let meta = &sent["params"]["_meta"];
-    let fork = &meta["jetbrains"]["air"]["fork"];
-    assert_eq!(
-        (fork["version"].as_i64(), fork["messageId"].as_str()),
-        (Some(1), Some("m7"))
-    );
-    assert_eq!(meta["jetbrains"]["other"], 1);
-    assert_eq!(meta["claudeCode"]["options"]["x"], 1);
+#[test]
+fn fork_sends_the_jetbrains_meta() {
+    saman::block_on_current(async {
+        let rest = r#"read f; echo "$f" >&2; printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"sessionId":"s2"}}'; cat >/dev/null"#;
+        let (conn, mut rx) = start(&script(rest), opts()).await;
+        let sid = open(&conn).await;
+        let mut f = fork_of(&sid, "/elsewhere", Some("m7"));
+        // a meta of the caller's own under `jetbrains` stays beside the fork point
+        f.meta = Some(json!({"jetbrains": {"other": 1}, "claudeCode": {"options": {"x": 1}}}));
+        let forked = conn.fork_into(f).await.unwrap();
+        assert_eq!(&*forked.0, "s2");
+        drop(conn);
+        let Event::Exit { stderr, .. } = next(&mut rx).await else {
+            panic!("exit")
+        };
+        let sent: Value = serde_json::from_str(stderr.trim()).unwrap();
+        assert_eq!(sent["method"], "session/fork");
+        assert_eq!(sent["params"]["sessionId"], "s1");
+        assert_eq!(sent["params"]["cwd"], "/elsewhere");
+        assert_eq!(sent["params"]["mcpServers"], json!([]));
+        let meta = &sent["params"]["_meta"];
+        let fork = &meta["jetbrains"]["air"]["fork"];
+        assert_eq!(
+            (fork["version"].as_i64(), fork["messageId"].as_str()),
+            (Some(1), Some("m7"))
+        );
+        assert_eq!(meta["jetbrains"]["other"], 1);
+        assert_eq!(meta["claudeCode"]["options"]["x"], 1);
+    })
 }
 
 /// `ratatoskr-mock` (domr's binary): `RATATOSKR_MOCK`, else in the test build's profile folder
@@ -411,7 +432,9 @@ struct Mock {
 
 impl Drop for Mock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        if let Err(e) = std::fs::remove_dir_all(&self.dir) {
+            tracing::debug!(error = %e, "the mock's folder was already gone");
+        }
     }
 }
 
@@ -445,7 +468,11 @@ impl Mock {
             new_session: false,
         };
         let (conn, mut rx) = Conn::spawn(spec, opts()).await.expect("spawn the mock");
-        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        saman::spawn(
+            "drain-events",
+            async move { while rx.recv().await.is_some() {} },
+        )
+        .detach("it ends with the connection");
         conn.initialize(ClientCaps::default())
             .await
             .expect("initialize");
@@ -454,7 +481,7 @@ impl Mock {
 
     /// The values of KEY in LOG, in order.
     fn logged(&self, log: &str, key: &str) -> Vec<Value> {
-        std::fs::read_to_string(self.dir.join(log))
+        eitri::read_string(&self.dir.join(log), 1 << 24)
             .unwrap_or_default()
             .lines()
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
@@ -468,213 +495,231 @@ async fn say(conn: &Conn, sid: &hermod::SessionId, text: &str) {
     conn.prompt(sid, vec![block], None).await.expect("a turn");
 }
 
-#[tokio::test]
-async fn fork_into_carries_cwd_mcp_and_lock_meta() {
-    let m = Mock::new();
-    let conn = m.start("a.log").await;
-    let sid = conn
-        .new_session(Path::new("/work"), vec![], None)
-        .await
+#[test]
+fn fork_into_carries_cwd_mcp_and_lock_meta() {
+    saman::block_on_current(async {
+        let m = Mock::new();
+        let conn = m.start("a.log").await;
+        let sid = conn
+            .new_session(Path::new("/work"), vec![], None)
+            .await
+            .unwrap();
+        let mcp: hermod::McpServer = serde_json::from_value(
+            json!({"name": "drgnx", "command": "/bin/true", "args": ["mcp-bridge"], "env": []}),
+        )
         .unwrap();
-    let mcp: hermod::McpServer = serde_json::from_value(
-        json!({"name": "drgnx", "command": "/bin/true", "args": ["mcp-bridge"], "env": []}),
-    )
-    .unwrap();
-    let mut f = fork_of(&sid, "/elsewhere", None);
-    f.mcp = vec![mcp];
-    f.meta = Some(json!({"claudeCode": {"options": {"permissionMode": "default"}}}));
-    let forked = conn.fork_into(f).await.unwrap();
-    let line = &m.logged("a.log", "session/fork")[0];
-    assert_eq!(line["sessionId"], json!(&*forked.0));
-    assert_eq!(line["cwd"], "/elsewhere");
-    assert_eq!(line["mcpServers"][0]["name"], "drgnx");
-    assert_eq!(line["claude_options"]["permissionMode"], "default");
+        let mut f = fork_of(&sid, "/elsewhere", None);
+        f.mcp = vec![mcp];
+        f.meta = Some(json!({"claudeCode": {"options": {"permissionMode": "default"}}}));
+        let forked = conn.fork_into(f).await.unwrap();
+        let line = &m.logged("a.log", "session/fork")[0];
+        assert_eq!(line["sessionId"], json!(&*forked.0));
+        assert_eq!(line["cwd"], "/elsewhere");
+        assert_eq!(line["mcpServers"][0]["name"], "drgnx");
+        assert_eq!(line["claude_options"]["permissionMode"], "default");
+    })
 }
 
-#[tokio::test]
-async fn fork_into_keeps_the_lock_meta_beside_the_fork_point() {
-    let m = Mock::new();
-    let conn = m.start("a.log").await;
-    let sid = conn
-        .new_session(Path::new("/work"), vec![], None)
-        .await
-        .unwrap();
-    say(&conn, &sid, "hello").await;
-    let mut f = fork_of(&sid, "/work", Some("a-1-1"));
-    f.meta = Some(json!({"claudeCode": {"options": {"permissionMode": "default"}}}));
-    conn.fork_into(f).await.unwrap();
-    let line = &m.logged("a.log", "session/fork")[0];
-    assert_eq!(line["claude_options"]["permissionMode"], "default");
-    assert_eq!(line["messageId"], "a-1-1");
-    assert_eq!(line["kept"], 2, "the user's message and the first answer");
+#[test]
+fn fork_into_keeps_the_lock_meta_beside_the_fork_point() {
+    saman::block_on_current(async {
+        let m = Mock::new();
+        let conn = m.start("a.log").await;
+        let sid = conn
+            .new_session(Path::new("/work"), vec![], None)
+            .await
+            .unwrap();
+        say(&conn, &sid, "hello").await;
+        let mut f = fork_of(&sid, "/work", Some("a-1-1"));
+        f.meta = Some(json!({"claudeCode": {"options": {"permissionMode": "default"}}}));
+        conn.fork_into(f).await.unwrap();
+        let line = &m.logged("a.log", "session/fork")[0];
+        assert_eq!(line["claude_options"]["permissionMode"], "default");
+        assert_eq!(line["messageId"], "a-1-1");
+        assert_eq!(line["kept"], 2, "the user's message and the first answer");
+    })
 }
 
-#[tokio::test]
-async fn fork_into_works_on_a_connection_that_never_saw_the_session() {
-    let m = Mock::new();
-    let first = m.start("a.log").await;
-    let sid = first
-        .new_session(Path::new("/work"), vec![], None)
-        .await
-        .unwrap();
-    say(&first, &sid, "hello").await;
-    drop(first);
-    let second = m.start("b.log").await;
-    let forked = second
-        .fork_into(fork_of(&sid, "/work", None))
-        .await
-        .expect("a fork on a fresh connection");
-    assert_ne!(forked, sid);
-    let line = &m.logged("b.log", "session/fork")[0];
-    assert_eq!(line["from"], json!(&*sid.0));
-    assert_eq!(line["kept"], 3, "the whole history");
+#[test]
+fn fork_into_works_on_a_connection_that_never_saw_the_session() {
+    saman::block_on_current(async {
+        let m = Mock::new();
+        let first = m.start("a.log").await;
+        let sid = first
+            .new_session(Path::new("/work"), vec![], None)
+            .await
+            .unwrap();
+        say(&first, &sid, "hello").await;
+        drop(first);
+        let second = m.start("b.log").await;
+        let forked = second
+            .fork_into(fork_of(&sid, "/work", None))
+            .await
+            .expect("a fork on a fresh connection");
+        assert_ne!(forked, sid);
+        let line = &m.logged("b.log", "session/fork")[0];
+        assert_eq!(line["from"], json!(&*sid.0));
+        assert_eq!(line["kept"], 3, "the whole history");
+    })
 }
 
-#[tokio::test]
-async fn fork_into_unknown_message_is_an_error() {
-    let m = Mock::new();
-    let conn = m.start("a.log").await;
-    let sid = conn
-        .new_session(Path::new("/work"), vec![], None)
-        .await
-        .unwrap();
-    say(&conn, &sid, "hello").await;
-    let r = conn.fork_into(fork_of(&sid, "/work", Some("nope"))).await;
-    assert!(matches!(r, Err(Error::Rpc { code: -32602, .. })), "{r:?}");
-    assert!(m.logged("a.log", "session/fork").is_empty());
+#[test]
+fn fork_into_unknown_message_is_an_error() {
+    saman::block_on_current(async {
+        let m = Mock::new();
+        let conn = m.start("a.log").await;
+        let sid = conn
+            .new_session(Path::new("/work"), vec![], None)
+            .await
+            .unwrap();
+        say(&conn, &sid, "hello").await;
+        let r = conn.fork_into(fork_of(&sid, "/work", Some("nope"))).await;
+        assert!(matches!(r, Err(Error::Rpc { code: -32602, .. })), "{r:?}");
+        assert!(m.logged("a.log", "session/fork").is_empty());
+    })
 }
 
-#[tokio::test]
-async fn fork_from_a_second_process_reads_state() {
-    let m = Mock::new();
-    let first = m.start("a.log").await;
-    let sid = first
-        .new_session(Path::new("/work"), vec![], None)
-        .await
-        .unwrap();
-    say(&first, &sid, "one").await;
-    say(&first, &sid, "two").await;
-    drop(first);
-    let second = m.start("b.log").await;
-    let forked = second
-        .fork_into(fork_of(&sid, "/work", Some("a-1-2")))
-        .await
-        .unwrap();
-    let line = &m.logged("b.log", "session/fork")[0];
-    assert_eq!(
-        (line["kept"].as_u64(), line["turns"].as_u64()),
-        (Some(3), Some(1)),
-        "the cut: turn one's three messages"
-    );
-    // the fork goes on from the cut: its next turn is the second
-    say(&second, &forked, "three").await;
-    let prompts = m.logged("b.log", "prompt");
-    assert_eq!(prompts[0]["turn"], 2);
-    assert_eq!(prompts[0]["sessionId"], json!(&*forked.0));
+#[test]
+fn fork_from_a_second_process_reads_state() {
+    saman::block_on_current(async {
+        let m = Mock::new();
+        let first = m.start("a.log").await;
+        let sid = first
+            .new_session(Path::new("/work"), vec![], None)
+            .await
+            .unwrap();
+        say(&first, &sid, "one").await;
+        say(&first, &sid, "two").await;
+        drop(first);
+        let second = m.start("b.log").await;
+        let forked = second
+            .fork_into(fork_of(&sid, "/work", Some("a-1-2")))
+            .await
+            .unwrap();
+        let line = &m.logged("b.log", "session/fork")[0];
+        assert_eq!(
+            (line["kept"].as_u64(), line["turns"].as_u64()),
+            (Some(3), Some(1)),
+            "the cut: turn one's three messages"
+        );
+        // the fork goes on from the cut: its next turn is the second
+        say(&second, &forked, "three").await;
+        let prompts = m.logged("b.log", "prompt");
+        assert_eq!(prompts[0]["turn"], 2);
+        assert_eq!(prompts[0]["sessionId"], json!(&*forked.0));
+    })
 }
 
-#[tokio::test]
-async fn unknown_notifications_are_ignored_unknown_requests_get_32601() {
-    let rest = format!(
-        r#"printf '%s\n' '{{"jsonrpc":"2.0","method":"foo/bar","params":{{}}}}' '{{"jsonrpc":"2.0","id":50,"method":"terminal/create","params":{{"sessionId":"s1","command":"ls"}}}}' '{}'; read r; echo "$r" >&2"#,
-        chunk("x", None)
-    );
-    let (conn, mut rx) = start(&script(&rest), opts()).await;
-    open(&conn).await;
-    assert!(
-        matches!(next(&mut rx).await, Event::Update { .. }),
-        "the update after the unknown ones"
-    );
-    // our side queued the answer to the terminal request before the update above reached us, and the writer
-    // sends everything queued before it closes the child's stdin; the child then echoes that line
-    drop(conn);
-    let Event::Exit { stderr, .. } = next(&mut rx).await else {
-        panic!("exit")
-    };
-    assert!(
-        stderr.contains("-32601") && stderr.contains(r#""id":50"#),
-        "{stderr}"
-    );
+#[test]
+fn unknown_notifications_are_ignored_unknown_requests_get_32601() {
+    saman::block_on_current(async {
+        let rest = format!(
+            r#"printf '%s\n' '{{"jsonrpc":"2.0","method":"foo/bar","params":{{}}}}' '{{"jsonrpc":"2.0","id":50,"method":"terminal/create","params":{{"sessionId":"s1","command":"ls"}}}}' '{}'; read r; echo "$r" >&2"#,
+            chunk("x", None)
+        );
+        let (conn, mut rx) = start(&script(&rest), opts()).await;
+        open(&conn).await;
+        assert!(
+            matches!(next(&mut rx).await, Event::Update { .. }),
+            "the update after the unknown ones"
+        );
+        // our side queued the answer to the terminal request before the update above reached us, and the writer
+        // sends everything queued before it closes the child's stdin; the child then echoes that line
+        drop(conn);
+        let Event::Exit { stderr, .. } = next(&mut rx).await else {
+            panic!("exit")
+        };
+        assert!(
+            stderr.contains("-32601") && stderr.contains(r#""id":50"#),
+            "{stderr}"
+        );
+    })
 }
 
 /// An extension request (`_`-prefixed, outside the schema) reaches the owner with its params as sent and a responder;
 /// another unknown request still gets -32601. Pattern C (handshake): the child echoes our answer before it exits.
-#[tokio::test]
-async fn an_extension_request_comes_with_a_responder() {
-    let rest = r#"printf '%s\n' '{"jsonrpc":"2.0","id":60,"method":"_drgnx/before_tool","params":{"sessionId":"s1","toolCall":{"toolCallId":"t1"}}}'; read r; echo "$r" >&2"#;
-    let (conn, mut rx) = start(&script(rest), opts()).await;
-    open(&conn).await;
-    let Event::Request(Incoming::Ext {
-        method,
-        params,
-        resp,
-    }) = next(&mut rx).await
-    else {
-        panic!("an extension request")
-    };
-    assert_eq!(method, "_drgnx/before_tool");
-    assert_eq!(params["toolCall"]["toolCallId"], "t1");
-    resp.respond(json!({"outcome": "allow"})).unwrap();
-    let Event::Exit { stderr, .. } = next(&mut rx).await else {
-        panic!("exit")
-    };
-    assert!(
-        stderr.contains(r#""id":60"#) && stderr.contains(r#""outcome":"allow""#),
-        "{stderr}"
-    );
+#[test]
+fn an_extension_request_comes_with_a_responder() {
+    saman::block_on_current(async {
+        let rest = r#"printf '%s\n' '{"jsonrpc":"2.0","id":60,"method":"_drgnx/before_tool","params":{"sessionId":"s1","toolCall":{"toolCallId":"t1"}}}'; read r; echo "$r" >&2"#;
+        let (conn, mut rx) = start(&script(rest), opts()).await;
+        open(&conn).await;
+        let Event::Request(Incoming::Ext {
+            method,
+            params,
+            resp,
+        }) = next(&mut rx).await
+        else {
+            panic!("an extension request")
+        };
+        assert_eq!(method, "_drgnx/before_tool");
+        assert_eq!(params["toolCall"]["toolCallId"], "t1");
+        resp.respond(json!({"outcome": "allow"})).unwrap();
+        let Event::Exit { stderr, .. } = next(&mut rx).await else {
+            panic!("exit")
+        };
+        assert!(
+            stderr.contains(r#""id":60"#) && stderr.contains(r#""outcome":"allow""#),
+            "{stderr}"
+        );
+    })
 }
 
 /// `ext_request` sends an extension method and returns the agent's result as it is; a request the agent leaves
 /// unanswered ends at its deadline and the connection goes on. Pattern C (handshake): the child answers only after
 /// it read the request, and never answers the second.
-#[tokio::test]
-async fn ext_request_returns_the_answer_or_ends_at_its_deadline() {
-    let rest = r#"read r; echo "$r" >&2; printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"frees":12}}'; cat >/dev/null"#;
-    let (conn, mut rx) = start(&script(rest), opts()).await;
-    open(&conn).await;
-    let got = conn
-        .ext_request(
-            "_drgnx/compact/preview",
-            json!({"sessionId": "s1"}),
-            Duration::from_secs(10),
-        )
-        .await
-        .expect("the agent's answer");
-    assert_eq!(got, json!({"frees": 12}));
-    let late = conn
-        .ext_request(
-            "_drgnx/context/drop",
-            json!({"sessionId": "s1", "item": "x"}),
-            Duration::from_millis(200),
-        )
-        .await;
-    assert!(
-        matches!(&late, Err(Error::Deadline(m)) if m == "_drgnx/context/drop"),
-        "{late:?}"
-    );
-    drop(conn);
-    let Event::Exit { stderr, .. } = next(&mut rx).await else {
-        panic!("exit")
-    };
-    assert!(
-        stderr.contains(r#""method":"_drgnx/compact/preview""#),
-        "{stderr}"
-    );
+#[test]
+fn ext_request_returns_the_answer_or_ends_at_its_deadline() {
+    saman::block_on_current(async {
+        let rest = r#"read r; echo "$r" >&2; printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"frees":12}}'; cat >/dev/null"#;
+        let (conn, mut rx) = start(&script(rest), opts()).await;
+        open(&conn).await;
+        let got = conn
+            .ext_request(
+                "_drgnx/compact/preview",
+                json!({"sessionId": "s1"}),
+                Duration::from_secs(10),
+            )
+            .await
+            .expect("the agent's answer");
+        assert_eq!(got, json!({"frees": 12}));
+        let late = conn
+            .ext_request(
+                "_drgnx/context/drop",
+                json!({"sessionId": "s1", "item": "x"}),
+                Duration::from_millis(200),
+            )
+            .await;
+        assert!(
+            matches!(&late, Err(Error::Deadline(m)) if m == "_drgnx/context/drop"),
+            "{late:?}"
+        );
+        drop(conn);
+        let Event::Exit { stderr, .. } = next(&mut rx).await else {
+            panic!("exit")
+        };
+        assert!(
+            stderr.contains(r#""method":"_drgnx/compact/preview""#),
+            "{stderr}"
+        );
+    })
 }
 
 /// The stderr a child wrote before it said anything is readable while it runs (a sandbox's complaint before the
 /// status line), from any thread.
-#[tokio::test]
-async fn stderr_is_readable_while_the_child_runs() {
-    let (conn, _rx) = start("echo 'bwrap: no permission' >&2; cat >/dev/null", opts()).await;
-    let tail = conn.stderr();
-    tokio::task::spawn_blocking(move || {
-        skuld::wait_until("the child's stderr holds its complaint", 10, || {
-            tail.get().contains("bwrap: no permission").then_some(())
-        });
+#[test]
+fn stderr_is_readable_while_the_child_runs() {
+    saman::block_on_current(async {
+        let (conn, _rx) = start("echo 'bwrap: no permission' >&2; cat >/dev/null", opts()).await;
+        let tail = conn.stderr();
+        saman::spawn_blocking("wait-for-stderr", move || {
+            skuld::wait_until("the child's stderr holds its complaint", 10, || {
+                tail.get().contains("bwrap: no permission").then_some(())
+            });
+        })
+        .await
+        .unwrap();
     })
-    .await
-    .unwrap();
 }
 
 /// An agent's child is forked from draugr's pinned thread: a parent-death signal (what bwrap's `--die-with-parent`
@@ -684,16 +729,17 @@ async fn stderr_is_readable_while_the_child_runs() {
 #[test]
 fn the_agent_survives_its_callers_thread() {
     let (stopped_tx, mut stopped) = tokio::sync::mpsc::unbounded_channel();
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .thread_keep_alive(Duration::from_millis(100))
-        .on_thread_stop(move || {
-            // this thread's own /proc entry: "PID/task/TID"
-            let _ = stopped_tx.send(std::fs::read_link("/proc/thread-self").ok());
-        })
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = saman::Executor::tuned(1, |b| {
+        b.thread_keep_alive(Duration::from_millis(100))
+            .on_thread_stop(move || {
+                // this thread's own /proc entry: "PID/task/TID"
+                saman::delivered(
+                    stopped_tx.send(std::fs::read_link("/proc/thread-self").ok()),
+                    "stopped_tx receiver",
+                );
+            });
+    })
+    .unwrap();
     rt.block_on(async {
         let mut spec = spec(&format!("read a; printf '%s\\n' '{INIT}'; cat >/dev/null"));
         let mut args: Vec<std::ffi::OsString> = ["--pdeathsig", "KILL", "--", "/bin/sh"]
@@ -702,7 +748,7 @@ fn the_agent_survives_its_callers_thread() {
         args.append(&mut spec.args);
         spec.program = "/usr/bin/setpriv".into();
         spec.args = args;
-        let (conn, _rx) = tokio::task::spawn_blocking(|| {
+        let (conn, _rx) = saman::spawn_blocking("pinned-spawn", || {
             tokio::runtime::Handle::current().block_on(Conn::spawn(spec, opts()))
         })
         .await

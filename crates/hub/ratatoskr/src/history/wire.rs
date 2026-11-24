@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 /// The open projects' histories, and which hub each tracked buffer belongs to.
 #[derive(Default)]
@@ -24,7 +24,7 @@ pub struct Hubs {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(m)
 }
 
 /// P with its `.` and `..` components taken away by name (no link is read): a linked worktree's `commondir` (`../..`)
@@ -292,11 +292,14 @@ async fn start_watch(f: &Front, hub: Arc<Hub>, tree: Tree, root: PathBuf) {
             let Some(hub) = weak.upgrade() else { return };
             let (t, r, k) = (tree.clone(), rx.clone(), key.clone());
             let now = crate::clock::wall_secs();
-            let _ = crate::clock::blocking(move || {
-                let rx = lock(&r);
-                watch::pump(&hub, &t, &k, &rx, now);
-            })
-            .await;
+            crate::soft::done(
+                crate::clock::blocking(move || {
+                    let rx = lock(&r);
+                    watch::pump(&hub, &t, &k, &rx, now);
+                })
+                .await,
+                "crate::clock::blocking",
+            );
             crate::clock::sleep(std::time::Duration::from_secs(1)).await;
         }
     });
@@ -382,7 +385,7 @@ mod tests {
         let (main, linked) = (root.join("main"), root.join("main/.claude/wt"));
         std::fs::create_dir_all(&main).unwrap();
         let git = |args: &[&str]| {
-            let ok = std::process::Command::new("git")
+            let ok = crate::proc::Command::new("git")
                 .args(["-c", "user.name=t", "-c", "user.email=t@t"])
                 .args(args)
                 .current_dir(&main)

@@ -102,16 +102,14 @@ struct Open {
 
 impl Open {
     fn state_of(&self, cell: &str) -> &'static str {
-        self.states
-            .lock()
-            .expect("states")
+        saman::lock(&self.states)
             .get(cell)
             .copied()
             .unwrap_or("idle")
     }
 
     fn set_state(&self, cell: &str, state: Option<&'static str>) {
-        let mut s = self.states.lock().expect("states");
+        let mut s = saman::lock(&self.states);
         match state {
             Some(st) => s.insert(cell.to_string(), st),
             None => s.remove(cell),
@@ -139,7 +137,7 @@ impl Open {
     /// The tail event a caller asks for: the latest sent while the cell is queued or running, else the book's.
     fn tail_now(&self, book: &Book, cell: &str) -> Option<Value> {
         if self.state_of(cell) != "idle"
-            && let Some(v) = self.live.lock().expect("live").get(cell)
+            && let Some(v) = saman::lock(&self.live).get(cell)
         {
             return Some(v.clone());
         }
@@ -202,30 +200,29 @@ fn new_id() -> String {
 
 /// The notebook file at PATH as text: a regular file (opened without waiting, so a FIFO is refused, and looked at after it is open), read
 /// at most [`MAX_NOTEBOOK_BYTES`].
-pub(crate) fn read_notebook(path: &Path) -> Result<String, String> {
+pub(crate) fn read_notebook(path: &Path) -> villa::Result<String> {
     use std::io::Read;
-    use std::os::unix::fs::OpenOptionsExt;
     let shown = path.display();
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|e| format!("{shown}: {e}"))?;
-    let meta = f.metadata().map_err(|e| format!("{shown}: {e}"))?;
+    let f = eitri::open_following(path).map_err(|e| villa::Error::io(format!("{shown}: {e}")))?;
+    let meta = f
+        .metadata()
+        .map_err(|e| villa::Error::invalid(format!("{shown}: {e}")))?;
     if !meta.is_file() {
-        return Err(format!("{shown}: not a regular file"));
+        return Err(villa::Error::invalid(format!(
+            "{shown}: not a regular file"
+        )));
     }
     let mut bytes = Vec::new();
     f.take(MAX_NOTEBOOK_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| format!("{shown}: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("{shown}: {e}")))?;
     if bytes.len() > MAX_NOTEBOOK_BYTES {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "{shown}: too large for a notebook (the limit is {} MiB)",
             MAX_NOTEBOOK_BYTES >> 20
-        ));
+        )));
     }
-    String::from_utf8(bytes).map_err(|_| format!("{shown}: not UTF-8 text"))
+    String::from_utf8(bytes).map_err(|_| villa::Error::invalid(format!("{shown}: not UTF-8 text")))
 }
 
 /// A place reserved for a notebook being opened: given back when the call ends without having opened it.
@@ -240,7 +237,7 @@ impl Place<'_> {
     }
 
     fn release(nb: &Notebooks, conn: u64) {
-        let mut r = nb.reserved.lock().expect("reserved");
+        let mut r = saman::lock(&nb.reserved);
         if let Some(n) = r.get_mut(&conn) {
             *n -= 1;
             if *n == 0 {
@@ -264,7 +261,7 @@ struct Reserved<'a>(&'a Open, bool);
 impl Drop for Reserved<'_> {
     fn drop(&mut self) {
         if self.1 {
-            let mut k = self.0.kernel.lock().expect("kernel");
+            let mut k = saman::lock(&self.0.kernel);
             if matches!(*k, Slot::Starting) {
                 *k = Slot::Empty;
             }
@@ -291,14 +288,12 @@ impl Notebooks {
     }
 
     /// Notebook ID if it is CONN's: any other is "no open notebook" (an id says nothing to a connection it is not).
-    fn get(&self, conn: u64, id: &str) -> Result<Arc<Open>, String> {
-        self.books
-            .lock()
-            .expect("books")
+    fn get(&self, conn: u64, id: &str) -> villa::Result<Arc<Open>> {
+        saman::lock(&self.books)
             .get(id)
             .filter(|o| o.conn == conn)
             .cloned()
-            .ok_or_else(|| format!("no open notebook {id}"))
+            .ok_or_else(|| villa::Error::invalid(format!("no open notebook {id}")))
     }
 
     /// The installed kernelspecs.
@@ -321,21 +316,26 @@ impl Notebooks {
         conn: u64,
         path: &Path,
         text: Option<String>,
-    ) -> Result<Opened, String> {
+    ) -> villa::Result<Opened> {
         if !path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("ipynb"))
         {
-            return Err(format!("{}: not a .ipynb file", path.display()));
+            return Err(villa::Error::invalid(format!(
+                "{}: not a .ipynb file",
+                path.display()
+            )));
         }
         // a place is taken under the books lock before anything is awaited: concurrent opens cannot pass the limit together
         let mut place = {
-            let books = self.books.lock().expect("books");
-            let mut reserved = self.reserved.lock().expect("reserved");
+            let books = saman::lock(&self.books);
+            let mut reserved = saman::lock(&self.reserved);
             let held = books.values().filter(|o| o.conn == conn).count()
                 + reserved.get(&conn).copied().unwrap_or(0);
             if held >= MAX_OPEN {
-                return Err(format!("{MAX_OPEN} notebooks are open: close one first"));
+                return Err(villa::Error::invalid(format!(
+                    "{MAX_OPEN} notebooks are open: close one first"
+                )));
             }
             *reserved.entry(conn).or_default() += 1;
             Place(self, Some(conn))
@@ -346,18 +346,19 @@ impl Notebooks {
                 let p = path.to_path_buf();
                 crate::clock::blocking(move || read_notebook(&p))
                     .await
-                    .map_err(|e| e.to_string())??
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?
             }
         };
         let book = Book::open(path, text)?;
         let id = new_id();
         let (cells, kernelspec, language) = (book.cells(), book.kernelspec_name(), book.language());
         if cells.iter().map(|c| c.source.len()).sum::<usize>() > OPEN_SOURCE_BYTES {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{}: more than {} MiB of cell sources",
                 path.display(),
                 OPEN_SOURCE_BYTES >> 20
-            ));
+            )));
         }
         let open = Arc::new(Open {
             id: id.clone(),
@@ -404,7 +405,7 @@ impl Notebooks {
         };
         {
             // the open notebook takes the place the reservation held, in one step
-            let mut books = self.books.lock().expect("books");
+            let mut books = saman::lock(&self.books);
             books.insert(id, open);
             place.commit();
         }
@@ -412,19 +413,21 @@ impl Notebooks {
     }
 
     /// The editor's cells (their text and types) are the notebook's.
-    pub async fn sync(&self, conn: u64, id: &str, cells: &[CellSync]) -> Result<(), String> {
-        self.get(conn, id)?.book.lock().await.sync(cells);
+    pub async fn sync(&self, conn: u64, id: &str, cells: &[CellSync]) -> villa::Result<()> {
+        self.get(conn, id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?
+            .book
+            .lock()
+            .await
+            .sync(cells);
         Ok(())
     }
 
     /// Write the notebook (after taking the editor's cells, when given).
-    pub async fn save(
-        &self,
-        conn: u64,
-        id: &str,
-        cells: Option<&[CellSync]>,
-    ) -> Result<(), String> {
-        let open = self.get(conn, id)?;
+    pub async fn save(&self, conn: u64, id: &str, cells: Option<&[CellSync]>) -> villa::Result<()> {
+        let open = self
+            .get(conn, id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let mut book = open.book.lock().await;
         if let Some(c) = cells {
             book.sync(c);
@@ -433,16 +436,20 @@ impl Notebooks {
     }
 
     /// The tail of one cell, from what the hub holds.
-    pub async fn tail(&self, conn: u64, id: &str, cell: &str) -> Result<Value, String> {
-        let open = self.get(conn, id)?;
+    pub async fn tail(&self, conn: u64, id: &str, cell: &str) -> villa::Result<Value> {
+        let open = self
+            .get(conn, id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let book = open.book.lock().await;
         open.tail_now(&book, cell)
-            .ok_or_else(|| format!("no cell {cell}"))
+            .ok_or_else(|| villa::Error::invalid(format!("no cell {cell}")))
     }
 
     /// CELL (or every code cell) has no output and no execution count; a cell that is queued or running is left as it is.
-    pub async fn clear(&self, conn: u64, id: &str, cell: Option<&str>) -> Result<(), String> {
-        let open = self.get(conn, id)?;
+    pub async fn clear(&self, conn: u64, id: &str, cell: Option<&str>) -> villa::Result<()> {
+        let open = self
+            .get(conn, id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let mut book = open.book.lock().await;
         let targets: Vec<String> = match cell {
             Some(c) => vec![c.to_string()],
@@ -455,7 +462,7 @@ impl Notebooks {
         };
         for c in targets {
             if book.cell_head(&c).is_none() {
-                return Err(format!("no cell {c}"));
+                return Err(villa::Error::invalid(format!("no cell {c}")));
             }
             if open.state_of(&c) != "idle" {
                 continue;
@@ -470,8 +477,14 @@ impl Notebooks {
     }
 
     /// The full output of one cell as nbformat objects.
-    pub async fn output(&self, conn: u64, id: &str, cell: &str) -> Result<Vec<Value>, String> {
-        Ok(self.get(conn, id)?.book.lock().await.outputs_of(cell))
+    pub async fn output(&self, conn: u64, id: &str, cell: &str) -> villa::Result<Vec<Value>> {
+        Ok(self
+            .get(conn, id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?
+            .book
+            .lock()
+            .await
+            .outputs_of(cell))
     }
 
     /// Start a kernel for notebook ID: KERNEL by name, else the notebook's own, else its language's; a sealed session (PLAN enforced)
@@ -482,15 +495,21 @@ impl Notebooks {
         id: &str,
         kernel: Option<&str>,
         plan: Option<&LaunchPlan>,
-    ) -> Result<String, String> {
+    ) -> villa::Result<String> {
         if let Some(p) = plan {
-            refuse_when_sealed(p).map_err(|r| r.0.to_string())?;
+            refuse_when_sealed(p)
+                .map_err(|r| r.0.to_string())
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
         }
-        let open = self.get(conn, id)?;
+        let open = self
+            .get(conn, id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         {
-            let mut slot = open.kernel.lock().expect("kernel");
+            let mut slot = saman::lock(&open.kernel);
             if !matches!(*slot, Slot::Empty) {
-                return Err("this notebook already has a kernel (or one is starting)".into());
+                return Err(villa::Error::invalid(
+                    "this notebook already has a kernel (or one is starting)",
+                ));
             }
             *slot = Slot::Starting;
         }
@@ -509,9 +528,17 @@ impl Notebooks {
         };
         let spec = match choose(&specs, name.as_deref(), lang.as_deref()) {
             Choice::Found(s) => s,
-            Choice::Ask(names) => return Err(format!("several kernels fit: {}", names.join(", "))),
+            Choice::Ask(names) => {
+                return Err(villa::Error::invalid(format!(
+                    "several kernels fit: {}",
+                    names.join(", ")
+                )));
+            }
             Choice::Missing => {
-                return Err(format!("no kernel {}", name.or(lang).unwrap_or_default()));
+                return Err(villa::Error::invalid(format!(
+                    "no kernel {}",
+                    name.or(lang).unwrap_or_default()
+                )));
             }
         };
         let conn_id = format!(
@@ -524,19 +551,18 @@ impl Notebooks {
             .await
             .inspect_err(|_| self.status(&open, "dead", None, 0))?;
         // the notebook may have been closed (or its editor gone) while the kernel started: then the kernel is not wanted
-        let registered = self
-            .books
-            .lock()
-            .expect("books")
+        let registered = saman::lock(&self.books)
             .get(id)
             .is_some_and(|o| Arc::ptr_eq(o, &open));
         if !registered {
-            let _ = k.shutdown().await;
-            return Err("the notebook was closed while its kernel started".into());
+            k.shutdown().await;
+            return Err(villa::Error::invalid(
+                "the notebook was closed while its kernel started",
+            ));
         }
         let (tx, rx) = mpsc::channel(64);
         let epoch = self.epochs.fetch_add(1, Ordering::SeqCst);
-        *open.kernel.lock().expect("kernel") = Slot::Running(Running {
+        *saman::lock(&open.kernel) = Slot::Running(Running {
             name: spec.name.clone(),
             cmds: tx,
             epoch,
@@ -550,20 +576,22 @@ impl Notebooks {
         send_status(&*self.sink, open, state, cell, queue);
     }
 
-    async fn command(&self, conn: u64, id: &str, cmd: Cmd) -> Result<(), String> {
+    async fn command(&self, conn: u64, id: &str, cmd: Cmd) -> villa::Result<()> {
         let open = self.get(conn, id)?;
-        let tx = match &*open.kernel.lock().expect("kernel") {
+        let tx = match &*saman::lock(&open.kernel) {
             Slot::Running(r) => r.cmds.clone(),
-            _ => return Err("this notebook has no kernel".into()),
+            _ => return Err(villa::Error::invalid("this notebook has no kernel")),
         };
         tx.send(cmd)
             .await
-            .map_err(|_| "the kernel has ended".to_string())
+            .map_err(|_| villa::Error::invalid("the kernel has ended"))
     }
 
     /// Queue CELLS (id and source, in order) to run: their text becomes the notebook's first.
-    pub async fn execute(&self, conn: u64, id: &str, cells: &[CellSync]) -> Result<(), String> {
-        let open = self.get(conn, id)?;
+    pub async fn execute(&self, conn: u64, id: &str, cells: &[CellSync]) -> villa::Result<()> {
+        let open = self
+            .get(conn, id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let ids: Vec<String> = {
             let mut book = open.book.lock().await;
             book.update(cells);
@@ -580,7 +608,7 @@ impl Notebooks {
         self.command(conn, id, Cmd::Execute(ids)).await
     }
 
-    pub async fn interrupt(&self, conn: u64, id: &str) -> Result<(), String> {
+    pub async fn interrupt(&self, conn: u64, id: &str) -> villa::Result<()> {
         self.command(conn, id, Cmd::Interrupt).await
     }
 
@@ -591,7 +619,7 @@ impl Notebooks {
         id: &str,
         request: &str,
         value: &str,
-    ) -> Result<(), String> {
+    ) -> villa::Result<()> {
         self.command(
             conn,
             id,
@@ -604,17 +632,19 @@ impl Notebooks {
     }
 
     /// End the notebook's kernel; how it ended.
-    pub async fn shutdown(&self, conn: u64, id: &str) -> Result<Exit, String> {
-        let open = self.get(conn, id)?;
+    pub async fn shutdown(&self, conn: u64, id: &str) -> villa::Result<Exit> {
+        let open = self
+            .get(conn, id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         end_kernel(&open).await
     }
 
     /// A new kernel of the same kind for notebook ID: the old one is asked to shut down (its group killed after the grace), what was queued
     /// is cancelled, and a new process starts with a new connection file and key. The kernel's name.
-    pub async fn restart(&self, conn: u64, id: &str) -> Result<String, String> {
+    pub async fn restart(&self, conn: u64, id: &str) -> villa::Result<String> {
         let name = self
             .kernel_name(conn, id)
-            .ok_or("this notebook has no kernel")?;
+            .ok_or_else(|| villa::Error::invalid("this notebook has no kernel"))?;
         self.shutdown(conn, id).await?;
         self.start(conn, id, Some(&name), None).await
     }
@@ -622,15 +652,15 @@ impl Notebooks {
     /// Forget notebook ID (its kernel ends first).
     pub async fn close(&self, conn: u64, id: &str) {
         if let Ok(open) = self.get(conn, id) {
-            let _ = end_kernel(&open).await;
-            self.books.lock().expect("books").remove(id);
+            crate::soft::done(end_kernel(&open).await, "end_kernel");
+            saman::lock(&self.books).remove(id);
         }
     }
 
     /// The connection CONN is gone: its notebooks close and their kernels end.
     pub async fn gone(&self, conn: u64) {
         let opens: Vec<Arc<Open>> = {
-            let mut books = self.books.lock().expect("books");
+            let mut books = saman::lock(&self.books);
             let ids: Vec<String> = books
                 .iter()
                 .filter(|(_, o)| o.conn == conn)
@@ -639,7 +669,7 @@ impl Notebooks {
             ids.iter().filter_map(|k| books.remove(k)).collect()
         };
         for open in opens {
-            let _ = end_kernel(&open).await;
+            crate::soft::done(end_kernel(&open).await, "end_kernel");
         }
     }
 
@@ -650,9 +680,11 @@ impl Notebooks {
         conn: u64,
         id: &str,
         since: u64,
-    ) -> Result<(Vec<super::views::LogEntry>, u64, u64), String> {
-        let open = self.get(conn, id)?;
-        let log = open.log.lock().expect("log");
+    ) -> villa::Result<(Vec<super::views::LogEntry>, u64, u64)> {
+        let open = self
+            .get(conn, id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
+        let log = saman::lock(&open.log);
         let (entries, lost) = log.since(since);
         Ok((entries, log.last_seq(), lost))
     }
@@ -661,10 +693,7 @@ impl Notebooks {
     /// (what `run_of` and the view read) with every tail, and once now.
     pub fn watch_output(&self, conn: u64, id: &str, cell: &str, on: bool) {
         let Ok(open) = self.get(conn, id) else { return };
-        let (mut watched, mut resync) = (
-            open.watched.lock().expect("watched"),
-            open.resync.lock().expect("resync"),
-        );
+        let (mut watched, mut resync) = (saman::lock(&open.watched), saman::lock(&open.resync));
         if on {
             watched.insert(cell.to_owned());
             resync.insert(cell.to_owned());
@@ -685,8 +714,10 @@ impl Notebooks {
         conn: u64,
         id: &str,
         limit: usize,
-    ) -> Result<(usize, Vec<super::views::OutlineCell>), String> {
-        let open = self.get(conn, id)?;
+    ) -> villa::Result<(usize, Vec<super::views::OutlineCell>)> {
+        let open = self
+            .get(conn, id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let book = open.book.lock().await;
         let (total, mut cells) = book.outline(limit);
         for c in &mut cells {
@@ -705,10 +736,13 @@ impl Notebooks {
         conn: u64,
         id: &str,
         cell: &str,
-    ) -> Result<super::output::CellRun, String> {
-        let open = self.get(conn, id)?;
+    ) -> villa::Result<super::output::CellRun> {
+        let open = self
+            .get(conn, id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let book = open.book.lock().await;
-        book.run_of(cell).ok_or_else(|| format!("no cell {cell}"))
+        book.run_of(cell)
+            .ok_or_else(|| villa::Error::invalid(format!("no cell {cell}")))
     }
 
     /// How many runs the notebook's kernel task still holds (none when nothing is queued or running).
@@ -718,7 +752,7 @@ impl Notebooks {
 
     /// The kernel's name for notebook ID, when it has one.
     pub fn kernel_name(&self, conn: u64, id: &str) -> Option<String> {
-        match &*self.get(conn, id).ok()?.kernel.lock().expect("kernel") {
+        match &*saman::lock(&self.get(conn, id).ok()?.kernel) {
             Slot::Running(r) => Some(r.name.clone()),
             _ => None,
         }
@@ -726,22 +760,23 @@ impl Notebooks {
 }
 
 /// End OPEN's kernel and say how it ended.
-async fn end_kernel(open: &Open) -> Result<Exit, String> {
+async fn end_kernel(open: &Open) -> villa::Result<Exit> {
     // taken in a statement of its own: the guard must not live through the match, whose Starting arm locks the slot again
-    let slot = std::mem::replace(&mut *open.kernel.lock().expect("kernel"), Slot::Empty);
+    let slot = std::mem::replace(&mut *saman::lock(&open.kernel), Slot::Empty);
     let cmds = match slot {
         Slot::Running(r) => r.cmds,
         Slot::Starting => {
-            *open.kernel.lock().expect("kernel") = Slot::Starting;
-            return Err("the kernel is starting".into());
+            *saman::lock(&open.kernel) = Slot::Starting;
+            return Err(villa::Error::invalid("the kernel is starting"));
         }
-        Slot::Empty => return Err("this notebook has no kernel".into()),
+        Slot::Empty => return Err(villa::Error::invalid("this notebook has no kernel")),
     };
     let (tx, rx) = oneshot::channel();
     cmds.send(Cmd::Shutdown(tx))
         .await
-        .map_err(|_| "the kernel has ended".to_string())?;
-    rx.await.map_err(|_| "the kernel's task ended".to_string())
+        .map_err(|_| villa::Error::invalid("the kernel has ended"))?;
+    rx.await
+        .map_err(|_| villa::Error::invalid("the kernel's task ended"))
 }
 
 fn send_status(sink: &dyn Sink, open: &Open, state: &str, cell: Option<&str>, queue: usize) {
@@ -852,12 +887,7 @@ impl Pump {
         let Some(e) = self.router.log().last().cloned() else {
             return;
         };
-        let seq = self
-            .open
-            .log
-            .lock()
-            .expect("log")
-            .push(&e.msg_type, &e.text);
+        let seq = saman::lock(&self.open.log).push(&e.msg_type, &e.text);
         let id = self.open.id.clone();
         self.emit_kept("log".into(), "notebook-log", json!({"id": id, "seq": seq}));
     }
@@ -913,7 +943,7 @@ impl Pump {
                 let t = tail::build(cell, run, version);
                 // the notebook gets a copy of the output now and then and when the cell is done, not with every tail
                 if finished
-                    || self.open.watched.lock().expect("watched").contains(cell)
+                    || saman::lock(&self.open.watched).contains(cell)
                     || self
                         .shown_at
                         .get(cell)
@@ -935,7 +965,7 @@ impl Pump {
         drop(book);
         let Some(event) = event else { return };
         {
-            let mut live = self.open.live.lock().expect("live");
+            let mut live = saman::lock(&self.open.live);
             if finished {
                 live.remove(cell);
             } else {
@@ -1011,7 +1041,7 @@ impl Pump {
         for cell in dropped {
             self.dirty.remove(&cell);
             self.open.set_state(&cell, None);
-            self.open.live.lock().expect("live").remove(&cell);
+            saman::lock(&self.open.live).remove(&cell);
             let mut book = self.open.book.lock().await;
             book.mark(&cell, why);
             if let Some(v) = self.open.tail_event(&book, &cell) {
@@ -1132,7 +1162,7 @@ impl Pump {
                         self.start_next().await;
                     }
                     Some(Cmd::Interrupt) => {
-                        let _ = self.kernel.interrupt();
+                        crate::soft::done(self.kernel.interrupt(), "hub");
                         self.drop_queue(RunStatus::Cancelled).await;
                         self.status(if self.current.is_some() { "busy" } else { "idle" });
                     }
@@ -1141,7 +1171,7 @@ impl Pump {
                         if let Some((_, parent)) = self.inputs.remove(&request) {
                             let mut reply = Message::request("hub", "input_reply", json!({"value": value, "status": "ok"}));
                             reply.parent = parent;
-                            let _ = self.kernel.send(Channel::Stdin, &reply);
+                            crate::soft::done(self.kernel.send(Channel::Stdin, &reply), "kernel send");
                         }
                     }
                 },
@@ -1154,7 +1184,7 @@ impl Pump {
                 _ = tick.tick() => {
                     self.resend();
                     // a view asked for after the output came: the cell's tail is built again, which copies the output
-                    let again: Vec<String> = self.open.resync.lock().expect("resync").drain().collect();
+                    let again: Vec<String> = saman::lock(&self.open.resync).drain().collect();
                     for cell in again {
                         if self.latest.contains_key(&cell) {
                             self.dirty.insert(cell);
@@ -1178,7 +1208,7 @@ impl Pump {
         }
         {
             // the slot is cleared only if it is still this kernel's (a restart may have started the next)
-            let mut slot = self.open.kernel.lock().expect("kernel");
+            let mut slot = saman::lock(&self.open.kernel);
             if matches!(&*slot, Slot::Running(r) if r.epoch == self.epoch) {
                 *slot = Slot::Empty;
             }
@@ -1187,7 +1217,7 @@ impl Pump {
         let exit = self.kernel.shutdown().await;
         send_status(&*sink, &open, "dead", None, 0);
         if let Some(tx) = shutdown {
-            let _ = tx.send(exit);
+            crate::soft::done(tx.send(exit), "tx send");
         }
     }
 }

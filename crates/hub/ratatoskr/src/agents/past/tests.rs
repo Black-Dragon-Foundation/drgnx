@@ -54,7 +54,7 @@ impl Home {
     fn write(&self, rel: &str, text: &str) -> PathBuf {
         let p = self.home.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(&p, text).unwrap();
+        crate::fsio::write(&p, text).unwrap();
         p
     }
 
@@ -170,7 +170,7 @@ fn an_append_is_read_on_from_its_offset_and_found() {
     assert!(h.history.search("pears").unwrap().is_empty());
     let more = json!({"type":"user","uuid":"u3","sessionId":"5f0c","timestamp":"2026-11-01T10:01:00Z",
                       "message":{"role":"user","content":"and the pears"}});
-    let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+    let mut f = crate::fsio::append(&p, false).unwrap();
     writeln!(f, "{more}").unwrap();
     drop(f);
     h.history.scan().unwrap();
@@ -194,7 +194,7 @@ fn a_shrunk_file_is_read_again_and_a_deleted_one_goes() {
     // rewritten shorter, with other words: the old ones are gone from the index
     let short = json!({"type":"user","uuid":"u1","sessionId":"5f0c","cwd":"/w/orchard","timestamp":"2026-11-01T10:00:00Z",
                        "message":{"role":"user","content":"rake"}});
-    std::fs::write(&p, format!("{short}\n")).unwrap();
+    crate::fsio::write(&p, format!("{short}\n")).unwrap();
     h.history.scan().unwrap();
     assert!(
         h.history
@@ -443,9 +443,8 @@ fn an_unchanged_scan_opens_no_file_and_writes_nothing() {
     // the index's mtime moved into the past, so a write would show without waiting for a clock tick
     let past =
         std::fs::metadata(&db).unwrap().modified().unwrap() - std::time::Duration::from_secs(3600);
-    std::fs::File::options()
-        .write(true)
-        .open(&db)
+    eitri::open_existing(&db)
+        .map_err(std::io::Error::from)
         .unwrap()
         .set_modified(past)
         .unwrap();
@@ -460,9 +459,7 @@ fn an_unchanged_scan_opens_no_file_and_writes_nothing() {
     );
     // a changed file is read again, and only that one
     let p = h.claude("c1", "count the apples and the plums");
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(&p)
+    crate::fsio::append(&p, false)
         .unwrap()
         .write_all(b"\n")
         .unwrap();
@@ -482,9 +479,8 @@ fn a_session_older_than_the_cap_is_neither_listed_nor_searchable() {
         // from the file's own mtime (just made), so no clock is read
         let t = std::fs::metadata(p).unwrap().modified().unwrap()
             - std::time::Duration::from_secs(days * 86_400);
-        std::fs::File::options()
-            .write(true)
-            .open(p)
+        eitri::open_existing(p)
+            .map_err(std::io::Error::from)
             .unwrap()
             .set_modified(t)
             .unwrap();
@@ -570,7 +566,7 @@ async fn resume_through_the_mock(route: PastRoute) {
         .join(&folder)
         .join(format!("{id}.jsonl"));
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         &file,
         claude_lines(id, cwd.to_str().unwrap(), "count the apples"),
     )
@@ -610,14 +606,18 @@ async fn resume_through_the_mock(route: PastRoute) {
     );
 }
 
-#[tokio::test]
-async fn a_past_claude_session_resumes_through_the_mock_on_a_copy() {
-    resume_through_the_mock(PastRoute::Copy).await;
+#[test]
+fn a_past_claude_session_resumes_through_the_mock_on_a_copy() {
+    saman::block_on_current(async move {
+        resume_through_the_mock(PastRoute::Copy).await;
+    })
 }
 
-#[tokio::test]
-async fn a_past_claude_session_resumes_through_the_mock_on_the_original() {
-    resume_through_the_mock(PastRoute::Original).await;
+#[test]
+fn a_past_claude_session_resumes_through_the_mock_on_the_original() {
+    saman::block_on_current(async move {
+        resume_through_the_mock(PastRoute::Original).await;
+    })
 }
 
 #[test]
@@ -627,9 +627,8 @@ fn a_cold_folder_is_read_again_when_it_changes_or_on_the_31st_walk() {
         // from the file's own mtime (just made), so no clock is read
         let t = std::fs::metadata(p).unwrap().modified().unwrap()
             - std::time::Duration::from_secs(2 * 3600);
-        std::fs::File::options()
-            .write(true)
-            .open(p)
+        eitri::open_existing(p)
+            .map_err(std::io::Error::from)
             .unwrap()
             .set_modified(t)
             .unwrap();
@@ -643,7 +642,7 @@ fn a_cold_folder_is_read_again_when_it_changes_or_on_the_31st_walk() {
     assert_eq!(h.history.scan_changed().unwrap(), (2, false));
     let reads = h.history.reads();
     // an append to a cold file (its folder's change time does not move) is not seen by the next walks...
-    let mut f = std::fs::OpenOptions::new().append(true).open(&a).unwrap();
+    let mut f = crate::fsio::append(&a, false).unwrap();
     f.write_all(b"{\"type\":\"user\",\"message\":{\"content\":\"more\"}}\n")
         .unwrap();
     drop(f);

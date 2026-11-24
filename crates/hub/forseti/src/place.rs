@@ -268,13 +268,12 @@ pub fn finish(job: &Job, c: &Candidate, now: u64) -> FinishEstimate {
 /// measured `c.link_bps`), and the expected time from [`Learned::expected_for`] (warm or cold when `warmth` is
 /// known, learned speed ratios, else the static rule). `job` and `now` aren't read.
 pub fn finish_with(
-    job: &Job,
+    _job: &Job,
     c: &Candidate,
-    now: u64,
+    _now: u64,
     learned: &Learned,
     warmth: Option<Warmth>,
 ) -> FinishEstimate {
-    let _ = (job, now);
     let expected_s = learned.expected_for(c, warmth).minutes * 60.0;
     let transfer_s = match learned.link(&c.name).or(c.link_bps) {
         Some(bps) if !c.local && bps > 0.0 => c.missing_bytes as f64 / bps,

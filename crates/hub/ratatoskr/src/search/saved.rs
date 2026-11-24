@@ -148,7 +148,7 @@ impl Saved {
         root: &Path,
         f: impl FnOnce(&mut Project) -> (R, bool),
     ) -> std::io::Result<(R, Option<Vec<u8>>)> {
-        let mut map = self.projects.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = saman::lock(&self.projects);
         if !map.contains_key(root) {
             if map.len() >= PROJECTS_MAX {
                 map.retain(|_, p| !p.pending.is_empty());
@@ -195,7 +195,7 @@ impl Saved {
 
     /// Write ROOT's searches as they are now. One flush at a time: a later one writes what is newer.
     pub fn flush(&self, root: &Path) -> std::io::Result<()> {
-        let _one = self.flushing.lock().unwrap_or_else(|e| e.into_inner());
+        let _one = saman::lock(&self.flushing);
         let ((), body) = self.with_body(root, |_| ((), true))?;
         match body {
             Some(body) => self.write(root, &body),
@@ -337,21 +337,16 @@ impl Saved {
 
 /// BODY to PATH whole or not at all: a temporary file beside it with MODE, synced, then renamed over it.
 fn write_atomic(path: &Path, body: &[u8], mode: u32) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
     let result = (|| {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(mode)
-            .open(&tmp)?;
+        let mut f = eitri::create_exclusive(&tmp, mode).map_err(std::io::Error::from)?;
         f.write_all(body)?;
         f.sync_all()?;
-        std::fs::rename(&tmp, path)
+        crate::fsio::rename(&tmp, path)
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+        crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
     }
     result
 }

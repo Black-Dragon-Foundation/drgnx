@@ -635,6 +635,7 @@ fn settings_are_parsed_and_refused_by_name() {
         assert!(
             parse_gpu_set(Some(bad))
                 .unwrap_err()
+                .to_string()
                 .contains("drgnx-search-gpus"),
             "{bad}"
         );
@@ -643,12 +644,14 @@ fn settings_are_parsed_and_refused_by_name() {
     assert!(
         parse_battery_gpu(Some("both"))
             .unwrap_err()
+            .to_string()
             .contains("drgnx-search-battery-gpu")
     );
     assert_eq!(parse_no_gpu(Some("cpu-idle")), Ok(NoGpu::CpuIdle));
     assert!(
         parse_no_gpu(Some("always"))
             .unwrap_err()
+            .to_string()
             .contains("drgnx-search-no-gpu")
     );
 }
@@ -747,12 +750,16 @@ fn the_video_memory_limit_sizes_checks_and_stops() {
     let big = engine_limits::vram_need_mib(gguf, 8192);
     assert!(small < big && small >= 640 + 300, "{small} {big}");
     assert!(engine_limits::vram_check(small, Some(22000), Some(4096)).is_ok());
-    let over = engine_limits::vram_check(big, Some(22000), Some(1024)).unwrap_err();
+    let over = engine_limits::vram_check(big, Some(22000), Some(1024))
+        .unwrap_err()
+        .to_string();
     assert!(
         over.contains("drgnx-search-vram-limit") && over.contains("1024"),
         "{over}"
     );
-    let held = engine_limits::vram_check(small, Some(100), None).unwrap_err();
+    let held = engine_limits::vram_check(small, Some(100), None)
+        .unwrap_err()
+        .to_string();
     assert!(held.contains("100 MiB free"), "{held}");
     assert!(
         engine_limits::vram_check(small, None, None).is_ok(),
@@ -774,6 +781,7 @@ fn limits_outside_their_range_are_refused_by_name() {
         }
         .check()
         .unwrap_err()
+        .to_string()
         .contains("drgnx-search-cpu-limit")
     );
     assert!(
@@ -783,6 +791,7 @@ fn limits_outside_their_range_are_refused_by_name() {
         }
         .check()
         .unwrap_err()
+        .to_string()
         .contains("drgnx-search-gpu-busy")
     );
     assert!(
@@ -792,6 +801,7 @@ fn limits_outside_their_range_are_refused_by_name() {
         }
         .check()
         .unwrap_err()
+        .to_string()
         .contains("drgnx-search-memory-limit")
     );
     assert!(
@@ -842,13 +852,13 @@ fn fake_engine(cache: &Path, asset: &hrafn_embed::EngineAsset, devices: &str) {
     let dir = ratatoskr::search::engine_install::dir_for(cache, asset);
     let exe = dir.join("bin").join(asset.binary);
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
-    std::fs::write(
+    ratatoskr::fsio::write(
         &exe,
         format!("#!/bin/sh\nif [ \"$1\" = --list-devices ]; then\ncat <<'EOF'\nAvailable devices:\n{devices}EOF\nfi\n"),
     )
     .unwrap();
     std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::write(
+    ratatoskr::fsio::write(
         dir.join(ratatoskr::search::engine_install::MARKER),
         asset.sha256,
     )
@@ -904,7 +914,7 @@ fn resolve_without_a_gpu_waits_for_the_users_choice_and_never_picks_the_cpu() {
 /// The user guide's table states each download total: its numbers are the pinned sizes' sums.
 #[test]
 fn the_user_guide_states_the_totals() {
-    let guide = std::fs::read_to_string(
+    let guide = ratatoskr::fsio::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/guide/search.md"),
     )
     .expect("docs/guide/search.md");

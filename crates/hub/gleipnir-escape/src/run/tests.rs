@@ -45,13 +45,16 @@ fn blocked_row() -> Row {
 #[test]
 fn control_not_reached_fails_the_row() {
     let r = blocked_row();
-    let e = judge_control(&r, &[line("read", "blocked", Some("ENOENT"), None)]).unwrap_err();
+    let e = judge_control(&r, &[line("read", "blocked", Some("ENOENT"), None)])
+        .unwrap_err()
+        .to_string();
     assert!(e.starts_with("control did not reach"), "{e}");
     judge_control(&r, &[line("read", "reached", None, Some("5"))]).unwrap();
     // No line at all is not a reach either.
     assert!(
         judge_control(&r, &[])
             .unwrap_err()
+            .to_string()
             .starts_with("control did not reach")
     );
 }
@@ -95,7 +98,7 @@ fn an_unlisted_skip_reason_is_a_fail() {
     let mut d = ok_data(vec![]);
     d.result_file =
         Some(json!({"refused": {"rule": "Setup", "message": "no bwrap"}, "exit": null}));
-    let e = judge_run(&r, &d, &canaries()).unwrap_err();
+    let e = judge_run(&r, &d, &canaries()).unwrap_err().to_string();
     assert!(e.contains("the sandbox refused the run"), "{e}");
     // And a host that has everything skips nothing.
     let host = Host {
@@ -143,7 +146,9 @@ fn a_row_without_result_asserts_exit_0_and_one_line_per_probe() {
     ];
     judge_run(&r, &ok_data(two.clone()), &canaries()).unwrap();
     // One line short.
-    let e = judge_run(&r, &ok_data(two[..1].to_vec()), &canaries()).unwrap_err();
+    let e = judge_run(&r, &ok_data(two[..1].to_vec()), &canaries())
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("1 lines for 2 probes"), "{e}");
     // A non-zero exit, judged from the result file.
     let mut d = ok_data(two.clone());
@@ -151,6 +156,7 @@ fn a_row_without_result_asserts_exit_0_and_one_line_per_probe() {
     assert!(
         judge_run(&r, &d, &canaries())
             .unwrap_err()
+            .to_string()
             .contains("exited 3")
     );
     // No result file at all.
@@ -159,6 +165,7 @@ fn a_row_without_result_asserts_exit_0_and_one_line_per_probe() {
     assert!(
         judge_run(&r, &d, &canaries())
             .unwrap_err()
+            .to_string()
             .contains("no result file")
     );
 }
@@ -178,6 +185,7 @@ fn a_row_with_result_compares_a_subset() {
     assert!(
         judge_run(&r, &d, &canaries())
             .unwrap_err()
+            .to_string()
             .contains("lacks")
     );
     d.result_file = Some(json!({"refused": null}));
@@ -200,12 +208,12 @@ fn a_refused_row_needs_silence_and_a_refusal() {
     let ran = r#"{"probe":"status-field","arg":"Seccomp","result":"reached","detail":"0"}"#;
     d.stdout = ran.into();
     d.lines = vec![line("status-field", "reached", None, Some("0"))];
-    let e = judge_run(&r, &d, &canaries()).unwrap_err();
+    let e = judge_run(&r, &d, &canaries()).unwrap_err().to_string();
     assert!(e.contains("to print nothing"), "{e}");
     // Not refused at all: `{}` does not match `null`.
     let mut d = ok_data(vec![]);
     d.result_file = Some(json!({"refused": null, "exit": 0}));
-    let e = judge_run(&r, &d, &canaries()).unwrap_err();
+    let e = judge_run(&r, &d, &canaries()).unwrap_err().to_string();
     assert!(e.contains("wanted an object"), "{e}");
     assert!(subset(&json!({"refused": null}), &json!({"refused": {}})).is_err());
     assert!(subset(&json!({"refused": "x"}), &json!({"refused": {}})).is_err());
@@ -225,7 +233,7 @@ fn canary_in_output_fails_the_row() {
             1 => d.stderr = leak,
             _ => d.result_text = leak,
         }
-        let e = judge_run(&r, &d, &canaries()).unwrap_err();
+        let e = judge_run(&r, &d, &canaries()).unwrap_err().to_string();
         assert!(e.contains("canary text (ssh-key)"), "{e}");
     }
 }
@@ -247,14 +255,16 @@ fn expectations_check_errno_and_detail() {
         &ok_data(vec![line("read", "blocked", Some("EACCES"), None)]),
         &canaries(),
     )
-    .unwrap_err();
+    .unwrap_err()
+    .to_string();
     assert!(e.contains("wanted errno"), "{e}");
     let e = judge_run(
         &r,
         &ok_data(vec![line("read", "reached", None, None)]),
         &canaries(),
     )
-    .unwrap_err();
+    .unwrap_err()
+    .to_string();
     assert!(e.contains("wanted blocked"), "{e}");
     let d = row(
         json!({"row": "d", "probes": [["http-connect", "x:1"]], "expect": [{"result": "reached", "detail": "200"}]}),
@@ -292,7 +302,7 @@ fn quiet_listeners_missing_control_lines_and_killed_runs() {
         lines: two[..1].to_vec(),
         ..RunData::default()
     };
-    let e = judge_run(&r, &direct, &canaries()).unwrap_err();
+    let e = judge_run(&r, &direct, &canaries()).unwrap_err().to_string();
     assert!(e.contains("1 lines for 2 probes"), "{e}");
     let killed = row(json!({
         "row": "k", "probes": [["spawn-sleep", "9"], ["run", "sleep", "3"]],
@@ -319,6 +329,7 @@ fn silent_listeners_events_and_files() {
     assert!(
         judge_run(&r, &d, &canaries())
             .unwrap_err()
+            .to_string()
             .contains("listener hub saw 1")
     );
     d.silent = vec![];
@@ -326,6 +337,7 @@ fn silent_listeners_events_and_files() {
     assert!(
         judge_run(&r, &d, &canaries())
             .unwrap_err()
+            .to_string()
             .contains("proxy events")
     );
     d.events = vec!["Denied a.test:443".into(), "Denied b.test:443".into()];
@@ -333,6 +345,7 @@ fn silent_listeners_events_and_files() {
     assert!(
         judge_run(&r, &d, &canaries())
             .unwrap_err()
+            .to_string()
             .contains("exists after the run")
     );
 }
@@ -351,6 +364,7 @@ fn proxy_events_are_judged_with_placeholders_filled() {
     assert!(
         judge_run(&r, &d, &canaries())
             .unwrap_err()
+            .to_string()
             .contains("proxy events")
     );
 }
@@ -390,6 +404,7 @@ fn a_killed_run_needs_no_result_file_but_its_lines_still_count() {
     assert!(
         judge_run(&g, &none, &canaries())
             .unwrap_err()
+            .to_string()
             .contains("no result file")
     );
 }
@@ -471,41 +486,48 @@ fn a_web_rows_relay_goes_to_the_web_proxy() {
     let bad = row(
         json!({"row": "r", "web": true, "grants": [{"target": {"host_port": "[::ffff:10.0.0.1]:80"}}], "probes": [["fds"]], "expect": [{"result": "reached"}]}),
     );
-    let e = setup(&mut fx, &bad, true).err().unwrap();
+    let e = setup(&mut fx, &bad, true).err().unwrap().to_string();
     assert!(e.contains("plain IPv4"), "{e}");
 }
 
 #[test]
 fn the_pause_dance_swaps_a_path_for_a_link() {
     let dir = tempfile::tempdir().unwrap();
-    let fifo = dir.path().join("f");
+    // a true name: the swap goes through eitri, which refuses a link in a path
+    let root = dir.path().canonicalize().unwrap();
+    let fifo = root.join("f");
     let c = std::ffi::CString::new(fifo.to_string_lossy().as_bytes()).unwrap();
     assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
-    let (task, target) = (dir.path().join("task"), dir.path().join("elsewhere"));
+    let (task, target) = (root.join("task"), root.join("elsewhere"));
     std::fs::create_dir(&task).unwrap();
     std::fs::create_dir(&target).unwrap();
     // A stand-in for `ratatoskr --pause-before-spawn`: writes "opened", waits for a line.
     let f2 = fifo.clone();
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(format!(
-            "echo opened > '{0}'; read line < '{0}'; echo got-$line",
-            f2.display()
-        ))
-        .stdout(Stdio::piped())
-        .spawn()
+    let pool = saman::Executor::new(1).unwrap();
+    let mut child = pool
+        .block_on(draugr::spawn(crate::fixture::program(
+            "sh",
+            vec![
+                "-c".into(),
+                format!(
+                    "echo opened > '{0}'; read line < '{0}'; echo got-$line",
+                    f2.display()
+                )
+                .into(),
+            ],
+        )))
         .unwrap();
-    pause_dance(&fifo, &[(task.clone(), target.clone())], &mut child).unwrap();
-    let mut out = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut out)
-        .unwrap();
-    assert_eq!(out.trim(), "got-go");
+    // the stand-in always reaches the pause: it never counts as gone
+    pause_dance(&fifo, &[(task.clone(), target.clone())], &mut || false).unwrap();
+    let mut out = Vec::new();
+    pool.block_on(tokio::io::AsyncReadExt::read_to_end(
+        &mut child.take_stdout().unwrap(),
+        &mut out,
+    ))
+    .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out).trim(), "got-go");
     assert!(task.is_symlink());
-    assert!(dir.path().join("task.orig").is_dir());
+    assert!(root.join("task.orig").is_dir());
 }
 
 fn mac_rows() -> Vec<Row> {
@@ -726,7 +748,7 @@ fn browser_row_specs_validate_for_the_full_tier() {
         fx.session_sockets().unwrap();
         setup(&mut fx, r, false).unwrap();
         let bin = fx.path("bin");
-        std::fs::write(bin.join("gleipnir-probe"), "x").unwrap();
+        eitri::replace_file(&bin.join("gleipnir-probe"), b"x").unwrap();
         let spec = build_spec_for(&fx, r, &bin, true).unwrap();
         let run = |s: &str| fx.path("run/drgnx/s/S1").join(s);
         let ports: Vec<u64> = spec["net"]["isolated"]["relay"]

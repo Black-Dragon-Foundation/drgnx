@@ -20,6 +20,9 @@ match stund::timeout(Duration::from_secs(5), reply).await {
 - With no clock installed these are tokio's. A test's `raun::Sandbox` installs a virtual clock; every timer then waits
   on virtual time that `sb.advance(d)` moves, so no test depends on how fast the machine is.
 - Waiting for something outside the clock (a child's exit, a socket) is an event wait and stays real.
+- `stund::real` is the system's clock whatever is installed (`instant()`, `wall()`, `sleep()`, `sleep_blocking()`): only
+  for what must not follow a virtual clock, such as a virtual clock's own starting point or a wait on a process outside.
+  `tokio_instant()` is tokio's own monotonic clock, which a test that pauses tokio's time moves by hand.
 
 **Enforced by:** clippy's `disallowed-methods` on the calls above. Owner: `stund` (in `crates/hub/stund`;
 its move into `crates/std` and its approved name, `stund`, come with the crate renames). Conformance:

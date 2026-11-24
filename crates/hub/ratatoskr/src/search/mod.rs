@@ -159,10 +159,7 @@ impl Search {
 
     /// The usable GPUs beyond the chosen one, as the last resolve found them.
     pub fn extra_gpus(&self) -> Vec<engine_pick::EngineDevice> {
-        self.extra
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        saman::lock(&self.extra).clone()
     }
 
     /// The one-time notice's state for this run.
@@ -199,10 +196,7 @@ impl Search {
         }
         let key = settings.key(on_battery);
         {
-            let held = self
-                .engine
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let held = saman::lock(&self.engine);
             if let Some((k, pool)) = held.as_ref()
                 && *k == key
             {
@@ -225,11 +219,7 @@ impl Search {
         for e in &settings.errors {
             tracing::warn!("search: {e}");
         }
-        *self
-            .extra
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            engine_setup::more_gpus(&resolved.plan, &settings.cfg);
+        *saman::lock(&self.extra) = engine_setup::more_gpus(&resolved.plan, &settings.cfg);
         let (members, notes): (
             Vec<(&'static hrafn_embed::EngineAsset, String)>,
             Vec<String>,
@@ -284,9 +274,7 @@ impl Search {
         }
         let identity = identity.ok_or_else(not_installed)?;
         let on_rate: engine_pool::OnRate = Box::new(move |id, rate| {
-            let mut held = pin
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut held = saman::lock(&pin);
             let old = held.0.rates.insert(id.to_owned(), rate);
             // kept when it moved by a fifth, not at every batch
             if old.is_none_or(|o| (o - rate).abs() > o * 0.2)
@@ -296,10 +284,7 @@ impl Search {
             }
         });
         let pool = Arc::new(engine_pool::EnginePool::new(lanes, identity, Some(on_rate)));
-        *self
-            .engine
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((key, pool.clone()));
+        *saman::lock(&self.engine) = Some((key, pool.clone()));
         Ok(pool)
     }
 
@@ -311,7 +296,7 @@ impl Search {
         if state(spec, &dir) != ModelState::Ready {
             return None;
         }
-        let mut held = self.builtin.lock().ok()?;
+        let mut held = saman::lock(&self.builtin);
         Some(
             held.get_or_insert_with(|| {
                 Arc::new(worker::WorkerEmbedder::new(worker::WorkerSpec {
@@ -341,16 +326,16 @@ pub fn models_root(env: &Env) -> PathBuf {
 }
 
 /// Where models come from: `drgnx-search-model-mirror`, else the Hugging Face host.
-pub fn model_base(mirror: Option<&str>) -> Result<Uri, String> {
+pub fn model_base(mirror: Option<&str>) -> villa::Result<Uri> {
     let text = mirror.unwrap_or(HOST).trim_end_matches('/');
-    let uri: Uri = text
-        .parse()
-        .map_err(|e| format!("the model mirror {text:?} is not a URL: {e}"))?;
+    let uri: Uri = text.parse().map_err(|e| {
+        villa::Error::invalid(format!("the model mirror {text:?} is not a URL: {e}"))
+    })?;
     match uri.scheme_str() {
         Some("http" | "https") => Ok(uri),
-        _ => Err(format!(
+        _ => Err(villa::Error::invalid(format!(
             "the model mirror {text:?} is neither http nor https"
-        )),
+        ))),
     }
 }
 
@@ -426,7 +411,7 @@ pub static TEST_TINY: ModelSpec = ModelSpec {
 
 /// `systemd-run`, when the user's systemd manager is there to hold the engine's CPU and memory limits.
 fn engine_systemd() -> Option<PathBuf> {
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)?;
+    let runtime = stig::system_runtime_dir()?;
     runtime.join("systemd").is_dir().then_some(())?;
     std::env::var_os("PATH")?
         .to_string_lossy()
@@ -453,7 +438,7 @@ mod tests {
 
     #[test]
     fn models_live_under_the_cache() {
-        let env = Env::new(&[("HOME", "/hm")], 1);
+        let env = Env::new(&[(stig::HOME_VAR, "/hm")], 1);
         assert_eq!(
             models_root(&env),
             Path::new("/hm/.cache/drgnx/models"),
@@ -470,20 +455,22 @@ mod tests {
         assert!(model_base(Some("not a url")).is_err());
     }
 
-    #[tokio::test]
-    async fn the_consent_survives_a_restart() {
-        let dir = tempfile::tempdir().unwrap();
-        let consent = Consent {
-            model: "m".into(),
-            bytes: 302,
-            at: 1.5,
-        };
-        {
+    #[test]
+    fn the_consent_survives_a_restart() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let consent = Consent {
+                model: "m".into(),
+                bytes: 302,
+                at: 1.5,
+            };
+            {
+                let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
+                assert!(stored_consent(&db).await.is_none());
+                store_consent(&db, &consent).await;
+            }
             let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
-            assert!(stored_consent(&db).await.is_none());
-            store_consent(&db, &consent).await;
-        }
-        let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
-        assert_eq!(stored_consent(&db).await, Some(consent));
+            assert_eq!(stored_consent(&db).await, Some(consent));
+        })
     }
 }

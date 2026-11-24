@@ -655,8 +655,9 @@ mod panel_blocks {
             env!("CARGO_MANIFEST_DIR"),
             "/../../../test/fixtures/agent-blocks/transcript.json"
         );
-        let v: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("the fixture"))
-            .expect("JSON");
+        let v: Value =
+            serde_json::from_str(&crate::fsio::read_to_string(path).expect("the fixture"))
+                .expect("JSON");
         serde_json::from_value(v["entries"].clone()).expect("entries")
     }
 

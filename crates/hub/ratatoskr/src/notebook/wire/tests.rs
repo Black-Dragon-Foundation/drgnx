@@ -163,11 +163,11 @@ fn random_frames_never_panic_and_a_good_message_survives_noise_around_it() {
         let frames: Vec<Vec<u8>> = (0..n)
             .map(|_| (0..(next() % 40)).map(|_| next() as u8).collect())
             .collect();
-        let _ = decode(&k, &frames);
+        crate::soft::done(decode(&k, &frames), "decode");
         // delimiter in a random place
         let mut with = frames.clone();
         with.insert((next() as usize) % (with.len() + 1), DELIM.to_vec());
-        let _ = decode(&k, &with);
+        crate::soft::done(decode(&k, &with), "decode");
     }
 }
 

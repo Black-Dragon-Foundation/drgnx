@@ -31,17 +31,17 @@ struct Events(Mutex<Vec<(String, Value)>>);
 
 impl Sink for Events {
     fn broadcast(&self, event: &str, data: Value, _: Option<u64>) {
-        self.0.lock().unwrap().push((event.to_owned(), data));
+        saman::lock(&self.0).push((event.to_owned(), data));
     }
     fn send(&self, _: u64, event: &str, data: Value) -> bool {
-        self.0.lock().unwrap().push((event.to_owned(), data));
+        saman::lock(&self.0).push((event.to_owned(), data));
         true
     }
 }
 
 impl Events {
     fn dump(&self) -> String {
-        let all = self.0.lock().unwrap();
+        let all = saman::lock(&self.0);
         let from = all.len().saturating_sub(40);
         all[from..]
             .iter()
@@ -54,10 +54,7 @@ impl Events {
     /// and its data.
     async fn next(&self, from: usize, name: &str, pred: impl Fn(&Value) -> bool) -> (usize, Value) {
         for _ in 0..4500 {
-            let hit = self
-                .0
-                .lock()
-                .unwrap()
+            let hit = saman::lock(&self.0)
                 .iter()
                 .enumerate()
                 .skip(from)
@@ -76,7 +73,7 @@ impl Events {
     async fn stop(&self, from: usize) -> (usize, Value) {
         let key = |d: &Value| (d["session"].clone(), d["epoch"].clone());
         let before: Vec<(Value, Value)> = {
-            let all = self.0.lock().unwrap();
+            let all = saman::lock(&self.0);
             all[..from.min(all.len())]
                 .iter()
                 .filter(|(n, _)| n == "debug-frame")
@@ -113,7 +110,7 @@ impl Tap {
         crate::clock::spawn("test:live-tap", async move {
             while let Some(m) = incoming.recv().await {
                 if let Incoming::Event { event, body } = &m {
-                    seen.lock().unwrap().push((event.clone(), body.clone()));
+                    saman::lock(&seen).push((event.clone(), body.clone()));
                 }
                 if tx.send(m).is_err() {
                     break;
@@ -129,10 +126,10 @@ impl Tap {
 }
 
 impl Launcher for Tap {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move { Ok(self.wrap(self.inner.connect().await?)) })
     }
-    fn child(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn child(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move { Ok(self.wrap(self.inner.child().await?)) })
     }
 }
@@ -148,17 +145,24 @@ impl Terminals for Procs {
         cwd: String,
         args: Vec<String>,
         env: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<Opened, String>> {
+    ) -> BoxFut<'_, villa::Result<Opened>> {
         Box::pin(async move {
-            let (program, rest) = args.split_first().ok_or("no command")?;
-            let mut cmd = std::process::Command::new(program);
+            let (program, rest) = args
+                .split_first()
+                .ok_or("no command")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            let mut cmd = crate::proc::Command::new(program);
             cmd.args(rest).envs(env);
             if !cwd.is_empty() {
                 cmd.current_dir(cwd);
             }
-            let c = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
+            let io = crate::proc::Io::Inherit;
+            let c = cmd
+                .spawn(io.clone(), io.clone(), io)
+                .map_err(|e| format!("{program}: {e}"))
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let pid = i64::from(c.id());
-            self.0.lock().unwrap().push(c);
+            saman::lock(&self.0).push(c);
             Ok(Opened {
                 term: "t1".into(),
                 view: "v1".into(),
@@ -171,9 +175,9 @@ impl Terminals for Procs {
 
 impl Drop for Procs {
     fn drop(&mut self) {
-        for c in self.0.lock().unwrap().iter_mut() {
-            let _ = c.kill();
-            let _ = c.wait();
+        for c in saman::lock(&self.0).iter_mut() {
+            crate::soft::done(c.kill(), "tests_live_adapters");
+            crate::soft::done(c.wait(), "tests_live_adapters");
         }
     }
 }
@@ -231,20 +235,20 @@ fn js_debug() -> Found {
 
 fn live_dir(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("drgnx-live-adapters-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
+    crate::soft::done(std::fs::remove_dir_all(&d), "std::fs::remove_dir_all");
     std::fs::create_dir_all(&d).unwrap();
     std::fs::canonicalize(&d).unwrap()
 }
 
 fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
     let p = dir.join(name);
-    std::fs::write(&p, text).unwrap();
+    crate::fsio::write(&p, text).unwrap();
     p
 }
 
 /// Runs PROGRAM with ARGS in DIR; panics with its output when it fails.
 fn run(dir: &Path, program: &str, args: &[&str]) {
-    let o = std::process::Command::new(program)
+    let o = crate::proc::Command::new(program)
         .args(args)
         .current_dir(dir)
         .output()
@@ -287,7 +291,7 @@ fn int_of(value: &str) -> i64 {
 
 /// Whether PID runs (not gone, a zombie or stopped by a tracer).
 fn running(pid: u32) -> bool {
-    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+    let Ok(stat) = crate::fsio::read_to_string(format!("/proc/{pid}/stat")) else {
         return false;
     };
     let state = stat
@@ -324,8 +328,7 @@ fn caps_report(caps: &Value) -> Value {
 
 /// The session's capabilities, from the hub's state.
 fn caps_of(ev: &Events, session: &str) -> Value {
-    ev.0.lock()
-        .unwrap()
+    saman::lock(&ev.0)
         .iter()
         .rev()
         .filter(|(n, _)| n == "debug-state")
@@ -491,9 +494,7 @@ async fn scenario(s: Scn) -> Value {
     let (total, _, scope) = local(&stop, "total");
     assert_eq!(int_of(&total), 3, "0 + 1 + 2");
     // the logpoint wrote its lines (and nothing stopped there)
-    let logs: Vec<String> = seen
-        .lock()
-        .unwrap()
+    let logs: Vec<String> = saman::lock(&seen)
         .iter()
         .filter(|(n, _)| n == "output")
         .filter_map(|(_, b)| b["output"].as_str().map(str::to_owned))
@@ -630,28 +631,27 @@ async fn scenario(s: Scn) -> Value {
     }
 
     // the debuggee's pid, when the adapter said it
-    let pid = seen
-        .lock()
-        .unwrap()
+    let pid = saman::lock(&seen)
         .iter()
         .rev()
         .find(|(n, _)| n == "process")
         .and_then(|(_, b)| b["systemProcessId"].as_u64())
         .and_then(|p| u32::try_from(p).ok());
     report["run_in_terminal"] = json!(
-        ev.0.lock()
-            .unwrap()
+        saman::lock(&ev.0)
             .iter()
             .any(|(n, _)| n == "debug-terminal")
     );
-    d.control(
-        &root_sid,
-        Op::Stop {
-            kill_debuggee: None,
-        },
-    )
-    .await
-    .ok();
+    crate::soft::done(
+        d.control(
+            &root_sid,
+            Op::Stop {
+                kill_debuggee: None,
+            },
+        )
+        .await,
+        "stop",
+    );
     d.shutdown().await;
     for _ in 0..1500 {
         if d.list().is_empty() {
@@ -669,7 +669,7 @@ async fn scenario(s: Scn) -> Value {
         }
         assert!(!running(pid), "the debuggee {pid} runs on after Stop");
     }
-    eprintln!("T10-REPORT {report}");
+    crate::soft::err_line(&format!("T10-REPORT {report}"));
     report
 }
 
@@ -718,16 +718,16 @@ async fn attach(
     // it runs on, untraced, for a while
     crate::clock::sleep(Duration::from_millis(500)).await;
     let alive = prog.try_wait().unwrap().is_none() && running(pid);
-    let _ = prog.kill();
-    let _ = prog.wait();
+    crate::soft::done(prog.kill(), "tests_live_adapters");
+    crate::soft::done(prog.wait(), "tests_live_adapters");
     assert!(
         alive,
         "the attached program {pid} did not run on after Stop"
     );
-    eprintln!(
+    crate::soft::err_line(&format!(
         "T10-REPORT {}",
         json!({"adapter": id, "attach": true, "caps": caps})
-    );
+    ));
 }
 
 const PY: &str = r#"import subprocess, sys, os
@@ -759,9 +759,10 @@ main()
 
 const CHILD_PY: &str = "n = 0\nn += 1\nprint(n)\n";
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: debugpy in the adapter image (see the module's doc)"]
-async fn debugpy_runs_the_scenario_with_a_subprocess_child() {
+fn debugpy_runs_the_scenario_with_a_subprocess_child() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("py");
     let file = write(&dir, "prog.py", PY);
     let child = write(&dir, "child.py", CHILD_PY);
@@ -786,11 +787,13 @@ async fn debugpy_runs_the_scenario_with_a_subprocess_child() {
         child: Some((child, 2)),
     })
     .await;
+})
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: debugpy and gdb in the adapter image, with ptrace (see the module's doc)"]
-async fn debugpy_attaches_to_a_pid_and_stop_leaves_it_running() {
+fn debugpy_attaches_to_a_pid_and_stop_leaves_it_running() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("pya");
     let file = write(
         &dir,
@@ -800,15 +803,16 @@ async fn debugpy_attaches_to_a_pid_and_stop_leaves_it_running() {
     let Found::Python(py) = python() else {
         unreachable!()
     };
-    let prog = std::process::Command::new(&py)
+    let prog = crate::proc::Command::new(&py)
         .arg(&file)
         .current_dir(&dir)
-        .spawn()
+        .spawn(crate::proc::Io::Inherit, crate::proc::Io::Inherit, crate::proc::Io::Inherit)
         .unwrap();
     crate::clock::sleep(Duration::from_millis(500)).await;
     let config = json!({"type": "debugpy", "request": "attach", "name": "pya", "processId": prog.id(),
                         "justMyCode": true});
     attach("debugpy", python(), &dir, prog, config, &file, 4).await;
+})
 }
 
 const GO: &str = "package main
@@ -842,9 +846,10 @@ func main() {
 }
 ";
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: delve in the adapter image, with ptrace (see the module's doc)"]
-async fn delve_runs_the_scenario() {
+fn delve_runs_the_scenario() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("go");
     let file = write(&dir, "main.go", GO);
     let d = dir.display();
@@ -876,6 +881,7 @@ async fn delve_runs_the_scenario() {
         child: None,
     })
     .await;
+})
 }
 
 const CPP: &str = r#"#include <cstdio>
@@ -909,9 +915,10 @@ int main() {
 }
 "#;
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: lldb-dap and clang in the adapter image, with ptrace (see the module's doc)"]
-async fn lldb_dap_runs_the_scenario_in_a_terminal() {
+fn lldb_dap_runs_the_scenario_in_a_terminal() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("cpp");
     let file = write(&dir, "prog.cpp", CPP);
     run(&dir, "clang++", &["-g", "-O0", "-o", "prog", "prog.cpp"]);
@@ -941,11 +948,13 @@ async fn lldb_dap_runs_the_scenario_in_a_terminal() {
         json!(true),
         "runInTerminal was not used"
     );
+})
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: lldb-dap and clang in the adapter image, with ptrace (see the module's doc)"]
-async fn lldb_dap_attaches_to_a_pid_and_stop_leaves_it_running() {
+fn lldb_dap_attaches_to_a_pid_and_stop_leaves_it_running() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("ca");
     let file = write(
         &dir,
@@ -953,9 +962,9 @@ async fn lldb_dap_attaches_to_a_pid_and_stop_leaves_it_running() {
         "#include <unistd.h>\nint main(void) {\n  volatile int n = 0;\n  for (;;) {\n    n++;\n    usleep(50000);\n  }\n}\n",
     );
     run(&dir, "clang", &["-g", "-O0", "-o", "loop", "loop.c"]);
-    let prog = std::process::Command::new(dir.join("loop"))
+    let prog = crate::proc::Command::new(dir.join("loop"))
         .current_dir(&dir)
-        .spawn()
+        .spawn(crate::proc::Io::Inherit, crate::proc::Io::Inherit, crate::proc::Io::Inherit)
         .unwrap();
     crate::clock::sleep(Duration::from_millis(300)).await;
     let config = json!({"type": "lldb-dap", "request": "attach", "name": "ca", "pid": prog.id(),
@@ -970,6 +979,7 @@ async fn lldb_dap_attaches_to_a_pid_and_stop_leaves_it_running() {
         5,
     )
     .await;
+})
 }
 
 const JS: &str = "function add(a, b) {
@@ -996,9 +1006,10 @@ function main() {
 main();
 ";
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: js-debug in the adapter image (see the module's doc)"]
-async fn js_debug_runs_the_scenario_with_a_forked_child() {
+fn js_debug_runs_the_scenario_with_a_forked_child() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("js");
     let file = write(&dir, "prog.js", JS);
     let child = write(&dir, "child.js", "let n = 0;\nn += 1;\nconsole.log(n);\n");
@@ -1023,6 +1034,7 @@ async fn js_debug_runs_the_scenario_with_a_forked_child() {
         child: Some((child, 2)),
     })
     .await;
+})
 }
 
 /// Probes (spec §19.2's per-adapter table): how long one costs, and its value's text. PROBES iterations of a loop, the
@@ -1066,9 +1078,7 @@ async fn probes(
         ev.next(0, "debug-ended", |_| true).await;
         times.push(t0.elapsed());
         if with {
-            let outs: Vec<String> = seen
-                .lock()
-                .unwrap()
+            let outs: Vec<String> = saman::lock(&seen)
                 .iter()
                 .filter(|(n, _)| n == "output")
                 .filter_map(|(_, b)| b["output"].as_str().map(str::to_owned))
@@ -1082,20 +1092,21 @@ async fn probes(
     }
     assert!(hits > 0, "{id}: no probe output");
     let per_hit_ms = (times[0].as_secs_f64() - times[1].as_secs_f64()) * 1000.0 / hits as f64;
-    eprintln!(
+    crate::soft::err_line(&format!(
         "T10-PROBES {}",
         json!({"adapter": id, "iterations": PROBES, "hits": hits, "with_ms": times[0].as_millis(),
                "without_ms": times[1].as_millis(), "per_hit_ms": (per_hit_ms * 1000.0).round() / 1000.0,
                "per_s": if per_hit_ms > 0.0 { (1000.0 / per_hit_ms).round() } else { 0.0 },
                "value_text": sample})
-    );
+    ));
 }
 
 const PROBES: u32 = 500;
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: debugpy in the adapter image (see the module's doc)"]
-async fn debugpy_probe_cost() {
+fn debugpy_probe_cost() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("py-probe");
     let file = write(
         &dir,
@@ -1107,11 +1118,13 @@ async fn debugpy_probe_cost() {
     let config = json!({"type": "debugpy", "request": "launch", "name": "pyp", "program": file, "cwd": dir,
                         "justMyCode": true});
     probes("debugpy", python(), &dir, config, &[], &file, 5).await;
+})
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: js-debug in the adapter image (see the module's doc)"]
-async fn js_debug_probe_cost() {
+fn js_debug_probe_cost() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("js-probe");
     let file = write(
         &dir,
@@ -1122,11 +1135,13 @@ async fn js_debug_probe_cost() {
     );
     let config = json!({"type": "pwa-node", "request": "launch", "name": "jsp", "program": file, "cwd": dir});
     probes("js-debug", js_debug(), &dir, config, &[], &file, 4).await;
+})
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: delve in the adapter image, with ptrace (see the module's doc)"]
-async fn delve_probe_cost() {
+fn delve_probe_cost() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("go-probe");
     let file = write(
         &dir,
@@ -1146,11 +1161,13 @@ async fn delve_probe_cost() {
     let config = json!({"type": "go", "request": "launch", "name": "gop", "mode": "debug", "program": file,
                         "cwd": dir, "output": dir.join("debug_bin")});
     probes("delve", on_path("delve"), &dir, config, &env, &file, 14).await;
+})
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: lldb-dap and clang in the adapter image, with ptrace (see the module's doc)"]
-async fn lldb_dap_probe_cost() {
+fn lldb_dap_probe_cost() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("c-probe");
     let file = write(
         &dir,
@@ -1163,6 +1180,7 @@ async fn lldb_dap_probe_cost() {
     let config = json!({"type": "lldb-dap", "request": "launch", "name": "cp", "program": dir.join("probe"),
                         "cwd": dir, "disableASLR": false});
     probes("lldb-dap", on_path("lldb-dap"), &dir, config, &[], &file, 7).await;
+})
 }
 
 fn codelldb() -> Found {
@@ -1173,9 +1191,10 @@ fn codelldb() -> Found {
     )
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: CodeLLDB and clang in the adapter image, with ptrace (see the module's doc)"]
-async fn codelldb_runs_the_scenario() {
+fn codelldb_runs_the_scenario() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("codelldb");
     let file = write(&dir, "prog.cpp", CPP);
     run(&dir, "clang++", &["-g", "-O0", "-o", "prog", "prog.cpp"]);
@@ -1200,6 +1219,7 @@ async fn codelldb_runs_the_scenario() {
         child: None,
     })
     .await;
+})
 }
 
 /// Break on Value Change with a native adapter: stopped in the loop, a data breakpoint on `count`; the next stop is
@@ -1249,11 +1269,11 @@ async fn breaks_on_value_change(id: &'static str, found: Found, ty: &str) {
     let stop = d.stop_of(&sid).unwrap();
     let (count, _, _) = local(&stop, "count");
     assert_eq!(int_of(&count), 1, "the stop after the change: {f}");
-    println!(
+    crate::soft::out_line(&format!(
         "T10-REPORT {}",
         json!({"adapter": id, "data_breakpoint": {"reason": stop.reason, "line": line_of(&f),
                                                   "description": list[0]["description"]}})
-    );
+    ));
     d.control(
         &sid,
         Op::Stop {
@@ -1266,22 +1286,27 @@ async fn breaks_on_value_change(id: &'static str, found: Found, ty: &str) {
         .await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: CodeLLDB and clang in the adapter image, with ptrace (see the module's doc)"]
-async fn codelldb_breaks_on_value_change() {
-    breaks_on_value_change("codelldb", codelldb(), "lldb").await;
+fn codelldb_breaks_on_value_change() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        breaks_on_value_change("codelldb", codelldb(), "lldb").await;
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: lldb-dap and clang in the adapter image, with ptrace (see the module's doc)"]
-async fn lldb_dap_breaks_on_value_change() {
-    breaks_on_value_change("lldb-dap", on_path("lldb-dap"), "lldb-dap").await;
+fn lldb_dap_breaks_on_value_change() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        breaks_on_value_change("lldb-dap", on_path("lldb-dap"), "lldb-dap").await;
+    })
 }
 
 /// Hot reload (D8): stopped in the loop, `lib.val` is saved returning 2 and reloaded; the next call returns it.
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: debugpy in the adapter image (see the module's doc)"]
-async fn debugpy_hot_reloads_a_saved_function() {
+fn debugpy_hot_reloads_a_saved_function() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("py-reload");
     let lib = write(&dir, "lib.py", "def val():\n    return 1\n");
     let file = write(
@@ -1317,7 +1342,7 @@ async fn debugpy_hot_reloads_a_saved_function() {
     let (c, _) = ev.stop(c).await;
     let x = local(&d.stop_of(&sid).unwrap(), "x").0;
     assert_eq!(int_of(&x), 1);
-    std::fs::write(&lib, "def val():\n    return 2\n").unwrap();
+    crate::fsio::write(&lib, "def val():\n    return 2\n").unwrap();
     let out = super::hot_reload::hot_reload(&d, &sid, &lib.display().to_string())
         .await
         .unwrap();
@@ -1327,7 +1352,7 @@ async fn debugpy_hot_reloads_a_saved_function() {
     let (_, f) = ev.stop(c).await;
     let x = local(&d.stop_of(&sid).unwrap(), "x").0;
     assert_eq!(int_of(&x), 2, "the call after the reload: {f}");
-    println!("T-HOT-RELOAD-REPORT {out}");
+    crate::soft::out_line(&format!("T-HOT-RELOAD-REPORT {out}"));
     d.control(
         &sid,
         Op::Stop {
@@ -1338,6 +1363,7 @@ async fn debugpy_hot_reloads_a_saved_function() {
     .unwrap();
     ev.next(0, "debug-ended", |e| e["session"] == json!(sid))
         .await;
+})
 }
 
 /// The heap graph live (spec §19.7 D7): a ring of three nodes (a → b → c → a) and `shared` = b, stopped on LINE; the
@@ -1391,11 +1417,11 @@ async fn heap_graph(
     let ident = super::heap::Ident::of(&ty);
     let t0 = crate::clock::now();
     let g = super::heap::walk(&probe, ident, roots, super::heap::Limits::default()).await;
-    eprintln!(
+    crate::soft::err_line(&format!(
         "HEAP-GRAPH {}",
         json!({"adapter": id, "ident": format!("{ident:?}"), "nodes": g.nodes.len(), "cut": g.cut,
                "ms": t0.elapsed().as_millis(), "roots": g.roots})
-    );
+    ));
     // `debug/heap`'s read: the root by expression, evaluated in the frame
     let from_a = super::heap::read(&d, &sid, None, Some("a"), super::heap::Limits::default())
         .await
@@ -1434,33 +1460,38 @@ async fn heap_graph(
 
 const HEAP_PY: &str = "class Node:\n    def __init__(self, v):\n        self.v = v\n        self.next = None\n\n\ndef main():\n    a, b, c = Node(1), Node(2), Node(3)\n    a.next, b.next, c.next = b, c, a\n    shared = b\n    print(a.v, shared.v)\n\n\nmain()\n";
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: debugpy in the adapter image"]
-async fn heap_graph_debugpy() {
+fn heap_graph_debugpy() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("heap-py");
     let file = write(&dir, "heap.py", HEAP_PY);
     let config = json!({"type": "debugpy", "request": "launch", "name": "hp", "program": file, "cwd": dir,
                         "justMyCode": true});
     heap_graph("debugpy", python(), &dir, config, &[], &file, 11, "next").await;
+})
 }
 
 const HEAP_JS: &str = "class Node {\n  constructor(v) { this.v = v; this.next = null; }\n}\nfunction main() {\n  const a = new Node(1), b = new Node(2), c = new Node(3);\n  a.next = b; b.next = c; c.next = a;\n  const shared = b;\n  console.log(a.v, shared.v);\n}\nmain();\n";
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: js-debug in the adapter image"]
-async fn heap_graph_js_debug() {
+fn heap_graph_js_debug() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("heap-js");
     let file = write(&dir, "heap.js", HEAP_JS);
     let config =
         json!({"type": "pwa-node", "request": "launch", "name": "hj", "program": file, "cwd": dir});
     heap_graph("js-debug", js_debug(), &dir, config, &[], &file, 8, "next").await;
+})
 }
 
 const HEAP_GO: &str = "package main\n\nimport \"fmt\"\n\ntype Node struct {\n\tV    int\n\tNext *Node\n}\n\nfunc main() {\n\ta, b, c := &Node{V: 1}, &Node{V: 2}, &Node{V: 3}\n\ta.Next, b.Next, c.Next = b, c, a\n\tshared := b\n\tfmt.Println(a.V, shared.V)\n}\n";
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: delve in the adapter image, with ptrace"]
-async fn heap_graph_delve() {
+fn heap_graph_delve() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("heap-go");
     let file = write(&dir, "main.go", HEAP_GO);
     let d = dir.display();
@@ -1484,13 +1515,15 @@ async fn heap_graph_delve() {
         "Next",
     )
     .await;
+})
 }
 
 const HEAP_CPP: &str = "#include <cstdio>\n\nstruct Node {\n  int v;\n  Node *next;\n};\n\nint main() {\n  Node *a = new Node{1, nullptr}, *b = new Node{2, nullptr}, *c = new Node{3, nullptr};\n  a->next = b; b->next = c; c->next = a;\n  Node *shared = b;\n  std::printf(\"%d %d\\n\", a->v, shared->v);\n  return 0;\n}\n";
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: lldb-dap and clang in the adapter image, with ptrace"]
-async fn heap_graph_lldb_dap() {
+fn heap_graph_lldb_dap() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("heap-lldb");
     let file = write(&dir, "heap.cpp", HEAP_CPP);
     run(&dir, "clang++", &["-g", "-O0", "-o", "heap", "heap.cpp"]);
@@ -1507,24 +1540,28 @@ async fn heap_graph_lldb_dap() {
         "next",
     )
     .await;
+})
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: CodeLLDB and clang in the adapter image, with ptrace"]
-async fn heap_graph_codelldb() {
+fn heap_graph_codelldb() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("heap-codelldb");
     let file = write(&dir, "heap.cpp", HEAP_CPP);
     run(&dir, "clang++", &["-g", "-O0", "-o", "heap", "heap.cpp"]);
     let config = json!({"type": "lldb", "request": "launch", "name": "hc", "program": dir.join("heap"),
                         "cwd": dir});
     heap_graph("codelldb", codelldb(), &dir, config, &[], &file, 12, "next").await;
+})
 }
 
 /// The heap graph's hidden map in JavaScript (the user's ruling, 2026-11-13): there while attached, gone after a
 /// detach that leaves the program running, as the program itself sees it (`Object.getOwnPropertySymbols`).
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: js-debug and node in the adapter image"]
-async fn js_debug_detach_leaves_no_hidden_map() {
+fn js_debug_detach_leaves_no_hidden_map() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("heap-js-detach");
     let out = dir.join("symbols.txt");
     let file = write(
@@ -1533,12 +1570,12 @@ async fn js_debug_detach_leaves_no_hidden_map() {
         "const fs = require('fs');\nconst out = process.argv[2];\nclass Node { constructor(v) { this.v = v; this.next = null; } }\nlet n = 0;\nfunction tick() {\n  const a = new Node(1), b = new Node(2);\n  a.next = b; b.next = a;\n  n += 1;\n  fs.writeFileSync(out, n + ' ' + Object.getOwnPropertySymbols(globalThis).map(String).join(','));\n}\nsetInterval(tick, 50);\n",
     );
     let port = adapters::free_port().unwrap();
-    let mut prog = std::process::Command::new("node")
+    let mut prog = crate::proc::Command::new("node")
         .arg(format!("--inspect=127.0.0.1:{port}"))
         .arg(&file)
         .arg(&out)
         .current_dir(&dir)
-        .spawn()
+        .spawn(crate::proc::Io::Inherit, crate::proc::Io::Inherit, crate::proc::Io::Inherit)
         .unwrap();
     crate::clock::sleep(Duration::from_millis(800)).await;
     let ev = Arc::new(Events::default());
@@ -1589,7 +1626,7 @@ async fn js_debug_detach_leaves_no_hidden_map() {
             .contains("drgnx.ids"),
         "the map is there while attached: {seen}"
     );
-    let at_stop = std::fs::read_to_string(&out).unwrap_or_default();
+    let at_stop = crate::fsio::read_to_string(&out).unwrap_or_default();
     remove(&d, &root, bp).await;
     d.control(
         &sid,
@@ -1601,9 +1638,9 @@ async fn js_debug_detach_leaves_no_hidden_map() {
     .unwrap();
     d.shutdown().await;
     crate::clock::sleep(Duration::from_millis(600)).await;
-    let after = std::fs::read_to_string(&out).unwrap_or_default();
-    let _ = prog.kill();
-    let _ = prog.wait();
+    let after = crate::fsio::read_to_string(&out).unwrap_or_default();
+    crate::soft::done(prog.kill(), "tests_live_adapters");
+    crate::soft::done(prog.wait(), "tests_live_adapters");
     let n = |s: &str| {
         s.split(' ')
             .next()
@@ -1618,13 +1655,15 @@ async fn js_debug_detach_leaves_no_hidden_map() {
         !after.contains("drgnx.ids"),
         "the program still sees the map: {after:?}"
     );
+})
 }
 
 /// An open heap graph is read again at each new stop and sent as `debug-heap` to the editor that opened it: a's value
 /// changes at the second stop, its `next` is a new object at the third; a's card stays where it was.
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: debugpy in the adapter image"]
-async fn an_open_heap_graph_follows_the_stops() {
+fn an_open_heap_graph_follows_the_stops() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("heap-py-stops");
     let file = write(
         &dir,
@@ -1709,13 +1748,15 @@ async fn an_open_heap_graph_follows_the_stops() {
     assert_eq!(cell(&third), first_cell, "a's card stays");
     assert!(d.heaps().close(&first.graph));
     d.shutdown().await;
+})
 }
 
 /// A frame's locals as a graph: the frame first, its locals its fields, `shared` (= a.next) one object with two edges
 /// into it; the push at the next stop is the locals again.
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: debugpy in the adapter image"]
-async fn a_frames_locals_are_a_heap_graph() {
+fn a_frames_locals_are_a_heap_graph() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("heap-py-locals");
     let file = write(
         &dir,
@@ -1795,6 +1836,7 @@ async fn a_frames_locals_are_a_heap_graph() {
         "a.v and the frame's i changed: {next}"
     );
     d.shutdown().await;
+})
 }
 
 const JAVA: &str = r#"public class Main {
@@ -1832,16 +1874,17 @@ async fn java_tools() -> PathBuf {
         let said = super::install::install(&plan, &tools, &super::install::Source::Https, &env)
             .await
             .unwrap_or_else(|e| panic!("the Java adapter's install: {e}"));
-        eprintln!("T10-JAVA {said}");
+        crate::soft::err_line(&format!("T10-JAVA {said}"));
     }
     tools
 }
 
 /// Java: break, step and inspect through jdtls and java-debug (the `lsp-command` start kind), with the pack's pinned
 /// JDK, jdtls and plugin: a breakpoint in a loop, Variables, step in, step out, and the program ends on Continue.
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: the pinned JDK, jdtls and java-debug downloaded (see the module's doc and lp-java-live.sh)"]
-async fn java_breaks_steps_and_inspects_through_jdtls() {
+fn java_breaks_steps_and_inspects_through_jdtls() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let tools = java_tools().await;
     let dir = live_dir("java");
     let file = write(&dir, "Main.java", JAVA);
@@ -1884,7 +1927,10 @@ async fn java_breaks_steps_and_inspects_through_jdtls() {
         .unwrap_or_else(|e| panic!("the start: {e}"));
     // break at `total = add(total, i)` the first time round the loop
     let (c, f) = ev.stop(0).await;
-    eprintln!("T10-JAVA first stop after {} ms", t0.elapsed().as_millis());
+    crate::soft::err_line(&format!(
+        "T10-JAVA first stop after {} ms",
+        t0.elapsed().as_millis()
+    ));
     assert!(path_is(&f, &file) && line_of(&f) == 9, "break: {f}");
     let sid = f["session"].as_str().unwrap().to_owned();
     let stop = d.stop_of(&sid).unwrap();
@@ -1929,16 +1975,19 @@ async fn java_breaks_steps_and_inspects_through_jdtls() {
         }
         crate::clock::sleep(Duration::from_millis(20)).await;
     }
-    d.control(
-        &sid_root,
-        Op::Stop {
-            kill_debuggee: None,
-        },
-    )
-    .await
-    .ok();
+    crate::soft::done(
+        d.control(
+            &sid_root,
+            Op::Stop {
+                kill_debuggee: None,
+            },
+        )
+        .await,
+        "stop",
+    );
     d.shutdown().await;
     assert!(d.list().is_empty(), "sessions left: {:?}", d.list());
+})
 }
 
 const CSHARP: &str = r#"using System;
@@ -1993,16 +2042,17 @@ async fn csharp_tools() -> PathBuf {
         let said = super::install::install(&plan, &tools, &super::install::Source::Https, &env)
             .await
             .unwrap_or_else(|e| panic!("the C# adapter's install: {e}"));
-        eprintln!("T10-CSHARP {said}");
+        crate::soft::err_line(&format!("T10-CSHARP {said}"));
     }
     tools
 }
 
 /// C#: break, step and inspect through netcoredbg with the pack's pinned, hashed adapter and the image's pinned .NET SDK
 /// (it builds the program): a breakpoint in a loop, Variables, step in, step out, and the program ends on Continue.
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: netcoredbg downloaded and the .NET SDK of the adapter image (see the module's doc and lp-cs-live.sh)"]
-async fn csharp_breaks_steps_and_inspects_through_netcoredbg() {
+fn csharp_breaks_steps_and_inspects_through_netcoredbg() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let tools = csharp_tools().await;
     let dir = live_dir("csharp");
     let file = write(&dir, "Program.cs", CSHARP);
@@ -2049,10 +2099,10 @@ async fn csharp_breaks_steps_and_inspects_through_netcoredbg() {
         .unwrap_or_else(|e| panic!("the start: {e}"));
     // break at `total = Add(total, i)` the first time round the loop
     let (c, f) = ev.stop(0).await;
-    eprintln!(
+    crate::soft::err_line(&format!(
         "T10-CSHARP first stop after {} ms",
         t0.elapsed().as_millis()
-    );
+    ));
     assert!(path_is(&f, &file) && line_of(&f) == 16, "break: {f}");
     let sid = f["session"].as_str().unwrap().to_owned();
     let stop = d.stop_of(&sid).unwrap();
@@ -2103,14 +2153,17 @@ async fn csharp_breaks_steps_and_inspects_through_netcoredbg() {
         "the session did not end when the program did: {:?}",
         d.list()
     );
-    d.control(
-        &sid_root,
-        Op::Stop {
-            kill_debuggee: None,
-        },
-    )
-    .await
-    .ok();
+    crate::soft::done(
+        d.control(
+            &sid_root,
+            Op::Stop {
+                kill_debuggee: None,
+            },
+        )
+        .await,
+        "stop",
+    );
     d.shutdown().await;
     assert!(d.list().is_empty(), "sessions left: {:?}", d.list());
+})
 }

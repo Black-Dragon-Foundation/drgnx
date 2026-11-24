@@ -45,11 +45,17 @@ pub struct MemPins(pub Mutex<Option<String>>);
 
 impl Pins for MemPins {
     fn get(&self) -> BoxFuture<'_, Option<String>> {
-        Box::pin(async move { self.0.lock().ok().and_then(|p| p.clone()) })
+        Box::pin(async move {
+            {
+                let p = saman::lock(&self.0);
+                p.clone()
+            }
+        })
     }
     fn set<'a>(&'a self, sha256: &'a str) -> BoxFuture<'a, ()> {
         Box::pin(async move {
-            if let Ok(mut p) = self.0.lock() {
+            {
+                let mut p = saman::lock(&self.0);
                 *p = Some(sha256.to_owned());
             }
         })
@@ -192,7 +198,10 @@ impl RemoteVectors {
             tokio_rustls::TlsConnector::from(Arc::new(config)).connect(name, tcp),
         )
         .await;
-        let seen = seen.lock().ok().and_then(|s| s.clone());
+        let seen = {
+            let s = saman::lock(&seen);
+            s.clone()
+        };
         if pinned.is_some() && seen.is_some() && seen != pinned {
             return Err(CHANGED_CERT.into());
         }
@@ -284,7 +293,7 @@ where
         .await
         .map_err(|e| format!("HTTP: {e}"))?;
     let conn = crate::clock::spawn("search:vectors", async move {
-        let _ = conn.await;
+        crate::soft::done(conn.await, "remote");
     });
     let resp = crate::clock::real(sender.send_request(req))
         .await
@@ -335,7 +344,8 @@ impl rustls::client::danger::ServerCertVerifier for PinVerifier {
         let mut sha = [0u8; 32];
         sha.copy_from_slice(d.as_ref());
         let hex = key_hex(&sha);
-        if let Ok(mut s) = self.seen.lock() {
+        {
+            let mut s = saman::lock(&self.seen);
             *s = Some(hex.clone());
         }
         match &self.pinned {
@@ -391,13 +401,19 @@ impl Source for RemoteVectors {
         }
     }
     fn identity(&self) -> Option<Identity> {
-        self.ident.lock().ok().and_then(|i| i.clone())
+        {
+            let i = saman::lock(&self.ident);
+            i.clone()
+        }
     }
     fn may_send_text(&self) -> bool {
         self.spec.trusted
     }
     fn max_batch(&self) -> usize {
-        self.batch.lock().map_or(1, |b| *b)
+        {
+            let b = saman::lock(&self.batch);
+            *b
+        }
     }
     fn lookup<'a>(
         &'a self,
@@ -450,11 +466,9 @@ impl Source for RemoteVectors {
                         .await?;
                     if let Some(l) = &self.spec.ledger {
                         let texts: Vec<&str> = part.iter().map(|&i| items[i].2.as_str()).collect();
-                        let model = self
-                            .ident
-                            .lock()
-                            .ok()
-                            .and_then(|g| g.as_ref().map(|i| i.record.model_id.clone()));
+                        let model = saman::lock(&self.ident)
+                            .as_ref()
+                            .map(|i| i.record.model_id.clone());
                         l.record(crate::embed_serve::spend_row(
                             &self.spec.id,
                             SPEND_AGENT,
@@ -489,16 +503,18 @@ impl Source for RemoteVectors {
                 .fingerprints
                 .first()
                 .ok_or_else(|| self.bad("no fingerprint"))?;
-            let record =
-                FingerprintRecord::from_json(&f.record.to_string()).map_err(|e| self.bad(&e))?;
+            let record = FingerprintRecord::from_json(&f.record.to_string())
+                .map_err(|e| self.bad(&e.to_string()))?;
             let id = Identity::new(record.clone(), record.model_id.clone());
             if id.fp.hex() != f.hex {
                 return Err(self.bad("a record that is not its fingerprint's"));
             }
-            if let Ok(mut b) = self.batch.lock() {
+            {
+                let mut b = saman::lock(&self.batch);
                 *b = (info.max_batch as usize).clamp(1, crate::embed_serve::MAX_BATCH as usize);
             }
-            if let Ok(mut i) = self.ident.lock() {
+            {
+                let mut i = saman::lock(&self.ident);
                 *i = Some(id.clone());
             }
             Ok(id)

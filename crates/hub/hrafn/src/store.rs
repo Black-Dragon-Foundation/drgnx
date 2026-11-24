@@ -7,7 +7,7 @@ use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use urdr::{Handle, Mode, Store, StoreSpec};
 
 #[derive(Debug)]
@@ -408,7 +408,7 @@ fn ro_uri(path: &Path) -> String {
 /// The vector cache at PATH attached read-only as `vc` on the store's connection C, unless it is already (another one
 /// is detached first). Outside a transaction only: a read closure's.
 pub(crate) fn ensure_vc(c: &Connection, attached: &Attached, path: &Path) -> rusqlite::Result<()> {
-    let mut a = attached.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut a = saman::lock(attached);
     if a.as_deref() == Some(path) {
         return Ok(());
     }

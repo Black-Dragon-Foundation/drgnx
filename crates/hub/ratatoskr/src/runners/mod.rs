@@ -80,7 +80,7 @@ impl RunnerCfg {
 
     /// Refuses a config that could reach ssh as anything but a value: a host or name that reads as an option or
     /// holds a space, a path ssh would expand or that would break its line, an empty argv.
-    pub fn check(&self) -> Result<(), String> {
+    pub fn check(&self) -> villa::Result<()> {
         let n = &self.name;
         let name_ok = !n.is_empty()
             && n.len() <= NAME_MAX
@@ -88,9 +88,9 @@ impl RunnerCfg {
             && n.bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
         if !name_ok {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "the runner name {n:?} must be 1 to {NAME_MAX} letters, digits, `_` or `-`, not starting with `-`"
-            ));
+            )));
         }
         let h = &self.host;
         if h.is_empty()
@@ -98,9 +98,9 @@ impl RunnerCfg {
             || h.starts_with('-')
             || h.chars().any(|c| c.is_whitespace() || c.is_control())
         {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "the host {h:?} must be a host as ssh knows it: no spaces, not starting with `-`"
-            ));
+            )));
         }
         if let Some(c) = &self.cloud {
             for p in [
@@ -109,7 +109,7 @@ impl RunnerCfg {
                 &c.certificate,
                 &c.known_hosts,
             ] {
-                config_path(p)?;
+                config_path(p).map_err(|e| villa::Error::invalid(e.to_string()))?;
             }
         }
         for (what, argv) in [
@@ -118,9 +118,9 @@ impl RunnerCfg {
             ("bulk out", &self.remote.bulk_out),
         ] {
             if argv.is_empty() || argv.iter().any(|w| w.contains('\0')) {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "the {what} session's argv must be non-empty, without NUL bytes"
-                ));
+                )));
             }
         }
         Ok(())
@@ -163,11 +163,11 @@ mod tests {
         assert_eq!(ssh_runner("r-1_b", "runner@10.0.0.7").check(), Ok(()));
         for host in ["-oProxyCommand=sh", "desk top", "desk\ntop", "", "a\u{7f}b"] {
             let e = ssh_runner("desktop", host).check().unwrap_err();
-            assert!(e.contains("host"), "{host:?}: {e}");
+            assert!(e.message().contains("host"), "{host:?}: {e}");
         }
         for name in ["", "-x", "a/b", "..", "a b", &"n".repeat(NAME_MAX + 1)] {
             let e = ssh_runner(name, "desktop").check().unwrap_err();
-            assert!(e.contains("name"), "{name:?}: {e}");
+            assert!(e.message().contains("name"), "{name:?}: {e}");
         }
         let mut r = ssh_runner("c1", "10.0.0.9");
         for bad in [
@@ -183,13 +183,13 @@ mod tests {
                 known_hosts: "/run/k".into(),
             });
             let e = r.check().unwrap_err();
-            assert!(e.contains("path"), "{bad:?}: {e}");
+            assert!(e.message().contains("path"), "{bad:?}: {e}");
         }
         let mut r = ssh_runner("desktop", "desktop");
         r.remote.bulk_in.clear();
-        assert!(r.check().unwrap_err().contains("argv"));
+        assert!(r.check().unwrap_err().message().contains("argv"));
         r.remote.bulk_in = vec!["a\0b".into()];
-        assert!(r.check().unwrap_err().contains("argv"));
+        assert!(r.check().unwrap_err().message().contains("argv"));
     }
 
     // [D] pure

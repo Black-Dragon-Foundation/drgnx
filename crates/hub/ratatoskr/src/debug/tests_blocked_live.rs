@@ -22,10 +22,10 @@ struct Events(Mutex<Vec<(String, Value)>>);
 
 impl Sink for Events {
     fn broadcast(&self, event: &str, data: Value, _: Option<u64>) {
-        self.0.lock().unwrap().push((event.to_owned(), data));
+        saman::lock(&self.0).push((event.to_owned(), data));
     }
     fn send(&self, _: u64, event: &str, data: Value) -> bool {
-        self.0.lock().unwrap().push((event.to_owned(), data));
+        saman::lock(&self.0).push((event.to_owned(), data));
         true
     }
 }
@@ -39,8 +39,8 @@ impl Terminals for NoTerms {
         _: String,
         _: Vec<String>,
         _: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<Opened, String>> {
-        Box::pin(async { Err("no terminal in the live test".to_owned()) })
+    ) -> BoxFut<'_, villa::Result<Opened>> {
+        Box::pin(async { Err(villa::Error::unavailable("no terminal in the live test")) })
     }
 }
 
@@ -85,7 +85,7 @@ fn listeners() -> Vec<u16> {
     let owned = owned_sockets();
     let mut out = vec![];
     for f in ["/proc/net/tcp", "/proc/net/tcp6"] {
-        let Ok(t) = std::fs::read_to_string(f) else {
+        let Ok(t) = crate::fsio::read_to_string(f) else {
             continue;
         };
         for line in t.lines().skip(1) {
@@ -111,30 +111,26 @@ fn listeners() -> Vec<u16> {
 /// Waits (real time, at most a minute) for a `debug-frame` whose path ends in FILE; its line.
 async fn stop_in(ev: &Events, file: &str) -> i64 {
     for _ in 0..3000 {
-        let hit =
-            ev.0.lock()
-                .unwrap()
-                .iter()
-                .filter(|(n, _)| n == "debug-frame")
-                .find(|(_, d)| d["path"].as_str().is_some_and(|p| p.ends_with(file)))
-                .map(|(_, d)| d["line"].as_i64().unwrap_or(0));
+        let hit = saman::lock(&ev.0)
+            .iter()
+            .filter(|(n, _)| n == "debug-frame")
+            .find(|(_, d)| d["path"].as_str().is_some_and(|p| p.ends_with(file)))
+            .map(|(_, d)| d["line"].as_i64().unwrap_or(0));
         if let Some(l) = hit {
             return l;
         }
         crate::clock::sleep(Duration::from_millis(20)).await;
     }
-    let seen: Vec<String> =
-        ev.0.lock()
-            .unwrap()
-            .iter()
-            .map(|(n, d)| format!("{n} {d}"))
-            .collect();
+    let seen: Vec<String> = saman::lock(&ev.0)
+        .iter()
+        .map(|(n, d)| format!("{n} {d}"))
+        .collect();
     panic!("no stop in {file}; events:\n{}", seen.join("\n"));
 }
 
 async fn ended(ev: &Events) {
     for _ in 0..3000 {
-        if ev.0.lock().unwrap().iter().any(|(n, _)| n == "debug-ended") {
+        if saman::lock(&ev.0).iter().any(|(n, _)| n == "debug-ended") {
             return;
         }
         crate::clock::sleep(Duration::from_millis(20)).await;
@@ -144,7 +140,7 @@ async fn ended(ev: &Events) {
 
 fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
     let p = dir.join(name);
-    std::fs::write(&p, text).unwrap();
+    crate::fsio::write(&p, text).unwrap();
     p
 }
 
@@ -170,7 +166,7 @@ async fn run(
     let tmp = dir.join("tmp");
     std::fs::create_dir_all(&tmp).unwrap();
     let preload = tmp.join(blocked::PRELOAD_NAME);
-    std::fs::write(&preload, blocked::PRELOAD).unwrap();
+    crate::fsio::write(&preload, blocked::PRELOAD).unwrap();
     let env = Env {
         path: vec![],
         tools: dir.to_path_buf(),
@@ -228,12 +224,10 @@ async fn run(
     )
     .await
     .unwrap_or_else(|e| {
-        let seen: Vec<String> =
-            ev.0.lock()
-                .unwrap()
-                .iter()
-                .map(|(n, d)| format!("{n} {d}"))
-                .collect();
+        let seen: Vec<String> = saman::lock(&ev.0)
+            .iter()
+            .map(|(n, d)| format!("{n} {d}"))
+            .collect();
         panic!("stop: {e}; events:\n{}", seen.join("\n"))
     });
     ended(&ev).await;
@@ -247,9 +241,10 @@ fn live_dir(name: &str) -> PathBuf {
     std::fs::canonicalize(&d).unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: debugpy in the adapter image, alone (see the module's doc)"]
-async fn debugpy_stops_in_a_subprocess_with_every_listener_in_the_block() {
+fn debugpy_stops_in_a_subprocess_with_every_listener_in_the_block() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("py");
     write(
         &dir,
@@ -280,11 +275,13 @@ async fn debugpy_stops_in_a_subprocess_with_every_listener_in_the_block() {
         held.iter().all(|p| ports.contains(p)),
         "listeners outside the block {ports:?}: {held:?}"
     );
+})
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: js-debug in the adapter image, alone (see the module's doc)"]
-async fn js_debug_stops_in_a_child_forked_at_once_with_every_listener_in_the_block() {
+fn js_debug_stops_in_a_child_forked_at_once_with_every_listener_in_the_block() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("js");
     // the fork is the program's first statement: no wait for js-debug's bootloader
     write(
@@ -326,11 +323,13 @@ async fn js_debug_stops_in_a_child_forked_at_once_with_every_listener_in_the_blo
         })
         .unwrap_or_default();
     assert_eq!(claims, [format!("port-{}", ports[2])]);
+})
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: js-debug in the adapter image, alone (see the module's doc)"]
-async fn a_child_past_the_blocks_ports_runs_without_the_debugger_and_says_so() {
+fn a_child_past_the_blocks_ports_runs_without_the_debugger_and_says_so() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = live_dir("js7");
     // a block of three ports: the adapter's, the program's, one child's. The first child takes it (it has said
     // "up" once its debugger is there), the second gets none
@@ -373,7 +372,7 @@ async fn a_child_past_the_blocks_ports_runs_without_the_debugger_and_says_so() {
         "{ports:?}: {held:?}"
     );
     // the second child ran, with no inspector, and said why
-    assert_eq!(std::fs::read_to_string(&out).unwrap(), "undefined");
+    assert_eq!(crate::fsio::read_to_string(&out).unwrap(), "undefined");
     let refused: Vec<String> = std::fs::read_dir(tmp.join(blocked::CLAIMS_DIR))
         .unwrap()
         .flatten()
@@ -381,4 +380,5 @@ async fn a_child_past_the_blocks_ports_runs_without_the_debugger_and_says_so() {
         .filter(|n| n.starts_with("refused-"))
         .collect();
     assert_eq!(refused.len(), 1, "{refused:?}");
+})
 }

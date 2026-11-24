@@ -311,48 +311,46 @@ pub fn start(f: &Front, c: &Caller, p: FilesParams) -> Result<FilesStarted, Erro
     let Some(front) = views.front.get().cloned() else {
         return Err(invalid("view", "the hub is starting"));
     };
-    std::thread::Builder::new()
-        .name("files".into())
-        .spawn(move || {
-            let Some(f) = front.upgrade() else { return };
-            let exclude = excludes(&f, &root);
-            let key: ListKey = (
-                root.clone(),
-                ignore == Ignore::Real,
-                exclude.clone(),
-                shown.clone(),
-            );
-            let list = f.core.views.files.lists.get(
-                &key,
-                (conn, view.clone()),
-                || {
-                    let mut out = names(&root, ignore, &exclude)?;
-                    if !shown.is_empty() {
-                        keep_shown(&mut out, &Exclude::new(shown));
-                    }
-                    Ok(out)
-                },
-                || tap_of(&f, &root),
-            );
-            let list = match list {
-                Ok(l) => l,
-                Err(e) => {
-                    tracing::warn!("search/files: {}: {e}", root.display());
-                    return;
+    saman::spawn_thread("files", move || {
+        let Some(f) = front.upgrade() else { return };
+        let exclude = excludes(&f, &root);
+        let key: ListKey = (
+            root.clone(),
+            ignore == Ignore::Real,
+            exclude.clone(),
+            shown.clone(),
+        );
+        let list = f.core.views.files.lists.get(
+            &key,
+            (conn, view.clone()),
+            || {
+                let mut out = names(&root, ignore, &exclude)?;
+                if !shown.is_empty() {
+                    keep_shown(&mut out, &Exclude::new(shown));
                 }
-            };
-            let top = if by_name {
-                list.top_names(&query, n as usize, &cancel)
-            } else {
-                list.top(&query, n as usize, &cancel)
-            };
-            let Some(top) = top else {
+                Ok(out)
+            },
+            || tap_of(&f, &root),
+        );
+        let list = match list {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!("search/files: {}: {e}", root.display());
                 return;
-            };
-            let rows = top.iter().map(row).collect();
-            f.core.views.files_rows(&f, conn, &view, id, rows);
-        })
-        .map_err(|e| invalid("view", &e.to_string()))?;
+            }
+        };
+        let top = if by_name {
+            list.top_names(&query, n as usize, &cancel)
+        } else {
+            list.top(&query, n as usize, &cancel)
+        };
+        let Some(top) = top else {
+            return;
+        };
+        let rows = top.iter().map(row).collect();
+        f.core.views.files_rows(&f, conn, &view, id, rows);
+    })
+    .map_err(|e| invalid("view", e.message()))?;
     Ok(FilesStarted { query: id })
 }
 

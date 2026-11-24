@@ -686,81 +686,83 @@ fn label_and_link_need_no_ver() {
     );
 }
 
-#[tokio::test]
-async fn concurrent_label_adds_lose_none() {
-    use crate::project::{self, ProjectRef};
-    use crate::store::{CoordDb, CoordError};
-    let dir = tempfile::tempdir().unwrap();
-    let db = CoordDb::spawn(dir.path().join("work.db"));
-    let root = ProjectRef {
-        id: "project:0123456789ab".into(),
-        root: dir.path().join("alpha"),
-        slug: "alpha".into(),
-        root_commit: Some("0123456789ab0123456789ab0123456789ab0123".into()),
-        roots: vec!["0123456789ab0123456789ab0123456789ab0123".into()],
-    };
-    let p = db
-        .write(TxMeta::new("hub", Class::System, "test"), move |tx| {
-            Ok(project::register(tx, &root)?)
-        })
-        .await
-        .unwrap();
-    let agent = |sid: &str| Caller {
-        class: Class::Agent,
-        actor: format!("agent:{sid}"),
-        session: Some(sid.into()),
-        profile: None,
-        job: None,
-        project: Some(p),
-    };
-    let maker = agent("s0");
-    let id = match db
-        .write(maker.tx_meta("mcp:task_write/create"), move |tx| {
-            Ok(op(tx, &maker, create("shared"))?)
-        })
-        .await
-        .unwrap()
-    {
-        TaskAnswer::Done { id, .. } => id,
-        other => panic!("{other:?}"),
-    };
-    let mut runs = Vec::new();
-    for i in 0..24 {
-        let db = db.clone();
-        let id = id.clone();
-        let who = agent(&format!("s{}", i % 3));
-        runs.push(tokio::spawn(async move {
-            db.write(who.tx_meta("mcp:task_write/label"), move |tx| {
-                op(
-                    tx,
-                    &who,
-                    TaskOp::Label {
-                        id,
-                        add: vec![format!("l{i}")],
-                        remove: vec![],
-                    },
-                )
-                .map_err(CoordError::from)
+#[test]
+fn concurrent_label_adds_lose_none() {
+    saman::block_on_current(async {
+        use crate::project::{self, ProjectRef};
+        use crate::store::{CoordDb, CoordError};
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        let root = ProjectRef {
+            id: "project:0123456789ab".into(),
+            root: dir.path().join("alpha"),
+            slug: "alpha".into(),
+            root_commit: Some("0123456789ab0123456789ab0123456789ab0123".into()),
+            roots: vec!["0123456789ab0123456789ab0123456789ab0123".into()],
+        };
+        let p = db
+            .write(TxMeta::new("hub", Class::System, "test"), move |tx| {
+                Ok(project::register(tx, &root)?)
             })
             .await
-        }));
-    }
-    for r in runs {
-        assert!(matches!(r.await.unwrap(), Ok(TaskAnswer::Done { .. })));
-    }
-    let (labels, ver) = db
-        .read(move |c| {
-            let e = entity::by_id(c, &id)?.unwrap();
-            Ok((labels_of(&e), e.ver))
-        })
-        .await
-        .unwrap();
-    let mut want: Vec<String> = (0..24).map(|i| format!("l{i}")).collect();
-    let mut got = labels.clone();
-    want.sort();
-    got.sort();
-    assert_eq!(got, want);
-    assert_eq!(ver, 25);
+            .unwrap();
+        let agent = |sid: &str| Caller {
+            class: Class::Agent,
+            actor: format!("agent:{sid}"),
+            session: Some(sid.into()),
+            profile: None,
+            job: None,
+            project: Some(p),
+        };
+        let maker = agent("s0");
+        let id = match db
+            .write(maker.tx_meta("mcp:task_write/create"), move |tx| {
+                Ok(op(tx, &maker, create("shared"))?)
+            })
+            .await
+            .unwrap()
+        {
+            TaskAnswer::Done { id, .. } => id,
+            other => panic!("{other:?}"),
+        };
+        let mut runs = Vec::new();
+        for i in 0..24 {
+            let db = db.clone();
+            let id = id.clone();
+            let who = agent(&format!("s{}", i % 3));
+            runs.push(saman::spawn("a label write", async move {
+                db.write(who.tx_meta("mcp:task_write/label"), move |tx| {
+                    op(
+                        tx,
+                        &who,
+                        TaskOp::Label {
+                            id,
+                            add: vec![format!("l{i}")],
+                            remove: vec![],
+                        },
+                    )
+                    .map_err(CoordError::from)
+                })
+                .await
+            }));
+        }
+        for r in runs {
+            assert!(matches!(r.await.unwrap(), Ok(TaskAnswer::Done { .. })));
+        }
+        let (labels, ver) = db
+            .read(move |c| {
+                let e = entity::by_id(c, &id)?.unwrap();
+                Ok((labels_of(&e), e.ver))
+            })
+            .await
+            .unwrap();
+        let mut want: Vec<String> = (0..24).map(|i| format!("l{i}")).collect();
+        let mut got = labels.clone();
+        want.sort();
+        got.sort();
+        assert_eq!(got, want);
+        assert_eq!(ver, 25);
+    })
 }
 
 #[test]

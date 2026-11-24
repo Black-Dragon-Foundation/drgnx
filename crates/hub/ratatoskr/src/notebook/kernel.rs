@@ -21,7 +21,7 @@ use crate::debug::ports::Block;
 /// The hub's variables a kernel inherits (a kernel is an ordinary session program, like the terminal's shell).
 const ENV_ALLOW: &[&str] = &[
     "PATH",
-    "HOME",
+    stig::HOME_VAR,
     "USER",
     "LOGNAME",
     "SHELL",
@@ -29,12 +29,12 @@ const ENV_ALLOW: &[&str] = &[
     "LANGUAGE",
     "TERM",
     "TMPDIR",
-    "XDG_RUNTIME_DIR",
-    "XDG_DATA_HOME",
-    "XDG_CONFIG_HOME",
-    "XDG_CACHE_HOME",
-    "XDG_DATA_DIRS",
-    "XDG_CONFIG_DIRS",
+    stig::SYSTEM_RUNTIME_VAR,
+    stig::Xdg::Data.var(),
+    stig::Xdg::Config.var(),
+    stig::Xdg::Cache.var(),
+    stig::SYSTEM_DATA_DIRS_VAR,
+    stig::SYSTEM_CONFIG_DIRS_VAR,
     "VIRTUAL_ENV",
     "CONDA_PREFIX",
     "CONDA_DEFAULT_ENV",
@@ -128,9 +128,9 @@ pub struct Kernel {
     grace: Duration,
 }
 
-fn random_hex(n: usize) -> Result<String, String> {
+fn random_hex(n: usize) -> villa::Result<String> {
     let mut b = vec![0u8; n];
-    getrandom::fill(&mut b).map_err(|e| format!("no random bytes: {e}"))?;
+    getrandom::fill(&mut b).map_err(|e| villa::Error::invalid(format!("no random bytes: {e}")))?;
     Ok(b.iter().map(|x| format!("{x:02x}")).collect())
 }
 
@@ -173,12 +173,12 @@ enum Wire {
 /// Why a start failed; REFUSED: the kernel's process ended before it made any socket (it could not bind what the connection
 /// file asked for), so a start over another transport is worth one try.
 struct Fail {
-    why: String,
+    why: villa::Error,
     refused: bool,
 }
 
-impl From<String> for Fail {
-    fn from(why: String) -> Fail {
+impl From<villa::Error> for Fail {
+    fn from(why: villa::Error) -> Fail {
         Fail {
             why,
             refused: false,
@@ -196,7 +196,7 @@ impl Kernel {
         id: &str,
         cwd: &Path,
         t: Timeouts,
-    ) -> Result<Kernel, String> {
+    ) -> villa::Result<Kernel> {
         Self::start_on(spec, folder, id, cwd, t, None).await
     }
 
@@ -208,7 +208,7 @@ impl Kernel {
         cwd: &Path,
         t: Timeouts,
         claimed: Option<Block>,
-    ) -> Result<Kernel, String> {
+    ) -> villa::Result<Kernel> {
         if claimed.is_some() || spec.transport == Transport::Tcp {
             return Self::attempt(spec, folder, id, cwd, t, Wire::Tcp(claimed))
                 .await
@@ -217,10 +217,14 @@ impl Kernel {
         match Self::attempt(spec, folder, id, cwd, t, Wire::Ipc).await {
             Ok(k) => Ok(k),
             Err(ipc) if ipc.refused => {
-                tracing::info!(target: "drgnx::notebook", "kernel {} refused ipc ({}); trying tcp", spec.name, ipc.why);
+                tracing::info!(target: "drgnx::notebook", "kernel {} refused ipc ({}); trying tcp", spec.name, ipc.why.message());
                 match Self::attempt(spec, folder, id, cwd, t, Wire::Tcp(None)).await {
                     Ok(k) => Ok(k),
-                    Err(tcp) => Err(format!("over ipc: {}; over tcp: {}", ipc.why, tcp.why)),
+                    Err(tcp) => Err(villa::Error::invalid(format!(
+                        "over ipc: {}; over tcp: {}",
+                        ipc.why.message(),
+                        tcp.why.message()
+                    ))),
                 }
             }
             Err(ipc) => Err(ipc.why),
@@ -261,7 +265,7 @@ impl Kernel {
         let argv = spec.argv_for(&conn.path);
         let program = argv
             .first()
-            .ok_or_else(|| "the kernelspec has no command".to_string())?;
+            .ok_or_else(|| villa::Error::invalid("the kernelspec has no command"))?;
         let runtime_dir: &OsStr = folder.as_os_str();
         let mut set: Vec<(&str, &OsStr)> = vec![("JUPYTER_RUNTIME_DIR", runtime_dir)];
         for (k, v) in &spec.env {
@@ -277,14 +281,17 @@ impl Kernel {
             new_session: false,
         })
         .await
-        .map_err(|e| format!("cannot start {program}: {e}"))?;
+        .map_err(|e| villa::Error::unavailable(format!("cannot start {program}: {e}")))?;
         let pid = child.id();
         // from here the kernel is ours to end: a start dropped part way (the caller gave up) takes it down
         let mut guard = Spawned(Some(pid));
         // a kernel's stdout is noise, but an unread pipe would stop it
         if let Some(mut out) = child.take_stdout() {
             crate::clock::spawn("notebook-kernel-stdout", async move {
-                let _ = tokio::io::copy(&mut out, &mut tokio::io::sink()).await;
+                crate::soft::done(
+                    tokio::io::copy(&mut out, &mut tokio::io::sink()).await,
+                    "tokio::io::copy",
+                );
             });
         }
         let (exit_tx, exit) = watch::channel::<Option<Exit>>(None);
@@ -293,11 +300,14 @@ impl Kernel {
             // the leader is gone: what it forked goes now, before anything can ask for it (the group id is still ours while a
             // member lives, and nothing signals it after the exit is known)
             kill_group_now(pid);
-            let _ = exit_tx.send(Some(Exit {
-                code: status.and_then(|s| s.code()),
-                signal: status.and_then(|s| s.signal()),
-                stderr: child.stderr_tail(),
-            }));
+            crate::soft::done(
+                exit_tx.send(Some(Exit {
+                    code: status.and_then(|s| s.code()),
+                    signal: status.and_then(|s| s.signal()),
+                    stderr: child.stderr_tail(),
+                })),
+                "exit_tx send",
+            );
         });
         let bring_up = async {
             wait_endpoints(&conn, pid, &mut exit.clone()).await?;
@@ -307,9 +317,10 @@ impl Kernel {
             if let Some(ports) = conn.ports
                 && !tcp_listeners_are_the_kernels(ports, pid).await?
             {
-                return Err("the kernel's ports have no listener after the connect"
-                    .to_string()
-                    .into());
+                return Err(villa::Error::unavailable(
+                    "the kernel's ports have no listener after the connect",
+                )
+                .into());
             }
             ready(&mut session, &session_id, &mut exit.clone(), t.ping).await?;
             Ok::<Session, Fail>(session)
@@ -335,11 +346,11 @@ impl Kernel {
             }
             Err(_) => {
                 kill_group_now(pid);
-                Err(format!(
+                Err(villa::Error::timeout(format!(
                     "the kernel {} was not ready within {} s",
                     spec.name,
                     t.ready.as_secs_f64()
-                )
+                ))
                 .into())
             }
         }
@@ -379,40 +390,40 @@ impl Kernel {
         channel: Channel,
         msg_type: &str,
         content: serde_json::Value,
-    ) -> Result<String, String> {
+    ) -> villa::Result<String> {
         let m = Message::request(&self.session_id, msg_type, content);
         self.session.send(channel, &m)?;
         Ok(m.header.msg_id)
     }
 
     /// Send MESSAGE (a reply built by the caller, e.g. `input_reply`) on CHANNEL.
-    pub fn send(&self, channel: Channel, message: &Message) -> Result<(), String> {
+    pub fn send(&self, channel: Channel, message: &Message) -> villa::Result<()> {
         self.session.send(channel, message)
     }
 
     /// Interrupt what is running: SIGINT to the kernel's group, or an `interrupt_request` on control for a kernelspec that asks
     /// for it.
-    pub fn interrupt(&self) -> Result<(), String> {
+    pub fn interrupt(&self) -> villa::Result<()> {
         match self.interrupt {
             Interrupt::Message => self
                 .request(Channel::Control, "interrupt_request", json!({}))
                 .map(|_| ()),
             Interrupt::Signal => {
                 if self.pid <= 1 {
-                    return Err("no kernel process".into());
+                    return Err(villa::Error::invalid("no kernel process"));
                 }
                 // once the leader is reaped its group id is not ours to signal
                 if self.exit.borrow().is_some() {
-                    return Err("the kernel has ended".into());
+                    return Err(villa::Error::invalid("the kernel has ended"));
                 }
                 // SAFETY: kill(2) has no memory effects; the group of a kernel this hub started.
                 if unsafe { libc::kill(-self.pid, libc::SIGINT) } == 0 {
                     Ok(())
                 } else {
-                    Err(format!(
+                    Err(villa::Error::invalid(format!(
                         "cannot interrupt the kernel: {}",
                         std::io::Error::last_os_error()
-                    ))
+                    )))
                 }
             }
         }
@@ -424,17 +435,21 @@ impl Kernel {
         if let Some(e) = exit.borrow().clone() {
             return e;
         }
-        let _ = self.request(
-            Channel::Control,
-            "shutdown_request",
-            json!({"restart": false}),
+        crate::soft::done(
+            self.request(
+                Channel::Control,
+                "shutdown_request",
+                json!({"restart": false}),
+            ),
+            "kernel",
         );
         if let Ok(e) = crate::clock::timeout(self.grace, exited(&mut exit)).await {
             // it went by itself, and the group went with it (see the wait task)
             return e;
         }
         // the leader is still there: the group is ours to take down
-        let _ = draugr::kill_group(self.pid, Duration::ZERO, &draugr::RealSignaller).await;
+
+        draugr::kill_group(self.pid, Duration::ZERO, &draugr::RealSignaller).await;
         self.bounded_exit().await
     }
 
@@ -505,7 +520,7 @@ async fn exited(rx: &mut watch::Receiver<Option<Exit>>) -> Exit {
 /// Whether the four channels' ports each have listeners that are the kernel's own (its process or group PID) and that no other
 /// process of this account can join (`Ok(true)` for all), not all there yet (`Ok(false)`), or one that is not (an error
 /// naming the port: nothing is connected to it).
-async fn tcp_listeners_are_the_kernels(ports: [u16; 5], pid: i32) -> Result<bool, String> {
+async fn tcp_listeners_are_the_kernels(ports: [u16; 5], pid: i32) -> villa::Result<bool> {
     let four = [ports[0], ports[1], ports[2], ports[3]];
     crate::clock::blocking(move || {
         let mut all = true;
@@ -519,7 +534,7 @@ async fn tcp_listeners_are_the_kernels(ports: [u16; 5], pid: i32) -> Result<bool
         Ok(all)
     })
     .await
-    .map_err(|e| format!("the port check failed: {e}"))?
+    .map_err(|e| villa::Error::invalid(format!("the port check failed: {e}")))?
 }
 
 async fn wait_endpoints(
@@ -539,7 +554,7 @@ async fn wait_endpoints(
         }
         if let Some(e) = exit.borrow().clone() {
             return Err(Fail {
-                why: format!("the kernel {e} before it was ready"),
+                why: villa::Error::unavailable(format!("the kernel {e} before it was ready")),
                 refused: true,
             });
         }
@@ -555,7 +570,7 @@ async fn ready(
     session_id: &str,
     exit: &mut watch::Receiver<Option<Exit>>,
     ping: Duration,
-) -> Result<(), String> {
+) -> villa::Result<()> {
     let (mut info, mut status) = (false, false);
     let mut tick = crate::clock::interval(ping);
     while !(info && status) {
@@ -565,11 +580,11 @@ async fn ready(
                 Some(Event::Message { channel: Channel::Shell, message, .. }) if message.header.msg_type == "kernel_info_reply" => info = true,
                 Some(Event::Message { channel: Channel::Iopub, message, .. }) if message.header.msg_type == "status" => status = true,
                 Some(Event::Message { .. }) => {}
-                Some(Event::Closed { channel, why }) => return Err(format!("the kernel's {} socket failed: {why}", channel.name())),
-                Some(Event::Flood) => return Err("the kernel flooded the hub while starting".into()),
-                None => return Err("the kernel's sockets ended".into()),
+                Some(Event::Closed { channel, why }) => return Err(villa::Error::invalid(format!("the kernel's {} socket failed: {why}", channel.name()))),
+                Some(Event::Flood) => return Err(villa::Error::invalid("the kernel flooded the hub while starting")),
+                None => return Err(villa::Error::invalid("the kernel's sockets ended")),
             },
-            e = exited(exit) => return Err(format!("the kernel {e} before it was ready")),
+            e = exited(exit) => return Err(villa::Error::invalid(format!("the kernel {e} before it was ready"))),
             _ = tick.tick() => {
                 session.send(Channel::Shell, &Message::request(session_id, "kernel_info_request", json!({})))?;
             }

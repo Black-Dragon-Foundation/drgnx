@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The inner spec's wire version: 2 adds `browser`.
 pub const VERSION: u32 = 2;
@@ -44,6 +44,8 @@ pub const EXIT_CANNOT_EXEC: i32 = 126;
 pub const EXIT_NOT_FOUND: i32 = 127;
 /// The longest status line [`read_status`] accepts.
 const STATUS_MAX: usize = 4096;
+/// The most of `/proc/<pid>/status` that is read.
+const STATUS_FILE_CAP: u64 = 1 << 16;
 
 /// What the helper applies before it execs the program. Travels as JSON on a sealed memfd ([`spec_memfd`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,7 +273,7 @@ pub fn browser_plan_for(
         .map(str::to_owned),
     );
     argv.extend(b.host_args.iter().cloned());
-    let env = ["HOME", "XDG_CACHE_HOME", "TMPDIR"]
+    let env = [stig::HOME_VAR, stig::Xdg::Cache.var(), "TMPDIR"]
         .map(|k| (k.to_owned(), dir.clone()))
         .into_iter()
         .chain([("PATH".to_owned(), "/usr/bin:/bin".to_owned())])
@@ -345,8 +347,7 @@ pub fn spec_memfd(spec: &InnerSpec) -> io::Result<OwnedFd> {
 /// Not Linux: unsupported.
 // Android among them: no backend; fails closed.
 #[cfg(not(target_os = "linux"))]
-pub fn spec_memfd(spec: &InnerSpec) -> io::Result<OwnedFd> {
-    let _ = spec;
+pub fn spec_memfd(_spec: &InnerSpec) -> io::Result<OwnedFd> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "the inner helper is Linux only",
@@ -412,7 +413,8 @@ pub fn read_status_for(
     deadline: Duration,
     browser: bool,
 ) -> Result<LayersReport, Refusal> {
-    let start = Instant::now();
+    // real time: the wait is for a child's write, not for the installed clock
+    let start = stund::real::instant();
     let mut buf: Vec<u8> = Vec::new();
     loop {
         if let Some(end) = buf.iter().position(|&b| b == b'\n') {
@@ -469,7 +471,7 @@ pub fn read_status_for(
 /// The first non-empty line of the child's stderr. The caller's reader may lag the status pipe's EOF, so an empty
 /// tail is asked for again for up to 200 ms.
 fn first_stderr_line(stderr_tail: &dyn Fn() -> String) -> String {
-    let start = Instant::now();
+    let start = stund::real::instant();
     loop {
         let tail = stderr_tail();
         if let Some(line) = tail.lines().map(str::trim).find(|l| !l.is_empty()) {
@@ -478,7 +480,7 @@ fn first_stderr_line(stderr_tail: &dyn Fn() -> String) -> String {
         if start.elapsed() >= Duration::from_millis(200) {
             return "the helper sent no status".into();
         }
-        std::thread::sleep(Duration::from_millis(20));
+        stund::real::sleep_blocking(Duration::from_millis(20));
     }
 }
 
@@ -577,8 +579,10 @@ fn threads_in(status: &str) -> Option<u32> {
 /// rights the first gave up.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn single_thread() -> Result<(), String> {
-    let status = std::fs::read_to_string("/proc/self/status")
-        .map_err(|e| format!("cannot count this process's threads (/proc/self/status: {e})"))?;
+    // `/proc/self` is a link, which `eitri` refuses: the process's own number names the same directory
+    let path = format!("/proc/{}/status", std::process::id());
+    let status = eitri::read_string(Path::new(&path), STATUS_FILE_CAP)
+        .map_err(|e| format!("cannot count this process's threads ({path}: {e})"))?;
     match threads_in(&status) {
         Some(1) => Ok(()),
         Some(n) => Err(format!(
@@ -602,7 +606,7 @@ pub fn inner_main(args: impl Iterator<Item = OsString>) -> i32 {
 #[cfg(not(target_os = "linux"))]
 pub fn inner_main(args: impl Iterator<Item = OsString>) -> i32 {
     drop(args);
-    eprintln!("ratatoskr sandbox-inner: the inner helper is Linux only");
+    crate::say("ratatoskr sandbox-inner: the inner helper is Linux only");
     EXIT_SETUP
 }
 
@@ -648,8 +652,11 @@ mod linux {
         match setup(args, ppid) {
             Ok(ready) => run(ready),
             Err(e) => {
-                eprintln!("ratatoskr sandbox-inner: {e}");
-                let _ = write_all(STATUS_FD, status_err_line(&e).as_bytes());
+                crate::say(&format!("ratatoskr sandbox-inner: {e}"));
+                if let Err(w) = write_all(STATUS_FD, status_err_line(&e).as_bytes()) {
+                    // the parent's end of the status pipe is gone: the stderr line above is all there is
+                    tracing::debug!(error = %w, "the status line was not written");
+                }
                 EXIT_SETUP
             }
         }
@@ -840,11 +847,15 @@ mod linux {
                     libc::_exit(EXIT_SETUP);
                 }
                 if let Err(e) = landlock::restrict(&b.landlock, abi_cap) {
-                    eprintln!("ratatoskr sandbox-inner: the browser layer: Landlock: {e}");
+                    crate::say(&format!(
+                        "ratatoskr sandbox-inner: the browser layer: Landlock: {e}"
+                    ));
                     libc::_exit(EXIT_SETUP);
                 }
                 if let Err(e) = seccomp::install(&prog) {
-                    eprintln!("ratatoskr sandbox-inner: the browser's seccomp: {e}");
+                    crate::say(&format!(
+                        "ratatoskr sandbox-inner: the browser's seccomp: {e}"
+                    ));
                     libc::_exit(EXIT_SETUP);
                 }
                 libc::execve(argv_p[0], argv_p.as_ptr(), envp_p.as_ptr());
@@ -883,20 +894,20 @@ mod linux {
     fn run(ready: Ready) -> i32 {
         // SAFETY: close_range only closes descriptors; Landlock needs Linux 5.13, close_range 5.9.
         if unsafe { libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32) } != 0 {
-            eprintln!(
+            crate::say(&format!(
                 "ratatoskr sandbox-inner: cannot close descriptors: {}",
                 io::Error::last_os_error()
-            );
+            ));
             return EXIT_SETUP;
         }
         if let Some(dir) = &ready.chdir {
             // SAFETY: a NUL-terminated path.
             if unsafe { libc::chdir(dir.as_ptr()) } != 0 {
-                eprintln!(
+                crate::say(&format!(
                     "ratatoskr sandbox-inner: cannot enter {}: {}",
                     dir.to_string_lossy(),
                     io::Error::last_os_error()
-                );
+                ));
                 return EXIT_SETUP;
             }
         }
@@ -905,7 +916,7 @@ mod linux {
         if let Some(r) = &ready.rlimits
             && let Err(e) = apply_rlimits(r)
         {
-            eprintln!("ratatoskr sandbox-inner: {e}");
+            crate::say(&format!("ratatoskr sandbox-inner: {e}"));
             return EXIT_SETUP;
         }
         let argv = nul_terminated(&ready.argv);
@@ -922,14 +933,14 @@ mod linux {
         let program = ready.argv[0].to_string_lossy();
         match cannot {
             Some((path, e)) => {
-                eprintln!(
+                crate::say(&format!(
                     "ratatoskr sandbox-inner: cannot run {}: {e}",
                     path.to_string_lossy()
-                );
+                ));
                 EXIT_CANNOT_EXEC
             }
             None => {
-                eprintln!("ratatoskr sandbox-inner: {program}: not found");
+                crate::say(&format!("ratatoskr sandbox-inner: {program}: not found"));
                 EXIT_NOT_FOUND
             }
         }
@@ -1137,7 +1148,8 @@ mod linux {
 
     /// Wait for exactly `ready\n` on `rd` within `timeout_ms`; `what` names the child in the errors.
     fn wait_ready(rd: OwnedFd, timeout_ms: u32, what: &str) -> Result<(), String> {
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms.into());
+        // real time: this helper waits on a child's write, and runs before any runtime exists
+        let deadline = stund::real::instant() + Duration::from_millis(timeout_ms.into());
         let mut buf = Vec::new();
         loop {
             if let Some(end) = buf.iter().position(|&b| b == b'\n') {
@@ -1153,7 +1165,7 @@ mod linux {
             if buf.len() > 64 {
                 return Err(format!("{what}'s ready line is too long"));
             }
-            let left = deadline.saturating_duration_since(Instant::now());
+            let left = deadline.saturating_duration_since(stund::real::instant());
             if left.is_zero() {
                 return Err(format!("{what} was not ready within {timeout_ms} ms"));
             }
@@ -1265,7 +1277,7 @@ mod tests {
     #[test]
     fn a_second_thread_is_refused() {
         let (tx, rx) = std::sync::mpsc::channel::<()>();
-        let t = std::thread::spawn(move || rx.recv());
+        let t = saman::spawn_thread("second-thread", move || rx.recv()).unwrap();
         let e = single_thread().unwrap_err();
         let n: u32 = e
             .strip_prefix("the inner helper must be single-threaded; it has ")
@@ -1343,7 +1355,7 @@ mod tests {
                 "--hub-fd".into(),
                 "3".into(),
             ],
-            env: vec![("HOME".into(), "/tmp/drgnx-browser".into())],
+            env: vec![(stig::HOME_VAR.into(), "/tmp/drgnx-browser".into())],
             own_dir: "/tmp/drgnx-browser".into(),
             landlock: plan(Tier::Full),
             ready_timeout_ms: BROWSER_READY_TIMEOUT_MS,
@@ -1459,8 +1471,8 @@ mod tests {
         assert_eq!(
             env,
             [
-                ("HOME", "/tmp/drgnx-browser"),
-                ("XDG_CACHE_HOME", "/tmp/drgnx-browser"),
+                (stig::HOME_VAR, "/tmp/drgnx-browser"),
+                (stig::Xdg::Cache.var(), "/tmp/drgnx-browser"),
                 ("TMPDIR", "/tmp/drgnx-browser"),
                 ("PATH", "/usr/bin:/bin")
             ]
@@ -1535,9 +1547,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     mod linux_io {
         use super::*;
-        use std::os::unix::process::CommandExt;
-        use std::process::{Command, Stdio};
-        use std::sync::{Arc, Mutex};
 
         #[test]
         fn spec_fd_is_sealed() {
@@ -1567,37 +1576,48 @@ mod tests {
             );
         }
 
-        /// `sh -c SCRIPT` with the status pipe's write end at fd 4 and stderr collected.
-        fn spawn_with_status(script: &str) -> (std::process::Child, OwnedFd, Arc<Mutex<String>>) {
-            let (rd, wr) = status_pipe().unwrap();
-            let hi = rustix::io::fcntl_dupfd_cloexec(&wr, 50).unwrap();
-            drop(wr);
-            let w = hi.as_raw_fd();
-            let mut cmd = Command::new("/bin/sh");
-            cmd.args(["-c", script])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped());
-            // SAFETY: dup2 is async-signal-safe.
-            unsafe {
-                cmd.pre_exec(move || {
-                    if libc::dup2(w, STATUS_FD) < 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
+        /// A `sh` child of these tests, and the pool its stderr is read on.
+        struct Shell {
+            pool: saman::Executor,
+            child: draugr::Child,
+        }
+
+        impl Shell {
+            /// Wait for it to exit.
+            fn wait(&mut self) {
+                let waited = self
+                    .pool
+                    .block_on(self.child.wait_deadline(Duration::from_secs(30)));
+                waited.unwrap();
             }
-            let mut child = cmd.spawn().unwrap();
-            drop(hi);
-            let tail = Arc::new(Mutex::new(String::new()));
-            let mut stderr = child.stderr.take().unwrap();
-            let t = Arc::clone(&tail);
-            std::thread::spawn(move || {
-                let mut s = String::new();
-                let _ = std::io::Read::read_to_string(&mut stderr, &mut s);
-                *t.lock().unwrap() = s;
-            });
-            (child, rd, tail)
+
+            /// End its process group and reap it.
+            fn kill(&mut self) {
+                let ended = self.pool.block_on(self.child.wait_deadline(Duration::ZERO));
+                ended.unwrap();
+            }
+        }
+
+        /// `sh -c SCRIPT` with the status pipe's write end at fd 4 and stderr collected.
+        fn spawn_with_status(script: &str) -> (Shell, OwnedFd, draugr::StderrTail) {
+            let (rd, wr) = status_pipe().unwrap();
+            let pool = saman::Executor::new(2).unwrap();
+            let child = pool
+                .block_on(draugr::spawn(draugr::Spec {
+                    program: "/bin/sh".into(),
+                    args: vec!["-c".into(), script.into()],
+                    env: draugr::env::build(&["PATH"], &[], &[]),
+                    cwd: None,
+                    stdin_null: true,
+                    pass_fds: vec![draugr::PassFd {
+                        fd: std::sync::Arc::new(wr),
+                        target: STATUS_FD,
+                    }],
+                    new_session: false,
+                }))
+                .unwrap();
+            let tail = child.stderr();
+            (Shell { pool, child }, rd, tail)
         }
 
         /// EOF with no line (bwrap failing before the helper runs, say) is a refusal naming stderr's first line.
@@ -1606,18 +1626,17 @@ mod tests {
             let (mut child, rd, tail) = spawn_with_status(
                 "echo 'bwrap: setting up uid map: Permission denied' >&2; echo more >&2; exit 1",
             );
-            let r = read_status(rd, &|| tail.lock().unwrap().clone(), Duration::from_secs(5))
-                .unwrap_err();
+            let r = read_status(rd, &|| tail.get(), Duration::from_secs(5)).unwrap_err();
             assert_eq!(r.rule, Rule::Setup);
             assert_eq!(
                 r.message,
                 "sandbox setup failed: bwrap: setting up uid map: Permission denied"
             );
-            child.wait().unwrap();
+            child.wait();
             let (mut child, rd, _) = spawn_with_status("exit 1");
             let r = read_status(rd, &String::new, Duration::from_secs(5)).unwrap_err();
             assert_eq!(r.message, "sandbox setup failed: the helper sent no status");
-            child.wait().unwrap();
+            child.wait();
         }
 
         /// A helper that never writes is refused at the deadline, not waited for.
@@ -1627,8 +1646,7 @@ mod tests {
             let r = read_status(rd, &String::new, Duration::from_secs(1)).unwrap_err();
             assert_eq!(r.rule, Rule::Setup);
             assert_eq!(r.message, "sandbox setup timed out");
-            child.kill().unwrap();
-            child.wait().unwrap();
+            child.kill();
         }
 
         /// The refusal comes at the deadline, not before and not long after: a timing test.
@@ -1636,15 +1654,14 @@ mod tests {
         #[ignore = "timing: the helper's deadline is kept"]
         fn the_hung_helper_is_refused_at_the_deadline_not_before_or_long_after() {
             let (mut child, rd, _) = spawn_with_status("exec sleep 60");
-            let start = Instant::now();
-            let _ = read_status(rd, &String::new, Duration::from_secs(1)).unwrap_err();
+            let start = stund::real::instant();
+            read_status(rd, &String::new, Duration::from_secs(1)).unwrap_err();
             let took = start.elapsed();
             assert!(
                 took >= Duration::from_secs(1) && took < Duration::from_secs(3),
                 "{took:?}"
             );
-            child.kill().unwrap();
-            child.wait().unwrap();
+            child.kill();
         }
 
         /// A line that arrives in pieces is still one line.
@@ -1659,8 +1676,7 @@ mod tests {
                 read_status(rd, &String::new, Duration::from_secs(3)),
                 Ok(report())
             );
-            child.kill().unwrap();
-            child.wait().unwrap();
+            child.kill();
         }
     }
 }

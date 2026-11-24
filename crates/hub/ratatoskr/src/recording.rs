@@ -26,7 +26,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use bifrost::engine::{End, Exchange, Sent, Tap};
@@ -57,7 +57,7 @@ struct Replay {
 static MODE: OnceLock<Mode> = OnceLock::new();
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(m)
 }
 
 fn var<'a>(env: &'a Env, name: &str) -> Option<&'a str> {
@@ -68,20 +68,20 @@ fn var<'a>(env: &'a Env, name: &str) -> Option<&'a str> {
 }
 
 /// At start: what ENV asks for, set up (the recorder, or the replayer started).  Err: the hub does not start.
-pub async fn start(env: &Env) -> Result<(), String> {
+pub async fn start(env: &Env) -> villa::Result<()> {
     match (var(env, "DRGNX_RECORD"), var(env, "DRGNX_REPLAY")) {
-        (Some(_), Some(_)) => Err(
-            "DRGNX_RECORD and DRGNX_REPLAY cannot both be set: a run is recorded or replayed"
-                .into(),
-        ),
+        (Some(_), Some(_)) => Err(villa::Error::invalid(
+            "DRGNX_RECORD and DRGNX_REPLAY cannot both be set: a run is recorded or replayed",
+        )),
         (Some(dir), None) => {
             let provenance = var(env, "DRGNX_RECORD_PROVENANCE").unwrap_or("live");
             if !matches!(provenance, "mock" | "live") {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "DRGNX_RECORD_PROVENANCE is {provenance:?}: mock or live"
-                ));
+                )));
             }
-            let r = Recorder::start(Path::new(dir), Roots::of_env(env), provenance)?;
+            let r = Recorder::start(Path::new(dir), Roots::of_env(env), provenance)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             // the caps `bin/drgnx record start` was given, for the manifest and the report (the run enforces them)
             if let Some(caps) = var(env, "DRGNX_RECORD_CAPS")
                 .and_then(|c| serde_json::from_str::<Value>(c).ok())
@@ -90,27 +90,30 @@ pub async fn start(env: &Env) -> Result<(), String> {
                 r.manifest(|m| m["caps"] = caps);
             }
             tracing::info!(dir, provenance, "recording this run (DRGNX_RECORD)");
-            let _ = MODE.set(Mode::Record(r));
+            crate::soft::done(MODE.set(Mode::Record(r)), "recording");
             Ok(())
         }
         (None, Some(dir)) => {
             let dir = PathBuf::from(dir);
             rec::read_manifest(&dir)?;
             let (d, e) = (dir.clone(), env.clone());
-            let (port, mock, scratch) =
-                crate::clock::blocking(move || replayer(&d, &e))
-                    .await
-                    .map_err(|e| format!("the replayer did not start: {e}"))??;
+            let (port, mock, scratch) = crate::clock::blocking(move || replayer(&d, &e))
+                .await
+                .map_err(|e| villa::Error::invalid(format!("the replayer did not start: {e}")))?
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             tracing::info!(dir = %dir.display(), port, "replaying a recorded run (DRGNX_REPLAY)");
-            let _ = MODE.set(Mode::Replay(Replay {
-                dir,
-                port,
-                mock,
-                scratch,
-                roots: Roots::of_env(env).to_json().to_string(),
-                speed: var(env, "DRGNX_REPLAY_SPEED").unwrap_or("0").to_owned(),
-                strict: var(env, "DRGNX_REPLAY_STRICT") == Some("1"),
-            }));
+            crate::soft::done(
+                MODE.set(Mode::Replay(Replay {
+                    dir,
+                    port,
+                    mock,
+                    scratch,
+                    roots: Roots::of_env(env).to_json().to_string(),
+                    speed: var(env, "DRGNX_REPLAY_SPEED").unwrap_or("0").to_owned(),
+                    strict: var(env, "DRGNX_REPLAY_STRICT") == Some("1"),
+                })),
+                "recording",
+            );
             Ok(())
         }
         (None, None) => Ok(()),
@@ -253,9 +256,12 @@ fn replayer(dir: &Path, env: &Env) -> Result<(u16, PathBuf, PathBuf), String> {
     .join("replay");
     std::fs::create_dir_all(&scratch)
         .map_err(|e| format!("cannot make {}: {e}", scratch.display()))?;
-    let _ = std::fs::remove_dir_all(scratch.join("claims"));
+    crate::soft::done(
+        std::fs::remove_dir_all(scratch.join("claims")),
+        "std::fs::remove_dir_all",
+    );
     let speed = var(env, "DRGNX_REPLAY_SPEED").unwrap_or("0");
-    let mut child = std::process::Command::new(&mock)
+    let mut child = crate::proc::Command::new(&mock)
         .arg("llm")
         .arg("--replay")
         .arg(dir)
@@ -265,9 +271,11 @@ fn replayer(dir: &Path, env: &Env) -> Result<(u16, PathBuf, PathBuf), String> {
         .arg(scratch.join("misses.jsonl"))
         .arg("--parent")
         .arg(std::process::id().to_string())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
+        .spawn(
+            crate::proc::Io::Null,
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Inherit,
+        )
         .map_err(|e| format!("cannot run {}: {e}", mock.display()))?;
     let mut line = String::new();
     let out = child.stdout.take().ok_or("the replayer has no stdout")?;
@@ -281,14 +289,17 @@ fn replayer(dir: &Path, env: &Env) -> Result<(u16, PathBuf, PathBuf), String> {
     match port {
         Some(p) => {
             // it ends with this hub (`--parent`); its status is read when it does, so it leaves no zombie
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
+            crate::soft::done(
+                saman::spawn_thread("ratatoskr:recording", move || {
+                    crate::soft::done(child.wait(), "recording");
+                }),
+                "thread",
+            );
             Ok((p, mock, scratch))
         }
         None => {
-            let _ = child.kill();
-            let _ = child.wait();
+            crate::soft::done(child.kill(), "recording");
+            crate::soft::done(child.wait(), "recording");
             Err(format!("the replayer said {:?}, not its port", line.trim()))
         }
     }
@@ -301,6 +312,8 @@ fn replayer(dir: &Path, env: &Env) -> Result<(u16, PathBuf, PathBuf), String> {
 pub struct Recorder {
     dir: PathBuf,
     started: Instant,
+    /// The same moment on the gateway's clock, for the instants a [`Tap`] hands over.
+    started_tap: stund::Instant,
     seq: AtomicU64,
     exchanges: AtomicU64,
     /// The longest a connection's reader thread spent in a worktree look, in microseconds.
@@ -334,17 +347,26 @@ impl Recorder {
         let started = crate::log::rfc3339(crate::clock::wall_secs() as u64);
         let manifest = rec::manifest(provenance, &started, crate::version::COMMIT, build, &roots);
         let text = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
-        std::fs::write(dir.join("manifest.json"), text + "\n")
+        crate::fsio::write(dir.join("manifest.json"), text + "\n")
             .map_err(|e| format!("cannot write {}/manifest.json: {e}", dir.display()))?;
         let (tx, rx) = mpsc::channel::<(String, String)>();
         let into = dir.to_path_buf();
-        std::thread::Builder::new()
-            .name("recording".into())
-            .spawn(move || write_lines(&into, &rx))
-            .map_err(|e| format!("no writer thread: {e}"))?;
-        Ok(Arc::new(Recorder {
+        saman::spawn_thread("recording", move || write_lines(&into, &rx))
+            .map_err(|e| format!("no writer thread: {}", e.message()))?;
+        Ok(Recorder::open(dir, roots, manifest, tx))
+    }
+
+    /// A recorder in DIR whose lines go to TX (the writer thread's channel, or a test's own).
+    fn open(
+        dir: &Path,
+        roots: Roots,
+        manifest: Value,
+        tx: mpsc::Sender<(String, String)>,
+    ) -> Arc<Recorder> {
+        Arc::new(Recorder {
             dir: dir.to_path_buf(),
             started: crate::clock::real_now(),
+            started_tap: crate::clock::tap_now(),
             seq: AtomicU64::new(0),
             exchanges: AtomicU64::new(0),
             worst_stall_us: AtomicU64::new(0),
@@ -355,11 +377,17 @@ impl Recorder {
             by_sid: Mutex::new(HashMap::new()),
             acp_sessions: Mutex::new(HashMap::new()),
             manifest: Mutex::new(manifest),
-        }))
+        })
     }
 
     fn t_ms(&self, at: Instant) -> u64 {
         u64::try_from(at.saturating_duration_since(self.started).as_millis()).unwrap_or(u64::MAX)
+    }
+
+    /// The time since the start of an instant on the gateway's clock (a [`Tap`]'s).
+    fn t_ms_tap(&self, at: stund::Instant) -> u64 {
+        u64::try_from(at.saturating_duration_since(self.started_tap).as_millis())
+            .unwrap_or(u64::MAX)
     }
 
     fn next_seq(&self) -> u64 {
@@ -370,7 +398,10 @@ impl Recorder {
     fn write(&self, stream: &str, seq: u64, at: Instant, dir: &str, msg: Value) {
         let line = json!({"seq": seq, "t_ms": self.t_ms(at), "dir": dir, "msg": msg}).to_string();
         // the receiver gone means the hub is stopping: nothing more is written
-        let _ = lock(&self.lines).send((stream.to_owned(), line));
+        crate::soft::done(
+            lock(&self.lines).send((stream.to_owned(), line)),
+            "lines send",
+        );
     }
 
     /// A connection's reader thread spent D in the worktree look (git and file reads, on that thread): the worst so
@@ -388,8 +419,8 @@ impl Recorder {
         f(&mut m);
         let text = serde_json::to_string_pretty(&*m).unwrap_or_default() + "\n";
         let tmp = self.dir.join("manifest.json.tmp");
-        if let Err(e) = std::fs::write(&tmp, text)
-            .and_then(|()| std::fs::rename(&tmp, self.dir.join("manifest.json")))
+        if let Err(e) = crate::fsio::write(&tmp, text)
+            .and_then(|()| crate::fsio::rename(&tmp, self.dir.join("manifest.json")))
         {
             tracing::error!("the recording's manifest cannot be written: {e}");
         }
@@ -403,13 +434,9 @@ fn write_lines(dir: &Path, rx: &mpsc::Receiver<(String, String)>) {
         if !files.contains_key(&stream) {
             let path = dir.join(&stream);
             if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
+                crate::soft::done(std::fs::create_dir_all(parent), "std::fs::create_dir_all");
             }
-            match std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-            {
+            match crate::fsio::append(&path, true) {
                 Ok(f) => {
                     files.insert(stream.clone(), f);
                 }
@@ -451,7 +478,7 @@ impl Tap for Recorder {
             .unwrap_or(Value::Null);
         let mut line = Map::new();
         line.insert("seq".into(), json!(seq));
-        line.insert("t_ms".into(), json!(self.t_ms(sent.at)));
+        line.insert("t_ms".into(), json!(self.t_ms_tap(sent.at)));
         line.insert("id".into(), json!(format!("x{id}")));
         if let Some(s) = sent.session {
             line.insert("session".into(), json!(s));
@@ -488,14 +515,14 @@ struct Line {
     line: Map<String, Value>,
     response: Map<String, Value>,
     chunks: Vec<Value>,
-    begun: Instant,
-    last: Instant,
+    begun: stund::Instant,
+    last: stund::Instant,
     scrub: Scrub,
     lines: mpsc::Sender<(String, String)>,
     written: bool,
 }
 
-fn ms(from: Instant, to: Instant) -> u64 {
+fn ms(from: stund::Instant, to: stund::Instant) -> u64 {
     u64::try_from(to.saturating_duration_since(from).as_millis()).unwrap_or(u64::MAX)
 }
 
@@ -517,12 +544,12 @@ impl Line {
         self.line.insert("response".into(), Value::Object(response));
         let text = Value::Object(std::mem::take(&mut self.line)).to_string();
         // the receiver gone means the hub is stopping: nothing more is written
-        let _ = self.lines.send(("llm.jsonl".into(), text));
+        crate::soft::done(self.lines.send(("llm.jsonl".into(), text)), "lines send");
     }
 }
 
 impl Exchange for Line {
-    fn head(&mut self, at: Instant, status: u16, headers: &http::HeaderMap) {
+    fn head(&mut self, at: stund::Instant, status: u16, headers: &http::HeaderMap) {
         let pairs: Vec<(&str, &str)> = headers
             .iter()
             .filter_map(|(n, v)| Some((n.as_str(), v.to_str().ok()?)))
@@ -535,13 +562,13 @@ impl Exchange for Line {
         self.last = at;
     }
 
-    fn chunk(&mut self, at: Instant, data: &[u8]) {
+    fn chunk(&mut self, at: stund::Instant, data: &[u8]) {
         self.chunks
             .push(json!([ms(self.last, at), stored(&self.scrub, data)]));
         self.last = at;
     }
 
-    fn end(mut self: Box<Self>, _at: Instant, end: End) {
+    fn end(mut self: Box<Self>, _at: stund::Instant, end: End) {
         let end = match end {
             End::Complete => json!({"end": "complete"}),
             End::Dropped => json!({"end": "dropped"}),
@@ -734,16 +761,19 @@ impl AcpTap {
             };
             let to = out.join("files").join(f);
             if let Some(p) = to.parent() {
-                let _ = std::fs::create_dir_all(p);
+                crate::soft::done(std::fs::create_dir_all(p), "std::fs::create_dir_all");
             }
-            if let Err(e) = std::fs::write(&to, bytes) {
+            if let Err(e) = crate::fsio::write(&to, bytes) {
                 tracing::error!("the recording cannot write {}: {e}", to.display());
             }
         }
         if !deleted.is_empty() {
             deleted.sort();
             let list: String = deleted.iter().map(|d| format!("{d}\n")).collect();
-            let _ = std::fs::write(out.join("deleted.txt"), list);
+            crate::soft::done(
+                crate::fsio::write(out.join("deleted.txt"), list),
+                "crate::fsio::write",
+            );
         }
         let mut msg = json!({"path": rel});
         if moved {
@@ -865,7 +895,7 @@ impl Tree {
 
 /// `git -C CWD ARGS…`'s output, when it succeeds.
 fn git(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    std::process::Command::new("git")
+    crate::proc::Command::new("git")
         .arg("-C")
         .arg(cwd)
         .args(args)
@@ -971,5 +1001,63 @@ mod tests {
             [PathBuf::from("/rec/run"), PathBuf::from("/bin/dir")]
         );
         assert_eq!(d.write, [PathBuf::from("/scratch/replay")]);
+    }
+
+    // Pattern D (pure): a chunk handed over before any head is timed from the send, not from the handling.
+    #[test]
+    fn a_first_chunk_is_timed_from_the_send() {
+        let (tx, rx) = mpsc::channel();
+        let r = Recorder::open(Path::new("/rec/run"), Roots::default(), json!({}), tx);
+        let sent = crate::clock::tap_now() + std::time::Duration::from_millis(700);
+        let mut x = r.begin(Sent {
+            provider: "p",
+            session: None,
+            path: "/v1/messages",
+            attempt: 1,
+            of: 1,
+            headers: Vec::new(),
+            body: b"{}",
+            client: None,
+            at: sent,
+        });
+        x.chunk(sent + std::time::Duration::from_millis(250), b"data");
+        x.end(sent + std::time::Duration::from_millis(300), End::Complete);
+        let (_, text) = rx.recv().expect("the line is written");
+        let line: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(line["response"]["chunks"][0][0], 250, "{line}");
+    }
+
+    // Pattern D (pure): an exchange line keeps the times the gateway handed over (its send, the head, a chunk), however
+    // long the recorder takes to handle them: the instants are moved ahead of now, so a stamp taken at handling time
+    // would read about zero.
+    #[test]
+    fn an_exchange_keeps_the_times_it_was_sent_with() {
+        let (tx, rx) = mpsc::channel();
+        let r = Recorder::open(Path::new("/rec/run"), Roots::default(), json!({}), tx);
+        let sent = crate::clock::tap_now() + std::time::Duration::from_millis(700);
+        let mut x = r.begin(Sent {
+            provider: "p",
+            session: None,
+            path: "/v1/messages",
+            attempt: 1,
+            of: 1,
+            headers: Vec::new(),
+            body: b"{}",
+            client: None,
+            at: sent,
+        });
+        x.head(
+            sent + std::time::Duration::from_millis(1000),
+            200,
+            &http::HeaderMap::new(),
+        );
+        x.chunk(sent + std::time::Duration::from_millis(1300), b"data");
+        x.end(sent + std::time::Duration::from_millis(1400), End::Complete);
+        let (stream, text) = rx.recv().expect("the line is written");
+        assert_eq!(stream, "llm.jsonl");
+        let line: Value = serde_json::from_str(&text).unwrap();
+        assert!(line["t_ms"].as_u64().unwrap() >= 700, "{line}");
+        assert_eq!(line["response"]["head_ms"], 1000, "{line}");
+        assert_eq!(line["response"]["chunks"][0][0], 300, "{line}");
     }
 }

@@ -213,7 +213,7 @@ pub struct Door {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(m)
 }
 
 impl Door {
@@ -397,7 +397,7 @@ impl Door {
             file: file.to_path_buf(),
             id,
         };
-        let _ = rx.await;
+        crate::soft::done(rx.await, "door");
         turn
     }
 
@@ -754,7 +754,7 @@ impl Door {
                             }
                         }
                         if let Some(tx) = p.reply.take() {
-                            let _ = tx.send((outcome, p.answer.take()));
+                            crate::soft::done(tx.send((outcome, p.answer.take())), "tx send");
                         }
                     }
                     Vec::new()
@@ -936,7 +936,7 @@ fn lines_of(served: Option<&Served>, real: &Path, kind: &WriteKind) -> Option<Ed
             if !small {
                 return None;
             }
-            disk = std::fs::read_to_string(real).ok()?;
+            disk = crate::fsio::read_to_string(real).ok()?;
             disk.as_str()
         }
     };
@@ -989,42 +989,44 @@ mod tests {
 
     /// [D] With pair off (Balanced: the toggle is allowed, not on) the edit tools answer with the hint, before any
     /// editor is asked.
-    #[tokio::test]
-    async fn pair_off_tools_answer_with_the_hint() {
-        let d = tempfile::tempdir().unwrap();
-        let root = d.path().canonicalize().unwrap();
-        std::fs::write(root.join("a.txt"), "a\n").unwrap();
-        let editors = Arc::new(Editors::default());
-        let out = Arc::new(Outbox::new(1));
-        editors.subscribe(1, out.clone());
-        let door = Door::new(editors, Arc::default());
-        let f = root.join("a.txt").to_string_lossy().into_owned();
-        for kind in [
-            WriteKind::Edit {
-                old: "a".into(),
-                new: "b".into(),
-            },
-            WriteKind::Whole {
-                content: "b\n".into(),
-            },
-        ] {
-            let r = door
-                .write("s1", &root, &chat(Preset::Balanced), &f, kind)
-                .await
-                .unwrap_err();
-            assert_eq!(r.0, PAIR_OFF);
-        }
-        assert!(out.take_lines().is_empty(), "no editor was asked");
-        assert!(!door.paired("s1", &chat(Preset::Balanced)));
-        assert!(door.paired("s1", &chat(Preset::Autonomous)));
-        assert!(!door.paired("s1", &chat(Preset::Cautious)));
+    #[test]
+    fn pair_off_tools_answer_with_the_hint() {
+        saman::block_on_current(async move {
+            let d = tempfile::tempdir().unwrap();
+            let root = d.path().canonicalize().unwrap();
+            crate::fsio::write(root.join("a.txt"), "a\n").unwrap();
+            let editors = Arc::new(Editors::default());
+            let out = Arc::new(Outbox::new(1));
+            editors.subscribe(1, out.clone());
+            let door = Door::new(editors, Arc::default());
+            let f = root.join("a.txt").to_string_lossy().into_owned();
+            for kind in [
+                WriteKind::Edit {
+                    old: "a".into(),
+                    new: "b".into(),
+                },
+                WriteKind::Whole {
+                    content: "b\n".into(),
+                },
+            ] {
+                let r = door
+                    .write("s1", &root, &chat(Preset::Balanced), &f, kind)
+                    .await
+                    .unwrap_err();
+                assert_eq!(r.0, PAIR_OFF);
+            }
+            assert!(out.take_lines().is_empty(), "no editor was asked");
+            assert!(!door.paired("s1", &chat(Preset::Balanced)));
+            assert!(door.paired("s1", &chat(Preset::Autonomous)));
+            assert!(!door.paired("s1", &chat(Preset::Cautious)));
+        })
     }
 
     /// A checkout with a.txt, and a door whose editor (connection 1) is OUT.
     fn fixture() -> (tempfile::TempDir, PathBuf, Arc<Door>, Arc<Outbox>) {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().canonicalize().unwrap();
-        std::fs::write(root.join("a.txt"), "a\n").unwrap();
+        crate::fsio::write(root.join("a.txt"), "a\n").unwrap();
         let editors = Arc::new(Editors::default());
         let out = Arc::new(Outbox::new(1));
         editors.subscribe(1, out.clone());
@@ -1048,381 +1050,421 @@ mod tests {
 
     /// [D] A file the editor has open as a large or remote buffer refuses a pair write with the reason, and the
     /// editor is sent nothing; a file no editor has goes to the disk (refused there without a read).
-    #[tokio::test]
-    async fn large_and_remote_refuse() {
-        use super::super::open_set::{FileKind, LARGE_OR_REMOTE};
-        let (_d, root, door, out) = fixture();
-        let eff = chat(Preset::Autonomous);
-        for (name, kind) in [("big.log", FileKind::Large), ("far.txt", FileKind::Remote)] {
-            let f = root.join(name);
-            opened(&door, &f, kind);
-            let edit = WriteKind::Edit {
-                old: "a".into(),
-                new: "b".into(),
-            };
-            let r = door
-                .write("s1", &root, &eff, &f.to_string_lossy(), edit)
-                .await
-                .unwrap_err();
-            assert_eq!(r.0, LARGE_OR_REMOTE, "{name}");
-        }
-        let r = door
-            .write(
-                "s1",
-                &root,
-                &eff,
-                &root.join("a.txt").to_string_lossy(),
-                WriteKind::Edit {
+    #[test]
+    fn large_and_remote_refuse() {
+        saman::block_on_current(async move {
+            use super::super::open_set::{FileKind, LARGE_OR_REMOTE};
+            let (_d, root, door, out) = fixture();
+            let eff = chat(Preset::Autonomous);
+            for (name, kind) in [("big.log", FileKind::Large), ("far.txt", FileKind::Remote)] {
+                let f = root.join(name);
+                opened(&door, &f, kind);
+                let edit = WriteKind::Edit {
                     old: "a".into(),
                     new: "b".into(),
-                },
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            r.0,
-            super::super::disk::UNREAD,
-            "a file open nowhere goes to the disk"
-        );
-        assert!(events(&out).is_empty(), "nothing went to the editor");
+                };
+                let r = door
+                    .write("s1", &root, &eff, &f.to_string_lossy(), edit)
+                    .await
+                    .unwrap_err();
+                assert_eq!(r.0, LARGE_OR_REMOTE, "{name}");
+            }
+            let r = door
+                .write(
+                    "s1",
+                    &root,
+                    &eff,
+                    &root.join("a.txt").to_string_lossy(),
+                    WriteKind::Edit {
+                        old: "a".into(),
+                        new: "b".into(),
+                    },
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                r.0,
+                super::super::disk::UNREAD,
+                "a file open nowhere goes to the disk"
+            );
+            assert!(events(&out).is_empty(), "nothing went to the editor");
+        })
     }
 
     /// [D] A write carries the step of its session it was made in to the editor, which applies it under that step.
-    #[tokio::test]
-    async fn a_write_carries_the_sessions_step() {
-        use super::super::open_set::FileKind;
-        let (_d, root, door, out) = fixture();
-        let eff = chat(Preset::Autonomous);
-        let f = root.join("a.txt");
-        opened(&door, &f, FileKind::Normal);
-        let path = f.to_string_lossy().into_owned();
-        let d2 = door.clone();
-        let (r2, e2) = (root.clone(), eff.clone());
-        let w = tokio::spawn(async move {
-            let edit = WriteKind::Edit {
-                old: "a".into(),
-                new: "b".into(),
-            };
-            d2.write_with("s1", 7, &r2, &e2, &path, edit, None).await
-        });
-        // the write runs to its wait on the editor's answer without yielding: one yield lets it get there
-        tokio::task::yield_now().await;
-        let sent = events(&out);
-        assert_eq!(sent.len(), 1, "{sent:?}");
-        assert_eq!(sent[0]["event"], "pair-apply");
-        assert_eq!(sent[0]["data"]["step"], 7, "{sent:?}");
-        w.abort();
+    #[test]
+    fn a_write_carries_the_sessions_step() {
+        saman::block_on_current(async move {
+            use super::super::open_set::FileKind;
+            let (_d, root, door, out) = fixture();
+            let eff = chat(Preset::Autonomous);
+            let f = root.join("a.txt");
+            opened(&door, &f, FileKind::Normal);
+            let path = f.to_string_lossy().into_owned();
+            let d2 = door.clone();
+            let (r2, e2) = (root.clone(), eff.clone());
+            let w = crate::clock::spawn_untracked(module_path!(), async move {
+                let edit = WriteKind::Edit {
+                    old: "a".into(),
+                    new: "b".into(),
+                };
+                d2.write_with("s1", 7, &r2, &e2, &path, edit, None).await
+            });
+            // the write runs to its wait on the editor's answer without yielding: one yield lets it get there
+            tokio::task::yield_now().await;
+            let sent = events(&out);
+            assert_eq!(sent.len(), 1, "{sent:?}");
+            assert_eq!(sent[0]["event"], "pair-apply");
+            assert_eq!(sent[0]["data"]["step"], 7, "{sent:?}");
+            w.abort();
+        })
     }
 
     /// [D] The user's own write (the Search view's) and a paired chat's never interleave on one file: the user's turn
     /// waits for the chat's write in the editor, and a chat write that comes during the turn is sent only once the turn
     /// ends.  A turn given up before it came does not hold the queue.
-    #[tokio::test]
-    async fn a_users_turn_and_pair_writes_take_turns() {
-        use super::super::open_set::FileKind;
-        let (_d, root, door, out) = fixture();
-        let eff = chat(Preset::Autonomous);
-        let f = root.join("a.txt");
-        opened(&door, &f, FileKind::Normal);
-        let path = f.to_string_lossy().into_owned();
-        let edit = || WriteKind::Edit {
-            old: "a".into(),
-            new: "b".into(),
-        };
-        let (d2, r2, e2, p2) = (door.clone(), root.clone(), eff.clone(), path.clone());
-        let first = tokio::spawn(async move { d2.write("s1", &r2, &e2, &p2, edit()).await });
-        tokio::task::yield_now().await;
-        let sent = events(&out);
-        assert_eq!(sent[0]["event"], "pair-apply");
-        let id = sent[0]["data"]["write"].as_u64().unwrap();
-        // the user's turn waits behind the write in the editor
-        let d3 = door.clone();
-        let f3 = f.clone();
-        let turn = tokio::spawn(async move { d3.user_turn(&f3).await });
-        tokio::task::yield_now().await;
-        assert!(!turn.is_finished(), "the turn waits for the chat's write");
-        assert!(door.answer(
-            1,
-            PairAnswer {
-                write: id,
-                result: PairResult::Applied,
-                version: None,
-                reason: None,
-                lines: None,
-                saved: None,
-                not_saved: None,
-            }
-        ));
-        let held = turn.await.unwrap();
-        assert!(first.await.unwrap().is_ok());
-        // a chat write during the turn waits for its end
-        let (d4, r4, e4, p4) = (door.clone(), root.clone(), eff.clone(), path.clone());
-        let second = tokio::spawn(async move { d4.write("s1", &r4, &e4, &p4, edit()).await });
-        tokio::task::yield_now().await;
-        assert!(
-            events(&out).is_empty(),
-            "nothing sent during the user's turn"
-        );
-        drop(held);
-        tokio::task::yield_now().await;
-        let sent = events(&out);
-        assert_eq!(sent.len(), 1, "{sent:?}");
-        assert_eq!(sent[0]["event"], "pair-apply");
-        second.abort();
-        // a turn given up while it waited: the queue goes on without it
-        let other = root.join("b.txt");
-        let a = door.user_turn(&other).await;
-        let d5 = door.clone();
-        let o5 = other.clone();
-        let gave_up = tokio::spawn(async move { d5.user_turn(&o5).await });
-        tokio::task::yield_now().await;
-        gave_up.abort();
-        let _ = gave_up.await;
-        drop(a);
-        let d6 = door.clone();
-        let next = tokio::spawn(async move { d6.user_turn(&other).await });
-        tokio::task::yield_now().await;
-        assert!(
-            next.is_finished(),
-            "the queue was not held by the turn given up"
-        );
+    #[test]
+    fn a_users_turn_and_pair_writes_take_turns() {
+        saman::block_on_current(async move {
+            use super::super::open_set::FileKind;
+            let (_d, root, door, out) = fixture();
+            let eff = chat(Preset::Autonomous);
+            let f = root.join("a.txt");
+            opened(&door, &f, FileKind::Normal);
+            let path = f.to_string_lossy().into_owned();
+            let edit = || WriteKind::Edit {
+                old: "a".into(),
+                new: "b".into(),
+            };
+            let (d2, r2, e2, p2) = (door.clone(), root.clone(), eff.clone(), path.clone());
+            let first = crate::clock::spawn_untracked(module_path!(), async move {
+                d2.write("s1", &r2, &e2, &p2, edit()).await
+            });
+            tokio::task::yield_now().await;
+            let sent = events(&out);
+            assert_eq!(sent[0]["event"], "pair-apply");
+            let id = sent[0]["data"]["write"].as_u64().unwrap();
+            // the user's turn waits behind the write in the editor
+            let d3 = door.clone();
+            let f3 = f.clone();
+            let turn =
+                crate::clock::spawn_untracked(
+                    module_path!(),
+                    async move { d3.user_turn(&f3).await },
+                );
+            tokio::task::yield_now().await;
+            assert!(!turn.is_finished(), "the turn waits for the chat's write");
+            assert!(door.answer(
+                1,
+                PairAnswer {
+                    write: id,
+                    result: PairResult::Applied,
+                    version: None,
+                    reason: None,
+                    lines: None,
+                    saved: None,
+                    not_saved: None,
+                }
+            ));
+            let held = turn.await.unwrap();
+            assert!(first.await.unwrap().is_ok());
+            // a chat write during the turn waits for its end
+            let (d4, r4, e4, p4) = (door.clone(), root.clone(), eff.clone(), path.clone());
+            let second = crate::clock::spawn_untracked(module_path!(), async move {
+                d4.write("s1", &r4, &e4, &p4, edit()).await
+            });
+            tokio::task::yield_now().await;
+            assert!(
+                events(&out).is_empty(),
+                "nothing sent during the user's turn"
+            );
+            drop(held);
+            tokio::task::yield_now().await;
+            let sent = events(&out);
+            assert_eq!(sent.len(), 1, "{sent:?}");
+            assert_eq!(sent[0]["event"], "pair-apply");
+            second.abort();
+            // a turn given up while it waited: the queue goes on without it
+            let other = root.join("b.txt");
+            let a = door.user_turn(&other).await;
+            let d5 = door.clone();
+            let o5 = other.clone();
+            let gave_up =
+                crate::clock::spawn_untracked(
+                    module_path!(),
+                    async move { d5.user_turn(&o5).await },
+                );
+            tokio::task::yield_now().await;
+            gave_up.abort();
+            crate::soft::done(gave_up.await, "door");
+            drop(a);
+            let d6 = door.clone();
+            let next =
+                crate::clock::spawn_untracked(
+                    module_path!(),
+                    async move { d6.user_turn(&other).await },
+                );
+            tokio::task::yield_now().await;
+            assert!(
+                next.is_finished(),
+                "the queue was not held by the turn given up"
+            );
+        })
     }
 
     /// [D] The user takes the wheel while a write of the session waits in the editor: the editor is told to drop the
     /// session's writes (`pair-drop`), the write's answer is the editor's `dropped` (refused text, never applied), and
     /// every later write is refused at the door with nothing sent.  Given back, writes go to the editor again.
-    #[tokio::test]
-    async fn a_held_session_is_refused_at_the_door() {
-        use super::super::open_set::FileKind;
-        let (_d, root, door, out) = fixture();
-        let eff = chat(Preset::Autonomous);
-        let f = root.join("a.txt");
-        opened(&door, &f, FileKind::Normal);
-        let edit = || WriteKind::Edit {
-            old: "a".into(),
-            new: "b".into(),
-        };
-        let path = f.to_string_lossy().into_owned();
-        let d2 = door.clone();
-        let (r2, p2, e2) = (root.clone(), path.clone(), eff.clone());
-        let first = tokio::spawn(async move { d2.write("s1", &r2, &e2, &p2, edit()).await });
-        // the write runs to its wait on the editor's answer without yielding: one yield lets it get there
-        tokio::task::yield_now().await;
-        let sent = events(&out);
-        assert_eq!(sent.len(), 1, "{sent:?}");
-        assert_eq!(sent[0]["event"], "pair-apply");
-        let id = sent[0]["data"]["write"].as_u64().unwrap();
-        door.hold("s1", true);
-        let sent = events(&out);
-        assert_eq!(sent.len(), 1, "{sent:?}");
-        assert_eq!(sent[0]["event"], "pair-drop");
-        assert_eq!(sent[0]["data"]["session"], "s1");
-        // the verdict is the editor's own answer
-        assert!(door.answer(
-            1,
-            PairAnswer {
-                write: id,
-                result: PairResult::Dropped,
-                version: None,
-                reason: runstav::types::Text::new("held").ok(),
-                lines: None,
-                saved: None,
-                not_saved: None,
-            }
-        ));
-        assert_eq!(first.await.unwrap().unwrap_err().0, HELD);
-        let r = door
-            .write("s1", &root, &eff, &path, edit())
-            .await
-            .unwrap_err();
-        assert_eq!(r.0, HELD);
-        assert!(events(&out).is_empty(), "nothing after held");
-        // given back: the next write goes to the editor
-        door.hold("s1", false);
-        let d3 = door.clone();
-        let (r3, p3, e3) = (root.clone(), path.clone(), eff.clone());
-        let _later = tokio::spawn(async move { d3.write("s1", &r3, &e3, &p3, edit()).await });
-        tokio::task::yield_now().await;
-        let sent = events(&out);
-        assert_eq!(sent.len(), 1, "{sent:?}");
-        assert_eq!(sent[0]["event"], "pair-apply");
+    #[test]
+    fn a_held_session_is_refused_at_the_door() {
+        saman::block_on_current(async move {
+            use super::super::open_set::FileKind;
+            let (_d, root, door, out) = fixture();
+            let eff = chat(Preset::Autonomous);
+            let f = root.join("a.txt");
+            opened(&door, &f, FileKind::Normal);
+            let edit = || WriteKind::Edit {
+                old: "a".into(),
+                new: "b".into(),
+            };
+            let path = f.to_string_lossy().into_owned();
+            let d2 = door.clone();
+            let (r2, p2, e2) = (root.clone(), path.clone(), eff.clone());
+            let first = crate::clock::spawn_untracked(module_path!(), async move {
+                d2.write("s1", &r2, &e2, &p2, edit()).await
+            });
+            // the write runs to its wait on the editor's answer without yielding: one yield lets it get there
+            tokio::task::yield_now().await;
+            let sent = events(&out);
+            assert_eq!(sent.len(), 1, "{sent:?}");
+            assert_eq!(sent[0]["event"], "pair-apply");
+            let id = sent[0]["data"]["write"].as_u64().unwrap();
+            door.hold("s1", true);
+            let sent = events(&out);
+            assert_eq!(sent.len(), 1, "{sent:?}");
+            assert_eq!(sent[0]["event"], "pair-drop");
+            assert_eq!(sent[0]["data"]["session"], "s1");
+            // the verdict is the editor's own answer
+            assert!(door.answer(
+                1,
+                PairAnswer {
+                    write: id,
+                    result: PairResult::Dropped,
+                    version: None,
+                    reason: runstav::types::Text::new("held").ok(),
+                    lines: None,
+                    saved: None,
+                    not_saved: None,
+                }
+            ));
+            assert_eq!(first.await.unwrap().unwrap_err().0, HELD);
+            let r = door
+                .write("s1", &root, &eff, &path, edit())
+                .await
+                .unwrap_err();
+            assert_eq!(r.0, HELD);
+            assert!(events(&out).is_empty(), "nothing after held");
+            // given back: the next write goes to the editor
+            door.hold("s1", false);
+            let d3 = door.clone();
+            let (r3, p3, e3) = (root.clone(), path.clone(), eff.clone());
+            let _later = crate::clock::spawn_untracked(module_path!(), async move {
+                d3.write("s1", &r3, &e3, &p3, edit()).await
+            });
+            tokio::task::yield_now().await;
+            let sent = events(&out);
+            assert_eq!(sent.len(), 1, "{sent:?}");
+            assert_eq!(sent[0]["event"], "pair-apply");
+        })
     }
 
     /// [D] The matrix makes `chat.project-edit` never (a preset or a cell changed) while a write of the paired session
     /// waits in the editor: the editor is told to drop the session's writes (`pair-drop`, reason `never`), the write's
     /// answer is the editor's `dropped`, and a later write is refused with nothing sent.  A look that changes nothing
     /// sends nothing.
-    #[tokio::test]
-    async fn a_never_cell_drops_the_queued_writes() {
-        use super::super::open_set::FileKind;
-        let (_d, root, door, out) = fixture();
-        let eff = chat(Preset::Autonomous);
-        let f = root.join("a.txt");
-        opened(&door, &f, FileKind::Normal);
-        let edit = || WriteKind::Edit {
-            old: "a".into(),
-            new: "b".into(),
-        };
-        let path = f.to_string_lossy().into_owned();
-        assert!(
-            !door.recheck("s1", &eff),
-            "paired and allowed: nothing to close"
-        );
-        let d2 = door.clone();
-        let (r2, p2, e2) = (root.clone(), path.clone(), eff.clone());
-        let first = tokio::spawn(async move { d2.write("s1", &r2, &e2, &p2, edit()).await });
-        tokio::task::yield_now().await;
-        let sent = events(&out);
-        assert_eq!(sent.len(), 1, "{sent:?}");
-        assert_eq!(sent[0]["event"], "pair-apply");
-        let id = sent[0]["data"]["write"].as_u64().unwrap();
-        let never = chat(Preset::Cautious);
-        assert!(door.recheck("s1", &never));
-        let sent = events(&out);
-        assert_eq!(sent.len(), 1, "{sent:?}");
-        assert_eq!(sent[0]["event"], "pair-drop");
-        assert_eq!(sent[0]["data"]["session"], "s1");
-        assert_eq!(sent[0]["data"]["reason"], "never");
-        assert!(door.answer(
-            1,
-            PairAnswer {
-                write: id,
-                result: PairResult::Dropped,
-                version: None,
-                reason: runstav::types::Text::new("never").ok(),
-                lines: None,
-                saved: None,
-                not_saved: None,
-            }
-        ));
-        assert_eq!(first.await.unwrap().unwrap_err().0, NEVER_NOW);
-        assert!(!door.recheck("s1", &never), "closed already");
-        let r = door
-            .write("s1", &root, &never, &path, edit())
-            .await
-            .unwrap_err();
-        assert!(r.0.contains("chat.project-edit"), "{r}");
-        assert!(events(&out).is_empty(), "nothing after never");
+    #[test]
+    fn a_never_cell_drops_the_queued_writes() {
+        saman::block_on_current(async move {
+            use super::super::open_set::FileKind;
+            let (_d, root, door, out) = fixture();
+            let eff = chat(Preset::Autonomous);
+            let f = root.join("a.txt");
+            opened(&door, &f, FileKind::Normal);
+            let edit = || WriteKind::Edit {
+                old: "a".into(),
+                new: "b".into(),
+            };
+            let path = f.to_string_lossy().into_owned();
+            assert!(
+                !door.recheck("s1", &eff),
+                "paired and allowed: nothing to close"
+            );
+            let d2 = door.clone();
+            let (r2, p2, e2) = (root.clone(), path.clone(), eff.clone());
+            let first = crate::clock::spawn_untracked(module_path!(), async move {
+                d2.write("s1", &r2, &e2, &p2, edit()).await
+            });
+            tokio::task::yield_now().await;
+            let sent = events(&out);
+            assert_eq!(sent.len(), 1, "{sent:?}");
+            assert_eq!(sent[0]["event"], "pair-apply");
+            let id = sent[0]["data"]["write"].as_u64().unwrap();
+            let never = chat(Preset::Cautious);
+            assert!(door.recheck("s1", &never));
+            let sent = events(&out);
+            assert_eq!(sent.len(), 1, "{sent:?}");
+            assert_eq!(sent[0]["event"], "pair-drop");
+            assert_eq!(sent[0]["data"]["session"], "s1");
+            assert_eq!(sent[0]["data"]["reason"], "never");
+            assert!(door.answer(
+                1,
+                PairAnswer {
+                    write: id,
+                    result: PairResult::Dropped,
+                    version: None,
+                    reason: runstav::types::Text::new("never").ok(),
+                    lines: None,
+                    saved: None,
+                    not_saved: None,
+                }
+            ));
+            assert_eq!(first.await.unwrap().unwrap_err().0, NEVER_NOW);
+            assert!(!door.recheck("s1", &never), "closed already");
+            let r = door
+                .write("s1", &root, &never, &path, edit())
+                .await
+                .unwrap_err();
+            assert!(r.0.contains("chat.project-edit"), "{r}");
+            assert!(events(&out).is_empty(), "nothing after never");
+        })
     }
 
     /// [C] (a real checkout in the sandbox container) A file open nowhere is written on disk through the door: a
     /// link to a file inside the checkout writes its target and stays a link; a hard link is broken on purpose (the
     /// other name keeps the old text); a link out of the checkout and a link that names nothing are refused, and
     /// nothing is written.  The record runs once, before the file changes.
-    #[tokio::test]
-    async fn disk_write_resolves_links_inside_the_roots_only() {
-        let (d, root, door, out) = fixture();
-        let eff = chat(Preset::Autonomous);
-        let outside = d
-            .path()
-            .join("..")
-            .canonicalize()
-            .unwrap()
-            .join(format!("pair-out-{}", std::process::id()));
-        std::fs::write(&outside, "secret\n").unwrap();
-        std::os::unix::fs::symlink(root.join("a.txt"), root.join("in.txt")).unwrap();
-        std::os::unix::fs::symlink(&outside, root.join("out.txt")).unwrap();
-        std::os::unix::fs::symlink(root.join("nothing"), root.join("dangling.txt")).unwrap();
-        std::fs::hard_link(root.join("a.txt"), root.join("hard.txt")).unwrap();
-        let link = root.join("in.txt").to_string_lossy().into_owned();
-        door.read("s1", &root, &eff, &link).await.unwrap();
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let s2 = seen.clone();
-        let record: super::super::disk::Record = Box::new(move |p: &Path, b: &[u8]| {
-            lock(&s2).push((p.to_path_buf(), b.to_vec(), std::fs::read(p).unwrap()));
-        });
-        let whole = |c: &str| WriteKind::Whole { content: c.into() };
-        door.write_with("s1", 0, &root, &eff, &link, whole("A\n"), Some(record))
-            .await
-            .unwrap();
-        assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "A\n");
-        assert!(
-            root.join("in.txt")
-                .symlink_metadata()
+    #[test]
+    fn disk_write_resolves_links_inside_the_roots_only() {
+        saman::block_on_current(async move {
+            let (d, root, door, out) = fixture();
+            let eff = chat(Preset::Autonomous);
+            let outside = d
+                .path()
+                .join("..")
+                .canonicalize()
                 .unwrap()
-                .file_type()
-                .is_symlink()
-        );
-        assert_eq!(
-            std::fs::read_to_string(root.join("hard.txt")).unwrap(),
-            "a\n",
-            "the hard link is broken"
-        );
-        let seen = lock(&seen).clone();
-        assert_eq!(
-            seen,
-            vec![(root.join("a.txt"), b"A\n".to_vec(), b"a\n".to_vec())]
-        );
-        let r = door
-            .write(
-                "s1",
-                &root,
-                &eff,
-                &root.join("out.txt").to_string_lossy(),
-                whole("x\n"),
-            )
-            .await
-            .unwrap_err();
-        assert!(r.0.contains("outside your project"), "{r}");
-        let r = door
-            .write(
-                "s1",
-                &root,
-                &eff,
-                &root.join("dangling.txt").to_string_lossy(),
-                whole("x\n"),
-            )
-            .await
-            .unwrap_err();
-        assert!(r.0.contains("names nothing"), "{r}");
-        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "secret\n");
-        assert!(!root.join("nothing").exists());
-        std::fs::remove_file(&outside).unwrap();
-        assert!(events(&out).is_empty(), "no editor was asked");
+                .join(format!("pair-out-{}", std::process::id()));
+            crate::fsio::write(&outside, "secret\n").unwrap();
+            std::os::unix::fs::symlink(root.join("a.txt"), root.join("in.txt")).unwrap();
+            std::os::unix::fs::symlink(&outside, root.join("out.txt")).unwrap();
+            std::os::unix::fs::symlink(root.join("nothing"), root.join("dangling.txt")).unwrap();
+            std::fs::hard_link(root.join("a.txt"), root.join("hard.txt")).unwrap();
+            let link = root.join("in.txt").to_string_lossy().into_owned();
+            door.read("s1", &root, &eff, &link).await.unwrap();
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let s2 = seen.clone();
+            let record: super::super::disk::Record = Box::new(move |p: &Path, b: &[u8]| {
+                lock(&s2).push((p.to_path_buf(), b.to_vec(), std::fs::read(p).unwrap()));
+            });
+            let whole = |c: &str| WriteKind::Whole { content: c.into() };
+            door.write_with("s1", 0, &root, &eff, &link, whole("A\n"), Some(record))
+                .await
+                .unwrap();
+            assert_eq!(
+                crate::fsio::read_to_string(root.join("a.txt")).unwrap(),
+                "A\n"
+            );
+            assert!(
+                root.join("in.txt")
+                    .symlink_metadata()
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(
+                crate::fsio::read_to_string(root.join("hard.txt")).unwrap(),
+                "a\n",
+                "the hard link is broken"
+            );
+            let seen = lock(&seen).clone();
+            assert_eq!(
+                seen,
+                vec![(root.join("a.txt"), b"A\n".to_vec(), b"a\n".to_vec())]
+            );
+            let r = door
+                .write(
+                    "s1",
+                    &root,
+                    &eff,
+                    &root.join("out.txt").to_string_lossy(),
+                    whole("x\n"),
+                )
+                .await
+                .unwrap_err();
+            assert!(r.0.contains("outside your project"), "{r}");
+            let r = door
+                .write(
+                    "s1",
+                    &root,
+                    &eff,
+                    &root.join("dangling.txt").to_string_lossy(),
+                    whole("x\n"),
+                )
+                .await
+                .unwrap_err();
+            assert!(r.0.contains("names nothing"), "{r}");
+            assert_eq!(crate::fsio::read_to_string(&outside).unwrap(), "secret\n");
+            assert!(!root.join("nothing").exists());
+            std::fs::remove_file(&outside).unwrap();
+            assert!(events(&out).is_empty(), "no editor was asked");
+        })
     }
 
     /// [C] (a real file in the sandbox container) A disk write keeps the file's mode, its extended attributes and its
     /// SELinux context; an attribute the file system cannot hold is reported, and the rest still checked.
-    #[tokio::test]
-    async fn disk_write_keeps_xattrs_and_selinux_context() {
-        use std::os::unix::fs::PermissionsExt;
-        let (_d, root, door, _out) = fixture();
-        let eff = chat(Preset::Autonomous);
-        let f = root.join("a.txt");
-        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o640)).unwrap();
-        let user = rustix::fs::setxattr(&f, "user.drgnx", b"kept", rustix::fs::XattrFlags::empty());
-        if let Err(e) = &user {
-            eprintln!(
-                "user attributes are not supported here ({e}): the mode and the context are checked"
-            );
-        }
-        let context = |p: &Path| {
-            let mut v = vec![0u8; 256];
-            rustix::fs::getxattr(p, "security.selinux", &mut v[..])
-                .ok()
-                .map(|n| v[..n].to_vec())
-        };
-        let before = context(&f);
-        let path = f.to_string_lossy().into_owned();
-        door.read("s1", &root, &eff, &path).await.unwrap();
-        door.write(
-            "s1",
-            &root,
-            &eff,
-            &path,
-            WriteKind::Whole {
-                content: "b\n".into(),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "b\n");
-        assert_eq!(f.metadata().unwrap().permissions().mode() & 0o777, 0o640);
-        if user.is_ok() {
-            let mut v = [0u8; 16];
-            let n = rustix::fs::getxattr(&f, "user.drgnx", &mut v[..]).unwrap();
-            assert_eq!(&v[..n], b"kept");
-        }
-        assert_eq!(context(&f), before, "the SELinux context is kept");
+    #[test]
+    fn disk_write_keeps_xattrs_and_selinux_context() {
+        saman::block_on_current(async move {
+            use std::os::unix::fs::PermissionsExt;
+            let (_d, root, door, _out) = fixture();
+            let eff = chat(Preset::Autonomous);
+            let f = root.join("a.txt");
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o640)).unwrap();
+            let user =
+                rustix::fs::setxattr(&f, "user.drgnx", b"kept", rustix::fs::XattrFlags::empty());
+            if let Err(e) = &user {
+                crate::soft::err_line(&format!(
+                    "user attributes are not supported here ({e}): the mode and the context are checked"
+                ));
+            }
+            let context = |p: &Path| {
+                let mut v = vec![0u8; 256];
+                rustix::fs::getxattr(p, "security.selinux", &mut v[..])
+                    .ok()
+                    .map(|n| v[..n].to_vec())
+            };
+            let before = context(&f);
+            let path = f.to_string_lossy().into_owned();
+            door.read("s1", &root, &eff, &path).await.unwrap();
+            door.write(
+                "s1",
+                &root,
+                &eff,
+                &path,
+                WriteKind::Whole {
+                    content: "b\n".into(),
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(crate::fsio::read_to_string(&f).unwrap(), "b\n");
+            assert_eq!(f.metadata().unwrap().permissions().mode() & 0o777, 0o640);
+            if user.is_ok() {
+                let mut v = [0u8; 16];
+                let n = rustix::fs::getxattr(&f, "user.drgnx", &mut v[..]).unwrap();
+                assert_eq!(&v[..n], b"kept");
+            }
+            assert_eq!(context(&f), before, "the SELinux context is kept");
+        })
     }
 }

@@ -7,8 +7,13 @@
 //! ```
 #![cfg(target_os = "linux")]
 
+use sleipnir::tool::limited;
+use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
+use std::time::Duration;
+
+/// How long one tool may take in these rows: podman starting a container.
+const LIMIT: Duration = Duration::from_secs(300);
 
 fn need(var: &str) -> String {
     std::env::var(var)
@@ -24,26 +29,39 @@ fn bundle_binaries_are_static_and_run_in_a_foreign_libc_image() {
     let image = need("DRGNX_TEST_FOREIGN_IMAGE");
     let px = format!("drgnx-px-{}-linux-musl", std::env::consts::ARCH);
     for b in ["sleipnir", "drgnx-key", px.as_str()] {
-        let out = Command::new("file")
-            .arg("-L")
-            .arg(bundle.join(b))
-            .output()
-            .unwrap();
+        let out = limited(
+            Path::new("file"),
+            &[std::ffi::OsString::from("-L"), bundle.join(b).into()],
+            &[],
+            LIMIT,
+        )
+        .unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
         assert!(
             text.contains("statically linked") || text.contains("static-pie linked"),
             "{b}: {text}"
         );
     }
-    let out = Command::new("podman")
-        .args(["run", "--rm", "--pull=never", "--network=none", "-v"])
-        .arg(format!(
-            "{}:/run/drgnx/key:ro,Z",
-            bundle.join("drgnx-key").display()
-        ))
-        .args(["--entrypoint", "/run/drgnx/key", &image, "get", "NONE"])
-        .output()
-        .unwrap();
+    let mounted = format!("{}:/run/drgnx/key:ro,Z", bundle.join("drgnx-key").display());
+    let out = limited(
+        Path::new("podman"),
+        &[
+            "run",
+            "--rm",
+            "--pull=never",
+            "--network=none",
+            "-v",
+            mounted.as_str(),
+            "--entrypoint",
+            "/run/drgnx/key",
+            image.as_str(),
+            "get",
+            "NONE",
+        ],
+        &[],
+        LIMIT,
+    )
+    .unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(75), "{err}");
     assert!(err.contains("drgnx-key: the key socket"), "{err}");

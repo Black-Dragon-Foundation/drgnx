@@ -81,6 +81,7 @@ name = "annall"
 version = "0.1.0"
 dependencies = [
  "hulda",
+ "libc",
  "raun",
  "stig",
  "tracing",
@@ -441,25 +442,30 @@ name = "bifrost"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "eitri",
  "http",
  "http-body-util",
  "hyper",
  "hyper-rustls",
  "hyper-util",
  "proptest",
+ "raun",
  "rcgen",
  "rustls",
  "rustls-platform-verifier",
+ "saman",
  "secrecy",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "skuld",
+ "stund",
  "tempfile",
  "tokio",
  "tokio-rustls",
  "tower-service",
  "tracing",
+ "villa",
  "zeroize",
 ]
 
@@ -613,15 +619,19 @@ name = "brokkr"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "draugr",
  "eitri",
  "gleipnir",
  "libc",
  "rustix",
+ "saman",
  "serde",
  "serde_json",
  "serde_path_to_error",
  "sha2 0.11.1",
  "skuld",
+ "stig",
+ "stund",
  "tempfile",
  "tokio",
  "wasmtime",
@@ -1546,10 +1556,13 @@ dependencies = [
  "eitri",
  "hlaup",
  "libc",
+ "saman",
  "skuld",
+ "stig",
  "stund",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1603,7 +1616,11 @@ dependencies = [
  "libc",
  "proptest",
  "rustix",
+ "saman",
+ "stund",
  "tempfile",
+ "tracing",
+ "villa",
 ]
 
 [[package]]
@@ -1811,15 +1828,22 @@ dependencies = [
 name = "ferja"
 version = "0.1.0"
 dependencies = [
+ "draugr",
+ "eitri",
  "gleipnir",
  "hlaup",
  "libc",
+ "saman",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "skuld",
+ "stig",
+ "stund",
  "tempfile",
  "tokio",
+ "tracing",
+ "villa",
  "zeroize",
 ]
 
@@ -1918,6 +1942,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "skuld",
+ "villa",
 ]
 
 [[package]]
@@ -2235,7 +2260,13 @@ dependencies = [
 name = "ghostty-vt-sys"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "draugr",
+ "eitri",
  "sha2 0.11.1",
+ "stig",
+ "tracing",
+ "villa",
 ]
 
 [[package]]
@@ -3035,34 +3066,47 @@ dependencies = [
 name = "gleipnir"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "draugr",
  "eitri",
  "insta",
  "landlock",
  "libc",
  "proptest",
  "rustix",
+ "saman",
  "seccompiler",
  "serde",
  "serde_json",
  "skuld",
+ "stig",
  "stund",
  "tempfile",
  "tokio",
+ "tracing",
+ "villa",
 ]
 
 [[package]]
 name = "gleipnir-escape"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "draugr",
+ "eitri",
  "gleipnir",
  "hlaup",
  "libc",
  "rustix",
+ "saman",
  "serde",
  "serde_json",
+ "stig",
+ "stund",
  "tempfile",
  "tokio",
+ "tracing",
+ "villa",
 ]
 
 [[package]]
@@ -3094,20 +3138,27 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 name = "glugg"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "base64 0.23.1",
+ "draugr",
+ "eitri",
  "ghostty-vt-sys",
  "icy_sixel",
  "image",
  "libc",
+ "mot",
  "png 0.18.1",
  "rodd",
  "rustix",
+ "saman",
  "serde",
  "serde_json",
  "skuld",
+ "stund",
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "villa",
 ]
 
 [[package]]
@@ -3259,10 +3310,13 @@ dependencies = [
  "agent-client-protocol-schema",
  "bytes",
  "draugr",
+ "eitri",
  "runstav",
+ "saman",
  "serde",
  "serde_json",
  "skuld",
+ "stund",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3278,7 +3332,10 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 name = "hlaup"
 version = "0.1.0"
 dependencies = [
+ "eitri",
  "libc",
+ "saman",
+ "stund",
  "tempfile",
 ]
 
@@ -3305,7 +3362,9 @@ dependencies = [
 name = "hrafn"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "ast-grep-core",
+ "draugr",
  "eitri",
  "gix",
  "hlaup",
@@ -3314,33 +3373,45 @@ dependencies = [
  "notify",
  "regex",
  "rusqlite",
+ "saman",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "skald",
  "skuld",
+ "stig",
+ "stund",
  "tempfile",
  "tokio",
  "toml_edit",
+ "tracing",
  "tree-sitter",
  "tree-sitter-elisp",
  "urdr",
+ "villa",
 ]
 
 [[package]]
 name = "hrafn-embed"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "bytemuck",
+ "draugr",
+ "eitri",
  "gemm",
  "half",
  "pollster",
  "rayon",
  "safetensors",
+ "saman",
  "serde_json",
  "sha2 0.11.1",
+ "stig",
+ "stund",
  "tempfile",
  "tokenizers",
+ "villa",
  "wgpu",
 ]
 
@@ -4370,10 +4441,12 @@ dependencies = [
  "proptest",
  "rmcp",
  "runstav",
+ "saman",
  "schemars 1.2.3",
  "serde",
  "serde_json",
  "serde_path_to_error",
+ "stund",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -4589,8 +4662,10 @@ checksum = "610a5acd306ec67f907abe5567859a3c693fb9886eb1f012ab8f2a47bef3db51"
 name = "norn"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "brokkr",
  "draugr",
+ "eitri",
  "hlaup",
  "huginn",
  "insta",
@@ -4599,16 +4674,20 @@ dependencies = [
  "ratatoskr",
  "regex",
  "runstav",
+ "saman",
  "schemars 1.2.3",
  "serde",
  "serde_json",
  "serde_path_to_error",
  "sha1 0.11.0",
  "skuld",
+ "stig",
+ "stund",
  "tempfile",
  "tokio",
  "tracing",
  "urdr",
+ "villa",
  "vordr",
 ]
 
@@ -5666,6 +5745,7 @@ dependencies = [
 name = "ratatoskr"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "aws-credential-types",
  "aws-sigv4",
  "base64 0.23.1",
@@ -5691,6 +5771,7 @@ dependencies = [
  "http",
  "http-body-util",
  "huginn",
+ "hulda",
  "hyper",
  "hyper-util",
  "jsonc-parser",
@@ -5716,6 +5797,7 @@ dependencies = [
  "rustls",
  "rustls-platform-verifier",
  "saga",
+ "saman",
  "secrecy",
  "security-framework",
  "serde",
@@ -5726,6 +5808,7 @@ dependencies = [
  "skald",
  "skuld",
  "sleipnir",
+ "stig",
  "stund",
  "subtle",
  "tar",
@@ -5741,6 +5824,7 @@ dependencies = [
  "urdr",
  "vegvisir",
  "verdandi",
+ "villa",
  "vor",
  "vordr",
  "xxhash-rust",
@@ -6049,8 +6133,10 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 name = "runstav"
 version = "0.1.0"
 dependencies = [
+ "eitri",
  "getrandom 0.4.3",
  "hmac",
+ "hulda",
  "proptest",
  "rodd",
  "rustix",
@@ -6063,9 +6149,11 @@ dependencies = [
  "sha1 0.11.0",
  "sha2 0.11.1",
  "skuld",
+ "stig",
  "subtle",
  "tempfile",
  "tokio-util",
+ "villa",
  "zeroize",
 ]
 
@@ -6291,6 +6379,8 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "pulldown-cmark",
+ "stund",
+ "villa",
 ]
 
 [[package]]
@@ -6787,7 +6877,10 @@ dependencies = [
 name = "skald"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "cc",
+ "draugr",
+ "eitri",
  "huginn",
  "libloading",
  "regex",
@@ -6795,9 +6888,12 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "sha2 0.11.1",
+ "stig",
  "tempfile",
+ "tracing",
  "tree-sitter",
  "tree-sitter-language",
+ "villa",
 ]
 
 [[package]]
@@ -6859,8 +6955,14 @@ dependencies = [
 name = "skuld"
 version = "0.1.0"
 dependencies = [
+ "draugr",
+ "eitri",
  "proptest",
+ "saman",
+ "stig",
+ "stund",
  "tokio",
+ "villa",
 ]
 
 [[package]]
@@ -6873,6 +6975,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 name = "sleipnir"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "draugr",
+ "eitri",
  "ferja",
  "forseti",
  "gleipnir",
@@ -6880,6 +6985,7 @@ dependencies = [
  "libc",
  "proptest",
  "rustix",
+ "saman",
  "secrecy",
  "serde",
  "serde_json",
@@ -6887,8 +6993,12 @@ dependencies = [
  "sha2 0.11.1",
  "similar",
  "skuld",
+ "stig",
+ "stund",
  "tempfile",
  "tokio",
+ "tracing",
+ "villa",
  "zeroize",
 ]
 
@@ -7053,6 +7163,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 name = "stig"
 version = "0.1.0"
 dependencies = [
+ "rustix",
  "tempfile",
  "villa",
 ]
@@ -7898,12 +8009,18 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 name = "urdr"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "draugr",
+ "eitri",
  "rusqlite",
+ "saman",
  "serde",
  "serde_json",
  "skuld",
+ "stund",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -8002,11 +8119,15 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 name = "vegvisir"
 version = "0.1.0"
 dependencies = [
+ "eitri",
+ "kvardi",
  "proptest",
  "rodd",
  "serde",
  "serde_json",
  "skuld",
+ "stund",
+ "tracing",
  "vegvisir",
 ]
 
@@ -8037,10 +8158,15 @@ version = "0.1.0"
 name = "vor"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "eitri",
+ "saman",
  "serde",
  "serde_json",
+ "stund",
  "tokio",
  "tokio-util",
+ "villa",
 ]
 
 [[package]]
@@ -8050,6 +8176,7 @@ dependencies = [
  "serde",
  "serde_json",
  "skuld",
+ "villa",
 ]
 
 [[package]]

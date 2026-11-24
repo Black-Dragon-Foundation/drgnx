@@ -61,16 +61,19 @@ fn an_unknown_task_and_a_cycle_are_named() {
           {"label": "c", "command": "true", "dependsOn": "nope"}]}"#,
     );
     let e = tasks::order(&t, "a", Os::Linux).unwrap_err();
-    assert!(e.contains("a → b → a"), "{e}");
+    assert!(e.message().contains("a → b → a"), "{e}");
     let e = tasks::order(&t, "c", Os::Linux).unwrap_err();
-    assert!(e.contains("nope"), "{e}");
+    assert!(e.message().contains("nope"), "{e}");
 }
 
 #[test]
 fn a_background_task_without_an_end_pattern_is_refused() {
     let t = file(r#"{"tasks": [{"label": "watch", "command": "tsc -w", "isBackground": true}]}"#);
     let e = tasks::order(&t, "watch", Os::Linux).unwrap_err();
-    assert!(e.contains("watch") && e.contains("isBackground"), "{e}");
+    assert!(
+        e.message().contains("watch") && e.message().contains("isBackground"),
+        "{e}"
+    );
 }
 
 #[test]
@@ -109,77 +112,86 @@ fn step(label: &str, script: &str, cwd: &Path) -> Step {
     }
 }
 
-#[tokio::test]
-async fn the_steps_run_in_order_and_the_first_failure_stops_the_rest() {
-    let d = tempfile::tempdir().unwrap();
-    let env: Vec<(std::ffi::OsString, std::ffi::OsString)> =
-        vec![("PATH".into(), "/usr/bin:/bin".into())];
-    let ok = vec![
-        step("one", "echo one >> log", d.path()),
-        step("two", "echo \"two $DRGNX_TASK_TEST\" >> log", d.path()),
-    ];
-    tasks::run(&ok, &env).await.unwrap();
-    assert_eq!(
-        std::fs::read_to_string(d.path().join("log")).unwrap(),
-        "one\ntwo 1\n"
-    );
-    let bad = vec![
-        step("make", "echo 'error: no rule' >&2; exit 2", d.path()),
-        step("after", "echo after >> log", d.path()),
-    ];
-    let e = tasks::run(&bad, &env).await.unwrap_err();
-    assert!(
-        e.contains("make") && e.contains("exit 2") && e.contains("no rule"),
-        "{e}"
-    );
-    assert!(
-        !std::fs::read_to_string(d.path().join("log"))
-            .unwrap()
-            .contains("after")
-    );
+#[test]
+fn the_steps_run_in_order_and_the_first_failure_stops_the_rest() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let env: Vec<(std::ffi::OsString, std::ffi::OsString)> =
+            vec![("PATH".into(), "/usr/bin:/bin".into())];
+        let ok = vec![
+            step("one", "echo one >> log", d.path()),
+            step("two", "echo \"two $DRGNX_TASK_TEST\" >> log", d.path()),
+        ];
+        tasks::run(&ok, &env).await.unwrap();
+        assert_eq!(
+            crate::fsio::read_to_string(d.path().join("log")).unwrap(),
+            "one\ntwo 1\n"
+        );
+        let bad = vec![
+            step("make", "echo 'error: no rule' >&2; exit 2", d.path()),
+            step("after", "echo after >> log", d.path()),
+        ];
+        let e = tasks::run(&bad, &env).await.unwrap_err();
+        assert!(
+            e.message().contains("make")
+                && e.message().contains("exit 2")
+                && e.message().contains("no rule"),
+            "{e}"
+        );
+        assert!(
+            !crate::fsio::read_to_string(d.path().join("log"))
+                .unwrap()
+                .contains("after")
+        );
+    })
 }
 
-#[tokio::test]
-async fn a_pre_launch_task_comes_from_the_roots_tasks_json() {
-    let d = tempfile::tempdir().unwrap();
-    std::fs::create_dir(d.path().join(".vscode")).unwrap();
-    std::fs::write(
+#[test]
+fn a_pre_launch_task_comes_from_the_roots_tasks_json() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join(".vscode")).unwrap();
+        crate::fsio::write(
         d.path().join(".vscode/tasks.json"),
         r#"{"tasks": [{"label": "build", "type": "process", "command": "/bin/sh",
                         "args": ["-c", "echo built > out"], "options": {"cwd": "${workspaceFolder}/sub"}}]}"#,
     )
     .unwrap();
-    std::fs::create_dir(d.path().join("sub")).unwrap();
-    let steps = tasks::before_launch(
-        d.path(),
-        &json!({"preLaunchTask": "build"}),
-        Os::Linux,
-        &|s| Ok(s.replace("${workspaceFolder}", &d.path().to_string_lossy())),
-    )
-    .unwrap();
-    assert_eq!(steps.len(), 1);
-    assert_eq!(steps[0].cwd, d.path().join("sub"));
-    // no preLaunchTask, nothing to run; one that names no task in a missing file: an error naming it
-    assert!(
-        tasks::before_launch(d.path(), &json!({}), Os::Linux, &|s| Ok(s.into()))
-            .unwrap()
-            .is_empty()
-    );
-    let e = tasks::before_launch(
-        Path::new("/nonexistent"),
-        &json!({"preLaunchTask": "x"}),
-        Os::Linux,
-        &|s| Ok(s.into()),
-    )
-    .unwrap_err();
-    assert!(e.contains("tasks.json") && e.contains('x'), "{e}");
+        std::fs::create_dir(d.path().join("sub")).unwrap();
+        let steps = tasks::before_launch(
+            d.path(),
+            &json!({"preLaunchTask": "build"}),
+            Os::Linux,
+            &|s| Ok(s.replace("${workspaceFolder}", &d.path().to_string_lossy())),
+        )
+        .unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].cwd, d.path().join("sub"));
+        // no preLaunchTask, nothing to run; one that names no task in a missing file: an error naming it
+        assert!(
+            tasks::before_launch(d.path(), &json!({}), Os::Linux, &|s| Ok(s.into()))
+                .unwrap()
+                .is_empty()
+        );
+        let e = tasks::before_launch(
+            Path::new("/nonexistent"),
+            &json!({"preLaunchTask": "x"}),
+            Os::Linux,
+            &|s| Ok(s.into()),
+        )
+        .unwrap_err();
+        assert!(
+            e.message().contains("tasks.json") && e.message().contains('x'),
+            "{e}"
+        );
+    })
 }
 
 #[test]
 fn a_post_debug_task_comes_from_the_same_file() {
     let d = tempfile::tempdir().unwrap();
     std::fs::create_dir(d.path().join(".vscode")).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         d.path().join(".vscode/tasks.json"),
         r#"{"tasks": [{"label": "clean", "type": "process", "command": "rm", "args": ["-f", "out"]}]}"#,
     )
@@ -188,7 +200,7 @@ fn a_post_debug_task_comes_from_the_same_file() {
     let steps = tasks::after_debug(d.path(), &config, Os::Linux, &|s| Ok(s.into())).unwrap();
     assert_eq!(steps[0].argv, ["rm", "-f", "out"]);
     // a background postDebugTask would be ended at once: refused
-    std::fs::write(
+    crate::fsio::write(
         d.path().join(".vscode/tasks.json"),
         r#"{"tasks": [{"label": "clean", "command": "w", "isBackground": true,
                        "problemMatcher": {"background": {"beginsPattern": "a", "endsPattern": "b"}}}]}"#,
@@ -196,7 +208,7 @@ fn a_post_debug_task_comes_from_the_same_file() {
     .unwrap();
     let e = tasks::after_debug(d.path(), &config, Os::Linux, &|s| Ok(s.into())).unwrap_err();
     assert!(
-        e.contains("postDebugTask") && e.contains("isBackground"),
+        e.message().contains("postDebugTask") && e.message().contains("isBackground"),
         "{e}"
     );
 }
@@ -218,8 +230,8 @@ impl super::Terminals for Tabs {
         cwd: String,
         args: Vec<String>,
         env: Vec<(String, String)>,
-    ) -> super::BoxFut<'_, Result<super::Opened, String>> {
-        let mut o = self.opened.lock().unwrap();
+    ) -> super::BoxFut<'_, villa::Result<super::Opened>> {
+        let mut o = saman::lock(&self.opened);
         o.push((conn, cwd, args, env));
         let n = o.len();
         Box::pin(async move {
@@ -233,7 +245,7 @@ impl super::Terminals for Tabs {
     }
 
     fn run_task(&self, term: String) -> super::BoxFut<'_, (Option<i32>, String)> {
-        let code = self.exits.lock().unwrap().remove(0);
+        let code = saman::lock(&self.exits).remove(0);
         let text = if code == Some(0) {
             String::new()
         } else {
@@ -243,80 +255,85 @@ impl super::Terminals for Tabs {
     }
 }
 
-#[tokio::test]
-async fn in_a_tab_each_step_runs_wrapped_and_a_failure_says_its_status_and_text() {
-    let d = tempfile::tempdir().unwrap();
-    let tabs = Tabs {
-        opened: Default::default(),
-        exits: std::sync::Mutex::new(vec![Some(0), Some(2)]),
-        text: "error: no rule\nEnter closes this tab.".into(),
-    };
-    let steps = vec![
-        step("gen", "echo gen", d.path()),
-        step("make", "make", d.path()),
-        step("after", "echo after", d.path()),
-    ];
-    let shown = std::sync::Mutex::new(vec![]);
-    let e = tasks::run_in(&steps, &tabs, 7, &|s, o| {
-        shown
-            .lock()
-            .unwrap()
-            .push((s.label.clone(), o.term.clone()))
-    })
-    .await
-    .unwrap_err();
-    assert_eq!(
-        *shown.lock().unwrap(),
-        [
-            ("gen".to_owned(), "t1".to_owned()),
-            ("make".into(), "t2".into())
-        ],
-        "each tab shown as it opens"
-    );
-    assert!(
-        e.contains("task make failed (exit 2)") && e.contains("t2: error: no rule"),
-        "{e}"
-    );
-    assert!(
-        !e.contains("Enter closes"),
-        "the tab's own line is not the task's: {e}"
-    );
-    let opened = tabs.opened.lock().unwrap();
-    assert_eq!(opened.len(), 2, "the first failure stops the rest");
-    let (conn, cwd, args, env) = &opened[0];
-    assert_eq!(*conn, 7);
-    assert_eq!(cwd, &d.path().to_string_lossy());
-    assert_eq!(
-        &args[..2],
-        ["/bin/sh", "-c"],
-        "the step runs in the tab's wrapper"
-    );
-    assert_eq!(
-        &args[3..],
-        ["drgnx-task", "/bin/sh", "-c", "echo gen"],
-        "its argv as is"
-    );
-    assert_eq!(env, &[("DRGNX_TASK_TEST".to_owned(), "1".to_owned())]);
-    // the wrapper marks the end with the status (OSC 133 D) and keeps a failed tab open
-    assert!(
-        args[2].contains("133;D;%d") && args[2].contains("read"),
-        "{}",
-        args[2]
-    );
-}
-
-#[tokio::test]
-async fn a_tab_that_goes_without_a_status_fails_the_start() {
-    let d = tempfile::tempdir().unwrap();
-    let tabs = Tabs {
-        opened: Default::default(),
-        exits: std::sync::Mutex::new(vec![None]),
-        text: String::new(),
-    };
-    let e = tasks::run_in(&[step("b", "true", d.path())], &tabs, 1, &|_, _| {})
+#[test]
+fn in_a_tab_each_step_runs_wrapped_and_a_failure_says_its_status_and_text() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let tabs = Tabs {
+            opened: Default::default(),
+            exits: std::sync::Mutex::new(vec![Some(0), Some(2)]),
+            text: "error: no rule\nEnter closes this tab.".into(),
+        };
+        let steps = vec![
+            step("gen", "echo gen", d.path()),
+            step("make", "make", d.path()),
+            step("after", "echo after", d.path()),
+        ];
+        let shown = std::sync::Mutex::new(vec![]);
+        let e = tasks::run_in(&steps, &tabs, 7, &|s, o| {
+            saman::lock(&shown).push((s.label.clone(), o.term.clone()))
+        })
         .await
         .unwrap_err();
-    assert!(e.contains("task b") && e.contains("closed"), "{e}");
+        assert_eq!(
+            *saman::lock(&shown),
+            [
+                ("gen".to_owned(), "t1".to_owned()),
+                ("make".into(), "t2".into())
+            ],
+            "each tab shown as it opens"
+        );
+        assert!(
+            e.message().contains("task make failed (exit 2)")
+                && e.message().contains("t2: error: no rule"),
+            "{e}"
+        );
+        assert!(
+            !e.message().contains("Enter closes"),
+            "the tab's own line is not the task's: {e}"
+        );
+        let opened = saman::lock(&tabs.opened);
+        assert_eq!(opened.len(), 2, "the first failure stops the rest");
+        let (conn, cwd, args, env) = &opened[0];
+        assert_eq!(*conn, 7);
+        assert_eq!(cwd, &d.path().to_string_lossy());
+        assert_eq!(
+            &args[..2],
+            ["/bin/sh", "-c"],
+            "the step runs in the tab's wrapper"
+        );
+        assert_eq!(
+            &args[3..],
+            ["drgnx-task", "/bin/sh", "-c", "echo gen"],
+            "its argv as is"
+        );
+        assert_eq!(env, &[("DRGNX_TASK_TEST".to_owned(), "1".to_owned())]);
+        // the wrapper marks the end with the status (OSC 133 D) and keeps a failed tab open
+        assert!(
+            args[2].contains("133;D;%d") && args[2].contains("read"),
+            "{}",
+            args[2]
+        );
+    })
+}
+
+#[test]
+fn a_tab_that_goes_without_a_status_fails_the_start() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let tabs = Tabs {
+            opened: Default::default(),
+            exits: std::sync::Mutex::new(vec![None]),
+            text: String::new(),
+        };
+        let e = tasks::run_in(&[step("b", "true", d.path())], &tabs, 1, &|_, _| {})
+            .await
+            .unwrap_err();
+        assert!(
+            e.message().contains("task b") && e.message().contains("closed"),
+            "{e}"
+        );
+    })
 }
 
 /// A background task's problem matcher: its own `background` patterns, or a named one drgnx knows.
@@ -346,11 +363,17 @@ fn a_background_task_needs_an_end_pattern_and_a_known_matcher() {
             .is_match("[12:00:01 PM] Found 0 errors. Watching for file changes.")
     );
     let e = tasks::order(&t, "plain", Os::Linux).unwrap_err();
-    assert!(e.contains("plain") && e.contains("endsPattern"), "{e}");
+    assert!(
+        e.message().contains("plain") && e.message().contains("endsPattern"),
+        "{e}"
+    );
     let e = tasks::order(&t, "other", Os::Linux).unwrap_err();
-    assert!(e.contains("$esbuild-watch"), "{e}");
+    assert!(e.message().contains("$esbuild-watch"), "{e}");
     let e = tasks::order(&t, "bad", Os::Linux).unwrap_err();
-    assert!(e.contains("bad") && e.contains("endsPattern"), "{e}");
+    assert!(
+        e.message().contains("bad") && e.message().contains("endsPattern"),
+        "{e}"
+    );
 }
 
 fn watch(label: &str, script: &str, cwd: &Path, begins: Option<&str>, ends: &str) -> Step {
@@ -366,74 +389,78 @@ fn watch(label: &str, script: &str, cwd: &Path, begins: Option<&str>, ends: &str
 
 /// The start waits for the end pattern (after the begin pattern), then goes on while the task runs; the watch's
 /// later lines reach its listener, and dropping it ends the task's whole process group.
-#[tokio::test]
-async fn a_background_task_lets_the_start_go_at_its_end_pattern_and_ends_with_its_watch() {
-    let d = tempfile::tempdir().unwrap();
-    let env: Vec<(std::ffi::OsString, std::ffi::OsString)> =
-        vec![("PATH".into(), "/usr/bin:/bin".into())];
-    // the pid file is written after a pause, just before the end line: a start that went early finds none
-    let script = "echo 'done early'; echo 'starting'; echo 'oops' >&2; sleep 1; echo $$ > pid; echo 'done 1'; \
+#[test]
+fn a_background_task_lets_the_start_go_at_its_end_pattern_and_ends_with_its_watch() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let env: Vec<(std::ffi::OsString, std::ffi::OsString)> =
+            vec![("PATH".into(), "/usr/bin:/bin".into())];
+        // the pid file is written after a pause, just before the end line: a start that went early finds none
+        let script = "echo 'done early'; echo 'starting'; echo 'oops' >&2; sleep 1; echo $$ > pid; echo 'done 1'; \
                   sleep 1; echo 'later' ; exec sleep 600";
-    let steps = vec![
-        watch("w", script, d.path(), Some("^starting"), "^done"),
-        step("after", "test -s pid && echo after >> log", d.path()),
-    ];
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let watches =
-        crate::clock::timeout(std::time::Duration::from_secs(20), tasks::run(&steps, &env))
+        let steps = vec![
+            watch("w", script, d.path(), Some("^starting"), "^done"),
+            step("after", "test -s pid && echo after >> log", d.path()),
+        ];
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let watches =
+            crate::clock::timeout(std::time::Duration::from_secs(20), tasks::run(&steps, &env))
+                .await
+                .expect("the start went at the end pattern")
+                .unwrap();
+        assert_eq!(
+            crate::fsio::read_to_string(d.path().join("log")).unwrap(),
+            "after\n"
+        );
+        assert_eq!(watches.len(), 1);
+        watches[0].listen(Box::new(move |line: &str| {
+            crate::soft::done(tx.send(line.to_owned()), "tx send");
+        }));
+        let line = crate::clock::timeout(std::time::Duration::from_secs(20), rx.recv())
             .await
-            .expect("the start went at the end pattern")
+            .unwrap()
             .unwrap();
-    assert_eq!(
-        std::fs::read_to_string(d.path().join("log")).unwrap(),
-        "after\n"
-    );
-    assert_eq!(watches.len(), 1);
-    watches[0].listen(Box::new(move |line: &str| {
-        let _ = tx.send(line.to_owned());
-    }));
-    let line = crate::clock::timeout(std::time::Duration::from_secs(20), rx.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(line, "later");
-    let pid: i32 = std::fs::read_to_string(d.path().join("pid"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    // SAFETY: kill(2) with signal 0 only asks whether the process exists.
-    assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
-    drop(watches);
-    let gone = crate::clock::timeout(std::time::Duration::from_secs(20), async {
-        // SAFETY: as above.
-        while unsafe { libc::kill(pid, 0) } == 0 {
-            crate::clock::sleep(std::time::Duration::from_millis(20)).await;
-        }
+        assert_eq!(line, "later");
+        let pid: i32 = crate::fsio::read_to_string(d.path().join("pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // SAFETY: kill(2) with signal 0 only asks whether the process exists.
+        assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+        drop(watches);
+        let gone = crate::clock::timeout(std::time::Duration::from_secs(20), async {
+            // SAFETY: as above.
+            while unsafe { libc::kill(pid, 0) } == 0 {
+                crate::clock::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(gone.is_ok(), "the task outlived its watch");
     })
-    .await;
-    assert!(gone.is_ok(), "the task outlived its watch");
 }
 
 /// A background task that ends before its end pattern stops the start with its status and output (stderr too).
-#[tokio::test]
-async fn a_background_task_that_ends_first_fails_the_start() {
-    let d = tempfile::tempdir().unwrap();
-    let env: Vec<(std::ffi::OsString, std::ffi::OsString)> =
-        vec![("PATH".into(), "/usr/bin:/bin".into())];
-    let steps = vec![watch(
-        "w",
-        "echo 'cannot find tsconfig' >&2; exit 3",
-        d.path(),
-        None,
-        "^ready",
-    )];
-    let e = tasks::run(&steps, &env).await.unwrap_err();
-    assert!(
-        e.contains("w")
-            && e.contains("exit 3")
-            && e.contains("cannot find tsconfig")
-            && e.contains("ready"),
-        "{e}"
-    );
+#[test]
+fn a_background_task_that_ends_first_fails_the_start() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let env: Vec<(std::ffi::OsString, std::ffi::OsString)> =
+            vec![("PATH".into(), "/usr/bin:/bin".into())];
+        let steps = vec![watch(
+            "w",
+            "echo 'cannot find tsconfig' >&2; exit 3",
+            d.path(),
+            None,
+            "^ready",
+        )];
+        let e = tasks::run(&steps, &env).await.unwrap_err();
+        assert!(
+            e.message().contains("w")
+                && e.message().contains("exit 3")
+                && e.message().contains("cannot find tsconfig")
+                && e.message().contains("ready"),
+            "{e}"
+        );
+    })
 }

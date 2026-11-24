@@ -64,74 +64,78 @@ fn step(point: Point, detail: serde_json::Value) -> HookInput {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_spinning_plugin_hook_fails_timed_out_within_the_points_budget() {
-    let host = Host::new(Limits::default()).unwrap();
-    let plugins = [load(&host, "slow-hook")];
-    let hooks = PluginHooks {
-        host: &host,
-        io: Arc::new(NoIo),
-        refresh: |_: &mut HookInput| {},
-    };
-    let input = step(
-        Point::BeforeTool,
-        json!({"tool": {"kind": "execute", "input": {}}}),
-    );
-    let records = run(
-        &input,
-        Duration::from_millis(300),
-        true,
-        &[],
-        &plugins,
-        &hooks,
-    )
-    .await;
-    assert_eq!(records.len(), 1);
-    // the deadline is what is left of the budget when the hook starts, a little under 300 ms on a real clock
-    let error = records[0].error.as_deref().unwrap_or("");
-    assert!(
-        error.starts_with("hook slow-hook failed: timed out (") && error.ends_with(" ms)"),
-        "{records:?}"
-    );
+#[test]
+fn a_spinning_plugin_hook_fails_timed_out_within_the_points_budget() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = Host::new(Limits::default()).unwrap();
+        let plugins = [load(&host, "slow-hook")];
+        let hooks = PluginHooks {
+            host: &host,
+            io: Arc::new(NoIo),
+            refresh: |_: &mut HookInput| {},
+        };
+        let input = step(
+            Point::BeforeTool,
+            json!({"tool": {"kind": "execute", "input": {}}}),
+        );
+        let records = run(
+            &input,
+            Duration::from_millis(300),
+            true,
+            &[],
+            &plugins,
+            &hooks,
+        )
+        .await;
+        assert_eq!(records.len(), 1);
+        // the deadline is what is left of the budget when the hook starts, a little under 300 ms on a real clock
+        let error = records[0].error.as_deref().unwrap_or("");
+        assert!(
+            error.starts_with("hook slow-hook failed: timed out (") && error.ends_with(" ms)"),
+            "{records:?}"
+        );
+    })
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_plugin_change_is_refused_where_the_site_takes_none_and_refreshed_where_it_does() {
-    let host = Host::new(Limits::default()).unwrap();
-    let plugins = [load(&host, "rewrite-commit-msg")];
-    let refreshed = AtomicUsize::new(0);
-    let hooks = PluginHooks {
-        host: &host,
-        io: Arc::new(NoIo),
-        refresh: |_: &mut HookInput| {
-            refreshed.fetch_add(1, Ordering::SeqCst);
-        },
-    };
-    let input = step(Point::BeforeCommit, json!({"commit": {"message": "merge"}}));
-    let budget = Duration::from_secs(10);
-    let refused = run(&input, budget, false, &[], &plugins, &hooks).await;
-    assert_eq!(
-        refused[0].error.as_deref(),
-        Some("hook rewrite-commit-msg failed: change is not accepted here")
-    );
-    assert_eq!(refreshed.load(Ordering::SeqCst), 0);
-    let taken = run(&input, budget, true, &[], &plugins, &hooks).await;
-    assert_eq!(
-        taken[0].verdict,
-        Some(Verdict::Change(json!({"message": "merge [checked]"})))
-    );
-    assert_eq!(refreshed.load(Ordering::SeqCst), 1);
+#[test]
+fn a_plugin_change_is_refused_where_the_site_takes_none_and_refreshed_where_it_does() {
+    saman::Executor::new(2).unwrap().block_on(async {
+        let host = Host::new(Limits::default()).unwrap();
+        let plugins = [load(&host, "rewrite-commit-msg")];
+        let refreshed = AtomicUsize::new(0);
+        let hooks = PluginHooks {
+            host: &host,
+            io: Arc::new(NoIo),
+            refresh: |_: &mut HookInput| {
+                refreshed.fetch_add(1, Ordering::SeqCst);
+            },
+        };
+        let input = step(Point::BeforeCommit, json!({"commit": {"message": "merge"}}));
+        let budget = Duration::from_secs(10);
+        let refused = run(&input, budget, false, &[], &plugins, &hooks).await;
+        assert_eq!(
+            refused[0].error.as_deref(),
+            Some("hook rewrite-commit-msg failed: change is not accepted here")
+        );
+        assert_eq!(refreshed.load(Ordering::SeqCst), 0);
+        let taken = run(&input, budget, true, &[], &plugins, &hooks).await;
+        assert_eq!(
+            taken[0].verdict,
+            Some(Verdict::Change(json!({"message": "merge [checked]"})))
+        );
+        assert_eq!(refreshed.load(Ordering::SeqCst), 1);
+    })
 }
 
 /// The cost a `before-tool` point adds to one tool call, as the seam pays it: the rules parsed from the setting's
 /// value (the hub reads them at every step), the fast path, `run` and `combine`. Three shapes: nothing subscribed,
 /// one rule, one rule and one trivial WASM hook (deny-rm-hook, answering allow). Prints p50/p95/max in µs; asserts
 /// the hook shape's p95 under 5 ms (design addendum §4.10, `perf/hook-overhead`).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test]
 #[ignore = "timing: the per-call cost of a before-tool point (run with --ignored --nocapture)"]
-async fn timing_before_tool_cost_per_call() {
+fn timing_before_tool_cost_per_call() {
+    saman::Executor::new(2).unwrap().block_on(async {
     use norn::hooks::{combine, parse_rules, subscribed};
-    use std::time::Instant;
     const N: usize = 2000;
     let host = Host::new(Limits::default()).unwrap();
     let hooked = [load(&host, "deny-rm-hook")];
@@ -159,7 +163,7 @@ async fn timing_before_tool_cost_per_call() {
     ] {
         let mut us: Vec<u128> = Vec::with_capacity(N);
         for i in 0..N + 50 {
-            let t0 = Instant::now();
+            let t0 = stund::Instant::now();
             let rules = if with_rules {
                 parse_rules(&setting).unwrap()
             } else {
@@ -184,9 +188,13 @@ async fn timing_before_tool_cost_per_call() {
         }
         us.sort_unstable();
         let (p50, p95, max) = (us[N / 2], us[N * 95 / 100], us[N - 1]);
-        println!("before-tool cost, {shape}: p50 {p50} µs, p95 {p95} µs, max {max} µs ({N} calls)");
+        annall::cli_out(&format!(
+            "before-tool cost, {shape}: p50 {p50} µs, p95 {p95} µs, max {max} µs ({N} calls)"
+        ))
+        .unwrap();
         if !plugins.is_empty() {
             assert!(p95 < 5_000, "p95 {p95} µs");
         }
     }
+})
 }

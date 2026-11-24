@@ -25,7 +25,6 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::sync::{Arc, Mutex};
@@ -123,11 +122,11 @@ fn request(v: Value) -> Result<Request, (Value, String)> {
 }
 
 /// stdout, one JSON line at a time; a write that fails means the hub is gone.
-struct Out(std::io::Stdout);
+struct Out(std::sync::Mutex<Box<dyn Write + Send>>);
 
 impl Out {
     fn line(&self, v: &Value) -> bool {
-        let mut o = self.0.lock();
+        let mut o = saman::lock(&self.0);
         writeln!(o, "{v}").and_then(|()| o.flush()).is_ok()
     }
 }
@@ -139,10 +138,10 @@ fn cap_address_space() {
     };
     // SAFETY: setrlimit reads the struct it is given and changes only this process's limit.
     if unsafe { libc::setrlimit(libc::RLIMIT_AS, &lim) } != 0 {
-        eprintln!(
+        crate::soft::err_line(&format!(
             "embed-worker: the address-space cap was refused: {}",
             std::io::Error::last_os_error()
-        );
+        ));
     }
 }
 
@@ -178,7 +177,7 @@ fn auto(spec: &'static ModelSpec, args: &WorkerArgs) -> Choice {
         .clone()
         .unwrap_or_else(|| PathBuf::from(power::SYS));
     let battery = power::on_battery(&root);
-    let cached = std::fs::read_to_string(&args.device_cache)
+    let cached = crate::fsio::read_to_string(&args.device_cache)
         .ok()
         .and_then(|t| Choice::parse(&t));
     let order = device::order(&adapters());
@@ -198,10 +197,12 @@ fn auto(spec: &'static ModelSpec, args: &WorkerArgs) -> Choice {
             .device_cache
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&tmp, choice.to_json()))
-            .and_then(|()| std::fs::rename(&tmp, &args.device_cache));
+            .and_then(|()| crate::fsio::write(&tmp, choice.to_json()))
+            .and_then(|()| crate::fsio::rename(&tmp, &args.device_cache));
         if let Err(e) = written {
-            eprintln!("embed-worker: the device choice was not cached: {e}");
+            crate::soft::err_line(&format!(
+                "embed-worker: the device choice was not cached: {e}"
+            ));
         }
     }
     choice
@@ -218,10 +219,10 @@ fn device_name(d: &Device) -> (&'static str, String) {
 pub fn run(args: WorkerArgs) -> i32 {
     lower_priority();
     let Some(spec) = super::model(&args.model) else {
-        eprintln!("embed-worker: no model {:?}", args.model);
+        crate::soft::err_line(&format!("embed-worker: no model {:?}", args.model));
         return 2;
     };
-    let out = Out(std::io::stdout());
+    let out = Out(std::sync::Mutex::new(Box::new(annall::raw_out())));
     let cpu = Device::Cpu {
         threads: args.threads.max(1),
     };
@@ -283,19 +284,22 @@ pub fn run(args: WorkerArgs) -> i32 {
     }
 
     let (tx, rx) = channel();
-    std::thread::spawn(move || {
-        for line in BufReader::new(std::io::stdin()).lines() {
-            let Ok(line) = line else { break };
-            let msg = match serde_json::from_str::<Value>(&line) {
-                Ok(v) => Msg::Line(v),
-                Err(e) => Msg::Bad(e.to_string()),
-            };
-            if tx.send(msg).is_err() {
-                return;
+    crate::soft::done(
+        saman::spawn_thread("ratatoskr:worker", move || {
+            for line in BufReader::new(std::io::stdin()).lines() {
+                let Ok(line) = line else { break };
+                let msg = match serde_json::from_str::<Value>(&line) {
+                    Ok(v) => Msg::Line(v),
+                    Err(e) => Msg::Bad(e.to_string()),
+                };
+                if tx.send(msg).is_err() {
+                    return;
+                }
             }
-        }
-        let _ = tx.send(Msg::End);
-    });
+            crate::soft::done(tx.send(Msg::End), "tx send");
+        }),
+        "thread",
+    );
 
     let mut w = Work {
         spec,
@@ -395,7 +399,10 @@ impl Work<'_> {
         if let Some(marker) = &self.test.crash_once
             && !marker.exists()
         {
-            let _ = std::fs::write(marker, b"crashed\n");
+            crate::soft::done(
+                crate::fsio::write(marker, b"crashed\n"),
+                "crate::fsio::write",
+            );
             std::process::abort();
         }
     }
@@ -591,7 +598,10 @@ struct Live {
 
 impl Live {
     fn dead(&self) -> bool {
-        self.pending.lock().map_or(true, |p| p.dead)
+        {
+            let p = saman::lock(&self.pending);
+            p.dead
+        }
     }
 }
 
@@ -620,7 +630,10 @@ impl WorkerEmbedder {
     }
 
     pub fn facts(&self) -> WorkerFacts {
-        self.facts.lock().map(|f| f.clone()).unwrap_or_default()
+        {
+            let f = saman::lock(&self.facts);
+            f.clone()
+        }
     }
 
     fn power_mode(&self) -> Mode {
@@ -633,7 +646,7 @@ impl WorkerEmbedder {
 
     fn spawn(&self, mode: Mode) -> Result<Live, EmbedError> {
         let s = &self.spec;
-        let mut cmd = Command::new(&s.exe);
+        let mut cmd = crate::proc::Command::new(&s.exe);
         cmd.arg("embed-worker")
             .args(["--model", &s.model, "--device", mode.arg()])
             .arg("--dir")
@@ -647,14 +660,16 @@ impl WorkerEmbedder {
         }
         #[cfg(feature = "test-hooks")]
         cmd.arg("--test-power-root").arg(&s.power_root);
-        cmd.args(&s.test_args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+        cmd.args(&s.test_args);
         let mut child = cmd
-            .spawn()
+            .spawn(
+                crate::proc::Io::Pipe,
+                crate::proc::Io::Pipe,
+                crate::proc::Io::Inherit,
+            )
             .map_err(|e| EmbedError(format!("the embed worker did not start: {e}")))?;
-        if let Ok(mut f) = self.facts.lock() {
+        {
+            let mut f = saman::lock(&self.facts);
             f.spawns += 1;
             f.device_arg = Some(mode.arg().into());
             f.ready = None;
@@ -664,22 +679,26 @@ impl WorkerEmbedder {
         let pending = Arc::new(Mutex::new(Pending::default()));
         let (theirs, facts) = (pending.clone(), self.facts.clone());
         // A thread, not a task: it waits on the child's pipe, outside the hub's clock, and ends with the child.
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                let Ok(v) = serde_json::from_str::<Value>(&line) else {
-                    continue;
-                };
-                answer(&theirs, &facts, v);
-            }
-            if let Ok(mut p) = theirs.lock() {
-                p.dead = true;
-                for (_, w) in p.waiting.drain() {
-                    let _ = w.send(Reply::Crashed);
+        crate::soft::done(
+            saman::spawn_thread("ratatoskr:worker", move || {
+                for line in BufReader::new(stdout).lines() {
+                    let Ok(line) = line else { break };
+                    let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                        continue;
+                    };
+                    answer(&theirs, &facts, v);
                 }
-            }
-            let _ = child.wait();
-        });
+                {
+                    let mut p = saman::lock(&theirs);
+                    p.dead = true;
+                    for (_, w) in p.waiting.drain() {
+                        crate::soft::done(w.send(Reply::Crashed), "w send");
+                    }
+                }
+                crate::soft::done(child.wait(), "worker");
+            }),
+            "thread",
+        );
         Ok(Live {
             stdin,
             pending,
@@ -714,7 +733,8 @@ impl WorkerEmbedder {
                 }
                 let l = live.as_mut().expect("started");
                 let (tx, rx) = oneshot::channel();
-                if let Ok(mut p) = l.pending.lock() {
+                {
+                    let mut p = saman::lock(&l.pending);
                     p.waiting.insert(id, tx);
                 }
                 let sent = l.stdin.as_mut().is_some_and(|s| {
@@ -722,10 +742,11 @@ impl WorkerEmbedder {
                         .and_then(|()| s.flush())
                         .is_ok()
                 });
-                if !sent && let Ok(mut p) = l.pending.lock() {
+                if !sent {
+                    let mut p = saman::lock(&l.pending);
                     p.dead = true;
                     if let Some(w) = p.waiting.remove(&id) {
-                        let _ = w.send(Reply::Crashed);
+                        crate::soft::done(w.send(Reply::Crashed), "w send");
                     }
                 }
                 rx
@@ -734,7 +755,8 @@ impl WorkerEmbedder {
                 Ok(Reply::Vectors(v)) => return Ok(v),
                 Ok(Reply::Error(e)) => return Err(EmbedError(e)),
                 Ok(Reply::Crashed) | Err(_) => {
-                    if let Ok(mut f) = self.facts.lock() {
+                    {
+                        let mut f = saman::lock(&self.facts);
                         f.crashes += 1;
                     }
                     tracing::warn!(
@@ -785,14 +807,16 @@ impl WorkerEmbedder {
 
 fn answer(pending: &Mutex<Pending>, facts: &Mutex<WorkerFacts>, v: Value) {
     if let Some(r) = v.get("ready") {
-        if let Ok(mut f) = facts.lock() {
+        {
+            let mut f = saman::lock(facts);
             f.ready = Some(r.clone());
         }
         return;
     }
     if let Some(fb) = v.get("fallback") {
         tracing::warn!("search: the embed worker fell back to the CPU path: {fb}");
-        if let Ok(mut f) = facts.lock() {
+        {
+            let mut f = saman::lock(facts);
             f.fallback = Some(fb.clone());
         }
         return;
@@ -800,10 +824,9 @@ fn answer(pending: &Mutex<Pending>, facts: &Mutex<WorkerFacts>, v: Value) {
     let Some(id) = v.get("id").and_then(Value::as_u64) else {
         return;
     };
-    if v.get("exit").and_then(Value::as_bool) == Some(true)
-        && let Ok(mut p) = pending.lock()
-    {
-        p.dead = true; // the worker is leaving: the next request starts another
+    if v.get("exit").and_then(Value::as_bool) == Some(true) {
+        // the worker is leaving: the next request starts another
+        saman::lock(pending).dead = true;
     }
     let reply = match (v.get("vectors"), v.get("error")) {
         (Some(vs), _) => serde_json::from_value::<Vec<Vec<f32>>>(vs.clone()).map_or_else(
@@ -813,10 +836,8 @@ fn answer(pending: &Mutex<Pending>, facts: &Mutex<WorkerFacts>, v: Value) {
         (None, Some(e)) => Reply::Error(e.as_str().unwrap_or("error").to_string()),
         (None, None) => Reply::Error("an answer with neither vectors nor error".into()),
     };
-    if let Ok(mut p) = pending.lock()
-        && let Some(w) = p.waiting.remove(&id)
-    {
-        let _ = w.send(reply);
+    if let Some(w) = saman::lock(pending).waiting.remove(&id) {
+        crate::soft::done(w.send(reply), "w send");
     }
 }
 

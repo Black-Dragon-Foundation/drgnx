@@ -339,7 +339,7 @@ pub(super) async fn state_of(
     let t2 = tree.clone();
     let (done, left, unknown) = crate::clock::blocking(move || {
         map_back(&matches, &taken, |rel| {
-            std::fs::read_to_string(t2.join(rel)).ok()
+            crate::fsio::read_to_string(t2.join(rel)).ok()
         })
     })
     .await
@@ -399,7 +399,7 @@ pub(super) fn watch(
                 break;
             }
             while let Ok(Ok(s)) = crate::clock::timeout(SETTLE, steps.recv()).await {
-                let _ = s;
+                let _only_when_used_elsewhere = &s;
             }
             let Some(state) = state_of(&f, &c, &id).await else {
                 break;

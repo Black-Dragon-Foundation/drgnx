@@ -59,3 +59,85 @@ fn cli_out_and_cli_err_print() {
     annall::cli_out("annall: a line for stdout").unwrap();
     annall::cli_err("annall: a line for stderr").unwrap();
 }
+
+#[test]
+fn the_stderr_sink_writes_json_lines_to_stderr_and_makes_no_file() {
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+    let _sb = raun::Sandbox::new();
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: pipe(2) fills two descriptors; dup2(2) points descriptor 2 at the write end, as a hub does for a worker
+    let mut read = unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert!(libc::dup2(fds[1], 2) >= 0);
+        libc::close(fds[1]);
+        std::fs::File::from_raw_fd(fds[0])
+    };
+    let guard = annall::init(annall::LogConfig {
+        sink: annall::Sink::Stderr,
+        ..annall::LogConfig::default()
+    })
+    .unwrap();
+    tracing::info!(answer = 7, "hello stderr");
+    drop(guard);
+    // SAFETY: closing descriptor 2 (the pipe's write end) ends the stream for the reader
+    unsafe { libc::close(2) };
+    let mut text = String::new();
+    read.read_to_string(&mut text).unwrap();
+    let line = text
+        .lines()
+        .find(|l| l.contains("hello stderr"))
+        .unwrap_or_else(|| panic!("no event in {text:?}"));
+    assert!(
+        line.starts_with('{') && line.contains("\"answer\":7"),
+        "{line}"
+    );
+    assert!(
+        !stig::state().join("log").join(annall::LOG_FILE).exists(),
+        "the stderr sink makes no log file"
+    );
+}
+
+#[test]
+fn raw_err_writes_the_bytes_it_is_given_and_nothing_else() {
+    use std::io::{Read, Write};
+    use std::os::fd::FromRawFd;
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: pipe(2) fills two descriptors; dup2(2) points descriptor 2 at the write end
+    let mut read = unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert!(libc::dup2(fds[1], 2) >= 0);
+        libc::close(fds[1]);
+        std::fs::File::from_raw_fd(fds[0])
+    };
+    let mut err = annall::raw_err();
+    err.write_all(b"\x00ask?\xff").unwrap();
+    err.flush().unwrap();
+    // SAFETY: closing descriptor 2 (the pipe's write end) ends the stream for the reader
+    unsafe { libc::close(2) };
+    let mut bytes = Vec::new();
+    read.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"\x00ask?\xff", "no newline, no encoding");
+}
+
+#[test]
+fn raw_out_writes_the_bytes_it_is_given_and_nothing_else() {
+    use std::io::{Read, Write};
+    use std::os::fd::FromRawFd;
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: pipe(2) fills two descriptors; dup2(2) points descriptor 1 at the write end, as a hub does for a worker
+    let mut read = unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert!(libc::dup2(fds[1], 1) >= 0);
+        libc::close(fds[1]);
+        std::fs::File::from_raw_fd(fds[0])
+    };
+    let mut out = annall::raw_out();
+    out.write_all(b"\x00key\xff").unwrap();
+    out.flush().unwrap();
+    // SAFETY: closing descriptor 1 (the pipe's write end) ends the stream for the reader
+    unsafe { libc::close(1) };
+    let mut bytes = Vec::new();
+    read.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"\x00key\xff", "no newline, no encoding");
+}

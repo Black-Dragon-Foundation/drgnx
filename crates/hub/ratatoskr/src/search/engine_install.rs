@@ -33,7 +33,7 @@ pub fn gguf_ready(models: &Path, spec: &GgufSpec) -> bool {
 
 /// `llama-server` of ASSET in DIR, when the asset was installed whole there.
 pub fn installed(asset: &EngineAsset, dir: &Path) -> Option<PathBuf> {
-    let mark = std::fs::read_to_string(dir.join(MARKER)).ok()?;
+    let mark = crate::fsio::read_to_string(dir.join(MARKER)).ok()?;
     if mark.trim() != asset.sha256 {
         return None;
     }
@@ -122,12 +122,12 @@ fn unpack(asset: &EngineAsset, dir: &Path) -> Result<PathBuf, DownloadError> {
         unpacked = unpack_one(rt.file_name());
     }
     if let Err(e) = unpacked {
-        let _ = std::fs::remove_dir_all(&staging);
+        crate::soft::done(std::fs::remove_dir_all(&staging), "std::fs::remove_dir_all");
         return Err(DownloadError::Archive(e));
     }
     let exe = staging.join(asset.binary);
     if !std::fs::symlink_metadata(&exe).is_ok_and(|m| m.is_file()) {
-        let _ = std::fs::remove_dir_all(&staging);
+        crate::soft::done(std::fs::remove_dir_all(&staging), "std::fs::remove_dir_all");
         return Err(DownloadError::Archive(format!(
             "{} holds no {}",
             asset.file_name(),
@@ -135,15 +135,18 @@ fn unpack(asset: &EngineAsset, dir: &Path) -> Result<PathBuf, DownloadError> {
         )));
     }
     std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).map_err(disk)?;
-    let _ = std::fs::remove_file(dir.join(MARKER));
+    crate::soft::done(
+        std::fs::remove_file(dir.join(MARKER)),
+        "std::fs::remove_file",
+    );
     if bin.exists() {
         std::fs::remove_dir_all(&bin).map_err(disk)?;
     }
-    std::fs::rename(&staging, &bin).map_err(disk)?;
+    crate::fsio::rename(&staging, &bin).map_err(disk)?;
     std::fs::remove_file(&archive).map_err(disk)?;
     if let Some(rt) = asset.runtime {
         std::fs::remove_file(dir.join(rt.file_name())).map_err(disk)?;
     }
-    std::fs::write(dir.join(MARKER), asset.sha256).map_err(disk)?;
+    crate::fsio::write(dir.join(MARKER), asset.sha256).map_err(disk)?;
     Ok(bin.join(asset.binary))
 }

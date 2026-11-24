@@ -167,50 +167,54 @@ mod tests {
             .collect()
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_files_anchors_come_back_in_order_and_apart_from_other_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        let pin = Anchor {
-            kind: AnchorKind::Pin,
-            fold_kind: None,
-            ..fold(40, 60, Some("the parser"))
-        };
-        let mine = vec![fold(10, 20, None), pin, fold(3, 8, Some("setup"))];
-        assert!(saved(&db, save_params("a.rs", mine.clone())).await);
-        assert!(saved(&db, save_params("b.rs", vec![fold(1, 2, None)])).await);
-        assert_eq!(loaded(&db, "a.rs").await, mine);
-        assert_eq!(loaded(&db, "b.rs").await, vec![fold(1, 2, None)]);
-        assert_eq!(loaded(&db, "c.rs").await, vec![]);
+    #[test]
+    fn a_files_anchors_come_back_in_order_and_apart_from_other_files() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            let pin = Anchor {
+                kind: AnchorKind::Pin,
+                fold_kind: None,
+                ..fold(40, 60, Some("the parser"))
+            };
+            let mine = vec![fold(10, 20, None), pin, fold(3, 8, Some("setup"))];
+            assert!(saved(&db, save_params("a.rs", mine.clone())).await);
+            assert!(saved(&db, save_params("b.rs", vec![fold(1, 2, None)])).await);
+            assert_eq!(loaded(&db, "a.rs").await, mine);
+            assert_eq!(loaded(&db, "b.rs").await, vec![fold(1, 2, None)]);
+            assert_eq!(loaded(&db, "c.rs").await, vec![]);
+        })
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_save_replaces_the_files_anchors_and_the_same_save_writes_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        assert!(
-            saved(
-                &db,
-                save_params("a.rs", vec![fold(10, 20, None), fold(30, 40, None)])
-            )
-            .await
-        );
-        assert!(saved(&db, save_params("a.rs", vec![fold(12, 22, Some("n"))])).await);
-        assert_eq!(loaded(&db, "a.rs").await, vec![fold(12, 22, Some("n"))]);
-        assert!(!saved(&db, save_params("a.rs", vec![fold(12, 22, Some("n"))])).await);
-        let live: i64 = db
-            .read(|c| {
-                Ok(c.query_row(
-                    "select count(*) from entity where kind = 'anchor' and retired_tx is null",
-                    [],
-                    |r| r.get(0),
-                )?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(live, 1);
-        // none: the file's anchors are forgotten
-        assert!(saved(&db, save_params("a.rs", vec![])).await);
-        assert_eq!(loaded(&db, "a.rs").await, vec![]);
+    #[test]
+    fn a_save_replaces_the_files_anchors_and_the_same_save_writes_nothing() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            assert!(
+                saved(
+                    &db,
+                    save_params("a.rs", vec![fold(10, 20, None), fold(30, 40, None)])
+                )
+                .await
+            );
+            assert!(saved(&db, save_params("a.rs", vec![fold(12, 22, Some("n"))])).await);
+            assert_eq!(loaded(&db, "a.rs").await, vec![fold(12, 22, Some("n"))]);
+            assert!(!saved(&db, save_params("a.rs", vec![fold(12, 22, Some("n"))])).await);
+            let live: i64 = db
+                .read(|c| {
+                    Ok(c.query_row(
+                        "select count(*) from entity where kind = 'anchor' and retired_tx is null",
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(live, 1);
+            // none: the file's anchors are forgotten
+            assert!(saved(&db, save_params("a.rs", vec![])).await);
+            assert_eq!(loaded(&db, "a.rs").await, vec![]);
+        })
     }
 }

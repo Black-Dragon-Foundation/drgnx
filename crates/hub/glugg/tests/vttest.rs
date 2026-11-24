@@ -53,7 +53,7 @@ impl Vt {
         ];
         let size = winsize(COLS, ROWS as u16, (8, 16));
         let pty = Pty::spawn(&vttest_bin(), &[], "/", &env, size).unwrap();
-        let t = std::thread::spawn(move || {
+        let t = saman::spawn_thread("vttest-loop", move || {
             let w = Worker::new(&Opts {
                 cols: COLS,
                 rows: ROWS as u16,
@@ -63,7 +63,8 @@ impl Vt {
             })
             .expect("engine");
             run(w, pty, Some(ctl), None)
-        });
+        })
+        .unwrap();
         hub.set_read_timeout(Some(Duration::from_millis(200)))
             .unwrap();
         let mut vt = Vt {
@@ -171,10 +172,11 @@ impl Vt {
             )
         }));
         if let Err(e) = seen {
-            eprintln!(
+            annall::cli_err(&format!(
                 "vttest's screen when the wait for {mark:?} ran out:\n{}",
                 self.screen().join("\n")
-            );
+            ))
+            .unwrap();
             std::panic::resume_unwind(e);
         }
         skuld::wait_until(&format!("the worker quiet after {what:?}"), 20, || {
@@ -207,12 +209,19 @@ impl Vt {
 
     fn close(mut self) {
         self.send(&In::Close { signal: Some(9) });
-        let _ = self.loop_.take().unwrap().join();
+        self.loop_
+            .take()
+            .unwrap()
+            .join()
+            .expect("the worker's loop")
+            .expect("the worker's loop ended well");
     }
 }
 
 fn golden_path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // eitri refuses a link in any component of a path: the checkout's own are resolved first
+    std::fs::canonicalize(env!("CARGO_MANIFEST_DIR"))
+        .unwrap()
         .join(format!("../../../test/conformance/vttest/{name}.txt"))
 }
 
@@ -229,11 +238,11 @@ fn golden(name: &str, steps: &[(&str, &str)]) {
     let path = golden_path(name);
     if std::env::var_os("UPDATE_VTTEST_GOLDENS").is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, &got).unwrap();
-        println!("=== {name}\n{got}");
+        eitri::replace_file(&path, got.as_bytes()).unwrap();
+        annall::cli_out(&format!("=== {name}\n{got}")).unwrap();
         return;
     }
-    let want = std::fs::read_to_string(&path)
+    let want = eitri::read_string(&path, 1 << 20)
         .unwrap_or_else(|e| panic!("no golden {}: {e}", path.display()));
     assert!(
         got == want,

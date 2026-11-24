@@ -2,11 +2,22 @@
 //! when the script fails.
 use vor::mock::{Mock, Script};
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
+/// LINE on stderr, then exit with CODE. A stderr that is gone leaves nobody to tell.
+fn die(code: i32, line: &str) -> ! {
+    drop(annall::cli_err(line));
+    std::process::exit(code)
+}
+
+fn main() {
+    match saman::Executor::new(1) {
+        Ok(rt) => rt.block_on(run()),
+        Err(e) => die(1, &format!("vor-mock: {e}")),
+    }
+}
+
+async fn run() {
     let Some(path) = std::env::args().nth(1) else {
-        eprintln!("usage: vor-mock SCRIPT.json");
-        std::process::exit(2);
+        die(2, "usage: vor-mock SCRIPT.json");
     };
     let script: Script = match std::fs::read(&path)
         .map_err(|e| e.to_string())
@@ -14,15 +25,13 @@ async fn main() {
     {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("vor-mock: {path}: {e}");
-            std::process::exit(2);
+            die(2, &format!("vor-mock: {path}: {e}"));
         }
     };
     if let Err(e) = Mock::start(script, tokio::io::stdin(), tokio::io::stdout())
         .finish()
         .await
     {
-        eprintln!("vor-mock: {e}");
-        std::process::exit(1);
+        die(1, &format!("vor-mock: {e}"));
     }
 }

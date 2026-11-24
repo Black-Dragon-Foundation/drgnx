@@ -14,9 +14,7 @@ use norn::tools::{Clock, Coord, Hub, Identity, SessionRow, tools};
 use serde_json::{Value, json};
 use urdr::Connection;
 
-fn fixtures() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../test/fixtures")
-}
+use crate::fixtures;
 
 /// A hub that answers no `agents/list` (as when none runs) and counts what it is told.
 #[derive(Default)]
@@ -49,7 +47,7 @@ impl World {
         let file = dir.path().join("work.db");
         {
             let c = Connection::open(&file).unwrap();
-            c.execute_batch(&std::fs::read_to_string(fixtures().join("work-db-6.sql")).unwrap())
+            c.execute_batch(&crate::read_file(fixtures().join("work-db-6.sql")))
                 .unwrap();
             for sql in setup {
                 c.execute_batch(sql).unwrap();
@@ -150,373 +148,389 @@ fn report_calls() -> Vec<(&'static str, Value)> {
     ]
 }
 
-#[tokio::test]
-async fn identity_args_are_refused() {
-    let w = World::new(&[]);
-    let who = session("s-1", None, w.dir.path());
-    let all = tools();
-    assert!(!all.is_empty());
-    for tool in &all {
-        for k in IDENTITY_ARGS {
-            let mut args = serde_json::Map::new();
-            args.insert(k.into(), json!("s-2"));
-            let (error, text) = w.call(&who, tool.name(), Value::Object(args)).await;
-            assert!(error, "{} took `{k}`: {text}", tool.name());
-            assert!(
-                text.starts_with(&format!("{k}: ")),
-                "{}: {text}",
-                tool.name()
-            );
+#[test]
+fn identity_args_are_refused() {
+    saman::block_on_current(async {
+        let w = World::new(&[]);
+        let who = session("s-1", None, w.dir.path());
+        let all = tools();
+        assert!(!all.is_empty());
+        for tool in &all {
+            for k in IDENTITY_ARGS {
+                let mut args = serde_json::Map::new();
+                args.insert(k.into(), json!("s-2"));
+                let (error, text) = w.call(&who, tool.name(), Value::Object(args)).await;
+                assert!(error, "{} took `{k}`: {text}", tool.name());
+                assert!(
+                    text.starts_with(&format!("{k}: ")),
+                    "{}: {text}",
+                    tool.name()
+                );
+            }
         }
-    }
-    assert_eq!(w.written(), 0, "nothing is written");
+        assert_eq!(w.written(), 0, "nothing is written");
+    })
 }
 
-#[tokio::test]
-async fn user_is_never_an_identity() {
-    let w = World::new(&[]);
-    for id in ["user", "User", " USER ", "uSeR"] {
-        let who = session(id, None, w.dir.path());
+#[test]
+fn user_is_never_an_identity() {
+    saman::block_on_current(async {
+        let w = World::new(&[]);
+        for id in ["user", "User", " USER ", "uSeR"] {
+            let who = session(id, None, w.dir.path());
+            for (name, args) in report_calls() {
+                let (error, text) = w.call(&who, name, args).await;
+                assert!(
+                    error && text.starts_with("\"user\" is the user"),
+                    "{id} {name}: {text}"
+                );
+            }
+        }
+        assert_eq!(w.written(), 0);
+    })
+}
+
+#[test]
+fn none_identity_reads_but_never_writes() {
+    saman::block_on_current(async {
+        let w = World::new(&[]);
         for (name, args) in report_calls() {
-            let (error, text) = w.call(&who, name, args).await;
-            assert!(
-                error && text.starts_with("\"user\" is the user"),
-                "{id} {name}: {text}"
-            );
+            let (error, text) = w.call(&Identity::None, name, args).await;
+            if name == "list_agents" {
+                assert_eq!((error, text.as_str()), (false, "null"));
+            } else {
+                assert!(
+                    error && text.contains("no agent identity"),
+                    "{name}: {text}"
+                );
+                // the hub takes identity from the session socket, never from an environment variable
+                assert!(!text.contains("DRGNX_AGENT"), "{name}: {text}");
+            }
         }
-    }
-    assert_eq!(w.written(), 0);
+        assert_eq!(w.written(), 0);
+    })
 }
 
-#[tokio::test]
-async fn none_identity_reads_but_never_writes() {
-    let w = World::new(&[]);
-    for (name, args) in report_calls() {
-        let (error, text) = w.call(&Identity::None, name, args).await;
-        if name == "list_agents" {
-            assert_eq!((error, text.as_str()), (false, "null"));
-        } else {
-            assert!(
-                error && text.contains("no agent identity"),
-                "{name}: {text}"
+#[test]
+fn outside_is_refused_the_job_tools() {
+    saman::block_on_current(async {
+        let w = World::new(&[
+            "insert into job values ('j1', 'Job', null, null, 'running', 1.0, null)",
+            "insert into jtask (id, job, n, title, role, status) values ('j1#1', 'j1', 1, 'One', 'implement', 'ready')",
+        ]);
+        let out = Identity::outside(
+            "claude",
+            4242,
+            Some(1_700_000_000.0),
+            Some(w.dir.path().into()),
+        )
+        .unwrap();
+        let refused = "task j1#1 is a drgnx job's task: an outside agent names no job task";
+        for name in ["hello", "ask_user"] {
+            let args = if name == "hello" {
+                json!({"task": "j1#1"})
+            } else {
+                json!({"question": "ok?", "task": "j1#1"})
+            };
+            assert_eq!(
+                w.call(&out, name, args).await,
+                (true, refused.to_string()),
+                "{name}"
             );
-            // the hub takes identity from the session socket, never from an environment variable
-            assert!(!text.contains("DRGNX_AGENT"), "{name}: {text}");
         }
-    }
-    assert_eq!(w.written(), 0);
-}
-
-#[tokio::test]
-async fn outside_is_refused_the_job_tools() {
-    let w = World::new(&[
-        "insert into job values ('j1', 'Job', null, null, 'running', 1.0, null)",
-        "insert into jtask (id, job, n, title, role, status) values ('j1#1', 'j1', 1, 'One', 'implement', 'ready')",
-    ]);
-    let out = Identity::outside(
-        "claude",
-        4242,
-        Some(1_700_000_000.0),
-        Some(w.dir.path().into()),
-    )
-    .unwrap();
-    let refused = "task j1#1 is a drgnx job's task: an outside agent names no job task";
-    for name in ["hello", "ask_user"] {
-        let args = if name == "hello" {
-            json!({"task": "j1#1"})
-        } else {
-            json!({"question": "ok?", "task": "j1#1"})
-        };
+        // the job tools (Task 8), each as the Lisp refuses it; skipped until they are in the list
+        let job_tools = [
+            (
+                "record_decision",
+                json!({"kind": "build", "subject": "s", "reason": "r", "seen_version": 0}),
+                "record_decision needs the user's binding for claude agents in this folder",
+            ),
+            (
+                "claim_task",
+                json!({"task": "j1#1", "seen_version": 0}),
+                "claim_task is for drgnx's own job agents",
+            ),
+            (
+                "update_task",
+                json!({"task": "j1#1", "status": "running", "seen_version": 0}),
+                "update_task is for drgnx's own job agents",
+            ),
+            (
+                "complete_task",
+                json!({"task": "j1#1", "seen_version": 0}),
+                "complete_task is for drgnx's own job agents",
+            ),
+            (
+                "escalate",
+                json!({"subject": "s", "text": "t", "seen_version": 0}),
+                "ask the user with ask_user",
+            ),
+        ];
+        let names: Vec<String> = tools().iter().map(|t| t.name().to_owned()).collect();
+        for (name, args, says) in job_tools {
+            if names.iter().any(|n| n == name) {
+                let (error, text) = w.call(&out, name, args).await;
+                assert!(error && text.contains(says), "{name}: {text}");
+            }
+        }
+        assert_eq!(w.written(), 0);
         assert_eq!(
-            w.call(&out, name, args).await,
-            (true, refused.to_string()),
-            "{name}"
+            w.text("select status || ':' || coalesce(agent, '') from jtask where id = 'j1#1'"),
+            Some("ready:".into())
         );
-    }
-    // the job tools (Task 8), each as the Lisp refuses it; skipped until they are in the list
-    let job_tools = [
-        (
-            "record_decision",
-            json!({"kind": "build", "subject": "s", "reason": "r", "seen_version": 0}),
-            "record_decision needs the user's binding for claude agents in this folder",
-        ),
-        (
-            "claim_task",
-            json!({"task": "j1#1", "seen_version": 0}),
-            "claim_task is for drgnx's own job agents",
-        ),
-        (
-            "update_task",
-            json!({"task": "j1#1", "status": "running", "seen_version": 0}),
-            "update_task is for drgnx's own job agents",
-        ),
-        (
-            "complete_task",
-            json!({"task": "j1#1", "seen_version": 0}),
-            "complete_task is for drgnx's own job agents",
-        ),
-        (
-            "escalate",
-            json!({"subject": "s", "text": "t", "seen_version": 0}),
-            "ask the user with ask_user",
-        ),
-    ];
-    let names: Vec<String> = tools().iter().map(|t| t.name().to_owned()).collect();
-    for (name, args, says) in job_tools {
-        if names.iter().any(|n| n == name) {
-            let (error, text) = w.call(&out, name, args).await;
-            assert!(error && text.contains(says), "{name}: {text}");
-        }
-    }
-    assert_eq!(w.written(), 0);
-    assert_eq!(
-        w.text("select status || ':' || coalesce(agent, '') from jtask where id = 'j1#1'"),
-        Some("ready:".into())
-    );
-    // what an outside agent may write carries no job and no task
-    let (error, text) = w
-        .call(&out, "report_test", json!({"command": "make"}))
-        .await;
-    assert!(!error, "{text}");
-    assert!(out.id().unwrap().starts_with("ext:claude:4242-"));
-    assert_eq!(
-        w.count(&format!(
-            "select count(*) from event where agent = '{}' and job is null and task is null",
-            out.id().unwrap()
-        )),
-        1
-    );
+        // what an outside agent may write carries no job and no task
+        let (error, text) = w
+            .call(&out, "report_test", json!({"command": "make"}))
+            .await;
+        assert!(!error, "{text}");
+        assert!(out.id().unwrap().starts_with("ext:claude:4242-"));
+        assert_eq!(
+            w.count(&format!(
+                "select count(*) from event where agent = '{}' and job is null and task is null",
+                out.id().unwrap()
+            )),
+            1
+        );
+    })
 }
 
-#[tokio::test]
-async fn report_rate_window_and_card_hour_end_exactly_on_the_boundary() {
-    let w = World::new(&[]);
-    let who = session("s-1", Some("j1"), w.dir.path());
-    let report = || w.call(&who, "report_test", json!({"command": "make check"}));
-    let cards = || w.count("select count(*) from card where kind = 'rate' and job = 'j1'");
-    let t0 = 1_700_000_000.5;
-    w.at(t0);
-    for _ in 0..20 {
-        assert!(!held(&report().await.1));
-    }
-    assert!(held(&report().await.1));
-    assert_eq!(cards(), 1);
-    // reports exactly a minute old no longer count
-    w.at(t0 + 60.0);
-    for i in 0..20 {
-        assert!(!held(&report().await.1), "report {i} a minute on");
-    }
-    assert!(held(&report().await.1));
-    assert_eq!(cards(), 1);
-    // exactly an hour after the card, the user is told again
-    w.at(t0 + 3600.0);
-    for _ in 0..20 {
-        assert!(!held(&report().await.1));
-    }
-    assert!(held(&report().await.1));
-    assert_eq!(cards(), 2, "an hour is not within the hour");
+#[test]
+fn report_rate_window_and_card_hour_end_exactly_on_the_boundary() {
+    saman::block_on_current(async {
+        let w = World::new(&[]);
+        let who = session("s-1", Some("j1"), w.dir.path());
+        let report = || w.call(&who, "report_test", json!({"command": "make check"}));
+        let cards = || w.count("select count(*) from card where kind = 'rate' and job = 'j1'");
+        let t0 = 1_700_000_000.5;
+        w.at(t0);
+        for _ in 0..20 {
+            assert!(!held(&report().await.1));
+        }
+        assert!(held(&report().await.1));
+        assert_eq!(cards(), 1);
+        // reports exactly a minute old no longer count
+        w.at(t0 + 60.0);
+        for i in 0..20 {
+            assert!(!held(&report().await.1), "report {i} a minute on");
+        }
+        assert!(held(&report().await.1));
+        assert_eq!(cards(), 1);
+        // exactly an hour after the card, the user is told again
+        w.at(t0 + 3600.0);
+        for _ in 0..20 {
+            assert!(!held(&report().await.1));
+        }
+        assert!(held(&report().await.1));
+        assert_eq!(cards(), 2, "an hour is not within the hour");
+    })
 }
 
 fn held(text: &str) -> bool {
     text.starts_with("HELD: more than 20 reports a minute (20 a minute is the limit)")
 }
 
-#[tokio::test]
-async fn report_rate_holds_the_21st_and_tells_once_an_hour() {
-    let w = World::new(&[]);
-    let who = session("s-1", Some("j1"), w.dir.path());
-    let report = || w.call(&who, "report_test", json!({"command": "make check"}));
-    let cards = || w.count("select count(*) from card where kind = 'rate' and job = 'j1'");
-    let t0 = 1_700_000_000.5;
-    w.at(t0);
-    for i in 0..20 {
+#[test]
+fn report_rate_holds_the_21st_and_tells_once_an_hour() {
+    saman::block_on_current(async {
+        let w = World::new(&[]);
+        let who = session("s-1", Some("j1"), w.dir.path());
+        let report = || w.call(&who, "report_test", json!({"command": "make check"}));
+        let cards = || w.count("select count(*) from card where kind = 'rate' and job = 'j1'");
+        let t0 = 1_700_000_000.5;
+        w.at(t0);
+        for i in 0..20 {
+            let (error, text) = report().await;
+            assert!(!error && !held(&text), "report {i}: {text}");
+        }
         let (error, text) = report().await;
-        assert!(!error && !held(&text), "report {i}: {text}");
-    }
-    let (error, text) = report().await;
-    assert!(!error && held(&text), "the 21st is held: {text}");
-    assert_eq!(
-        w.count("select count(*) from event where kind = 'test'"),
-        20,
-        "a held report writes nothing"
-    );
-    assert_eq!(cards(), 1, "the user is told");
-    assert_eq!(
-        w.text("select value from meta where key = 'rate-told:s-1'"),
-        Some(t0.to_string())
-    );
-    assert!(held(&report().await.1));
-    assert_eq!(cards(), 1, "told once");
-    // a minute on, the agent reports again; held again within the hour, nobody is told twice
-    w.at(t0 + 61.0);
-    for _ in 0..20 {
-        assert!(!held(&report().await.1));
-    }
-    assert!(held(&report().await.1));
-    assert_eq!(cards(), 1);
-    // an hour on, the user is told again
-    w.at(t0 + 3700.0);
-    for _ in 0..20 {
-        assert!(!held(&report().await.1));
-    }
-    assert!(held(&report().await.1));
-    assert_eq!(cards(), 2);
-    // a hub started again counts afresh, and the store's stamp keeps the card to one an hour
-    let again = w.restarted();
-    w.at(t0 + 3710.0);
-    for _ in 0..20 {
-        assert!(!held(
+        assert!(!error && held(&text), "the 21st is held: {text}");
+        assert_eq!(
+            w.count("select count(*) from event where kind = 'test'"),
+            20,
+            "a held report writes nothing"
+        );
+        assert_eq!(cards(), 1, "the user is told");
+        assert_eq!(
+            w.text("select value from meta where key = 'rate-told:s-1'"),
+            Some(t0.to_string())
+        );
+        assert!(held(&report().await.1));
+        assert_eq!(cards(), 1, "told once");
+        // a minute on, the agent reports again; held again within the hour, nobody is told twice
+        w.at(t0 + 61.0);
+        for _ in 0..20 {
+            assert!(!held(&report().await.1));
+        }
+        assert!(held(&report().await.1));
+        assert_eq!(cards(), 1);
+        // an hour on, the user is told again
+        w.at(t0 + 3700.0);
+        for _ in 0..20 {
+            assert!(!held(&report().await.1));
+        }
+        assert!(held(&report().await.1));
+        assert_eq!(cards(), 2);
+        // a hub started again counts afresh, and the store's stamp keeps the card to one an hour
+        let again = w.restarted();
+        w.at(t0 + 3710.0);
+        for _ in 0..20 {
+            assert!(!held(
+                &call_on(&again, &who, "report_test", json!({"command": "x"}))
+                    .await
+                    .1
+            ));
+        }
+        assert!(held(
             &call_on(&again, &who, "report_test", json!({"command": "x"}))
                 .await
                 .1
         ));
-    }
-    assert!(held(
-        &call_on(&again, &who, "report_test", json!({"command": "x"}))
-            .await
-            .1
-    ));
-    assert_eq!(cards(), 2, "the store remembers it told");
-    assert!(
-        w.hub.notified.load(Ordering::SeqCst) >= 80,
-        "every report tells the hub"
-    );
+        assert_eq!(cards(), 2, "the store remembers it told");
+        assert!(
+            w.hub.notified.load(Ordering::SeqCst) >= 80,
+            "every report tells the hub"
+        );
+    })
 }
 
-#[tokio::test]
-async fn report_edit_path_rules() {
-    let w = World::new(&[]);
-    let proj = std::fs::canonicalize(w.dir.path()).unwrap().join("proj");
-    std::fs::create_dir(&proj).unwrap();
-    let who = session("s-1", None, &proj);
-    let (error, text) = w
-        .call(
-            &who,
-            "report_edit",
-            json!({"paths": ["src/a.rs", "./b.rs"]}),
-        )
-        .await;
-    assert!(!error, "{text}");
-    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["paths"], 2);
-    let data: Value =
-        serde_json::from_str(&w.text("select data from event where id = 1").unwrap()).unwrap();
-    assert_eq!(
-        data,
-        json!({"root": proj.to_str().unwrap(), "paths": ["src/a.rs", "b.rs"]})
-    );
-    for (paths, n) in [
-        (json!("x.rs, y.rs"), 2),
-        (json!("one.rs\n two, three.rs\n"), 2),
-    ] {
-        let (error, text) = w.call(&who, "report_edit", json!({"paths": paths})).await;
-        assert!(!error, "{text}");
-        assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["paths"], n);
-    }
-    let refusals = [
-        (
-            "../x",
-            "../x has a `..': name it from the folder you work in".to_string(),
-        ),
-        (
-            "a/../../x",
-            "a/../../x has a `..': name it from the folder you work in".to_string(),
-        ),
-        ("/ssh:x:/y", "/ssh:x:/y is not a local path".to_string()),
-        (
-            "/sudo::/etc/x",
-            "/sudo::/etc/x is not a local path".to_string(),
-        ),
-        (
-            "/etc/passwd",
-            format!(
-                "/etc/passwd is outside {}, the folder you work in",
-                proj.display()
-            ),
-        ),
-    ];
-    for (path, says) in refusals {
-        let (error, text) = w.call(&who, "report_edit", json!({"paths": [path]})).await;
-        assert_eq!((error, text), (true, says), "{path}");
-    }
-    let many: Vec<String> = (0..1001).map(|i| format!("f{i}.rs")).collect();
-    let (error, text) = w.call(&who, "report_edit", json!({"paths": many})).await;
-    assert_eq!(
-        (error, text.as_str()),
-        (true, "1001 paths: at most 1000 in one report")
-    );
-    // a root of `/` is too wide: an agent started in the wrong place
-    let wide = session("s-2", None, Path::new("/"));
-    let (error, text) = w
-        .call(&wide, "report_edit", json!({"paths": ["etc/x"]}))
-        .await;
-    assert!(
-        error && text.starts_with("The folder you work in is / — "),
-        "{text}"
-    );
-    assert_eq!(
-        w.count("select count(*) from event"),
-        3,
-        "only the reports that passed"
-    );
-}
-
-#[tokio::test]
-async fn hello_cwd_must_be_inside_home() {
-    let w = World::new(&[]);
-    let proj = std::fs::canonicalize(w.dir.path()).unwrap().join("proj");
-    std::fs::create_dir_all(proj.join("sub")).unwrap();
-    let who = session("s-1", None, &proj);
-    let (error, text) = w.call(&who, "hello", json!({"cwd": "/"})).await;
-    assert_eq!(
-        (error, text),
-        (
-            true,
-            format!(
-                "/ is outside {}, the folder this server was started in",
-                proj.display()
+#[test]
+fn report_edit_path_rules() {
+    saman::block_on_current(async {
+        let w = World::new(&[]);
+        let proj = std::fs::canonicalize(w.dir.path()).unwrap().join("proj");
+        std::fs::create_dir(&proj).unwrap();
+        let who = session("s-1", None, &proj);
+        let (error, text) = w
+            .call(
+                &who,
+                "report_edit",
+                json!({"paths": ["src/a.rs", "./b.rs"]}),
             )
-        )
-    );
-    let (error, text) = w.call(&who, "hello", json!({"cwd": "missing"})).await;
-    assert_eq!(
-        (error, text),
-        (true, format!("{}/missing is not a folder", proj.display()))
-    );
-    assert_eq!(w.written(), 0);
-    let (error, text) = w
-        .call(
-            &who,
-            "hello",
-            json!({"cwd": "sub", "name": "claude · test", "plan": "p\nq"}),
-        )
-        .await;
-    assert!(!error, "{text}");
-    let sub = proj.join("sub").to_str().unwrap().to_owned();
-    assert_eq!(
-        serde_json::from_str::<Value>(&text).unwrap(),
-        json!({"agent": "s-1", "version": 0, "cwd": sub, "worktree": null, "base": null})
-    );
-    assert_eq!(
-        w.text("select name || '|' || cwd || '|' || plan from agent where id = 's-1'"),
-        Some(format!("claude · test|{sub}|p q"))
-    );
-    assert_eq!(
-        w.text("select summary from event where kind = 'start'"),
-        Some(format!("claude · test started in {sub}"))
-    );
-    // a later hello without a cwd keeps the registered one
-    let (_, text) = w.call(&who, "hello", json!({})).await;
-    assert_eq!(
-        serde_json::from_str::<Value>(&text).unwrap()["cwd"],
-        json!(sub)
-    );
-    // an outside bridge that named no folder has none to register
-    let lost = Identity::outside("zed", 7, Some(1.0), None).unwrap();
-    let (error, text) = w.call(&lost, "hello", json!({})).await;
-    assert!(
-        error && text.starts_with("No folder is known for you"),
-        "{text}"
-    );
+            .await;
+        assert!(!error, "{text}");
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["paths"], 2);
+        let data: Value =
+            serde_json::from_str(&w.text("select data from event where id = 1").unwrap()).unwrap();
+        assert_eq!(
+            data,
+            json!({"root": proj.to_str().unwrap(), "paths": ["src/a.rs", "b.rs"]})
+        );
+        for (paths, n) in [
+            (json!("x.rs, y.rs"), 2),
+            (json!("one.rs\n two, three.rs\n"), 2),
+        ] {
+            let (error, text) = w.call(&who, "report_edit", json!({"paths": paths})).await;
+            assert!(!error, "{text}");
+            assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["paths"], n);
+        }
+        let refusals = [
+            (
+                "../x",
+                "../x has a `..': name it from the folder you work in".to_string(),
+            ),
+            (
+                "a/../../x",
+                "a/../../x has a `..': name it from the folder you work in".to_string(),
+            ),
+            ("/ssh:x:/y", "/ssh:x:/y is not a local path".to_string()),
+            (
+                "/sudo::/etc/x",
+                "/sudo::/etc/x is not a local path".to_string(),
+            ),
+            (
+                "/etc/passwd",
+                format!(
+                    "/etc/passwd is outside {}, the folder you work in",
+                    proj.display()
+                ),
+            ),
+        ];
+        for (path, says) in refusals {
+            let (error, text) = w.call(&who, "report_edit", json!({"paths": [path]})).await;
+            assert_eq!((error, text), (true, says), "{path}");
+        }
+        let many: Vec<String> = (0..1001).map(|i| format!("f{i}.rs")).collect();
+        let (error, text) = w.call(&who, "report_edit", json!({"paths": many})).await;
+        assert_eq!(
+            (error, text.as_str()),
+            (true, "1001 paths: at most 1000 in one report")
+        );
+        // a root of `/` is too wide: an agent started in the wrong place
+        let wide = session("s-2", None, Path::new("/"));
+        let (error, text) = w
+            .call(&wide, "report_edit", json!({"paths": ["etc/x"]}))
+            .await;
+        assert!(
+            error && text.starts_with("The folder you work in is / — "),
+            "{text}"
+        );
+        assert_eq!(
+            w.count("select count(*) from event"),
+            3,
+            "only the reports that passed"
+        );
+    })
+}
+
+#[test]
+fn hello_cwd_must_be_inside_home() {
+    saman::block_on_current(async {
+        let w = World::new(&[]);
+        let proj = std::fs::canonicalize(w.dir.path()).unwrap().join("proj");
+        std::fs::create_dir_all(proj.join("sub")).unwrap();
+        let who = session("s-1", None, &proj);
+        let (error, text) = w.call(&who, "hello", json!({"cwd": "/"})).await;
+        assert_eq!(
+            (error, text),
+            (
+                true,
+                format!(
+                    "/ is outside {}, the folder this server was started in",
+                    proj.display()
+                )
+            )
+        );
+        let (error, text) = w.call(&who, "hello", json!({"cwd": "missing"})).await;
+        assert_eq!(
+            (error, text),
+            (true, format!("{}/missing is not a folder", proj.display()))
+        );
+        assert_eq!(w.written(), 0);
+        let (error, text) = w
+            .call(
+                &who,
+                "hello",
+                json!({"cwd": "sub", "name": "claude · test", "plan": "p\nq"}),
+            )
+            .await;
+        assert!(!error, "{text}");
+        let sub = proj.join("sub").to_str().unwrap().to_owned();
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap(),
+            json!({"agent": "s-1", "version": 0, "cwd": sub, "worktree": null, "base": null})
+        );
+        assert_eq!(
+            w.text("select name || '|' || cwd || '|' || plan from agent where id = 's-1'"),
+            Some(format!("claude · test|{sub}|p q"))
+        );
+        assert_eq!(
+            w.text("select summary from event where kind = 'start'"),
+            Some(format!("claude · test started in {sub}"))
+        );
+        // a later hello without a cwd keeps the registered one
+        let (_, text) = w.call(&who, "hello", json!({})).await;
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap()["cwd"],
+            json!(sub)
+        );
+        // an outside bridge that named no folder has none to register
+        let lost = Identity::outside("zed", 7, Some(1.0), None).unwrap();
+        let (error, text) = w.call(&lost, "hello", json!({})).await;
+        assert!(
+            error && text.starts_with("No folder is known for you"),
+            "{text}"
+        );
+    })
 }
 
 fn script(path: &Path, body: &str) {
@@ -525,87 +539,86 @@ fn script(path: &Path, body: &str) {
 
 /// git for the fixture itself: no overrides, `HOME` in the temporary root.
 fn plain_git(home: &Path, cwd: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("/usr/bin/git")
-        .args(args)
-        .current_dir(cwd)
-        .env_clear()
-        .env("HOME", home)
-        .env("PATH", "/usr/bin:/bin")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
-        .unwrap();
+    let env = vec![
+        (stig::HOME_VAR.into(), home.as_os_str().to_owned()),
+        ("PATH".into(), "/usr/bin:/bin".into()),
+        ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+    ];
+    let out = crate::run_child("/usr/bin/git", args, cwd, env);
     assert!(out.status.success(), "git {args:?}");
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
-#[tokio::test]
-async fn hello_git_read_runs_no_hook_or_fsmonitor() {
-    let w = World::new(&[]);
-    let root = std::fs::canonicalize(w.dir.path()).unwrap();
-    let repo = root.join("repo");
-    plain_git(
-        &root,
-        &root,
-        &["-c", "init.defaultBranch=main", "init", "-q", "repo"],
-    );
-    std::fs::write(repo.join("a"), "a\n").unwrap();
-    plain_git(&root, &repo, &["add", "a"]);
-    plain_git(
-        &root,
-        &repo,
-        &[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "commit",
-            "-qm",
-            "one",
-        ],
-    );
-    let canary = root.join("canary");
-    let c = canary.display();
-    for hook in [
-        "post-checkout",
-        "post-index-change",
-        "reference-transaction",
-        "pre-auto-gc",
-    ] {
-        script(
-            &repo.join(".git/hooks").join(hook),
-            &format!("echo {hook} >> '{c}'"),
+#[test]
+fn hello_git_read_runs_no_hook_or_fsmonitor() {
+    saman::block_on_current(async {
+        let w = World::new(&[]);
+        let root = std::fs::canonicalize(w.dir.path()).unwrap();
+        let repo = root.join("repo");
+        plain_git(
+            &root,
+            &root,
+            &["-c", "init.defaultBranch=main", "init", "-q", "repo"],
         );
-    }
-    let fsmon = root.join("fsmonitor");
-    script(&fsmon, &format!("echo fsmonitor >> '{c}'; exit 1"));
-    plain_git(
-        &root,
-        &repo,
-        &["config", "core.fsmonitor", fsmon.to_str().unwrap()],
-    );
-    let head = plain_git(&root, &repo, &["rev-parse", "HEAD"]);
+        crate::put_file(repo.join("a"), "a\n");
+        plain_git(&root, &repo, &["add", "a"]);
+        plain_git(
+            &root,
+            &repo,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "one",
+            ],
+        );
+        let canary = root.join("canary");
+        let c = canary.display();
+        for hook in [
+            "post-checkout",
+            "post-index-change",
+            "reference-transaction",
+            "pre-auto-gc",
+        ] {
+            script(
+                &repo.join(".git/hooks").join(hook),
+                &format!("echo {hook} >> '{c}'"),
+            );
+        }
+        let fsmon = root.join("fsmonitor");
+        script(&fsmon, &format!("echo fsmonitor >> '{c}'; exit 1"));
+        plain_git(
+            &root,
+            &repo,
+            &["config", "core.fsmonitor", fsmon.to_str().unwrap()],
+        );
+        let head = plain_git(&root, &repo, &["rev-parse", "HEAD"]);
 
-    let who = session("s-1", None, &repo);
-    let (error, text) = w.call(&who, "hello", json!({})).await;
-    assert!(!error, "{text}");
-    let answer: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(answer["worktree"], json!(repo.to_str().unwrap()));
-    assert_eq!(answer["base"], json!(head));
-    assert_eq!(
-        w.text("select branch from agent where id = 's-1'"),
-        Some("main".into())
-    );
-    assert!(
-        !canary.exists(),
-        "a hook or the fsmonitor ran: {:?}",
-        std::fs::read_to_string(&canary)
-    );
-    // the control: plain git runs the planted fsmonitor
-    plain_git(&root, &repo, &["status", "--porcelain"]);
-    assert!(
-        canary.exists(),
-        "the fixture's fsmonitor never ran, so the test proves nothing"
-    );
+        let who = session("s-1", None, &repo);
+        let (error, text) = w.call(&who, "hello", json!({})).await;
+        assert!(!error, "{text}");
+        let answer: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(answer["worktree"], json!(repo.to_str().unwrap()));
+        assert_eq!(answer["base"], json!(head));
+        assert_eq!(
+            w.text("select branch from agent where id = 's-1'"),
+            Some("main".into())
+        );
+        assert!(
+            !canary.exists(),
+            "a hook or the fsmonitor ran: {:?}",
+            eitri::read_string(&canary, 1 << 20)
+        );
+        // the control: plain git runs the planted fsmonitor
+        plain_git(&root, &repo, &["status", "--porcelain"]);
+        assert!(
+            canary.exists(),
+            "the fixture's fsmonitor never ran, so the test proves nothing"
+        );
+    })
 }
 
 // ---- the Lisp oracle's cases ----
@@ -689,7 +702,7 @@ impl Scanned {
     /// The rows the statements insert, read back from a scratch schema-6 database.
     fn of(statements: &[&str]) -> Scanned {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch(&std::fs::read_to_string(fixtures().join("work-db-6.sql")).unwrap())
+        c.execute_batch(&crate::read_file(fixtures().join("work-db-6.sql")))
             .unwrap();
         for sql in statements {
             c.execute_batch(sql).unwrap();
@@ -896,72 +909,74 @@ fn answer(v: &Value) -> Value {
     v
 }
 
-#[tokio::test]
-async fn every_tool_fixture_replays() {
-    let dir = fixtures().join("coord-parity");
-    let mut inputs: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| {
-            let name = p.file_name().unwrap().to_string_lossy();
-            name.starts_with("tools-") && name.ends_with(".input.json")
-        })
-        .collect();
-    inputs.sort();
-    assert!(!inputs.is_empty(), "no tool cases in {}", dir.display());
-    for path in inputs {
-        let name = path
-            .file_name()
+#[test]
+fn every_tool_fixture_replays() {
+    saman::block_on_current(async {
+        let dir = fixtures().join("coord-parity");
+        let mut inputs: Vec<PathBuf> = std::fs::read_dir(&dir)
             .unwrap()
-            .to_string_lossy()
-            .replace(".input.json", "");
-        let input = expand(serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap());
-        let expect = expand(
-            serde_json::from_slice(
-                &std::fs::read(dir.join(format!("{name}.expect.json"))).unwrap(),
-            )
-            .unwrap(),
-        );
-        let setup: Vec<&str> = input["setup"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|s| s.as_str().unwrap())
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                let name = p.file_name().unwrap().to_string_lossy();
+                name.starts_with("tools-") && name.ends_with(".input.json")
+            })
             .collect();
-        // the scan's rows are not the migration's to carry (see `Scanned`): the rest of the setup is
-        let (scan, setup): (Vec<&str>, Vec<&str>) = setup.into_iter().partition(|s| {
-            s.starts_with("insert into node ") || s.starts_with("insert into edge ")
-        });
-        let w = World::new(&setup);
-        if !scan.is_empty() {
-            w.put_scanned(Scanned::of(&scan)).await;
-        }
-        let calls = input["calls"].as_array().unwrap();
-        let wanted = expect["results"].as_array().unwrap();
-        assert_eq!(calls.len(), wanted.len(), "case {name}");
-        for (i, (call, want)) in calls.iter().zip(wanted).enumerate() {
-            w.at(call["now"].as_f64().expect("a tool call names its time"));
-            let who = identity_of(&call["identity"]);
-            let (error, text) = w
-                .call(&who, call["tool"].as_str().unwrap(), call["args"].clone())
-                .await;
-            let mut got = serde_json::Map::new();
-            got.insert(
-                if error { "error" } else { "text" }.into(),
-                Value::String(text),
+        inputs.sort();
+        assert!(!inputs.is_empty(), "no tool cases in {}", dir.display());
+        for path in inputs {
+            let name = path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .replace(".input.json", "");
+            let input = expand(serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap());
+            let expect = expand(
+                serde_json::from_slice(
+                    &std::fs::read(dir.join(format!("{name}.expect.json"))).unwrap(),
+                )
+                .unwrap(),
             );
-            let got = Value::Object(got);
-            assert_eq!(answer(&got), answer(want), "case {name}, call {i}");
+            let setup: Vec<&str> = input["setup"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_str().unwrap())
+                .collect();
+            // the scan's rows are not the migration's to carry (see `Scanned`): the rest of the setup is
+            let (scan, setup): (Vec<&str>, Vec<&str>) = setup.into_iter().partition(|s| {
+                s.starts_with("insert into node ") || s.starts_with("insert into edge ")
+            });
+            let w = World::new(&setup);
+            if !scan.is_empty() {
+                w.put_scanned(Scanned::of(&scan)).await;
+            }
+            let calls = input["calls"].as_array().unwrap();
+            let wanted = expect["results"].as_array().unwrap();
+            assert_eq!(calls.len(), wanted.len(), "case {name}");
+            for (i, (call, want)) in calls.iter().zip(wanted).enumerate() {
+                w.at(call["now"].as_f64().expect("a tool call names its time"));
+                let who = identity_of(&call["identity"]);
+                let (error, text) = w
+                    .call(&who, call["tool"].as_str().unwrap(), call["args"].clone())
+                    .await;
+                let mut got = serde_json::Map::new();
+                got.insert(
+                    if error { "error" } else { "text" }.into(),
+                    Value::String(text),
+                );
+                let got = Value::Object(got);
+                assert_eq!(answer(&got), answer(want), "case {name}, call {i}");
+            }
+            let conn = w.conn();
+            for (table, rows) in expect["tables"].as_object().unwrap() {
+                assert_eq!(
+                    norm(tidy(table, dump(&conn, table))),
+                    norm(tidy(table, rows.clone())),
+                    "case {name}, table {table}"
+                );
+            }
         }
-        let conn = w.conn();
-        for (table, rows) in expect["tables"].as_object().unwrap() {
-            assert_eq!(
-                norm(tidy(table, dump(&conn, table))),
-                norm(tidy(table, rows.clone())),
-                "case {name}, table {table}"
-            );
-        }
-    }
+    })
 }
 
 // ---- Task 8's rules the oracle cannot reach ----
@@ -981,169 +996,180 @@ impl Hub for SessionsHub {
     fn notify(&self) {}
 }
 
-#[tokio::test]
-async fn send_message_resolves_a_hub_session_by_id_or_name() {
-    let w = World::new(&[]);
-    let coord = Arc::new(Coord::new(w.db.clone(), Arc::new(SessionsHub)));
-    let who = session("s-1", None, w.dir.path());
-    for (to, id) in [("hub-7", 1), ("claude · b", 2), ("hub-8", 3)] {
+#[test]
+fn send_message_resolves_a_hub_session_by_id_or_name() {
+    saman::block_on_current(async {
+        let w = World::new(&[]);
+        let coord = Arc::new(Coord::new(w.db.clone(), Arc::new(SessionsHub)));
+        let who = session("s-1", None, w.dir.path());
+        for (to, id) in [("hub-7", 1), ("claude · b", 2), ("hub-8", 3)] {
+            let (error, text) = call_on(
+                &coord,
+                &who,
+                "send_message",
+                json!({"to": to, "text": "hi", "seen_version": 0}),
+            )
+            .await;
+            assert!(!error, "{to}: {text}");
+            assert_eq!(
+                serde_json::from_str::<Value>(&text).unwrap()["id"],
+                id,
+                "{to}"
+            );
+        }
+        assert_eq!(
+            w.count("select count(*) from message where recipient = 'hub-7'"),
+            2,
+            "a name is stored as the session's id"
+        );
         let (error, text) = call_on(
             &coord,
             &who,
             "send_message",
-            json!({"to": to, "text": "hi", "seen_version": 0}),
+            json!({"to": "ghost", "text": "hi", "seen_version": 0}),
         )
         .await;
-        assert!(!error, "{to}: {text}");
         assert_eq!(
-            serde_json::from_str::<Value>(&text).unwrap()["id"],
-            id,
-            "{to}"
+            (error, text.as_str()),
+            (
+                true,
+                "No agent \"ghost\" (list_agents names them; \"user\" is the user)"
+            ),
+            "a hub answered, so the suffix about no hub is not there"
         );
-    }
-    assert_eq!(
-        w.count("select count(*) from message where recipient = 'hub-7'"),
-        2,
-        "a name is stored as the session's id"
-    );
-    let (error, text) = call_on(
-        &coord,
-        &who,
-        "send_message",
-        json!({"to": "ghost", "text": "hi", "seen_version": 0}),
-    )
-    .await;
-    assert_eq!(
-        (error, text.as_str()),
-        (
-            true,
-            "No agent \"ghost\" (list_agents names them; \"user\" is the user)"
-        ),
-        "a hub answered, so the suffix about no hub is not there"
-    );
+    })
 }
 
-#[tokio::test]
-async fn read_decisions_sets_seen_only_when_it_changed() {
-    let w = World::new(&[]);
-    let who = session("s-1", Some("j1"), w.dir.path());
-    let other = session("s-2", Some("j1"), w.dir.path());
-    let (error, text) = w
-        .call(
-            &who,
-            "record_decision",
-            json!({"kind": "build", "subject": "A", "reason": "r", "seen_version": 0}),
-        )
-        .await;
-    assert!(!error, "{text}");
-    let rowid = |agent: &str| {
-        w.text(&format!(
-            "select cast(rowid as text) from kv where key = 'seen:{agent}'"
-        ))
-    };
-    assert_eq!(rowid("s-2"), None);
-    assert!(!w.call(&other, "read_decisions", json!({})).await.0);
-    let first = rowid("s-2").expect("the first read sets seen");
-    assert_eq!(
-        w.text("select value from meta where key = 'seen:s-2'"),
-        Some("1".into())
-    );
-    // a row that would take the next rowid: a second `insert or replace` of seen:s-2 would move it
-    w.conn()
-        .execute("insert into kv values ('zz', '1')", [])
-        .unwrap();
-    assert!(!w.call(&other, "read_decisions", json!({})).await.0);
-    assert_eq!(
-        rowid("s-2"),
-        Some(first),
-        "nothing changed: nothing written"
-    );
+#[test]
+fn read_decisions_sets_seen_only_when_it_changed() {
+    saman::block_on_current(async {
+        let w = World::new(&[]);
+        let who = session("s-1", Some("j1"), w.dir.path());
+        let other = session("s-2", Some("j1"), w.dir.path());
+        let (error, text) = w
+            .call(
+                &who,
+                "record_decision",
+                json!({"kind": "build", "subject": "A", "reason": "r", "seen_version": 0}),
+            )
+            .await;
+        assert!(!error, "{text}");
+        let rowid = |agent: &str| {
+            w.text(&format!(
+                "select cast(rowid as text) from kv where key = 'seen:{agent}'"
+            ))
+        };
+        assert_eq!(rowid("s-2"), None);
+        assert!(!w.call(&other, "read_decisions", json!({})).await.0);
+        let first = rowid("s-2").expect("the first read sets seen");
+        assert_eq!(
+            w.text("select value from meta where key = 'seen:s-2'"),
+            Some("1".into())
+        );
+        // a row that would take the next rowid: a second `insert or replace` of seen:s-2 would move it
+        w.conn()
+            .execute("insert into kv values ('zz', '1')", [])
+            .unwrap();
+        assert!(!w.call(&other, "read_decisions", json!({})).await.0);
+        assert_eq!(
+            rowid("s-2"),
+            Some(first),
+            "nothing changed: nothing written"
+        );
+    })
 }
 
-#[tokio::test]
-async fn a_held_write_is_counted_and_a_good_one_clears_it() {
-    let w = World::new(&["insert into job values ('j1', 'Job', null, null, 'running', 1.0, null)"]);
-    let who = session("s-1", Some("j1"), w.dir.path());
-    let (error, text) = w
-        .call(
-            &who,
-            "record_decision",
-            json!({"kind": "build", "subject": "A", "reason": "r", "seen_version": 0}),
-        )
-        .await;
-    assert!(!error, "{text}");
-    let held = |a: &str| w.text(&format!("select value from meta where key = 'held:{a}'"));
-    let stale = || {
-        w.call(
-            &who,
-            "send_message",
-            json!({"to": "user", "text": "x", "seen_version": 0}),
-        )
-    };
-    for n in ["1", "2"] {
-        let (error, text) = stale().await;
-        assert!(
-            !error && text.starts_with("HELD: the decision log moved on"),
-            "{text}"
+#[test]
+fn a_held_write_is_counted_and_a_good_one_clears_it() {
+    saman::block_on_current(async {
+        let w =
+            World::new(&["insert into job values ('j1', 'Job', null, null, 'running', 1.0, null)"]);
+        let who = session("s-1", Some("j1"), w.dir.path());
+        let (error, text) = w
+            .call(
+                &who,
+                "record_decision",
+                json!({"kind": "build", "subject": "A", "reason": "r", "seen_version": 0}),
+            )
+            .await;
+        assert!(!error, "{text}");
+        let held = |a: &str| w.text(&format!("select value from meta where key = 'held:{a}'"));
+        let stale = || {
+            w.call(
+                &who,
+                "send_message",
+                json!({"to": "user", "text": "x", "seen_version": 0}),
+            )
+        };
+        for n in ["1", "2"] {
+            let (error, text) = stale().await;
+            assert!(
+                !error && text.starts_with("HELD: the decision log moved on"),
+                "{text}"
+            );
+            assert_eq!(held("s-1").as_deref(), Some(n));
+        }
+        let (error, text) = w
+            .call(
+                &who,
+                "send_message",
+                json!({"to": "user", "text": "x", "seen_version": 1}),
+            )
+            .await;
+        assert!(!error, "{text}");
+        assert_eq!(held("s-1").as_deref(), Some("0"));
+        assert_eq!(
+            w.count("select count(*) from message"),
+            1,
+            "a held write stored nothing"
         );
-        assert_eq!(held("s-1").as_deref(), Some(n));
-    }
-    let (error, text) = w
-        .call(
-            &who,
-            "send_message",
-            json!({"to": "user", "text": "x", "seen_version": 1}),
-        )
-        .await;
-    assert!(!error, "{text}");
-    assert_eq!(held("s-1").as_deref(), Some("0"));
-    assert_eq!(
-        w.count("select count(*) from message"),
-        1,
-        "a held write stored nothing"
-    );
+    })
 }
 
 /// A hub that started on a file it cannot open yet (a schema 5): the first tool call after a schema-6 file replaced it
 /// is answered, with no schema tick between (the store asks the writer to look at the file once more itself, and the
 /// opening rule migrates it).
-#[tokio::test]
-async fn a_work_db_made_after_the_start_is_used_by_the_next_tool_call() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("work.db");
-    Connection::open(&file)
+#[test]
+fn a_work_db_made_after_the_start_is_used_by_the_next_tool_call() {
+    saman::block_on_current(async {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("work.db");
+        Connection::open(&file)
         .unwrap()
         .execute_batch(
             "create table meta (key text primary key, value text); insert into meta values ('schema', '5');",
         )
         .unwrap();
-    let db = CoordDb::spawn(&file);
-    let hub = Arc::new(CountingHub::default());
-    let coord = Arc::new(Coord::new(db, hub));
-    let who = session("s-1", None, dir.path());
-    let (error, text) = call_on(&coord, &who, "report_test", json!({"command": "make"})).await;
-    assert!(
-        error && text.contains("work.db is schema 5; open it once with drgnx 6 first"),
-        "{text}"
-    );
-    let next = dir.path().join("next.db");
-    Connection::open(&next)
-        .unwrap()
-        .execute_batch(&std::fs::read_to_string(fixtures().join("work-db-6.sql")).unwrap())
-        .unwrap();
-    for ext in ["-wal", "-shm"] {
-        let _ = std::fs::remove_file(dir.path().join(format!("work.db{ext}")));
-    }
-    std::fs::rename(&next, &file).unwrap();
-    let (error, text) = call_on(&coord, &who, "report_test", json!({"command": "make"})).await;
-    assert!(!error, "{text}");
-    let events: i64 = Connection::open(&file)
-        .unwrap()
-        .query_row("select count(*) from event where kind = 'test'", [], |r| {
-            r.get(0)
-        })
-        .unwrap();
-    assert_eq!(events, 1);
+        let db = CoordDb::spawn(&file);
+        let hub = Arc::new(CountingHub::default());
+        let coord = Arc::new(Coord::new(db, hub));
+        let who = session("s-1", None, dir.path());
+        let (error, text) = call_on(&coord, &who, "report_test", json!({"command": "make"})).await;
+        assert!(
+            error && text.contains("work.db is schema 5; open it once with drgnx 6 first"),
+            "{text}"
+        );
+        let next = dir.path().join("next.db");
+        Connection::open(&next)
+            .unwrap()
+            .execute_batch(&crate::read_file(fixtures().join("work-db-6.sql")))
+            .unwrap();
+        for ext in ["-wal", "-shm"] {
+            if let Err(e) = std::fs::remove_file(dir.path().join(format!("work.db{ext}"))) {
+                assert_eq!(e.kind(), std::io::ErrorKind::NotFound, "{ext}: {e}");
+            }
+        }
+        eitri::rename_file(&next, &file).unwrap();
+        let (error, text) = call_on(&coord, &who, "report_test", json!({"command": "make"})).await;
+        assert!(!error, "{text}");
+        let events: i64 = Connection::open(&file)
+            .unwrap()
+            .query_row("select count(*) from event where kind = 'test'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(events, 1);
+    })
 }
 
 // ---- work_status: paged, filtered, compact ----
@@ -1173,75 +1199,83 @@ async fn work_status(w: &World, args: Value) -> Value {
     serde_json::from_str(&text).unwrap()
 }
 
-#[tokio::test]
-async fn work_status_defaults_to_plans_not_done() {
-    let w = world_with_plans(&[
-        ("a", Some("docs/plans/a.md"), None),
-        ("b", Some("docs/plans/b.md"), Some("done")),
-        ("c", Some("docs/plans/c.md"), Some("open")),
-    ])
-    .await;
-    let got = work_status(&w, json!({})).await;
-    let ids: Vec<&str> = got["plans"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, ["plan:a", "plan:c"]);
-    let all = work_status(&w, json!({"status": "all"})).await;
-    assert_eq!(all["plans"].as_array().unwrap().len(), 3);
-    let done = work_status(&w, json!({"status": "done"})).await;
-    assert_eq!(done["plans"].as_array().unwrap().len(), 1);
-    // the compact row
-    let row = &got["plans"][0];
-    for k in ["id", "title", "path", "status", "tasks", "steps"] {
-        assert!(row.get(k).is_some(), "{k}");
-    }
-    for k in ["spec", "branch", "merged", "todos", "commits"] {
-        assert!(row.get(k).is_none(), "{k}");
-    }
+#[test]
+fn work_status_defaults_to_plans_not_done() {
+    saman::block_on_current(async {
+        let w = world_with_plans(&[
+            ("a", Some("docs/plans/a.md"), None),
+            ("b", Some("docs/plans/b.md"), Some("done")),
+            ("c", Some("docs/plans/c.md"), Some("open")),
+        ])
+        .await;
+        let got = work_status(&w, json!({})).await;
+        let ids: Vec<&str> = got["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["plan:a", "plan:c"]);
+        let all = work_status(&w, json!({"status": "all"})).await;
+        assert_eq!(all["plans"].as_array().unwrap().len(), 3);
+        let done = work_status(&w, json!({"status": "done"})).await;
+        assert_eq!(done["plans"].as_array().unwrap().len(), 1);
+        // the compact row
+        let row = &got["plans"][0];
+        for k in ["id", "title", "path", "status", "tasks", "steps"] {
+            assert!(row.get(k).is_some(), "{k}");
+        }
+        for k in ["spec", "branch", "merged", "todos", "commits"] {
+            assert!(row.get(k).is_none(), "{k}");
+        }
+    })
 }
 
-#[tokio::test]
-async fn work_status_pages_with_a_cursor() {
-    let ids: Vec<String> = (0..25).map(|i| format!("p{i:02}")).collect();
-    let paths: Vec<String> = ids.iter().map(|i| format!("docs/plans/{i}.md")).collect();
-    let plans: Vec<(&str, Option<&str>, Option<&str>)> = ids
-        .iter()
-        .zip(&paths)
-        .map(|(i, p)| (i.as_str(), Some(p.as_str()), None))
-        .collect();
-    let w = world_with_plans(&plans).await;
-    let first = work_status(&w, json!({"limit": 10})).await;
-    assert_eq!(first["plans"].as_array().unwrap().len(), 10);
-    assert_eq!(first["next_cursor"], "o:10");
-    let last = work_status(&w, json!({"limit": 10, "cursor": "o:20"})).await;
-    assert_eq!(last["plans"].as_array().unwrap().len(), 5);
-    assert!(last.get("next_cursor").is_none());
+#[test]
+fn work_status_pages_with_a_cursor() {
+    saman::block_on_current(async {
+        let ids: Vec<String> = (0..25).map(|i| format!("p{i:02}")).collect();
+        let paths: Vec<String> = ids.iter().map(|i| format!("docs/plans/{i}.md")).collect();
+        let plans: Vec<(&str, Option<&str>, Option<&str>)> = ids
+            .iter()
+            .zip(&paths)
+            .map(|(i, p)| (i.as_str(), Some(p.as_str()), None))
+            .collect();
+        let w = world_with_plans(&plans).await;
+        let first = work_status(&w, json!({"limit": 10})).await;
+        assert_eq!(first["plans"].as_array().unwrap().len(), 10);
+        assert_eq!(first["next_cursor"], "o:10");
+        let last = work_status(&w, json!({"limit": 10, "cursor": "o:20"})).await;
+        assert_eq!(last["plans"].as_array().unwrap().len(), 5);
+        assert!(last.get("next_cursor").is_none());
+    })
 }
 
-#[tokio::test]
-async fn work_status_path_prefix_filters() {
-    let w = world_with_plans(&[
-        ("a", Some("docs/plans/x/a.md"), None),
-        ("b", Some("docs/plans/y/b.md"), None),
-        ("c", None, None),
-    ])
-    .await;
-    let got = work_status(&w, json!({"path_prefix": "docs/plans/x/"})).await;
-    assert_eq!(got["plans"].as_array().unwrap().len(), 1);
-    assert_eq!(got["plans"][0]["id"], "plan:a");
+#[test]
+fn work_status_path_prefix_filters() {
+    saman::block_on_current(async {
+        let w = world_with_plans(&[
+            ("a", Some("docs/plans/x/a.md"), None),
+            ("b", Some("docs/plans/y/b.md"), None),
+            ("c", None, None),
+        ])
+        .await;
+        let got = work_status(&w, json!({"path_prefix": "docs/plans/x/"})).await;
+        assert_eq!(got["plans"].as_array().unwrap().len(), 1);
+        assert_eq!(got["plans"][0]["id"], "plan:a");
+    })
 }
 
-#[tokio::test]
-async fn a_plan_without_a_path_is_null() {
-    let w = world_with_plans(&[("a", None, None)]).await;
-    let got = work_status(&w, json!({})).await;
-    let rows = got["plans"].as_array().unwrap();
-    assert_eq!(rows.len(), 1);
-    assert!(rows[0].as_object().unwrap().contains_key("path"));
-    assert_eq!(rows[0]["path"], Value::Null);
+#[test]
+fn a_plan_without_a_path_is_null() {
+    saman::block_on_current(async {
+        let w = world_with_plans(&[("a", None, None)]).await;
+        let got = work_status(&w, json!({})).await;
+        let rows = got["plans"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].as_object().unwrap().contains_key("path"));
+        assert_eq!(rows[0]["path"], Value::Null);
+    })
 }
 
 // ---- outside agents the user bound (MP-3) ----
@@ -1260,7 +1294,7 @@ impl GateHub {
         })
     }
     fn calls(&self) -> Vec<String> {
-        self.calls.lock().unwrap().clone()
+        saman::lock(&self.calls).clone()
     }
 }
 
@@ -1276,7 +1310,7 @@ impl Hub for GateHub {
         own_record: bool,
         change: norn::grants::Change,
     ) -> BoxFuture<'_, Result<(), String>> {
-        self.calls.lock().unwrap().push(format!(
+        saman::lock(&self.calls).push(format!(
             "gate {actor} {} own={own_record} {} {}",
             action.id(),
             change.method,
@@ -1291,10 +1325,7 @@ impl Hub for GateHub {
         method: &'static str,
         _params: Value,
     ) -> BoxFuture<'_, Result<Value, String>> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push(format!("exec {sid} {method}"));
+        saman::lock(&self.calls).push(format!("exec {sid} {method}"));
         Box::pin(async { Ok(json!({"ok": true})) })
     }
 }
@@ -1328,211 +1359,221 @@ async fn call_in(
 
 /// [MP-3] The four tools a bound outside agent gets reach the hub as its own id; an unbound one is told how to be
 /// bound and reaches nothing.
-#[tokio::test]
-async fn the_outside_tools_reach_the_hub_as_a_bound_agent() {
-    let w = World::new(&[]);
-    let hub = GateHub::new(Ok(()));
-    let coord = Arc::new(Coord::new(w.db.clone(), hub.clone()));
-    let list = norn::tools::records::outside_tools();
-    let names: Vec<&str> = list.iter().map(|t| t.name()).collect();
-    assert_eq!(names, norn::tools::OUTSIDE_TOOLS);
-    let me = bound(w.dir.path(), norn::matrix::Role::Worker);
-    let id = me.id().unwrap().to_owned();
-    let calls = [
-        ("plan_read", json!({"plan": "plan:p"}), "plans/get"),
-        (
-            "plan_write",
-            json!({"plan": "plan:p", "tasks": []}),
-            "plans/write",
-        ),
-        ("records_read", json!({"record": "spec:s"}), "records/read"),
-        (
-            "records_write",
-            json!({"record": "spec:s", "kind": "spec", "base_version": 1}),
-            "records/write",
-        ),
-    ];
-    for (tool, args, method) in calls.clone() {
-        let (error, text) = call_in(&list, &coord, &me, tool, args).await;
-        assert!(!error, "{tool}: {text}");
-        assert_eq!(hub.calls().last().unwrap(), &format!("exec {id} {method}"));
-    }
-    let unbound = me.clone().with_role(None);
-    let before = hub.calls().len();
-    for (tool, args, _) in calls {
-        let (error, text) = call_in(&list, &coord, &unbound, tool, args).await;
-        assert!(
-            error
-                && text.starts_with(&format!(
-                    "{tool} needs the user's binding for claude agents"
-                )),
-            "{tool}: {text}"
+#[test]
+fn the_outside_tools_reach_the_hub_as_a_bound_agent() {
+    saman::block_on_current(async {
+        let w = World::new(&[]);
+        let hub = GateHub::new(Ok(()));
+        let coord = Arc::new(Coord::new(w.db.clone(), hub.clone()));
+        let list = norn::tools::records::outside_tools();
+        let names: Vec<&str> = list.iter().map(|t| t.name()).collect();
+        assert_eq!(names, norn::tools::OUTSIDE_TOOLS);
+        let me = bound(w.dir.path(), norn::matrix::Role::Worker);
+        let id = me.id().unwrap().to_owned();
+        let calls = [
+            ("plan_read", json!({"plan": "plan:p"}), "plans/get"),
+            (
+                "plan_write",
+                json!({"plan": "plan:p", "tasks": []}),
+                "plans/write",
+            ),
+            ("records_read", json!({"record": "spec:s"}), "records/read"),
+            (
+                "records_write",
+                json!({"record": "spec:s", "kind": "spec", "base_version": 1}),
+                "records/write",
+            ),
+        ];
+        for (tool, args, method) in calls.clone() {
+            let (error, text) = call_in(&list, &coord, &me, tool, args).await;
+            assert!(!error, "{tool}: {text}");
+            assert_eq!(hub.calls().last().unwrap(), &format!("exec {id} {method}"));
+        }
+        let unbound = me.clone().with_role(None);
+        let before = hub.calls().len();
+        for (tool, args, _) in calls {
+            let (error, text) = call_in(&list, &coord, &unbound, tool, args).await;
+            assert!(
+                error
+                    && text.starts_with(&format!(
+                        "{tool} needs the user's binding for claude agents"
+                    )),
+                "{tool}: {text}"
+            );
+        }
+        assert_eq!(
+            hub.calls().len(),
+            before,
+            "an unbound agent reaches no hub method"
         );
-    }
-    assert_eq!(
-        hub.calls().len(),
-        before,
-        "an unbound agent reaches no hub method"
-    );
+    })
 }
 
 /// [MP-3] A bound outside agent's decision is proposed, names its origin (from-brief or needs-user) and its sources,
 /// and passes the matrix's `graph.change` (its own record unless it replaces one); the author is its id.
-#[tokio::test]
-async fn record_decision_of_a_bound_outside_agent_is_proposed_with_sources() {
-    let w = World::new(&[]);
-    let hub = GateHub::new(Ok(()));
-    let coord = Arc::new(Coord::new(w.db.clone(), hub.clone()));
-    let me = bound(w.dir.path(), norn::matrix::Role::Worker);
-    let base = json!({"kind": "build", "subject": "s", "reason": "r", "seen_version": 0});
-    let with = |extra: Value| {
-        let mut v = base.clone();
-        v.as_object_mut()
-            .unwrap()
-            .extend(extra.as_object().unwrap().clone());
-        v
-    };
-    let src = json!([{"path": "docs/specs/x.md"}]);
-    for (args, says) in [
-        (
-            with(json!({"origin": "own", "sources": src})),
-            "from-brief or needs-user",
-        ),
-        (with(json!({"sources": src})), "from-brief or needs-user"),
-        (with(json!({"origin": "from-brief"})), "names its sources"),
-        (
-            with(json!({"origin": "from-brief", "sources": []})),
-            "names its sources",
-        ),
-        (
-            with(json!({"origin": "from-brief", "sources": src, "task": "j1#1"})),
-            "task j1#1 is a drgnx job's task",
-        ),
-    ] {
-        let (error, text) = call_on(&coord, &me, "record_decision", args.clone()).await;
-        assert!(error && text.contains(says), "{args}: {text}");
-    }
-    assert_eq!(w.count("select count(*) from decision"), 0);
-    assert!(hub.calls().is_empty(), "{:?}", hub.calls());
-    let (error, text) = call_on(
-        &coord,
-        &me,
-        "record_decision",
-        with(json!({"origin": "needs-user", "sources": src})),
-    )
-    .await;
-    assert!(!error, "{text}");
-    assert_eq!(
-        serde_json::from_str::<Value>(&text).unwrap()["status"],
-        "proposed"
-    );
-    assert_eq!(
-        w.text("select author || ':' || status from decision"),
-        Some(format!("{}:proposed", me.id().unwrap()))
-    );
-    assert_eq!(
-        hub.calls(),
-        [format!(
-            "gate {} graph.change own=true record_decision a new decision",
-            me.id().unwrap()
-        )]
-    );
-    // it replaces only its own decisions (review finding): another's, or a number nothing has, is refused before the
-    // matrix is asked
-    let no = GateHub::new(Err("the matrix asks the user first (card 3)".into()));
-    let coord = Arc::new(Coord::new(w.db.clone(), no.clone()));
-    let (error, text) = call_on(
-        &coord,
-        &me,
-        "record_decision",
-        with(json!({"origin": "from-brief", "sources": src, "replaces": 99, "seen_version": 1})),
-    )
-    .await;
-    assert!(
-        error && text.starts_with("an outside agent replaces only its own decisions"),
-        "{text}"
-    );
-    assert!(no.calls().is_empty(), "{:?}", no.calls());
-    // replacing its own decision #1 is its own record: the gate is asked with own=true, and its refusal is the answer
-    let (error, text) = call_on(
-        &coord,
-        &me,
-        "record_decision",
-        with(json!({"origin": "from-brief", "sources": src, "replaces": 1, "seen_version": 1})),
-    )
-    .await;
-    assert_eq!(
-        (error, text.as_str()),
-        (true, "the matrix asks the user first (card 3)")
-    );
-    assert_eq!(
-        no.calls(),
-        [format!(
-            "gate {} graph.change own=true record_decision decision #1",
-            me.id().unwrap()
-        )]
-    );
-    assert_eq!(w.count("select count(*) from decision"), 1);
+#[test]
+fn record_decision_of_a_bound_outside_agent_is_proposed_with_sources() {
+    saman::block_on_current(async {
+        let w = World::new(&[]);
+        let hub = GateHub::new(Ok(()));
+        let coord = Arc::new(Coord::new(w.db.clone(), hub.clone()));
+        let me = bound(w.dir.path(), norn::matrix::Role::Worker);
+        let base = json!({"kind": "build", "subject": "s", "reason": "r", "seen_version": 0});
+        let with = |extra: Value| {
+            let mut v = base.clone();
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            v
+        };
+        let src = json!([{"path": "docs/specs/x.md"}]);
+        for (args, says) in [
+            (
+                with(json!({"origin": "own", "sources": src})),
+                "from-brief or needs-user",
+            ),
+            (with(json!({"sources": src})), "from-brief or needs-user"),
+            (with(json!({"origin": "from-brief"})), "names its sources"),
+            (
+                with(json!({"origin": "from-brief", "sources": []})),
+                "names its sources",
+            ),
+            (
+                with(json!({"origin": "from-brief", "sources": src, "task": "j1#1"})),
+                "task j1#1 is a drgnx job's task",
+            ),
+        ] {
+            let (error, text) = call_on(&coord, &me, "record_decision", args.clone()).await;
+            assert!(error && text.contains(says), "{args}: {text}");
+        }
+        assert_eq!(w.count("select count(*) from decision"), 0);
+        assert!(hub.calls().is_empty(), "{:?}", hub.calls());
+        let (error, text) = call_on(
+            &coord,
+            &me,
+            "record_decision",
+            with(json!({"origin": "needs-user", "sources": src})),
+        )
+        .await;
+        assert!(!error, "{text}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap()["status"],
+            "proposed"
+        );
+        assert_eq!(
+            w.text("select author || ':' || status from decision"),
+            Some(format!("{}:proposed", me.id().unwrap()))
+        );
+        assert_eq!(
+            hub.calls(),
+            [format!(
+                "gate {} graph.change own=true record_decision a new decision",
+                me.id().unwrap()
+            )]
+        );
+        // it replaces only its own decisions (review finding): another's, or a number nothing has, is refused before the
+        // matrix is asked
+        let no = GateHub::new(Err("the matrix asks the user first (card 3)".into()));
+        let coord = Arc::new(Coord::new(w.db.clone(), no.clone()));
+        let (error, text) = call_on(
+            &coord,
+            &me,
+            "record_decision",
+            with(
+                json!({"origin": "from-brief", "sources": src, "replaces": 99, "seen_version": 1}),
+            ),
+        )
+        .await;
+        assert!(
+            error && text.starts_with("an outside agent replaces only its own decisions"),
+            "{text}"
+        );
+        assert!(no.calls().is_empty(), "{:?}", no.calls());
+        // replacing its own decision #1 is its own record: the gate is asked with own=true, and its refusal is the answer
+        let (error, text) = call_on(
+            &coord,
+            &me,
+            "record_decision",
+            with(json!({"origin": "from-brief", "sources": src, "replaces": 1, "seen_version": 1})),
+        )
+        .await;
+        assert_eq!(
+            (error, text.as_str()),
+            (true, "the matrix asks the user first (card 3)")
+        );
+        assert_eq!(
+            no.calls(),
+            [format!(
+                "gate {} graph.change own=true record_decision decision #1",
+                me.id().unwrap()
+            )]
+        );
+        assert_eq!(w.count("select count(*) from decision"), 1);
+    })
 }
 
 /// [MP-3] Binding opens no job tool: `claim_task`, `update_task`, `complete_task` and `report_submit` refuse a bound
 /// outside agent as an unbound one, and write nothing.
-#[tokio::test]
-async fn the_job_tools_still_refuse_a_bound_outside_agent() {
-    let w = World::new(&[
-        "insert into job values ('j1', 'Job', null, null, 'running', 1.0, null)",
-        "insert into jtask (id, job, n, title, role, status) values ('j1#1', 'j1', 1, 'One', 'implement', 'ready')",
-    ]);
-    let hub = GateHub::new(Ok(()));
-    let coord = Arc::new(Coord::new(w.db.clone(), hub.clone()));
-    let me = bound(w.dir.path(), norn::matrix::Role::Manager);
-    for (name, args) in [
-        ("claim_task", json!({"task": "j1#1", "seen_version": 0})),
-        (
-            "update_task",
-            json!({"task": "j1#1", "status": "running", "seen_version": 0}),
-        ),
-        ("complete_task", json!({"task": "j1#1", "seen_version": 0})),
-    ] {
-        let (error, text) = call_on(&coord, &me, name, args).await;
-        assert_eq!(
-            (error, text),
+#[test]
+fn the_job_tools_still_refuse_a_bound_outside_agent() {
+    saman::block_on_current(async {
+        let w = World::new(&[
+            "insert into job values ('j1', 'Job', null, null, 'running', 1.0, null)",
+            "insert into jtask (id, job, n, title, role, status) values ('j1#1', 'j1', 1, 'One', 'implement', 'ready')",
+        ]);
+        let hub = GateHub::new(Ok(()));
+        let coord = Arc::new(Coord::new(w.db.clone(), hub.clone()));
+        let me = bound(w.dir.path(), norn::matrix::Role::Manager);
+        for (name, args) in [
+            ("claim_task", json!({"task": "j1#1", "seen_version": 0})),
             (
-                true,
-                format!(
-                    "{name} is for drgnx's own job agents: the user starts jobs; report your work with report_edit and report_test"
+                "update_task",
+                json!({"task": "j1#1", "status": "running", "seen_version": 0}),
+            ),
+            ("complete_task", json!({"task": "j1#1", "seen_version": 0})),
+        ] {
+            let (error, text) = call_on(&coord, &me, name, args).await;
+            assert_eq!(
+                (error, text),
+                (
+                    true,
+                    format!(
+                        "{name} is for drgnx's own job agents: the user starts jobs; report your work with report_edit and report_test"
+                    )
                 )
-            )
+            );
+        }
+        let reports = norn::tools::reports::tools();
+        let (error, text) = call_in(
+            &reports,
+            &coord,
+            &me,
+            "report_submit",
+            json!({"tip": "0123456789abcdef0123456789abcdef01234567"}),
+        )
+        .await;
+        assert!(
+            error && text.starts_with("report_submit ends a drgnx job's task"),
+            "{text}"
         );
-    }
-    let reports = norn::tools::reports::tools();
-    let (error, text) = call_in(
-        &reports,
-        &coord,
-        &me,
-        "report_submit",
-        json!({"tip": "0123456789abcdef0123456789abcdef01234567"}),
-    )
-    .await;
-    assert!(
-        error && text.starts_with("report_submit ends a drgnx job's task"),
-        "{text}"
-    );
-    assert_eq!(w.written(), 0);
-    assert!(hub.calls().is_empty(), "{:?}", hub.calls());
+        assert_eq!(w.written(), 0);
+        assert!(hub.calls().is_empty(), "{:?}", hub.calls());
+    })
 }
 
-#[tokio::test]
-async fn limit_over_50_is_refused() {
-    let w = world_with_plans(&[("a", None, None)]).await;
-    for limit in [51, 0] {
-        let (error, text) = w
-            .call(&Identity::None, "work_status", json!({"limit": limit}))
+#[test]
+fn limit_over_50_is_refused() {
+    saman::block_on_current(async {
+        let w = world_with_plans(&[("a", None, None)]).await;
+        for limit in [51, 0] {
+            let (error, text) = w
+                .call(&Identity::None, "work_status", json!({"limit": limit}))
+                .await;
+            assert!(error && text.contains("limit"), "{limit}: {text}");
+        }
+        let (ok, _) = w
+            .call(&Identity::None, "work_status", json!({"limit": 50}))
             .await;
-        assert!(error && text.contains("limit"), "{limit}: {text}");
-    }
-    let (ok, _) = w
-        .call(&Identity::None, "work_status", json!({"limit": 50}))
-        .await;
-    assert!(!ok);
+        assert!(!ok);
+    })
 }

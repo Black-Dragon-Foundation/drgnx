@@ -254,24 +254,24 @@ pub fn contract(
     }
 }
 
+/// How long each tool of [`read`] may take.
+#[cfg(all(target_os = "macos", feature = "runner"))]
+const TOOL_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The machine read now: one call to each tool, in the runner account. ROOT is the runner folder (its volume's free
 /// space).
 #[cfg(all(target_os = "macos", feature = "runner"))]
 pub fn read(root: &std::path::Path) -> Raw {
-    use std::process::Command;
+    use crate::linux::run::limited;
     let out = |prog: &str, args: &[&str]| -> String {
-        Command::new(prog)
-            .args(args)
-            .output()
+        limited(std::path::Path::new(prog), args, &[], TOOL_LIMIT)
             .ok()
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_default()
     };
     let both = |prog: &str, args: &[&str]| -> String {
-        Command::new(prog)
-            .args(args)
-            .output()
+        limited(std::path::Path::new(prog), args, &[], TOOL_LIMIT)
             .map(|o| {
                 format!(
                     "{}{}",

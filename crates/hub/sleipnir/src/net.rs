@@ -19,14 +19,15 @@ pub const METADATA_ADDRS: &[&str] = &["169.254.169.254", "fd00:ec2::254"];
 
 /// The hub's allow-list (`host:port` per line, `#` comments) as the proxy's targets. An entry that is malformed, a
 /// metadata name or address, or an address that isn't public is refused, naming it.
-pub fn allow_list(text: &str) -> Result<Vec<Target>, String> {
+pub fn allow_list(text: &str) -> villa::Result<Vec<Target>> {
     let mut out = Vec::new();
     for raw in text.lines() {
         let entry = raw.trim();
         if entry.is_empty() || entry.starts_with('#') {
             continue;
         }
-        let t = parse_target(entry).map_err(|e| format!("the allow-list entry {entry:?}: {e}"))?;
+        let t = parse_target(entry)
+            .map_err(|e| villa::Error::invalid(format!("the allow-list entry {entry:?}: {e}")))?;
         let never = match &t.host {
             Host::Name(n) => METADATA_NAMES.contains(&n.as_str()),
             Host::V4(a) => {
@@ -37,9 +38,9 @@ pub fn allow_list(text: &str) -> Result<Vec<Target>, String> {
             }
         };
         if never {
-            return Err(format!(
+            return Err(villa::Error::refused(format!(
                 "the allow-list entry {entry:?}: a metadata service or an address that isn't public is never reached"
-            ));
+            )));
         }
         out.push(t);
     }

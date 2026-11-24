@@ -13,11 +13,10 @@
 //! broker event, a process's end), each under a deadline that only fails the test.
 #![cfg(all(target_os = "linux", feature = "test-hooks"))]
 
+use ratatoskr::proc::{Command, Io};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -68,10 +67,10 @@ fn mock() -> PathBuf {
 /// Asked for (`DRGNX_TEST_REAL_BROWSER=1`), and everything it needs is here; asked for but missing is a failure.
 fn wanted(kind: &Kind) -> bool {
     if std::env::var("DRGNX_TEST_REAL_BROWSER").as_deref() != Ok("1") {
-        eprintln!(
+        ratatoskr::soft::err_line(&format!(
             "browser_real {}: not run (DRGNX_TEST_REAL_BROWSER is not 1)",
             kind.name
-        );
+        ));
         return false;
     }
     let cli = format!("{PW_MCP}/cli.js");
@@ -111,7 +110,7 @@ fn relay(
     dir: &'static str,
     rec: Recording,
 ) {
-    std::thread::spawn(move || {
+    saman::spawn_thread("relay", move || {
         let mut dec = FrameDecoder::new(MAX_MESSAGE + 64);
         let mut buf = vec![0u8; 64 * 1024];
         while let Ok(n) = from.read(&mut buf) {
@@ -120,12 +119,13 @@ fn relay(
             }
             for f in dec.push(&buf[..n]).unwrap_or_default() {
                 if f.kind == KIND_CDP {
-                    rec.lock().unwrap().push((dir, f.payload));
+                    saman::lock(&rec).push((dir, f.payload));
                 }
             }
         }
-        let _ = to.shutdown(std::net::Shutdown::Write);
-    });
+        ratatoskr::soft::done(to.shutdown(std::net::Shutdown::Write), "browser_real");
+    })
+    .expect("the relay thread");
 }
 
 /// The browser host for `kind`, through the recording relay: the host process, the broker's end of the stream.
@@ -145,37 +145,47 @@ fn start_host(
     let (mut ready_r, ready_w) = std::io::pipe().unwrap();
     let (hub_fd, ready_fd) = (high(&host_end), high(&ready_w));
     drop((host_end, ready_w));
-    let (h, r) = (hub_fd.as_raw_fd(), ready_fd.as_raw_fd());
-    let mut cmd = Command::new(RATATOSKR);
-    cmd.args([
-        "browser-host",
-        "--hub-fd",
-        "3",
-        "--ready-fd",
-        "4",
-        "--program",
-        kind.program,
-    ])
-    .args([
-        "--dir",
-        OWN_DIR,
-        "--web-port",
-        "3130",
-        kind.flag,
-        "--unconfined",
-    ])
-    .stdin(Stdio::null());
-    // SAFETY: only dup2, which is async-signal-safe, between fork and exec.
-    unsafe {
-        cmd.pre_exec(move || {
-            if libc::dup2(h, 3) < 0 || libc::dup2(r, 4) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let child = cmd.spawn().expect("ratatoskr browser-host");
-    drop((hub_fd, ready_fd));
+    let spec = draugr::Spec {
+        program: RATATOSKR.into(),
+        args: [
+            "browser-host",
+            "--hub-fd",
+            "3",
+            "--ready-fd",
+            "4",
+            "--program",
+            kind.program,
+            "--dir",
+            OWN_DIR,
+            "--web-port",
+            "3130",
+            kind.flag,
+            "--unconfined",
+        ]
+        .map(std::ffi::OsString::from)
+        .to_vec(),
+        env: std::env::vars_os().collect(),
+        cwd: None,
+        stdin_null: true,
+        pass_fds: vec![
+            draugr::PassFd {
+                fd: Arc::new(hub_fd),
+                target: 3,
+            },
+            draugr::PassFd {
+                fd: Arc::new(ready_fd),
+                target: 4,
+            },
+        ],
+        new_session: false,
+    };
+    let opts = draugr::Opts {
+        stdout: draugr::Redirect::Inherit,
+        stderr: draugr::Redirect::Inherit,
+        ..draugr::Opts::default()
+    };
+    let child = draugr::spawn_std(&spec, &opts).expect("ratatoskr browser-host");
+    drop(spec);
     let mut line = String::new();
     ready_r.read_to_string(&mut line).unwrap();
     assert_eq!(line, "ready\n", "the browser host's ready line");
@@ -186,16 +196,21 @@ fn start_host(
 async fn tcp_front(sock: PathBuf) -> u16 {
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = l.local_addr().unwrap().port();
-    tokio::spawn(async move {
+    saman::spawn("tcp-front", async move {
         while let Ok((mut tcp, _)) = l.accept().await {
             let sock = sock.clone();
-            tokio::spawn(async move {
+            saman::spawn("tcp-front-conn", async move {
                 if let Ok(mut unix) = UnixStream::connect(&sock).await {
-                    let _ = tokio::io::copy_bidirectional(&mut tcp, &mut unix).await;
+                    ratatoskr::soft::done(
+                        tokio::io::copy_bidirectional(&mut tcp, &mut unix).await,
+                        "tokio::io::copy_bidirectional",
+                    );
                 }
-            });
+            })
+            .detach("a connection lives until either side closes");
         }
-    });
+    })
+    .detach("the front lives as long as the test");
     port
 }
 
@@ -203,8 +218,7 @@ async fn tcp_front(sock: PathBuf) -> u16 {
 fn http_serve(text: &str) -> (std::process::Child, u16) {
     let mut c = Command::new(mock())
         .args(["http-serve", "0", text])
-        .stdout(Stdio::piped())
-        .spawn()
+        .spawn(Io::Null, Io::Pipe, Io::Inherit)
         .unwrap();
     let mut out = std::io::BufReader::new(c.stdout.take().unwrap());
     let mut line = String::new();
@@ -350,16 +364,17 @@ fn write_recording(kind: &Kind, product: &str, rec: &Recording) {
     let Some(dir) = std::env::var_os("DRGNX_TEST_RECORD_DIR") else {
         return;
     };
-    let pw: Value =
-        serde_json::from_str(&std::fs::read_to_string(format!("{PW_MCP}/package.json")).unwrap())
-            .unwrap();
+    let pw: Value = serde_json::from_str(
+        &ratatoskr::fsio::read_to_string(format!("{PW_MCP}/package.json")).unwrap(),
+    )
+    .unwrap();
     let mut out = json!({"note": format!(
         "Recorded by ratatoskr's tests/browser_real.rs: {product} ({}) with Playwright MCP {} as the agent; \
          the browser side only (what the broker sent, what the browser answered), strings over 300 bytes elided",
         kind.name, pw["version"].as_str().unwrap_or("?"))})
     .to_string();
     out.push('\n');
-    for (dir, msg) in rec.lock().unwrap().iter() {
+    for (dir, msg) in saman::lock(rec).iter() {
         let mut v: Value = serde_json::from_slice(msg).unwrap();
         elide(&mut v);
         let mut line = serde_json::Map::new();
@@ -368,27 +383,27 @@ fn write_recording(kind: &Kind, product: &str, rec: &Recording) {
         out.push('\n');
     }
     let path = Path::new(&dir).join(format!("real-{}.jsonl", kind.name));
-    std::fs::write(&path, out).unwrap();
-    eprintln!("browser_real {}: recorded {}", kind.name, path.display());
+    ratatoskr::fsio::write(&path, out).unwrap();
+    ratatoskr::soft::err_line(&format!(
+        "browser_real {}: recorded {}",
+        kind.name,
+        path.display()
+    ));
 }
 
 fn run(kind: &Kind) {
     if !wanted(kind) {
         return;
     }
-    let _one = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
-    let _ = std::fs::remove_dir_all(OWN_DIR);
+    let _one = saman::lock(&SERIAL);
+    ratatoskr::soft::done(std::fs::remove_dir_all(OWN_DIR), "std::fs::remove_dir_all");
     let tmp = tempfile::tempdir().unwrap();
     let sock = tmp.path().join("cdp.sock");
     let rec: Recording = Arc::default();
     let (mut host, broker_end) = start_host(kind, &rec);
     let text = format!("{}-page", kind.name);
     let (mut site, site_port) = http_serve(&text);
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = saman::Executor::new(2).unwrap();
     let product = rt.block_on(async {
         let secret = Secret::new().unwrap();
         let path = format!("{}{}", broker::PATH_PREFIX, secret.hex());
@@ -421,20 +436,20 @@ fn run(kind: &Kind) {
                 "PLAYWRIGHT_MCP_CDP_ENDPOINT",
                 format!("ws://127.0.0.1:{port}{path}"),
             )
-            .stdin(Stdio::null());
+            .stdin(std::process::Stdio::null());
         let out = timeout(
             Duration::from_secs(240),
-            tokio::task::spawn_blocking(move || drive.output().unwrap()),
+            saman::spawn_blocking("cdp-drive", move || drive.output().unwrap()),
         )
         .await
         .expect("cdp-drive ends within 240 s")
         .unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
-        eprintln!(
+        ratatoskr::soft::err_line(&format!(
             "browser_real {}: cdp-drive said:\n{stdout}{}",
             kind.name,
             String::from_utf8_lossy(&out.stderr)
-        );
+        ));
         assert!(out.status.success(), "cdp-drive failed: {}", out.status);
         assert!(stdout.contains("TITLE data-ok\n"), "{stdout}");
         assert!(stdout.contains(&format!("TITLE {text}\n")), "{stdout}");
@@ -486,7 +501,7 @@ fn run(kind: &Kind) {
             loop {
                 match events.recv().await.expect("the broker's events") {
                     BrokerEvent::Download { guid: g, path } if g == guid => return path,
-                    other => eprintln!("browser_real {}: broker event {other:?}", kind.name),
+                    other => ratatoskr::soft::err_line(&format!("browser_real {}: broker event {other:?}", kind.name)),
                 }
             }
         })
@@ -494,7 +509,7 @@ fn run(kind: &Kind) {
         .expect("the download's broker event within 10 s");
         assert_eq!(event, format!("{}/{guid}", heimdall::DOWNLOAD_DIR));
         assert_eq!(
-            std::fs::read_to_string(format!("{OWN_DIR}/downloads/{guid}")).unwrap(),
+            ratatoskr::fsio::read_to_string(format!("{OWN_DIR}/downloads/{guid}")).unwrap(),
             text
         );
 
@@ -619,7 +634,7 @@ fn run(kind: &Kind) {
         while let Ok(e) = events.try_recv() {
             fallback |= e == BrokerEvent::NoBrowserSession;
         }
-        eprintln!(
+        ratatoskr::soft::err_line(&format!(
             "browser_real {}: {product}: Target.attachToBrowserTarget {}",
             kind.name,
             if fallback {
@@ -627,18 +642,19 @@ fn run(kind: &Kind) {
             } else {
                 "worked"
             }
-        );
+        ));
         handle.close();
         product
     });
     // the broker's end closed: the host stops Chromium and exits 0, and nothing of Chromium is left
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || tx.send(host.wait().unwrap()));
+    saman::spawn_thread("host-wait", move || tx.send(host.wait().unwrap()))
+        .expect("the host-wait thread");
     let status = rx
         .recv_timeout(Duration::from_secs(20))
         .expect("the browser host exits within 20 s of the broker's close");
     assert_eq!(status.code(), Some(0), "the browser host's exit");
-    let left = Command::new("pgrep")
+    let left = ratatoskr::proc::Command::new("pgrep")
         .args(["-f", "--", &format!("--user-data-dir={OWN_DIR}/profile")])
         .output()
         .unwrap();
@@ -647,8 +663,8 @@ fn run(kind: &Kind) {
         "Chromium processes are left: {}",
         String::from_utf8_lossy(&left.stdout)
     );
-    let _ = site.kill();
-    let _ = site.wait();
+    ratatoskr::soft::done(site.kill(), "browser_real");
+    ratatoskr::soft::done(site.wait(), "browser_real");
     write_recording(kind, &product, &rec);
 }
 

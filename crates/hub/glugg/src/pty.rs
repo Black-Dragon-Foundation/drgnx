@@ -1,15 +1,10 @@
 //! The PTY and the shell on it: a new session whose controlling terminal is the PTY's other side.
 
-use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
+use rustix::fd::{AsFd, OwnedFd};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 use rustix::termios::{Winsize, tcgetwinsize, tcsetwinsize};
-use std::ffi::OsStr;
-use std::fs::OpenOptions;
 use std::io;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 
 /// A PTY master and the program running on it.
 pub struct Pty {
@@ -48,30 +43,31 @@ impl Pty {
         grantpt(&master)?;
         unlockpt(&master)?;
         let name = ptsname(&master, Vec::new())?;
-        let slave: OwnedFd = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(rustix::fs::OFlags::NOCTTY.bits() as i32)
-            .open(OsStr::from_bytes(name.as_bytes()))?
-            .into();
+        let slave: OwnedFd = rustix::fs::open(
+            name.as_c_str(),
+            rustix::fs::OFlags::RDWR | rustix::fs::OFlags::NOCTTY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )?;
         tcsetwinsize(&slave, size)?;
-        let mut cmd = Command::new(program);
-        cmd.args(args)
-            .current_dir(dir)
-            .env_clear()
-            .envs(env.iter().map(|(k, v)| (k, v)))
-            .stdin(Stdio::from(slave.try_clone()?))
-            .stdout(Stdio::from(slave.try_clone()?))
-            .stderr(Stdio::from(slave));
-        // SAFETY: setsid and ioctl are async-signal-safe; stdin is the PTY's other side by now.
-        unsafe {
-            cmd.pre_exec(|| {
-                rustix::process::setsid()?;
-                rustix::process::ioctl_tiocsctty(BorrowedFd::borrow_raw(0))?;
-                Ok(())
-            });
-        }
-        let child = cmd.spawn()?;
+        let slave = std::sync::Arc::new(slave);
+        let spec = draugr::Spec {
+            program: program.into(),
+            args: args.iter().map(Into::into).collect(),
+            env: env.iter().map(|(k, v)| (k.into(), v.into())).collect(),
+            cwd: Some(dir.into()),
+            stdin_null: false,
+            pass_fds: Vec::new(),
+            new_session: true,
+        };
+        // the shell's stdio is the PTY's other side, which is also its controlling terminal
+        let opts = draugr::Opts {
+            controlling_tty: Some(slave.clone()),
+            stdin: Some(slave.clone()),
+            stdout: draugr::Redirect::To(slave.clone()),
+            stderr: draugr::Redirect::To(slave),
+            ..draugr::Opts::default()
+        };
+        let child = draugr::spawn_std(&spec, &opts)?;
         set_nonblocking(&master)?;
         Ok(Pty { master, child })
     }

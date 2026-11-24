@@ -11,7 +11,7 @@
 use super::definers;
 use super::ts::Kind;
 use std::collections::BTreeMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 use tree_sitter::{CaptureQuantifier, Node, Query, QueryCursor, StreamingIterator, Tree};
 
 /// How many first lines a reference keeps.
@@ -106,7 +106,7 @@ pub(super) fn compile_tags(language: &tree_sitter::Language, source: &str) -> Op
 
 pub(super) fn query(kind: Kind) -> Option<&'static Query> {
     static QUERIES: Mutex<Vec<(Kind, &'static Query)>> = Mutex::new(Vec::new());
-    let mut all = QUERIES.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut all = saman::lock(&QUERIES);
     if let Some((_, q)) = all.iter().find(|(k, _)| *k == kind) {
         return Some(q);
     }

@@ -31,7 +31,7 @@ pub const UNUSED_FOR: Duration = Duration::from_secs(7 * 24 * 3600);
 
 /// What a slot is shared by: jobs of one project, source worktree, trust and toolchain.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct SlotKey {
+pub struct SlotId {
     pub project: String,
     pub worktree: String,
     pub trust: JobTrust,
@@ -77,11 +77,11 @@ pub enum CopyKind {
     Plain,
 }
 
-impl SlotKey {
+impl SlotId {
     /// The slot key of a job: its project, the hub's worktree, its trust; one toolchain for now. The runner names a
     /// slot by it, and the hub knows from it whether a runner's `ready` lists the job's slot.
-    pub fn of(spec: &forseti::JobSpec) -> SlotKey {
-        SlotKey {
+    pub fn of(spec: &forseti::JobSpec) -> SlotId {
+        SlotId {
             project: spec.project.as_str().to_string(),
             worktree: spec.tree.display().to_string(),
             trust: spec.trust,
@@ -130,7 +130,7 @@ pub fn present(root: &Path) -> Vec<String> {
 }
 
 /// The slot's directories under the runner folder `root`.
-pub fn paths(root: &Path, key: &SlotKey) -> SlotPaths {
+pub fn paths(root: &Path, key: &SlotId) -> SlotPaths {
     let id = key.id();
     SlotPaths {
         slot: root.join("slots").join(&id),
@@ -186,9 +186,9 @@ pub fn update(p: &SlotPaths, mirror: &Path, commit: &str, overlay: &Overlay) -> 
     fs::create_dir_all(p.git_dir.join("objects/info"))?;
     let mut alternates = mirror.join("objects").into_os_string().into_vec();
     alternates.push(b'\n');
-    fs::write(p.git_dir.join("objects/info/alternates"), alternates)?;
+    crate::fsio::write(p.git_dir.join("objects/info/alternates"), alternates)?;
     fs::create_dir_all(p.git_dir.join("info"))?;
-    fs::write(p.git_dir.join("info/attributes"), ATTRIBUTES)?;
+    crate::fsio::write(p.git_dir.join("info/attributes"), ATTRIBUTES)?;
     touch(&p.git_dir.join("used"))?;
 
     // the wanted index: the commit, then the overlay's deletions and files, in a temporary index
@@ -196,7 +196,7 @@ pub fn update(p: &SlotPaths, mirror: &Path, commit: &str, overlay: &Overlay) -> 
     remove_if_there(&next)?;
     let with_next = |args: &[&str]| {
         let mut c = git.cmd(args);
-        c.env("GIT_INDEX_FILE", &next);
+        super::git::set_env(&mut c, "GIT_INDEX_FILE", &next);
         c
     };
     run("read the commit", with_next(&["read-tree", commit]), None)?;
@@ -334,9 +334,9 @@ fn copy_tree(src: &Path, dst: &Path, plain: &mut bool) -> Result<()> {
             let meta = r.metadata()?;
             // a Mac clones by name (APFS `fclonefileat` makes the file), elsewhere into an open file (FICLONE)
             let w = if clone_new(&r, &to) {
-                fs::File::options().write(true).open(&to)?
+                crate::fsio::open_existing(&to)?
             } else {
-                let mut w = fs::File::options().write(true).create_new(true).open(&to)?;
+                let mut w = crate::fsio::create_new(&to, 0o600)?;
                 if !clone(&w, &r) {
                     *plain = true;
                     io::copy(&mut r, &mut w)?;
@@ -441,12 +441,7 @@ impl Locks {
 
     fn lock(&self, name: &str, op: FlockOperation) -> Result<Option<Held>> {
         fs::create_dir_all(&self.git_dir)?;
-        let file = fs::File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(self.git_dir.join(name))?;
+        let file = crate::fsio::open_lock(self.git_dir.join(name), 0o666)?;
         match rustix::fs::flock(&file, op) {
             Ok(()) => Ok(Some(Held { _file: file })),
             Err(rustix::io::Errno::WOULDBLOCK) => Ok(None),
@@ -461,7 +456,8 @@ const INPUTS: &str = "inputs";
 
 /// Whether the slot whose git dir is GIT_DIR holds INPUTS (an empty key is never held).
 fn holds(git_dir: &Path, inputs: &str) -> bool {
-    !inputs.is_empty() && fs::read_to_string(git_dir.join(INPUTS)).is_ok_and(|s| s == inputs)
+    !inputs.is_empty()
+        && crate::fsio::read_to_string(git_dir.join(INPUTS)).is_ok_and(|s| s == inputs)
 }
 
 /// A read lock on slot P once it holds INPUTS, for a job that reads it: the slot is moved there first by MOVE (under
@@ -493,7 +489,7 @@ pub fn hold(
                 if !holds(&p.git_dir, inputs) {
                     remove_if_there(&p.git_dir.join(INPUTS))?;
                     move_to()?;
-                    fs::write(p.git_dir.join(INPUTS), inputs)?;
+                    crate::fsio::write(p.git_dir.join(INPUTS), inputs)?;
                 }
             }
         }
@@ -508,31 +504,34 @@ pub const JOB_HOLD: &str = "slot-hold";
 pub fn write_job_hold(dir: &Path, p: &SlotPaths, inputs: &str) -> io::Result<()> {
     let mut body = format!("{inputs}\n").into_bytes();
     body.extend_from_slice(p.git_dir.as_os_str().as_bytes());
-    fs::write(dir.join(JOB_HOLD), body)
+    crate::fsio::write(dir.join(JOB_HOLD), body)
 }
 
 /// The read lock job-exec holds for its job's life, on the slot DIR's [`JOB_HOLD`] names (none named: `Ok(None)`). An
 /// error when the slot no longer holds the job's inputs (moved between `serve`'s checkout and this start: that `serve`
 /// is gone) or can't be locked: the job must not run.
-pub fn hold_for_job(dir: &Path) -> std::result::Result<Option<Held>, String> {
+pub fn hold_for_job(dir: &Path) -> villa::Result<Option<Held>> {
     let body = match fs::read(dir.join(JOB_HOLD)) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("{JOB_HOLD}: {e}")),
+        Err(e) => return Err(villa::Error::io(format!("{JOB_HOLD}: {e}")).with_source(e)),
         Ok(b) => b,
     };
     let at = body
         .iter()
         .position(|&b| b == b'\n')
-        .ok_or_else(|| format!("{JOB_HOLD}: no slot named"))?;
-    let inputs = std::str::from_utf8(&body[..at]).map_err(|_| format!("{JOB_HOLD}: not a key"))?;
+        .ok_or_else(|| villa::Error::invalid(format!("{JOB_HOLD}: no slot named")))?;
+    let inputs = std::str::from_utf8(&body[..at])
+        .map_err(|_| villa::Error::invalid(format!("{JOB_HOLD}: not a key")))?;
     let git_dir = Path::new(std::ffi::OsStr::from_bytes(&body[at + 1..]));
     let held = Locks {
         git_dir: git_dir.to_path_buf(),
     }
     .read()
-    .map_err(|e| format!("the checkout slot's read lock: {e}"))?;
+    .map_err(|e| villa::Error::conflict(format!("the checkout slot's read lock: {e}")))?;
     if !holds(git_dir, inputs) {
-        return Err("its checkout slot moved to other inputs before the job started".into());
+        return Err(villa::Error::conflict(
+            "its checkout slot moved to other inputs before the job started",
+        ));
     }
     Ok(Some(held))
 }
@@ -581,12 +580,8 @@ pub fn gc(root: &Path, now: SystemTime, in_use: &[PathBuf]) -> Result<Vec<PathBu
 }
 
 fn touch(path: &Path) -> io::Result<()> {
-    let f = fs::File::options()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)?;
-    f.set_modified(SystemTime::now())
+    let f = crate::fsio::open_lock(path, 0o666)?;
+    f.set_modified(stund::wall())
 }
 
 fn remove_if_there(path: &Path) -> io::Result<()> {
@@ -607,8 +602,8 @@ mod tests {
     use super::super::testutil::{self, DirBlobs, HOOKS, marker_script, user_git, write};
     use super::*;
 
-    fn key(n: &str) -> SlotKey {
-        SlotKey {
+    fn key(n: &str) -> SlotId {
+        SlotId {
             project: "p".into(),
             worktree: n.into(),
             trust: JobTrust::Private,
@@ -628,9 +623,7 @@ mod tests {
     }
 
     fn backdate(p: &Path, to: SystemTime) {
-        fs::File::options()
-            .write(true)
-            .open(p)
+        crate::fsio::open_existing(p)
             .unwrap()
             .set_modified(to)
             .unwrap();
@@ -738,7 +731,7 @@ mod tests {
                 .is_symlink()
         );
 
-        fs::write(dest.join("a"), b"the job wrote this\n").unwrap();
+        crate::fsio::write(dest.join("a"), b"the job wrote this\n").unwrap();
         assert_eq!(
             fs::read(p.slot.join("a")).unwrap(),
             b"a\n",
@@ -767,7 +760,7 @@ mod tests {
         assert!(
             !marker.exists(),
             "a planted program ran: {:?}",
-            fs::read_to_string(&marker)
+            crate::fsio::read_to_string(&marker)
         );
         assert!(
             fs::symlink_metadata(p.slot.join(".git")).is_err(),
@@ -852,7 +845,7 @@ mod tests {
                 &evil,
                 &["config", "core.fsmonitor", monitor.to_str().unwrap()],
             );
-            fs::write(
+            crate::fsio::write(
                 p.slot.join(".git"),
                 format!("gitdir: {}\n", evil_git.display()),
             )
@@ -879,7 +872,7 @@ mod tests {
         let outside = t.path().join("outside");
         fs::create_dir(&outside).unwrap();
         let sentinel = t.path().join("sentinel");
-        fs::write(&sentinel, b"keep\n").unwrap();
+        crate::fsio::write(&sentinel, b"keep\n").unwrap();
         let p = plant_then_sync(t.path(), |p, _| {
             fs::remove_dir_all(p.slot.join("dir")).unwrap();
             symlink(&outside, p.slot.join("dir")).unwrap();
@@ -1007,7 +1000,7 @@ mod tests {
         let root = Path::new("/r");
         let a = paths(root, &key("w"));
         assert_eq!(a, paths(root, &key("w")));
-        let other = SlotKey {
+        let other = SlotId {
             trust: JobTrust::PrivateKeys,
             ..key("w")
         };
@@ -1036,7 +1029,7 @@ mod tests {
         for p in [&b, &a] {
             fs::create_dir_all(&p.slot).unwrap();
         }
-        fs::write(d.path().join("slots/stray"), b"").unwrap();
+        crate::fsio::write(d.path().join("slots/stray"), b"").unwrap();
         let mut want = vec![key("w").id(), key("w2").id()];
         want.sort();
         assert_eq!(present(d.path()), want);

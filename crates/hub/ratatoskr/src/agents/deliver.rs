@@ -171,12 +171,15 @@ pub(crate) async fn pass(front: &Front, told: &mut HashMap<String, u64>) {
         )
         .is_err()
         {
-            let _ = front
-                .writer
-                .write(&hub_caller(), "coord/deliver", move |tx| {
-                    messages::unsend(tx, id)
-                })
-                .await;
+            crate::soft::done(
+                front
+                    .writer
+                    .write(&hub_caller(), "coord/deliver", move |tx| {
+                        messages::unsend(tx, id)
+                    })
+                    .await,
+                "deliver",
+            );
             continue;
         }
         super::die_at("after-queue-before-mark");
@@ -203,7 +206,10 @@ pub(crate) async fn pass(front: &Front, told: &mut HashMap<String, u64>) {
         }
         if let Some((v, seen, changes)) = behind(s, job).await {
             told.insert(s.id.clone(), v);
-            let _ = s.prompt(messages::notice(v, job, &changes, seen), Origin::Hub);
+            crate::soft::done(
+                s.prompt(messages::notice(v, job, &changes, seen), Origin::Hub),
+                "deliver",
+            );
         }
     }
 }

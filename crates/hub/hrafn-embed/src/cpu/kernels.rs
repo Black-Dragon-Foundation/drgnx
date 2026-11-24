@@ -10,7 +10,7 @@ pub(super) struct Shape {
     pub(super) head: usize,
     pub(super) heads: usize,
     pub(super) glu: usize,
-    pub(super) scale: f32,
+    pub(super) inv_sqrt_head: f32,
     pub(super) eps: f32,
 }
 
@@ -52,7 +52,7 @@ fn attn_row(s: Shape, q: &[f32], qkv: &[f32], span: [u32; 2], out: &mut [f32], s
                     sum[l] += a[l] * b[l];
                 }
             }
-            *score = sum.iter().sum::<f32>() * s.scale;
+            *score = sum.iter().sum::<f32>() * s.inv_sqrt_head;
         }
         let top = scores.iter().copied().fold(f32::MIN, f32::max);
         scores.iter_mut().for_each(|x| *x -= top);

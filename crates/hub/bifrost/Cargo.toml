@@ -29,6 +29,9 @@ secrecy.workspace = true
 zeroize.workspace = true
 sha2.workspace = true
 tracing.workspace = true
+villa.workspace = true
+saman.workspace = true
+stund.workspace = true
 bytes = "1"               # request and response bodies (already in the tree through hyper)
 tower-service = "0.3"    # the connector trait (already in the tree through hyper-util)
 http = "1"                # request, response and header types (already in the tree through hyper)
@@ -37,6 +40,12 @@ http = "1"                # request, response and header types (already in the t
 skuld = { path = "../skuld", version = "0.1.0" }   # the workspace's binaries from a test (ratatoskr-mock)
 tempfile.workspace = true
 proptest.workspace = true
+eitri.workspace = true
+raun.workspace = true   # the mock's child process
+stund = { workspace = true, features = ["test-hooks"] }   # the throttle and drain tests move a `stund::Manual` clock by hand
 # The TLS tests (tests/tls.rs, tests/common): certificates made at run time, an in-test TLS server.
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+
+[lints]
+workspace = true

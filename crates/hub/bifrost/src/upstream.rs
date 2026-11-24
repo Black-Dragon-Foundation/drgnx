@@ -310,164 +310,183 @@ mod tests {
         Upstream::with_proxy(UpstreamOpts::default(), Matcher::builder().build()).unwrap()
     }
 
-    #[tokio::test]
-    async fn plain_http_to_a_local_server() {
-        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = l.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            let (mut s, _) = l.accept().await.unwrap();
-            read_head(&mut s).await;
-            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello")
+    #[test]
+    fn plain_http_to_a_local_server() {
+        saman::block_on_current(async {
+            let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = l.local_addr().unwrap().port();
+            saman::spawn("test-server", async move {
+                let (mut s, _) = l.accept().await.unwrap();
+                read_head(&mut s).await;
+                s.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello",
+                )
                 .await
                 .unwrap();
+            })
+            .detach("a test server ends with its one connection");
+            let resp = direct()
+                .send(get(&format!("http://127.0.0.1:{port}/x")))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+            let body = resp.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(&body[..], b"hello");
         });
-        let resp = direct()
-            .send(get(&format!("http://127.0.0.1:{port}/x")))
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), 200);
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        assert_eq!(&body[..], b"hello");
     }
 
-    #[tokio::test]
-    async fn get_sends_the_headers_and_reads_the_body() {
-        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = l.local_addr().unwrap().port();
-        let (tx, rx) = oneshot::channel();
-        tokio::spawn(async move {
+    #[test]
+    fn get_sends_the_headers_and_reads_the_body() {
+        saman::block_on_current(async {
+            let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = l.local_addr().unwrap().port();
+            let (tx, rx) = oneshot::channel();
+            saman::spawn("test-server", async move {
             let (mut s, _) = l.accept().await.unwrap();
-            let _ = tx.send(read_head(&mut s).await);
+            saman::delivered(tx.send(read_head(&mut s).await), "test head");
             s.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Length: 5\r\nContent-Range: bytes 2-6/7\r\nConnection: close\r\n\r\nhello")
                 .await
                 .unwrap();
-        });
-        let url: Uri = format!("http://127.0.0.1:{port}/x").parse().unwrap();
-        let mut got = direct()
-            .get(&url, &[("range", "bytes=2-".to_string())])
-            .await
-            .unwrap();
-        assert_eq!(got.status(), 206);
-        assert_eq!(got.header("content-range"), Some("bytes 2-6/7"));
-        let mut body = Vec::new();
-        while let Some(piece) = got.chunk().await {
-            body.extend_from_slice(&piece.unwrap());
-        }
-        assert_eq!(body, b"hello");
-        assert!(rx.await.unwrap().to_lowercase().contains("range: bytes=2-"));
-    }
-
-    #[tokio::test]
-    async fn a_connect_failure_ends_within_the_timeout() {
-        // A port nothing listens on: bind, note the port, drop.
-        let port = {
-            let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            l.local_addr().unwrap().port()
-        };
-        let up = Upstream::with_proxy(
-            UpstreamOpts {
-                connect_timeout: Duration::from_millis(100),
-            },
-            Matcher::builder().build(),
-        )
-        .unwrap();
-        let err = tokio::time::timeout(
-            Duration::from_millis(200),
-            up.send(get(&format!("http://127.0.0.1:{port}/"))),
-        )
-        .await
-        .expect("the connect error arrives within the test timeout")
-        .unwrap_err();
-        assert!(matches!(err, UpstreamError::Connect(_)), "{err}");
-    }
-
-    #[tokio::test]
-    async fn https_proxy_from_the_environment_goes_through_connect() {
-        // The matcher is what `Matcher::from_env` builds from HTTPS_PROXY; the test builds it directly so that it
-        // does not touch the process environment.
-        let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let pport = proxy.local_addr().unwrap().port();
-        let (tx, rx) = oneshot::channel();
-        tokio::spawn(async move {
-            let (mut s, _) = proxy.accept().await.unwrap();
-            let head = read_head(&mut s).await;
-            let _ = tx.send(head);
-            let _ = s.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await;
-        });
-        let m = Matcher::builder()
-            .https(format!("http://127.0.0.1:{pport}"))
-            .build();
-        let up = Upstream::with_proxy(UpstreamOpts::default(), m).unwrap();
-        let err = up
-            .send(get("https://localhost:4443/v1/messages"))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, UpstreamError::Proxy(_)), "{err}");
-        let head = rx.await.unwrap();
-        assert!(head.starts_with("CONNECT localhost:4443 "), "{head}");
-    }
-
-    #[tokio::test]
-    async fn no_proxy_is_respected() {
-        let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let pport = proxy.local_addr().unwrap().port();
-        let seen = Arc::new(AtomicUsize::new(0));
-        let seen2 = seen.clone();
-        tokio::spawn(async move {
-            while proxy.accept().await.is_ok() {
-                seen2.fetch_add(1, Ordering::SeqCst);
+        }).detach("a test server ends with its one connection");
+            let url: Uri = format!("http://127.0.0.1:{port}/x").parse().unwrap();
+            let mut got = direct()
+                .get(&url, &[("range", "bytes=2-".to_string())])
+                .await
+                .unwrap();
+            assert_eq!(got.status(), 206);
+            assert_eq!(got.header("content-range"), Some("bytes 2-6/7"));
+            let mut body = Vec::new();
+            while let Some(piece) = got.chunk().await {
+                body.extend_from_slice(&piece.unwrap());
             }
+            assert_eq!(body, b"hello");
+            assert!(rx.await.unwrap().to_lowercase().contains("range: bytes=2-"));
         });
-        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = l.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            let (mut s, _) = l.accept().await.unwrap();
-            read_head(&mut s).await;
-            s.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
-                .await
-                .unwrap();
-        });
-        let m = Matcher::builder()
-            .http(format!("http://127.0.0.1:{pport}"))
-            .no("127.0.0.1")
-            .build();
-        let up = Upstream::with_proxy(UpstreamOpts::default(), m).unwrap();
-        let resp = up
-            .send(get(&format!("http://127.0.0.1:{port}/")))
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), 204);
-        assert_eq!(
-            seen.load(Ordering::SeqCst),
-            0,
-            "the proxy must not be dialled for a NO_PROXY host"
-        );
     }
 
-    #[tokio::test]
-    async fn the_response_streams() {
-        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = l.local_addr().unwrap().port();
-        let (go, wait) = oneshot::channel::<()>();
-        tokio::spawn(async move {
-            let (mut s, _) = l.accept().await.unwrap();
-            read_head(&mut s).await;
-            s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\none\r\n")
+    #[test]
+    fn a_connect_failure_ends_within_the_timeout() {
+        saman::block_on_current(async {
+            // A port nothing listens on: bind, note the port, drop.
+            let port = {
+                let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                l.local_addr().unwrap().port()
+            };
+            let up = Upstream::with_proxy(
+                UpstreamOpts {
+                    connect_timeout: Duration::from_millis(100),
+                },
+                Matcher::builder().build(),
+            )
+            .unwrap();
+            let err = tokio::time::timeout(
+                Duration::from_millis(200),
+                up.send(get(&format!("http://127.0.0.1:{port}/"))),
+            )
+            .await
+            .expect("the connect error arrives within the test timeout")
+            .unwrap_err();
+            assert!(matches!(err, UpstreamError::Connect(_)), "{err}");
+        });
+    }
+
+    #[test]
+    fn https_proxy_from_the_environment_goes_through_connect() {
+        saman::block_on_current(async {
+            // The matcher is what `Matcher::from_env` builds from HTTPS_PROXY; the test builds it directly so that it
+            // does not touch the process environment.
+            let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let pport = proxy.local_addr().unwrap().port();
+            let (tx, rx) = oneshot::channel();
+            saman::spawn("test-server", async move {
+                let (mut s, _) = proxy.accept().await.unwrap();
+                let head = read_head(&mut s).await;
+                saman::delivered(tx.send(head), "test head");
+                drop(s.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await);
+            })
+            .detach("a test server ends with its one connection");
+            let m = Matcher::builder()
+                .https(format!("http://127.0.0.1:{pport}"))
+                .build();
+            let up = Upstream::with_proxy(UpstreamOpts::default(), m).unwrap();
+            let err = up
+                .send(get("https://localhost:4443/v1/messages"))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, UpstreamError::Proxy(_)), "{err}");
+            let head = rx.await.unwrap();
+            assert!(head.starts_with("CONNECT localhost:4443 "), "{head}");
+        });
+    }
+
+    #[test]
+    fn no_proxy_is_respected() {
+        saman::block_on_current(async {
+            let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let pport = proxy.local_addr().unwrap().port();
+            let seen = Arc::new(AtomicUsize::new(0));
+            let seen2 = seen.clone();
+            saman::spawn("test-server", async move {
+                while proxy.accept().await.is_ok() {
+                    seen2.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+            .detach("a test server ends with its one connection");
+            let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = l.local_addr().unwrap().port();
+            saman::spawn("test-server", async move {
+                let (mut s, _) = l.accept().await.unwrap();
+                read_head(&mut s).await;
+                s.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+            })
+            .detach("a test server ends with its one connection");
+            let m = Matcher::builder()
+                .http(format!("http://127.0.0.1:{pport}"))
+                .no("127.0.0.1")
+                .build();
+            let up = Upstream::with_proxy(UpstreamOpts::default(), m).unwrap();
+            let resp = up
+                .send(get(&format!("http://127.0.0.1:{port}/")))
                 .await
                 .unwrap();
-            // The second chunk is written only after the client has read the first.
-            wait.await.unwrap();
-            s.write_all(b"3\r\ntwo\r\n0\r\n\r\n").await.unwrap();
+            assert_eq!(resp.status(), 204);
+            assert_eq!(
+                seen.load(Ordering::SeqCst),
+                0,
+                "the proxy must not be dialled for a NO_PROXY host"
+            );
         });
-        let resp = direct()
-            .send(get(&format!("http://127.0.0.1:{port}/")))
-            .await
-            .unwrap();
-        let mut body = resp.into_body();
-        let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
-        assert_eq!(&first[..], b"one");
-        go.send(()).unwrap();
-        let second = body.frame().await.unwrap().unwrap().into_data().unwrap();
-        assert_eq!(&second[..], b"two");
+    }
+
+    #[test]
+    fn the_response_streams() {
+        saman::block_on_current(async {
+            let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = l.local_addr().unwrap().port();
+            let (go, wait) = oneshot::channel::<()>();
+            saman::spawn("test-server", async move {
+                let (mut s, _) = l.accept().await.unwrap();
+                read_head(&mut s).await;
+                s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\none\r\n")
+                    .await
+                    .unwrap();
+                // The second chunk is written only after the client has read the first.
+                wait.await.unwrap();
+                s.write_all(b"3\r\ntwo\r\n0\r\n\r\n").await.unwrap();
+            })
+            .detach("a test server ends with its one connection");
+            let resp = direct()
+                .send(get(&format!("http://127.0.0.1:{port}/")))
+                .await
+                .unwrap();
+            let mut body = resp.into_body();
+            let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
+            assert_eq!(&first[..], b"one");
+            go.send(()).unwrap();
+            let second = body.frame().await.unwrap().unwrap().into_data().unwrap();
+            assert_eq!(&second[..], b"two");
+        });
     }
 }

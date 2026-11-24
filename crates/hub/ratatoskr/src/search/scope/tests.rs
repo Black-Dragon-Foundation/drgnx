@@ -3,7 +3,7 @@
 use super::*;
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args([
             "-c",
             "user.name=t",
@@ -27,7 +27,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 fn write(dir: &Path, name: &str, text: &str) {
     let p = dir.join(name);
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-    std::fs::write(p, text).unwrap();
+    crate::fsio::write(p, text).unwrap();
 }
 
 /// A repository on `main` with one commit: a.txt, b.txt, c.txt, old.txt (four lines each) and an ignore rule.

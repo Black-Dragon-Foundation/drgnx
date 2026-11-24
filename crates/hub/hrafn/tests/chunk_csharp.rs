@@ -10,10 +10,11 @@ use std::fmt::Write;
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> String {
-    std::fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    eitri::read_string(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/langs")
             .join(name),
+        4 << 20,
     )
     .unwrap()
 }
@@ -113,8 +114,8 @@ fn csharp_chunks_and_their_vector_keys_stay_as_designed() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/golden/chunks-csharp.golden");
     if !path.exists() {
-        std::fs::write(&path, &out).unwrap();
+        eitri::replace_file(&path, out.as_bytes()).unwrap();
         panic!("chunks-csharp.golden was missing and is written now: read it, then commit it");
     }
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), out);
+    assert_eq!(eitri::read_string(&path, 4 << 20).unwrap(), out);
 }

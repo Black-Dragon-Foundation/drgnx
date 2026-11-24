@@ -5,8 +5,7 @@
 
 use hrafn_embed::{Device, LocalEmbedder, MODELS, TOKEN_CAP, Tuning};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const WANT: usize = 512;
 
@@ -40,13 +39,13 @@ fn load(tuning: Tuning) -> LocalEmbedder {
 fn corpus() -> Vec<String> {
     let mut files: Vec<_> = std::fs::read_dir("../../../core")
         .unwrap()
-        .map(|e| e.unwrap().path())
+        .map(|e| std::fs::canonicalize(e.unwrap().path()).unwrap())
         .filter(|p| p.extension().is_some_and(|e| e == "el"))
         .collect();
     files.sort();
     let mut all = Vec::new();
     for file in files {
-        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        let text = eitri::read_string(&file, 1 << 28).unwrap_or_default();
         let (mut held, mut n) = (String::new(), 0);
         for line in text.lines() {
             held.push_str(line);
@@ -82,16 +81,16 @@ fn vram_mb() -> u64 {
     let Ok(cards) = std::fs::read_dir("/sys/class/drm") else {
         return 0;
     };
-    let used = cards
-        .flatten()
-        .filter_map(|c| std::fs::read_to_string(c.path().join("device/mem_info_vram_used")).ok());
+    let used = cards.flatten().filter_map(|c| {
+        eitri::read_string(&c.path().join("device/mem_info_vram_used"), 1 << 28).ok()
+    });
     used.filter_map(|s| s.trim().parse::<u64>().ok())
         .sum::<u64>()
         >> 20
 }
 
 fn peak_rss() -> String {
-    let status = std::fs::read_to_string("/proc/self/status").unwrap();
+    let status = eitri::read_string(std::path::Path::new("/proc/self/status"), 1 << 28).unwrap();
     status
         .lines()
         .find(|l| l.starts_with("VmHWM"))
@@ -103,25 +102,25 @@ fn peak_rss() -> String {
 
 fn row(name: &str, budget: usize, tuning: Tuning) {
     let before = vram_mb();
-    let start = Instant::now();
+    let start = stund::real::instant();
     let mut model = load(tuning);
     let loaded = start.elapsed();
     let after_load = vram_mb().saturating_sub(before);
     let texts = corpus();
-    let start = Instant::now();
+    let start = stund::real::instant();
     let ids: Vec<Vec<u32>> = texts.iter().map(|t| model.encode_doc(t)).collect();
     let tokenise = start.elapsed();
     let tokens: usize = ids.iter().map(Vec::len).sum();
     let batches = in_batches(&ids, budget);
     model.embed_ids(&batches[0]).unwrap(); // warm-up
     let (mut worst, mut peak) = (Duration::ZERO, before);
-    let start = Instant::now();
+    let start = stund::real::instant();
     for batch in &batches {
         worst = worst.max(model.embed_ids(batch).unwrap().worst_submit);
         peak = peak.max(vram_mb());
     }
     let s = start.elapsed().as_secs_f64();
-    println!(
+    annall::cli_out(&format!(
         "BENCH {name} budget={budget} load={loaded:?} chunks={} tokens={tokens} mean={:.0} tokenise={tokenise:?} batches={} chunks_per_s={:.2} tokens_per_s={:.0} worst_submit={worst:?} vram_after_load_mb={after_load} vram_delta_mb={} {}",
         ids.len(),
         tokens as f64 / ids.len() as f64,
@@ -130,7 +129,7 @@ fn row(name: &str, budget: usize, tuning: Tuning) {
         tokens as f64 / s,
         peak.saturating_sub(before),
         peak_rss(),
-    );
+    )).unwrap();
     if name == "default" && budget == TOKEN_CAP {
         let rate = tokens as f64 / s;
         assert!(
@@ -173,21 +172,22 @@ fn bench_cpu() {
     let texts = corpus();
     let ids: Vec<Vec<u32>> = texts.iter().take(64).map(|t| model.encode_doc(t)).collect();
     let tokens: usize = ids.iter().map(Vec::len).sum();
-    let start = Instant::now();
+    let start = stund::real::instant();
     for batch in in_batches(&ids, 1) {
         model.embed_ids(&batch).unwrap();
     }
     let s = start.elapsed().as_secs_f64();
-    println!(
+    annall::cli_out(&format!(
         "BENCH cpu threads=4 chunks={} tokens={tokens} chunks_per_s={:.2} tokens_per_s={:.0} {}",
         ids.len(),
         ids.len() as f64 / s,
         tokens as f64 / s,
         peak_rss(),
-    );
+    ))
+    .unwrap();
     let rate = tokens as f64 / s;
     query_times(&mut model, "cpu");
-    println!("after queries {}", peak_rss());
+    annall::cli_out(&format!("after queries {}", peak_rss())).unwrap();
     assert!(
         rate >= CPU_TOKENS_PER_S,
         "{rate:.0} tokens/s under {CPU_TOKENS_PER_S}"
@@ -209,18 +209,19 @@ fn query_times(model: &mut LocalEmbedder, name: &str) {
     ];
     let mut times = Vec::new();
     for q in queries.iter().cycle().take(44) {
-        let start = Instant::now();
+        let start = stund::real::instant();
         model.embed_query(q, None).unwrap();
         times.push(start.elapsed());
     }
     let mut times = times.split_off(4); // the first ones warm up
     times.sort();
-    println!(
+    annall::cli_out(&format!(
         "QUERY {name} p50={:?} p95={:?} max={:?}",
         times[times.len() / 2],
         times[times.len() * 95 / 100],
         times[times.len() - 1]
-    );
+    ))
+    .unwrap();
     let p95 = times[times.len() * 95 / 100];
     assert!(
         p95 <= QUERY_P95,
@@ -263,7 +264,7 @@ fn probe_client() {
     );
     let mut stalls = Vec::new();
     for _ in 0..seconds * 125 {
-        let start = Instant::now();
+        let start = stund::real::instant();
         let mut encoder = device.create_command_encoder(&Default::default());
         encoder.copy_buffer_to_buffer(&from, 0, &to, 0, 65536);
         let index = queue.submit([encoder.finish()]);
@@ -274,59 +275,74 @@ fn probe_client() {
             })
             .unwrap();
         stalls.push(start.elapsed().as_secs_f64() * 1e3);
-        std::thread::sleep(Duration::from_millis(8));
+        stund::real::sleep_blocking(Duration::from_millis(8));
     }
     stalls.sort_by(f64::total_cmp);
     let at = |q: usize| stalls[stalls.len() * q / 100];
     let over = stalls.iter().filter(|s| **s > 16.6).count();
-    println!(
+    annall::cli_out(&format!(
         "PROBE n={} p50={:.2} p95={:.2} p99={:.2} max={:.2} ms; over 16.6 ms: {over}",
         stalls.len(),
         at(50),
         at(95),
         at(99),
         stalls[stalls.len() - 1]
-    );
+    ))
+    .unwrap();
 }
 
 #[test]
 #[ignore = "a real GPU's row"]
 fn stall_probe() {
     let client = || {
-        Command::new(std::env::current_exe().unwrap())
-            .args(["--ignored", "--exact", "probe_client", "--nocapture"])
-            .env("HRAFN_PROBE_S", "20")
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap()
+        saman::spawn_thread("probe-client", || {
+            let spec = draugr::Spec {
+                program: std::env::current_exe().unwrap(),
+                args: ["--ignored", "--exact", "probe_client", "--nocapture"]
+                    .map(Into::into)
+                    .to_vec(),
+                env: draugr::env::build(
+                    &["PATH", "LANG", "LD_LIBRARY_PATH", stig::HOME_VAR],
+                    &["WGPU_", "MESA_", "VK_", "DRI_"],
+                    &[("HRAFN_PROBE_S", std::ffi::OsStr::new("20"))],
+                ),
+                cwd: None,
+                stdin_null: true,
+                pass_fds: Vec::new(),
+                new_session: false,
+            };
+            draugr::run(spec, Duration::from_secs(120)).unwrap()
+        })
+        .unwrap()
     };
     // The client alone, then against the embedder at each budget. The child's exit ends each round.
-    let idle = client().wait_with_output().unwrap();
-    println!(
+    let idle = client().join().unwrap();
+    annall::cli_out(&format!(
         "idle: {}",
         String::from_utf8_lossy(&idle.stdout)
             .lines()
             .find(|l| l.starts_with("PROBE"))
             .unwrap_or("?")
-    );
+    ))
+    .unwrap();
     let mut model = load(Tuning::default());
     let ids: Vec<Vec<u32>> = corpus().iter().map(|t| model.encode_doc(t)).collect();
     for budget in [2048, 4096] {
         let batches = in_batches(&ids, budget);
-        let mut child = client();
+        let child = client();
         let mut worst = Duration::ZERO;
         'run: loop {
             for batch in &batches {
                 worst = worst.max(model.embed_ids(batch).unwrap().worst_submit);
-                if child.try_wait().unwrap().is_some() {
+                if child.is_finished() {
                     break 'run;
                 }
             }
         }
-        let output = child.wait_with_output().unwrap();
+        let output = child.join().unwrap();
         let line = String::from_utf8_lossy(&output.stdout);
         let probe = line.lines().find(|l| l.starts_with("PROBE")).unwrap_or("?");
-        println!("budget {budget}: worst submit {worst:?}; {probe}");
+        annall::cli_out(&format!("budget {budget}: worst submit {worst:?}; {probe}")).unwrap();
         if budget == TOKEN_CAP {
             let over: usize = probe
                 .rsplit("over 16.6 ms: ")

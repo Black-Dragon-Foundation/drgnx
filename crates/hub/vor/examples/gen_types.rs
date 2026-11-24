@@ -22,7 +22,10 @@ fn main() {
     let path = std::env::args()
         .nth(1)
         .expect("usage: gen_types SCHEMA.json");
-    let schema: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let schema: Value = serde_json::from_str(
+        &eitri::read_string(&std::path::absolute(&path).unwrap(), 16 << 20).unwrap(),
+    )
+    .unwrap();
     let defs = schema["definitions"].as_object().unwrap().clone();
     let mut g = Gen {
         defs,
@@ -127,7 +130,7 @@ fn main() {
         .unwrap();
     }
     g.out.push_str("}\n");
-    print!("{}", g.out);
+    annall::cli_out(g.out.trim_end_matches('\n')).unwrap();
 }
 
 impl Gen {

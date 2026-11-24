@@ -6,10 +6,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::ffi::{OsStr, OsString};
 use std::hash::{BuildHasher, Hasher};
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -37,10 +34,17 @@ pub struct ProjectRef {
 const GIT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// The variables git keeps from the hub's environment (as `hello`'s, call 10).
-const GIT_ENV: [&str; 6] = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR"];
+const GIT_ENV: [&str; 6] = [
+    "PATH",
+    stig::HOME_VAR,
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+];
 
 /// What git said: its output when it succeeded, `None` when it ran and failed (not a repository, no `HEAD`).
-pub(crate) type GitAnswer = Result<Option<String>, String>;
+pub(crate) type GitAnswer = villa::Result<Option<String>>;
 
 /// git ARGS in DIR, blocking: its whole output; `Ok(None)` when it ran and failed, or DIR is not a folder; an error
 /// naming git when git is not the trusted one, cannot start, or takes over [`GIT_TIMEOUT`] (it is killed): no answer
@@ -52,18 +56,24 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> GitAnswer {
         return git_at(Path::new(&program), dir, args, GIT_TIMEOUT);
     }
     let program = draugr::git::git_program().map_err(|e| {
-        format!(
+        villa::Error::unavailable(format!(
             "git {} in {}: no trusted git: {e}",
             args.join(" "),
             dir.display()
-        )
+        ))
     })?;
     git_at(&program.path, dir, args, GIT_TIMEOUT)
 }
 
 fn git_at(program: &Path, dir: &Path, args: &[&str], timeout: Duration) -> GitAnswer {
     use draugr::git::{GitCall, Place, command};
-    let fail = |what: String| format!("git {} in {}: {what}", args.join(" "), dir.display());
+    let fail = |what: String| {
+        villa::Error::unavailable(format!(
+            "git {} in {}: {what}",
+            args.join(" "),
+            dir.display()
+        ))
+    };
     if !dir.is_dir() {
         return Ok(None);
     }
@@ -78,53 +88,43 @@ fn git_at(program: &Path, dir: &Path, args: &[&str], timeout: Duration) -> GitAn
         .filter_map(|(k, v)| Some((k.to_str()?, v.as_os_str())))
         .collect();
     let env = draugr::env::build(&GIT_ENV, &[], &set);
-    let started = std::time::Instant::now();
-    let mut child = Command::new(program)
-        .args(&argv)
-        .current_dir(dir)
-        .env_clear()
-        .envs(env)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| fail(format!("cannot start: {e}")))?;
-    let spawned = started.elapsed();
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| fail("no stdout".into()))?;
-    let (send, recv) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut out = Vec::new();
-        let read = stdout.read_to_end(&mut out).map(|_| out);
-        let _ = send.send(read);
-    });
-    let Ok(out) = recv.recv_timeout(timeout) else {
-        // whether git itself was still running, or something else held its output open after it ended
-        let ended = child.try_wait().ok().flatten();
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(fail(format!(
-            "no answer within {} ms (started in {} ms; {})",
-            timeout.as_millis(),
-            spawned.as_millis(),
-            match ended {
-                Some(st) => format!("git had ended ({st}), its output still open"),
-                None => "git still running, killed".into(),
-            }
-        )));
+    let spec = draugr::Spec {
+        program: program.to_path_buf(),
+        args: argv,
+        env,
+        cwd: Some(dir.to_path_buf()),
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: false,
     };
-    let out = out.map_err(|e| fail(format!("reading its output: {e}")))?;
-    let status = child
-        .wait()
-        .map_err(|e| fail(format!("waiting for it: {e}")))?;
-    if !status.success() {
+    // draugr ends git's whole process group once the timeout has passed
+    let out = run_blocking(spec, timeout).map_err(|e| match e.kind() {
+        std::io::ErrorKind::TimedOut => villa::Error::timeout(format!(
+            "git {} in {}: no answer within {} ms, git was killed",
+            args.join(" "),
+            dir.display(),
+            timeout.as_millis()
+        )),
+        _ => fail(format!("cannot run: {e}")),
+    })?;
+    if !out.status.success() {
         return Ok(None);
     }
-    String::from_utf8(out)
+    String::from_utf8(out.stdout)
         .map(Some)
         .map_err(|_| fail("its output is not UTF-8".into()))
+}
+
+/// SPEC run to its end by `draugr::run` on a thread of its own, which makes a runtime: this is also called from a
+/// thread that already has one (a test's, a blocking pool's).
+pub(crate) fn run_blocking(
+    spec: draugr::Spec,
+    timeout: Duration,
+) -> std::io::Result<draugr::Output> {
+    saman::spawn_thread("norn-git", move || draugr::run(spec, timeout))
+        .map_err(std::io::Error::other)?
+        .join()
+        .map_err(|_| std::io::Error::other("the thread that runs the child panicked"))?
 }
 
 fn first_line(text: &str) -> Option<&str> {
@@ -133,7 +133,7 @@ fn first_line(text: &str) -> Option<&str> {
 
 /// `$HOME` as a truename.
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
+    std::env::var_os(stig::HOME_VAR)
         .filter(|h| !h.is_empty())
         .and_then(|h| std::fs::canonicalize(h).ok())
 }
@@ -142,7 +142,7 @@ fn home_dir() -> Option<PathBuf> {
 fn random_x() -> String {
     let mut h = RandomState::new().build_hasher();
     h.write_u128(
-        std::time::SystemTime::now()
+        stund::wall()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos()),
     );
@@ -165,7 +165,7 @@ pub(crate) fn base36(mut v: u64, len: usize) -> String {
 /// folder itself (a repository of dotfiles holds no project, as `hello` rules). An error, naming git, when git
 /// cannot answer (not trusted, cannot start, over its time): never read as "no project". Blocking (runs git): not on
 /// an async worker, never under the writer's lock.
-pub fn resolve(cwd: &Path) -> Result<Option<ProjectRef>, String> {
+pub fn resolve(cwd: &Path) -> villa::Result<Option<ProjectRef>> {
     resolve_by(cwd, git)
 }
 
@@ -173,14 +173,15 @@ pub fn resolve(cwd: &Path) -> Result<Option<ProjectRef>, String> {
 fn resolve_by(
     cwd: &Path,
     git: impl Fn(&Path, &[&str]) -> GitAnswer,
-) -> Result<Option<ProjectRef>, String> {
+) -> villa::Result<Option<ProjectRef>> {
     let Some(top) = git(cwd, &["rev-parse", "--show-toplevel"])? else {
         return Ok(None);
     };
     let Some(top) = first_line(&top) else {
         return Ok(None);
     };
-    let top = std::fs::canonicalize(top).map_err(|e| format!("git's top-level {top}: {e}"))?;
+    let top = std::fs::canonicalize(top)
+        .map_err(|e| villa::Error::io(format!("git's top-level {top}: {e}")).with_source(e))?;
     // A linked worktree's common dir is its main repository's `.git`: the main top-level is its parent.
     let root = git(
         cwd,
@@ -361,7 +362,7 @@ impl ProjectCache {
     /// Resolve DIR now ([`resolve`]: blocking, runs git) and keep the answer; a known `n` is kept while the
     /// resolved id is unchanged. When git cannot answer, nothing is kept (the next look asks again) and the error
     /// is returned.
-    pub fn fill(&mut self, dir: &Path) -> Result<Option<&ProjectRef>, String> {
+    pub fn fill(&mut self, dir: &Path) -> villa::Result<Option<&ProjectRef>> {
         let resolved = resolve(dir)?;
         let n = match (self.dirs.get(dir), &resolved) {
             (Some(Some((old, n))), Some(new)) if old.id == new.id => *n,
@@ -426,31 +427,47 @@ impl ProjectCache {
 pub(crate) mod tests {
     use super::*;
     use crate::scope::testkit;
-    use std::process::Command;
     use urdr::graph::{Class, TxMeta};
 
     /// A git command for the fixtures: no global or system config, fixed names, dates from DATE (unix seconds).
     fn sh(dir: &Path, args: &[&str], date: Option<i64>) {
-        let mut cmd = Command::new("git");
-        cmd.args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
-            .args([
-                "-c",
-                "init.defaultBranch=main",
-                "-c",
-                "commit.gpgsign=false",
-            ])
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        if let Some(d) = date {
-            cmd.env("GIT_COMMITTER_DATE", format!("@{d} +0000"))
-                .env("GIT_AUTHOR_DATE", format!("@{d} +0000"));
+        let stamp = date.map(|d| std::ffi::OsString::from(format!("@{d} +0000")));
+        let mut set: Vec<(&str, &OsStr)> = vec![
+            ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+            ("GIT_CONFIG_GLOBAL", OsStr::new("/dev/null")),
+        ];
+        if let Some(s) = &stamp {
+            set.push(("GIT_COMMITTER_DATE", s));
+            set.push(("GIT_AUTHOR_DATE", s));
         }
-        let status = cmd.status().expect("git runs");
-        assert!(status.success(), "git {args:?} in {}", dir.display());
+        let mut argv: Vec<OsString> = [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "-c",
+            "init.defaultBranch=main",
+            "-c",
+            "commit.gpgsign=false",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        argv.extend(args.iter().map(OsString::from));
+        let out = run_blocking(
+            draugr::Spec {
+                program: draugr::git::git_program().expect("a trusted git").path,
+                args: argv,
+                env: draugr::env::build(&["PATH"], &[], &set),
+                cwd: Some(dir.to_path_buf()),
+                stdin_null: true,
+                pass_fds: Vec::new(),
+                new_session: false,
+            },
+            Duration::from_secs(30),
+        )
+        .expect("git runs");
+        assert!(out.status.success(), "git {args:?} in {}", dir.display());
     }
 
     /// A repository NAME under BASE with one commit at DATE.
@@ -490,7 +507,7 @@ pub(crate) mod tests {
         assert!(before.id.starts_with("project:") && before.id.len() == "project:".len() + 12);
         assert_eq!(before.slug, "alpha");
         let beta = base.path().join("beta");
-        std::fs::rename(&alpha, &beta).unwrap();
+        eitri::rename_dir(&alpha, &beta).unwrap();
         let after = resolve(&beta).unwrap().expect("a repository");
         assert_eq!(after.id, before.id);
         assert_eq!(after.slug, "beta");
@@ -611,7 +628,9 @@ pub(crate) mod tests {
         hlaup::write(&slow, "#!/bin/sh\nsleep 5\n").unwrap();
         // the error names the 300 ms bound it gave up at: the first call, not the sleep's 5 s
         let r = resolve_by(&dir, |d, a| git_at(&slow, d, a, Duration::from_millis(300)));
-        let e = r.expect_err("a git that does not answer is an error");
+        let e = r
+            .expect_err("a git that does not answer is an error")
+            .to_string();
         assert!(
             e.contains("git rev-parse --show-toplevel") && e.contains("no answer within 300 ms"),
             "{e}"
@@ -619,9 +638,10 @@ pub(crate) mod tests {
         // a git that answers "no" is still no project
         let no = d.path().join("no-git");
         hlaup::write(&no, "#!/bin/sh\nexit 128\n").unwrap();
-        assert_eq!(
-            resolve_by(&dir, |d, a| git_at(&no, d, a, Duration::from_secs(5))),
-            Ok(None)
+        assert!(
+            resolve_by(&dir, |d, a| git_at(&no, d, a, Duration::from_secs(5)))
+                .unwrap()
+                .is_none()
         );
     }
 
@@ -629,12 +649,12 @@ pub(crate) mod tests {
     fn outside_a_repo_is_none() {
         let base = tempfile::tempdir().unwrap();
         // Unless the temp folder itself lies in a repository (then there is nothing to show here).
-        if git(base.path(), &["rev-parse", "--show-toplevel"]) == Ok(None) {
-            assert_eq!(resolve(base.path()), Ok(None));
+        if git(base.path(), &["rev-parse", "--show-toplevel"]).is_ok_and(|a| a.is_none()) {
+            assert!(resolve(base.path()).unwrap().is_none());
         }
-        assert_eq!(resolve(&base.path().join("missing")), Ok(None));
+        assert!(resolve(&base.path().join("missing")).unwrap().is_none());
         let mut cache = ProjectCache::default();
-        assert_eq!(cache.fill(&base.path().join("missing")), Ok(None));
+        assert!(cache.fill(&base.path().join("missing")).unwrap().is_none());
         assert_eq!(cache.project_n(&base.path().join("missing")), None);
     }
 

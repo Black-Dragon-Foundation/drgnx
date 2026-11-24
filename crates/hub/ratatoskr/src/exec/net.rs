@@ -8,6 +8,7 @@
 
 use super::container::{self, NetNames};
 use crate::agents::launch::NetCell;
+use crate::clock::Spawned;
 use crate::shell_env::ShellEnv;
 use ferja::owner::{self, End, Sidecar};
 use gleipnir::{Refusal, Rule};
@@ -16,7 +17,6 @@ use std::ffi::OsString;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::task::JoinHandle;
 
 /// What a job's `why` file starts with when the hub's relay, not the job, ended it.
 pub const INFRA: &str = "infra: proxy";
@@ -78,7 +78,7 @@ pub fn job_web(
 /// The podman machine connection drgnx names on a Mac (S8): from `podman system connection list --format json`, the
 /// default when it is rootless, else the first rootless machine connection.  A rootful default is no reason to refuse;
 /// a machine without a rootless connection is (design §6).
-pub fn rootless_connection(list: &serde_json::Value) -> Result<String, String> {
+pub fn rootless_connection(list: &serde_json::Value) -> villa::Result<String> {
     let rows = list.as_array().cloned().unwrap_or_default();
     let rootless = |r: &serde_json::Value| {
         let uri = r["URI"].as_str().unwrap_or("");
@@ -100,10 +100,10 @@ pub fn rootless_connection(list: &serde_json::Value) -> Result<String, String> {
         .next()
         .map(|n| n.trim_end_matches("-root").to_string())
         .unwrap_or_else(|| "podman-machine-default".into());
-    Err(format!(
+    Err(villa::Error::invalid(format!(
         "drgnx runs containers rootless, and podman machine `{m}` has no rootless connection: re-create the machine, \
          or add one with `podman system connection add`."
-    ))
+    )))
 }
 
 /// This host's podman architecture name.
@@ -129,12 +129,12 @@ pub struct JobNetwork {
     sidecar: Option<Sidecar>,
     names: NetNames,
     job: String,
-    channel: JoinHandle<End>,
-    log: JoinHandle<()>,
+    channel: Spawned<End>,
+    log: Spawned<()>,
     /// The proxy's events (its refusals), until [`JobNetwork::take_events`] takes them.
     events: Option<tokio::sync::mpsc::Receiver<gleipnir::net::proxy::ProxyEvent>>,
     /// The loop that turns them into cards ([`super::hostgrants`]), ended with the relay.
-    asker: Option<JoinHandle<()>>,
+    asker: Option<Spawned<()>>,
     podman: PathBuf,
     env: Vec<(OsString, OsString)>,
 }
@@ -159,7 +159,7 @@ impl JobNetwork {
     }
 
     /// The card loop, which [`JobNetwork::end`] ends with the relay.
-    pub fn set_asker(&mut self, task: JoinHandle<()>) {
+    pub fn set_asker(&mut self, task: Spawned<()>) {
         self.asker = Some(task);
     }
 
@@ -183,19 +183,22 @@ impl JobNetwork {
         if let Some(a) = &self.asker {
             a.abort();
         }
-        let _ = tokio::process::Command::new(&self.podman)
-            .args(["rm", "-f", "-t", "0", &self.job])
-            .envs(self.env.iter().map(|(k, v)| (k, v)))
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await;
+        crate::soft::done(
+            crate::proc::Command::new(&self.podman)
+                .args(["rm", "-f", "-t", "0", &self.job])
+                .envs(self.env.iter().map(|(k, v)| (k, v)))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status_async()
+                .await,
+            "tokio::process::Command::new",
+        );
         // the channel task owns the sidecar's stdio: dropped (awaited after the abort), the sidecar reads its EOF; a
         // channel that ended already ([`JobNetwork::ended`]) dropped it then
         if !self.channel.is_finished() {
             self.channel.abort();
-            let _ = (&mut self.channel).await;
+            crate::soft::done((&mut self.channel).await, "net");
         }
         let code = match self.sidecar {
             Some(s) => s.stop(&self.podman, &self.names.sidecar, &self.env).await,
@@ -260,7 +263,7 @@ pub async fn prepare_net(
         Sidecar::start(podman, argv, &env),
         crate::clock::blocking(move || -> Result<(), Refusal> {
             let info = container::check_limits(&checks_shell, &p, Duration::from_secs(30))?;
-            sleipnir::linux::netcheck::net_ready(&info).map_err(setup)?;
+            sleipnir::linux::netcheck::net_ready(&info).map_err(|e| setup(e.to_string()))?;
             container::ensure_image(&checks_shell, &p, &reference, container::PULL_TIMEOUT)
         })
     );
@@ -292,7 +295,7 @@ pub async fn prepare_net(
     let (streams_tx, streams_rx) = tokio::sync::mpsc::channel(owner::STREAMS_ROOM);
     let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(16);
     let job = id.to_string();
-    tokio::spawn(async move {
+    crate::clock::spawn_untracked(module_path!(), async move {
         while let Some(e) = events_rx.recv().await {
             tracing::warn!("job {job}: the relay reports {e:?}");
         }
@@ -305,13 +308,9 @@ pub async fn prepare_net(
     );
     handle.listen(proxy::Listener::Streams(streams_rx), 1);
     let px_log = ferja::shell::Log::default();
-    let log_file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log)
-        .await;
+    let log_file = crate::fsio::append(log, true).map(tokio::fs::File::from_std);
     let drained = px_log.clone();
-    let log = tokio::spawn(async move {
+    let log = crate::clock::spawn_untracked(module_path!(), async move {
         if let Ok(f) = log_file {
             drained.drain_to(f).await;
         }
@@ -338,7 +337,7 @@ pub async fn prepare_net(
             px_log,
         )),
     };
-    let channel = tokio::spawn(carried);
+    let channel = crate::clock::spawn_untracked(module_path!(), carried);
     let job_net = container::JobNet {
         sidecar: names.sidecar.clone(),
     };
@@ -385,50 +384,53 @@ mod tests {
     /// removed `-t 0`, and the sidecar's stdin closes before the sidecar is stopped, so it exits by itself rather than
     /// waiting out `STOP_LIMIT`.  The stand-in `podman run` exits when its stdin closes, like drgnx-px.
     #[cfg(unix)]
-    #[tokio::test]
-    async fn the_end_removes_the_job_at_once_and_lets_the_sidecar_exit() {
-        let dir = tempfile::tempdir().unwrap();
-        let (podman, rms) = (dir.path().join("podman"), dir.path().join("rm"));
-        hlaup::write(&podman,
+    #[test]
+    fn the_end_removes_the_job_at_once_and_lets_the_sidecar_exit() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (podman, rms) = (dir.path().join("podman"), dir.path().join("rm"));
+            hlaup::write(&podman,
             format!(
                 "#!/bin/sh\ncase \"$1\" in\nrun) cat >/dev/null; exit 0 ;;\nrm) echo \"$*\" >> {} ;;\nesac\n",
                 rms.display()
             ),
         ).unwrap();
-        let mut sidecar = Sidecar::start(&podman, vec!["run".into()], &[])
-            .await
-            .expect("the stand-in starts");
-        let io = sidecar.take_io().expect("its stdio");
-        let (ptx, prx) = tokio::sync::mpsc::channel(16);
-        let net = JobNetwork {
-            _proxy: gleipnir::net::proxy::start(
-                proxy_config(vec![], &[], job_web(None)),
-                std::sync::Arc::new(gleipnir::net::proxy::SystemResolver),
-                ptx,
-            ),
-            web: job_web(None),
-            sidecar: Some(sidecar),
-            names: container::net_names(&container::placement("ffffffff", None, 0), "x1").unwrap(),
-            job: container::name_of("x1").unwrap(),
-            // the channel holds the sidecar's stdio while the relay runs
-            channel: tokio::spawn(async move {
-                let _io = io;
-                std::future::pending::<End>().await
-            }),
-            log: tokio::spawn(async {}),
-            events: Some(prx),
-            asker: None,
-            podman,
-            env: vec![],
-        };
-        let job = net.job.clone();
-        assert_eq!(net.end().await, Some(0), "the sidecar exits by itself");
-        let rms = std::fs::read_to_string(&rms).unwrap();
-        assert_eq!(
-            rms.lines().next(),
-            Some(format!("rm -f -t 0 {job}").as_str()),
-            "{rms}"
-        );
+            let mut sidecar = Sidecar::start(&podman, vec!["run".into()], &[])
+                .await
+                .expect("the stand-in starts");
+            let io = sidecar.take_io().expect("its stdio");
+            let (ptx, prx) = tokio::sync::mpsc::channel(16);
+            let net = JobNetwork {
+                _proxy: gleipnir::net::proxy::start(
+                    proxy_config(vec![], &[], job_web(None)),
+                    std::sync::Arc::new(gleipnir::net::proxy::SystemResolver),
+                    ptx,
+                ),
+                web: job_web(None),
+                sidecar: Some(sidecar),
+                names: container::net_names(&container::placement("ffffffff", None, 0), "x1")
+                    .unwrap(),
+                job: container::name_of("x1").unwrap(),
+                // the channel holds the sidecar's stdio while the relay runs
+                channel: crate::clock::spawn_untracked(module_path!(), async move {
+                    let _io = io;
+                    std::future::pending::<End>().await
+                }),
+                log: crate::clock::spawn_untracked(module_path!(), async {}),
+                events: Some(prx),
+                asker: None,
+                podman,
+                env: vec![],
+            };
+            let job = net.job.clone();
+            assert_eq!(net.end().await, Some(0), "the sidecar exits by itself");
+            let rms = crate::fsio::read_to_string(&rms).unwrap();
+            assert_eq!(
+                rms.lines().next(),
+                Some(format!("rm -f -t 0 {job}").as_str()),
+                "{rms}"
+            );
+        })
     }
 
     #[test]
@@ -456,7 +458,8 @@ mod tests {
         ]);
         let e = rootless_connection(&none).unwrap_err();
         assert!(
-            e.contains("podman machine `podman-machine-default` has no rootless connection"),
+            e.message()
+                .contains("podman machine `podman-machine-default` has no rootless connection"),
             "{e}"
         );
     }

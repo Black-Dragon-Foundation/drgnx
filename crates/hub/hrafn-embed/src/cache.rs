@@ -135,7 +135,7 @@ pub fn import(spec: &ModelSpec, from: &Path, dir: &Path) -> Result<(), CacheErro
             fs::remove_file(&part).map_err(io_err)?;
             return Err(CacheError::Corrupt(file.name.to_string()));
         }
-        fs::rename(&part, &dest).map_err(io_err)?;
+        eitri::rename_file(&part, &dest).map_err(|e| CacheError::Io(e.to_string()))?;
     }
     Ok(())
 }

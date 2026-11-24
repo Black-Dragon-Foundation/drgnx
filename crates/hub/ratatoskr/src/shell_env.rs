@@ -14,14 +14,14 @@ use std::sync::{Arc, RwLock};
 /// takes them, so the login shell's overlay only reaches what children inherit (their `PATH` and the like), never where
 /// the hub keeps its sockets and scratch folders.  `PATH` is not here: the sandbox's program folders read it, on purpose.
 pub const PATH_RULE_NAMES: [&str; 13] = [
-    "HOME",
+    stig::HOME_VAR,
     "TMPDIR",
     "TMP",
     "TEMP",
-    "XDG_RUNTIME_DIR",
-    "XDG_DATA_HOME",
-    "XDG_CONFIG_HOME",
-    "XDG_STATE_HOME",
+    stig::SYSTEM_RUNTIME_VAR,
+    stig::Xdg::Data.var(),
+    stig::Xdg::Config.var(),
+    stig::Xdg::State.var(),
     "DRGNX_DATA_DIR",
     "DRGNX_CONFIG_DIR",
     "DRGNX_DIR",
@@ -166,7 +166,7 @@ mod tests {
         for (k, v) in std::env::vars_os() {
             assert_eq!(get(&env, k.to_str().unwrap()), Some(v));
         }
-        assert_eq!(env.var_os("HOME"), std::env::var_os("HOME"));
+        assert_eq!(env.var_os(stig::HOME_VAR), std::env::var_os(stig::HOME_VAR));
         assert_eq!(env.var_os("DRGNX_SHELL_ENV_TEST_B").unwrap(), "b");
     }
 
@@ -181,16 +181,16 @@ mod tests {
             "TMPDIR",
             "TMP",
             "TEMP",
-            "XDG_RUNTIME_DIR",
-            "XDG_DATA_HOME",
-            "XDG_CONFIG_HOME",
-            "XDG_STATE_HOME",
+            stig::SYSTEM_RUNTIME_VAR,
+            stig::Xdg::Data.var(),
+            stig::Xdg::Config.var(),
+            stig::Xdg::State.var(),
             "DRGNX_DATA_DIR",
             "DRGNX_CONFIG_DIR",
             "DRGNX_DIR",
             "SSH_AUTH_SOCK",
             "DBUS_SESSION_BUS_ADDRESS",
-            "HOME",
+            stig::HOME_VAR,
         ] {
             assert!(PATH_RULE_NAMES.contains(&n), "{n} is not refused");
         }

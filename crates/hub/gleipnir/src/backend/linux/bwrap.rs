@@ -9,10 +9,9 @@ use crate::spec::{HELPER_INSIDE, Mode, Target, ValidSpec};
 use crate::validate::{Refusal, Rule};
 use eitri::{FsError, Kind, TrustedProgram, open_path, trusted_program};
 use std::fs;
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Where bwrap is looked for, in order. `PATH` is never consulted (review S12).
 pub const CANDIDATES: &[&str] = &["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"];
@@ -66,43 +65,99 @@ fn find_with(
 fn version_output(program: &Path, deadline: Duration) -> Result<String, Refusal> {
     let what = format!("{} --version", program.display());
     let failed = |why: String| malformed(format!("{what}: {why}"));
-    let mut child = Command::new(program)
-        .arg("--version")
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| failed(format!("cannot run it ({e})")))?;
-    let start = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if start.elapsed() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            waited => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(failed(match waited {
-                    Err(e) => format!("cannot wait for it ({e})"),
-                    _ => format!("no answer within {} ms", deadline.as_millis()),
-                }));
-            }
-        }
+    let spec = draugr::Spec {
+        program: program.to_path_buf(),
+        args: vec!["--version".into()],
+        env: Vec::new(),
+        cwd: None,
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: false,
     };
-    if !status.success() {
-        return Err(failed(format!("exited with {status}")));
+    // on a thread of its own with its own pool: the caller may be on a runtime's thread
+    let answer = saman::spawn_thread("bwrap-version", move || version_run(spec, deadline))
+        .map_err(|e| failed(format!("cannot run it ({e})")))?
+        .join()
+        .map_err(|_| failed("cannot run it (its thread panicked)".into()))?
+        .map_err(failed)?;
+    String::from_utf8(answer).map_err(|_| failed("its output is not UTF-8".into()))
+}
+
+/// Runs SPEC, a `--version` probe: its first 4096 bytes of stdout when it exits successfully within DEADLINE, else why
+/// not. Its whole process group is ended when the deadline passes.
+fn version_run(spec: draugr::Spec, deadline: Duration) -> Result<Vec<u8>, String> {
+    let pool = saman::Executor::new(1).map_err(|e| format!("cannot run it ({e})"))?;
+    pool.block_on(async {
+        let mut child = draugr::spawn(spec)
+            .await
+            .map_err(|e| format!("cannot run it ({e})"))?;
+        let stdout = child.take_stdout();
+        let waited = match stund::timeout(deadline, child.wait()).await {
+            Ok(waited) => waited,
+            Err(stund::Elapsed) => {
+                // the group is ended and reaped
+                child
+                    .wait_deadline(Duration::ZERO)
+                    .await
+                    .map_err(|e| format!("cannot wait for it ({e})"))?;
+                return Err(format!("no answer within {} ms", deadline.as_millis()));
+            }
+        };
+        let status = waited
+            .map_err(|e| format!("cannot wait for it ({e})"))?
+            .ok_or_else(|| "cannot wait for it (already waited for)".to_string())?;
+        if !status.success() {
+            return Err(format!("exited with {status}"));
+        }
+        // It has exited: what it wrote is in the pipe already. Read that and no more, without waiting for an end a child
+        // of its own may hold open: a pipe with nothing more to read right now is the end.
+        let mut buf = Vec::new();
+        if let Some(out) = stdout.as_ref() {
+            drain_now(out, &mut buf, 4096).map_err(|e| format!("cannot read its output ({e})"))?;
+        }
+        Ok(buf)
+    })
+}
+
+/// Reads from OUT what is there now, at most MAX bytes: a `poll` with no wait says whether a read would answer at once.
+fn drain_now(out: &tokio::process::ChildStdout, buf: &mut Vec<u8>, max: usize) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let fd = out.as_raw_fd();
+    let mut chunk = [0u8; 1024];
+    while buf.len() < max {
+        let mut p = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: poll(2) on one pollfd, with a zero timeout, on a descriptor the caller holds open
+        match unsafe { libc::poll(&mut p, 1, 0) } {
+            0 => return Ok(()),
+            n if n < 0 => {
+                let e = io::Error::last_os_error();
+                if e.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(e);
+            }
+            _ => {}
+        }
+        let want = chunk.len().min(max - buf.len());
+        // SAFETY: read(2) into a buffer of at least `want` bytes
+        let n = unsafe { libc::read(fd, chunk.as_mut_ptr().cast(), want) };
+        match n {
+            0 => return Ok(()),
+            n if n < 0 => {
+                let e = io::Error::last_os_error();
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(e);
+            }
+            n => buf.extend_from_slice(&chunk[..n as usize]),
+        }
     }
-    // It has exited: read what it left in the pipe without blocking (a child of its own may still hold the pipe).
-    let mut stdout = child.stdout.take().expect("piped");
-    rustix::fs::fcntl_setfl(&stdout, rustix::fs::OFlags::NONBLOCK)
-        .map_err(|e| failed(format!("cannot read its output ({e})")))?;
-    let mut buf = Vec::new();
-    match (&mut stdout).take(4096).read_to_end(&mut buf) {
-        Ok(_) => {}
-        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-        Err(e) => return Err(failed(format!("cannot read its output ({e})"))),
-    }
-    String::from_utf8(buf).map_err(|_| failed("its output is not UTF-8".into()))
+    Ok(())
 }
 
 /// Opens every source of `spec` (home, reads, writes, run, binds) and the helper with `eitri::open_path`, which
@@ -262,10 +317,17 @@ fn refused(key: &str, path: &Path, e: FsError) -> Refusal {
     }
 }
 
+/// The most of `/etc/login.defs` that is read.
+const LOGIN_DEFS_CAP: u64 = 1 << 20;
+
 /// The highest uid of a system account on this host: from `/etc/login.defs` (`parse_uid_boundary`); root alone (0)
 /// when the file does not read.
 fn sys_uid_max() -> u32 {
-    parse_uid_boundary(fs::read_to_string("/etc/login.defs").ok().as_deref())
+    parse_uid_boundary(
+        eitri::read_string(Path::new("/etc/login.defs"), LOGIN_DEFS_CAP)
+            .ok()
+            .as_deref(),
+    )
 }
 
 /// The value of the last line of a `login.defs` text that begins with `key`; None when there is none, or that last line
@@ -356,10 +418,10 @@ mod tests {
     fn a_private_root_puts_each_entry_back_and_never_follows_a_link() {
         let (dir, _) = script("true");
         let root = fs::canonicalize(dir.path()).unwrap();
-        fs::write(root.join("a"), "x").unwrap();
+        eitri::replace_file(&root.join("a"), b"x").unwrap();
         fs::create_dir(root.join("d")).unwrap();
         fs::create_dir(root.join("codex")).unwrap();
-        fs::write(root.join("codex/own.toml"), "x").unwrap();
+        eitri::replace_file(&root.join("codex/own.toml"), b"x").unwrap();
         std::os::unix::fs::symlink("../nowhere", root.join("l")).unwrap();
         std::os::unix::fs::symlink("d", root.join("ld")).unwrap();
         let missing = root.join("codex/requirements.toml");
@@ -452,7 +514,7 @@ mod tests {
     fn script(body: &str) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::Builder::new().prefix("glp-").tempdir().unwrap();
         let p = dir.path().join("prog");
-        fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        eitri::replace_file(&p, format!("#!/bin/sh\n{body}\n").as_bytes()).unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
         (dir, p)
     }
@@ -498,7 +560,7 @@ mod tests {
                 fs::create_dir_all(b.join(d)).unwrap();
             }
             for f in ["home/u/proj/.env", "rt/s/S1/proxy.sock", "bin/ratatoskr"] {
-                fs::write(b.join(f), "x").unwrap();
+                eitri::replace_file(&b.join(f), b"x").unwrap();
             }
             Fx { _dir: dir, b }
         }
@@ -615,7 +677,7 @@ mod tests {
         // The write is swapped for a link to the canary after the open: the fd still holds the original.
         let task = fx.p("home/u/proj");
         let before = id(&task);
-        fs::rename(&task, fx.p("home/u/proj.old")).unwrap();
+        eitri::rename_dir(&task, &fx.p("home/u/proj.old")).unwrap();
         std::os::unix::fs::symlink(fx.p("canary"), &task).unwrap();
         let w = opened.mounts().iter().find(|m| m.source == task).unwrap();
         assert_eq!(fd_id(&w.fd), before);
@@ -665,7 +727,7 @@ mod tests {
         let fx = Fx::new();
         let valid = fx.valid();
         let task = fx.p("home/u/proj");
-        fs::rename(&task, fx.p("home/u/proj.old")).unwrap();
+        eitri::rename_dir(&task, &fx.p("home/u/proj.old")).unwrap();
         std::os::unix::fs::symlink(fx.p("canary"), &task).unwrap();
         let r = open_sources(&valid, &fx.helper()).expect_err("a link");
         assert_eq!(r.rule, Rule::NotCanonical, "{}", r.message);
@@ -777,7 +839,7 @@ mod tests {
         let d = dir.join(name);
         fs::create_dir(&d).unwrap();
         let p = d.join("bwrap");
-        fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        eitri::replace_file(&p, format!("#!/bin/sh\n{body}\n").as_bytes()).unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
         p
     }
@@ -816,7 +878,7 @@ mod tests {
     #[test]
     fn find_applies_the_floor_and_the_deadline() {
         if !is_root() {
-            eprintln!("skipped: needs uid 0 for root-owned fixtures");
+            annall::cli_err("skipped: needs uid 0 for root-owned fixtures").unwrap();
             return;
         }
         let dir = tempfile::Builder::new()

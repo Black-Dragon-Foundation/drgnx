@@ -23,9 +23,10 @@ struct Group {
 }
 
 /// The groups in the JSON the groups command printed, as checks (name = the group's id).
-pub fn parse(json: &str) -> Result<Vec<Check>, String> {
-    let l: Listed =
-        serde_json::from_str(json).map_err(|e| format!("the groups command's JSON: {e}"))?;
+pub fn parse(json: &str) -> villa::Result<Vec<Check>> {
+    let l: Listed = serde_json::from_str(json).map_err(|e| {
+        villa::Error::invalid(format!("the groups command's JSON: {e}")).with_source(e)
+    })?;
     Ok(l.groups
         .into_iter()
         .map(|g| Check {

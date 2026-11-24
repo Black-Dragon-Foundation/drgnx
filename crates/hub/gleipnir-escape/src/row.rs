@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 /// The plan's list is the first eleven. The rest are what Tasks 15 and 16 need to name things the fixture makes at
 /// run time (addresses and ports, the abstract socket, a pid, the fake bwrap and its marker, the git).
 pub const PLACEHOLDERS: &[&str] = &[
-    "HOME",
+    stig::HOME_VAR,
     "RUNTIME",
     "RUN",
     "TASK",
@@ -380,21 +380,21 @@ impl Row {
     }
 
     /// The parse checks that need the whole row.
-    pub fn check(&self) -> Result<(), String> {
+    pub fn check(&self) -> villa::Result<()> {
         let name = &self.row;
         for text in self.texts() {
             for p in placeholders_in(&text) {
                 if !PLACEHOLDERS.contains(&p) {
-                    return Err(format!(
+                    return Err(villa::Error::invalid(format!(
                         "{name}: undefined placeholder ${{{p}}} in {text:?}"
-                    ));
+                    )));
                 }
             }
         }
         if self.raw.is_some() == self.has_probes() {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{name}: a row has probes or a raw command, not both and not neither"
-            ));
+            )));
         }
         // One expectation per probe. A refused row (`result` and none) expects no line; a run cut short by `after`
         // expects the lines that came before the cut.
@@ -402,16 +402,18 @@ impl Row {
         let counts_ok =
             e == p || (self.result.is_some() && e == 0) || (self.after.is_some() && e <= p);
         if self.has_probes() && !counts_ok {
-            return Err(format!("{name}: {e} expectations for {p} probes"));
+            return Err(villa::Error::invalid(format!(
+                "{name}: {e} expectations for {p} probes"
+            )));
         }
         if let Some(c) = &self.control_expect
             && c.len() != self.probes.len()
         {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{name}: control_expect has {} entries for {} probes",
                 c.len(),
                 self.probes.len()
-            ));
+            )));
         }
         let all = self
             .expect
@@ -420,44 +422,54 @@ impl Row {
         for e in all {
             for n in &e.errno {
                 if errno_from_name(n).is_none() {
-                    return Err(format!("{name}: unknown errno name {n:?}"));
+                    return Err(villa::Error::invalid(format!(
+                        "{name}: unknown errno name {n:?}"
+                    )));
                 }
             }
             if e.result == ResultKind::Reached && !e.errno.is_empty() {
-                return Err(format!("{name}: an errno list on a reached expectation"));
+                return Err(villa::Error::invalid(format!(
+                    "{name}: an errno list on a reached expectation"
+                )));
             }
         }
         let says_blocked = self.expect.iter().any(|e| e.result == ResultKind::Blocked);
         if says_blocked && !self.control && !self.unsandboxed {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{name}: an expectation says blocked, so the row needs control: true (a typo must not pass as ENOENT)"
-            ));
+            )));
         }
         if self.unsandboxed && (self.control || self.control_expect.is_some()) {
-            return Err(format!("{name}: an unsandboxed row is its own control"));
+            return Err(villa::Error::invalid(format!(
+                "{name}: an unsandboxed row is its own control"
+            )));
         }
         if self.control_expect.is_some() && !self.control {
-            return Err(format!("{name}: control_expect without control"));
+            return Err(villa::Error::invalid(format!(
+                "{name}: control_expect without control"
+            )));
         }
         for l in &self.listeners_silent {
             if !LISTENERS.contains(&l.as_str()) {
-                return Err(format!("{name}: unknown listener {l:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "{name}: unknown listener {l:?}"
+                )));
             }
         }
         if self.after.is_some() && self.raw.is_some() {
-            return Err(format!("{name}: after needs probes"));
+            return Err(villa::Error::invalid(format!("{name}: after needs probes")));
         }
         if self.web.is_none() && (!self.grants.is_empty() || !self.dns.is_empty()) {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{name}: grants and dns are the web proxy's, so the row needs web"
-            ));
+            )));
         }
         self.check_layer()
     }
 
     /// A `layer` row runs on the full tier (the only one with the browser) with probes, in the harness's own two runs:
     /// no `unsandboxed`, `after`, `bwrap` or setup that only fits a plain run. `${PARENT}` exists only there.
-    fn check_layer(&self) -> Result<(), String> {
+    fn check_layer(&self) -> villa::Result<()> {
         let name = &self.row;
         let parent = self
             .texts()
@@ -465,19 +477,21 @@ impl Row {
             .any(|t| placeholders_in(t).contains(&"PARENT"));
         let Some(Layer::Browser) = self.layer else {
             if parent {
-                return Err(format!("{name}: ${{PARENT}} is a layer row's"));
+                return Err(villa::Error::invalid(format!(
+                    "{name}: ${{PARENT}} is a layer row's"
+                )));
             }
             return Ok(());
         };
         if !self.needs.contains(&Need::Bwrap) || self.tier != TierName::Full {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{name}: a browser layer row needs bwrap (the full tier)"
-            ));
+            )));
         }
         if self.raw.is_some() || self.unsandboxed || self.after.is_some() || self.bwrap.is_some() {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{name}: a layer row runs its probes in the harness's sandbox, without raw, unsandboxed, after or bwrap"
-            ));
+            )));
         }
         let plain_only = self.setup.iter().any(|s| {
             matches!(
@@ -489,27 +503,37 @@ impl Row {
             )
         });
         if plain_only {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{name}: a layer row takes only make-dir, make-file, plant-link, canary-fd and start-sleep"
-            ));
+            )));
         }
         Ok(())
     }
 }
 
+/// The most a rows file may hold.
+const ROW_FILE_CAP: u64 = 1 << 24;
+
 /// The rows of one `.jsonl` file (blank lines skipped).
-pub fn parse_file(path: &Path, platform: Platform) -> Result<Vec<Row>, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+pub fn parse_file(path: &Path, platform: Platform) -> villa::Result<Vec<Row>> {
+    // a true name: eitri refuses a link in any component, and the rows' directory may sit behind one
+    let text = path
+        .canonicalize()
+        .map_err(villa::Error::from)
+        .and_then(|real| Ok(eitri::read_string(&real, ROW_FILE_CAP)?))
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", path.display())))?;
     let mut rows = Vec::new();
     for (i, line) in text.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
         let at = format!("{}:{}", path.display(), i + 1);
-        let mut row: Row = serde_json::from_str(line).map_err(|e| format!("{at}: {e}"))?;
+        let mut row: Row =
+            serde_json::from_str(line).map_err(|e| villa::Error::invalid(format!("{at}: {e}")))?;
         row.platform = Some(platform);
         row.source = path.to_path_buf();
-        row.check().map_err(|e| format!("{at}: {e}"))?;
+        row.check()
+            .map_err(|e| villa::Error::invalid(format!("{at}: {e}")))?;
         rows.push(row);
     }
     Ok(rows)
@@ -517,7 +541,7 @@ pub fn parse_file(path: &Path, platform: Platform) -> Result<Vec<Row>, String> {
 
 /// Every row under `dir`: `dir` itself when it holds `.jsonl` files (its own name says the platform), and each of
 /// its `any`, `linux`, `macos` subdirectories. Row names must be unique.
-pub fn load_dir(dir: &Path) -> Result<Vec<Row>, String> {
+pub fn load_dir(dir: &Path) -> villa::Result<Vec<Row>> {
     let mut rows = Vec::new();
     let mut dirs: Vec<(PathBuf, Platform)> = Vec::new();
     let own = match dir.file_name().and_then(|n| n.to_str()) {
@@ -538,7 +562,7 @@ pub fn load_dir(dir: &Path) -> Result<Vec<Row>, String> {
     }
     for (d, p) in dirs {
         let mut files: Vec<PathBuf> = std::fs::read_dir(&d)
-            .map_err(|e| format!("{}: {e}", d.display()))?
+            .map_err(|e| villa::Error::invalid(format!("{}: {e}", d.display())))?
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|f| f.extension().is_some_and(|x| x == "jsonl"))
             .collect();
@@ -550,7 +574,10 @@ pub fn load_dir(dir: &Path) -> Result<Vec<Row>, String> {
     let mut seen = BTreeSet::new();
     for r in &rows {
         if !seen.insert(r.row.clone()) {
-            return Err(format!("row {:?} appears twice", r.row));
+            return Err(villa::Error::invalid(format!(
+                "row {:?} appears twice",
+                r.row
+            )));
         }
     }
     Ok(rows)
@@ -564,10 +591,10 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("rows")
     }
 
-    fn parse(line: &str) -> Result<Vec<Row>, String> {
+    fn parse(line: &str) -> villa::Result<Vec<Row>> {
         let dir = tempfile::tempdir().unwrap();
-        let f = dir.path().join("t.jsonl");
-        std::fs::write(&f, line).unwrap();
+        let f = dir.path().canonicalize().unwrap().join("t.jsonl");
+        eitri::replace_file(&f, line.as_bytes()).unwrap();
         parse_file(&f, Platform::Any)
     }
 
@@ -588,7 +615,8 @@ mod tests {
     fn an_undefined_placeholder_fails_the_parse() {
         let e =
             parse(r#"{"row":"x","probes":[["read","${NOPE}/f"]],"expect":[{"result":"reached"}]}"#)
-                .unwrap_err();
+                .unwrap_err()
+                .to_string();
         assert!(e.contains("undefined placeholder ${NOPE}"), "{e}");
         parse(r#"{"row":"x","probes":[["read","${HOME}/f"]],"expect":[{"result":"reached"}]}"#)
             .unwrap();
@@ -598,20 +626,23 @@ mod tests {
     fn a_blocked_expectation_without_control_fails_the_parse() {
         let blocked =
             r#""probes":[["read","/x"]],"expect":[{"result":"blocked","errno":["ENOENT"]}]"#;
-        let e = parse(&format!(r#"{{"row":"x",{blocked}}}"#)).unwrap_err();
+        let e = parse(&format!(r#"{{"row":"x",{blocked}}}"#))
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("needs control: true"), "{e}");
         parse(&format!(r#"{{"row":"x","control":true,{blocked}}}"#)).unwrap();
     }
 
     #[test]
     fn typos_and_miscounts_fail_the_parse() {
-        let e = parse(r#"{"row":"x","probe":[]}"#).unwrap_err();
+        let e = parse(r#"{"row":"x","probe":[]}"#).unwrap_err().to_string();
         assert!(e.contains("unknown field"), "{e}");
         let e = parse(r#"{"row":"x","probes":[["fds"],["fds"]],"expect":[{"result":"reached"}]}"#)
-            .unwrap_err();
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("1 expectations for 2 probes"), "{e}");
         let e = parse(r#"{"row":"x","control":true,"probes":[["fds"]],"expect":[{"result":"blocked","errno":["EBOGUS"]}]}"#)
-            .unwrap_err();
+            .unwrap_err().to_string();
         assert!(e.contains("unknown errno"), "{e}");
     }
 
@@ -623,24 +654,30 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(r[0].layer, Some(Layer::Browser));
-        let e = parse(&format!(r#"{{"row":"x",{probes}}}"#)).unwrap_err();
+        let e = parse(&format!(r#"{{"row":"x",{probes}}}"#))
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("${PARENT} is a layer row's"), "{e}");
-        let e = parse(&format!(r#"{{"row":"x","layer":"browser",{probes}}}"#)).unwrap_err();
+        let e = parse(&format!(r#"{{"row":"x","layer":"browser",{probes}}}"#))
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("needs bwrap"), "{e}");
         let e = parse(&format!(
             r#"{{"row":"x","needs":["bwrap"],"tier":"reduced","layer":"browser",{probes}}}"#
         ))
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert!(e.contains("needs bwrap"), "{e}");
         let e = parse(&format!(
             r#"{{"row":"x","needs":["bwrap"],"layer":"browser","setup":[{{"step":"controlling-tty"}}],{probes}}}"#
         ))
-        .unwrap_err();
+        .unwrap_err().to_string();
         assert!(e.contains("takes only"), "{e}");
         let e = parse(
             r#"{"row":"x","layer":"agent","probes":[["fds"]],"expect":[{"result":"reached"}]}"#,
         )
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert!(e.contains("unknown variant"), "{e}");
     }
 
@@ -650,17 +687,19 @@ mod tests {
         let e = parse(&format!(
             r#"{{"row":"x","grants":[{{"target":"all_private"}}],{probe}}}"#
         ))
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert!(e.contains("needs web"), "{e}");
         let e = parse(&format!(
             r#"{{"row":"x","web":true,"dns":{{"a.test":["${{NOPE}}"]}},{probe}}}"#
         ))
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert!(e.contains("undefined placeholder ${NOPE}"), "{e}");
         let e = parse(&format!(
             r#"{{"row":"x","web":true,"grants":[{{"target":{{"host_port":"${{NOPE}}:1"}}}}],{probe}}}"#
         ))
-        .unwrap_err();
+        .unwrap_err().to_string();
         assert!(e.contains("undefined placeholder ${NOPE}"), "{e}");
         let r = parse(&format!(
             r#"{{"row":"x","web":false,"grants":[{{"target":{{"host_port":"${{HOST_LAN}}:80"}}}}],"dns":{{"a.test":["${{HOST_LAN}}"]}},{probe}}}"#

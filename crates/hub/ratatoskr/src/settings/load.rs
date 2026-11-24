@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use huginn::form::{Problem as FormProblem, parse_settings};
@@ -120,40 +120,42 @@ pub fn stamp(path: &Path) -> Stamp {
 
 /// PATH's bytes, or none when there is no file, or why it is refused.  The checks are made on the file opened (a
 /// link followed), so what is checked is what is read; a FIFO or device is opened without waiting and refused.
-pub fn read_checked(path: &Path) -> Result<Option<Vec<u8>>, String> {
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
-    {
+pub fn read_checked(path: &Path) -> villa::Result<Option<Vec<u8>>> {
+    let file = match eitri::open_following(path) {
         Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("cannot be opened: {e}")),
+        Err(eitri::FsError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(villa::Error::io(format!("cannot be opened: {e}"))),
     };
     let meta = file
         .metadata()
-        .map_err(|e| format!("cannot be looked at: {e}"))?;
+        .map_err(|e| villa::Error::io(format!("cannot be looked at: {e}")))?;
     if !meta.is_file() {
-        return Err("is not a regular file".into());
+        return Err(villa::Error::invalid("is not a regular file"));
     }
     if meta.len() > MAX_BYTES {
-        return Err(format!("is over 1 MiB ({} bytes)", meta.len()));
+        return Err(villa::Error::invalid(format!(
+            "is over 1 MiB ({} bytes)",
+            meta.len()
+        )));
     }
     if meta.uid() != rustix::process::geteuid().as_raw() {
-        return Err(format!("is owned by user {}, not by you", meta.uid()));
+        return Err(villa::Error::invalid(format!(
+            "is owned by user {}, not by you",
+            meta.uid()
+        )));
     }
     if meta.mode() & 0o022 != 0 {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "is writable by others (mode {:o}): chmod go-w it",
             meta.mode() & 0o777
-        ));
+        )));
     }
     let mut bytes = Vec::new();
     file.take(MAX_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| format!("cannot be read: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("cannot be read: {e}")))?;
     if bytes.len() as u64 > MAX_BYTES {
-        return Err("is over 1 MiB".into());
+        return Err(villa::Error::invalid("is over 1 MiB"));
     }
     Ok(Some(bytes))
 }

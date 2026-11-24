@@ -143,6 +143,16 @@ impl Error {
     }
 }
 
+impl PartialEq for Error {
+    /// Two errors are equal when they say the same: the kind, the sentence and the detail. The source is not compared
+    /// (an `io::Error` has no equality); this is for a test that asserts what a function answered.
+    fn eq(&self, other: &Error) -> bool {
+        self.kind == other.kind && self.message == other.message && self.detail == other.detail
+    }
+}
+
+impl Eq for Error {}
+
 impl fmt::Display for Error {
     /// Only the user's sentence.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

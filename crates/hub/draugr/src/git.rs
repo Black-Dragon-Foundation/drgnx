@@ -379,7 +379,7 @@ pub fn command(call: &GitCall) -> Result<(Vec<OsString>, Env), GitRefusal> {
                 ("GIT_CONFIG_NOSYSTEM", "1"),
                 ("GIT_CONFIG_GLOBAL", "/dev/null"),
                 ("GIT_ATTR_NOSYSTEM", "1"),
-                ("HOME", "/nonexistent"),
+                (stig::HOME_VAR, "/nonexistent"),
                 ("GIT_LFS_SKIP_SMUDGE", "1"),
             ]
             .map(|(k, v)| (k.into(), v.into())),
@@ -611,7 +611,7 @@ mod tests {
                 ("GIT_CONFIG_NOSYSTEM", "1"),
                 ("GIT_CONFIG_GLOBAL", "/dev/null"),
                 ("GIT_ATTR_NOSYSTEM", "1"),
-                ("HOME", "/nonexistent"),
+                (stig::HOME_VAR, "/nonexistent"),
                 ("GIT_LFS_SKIP_SMUDGE", "1"),
             ]
         );
@@ -766,7 +766,7 @@ mod tests {
             mode(&top.path().join(d), 0o755).unwrap();
         }
         let git = dev.join("usr/bin/git");
-        std::fs::write(&git, b"#!/bin/sh\n").unwrap();
+        eitri::replace_file(&git, b"#!/bin/sh\n").unwrap();
         mode(&git, 0o755).unwrap();
         let link = top.path().join("db/xcode_select_link");
         symlink(&dev, &link).unwrap();
@@ -777,7 +777,7 @@ mod tests {
     fn macos_devdir_from_the_link() {
         use std::os::unix::fs::{PermissionsExt, lchown, symlink};
         if !is_root() {
-            eprintln!("macos_devdir_from_the_link: needs uid 0; skipped");
+            tracing::warn!("macos_devdir_from_the_link: needs uid 0; skipped");
             return;
         }
         let (top, link, git) = devdir_fixture();
@@ -816,7 +816,12 @@ mod tests {
         assert!(git_from_xcode_link(&plain).is_err());
         for target in ["dev", "/var/lib/../lib/x"] {
             let l = db.join("other");
-            let _ = std::fs::remove_file(&l);
+            std::fs::remove_file(&l)
+                .or_else(|e| match e.kind() {
+                    std::io::ErrorKind::NotFound => Ok(()),
+                    _ => Err(e),
+                })
+                .unwrap();
             symlink(target, &l).unwrap();
             assert!(
                 matches!(git_from_xcode_link(&l), Err(FsError::Untrusted { .. })),
@@ -830,7 +835,7 @@ mod tests {
     fn the_active_developer_dir_is_the_links_even_where_its_git_is_refused() {
         use std::os::unix::fs::{PermissionsExt, symlink};
         if !is_root() {
-            eprintln!(
+            tracing::warn!(
                 "the_active_developer_dir_is_the_links_even_where_its_git_is_refused: needs uid 0; skipped"
             );
             return;

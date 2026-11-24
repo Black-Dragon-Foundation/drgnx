@@ -156,19 +156,22 @@ pub fn read(text: &str, file: &Path) -> Plan {
 }
 
 /// Refuse tasks that number a task twice, whose dependencies name a task that is not there, or go round in a cycle.
-pub fn check(tasks: &[PlanTask]) -> Result<(), String> {
+pub fn check(tasks: &[PlanTask]) -> villa::Result<()> {
     for t in tasks {
         if tasks.iter().filter(|o| o.n == t.n).count() > 1 {
-            return Err(format!("Task {} appears twice in the plan", t.n));
+            return Err(villa::Error::invalid(format!(
+                "Task {} appears twice in the plan",
+                t.n
+            )));
         }
     }
     for t in tasks {
         for d in &t.deps {
             if !tasks.iter().any(|o| o.n == *d) {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "Task {} depends on Task {d}, which the plan does not have",
                     t.n
-                ));
+                )));
             }
         }
     }
@@ -178,18 +181,18 @@ pub fn check(tasks: &[PlanTask]) -> Result<(), String> {
         tasks: &[PlanTask],
         state: &mut std::collections::HashMap<i64, u8>,
         path: &mut Vec<i64>,
-    ) -> Result<(), String> {
+    ) -> villa::Result<()> {
         match state.get(&n) {
             Some(2) => return Ok(()),
             Some(1) => {
                 path.push(n);
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "The plan's dependencies go round in a cycle: {}",
                     path.iter()
                         .map(|x| format!("Task {x}"))
                         .collect::<Vec<_>>()
                         .join(" -> ")
-                ));
+                )));
             }
             _ => {}
         }
@@ -206,22 +209,23 @@ pub fn check(tasks: &[PlanTask]) -> Result<(), String> {
     }
     let mut state = std::collections::HashMap::new();
     for t in tasks {
-        visit(t.n, tasks, &mut state, &mut Vec::new())?;
+        visit(t.n, tasks, &mut state, &mut Vec::new())
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
     }
     Ok(())
 }
 
 /// Task N of TASKS and every task it depends on, directly or not, in the plan's order (Start as Job).
-pub fn needs(tasks: &[PlanTask], n: i64) -> Result<Vec<PlanTask>, String> {
+pub fn needs(tasks: &[PlanTask], n: i64) -> villa::Result<Vec<PlanTask>> {
     let mut want: Vec<i64> = Vec::new();
     let mut todo = vec![n];
     while let Some(k) = todo.pop() {
         let Some(t) = tasks.iter().find(|t| t.n == k) else {
-            return Err(if k == n {
+            return Err(villa::Error::not_found(if k == n {
                 format!("The plan has no Task {k}")
             } else {
                 format!("A task depends on Task {k}, which the plan does not have")
-            });
+            }));
         };
         if !want.contains(&k) {
             want.push(k);
@@ -294,11 +298,17 @@ mod tests {
         assert!(
             check(&[t(1, &[]), t(1, &[])])
                 .unwrap_err()
+                .message()
                 .contains("twice")
         );
-        assert!(check(&[t(1, &[9])]).unwrap_err().contains("Task 9"));
+        assert!(
+            check(&[t(1, &[9])])
+                .unwrap_err()
+                .message()
+                .contains("Task 9")
+        );
         let cyc = check(&[t(1, &[2]), t(2, &[1])]).unwrap_err();
-        assert!(cyc.contains("cycle"), "{cyc}");
+        assert!(cyc.message().contains("cycle"), "{cyc}");
     }
 
     #[test]
@@ -307,6 +317,11 @@ mod tests {
         let got = needs(&p.tasks, 2).unwrap();
         assert_eq!(got.iter().map(|t| t.n).collect::<Vec<_>>(), [1, 2]);
         assert_eq!(needs(&p.tasks, 1).unwrap().len(), 1);
-        assert!(needs(&p.tasks, 7).unwrap_err().contains("no Task 7"));
+        assert!(
+            needs(&p.tasks, 7)
+                .unwrap_err()
+                .message()
+                .contains("no Task 7")
+        );
     }
 }

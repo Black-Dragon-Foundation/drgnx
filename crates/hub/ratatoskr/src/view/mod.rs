@@ -689,7 +689,7 @@ impl Default for Views {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }
 
 impl Views {
@@ -1058,7 +1058,7 @@ impl Views {
 
     /// Keep the front once; the searches' threads send through it.
     pub fn bind(&self, front: &Arc<Front>) {
-        let _ = self.front.set(Arc::downgrade(front));
+        crate::soft::done(self.front.set(Arc::downgrade(front)), "mod");
         self.panels.bind(front);
     }
 

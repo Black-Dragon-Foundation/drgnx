@@ -13,11 +13,10 @@ use rmcp::model::{
 use rmcp::{ClientLifecycleMode, ClientServiceExt};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use support::{Client, FAILED_AFTER, Hub, Root};
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = ratatoskr::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -55,7 +54,7 @@ fn project(root: &Root, name: &str) -> (PathBuf, PathBuf) {
     for (p, text) in FILES {
         let f = dir.join(p);
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-        std::fs::write(f, text).unwrap();
+        ratatoskr::fsio::write(f, text).unwrap();
     }
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-q", "-m", "one"]);
@@ -64,7 +63,7 @@ fn project(root: &Root, name: &str) -> (PathBuf, PathBuf) {
         &dir,
         &["worktree", "add", "-q", "-b", "topic", wt.to_str().unwrap()],
     );
-    std::fs::write(
+    ratatoskr::fsio::write(
         wt.join("src/branch.rs"),
         "pub fn branch_only() {\n    make_widget();\n}\n",
     )
@@ -75,7 +74,7 @@ fn project(root: &Root, name: &str) -> (PathBuf, PathBuf) {
 fn settings(root: &Root, body: &str) {
     let dir = root.dir.path().join("h/c");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
+    ratatoskr::fsio::write(
         dir.join("settings.el"),
         format!("(drgnx-settings\n :version 1\n {body})\n"),
     )
@@ -163,7 +162,7 @@ fn why_names_layer_and_rule() {
     let root = Root::new();
     let (proj, _wt) = project(&root, "proj");
     std::fs::create_dir_all(proj.join(".drgnx")).unwrap();
-    std::fs::write(
+    ratatoskr::fsio::write(
         proj.join(".drgnx/search.toml"),
         "ignore = [\"src/user.rs\"]\n",
     )
@@ -573,8 +572,9 @@ const TOOLS: [&str; 8] = [
 ];
 
 /// Pattern C. A session's search socket serves the three tools; their text answers; refusals are tool errors.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_session_socket_serves_symbols_and_outline() {
+#[test]
+fn the_session_socket_serves_symbols_and_outline() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let root = Root::new();
     settings(&root, "(drgnx-agents-mcp (coordination search))");
     let (proj, _wt) = project(&root, "proj");
@@ -699,41 +699,50 @@ async fn the_session_socket_serves_symbols_and_outline() {
         assert!(refused, "{tool} {bad}");
     }
     client.cancel().await.unwrap();
+})
 }
 
 /// Pattern C. `ratatoskr search mcp ROOT` on stdio serves the same tools and answers as the socket does.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stdio_serves_the_same_tools() {
-    let root = Root::new();
-    let (proj, _wt) = project(&root, "proj");
-    let (_hub, _c) = ready(&root);
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_ratatoskr"))
-        .args(["search", "mcp"])
-        .arg(&proj)
-        .envs(root.vars())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let (out, inp) = (child.stdout.take().unwrap(), child.stdin.take().unwrap());
-    let client = mcp_on!(out, inp);
-    let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(
-        tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>(),
-        TOOLS
-    );
-    let r = client
-        .call_tool(
-            CallToolRequestParams::new("symbols")
-                .with_arguments(args(json!({"name": "drgnx-hub", "match": "prefix"}))),
-        )
-        .await
-        .unwrap();
-    let text = text_of(&r);
-    assert!(
-        text.starts_with("matched: prefix\ncore/hub.el:3-5  function  drgnx-hub-call"),
-        "{text}"
-    );
-    client.cancel().await.unwrap();
+#[test]
+fn stdio_serves_the_same_tools() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let root = Root::new();
+        let (proj, _wt) = project(&root, "proj");
+        let (_hub, _c) = ready(&root);
+        let mut child = ratatoskr::proc::Command::new(env!("CARGO_BIN_EXE_ratatoskr"))
+            .args(["search", "mcp"])
+            .arg(&proj)
+            .envs(root.vars())
+            .spawn(
+                ratatoskr::proc::Io::Pipe,
+                ratatoskr::proc::Io::Pipe,
+                ratatoskr::proc::Io::Inherit,
+            )
+            .unwrap();
+        let (out, inp) = (
+            tokio::process::ChildStdout::from_std(child.stdout.take().unwrap()).unwrap(),
+            tokio::process::ChildStdin::from_std(child.stdin.take().unwrap()).unwrap(),
+        );
+        let client = mcp_on!(out, inp);
+        let tools = client.list_all_tools().await.unwrap();
+        assert_eq!(
+            tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>(),
+            TOOLS
+        );
+        let r = client
+            .call_tool(
+                CallToolRequestParams::new("symbols")
+                    .with_arguments(args(json!({"name": "drgnx-hub", "match": "prefix"}))),
+            )
+            .await
+            .unwrap();
+        let text = text_of(&r);
+        assert!(
+            text.starts_with("matched: prefix\ncore/hub.el:3-5  function  drgnx-hub-call"),
+            "{text}"
+        );
+        client.cancel().await.unwrap();
+        ratatoskr::soft::done(child.kill(), "search_tools");
+        ratatoskr::soft::done(child.wait(), "search_tools");
+    })
 }

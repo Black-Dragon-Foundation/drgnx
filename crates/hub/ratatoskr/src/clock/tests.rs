@@ -14,7 +14,7 @@ fn log() -> Log {
 }
 
 fn seen(l: &Log) -> Vec<&'static str> {
-    l.lock().unwrap().clone()
+    saman::lock(l).clone()
 }
 
 #[test]
@@ -24,10 +24,10 @@ fn virtual_time_moves_only_on_advance() {
         let mine = l.clone();
         spawn("t", async move {
             sleep(ms(50)).await;
-            mine.lock().unwrap().push("woke");
+            saman::lock(&mine).push("woke");
         });
         // real time passes; the virtual clock stands still
-        tokio::time::sleep(ms(200)).await;
+        stund::real::sleep(ms(200)).await;
         assert!(seen(&l).is_empty(), "woke without an advance");
         let a = advance(ms(49)).await;
         assert_eq!((a.now_ms, a.woken), (49, 0));
@@ -48,7 +48,7 @@ fn a_timer_through_drgnx_clock_moves_with_the_hubs_clock() {
         let mine = l.clone();
         spawn("other-crate", async move {
             stund::sleep(ms(50)).await;
-            mine.lock().unwrap().push("woke");
+            saman::lock(&mine).push("woke");
         });
         advance(Duration::ZERO).await;
         let a = advance(ms(49)).await;
@@ -68,7 +68,7 @@ fn due_sleepers_wake_in_deadline_then_registration_order() {
             let mine = l.clone();
             spawn(name, async move {
                 sleep(ms(after)).await;
-                mine.lock().unwrap().push(name);
+                saman::lock(&mine).push(name);
             });
             // each task has run (and registered) before the next is spawned
             advance(Duration::ZERO).await;
@@ -89,15 +89,15 @@ fn advance_returns_after_woken_tasks_park() {
             for _ in 0..20 {
                 tokio::task::yield_now().await;
             }
-            mine.lock().unwrap().push("woken");
+            saman::lock(&mine).push("woken");
             let child = mine.clone();
             spawn("child", async move {
                 tokio::task::yield_now().await;
-                child.lock().unwrap().push("child");
+                saman::lock(&child).push("child");
             });
             // parked again
             sleep(ms(1000)).await;
-            mine.lock().unwrap().push("late");
+            saman::lock(&mine).push("late");
         });
         let a = advance(ms(10)).await;
         assert_eq!((a.woken, a.busy.len()), (1, 0), "{a:?}");
@@ -131,8 +131,8 @@ fn a_task_idle_on_a_channel_after_its_wake_is_parked() {
         let (_keep, rx) = tokio::sync::oneshot::channel::<()>();
         spawn("t", async move {
             sleep(ms(10)).await;
-            mine.lock().unwrap().push("woke");
-            let _ = rx.await;
+            saman::lock(&mine).push("woke");
+            crate::soft::done(rx.await, "tests");
         });
         let a = advance(ms(10)).await;
         assert_eq!((a.now_ms, a.woken, a.busy.len()), (10, 1, 0), "{a:?}");
@@ -144,7 +144,7 @@ fn a_task_idle_on_a_channel_after_its_wake_is_parked() {
 fn wall_follows_virtual_time() {
     on_virtual(async {
         let (w0, n0, s0) = (wall(), now(), wall_secs());
-        tokio::time::sleep(ms(50)).await;
+        stund::real::sleep(ms(50)).await;
         assert_eq!((wall(), now()), (w0, n0), "real time moved the clock");
         advance(ms(1500)).await;
         assert_eq!(wall().duration_since(w0).unwrap(), ms(1500));
@@ -162,7 +162,7 @@ fn timeouts_and_intervals_follow_virtual_time() {
         spawn("timeout", async move {
             let never = std::future::pending::<()>();
             if timeout(ms(100), never).await == Err(Elapsed) {
-                mine.lock().unwrap().push("elapsed");
+                saman::lock(&mine).push("elapsed");
             }
             // a ready future registers no sleeper and wins
             assert_eq!(timeout(ms(1), async { 7 }).await, Ok(7));
@@ -172,7 +172,7 @@ fn timeouts_and_intervals_follow_virtual_time() {
             let mut every = interval(ms(40));
             for _ in 0..3 {
                 every.tick().await;
-                mine.lock().unwrap().push("tick");
+                saman::lock(&mine).push("tick");
             }
         });
         advance(ms(99)).await;
@@ -191,8 +191,8 @@ fn a_real_wait_is_waited_for_and_one_that_lasts_is_named() {
         let mine = l.clone();
         // a job's watcher: the child's end, under the clock's time box
         spawn("job:watch", async move {
-            let _ = timeout(ms(5000), real_long(rx)).await;
-            mine.lock().unwrap().push("after");
+            crate::soft::done(timeout(ms(5000), real_long(rx)).await, "timeout");
+            saman::lock(&mine).push("after");
         });
         // an advance counts it parked: the advance may be what ends it
         let a = advance(Duration::ZERO).await;
@@ -226,8 +226,8 @@ fn a_blocking_call_is_a_real_wait() {
         let l = log();
         let mine = l.clone();
         spawn("work:edits", async move {
-            let _ = blocking(move || held.recv()).await;
-            mine.lock().unwrap().push("done");
+            crate::soft::done(blocking(move || held.recv()).await, "blocking");
+            saman::lock(&mine).push("done");
         });
         advance(Duration::ZERO).await;
         assert_eq!(waiting(ms(100), &[]).await, ["work:edits"]);
@@ -245,11 +245,11 @@ fn a_real_wait_left_at_the_settle_names_its_line_and_its_time() {
         let (hold, held) = std::sync::mpsc::channel::<()>();
         let (go, rx) = tokio::sync::oneshot::channel::<()>();
         spawn("work:edits", async move {
-            let _ = blocking(move || held.recv()).await;
+            crate::soft::done(blocking(move || held.recv()).await, "blocking");
         });
         let at_blocking = line!() - 2;
         spawn("job:watch", async move {
-            let _ = real(rx).await;
+            crate::soft::done(real(rx).await, "real");
         });
         let at_real = line!() - 2;
         advance(Duration::ZERO).await;
@@ -354,16 +354,16 @@ fn a_task_woken_by_another_tasks_real_wait_is_waited_for() {
             let (go, rx) = tokio::sync::oneshot::channel::<()>();
             let (tell, heard) = tokio::sync::oneshot::channel::<()>();
             spawn("job:watch", async move {
-                let _ = real(rx).await;
-                let _ = tell.send(());
+                crate::soft::done(real(rx).await, "real");
+                crate::soft::done(tell.send(()), "tell send");
             });
             let mine = l.clone();
             spawn("wake:run", async move {
-                let _ = heard.await;
+                crate::soft::done(heard.await, "tests");
                 for _ in 0..20 {
                     tokio::task::yield_now().await;
                 }
-                mine.lock().unwrap().push("woke");
+                saman::lock(&mine).push("woke");
             });
             advance(Duration::ZERO).await;
             go.send(()).unwrap();
@@ -398,13 +398,15 @@ fn a_store_threads_answer_is_a_real_wait() {
         let l = log();
         let mine = l.clone();
         spawn("records:follow", async move {
-            let _ = db
-                .read(move |_| {
-                    let _ = held.recv();
+            crate::soft::done(
+                db.read(move |_| {
+                    crate::soft::done(held.recv(), "tests");
                     Ok(())
                 })
-                .await;
-            mine.lock().unwrap().push("read");
+                .await,
+                "tests",
+            );
+            saman::lock(&mine).push("read");
         });
         advance(Duration::ZERO).await;
         assert_eq!(waiting(ms(100), &[]).await, ["records:follow"]);
@@ -426,15 +428,15 @@ fn an_advance_waits_for_a_real_wait_inside_a_clock_timeout() {
             let (go, rx) = tokio::sync::oneshot::channel::<()>();
             spawn("search:download", async move {
                 sleep(ms(10)).await;
-                let _ = timeout(ms(5000), real(rx)).await;
-                mine.lock().unwrap().push("after");
+                crate::soft::done(timeout(ms(5000), real(rx)).await, "timeout");
+                saman::lock(&mine).push("after");
             });
             advance(Duration::ZERO).await;
-            tokio::spawn(async move {
+            crate::clock::spawn_untracked(module_path!(), async move {
                 for _ in 0..20 {
                     tokio::task::yield_now().await;
                 }
-                let _ = go.send(());
+                crate::soft::done(go.send(()), "go send");
             });
             let a = advance(ms(10)).await;
             assert!(a.busy.is_empty(), "{a:?}");
@@ -468,13 +470,15 @@ fn a_barrier_waits_for_a_store_answer_that_takes_longer_than_busy_after() {
         let l = log();
         let mine = l.clone();
         spawn("session:steps", async move {
-            let _ = db
-                .read(|_| {
-                    std::thread::sleep(BUSY_AFTER + Duration::from_secs(1));
+            crate::soft::done(
+                db.read(|_| {
+                    stund::real::sleep_blocking(BUSY_AFTER + Duration::from_secs(1));
                     Ok(())
                 })
-                .await;
-            mine.lock().unwrap().push("written");
+                .await,
+                "tests",
+            );
+            saman::lock(&mine).push("written");
         });
         advance(Duration::ZERO).await;
         assert_eq!(barrier().await, Vec::<String>::new());

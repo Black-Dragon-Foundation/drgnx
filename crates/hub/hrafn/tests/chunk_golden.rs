@@ -39,7 +39,7 @@ fn fixtures() -> PathBuf {
 fn render(files: &[&str], dir: PathBuf) -> String {
     let mut out = String::new();
     for name in files {
-        let text = std::fs::read_to_string(dir.join(name)).unwrap();
+        let text = eitri::read_string(&dir.join(name), 4 << 20).unwrap();
         let (lang, _) = classify(name, text.as_bytes());
         let (chunks, symbols) = chunk_file(name, lang, false, &text, BUDGET);
         writeln!(out, "# {name} {}", lang.as_str()).unwrap();
@@ -71,12 +71,12 @@ fn render(files: &[&str], dir: PathBuf) -> String {
 fn compare(golden_name: &str, now: String) {
     let path = fixtures().join("golden").join(golden_name);
     if !path.exists() {
-        std::fs::write(&path, &now).unwrap();
+        eitri::replace_file(&path, now.as_bytes()).unwrap();
         panic!(
             "{golden_name} was missing and is written now: make it on the chunker it guards, then commit it"
         );
     }
-    let golden = std::fs::read_to_string(&path).unwrap();
+    let golden = eitri::read_string(&path, 4 << 20).unwrap();
     for (i, (a, b)) in golden.lines().zip(now.lines()).enumerate() {
         assert_eq!(a, b, "line {} of {golden_name}", i + 1);
     }
@@ -98,7 +98,7 @@ fn embed_text_has_no_path() {
         (LANG_FILES, fixtures().join("langs")),
     ] {
         for name in files {
-            let text = std::fs::read_to_string(dir.join(name)).unwrap();
+            let text = eitri::read_string(&dir.join(name), 4 << 20).unwrap();
             let path = format!("deep/nested/{name}");
             let (lang, _) = classify(&path, text.as_bytes());
             let (chunks, _) = chunk_file(&path, lang, false, &text, BUDGET);

@@ -1,6 +1,15 @@
 # A fixture workspace for xtask/tests/standards.rs: never built, only read (cargo metadata --no-deps, the scanner).
 [workspace]
-members = ["crates/*"]
+members = [
+    "crates/app",
+    "crates/bad",
+    "crates/glitnir",
+    "crates/owner",
+    "crates/reactive",
+    "crates/ui/canvas",
+    "crates/uiapp",
+    "crates/villa",
+]
 resolver = "3"
 
 [workspace.package]

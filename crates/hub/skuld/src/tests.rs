@@ -110,15 +110,15 @@ fn run_all<E: Events + Ord>(p: &Partial<E>, bound: Bound) -> (Vec<Vec<E>>, crate
 
 #[test]
 fn count_matches_the_closed_form() {
-    assert_eq!(count(&two(8, 8), u64::MAX), Ok(12_870));
-    assert_eq!(count(&three(3), u64::MAX), Ok(1_680));
+    assert_eq!(count(&two(8, 8), u64::MAX).unwrap(), 12_870);
+    assert_eq!(count(&three(3), u64::MAX).unwrap(), 1_680);
     let mut p = two(8, 8);
     p.before((0, 7), (1, 0));
-    assert_eq!(count(&p, u64::MAX), Ok(1));
+    assert_eq!(count(&p, u64::MAX).unwrap(), 1);
     for a in 0..=7 {
         for b in 0..=7 {
             let want = binomial(u64::from(a) + u64::from(b), u64::from(a));
-            assert_eq!(count(&two(a, b), u64::MAX), Ok(want), "{a} and {b}");
+            assert_eq!(count(&two(a, b), u64::MAX).unwrap(), want, "{a} and {b}");
         }
     }
     // 4!·4!·4!·4! into 16!: 63,063,000
@@ -126,12 +126,12 @@ fn count_matches_the_closed_form() {
     for s in 0..4u8 {
         four.source("s", (0..4).map(|i| Three::A(s * 4 + i)).collect());
     }
-    assert_eq!(count(&four, u64::MAX), Ok(63_063_000));
+    assert_eq!(count(&four, u64::MAX).unwrap(), 63_063_000);
     // The cap: exact below it, the cap itself above it.
-    assert_eq!(count(&two(8, 8), 20_001), Ok(12_870));
-    assert_eq!(count(&two(9, 9), u64::MAX), Ok(48_620));
-    assert_eq!(count(&two(9, 9), 20_001), Ok(20_001));
-    assert_eq!(count(&four, 20_001), Ok(20_001));
+    assert_eq!(count(&two(8, 8), 20_001).unwrap(), 12_870);
+    assert_eq!(count(&two(9, 9), u64::MAX).unwrap(), 48_620);
+    assert_eq!(count(&two(9, 9), 20_001).unwrap(), 20_001);
+    assert_eq!(count(&four, 20_001).unwrap(), 20_001);
     // An edge's count against the brute force: A1 before B2 in 2×4.
     let mut e = two(4, 4);
     e.before((0, 1), (1, 2));
@@ -139,7 +139,7 @@ fn count_matches_the_closed_form() {
         .iter()
         .filter(|o| position(o, &Two::A(1)) < position(o, &Two::B(2)))
         .count() as u64;
-    assert_eq!(count(&e, u64::MAX), Ok(want));
+    assert_eq!(count(&e, u64::MAX).unwrap(), want);
 }
 
 #[test]
@@ -453,6 +453,7 @@ fn vacuous_runs_fail() {
     assert!(
         count(&p, u64::MAX)
             .expect_err("a cycle")
+            .message()
             .contains("the edges form a cycle")
     );
     // An edge against its own source's order is a cycle too.
@@ -461,6 +462,7 @@ fn vacuous_runs_fail() {
     assert!(
         count(&p, u64::MAX)
             .expect_err("a cycle")
+            .message()
             .contains("the edges form a cycle")
     );
 

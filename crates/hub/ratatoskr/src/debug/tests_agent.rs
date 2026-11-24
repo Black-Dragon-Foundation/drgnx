@@ -38,11 +38,12 @@ fn the_users_step_wins() {
     assert!(still_at("d1", 4, Some(4)).is_ok());
     let e = still_at("d1", 4, Some(5)).unwrap_err();
     assert!(
-        e.contains("moved on since stop 4") && e.contains("the user's step wins"),
+        e.message().contains("moved on since stop 4")
+            && e.message().contains("the user's step wins"),
         "{e}"
     );
     let e = still_at("d1", 4, None).unwrap_err();
-    assert!(e.contains("not stopped"), "{e}");
+    assert!(e.message().contains("not stopped"), "{e}");
 }
 
 #[test]
@@ -70,25 +71,41 @@ fn a_fix_passes_only_a_clean_exit_without_the_failure() {
     assert!(
         passes(&p, &raised)
             .unwrap_err()
+            .message()
             .contains("still raised at stock.py:9")
     );
     let failed = RunEnd {
         exit: Some(1),
         ..RunEnd::default()
     };
-    assert!(passes(&p, &failed).unwrap_err().contains("exited with 1"));
+    assert!(
+        passes(&p, &failed)
+            .unwrap_err()
+            .message()
+            .contains("exited with 1")
+    );
     let slow = RunEnd {
         timed_out: true,
         ..RunEnd::default()
     };
-    assert!(passes(&p, &slow).unwrap_err().contains("time box"));
+    assert!(
+        passes(&p, &slow)
+            .unwrap_err()
+            .message()
+            .contains("time box")
+    );
     let q = predicate(&json!({"probe": "stock.py:22", "expr": "reserve", "not": "-1"})).unwrap();
     let bad = RunEnd {
         exit: Some(0),
         probe_values: vec!["3".into(), "-1".into()],
         ..RunEnd::default()
     };
-    assert!(passes(&q, &bad).unwrap_err().contains("still shows -1"));
+    assert!(
+        passes(&q, &bad)
+            .unwrap_err()
+            .message()
+            .contains("still shows -1")
+    );
     assert!(predicate(&json!({"probe": "stock.py:22"})).is_err());
     assert!(predicate(&json!({"exception": "stock.py"})).is_err());
 }
@@ -98,7 +115,7 @@ fn a_fix_passes_only_a_clean_exit_without_the_failure() {
 fn an_agent_removes_only_its_own_marks() {
     assert!(may_remove("breakpoint b1", Some("s1"), "s1").is_ok());
     let e = may_remove("breakpoint b1", None, "s1").unwrap_err();
-    assert!(e.contains("breakpoint b1 is not yours"), "{e}");
+    assert!(e.message().contains("breakpoint b1 is not yours"), "{e}");
     assert!(may_remove("probe p2", Some("s2"), "s1").is_err());
 }
 
@@ -114,7 +131,7 @@ fn a_fix_that_still_fails_is_not_offered() {
         ..RunEnd::default()
     };
     let why = offer(&p, &raised, &args, "/p", "s1").unwrap_err();
-    assert!(why.contains("still raised"), "{why}");
+    assert!(why.message().contains("still raised"), "{why}");
     let clean = RunEnd {
         exit: Some(0),
         ..RunEnd::default()

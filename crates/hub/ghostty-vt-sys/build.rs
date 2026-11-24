@@ -5,20 +5,23 @@
 //! packages). Zig is a build tool only and must be 0.17.x.
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::time::Duration;
 use std::{env, fs};
 
-fn main() {
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=pin.toml");
+fn main() -> villa::Result<()> {
+    annall::cli_out("cargo:rerun-if-changed=build.rs")?;
+    annall::cli_out("cargo:rerun-if-changed=pin.toml")?;
     for v in ["GHOSTTY_VT_LIB", "GHOSTTY_VT_TARBALLS", "ZIG"] {
-        println!("cargo:rerun-if-env-changed={v}");
+        annall::cli_out(&format!("cargo:rerun-if-env-changed={v}"))?;
     }
     if env::var_os("CARGO_FEATURE_GHOSTTY").is_none() {
-        return;
+        return Ok(());
     }
     let pin = Pin::read(&PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("pin.toml"));
-    println!("cargo:rustc-env=GHOSTTY_VT_PIN_VERSION={}", pin.version);
+    annall::cli_out(&format!(
+        "cargo:rustc-env=GHOSTTY_VT_PIN_VERSION={}",
+        pin.version
+    ))?;
     if let Some(lib) = env::var_os("GHOSTTY_VT_LIB") {
         let lib = PathBuf::from(lib);
         let dir = if lib.is_file() {
@@ -31,8 +34,8 @@ fn main() {
             "GHOSTTY_VT_LIB: no libghostty-vt.a in {}",
             dir.display()
         );
-        link(&dir);
-        return;
+        link(&dir)?;
+        return Ok(());
     }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let tarballs = env::var_os("GHOSTTY_VT_TARBALLS")
@@ -48,10 +51,10 @@ fn main() {
         zig_target()
     );
     if prefix.join("lib/libghostty-vt.a").is_file()
-        && fs::read_to_string(&stamp).ok().as_deref() == Some(&want)
+        && eitri::read_string(&stamp, 4096).ok().as_deref() == Some(&want)
     {
-        link(&prefix.join("lib"));
-        return;
+        link(&prefix.join("lib"))?;
+        return Ok(());
     }
     for (file, sha) in [&pin.source, &pin.deps] {
         let path = tarballs.join(file);
@@ -67,24 +70,28 @@ fn main() {
         );
     }
     let src = out.join("src");
-    let _ = fs::remove_dir_all(&src);
+    clear(&src)?;
     fs::create_dir_all(&src).unwrap();
     for (file, _) in [&pin.source, &pin.deps] {
         run(
-            Command::new("tar")
-                .arg("-xzf")
-                .arg(tarballs.join(file))
-                .arg("-C")
-                .arg(&src),
+            spec(
+                "tar",
+                &src,
+                &[],
+                vec![
+                    "-xzf".into(),
+                    tarballs.join(file).into(),
+                    "-C".into(),
+                    src.clone().into(),
+                ],
+            ),
             "tar",
-        );
+        )?;
     }
     let tree = src.join(format!("libghostty-vt-{}", pin.version));
     let deps = src.join(format!("libghostty-vt-{}-deps", pin.version));
     let zig = env::var("ZIG").unwrap_or_else(|_| "zig".into());
-    let version = Command::new(&zig)
-        .arg("version")
-        .output()
+    let version = draugr::run(spec(&zig, &out, &[], vec!["version".into()]), STEP_DEADLINE)
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
     match version {
         Ok(v) if v.starts_with(&format!("{}.", pin.zig)) => {}
@@ -98,45 +105,92 @@ fn main() {
         ),
     }
     let cache = out.join("zig-cache");
-    let _ = fs::remove_dir_all(&cache);
+    let zig_local = out.join("zig-local");
+    clear(&cache)?;
     fs::create_dir_all(&cache).unwrap();
-    let _ = fs::remove_dir_all(&prefix);
-    let mut cmd = Command::new(&zig);
-    cmd.current_dir(&tree)
-        .env("ZIG_GLOBAL_CACHE_DIR", &cache)
-        .env("ZIG_LOCAL_CACHE_DIR", out.join("zig-local"))
-        .arg("build")
-        .arg("--prefix")
-        .arg(&prefix)
-        .arg("--system")
-        .arg(&deps)
-        .args(["-Doptimize=ReleaseFast", "-Dcpu=baseline"])
-        .arg(format!("-Dtarget={}", zig_target()));
+    clear(&prefix)?;
+    let mut args: Vec<std::ffi::OsString> = vec![
+        "build".into(),
+        "--prefix".into(),
+        prefix.clone().into(),
+        "--system".into(),
+        deps.clone().into(),
+        "-Doptimize=ReleaseFast".into(),
+        "-Dcpu=baseline".into(),
+        format!("-Dtarget={}", zig_target()).into(),
+    ];
     if env::var_os("CARGO_FEATURE_NO_SIMD").is_some() {
-        cmd.arg("-Dsimd=false");
+        args.push("-Dsimd=false".into());
     }
-    run(&mut cmd, "zig build");
+    let cmd = spec(
+        &zig,
+        &tree,
+        &[
+            ("ZIG_GLOBAL_CACHE_DIR", cache.as_os_str()),
+            ("ZIG_LOCAL_CACHE_DIR", zig_local.as_os_str()),
+        ],
+        args,
+    );
+    run(cmd, "zig build")?;
     assert!(
         prefix.join("lib/libghostty-vt.a").is_file(),
         "zig build left no libghostty-vt.a in {}",
         prefix.display()
     );
-    fs::write(&stamp, want).unwrap();
-    link(&prefix.join("lib"));
+    eitri::replace_file(&stamp, want.as_bytes())?;
+    link(&prefix.join("lib"))
 }
 
-fn link(dir: &Path) {
-    println!(
+fn link(dir: &Path) -> villa::Result<()> {
+    annall::cli_out(&format!(
         "cargo:rustc-env=GHOSTTY_VT_ARCHIVE={}",
         dir.join("libghostty-vt.a").display()
-    );
-    println!("cargo:rustc-link-search=native={}", dir.display());
-    println!("cargo:rustc-link-lib=static=ghostty-vt");
+    ))?;
+    annall::cli_out(&format!("cargo:rustc-link-search=native={}", dir.display()))?;
+    annall::cli_out("cargo:rustc-link-lib=static=ghostty-vt")
 }
 
-fn run(cmd: &mut Command, what: &str) {
-    let st = cmd.status().unwrap_or_else(|e| panic!("{what}: {e}"));
-    assert!(st.success(), "{what} failed ({st})");
+/// How long one build step may take: zig builds the engine from source, which is minutes.
+const STEP_DEADLINE: Duration = Duration::from_secs(3600);
+
+/// A step of the build, started in CWD with the build's own environment (`PATH`, `HOME`, the temporary folder, the
+/// toolchain's variables) plus SET.
+fn spec(
+    program: &str,
+    cwd: &Path,
+    set: &[(&str, &std::ffi::OsStr)],
+    args: Vec<std::ffi::OsString>,
+) -> draugr::Spec {
+    draugr::Spec {
+        program: program.into(),
+        args,
+        env: draugr::env::build(
+            &["PATH", stig::HOME_VAR, "TMPDIR", "LANG", "ZIG"],
+            &["LC_"],
+            set,
+        ),
+        cwd: Some(cwd.to_path_buf()),
+        stdin_null: true,
+        pass_fds: vec![],
+        new_session: false,
+    }
+}
+
+fn run(spec: draugr::Spec, what: &str) -> villa::Result<()> {
+    let out =
+        draugr::run(spec, STEP_DEADLINE).map_err(|e| villa::Error::from(e).with_detail(what))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(villa::Error::internal(format!("{what} failed ({})", out.status)).with_detail(out.stderr))
+}
+
+/// DIR and everything in it removed; a folder that is not there is already clear.
+fn clear(dir: &Path) -> villa::Result<()> {
+    match fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(villa::Error::from(e)),
+        _ => Ok(()),
+    }
 }
 
 fn hex(b: &[u8]) -> String {
@@ -170,7 +224,7 @@ struct Pin {
 
 impl Pin {
     fn read(path: &Path) -> Pin {
-        let text = fs::read_to_string(path).unwrap();
+        let text = eitri::read_string(path, 1 << 20).unwrap();
         let (mut section, mut version, mut zig) = (String::new(), String::new(), String::new());
         let (mut source, mut deps) = (
             (String::new(), String::new()),

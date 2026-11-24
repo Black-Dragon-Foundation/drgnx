@@ -15,7 +15,8 @@ let log_dir = stig::state().join("log");
   `~/.config/drgnx/dev`. An unknown profile is refused, never read as the default. A relative XDG value is ignored.
 - A Wayland client finds its compositor's socket in the system's runtime directory, which is not `stig::runtime()`:
   `stig::system_runtime_dir()` (a relative `XDG_RUNTIME_DIR` is ignored), and `stig::SYSTEM_RUNTIME_VAR` names the
-  variable for a child that is pointed at another one.
+  variable for a child that is pointed at another one. `stig::SYSTEM_DATA_DIRS_VAR` and `stig::SYSTEM_CONFIG_DIRS_VAR`
+  name the system's search paths for a tool (a Jupyter kernel) that finds what other programs installed.
 - A test never resolves the real directories: `raun::Sandbox` calls `stig::init_for_test(temp)`, and every directory
   is under the temp root with the `test` profile.
 - `Dirs::from_lookup` resolves from any environment, for code that must answer for another one.

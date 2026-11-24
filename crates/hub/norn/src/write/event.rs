@@ -277,11 +277,11 @@ mod tests {
     /// schema round-trips: the same set as `EventKind`.
     #[test]
     fn kinds_are_the_records_fixtures() {
-        let src = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../test/fixtures/records/events.eld"
-        ))
-        .unwrap();
+        // eitri refuses a link in any component of a path: the checkout's own are resolved first
+        let path = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR"))
+            .unwrap()
+            .join("../../../test/fixtures/records/events.eld");
+        let src = eitri::read_string(&path, 1 << 20).unwrap();
         let mut fixture: Vec<&str> = src
             .lines()
             .filter(|l| !l.trim_start().starts_with(';'))

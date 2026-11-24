@@ -567,10 +567,10 @@ fn golden(name: &str, events: Vec<Event>, width: u32) {
     let m = model_of(events);
     let l = layout(&m, &view(width), None);
     all_checks(&m, &l).unwrap_or_else(|e| panic!("{name}: {e}"));
-    println!("{}", summary(name, &l));
+    tracing::info!("{}", summary(name, &l));
     let path = golden_path(name);
     let text = serde_json::to_string_pretty(&l).expect("a layout serializes") + "\n";
-    let old: Option<Layout> = std::fs::read_to_string(&path)
+    let old: Option<Layout> = eitri::read_string(&path, 1 << 26)
         .ok()
         .map(|t| serde_json::from_str(&t).expect("a golden layout"));
     let update = std::env::var("UPDATE_VEGVISIR_GOLDEN").ok();
@@ -585,7 +585,7 @@ fn golden(name: &str, events: Vec<Event>, width: u32) {
             );
         }
         std::fs::create_dir_all(path.parent().expect("a directory")).expect("the golden directory");
-        std::fs::write(&path, text).expect("the golden is written");
+        eitri::replace_file(&path, text.as_bytes()).expect("the golden is written");
         return;
     }
     let old = old.unwrap_or_else(|| panic!("{name}: no golden at {}", path.display()));

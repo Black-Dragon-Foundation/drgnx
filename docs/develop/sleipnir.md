@@ -414,7 +414,8 @@ A key reaches a job without touching disk (design 6.6):
 2. The helper takes only the names the job's spec lists, and holds each value in a `Locked` buffer: an anonymous
    mapping, `mlock`ed and `MADV_DONTDUMP`, zeroed and unmapped when it goes (at the job's end, or when the store is
    cleared). A test build's probe (`keys::probe::last_zeroed`) reads the buffer just before it is unmapped.
-3. `drgnx-key` (std only, so its static build starts in any image) asks on the abstract socket `@drgnx-key`
+3. `drgnx-key` (errors `villa`, output `annall`, the exec `draugr`, no tokio, so its static build starts in any image;
+   built with `--features std-owners`) asks on the abstract socket `@drgnx-key`
    (`DRGNX_KEY_SOCK` names another: `@NAME` or a path):
    - `drgnx-key exec NAME=VAR… -- CMD` reads each key into VAR, in its own environment only, and execs CMD;
    - `drgnx-key get NAME` writes one key to stdout.

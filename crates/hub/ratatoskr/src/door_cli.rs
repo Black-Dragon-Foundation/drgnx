@@ -88,25 +88,25 @@ pub enum Sub {
 }
 
 /// A status word, as the registry's `Status` type takes it (lowercase letters and `-`, a letter first, at most 32).
-fn status_word(s: &str) -> Result<String, String> {
+fn status_word(s: &str) -> villa::Result<String> {
     let ok = s.len() <= 32
         && s.chars().next().is_some_and(|c| c.is_ascii_lowercase())
         && s.chars().all(|c| c.is_ascii_lowercase() || c == '-');
     if ok {
         Ok(s.to_owned())
     } else {
-        Err(format!(
+        Err(villa::Error::invalid(format!(
             "a status is lowercase letters and -, a letter first, not {s:?}"
-        ))
+        )))
     }
 }
 
 /// The arguments after GROUP (`card`, `message`, `task`, `plan` or `records`).
-pub fn parse(group: &str, args: impl IntoIterator<Item = OsString>) -> Result<DoorCommand, String> {
+pub fn parse(group: &str, args: impl IntoIterator<Item = OsString>) -> villa::Result<DoorCommand> {
     use lexopt::Arg::{Long, Value as Word};
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let (mut json, mut open) = (false, false);
     let mut words: Vec<String> = Vec::new();
     let mut reason: Option<String> = None;
@@ -122,13 +122,13 @@ pub fn parse(group: &str, args: impl IntoIterator<Item = OsString>) -> Result<Do
                 keep = Some(p.value().map_err(e)?.string().map_err(e)?)
             }
             Word(v) => words.push(v.string().map_err(e)?),
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     let w: Vec<&str> = words.iter().map(String::as_str).collect();
     let id_num = |v: &str, what: &str| {
         v.parse::<u64>()
-            .map_err(|_| format!("{what} takes a whole number, not {v:?}"))
+            .map_err(|_| villa::Error::invalid(format!("{what} takes a whole number, not {v:?}")))
     };
     let sub = match (group, w.as_slice()) {
         ("card", ["list"]) => Sub::CardList { open },
@@ -165,21 +165,29 @@ pub fn parse(group: &str, args: impl IntoIterator<Item = OsString>) -> Result<Do
                 id: (*id).into(),
                 keep: k.into(),
             },
-            _ => return Err("records resolve needs --keep file|graph".into()),
+            _ => {
+                return Err(villa::Error::invalid(
+                    "records resolve needs --keep file|graph",
+                ));
+            }
         },
-        _ => return Err(format!("{group}: not a command of this kind\n{USAGE}")),
+        _ => {
+            return Err(villa::Error::invalid(format!(
+                "{group}: not a command of this kind\n{USAGE}"
+            )));
+        }
     };
     if keep.is_some() {
-        return Err("--keep goes with records resolve".into());
+        return Err(villa::Error::invalid("--keep goes with records resolve"));
     }
     if open && !matches!(sub, Sub::CardList { .. }) {
-        return Err("--open goes with card list".into());
+        return Err(villa::Error::invalid("--open goes with card list"));
     }
     Ok(DoorCommand { sub, json })
 }
 
-/// How a command reaches the hub: one method call, its answer or the error text.
-pub type Hub<'a> = dyn FnMut(&str, Value) -> Result<Value, String> + 'a;
+/// How a command reaches the hub: one method call, its answer or the hub's error.
+pub type Hub<'a> = dyn FnMut(&str, Value) -> villa::Result<Value> + 'a;
 
 const CARDS: &str = "select id, kind, state, title, job, task from card";
 
@@ -189,7 +197,7 @@ fn sql(text: &str, params: Value) -> (&'static str, Value) {
 }
 
 /// Runs the command through HUB: its text, its last answer, and whether it did what was asked.
-pub fn execute(sub: &Sub, hub: &mut Hub<'_>) -> Result<(String, Value, bool), String> {
+pub fn execute(sub: &Sub, hub: &mut Hub<'_>) -> villa::Result<(String, Value, bool)> {
     match sub {
         Sub::CardList { open } => {
             let text = format!(
@@ -236,10 +244,12 @@ pub fn execute(sub: &Sub, hub: &mut Hub<'_>) -> Result<(String, Value, bool), St
             let (m, p) = sql("select sender, job from message where id = ?1", json!([id]));
             let row = hub(m, p)?;
             let Some(r) = row["rows"].get(0) else {
-                return Err(format!("no message {id}"));
+                return Err(villa::Error::not_found(format!("no message {id}")));
             };
             let Some(to) = r[0].as_str() else {
-                return Err(format!("message {id} has no sender to answer"));
+                return Err(villa::Error::invalid(format!(
+                    "message {id} has no sender to answer"
+                )));
             };
             let mut p = json!({"recipient": to, "text": text, "answers": id});
             if let Some(j) = r[1].as_str() {
@@ -251,7 +261,7 @@ pub fn execute(sub: &Sub, hub: &mut Hub<'_>) -> Result<(String, Value, bool), St
         Sub::TaskStatus { id, status, reason } => {
             let e = hub("graph/entity", json!({"id": id}))?;
             let Some(ver) = e["entity"]["ver"].as_i64() else {
-                return Err(format!("no task {id}"));
+                return Err(villa::Error::not_found(format!("no task {id}")));
             };
             let a = hub(
                 "tasks/write",
@@ -280,7 +290,9 @@ pub fn execute(sub: &Sub, hub: &mut Hub<'_>) -> Result<(String, Value, bool), St
                 .flatten()
                 .find(|t| t["number"] == json!(task))
             else {
-                return Err(format!("{plan} has no task {task}"));
+                return Err(villa::Error::not_found(format!(
+                    "{plan} has no task {task}"
+                )));
             };
             let mut w = json!({"number": task, "status": status});
             if let Some(r) = reason {
@@ -399,7 +411,7 @@ pub fn run(env: &Env, cmd: DoorCommand) -> i32 {
     let mut client = match Client::user(env, Duration::from_secs(5)) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("ratatoskr: {e}");
+            crate::soft::err_line(&format!("ratatoskr: {e}"));
             return 1;
         }
     };
@@ -407,14 +419,14 @@ pub fn run(env: &Env, cmd: DoorCommand) -> i32 {
     match execute(&cmd.sub, &mut call) {
         Ok((text, answer, ok)) => {
             if cmd.json {
-                println!("{answer}");
+                crate::soft::out_line(&answer.to_string());
             } else {
-                print!("{text}");
+                crate::soft::out_text(&text);
             }
             i32::from(!ok)
         }
         Err(e) => {
-            eprintln!("ratatoskr: {e}");
+            crate::soft::err_line(&format!("ratatoskr: {e}"));
             1
         }
     }
@@ -424,21 +436,25 @@ pub fn run(env: &Env, cmd: DoorCommand) -> i32 {
 mod tests {
     use super::*;
 
-    fn p(group: &str, args: &[&str]) -> Result<DoorCommand, String> {
+    fn p(group: &str, args: &[&str]) -> villa::Result<DoorCommand> {
         parse(group, args.iter().map(OsString::from))
     }
 
     type Calls = Vec<(String, Value)>;
-    type Done = Result<(String, Value, bool), String>;
+    type Done = villa::Result<(String, Value, bool)>;
 
-    /// SUB run against a hub that records the calls and answers from ANSWERS in order.
+    /// SUB run against a hub that records the calls and answers from ANSWERS in order (an `Err` text is the hub's
+    /// refusal, as the client hands it over).
     fn run_fake(sub: &Sub, mut answers: Vec<Result<Value, String>>) -> (Done, Calls) {
         let mut seen = Calls::new();
         answers.reverse();
         let r = {
             let mut hub = |m: &str, p: Value| {
                 seen.push((m.to_owned(), p));
-                answers.pop().expect("one answer per call")
+                answers
+                    .pop()
+                    .expect("one answer per call")
+                    .map_err(villa::Error::refused)
             };
             execute(sub, &mut hub)
         };
@@ -459,7 +475,7 @@ mod tests {
         assert!(!r.unwrap().2);
         // the method's own refusal is the command's error, whole
         let (r, _) = run_fake(&c.sub, vec![Err("invalid-params: unknown choice".into())]);
-        assert_eq!(r.unwrap_err(), "invalid-params: unknown choice");
+        assert_eq!(r.unwrap_err().to_string(), "invalid-params: unknown choice");
         let l = p("card", &["list", "--open", "--json"]).unwrap();
         assert!(l.json);
         let (r, seen) = run_fake(
@@ -514,7 +530,7 @@ mod tests {
             )
         );
         let (r, _) = run_fake(&rp.sub, vec![Ok(json!({"rows": []}))]);
-        assert_eq!(r.unwrap_err(), "no message 9");
+        assert_eq!(r.unwrap_err().to_string(), "no message 9");
     }
 
     #[test]
@@ -582,7 +598,7 @@ mod tests {
             },
             vec![Err("not-allowed: no such conflict".into())],
         );
-        assert_eq!(r.unwrap_err(), "not-allowed: no such conflict");
+        assert_eq!(r.unwrap_err().to_string(), "not-allowed: no such conflict");
         for bad in [
             &["resolve", "spec:b-1"][..],
             &["resolve", "spec:b-1", "--keep", "both"],
@@ -641,9 +657,13 @@ mod tests {
                 Err("not-allowed: this comes from /w/p.md; add a note".into()),
             ],
         );
-        assert!(r.unwrap_err().contains("this comes from /w/p.md"));
+        assert!(
+            r.unwrap_err()
+                .to_string()
+                .contains("this comes from /w/p.md")
+        );
         let (r, _) = run_fake(&t.sub, vec![Ok(json!({"entity": null}))]);
-        assert_eq!(r.unwrap_err(), "no task task:aa-00001");
+        assert_eq!(r.unwrap_err().to_string(), "no task task:aa-00001");
 
         // done ticks every step; another status leaves the steps as they are
         let view = json!({"version": 12, "tasks": [
@@ -671,7 +691,7 @@ mod tests {
             json!([{"number": "1", "status": "blocked"}])
         );
         let (r, _) = run_fake(&o.sub, vec![Ok(json!({"version": 1, "tasks": []}))]);
-        assert_eq!(r.unwrap_err(), "plan:aa-1 has no task 1");
+        assert_eq!(r.unwrap_err().to_string(), "plan:aa-1 has no task 1");
     }
 
     #[test]

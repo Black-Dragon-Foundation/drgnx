@@ -1173,7 +1173,7 @@ pub fn parse(cmd: &str) -> Parsed {
 /// Canonical paths of what a parsed command names, against `cwd`, under `roots` only. At most `glob_cap` paths come
 /// from globs in all; a glob over the cap, one that matches nothing and a brace word go to `patterns`.
 pub fn resolve(p: &Parsed, cwd: &Path, roots: &[PathBuf], glob_cap: usize) -> Resolved {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = std::env::var_os(stig::HOME_VAR).map(PathBuf::from);
     resolve_with_home(p, cwd, roots, glob_cap, home.as_deref())
 }
 
@@ -1640,12 +1640,12 @@ mod tests {
             std::fs::create_dir_all(d).unwrap();
         }
         for f in ["a.txt", "b.txt", "sub/c.txt"] {
-            std::fs::write(ws.join(f), "x").unwrap();
+            crate::fsio::write(ws.join(f), "x").unwrap();
         }
         for i in 0..250 {
-            std::fs::write(ws.join("many").join(format!("f{i:03}.txt")), "x").unwrap();
+            crate::fsio::write(ws.join("many").join(format!("f{i:03}.txt")), "x").unwrap();
         }
-        std::fs::write(outside.join("secret.txt"), "x").unwrap();
+        crate::fsio::write(outside.join("secret.txt"), "x").unwrap();
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(&outside, ws.join("link")).unwrap();

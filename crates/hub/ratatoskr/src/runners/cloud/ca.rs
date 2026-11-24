@@ -76,9 +76,15 @@ fn random<const N: usize>() -> [u8; N] {
 }
 
 /// An SSH public key, as its wire blob.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PublicKey {
     blob: Vec<u8>,
+}
+
+impl std::fmt::Debug for PublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PublicKey({} bytes)", self.blob.len())
+    }
 }
 
 impl PublicKey {
@@ -106,7 +112,7 @@ impl PublicKey {
     /// The raw 32-byte ed25519 key.
     fn raw(&self) -> &[u8] {
         let mut w = Wire(&self.blob);
-        let _ = w.string();
+        w.string();
         w.string().unwrap_or_default()
     }
 }
@@ -289,9 +295,10 @@ impl Ca {
     }
 
     /// The CA the editor handed back.
-    pub fn from_secret(s: &SecretString) -> Result<Ca, String> {
+    pub fn from_secret(s: &SecretString) -> villa::Result<Ca> {
         Ok(Ca {
-            key: Ed25519Key::from_openssh_private(s.expose_secret())?,
+            key: Ed25519Key::from_openssh_private(s.expose_secret())
+                .map_err(|e| villa::Error::invalid(e.to_string()))?,
         })
     }
 
@@ -354,17 +361,18 @@ impl Agent {
             .arg("-D")
             .arg("-a")
             .arg(&sock)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()?;
+            .spawn(
+                crate::proc::Io::Null,
+                crate::proc::Io::Pipe,
+                crate::proc::Io::Null,
+            )?;
         let out = child.stdout.take().expect("piped");
         let mut first = String::new();
         let mut r = io::BufReader::new(out);
         r.read_line(&mut first)?;
         if !first.starts_with("SSH_AUTH_SOCK=") {
-            let _ = child.kill();
-            let _ = child.wait();
+            crate::soft::done(child.kill(), "ca");
+            crate::soft::done(child.wait(), "ca");
             return Err(io::Error::other("ssh-agent did not start"));
         }
         Ok(Agent {
@@ -385,10 +393,11 @@ impl Agent {
             .arg("-t")
             .arg(lifetime.as_secs().max(1).to_string())
             .arg("-")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
+            .spawn(
+                crate::proc::Io::Pipe,
+                crate::proc::Io::Null,
+                crate::proc::Io::Pipe,
+            )?;
         {
             let pem = key.key.openssh_private("drgnx");
             let mut stdin = child.stdin.take().expect("piped");
@@ -407,15 +416,15 @@ impl Agent {
 
 impl Drop for Agent {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.sock);
+        crate::soft::done(self.child.kill(), "ca");
+        crate::soft::done(self.child.wait(), "ca");
+        crate::soft::done(std::fs::remove_file(&self.sock), "std::fs::remove_file");
     }
 }
 
 /// PROG with nothing of the hub's environment but `PATH`, and SOCK as `SSH_AUTH_SOCK` when given.
-fn clean(prog: &str, sock: Option<&Path>) -> std::process::Command {
-    let mut c = std::process::Command::new(prog);
+fn clean(prog: &str, sock: Option<&Path>) -> crate::proc::Command {
+    let mut c = crate::proc::Command::new(prog);
     c.env_clear();
     if let Some(path) = std::env::var_os("PATH") {
         c.env("PATH", path);
@@ -438,10 +447,16 @@ pub mod pin {
     const MAX_KEYS: usize = 16;
 
     /// A host key: its algorithm and wire blob.
-    #[derive(Clone, Debug, PartialEq, Eq)]
+    #[derive(Clone, PartialEq, Eq)]
     pub struct HostKey {
         pub algo: String,
         pub blob: Vec<u8>,
+    }
+
+    impl std::fmt::Debug for HostKey {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "HostKey({}, {} bytes)", self.algo, self.blob.len())
+        }
     }
 
     impl HostKey {
@@ -461,17 +476,17 @@ pub mod pin {
     /// fingerprints through `logger -s -t cloud-init` (each line after a syslog prefix), then the public keys as they
     /// are. A key counts only when its own SHA-256 is among the fingerprints. Refused: a console without both blocks
     /// (not booted yet, or not our image), a key the fingerprints don't list, no key at all.
-    pub fn from_console(text: &str) -> Result<Vec<HostKey>, String> {
+    pub fn from_console(text: &str) -> villa::Result<Vec<HostKey>> {
         let lines: Vec<&str> = text.lines().map(|l| l.trim_end_matches('\r')).collect();
         let fps: Vec<&str> = last_block(&lines, FP_BEGIN, FP_END)
-            .ok_or("the console shows no host key fingerprints (cloud-init's BEGIN SSH HOST KEY FINGERPRINTS); no key is trusted on first use")?
+            .ok_or_else(|| villa::Error::invalid("the console shows no host key fingerprints (cloud-init's BEGIN SSH HOST KEY FINGERPRINTS); no key is trusted on first use"))?
             .into_iter()
             .flat_map(|l| l.split_whitespace())
             .filter(|w| w.starts_with("SHA256:"))
             .collect();
-        let block = last_block(&lines, KEYS_BEGIN, KEYS_END).ok_or(
-            "the console shows host key fingerprints but no keys (BEGIN SSH HOST KEY KEYS)",
-        )?;
+        let block = last_block(&lines, KEYS_BEGIN, KEYS_END)
+            .ok_or("the console shows host key fingerprints but no keys (BEGIN SSH HOST KEY KEYS)")
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let mut keys = Vec::new();
         for line in block {
             let words: Vec<&str> = line.split_whitespace().collect();
@@ -485,19 +500,24 @@ pub mod pin {
             });
             let Some(k) = found else { continue };
             if !fps.contains(&k.fingerprint().as_str()) {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "the console's {} host key ({}) is not among its fingerprints",
                     k.algo,
                     k.fingerprint()
-                ));
+                )));
             }
             keys.push(k);
         }
         if keys.is_empty() {
-            return Err("the console's host key block holds no key".into());
+            return Err(villa::Error::invalid(
+                "the console's host key block holds no key",
+            ));
         }
         if keys.len() > MAX_KEYS {
-            return Err(format!("the console lists {} host keys", keys.len()));
+            return Err(villa::Error::invalid(format!(
+                "the console lists {} host keys",
+                keys.len()
+            )));
         }
         Ok(keys)
     }
@@ -711,11 +731,17 @@ mod tests {
         assert!(from_console("[    0.0] Linux version 6.17\nlogin: ").is_err());
         // fingerprints without keys, keys without fingerprints
         let fp_only: String = good.lines().take(7).map(|l| format!("{l}\n")).collect();
-        assert!(from_console(&fp_only).unwrap_err().contains("no keys"));
+        assert!(
+            from_console(&fp_only)
+                .unwrap_err()
+                .message()
+                .contains("no keys")
+        );
         let keys_only: String = good.lines().skip(7).map(|l| format!("{l}\n")).collect();
         assert!(
             from_console(&keys_only)
                 .unwrap_err()
+                .message()
                 .contains("fingerprints")
         );
         // a key whose hash the fingerprints don't list
@@ -730,6 +756,7 @@ mod tests {
         assert!(
             from_console(&wrong)
                 .unwrap_err()
+                .message()
                 .contains("ecdsa-sha2-nistp256")
         );
         // a later boot's blocks win over an earlier one's

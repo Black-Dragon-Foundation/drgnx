@@ -20,14 +20,14 @@ fn child() {
 }
 
 mod trace {
+    use crate::trace_support::Cmd;
     use crate::trace_support::{
         Kid, Sup, WRAPPER, child_command, child_line, marker_value, run, spawn,
     };
     use gleipnir::trace::{self as gt, ListenOptions, Scope};
-    use std::process::Command;
 
-    fn text(b: &[u8]) -> String {
-        String::from_utf8_lossy(b).into_owned()
+    fn text(b: impl AsRef<[u8]>) -> String {
+        String::from_utf8_lossy(b.as_ref()).into_owned()
     }
 
     /// `cat a; sed -n 1,5p b > c` reads a and b, and writes c (the redirect), each path resolved against the
@@ -53,7 +53,7 @@ mod trace {
             !seen.writes.contains(&a) && !seen.reads.contains(&c),
             "{seen:?}"
         );
-        assert_eq!(std::fs::read_to_string(c).unwrap(), "1\n2\n3\n4\n5\n");
+        assert_eq!(eitri::read_string(&c, 1 << 20).unwrap(), "1\n2\n3\n4\n5\n");
     }
 
     /// Every call is continued: stdout, stderr and the exit code are the untraced run's.
@@ -63,11 +63,10 @@ mod trace {
         s.file("a", "alpha\n");
         s.file("b", "1\n2\n3\n");
         let cmd = r#"cat a; printf 'x%sy\n' "$(wc -l < b)"; ls; echo to-stderr >&2; exit 3"#;
-        let plain = Command::new("bash")
+        let plain = Cmd::new("bash")
             .args(["-c", cmd])
             .current_dir(&s.root)
-            .output()
-            .unwrap();
+            .output();
         let mut child = spawn(s.wrapper(cmd));
         let t = s.trace(&mut child, ListenOptions::default());
         let traced = run(child);
@@ -129,7 +128,7 @@ mod trace {
     #[test]
     fn landlock_still_refuses() {
         if gleipnir::landlock::kernel_abi() == 0 {
-            eprintln!("SKIP landlock_still_refuses: the kernel has no Landlock");
+            annall::cli_err("SKIP landlock_still_refuses: the kernel has no Landlock").unwrap();
             return;
         }
         let s = Sup::new();
@@ -195,7 +194,7 @@ mod trace {
         let t = s.trace(&mut child, ListenOptions::default());
         assert_eq!(t.handed, "listener");
         let out = run(child);
-        let _ = t.finish();
+        t.finish();
         assert_eq!(
             marker_value(&out.stdout, "io_uring: errno ").as_deref(),
             Some("1"),
@@ -213,7 +212,7 @@ mod trace {
         let t = s.trace(&mut child, ListenOptions::default());
         assert_eq!(t.handed, "listener");
         let out = run(child);
-        let _ = t.finish();
+        t.finish();
         let fds = text(&out.stdout);
         assert!(fds.lines().count() >= 3, "{fds}");
         assert!(!fds.contains("seccomp"), "the listener leaked: {fds}");
@@ -322,7 +321,7 @@ mod trace {
         );
         let mut none = s.wrapper("cat a");
         none.env(gt::SOCK_ENV, s.root.join("nobody.sock"));
-        let out = none.output().unwrap();
+        let out = none.output();
         assert_eq!(text(&out.stdout), "one\n");
         assert_eq!(text(&out.stderr), "");
     }

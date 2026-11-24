@@ -119,7 +119,7 @@ fn render(
         let Some(l) = loaded.get(&f) else { continue };
         let names = &picked[&f];
         let path = &g.paths[f as usize];
-        let _ = writeln!(text, "{path}:");
+        writeln!(text, "{path}:").expect("writing to a String cannot fail");
         let mut defs = Vec::new();
         let mut last: Option<usize> = None;
         for (i, e) in l.entries.iter().enumerate() {
@@ -137,12 +137,13 @@ fn render(
                 e.sig.as_str()
             };
             for (j, line) in sig.lines().enumerate() {
-                let _ = writeln!(
+                writeln!(
                     text,
                     "{:>4}│ {indent}{}",
                     e.line_start as usize + j,
                     line.trim()
-                );
+                )
+                .expect("writing to a String cannot fail");
             }
             defs.push(e.clone());
         }

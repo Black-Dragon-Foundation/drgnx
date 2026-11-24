@@ -97,7 +97,7 @@ fn no_other_code_writes_graph_tables() {
         if in_graph || in_tests {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&file) else {
+        let Ok(text) = eitri::read_string(&file, 1 << 20) else {
             continue;
         };
         for h in hits(non_test_code(&text)) {
@@ -132,7 +132,7 @@ fn only_the_event_writer_inserts_events() {
         if canon == writer || in_tests {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&file) else {
+        let Ok(text) = eitri::read_string(&file, 1 << 20) else {
             continue;
         };
         for h in hits_of(non_test_code(&text), &["event"]) {

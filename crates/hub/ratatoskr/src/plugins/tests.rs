@@ -25,8 +25,8 @@ impl Rig {
     fn put(&self, name: &str, manifest: &str, wasm: &[u8]) {
         let d = self.root().join(name);
         std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("plugin.json"), manifest).unwrap();
-        std::fs::write(d.join("plugin.wasm"), wasm).unwrap();
+        crate::fsio::write(d.join("plugin.json"), manifest).unwrap();
+        crate::fsio::write(d.join("plugin.wasm"), wasm).unwrap();
     }
 
     async fn global(&self, name: &str, value: Value) {
@@ -89,189 +89,201 @@ fn hash_of(rows: &[PluginRow], name: &str) -> String {
 }
 
 // [D] pure: plugins/install-then-list-unapproved
-#[tokio::test]
-async fn install_then_list_unapproved() {
-    let r = rig().await;
-    let m = manifest("alpha", ECHO);
-    r.put("alpha", &m, b"\0asm-one");
-    let s = r.plugins.sync().await.unwrap();
-    assert_eq!(s.rows.len(), 1);
-    let row = &s.rows[0];
-    assert_eq!(row.state, PluginState::Unapproved);
-    assert_eq!(row.abilities, ["echo"]);
-    assert_eq!(row.hosts, ["api.example.com:443"]);
-    assert_eq!(
-        hash_of(&s.rows, "alpha"),
-        hex(&brokkr::plugin_hash(m.as_bytes(), b"\0asm-one"))
-    );
-    assert_eq!(
-        s.changes,
-        [Change {
-            name: "alpha".into(),
-            state: Some(PluginState::Unapproved)
-        }]
-    );
-    // a second look finds nothing new, and nothing runs
-    assert!(r.plugins.sync().await.unwrap().changes.is_empty());
-    r.global(SETTING_PLUGINS, json!(["alpha"])).await;
-    assert!(r.plugins.enabled_for(None).is_empty());
+#[test]
+fn install_then_list_unapproved() {
+    saman::block_on_current(async move {
+        let r = rig().await;
+        let m = manifest("alpha", ECHO);
+        r.put("alpha", &m, b"\0asm-one");
+        let s = r.plugins.sync().await.unwrap();
+        assert_eq!(s.rows.len(), 1);
+        let row = &s.rows[0];
+        assert_eq!(row.state, PluginState::Unapproved);
+        assert_eq!(row.abilities, ["echo"]);
+        assert_eq!(row.hosts, ["api.example.com:443"]);
+        assert_eq!(
+            hash_of(&s.rows, "alpha"),
+            hex(&brokkr::plugin_hash(m.as_bytes(), b"\0asm-one"))
+        );
+        assert_eq!(
+            s.changes,
+            [Change {
+                name: "alpha".into(),
+                state: Some(PluginState::Unapproved)
+            }]
+        );
+        // a second look finds nothing new, and nothing runs
+        assert!(r.plugins.sync().await.unwrap().changes.is_empty());
+        r.global(SETTING_PLUGINS, json!(["alpha"])).await;
+        assert!(r.plugins.enabled_for(None).is_empty());
+    })
 }
 
 // [D] pure: plugins/approve-enables, and disable until approved again
-#[tokio::test]
-async fn approve_enables_and_disable_switches_off() {
-    let r = rig().await;
-    r.put("alpha", &manifest("alpha", ECHO), b"one");
-    r.global(SETTING_PLUGINS, json!(["alpha"])).await;
-    let rows = r.plugins.sync().await.unwrap().rows;
-    let (row, changes) = r
-        .plugins
-        .approve("alpha", &hash_of(&rows, "alpha"))
-        .await
-        .unwrap();
-    assert_eq!(row.state, PluginState::Approved);
-    assert_eq!(changes.len(), 1);
-    assert_eq!(names(&r.plugins.enabled_for(None)), ["alpha"]);
-    // approved, but not on the list: it does not run
-    r.global(SETTING_PLUGINS, json!([])).await;
-    assert!(r.plugins.enabled_for(None).is_empty());
-    r.global(SETTING_PLUGINS, json!(["alpha"])).await;
+#[test]
+fn approve_enables_and_disable_switches_off() {
+    saman::block_on_current(async move {
+        let r = rig().await;
+        r.put("alpha", &manifest("alpha", ECHO), b"one");
+        r.global(SETTING_PLUGINS, json!(["alpha"])).await;
+        let rows = r.plugins.sync().await.unwrap().rows;
+        let (row, changes) = r
+            .plugins
+            .approve("alpha", &hash_of(&rows, "alpha"))
+            .await
+            .unwrap();
+        assert_eq!(row.state, PluginState::Approved);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(names(&r.plugins.enabled_for(None)), ["alpha"]);
+        // approved, but not on the list: it does not run
+        r.global(SETTING_PLUGINS, json!([])).await;
+        assert!(r.plugins.enabled_for(None).is_empty());
+        r.global(SETTING_PLUGINS, json!(["alpha"])).await;
 
-    let (row, _) = r.plugins.disable("alpha").await.unwrap();
-    assert_eq!(row.state, PluginState::Disabled);
-    assert!(r.plugins.enabled_for(None).is_empty());
-    let (row, _) = r
-        .plugins
-        .approve("alpha", &hash_of(&rows, "alpha"))
-        .await
-        .unwrap();
-    assert_eq!(row.state, PluginState::Approved);
-    assert_eq!(names(&r.plugins.enabled_for(None)), ["alpha"]);
+        let (row, _) = r.plugins.disable("alpha").await.unwrap();
+        assert_eq!(row.state, PluginState::Disabled);
+        assert!(r.plugins.enabled_for(None).is_empty());
+        let (row, _) = r
+            .plugins
+            .approve("alpha", &hash_of(&rows, "alpha"))
+            .await
+            .unwrap();
+        assert_eq!(row.state, PluginState::Approved);
+        assert_eq!(names(&r.plugins.enabled_for(None)), ["alpha"]);
+    })
 }
 
 // [D] pure: plugins/a-changed-wasm-is-disabled-until-approved, and a-changed-plugin-lists-its-approved-reach
-#[tokio::test]
-async fn a_changed_plugin_stops_and_lists_its_approved_reach() {
-    let r = rig().await;
-    r.put("alpha", &manifest("alpha", ECHO), b"one");
-    r.global(SETTING_PLUGINS, json!(["alpha"])).await;
-    let rows = r.plugins.sync().await.unwrap().rows;
-    r.plugins
-        .approve("alpha", &hash_of(&rows, "alpha"))
-        .await
-        .unwrap();
-    assert_eq!(names(&r.plugins.enabled_for(None)), ["alpha"]);
+#[test]
+fn a_changed_plugin_stops_and_lists_its_approved_reach() {
+    saman::block_on_current(async move {
+        let r = rig().await;
+        r.put("alpha", &manifest("alpha", ECHO), b"one");
+        r.global(SETTING_PLUGINS, json!(["alpha"])).await;
+        let rows = r.plugins.sync().await.unwrap().rows;
+        r.plugins
+            .approve("alpha", &hash_of(&rows, "alpha"))
+            .await
+            .unwrap();
+        assert_eq!(names(&r.plugins.enabled_for(None)), ["alpha"]);
 
-    // the component is swapped, and the manifest asks for more
-    let wider = r#","abilities":[{"name":"echo","description":"d","input_schema":{"type":"object"}},{"name":"more","description":"d","input_schema":{"type":"object"}}],"hosts":["api.example.com","evil.example.org"]"#;
-    r.put("alpha", &manifest("alpha", wider), b"two");
-    let s = r.plugins.sync().await.unwrap();
-    let row = s.rows.iter().find(|x| x.name == "alpha").unwrap();
-    assert_eq!(row.state, PluginState::Changed);
-    assert!(
-        r.plugins.enabled_for(None).is_empty(),
-        "no call reaches the new code"
-    );
-    assert_eq!(row.abilities, ["echo", "more"]);
-    assert_eq!(row.hosts, ["api.example.com:443", "evil.example.org:443"]);
-    let was = row.approved_reach.clone().expect("the approved reach");
-    assert_eq!(was.abilities, ["echo"]);
-    assert_eq!(was.hosts, ["api.example.com:443"]);
-    // the reach carries the store's size (the default here) for the page's diff
-    assert_eq!(was.kv_bytes, Some(brokkr::manifest::MAX_KV_BYTES));
-    assert_eq!(
-        s.changes,
-        [Change {
-            name: "alpha".into(),
-            state: Some(PluginState::Changed)
-        }]
-    );
+        // the component is swapped, and the manifest asks for more
+        let wider = r#","abilities":[{"name":"echo","description":"d","input_schema":{"type":"object"}},{"name":"more","description":"d","input_schema":{"type":"object"}}],"hosts":["api.example.com","evil.example.org"]"#;
+        r.put("alpha", &manifest("alpha", wider), b"two");
+        let s = r.plugins.sync().await.unwrap();
+        let row = s.rows.iter().find(|x| x.name == "alpha").unwrap();
+        assert_eq!(row.state, PluginState::Changed);
+        assert!(
+            r.plugins.enabled_for(None).is_empty(),
+            "no call reaches the new code"
+        );
+        assert_eq!(row.abilities, ["echo", "more"]);
+        assert_eq!(row.hosts, ["api.example.com:443", "evil.example.org:443"]);
+        let was = row.approved_reach.clone().expect("the approved reach");
+        assert_eq!(was.abilities, ["echo"]);
+        assert_eq!(was.hosts, ["api.example.com:443"]);
+        // the reach carries the store's size (the default here) for the page's diff
+        assert_eq!(was.kv_bytes, Some(brokkr::manifest::MAX_KV_BYTES));
+        assert_eq!(
+            s.changes,
+            [Change {
+                name: "alpha".into(),
+                state: Some(PluginState::Changed)
+            }]
+        );
 
-    // approving what is shown now turns it on again, and the old reach is not kept in the row
-    let (row, _) = r
-        .plugins
-        .approve("alpha", &hash_of(&s.rows, "alpha"))
-        .await
-        .unwrap();
-    assert_eq!(row.state, PluginState::Approved);
-    assert_eq!(row.approved_reach, None);
-    assert_eq!(names(&r.plugins.enabled_for(None)), ["alpha"]);
+        // approving what is shown now turns it on again, and the old reach is not kept in the row
+        let (row, _) = r
+            .plugins
+            .approve("alpha", &hash_of(&s.rows, "alpha"))
+            .await
+            .unwrap();
+        assert_eq!(row.state, PluginState::Approved);
+        assert_eq!(row.approved_reach, None);
+        assert_eq!(names(&r.plugins.enabled_for(None)), ["alpha"]);
+    })
 }
 
 // [D] pure: plugins/approve-with-a-stale-hash-is-refused
-#[tokio::test]
-async fn approve_with_a_stale_hash_is_refused() {
-    let r = rig().await;
-    r.put("alpha", &manifest("alpha", ""), b"one");
-    let shown = hash_of(&r.plugins.sync().await.unwrap().rows, "alpha");
-    r.put("alpha", &manifest("alpha", ""), b"two");
-    let e = r.plugins.approve("alpha", &shown).await.unwrap_err();
-    assert_eq!(e.code, ErrorCode::InvalidParams);
-    assert_eq!(e.path.as_deref(), Some("hash"));
-    assert_eq!(
-        state(&r.plugins.sync().await.unwrap().rows, "alpha"),
-        PluginState::Unapproved
-    );
-    let e = r.plugins.approve("nope", &shown).await.unwrap_err();
-    assert_eq!(e.path.as_deref(), Some("name"));
+#[test]
+fn approve_with_a_stale_hash_is_refused() {
+    saman::block_on_current(async move {
+        let r = rig().await;
+        r.put("alpha", &manifest("alpha", ""), b"one");
+        let shown = hash_of(&r.plugins.sync().await.unwrap().rows, "alpha");
+        r.put("alpha", &manifest("alpha", ""), b"two");
+        let e = r.plugins.approve("alpha", &shown).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidParams);
+        assert_eq!(e.path.as_deref(), Some("hash"));
+        assert_eq!(
+            state(&r.plugins.sync().await.unwrap().rows, "alpha"),
+            PluginState::Unapproved
+        );
+        let e = r.plugins.approve("nope", &shown).await.unwrap_err();
+        assert_eq!(e.path.as_deref(), Some("name"));
+    })
 }
 
 // [D] pure: a broken manifest is shown with its problem and cannot be approved; a removed folder is forgotten
-#[tokio::test]
-async fn broken_and_removed_plugins() {
-    let r = rig().await;
-    r.put("good", &manifest("good", ""), b"x");
-    r.put("bad", "{not json", b"x");
-    let s = r.plugins.sync().await.unwrap();
-    assert_eq!(state(&s.rows, "bad"), PluginState::Broken);
-    assert!(
-        s.rows
-            .iter()
-            .find(|x| x.name == "bad")
-            .unwrap()
-            .problem
-            .is_some()
-    );
-    let e = r.plugins.approve("bad", &"0".repeat(64)).await.unwrap_err();
-    assert_eq!(e.path.as_deref(), Some("name"));
+#[test]
+fn broken_and_removed_plugins() {
+    saman::block_on_current(async move {
+        let r = rig().await;
+        r.put("good", &manifest("good", ""), b"x");
+        r.put("bad", "{not json", b"x");
+        let s = r.plugins.sync().await.unwrap();
+        assert_eq!(state(&s.rows, "bad"), PluginState::Broken);
+        assert!(
+            s.rows
+                .iter()
+                .find(|x| x.name == "bad")
+                .unwrap()
+                .problem
+                .is_some()
+        );
+        let e = r.plugins.approve("bad", &"0".repeat(64)).await.unwrap_err();
+        assert_eq!(e.path.as_deref(), Some("name"));
 
-    let h = hash_of(&s.rows, "good");
-    r.plugins.approve("good", &h).await.unwrap();
-    std::fs::remove_dir_all(r.root().join("good")).unwrap();
-    let s = r.plugins.sync().await.unwrap();
-    assert!(s.changes.contains(&Change {
-        name: "good".into(),
-        state: None
-    }));
-    // its approval went with it: the same files back are unapproved again
-    r.put("good", &manifest("good", ""), b"x");
-    assert_eq!(
-        state(&r.plugins.sync().await.unwrap().rows, "good"),
-        PluginState::Unapproved
-    );
+        let h = hash_of(&s.rows, "good");
+        r.plugins.approve("good", &h).await.unwrap();
+        std::fs::remove_dir_all(r.root().join("good")).unwrap();
+        let s = r.plugins.sync().await.unwrap();
+        assert!(s.changes.contains(&Change {
+            name: "good".into(),
+            state: None
+        }));
+        // its approval went with it: the same files back are unapproved again
+        r.put("good", &manifest("good", ""), b"x");
+        assert_eq!(
+            state(&r.plugins.sync().await.unwrap().rows, "good"),
+            PluginState::Unapproved
+        );
+    })
 }
 
 // [D] pure: plugins/project-override-disables
-#[tokio::test]
-async fn a_project_list_replaces_the_global_one() {
-    let r = rig().await;
-    for n in ["alpha", "beta"] {
-        r.put(n, &manifest(n, ""), n.as_bytes());
-    }
-    let rows = r.plugins.sync().await.unwrap().rows;
-    for n in ["alpha", "beta"] {
-        r.plugins.approve(n, &hash_of(&rows, n)).await.unwrap();
-    }
-    r.global(SETTING_PLUGINS, json!(["beta", "alpha"])).await;
-    r.set(Some("p"), &[(SETTING_PLUGINS, json!(["beta"]))])
-        .await;
-    assert_eq!(names(&r.plugins.enabled_for(None)), ["beta", "alpha"]);
-    assert_eq!(names(&r.plugins.enabled_for(Some("p"))), ["beta"]);
-    // a project that never sent a list has the global one
-    assert_eq!(names(&r.plugins.enabled_for(Some("q"))), ["beta", "alpha"]);
-    // a project's empty list is its own: nothing runs there
-    r.set(Some("p"), &[(SETTING_PLUGINS, json!([]))]).await;
-    assert!(r.plugins.enabled_for(Some("p")).is_empty());
+#[test]
+fn a_project_list_replaces_the_global_one() {
+    saman::block_on_current(async move {
+        let r = rig().await;
+        for n in ["alpha", "beta"] {
+            r.put(n, &manifest(n, ""), n.as_bytes());
+        }
+        let rows = r.plugins.sync().await.unwrap().rows;
+        for n in ["alpha", "beta"] {
+            r.plugins.approve(n, &hash_of(&rows, n)).await.unwrap();
+        }
+        r.global(SETTING_PLUGINS, json!(["beta", "alpha"])).await;
+        r.set(Some("p"), &[(SETTING_PLUGINS, json!(["beta"]))])
+            .await;
+        assert_eq!(names(&r.plugins.enabled_for(None)), ["beta", "alpha"]);
+        assert_eq!(names(&r.plugins.enabled_for(Some("p"))), ["beta"]);
+        // a project that never sent a list has the global one
+        assert_eq!(names(&r.plugins.enabled_for(Some("q"))), ["beta", "alpha"]);
+        // a project's empty list is its own: nothing runs there
+        r.set(Some("p"), &[(SETTING_PLUGINS, json!([]))]).await;
+        assert!(r.plugins.enabled_for(Some("p")).is_empty());
+    })
 }
 
 fn rule(id: Option<&str>, verdict: &str, reason: &str) -> Value {
@@ -283,38 +295,40 @@ fn rule(id: Option<&str>, verdict: &str, reason: &str) -> Value {
 }
 
 // [D] pure: rules_for_appends_and_switches_off_by_id
-#[tokio::test]
-async fn rules_for_appends_and_switches_off_by_id() {
-    let r = rig().await;
-    let (a, b) = (
-        rule(Some("a"), "deny", "no a"),
-        rule(Some("b"), "annotate", "note b"),
-    );
-    r.global(SETTING_RULES, json!([a, b])).await;
-    let ids =
-        |rules: &[Rule]| -> Vec<Option<String>> { rules.iter().map(|x| x.id.clone()).collect() };
-    assert_eq!(
-        ids(&r.plugins.rules_for(None)),
-        [Some("a".into()), Some("b".into())]
-    );
-    // the project switches `a` off and adds its own; the editor sends the merged list, so `b` comes again
-    let mine = rule(None, "deny", "mine");
-    r.set(
-        Some("p"),
-        &[
-            (SETTING_RULES, json!([b, mine])),
-            (SETTING_RULES_OFF, json!(["a"])),
-        ],
-    )
-    .await;
-    let got = r.plugins.rules_for(Some("p"));
-    assert_eq!(ids(&got), [Some("b".into()), None]);
-    assert_eq!(got[1].reason, "mine");
-    // another project keeps the global rules, and the global ones are unchanged
-    assert_eq!(r.plugins.rules_for(Some("q")).len(), 2);
-    assert_eq!(r.plugins.rules_for(None).len(), 2);
-    // keys may be written as the Lisp spells them
-    r.set(
+#[test]
+fn rules_for_appends_and_switches_off_by_id() {
+    saman::block_on_current(async move {
+        let r = rig().await;
+        let (a, b) = (
+            rule(Some("a"), "deny", "no a"),
+            rule(Some("b"), "annotate", "note b"),
+        );
+        r.global(SETTING_RULES, json!([a, b])).await;
+        let ids = |rules: &[Rule]| -> Vec<Option<String>> {
+            rules.iter().map(|x| x.id.clone()).collect()
+        };
+        assert_eq!(
+            ids(&r.plugins.rules_for(None)),
+            [Some("a".into()), Some("b".into())]
+        );
+        // the project switches `a` off and adds its own; the editor sends the merged list, so `b` comes again
+        let mine = rule(None, "deny", "mine");
+        r.set(
+            Some("p"),
+            &[
+                (SETTING_RULES, json!([b, mine])),
+                (SETTING_RULES_OFF, json!(["a"])),
+            ],
+        )
+        .await;
+        let got = r.plugins.rules_for(Some("p"));
+        assert_eq!(ids(&got), [Some("b".into()), None]);
+        assert_eq!(got[1].reason, "mine");
+        // another project keeps the global rules, and the global ones are unchanged
+        assert_eq!(r.plugins.rules_for(Some("q")).len(), 2);
+        assert_eq!(r.plugins.rules_for(None).len(), 2);
+        // keys may be written as the Lisp spells them
+        r.set(
         Some("p"),
         &[(
             SETTING_RULES,
@@ -322,82 +336,87 @@ async fn rules_for_appends_and_switches_off_by_id() {
         )],
     )
     .await;
-    assert_eq!(r.plugins.rules_for(Some("p")).len(), 3);
+        assert_eq!(r.plugins.rules_for(Some("p")).len(), 3);
+    })
 }
 
 // [D] pure: settings/a-bad-project-rule-is-refused-with-its-path
-#[tokio::test]
-async fn a_bad_project_rule_refuses_the_whole_set_with_its_path() {
-    let r = rig().await;
-    let good = Override {
-        name: SETTING_PLUGINS.into(),
-        value: json!(["alpha"]),
-        source: "test".into(),
-    };
-    let bad = Override {
-        name: SETTING_RULES.into(),
-        value: json!([rule(None, "deny", "ok"), rule(None, "wild", "no")]),
-        source: "test".into(),
-    };
-    let e = r
-        .settings
-        .set_overrides(Some("p"), vec![good, bad])
-        .await
-        .unwrap_err();
-    assert_eq!(
-        e.path.as_deref(),
-        Some("overrides[1].value[1].verdict"),
-        "{e:?}"
-    );
-    // nothing was kept, not even the good entry
-    assert!(r.settings.project_value(SETTING_PLUGINS, "p").is_none());
-    // a bad id too
-    let bad = Override {
-        name: SETTING_RULES.into(),
-        value: json!([rule(Some("Bad Id"), "deny", "no")]),
-        source: "test".into(),
-    };
-    let e = r
-        .settings
-        .set_overrides(Some("p"), vec![bad])
-        .await
-        .unwrap_err();
-    assert_eq!(e.path.as_deref(), Some("overrides[0].value[0].id"), "{e:?}");
+#[test]
+fn a_bad_project_rule_refuses_the_whole_set_with_its_path() {
+    saman::block_on_current(async move {
+        let r = rig().await;
+        let good = Override {
+            name: SETTING_PLUGINS.into(),
+            value: json!(["alpha"]),
+            source: "test".into(),
+        };
+        let bad = Override {
+            name: SETTING_RULES.into(),
+            value: json!([rule(None, "deny", "ok"), rule(None, "wild", "no")]),
+            source: "test".into(),
+        };
+        let e = r
+            .settings
+            .set_overrides(Some("p"), vec![good, bad])
+            .await
+            .unwrap_err();
+        assert_eq!(
+            e.path.as_deref(),
+            Some("overrides[1].value[1].verdict"),
+            "{e:?}"
+        );
+        // nothing was kept, not even the good entry
+        assert!(r.settings.project_value(SETTING_PLUGINS, "p").is_none());
+        // a bad id too
+        let bad = Override {
+            name: SETTING_RULES.into(),
+            value: json!([rule(Some("Bad Id"), "deny", "no")]),
+            source: "test".into(),
+        };
+        let e = r
+            .settings
+            .set_overrides(Some("p"), vec![bad])
+            .await
+            .unwrap_err();
+        assert_eq!(e.path.as_deref(), Some("overrides[0].value[0].id"), "{e:?}");
+    })
 }
 
 // [D] pure: kv_quota_enforced
-#[tokio::test]
-async fn kv_quota_enforced() {
-    let r = rig().await;
-    let db = &r.db;
-    kv_put(db, "alpha", "k1", b"12345678", 16).await.unwrap(); // 2 + 8
-    assert_eq!(
-        kv_put(db, "alpha", "k2", b"123456789", 16).await, // 2 + 9 more: over
-        Err(KvError::Quota { limit: 16 })
-    );
-    assert_eq!(kv_get(db, "alpha", "k2").await, Ok(None));
-    // replacing a value is counted by its new size, not added to the old
-    kv_put(db, "alpha", "k1", b"123456789012", 16)
-        .await
-        .unwrap();
-    assert_eq!(
-        kv_get(db, "alpha", "k1").await,
-        Ok(Some(b"123456789012".to_vec()))
-    );
-    assert_eq!(
-        kv_put(db, "alpha", "k1", b"1234567890123456", 16).await,
-        Err(KvError::Quota { limit: 16 })
-    );
-    // the store is the plugin's own
-    kv_put(db, "beta", "k1", b"12345678901234", 16)
-        .await
-        .unwrap();
-    kv_delete(db, "alpha", "k1").await.unwrap();
-    kv_put(db, "alpha", "k2", b"1234567890", 16).await.unwrap();
+#[test]
+fn kv_quota_enforced() {
+    saman::block_on_current(async move {
+        let r = rig().await;
+        let db = &r.db;
+        kv_put(db, "alpha", "k1", b"12345678", 16).await.unwrap(); // 2 + 8
+        assert_eq!(
+            kv_put(db, "alpha", "k2", b"123456789", 16).await, // 2 + 9 more: over
+            Err(KvError::Quota { limit: 16 })
+        );
+        assert_eq!(kv_get(db, "alpha", "k2").await, Ok(None));
+        // replacing a value is counted by its new size, not added to the old
+        kv_put(db, "alpha", "k1", b"123456789012", 16)
+            .await
+            .unwrap();
+        assert_eq!(
+            kv_get(db, "alpha", "k1").await,
+            Ok(Some(b"123456789012".to_vec()))
+        );
+        assert_eq!(
+            kv_put(db, "alpha", "k1", b"1234567890123456", 16).await,
+            Err(KvError::Quota { limit: 16 })
+        );
+        // the store is the plugin's own
+        kv_put(db, "beta", "k1", b"12345678901234", 16)
+            .await
+            .unwrap();
+        kv_delete(db, "alpha", "k1").await.unwrap();
+        kv_put(db, "alpha", "k2", b"1234567890", 16).await.unwrap();
+    })
 }
 
 fn public(name: &str) -> Vec<IpAddr> {
-    let _ = name;
+    let _only_when_used_elsewhere = &name;
     vec!["93.184.216.34".parse().unwrap()]
 }
 
@@ -565,58 +584,60 @@ fn http_with_no_session_and_no_job_is_refused() {
 fn source(dir: &Path, manifest: &str, wasm: &[u8]) -> PathBuf {
     let s = dir.join("src");
     std::fs::create_dir_all(&s).unwrap();
-    std::fs::write(s.join("plugin.json"), manifest).unwrap();
-    std::fs::write(s.join("plugin.wasm"), wasm).unwrap();
+    crate::fsio::write(s.join("plugin.json"), manifest).unwrap();
+    crate::fsio::write(s.join("plugin.wasm"), wasm).unwrap();
     s
 }
 
 // [D] pure: install copies, refuses a name that is there, and replaces with the flag; an approved plugin turns changed
-#[tokio::test]
-async fn install_copies_refuses_an_existing_name_and_replaces_with_a_flag() {
-    use std::os::unix::fs::PermissionsExt;
-    let r = rig().await;
-    let m = manifest("alpha", ECHO);
-    let src = source(r.dir.path(), &m, b"one");
-    let got = install(&r.root(), &src, false).unwrap();
-    assert_eq!(got.name, "alpha");
-    assert_eq!(got.version, "1.0.0");
-    assert_eq!(got.hash, hex(&brokkr::plugin_hash(m.as_bytes(), b"one")));
-    let dest = r.root().join("alpha");
-    assert_eq!(std::fs::read(dest.join("plugin.wasm")).unwrap(), b"one");
-    assert_eq!(
-        std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777,
-        0o700
-    );
-    assert_eq!(
-        std::fs::metadata(r.root()).unwrap().permissions().mode() & 0o777,
-        0o700
-    );
+#[test]
+fn install_copies_refuses_an_existing_name_and_replaces_with_a_flag() {
+    saman::block_on_current(async move {
+        use std::os::unix::fs::PermissionsExt;
+        let r = rig().await;
+        let m = manifest("alpha", ECHO);
+        let src = source(r.dir.path(), &m, b"one");
+        let got = install(&r.root(), &src, false).unwrap();
+        assert_eq!(got.name, "alpha");
+        assert_eq!(got.version, "1.0.0");
+        assert_eq!(got.hash, hex(&brokkr::plugin_hash(m.as_bytes(), b"one")));
+        let dest = r.root().join("alpha");
+        assert_eq!(std::fs::read(dest.join("plugin.wasm")).unwrap(), b"one");
+        assert_eq!(
+            std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(r.root()).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
 
-    let rows = r.plugins.sync().await.unwrap().rows;
-    assert_eq!(hash_of(&rows, "alpha"), got.hash);
-    r.plugins.approve("alpha", &got.hash).await.unwrap();
+        let rows = r.plugins.sync().await.unwrap().rows;
+        assert_eq!(hash_of(&rows, "alpha"), got.hash);
+        r.plugins.approve("alpha", &got.hash).await.unwrap();
 
-    std::fs::write(src.join("plugin.wasm"), b"two").unwrap();
-    let e = install(&r.root(), &src, false).unwrap_err();
-    assert!(e.contains("--replace"), "{e}");
-    assert_eq!(
-        std::fs::read(dest.join("plugin.wasm")).unwrap(),
-        b"one",
-        "nothing changed"
-    );
-    let again = install(&r.root(), &src, true).unwrap();
-    assert_ne!(again.hash, got.hash);
-    assert_eq!(std::fs::read(dest.join("plugin.wasm")).unwrap(), b"two");
-    assert_eq!(
-        state(&r.plugins.sync().await.unwrap().rows, "alpha"),
-        PluginState::Changed
-    );
-    // no staging folder is left beside the plugins
-    let left: Vec<_> = std::fs::read_dir(r.dir.path().join("data"))
-        .unwrap()
-        .map(|e| e.unwrap().file_name().into_string().unwrap())
-        .collect();
-    assert_eq!(left, ["plugins"]);
+        crate::fsio::write(src.join("plugin.wasm"), b"two").unwrap();
+        let e = install(&r.root(), &src, false).unwrap_err();
+        assert!(e.message().contains("--replace"), "{e}");
+        assert_eq!(
+            std::fs::read(dest.join("plugin.wasm")).unwrap(),
+            b"one",
+            "nothing changed"
+        );
+        let again = install(&r.root(), &src, true).unwrap();
+        assert_ne!(again.hash, got.hash);
+        assert_eq!(std::fs::read(dest.join("plugin.wasm")).unwrap(), b"two");
+        assert_eq!(
+            state(&r.plugins.sync().await.unwrap().rows, "alpha"),
+            PluginState::Changed
+        );
+        // no staging folder is left beside the plugins
+        let left: Vec<_> = std::fs::read_dir(r.dir.path().join("data"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(left, ["plugins"]);
+    })
 }
 
 // [D] pure: a manifest that does not read, a missing component and a link copy nothing
@@ -628,16 +649,18 @@ fn install_refuses_what_does_not_read() {
     assert!(
         install(&root, &src, false)
             .unwrap_err()
+            .message()
             .contains("plugin.json")
     );
-    std::fs::write(src.join("plugin.json"), manifest("alpha", "")).unwrap();
+    crate::fsio::write(src.join("plugin.json"), manifest("alpha", "")).unwrap();
     std::fs::remove_file(src.join("plugin.wasm")).unwrap();
     assert!(
         install(&root, &src, false)
             .unwrap_err()
+            .message()
             .contains("plugin.wasm")
     );
-    std::fs::write(dir.path().join("elsewhere"), b"x").unwrap();
+    crate::fsio::write(dir.path().join("elsewhere"), b"x").unwrap();
     std::os::unix::fs::symlink(dir.path().join("elsewhere"), src.join("plugin.wasm")).unwrap();
     assert!(
         install(&root, &src, false).is_err(),

@@ -260,66 +260,70 @@ mod tests {
     }
 
     // [B] the mock's virtual clock and the sweeper's NOW values: no time passes for real
-    #[tokio::test]
-    async fn ends_an_unreachable_tagged_machine_after_5_minutes() {
-        let m = Mock::start();
-        let aws = m.aws();
-        seed(&m, "i-lost", Some(HUB)).await;
-        seed(&m, "i-linked", Some(HUB)).await;
-        let mut s = Sweeper::new(HUB, B);
-        let linked = |id: &str| id == "i-linked";
-        let w = done(s.pass(&aws, T0 + 10, &linked, CapState::Under).await);
-        let reattach: Vec<&str> = w.reattach.iter().map(|i| i.id.as_str()).collect();
-        assert_eq!(
-            reattach,
-            ["i-lost"],
-            "a running machine it can't reach: reattach"
-        );
-        assert!(w.ended.is_empty(), "{w:?}");
-        let w = done(s.pass(&aws, T0 + 309, &linked, CapState::Under).await);
-        assert!(w.ended.is_empty(), "299 s unreachable: {w:?}");
-        let w = done(s.pass(&aws, T0 + 310, &linked, CapState::Under).await);
-        assert_eq!(ended(&w), [("i-lost", Ended::Unreachable)]);
-        gone(&m, "i-lost").await;
-        assert_eq!(m.state_of("i-linked").await, "running");
-        // reached again, a machine's count starts afresh
-        seed(&m, "i-flaky", Some(HUB)).await;
-        let w = done(s.pass(&aws, T0 + 400, &|_| false, CapState::Under).await);
-        assert!(!w.ended.iter().any(|(id, _)| id == "i-linked"), "{w:?}");
-        done(s.pass(&aws, T0 + 650, &|_| true, CapState::Under).await);
-        let w = done(s.pass(&aws, T0 + 800, &|_| false, CapState::Under).await);
-        assert!(w.ended.is_empty(), "{w:?}");
-        // past its lifetime: ended, reachable or not
-        let w = done(
-            s.pass(&aws, T0 + 8 * 3600, &|_| true, CapState::Under)
-                .await,
-        );
-        assert_eq!(
-            ended(&w),
-            [("i-flaky", Ended::Lifetime), ("i-linked", Ended::Lifetime)]
-        );
+    #[test]
+    fn ends_an_unreachable_tagged_machine_after_5_minutes() {
+        saman::block_on_current(async move {
+            let m = Mock::start();
+            let aws = m.aws();
+            seed(&m, "i-lost", Some(HUB)).await;
+            seed(&m, "i-linked", Some(HUB)).await;
+            let mut s = Sweeper::new(HUB, B);
+            let linked = |id: &str| id == "i-linked";
+            let w = done(s.pass(&aws, T0 + 10, &linked, CapState::Under).await);
+            let reattach: Vec<&str> = w.reattach.iter().map(|i| i.id.as_str()).collect();
+            assert_eq!(
+                reattach,
+                ["i-lost"],
+                "a running machine it can't reach: reattach"
+            );
+            assert!(w.ended.is_empty(), "{w:?}");
+            let w = done(s.pass(&aws, T0 + 309, &linked, CapState::Under).await);
+            assert!(w.ended.is_empty(), "299 s unreachable: {w:?}");
+            let w = done(s.pass(&aws, T0 + 310, &linked, CapState::Under).await);
+            assert_eq!(ended(&w), [("i-lost", Ended::Unreachable)]);
+            gone(&m, "i-lost").await;
+            assert_eq!(m.state_of("i-linked").await, "running");
+            // reached again, a machine's count starts afresh
+            seed(&m, "i-flaky", Some(HUB)).await;
+            let w = done(s.pass(&aws, T0 + 400, &|_| false, CapState::Under).await);
+            assert!(!w.ended.iter().any(|(id, _)| id == "i-linked"), "{w:?}");
+            done(s.pass(&aws, T0 + 650, &|_| true, CapState::Under).await);
+            let w = done(s.pass(&aws, T0 + 800, &|_| false, CapState::Under).await);
+            assert!(w.ended.is_empty(), "{w:?}");
+            // past its lifetime: ended, reachable or not
+            let w = done(
+                s.pass(&aws, T0 + 8 * 3600, &|_| true, CapState::Under)
+                    .await,
+            );
+            assert_eq!(
+                ended(&w),
+                [("i-flaky", Ended::Lifetime), ("i-linked", Ended::Lifetime)]
+            );
+        })
     }
 
     // [B]
-    #[tokio::test]
-    async fn stops_every_machine_past_the_cap() {
-        let m = Mock::start();
-        let aws = m.aws();
-        seed(&m, "i-a", Some(HUB)).await;
-        seed(&m, "i-b", Some(HUB)).await;
-        let mut s = Sweeper::new(HUB, B);
-        // at the cap they run on (they stop when their jobs end)
-        let w = done(s.pass(&aws, T0 + 10, &|_| true, CapState::AtCap).await);
-        assert!(w.ended.is_empty(), "{w:?}");
-        // a machine-hour past it: every machine, reachable and busy, ends now
-        let w = done(
-            s.pass(&aws, T0 + 20, &|_| true, CapState::PastCapPlusHour)
-                .await,
-        );
-        assert_eq!(ended(&w), [("i-a", Ended::Cap), ("i-b", Ended::Cap)]);
-        for id in ["i-a", "i-b"] {
-            gone(&m, id).await;
-        }
+    #[test]
+    fn stops_every_machine_past_the_cap() {
+        saman::block_on_current(async move {
+            let m = Mock::start();
+            let aws = m.aws();
+            seed(&m, "i-a", Some(HUB)).await;
+            seed(&m, "i-b", Some(HUB)).await;
+            let mut s = Sweeper::new(HUB, B);
+            // at the cap they run on (they stop when their jobs end)
+            let w = done(s.pass(&aws, T0 + 10, &|_| true, CapState::AtCap).await);
+            assert!(w.ended.is_empty(), "{w:?}");
+            // a machine-hour past it: every machine, reachable and busy, ends now
+            let w = done(
+                s.pass(&aws, T0 + 20, &|_| true, CapState::PastCapPlusHour)
+                    .await,
+            );
+            assert_eq!(ended(&w), [("i-a", Ended::Cap), ("i-b", Ended::Cap)]);
+            for id in ["i-a", "i-b"] {
+                gone(&m, id).await;
+            }
+        })
     }
 
     /// AWS with a list that returns every machine in the account, as a broken filter would.
@@ -359,76 +363,80 @@ mod tests {
     }
 
     // [B]
-    #[tokio::test]
-    async fn never_touches_an_untagged_instance() {
-        let m = Mock::start();
-        let aws = m.aws();
-        seed(&m, "i-mine", Some(HUB)).await;
-        seed(&m, "i-untagged", None).await;
-        seed(&m, "i-other-hub", Some("hub-2")).await;
-        let all = Everything {
-            aws: &aws,
-            ids: vec!["i-mine", "i-untagged", "i-other-hub"],
-        };
-        let mut s = Sweeper::new(HUB, B);
-        for (now, cap) in [
-            (T0, CapState::Under),
-            (T0 + 400, CapState::Under),
-            (T0 + 9 * 3600, CapState::PastCapPlusHour),
-        ] {
-            let w = done(s.pass(&all, now, &|_| false, cap).await);
-            assert!(
-                !w.ended.iter().any(|(id, _)| id != "i-mine"),
-                "only ours is ever ended: {w:?}"
+    #[test]
+    fn never_touches_an_untagged_instance() {
+        saman::block_on_current(async move {
+            let m = Mock::start();
+            let aws = m.aws();
+            seed(&m, "i-mine", Some(HUB)).await;
+            seed(&m, "i-untagged", None).await;
+            seed(&m, "i-other-hub", Some("hub-2")).await;
+            let all = Everything {
+                aws: &aws,
+                ids: vec!["i-mine", "i-untagged", "i-other-hub"],
+            };
+            let mut s = Sweeper::new(HUB, B);
+            for (now, cap) in [
+                (T0, CapState::Under),
+                (T0 + 400, CapState::Under),
+                (T0 + 9 * 3600, CapState::PastCapPlusHour),
+            ] {
+                let w = done(s.pass(&all, now, &|_| false, cap).await);
+                assert!(
+                    !w.ended.iter().any(|(id, _)| id != "i-mine"),
+                    "only ours is ever ended: {w:?}"
+                );
+                assert_eq!(w.not_ours, ["i-untagged", "i-other-hub"], "{w:?}");
+                assert!(!w.reattach.iter().any(|i| i.id != "i-mine"), "{w:?}");
+            }
+            assert_eq!(m.state_of("i-untagged").await, "running");
+            assert_eq!(m.state_of("i-other-hub").await, "running");
+            gone(&m, "i-mine").await;
+            // through the provider's own filter they are never even listed
+            let w = done(
+                Sweeper::new(HUB, B)
+                    .pass(&aws, T0 + 9 * 3600, &|_| false, CapState::Under)
+                    .await,
             );
-            assert_eq!(w.not_ours, ["i-untagged", "i-other-hub"], "{w:?}");
-            assert!(!w.reattach.iter().any(|i| i.id != "i-mine"), "{w:?}");
-        }
-        assert_eq!(m.state_of("i-untagged").await, "running");
-        assert_eq!(m.state_of("i-other-hub").await, "running");
-        gone(&m, "i-mine").await;
-        // through the provider's own filter they are never even listed
-        let w = done(
-            Sweeper::new(HUB, B)
-                .pass(&aws, T0 + 9 * 3600, &|_| false, CapState::Under)
-                .await,
-        );
-        assert!(w.not_ours.is_empty(), "{w:?}");
+            assert!(w.not_ours.is_empty(), "{w:?}");
+        })
     }
 
     mod creds {
         use super::*;
 
         // [B] the mock's expired token, then its token accepted again
-        #[tokio::test]
-        async fn expired_pauses_the_sweeper_and_it_resumes() {
-            let m = Mock::start();
-            let aws = m.aws();
-            seed(&m, "i-old", Some(HUB)).await;
-            let mut s = Sweeper::new(HUB, B);
-            m.knob("expire", json!({})).await;
-            // past its lifetime, but the credentials need a login: the sweeper pauses and ends nothing
-            let late = T0 + 9 * 3600;
-            let cmd = match s.pass(&aws, late, &|_| false, CapState::Under).await {
-                Pass::Paused(cmd) => cmd,
-                other => panic!("not paused: {other:?}"),
-            };
-            assert_eq!(s.paused(), Some(cmd.as_str()));
-            assert_eq!(
-                needs_login_text(&cmd),
-                format!("Run `{cmd}`, then Runners: Retry Cloud")
-            );
-            assert_eq!(m.state_of("i-old").await, "running");
-            assert!(matches!(
-                s.pass(&aws, late + 600, &|_| false, CapState::Under).await,
-                Pass::Paused(_)
-            ));
-            // the user logs in (the mock takes the token again): the next pass resumes, and ends what is past its bound
-            m.knob("token", json!({})).await;
-            let w = done(s.pass(&aws, late + 1200, &|_| false, CapState::Under).await);
-            assert_eq!(ended(&w), [("i-old", Ended::Lifetime)]);
-            assert_eq!(s.paused(), None);
-            gone(&m, "i-old").await;
+        #[test]
+        fn expired_pauses_the_sweeper_and_it_resumes() {
+            saman::block_on_current(async move {
+                let m = Mock::start();
+                let aws = m.aws();
+                seed(&m, "i-old", Some(HUB)).await;
+                let mut s = Sweeper::new(HUB, B);
+                m.knob("expire", json!({})).await;
+                // past its lifetime, but the credentials need a login: the sweeper pauses and ends nothing
+                let late = T0 + 9 * 3600;
+                let cmd = match s.pass(&aws, late, &|_| false, CapState::Under).await {
+                    Pass::Paused(cmd) => cmd,
+                    other => panic!("not paused: {other:?}"),
+                };
+                assert_eq!(s.paused(), Some(cmd.as_str()));
+                assert_eq!(
+                    needs_login_text(&cmd),
+                    format!("Run `{cmd}`, then Runners: Retry Cloud")
+                );
+                assert_eq!(m.state_of("i-old").await, "running");
+                assert!(matches!(
+                    s.pass(&aws, late + 600, &|_| false, CapState::Under).await,
+                    Pass::Paused(_)
+                ));
+                // the user logs in (the mock takes the token again): the next pass resumes, and ends what is past its bound
+                m.knob("token", json!({})).await;
+                let w = done(s.pass(&aws, late + 1200, &|_| false, CapState::Under).await);
+                assert_eq!(ended(&w), [("i-old", Ended::Lifetime)]);
+                assert_eq!(s.paused(), None);
+                gone(&m, "i-old").await;
+            })
         }
     }
 }

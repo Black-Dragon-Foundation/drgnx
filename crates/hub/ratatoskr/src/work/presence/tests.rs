@@ -371,7 +371,7 @@ fn a_file_is_found_by_a_name_through_a_link() {
     let dir = tempfile::tempdir().unwrap();
     let real = std::fs::canonicalize(dir.path()).unwrap().join("real");
     std::fs::create_dir(&real).unwrap();
-    std::fs::write(real.join("a.txt"), "one\n").unwrap();
+    crate::fsio::write(real.join("a.txt"), "one\n").unwrap();
     let link = real.with_file_name("link");
     std::os::unix::fs::symlink(&real, &link).unwrap();
     let file = place(&link, "a.txt");
@@ -507,7 +507,7 @@ fn every_order_live_then_close_leaves_one_entry() {
     );
     p.before((reader, 0), (writer, 0));
     p.before((reader, 2), (writer, 1));
-    let _ = b;
+    let _only_when_used_elsewhere = &b;
     // a third session reads elsewhere, has a request's entry withdrawn there, and ends
     p.source(
         "c",
@@ -600,7 +600,7 @@ fn every_order_a_denied_pending_is_dropped() {
     );
     p.before((ask, 0), (deny, 0));
     p.before((ask, 0), (writer, 0));
-    let _ = steps;
+    let _only_when_used_elsewhere = &steps;
     // a third session that was pending elsewhere, and allowed, ends
     p.source(
         "c",
@@ -779,7 +779,7 @@ fn rebuild_after_restart_has_no_live_entries() {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args([
             "-c",
             "user.name=t",
@@ -805,7 +805,7 @@ fn rel_and_repo_are_the_users_tree_for_a_worktree_path() {
     let root = std::fs::canonicalize(dir.path()).unwrap();
     let main = root.join("main");
     std::fs::create_dir_all(main.join("src")).unwrap();
-    std::fs::write(main.join("src/a.rs"), "fn a() {}\n").unwrap();
+    crate::fsio::write(main.join("src/a.rs"), "fn a() {}\n").unwrap();
     git(&main, &["init", "-q", "-b", "main"]);
     git(&main, &["add", "-A"]);
     git(&main, &["commit", "-q", "-m", "one"]);

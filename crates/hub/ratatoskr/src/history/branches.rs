@@ -97,32 +97,38 @@ async fn source_repo(f: &Front, sid: &str) -> Option<PathBuf> {
 /// follows no link).
 async fn remove_tree(repo: Option<PathBuf>, path: &Path) {
     let p = path.to_path_buf();
-    let _ = crate::clock::blocking(move || {
-        let git = |args: &[&std::ffi::OsStr]| {
-            if let Some(r) = &repo {
-                let _ = std::process::Command::new("git")
-                    .arg("-C")
-                    .arg(r)
-                    .args(args)
-                    .env("GIT_TERMINAL_PROMPT", "0")
-                    .stdin(std::process::Stdio::null())
-                    .output();
+    crate::soft::done(
+        crate::clock::blocking(move || {
+            let git = |args: &[&std::ffi::OsStr]| {
+                if let Some(r) = &repo {
+                    crate::soft::done(
+                        crate::proc::Command::new("git")
+                            .arg("-C")
+                            .arg(r)
+                            .args(args)
+                            .env("GIT_TERMINAL_PROMPT", "0")
+                            .stdin(std::process::Stdio::null())
+                            .output(),
+                        "std::process::Command::new",
+                    );
+                }
+            };
+            git(&[
+                "worktree".as_ref(),
+                "remove".as_ref(),
+                "--force".as_ref(),
+                p.as_os_str(),
+            ]);
+            if p.exists()
+                && let Err(e) = std::fs::remove_dir_all(&p)
+            {
+                tracing::warn!(path = %p.display(), "the fork's tree is not removed: {e}");
             }
-        };
-        git(&[
-            "worktree".as_ref(),
-            "remove".as_ref(),
-            "--force".as_ref(),
-            p.as_os_str(),
-        ]);
-        if p.exists()
-            && let Err(e) = std::fs::remove_dir_all(&p)
-        {
-            tracing::warn!(path = %p.display(), "the fork's tree is not removed: {e}");
-        }
-        git(&["worktree".as_ref(), "prune".as_ref()]);
-    })
-    .await;
+            git(&["worktree".as_ref(), "prune".as_ref()]);
+        })
+        .await,
+        "crate::clock::blocking",
+    );
 }
 
 /// The branch NAME of HUB frozen at the hub's time (kept for compare until it expires).
@@ -534,7 +540,7 @@ type RedoPlan = (Vec<PathBuf>, Vec<Merge>, Vec<(PathBuf, String)>);
 /// the revert changed goes back to UNDONE's version when the user has not touched it since (it is the checkpoint's
 /// still), is merged with the user's later edit where they do not meet (`merge3`: base the checkpoint's, ours the
 /// user's, theirs the undone), and is left, `edited-later`, where they meet.
-fn redo_plan(root: &Path, cwd: &Path, checkpoint: &str, undone: &str) -> Result<RedoPlan, String> {
+fn redo_plan(root: &Path, cwd: &Path, checkpoint: &str, undone: &str) -> villa::Result<RedoPlan> {
     let now = snapshot::tree_now(root, cwd, cwd, &[])?;
     let (mut back, mut merges, mut skipped) = (Vec::new(), Vec::new(), Vec::new());
     let regular = |m: u32| m == 0o100644 || m == 0o100755;

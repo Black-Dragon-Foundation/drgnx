@@ -87,8 +87,8 @@ fn the_host_starts_under_its_layer() {
     let s = |rel: &str| b.join(rel).to_str().unwrap().to_owned();
     let env = Env::new(
         &[
-            ("HOME", &s("home")),
-            ("XDG_RUNTIME_DIR", &s("run")),
+            (stig::HOME_VAR, &s("home")),
+            (stig::SYSTEM_RUNTIME_VAR, &s("run")),
             ("TMPDIR", &s("t")),
             ("PATH", "/usr/bin:/bin"),
         ],
@@ -152,11 +152,7 @@ fn the_host_starts_under_its_layer() {
             gleipnir::TestHooks::default(),
         )
         .unwrap_or_else(|r| panic!("refused: {r}"));
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
+    saman::block_on_current(async {
         let mut child = draugr::spawn_pinned(sandbox::to_draugr(prepared.invocation))
             .await
             .expect("spawn");
@@ -169,7 +165,7 @@ fn the_host_starts_under_its_layer() {
         )
         .unwrap_or_else(|r| panic!("the sandbox did not start: {r}\n{}", child.stderr_tail()));
         assert!(layers.browser, "{layers:?}");
-        let talk = tokio::task::spawn_blocking(move || {
+        let talk = saman::spawn_blocking("browser_sandboxed", move || {
             let mut hub = Hub {
                 s: hub,
                 dec: FrameDecoder::new((1 << 20) + 64),
@@ -192,7 +188,7 @@ fn the_host_starts_under_its_layer() {
         let exited = talk.await;
         // SAFETY: the sandbox's own process group, which draugr made.
         unsafe { libc::kill(-child.id(), libc::SIGKILL) };
-        let _ = child.wait().await;
+        ratatoskr::soft::done(child.wait().await, "browser_sandboxed");
         let exited = exited.unwrap_or_else(|e| panic!("{e}\n{}", child.stderr_tail()));
         assert!(
             exited["code"].is_number() || exited["signal"].is_number(),
@@ -232,8 +228,8 @@ fn launch_with(agent: &str, probe: bool) -> Launched {
     let s = |rel: &str| b.join(rel).to_str().unwrap().to_owned();
     let env = Env::new(
         &[
-            ("HOME", &s("home")),
-            ("XDG_RUNTIME_DIR", &s("run")),
+            (stig::HOME_VAR, &s("home")),
+            (stig::SYSTEM_RUNTIME_VAR, &s("run")),
             ("TMPDIR", &s("t")),
             ("PATH", "/usr/bin:/bin"),
         ],
@@ -306,7 +302,7 @@ fn procs_under(pid: i32, name: &str) -> Vec<i32> {
         let Some(p) = e.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else {
             continue;
         };
-        let Ok(stat) = std::fs::read_to_string(format!("/proc/{p}/stat")) else {
+        let Ok(stat) = ratatoskr::fsio::read_to_string(format!("/proc/{p}/stat")) else {
             continue;
         };
         // the field after the command's closing parenthesis: state, then the parent's pid
@@ -370,11 +366,7 @@ fn a_hub_restart_leaves_no_chromium() {
             new_session: false,
         },
     );
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
+    saman::block_on_current(async {
         let mut child = draugr::spawn_pinned(spec).await.expect("spawn");
         gleipnir::inner::read_status_for(
             status,
@@ -405,7 +397,7 @@ fn a_hub_restart_leaves_no_chromium() {
         );
         // SAFETY: the sandbox's own process group, which draugr made.
         unsafe { libc::kill(-pid, libc::SIGKILL) };
-        let _ = child.wait().await;
+        ratatoskr::soft::done(child.wait().await, "browser_sandboxed");
     });
     drop(l);
 }
@@ -433,11 +425,7 @@ fn there_is_no_listening_cdp_port_inside() {
             new_session: false,
         },
     );
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
+    saman::block_on_current(async {
         let mut child = draugr::spawn_pinned(spec).await.expect("spawn");
         gleipnir::inner::read_status_for(
             status,
@@ -453,13 +441,13 @@ fn there_is_no_listening_cdp_port_inside() {
         };
         hub.send(KIND_CONTROL, &json!({"op": "start"}).to_string());
         hub.event("started");
-        std::fs::write(wt.join("go"), "").unwrap();
+        ratatoskr::fsio::write(wt.join("go"), "").unwrap();
         until(
             "the agent's look at its listeners",
             Duration::from_secs(10),
             || wt.join("tcp").exists(),
         );
-        let text = std::fs::read_to_string(wt.join("tcp")).unwrap();
+        let text = ratatoskr::fsio::read_to_string(wt.join("tcp")).unwrap();
         let mut listening: Vec<u16> = text
             .lines()
             .filter_map(|line| {
@@ -476,7 +464,7 @@ fn there_is_no_listening_cdp_port_inside() {
         assert_eq!(listening, [3128, 3130, 9222], "{text}");
         // SAFETY: the sandbox's own process group, which draugr made.
         unsafe { libc::kill(-child.id(), libc::SIGKILL) };
-        let _ = child.wait().await;
+        ratatoskr::soft::done(child.wait().await, "browser_sandboxed");
     });
 }
 
@@ -499,29 +487,30 @@ fn the_check_takes_a_screenshot() {
     std::fs::set_permissions(b.join("run"), std::fs::Permissions::from_mode(0o700)).unwrap();
     let env = Env::new(
         &[
-            ("HOME", b.join("home").to_str().unwrap()),
-            ("XDG_RUNTIME_DIR", b.join("run").to_str().unwrap()),
+            (stig::HOME_VAR, b.join("home").to_str().unwrap()),
+            (stig::SYSTEM_RUNTIME_VAR, b.join("run").to_str().unwrap()),
             ("TMPDIR", b.join("t").to_str().unwrap()),
             ("PATH", "/usr/bin:/bin"),
         ],
         rustix::process::geteuid().as_raw(),
     );
     let me = std::process::id();
-    let mut hub = std::process::Command::new(RATATOSKR)
+    let mut hub = ratatoskr::proc::Command::new(RATATOSKR)
         .args(["serve", "--foreground", "--parent-pid", &me.to_string()])
         .env_clear()
         .envs([
-            ("HOME", b.join("home")),
-            ("XDG_RUNTIME_DIR", b.join("run")),
+            (stig::HOME_VAR, b.join("home")),
+            (stig::SYSTEM_RUNTIME_VAR, b.join("run")),
             ("TMPDIR", b.join("t")),
             ("PATH", PathBuf::from("/usr/bin:/bin")),
             ("RATATOSKR_SUPERVISOR", PathBuf::from("none")),
         ])
         .current_dir(&b)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::fs::File::create(b.join("hub.err")).unwrap())
-        .spawn()
+        .spawn(
+            ratatoskr::proc::Io::Null,
+            ratatoskr::proc::Io::Null,
+            ratatoskr::proc::Io::file(eitri::create_exclusive(&b.join("hub.err"), 0o666).unwrap()),
+        )
         .expect("the hub");
     // the hub's stderr says why when it never answers
     let mut c = skuld::wait_until(
@@ -538,15 +527,16 @@ fn the_check_takes_a_screenshot() {
     )
     .expect("the browser program setting");
     let r = c.call("browser/check", json!({}), Duration::from_secs(60));
-    let kept =
-        std::fs::read_to_string(runstav::paths::state_dir(&env).join("hub/browser-check.json"));
+    let kept = ratatoskr::fsio::read_to_string(
+        runstav::paths::state_dir(&env).join("hub/browser-check.json"),
+    );
     drop(c);
-    let _ = hub.kill();
-    let _ = hub.wait();
+    ratatoskr::soft::done(hub.kill(), "browser_sandboxed");
+    ratatoskr::soft::done(hub.wait(), "browser_sandboxed");
     let r = r.unwrap_or_else(|e| {
         panic!(
             "browser/check: {e}: {}",
-            std::fs::read_to_string(b.join("hub.err")).unwrap_or_default()
+            ratatoskr::fsio::read_to_string(b.join("hub.err")).unwrap_or_default()
         )
     });
     assert_eq!(r["ok"], true, "{r}");
@@ -606,13 +596,9 @@ fn a_browser_session_starts_and_reaches_its_dev_server() {
         true,
     );
     let wt = l.b.join("wt");
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
+    saman::block_on_current(async {
         let (mut child, mut hub) = spawn_and_start(&mut l).await;
-        let nav = tokio::task::spawn_blocking(move || {
+        let nav = saman::spawn_blocking("browser_sandboxed", move || {
             hub.send(
                 KIND_CDP,
                 r#"{"id":7,"method":"Page.navigate","params":{"url":"http://127.0.0.1:3000/app"}}"#,
@@ -631,14 +617,14 @@ fn a_browser_session_starts_and_reaches_its_dev_server() {
         until("the dev server's report", Duration::from_secs(10), || {
             wt.join("served").exists()
         });
-        let served = std::fs::read_to_string(wt.join("served")).unwrap();
+        let served = ratatoskr::fsio::read_to_string(wt.join("served")).unwrap();
         assert!(
             served.contains("\"result\":\"reached\"") && served.contains("served 1"),
             "{served}"
         );
         // SAFETY: the sandbox's own process group, which draugr made.
         unsafe { libc::kill(-child.id(), libc::SIGKILL) };
-        let _ = child.wait().await;
+        ratatoskr::soft::done(child.wait().await, "browser_sandboxed");
     });
 }
 
@@ -651,11 +637,7 @@ fn a_browser_session_starts_and_reaches_its_dev_server() {
 fn everything_is_gone_after_the_session() {
     let mut l = launch_with_browser("while [ ! -e go ]; do sleep 0.05; done; exit 0");
     let wt = l.b.join("wt");
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
+    saman::block_on_current(async {
         let (mut child, hub) = spawn_and_start(&mut l).await;
         let pid = child.id();
         assert!(!chromiums_under(pid).is_empty(), "the stand-in runs");
@@ -665,7 +647,7 @@ fn everything_is_gone_after_the_session() {
             "the sandbox, the browser host, Chromium: {ran:?}"
         );
         // the agent ends: so does its session
-        std::fs::write(wt.join("go"), "").unwrap();
+        ratatoskr::fsio::write(wt.join("go"), "").unwrap();
         let status = tokio::time::timeout(Duration::from_secs(20), child.wait())
             .await
             .unwrap_or_else(|_| {
@@ -676,16 +658,16 @@ fn everything_is_gone_after_the_session() {
             "no process of the session left",
             Duration::from_secs(10),
             || {
-                ran.iter().all(
-                    |p| match std::fs::read_to_string(format!("/proc/{p}/stat")) {
+                ran.iter().all(|p| {
+                    match ratatoskr::fsio::read_to_string(format!("/proc/{p}/stat")) {
                         Err(_) => true,
                         Ok(s) => {
                             s.rsplit_once(')')
                                 .and_then(|(_, rest)| rest.split_whitespace().next())
                                 == Some("Z")
                         }
-                    },
-                )
+                    }
+                })
             },
         );
         assert!(chromiums_under(1).is_empty(), "a stand-in Chromium is left");

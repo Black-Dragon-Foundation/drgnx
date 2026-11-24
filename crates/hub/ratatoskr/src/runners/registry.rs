@@ -189,33 +189,19 @@ pub struct MemStore(Mutex<BTreeMap<String, Record>>);
 
 impl Store for MemStore {
     fn list(&self) -> BoxFuture<'_, Result<Vec<Record>, String>> {
-        Box::pin(async move {
-            Ok(self
-                .0
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .values()
-                .cloned()
-                .collect())
-        })
+        Box::pin(async move { Ok(saman::lock(&self.0).values().cloned().collect()) })
     }
 
     fn put<'a>(&'a self, r: &'a Record) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            self.0
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(r.name.clone(), r.clone());
+            saman::lock(&self.0).insert(r.name.clone(), r.clone());
             Ok(())
         })
     }
 
     fn remove<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            self.0
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .remove(name);
+            saman::lock(&self.0).remove(name);
             Ok(())
         })
     }
@@ -460,17 +446,21 @@ fn set_feature(
 }
 
 /// The scheduler's limits for PROFILE with RESERVE_MIB (refused as [`forseti::Limits::with_reserve`] refuses).
-fn limits(profile: Profile, reserve_mib: Option<u64>) -> Result<forseti::Limits, String> {
+fn limits(profile: Profile, reserve_mib: Option<u64>) -> villa::Result<forseti::Limits> {
     let p = match profile {
         Profile::Dedicated => forseti::Profile::Dedicated,
         Profile::Workstation => forseti::Profile::Workstation,
     };
-    forseti::Limits::for_profile(p, 0, 1).with_reserve(p, reserve_mib)
+    forseti::Limits::for_profile(p, 0, 1)
+        .with_reserve(p, reserve_mib)
+        .map_err(|e| villa::Error::invalid(e.to_string()))
 }
 
 /// A reserve for the user is a workstation's, of at least [`forseti::MIN_RESERVE_MIB`].
 fn check_reserve(profile: Profile, reserve_mib: Option<u64>) -> Result<(), RegError> {
-    limits(profile, reserve_mib).map(|_| ()).map_err(refused)
+    limits(profile, reserve_mib)
+        .map(|_| ())
+        .map_err(|e| refused(e.message()))
 }
 
 /// Below this much memory for jobs, hardly a job fits: the runner list says the runner has no room.
@@ -603,18 +593,18 @@ impl Registry {
         let (mut tx, mut rx, err) = (control.tx, control.rx, control.err);
         let run = async {
             let write = async {
-                let _ = tx.write_all(stdin).await;
-                let _ = tx.shutdown().await;
+                crate::soft::done(tx.write_all(stdin).await, "registry");
+                crate::soft::done(tx.shutdown().await, "registry");
             };
             let read = async {
                 let mut out = Vec::new();
-                let _ = rx.read_to_end(&mut out).await;
+                crate::soft::done(rx.read_to_end(&mut out).await, "registry");
                 out
             };
             let read_err = async {
                 let mut out = Vec::new();
                 if let Some(mut e) = err {
-                    let _ = e.read_to_end(&mut out).await;
+                    crate::soft::done(e.read_to_end(&mut out).await, "registry");
                 }
                 out
             };
@@ -764,7 +754,7 @@ impl Registry {
     pub async fn probe_host(&self, host: &str) -> Result<Probed, RegError> {
         let name = format!("probe-{:.8}", hex(&Sha256::digest(host.as_bytes())));
         let rc = self.base_cfg(&name, host);
-        rc.check().map_err(refused)?;
+        rc.check().map_err(|e| refused(e.message()))?;
         let config = ssh_config::write(&self.cfg.runtime_dir, &name, &ssh_config::render(&rc))
             .map_err(|e| failed(format!("writing the ssh config: {e}")))?;
         let effective = super::transport::effective(&config, host).await?;
@@ -777,7 +767,7 @@ impl Registry {
         let staged = self.stage(&name, host, None, None, false, false).await;
         self.cfg.transport.stop(&name).await;
         let (rec, probe) = staged?;
-        let _ = rec;
+        let _only_when_used_elsewhere = &rec;
         Ok(match probe.facts {
             Some(f) if all_missing(&probe).is_empty() => Probed {
                 effective,
@@ -805,7 +795,7 @@ impl Registry {
         admin: bool,
     ) -> Result<(Record, Probe), RegError> {
         let cfg = self.base_cfg(name, host);
-        cfg.check().map_err(refused)?;
+        cfg.check().map_err(|e| refused(e.message()))?;
         // a Rosetta shell reports x86_64 on Apple silicon: `sysctl.proc_translated` says so
         let basics = self
             .sh_ok(
@@ -974,7 +964,9 @@ impl Registry {
             .as_ref()
             .map(|n| n.as_str().to_string())
             .unwrap_or_else(|| default_name(&host));
-        self.base_cfg(&name, &host).check().map_err(refused)?;
+        self.base_cfg(&name, &host)
+            .check()
+            .map_err(|e| refused(e.message()))?;
         check_reserve(p.profile.unwrap_or(Profile::Dedicated), p.reserve_mib)?;
         let known = self.cfg.store.list().await.map_err(failed)?;
         if known.iter().any(|r| r.name == name) {
@@ -1054,7 +1046,7 @@ impl Registry {
         rec.checked = Some(crate::clock::wall_secs());
         self.cfg.store.put(rec).await.map_err(failed)?;
         if let Err(e) = self.connect(rec).await {
-            let _ = self.cfg.store.remove(&rec.name).await;
+            crate::soft::done(self.cfg.store.remove(&rec.name).await, "registry");
             return Err(e);
         }
         Ok(())
@@ -1333,7 +1325,10 @@ impl Registry {
         let _g = self.busy.lock().await;
         let rec = self.record(name).await?;
         let session = self.cfg.queue.session(name);
-        self.cfg.queue.remove_runner(name).map_err(refused)?;
+        self.cfg
+            .queue
+            .remove_runner(name)
+            .map_err(|e| refused(e.message()))?;
         if let Some(s) = session {
             s.close().await;
         }
@@ -1425,7 +1420,7 @@ mod tests {
             ("echo hi; exit 3", "hi", 3),
             ("printf 'a\\nb'; false", "a\nb", 1),
         ] {
-            let o = std::process::Command::new("sh")
+            let o = crate::proc::Command::new("sh")
                 .args(["-c", &wrapped(script)])
                 .output()
                 .unwrap();

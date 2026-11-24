@@ -43,7 +43,7 @@ fn write<T>(l: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }
 
 /// The host's own addresses, as the web policy reads them.
@@ -188,11 +188,11 @@ impl NeverSetWatch {
 pub fn machine_ports(
     inspect: &serde_json::Value,
     config: Option<&serde_json::Value>,
-) -> Result<Vec<u16>, String> {
+) -> villa::Result<Vec<u16>> {
     let port = |v: &serde_json::Value| v.as_u64().and_then(|p| u16::try_from(p).ok());
     let ssh = port(&inspect["SSHConfig"]["Port"])
         .or_else(|| config.and_then(|c| port(&c["SSH"]["Port"])))
-        .ok_or("podman machine inspect names no SSH port")?;
+        .ok_or_else(|| villa::Error::invalid("podman machine inspect names no SSH port"))?;
     let mut out = vec![ssh];
     if let Some(c) = config {
         for e in [
@@ -216,7 +216,7 @@ pub fn machine_ports(
 /// `podman machine inspect` of the default machine and its config file (`<ConfigDir.Path>/<Name>.json`), read now.
 #[cfg(target_os = "macos")]
 fn read_machine_ports() -> Result<Vec<u16>, String> {
-    let out = std::process::Command::new("podman")
+    let out = crate::proc::Command::new("podman")
         .args(["machine", "inspect"])
         .stdin(std::process::Stdio::null())
         .output()
@@ -328,7 +328,7 @@ mod tests {
         let a = interface_addrs().unwrap();
         assert!(a.0.contains(&IpAddr::V4(Ipv4Addr::LOCALHOST)), "{:?}", a.0);
         // every IPv6 address the kernel lists (/proc/net/if_inet6: 32 hex digits first on each line)
-        if let Ok(text) = std::fs::read_to_string("/proc/net/if_inet6") {
+        if let Ok(text) = crate::fsio::read_to_string("/proc/net/if_inet6") {
             for line in text.lines() {
                 let hex = &line[..32];
                 let v6 = Ipv6Addr::from(u128::from_str_radix(hex, 16).unwrap());

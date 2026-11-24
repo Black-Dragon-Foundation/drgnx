@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 pub const META: &str = "attempt.json";
 pub const LOG: &str = "log";
@@ -66,11 +65,11 @@ pub fn read_meta(dir: &Path) -> io::Result<Meta> {
 /// Writes META by rename, so a reader sees the old record or the new one.
 pub fn write_meta(dir: &Path, meta: &Meta) -> io::Result<()> {
     let tmp = dir.join(format!(".{META}.tmp"));
-    fs::write(
+    crate::fsio::write(
         &tmp,
         serde_json::to_vec_pretty(meta).map_err(io::Error::other)?,
     )?;
-    fs::rename(&tmp, dir.join(META))
+    crate::fsio::rename(&tmp, dir.join(META))
 }
 
 /// One attempt folder as `serve` finds it.
@@ -112,7 +111,7 @@ pub fn scan(root: &Path, active: &dyn Fn(&str) -> bool) -> Vec<Found> {
     let Ok(rd) = fs::read_dir(jobs(root)) else {
         return vec![];
     };
-    let now = SystemTime::now();
+    let now = stund::wall();
     let mut out: Vec<Found> = rd
         .flatten()
         .filter_map(|e| {

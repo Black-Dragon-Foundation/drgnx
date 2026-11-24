@@ -24,9 +24,8 @@ use forseti::Verdict;
 use forseti::classify::{ExitEvidence, infra};
 use std::fs;
 use std::io::Read;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 /// How often job-exec looks at the command, the clock and the kill reason.
@@ -124,71 +123,72 @@ fn run_unchecked(dir: &Path, spec: &JobExec, refused: Option<String>) -> (Result
         ..Seen::default()
     };
     if seen.setup.is_none() {
-        let log = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&spec.log);
+        let log = crate::fsio::append(&spec.log, true);
         match log {
             Err(e) => seen.setup = Some(format!("the log {}: {e}", spec.log.display())),
             Ok(log) => {
-                let mut cmd = Command::new(&spec.argv[0]);
-                cmd.args(&spec.argv[1..])
-                    .env_clear()
-                    .envs(spec.env.iter().map(|(k, v)| (k, v)))
-                    .stdin(Stdio::null());
+                let mut env: Vec<(std::ffi::OsString, std::ffi::OsString)> =
+                    spec.env.iter().map(|(k, v)| (k.into(), v.into())).collect();
                 // a pipe, copied into the log: under Seatbelt the job can't stat or write its attempt folder's
                 // files, and a pipe has no path
                 let mut copier = None;
+                let mut opts = draugr::Opts::default();
                 match std::io::pipe().and_then(|(r, w)| Ok((r, w.try_clone()?, w))) {
                     Ok((r, out, err)) => {
-                        cmd.stdout(out).stderr(err);
+                        let fd = |w: std::io::PipeWriter| {
+                            std::sync::Arc::new(std::os::fd::OwnedFd::from(w))
+                        };
+                        opts.stdout = draugr::Redirect::To(fd(out));
+                        opts.stderr = draugr::Redirect::To(fd(err));
                         copier = Some(copy_into(r, log));
                     }
                     Err(e) => seen.setup = Some(format!("the log's pipe: {e}")),
-                }
-                if let Some(c) = &spec.cwd {
-                    cmd.current_dir(c);
                 }
                 // the marker, from the spec (`sandbox::spec` sets it) or made here: the attempt's folder, unique
                 let marker = match spec.env.iter().find(|(k, _)| k == MARKER) {
                     Some((_, v)) => v.clone(),
                     None => {
                         let v = dir.display().to_string();
-                        cmd.env(MARKER, &v);
+                        env.push((MARKER.into(), v.clone().into()));
                         v
                     }
                 };
-                if !leads_session() {
-                    // SAFETY: setsid is async-signal-safe and touches nothing of the parent's
-                    unsafe {
-                        cmd.pre_exec(|| {
-                            rustix::process::setsid()
-                                .map(|_| ())
-                                .map_err(std::io::Error::from)
-                        });
-                    }
-                }
                 if seen.setup.is_none() {
+                    // a job-exec that leads no session starts the command in one of its own
+                    let job = draugr::Spec {
+                        program: (&spec.argv[0]).into(),
+                        args: spec.argv[1..].iter().map(Into::into).collect(),
+                        env,
+                        cwd: spec.cwd.clone(),
+                        stdin_null: true,
+                        pass_fds: vec![],
+                        new_session: !leads_session(),
+                    };
                     watch(
                         dir,
                         spec,
-                        &mut cmd,
+                        (job, opts),
                         &format!("{MARKER}={marker}"),
                         t0,
                         &mut seen,
                     );
                 }
-                // our ends of the pipe closed: the copy ends once the job's processes (killed by `watch`) are gone
-                drop(cmd);
+                // our ends of the pipe closed (`watch` dropped them at the spawn): the copy ends once the job's processes
+                // (killed by `watch`) are gone
                 if let Some(done) = copier {
-                    let _ = done.recv_timeout(DRAIN);
+                    // a timeout is the stray process holding the pipe, which the group's kill ends; nothing to add
+                    if done.recv_timeout(DRAIN).is_err() {
+                        tracing::debug!("the job's log copy did not end within the drain wait");
+                    }
                 }
             }
         }
     }
     let stop = seen.timed_out || seen.stopped;
     let result = judge(dir, spec, &seen, mono_s() - t0);
-    let _ = result.write(dir);
+    if let Err(e) = result.write(dir) {
+        crate::eline!("sleipnir job-exec: result.json: {e}");
+    }
     (result, stop)
 }
 
@@ -199,19 +199,62 @@ const DRAIN: Duration = Duration::from_secs(2);
 /// What reaches R copied into LOG on a thread of its own; the receiver hears when R reached its end.
 fn copy_into(mut r: std::io::PipeReader, mut log: fs::File) -> std::sync::mpsc::Receiver<()> {
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = std::io::copy(&mut r, &mut log);
-        let _ = tx.send(());
+    let started = saman::spawn_thread("job-log-copy", move || {
+        // the copy ends when the job's processes are gone; how it ended does not change the verdict
+        if let Err(e) = std::io::copy(&mut r, &mut log) {
+            tracing::debug!(error = %e, "copying the job's output into its log");
+        }
+        saman::delivered(tx.send(()), "the log copy's end");
     });
+    if let Err(e) = started {
+        crate::eline!("sleipnir job-exec: the log copy: {e}");
+    }
     rx
 }
 
-fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, seen: &mut Seen) {
+/// `caffeinate -i -w <our pid>`: idle sleep held off while job-exec lives. Started on a pool of its own that stays
+/// until [`Awake::end`], since a blocking caller has no runtime to hold the child.
+struct Awake {
+    pool: saman::Executor,
+    child: draugr::Child,
+}
+
+impl Awake {
+    fn start() -> Option<Awake> {
+        let pool = saman::Executor::new(1).ok()?;
+        let pid = std::process::id().to_string();
+        let spec =
+            crate::linux::run::spec(Path::new("/usr/bin/caffeinate"), &["-i", "-w", &pid], &[]);
+        let child = pool.block_on(draugr::spawn(spec)).ok()?;
+        Some(Awake { pool, child })
+    }
+
+    /// Stops it: its group is killed at once, and it is reaped.
+    fn end(mut self) {
+        if let Err(e) = self.pool.block_on(self.child.wait_deadline(Duration::ZERO)) {
+            crate::eline!("sleipnir job-exec: stopping caffeinate: {e}");
+        }
+    }
+}
+
+fn watch(
+    dir: &Path,
+    spec: &JobExec,
+    (job, opts): (draugr::Spec, draugr::Opts),
+    marker: &str,
+    t0: f64,
+    seen: &mut Seen,
+) {
     // SAFETY: getpid has no failure
     let me = unsafe { libc::getpid() };
     // what the disk watch counts this job's growth from
-    let _ = fs::write(dir.join(disk::DISK_START), disk::size(dir).to_string());
-    let mut child = match cmd.spawn() {
+    if let Err(e) = crate::fsio::write(dir.join(disk::DISK_START), disk::size(dir).to_string()) {
+        crate::eline!("sleipnir job-exec: the disk start record: {e}");
+    }
+    let started = draugr::spawn_std(&job, &opts);
+    // our ends of the log's pipe closed: only the job holds them now
+    drop((job, opts));
+    let mut child = match started {
         Err(e) => {
             seen.setup = Some(format!("{}: {e}", spec.argv[0]));
             return;
@@ -232,17 +275,7 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, s
         .and_then(|r| Probe::system("", "", "drgnx-runner", r, forseti::Profile::Dedicated).ok());
     let disk_every = (disk::EVERY.as_millis() / TICK.as_millis()).max(1) as u32;
     // idle sleep held off while job-exec lives (a Mac on battery still sleeps at lid close)
-    let awake = cfg!(target_os = "macos")
-        .then(|| {
-            Command::new("/usr/bin/caffeinate")
-                .args(["-i", "-w", &std::process::id().to_string()])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .ok()
-        })
-        .flatten();
+    let awake = cfg!(target_os = "macos").then(Awake::start).flatten();
     let mut tick = 0u32;
     loop {
         if tick > 0
@@ -283,10 +316,11 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, s
             seen.stopped = true;
             break;
         }
-        std::thread::sleep(TICK);
+        stund::sleep_blocking(TICK);
     }
     if seen.timed_out || seen.stopped {
-        let _ = child.kill();
+        // the child may have exited between the last check and now: a failed kill says only that
+        drop(child.kill());
         if let Ok(st) = child.wait() {
             seen.exit_code = st.code();
             seen.signal = st.signal();
@@ -301,16 +335,18 @@ fn watch(dir: &Path, spec: &JobExec, cmd: &mut Command, marker: &str, t0: f64, s
         unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
     }
     memwatch::kill_all(&memwatch::scan(me, sid, born, marker).pids);
-    if let Some(mut c) = awake {
-        let _ = c.kill();
-        let _ = c.wait();
+    if let Some(a) = awake {
+        a.end();
     }
 }
 
 fn judge(dir: &Path, spec: &JobExec, seen: &Seen, wall_s: f64) -> ResultJson {
     let mut log = vec![];
     if let Ok(f) = fs::File::open(&spec.log) {
-        let _ = f.take(crate::linux::jobexec::LOG_CAP).read_to_end(&mut log);
+        // what could be read is what the parser gets; a log that ends early is no reason to lose the verdict
+        if let Err(e) = f.take(crate::linux::jobexec::LOG_CAP).read_to_end(&mut log) {
+            tracing::debug!(error = %e, "reading the job's log");
+        }
     }
     let parsed = parse::parse(spec.parser, &log);
     let reason = read_kill_reason(dir);
@@ -342,7 +378,7 @@ fn judge(dir: &Path, spec: &JobExec, seen: &Seen, wall_s: f64) -> ResultJson {
         _ => None,
     };
     if let Some(why) = &seen.setup {
-        eprintln!("sleipnir job-exec: {why}");
+        crate::eline!("sleipnir job-exec: {why}");
     }
     // the children's CPU and peak memory (ru_maxrss: bytes on macOS, KiB on Linux)
     // SAFETY: a valid rusage to fill
@@ -521,7 +557,7 @@ mod tests {
         let (r, stop) = run_unchecked(d.path(), &s, None);
         assert_eq!(r.verdict, Verdict::Pass);
         assert!(!stop);
-        let log = fs::read_to_string(d.path().join("log")).unwrap();
+        let log = crate::fsio::read_to_string(d.path().join("log")).unwrap();
         assert!(
             log.contains("out") && log.contains("err") && log.contains("home=unset"),
             "{log}"
@@ -536,7 +572,7 @@ mod tests {
     #[test]
     fn the_job_writes_a_pipe_that_job_exec_copies_into_the_log() {
         let d = tempfile::tempdir().unwrap();
-        fs::write(d.path().join("in.txt"), "from a file\n").unwrap();
+        crate::fsio::write(d.path().join("in.txt"), "from a file\n").unwrap();
         let s = spec(
             d.path(),
             &[
@@ -546,7 +582,7 @@ mod tests {
             ],
         );
         let (r, _) = run_unchecked(d.path(), &s, None);
-        let log = fs::read_to_string(d.path().join("log")).unwrap();
+        let log = crate::fsio::read_to_string(d.path().join("log")).unwrap();
         assert_eq!(r.verdict, Verdict::Pass, "{log}");
         assert_eq!(log, "piped\nfrom a file\nlast\n");
     }
@@ -562,12 +598,15 @@ mod tests {
         let (r, stop) = run_unchecked(d.path(), &s, None);
         assert_eq!(r.verdict, Verdict::Pass, "{r:?}");
         assert!(!stop);
-        let pid = fs::read_to_string(d.path().join("left")).unwrap();
+        let pid = crate::fsio::read_to_string(d.path().join("left")).unwrap();
         // gone, or a zombie its new parent hasn't reaped yet: either way not running
-        let ps = Command::new("ps")
-            .args(["-o", "stat=", "-p", pid.trim()])
-            .output()
-            .unwrap();
+        let ps = crate::linux::run::limited(
+            Path::new("ps"),
+            &["-o", "stat=", "-p", pid.trim()],
+            &[],
+            Duration::from_secs(10),
+        )
+        .unwrap();
         let stat = String::from_utf8_lossy(&ps.stdout);
         assert!(
             stat.trim().is_empty() || stat.trim().starts_with('Z'),
@@ -602,7 +641,7 @@ mod tests {
     #[test]
     fn a_job_below_the_disk_floor_is_stopped() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(
+        crate::fsio::write(
             root.path().join(crate::linux::probe::TEST_MACHINE),
             r#"{"psi": {"mem_some10": 0.0, "cpu_some10": 0.0, "io_full10": 0.0, "app_mem_some10": null},
                 "disk_free_gb": 1, "disk_total_gb": 475, "mem_available_mib": 8192}"#,

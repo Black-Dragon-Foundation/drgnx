@@ -36,18 +36,18 @@ pub fn floor(total: u64) -> u64 {
 fn load(root: &Path) -> Option<(f64, u32)> {
     #[cfg(target_os = "macos")]
     if root == Path::new(super::power::SYS) {
-        let o = std::process::Command::new("sysctl")
+        let o = crate::proc::Command::new("sysctl")
             .args(["-n", "vm.loadavg", "hw.logicalcpu"])
             .output()
             .ok()?;
         return sysctl_load(&String::from_utf8_lossy(&o.stdout));
     }
     let avg = if root == Path::new(super::power::SYS) {
-        std::fs::read_to_string("/proc/loadavg").ok()?
+        crate::fsio::read_to_string("/proc/loadavg").ok()?
     } else {
-        std::fs::read_to_string(root.join("loadavg")).ok()?
+        crate::fsio::read_to_string(root.join("loadavg")).ok()?
     };
-    let online = std::fs::read_to_string(root.join("devices/system/cpu/online")).ok()?;
+    let online = crate::fsio::read_to_string(root.join("devices/system/cpu/online")).ok()?;
     Some((first_load(&avg)?, cpu_count(&online)?))
 }
 
@@ -79,7 +79,7 @@ fn sysctl_load(text: &str) -> Option<(f64, u32)> {
 /// Free (to this user) and total bytes of STATE's filesystem; a stand-in ROOT's `statvfs` file holds `AVAIL TOTAL`.
 fn space(root: &Path, state: &Path) -> Option<(u64, u64)> {
     if root != Path::new(super::power::SYS) {
-        let text = std::fs::read_to_string(root.join("statvfs")).ok()?;
+        let text = crate::fsio::read_to_string(root.join("statvfs")).ok()?;
         let mut f = text.split_whitespace().map(str::parse::<u64>);
         return Some((f.next()?.ok()?, f.next()?.ok()?));
     }

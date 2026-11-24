@@ -25,7 +25,7 @@ use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use urdr::Connection;
@@ -44,21 +44,21 @@ const LIST: usize = 2000;
 pub const VIEW: &str = "agent-history/";
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }
 
-fn err(message: impl Into<String>) -> Error {
+fn err(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::InvalidParams,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
 
-fn internal(message: impl Into<String>) -> Error {
+fn internal(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::Internal,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
@@ -310,10 +310,7 @@ fn mtime_of(m: &std::fs::Metadata) -> i64 {
 
 /// PATH opened read-only, never through a link.
 fn open_ro(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
+    eitri::open_read(path).map_err(std::io::Error::from)
 }
 
 const SCHEMA: &str = "
@@ -326,20 +323,17 @@ create virtual table if not exists turn using fts5(key unindexed, idx unindexed,
 ";
 
 /// The index at PATH, made with mode 0600 when missing (and set back to it when it is not).
-pub fn open_db(path: &Path) -> Result<Connection, String> {
+pub fn open_db(path: &Path) -> villa::Result<Connection> {
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", dir.display())))?;
     }
-    let f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let f = eitri::open_append(path, Some(0o600))
+        .map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
     f.set_permissions(std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    let c = Connection::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        .map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
+    let c =
+        Connection::open(path).map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
     // the index is a cache: one from before the format-drift columns is dropped and read again
     let old: bool = c
         .query_row(
@@ -347,19 +341,19 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
             [],
             |r| r.get(0),
         )
-        .map_err(|e| e.to_string())?
+        .map_err(|e| villa::Error::invalid(e.to_string()))?
         && c.query_row(
             "select count(*) > 0 from pragma_table_info('session')",
             [],
             |r| r.get(0),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if old {
         c.execute_batch("drop table session; drop table turn;")
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
     }
     c.execute_batch(SCHEMA)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", path.display())))?;
     Ok(c)
 }
 
@@ -452,7 +446,10 @@ impl History {
         for suffix in ["", "-journal", "-wal", "-shm"] {
             let mut p = db_path.as_os_str().to_owned();
             p.push(suffix);
-            let _ = std::fs::remove_file(PathBuf::from(p));
+            crate::soft::done(
+                std::fs::remove_file(PathBuf::from(p)),
+                "std::fs::remove_file",
+            );
         }
         drop(i);
         lock(&self.list).clear();
@@ -476,7 +473,7 @@ impl History {
 
     /// Scan the roots now (blocking): new and changed files read (an append from its offset), gone ones dropped.  The
     /// answer is how many sessions are indexed.
-    pub fn scan(&self) -> Result<u64, String> {
+    pub fn scan(&self) -> villa::Result<u64> {
         self.scan_changed().map(|(n, _)| n)
     }
 
@@ -492,7 +489,7 @@ impl History {
 
     /// `scan`, and whether the index changed.  The walk is stat-only: the files' size and change time are compared with
     /// the known ones held in memory; when nothing is new, changed or gone nothing is opened, written or listed.
-    pub fn scan_changed(&self) -> Result<(u64, bool), String> {
+    pub fn scan_changed(&self) -> villa::Result<(u64, bool)> {
         let mut i = lock(&self.inner);
         let Some(roots) = i.roots.clone() else {
             return Ok((0, false));
@@ -517,7 +514,7 @@ impl History {
         } = &mut *i;
         let db = db.as_mut().expect("opened above");
         if known.is_none() {
-            let k = indexed(db)?;
+            let k = indexed(db).map_err(|e| villa::Error::invalid(e.to_string()))?;
             per_dir.clear();
             for r in k.values() {
                 *per_dir.entry(parent_of(&r.path)).or_default() += 1;
@@ -568,9 +565,11 @@ impl History {
             })
             .cloned()
             .collect();
-        let tx = db.transaction().map_err(|e| e.to_string())?;
+        let tx = db
+            .transaction()
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         for k in &gone {
-            drop_session(&tx, &k.key)?;
+            drop_session(&tx, &k.key).map_err(|e| villa::Error::invalid(e.to_string()))?;
         }
         let mut put: Vec<Indexed> = Vec::new();
         for f in todo {
@@ -599,13 +598,17 @@ impl History {
             } else {
                 row.map_or(0, |r| r.entries)
             };
-            put.push(index_one(&tx, f, &rd, row, old_entries)?);
+            put.push(
+                index_one(&tx, f, &rd, row, old_entries)
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?,
+            );
             readers.push((f.path.clone(), rd));
             if readers.len() > READERS {
                 readers.remove(0);
             }
         }
-        tx.commit().map_err(|e| e.to_string())?;
+        tx.commit()
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         for k in &gone {
             known_map.remove(&k.path);
             let d = parent_of(&k.path);
@@ -622,7 +625,7 @@ impl History {
                 *per_dir.entry(d).or_default() += 1;
             }
         }
-        let list = list_of(db)?;
+        let list = list_of(db).map_err(|e| villa::Error::invalid(e.to_string()))?;
         let n = known_map.len() as u64;
         *lock(&self.list) = list;
         *listed = true;
@@ -631,7 +634,7 @@ impl History {
 
     /// The CLIs whose files read with a share of lines this build does not know: per provider, how many files had at
     /// least `DRIFT_PCT` percent unknown lines over at least `DRIFT_LINES` lines, and the share over those files.
-    pub fn drift(&self) -> Result<Vec<PastDrift>, String> {
+    pub fn drift(&self) -> villa::Result<Vec<PastDrift>> {
         let i = lock(&self.inner);
         let Some(db) = i.db.as_ref() else {
             return Ok(Vec::new());
@@ -640,8 +643,7 @@ impl History {
             .prepare(
                 "select provider, count(*), sum(unknown), sum(lines) from session
                  where lines >= ?1 and unknown * 100 >= lines * ?2 group by provider order by provider",
-            )
-            .map_err(|e| e.to_string())?;
+            ).map_err(|e| villa::Error::invalid(e.to_string()))?;
         let rows = st
             .query_map((DRIFT_LINES, DRIFT_PCT), |r| {
                 let provider: String = r.get(0)?;
@@ -652,12 +654,13 @@ impl History {
                     unknown_pct: (unknown * 100 / lines.max(1)) as u64,
                 })
             })
-            .map_err(|e| e.to_string())?;
-        rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
+        rows.collect::<Result<_, _>>()
+            .map_err(|e| villa::Error::invalid(e.to_string()))
     }
 
     /// The sessions whose title or transcript hold every word of QUERY, best first.
-    pub fn search(&self, query: &str) -> Result<Vec<PastHit>, String> {
+    pub fn search(&self, query: &str) -> villa::Result<Vec<PastHit>> {
         let mut i = lock(&self.inner);
         let Some(db) = i.db.as_mut() else {
             return Ok(Vec::new());
@@ -666,21 +669,23 @@ impl History {
     }
 
     /// The session PROVIDER:ID as the list has it, and its file.
-    fn find(&self, p: PastProvider, id: &str) -> Result<(PastSession, PathBuf), String> {
+    fn find(&self, p: PastProvider, id: &str) -> villa::Result<(PastSession, PathBuf)> {
         let i = lock(&self.inner);
-        let db = i.db.as_ref().ok_or("no past sessions are indexed")?;
+        let db =
+            i.db.as_ref()
+                .ok_or_else(|| villa::Error::invalid("no past sessions are indexed"))?;
         let key = format!("{}:{id}", provider_of(p).name());
         let mut st = db
             .prepare("select path from session where key = ?1")
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let path: String = st
             .query_row([&key], |r| r.get(0))
-            .map_err(|_| format!("no past session {key}"))?;
+            .map_err(|_| villa::Error::invalid(format!("no past session {key}")))?;
         let s = lock(&self.list)
             .iter()
             .find(|s| s.provider == p && s.id == id)
             .cloned()
-            .ok_or_else(|| format!("no past session {key}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no past session {key}")))?;
         Ok((s, PathBuf::from(path)))
     }
 
@@ -694,7 +699,7 @@ impl History {
             let Some(entries) = entries else {
                 return false;
             };
-            let _ = view;
+            let _only_when_used_elsewhere = &view;
             f.core
                 .views
                 .publish_built(f, key, |_, _| (transcript_rows(&entries), Vec::new()));
@@ -742,10 +747,10 @@ impl History {
     }
 }
 
-fn indexed(db: &Connection) -> Result<HashMap<String, Indexed>, String> {
+fn indexed(db: &Connection) -> villa::Result<HashMap<String, Indexed>> {
     let mut st = db
         .prepare("select key, path, size, mtime, off, entries from session")
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let rows = st
         .query_map([], |r| {
             Ok(Indexed {
@@ -757,20 +762,20 @@ fn indexed(db: &Connection) -> Result<HashMap<String, Indexed>, String> {
                 entries: r.get::<_, i64>(5)? as u64,
             })
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let mut out = HashMap::new();
     for r in rows {
-        let r = r.map_err(|e| e.to_string())?;
+        let r = r.map_err(|e| villa::Error::invalid(e.to_string()))?;
         out.insert(r.path.clone(), r);
     }
     Ok(out)
 }
 
-fn drop_session(tx: &Connection, key: &str) -> Result<(), String> {
+fn drop_session(tx: &Connection, key: &str) -> villa::Result<()> {
     tx.execute("delete from session where key = ?1", [key])
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     tx.execute("delete from turn where key = ?1", [key])
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     Ok(())
 }
 
@@ -801,7 +806,7 @@ fn index_one(
     rd: &Reader,
     row: Option<&Indexed>,
     old_entries: u64,
-) -> Result<Indexed, String> {
+) -> villa::Result<Indexed> {
     let meta = rd.meta();
     let sid = meta.id.clone().unwrap_or_else(|| {
         f.path
@@ -830,7 +835,7 @@ fn index_one(
                 "insert into turn (key, idx, text) values (?1, ?2, ?3)",
                 (&key, idx as i64, &t),
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         }
     }
     let title = meta
@@ -863,7 +868,7 @@ fn index_one(
             rd.unknown() as i64,
         ),
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| villa::Error::invalid(e.to_string()))?;
     Ok(Indexed {
         key,
         path: f.path.to_string_lossy().into_owned(),
@@ -891,15 +896,17 @@ fn session_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<PastSession> {
     })
 }
 
-fn list_of(db: &Connection) -> Result<Vec<PastSession>, String> {
+fn list_of(db: &Connection) -> villa::Result<Vec<PastSession>> {
     let mut st = db
         .prepare(&format!(
             "select {COLUMNS} from session order by coalesce(updated, '') desc limit {LIST}"
         ))
-        .map_err(|e| e.to_string())?;
-    let rows = st.query_map([], session_of).map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let rows = st
+        .query_map([], session_of)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+        .map_err(|e| villa::Error::invalid(e.to_string()))
 }
 
 /// QUERY as an FTS5 match: every word as a phrase (quotes doubled), the last one a prefix.  None when it has no word.
@@ -925,7 +932,7 @@ pub fn fts_query(query: &str) -> Option<String> {
     )
 }
 
-fn search_in(db: &Connection, query: &str) -> Result<Vec<PastHit>, String> {
+fn search_in(db: &Connection, query: &str) -> villa::Result<Vec<PastHit>> {
     let Some(q) = fts_query(query) else {
         return Ok(Vec::new());
     };
@@ -937,10 +944,10 @@ fn search_in(db: &Connection, query: &str) -> Result<Vec<PastHit>, String> {
         .prepare(&format!(
             "select {COLUMNS} from session where title like ?1 order by coalesce(updated, '') desc limit 200"
         ))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     for s in st
         .query_map([&like], session_of)
-        .map_err(|e| e.to_string())?
+        .map_err(|e| villa::Error::invalid(e.to_string()))?
         .flatten()
     {
         if seen.insert((s.provider, s.id.clone())) {
@@ -961,10 +968,10 @@ fn search_in(db: &Connection, query: &str) -> Result<Vec<PastHit>, String> {
             "select {cols}, snippet(turn, 2, '', '', '…', 16) from turn join session s on s.key = turn.key
              where turn match ?1 order by rank limit 400"
         ))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let rows = st
         .query_map([&q], |r| Ok((session_of(r)?, r.get::<_, String>(8)?)))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     for (s, snippet) in rows.flatten() {
         if hits.len() >= 50 {
             break;
@@ -1211,19 +1218,22 @@ pub fn put_grant(sid: &str, g: Grant) {
 /// FILE checked for a grant: a regular file (not a link), still under ROOT once its true name is read. Below ROOT the
 /// path must be its true name (no link, no `..`); above it links are the machine's (macOS's `/var` is
 /// `/private/var`, an atomic Fedora's `/home` is `/var/home`) and ROOT and FILE may name it either way.
-pub fn checked_file(root: &Path, file: &Path) -> Result<PathBuf, String> {
+pub fn checked_file(root: &Path, file: &Path) -> villa::Result<PathBuf> {
     let meta = file
         .symlink_metadata()
-        .map_err(|e| format!("{}: {e}", file.display()))?;
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", file.display())))?;
     if !meta.file_type().is_file() {
-        return Err(format!("{} is not a regular file", file.display()));
+        return Err(villa::Error::invalid(format!(
+            "{} is not a regular file",
+            file.display()
+        )));
     }
     let real = file
         .canonicalize()
-        .map_err(|e| format!("{}: {e}", file.display()))?;
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", file.display())))?;
     let root = root
         .canonicalize()
-        .map_err(|e| format!("{}: {e}", root.display()))?;
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", root.display())))?;
     // the part below the root as the true name has it, and as FILE spells it: the same, under a folder that is ROOT
     let true_name = real.strip_prefix(&root).ok().filter(|rel| {
         file.ends_with(rel)
@@ -1234,13 +1244,13 @@ pub fn checked_file(root: &Path, file: &Path) -> Result<PathBuf, String> {
                 .is_some_and(|above| above == root)
     });
     if true_name.is_none() {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "{} is not under {}",
             file.display(),
             root.display()
-        ));
+        )));
     }
-    open_ro(&real).map_err(|e| format!("{}: {e}", real.display()))?;
+    open_ro(&real).map_err(|e| villa::Error::invalid(format!("{}: {e}", real.display())))?;
     Ok(real)
 }
 
@@ -1296,7 +1306,7 @@ pub async fn scan_now(f: &Front) -> Result<u64, Error> {
 pub async fn follow(f: Arc<Front>) {
     loop {
         if f.dirs.get().is_some() {
-            let _ = scan_now(&f).await;
+            crate::soft::done(scan_now(&f).await, "scan_now");
         }
         crate::clock::sleep(std::time::Duration::from_secs(2)).await;
     }
@@ -1333,7 +1343,7 @@ pub async fn open(f: &Front, _: &Caller, p: PastRef) -> Result<PastOpened, Error
     }
     let (session, path) = f.core.past.find(p.provider, &p.id.0).map_err(err)?;
     let provider = provider_of(p.provider);
-    let entries = crate::clock::blocking(move || -> Result<Vec<Entry>, String> {
+    let entries = crate::clock::blocking(move || -> villa::Result<Vec<Entry>> {
         let mut rd = Reader::new(provider);
         let found = Found {
             provider,
@@ -1341,7 +1351,8 @@ pub async fn open(f: &Front, _: &Caller, p: PastRef) -> Result<PastOpened, Error
             size: 0,
             mtime: 0,
         };
-        read_into(&mut rd, &found).map_err(|e| format!("{}: {e}", path.display()))?;
+        read_into(&mut rd, &found)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
         Ok(rd.entries().iter().map(entry_of).collect())
     })
     .await

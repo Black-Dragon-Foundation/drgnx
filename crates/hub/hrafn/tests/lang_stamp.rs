@@ -9,11 +9,12 @@ use hrafn::{CodeStore, Listed, Scope, View, classify, refresh};
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
+use std::sync::Mutex;
 
 /// The grammar registry is the process's: libtest runs this file's tests on threads of one process (macOS's job runs the
 /// binaries as they are; nextest gives each its own), so a test that installs grammars holds this while it does, and
 /// the stamp is never read between its installs.
-static REGISTRY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static REGISTRY: Mutex<()> = Mutex::new(());
 
 const PY: &str = "def make_widget(n):\n    \"\"\"Makes one.\"\"\"\n    return n\n";
 
@@ -73,39 +74,38 @@ async fn keys(s: &CodeStore) -> Vec<Vec<u8>> {
         .unwrap()
 }
 
-#[tokio::test]
-async fn a_grammar_built_later_re_parses_the_files_without_an_edit() {
-    let lock = std::env::var("DRGNX_PACK_LOCK").expect("the test run's pack grammars");
-    let grammars = std::env::var("DRGNX_PACK_GRAMMARS").expect("the test run's pack grammars");
-    let _registry = REGISTRY.lock().await;
-    let dir = tempfile::tempdir().unwrap();
-    let s = CodeStore::open(&dir.path().join("code.db")).unwrap();
+#[test]
+fn a_grammar_built_later_re_parses_the_files_without_an_edit() {
+    let _registry = saman::lock(&REGISTRY);
+    saman::block_on_current(async {
+        let lock = std::env::var("DRGNX_PACK_LOCK").expect("the test run's pack grammars");
+        let grammars = std::env::var("DRGNX_PACK_GRAMMARS").expect("the test run's pack grammars");
+        let dir = tempfile::tempdir().unwrap();
+        let s = CodeStore::open(&dir.path().join("code.db")).unwrap();
 
-    // the Python pack's grammar is not built: the file reads as text, no symbol
-    skald::registry::install(Vec::new());
-    index(&s).await;
-    assert_eq!(hits(&s).await, 0);
-    let text_keys = keys(&s).await;
+        // the Python pack's grammar is not built: the file reads as text, no symbol
+        skald::registry::install(Vec::new());
+        index(&s).await;
+        assert_eq!(hits(&s).await, 0);
 
-    // the grammar is built: the same file, unedited, is parsed again
-    skald::registry::install_from(Path::new(&lock), Path::new(&grammars)).unwrap();
-    index(&s).await;
-    assert_eq!(hits(&s).await, 1);
-    assert!(!keys(&s).await.is_empty());
+        // the grammar is built: the same file, unedited, is parsed again
+        skald::registry::install_from(Path::new(&lock), Path::new(&grammars)).unwrap();
+        index(&s).await;
+        assert_eq!(hits(&s).await, 1);
+        assert!(!keys(&s).await.is_empty());
 
-    // and the other way: nothing moves while the stamp does not
-    let again = keys(&s).await;
-    index(&s).await;
-    assert_eq!(keys(&s).await, again);
-    // (the text chunks' keys are the whole file's text; the parsed file may chunk the same text, so keys may match)
-    let _ = text_keys;
+        // and the other way: nothing moves while the stamp does not
+        let again = keys(&s).await;
+        index(&s).await;
+        assert_eq!(keys(&s).await, again);
+    })
 }
 
 /// The stamp is a hash of the packs, the grammars' availability and the version of the language rules
 /// ([`hrafn::files::LANG_RULES`]): the same twice, and a hash of 64 hex digits.
 #[test]
 fn the_stamp_is_a_stable_hash() {
-    let _registry = REGISTRY.blocking_lock();
+    let _registry = saman::lock(&REGISTRY);
     let s = hrafn::chunk::lang_stamp();
     assert_eq!(s, hrafn::chunk::lang_stamp());
     assert_eq!(s.len(), 64);

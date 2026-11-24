@@ -165,24 +165,26 @@ fn section_text(heading: &str, body: &str, last: bool) -> (String, String) {
     (format!("## {heading}\n"), format!("\n{b}"))
 }
 
-fn check_heading(h: &str) -> Result<(), String> {
+fn check_heading(h: &str) -> villa::Result<()> {
     if h.trim().is_empty() || h.contains(['\n', '\r']) || h.trim_start().starts_with('#') {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "a section heading is one line of text with no `#` ({h:?})"
+        )));
+    }
+    Ok(())
+}
+
+fn check_body(b: &str) -> villa::Result<()> {
+    if md::headings(b).iter().any(|h| h.level == 2) {
+        return Err(villa::Error::invalid(
+            "a section body holds no level-2 heading (`## `) outside a code fence: write it as its own section",
         ));
     }
     Ok(())
 }
 
-fn check_body(b: &str) -> Result<(), String> {
-    if md::headings(b).iter().any(|h| h.level == 2) {
-        return Err("a section body holds no level-2 heading (`## `) outside a code fence: write it as its own section".into());
-    }
-    Ok(())
-}
-
 /// TEXT with EDITS applied; an unknown key, a bad heading or a body holding a level-2 heading is an error.
-pub fn edit(text: &str, e: &SpecEdits) -> Result<String, String> {
+pub fn edit(text: &str, e: &SpecEdits) -> villa::Result<String> {
     let doc = parse(text);
     let keys = section_keys(&doc.sections);
     let known = |k: &str| keys.iter().position(|x| x == k);
@@ -194,7 +196,7 @@ pub fn edit(text: &str, e: &SpecEdits) -> Result<String, String> {
         .map(|(s, k)| (Some(k.clone()), s.heading.clone(), s.body.clone()))
         .collect();
     for k in &e.remove {
-        known(k).ok_or_else(|| format!("no section {k:?} to remove"))?;
+        known(k).ok_or_else(|| villa::Error::not_found(format!("no section {k:?} to remove")))?;
     }
     for w in &e.sections {
         check_heading(&w.heading)?;
@@ -216,13 +218,16 @@ pub fn edit(text: &str, e: &SpecEdits) -> Result<String, String> {
     for w in &e.sections {
         match (&w.key, &w.after) {
             (Some(k), _) => {
-                let i = known(k).ok_or_else(|| format!("no section {k:?}"))?;
+                let i =
+                    known(k).ok_or_else(|| villa::Error::not_found(format!("no section {k:?}")))?;
                 let (h, b) = section_text(&w.heading, &w.body, true);
                 items[i].1 = h;
                 items[i].2 = b;
             }
             (None, Some(a)) => {
-                let i = known(a).ok_or_else(|| format!("no section {a:?} to put it after"))?;
+                let i = known(a).ok_or_else(|| {
+                    villa::Error::not_found(format!("no section {a:?} to put it after"))
+                })?;
                 inserts.push((i, w.heading.clone(), w.body.clone()));
             }
             (None, None) => append.push((w.heading.clone(), w.body.clone())),

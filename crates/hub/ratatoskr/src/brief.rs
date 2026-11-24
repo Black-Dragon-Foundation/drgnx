@@ -34,10 +34,10 @@ const OPEN: i64 = 4_611_686_018_427_387_904;
 #[derive(Default)]
 pub struct Briefs {}
 
-fn err(code: ErrorCode, msg: impl Into<String>) -> Error {
+fn err(code: ErrorCode, msg: impl ToString) -> Error {
     Error {
         code,
-        message: msg.into(),
+        message: msg.to_string(),
         path: None,
     }
 }
@@ -172,7 +172,7 @@ fn section_from_file(file: &str, n: i64) -> Option<String> {
     if !Path::new(file).is_absolute() {
         return None;
     }
-    let text = std::fs::read_to_string(file).ok()?;
+    let text = crate::fsio::read_to_string(file).ok()?;
     let doc = saga::plan::parse(&text);
     let t = doc.tasks.iter().find(|t| t.number == n.to_string())?;
     let mut raw = format!("{}{}", t.heading, t.body);
@@ -361,7 +361,7 @@ fn gather(
     let agents = job
         .as_ref()
         .and_then(|j| j.repo.as_deref())
-        .and_then(|r| std::fs::read_to_string(Path::new(r).join("AGENTS.md")).ok())
+        .and_then(|r| crate::fsio::read_to_string(Path::new(r).join("AGENTS.md")).ok())
         .map(|t| cut_with_pointer(&t, AGENTS_CAP, "read AGENTS.md in the repo root"))
         .unwrap_or_default();
     let matrix = matrix_lines(&gate.effective_for(conn, &who, &ctx, now));

@@ -305,49 +305,55 @@ mod tests {
         (job.to_string(), state.to_string())
     }
 
-    #[tokio::test]
-    async fn a_wake_is_kept_once_claimed_once_and_only_with_a_store() {
-        let d = tempfile::tempdir().unwrap();
-        let (none, _) = front(d.path(), false);
-        assert!(write(&none, |_| Ok(1)).await.is_none());
-        record(&none, &done(ExecStatus::Done, Some(0), &[])).await;
-        assert!(!claim(&none, "x1").await);
+    #[test]
+    fn a_wake_is_kept_once_claimed_once_and_only_with_a_store() {
+        saman::block_on_current(async move {
+            let d = tempfile::tempdir().unwrap();
+            let (none, _) = front(d.path(), false);
+            assert!(write(&none, |_| Ok(1)).await.is_none());
+            record(&none, &done(ExecStatus::Done, Some(0), &[])).await;
+            assert!(!claim(&none, "x1").await);
 
-        let d = tempfile::tempdir().unwrap();
-        let (f, _store) = front(d.path(), true);
-        assert_eq!(write(&f, |_| Ok(7)).await, Some(7));
-        // a job that no session started has no wake
-        let mut other = done(ExecStatus::Done, Some(0), &[]);
-        other.session = None;
-        record(&f, &other).await;
-        assert!(rows(&f).await.is_empty());
-        let d1 = done(ExecStatus::Done, Some(0), &[]);
-        record(&f, &d1).await;
-        record(&f, &d1).await;
-        assert_eq!(rows(&f).await, [row("x1", "pending")]);
-        assert!(!claim(&f, "nope").await);
-        assert!(claim(&f, "x1").await);
-        assert_eq!(rows(&f).await, [row("x1", "sending")]);
-        assert!(!claim(&f, "x1").await, "a second delivery does not get it");
+            let d = tempfile::tempdir().unwrap();
+            let (f, _store) = front(d.path(), true);
+            assert_eq!(write(&f, |_| Ok(7)).await, Some(7));
+            // a job that no session started has no wake
+            let mut other = done(ExecStatus::Done, Some(0), &[]);
+            other.session = None;
+            record(&f, &other).await;
+            assert!(rows(&f).await.is_empty());
+            let d1 = done(ExecStatus::Done, Some(0), &[]);
+            record(&f, &d1).await;
+            record(&f, &d1).await;
+            assert_eq!(rows(&f).await, [row("x1", "pending")]);
+            assert!(!claim(&f, "nope").await);
+            assert!(claim(&f, "x1").await);
+            assert_eq!(rows(&f).await, [row("x1", "sending")]);
+            assert!(!claim(&f, "x1").await, "a second delivery does not get it");
+        })
     }
 
-    #[tokio::test]
-    async fn a_wake_with_no_session_yet_stays_pending() {
-        let d = tempfile::tempdir().unwrap();
-        let (f, _store) = front(d.path(), true);
-        let d1 = done(ExecStatus::Done, Some(0), &[]);
-        record(&f, &d1).await;
-        deliver(&f, &d1).await;
-        assert_eq!(rows(&f).await, [row("x1", "pending")]);
+    #[test]
+    fn a_wake_with_no_session_yet_stays_pending() {
+        saman::block_on_current(async move {
+            let d = tempfile::tempdir().unwrap();
+            let (f, _store) = front(d.path(), true);
+            let d1 = done(ExecStatus::Done, Some(0), &[]);
+            record(&f, &d1).await;
+            deliver(&f, &d1).await;
+            assert_eq!(rows(&f).await, [row("x1", "pending")]);
+        })
     }
 
-    #[tokio::test]
-    async fn recovery_drops_the_wakes_of_jobs_that_are_gone() {
-        let d = tempfile::tempdir().unwrap();
-        let (f, _store) = front(d.path(), true);
-        record(&f, &done(ExecStatus::Done, Some(0), &[])).await;
-        assert_eq!(rows(&f).await.len(), 1);
-        recover(&f).await;
-        assert!(rows(&f).await.is_empty());
+    #[test]
+    fn recovery_drops_the_wakes_of_jobs_that_are_gone() {
+        saman::block_on_current(async move {
+            let d = tempfile::tempdir().unwrap();
+            let (f, _store) = front(d.path(), true);
+            record(&f, &done(ExecStatus::Done, Some(0), &[])).await;
+            assert_eq!(rows(&f).await.len(), 1);
+            recover(&f).await;
+            assert!(rows(&f).await.is_empty());
+        })
     }
 }

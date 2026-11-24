@@ -89,7 +89,10 @@ async fn reopen(projects: &Projects, front: Option<Weak<Front>>) {
     };
     for root in roots {
         // a root that cannot be opened now is opened (and its error told) by the call that names it
-        let _ = front.search.project(&front, &root).await;
+        crate::soft::done(
+            front.search.project(&front, &root).await,
+            "search: reopen a project",
+        );
     }
 }
 
@@ -117,10 +120,10 @@ pub struct Hub {
 /// none of them costs a request to the server. Tier 2 probes before every batch on its own.
 const PROBE_TTL: Duration = Duration::from_secs(10);
 
-fn error(code: ErrorCode, message: impl Into<String>, path: Option<&str>) -> Error {
+fn error(code: ErrorCode, message: impl ToString, path: Option<&str>) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: path.map(str::to_owned),
     }
 }
@@ -269,14 +272,14 @@ fn scope_of(s: Option<w::Scope>) -> Scope {
 
 /// `.drgnx/search.toml` of ROOT as a layer ([`hrafn::files::read_repo`], at most 64 KiB, read as data). No file is an
 /// empty layer; a file that does not read is an `Err`.
-pub fn config_file(root: &Path) -> Result<hrafn::rules::RuleSet, String> {
-    hrafn::files::read_repo(root).map_err(|e| e.to_string())
+pub fn config_file(root: &Path) -> villa::Result<hrafn::rules::RuleSet> {
+    hrafn::files::read_repo(root).map_err(|e| villa::Error::invalid(e.to_string()))
 }
 
 impl Hub {
     /// The front, once it is in its `Arc` (the MCP tool reaches the hub through it).
     pub fn bind(&self, front: &Arc<Front>) {
-        let _ = self.front.set(Arc::downgrade(front));
+        crate::soft::done(self.front.set(Arc::downgrade(front)), "methods");
     }
 
     /// The front the hub was bound to, while it lives.
@@ -287,16 +290,22 @@ impl Hub {
     /// Where things are, once the server knows: ENV for the state and cache folders, HOME and CONFIG for the deny-list,
     /// RUNTIME for the model consent.
     pub fn configure(&self, env: &Env, home: PathBuf, config: PathBuf, runtime: urdr::Handle) {
-        let _ = self.search.set(Search::new(env));
-        let _ = self.saved.set(Arc::new(Saved::new(
-            paths::state_dir(env).join("hub").join("search"),
-        )));
-        let _ = self.dirs.set(Dirs {
-            env: env.clone(),
-            home,
-            config,
-            runtime,
-        });
+        crate::soft::done(self.search.set(Search::new(env)), "methods");
+        crate::soft::done(
+            self.saved.set(Arc::new(Saved::new(
+                paths::state_dir(env).join("hub").join("search"),
+            ))),
+            "methods",
+        );
+        crate::soft::done(
+            self.dirs.set(Dirs {
+                env: env.clone(),
+                home,
+                config,
+                runtime,
+            }),
+            "methods",
+        );
     }
 
     /// The built-in model's worker, once the model is `Ready` in the cache.
@@ -406,10 +415,11 @@ impl Hub {
     pub fn watch_status(&self) -> runstav::methods::hub::WatchStatus {
         use runstav::methods::hub::{ProjectWatch, WatchStatus};
         let mut projects = Vec::new();
-        if let Ok(mut rows) = self.watches.lock() {
+        {
+            let mut rows = saman::lock(&self.watches);
             rows.retain(|(_, w)| w.strong_count() > 0);
             for (root, w) in rows.iter() {
-                if let Some(s) = w.upgrade().and_then(|s| s.lock().ok().map(|s| s.clone())) {
+                if let Some(s) = w.upgrade().map(|s| saman::lock(&s).clone()) {
                     projects.push(ProjectWatch {
                         root: root.to_string_lossy().into_owned(),
                         watched: s.watched as u64,
@@ -419,7 +429,7 @@ impl Hub {
             }
         }
         WatchStatus {
-            max_user_watches: std::fs::read_to_string(MAX_USER_WATCHES)
+            max_user_watches: crate::fsio::read_to_string(MAX_USER_WATCHES)
                 .ok()
                 .and_then(|t| t.trim().parse().ok()),
             projects,
@@ -433,11 +443,12 @@ impl Hub {
         let Some(s) = self.saved.get() else { return };
         if s.offer(root, view, spec, crate::clock::now()) {
             let (s, root) = (Arc::clone(s), root.to_path_buf());
-            let _ = std::thread::Builder::new()
-                .name("search-recent".into())
-                .spawn(move || {
-                    let _ = s.flush(&root);
-                });
+            crate::soft::done(
+                saman::spawn_thread("search-recent", move || {
+                    crate::soft::done(s.flush(&root), "methods");
+                }),
+                "search-recent",
+            );
         }
     }
 
@@ -470,11 +481,14 @@ impl Hub {
     async fn probed(&self, s: &ProviderEmbedder) -> Option<Identity> {
         let key = s.cache_key();
         let now = crate::clock::now();
-        let cached = self.probes.lock().ok().and_then(|p| {
-            p.get(&key)
-                .filter(|(at, _)| now.saturating_duration_since(*at) < PROBE_TTL)
-                .map(|(_, got)| got.clone())
-        });
+        let cached = {
+            let p = saman::lock(&self.probes);
+            {
+                p.get(&key)
+                    .filter(|(at, _)| now.saturating_duration_since(*at) < PROBE_TTL)
+                    .map(|(_, got)| got.clone())
+            }
+        };
         match cached {
             Some(got) => {
                 if let Some(i) = &got {
@@ -484,7 +498,8 @@ impl Hub {
             }
             None => {
                 let got = DocEmbedder::probe(s).await.ok();
-                if let Ok(mut p) = self.probes.lock() {
+                {
+                    let mut p = saman::lock(&self.probes);
                     p.insert(key, (now, got.clone()));
                 }
                 got
@@ -689,17 +704,19 @@ impl Hub {
             project.watch(watch.clone());
         }
         let state = hrafn::Watch::shared_state(&*watch);
-        if let Err(e) = added
-            && let Ok(mut s) = state.lock()
-            && s.error.is_none()
-        {
-            tracing::warn!("search: no file watch for {}: {e}", real.display());
-            s.error = Some(e.to_string());
+        if let Err(e) = added {
+            let mut s = saman::lock(&state);
+            if s.error.is_none() {
+                tracing::warn!("search: no file watch for {}: {e}", real.display());
+                s.error = Some(e.to_string());
+            }
         }
-        if let Some(e) = state.lock().ok().and_then(|s| s.error.clone()) {
+        let error = saman::lock(&state).error.clone();
+        if let Some(e) = error {
             tracing::warn!("search: {} runs unwatched: {e}", real.display());
         }
-        if let Ok(mut rows) = self.watches.lock() {
+        {
+            let mut rows = saman::lock(&self.watches);
             rows.retain(|(_, w)| w.strong_count() > 0);
             rows.push((real.clone(), Arc::downgrade(&state)));
         }
@@ -1309,18 +1326,12 @@ impl Hub {
                 watched: t.watched,
             })
             .collect();
-        let used = self
-            .watches
-            .lock()
-            .ok()
-            .and_then(|rows| {
-                rows.iter()
-                    .find(|(r, _)| r == p.root())
-                    .and_then(|(_, w)| w.upgrade())
-                    .and_then(|s| s.lock().ok().map(|s| s.watched as u64))
-            })
-            .unwrap_or(0);
-        let limit: Option<u64> = std::fs::read_to_string(MAX_USER_WATCHES)
+        let used = saman::lock(&self.watches)
+            .iter()
+            .find(|(r, _)| r == p.root())
+            .and_then(|(_, w)| w.upgrade())
+            .map_or(0, |s| saman::lock(&s).watched as u64);
+        let limit: Option<u64> = crate::fsio::read_to_string(MAX_USER_WATCHES)
             .ok()
             .and_then(|t| t.trim().parse().ok());
         let watch = w::SearchWatch {
@@ -1372,13 +1383,13 @@ impl Hub {
             ModelState::Ready => ("ready", download_bytes(spec)),
             ModelState::Corrupt { .. } => ("corrupt", 0),
         };
-        let mut failed = None;
-        if let Ok(d) = self.download.lock() {
+        let failed = {
+            let d = saman::lock(&self.download);
             if d.running {
                 (st, held) = ("downloading", d.have.min(d.total));
             }
-            failed = d.failed.clone();
-        }
+            d.failed.clone()
+        };
         let builtin = self.builtin();
         let mut servers = Vec::new();
         let mut preferred = None;
@@ -1431,9 +1442,7 @@ impl Hub {
     /// The entity embedder's chain as its last step left it, each entry's state; a wait as wall-clock seconds.
     fn chain_entries(&self) -> Vec<w::ChainEntry> {
         let (now, wall) = (crate::clock::now(), crate::clock::wall());
-        let Ok(view) = self.embed.view.lock() else {
-            return Vec::new();
-        };
+        let view = saman::lock(&self.embed.view);
         view.iter()
             .map(|(l, h)| {
                 let (state, until, why) = match h {
@@ -1499,10 +1508,7 @@ impl Hub {
         )
         .map_err(|m| error(ErrorCode::InvalidParams, m, None))?;
         {
-            let mut d = self
-                .download
-                .lock()
-                .map_err(|_| internal("download state"))?;
+            let mut d = saman::lock(&self.download);
             if d.running {
                 return Ok(w::Started { started: false });
             }
@@ -1521,13 +1527,13 @@ impl Hub {
             let progress = {
                 let state = progress_state.clone();
                 move |have: u64, total: u64| {
-                    if let Ok(mut d) = state.lock() {
-                        (d.have, d.total) = (have, total);
-                    }
+                    let mut d = saman::lock(&state);
+                    (d.have, d.total) = (have, total);
                 }
             };
             let result = download(spec, &root, &base, &consent, &progress).await;
-            if let Ok(mut d) = progress_state.lock() {
+            {
+                let mut d = saman::lock(&progress_state);
                 d.running = false;
                 d.failed = result.as_ref().err().map(|e| format!("{e:?}"));
             }
@@ -1606,10 +1612,7 @@ impl Hub {
         )
         .map_err(|m| error(ErrorCode::InvalidParams, m, None))?;
         {
-            let mut d = self
-                .download
-                .lock()
-                .map_err(|_| internal("download state"))?;
+            let mut d = saman::lock(&self.download);
             if d.running {
                 return Ok(w::Started { started: false });
             }
@@ -1635,9 +1638,8 @@ impl Hub {
             .collect();
         clock::spawn("search:download", async move {
             let held = |have: u64| {
-                if let Ok(mut d) = state.lock() {
-                    d.have = have;
-                }
+                let mut d = saman::lock(&state);
+                d.have = have;
             };
             let mut result = super::download_gguf(gguf, &models, &base, &held).await;
             let mut before = gguf.bytes;
@@ -1657,7 +1659,8 @@ impl Hub {
                 .map(|_| ());
                 before += asset.total_bytes();
             }
-            if let Ok(mut d) = state.lock() {
+            {
+                let mut d = saman::lock(&state);
                 d.running = false;
                 d.failed = result.as_ref().err().map(|e| format!("{e:?}"));
             }
@@ -1745,7 +1748,7 @@ impl Hub {
         if given.is_none() {
             let to = write_to.with_file_name(format!("{}.vpack", &done.sha256[..16]));
             let (from, dest) = (write_to.clone(), to.clone());
-            clock::blocking(move || std::fs::rename(from, dest))
+            clock::blocking(move || crate::fsio::rename(from, dest))
                 .await
                 .map_err(internal)?
                 .map_err(internal)?;
@@ -2091,7 +2094,7 @@ impl Hub {
             )
         })?;
         Ok(w::ServeToken {
-            token: r.new_token().map_err(internal)?,
+            token: hulda::Secret::new(r.new_token().map_err(internal)?),
         })
     }
 }

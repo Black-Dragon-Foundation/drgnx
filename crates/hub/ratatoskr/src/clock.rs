@@ -36,6 +36,56 @@ impl From<String> for Origin {
     }
 }
 
+/// A task [`spawn`]ed here, what tokio's `JoinHandle` was to its callers: dropping it lets the task run on (the hub's
+/// tasks do not end with their handles), [`Spawned::abort`] ends it, and awaiting it gives its output, or a villa error
+/// when it was aborted or panicked.
+pub struct Spawned<T> {
+    task: std::sync::Mutex<Option<saman::Task<T>>>,
+}
+
+impl<T> Spawned<T> {
+    fn new(task: saman::Task<T>) -> Spawned<T> {
+        Spawned {
+            task: std::sync::Mutex::new(Some(task)),
+        }
+    }
+
+    /// End the task now (its output is gone).
+    pub fn abort(&self) {
+        drop(saman::lock(&self.task).take());
+    }
+
+    /// Whether the task has ended (finished, panicked or been aborted).
+    pub fn is_finished(&self) -> bool {
+        saman::lock(&self.task)
+            .as_ref()
+            .is_none_or(saman::Task::is_finished)
+    }
+}
+
+impl<T> Drop for Spawned<T> {
+    fn drop(&mut self) {
+        if let Some(t) = saman::lock(&self.task).take() {
+            t.detach("a clock::spawn task runs on when its handle is dropped (the contract of tokio's JoinHandle)");
+        }
+    }
+}
+
+impl<T> Future for Spawned<T> {
+    type Output = villa::Result<T>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let mut slot = saman::lock(&self.task);
+        match slot.as_mut() {
+            Some(t) => std::pin::Pin::new(t).poll(cx),
+            None => std::task::Poll::Ready(Err(villa::Error::cancelled("The task was aborted."))),
+        }
+    }
+}
+
 /// A [`timeout`] that ran out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Elapsed;
@@ -55,7 +105,12 @@ pub fn now() -> tokio::time::Instant {
     if let Some(v) = virt::current() {
         return v.now();
     }
-    tokio::time::Instant::now()
+    real_instant()
+}
+
+/// Tokio's monotonic time, whatever clock the hub runs on: the system's, or a paused test's.
+fn real_instant() -> tokio::time::Instant {
+    stund::real::tokio_instant()
 }
 
 /// The hub's time of day.
@@ -65,7 +120,7 @@ pub fn wall() -> SystemTime {
     if let Some(v) = virt::current() {
         return v.wall();
     }
-    SystemTime::now()
+    stund::real::wall()
 }
 
 /// The hub's time of day, in seconds since the epoch.
@@ -76,11 +131,18 @@ pub fn wall_secs() -> f64 {
         .map_or(0.0, |d| d.as_secs_f64())
 }
 
+/// The hub's clock as the crates that wait through `stund` read it (the provider installed below is this clock): for the
+/// instants a gateway tap hands over, which are `stund`'s.
+#[inline]
+pub fn tap_now() -> stund::Instant {
+    stund::Instant::now()
+}
+
 /// Real time, whatever clock the hub runs on: only for a limit on a blocking thread's wait for something outside the
 /// hub (a podman pull), which a virtual clock, standing still, would never end.
 #[inline]
 pub fn real_now() -> std::time::Instant {
-    std::time::Instant::now()
+    stund::real::instant()
 }
 
 /// Ticks every PERIOD of real time, whatever clock the hub runs on: only for watching something outside the hub (a
@@ -98,7 +160,7 @@ pub async fn sleep(d: Duration) {
     if let Some(v) = virt::current() {
         return virt::Sleep::new(&v, d).await;
     }
-    tokio::time::sleep(d).await
+    stund::real::sleep(d).await
 }
 
 /// F, or [`Elapsed`] once D has passed on the hub's clock.
@@ -162,26 +224,29 @@ impl Interval {
     }
 }
 
-/// `tokio::spawn` of F, named ORIGIN.  With the `test-hooks` feature the name is held task-local, and on the virtual
-/// clock the task is tracked: an advance waits for it ([`advance`]).
+/// F as a task named ORIGIN on the runtime the caller runs in.  With the `test-hooks` feature the name is held
+/// task-local, and on the virtual clock the task is tracked: an advance waits for it ([`advance`]).
 #[cfg(not(feature = "test-hooks"))]
 #[inline]
-pub fn spawn<F>(origin: impl Into<Origin>, f: F) -> tokio::task::JoinHandle<F::Output>
+pub fn spawn<F>(origin: impl Into<Origin>, f: F) -> Spawned<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
     // the stall watchdog's names ([`crate::stall`]), when it runs
     if crate::stall::on() {
-        return tokio::spawn(crate::stall::Named::new(origin.into().0, f));
+        return Spawned::new(saman::spawn(
+            "clock:task",
+            crate::stall::Named::new(origin.into().0, f),
+        ));
     }
-    tokio::spawn(f)
+    Spawned::new(saman::spawn("clock:task", f))
 }
 
-/// `tokio::spawn` of F, named ORIGIN.  With the `test-hooks` feature the name is held task-local, and on the virtual
-/// clock the task is tracked: an advance waits for it ([`advance`]).
+/// F as a task named ORIGIN on the runtime the caller runs in.  With the `test-hooks` feature the name is held
+/// task-local, and on the virtual clock the task is tracked: an advance waits for it ([`advance`]).
 #[cfg(feature = "test-hooks")]
-pub fn spawn<F>(origin: impl Into<Origin>, f: F) -> tokio::task::JoinHandle<F::Output>
+pub fn spawn<F>(origin: impl Into<Origin>, f: F) -> Spawned<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
@@ -190,9 +255,20 @@ where
     // the stall watchdog's names ([`crate::stall`]), when it runs (never on the virtual clock)
     if crate::stall::on() {
         let named = crate::stall::Named::new(origin.0.clone(), f);
-        return virt::spawn(origin, named);
+        return Spawned::new(virt::spawn(origin, named));
     }
-    virt::spawn(origin, f)
+    Spawned::new(virt::spawn(origin, f))
+}
+
+/// F as a task named NAME on the runtime the caller runs in, outside the virtual clock's tracking: what a bare
+/// `tokio::spawn` was (an advance does not wait for it).
+#[inline]
+pub fn spawn_untracked<F>(name: &'static str, f: F) -> Spawned<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    Spawned::new(saman::spawn(name, f))
 }
 
 /// What an advance did: the virtual time now, how many sleepers it woke, the tasks still running after
@@ -305,13 +381,13 @@ where
 {
     Blocking {
         _inside: inside(),
-        join: tokio::task::spawn_blocking(f),
+        join: saman::spawn_blocking("clock:blocking", f),
     }
 }
 
-/// See [`blocking`]: tokio's `JoinHandle`, awaited.
+/// See [`blocking`]: the blocking task, awaited.
 pub(crate) struct Blocking<R> {
-    join: tokio::task::JoinHandle<R>,
+    join: saman::Task<R>,
     /// The awaiting task inside its real wait, until the result is taken (test-hooks; nothing in a release build).
     _inside: Option<Inside>,
 }
@@ -334,7 +410,7 @@ fn inside() -> Option<Inside> {
 }
 
 impl<R> Future for Blocking<R> {
-    type Output = Result<R, tokio::task::JoinError>;
+    type Output = villa::Result<R>;
 
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
@@ -414,14 +490,12 @@ pub(crate) fn on_virtual<F: Future>(f: F) -> F::Output {
     virt::install_provider();
     let clock = std::sync::Arc::new(virt::Virtual::new());
     let theirs = clock.clone();
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .on_thread_start(move || virt::LOCAL.with(|l| *l.borrow_mut() = Some(theirs.clone())))
-        .on_thread_park(worker_parks)
-        .on_thread_unpark(worker_unparks)
-        .build()
-        .unwrap();
+    let rt = saman::Executor::tuned(2, |b| {
+        b.on_thread_start(move || virt::LOCAL.with(|l| *l.borrow_mut() = Some(theirs.clone())))
+            .on_thread_park(worker_parks)
+            .on_thread_unpark(worker_unparks);
+    })
+    .unwrap();
     virt::LOCAL.with(|l| *l.borrow_mut() = Some(clock));
     let out = rt.block_on(f);
     virt::LOCAL.with(|l| *l.borrow_mut() = None);
@@ -443,14 +517,14 @@ pub(crate) fn sleepers() -> usize {
 
 #[cfg(feature = "test-hooks")]
 mod virt {
-    use super::{Advanced, BUSY_AFTER, Elapsed, Origin};
+    use super::{Advanced, BUSY_AFTER, Elapsed, Origin, real_instant};
     use std::cell::Cell;
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::future::Future;
     use std::panic::Location;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+    use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
     use std::task::{Context, Poll, Wake, Waker};
     use std::thread::ThreadId;
     use std::time::{Duration, SystemTime};
@@ -478,7 +552,7 @@ mod virt {
                 "a unit test runs on its own virtual clock (clock::on_virtual), never the process's"
             );
         }
-        let _ = GLOBAL.set(Arc::new(Virtual::new()));
+        crate::soft::done(GLOBAL.set(Arc::new(Virtual::new())), "clock");
         urdr::wait::set(store_wait);
         install_provider();
     }
@@ -491,7 +565,7 @@ mod virt {
             fn sleep(&self, d: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> {
                 match current() {
                     Some(v) => Box::pin(Sleep::new(&v, d)),
-                    None => Box::pin(tokio::time::sleep(d)),
+                    None => Box::pin(stund::real::sleep(d)),
                 }
             }
             fn now(&self) -> Duration {
@@ -527,7 +601,7 @@ mod virt {
     }
 
     fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-        m.lock().unwrap_or_else(PoisonError::into_inner)
+        saman::lock(m)
     }
 
     /// A task [`super::spawn`] started.  Lock order: the clock's state, then a task's flags.
@@ -692,8 +766,8 @@ mod virt {
     impl Virtual {
         pub(super) fn new() -> Virtual {
             Virtual {
-                base: tokio::time::Instant::now(),
-                base_wall: SystemTime::now(),
+                base: real_instant(),
+                base_wall: stund::real::wall(),
                 state: Mutex::new(State {
                     elapsed: Duration::ZERO,
                     next_seq: 0,
@@ -790,7 +864,7 @@ mod virt {
         /// runs or holds a deferred wake; at most [`BUSY_AFTER`] of real time, after which those still running are
         /// named in BUSY and not waited for again.
         async fn settle(&self, woken: Option<Arc<Task>>, busy: &mut BTreeSet<String>) {
-            let give_up = tokio::time::Instant::now() + BUSY_AFTER;
+            let give_up = real_instant() + BUSY_AFTER;
             // the tasks last seen running: named if the limit passes while a deferred wake hides them
             let mut last: Vec<Arc<Task>> = woken.iter().cloned().collect();
             let mut polls = HashMap::new();
@@ -824,13 +898,11 @@ mod virt {
                 }
                 // a deferred wake tells nobody: looked at again each millisecond until a worker parks
                 let next = if running.is_empty() {
-                    give_up.min(tokio::time::Instant::now() + Duration::from_millis(1))
+                    give_up.min(real_instant() + Duration::from_millis(1))
                 } else {
                     give_up
                 };
-                if tokio::time::timeout_at(next, note).await.is_err()
-                    && tokio::time::Instant::now() >= give_up
-                {
+                if tokio::time::timeout_at(next, note).await.is_err() && real_instant() >= give_up {
                     for t in &last {
                         busy.insert(t.origin.as_str().to_string());
                     }
@@ -995,7 +1067,7 @@ mod virt {
             } else {
                 f.real += 1;
             }
-            f.sites.push((site, at, std::time::Instant::now()));
+            f.sites.push((site, at, stund::real::instant()));
         }
         Some(InReal {
             clock,
@@ -1030,7 +1102,7 @@ mod virt {
             ok: &[String],
             hold: bool,
         ) -> super::Settled {
-            let mut give_up = tokio::time::Instant::now() + within;
+            let mut give_up = real_instant() + within;
             // the origins last seen running: named if the limit passes while a deferred wake hides them
             let mut last: Vec<String> = Vec::new();
             let mut polls = HashMap::new();
@@ -1072,7 +1144,7 @@ mod virt {
                 }
                 // past the limit inside a real wait: its end (an exit from it notifies) is waited for, and the limit
                 // counts again from there for what the task then does
-                if held && tokio::time::Instant::now() >= give_up {
+                if held && real_instant() >= give_up {
                     // in the hub's log: a barrier that never answers names the real waits that hold it
                     let left = self.left(ok, None);
                     tracing::warn!(
@@ -1082,18 +1154,18 @@ mod virt {
                         within.as_millis()
                     );
                     note.await;
-                    give_up = tokio::time::Instant::now() + within;
+                    give_up = real_instant() + within;
                     continue;
                 }
                 // nothing outside, and no deferred wake, tells the clock it is done: looked at again each
                 // millisecond while one may be what is left
                 let next = if outside || !waited {
-                    give_up.min(tokio::time::Instant::now() + Duration::from_millis(1))
+                    give_up.min(real_instant() + Duration::from_millis(1))
                 } else {
                     give_up
                 };
                 if tokio::time::timeout_at(next, note).await.is_err()
-                    && tokio::time::Instant::now() >= give_up
+                    && real_instant() >= give_up
                     && !held
                 {
                     return self.left(ok, Some(&last));
@@ -1155,7 +1227,7 @@ mod virt {
         st.live.push(task);
     }
 
-    pub(super) fn spawn<F>(origin: Origin, f: F) -> tokio::task::JoinHandle<F::Output>
+    pub(super) fn spawn<F>(origin: Origin, f: F) -> saman::Task<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
@@ -1167,7 +1239,7 @@ mod virt {
         });
         let scoped = TASK.scope(task.clone(), f);
         let Some(clock) = current() else {
-            return tokio::spawn(scoped);
+            return saman::spawn("clock:task", scoped);
         };
         {
             let mut st = clock.state();
@@ -1186,13 +1258,16 @@ mod virt {
             clock: clock.clone(),
             runtime: Mutex::new(Waker::noop().clone()),
         });
-        tokio::spawn(Tracked {
-            fut: Box::pin(scoped),
-            task,
-            clock,
-            waker: Waker::from(wake.clone()),
-            wake,
-        })
+        saman::spawn(
+            "clock:task",
+            Tracked {
+                fut: Box::pin(scoped),
+                task,
+                clock,
+                waker: Waker::from(wake.clone()),
+                wake,
+            },
+        )
     }
 
     /// The waker a tracked task's future is polled with: any wake (the clock's, a channel's, a socket's) marks the

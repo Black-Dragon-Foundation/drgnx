@@ -14,8 +14,8 @@
 //! ([`super::probe::Probe::cpuset_by_systemd`] false) [`set_cpus`] writes the delegated files itself.
 
 use super::run;
+use crate::fsio;
 use forseti::Profile;
-use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -29,9 +29,11 @@ fn plain(s: &str) -> bool {
 
 /// Makes `<root>.slice` and `<root>-work.slice` (starting the child starts its parent), with the workstation's weights
 /// on the root so the person at the machine comes first on CPU and IO.
-pub fn ensure_tree(root: &str, profile: Profile) -> Result<(), String> {
+pub fn ensure_tree(root: &str, profile: Profile) -> villa::Result<()> {
     if !plain(root) {
-        return Err(format!("the slice root {root:?} is not a plain name"));
+        return Err(villa::Error::invalid(format!(
+            "the slice root {root:?} is not a plain name"
+        )));
     }
     run::systemctl_ok(&["start", &format!("{root}-work.slice")])?;
     if profile == Profile::Workstation {
@@ -44,7 +46,7 @@ pub fn ensure_tree(root: &str, profile: Profile) -> Result<(), String> {
 }
 
 /// Sets PROPS on UNIT for this boot only (`set-property --runtime`).
-pub fn set(unit: &str, props: &[(&str, String)]) -> Result<(), String> {
+pub fn set(unit: &str, props: &[(&str, String)]) -> villa::Result<()> {
     let mut args = vec![
         "set-property".to_string(),
         "--runtime".into(),
@@ -55,17 +57,17 @@ pub fn set(unit: &str, props: &[(&str, String)]) -> Result<(), String> {
 }
 
 /// The slice of job ID under ROOT: `<root>-work-<id>.slice`.
-pub fn job_slice(root: &str, id: &str) -> Result<String, String> {
+pub fn job_slice(root: &str, id: &str) -> villa::Result<String> {
     if !plain(root) || id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "a job slice needs a plain root and an id of letters and digits: {root:?} {id:?}"
-        ));
+        )));
     }
     Ok(format!("{root}-work-{id}.slice"))
 }
 
 /// Stops SLICE and everything in it (its services and its containers' scopes), without waiting.
-pub fn stop(slice: &str) -> Result<(), String> {
+pub fn stop(slice: &str) -> villa::Result<()> {
     run::systemctl_ok(&["stop", "--no-block", slice]).map(|_| ())
 }
 
@@ -81,13 +83,13 @@ pub fn job_props(reserve_mib: u64, cap_mib: u64) -> [(&'static str, String); 2] 
 
 /// A job's SLICE once the job ended: stopped, and the properties [`set`] gave it dropped (`revert` removes the
 /// runtime drop-ins, which would otherwise pile up until the next boot, one per job).
-pub fn forget(slice: &str) -> Result<(), String> {
+pub fn forget(slice: &str) -> villa::Result<()> {
     stop(slice)?;
     revert(slice)
 }
 
 /// Drops the properties [`set`] gave SLICE (its runtime drop-ins).
-pub fn revert(slice: &str) -> Result<(), String> {
+pub fn revert(slice: &str) -> villa::Result<()> {
     run::systemctl_ok(&["revert", slice]).map(|_| ())
 }
 
@@ -96,7 +98,7 @@ pub fn revert(slice: &str) -> Result<(), String> {
 /// when it does not, the property is still set (it takes over after a re-exec) and the delegated files are written
 /// directly: `+cpuset` into each ancestor's `cgroup.subtree_control` from the manager down, then the slice's
 /// `cpuset.cpus`. systemd keeps a direct write when it realizes the tree again.
-pub fn set_cpus(manager: &Path, slice: &str, cpus: &str, by_systemd: bool) -> Result<(), String> {
+pub fn set_cpus(manager: &Path, slice: &str, cpus: &str, by_systemd: bool) -> villa::Result<()> {
     set(slice, &[("AllowedCPUs", cpus.to_string())])?;
     if by_systemd {
         return Ok(());
@@ -105,36 +107,40 @@ pub fn set_cpus(manager: &Path, slice: &str, cpus: &str, by_systemd: bool) -> Re
 }
 
 /// The direct write of [`set_cpus`].
-pub fn direct_cpus(manager: &Path, slice: &str, cpus: &str) -> Result<(), String> {
+pub fn direct_cpus(manager: &Path, slice: &str, cpus: &str) -> villa::Result<()> {
     let path = super::probe::slice_path(slice);
     let mut dir = manager.to_path_buf();
     for part in path.components() {
         let control = dir.join("cgroup.subtree_control");
-        let has =
-            fs::read_to_string(&control).map_err(|e| format!("{}: {e}", control.display()))?;
+        let has = fsio::read_to_string(&control)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", control.display())))?;
         if !has.split_whitespace().any(|c| c == "cpuset") {
-            fs::write(&control, "+cpuset")
-                .map_err(|e| format!("enabling cpuset in {}: {e}", control.display()))?;
+            fsio::write_in_place(&control, "+cpuset").map_err(|e| {
+                villa::Error::io(format!("enabling cpuset in {}: {e}", control.display()))
+            })?;
         }
         dir.push(part);
     }
     let file = dir.join("cpuset.cpus");
-    fs::write(&file, format!("{cpus}\n")).map_err(|e| format!("{}: {e}", file.display()))
+    fsio::write_in_place(&file, format!("{cpus}\n"))
+        .map_err(|e| villa::Error::io(format!("{}: {e}", file.display())))
 }
 
 /// The timing slice under ROOT, `<root>-timing.slice`, for ISLAND (a kernel CPU list: the runner profile's `island`).
 /// A timing job's own slice is `<root>-timing-<id>.slice` ([`timing_job_slice`]), so it runs on the island while the
 /// work slice runs on the rest (design §5.6).
-pub fn timing_slice(root: &str, island: &str) -> Result<String, String> {
+pub fn timing_slice(root: &str, island: &str) -> villa::Result<String> {
     if !plain(root) {
-        return Err(format!("the slice root {root:?} is not a plain name"));
+        return Err(villa::Error::invalid(format!(
+            "the slice root {root:?} is not a plain name"
+        )));
     }
     cpus_of(island)?;
     Ok(format!("{root}-timing.slice"))
 }
 
 /// The slice of timing job ID under ROOT: `<root>-timing-<id>.slice`.
-pub fn timing_job_slice(root: &str, id: &str) -> Result<String, String> {
+pub fn timing_job_slice(root: &str, id: &str) -> villa::Result<String> {
     job_slice(root, id).map(|_| format!("{root}-timing-{id}.slice"))
 }
 
@@ -161,11 +167,13 @@ pub fn cpu_list(cpus: &[u32]) -> String {
 }
 
 /// The CPUs of LIST (a kernel CPU list), or why it is none.
-fn cpus_of(list: &str) -> Result<Vec<u32>, String> {
+fn cpus_of(list: &str) -> villa::Result<Vec<u32>> {
     super::probe::parse_cpu_list(list)
         .ok()
         .filter(|c| !c.is_empty())
-        .ok_or_else(|| format!("{list:?} is not a CPU list (such as 0-5,12-17)"))
+        .ok_or_else(|| {
+            villa::Error::invalid(format!("{list:?} is not a CPU list (such as 0-5,12-17)"))
+        })
 }
 
 /// What the timing slice became: an isolated partition (no scheduler balancing across it), a root partition, or a
@@ -186,8 +194,8 @@ pub fn set_partition(manager: &Path, slice: &str, said: &AtomicBool) -> Partitio
         .join("cpuset.cpus.partition");
     // the kernel takes a write it can't honour and reads back "<mode> invalid (why)"
     let takes = |mode: &str| {
-        fs::write(&file, mode).is_ok()
-            && fs::read_to_string(&file)
+        fsio::write_in_place(&file, mode).is_ok()
+            && fsio::read_to_string(&file)
                 .is_ok_and(|s| s.trim_start().starts_with(mode) && !s.contains("invalid"))
     };
     let p = if takes("isolated") {
@@ -195,11 +203,12 @@ pub fn set_partition(manager: &Path, slice: &str, said: &AtomicBool) -> Partitio
     } else if takes("root") {
         Partition::Root
     } else {
-        let _ = fs::write(&file, "member");
+        // a kernel that took neither mode may refuse this too; the slice is a member either way
+        drop(fsio::write_in_place(&file, "member"));
         Partition::Member
     };
     if p != Partition::Isolated && !said.swap(true, Ordering::Relaxed) {
-        eprintln!(
+        crate::eline!(
             "sleipnir: the timing slice {slice} is a {} partition, not isolated: the island has its CPUs, and the 
              scheduler may still balance across it",
             if p == Partition::Root { "root" } else { "plain member (AllowedCPUs only)" }
@@ -210,22 +219,22 @@ pub fn set_partition(manager: &Path, slice: &str, said: &AtomicBool) -> Partitio
 
 /// Whether ISLAND (a CPU list) is whole L3 groups as CPU_DIR (`/sys/devices/system/cpu`) reads them: every CPU of an
 /// L3 group it touches is in it, so the island never shares a cache with the work.
-pub fn island_whole_l3(cpu_dir: &Path, island: &str) -> Result<(), String> {
+pub fn island_whole_l3(cpu_dir: &Path, island: &str) -> villa::Result<()> {
     let want = cpus_of(island)?;
     for cpu in &want {
         let file = cpu_dir.join(format!("cpu{cpu}/cache/index3/shared_cpu_list"));
-        let text = fs::read_to_string(&file).map_err(|e| {
-            format!(
+        let text = fsio::read_to_string(&file).map_err(|e| {
+            villa::Error::io(format!(
                 "the island's CPU {cpu}: its L3 group ({}): {e}",
                 file.display()
-            )
+            ))
         })?;
         let group = cpus_of(text.trim())?;
         if let Some(out) = group.iter().find(|c| !want.contains(c)) {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "the island {island} splits the L3 group {} (CPU {out} is outside it): an island is whole L3 groups",
                 text.trim()
-            ));
+            )));
         }
     }
     Ok(())
@@ -240,7 +249,7 @@ pub fn island_on(
     on: Option<(&str, &str)>,
     by_systemd: bool,
     said: &AtomicBool,
-) -> Result<Option<Partition>, String> {
+) -> villa::Result<Option<Partition>> {
     let work = format!("{root}-work.slice");
     let Some((island, rest)) = on else {
         return set_cpus(manager, &work, "", by_systemd).map(|()| None);
@@ -286,13 +295,13 @@ mod tests {
                 "6-11,18-23"
             };
             let dir = d.path().join(format!("cpu{cpu}/cache/index3"));
-            fs::create_dir_all(&dir).unwrap();
-            fs::write(dir.join("shared_cpu_list"), format!("{l3}\n")).unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
+            fsio::write(dir.join("shared_cpu_list"), format!("{l3}\n")).unwrap();
         }
-        assert_eq!(island_whole_l3(d.path(), "0-5,12-17"), Ok(()));
-        assert_eq!(island_whole_l3(d.path(), "6-11,18-23"), Ok(()));
+        island_whole_l3(d.path(), "0-5,12-17").unwrap();
+        island_whole_l3(d.path(), "6-11,18-23").unwrap();
         let e = island_whole_l3(d.path(), "0-5").unwrap_err();
-        assert!(e.contains("0-5,12-17"), "{e}");
+        assert!(e.message().contains("0-5,12-17"), "{e}");
         assert!(island_whole_l3(d.path(), "0-6,12-17").is_err());
         assert!(island_whole_l3(d.path(), "0-5,12-x").is_err());
         assert!(
@@ -323,8 +332,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let said = AtomicBool::new(false);
         let at = |s: &str| d.path().join(super::super::probe::slice_path(s));
-        fs::create_dir_all(at("t-timing.slice")).unwrap();
-        fs::write(
+        std::fs::create_dir_all(at("t-timing.slice")).unwrap();
+        fsio::write(
             at("t-timing.slice").join("cpuset.cpus.partition"),
             "member\n",
         )
@@ -335,7 +344,7 @@ mod tests {
         );
         assert!(!said.load(Ordering::Relaxed));
         // a directory where the file is: no write takes
-        fs::create_dir_all(at("u-timing.slice").join("cpuset.cpus.partition")).unwrap();
+        std::fs::create_dir_all(at("u-timing.slice").join("cpuset.cpus.partition")).unwrap();
         assert_eq!(
             set_partition(d.path(), "u-timing.slice", &said),
             Partition::Member
@@ -353,29 +362,31 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let m = d.path();
         let work = m.join("t.slice/t-work.slice");
-        fs::create_dir_all(&work).unwrap();
-        fs::write(
+        std::fs::create_dir_all(&work).unwrap();
+        fsio::write(
             m.join("cgroup.subtree_control"),
             "cpuset cpu io memory pids\n",
         )
         .unwrap();
-        fs::write(
+        fsio::write(
             m.join("t.slice/cgroup.subtree_control"),
             "cpu memory pids\n",
         )
         .unwrap();
+        // a cgroup's control files are there from the start: the write only changes one in place
+        fsio::write(work.join("cpuset.cpus"), "").unwrap();
         direct_cpus(m, "t-work.slice", "2-3").unwrap();
         // a real cgroup file takes "+cpuset" as an edit; the fixture file just holds what was written
         assert_eq!(
-            fs::read_to_string(m.join("t.slice/cgroup.subtree_control")).unwrap(),
+            fsio::read_to_string(m.join("t.slice/cgroup.subtree_control")).unwrap(),
             "+cpuset"
         );
         assert_eq!(
-            fs::read_to_string(m.join("cgroup.subtree_control")).unwrap(),
+            fsio::read_to_string(m.join("cgroup.subtree_control")).unwrap(),
             "cpuset cpu io memory pids\n"
         );
         assert_eq!(
-            fs::read_to_string(work.join("cpuset.cpus")).unwrap(),
+            fsio::read_to_string(work.join("cpuset.cpus")).unwrap(),
             "2-3\n"
         );
         assert_eq!(

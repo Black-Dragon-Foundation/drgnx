@@ -51,7 +51,7 @@ fn refused(m: impl Into<String>) -> PackError {
 }
 
 /// A blocking call's result, a task that did not end being an error.
-fn joined<T>(r: Result<T, tokio::task::JoinError>) -> Result<T, PackError> {
+fn joined<T>(r: villa::Result<T>) -> Result<T, PackError> {
     r.map_err(|e| refused(format!("a pack task ended: {e}")))
 }
 

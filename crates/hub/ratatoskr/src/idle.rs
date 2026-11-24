@@ -15,7 +15,6 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
 
 /// How often the binary is looked at.
 pub const TICK: Duration = Duration::from_secs(2);
@@ -206,32 +205,13 @@ impl Watcher {
 
 /// `<path> version --json` against COMMIT, the running build's.
 pub async fn build_at(path: &Path, commit: &str, build_id: &str) -> Build {
-    let mut child = match tokio::process::Command::new(path)
-        .args(["version", "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("cannot run {} version: {e}", path.display());
-            return Build::Unknown;
-        }
-    };
-    let Some(mut out) = child.stdout.take() else {
-        return Build::Unknown;
-    };
+    let mut cmd = crate::proc::Command::new(path);
+    cmd.args(["version", "--json"]).deadline(VERSION_DEADLINE);
     let run = async {
-        let mut text = String::new();
-        (&mut out)
-            .take(1 << 16)
-            .read_to_string(&mut text)
-            .await
-            .ok()?;
-        let status = child.wait().await.ok()?;
-        status.success().then_some(text)
+        let out = cmd.output_async().await.ok()?;
+        let text =
+            String::from_utf8_lossy(&out.stdout[..out.stdout.len().min(1 << 16)]).into_owned();
+        out.status.success().then_some(text)
     };
     let text = match crate::clock::timeout(VERSION_DEADLINE, run).await {
         Ok(Some(t)) => t,
@@ -358,23 +338,25 @@ mod tests {
     fn version_program(dir: &Path, text: &str) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let p = dir.join("ratatoskr");
-        std::fs::write(&p, format!("#!/bin/sh\ncat <<'E'\n{text}\nE\n")).unwrap();
+        crate::fsio::write(&p, format!("#!/bin/sh\ncat <<'E'\n{text}\nE\n")).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         p
     }
 
     /// The same commit is another build when its build id differs (a rebuild that says `unknown` or the same
     /// `HEAD-dirty`), or when the file names none (a build from before the id); only the same pair is the same build.
-    #[tokio::test]
-    async fn the_same_commit_with_another_build_id_is_another_build() {
-        let dir = tempfile::tempdir().unwrap();
-        let said = |text: &str| version_program(dir.path(), text);
-        let p = said(r#"{"commit":"abc","build_id":"7"}"#);
-        assert_eq!(build_at(&p, "abc", "7").await, Build::Same);
-        assert!(matches!(build_at(&p, "abc", "6").await, Build::Other(_)));
-        assert!(matches!(build_at(&p, "xyz", "7").await, Build::Other(_)));
-        let p = said(r#"{"commit":"abc"}"#);
-        assert!(matches!(build_at(&p, "abc", "7").await, Build::Other(_)));
+    #[test]
+    fn the_same_commit_with_another_build_id_is_another_build() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let said = |text: &str| version_program(dir.path(), text);
+            let p = said(r#"{"commit":"abc","build_id":"7"}"#);
+            assert_eq!(build_at(&p, "abc", "7").await, Build::Same);
+            assert!(matches!(build_at(&p, "abc", "6").await, Build::Other(_)));
+            assert!(matches!(build_at(&p, "xyz", "7").await, Build::Other(_)));
+            let p = said(r#"{"commit":"abc"}"#);
+            assert!(matches!(build_at(&p, "abc", "7").await, Build::Other(_)));
+        })
     }
 
     /// A source the test drives: the stamp, what the build says and the turns.
@@ -419,10 +401,7 @@ mod tests {
     }
 
     fn block<T>(f: impl std::future::Future<Output = T>) -> T {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap()
-            .block_on(f)
+        saman::Executor::new(1).unwrap().block_on(f)
     }
 
     // `the_path_is_statted_not_proc_self_exe` runs a child process, which a fork inside this test binary would let

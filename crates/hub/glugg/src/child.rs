@@ -20,11 +20,18 @@ impl Marks {
     }
 }
 
+/// The most `/proc/<pid>/task/<pid>/children` is read for (a pid is a few bytes, 4 MiB is a million of them).
+#[cfg(target_os = "linux")]
+const CHILDREN_CAP: u64 = 4 << 20;
+
 /// Whether PID has a child process.
 #[cfg(target_os = "linux")]
 pub fn has_children(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
-        .is_ok_and(|s| !s.trim().is_empty())
+    eitri::read_string(
+        std::path::Path::new(&format!("/proc/{pid}/task/{pid}/children")),
+        CHILDREN_CAP,
+    )
+    .is_ok_and(|s| !s.trim().is_empty())
 }
 
 /// Whether PID has a child process.

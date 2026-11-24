@@ -199,7 +199,7 @@ fn derive_debug_on_token_type_fails_scan() {
     let ws = fixture();
     let (code, out) = run(ws.path(), &[]);
     assert_eq!(code, 1, "{out}");
-    // ApiToken; not WrappedToken (every field a Secret), not PlainKey (no Debug)
+    // ApiToken; not WrappedToken (every field a Secret), not PlainKey (no Debug), not CacheKey (numbers only)
     let hits = lines(
         &out,
         "crates/bad/src/secret.rs",
@@ -295,7 +295,8 @@ fn colour_literal_fails() {
     assert_eq!(code, 1, "{out}");
     let hits = lines(&out, "crates/bad/src/colour.rs", "[kit/no-colour-literal]");
     // the hex string and `rgb(1, 2, 3)`; not "#hashtag"; then the hex numbers used as colours: a const named for a colour,
-    // `paint(0xff8800aa)` is not (it names no colour), `Rgba::new(1, 2, 3, 4)`, a field named `color`; not a mask or `0x0f0f`
+    // `paint(0xff8800aa)` is not (it names no colour), `Rgba::new(1, 2, 3, 4)`, a field named `color`; not a mask or `0x0f0f`,
+    // not `Colour::Ansi(1)` (a palette index)
     let at: Vec<&str> = hits.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
     assert_eq!(at, ["1", "5", "8", "13", "15", "18"], "{out}");
     assert!(
@@ -349,19 +350,36 @@ fn a_hand_made_scale_multiplication_fails() {
     let ws = fixture();
     let (code, out) = run(ws.path(), &[]);
     assert_eq!(code, 1, "{out}");
-    // `x * scale`, `… * s.scale_factor`, `s.zoom_scale() * 2.0`, `d *= scale` and `scale as f32 * x`; not `x * 2.0`
+    // `x * scale`, `… * s.scale_factor`, `s.zoom_scale() * 2.0`, `d *= scale` and `scale as f32 * x`; not `x * 2.0`.
+    // The rule is for UI crates: a non-UI crate's `sum * scale` (villa's quantiser step) is no finding.
     let hits = lines(
         &out,
-        "crates/bad/src/scale.rs",
+        "crates/uiapp/src/scale.rs",
         "[scale-zoom/no-raw-scale-mul]",
     );
     let at: Vec<&str> = hits.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
     assert_eq!(at, ["2", "3", "4", "6", "7"], "{out}");
     assert!(
-        !out.lines()
-            .any(|l| l.starts_with("crates/villa/") && l.contains("no-raw-scale-mul")),
+        !out.lines().any(|l| !l.starts_with("crates/uiapp/")
+            && !l.starts_with("crates/ui/")
+            && l.contains("no-raw-scale-mul")),
         "{out}"
     );
+}
+
+/// A drawing crate under `crates/ui/` that is not marked `ui = true` (glitnir is one) is still a UI crate for the scale
+/// rule: its raw `x * scale` is a finding.
+#[test]
+fn a_raw_scale_multiply_under_crates_ui_fails_without_the_ui_mark() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    let hits = lines(
+        &out,
+        "crates/ui/canvas/src/lib.rs",
+        "[scale-zoom/no-raw-scale-mul]",
+    );
+    assert_eq!(hits.len(), 1, "{out}");
 }
 
 /// Review Focus 1: a closure given to a formula or registered as a callback that captures a shared cell, a lock or a
@@ -402,4 +420,19 @@ fn use_effect_named_api_fails_the_scan() {
     );
     let at: Vec<&str> = hits.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
     assert_eq!(at, ["25", "27", "31"], "{out}");
+}
+
+#[test]
+fn open_options_open_fails_scan_like_clippy_does() {
+    let ws = fixture();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    // `OpenOptions::new()….open(p)` and `File::options()….open(p)`; not `File::open(p)`
+    let hits = lines(
+        &out,
+        "crates/bad/src/open.rs",
+        "[processes/disallowed-path]",
+    );
+    let at: Vec<&str> = hits.iter().map(|l| l.split(':').nth(1).unwrap()).collect();
+    assert_eq!(at, ["4", "5"], "{out}");
 }

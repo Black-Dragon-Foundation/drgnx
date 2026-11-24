@@ -14,7 +14,7 @@ use ratatoskr::search::engine::{EngineSpec, LocalEngine, SelfCheck};
 use serde_json::Value;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -24,18 +24,16 @@ const IDLE: Duration = Duration::from_secs(300);
 
 /// The rows on the hub's runtime (its two workers and the clock's park hooks), one at a time: the clock is the process's.
 fn on_hub_runtime<F: std::future::Future>(f: F) -> F::Output {
-    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    static RT: OnceLock<saman::Executor> = OnceLock::new();
     static ONE: Mutex<()> = Mutex::new(());
-    let _one = ONE.lock().unwrap_or_else(PoisonError::into_inner);
+    let _one = saman::lock(&ONE);
     clock::install_virtual();
     RT.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .on_thread_park(clock::worker_parks)
-            .on_thread_unpark(clock::worker_unparks)
-            .build()
-            .unwrap()
+        saman::Executor::tuned(2, |b| {
+            b.on_thread_park(clock::worker_parks)
+                .on_thread_unpark(clock::worker_unparks);
+        })
+        .unwrap()
     })
     .block_on(f)
 }
@@ -81,7 +79,7 @@ impl Rig {
             .map(|k| k.replace("{dir}", &dir.path().display().to_string()))
             .map(|k| format!("'{k}'"))
             .collect();
-        std::fs::write(
+        ratatoskr::fsio::write(
             &exe,
             format!(
                 "#!/bin/sh\nexec '{}' embed --as llama-server --log '{}' --dims {DIMS} {} \"$@\"\n",
@@ -117,7 +115,7 @@ impl Rig {
     }
 
     fn lines(&self, key: &str) -> Vec<Value> {
-        std::fs::read_to_string(&self.log)
+        ratatoskr::fsio::read_to_string(&self.log)
             .unwrap_or_default()
             .lines()
             .map(|l| serde_json::from_str::<Value>(l).unwrap())
@@ -334,7 +332,7 @@ const ROCM_ONE: &str = "  ROCm0: AMD Radeon RX 7900 XTX (24560 MiB, 22212 MiB fr
 /// The rig with a device list the mock prints for `--list-devices`.
 fn rig_with_devices(text: &str) -> Rig {
     let r = Rig::new(&["--devices", "{dir}/devices.txt"]);
-    std::fs::write(r.dir.path().join("devices.txt"), text).unwrap();
+    ratatoskr::fsio::write(r.dir.path().join("devices.txt"), text).unwrap();
     r
 }
 
@@ -439,7 +437,7 @@ impl Fake {
     }
 
     fn count(&self) -> usize {
-        self.got.lock().unwrap().len()
+        saman::lock(&self.got).len()
     }
 }
 
@@ -453,7 +451,7 @@ impl ratatoskr::search::engine_pool::Lane for Fake {
             if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err(urdr::graph::search::EmbedError("this engine died".into()));
             }
-            self.got.lock().unwrap().extend(t.iter().cloned());
+            saman::lock(&self.got).extend(t.iter().cloned());
             // the vector says which text it is: the order of the answer is checkable
             Ok(t.iter()
                 .map(|x| vec![x[1..].parse::<f32>().unwrap()])
@@ -562,7 +560,7 @@ fn a_dead_engines_batch_moves_to_the_others() {
         assert!(in_order(&v), "every text has its own vector");
         assert_eq!((a.count(), b.count()), (0, 10));
         // the dead one gets nothing the next time
-        b.got.lock().unwrap().clear();
+        saman::lock(&b.got).clear();
         a.fail.store(false, std::sync::atomic::Ordering::SeqCst);
         let v = p.embed_docs(&numbered(4)).await.unwrap();
         assert!(in_order(&v));
@@ -619,7 +617,7 @@ fn a_game_on_the_device_pauses_the_engine_after_its_batch_and_says_why() {
         }));
         let e = Arc::new(LocalEngine::new(spec));
         assert_eq!(e.holding(), None);
-        let run = tokio::spawn({
+        let run = saman::spawn("embed", {
             let e = e.clone();
             async move { e.embed_docs(&several()).await }
         });
@@ -653,13 +651,13 @@ fn video_memory_taken_by_another_program_pauses_the_engine_until_it_is_back() {
         let e = Arc::new(LocalEngine::new(spec));
         e.embed_docs(&texts(&["a"])).await.unwrap();
         let devices = r.dir.path().join("devices.txt");
-        std::fs::write(
+        ratatoskr::fsio::write(
             &devices,
             "  ROCm0: AMD Radeon RX 7900 XTX (24560 MiB, 50 MiB free)\n",
         )
         .unwrap();
         let before = r.embeds().len();
-        let run = tokio::spawn({
+        let run = saman::spawn("embed", {
             let e = e.clone();
             async move { e.embed_docs(&several()).await }
         });
@@ -672,7 +670,7 @@ fn video_memory_taken_by_another_program_pauses_the_engine_until_it_is_back() {
             before,
             "nothing was sent while it was short"
         );
-        std::fs::write(&devices, ROCM_ONE).unwrap();
+        ratatoskr::fsio::write(&devices, ROCM_ONE).unwrap();
         clock::advance(ratatoskr::search::engine_hold::HOLD_POLL).await;
         assert_eq!(run.await.unwrap().unwrap().len(), 5);
         assert_eq!(e.holding(), None);
@@ -701,7 +699,7 @@ fn a_held_engine_shows_as_held_with_its_reason_in_the_chain_status() {
         let engine_entry =
             |c: &SourceChain| c.status().into_iter().find(|s| s.kind != "cache").unwrap();
         assert_eq!(engine_entry(&chain).state, "answering");
-        let run = tokio::spawn({
+        let run = saman::spawn("embed", {
             let e = e.clone();
             async move { e.embed_docs(&several()).await }
         });
@@ -709,7 +707,7 @@ fn a_held_engine_shows_as_held_with_its_reason_in_the_chain_status() {
         let entry = engine_entry(&chain);
         assert_eq!(entry.state, "held");
         assert!(entry.why.unwrap().contains("train.py (pid 4)"));
-        run.abort();
+        drop(run); // a saman task is cancelled when dropped
         e.close().await;
     });
 }

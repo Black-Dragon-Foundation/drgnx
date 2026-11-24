@@ -6,18 +6,39 @@
 use ghostty_vt_sys::bindings::*;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::process::Command;
+use std::time::Duration;
+
+/// A child of the test through draugr: only the names of ENV_ALLOW reach it, plus SET.
+fn run(
+    program: &str,
+    args: Vec<std::ffi::OsString>,
+    allow: &[&str],
+    set: &[(&str, &std::ffi::OsStr)],
+    wait: Duration,
+) -> std::io::Result<draugr::Output> {
+    draugr::run(
+        draugr::Spec {
+            program: program.into(),
+            args,
+            env: draugr::env::build(allow, &[], set),
+            cwd: None,
+            stdin_null: true,
+            pass_fds: vec![],
+            new_session: false,
+        },
+        wait,
+    )
+}
 
 fn tool(name: &str, args: &[&str], file: &str) -> String {
-    let out = Command::new(name)
-        .args(args)
-        .arg(file)
-        .output()
+    let mut all: Vec<std::ffi::OsString> = args.iter().map(Into::into).collect();
+    all.push(file.into());
+    let out = run(name, all, &["PATH", "LANG"], &[], Duration::from_secs(300))
         .unwrap_or_else(|e| panic!("{name}: {e} (binutils in the image?)"));
     assert!(
         out.status.success(),
         "{name} {args:?} {file}: {}",
-        String::from_utf8_lossy(&out.stderr)
+        out.stderr
     );
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
@@ -175,16 +196,22 @@ fn builds_offline() {
     // A network namespace needs `unshare(2)`, which Docker's default seccomp profile refuses (EPERM): there the row says
     // so and stops; the escape-host job (runtime.yml: a runner, not a container) sets DRGNX_REQUIRE_NETNS=1, and a
     // namespace it cannot make is a failure, so the row runs where it can and never passes by default.
-    let can = Command::new("unshare")
-        .args(["--net", "--map-root-user", "true"])
-        .status()
-        .is_ok_and(|s| s.success());
+    let can = run(
+        "unshare",
+        ["--net", "--map-root-user", "true"]
+            .map(Into::into)
+            .to_vec(),
+        &["PATH"],
+        &[],
+        Duration::from_secs(60),
+    )
+    .is_ok_and(|o| o.status.success());
     if !can {
         assert!(
             std::env::var_os("DRGNX_REQUIRE_NETNS").is_none(),
             "DRGNX_REQUIRE_NETNS is set and this machine cannot make a network namespace"
         );
-        eprintln!(
+        tracing::warn!(
             "builds_offline: no network namespace here (unshare refused); the escape-host job runs this row"
         );
         return;
@@ -195,35 +222,55 @@ fn builds_offline() {
         .map(PathBuf::from)
         .unwrap_or_else(|| dir.join("tarballs"));
     let target = std::env::temp_dir().join(format!("ghostty-offline-{}", std::process::id()));
-    let st = Command::new("unshare")
-        .args(["--net", "--map-root-user", "--"])
-        .arg(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-        .args([
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let mut args: Vec<std::ffi::OsString> =
+        ["--net", "--map-root-user", "--"].map(Into::into).to_vec();
+    args.push(cargo.into());
+    args.extend(
+        [
             "build",
             "--locked",
             "--offline",
             "-p",
             "ghostty-vt-sys",
             "--lib",
-        ])
-        .arg("--manifest-path")
-        .arg(dir.join("Cargo.toml"))
-        .env("CARGO_TARGET_DIR", &target)
-        .env("GHOSTTY_VT_TARBALLS", &tarballs)
-        // a compiler cache (sccache) is a client of a server it cannot reach from an empty namespace
-        .env_remove("RUSTC_WRAPPER")
-        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
-        .status()
-        .expect("unshare (util-linux)");
-    let _ = std::fs::remove_dir_all(&target);
+            "--manifest-path",
+        ]
+        .map(Into::into),
+    );
+    args.push(dir.join("Cargo.toml").into());
+    // a compiler cache (sccache) is a client of a server it cannot reach from an empty namespace: its variables are
+    // not among the names the child may have
+    let st = run(
+        "unshare",
+        args,
+        &[
+            "PATH",
+            stig::HOME_VAR,
+            "TMPDIR",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "RUSTUP_TOOLCHAIN",
+        ],
+        &[
+            ("CARGO_TARGET_DIR", target.as_os_str()),
+            ("GHOSTTY_VT_TARBALLS", tarballs.as_os_str()),
+        ],
+        Duration::from_secs(3600),
+    )
+    .expect("unshare (util-linux)")
+    .status;
+    if let Err(e) = std::fs::remove_dir_all(&target) {
+        tracing::warn!("removing {}: {e}", target.display());
+    }
     assert!(st.success(), "the offline build failed: {st}");
 }
 
 #[test]
 fn notice_matches_pin() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let pin = std::fs::read_to_string(dir.join("pin.toml")).unwrap();
-    let notice = std::fs::read_to_string(dir.join("NOTICE")).unwrap();
+    let pin = eitri::read_string(&dir.join("pin.toml"), 1 << 20).unwrap();
+    let notice = eitri::read_string(&dir.join("NOTICE"), 1 << 20).unwrap();
     let files: Vec<&str> = pin
         .lines()
         .filter_map(|l| l.trim().strip_prefix("file = \""))

@@ -211,7 +211,7 @@ fn every_order_a_gap_gets_a_full_frame() {
             ViewEv::Gone { conn: 2 },
         ],
     );
-    let _ = agent;
+    let _only_when_used_elsewhere = &agent;
     let r = every_order(&p, Bound::default(), Harness::default, |h, _| {
         if let Some(b) = &h.broken {
             return Err(b.clone());

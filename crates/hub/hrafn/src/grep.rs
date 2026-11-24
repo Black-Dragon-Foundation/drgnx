@@ -5,10 +5,9 @@
 
 use regex::RegexBuilder;
 use serde_json::Value;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::io::AsyncBufReadExt;
 
 /// Characters of the line kept before and after a match.
 pub const CONTEXT_CHARS: usize = 80;
@@ -416,7 +415,7 @@ pub fn parse_grep(line: &str, root: &Path, re: &regex::Regex) -> Vec<Match> {
 }
 
 /// Q's pattern as a regex for the fallbacks that print whole lines.
-pub fn line_regex(q: &Query) -> Result<regex::Regex, String> {
+pub fn line_regex(q: &Query) -> villa::Result<regex::Regex> {
     let body = if q.regexp {
         q.text.clone()
     } else {
@@ -430,7 +429,7 @@ pub fn line_regex(q: &Query) -> Result<regex::Regex, String> {
     RegexBuilder::new(&body)
         .case_insensitive(!q.case)
         .build()
-        .map_err(|e| e.to_string())
+        .map_err(|e| villa::Error::invalid(e.to_string()))
 }
 
 /// What a match MATCHED becomes when replaced by TEMPLATE: the template itself, or after a regexp search its `\1`
@@ -500,89 +499,91 @@ pub fn run_with(
     q: &Query,
     cancel: &AtomicBool,
     mut on_file: impl FnMut(Vec<Match>),
-) -> Result<(), String> {
+) -> villa::Result<()> {
     // a list the globs left empty names no file (the searchers would take the root)
     if q.text.is_empty() || (q.file.is_none() && listed(q).is_some_and(|l| l.is_empty())) {
         return Ok(());
     }
     let re = (b != Backend::Rg).then(|| line_regex(q)).transpose()?;
     let argv = command(b, q);
-    let mut child = Command::new(&argv[0])
-        .args(&argv[1..])
-        .current_dir(&q.root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("{}: {e}", argv[0]))?;
-    let stderr = child.stderr.take();
-    let err = std::thread::spawn(move || {
-        let mut s = String::new();
-        if let Some(mut e) = stderr {
-            let _ = std::io::Read::read_to_string(&mut e, &mut s);
-        }
-        s
-    });
-    let mut out = BufReader::new(child.stdout.take().expect("piped"));
-    let (mut file, mut batch): (String, Vec<Match>) = (String::new(), Vec::new());
-    let mut raw = Vec::new();
-    let mut cancelled = false;
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            cancelled = true;
-            break;
-        }
-        raw.clear();
-        match out.read_until(b'\n', &mut raw) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
-        let line = String::from_utf8_lossy(&raw);
-        let line = trim_eol(&line);
-        let found = match &re {
-            None => parse_rg(line, &q.root),
-            Some(re) => parse_grep(line, &q.root, re),
+    let spec = crate::proc::spec(
+        &argv[0],
+        argv[1..].iter().map(Into::into).collect(),
+        Some(&q.root),
+        false,
+    );
+    let exec = saman::Executor::new(1)?;
+    exec.block_on(async {
+        let mut child = draugr::spawn(spec).await.map_err(|e| {
+            villa::Error::unavailable(format!("{}: {e}", argv[0]))
+                .with_detail("starting the searcher")
+                .with_source(e)
+        })?;
+        let Some(stdout) = child.take_stdout() else {
+            return Err(villa::Error::internal("the searcher has no output"));
         };
-        for m in found {
-            let rel = m
-                .file
-                .strip_prefix(&*q.root.to_string_lossy())
-                .unwrap_or(&m.file);
-            if !searched(q.ignore, rel.trim_start_matches('/')) {
-                continue;
+        let mut out = tokio::io::BufReader::new(stdout);
+        let (mut file, mut batch): (String, Vec<Match>) = (String::new(), Vec::new());
+        let mut raw = Vec::new();
+        let mut cancelled = false;
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                cancelled = true;
+                break;
             }
-            if m.file != file && !batch.is_empty() {
-                on_file(std::mem::take(&mut batch));
+            raw.clear();
+            match out.read_until(b'\n', &mut raw).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
             }
-            file.clone_from(&m.file);
-            batch.push(m);
+            let line = String::from_utf8_lossy(&raw);
+            let line = trim_eol(&line);
+            let found = match &re {
+                None => parse_rg(line, &q.root),
+                Some(re) => parse_grep(line, &q.root, re),
+            };
+            for m in found {
+                let rel = m
+                    .file
+                    .strip_prefix(&*q.root.to_string_lossy())
+                    .unwrap_or(&m.file);
+                if !searched(q.ignore, rel.trim_start_matches('/')) {
+                    continue;
+                }
+                if m.file != file && !batch.is_empty() {
+                    on_file(std::mem::take(&mut batch));
+                }
+                file.clone_from(&m.file);
+                batch.push(m);
+            }
         }
-    }
-    if cancelled {
-        let _ = child.kill();
-    }
-    let status = child.wait().map_err(|e| e.to_string())?;
-    let stderr_text = err.join().unwrap_or_default();
-    if cancelled {
-        return Ok(());
-    }
-    if !batch.is_empty() {
-        on_file(batch);
-    }
-    // 1: no match (rg, grep, git grep); 2 and up: the search failed
-    match status.code() {
-        Some(0 | 1) => Ok(()),
-        _ => Err(stderr_text
-            .lines()
-            .next()
-            .unwrap_or("the search failed")
-            .to_owned()),
-    }
+        if cancelled {
+            // the searcher's group is ended and reaped
+            child.wait_deadline(std::time::Duration::ZERO).await?;
+            return Ok(());
+        }
+        let status = child.wait().await?;
+        if !batch.is_empty() {
+            on_file(batch);
+        }
+        // 1: no match (rg, grep, git grep); 2 and up: the search failed
+        match status.and_then(|s| s.code()) {
+            Some(0 | 1) => Ok(()),
+            _ => Err(villa::Error::unavailable(
+                child
+                    .stderr_tail()
+                    .lines()
+                    .next()
+                    .unwrap_or("the search failed")
+                    .to_owned(),
+            )),
+        }
+    })
 }
 
 /// Q's matches in TEXT, the contents of FILE held elsewhere (an editor's buffer with unsaved edits): line by line, as
 /// the fallbacks match a printed line. An empty text finds nothing.
-pub fn search_text(q: &Query, file: &str, text: &str) -> Result<Vec<Match>, String> {
+pub fn search_text(q: &Query, file: &str, text: &str) -> villa::Result<Vec<Match>> {
     if q.text.is_empty() {
         return Ok(Vec::new());
     }
@@ -607,7 +608,7 @@ pub fn match_at(file: &str, n: u32, text: &str, from: usize, to: usize) -> Match
 }
 
 /// Search Q with the backend its root has.
-pub fn run(q: &Query, cancel: &AtomicBool, on_file: impl FnMut(Vec<Match>)) -> Result<(), String> {
+pub fn run(q: &Query, cancel: &AtomicBool, on_file: impl FnMut(Vec<Match>)) -> villa::Result<()> {
     run_on(backend(&q.root), q, cancel, on_file)
 }
 
@@ -617,7 +618,7 @@ pub fn run_on(
     q: &Query,
     cancel: &AtomicBool,
     mut on_file: impl FnMut(Vec<Match>),
-) -> Result<(), String> {
+) -> villa::Result<()> {
     let Some(files) = q.files.as_ref().filter(|_| q.file.is_none()) else {
         return run_with(b, q, cancel, on_file);
     };
@@ -718,19 +719,15 @@ mod tests {
         let root = d.path();
         for f in ["a.rs", "b.txt", "d.rs", "sub/c.rs", "sub/e.txt"] {
             std::fs::create_dir_all(root.join(f).parent().unwrap()).unwrap();
-            std::fs::write(root.join(f), "needle\n").unwrap();
+            eitri::replace_file(&root.join(f), b"needle\n").unwrap();
         }
         let mut backends = vec![Backend::Grep];
         if on_path("rg") {
             backends.push(Backend::Rg);
         }
         if on_path("git") {
-            let init = Command::new("git")
-                .args(["init", "-q"])
-                .current_dir(root)
-                .status()
-                .unwrap();
-            assert!(init.success());
+            let init = crate::proc::git(root, &["init", "-q"], Vec::new()).unwrap();
+            assert!(init.status.success());
             backends.push(Backend::Git);
         }
         for b in backends {
@@ -768,7 +765,7 @@ mod tests {
             .map(|i| d.path().join(format!("f{i:04}.txt")))
             .collect();
         for f in &files {
-            std::fs::write(f, "needle\n").unwrap();
+            eitri::replace_file(f, b"needle\n").unwrap();
         }
         let mut query = q(d.path(), "needle");
         query.files = Some(files[..2400].to_vec());
@@ -784,7 +781,7 @@ mod tests {
             ("c.txt", "needle\n"),
             (".env", "needle\n"),
         ] {
-            std::fs::write(d.path().join(f), body).unwrap();
+            eitri::replace_file(&d.path().join(f), body.as_bytes()).unwrap();
         }
         let mut query = q(d.path(), "needle");
         let no = AtomicBool::new(false);
@@ -802,9 +799,24 @@ mod tests {
     }
 
     #[test]
+    fn a_search_that_finds_nothing_is_no_error() {
+        let d = tempfile::tempdir().unwrap();
+        eitri::replace_file(&d.path().join("a.txt"), b"hay\n").unwrap();
+        let mut n = 0;
+        run_with(
+            Backend::Grep,
+            &q(d.path(), "needle"),
+            &AtomicBool::new(false),
+            |_| n += 1,
+        )
+        .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
     fn a_cancelled_run_hands_over_nothing_more() {
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(d.path().join("a.txt"), "needle\n").unwrap();
+        eitri::replace_file(&d.path().join("a.txt"), b"needle\n").unwrap();
         let stop = AtomicBool::new(true);
         let mut n = 0;
         run_with(Backend::Grep, &q(d.path(), "needle"), &stop, |_| n += 1).unwrap();

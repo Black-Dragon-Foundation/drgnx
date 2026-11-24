@@ -5,13 +5,13 @@
 #![cfg(feature = "sync")]
 
 mod slot {
-    use sleipnir::sync::slot::{Locks, SlotKey, paths};
+    use sleipnir::sync::slot::{Locks, SlotId, paths};
 
     // [D] pure: one open file description per lock, in one process with no other thread
     #[test]
     fn an_update_waits_for_its_readers_and_the_target_is_exclusive() {
         let t = tempfile::tempdir().unwrap();
-        let key = SlotKey {
+        let key = SlotId {
             project: "p".into(),
             worktree: "w".into(),
             trust: forseti::JobTrust::Private,
@@ -45,7 +45,7 @@ mod slot {
     fn slot_at(t: &std::path::Path) -> sleipnir::sync::slot::SlotPaths {
         paths(
             t,
-            &SlotKey {
+            &SlotId {
                 project: "p".into(),
                 worktree: "w".into(),
                 trust: forseti::JobTrust::Private,
@@ -123,7 +123,7 @@ mod slot {
         let serve_b = hold(&p, "k2", || Ok(())).unwrap().unwrap();
         write_job_hold(&b, &p, "k2").unwrap();
         let why = hold_for_job(&a).err().expect("moved");
-        assert!(why.contains("moved to other inputs"), "{why}");
+        assert!(why.message().contains("moved to other inputs"), "{why}");
         assert!(hold_for_job(&b).unwrap().is_some());
         drop(serve_b);
     }

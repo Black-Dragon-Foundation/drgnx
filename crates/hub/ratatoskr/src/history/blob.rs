@@ -4,10 +4,10 @@
 
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
-fn base(git_dir: &Path, work_tree: &Path) -> Command {
-    let mut c = Command::new("git");
+fn base(git_dir: &Path, work_tree: &Path) -> crate::proc::Command {
+    let mut c = crate::proc::Command::new("git");
     c.arg("--git-dir")
         .arg(git_dir)
         .arg("--work-tree")
@@ -18,24 +18,25 @@ fn base(git_dir: &Path, work_tree: &Path) -> Command {
     c
 }
 
-fn run(mut c: Command, input: Option<&[u8]>) -> Result<Vec<u8>, String> {
-    c.stdin(if input.is_some() {
-        Stdio::piped()
-    } else {
-        Stdio::null()
-    })
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
-    let mut child = c.spawn().map_err(|e| e.to_string())?;
+fn run(mut c: crate::proc::Command, input: Option<&[u8]>) -> villa::Result<Vec<u8>> {
+    use crate::proc::Io;
+    let feed = if input.is_some() { Io::Pipe } else { Io::Null };
+    let mut child = c
+        .spawn(feed, Io::Pipe, Io::Pipe)
+        .map_err(|e| villa::Error::io(e.to_string()))?;
     if let (Some(bytes), Some(mut stdin)) = (input, child.stdin.take()) {
         // a broken pipe is git's own error, reported by its exit status
-        let _ = stdin.write_all(bytes);
+        crate::soft::done(stdin.write_all(bytes), "blob");
     }
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| villa::Error::io(e.to_string()))?;
     if out.status.success() {
         Ok(out.stdout)
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+        Err(villa::Error::io(
+            String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        ))
     }
 }
 
@@ -46,7 +47,7 @@ pub fn hash_object(
     work_tree: &Path,
     rel: &str,
     bytes: &[u8],
-) -> Result<String, String> {
+) -> villa::Result<String> {
     let mut c = base(git_dir, work_tree);
     c.args(["hash-object", "--stdin", "--path", rel]);
     Ok(String::from_utf8_lossy(&run(c, Some(bytes))?)
@@ -55,7 +56,7 @@ pub fn hash_object(
 }
 
 /// The blob id of BYTES with no filter (a link's target).
-pub fn hash_raw(git_dir: &Path, work_tree: &Path, bytes: &[u8]) -> Result<String, String> {
+pub fn hash_raw(git_dir: &Path, work_tree: &Path, bytes: &[u8]) -> villa::Result<String> {
     let mut c = base(git_dir, work_tree);
     c.args(["hash-object", "--stdin", "--no-filters"]);
     Ok(String::from_utf8_lossy(&run(c, Some(bytes))?)
@@ -77,7 +78,7 @@ pub fn blame_porcelain(
     work_tree: &Path,
     rel: &str,
     contents: Option<&[u8]>,
-) -> Result<Vec<u8>, String> {
+) -> villa::Result<Vec<u8>> {
     let mut c = base(git_dir, work_tree);
     c.args(["blame", "--porcelain"]);
     if contents.is_some() {
@@ -106,7 +107,7 @@ pub fn stage_bytes(
     rel: &str,
     mode: &str,
     bytes: &[u8],
-) -> Result<(), String> {
+) -> villa::Result<()> {
     let mut c = base(git_dir, work_tree);
     c.args(["hash-object", "-w", "--stdin", "--path", rel]);
     let sha = String::from_utf8_lossy(&run(c, Some(bytes))?)
@@ -128,7 +129,7 @@ pub fn changed_paths(
     work_tree: &Path,
     old: &str,
     new: &str,
-) -> Result<Vec<String>, String> {
+) -> villa::Result<Vec<String>> {
     let mut c = base(git_dir, work_tree);
     c.args([
         "diff-tree",
@@ -148,7 +149,7 @@ pub fn changed_paths(
 }
 
 /// The paths of the work tree that differ from its head: changed, deleted and untracked (not ignored) files.
-pub fn dirty_paths(git_dir: &Path, work_tree: &Path) -> Result<Vec<String>, String> {
+pub fn dirty_paths(git_dir: &Path, work_tree: &Path) -> villa::Result<Vec<String>> {
     let mut c = base(git_dir, work_tree);
     c.current_dir(work_tree).args([
         "status",

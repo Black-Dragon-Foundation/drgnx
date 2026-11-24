@@ -342,7 +342,7 @@ fn old_text(doc: &Path, from: &str) -> Result<String, Error> {
     }
     let main = crate::work::presence::main_checkout(doc)
         .ok_or_else(|| invalid("doc", "the document is not in a git repository"))?;
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args(["cat-file", "blob", from])
         .current_dir(&main)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -404,7 +404,7 @@ pub async fn effects(f: &Front, _: &Caller, p: EffectsParams) -> Result<Vec<Task
             }
             let doc = true_path(&d.doc);
             let old = old_text(&doc, &d.from)?;
-            let new = std::fs::read_to_string(&doc).ok();
+            let new = crate::fsio::read_to_string(&doc).ok();
             let tasks = live(f, false).await?;
             let of_plan = |plan: &Path| -> Vec<Live> {
                 tasks

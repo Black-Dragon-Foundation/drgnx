@@ -126,11 +126,7 @@ pub struct Deleted {
 
 /// Deletes the index of the store ID (`<state>/code/<ID>.db`, its base checkout BASE): its holds in every cache of
 /// CACHES (with the vectors only it held), the store's files, and BASE's `.drgnx/packs/`. The project must be closed.
-pub async fn delete_root(
-    caches: &Caches,
-    id: &str,
-    base: Option<&Path>,
-) -> Result<Deleted, String> {
+pub async fn delete_root(caches: &Caches, id: &str, base: Option<&Path>) -> villa::Result<Deleted> {
     let mut gone = Deleted {
         bytes: 0,
         vectors: 0,
@@ -139,7 +135,8 @@ pub async fn delete_root(
     // the store first: a cache opened after this registers no hold for it again
     for f in store_files(caches.state(), id) {
         if let Ok(m) = std::fs::metadata(&f) {
-            std::fs::remove_file(&f).map_err(|e| format!("{}: {e}", f.display()))?;
+            std::fs::remove_file(&f)
+                .map_err(|e| villa::Error::io(format!("{}: {e}", f.display())))?;
             gone.bytes += m.len();
         }
     }
@@ -147,7 +144,7 @@ pub async fn delete_root(
         && packs.is_dir()
     {
         for e in std::fs::read_dir(&packs)
-            .map_err(|e| format!("{}: {e}", packs.display()))?
+            .map_err(|e| villa::Error::io(format!("{}: {e}", packs.display())))?
             .flatten()
         {
             let p = e.path();
@@ -158,11 +155,20 @@ pub async fn delete_root(
                 }
             }
         }
-        std::fs::remove_dir_all(&packs).map_err(|e| format!("{}: {e}", packs.display()))?;
+        std::fs::remove_dir_all(&packs)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", packs.display())))?;
     }
     for ident in caches.stored() {
-        let cache = caches.get(&ident).await.map_err(|e| e.to_string())?;
-        gone.vectors += u64::from(cache.drop_holder(id).await.map_err(|e| e.to_string())?);
+        let cache = caches
+            .get(&ident)
+            .await
+            .map_err(|e| villa::Error::io(e.to_string()))?;
+        gone.vectors += u64::from(
+            cache
+                .drop_holder(id)
+                .await
+                .map_err(|e| villa::Error::invalid(e.to_string()))?,
+        );
     }
     Ok(gone)
 }

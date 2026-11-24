@@ -7,11 +7,9 @@
 use gleipnir::inner::{self, BrowserPlan, InnerSpec, LayersReport, RelayPlan};
 use gleipnir::landlock::{self, LandlockPlan, Tier};
 use gleipnir::validate::{Refusal, Rule};
-use std::io::{self, Read};
-use std::os::fd::{AsRawFd, OwnedFd};
-use std::os::unix::process::CommandExt;
+use std::io::Read;
+use std::os::fd::OwnedFd;
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -21,7 +19,7 @@ const CANARY: &str = "glp-parent-canary-5b7e";
 fn landlock_here(test: &str) -> bool {
     let abi = landlock::kernel_abi();
     if abi == 0 {
-        eprintln!("SKIP {test}: the kernel has no Landlock");
+        ratatoskr::soft::err_line(&format!("SKIP {test}: the kernel has no Landlock"));
     }
     abi > 0
 }
@@ -77,107 +75,79 @@ struct Outcome {
     stderr: String,
 }
 
-fn high(fd: &OwnedFd) -> OwnedFd {
-    rustix::io::fcntl_dupfd_cloexec(fd, 50).unwrap()
-}
-
-/// A filter that answers `nr` with EPERM and allows everything else (test-only: no arch check).
-fn deny_filter(nr: libc::c_long) -> Vec<libc::sock_filter> {
-    const LD_W_ABS: u16 = 0x20; // BPF_LD | BPF_W | BPF_ABS
-    const JEQ_K: u16 = 0x15; // BPF_JMP | BPF_JEQ | BPF_K
-    const RET_K: u16 = 0x06; // BPF_RET | BPF_K
-    let f = |code, jt, jf, k| libc::sock_filter { code, jt, jf, k };
-    vec![
-        f(LD_W_ABS, 0, 0, 0),
-        f(JEQ_K, 0, 1, u32::try_from(nr).unwrap()),
-        f(RET_K, 0, 0, libc::SECCOMP_RET_ERRNO | libc::EPERM as u32),
-        f(RET_K, 0, 0, libc::SECCOMP_RET_ALLOW),
-    ]
-}
-
 /// Run the helper with `spec_fd` at 3 and a status pipe at 4, `cmd` after `--`. The process group (if the helper led
 /// one) is killed once the helper's process is gone, so a relay left behind does not outlive the test.
 fn run_fd(spec_fd: OwnedFd, cmd: &[&str], o: Opts) -> Outcome {
     let (rd, wr) = inner::status_pipe().unwrap();
-    let (hs, hw) = (high(&spec_fd), high(&wr));
-    drop((spec_fd, wr));
-    let mut c = if o.bare {
-        let mut c = Command::new(cmd[0]);
-        c.args(&cmd[1..]);
-        c
+    let (program, args): (&str, Vec<&str>) = if o.bare {
+        (cmd[0], cmd[1..].to_vec())
     } else {
-        let mut c = Command::new(HELPER);
-        c.args(["sandbox-inner", "--spec-fd", "3", "--"]).args(cmd);
-        c
+        (
+            HELPER,
+            ["sandbox-inner", "--spec-fd", "3", "--"]
+                .into_iter()
+                .chain(cmd.iter().copied())
+                .collect(),
+        )
     };
-    c.env_clear()
-        .env("GLP_PARENT_CANARY", CANARY)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if o.pgroup {
-        c.process_group(0);
-    }
-    let (s, w, setsid, canary) = (hs.as_raw_fd(), hw.as_raw_fd(), o.setsid, o.canary_fd7);
-    let hh = o.hub.as_ref().map(high);
-    let hub = hh.as_ref().map(AsRawFd::as_raw_fd);
-    let filter = o.deny.map(deny_filter);
-    // SAFETY: only async-signal-safe calls (setsid, dup2, prctl) on values made before the fork.
-    unsafe {
-        c.pre_exec(move || {
-            let fail = || Err(io::Error::last_os_error());
-            if setsid && libc::setsid() < 0 {
-                return fail();
-            }
-            if libc::dup2(s, 3) < 0 || libc::dup2(w, 4) < 0 {
-                return fail();
-            }
-            if let Some(h) = hub
-                && libc::dup2(h, 5) < 0
-            {
-                return fail();
-            }
-            if canary && libc::dup2(2, 7) < 0 {
-                return fail();
-            }
-            if let Some(f) = &filter {
-                let prog = libc::sock_fprog {
-                    len: f.len() as libc::c_ushort,
-                    filter: f.as_ptr().cast_mut(),
-                };
-                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
-                    || libc::prctl(
-                        libc::PR_SET_SECCOMP,
-                        libc::SECCOMP_MODE_FILTER,
-                        &prog as *const libc::sock_fprog,
-                    ) != 0
-                {
-                    return fail();
-                }
-            }
-            Ok(())
+    let mut pass = vec![
+        draugr::PassFd {
+            fd: Arc::new(spec_fd),
+            target: 3,
+        },
+        draugr::PassFd {
+            fd: Arc::new(wr),
+            target: 4,
+        },
+    ];
+    if let Some(hub) = o.hub {
+        pass.push(draugr::PassFd {
+            fd: Arc::new(hub),
+            target: 5,
         });
     }
-    let mut child = c.spawn().unwrap();
-    drop((hs, hw, hh, o.hub));
+    if o.canary_fd7 {
+        // a descriptor the helper was not told about, open and not close-on-exec
+        pass.push(draugr::PassFd {
+            fd: Arc::new(OwnedFd::from(std::fs::File::open("/dev/null").unwrap())),
+            target: 7,
+        });
+    }
+    let spec = draugr::Spec {
+        program: program.into(),
+        args: args.into_iter().map(Into::into).collect(),
+        env: vec![("GLP_PARENT_CANARY".into(), CANARY.into())],
+        cwd: None,
+        stdin_null: true,
+        pass_fds: pass,
+        new_session: o.setsid,
+    };
+    let opts = draugr::Opts {
+        deny_syscall: o.deny,
+        // a helper that makes its own session must not be spawned as a group leader
+        inherit_group: !o.pgroup && !o.setsid,
+        ..draugr::Opts::default()
+    };
+    let mut child = draugr::spawn_std(&spec, &opts).unwrap();
+    drop(spec);
     let mut out = child.stdout.take().unwrap();
-    let out = std::thread::spawn(move || {
+    let out = saman::spawn_thread("sandbox-inner-out", move || {
         let mut s = String::new();
-        let _ = out.read_to_string(&mut s);
+        ratatoskr::soft::done(out.read_to_string(&mut s), "sandbox_inner");
         s
-    });
+    })
+    .unwrap();
     let err_buf = Arc::new(Mutex::new(String::new()));
     let mut err = child.stderr.take().unwrap();
     let eb = Arc::clone(&err_buf);
-    let err = std::thread::spawn(move || {
+    let err = saman::spawn_thread("sandbox-inner-err", move || {
         let mut chunk = [0u8; 4096];
         while let Ok(n @ 1..) = err.read(&mut chunk) {
-            eb.lock()
-                .unwrap()
-                .push_str(&String::from_utf8_lossy(&chunk[..n]));
+            saman::lock(&eb).push_str(&String::from_utf8_lossy(&chunk[..n]));
         }
-    });
-    let tail = || err_buf.lock().unwrap().clone();
+    })
+    .unwrap();
+    let tail = || saman::lock(&err_buf).clone();
     let status = inner::read_status(rd, &tail, Duration::from_secs(10));
     let code = child.wait().unwrap().code();
     if o.pgroup || o.setsid {
@@ -538,7 +508,7 @@ fn supervise(sock: &Path, shut: bool) -> std::thread::JoinHandle<AtSocket> {
     use gleipnir::trace as gt;
     use std::io::Write;
     let l = std::os::unix::net::UnixListener::bind(sock).unwrap();
-    std::thread::spawn(move || {
+    saman::spawn_thread("supervise", move || {
         let Ok((s, _)) = l.accept() else {
             return AtSocket::Nothing;
         };
@@ -576,12 +546,16 @@ fn supervise(sock: &Path, shut: bool) -> std::thread::JoinHandle<AtSocket> {
             other => panic!("the listener did not come over the socket: {other:?}"),
         }
     })
+    .unwrap()
 }
 
 /// The supervisor's result once the helper is gone: a connection of our own wakes an `accept` the helper never
 /// reached (it has exited, so it never will), and is then nothing.
 fn supervised(sock: &Path, h: std::thread::JoinHandle<AtSocket>) -> AtSocket {
-    let _ = std::os::unix::net::UnixStream::connect(sock);
+    ratatoskr::soft::done(
+        std::os::unix::net::UnixStream::connect(sock),
+        "std::os::unix::net::UnixStream::connect",
+    );
     h.join().unwrap()
 }
 
@@ -597,7 +571,7 @@ fn a_whole_tree_spec_hands_its_listener_over() {
     let dir = fixture();
     let root = dir.path().canonicalize().unwrap();
     let marker = root.join("marker");
-    std::fs::write(&marker, "seen\n").unwrap();
+    ratatoskr::fsio::write(&marker, "seen\n").unwrap();
     let sock = root.join("trace.sock");
     let mut s = spec(&root);
     s.landlock.unix_connect_roots = vec![sock.clone()];
@@ -681,9 +655,9 @@ fn a_whole_tree_spec_hands_its_listener_over() {
 fn a_reduced_run_end_to_end() {
     let abi = landlock::kernel_abi();
     if abi < 9 {
-        eprintln!(
+        ratatoskr::soft::err_line(&format!(
             "SKIP a_reduced_run_end_to_end: the kernel's Landlock ABI is {abi}, this needs 9"
-        );
+        ));
         return;
     }
     use gleipnir::backend::linux::reduced;
@@ -763,14 +737,19 @@ fn a_reduced_run_end_to_end() {
         o.stdout,
         format!("{}\nout-refused\ntcp-refused\n", root.join("w").display())
     );
-    assert_eq!(std::fs::read_to_string(root.join("w/f")).unwrap(), "in\n");
+    assert_eq!(
+        ratatoskr::fsio::read_to_string(root.join("w/f")).unwrap(),
+        "in\n"
+    );
     assert!(!out.join("f").exists());
 }
 
 fn abi9_here(test: &str) -> bool {
     let abi = landlock::kernel_abi();
     if abi < 9 {
-        eprintln!("SKIP {test}: the kernel's Landlock ABI is {abi}, the browser needs 9");
+        ratatoskr::soft::err_line(&format!(
+            "SKIP {test}: the kernel's Landlock ABI is {abi}, the browser needs 9"
+        ));
     }
     abi >= 9
 }
@@ -794,7 +773,7 @@ fn browser(
         hub_fd: 5,
         argv: argv.iter().map(|a| a.to_string()).collect(),
         env: vec![
-            ("HOME".into(), own.to_str().unwrap().into()),
+            (stig::HOME_VAR.into(), own.to_str().unwrap().into()),
             ("PATH".into(), "/usr/bin:/bin".into()),
         ],
         own_dir: own.clone(),

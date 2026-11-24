@@ -35,7 +35,7 @@ fn brace_words_are_filled_in_and_another_word_is_an_error_naming_it() {
     );
     assert_eq!(expand("no braces", &v).unwrap(), "no braces");
     let e = expand("{nope}", &v).unwrap_err();
-    assert!(e.contains("unknown {nope}"), "{e}");
+    assert!(e.message().contains("unknown {nope}"), "{e}");
     assert!(expand("a { b", &v).is_err());
     assert_eq!(file_uri(Path::new("/a/ü b")), "file:///a/%C3%BC%20b");
 }
@@ -45,12 +45,12 @@ fn a_glob_names_exactly_one_file_under_the_tools_folder() {
     let dir = tempfile::tempdir().unwrap();
     let plugins = dir.path().join("jdtls/plugins");
     std::fs::create_dir_all(&plugins).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         plugins.join("org.eclipse.equinox.launcher_1.6.900.v2024.jar"),
         "",
     )
     .unwrap();
-    std::fs::write(plugins.join("other.jar"), "").unwrap();
+    crate::fsio::write(plugins.join("other.jar"), "").unwrap();
     let v = vars(dir.path());
     let got = expand(
         "{glob:jdtls/plugins/org.eclipse.equinox.launcher_*.jar}",
@@ -65,15 +65,17 @@ fn a_glob_names_exactly_one_file_under_the_tools_folder() {
     assert!(
         expand("{glob:jdtls/plugins/nothing_*.jar}", &v)
             .unwrap_err()
+            .message()
             .contains("matches nothing")
     );
-    std::fs::write(plugins.join("org.eclipse.equinox.launcher_2.jar"), "").unwrap();
+    crate::fsio::write(plugins.join("org.eclipse.equinox.launcher_2.jar"), "").unwrap();
     assert!(
         expand(
             "{glob:jdtls/plugins/org.eclipse.equinox.launcher_*.jar}",
             &v
         )
         .unwrap_err()
+        .message()
         .contains("matches 2 files")
     );
     assert!(expand("{glob:jdtls/plugins/other.jar}", &v).is_err());

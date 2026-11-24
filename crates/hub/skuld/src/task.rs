@@ -31,37 +31,45 @@ pub async fn while_running<T: Debug, R>(
 #[cfg(test)]
 mod tests {
     use super::while_running;
+    use std::future::Future;
 
     /// The task panics before it sends; the test still holds a sender, so the receiver alone would wait forever.
-    #[tokio::test]
+    #[test]
     #[should_panic(expected = "skuld::while_running: the reply: the task ended first")]
-    async fn a_task_that_panics_first_fails_the_wait() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<u32>(1);
-        let held = tx.clone();
-        let mut call = tokio::spawn(async move {
-            let list: Vec<u32> = Vec::new();
-            tx.send(list[0]).await.unwrap();
+    fn a_task_that_panics_first_fails_the_wait() {
+        let exec = saman::Executor::new(1).unwrap();
+        exec.block_on(async {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<u32>(1);
+            let held = tx.clone();
+            let mut call = exec.spawn("panics-first", async move {
+                let list: Vec<u32> = Vec::new();
+                tx.send(list[0]).await.unwrap();
+            });
+            while_running("the reply", &mut call, rx.recv()).await;
+            drop(held);
         });
-        while_running("the reply", &mut call, rx.recv()).await;
-        drop(held);
     }
 
     /// What the test waits for comes first: its value, and the task still runs to its own end.
-    #[tokio::test]
-    async fn the_wait_ends_with_its_own_value_and_the_task_runs_on() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<u32>(1);
-        let (go, gate) = tokio::sync::oneshot::channel::<()>();
-        let mut call = tokio::spawn(async move {
-            tx.send(7).await.unwrap();
-            gate.await.unwrap();
-            8
+    #[test]
+    fn the_wait_ends_with_its_own_value_and_the_task_runs_on() {
+        let exec = saman::Executor::new(1).unwrap();
+        exec.block_on(async {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<u32>(1);
+            let (go, gate) = tokio::sync::oneshot::channel::<()>();
+            let mut call = exec.spawn("runs-on", async move {
+                tx.send(7).await.unwrap();
+                gate.await.unwrap();
+                8
+            });
+            assert_eq!(
+                while_running("the reply", &mut call, rx.recv()).await,
+                Some(7)
+            );
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(std::pin::Pin::new(&mut call).poll(&mut cx).is_pending());
+            go.send(()).unwrap();
+            assert_eq!(call.await.unwrap(), 8);
         });
-        assert_eq!(
-            while_running("the reply", &mut call, rx.recv()).await,
-            Some(7)
-        );
-        assert!(!call.is_finished());
-        go.send(()).unwrap();
-        assert_eq!(call.await.unwrap(), 8);
     }
 }

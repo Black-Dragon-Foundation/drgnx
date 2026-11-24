@@ -3,6 +3,7 @@
 #
 #   id            the standard; its page is docs/develop/standards/<id>.md
 #   owner         the one crate that may silence this standard's lints, and that the scanner's rules for it skip
+#   co_owners     crates that own the row with `owner` (the layer the owner is built on): same rights as the owner
 #   clippy        paths clippy's disallowed-methods rejects outside the owner (the scanner rejects them too, also
 #                 through `use … as`, `type` aliases and glob imports within one file, and inside macro arguments)
 #   clippy_types  paths clippy's disallowed-types rejects outside the owner
@@ -32,6 +33,32 @@ mal-gen = { clean = true }
 sattr = { clean = true }
 kvardi = { clean = true }
 mot = { clean = true }
+hrafn = { clean = true }
+bifrost = { clean = true }
+urdr = { clean = true }
+brokkr = { clean = true }
+sleipnir = { clean = true }
+gleipnir = { clean = true }
+gleipnir-escape = { clean = true }
+norn = { clean = true }
+glugg = { clean = true }
+ferja = { clean = true }
+vor = { clean = true }
+mimir = { clean = true }
+ghostty-vt-sys = { clean = true }
+skuld = { clean = true }
+minni = { clean = true }
+saga = { clean = true }
+forseti = { clean = true }
+vordr = { clean = true }
+hlaup = { clean = true }
+stund = { clean = true }
+eitri = { clean = true }
+draugr = { clean = true }
+ratatoskr = { clean = true }
+vegvisir = { clean = true }
+hrafn-embed = { clean = true }
+hermod = { clean = true }
 huginn = { clean = true }
 hlidskjalf = { clean = true }
 ritari = { clean = true }
@@ -39,6 +66,7 @@ skel = { clean = true }
 glitnir = { clean = true }
 sja = { clean = true }
 smidja = { clean = true }
+runstav = { clean = true }
 tafl = { clean = true, ui = true }
 
 [[standard]]
@@ -83,6 +111,7 @@ conformance = "crates/hub/stund/tests/conformance.rs"
 [[standard]]
 id = "files"
 owner = "eitri"
+co_owners = ["hlaup"]
 clippy = [
     "std::fs::write",
     "std::fs::read_to_string",
@@ -95,12 +124,14 @@ conformance = "crates/hub/eitri/tests/conformance.rs"
 [[standard]]
 id = "processes"
 owner = "draugr"
+co_owners = ["hlaup"]
 clippy = ["std::process::Command::new", "tokio::process::Command::new"]
 conformance = "crates/hub/draugr/tests/conformance.rs"
 
 [[standard]]
 id = "concurrency"
 owner = "saman"
+co_owners = ["stund"]
 clippy = [
     "std::thread::spawn",
     "std::thread::Builder::spawn",

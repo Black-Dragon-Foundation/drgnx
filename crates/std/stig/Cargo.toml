@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 villa.workspace = true
+rustix.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

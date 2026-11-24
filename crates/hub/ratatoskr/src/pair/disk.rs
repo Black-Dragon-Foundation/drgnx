@@ -172,7 +172,10 @@ fn folders(
 /// The folders MADE removed again, deepest first.
 fn unmake(made: Vec<(OwnedFd, Vec<u8>)>) {
     for (parent, name) in made.into_iter().rev() {
-        let _ = rustix::fs::unlinkat(parent.as_fd(), OsStr::from_bytes(&name), AtFlags::REMOVEDIR);
+        crate::soft::done(
+            rustix::fs::unlinkat(parent.as_fd(), OsStr::from_bytes(&name), AtFlags::REMOVEDIR),
+            "rustix::fs::unlinkat",
+        );
     }
 }
 
@@ -393,7 +396,10 @@ pub fn replace(
                 .map_err(|e| io(&real.display().to_string(), e))
         })();
         if rest.is_err() {
-            let _ = rustix::fs::unlinkat(parent.as_fd(), tmp.as_str(), AtFlags::empty());
+            crate::soft::done(
+                rustix::fs::unlinkat(parent.as_fd(), tmp.as_str(), AtFlags::empty()),
+                "rustix::fs::unlinkat",
+            );
         }
         rest.map(|()| lost)
     })();
@@ -480,11 +486,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().canonicalize().unwrap();
         let f = root.join("a.txt");
-        std::fs::write(&f, "one\n").unwrap();
+        crate::fsio::write(&f, "one\n").unwrap();
         let user = rustix::fs::setxattr(&f, "user.drgnx", b"1", XattrFlags::empty()).is_ok();
         let label = xattr(&f, "security.selinux");
         let lost = replace(&root, &f, |_| Ok(b"two\n".to_vec()), None, "raced").unwrap();
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "two\n");
+        assert_eq!(crate::fsio::read_to_string(&f).unwrap(), "two\n");
         assert_eq!(
             xattr(&f, "security.selinux"),
             label,
@@ -505,7 +511,7 @@ mod tests {
         let co = root.join("co");
         let f = co.join("x/y/new.txt");
         assert_eq!(write(&co, &f, None, &whole("hi\n"), None).unwrap(), "hi\n");
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "hi\n");
+        assert_eq!(crate::fsio::read_to_string(&f).unwrap(), "hi\n");
         let out = root.join("out/new.txt");
         assert!(write(&co, &out, None, &whole("hi\n"), None).is_err());
         assert!(

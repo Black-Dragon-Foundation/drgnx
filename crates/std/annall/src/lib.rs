@@ -10,17 +10,29 @@ use std::io::Write;
 /// The log file's name, under `<state>/log/`.
 pub const LOG_FILE: &str = "drgnx.log";
 
+/// Where the log's lines go.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Sink {
+    /// `<state>/log/drgnx.log`.
+    #[default]
+    File,
+    /// This process's stderr: for a child whose stderr the hub keeps in a log of its own (a terminal worker).
+    Stderr,
+}
+
 /// How the log is set up.
 #[derive(Debug, Clone)]
 pub struct LogConfig {
     /// The least severe level written.
     pub level: tracing::Level,
+    pub sink: Sink,
 }
 
 impl Default for LogConfig {
     fn default() -> LogConfig {
         LogConfig {
             level: tracing::Level::INFO,
+            sink: Sink::File,
         }
     }
 }
@@ -30,14 +42,19 @@ pub struct Guard {
     _worker: tracing_appender::non_blocking::WorkerGuard,
 }
 
-/// Logging to `<state>/log/drgnx.log`, for the rest of the process. A second call is a [`villa::Kind::Conflict`].
+/// Logging to `<state>/log/drgnx.log` (or stderr, by `cfg.sink`), for the rest of the process. A second call is a [`villa::Kind::Conflict`].
 pub fn init(cfg: LogConfig) -> villa::Result<Guard> {
-    let dir = stig::state().join("log");
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        villa::Error::from(e).with_detail(format!("creating the log folder {}", dir.display()))
-    })?;
-    let (writer, worker) =
-        tracing_appender::non_blocking(tracing_appender::rolling::never(&dir, LOG_FILE));
+    let (writer, worker) = match cfg.sink {
+        Sink::File => {
+            let dir = stig::state().join("log");
+            std::fs::create_dir_all(&dir).map_err(|e| {
+                villa::Error::from(e)
+                    .with_detail(format!("creating the log folder {}", dir.display()))
+            })?;
+            tracing_appender::non_blocking(tracing_appender::rolling::never(&dir, LOG_FILE))
+        }
+        Sink::Stderr => tracing_appender::non_blocking(std::io::stderr()),
+    };
     let subscriber = tracing_subscriber::fmt()
         .json()
         .with_max_level(cfg.level)
@@ -61,6 +78,18 @@ pub fn redact<T: hulda::Redact + ?Sized>(v: &T) -> tracing::field::DisplayValue<
 /// LINE and a newline on stdout: a command's output.
 pub fn cli_out(line: &str) -> villa::Result<()> {
     writeln!(std::io::stdout().lock(), "{line}").map_err(villa::Error::from)
+}
+
+/// The process's stdout as a writer, for a command whose output is bytes and not lines (a wire protocol's frames, a
+/// key on a pipe): what is written arrives as it is, with nothing added.
+pub fn raw_out() -> impl std::io::Write + Send {
+    std::io::stdout()
+}
+
+/// The process's stderr as a writer: for a diagnostic that is not a line (a prompt waiting for the answer, a log sink
+/// handed a writer): what is written arrives as it is, with nothing added.
+pub fn raw_err() -> std::io::Stderr {
+    std::io::stderr()
 }
 
 /// LINE and a newline on stderr: a command's diagnostics.

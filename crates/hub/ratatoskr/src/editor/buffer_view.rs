@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 /// One view: a connection's id for one buffer.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ViewKey {
+pub struct ViewId {
     pub conn: u64,
     pub view: String,
 }
@@ -96,7 +96,7 @@ pub enum ViewOut {
 /// See the module.
 #[derive(Debug, Default)]
 pub struct Views {
-    views: BTreeMap<ViewKey, View>,
+    views: BTreeMap<ViewId, View>,
     armed: bool,
 }
 
@@ -111,7 +111,7 @@ impl Views {
                 keys,
                 doc_version,
             } => {
-                let key = ViewKey {
+                let key = ViewId {
                     conn,
                     view: view.clone(),
                 };
@@ -149,7 +149,7 @@ impl Views {
                 }
             }
             ViewEv::Unwatch { conn, view } => {
-                if self.views.remove(&ViewKey { conn, view }).is_none() {
+                if self.views.remove(&ViewId { conn, view }).is_none() {
                     out.push(ViewOut::NoView);
                 }
             }
@@ -170,7 +170,7 @@ impl Views {
                 view,
                 generation,
             } => {
-                if let Some(v) = self.views.get_mut(&ViewKey { conn, view })
+                if let Some(v) = self.views.get_mut(&ViewId { conn, view })
                     && v.typed == generation
                 {
                     v.dirty = true;

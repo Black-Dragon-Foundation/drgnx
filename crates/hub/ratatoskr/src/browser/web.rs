@@ -73,7 +73,7 @@ impl Drop for WebProxy {
         self.handle.shutdown();
         self.tasks.abort_all();
         if std::fs::symlink_metadata(&self.socket).is_ok_and(|m| (m.dev(), m.ino()) == self.bound) {
-            let _ = std::fs::remove_file(&self.socket);
+            crate::soft::done(std::fs::remove_file(&self.socket), "std::fs::remove_file");
         }
     }
 }
