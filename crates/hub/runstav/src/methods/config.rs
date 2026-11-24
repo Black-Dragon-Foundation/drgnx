@@ -76,13 +76,13 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "config/settings", ConfigSettings(SettingsParams) -> SettingsApplied,
             classes: [User], writes: false,
-            doc: "the editor's runtime settings values per project (or global), each set kept as last good; a bad value is refused with its path; replaces config/providers",
+            doc: "Emacs-era, re-decide at B1: the editor's runtime settings values per project (or global), each set kept as last good; a bad value is refused with its path; replaces config/providers",
             check: check_settings,
         ),
         method!(
             "config/changed", ConfigChanged(Empty) -> bool,
             classes: [User], writes: false,
-            doc: "settings.el may have changed: its stamp is checked now",
+            doc: "Emacs-era, re-decide at B1: settings.el may have changed: its stamp is checked now",
         ),
     ]
 }

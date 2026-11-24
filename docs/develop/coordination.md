@@ -228,7 +228,7 @@ work.db has one writer: the hub (Ratatoskr). Every write below is a transaction 
 | Writes | Through | Who calls | `tx` actor |
 |---|---|---|---|
 | a card settled, a message sent or marked, an event, a review mark and its event | the front's `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark` (`ratatoskr/src/coord.rs` on `norn::write`) | the editor (a user connection) | `user` |
-| jobs, tasks, leases, decisions, agents, cards, held counts, the daily prune | `coord/job-create`, `coord/job-set`, `coord/task-status`, `coord/leases`, `coord/decide`, `coord/agent`, `coord/card-create`, `coord/card-set`, `coord/held`, `coord/prune` (user class), and the hub's own runner and timers on `norn::write` | a user connection; the hub itself | `hub` (class `system`) |
+| jobs, tasks, leases, decisions, agents, cards, held counts, the daily prune | the hub's own runner and timers on `norn::write` (no wire method: the Lisp job runner's `coord/*` seam is gone) | the hub itself | `hub` (class `system`) |
 | what the coordination tools write | `norn::tools` on the same `CoordDb` (`Front.tools`) | agents, through the MCP hosting | `agent:SID` (or the outside agent's `ext:…`) |
 
 A service connection's write is the hub's (`hub`, class `system`); an agent socket's is its session's. No other
@@ -237,9 +237,7 @@ process writes these tables: an editor, the CLI and any Lisp reach them only thr
 The front's methods take the Lisp keywords as params (`messages/send` `{recipient, text, job?, seen?, answers?,
 question?}`; a `sender` is refused from every caller, `invalid-params` with path `sender`: a message's sender is its
 connection's) and answer the Lisp results typed: `messages/send` is `{ok, id, state}` or `{held, version, changes}`
-(the decisions after `seen`, newest first, as `decisions_since` reads them), `coord/decide` `{ok, n, status,
-version}`, `{held, version, changes}` or `{error}`, `coord/leases` `{released: [{task, agent, job}]}`. Each is one
-transaction; each committed one is counted in `status`'s `store.writes`, sends its new events to subscribers and wakes
+(the decisions after `seen`, newest first, as `decisions_since` reads them). Each is one transaction; each committed one is counted in `status`'s `store.writes`, sends its new events to subscribers and wakes
 delivery.
 
 ### Who opens work.db
