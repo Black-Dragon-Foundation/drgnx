@@ -68,6 +68,9 @@ ratatoskr card list --open                 # what waits for you: questions, acce
 ratatoskr card settle 12 yes               # answer card 12 (the choices are the card's own)
 ratatoskr message send agent:s-3 "go on"   # write to an agent as yourself
 ratatoskr message reply 41 "use the new API"   # answer a question message: it goes to the asker
+ratatoskr task list --status open --label docs   # tracker tasks by words (--query), status, assignee, labels, project; --cursor N for the next page
+ratatoskr task ready --project aa          # the tasks nothing blocks and nobody holds, by priority then age
+ratatoskr task show task:aa-00001 [--history]   # one task: its fields, links and notes (and every version)
 ratatoskr task status task:aa-00001 done   # set a task's status (a status the tracker knows)
 ratatoskr plan status plan:aa-00002 3 done # set a task of a plan; done also ticks its steps in the file
 ratatoskr records status                   # the record view files and their conflicts

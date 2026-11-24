@@ -71,6 +71,9 @@ pub struct Layer {
     #[serde(rename = "crate")]
     pub krate: String,
     pub may_not_depend: Vec<String>,
+    /// Dev-dependencies of the crate itself count too (a test back-edge); those of its dependencies never do.
+    #[serde(default)]
+    pub dev: bool,
 }
 
 impl Standard {
@@ -133,6 +136,8 @@ pub struct Member {
     pub dir: PathBuf,
     /// Its normal and build dependencies, by package name.
     pub deps: Vec<String>,
+    /// Its dev-dependencies, by package name.
+    pub dev_deps: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -188,9 +193,15 @@ pub fn members(root: &Path) -> Result<Vec<Member>, String> {
                 .unwrap_or_default(),
             deps: p
                 .dependencies
-                .into_iter()
+                .iter()
                 .filter(|d| d.kind.as_deref() != Some("dev"))
-                .map(|d| d.name)
+                .map(|d| d.name.clone())
+                .collect(),
+            dev_deps: p
+                .dependencies
+                .iter()
+                .filter(|d| d.kind.as_deref() == Some("dev"))
+                .map(|d| d.name.clone())
                 .collect(),
         })
         .collect())

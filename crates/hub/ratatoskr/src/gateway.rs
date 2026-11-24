@@ -434,12 +434,17 @@ impl Gate {
         read(&self.providers).get(id).map(|p| p.base.to_string())
     }
 
-    /// The editor token the hub's own embedders use (made when first asked for).
+    /// The editor token the hub's own embedders use (made when first asked for, and forwarding from then on).  It is
+    /// the hub's, no one's registration: `status` does not count it ([`Gate::status`]).
     fn hub_embed_token(&self) -> Result<String, Error> {
-        let token = match self.embed_token.get() {
-            Some(t) => t.clone(),
-            None => {
-                let t = token().map_err(|e| internal(format!("no token: {e}")))?;
+        if let Some(t) = self.embed_token.get() {
+            return Ok(t.clone());
+        }
+        let t = token().map_err(|e| internal(format!("no token: {e}")))?;
+        // inserted by the one call that sets it: two first calls at once leave one token forwarding, not two
+        Ok(self
+            .embed_token
+            .get_or_init(|| {
                 crate::recording::secret(&t);
                 write(&self.regs.0).insert(
                     token_hash(t.as_bytes()),
@@ -448,10 +453,9 @@ impl Gate {
                         owner: None,
                     },
                 );
-                self.embed_token.get_or_init(|| t).clone()
-            }
-        };
-        Ok(token)
+                t
+            })
+            .clone())
     }
 
     /// At start, after the sessions came back: the last provider table, then the registrations of live owners (each
@@ -963,15 +967,19 @@ impl Gate {
         }
     }
 
-    /// `status`'s `gateway`.
+    /// `status`'s `gateway`.  `registrations` counts the agents' and editors', not the hub's own embedders' token.
     pub fn status(&self) -> GatewayStatus {
         let (port, (bytes_in, bytes_out)) = match self.engine.get() {
             Some((gw, port)) => (Some(u64::from(*port)), gw.traffic()),
             None => (None, (0, 0)),
         };
+        let own = self.embed_token.get().map(|t| token_hash(t.as_bytes()));
         GatewayStatus {
             port,
-            registrations: read(&self.regs.0).len() as u64,
+            registrations: read(&self.regs.0)
+                .keys()
+                .filter(|h| Some(*h) != own.as_ref())
+                .count() as u64,
             requests: self.requests.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
             fallbacks: self.fallbacks.load(Ordering::Relaxed),
@@ -2059,6 +2067,26 @@ mod tests {
             g.restore(&h.front.mcp).await;
             assert!(g.regs.find(&hash).is_none());
             assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
+        })
+    }
+
+    /// The hub's own embedders' token forwards like an editor's, but it is no one's registration: `status` does not
+    /// count it, so once a gone owner's registration is pruned the count is 0 whether or not the embed tick (every 2 s,
+    /// with the preset `tei` provider) made the token first.
+    #[test]
+    fn the_hubs_embed_token_is_not_a_registration() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            let t: Vec<ProviderConfig> = serde_json::from_value(json!([
+                {"id": "tei", "kind": "tei", "base": "http://127.0.0.1:9", "auth": "none",
+                 "messages": false, "caps": ["embed"]}]))
+            .unwrap();
+            g.apply(&t).unwrap();
+            assert_eq!(g.embedders(&[]).unwrap().len(), 1);
+            assert_eq!(g.embedders(&[]).unwrap().len(), 1);
+            assert_eq!(read(&g.regs.0).len(), 1, "the one token forwards");
+            assert_eq!(g.status().registrations, 0);
         })
     }
 

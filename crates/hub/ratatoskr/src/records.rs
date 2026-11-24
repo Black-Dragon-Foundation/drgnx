@@ -8,27 +8,31 @@
 mod ignore;
 mod paths;
 pub(crate) mod read;
+pub mod structure;
 pub(crate) mod write;
 
 use crate::coord::fail;
 use crate::dispatch::Caller;
 use crate::front::Front;
-use ignore::Ignore;
+use ignore::{GitIgnore, Ignore};
+// the graph-side helpers live with the seam; `write` reaches them as `super::…`
 use norn::deny::{DenyList, RootVerdict, Verdict};
 use norn::store::CoordDb;
 use runstav::methods::records::{
-    ByPath, Conflict, ImportParams, ImportReport, ImportedFile, Keep, RecordKind, RecordsConflict,
-    RecordsNotice, ResolveParams, Resolved, ViewStatus, ViewWritten, Views as ViewsAnswer,
+    ByPath, Conflict, ForgetRootParams, Forgotten, ImportParams, ImportReport, ImportedFile, Keep,
+    RecordKind, RecordsConflict, RecordsNotice, ResolveParams, Resolved, SkipWhy, Skipped,
+    ViewStatus, ViewWritten, Views as ViewsAnswer,
 };
 use runstav::wire::{Error, ErrorCode};
 use saga::import::{self, AnyDoc, GraphOp};
-use saga::merge::{self, Act as MergeAct, Base, Merged};
+use saga::merge::{self, Base};
 use saga::{status, view};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+use structure::{apply_acts, diff, link_structure};
 use urdr::graph::entity::{self, Changes, EntityNew, Origin};
 use urdr::graph::link;
 use urdr::graph::{Class, TxMeta};
@@ -42,6 +46,9 @@ const TRIES: usize = 3;
 
 /// How many of a piece's last texts the base remembers (a stale editor save brings back one of them).
 const BASE_KEEP: usize = 8;
+
+/// A record file bigger than this is skipped and listed (by its size; it is never read).
+pub(crate) const MAX_RECORD_BYTES: u64 = 2 * 1024 * 1024;
 
 /// What a sync of one file did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,14 +162,56 @@ fn parse_of(kind: RecordKind) -> &'static str {
     }
 }
 
+/// What keeps a file of ROOT out of the import: the records' own ignore list (silently), then the size limit and git's
+/// ignore rules (the file is listed as skipped).
+struct Rules<'a> {
+    root: &'a Path,
+    ign: &'a Ignore,
+    git: &'a GitIgnore,
+}
+
+impl Rules<'_> {
+    /// P is on the records' ignore list.
+    fn ignored(&self, p: &Path, is_dir: bool) -> bool {
+        p.strip_prefix(self.root)
+            .is_ok_and(|rel| self.ign.ignored(rel, is_dir))
+    }
+
+    /// Why the file P is skipped: over [`MAX_RECORD_BYTES`] (by its size, never read), or git-ignored (a file outside
+    /// the root, a spec a plan names elsewhere, only by its size).
+    fn limit(&self, p: &Path) -> Option<SkipWhy> {
+        if std::fs::metadata(p).is_ok_and(|m| m.len() > MAX_RECORD_BYTES) {
+            return Some(SkipWhy::TooBig);
+        }
+        p.strip_prefix(self.root)
+            .is_ok_and(|rel| self.git.ignored(rel, false))
+            .then_some(SkipWhy::GitIgnored)
+    }
+}
+
+fn skipped(p: &Path, why: SkipWhy) -> Skipped {
+    Skipped {
+        path: p.to_string_lossy().into_owned(),
+        why,
+    }
+}
+
 /// The record files of ROOT: specs under `docs/specs/`, plans and ledgers under `docs/plans/`, decision records under
-/// `docs/decisions/` and `docs/adr/`, `DEFERRED.md`, `BUILD-BOARD.md`; `board.org` only when ONLY names it.
-fn discover(root: &Path, only: Option<RecordKind>, ign: &Ignore) -> Vec<Found> {
-    let skip = |p: &Path| {
-        p.strip_prefix(root)
-            .is_ok_and(|rel| ign.ignored(rel, false))
-    };
+/// `docs/decisions/` and `docs/adr/`, `DEFERRED.md`, `BUILD-BOARD.md`; `board.org` only when ONLY names it.  And the
+/// record files left out: over the size limit or git-ignored.
+fn discover(
+    root: &Path,
+    only: Option<RecordKind>,
+    ign: &Ignore,
+    git: &GitIgnore,
+) -> (Vec<Found>, Vec<Skipped>) {
+    let rules = Rules { root, ign, git };
     let mut out = Vec::new();
+    let mut skips = Vec::new();
+    let mut take = |p: PathBuf, kind: RecordKind, out: &mut Vec<Found>| match rules.limit(&p) {
+        Some(why) => skips.push(skipped(&p, why)),
+        None => out.push(found(p, kind)),
+    };
     for (dir, kind) in [
         ("docs/specs", RecordKind::Specs),
         ("docs/plans", RecordKind::Plans),
@@ -172,9 +221,9 @@ fn discover(root: &Path, only: Option<RecordKind>, ign: &Ignore) -> Vec<Found> {
         let mut md = Vec::new();
         walk(&root.join(dir), &mut md);
         md.sort();
-        for p in md.into_iter().filter(|p| !skip(p)) {
+        for p in md.into_iter().filter(|p| !rules.ignored(p, false)) {
             let ledger = kind == RecordKind::Plans && p.to_string_lossy().ends_with(".ledger.md");
-            out.push(found(p, if ledger { RecordKind::Ledgers } else { kind }));
+            take(p, if ledger { RecordKind::Ledgers } else { kind }, &mut out);
         }
     }
     for (name, kind) in [
@@ -184,12 +233,13 @@ fn discover(root: &Path, only: Option<RecordKind>, ign: &Ignore) -> Vec<Found> {
     ] {
         let p = root.join(name);
         if p.is_file() && (kind != RecordKind::Board || only == Some(RecordKind::Board)) {
-            out.push(found(p, kind));
+            take(p, kind, &mut out);
         }
     }
     // what the Lisp scan's walk met: plans, specs and ledgers anywhere under the root (see [`walk_scan`])
     let mut met = Vec::new();
-    walk_scan(root, root, 7, false, ign, &mut met);
+    let mut met_skips = Vec::new();
+    walk_scan(&rules, root, 7, false, &mut met, &mut met_skips);
     met.sort_by(|a, b| a.0.cmp(&b.0));
     for (p, kind) in met {
         if !out.iter().any(|f| f.path == p) {
@@ -205,14 +255,17 @@ fn discover(root: &Path, only: Option<RecordKind>, ign: &Ignore) -> Vec<Found> {
     for plan in plans {
         if let Some(spec) = plan_spec_of(&plan)
             && spec.extension().is_some_and(|e| e == "md" || e == "org")
-            && !skip(&spec)
+            && !rules.ignored(&spec, false)
             && !out.iter().any(|f| f.path == spec)
         {
-            out.push(found(spec, RecordKind::Specs));
+            take(spec, RecordKind::Specs, &mut out);
         }
     }
     out.retain(|f| only.is_none_or(|o| o == f.kind));
-    out
+    skips.extend(met_skips);
+    skips.sort_by(|a, b| a.path.cmp(&b.path));
+    skips.dedup_by(|a, b| a.path == b.path);
+    (out, skips)
 }
 
 /// The folders the scan never enters (dot folders are entered: ledgers live in `.superpowers`).
@@ -257,6 +310,17 @@ fn has_tasks(text: &str) -> bool {
 /// `.superpowers/sdd/*/progress.md` are ledgers, a markdown under a `plans/` folder with task headings a plan, one under
 /// a `specs/` folder a spec (`drgnx-work--classify`).
 fn classify(file: &Path, root: &Path) -> Option<RecordKind> {
+    match candidate(file, root)? {
+        RecordKind::Plans => {
+            let text = crate::fsio::read_to_string(file).ok()?;
+            has_tasks(&text).then_some(RecordKind::Plans)
+        }
+        kind => Some(kind),
+    }
+}
+
+/// What [`classify`] would make of FILE without reading it: a markdown under a `plans/` folder may be a plan.
+fn candidate(file: &Path, root: &Path) -> Option<RecordKind> {
     let rel = file.strip_prefix(root).ok()?;
     let parts: Vec<String> = rel
         .components()
@@ -276,8 +340,7 @@ fn classify(file: &Path, root: &Path) -> Option<RecordKind> {
         return None;
     }
     if parts.iter().any(|p| p == "plans") {
-        let text = crate::fsio::read_to_string(file).ok()?;
-        return has_tasks(&text).then_some(RecordKind::Plans);
+        return Some(RecordKind::Plans);
     }
     parts
         .iter()
@@ -287,15 +350,17 @@ fn classify(file: &Path, root: &Path) -> Option<RecordKind> {
 
 /// Every plan, spec and ledger under DIR (a folder of ROOT), at most DEPTH folders down, links not followed.  Inside a
 /// linked git worktree (its `.git` a file) only its ledgers count: its plans and specs are copies
-/// (`drgnx-work--walk`).  `.claude/tmp` is not entered.
+/// (`drgnx-work--walk`).  `.claude/tmp` is not entered, nor a git-ignored folder; a record file over the size limit or
+/// git-ignored goes to SKIPS.
 fn walk_scan(
-    root: &Path,
+    rules: &Rules<'_>,
     dir: &Path,
     depth: u32,
     ledgers_only: bool,
-    ign: &Ignore,
     out: &mut Vec<(PathBuf, RecordKind)>,
+    skips: &mut Vec<Skipped>,
 ) {
+    let root = rules.root;
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
@@ -310,23 +375,27 @@ fn walk_scan(
         }
         if meta.is_dir() {
             let in_claude = dir.file_name().is_some_and(|n| n == ".claude");
-            let ignored = p.strip_prefix(root).is_ok_and(|rel| ign.ignored(rel, true));
+            let ignored = rules.ignored(&p, true)
+                || p.strip_prefix(root)
+                    .is_ok_and(|rel| rules.git.ignored(rel, true));
             if depth > 0
                 && !ignored
                 && !SKIP.contains(&name.as_str())
                 && !(name == "tmp" && in_claude)
             {
                 let linked = std::fs::symlink_metadata(p.join(".git")).is_ok_and(|m| m.is_file());
-                walk_scan(root, &p, depth - 1, ledgers_only || linked, ign, out);
+                walk_scan(rules, &p, depth - 1, ledgers_only || linked, out, skips);
             }
         } else if meta.is_file()
-            && !p
-                .strip_prefix(root)
-                .is_ok_and(|rel| ign.ignored(rel, false))
-            && let Some(kind) = classify(&p, root)
-            && (!ledgers_only || kind == RecordKind::Ledgers)
+            && !rules.ignored(&p, false)
+            && let Some(cand) = candidate(&p, root)
+            && (!ledgers_only || cand == RecordKind::Ledgers)
         {
-            out.push((p, kind));
+            if let Some(why) = rules.limit(&p) {
+                skips.push(skipped(&p, why));
+            } else if let Some(kind) = classify(&p, root) {
+                out.push((p, kind));
+            }
         }
     }
 }
@@ -466,162 +535,8 @@ pub(super) fn data_of(op: &GraphOp, file: &Path, kind: RecordKind) -> Value {
     d
 }
 
-/// A plan's structure: its tasks are under its head (`parent_of`), and a task waits on the tasks it `Depends:` on
-/// (`blocks`, dependency to task).  Links already there are left as they are.
-fn link_structure(
-    tx: &mut norn::store::WTx<'_>,
-    ops: &[GraphOp],
-) -> Result<(), norn::store::CoordError> {
-    let live =
-        |tx: &norn::store::WTx<'_>, id: &str| -> Result<Option<i64>, norn::store::CoordError> {
-            Ok(entity::by_id(tx.sql(), id)?
-                .filter(|e| e.retired_tx.is_none())
-                .map(|e| e.n))
-        };
-    for op in ops {
-        let Some(t) = &op.task else { continue };
-        let Some(me) = live(tx, &op.id)? else {
-            continue;
-        };
-        if let Some(p) = op.parent.and_then(|p| ops.iter().find(|o| o.seq == p))
-            && let Some(parent) = live(tx, &p.id)?
-        {
-            urdr::graph::link::add(
-                tx,
-                parent,
-                "parent_of",
-                me,
-                None,
-                Origin::Imported,
-                Some(&op.source),
-            )?;
-        }
-        for dep in &t.deps {
-            let found = ops
-                .iter()
-                .find(|o| o.task.as_ref().is_some_and(|d| &d.number == dep));
-            if let Some(d) = found
-                && let Some(dep_n) = live(tx, &d.id)?
-            {
-                urdr::graph::link::add(
-                    tx,
-                    dep_n,
-                    "blocks",
-                    me,
-                    None,
-                    Origin::Imported,
-                    Some(&op.source),
-                )?;
-            }
-        }
-    }
-    Ok(())
-}
-
-enum Act {
-    Create(usize),
-    Update(i64, usize),
-    Retire(i64),
-}
-
-/// What it takes to make the graph hold OPS (with DATA per op): read-only, so a dry run and an import share it.
-fn diff(
-    conn: &urdr::Connection,
-    ops: &[GraphOp],
-    data: &[Value],
-) -> Result<Vec<Act>, urdr::SqliteError> {
-    let mut acts = Vec::new();
-    for (i, op) in ops.iter().enumerate() {
-        match entity::by_id(conn, &op.id)? {
-            None => acts.push(Act::Create(i)),
-            Some(e) if e.retired_tx.is_some() => {}
-            Some(e) => {
-                let same = e.title == op.title
-                    && e.status == op.status
-                    && e.body.as_deref() == Some(op.body.as_str())
-                    && e.data == data[i];
-                if !same {
-                    acts.push(Act::Update(e.n, i));
-                }
-            }
-        }
-    }
-    if let Some(first) = ops.first() {
-        let mut st =
-            conn.prepare("select n, id from entity where source = ?1 and retired_tx is null")?;
-        let rows = st.query_map([&first.source], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            let (n, id) = row?;
-            if !ops.iter().any(|o| o.id == id) {
-                acts.push(Act::Retire(n));
-            }
-        }
-    }
-    Ok(acts)
-}
-
-fn changes_of(op: &GraphOp, data: &Value) -> Changes {
-    Changes {
-        title: Some(op.title.clone()),
-        status: Some(op.status.clone()),
-        body: Some(Some(op.body.clone())),
-        data_patch: Some(data.clone()),
-        ..Default::default()
-    }
-}
-
-/// Count ACTS, and carry them out when TX is given.
-fn apply_acts(
-    acts: Vec<Act>,
-    ops: &[GraphOp],
-    data: &[Value],
-    mut tx: Option<&mut norn::store::WTx<'_>>,
-) -> Result<(u64, u64), norn::store::CoordError> {
-    let (mut ents, mut n_ops) = (0, 0);
-    for a in acts {
-        n_ops += 1;
-        match a {
-            Act::Create(i) => {
-                ents += 1;
-                if let Some(tx) = tx.as_deref_mut() {
-                    let op = &ops[i];
-                    entity::create(
-                        tx,
-                        EntityNew {
-                            id: op.id.clone(),
-                            kind: op.kind.into(),
-                            project: None,
-                            title: op.title.clone(),
-                            status: op.status.clone(),
-                            body: Some(op.body.clone()),
-                            priority: None,
-                            assignee: None,
-                            data: data[i].clone(),
-                            origin: Origin::Imported,
-                            source: Some(op.source.clone()),
-                        },
-                    )?;
-                }
-            }
-            Act::Update(n, i) => {
-                ents += 1;
-                if let Some(tx) = tx.as_deref_mut() {
-                    entity::update(tx, n, None, changes_of(&ops[i], &data[i]))?;
-                }
-            }
-            Act::Retire(n) => {
-                if let Some(tx) = tx.as_deref_mut() {
-                    entity::retire(tx, n)?;
-                }
-            }
-        }
-    }
-    Ok((ents, n_ops))
-}
-
-/// Read, parse and diff one file; apply the diff unless DRY.  Answers the report row.
+/// Read, parse and diff one file; apply the diff unless DRY (through the seam, [`structure::apply_text`]).  Answers
+/// the report row.
 async fn import_one(
     db: &CoordDb,
     f: &Found,
@@ -634,12 +549,27 @@ async fn import_one(
     let doc: AnyDoc = import::parse(f.parse, view::strip_header(&text))
         .ok_or_else(|| err("unknown record kind"))?;
     let ops = import::ops(&doc, &f.path);
-    let data: Vec<Value> = ops.iter().map(|o| data_of(o, &f.path, f.kind)).collect();
     let root = ops.first().map(|o| o.id.clone());
-    let (ops, data) = (Arc::new(ops), Arc::new(data));
     let source = f.path.to_string_lossy().into_owned();
+    if dry {
+        let data: Vec<Value> = ops.iter().map(|o| data_of(o, &f.path, f.kind)).collect();
+        let done = db
+            .read(move |c| {
+                let acts = diff(c, &ops, &data)?;
+                apply_acts(acts, &ops, &data, None)
+            })
+            .await
+            .map_err(fail)?;
+        return Ok(ImportedFile {
+            path: source,
+            kind: f.kind,
+            entity: root,
+            entities: done.entities(),
+            ops: done.ops(),
+        });
+    }
     // a file that was forgotten and is back (no adoption mark left): what it had comes back with it
-    if back && !dry {
+    if back {
         let ids: Vec<String> = ops.iter().map(|o| o.id.clone()).collect();
         let retired = db
             .read(move |c| {
@@ -666,33 +596,16 @@ async fn import_one(
             .map_err(fail)?;
         }
     }
-    // read first: a write with nothing to do would still add a `tx` row
-    let (r_ops, r_data) = (ops.clone(), data.clone());
-    let (entities, n_ops) = db
-        .read(move |c| {
-            let acts = diff(c, &r_ops, &r_data)?;
-            apply_acts(acts, &r_ops, &r_data, None)
-        })
+    let a = structure::apply_text_as(db, &f.path, f.kind, &text, meta)
         .await
-        .map_err(fail)?;
-    let (entities, n_ops) = if dry || n_ops == 0 {
-        (entities, n_ops)
-    } else {
-        db.write(meta, move |tx| {
-            let acts = diff(tx.sql(), &ops, &data)?;
-            let done = apply_acts(acts, &ops, &data, Some(&mut *tx))?;
-            link_structure(tx, &ops)?;
-            Ok(done)
-        })
-        .await
-        .map_err(fail)?
-    };
+        .map_err(structure::wire_of)?;
+    let entities = (a.created.len() + a.updated.len()) as u64;
     Ok(ImportedFile {
         path: source,
         kind: f.kind,
         entity: root,
         entities,
-        ops: n_ops,
+        ops: entities + a.retired.len() as u64,
     })
 }
 
@@ -842,14 +755,89 @@ async fn kv_put(db: &CoordDb, pairs: Vec<(String, Option<String>)>) -> Result<()
     .map_err(fail)
 }
 
+/// KEY set to VALUE (none: removed), with no write when it already is.
+async fn kv_set(db: &CoordDb, key: String, value: Option<String>) -> Result<(), Error> {
+    let k = key.clone();
+    let now = db.read(move |c| Ok(kv_get(c, &k))).await.map_err(fail)?;
+    if now == value {
+        return Ok(());
+    }
+    kv_put(db, vec![(key, value)]).await
+}
+
 fn adopted_key(path: &Path) -> String {
     format!("records-adopted:{}", path.to_string_lossy())
 }
 
+/// The files the last full import of ROOT skipped (`[Skipped]` as JSON).
+fn skipped_key(root: &Path) -> String {
+    format!("records-skipped:{}", root.to_string_lossy())
+}
+
+/// ROOT's `records.adopt`, a project setting of the store's: `off` after `records/forget-root`, absent when on.
+fn adopt_key(root: &Path) -> String {
+    format!("setting:records-adopt:{}", root.to_string_lossy())
+}
+
+/// Whether ROOT may be adopted: neither it nor a folder above it was forgotten.
+async fn adopt_on(db: &CoordDb, root: &Path) -> Result<bool, Error> {
+    let keys: Vec<String> = lexical(root).ancestors().map(adopt_key).collect();
+    db.read(move |c| Ok(keys.iter().all(|k| kv_get(c, k).is_none())))
+        .await
+        .map_err(fail)
+}
+
+/// The records of the file at PATH retired, with the links and rulings it made, and its marks dropped (so it is adopted
+/// afresh if it comes back).  How many of its pieces were live.
+async fn forget_file(db: &CoordDb, path: &Path) -> Result<u64, Error> {
+    let p = path.to_string_lossy().into_owned();
+    let source = import::source_key(path);
+    let marks = [
+        adopted_key(path),
+        format!("records-base:{p}"),
+        format!("records-view:{p}"),
+    ];
+    db.write(meta(), move |tx| {
+        let live: Vec<i64> = {
+            let mut q = tx
+                .sql()
+                .prepare("select n from entity where source = ?1 and retired_tx is null")?;
+            q.query_map([&source], |r| r.get(0))?
+                .collect::<Result<_, _>>()?
+        };
+        for n in &live {
+            entity::retire(tx, *n)?;
+        }
+        // the links the file made (a ledger's commits, a board's items) and the rulings it gave go with it
+        link::retire_by_source(tx, &p)?;
+        let rulings: Vec<i64> = {
+            let mut q = tx.sql().prepare(
+                "select n from entity where kind = 'ruling' and retired_tx is null and json_extract(data, '$.ledger') = ?1",
+            )?;
+            q.query_map([&p], |r| r.get(0))?.collect::<Result<_, _>>()?
+        };
+        for n in rulings {
+            entity::retire(tx, n)?;
+        }
+        for k in &marks {
+            tx.sql().execute("delete from kv where key = ?1", [k])?;
+        }
+        Ok(live.len() as u64)
+    })
+    .await
+    .map_err(fail)
+}
+
 /// The records of ROOT that went: a file the import adopted before, under ROOT, that is not there now (deleted), or is a
 /// plan, spec or ledger no longer found (a spec no plan names any more) has its entities retired, and is adopted again
-/// if it comes back (`a-rescan-forgets-what-left`).  The board and the other named files are never forgotten here.
-async fn forget_gone(db: &CoordDb, root: &Path, found: &[Found]) -> Result<(), Error> {
+/// if it comes back (`a-rescan-forgets-what-left`).  A file the import now skips (SKIPS: too big, git-ignored) goes
+/// too, its text untouched.  The board and the other named files are never forgotten here otherwise.
+async fn forget_gone(
+    db: &CoordDb,
+    root: &Path,
+    found: &[Found],
+    skips: &[Skipped],
+) -> Result<(), Error> {
     let keys: Vec<String> = db
         .read(|c| {
             let mut q = c.prepare("select key from kv where key like 'records-adopted:%'")?;
@@ -868,6 +856,7 @@ async fn forget_gone(db: &CoordDb, root: &Path, found: &[Found]) -> Result<(), E
         }
         let kind = kind_in(&pieces(db, &path).await?);
         let leaves = !path.exists()
+            || skips.iter().any(|s| s.path == p)
             || matches!(
                 kind,
                 Some(RecordKind::Specs | RecordKind::Plans | RecordKind::Ledgers)
@@ -875,42 +864,7 @@ async fn forget_gone(db: &CoordDb, root: &Path, found: &[Found]) -> Result<(), E
         if !leaves {
             continue;
         }
-        let source = import::source_key(&path);
-        let file = path.to_string_lossy().into_owned();
-        let marks = [
-            key.clone(),
-            format!("records-base:{p}"),
-            format!("records-view:{p}"),
-        ];
-        db.write(meta(), move |tx| {
-            let live: Vec<i64> = {
-                let mut q = tx
-                    .sql()
-                    .prepare("select n from entity where source = ?1 and retired_tx is null")?;
-                q.query_map([&source], |r| r.get(0))?
-                    .collect::<Result<_, _>>()?
-            };
-            for n in live {
-                entity::retire(tx, n)?;
-            }
-            // the links the file made (a ledger's commits, a board's items) and the rulings it gave go with it
-            link::retire_by_source(tx, &file)?;
-            let rulings: Vec<i64> = {
-                let mut q = tx.sql().prepare(
-                    "select n from entity where kind = 'ruling' and retired_tx is null and json_extract(data, '$.ledger') = ?1",
-                )?;
-                q.query_map([&file], |r| r.get(0))?.collect::<Result<_, _>>()?
-            };
-            for n in rulings {
-                entity::retire(tx, n)?;
-            }
-            for k in &marks {
-                tx.sql().execute("delete from kv where key = ?1", [k])?;
-            }
-            Ok(())
-        })
-        .await
-        .map_err(fail)?;
+        forget_file(db, &path).await?;
         // the plan beside a ledger that went is read again
         if let Some((plan, ledger)) = plan_and_ledger(&path)
             && ledger == path
@@ -1006,25 +960,6 @@ fn next_base(
         }
     }
     out
-}
-
-/// FILE's pieces given the ids the graph already has for them: a piece the graph knows by another id (one adopted
-/// before the ids were keyed) keeps that id when its text is the graph's.
-fn align(file: &mut [GraphOp], live: &[Piece]) {
-    let ids: HashSet<String> = file.iter().map(|o| o.id.clone()).collect();
-    let mut free: Vec<&Piece> = live.iter().filter(|p| !ids.contains(&p.id)).collect();
-    let known: HashSet<&str> = live.iter().map(|p| p.id.as_str()).collect();
-    for op in file.iter_mut() {
-        if known.contains(op.id.as_str()) {
-            continue;
-        }
-        if let Some(i) = free
-            .iter()
-            .position(|p| p.kind == op.kind && p.body == op.body)
-        {
-            op.id = free.remove(i).id.clone();
-        }
-    }
 }
 
 impl Views {
@@ -1141,6 +1076,10 @@ impl Views {
     ) -> Result<(Flush, u64, Vec<String>), Error> {
         let gate = self.gate(path);
         let _held = gate.lock().await;
+        // a file that grew past the limit is never read or rewritten; the next full import forgets it
+        if std::fs::metadata(path).is_ok_and(|m| m.len() > MAX_RECORD_BYTES) {
+            return Ok((Flush::Unchanged, 0, Vec::new()));
+        }
         sync_bodies(db, path).await?;
         let Some(kind) = kind_in(&pieces(db, path).await?) else {
             return Ok((Flush::Unchanged, 0, Vec::new()));
@@ -1154,11 +1093,8 @@ impl Views {
             let Ok(raw) = crate::fsio::read_to_string(path) else {
                 return Ok((Flush::Unchanged, acts, flagged));
             };
-            let doc = import::parse(parse_of(kind), view::strip_header(&raw))
-                .ok_or_else(|| err("unknown record kind"))?;
-            let mut ops = import::ops(&doc, path);
             let live = pieces(db, path).await?;
-            align(&mut ops, &live);
+            let ops = structure::ops_of(kind, path, &raw, &live).map_err(structure::wire_of)?;
             let lv: Vec<merge::Live> = live
                 .iter()
                 .map(|p| merge::Live {
@@ -1178,7 +1114,7 @@ impl Views {
                     flagged.push(id.clone());
                 }
             }
-            acts += apply(db, path, kind, &ops, &m, &live).await?;
+            acts += structure::apply_merged(db, path, kind, &ops, &m, &live).await?;
             let vers: HashMap<String, i64> = pieces(db, path)
                 .await?
                 .into_iter()
@@ -2333,126 +2269,6 @@ async fn ledger_commits(
     .map_err(fail)
 }
 
-/// M's acts carried out on the graph, and its pieces put in its order.  How many acts.
-async fn apply(
-    db: &CoordDb,
-    path: &Path,
-    kind: RecordKind,
-    ops: &[GraphOp],
-    m: &Merged,
-    live: &[Piece],
-) -> Result<u64, Error> {
-    let seqs: HashMap<&str, Option<u64>> = live.iter().map(|p| (p.id.as_str(), p.seq())).collect();
-    let reorder: Vec<(String, usize)> = m
-        .order
-        .iter()
-        .enumerate()
-        .filter(|(i, id)| seqs.get(id.as_str()).is_some_and(|s| *s != Some(*i as u64)))
-        .map(|(i, id)| (id.clone(), i))
-        .collect();
-    if m.acts.is_empty() && reorder.is_empty() {
-        return Ok(0);
-    }
-    let n = m.acts.len() as u64;
-    let (acts, order, ops, file) = (
-        m.acts.clone(),
-        m.order.clone(),
-        ops.to_vec(),
-        path.to_path_buf(),
-    );
-    db.write(meta(), move |tx| {
-        let at = |id: &str, op: &GraphOp| -> GraphOp {
-            let mut op = op.clone();
-            op.id = id.to_owned();
-            if let Some(i) = order.iter().position(|x| x == id) {
-                op.seq = i as u32;
-            }
-            op
-        };
-        for a in &acts {
-            match a {
-                MergeAct::Update { id, op } => {
-                    let op = at(id, op);
-                    if let Some(e) = entity::by_id(tx.sql(), id)? {
-                        entity::update(tx, e.n, None, changes_of(&op, &data_of(&op, &file, kind)))?;
-                    }
-                }
-                MergeAct::Create(op) => {
-                    let op = at(&op.id, op);
-                    let data = data_of(&op, &file, kind);
-                    match entity::by_id(tx.sql(), &op.id)? {
-                        Some(e) => {
-                            if e.retired_tx.is_some() {
-                                entity::unretire(tx, e.n)?;
-                            }
-                            entity::update(tx, e.n, None, changes_of(&op, &data))?;
-                        }
-                        None => {
-                            entity::create(
-                                tx,
-                                EntityNew {
-                                    id: op.id.clone(),
-                                    kind: op.kind.into(),
-                                    project: None,
-                                    title: op.title.clone(),
-                                    status: op.status.clone(),
-                                    body: Some(op.body.clone()),
-                                    priority: None,
-                                    assignee: None,
-                                    data,
-                                    origin: Origin::Imported,
-                                    source: Some(op.source.clone()),
-                                },
-                            )?;
-                        }
-                    }
-                }
-                MergeAct::Retire { id } => {
-                    if let Some(e) = entity::by_id(tx.sql(), id)?
-                        && e.retired_tx.is_none()
-                    {
-                        entity::retire(tx, e.n)?;
-                    }
-                }
-                MergeAct::Conflict { id, file: text } => {
-                    if let Some(e) = entity::by_id(tx.sql(), id)? {
-                        entity::update(
-                            tx,
-                            e.n,
-                            None,
-                            Changes {
-                                data_patch: Some(
-                                    json!({"records": {"conflict": {"file": text, "at": now()}}}),
-                                ),
-                                ..Default::default()
-                            },
-                        )?;
-                    }
-                }
-            }
-        }
-        for (id, i) in &reorder {
-            if let Some(e) = entity::by_id(tx.sql(), id)? {
-                entity::update(
-                    tx,
-                    e.n,
-                    None,
-                    Changes {
-                        data_patch: Some(json!({"records": {"seq": i}})),
-                        ..Default::default()
-                    },
-                )?;
-            }
-        }
-        let placed: Vec<GraphOp> = ops.iter().map(|o| at(&o.id, o)).collect();
-        link_structure(tx, &placed)?;
-        Ok(())
-    })
-    .await
-    .map_err(fail)?;
-    Ok(n)
-}
-
 /// The conflicted record ID: its file, its file text and the graph's version.
 async fn conflict_of(db: &CoordDb, id: &str) -> Result<Conflict, Error> {
     let id = id.to_owned();
@@ -2644,10 +2460,18 @@ pub async fn import_core(
     if !board_only && let RootVerdict::Denied { .. } = deny.check_root(root) {
         return Err(err(PERSONAL_NOTES_REFUSAL));
     }
+    // "not for this project": a root (or a folder of one) whose `records.adopt` is off adopts nothing
+    if !adopt_on(db, root).await? {
+        return Err(refuse(format!(
+            "records.adopt is off for {} (records/forget-root); import with adopt: true to adopt it again",
+            root.display()
+        )));
+    }
     // a file the hard tier denies (a spec a plan names inside `~/org`, even through a link) is never read; one the user
     // opted in (`personal-notes-allow.json`) is
     let ign = Ignore::load(root).map_err(err)?;
-    let mut found = discover(root, only, &ign);
+    let git = GitIgnore::load(root).map_err(err)?;
+    let (mut found, skips) = discover(root, only, &ign, &git);
     if let Some(one) = one {
         let shown = one.display();
         let (lex, root_lex) = (lexical(one), lexical(root));
@@ -2662,6 +2486,12 @@ pub async fn import_core(
                 "{shown} is ignored by {}",
                 ignore::RECORDS_TOML
             )));
+        }
+        if let Some(s) = skips.iter().find(|s| Path::new(&s.path) == lex) {
+            return Err(err(match s.why {
+                SkipWhy::TooBig => format!("{shown} is over 2 MiB; records skip it"),
+                SkipWhy::GitIgnored => format!("{shown} is git-ignored; records skip it"),
+            }));
         }
         found.retain(|f| f.path == lex);
         if found.is_empty() {
@@ -2746,7 +2576,9 @@ pub async fn import_core(
         }
     }
     if only.is_none() && one.is_none() {
-        forget_gone(db, root, &found).await?;
+        let list = (!skips.is_empty()).then(|| json!(skips).to_string());
+        kv_set(db, skipped_key(&lexical(root)), list).await?;
+        forget_gone(db, root, &found, &skips).await?;
     }
     Ok(ImportReport {
         dry_run: false,
@@ -2836,7 +2668,25 @@ pub async fn status_core(
         });
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(ViewsAnswer { views: out })
+    // what the last full import of each root left out
+    let lists: Vec<String> = db
+        .read(|c| {
+            let mut q = c.prepare("select value from kv where key like 'records-skipped:%'")?;
+            Ok(q.query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .map_err(fail)?;
+    let mut skipped: Vec<Skipped> = lists
+        .iter()
+        .flat_map(|l| serde_json::from_str::<Vec<Skipped>>(l).unwrap_or_default())
+        .filter(|s| only.is_none_or(|o| Path::new(&s.path) == o))
+        .collect();
+    skipped.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(ViewsAnswer {
+        views: out,
+        skipped,
+    })
 }
 
 fn hub_dir(f: &Front) -> Result<PathBuf, Error> {
@@ -2860,6 +2710,9 @@ pub async fn import(f: &Front, _: &Caller, p: ImportParams) -> Result<ImportRepo
         let (name, body) = e.parts();
         f.broadcast(name, body);
     };
+    if p.adopt == Some(true) {
+        set_adopt(&f.writer.db, Path::new(p.root.as_str()), true).await?;
+    }
     import_core(
         &f.writer.db,
         &f.core.records,
@@ -2888,6 +2741,80 @@ pub async fn status(f: &Front, _: &Caller, p: ByPath) -> Result<ViewsAnswer, Err
         p.path.as_ref().map(|a| Path::new(a.as_str())),
     )
     .await
+}
+
+/// "Not for this project": every record of a file under ROOT retired (with the links and rulings it made, and its
+/// marks), and ROOT's `records.adopt` turned off; the files are never touched.
+pub async fn forget_root_core(
+    db: &CoordDb,
+    views: &Views,
+    root: &Path,
+) -> Result<Forgotten, Error> {
+    let root = lexical(root);
+    // the files the graph holds records of under ROOT, and the ones adopted there
+    let under = root.clone();
+    let files: Vec<PathBuf> = db
+        .read(move |c| {
+            let mut out: Vec<String> = {
+                let mut q = c.prepare(
+                    "select distinct json_extract(data, '$.records.file') from entity \
+                     where source like 'records:%' and retired_tx is null",
+                )?;
+                q.query_map([], |r| r.get::<_, Option<String>>(0))?
+                    .filter_map(|r| r.transpose())
+                    .collect::<Result<_, _>>()?
+            };
+            let mut q = c.prepare("select key from kv where key like 'records-adopted:%'")?;
+            for k in q.query_map([], |r| r.get::<_, String>(0))? {
+                if let Some(p) = k?.strip_prefix("records-adopted:") {
+                    out.push(p.to_owned());
+                }
+            }
+            out.sort();
+            out.dedup();
+            Ok(out
+                .into_iter()
+                .map(PathBuf::from)
+                .filter(|p| p.starts_with(&under))
+                .collect())
+        })
+        .await
+        .map_err(fail)?;
+    let mut pieces = 0;
+    for f in &files {
+        pieces += forget_file(db, f).await?;
+    }
+    {
+        let mut st = lock(&views.state);
+        for f in &files {
+            st.bases.remove(f);
+            st.written.remove(f);
+            if let Some(t) = st.timers.remove(f) {
+                t.abort();
+            }
+        }
+    }
+    set_adopt(db, &root, false).await?;
+    kv_set(db, skipped_key(&root), None).await?;
+    Ok(Forgotten {
+        pieces,
+        files: files.len() as u64,
+    })
+}
+
+/// ROOT's `records.adopt` (project level, in the store's `kv`): off after `records/forget-root`, on again by
+/// `records/import {adopt: true}`.
+pub async fn set_adopt(db: &CoordDb, root: &Path, on: bool) -> Result<(), Error> {
+    kv_set(
+        db,
+        adopt_key(&lexical(root)),
+        (!on).then(|| "off".to_owned()),
+    )
+    .await
+}
+
+pub async fn forget_root(f: &Front, _: &Caller, p: ForgetRootParams) -> Result<Forgotten, Error> {
+    forget_root_core(&f.writer.db, &f.core.records, Path::new(p.root.as_str())).await
 }
 
 pub async fn conflict(
@@ -3107,6 +3034,11 @@ pub(crate) mod tests {
                 .await
                 .unwrap()
         }
+    }
+
+    /// ROOT's git rules, as the importer reads them.
+    fn git_rules(root: &Path) -> GitIgnore {
+        GitIgnore::load(root).unwrap()
     }
 
     const TX: &str = "select count(*) from tx";
@@ -3598,16 +3530,22 @@ pub(crate) mod tests {
         std::fs::create_dir_all(dir.path().join("outside/plans")).unwrap();
         crate::fsio::write(dir.path().join("outside/plans/o.md"), plan).unwrap();
         std::os::unix::fs::symlink(dir.path().join("outside"), root.join("linked")).unwrap();
-        let mut got: Vec<String> = discover(&root, None, &Ignore::load(&root).unwrap())
-            .into_iter()
-            .map(|f| {
-                format!(
-                    "{} {}",
-                    f.path.strip_prefix(&root).unwrap().display(),
-                    f.parse
-                )
-            })
-            .collect();
+        let mut got: Vec<String> = discover(
+            &root,
+            None,
+            &Ignore::load(&root).unwrap(),
+            &git_rules(&root),
+        )
+        .0
+        .into_iter()
+        .map(|f| {
+            format!(
+                "{} {}",
+                f.path.strip_prefix(&root).unwrap().display(),
+                f.parse
+            )
+        })
+        .collect();
         got.sort();
         let want = [
             ".claude/plans/kept.md plan",
@@ -4552,10 +4490,16 @@ pub(crate) mod tests {
         crate::fsio::write(root.join("notes/n.md"), "# Notes\n\n### Task 1: a\n").unwrap();
         std::fs::create_dir_all(root.join("sub/plans")).unwrap();
         crate::fsio::write(root.join("sub/plans/p.md"), "# P\n\n### Task 1: a\n").unwrap();
-        let got: Vec<String> = discover(&root, None, &Ignore::load(&root).unwrap())
-            .into_iter()
-            .map(|f| f.path.strip_prefix(&root).unwrap().display().to_string())
-            .collect();
+        let got: Vec<String> = discover(
+            &root,
+            None,
+            &Ignore::load(&root).unwrap(),
+            &git_rules(&root),
+        )
+        .0
+        .into_iter()
+        .map(|f| f.path.strip_prefix(&root).unwrap().display().to_string())
+        .collect();
         // the root's own name counts for nothing: only sub/plans/p.md is under a plans/ folder
         assert_eq!(got, ["sub/plans/p.md"], "{got:?}");
     }
@@ -5028,10 +4972,16 @@ pub(crate) mod tests {
     }
 
     fn found_rels(f: &Fix) -> Vec<String> {
-        let mut v: Vec<String> = discover(&f.root, None, &Ignore::load(&f.root).unwrap())
-            .into_iter()
-            .map(|x| x.path.strip_prefix(&f.root).unwrap().display().to_string())
-            .collect();
+        let mut v: Vec<String> = discover(
+            &f.root,
+            None,
+            &Ignore::load(&f.root).unwrap(),
+            &git_rules(&f.root),
+        )
+        .0
+        .into_iter()
+        .map(|x| x.path.strip_prefix(&f.root).unwrap().display().to_string())
+        .collect();
         v.sort();
         v
     }
@@ -5209,6 +5159,252 @@ pub(crate) mod tests {
                 e.message
             );
             assert_eq!(f.count(RECS).await, 0);
+        })
+    }
+
+    // ---- the importer's limits: big files and git-ignored files ----
+
+    async fn skipped_of(f: &Fix) -> Vec<(String, SkipWhy)> {
+        status_core(&f.db, &f.views, None)
+            .await
+            .unwrap()
+            .skipped
+            .into_iter()
+            .map(|s| {
+                let rel = Path::new(&s.path).strip_prefix(&f.root).unwrap();
+                (rel.display().to_string(), s.why)
+            })
+            .collect()
+    }
+
+    async fn live_under(f: &Fix, rel: &str) -> i64 {
+        live_of(f, &f.root.join(rel)).await
+    }
+
+    /// PLAN padded past 2 MiB with lines of a task's text.
+    fn big_plan() -> String {
+        let mut t = PLAN.to_owned();
+        while (t.len() as u64) <= 3 * 1024 * 1024 {
+            t.push_str("- [ ] a step that makes the plan bigger than the limit\n");
+        }
+        t
+    }
+
+    #[test]
+    fn a_3_mib_plan_is_skipped_and_listed() {
+        saman::block_on_current(async move {
+            let f = fix();
+            put(&f, "docs/plans/x/big.md", &big_plan());
+            put(&f, "docs/plans/x/small.md", PLAN);
+            f.import(None, false).await;
+            assert_eq!(live_under(&f, "docs/plans/x/big.md").await, 0);
+            assert!(live_under(&f, "docs/plans/x/small.md").await > 0);
+            assert_eq!(
+                skipped_of(&f).await,
+                [("docs/plans/x/big.md".to_owned(), SkipWhy::TooBig)]
+            );
+        })
+    }
+
+    #[test]
+    fn a_gitignored_spec_is_skipped_and_listed() {
+        saman::block_on_current(async move {
+            let f = fix();
+            put(&f, ".gitignore", "docs/specs/secret.md\n");
+            put(&f, "docs/specs/secret.md", "# Secret\n");
+            put(&f, "docs/specs/open.md", "# Open\n");
+            f.import(None, false).await;
+            assert_eq!(live_under(&f, "docs/specs/secret.md").await, 0);
+            assert!(live_under(&f, "docs/specs/open.md").await > 0);
+            assert_eq!(
+                skipped_of(&f).await,
+                [("docs/specs/secret.md".to_owned(), SkipWhy::GitIgnored)]
+            );
+        })
+    }
+
+    #[test]
+    fn a_negated_gitignore_line_imports_the_file() {
+        saman::block_on_current(async move {
+            let f = fix();
+            put(&f, ".gitignore", "docs/specs/*.md\n!docs/specs/keep.md\n");
+            put(&f, "docs/specs/keep.md", "# Keep\n");
+            put(&f, "docs/specs/drop.md", "# Drop\n");
+            f.import(None, false).await;
+            assert!(live_under(&f, "docs/specs/keep.md").await > 0);
+            assert_eq!(live_under(&f, "docs/specs/drop.md").await, 0);
+            assert_eq!(
+                skipped_of(&f).await,
+                [("docs/specs/drop.md".to_owned(), SkipWhy::GitIgnored)]
+            );
+        })
+    }
+
+    /// RF5: an adopted plan that grows past the limit is never synced again, and the next full import forgets it.
+    #[test]
+    fn an_adopted_file_that_grows_past_the_limit_is_forgotten_not_rewritten() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let rel = "docs/plans/x/grows.md";
+            put(&f, rel, PLAN);
+            f.import(None, false).await;
+            assert!(live_under(&f, rel).await > 0);
+            let p = f.root.join(rel);
+            // the graph changes the plan's task, which a sync would write into the file
+            let id: String =
+                f.db.read(|c| {
+                    Ok(c.query_row(
+                        "select id from entity where kind = 'task' and retired_tx is null \
+                         and json_extract(data, '$.records.file') like '%/grows.md'",
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            f.db.write(meta(), move |tx| {
+                let e = entity::by_id(tx.sql(), &id)?.expect("the task");
+                entity::update(tx, e.n, None, closed())?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+            let big = big_plan();
+            put(&f, rel, &big);
+            f.views.sync_all(&f.db).await.unwrap();
+            assert_eq!(
+                crate::fsio::read_to_string(&p).unwrap(),
+                big,
+                "never rewritten"
+            );
+            f.import(None, false).await;
+            assert_eq!(live_under(&f, rel).await, 0, "forgotten");
+            assert_eq!(skipped_of(&f).await, [(rel.to_owned(), SkipWhy::TooBig)]);
+            assert_eq!(
+                crate::fsio::read_to_string(&p).unwrap(),
+                big,
+                "never rewritten"
+            );
+        })
+    }
+
+    // ---- "not for this project": forget-root and records.adopt ----
+
+    /// Every file under DIR: its bytes and its mtime.
+    fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
+        let mut out = Vec::new();
+        let mut todo = vec![dir.to_path_buf()];
+        while let Some(d) = todo.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                let m = std::fs::symlink_metadata(&p).unwrap();
+                if m.is_dir() {
+                    todo.push(p);
+                } else {
+                    out.push((p.clone(), std::fs::read(&p).unwrap(), m.modified().unwrap()));
+                }
+            }
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    const LIVE_RECS: &str =
+        "select count(*) from entity where source like 'records:%' and retired_tx is null";
+
+    #[test]
+    fn forget_root_retires_and_leaves_every_file_alone() {
+        saman::block_on_current(async move {
+            let f = fix();
+            f.import(None, false).await;
+            let live = f.count(LIVE_RECS).await;
+            assert!(live > 0);
+            let before = snapshot(&f.root);
+            let g = forget_root_core(&f.db, &f.views, &f.root).await.unwrap();
+            assert_eq!(g.pieces, live as u64, "{g:?}");
+            assert_eq!(g.files, 4, "{g:?}");
+            assert_eq!(f.count(LIVE_RECS).await, 0);
+            assert!(
+                status_core(&f.db, &f.views, None)
+                    .await
+                    .unwrap()
+                    .views
+                    .is_empty()
+            );
+            // nothing that follows touches a file either
+            f.views.sync_all(&f.db).await.unwrap();
+            assert_eq!(snapshot(&f.root), before);
+        })
+    }
+
+    async fn import_result(f: &Fix) -> Result<ImportReport, Error> {
+        let heard = |_e: ViewEvent| {};
+        import_core(
+            &f.db,
+            &f.views,
+            &f.hub,
+            &f.root,
+            None,
+            None,
+            false,
+            Ears {
+                emit: &heard,
+                deny: &f.deny,
+            },
+        )
+        .await
+    }
+
+    #[test]
+    fn an_import_of_a_forgotten_root_adopts_nothing_while_adopt_is_off() {
+        saman::block_on_current(async move {
+            let f = fix();
+            f.import(None, false).await;
+            forget_root_core(&f.db, &f.views, &f.root).await.unwrap();
+            let e = import_result(&f).await.unwrap_err();
+            assert_eq!(e.code, ErrorCode::NotAllowed, "{}", e.message);
+            assert!(e.message.contains("records.adopt"), "{}", e.message);
+            assert_eq!(f.count(LIVE_RECS).await, 0);
+            // a folder inside the root is the root's project too
+            let sub = f.root.join("docs");
+            let heard = |_e: ViewEvent| {};
+            let e = import_core(
+                &f.db,
+                &f.views,
+                &f.hub,
+                &sub,
+                None,
+                None,
+                false,
+                Ears {
+                    emit: &heard,
+                    deny: &f.deny,
+                },
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(e.code, ErrorCode::NotAllowed, "{}", e.message);
+            assert_eq!(f.count(LIVE_RECS).await, 0);
+        })
+    }
+
+    #[test]
+    fn adopt_on_again_imports_the_root_afresh() {
+        saman::block_on_current(async move {
+            let f = fix();
+            f.import(None, false).await;
+            let live = f.count(LIVE_RECS).await;
+            forget_root_core(&f.db, &f.views, &f.root).await.unwrap();
+            let before = snapshot(&f.root);
+            set_adopt(&f.db, &f.root, true).await.unwrap();
+            let (r, heard) = f.import_heard(None, false).await;
+            assert!(r.backup.is_some(), "a fresh adoption backs up first: {r:?}");
+            assert!(
+                heard.iter().any(|e| matches!(e, ViewEvent::Notice(_))),
+                "and sends the notice again"
+            );
+            assert_eq!(f.count(LIVE_RECS).await, live);
+            assert_eq!(snapshot(&f.root), before);
         })
     }
 }

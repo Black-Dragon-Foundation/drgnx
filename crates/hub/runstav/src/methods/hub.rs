@@ -451,7 +451,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "env/set", EnvSet(EnvSetParams) -> EnvSetResult,
             classes: [User], writes: false,
-            doc: "the user's login-shell variables the hub allows (never a key), for the agents and jobs it starts next",
+            doc: "Emacs-era, re-decide at B1: the user's login-shell variables the hub allows (never a key), for the agents and jobs it starts next",
             check: check_env,
         ),
     ]

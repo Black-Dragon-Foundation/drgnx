@@ -1,9 +1,9 @@
-//! The front writes work.db (docs/develop/coordination.md, "Who writes what"): the editor's five methods and the
-//! seam's `coord/*`, each decoded by the registry, written by norn's writer in one transaction and answered typed.
+//! The front writes work.db (docs/develop/coordination.md, "Who writes what"): the editor's five methods, each decoded
+//! by the registry, written by norn's writer in one transaction and answered typed.
 //!
 //! - **Errors:** a file that is not ready is `internal` with its text (looked at once more first: the schema tick's
-//!   open, now); a newer one is `schema`; a busy one `internal` "work.db is busy; retry" (a best-effort event and
-//!   `coord/agent seen` answer `{}` instead); a writer's refusal `invalid-params` with its text.
+//!   open, now); a newer one is `schema`; a busy one `internal` "work.db is busy; retry" (a best-effort event
+//!   answers `{}` instead); a writer's refusal `invalid-params` with its text.
 //! - **`events`:** every committed write wakes [`broadcast_events`], which reads the new `event` rows on the reader's
 //!   thread and sends `events` `{since, last, events}` to the subscribers: at most 200 rows a batch, every 0.25 s at
 //!   most.  The 2 s schema tick wakes it too.
@@ -19,7 +19,7 @@ use mimir::BoxFuture;
 use norn::read::decisions::{self as decision_log, Decision as Logged};
 use norn::store::{CoordDb, CoordError, WTx};
 use norn::tools::{Hub, SessionRow};
-use norn::write::{agents, cards, decisions, event, jobs, messages, meta, prune, review, tasks};
+use norn::write::{event, messages, review};
 use runstav::methods::Params;
 use runstav::methods::coord as api;
 use runstav::registry::{self, Class};
@@ -137,7 +137,7 @@ pub const HOOKS_ACTOR: &str = "hub:hooks";
 
 /// The `tx` row of a front method's write (Urdr Task 12): who it is comes from the connection, never from a param.
 /// The hub is the one writer; the actor is
-/// - for a seam method (`coord/*`, the hub's own housekeeping): `hub`, class `system`;
+/// - for the hub's own housekeeping writes (`coord/*` tool names, no wire method): `hub`, class `system`;
 /// - for the editor's own methods (`cards/settle`, `messages/*`, `events/add`, `review/mark`) from the user's
 ///   connection: `user`, class `user`;
 /// - for an agent socket's session: `agent:SID`, class `agent`;
@@ -343,241 +343,6 @@ pub async fn serve(
             .await
             .map(|ok| json!(ok))
         }
-        Params::CoordJobCreate(p) => {
-            let j = jobs::NewJob {
-                id: p.id.as_str().to_owned(),
-                title: p.title.as_str().to_owned(),
-                plan: p.plan.map(|s| s.into_inner()),
-                repo: p.repo.map(|s| s.into_inner()),
-                tasks: p
-                    .tasks
-                    .map(|t| t.into_inner())
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|t| jobs::NewTask {
-                        n: int(t.n),
-                        title: t.title.as_str().to_owned(),
-                        role: t.role.map(|r| r.into_inner()),
-                        deps: t
-                            .deps
-                            .map(|d| d.into_inner())
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(int)
-                            .collect(),
-                    })
-                    .collect(),
-                data: p.data.map(|d| Value::Object(d.into_inner())),
-            };
-            w.write(caller, "coord/job-create", move |tx| {
-                jobs::job_create(tx, j.clone(), now)
-            })
-            .await
-            .map(|id| json!(api::JobCreated { id }))
-        }
-        Params::CoordJobSet(p) => {
-            let id = p.id.as_str().to_owned();
-            let status = p.status.map(|s| s.as_str().to_owned());
-            let data = p.data.map(|d| Value::Object(d.into_inner()));
-            w.write(caller, "coord/job-set", move |tx| {
-                jobs::job_set(tx, &id, status.as_deref(), data.as_ref(), now)
-            })
-            .await
-            .map(|()| json!(true))
-        }
-        Params::CoordTaskStatus(p) => {
-            let task = p.task.as_str().to_owned();
-            let status = p.status.as_str().to_owned();
-            let agent = p.agent.map(|a| a.as_str().to_owned());
-            w.write(caller, "coord/task-status", move |tx| {
-                tasks::force_status(tx, &task, &status, agent.as_deref(), now)
-            })
-            .await
-            .map(|ok| json!(ok))
-        }
-        Params::CoordLeases(p) => {
-            let renew: Vec<String> = p
-                .renew
-                .map(|r| r.into_inner())
-                .unwrap_or_default()
-                .iter()
-                .map(|a| a.as_str().to_owned())
-                .collect();
-            let stale = p.release_stale == Some(true);
-            w.write(caller, "coord/leases", move |tx| {
-                for agent in &renew {
-                    tasks::renew(tx, agent, now)?;
-                }
-                if stale {
-                    tasks::release_stale(tx, now)
-                } else {
-                    Ok(Vec::new())
-                }
-            })
-            .await
-            .map(|released| {
-                json!(api::Leases {
-                    released: released
-                        .into_iter()
-                        .map(|r| api::Released {
-                            task: r.task,
-                            agent: r.agent,
-                            job: r.job,
-                        })
-                        .collect(),
-                })
-            })
-        }
-        Params::CoordDecide(p) => {
-            let d = decisions::Decide {
-                kind: p.kind.into_inner(),
-                subject: p.subject.as_str().to_owned(),
-                task: p.task.map(|t| t.as_str().to_owned()),
-                paths: p.paths.map(|s| s.as_str().to_owned()),
-                reason: p.reason.map(|s| s.as_str().to_owned()),
-                author: p.author.as_str().to_owned(),
-                seen: p.seen,
-                replaces: p.replaces.map(int),
-                job: p.job.map(|j| j.as_str().to_owned()),
-            };
-            w.write(caller, "coord/decide", move |tx| {
-                decisions::decide(tx, d.clone(), now)
-            })
-            .await
-            .map(|r| {
-                json!(match r {
-                    decisions::DecideResult::Ok { n, status, version } => api::Decided {
-                        ok: Some(true),
-                        n: Some(n),
-                        status: Some(status),
-                        version: Some(version),
-                        ..Default::default()
-                    },
-                    decisions::DecideResult::Held(h) => api::Decided {
-                        held: Some(true),
-                        version: Some(h.version),
-                        changes: Some(h.changes.into_iter().map(decision).collect()),
-                        ..Default::default()
-                    },
-                    decisions::DecideResult::Error(text) => api::Decided {
-                        error: Some(text),
-                        ..Default::default()
-                    },
-                })
-            })
-        }
-        Params::CoordAgent(p) => match (p.register, p.seen) {
-            (Some(a), _) => {
-                let r = agents::AgentRegister {
-                    id: a.id.as_str().to_owned(),
-                    kind: a.kind.map(|s| s.into_inner()),
-                    name: a.name.map(|s| s.into_inner()),
-                    cwd: a.cwd.map(|s| s.into_inner()),
-                    worktree: a.worktree.map(|s| s.into_inner()),
-                    branch: a.branch.map(|s| s.into_inner()),
-                    base: a.base.map(|s| s.into_inner()),
-                    plan: a.plan.map(|s| s.into_inner()),
-                    task: a.task.map(|t| t.as_str().to_owned()),
-                    pid: a.pid.map(int),
-                    clear: a
-                        .clear
-                        .map(|c| c.into_inner())
-                        .unwrap_or_default()
-                        .iter()
-                        .filter_map(|f| agents::AgentField::parse(f.as_str()))
-                        .collect(),
-                };
-                w.write(caller, "coord/agent", move |tx| {
-                    agents::agent_register(tx, r.clone(), now)
-                })
-                .await
-                .map(|id| {
-                    json!(api::AgentResult {
-                        id: Some(id),
-                        ..Default::default()
-                    })
-                })
-            }
-            (None, Some(id)) => {
-                let id = id.as_str().to_owned();
-                match w
-                    .write(caller, "coord/agent", move |tx| {
-                        agents::agent_seen(tx, &id, now)
-                    })
-                    .await
-                {
-                    // telemetry: a busy file is no error
-                    Err(CoordError::Busy) => Ok(json!({})),
-                    r => r.map(|seen| {
-                        json!(api::AgentResult {
-                            seen,
-                            ..Default::default()
-                        })
-                    }),
-                }
-            }
-            // the registry's check takes one of the two
-            (None, None) => Err(CoordError::Refused(
-                "coord/agent takes one of register or seen".into(),
-            )),
-        },
-        Params::CoordCardCreate(p) => {
-            let c = cards::NewCard {
-                job: p.job.map(|j| j.as_str().to_owned()),
-                task: p.task.map(|t| t.as_str().to_owned()),
-                kind: p.kind.map(|k| k.into_inner()),
-                title: p.title.map(|t| t.as_str().to_owned()),
-                data: p.data.map(|d| Value::Object(d.into_inner())),
-            };
-            w.write(caller, "coord/card-create", move |tx| {
-                cards::card_create(tx, c.clone(), now)
-            })
-            .await
-            .map(|id| {
-                json!(api::CardCreated {
-                    id: id.max(0) as u64
-                })
-            })
-        }
-        Params::CoordCardSet(p) => {
-            let id = int(p.id);
-            let set = cards::CardSet {
-                title: p.title.map(|t| t.as_str().to_owned()),
-                data: p.data.map(|d| Value::Object(d.into_inner())),
-                state: p.state.map(|s| s.as_str().to_owned()),
-            };
-            w.write(caller, "coord/card-set", move |tx| {
-                cards::card_set(tx, id, set.clone(), now)
-            })
-            .await
-            .map(|()| json!(true))
-        }
-        Params::CoordHeld(p) => {
-            let agent = p.agent.as_str().to_owned();
-            // the Lisp's argument counts only as non-nil
-            let held = p.held.then_some(0);
-            w.write(caller, "coord/held", move |tx| {
-                meta::note_held(tx, &agent, held)
-            })
-            .await
-            .map(|()| json!(true))
-        }
-        Params::CoordPrune(_) => {
-            // the daily prune never fails its caller: the next day's runs
-            let pruned = match w
-                .write(caller, "coord/prune", move |tx| {
-                    prune::prune_daily_tx(tx, now)
-                })
-                .await
-            {
-                Ok(ran) => ran,
-                Err(e) => {
-                    tracing::info!("the daily event prune did not run: {e}");
-                    false
-                }
-            };
-            Ok(json!(api::Pruned { pruned }))
-        }
         other => return Err(Box::new(other)),
     };
     Ok(answer.map_err(fail))
@@ -712,8 +477,9 @@ impl Hub for ToolHub {
                 .get()
                 .and_then(std::sync::Weak::upgrade)
                 .ok_or("jobs are not ready: the hub is starting")?;
-            // `agent_core::serve` checks no registry class: an outside actor reaches its four methods only
-            if crate::outside::is_ext(&sid) && !crate::outside::OUTSIDE_METHODS.contains(&method) {
+            // `agent_core::serve` checks no registry class: an outside actor reaches its listed methods only
+            if crate::outside::is_ext(&sid) && !crate::outside::outside_methods().contains(&method)
+            {
                 return Err(format!("{method} is not open to an outside agent"));
             }
             let m = registry::find(method).ok_or_else(|| format!("no method {method}"))?;
@@ -970,11 +736,11 @@ mod tests {
             (user.actor.as_str(), user.class, user.tool.as_str()),
             ("user", TxClass::User, "proto:cards/settle")
         );
-        // the seam's methods are the hub's, and so is a service connection's write
-        let seam = tx_meta(&caller(), "coord/decide");
+        // the hub's own housekeeping writes are the hub's, and so is a service connection's write
+        let seam = tx_meta(&caller(), "coord/agent-register");
         assert_eq!(
             (seam.actor.as_str(), seam.class, seam.tool.as_str()),
-            ("hub", TxClass::System, "proto:coord/decide")
+            ("hub", TxClass::System, "proto:coord/agent-register")
         );
         let service = tx_meta(
             &Caller {
@@ -1050,11 +816,6 @@ mod tests {
                 )
             );
             assert_eq!(w.signals.writes(), 0);
-            // the daily prune never fails its caller
-            assert_eq!(
-                call(&w, "coord/prune", json!({})).await.unwrap(),
-                json!({"pruned": false})
-            );
             // another method's params come back
             assert!(
                 serve(&w, &caller(), params("job/status", json!({})))
@@ -1075,14 +836,14 @@ mod tests {
                 );
             }
             crate::fsio::rename(&next, &file).unwrap();
-            let card = call(
+            let sent = call(
                 &w,
-                "coord/card-create",
-                json!({"kind": "ask", "title": "t"}),
+                "messages/send",
+                json!({"recipient": "a1", "text": "hi"}),
             )
             .await
             .unwrap();
-            assert!(card["id"].as_u64().is_some(), "{card}");
+            assert_eq!(sent["ok"], json!(true), "{sent}");
             assert_eq!(w.signals.writes(), 1);
         })
     }
@@ -1120,15 +881,13 @@ mod tests {
                 .execute_batch(DDL)
                 .unwrap();
             let w = writer(dir.path());
-            let card = call(
-                &w,
-                "coord/card-create",
-                json!({"kind": "ask", "title": "t"}),
-            )
-            .await
-            .unwrap();
-            let id = card["id"].clone();
-            let settle = json!({"card": id, "choice": "yes"});
+            urdr::Connection::open(dir.path().join("work.db"))
+                .unwrap()
+                .execute_batch(
+                    "insert into card (id, kind, title, state, at) values (7, 'ask', 't', 'open', 1.0)",
+                )
+                .unwrap();
+            let settle = json!({"card": 7, "choice": "yes"});
             assert_eq!(
                 call(&w, "cards/settle", settle.clone()).await.unwrap(),
                 json!({"settled": true})
@@ -1163,18 +922,14 @@ mod tests {
             let added = call(&w, "events/add", json!({"kind": "comment", "summary": "s"}))
                 .await
                 .unwrap();
-            for (method, v) in [
-                ("coord/card-create", card),
-                ("messages/send", sent),
-                ("events/add", added),
-            ] {
+            for (method, v) in [("messages/send", sent), ("events/add", added)] {
                 assert_eq!(
                     (find(method).unwrap().check_result)(&v).unwrap(),
                     v,
                     "{method}"
                 );
             }
-            assert_eq!(w.signals.writes(), 5);
+            assert_eq!(w.signals.writes(), 4);
             // the refused send wrote nothing
             let n: i64 = urdr::Connection::open(dir.path().join("work.db"))
                 .unwrap()

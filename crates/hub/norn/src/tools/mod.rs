@@ -358,7 +358,14 @@ pub const CORE_TOOLS: [&str; 11] = [
 
 /// What a bound outside agent gets on top of [`tools`] (MP-3): the plans and the records, under the matrix and the
 /// outside caps (`crate::matrix::OUTSIDE_NEVER`).
-pub const OUTSIDE_TOOLS: [&str; 4] = ["plan_read", "plan_write", "records_read", "records_write"];
+pub const OUTSIDE_RECORD_TOOLS: &[&str] =
+    &["plan_read", "plan_write", "records_read", "records_write"];
+
+/// Every tool name a bound outside agent gets on top of [`tools`]: the concatenation of each area's slice
+/// ([`OUTSIDE_RECORD_TOOLS`] today; an area adds its own slice and one line here).
+pub fn outside_tool_names() -> Vec<&'static str> {
+    OUTSIDE_RECORD_TOOLS.to_vec()
+}
 
 /// The manager's tools, served on a manager session's socket only (Task 25), each checked by the hub's matrix with
 /// the manager's column.

@@ -252,12 +252,17 @@ impl Editor {
     }
 
     /// The answers that have come in, and the questions that failed, to deliver to the extensions that asked: an
-    /// extension always hears back. It never waits.
+    /// extension always hears back. It never waits (the host polls it each turn of its loop).
     pub fn poll_answers(&mut self) -> Vec<Delivery> {
-        let mut cx = Context::from_waker(Waker::noop());
+        self.poll_answers_with(&mut Context::from_waker(Waker::noop()))
+    }
+
+    /// [`Self::poll_answers`] with CX's waker registered on every question still open, so a caller that awaits
+    /// (`std::future::poll_fn`) is woken when one is answered or fails, instead of polling in a loop.
+    pub fn poll_answers_with(&mut self, cx: &mut Context<'_>) -> Vec<Delivery> {
         let mut out = Vec::new();
         self.questions
-            .retain_mut(|p| match Pin::new(&mut p.task).poll(&mut cx) {
+            .retain_mut(|p| match Pin::new(&mut p.task).poll(cx) {
                 Poll::Pending => true,
                 Poll::Ready(r) => {
                     let (choice, how) = match r {

@@ -376,16 +376,15 @@ fn a_question_returns_at_once_has_a_capped_timeout_and_its_answer_comes_later() 
     let ext = h
         .load(user(), "ext", "local E = {}; E.answered = function(q, c, how) E.last = q .. ':' .. c .. ':' .. how end; return E")
         .expect("loads");
-    let mut got = Vec::new();
-    ex.block_on(async {
-        for _ in 0..100_000 {
-            got = saman::lock(&api).poll_answers();
-            if !got.is_empty() {
-                break;
-            }
-            tokio::task::yield_now().await;
+    // woken by the question's task when it ends, never a polling loop
+    let got = ex.block_on(std::future::poll_fn(|cx| {
+        let got = saman::lock(&api).poll_answers_with(cx);
+        if got.is_empty() {
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(got)
         }
-    });
+    }));
     assert_eq!(got.len(), 1, "{got:?}");
     assert_eq!(
         (
@@ -448,16 +447,15 @@ fn a_question_that_failed_is_delivered_as_cancelled() {
         "assert(drgnx.ask.choose('t', 'b', {'a'}, 'a', 1000) == 1)",
     )
     .expect("asks");
-    let mut got = Vec::new();
-    ex.block_on(async {
-        for _ in 0..100_000 {
-            got = saman::lock(&api).poll_answers();
-            if !got.is_empty() {
-                break;
-            }
-            tokio::task::yield_now().await;
+    // woken by the question's task when it ends, never a polling loop
+    let got = ex.block_on(std::future::poll_fn(|cx| {
+        let got = saman::lock(&api).poll_answers_with(cx);
+        if got.is_empty() {
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(got)
         }
-    });
+    }));
     assert_eq!(got.len(), 1, "{got:?}");
     assert_eq!(
         (got[0].question, got[0].choice.as_str(), got[0].how),

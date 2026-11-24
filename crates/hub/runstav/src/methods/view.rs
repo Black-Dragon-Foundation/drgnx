@@ -561,7 +561,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "buffers/set", BuffersSet(BuffersSet) -> bool,
             classes: [User], writes: false,
-            doc: "changes to the Buffers panel's open buffers of a hub-fed view (put, modified, remove, the window's scope, the filter), in order: the hub sends the view's rows that changed to every class of it",
+            doc: "Emacs-era, re-decide at B1: changes to the Buffers panel's open buffers of a hub-fed view (put, modified, remove, the window's scope, the filter), in order: the hub sends the view's rows that changed to every class of it",
             check: check_buffers,
         ),
         method!(

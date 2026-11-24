@@ -343,7 +343,8 @@ impl Projects {
             [] => Resolved::NotRegistered,
             many => Resolved::Ambiguous(many.iter().map(|p| p.id.clone()).collect()),
         };
-        self.misses.insert(dir, (r.clone(), Instant::now()));
+        self.misses
+            .insert(dir, (r.clone(), crate::clock::tap_now()));
         r
     }
 

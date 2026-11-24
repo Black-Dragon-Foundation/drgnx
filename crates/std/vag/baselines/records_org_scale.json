@@ -1,0 +1,15 @@
+{
+  "name": "records_org_scale",
+  "commit": "f266e02e2",
+  "machine": "3be860a095fe",
+  "metrics": {
+    "import_again_ms": 28524.314345,
+    "import_cold_ms": 88364.34748800001,
+    "peak_rss_kib": 106492.0,
+    "reps": 5.0,
+    "status_ms": 1193.241706,
+    "sync_all_ms": 29298.455708999998,
+    "tree_bytes": 50768185.0,
+    "tree_files": 2000.0
+  }
+}

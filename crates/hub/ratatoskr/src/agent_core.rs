@@ -242,6 +242,7 @@ pub async fn serve(
         Params::RecordsResolve(p) => arm!(answer(records::resolve(f, c, p).await)),
         Params::RecordsWrite(p) => arm!(answer(records::write::records_write(f, c, p).await)),
         Params::RecordsRead(p) => arm!(answer(records::read::records_read(f, c, p).await)),
+        Params::RecordsForgetRoot(p) => arm!(answer(records::forget_root(f, c, p).await)),
         Params::OutsideBind(p) => arm!(answer(crate::outside::bind(f, c, p).await)),
         Params::OutsideUnbind(p) => arm!(answer(crate::outside::unbind(f, c, p).await)),
         Params::OutsideBindings(p) => arm!(answer(crate::outside::list(f, c, p).await)),

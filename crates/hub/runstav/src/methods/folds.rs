@@ -114,13 +114,13 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "folds/save", FoldsSave(FoldsSave) -> bool,
             classes: [User], writes: true,
-            doc: "a file's folds and pinned regions now (sent on kill, save and an idle 30 s after a fold changes): kept as Urdr anchor records per worktree and path, replacing the file's last ones; true when they changed",
+            doc: "Emacs-era, re-decide at B1: a file's folds and pinned regions now (sent on kill, save and an idle 30 s after a fold changes): kept as Urdr anchor records per worktree and path, replacing the file's last ones; true when they changed",
             check: check_save,
         ),
         method!(
             "folds/load", FoldsLoad(FoldsLoad) -> FoldsLoaded,
             classes: [User], writes: false,
-            doc: "the folds and pinned regions kept for a file (asked when it opens): the editor matches each to its text by kind and first-line hash within 50 lines",
+            doc: "Emacs-era, re-decide at B1: the folds and pinned regions kept for a file (asked when it opens): the editor matches each to its text by kind and first-line hash within 50 lines",
             check: |p: &FoldsLoad| check_file(&p.worktree, &p.path),
         ),
     ]

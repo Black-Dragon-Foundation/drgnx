@@ -1,0 +1,21 @@
+{"scenario": "records/forget-root-user-only", "requires": ["v1", "test-hooks"], "doc": "records/forget-root (\"not for this project\") is the user's: an agent's call is not-allowed and retires nothing; the user's retires the root's records and leaves the file as it was; an import of the root is then refused until it asks to adopt again."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/proj/docs/specs/a.md", "text": "# A spec\n\nIts text.\n"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "records/import", "params": {"root": "$ROOT/proj"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"dry_run": false}}}
+{"do": "send", "conn": "a", "json": {"id": 2, "method": "records/forget-root", "params": {"root": "$ROOT/proj"}}}
+{"do": "expect", "conn": "a", "json": {"id": 2, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "records/status", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"views": [{"path": "$ROOT/proj/docs/specs/a.md"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "records/forget-root", "params": {"root": "$ROOT/proj"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"pieces": 1, "files": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "records/status", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"views": []}}}
+{"do": "file", "path": "$ROOT/proj/docs/specs/a.md", "contains": "# A spec\n\nIts text.\n"}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "records/import", "params": {"root": "$ROOT/proj"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "records/import", "params": {"root": "$ROOT/proj", "adopt": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"dry_run": false}}}
