@@ -268,29 +268,31 @@ fn gpu_worker_exits_over_its_rss_cap() {
 
 /// Pattern C. The hub sees that exit as the worker's answer, not a crash: no retry, no crash counted, and the next
 /// request starts a fresh worker.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test]
 #[cfg_attr(
     target_os = "macos",
     ignore = "a GPU row: CI's Mac has no GPU, Metal is a real Mac's"
 )]
-async fn rss_exit_is_not_a_crash_loop() {
-    let (cache, ac) = (tempfile::tempdir().unwrap(), power(true));
-    let dev = format!("gpu:{}", adapter());
-    let e = WorkerEmbedder::new(spec(
-        cache.path(),
-        ac.path(),
-        &["--device", &dev, "--test-rss-cap-mb", "1"],
-    ));
-    let long = "word ".repeat(900);
-    let texts = vec![long.clone(), long.clone(), long];
-    let err = e.embed_docs(&texts, false).await.unwrap_err();
-    assert!(err.0.contains("memory"), "{err:?}");
-    let facts = e.facts();
-    assert_eq!((facts.crashes, facts.spawns), (0, 1), "{facts:?}");
-    let err = e.embed_docs(&texts, false).await.unwrap_err();
-    assert!(err.0.contains("memory"), "{err:?}");
-    let facts = e.facts();
-    assert_eq!((facts.crashes, facts.spawns), (0, 2), "{facts:?}");
+fn rss_exit_is_not_a_crash_loop() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (cache, ac) = (tempfile::tempdir().unwrap(), power(true));
+        let dev = format!("gpu:{}", adapter());
+        let e = WorkerEmbedder::new(spec(
+            cache.path(),
+            ac.path(),
+            &["--device", &dev, "--test-rss-cap-mb", "1"],
+        ));
+        let long = "word ".repeat(900);
+        let texts = vec![long.clone(), long.clone(), long];
+        let err = e.embed_docs(&texts, false).await.unwrap_err();
+        assert!(err.0.contains("memory"), "{err:?}");
+        let facts = e.facts();
+        assert_eq!((facts.crashes, facts.spawns), (0, 1), "{facts:?}");
+        let err = e.embed_docs(&texts, false).await.unwrap_err();
+        assert!(err.0.contains("memory"), "{err:?}");
+        let facts = e.facts();
+        assert_eq!((facts.crashes, facts.spawns), (0, 2), "{facts:?}");
+    })
 }
 
 fn spec(cache: &Path, power: &Path, test_args: &[&str]) -> WorkerSpec {
@@ -323,45 +325,47 @@ fn power(on_ac: bool) -> TempDir {
 
 /// Pattern C. The worker dies inside a request (killed mid-batch): the embedder reports it, starts another and sends
 /// the request again, once.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn worker_crash_is_reported_and_retried_once() {
-    let (cache, ac) = (tempfile::tempdir().unwrap(), power(true));
-    let marker = cache.path().join("crashed");
-    let once = WorkerEmbedder::new(spec(
-        cache.path(),
-        ac.path(),
-        &[
-            "--device",
-            "cpu",
-            "--test-crash-once",
-            marker.to_str().unwrap(),
-        ],
-    ));
-    let got = once
-        .embed_docs(&["(defun a () 1)".to_string()], false)
-        .await
-        .unwrap();
-    assert_eq!(got.len(), 1);
-    let facts = once.facts();
-    assert_eq!((facts.crashes, facts.spawns), (1, 2), "{facts:?}");
-    assert!(marker.exists());
+#[test]
+fn worker_crash_is_reported_and_retried_once() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (cache, ac) = (tempfile::tempdir().unwrap(), power(true));
+        let marker = cache.path().join("crashed");
+        let once = WorkerEmbedder::new(spec(
+            cache.path(),
+            ac.path(),
+            &[
+                "--device",
+                "cpu",
+                "--test-crash-once",
+                marker.to_str().unwrap(),
+            ],
+        ));
+        let got = once
+            .embed_docs(&["(defun a () 1)".to_string()], false)
+            .await
+            .unwrap();
+        assert_eq!(got.len(), 1);
+        let facts = once.facts();
+        assert_eq!((facts.crashes, facts.spawns), (1, 2), "{facts:?}");
+        assert!(marker.exists());
 
-    let always = WorkerEmbedder::new(spec(
-        cache.path(),
-        ac.path(),
-        &["--device", "cpu", "--test-crash-always"],
-    ));
-    let err = always
-        .embed_docs(&["(defun a () 1)".to_string()], false)
-        .await
-        .unwrap_err();
-    assert!(err.0.contains("crash"), "{err:?}");
-    let facts = always.facts();
-    assert_eq!(
-        (facts.crashes, facts.spawns),
-        (2, 2),
-        "retried once only: {facts:?}"
-    );
+        let always = WorkerEmbedder::new(spec(
+            cache.path(),
+            ac.path(),
+            &["--device", "cpu", "--test-crash-always"],
+        ));
+        let err = always
+            .embed_docs(&["(defun a () 1)".to_string()], false)
+            .await
+            .unwrap_err();
+        assert!(err.0.contains("crash"), "{err:?}");
+        let facts = always.facts();
+        assert_eq!(
+            (facts.crashes, facts.spawns),
+            (2, 2),
+            "retried once only: {facts:?}"
+        );
+    })
 }
 
 fn git(dir: &Path, args: &[&str]) {
@@ -472,119 +476,125 @@ async fn status_until(p: &Project, what: &str, f: impl Fn(&Status) -> bool) -> S
 }
 
 /// Pattern D.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tier1_without_embedder() {
-    let f = fixture(&lisp_files(3));
-    let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
-        .await
-        .unwrap();
-    let r = p.refresh_now().await.unwrap();
-    assert_eq!(r.files_changed, 3);
-    assert!(r.chunks_written >= 3);
-    assert_eq!(r.keys_missing, 0, "no model, nothing to embed");
-    let lag = p.lag(None).await.unwrap();
-    assert_eq!(lag.model, None);
-    assert_eq!(lag.chunks_behind, 0);
-    let symbols: i64 = p
-        .store()
-        .handle()
-        .read(|c| {
-            Ok(c.query_row(
-                "select count(*) from symbol where name = 'f1-run'",
-                [],
-                |r| r.get(0),
-            )?)
-        })
-        .await
-        .unwrap();
-    assert_eq!(symbols, 1, "keyword and symbol search have their rows");
-    assert_eq!(p.refresh_now().await.unwrap().files_changed, 0);
-}
-
-/// Pattern D. A linked worktree is its main checkout's project: worktree agents search main's store.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn worktree_maps_to_the_main_store() {
-    let f = fixture(&lisp_files(1));
-    let wt = f.home.path().join("src/proj-topic");
-    git(
-        &f.root,
-        &["worktree", "add", "-q", "-b", "topic", wt.to_str().unwrap()],
-    );
-    let (main_root, main_id) = project_id(&f.root).unwrap();
-    let (wt_root, wt_id) = project_id(&wt).unwrap();
-    assert_eq!(wt_id, main_id);
-    assert_eq!(wt_root, main_root);
-    assert_eq!(main_root, std::fs::canonicalize(&f.root).unwrap());
-    assert_eq!(main_id.len(), 16);
-    assert!(main_id.bytes().all(|b| b.is_ascii_hexdigit()));
-
-    let mut s = project_spec(&f, vec![], Path::new("/nonexistent"));
-    s.root = wt.clone();
-    let p = Project::open(s).await.unwrap();
-    assert_eq!(p.id(), main_id);
-    assert!(f.state.path().join(format!("code/{main_id}.db")).exists());
-}
-
-/// Pattern D. Storage §5.6: a root under `~/org` is refused before anything is listed; a root that holds `~/org`
-/// (HOME itself) indexes around it, and a canary there never reaches what tier 2 would embed.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn denied_root_refused_and_canary_never_embedded() {
-    let home = tempfile::tempdir().unwrap();
-    let canary = format!(
-        "canary-{:016x}",
-        u64::from(std::process::id()).wrapping_mul(0x9e37_79b9_7f4a_7c15)
-    );
-    let inside = home.path().join("org/proj");
-    repo_at(&inside, &[("a.el", "(defun a () 1)\n")]);
-    let state = tempfile::tempdir().unwrap();
-    let spec_for = |root: PathBuf| ProjectSpec {
-        root,
-        state: state.path().to_path_buf(),
-        home: home.path().to_path_buf(),
-        config_dir: home.path().join(".config/drgnx"),
-        config: hrafn::Config::default(),
-        embedders: vec![],
-        power_root: PathBuf::from("/nonexistent"),
-        base: None,
-        test_permits: None,
-    };
-    match Project::open(spec_for(inside.clone())).await {
-        Err(ProjectError::Denied(why)) => assert!(why.contains("personal notes"), "{why}"),
-        Err(e) => panic!("refused for the wrong reason: {e}"),
-        Ok(_) => panic!("a root under ~/org was opened"),
-    }
-    assert!(
-        !state.path().join("code").exists(),
-        "no store for a refused root"
-    );
-
-    // HOME as a repository holding ~/org
-    std::fs::remove_dir_all(home.path().join("org/proj/.git")).unwrap();
-    ratatoskr::fsio::write(home.path().join("org/notes.org"), format!("* {canary}\n")).unwrap();
-    repo_at(home.path(), &[("src/a.el", "(defun a-home () 1)\n")]);
-    let p = Project::open(spec_for(home.path().to_path_buf()))
-        .await
-        .unwrap();
-    let r = p.refresh_now().await.unwrap();
-    assert_eq!(r.files_changed, 1, "src/a.el only: {r:?}");
-    let leaked: i64 = {
-        let like = format!("%{canary}%");
-        p.store()
+#[test]
+fn tier1_without_embedder() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let f = fixture(&lisp_files(3));
+        let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
+            .await
+            .unwrap();
+        let r = p.refresh_now().await.unwrap();
+        assert_eq!(r.files_changed, 3);
+        assert!(r.chunks_written >= 3);
+        assert_eq!(r.keys_missing, 0, "no model, nothing to embed");
+        let lag = p.lag(None).await.unwrap();
+        assert_eq!(lag.model, None);
+        assert_eq!(lag.chunks_behind, 0);
+        let symbols: i64 = p
+            .store()
             .handle()
-            .read(move |c| {
+            .read(|c| {
                 Ok(c.query_row(
-                    "select count(*) from chunk where embed_text like ?1 or path like 'org/%'",
-                    [&like],
+                    "select count(*) from symbol where name = 'f1-run'",
+                    [],
                     |r| r.get(0),
                 )?)
             })
             .await
-            .unwrap()
-    };
-    assert_eq!(leaked, 0);
-    let cache = p.cache(&model_id()).await.unwrap();
-    let pending = hrafn::missing(p.store(), &cache, 1000).await.unwrap();
-    assert!(pending.iter().all(|(_, _, t)| !t.contains(&canary)));
+            .unwrap();
+        assert_eq!(symbols, 1, "keyword and symbol search have their rows");
+        assert_eq!(p.refresh_now().await.unwrap().files_changed, 0);
+    })
+}
+
+/// Pattern D. A linked worktree is its main checkout's project: worktree agents search main's store.
+#[test]
+fn worktree_maps_to_the_main_store() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let f = fixture(&lisp_files(1));
+        let wt = f.home.path().join("src/proj-topic");
+        git(
+            &f.root,
+            &["worktree", "add", "-q", "-b", "topic", wt.to_str().unwrap()],
+        );
+        let (main_root, main_id) = project_id(&f.root).unwrap();
+        let (wt_root, wt_id) = project_id(&wt).unwrap();
+        assert_eq!(wt_id, main_id);
+        assert_eq!(wt_root, main_root);
+        assert_eq!(main_root, std::fs::canonicalize(&f.root).unwrap());
+        assert_eq!(main_id.len(), 16);
+        assert!(main_id.bytes().all(|b| b.is_ascii_hexdigit()));
+
+        let mut s = project_spec(&f, vec![], Path::new("/nonexistent"));
+        s.root = wt.clone();
+        let p = Project::open(s).await.unwrap();
+        assert_eq!(p.id(), main_id);
+        assert!(f.state.path().join(format!("code/{main_id}.db")).exists());
+    })
+}
+
+/// Pattern D. Storage §5.6: a root under `~/org` is refused before anything is listed; a root that holds `~/org`
+/// (HOME itself) indexes around it, and a canary there never reaches what tier 2 would embed.
+#[test]
+fn denied_root_refused_and_canary_never_embedded() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let home = tempfile::tempdir().unwrap();
+        let canary = format!(
+            "canary-{:016x}",
+            u64::from(std::process::id()).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        );
+        let inside = home.path().join("org/proj");
+        repo_at(&inside, &[("a.el", "(defun a () 1)\n")]);
+        let state = tempfile::tempdir().unwrap();
+        let spec_for = |root: PathBuf| ProjectSpec {
+            root,
+            state: state.path().to_path_buf(),
+            home: home.path().to_path_buf(),
+            config_dir: home.path().join(".config/drgnx"),
+            config: hrafn::Config::default(),
+            embedders: vec![],
+            power_root: PathBuf::from("/nonexistent"),
+            base: None,
+            test_permits: None,
+        };
+        match Project::open(spec_for(inside.clone())).await {
+            Err(ProjectError::Denied(why)) => assert!(why.contains("personal notes"), "{why}"),
+            Err(e) => panic!("refused for the wrong reason: {e}"),
+            Ok(_) => panic!("a root under ~/org was opened"),
+        }
+        assert!(
+            !state.path().join("code").exists(),
+            "no store for a refused root"
+        );
+
+        // HOME as a repository holding ~/org
+        std::fs::remove_dir_all(home.path().join("org/proj/.git")).unwrap();
+        ratatoskr::fsio::write(home.path().join("org/notes.org"), format!("* {canary}\n")).unwrap();
+        repo_at(home.path(), &[("src/a.el", "(defun a-home () 1)\n")]);
+        let p = Project::open(spec_for(home.path().to_path_buf()))
+            .await
+            .unwrap();
+        let r = p.refresh_now().await.unwrap();
+        assert_eq!(r.files_changed, 1, "src/a.el only: {r:?}");
+        let leaked: i64 = {
+            let like = format!("%{canary}%");
+            p.store()
+                .handle()
+                .read(move |c| {
+                    Ok(c.query_row(
+                        "select count(*) from chunk where embed_text like ?1 or path like 'org/%'",
+                        [&like],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap()
+        };
+        assert_eq!(leaked, 0);
+        let cache = p.cache(&model_id()).await.unwrap();
+        let pending = hrafn::missing(p.store(), &cache, 1000).await.unwrap();
+        assert!(pending.iter().all(|(_, _, t)| !t.contains(&canary)));
+    })
 }
 
 /// Pattern B: tier 2 holds while typing holds, and only between requests. The clock moves by 250 ms advances;
@@ -746,19 +756,21 @@ fn a_wake_with_nothing_missing_stays_idle() {
 }
 
 /// Pattern B. A query on battery uses the CPU path, so it doesn't wake a sleeping dGPU.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn query_on_battery_uses_the_cpu() {
-    let (cache, bat) = (tempfile::tempdir().unwrap(), power(false));
-    let embedder = WorkerEmbedder::new(spec(cache.path(), bat.path(), &[]));
-    let v = embedder
-        .embed_query("where does the editor call the hub", None)
-        .await
-        .unwrap();
-    assert_eq!(v.len(), DIMS);
-    let facts = embedder.facts();
-    assert_eq!(facts.device_arg.as_deref(), Some("cpu"), "{facts:?}");
-    assert_eq!(facts.ready.unwrap()["device"], "cpu");
-    assert_eq!(facts.spawns, 1);
+#[test]
+fn query_on_battery_uses_the_cpu() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (cache, bat) = (tempfile::tempdir().unwrap(), power(false));
+        let embedder = WorkerEmbedder::new(spec(cache.path(), bat.path(), &[]));
+        let v = embedder
+            .embed_query("where does the editor call the hub", None)
+            .await
+            .unwrap();
+        assert_eq!(v.len(), DIMS);
+        let facts = embedder.facts();
+        assert_eq!(facts.device_arg.as_deref(), Some("cpu"), "{facts:?}");
+        assert_eq!(facts.ready.unwrap()["device"], "cpu");
+        assert_eq!(facts.spawns, 1);
+    })
 }
 
 // ---- worktree overlays in the hub (H16 overlay design §6, O6) ----
@@ -833,66 +845,72 @@ fn edit(root: &Path, rel: &str, name: &str) {
 }
 
 /// Pattern D. The main checkout answers from the base; a linked worktree from its own view once seeded.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn view_for_names_the_tree() {
-    let (f, p, trees) = with_trees(1).await;
-    let v = p.view_for(&f.root, false).await.unwrap();
-    assert_eq!(v.view, hrafn::View::Base);
-    assert_eq!(v.worktree, None);
-    edit(&trees[0], "core/f1.el", "wt-only-fn");
-    let key = seeded(&p, &trees[0]).await;
-    let v = p.view_for(&trees[0], false).await.unwrap();
-    assert!(matches!(v.view, hrafn::View::Tree(_)), "{v:?}");
-    assert_eq!(tree_rows(&p, &key).await.len(), 1);
+#[test]
+fn view_for_names_the_tree() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (f, p, trees) = with_trees(1).await;
+        let v = p.view_for(&f.root, false).await.unwrap();
+        assert_eq!(v.view, hrafn::View::Base);
+        assert_eq!(v.worktree, None);
+        edit(&trees[0], "core/f1.el", "wt-only-fn");
+        let key = seeded(&p, &trees[0]).await;
+        let v = p.view_for(&trees[0], false).await.unwrap();
+        assert!(matches!(v.view, hrafn::View::Tree(_)), "{v:?}");
+        assert_eq!(tree_rows(&p, &key).await.len(), 1);
+    })
 }
 
 /// Pattern D. A worktree named through a link (macOS's temporary folders are under /var, a link to /private/var) is
 /// seeded and answers from its view: the overlay reads its true name, which `eitri` opens.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_worktree_named_through_a_link_is_seeded() {
-    let (f, p, trees) = with_trees(1).await;
-    let link = f.home.path().join("link");
-    std::os::unix::fs::symlink(f.home.path().join("src"), &link).unwrap();
-    let via = link.join(trees[0].file_name().unwrap());
-    edit(&trees[0], "core/f1.el", "wt-only-fn");
-    let key = seeded(&p, &via).await;
-    let v = p.view_for(&via, false).await.unwrap();
-    assert!(matches!(v.view, hrafn::View::Tree(_)), "{v:?}");
-    assert_eq!(v.root, std::fs::canonicalize(&trees[0]).unwrap());
-    assert_eq!(tree_rows(&p, &key).await.len(), 1);
+#[test]
+fn a_worktree_named_through_a_link_is_seeded() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (f, p, trees) = with_trees(1).await;
+        let link = f.home.path().join("link");
+        std::os::unix::fs::symlink(f.home.path().join("src"), &link).unwrap();
+        let via = link.join(trees[0].file_name().unwrap());
+        edit(&trees[0], "core/f1.el", "wt-only-fn");
+        let key = seeded(&p, &via).await;
+        let v = p.view_for(&via, false).await.unwrap();
+        assert!(matches!(v.view, hrafn::View::Tree(_)), "{v:?}");
+        assert_eq!(v.root, std::fs::canonicalize(&trees[0]).unwrap());
+        assert_eq!(tree_rows(&p, &key).await.len(), 1);
+    })
 }
 
 /// Pattern D. A feed subscriber that lagged past the channel's 256 versions marks the trees stale and re-diffs them:
 /// the version it missed reaches the overlay.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lagged_feed_rediffs() {
-    let (_f, p, trees) = with_trees(1).await;
-    let key = seeded(&p, &trees[0]).await;
-    assert!(tree_rows(&p, &key).await.is_empty());
-    edit(&trees[0], "core/f1.el", "missed-fn");
-    let (tx, rx) = tokio::sync::broadcast::channel(256);
-    let version = |path: &str| ratatoskr::history::FileVersion {
-        worktree: key.clone(),
-        path: path.into(),
-        blob: None,
-        op: 1,
-        class: ratatoskr::history::Class::Text,
-    };
-    // the version of f1 is the first of 300: the subscriber never sees it
-    tx.send(version("core/f1.el")).unwrap();
-    for _ in 0..299 {
-        tx.send(version("core/f0.el")).unwrap();
-    }
-    drop(tx);
-    let checks = tree_live(&p, &key).await.checks;
-    p.feed(rx).expect("the first feed is taken").await.unwrap();
-    p.settle_trees().await;
-    let rows = tree_rows(&p, &key).await;
-    assert_eq!(
-        rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
-        ["core/f1.el"]
-    );
-    assert!(tree_live(&p, &key).await.checks > checks, "a lag re-diffs");
+#[test]
+fn lagged_feed_rediffs() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_f, p, trees) = with_trees(1).await;
+        let key = seeded(&p, &trees[0]).await;
+        assert!(tree_rows(&p, &key).await.is_empty());
+        edit(&trees[0], "core/f1.el", "missed-fn");
+        let (tx, rx) = tokio::sync::broadcast::channel(256);
+        let version = |path: &str| ratatoskr::history::FileVersion {
+            worktree: key.clone(),
+            path: path.into(),
+            blob: None,
+            op: 1,
+            class: ratatoskr::history::Class::Text,
+        };
+        // the version of f1 is the first of 300: the subscriber never sees it
+        tx.send(version("core/f1.el")).unwrap();
+        for _ in 0..299 {
+            tx.send(version("core/f0.el")).unwrap();
+        }
+        drop(tx);
+        let checks = tree_live(&p, &key).await.checks;
+        p.feed(rx).expect("the first feed is taken").await.unwrap();
+        p.settle_trees().await;
+        let rows = tree_rows(&p, &key).await;
+        assert_eq!(
+            rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+            ["core/f1.el"]
+        );
+        assert!(tree_live(&p, &key).await.checks > checks, "a lag re-diffs");
+    })
 }
 
 /// A watcher double: one tree besides main at a time, the next one is `ENOSPC`.
@@ -919,137 +937,147 @@ impl hrafn::Watch for OneTree {
 
 /// Pattern D. On `ENOSPC` the least recently used tree is unwatched (the new one is watched), and the unwatched tree
 /// still answers right after its check.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn watch_budget_unwatches_lru_tree() {
-    let (_f, p, trees) = with_trees(2).await;
-    let w = Arc::new(hrafn::ProjectWatch::new(|| {
-        Ok(Arc::new(OneTree {
-            trees: Mutex::new(vec![]),
-        }) as Arc<dyn hrafn::Watch>)
-    }));
-    w.add_tree(hrafn::TreeSpec::main(p.root())).unwrap();
-    p.watch(w);
-    let a = seeded(&p, &trees[0]).await;
-    assert!(tree_live(&p, &a).await.watched);
-    let b = seeded(&p, &trees[1]).await;
-    assert!(tree_live(&p, &b).await.watched, "the new tree is watched");
-    let la = tree_live(&p, &a).await;
-    assert!(!la.watched);
-    assert_eq!(la.state, hrafn::TreeState::Unwatched);
-    edit(&trees[0], "core/f2.el", "after-unwatch-fn");
-    p.view_for(&trees[0], false).await.unwrap();
-    p.settle_trees().await;
-    assert_eq!(
-        tree_rows(&p, &a)
-            .await
-            .iter()
-            .map(|r| r.0.as_str())
-            .collect::<Vec<_>>(),
-        ["core/f2.el"]
-    );
+#[test]
+fn watch_budget_unwatches_lru_tree() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_f, p, trees) = with_trees(2).await;
+        let w = Arc::new(hrafn::ProjectWatch::new(|| {
+            Ok(Arc::new(OneTree {
+                trees: Mutex::new(vec![]),
+            }) as Arc<dyn hrafn::Watch>)
+        }));
+        w.add_tree(hrafn::TreeSpec::main(p.root())).unwrap();
+        p.watch(w);
+        let a = seeded(&p, &trees[0]).await;
+        assert!(tree_live(&p, &a).await.watched);
+        let b = seeded(&p, &trees[1]).await;
+        assert!(tree_live(&p, &b).await.watched, "the new tree is watched");
+        let la = tree_live(&p, &a).await;
+        assert!(!la.watched);
+        assert_eq!(la.state, hrafn::TreeState::Unwatched);
+        edit(&trees[0], "core/f2.el", "after-unwatch-fn");
+        p.view_for(&trees[0], false).await.unwrap();
+        p.settle_trees().await;
+        assert_eq!(
+            tree_rows(&p, &a)
+                .await
+                .iter()
+                .map(|r| r.0.as_str())
+                .collect::<Vec<_>>(),
+            ["core/f2.el"]
+        );
+    })
 }
 
 /// Pattern D. A query in an unwatched tree answers at once from its rows; its check reads only the stat-dirty file,
 /// and a burst of queries within the TTL runs one check.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn query_check_is_stat_bound_and_ttl() {
-    let (_f, p, trees) = with_trees(1).await;
-    let key = seeded(&p, &trees[0]).await;
-    assert_eq!(tree_live(&p, &key).await.state, hrafn::TreeState::Unwatched);
-    let before = tree_live(&p, &key).await.checks;
-    edit(&trees[0], "core/f1.el", "dirty-fn");
-    for _ in 0..3 {
-        let v = p.view_for(&trees[0], false).await.unwrap();
-        assert!(matches!(v.view, hrafn::View::Tree(_)), "{v:?}");
-        assert_eq!(v.state, Some(hrafn::TreeState::Unwatched));
-    }
-    p.settle_trees().await;
-    let l = tree_live(&p, &key).await;
-    assert_eq!(l.checks, before + 1, "one check for the burst");
-    assert_eq!(l.last.map(|s| s.read), Some(1), "{:?}", l.last);
-    assert_eq!(tree_rows(&p, &key).await.len(), 1);
+#[test]
+fn query_check_is_stat_bound_and_ttl() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_f, p, trees) = with_trees(1).await;
+        let key = seeded(&p, &trees[0]).await;
+        assert_eq!(tree_live(&p, &key).await.state, hrafn::TreeState::Unwatched);
+        let before = tree_live(&p, &key).await.checks;
+        edit(&trees[0], "core/f1.el", "dirty-fn");
+        for _ in 0..3 {
+            let v = p.view_for(&trees[0], false).await.unwrap();
+            assert!(matches!(v.view, hrafn::View::Tree(_)), "{v:?}");
+            assert_eq!(v.state, Some(hrafn::TreeState::Unwatched));
+        }
+        p.settle_trees().await;
+        let l = tree_live(&p, &key).await;
+        assert_eq!(l.checks, before + 1, "one check for the burst");
+        assert_eq!(l.last.map(|s| s.read), Some(1), "{:?}", l.last);
+        assert_eq!(tree_rows(&p, &key).await.len(), 1);
+    })
 }
 
 /// Pattern D. A 17th tree evicts the least recently used tree's rows; a tree used again is kept.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resident_cap_evicts_lru() {
-    use ratatoskr::search::project::RESIDENT_CAP;
-    let (_f, p, trees) = with_trees(RESIDENT_CAP + 1).await;
-    let mut keys = Vec::new();
-    for (i, t) in trees.iter().enumerate().take(RESIDENT_CAP) {
-        edit(t, "core/f0.el", &format!("tree-{i}-fn"));
-        keys.push(seeded(&p, t).await);
-    }
-    // tree 0 is used again: tree 1 is now the least recently used
-    p.view_for(&trees[0], false).await.unwrap();
-    p.settle_trees().await;
-    let last = &trees[RESIDENT_CAP];
-    edit(last, "core/f0.el", "last-tree-fn");
-    seeded(&p, last).await;
-    let held: Vec<String> = p
-        .tree_status()
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|t| t.key)
-        .collect();
-    assert_eq!(held.len(), RESIDENT_CAP);
-    assert!(!held.contains(&keys[1]), "{held:?}");
-    assert!(held.contains(&keys[0]), "{held:?}");
-    assert!(tree_rows(&p, &keys[1]).await.is_empty());
-    assert_eq!(tree_rows(&p, &keys[0]).await.len(), 1);
+#[test]
+fn resident_cap_evicts_lru() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        use ratatoskr::search::project::RESIDENT_CAP;
+        let (_f, p, trees) = with_trees(RESIDENT_CAP + 1).await;
+        let mut keys = Vec::new();
+        for (i, t) in trees.iter().enumerate().take(RESIDENT_CAP) {
+            edit(t, "core/f0.el", &format!("tree-{i}-fn"));
+            keys.push(seeded(&p, t).await);
+        }
+        // tree 0 is used again: tree 1 is now the least recently used
+        p.view_for(&trees[0], false).await.unwrap();
+        p.settle_trees().await;
+        let last = &trees[RESIDENT_CAP];
+        edit(last, "core/f0.el", "last-tree-fn");
+        seeded(&p, last).await;
+        let held: Vec<String> = p
+            .tree_status()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.key)
+            .collect();
+        assert_eq!(held.len(), RESIDENT_CAP);
+        assert!(!held.contains(&keys[1]), "{held:?}");
+        assert!(held.contains(&keys[0]), "{held:?}");
+        assert!(tree_rows(&p, &keys[1]).await.is_empty());
+        assert_eq!(tree_rows(&p, &keys[0]).await.len(), 1);
+    })
 }
 
 /// Pattern D. `git worktree remove` drops the tree's overlay; a locked worktree whose folder is missing keeps its rows.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn removed_worktree_drops_its_overlay() {
-    let (f, p, trees) = with_trees(2).await;
-    edit(&trees[0], "core/f0.el", "gone-fn");
-    edit(&trees[1], "core/f0.el", "locked-fn");
-    let (a, b) = (seeded(&p, &trees[0]).await, seeded(&p, &trees[1]).await);
-    git(&f.root, &["worktree", "lock", trees[1].to_str().unwrap()]);
-    ratatoskr::fsio::rename(&trees[1], f.home.path().join("src/moved-away")).unwrap();
-    git(
-        &f.root,
-        &["worktree", "remove", "--force", trees[0].to_str().unwrap()],
-    );
-    p.sweep_trees().await.unwrap();
-    let held: Vec<String> = p
-        .tree_status()
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|t| t.key)
-        .collect();
-    assert_eq!(held, std::slice::from_ref(&b));
-    assert!(tree_rows(&p, &a).await.is_empty());
-    assert_eq!(tree_rows(&p, &b).await.len(), 1);
+#[test]
+fn removed_worktree_drops_its_overlay() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (f, p, trees) = with_trees(2).await;
+        edit(&trees[0], "core/f0.el", "gone-fn");
+        edit(&trees[1], "core/f0.el", "locked-fn");
+        let (a, b) = (seeded(&p, &trees[0]).await, seeded(&p, &trees[1]).await);
+        git(&f.root, &["worktree", "lock", trees[1].to_str().unwrap()]);
+        ratatoskr::fsio::rename(&trees[1], f.home.path().join("src/moved-away")).unwrap();
+        git(
+            &f.root,
+            &["worktree", "remove", "--force", trees[0].to_str().unwrap()],
+        );
+        p.sweep_trees().await.unwrap();
+        let held: Vec<String> = p
+            .tree_status()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.key)
+            .collect();
+        assert_eq!(held, std::slice::from_ref(&b));
+        assert!(tree_rows(&p, &a).await.is_empty());
+        assert_eq!(tree_rows(&p, &b).await.len(), 1);
+    })
 }
 
 /// Pattern D. Edits made while the hub was down: on open the tree is stale, the first query answers at once from the
 /// stored rows, and its check brings the edits in.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn restart_rechecks_stale_tree() {
-    let (f, p, trees) = with_trees(1).await;
-    edit(&trees[0], "core/f0.el", "before-down-fn");
-    let key = seeded(&p, &trees[0]).await;
-    drop(p);
-    edit(&trees[0], "core/f2.el", "while-down-fn");
-    let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
-        .await
-        .unwrap();
-    assert_eq!(tree_live(&p, &key).await.state, hrafn::TreeState::Stale);
-    let v = p.view_for(&trees[0], false).await.unwrap();
-    assert_eq!(v.state, Some(hrafn::TreeState::Stale));
-    p.settle_trees().await;
-    assert_eq!(
-        tree_rows(&p, &key)
+#[test]
+fn restart_rechecks_stale_tree() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (f, p, trees) = with_trees(1).await;
+        edit(&trees[0], "core/f0.el", "before-down-fn");
+        let key = seeded(&p, &trees[0]).await;
+        drop(p);
+        edit(&trees[0], "core/f2.el", "while-down-fn");
+        let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
             .await
-            .iter()
-            .map(|r| r.0.as_str())
-            .collect::<Vec<_>>(),
-        ["core/f0.el", "core/f2.el"]
-    );
+            .unwrap();
+        assert_eq!(tree_live(&p, &key).await.state, hrafn::TreeState::Stale);
+        let v = p.view_for(&trees[0], false).await.unwrap();
+        assert_eq!(v.state, Some(hrafn::TreeState::Stale));
+        p.settle_trees().await;
+        assert_eq!(
+            tree_rows(&p, &key)
+                .await
+                .iter()
+                .map(|r| r.0.as_str())
+                .collect::<Vec<_>>(),
+            ["core/f0.el", "core/f2.el"]
+        );
+    })
 }
 
 /// The symbol names the base view holds.
@@ -1071,79 +1099,83 @@ async fn base_names(p: &Project) -> Vec<String> {
 
 /// Pattern D. The repo's rules are read at every tier-1 listing, not when the project opens: no reopen, and a file a
 /// new line ignores loses its rows at the next refresh; take the line away and the rows come back.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn editing_search_toml_takes_effect_at_the_next_refresh() {
-    let f = fixture(&lisp_files(3));
-    let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
-        .await
-        .unwrap();
-    assert_eq!(p.refresh_now().await.unwrap().files_changed, 3);
-    assert!(base_names(&p).await.contains(&"f1-run".to_string()));
-    let toml = f.root.join(".drgnx/search.toml");
-    std::fs::create_dir_all(toml.parent().unwrap()).unwrap();
-    ratatoskr::fsio::write(&toml, "ignore = [\"core/f1.el\"]\n").unwrap();
-    assert_eq!(p.refresh_now().await.unwrap().files_changed, 1);
-    let n = base_names(&p).await;
-    assert!(!n.contains(&"f1-run".to_string()), "{n:?}");
-    assert!(n.contains(&"f0-run".to_string()) && n.contains(&"f2-run".to_string()));
-    // a file that cannot be read is an error the listing reports, not the defaults
-    ratatoskr::fsio::write(&toml, "ignore = [\n").unwrap();
-    let e = p.refresh_now().await.unwrap_err();
-    assert!(e.to_string().contains("search.toml cannot be read"), "{e}");
-    std::fs::remove_file(&toml).unwrap();
-    assert_eq!(p.refresh_now().await.unwrap().files_changed, 1);
-    assert!(base_names(&p).await.contains(&"f1-run".to_string()));
+#[test]
+fn editing_search_toml_takes_effect_at_the_next_refresh() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let f = fixture(&lisp_files(3));
+        let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
+            .await
+            .unwrap();
+        assert_eq!(p.refresh_now().await.unwrap().files_changed, 3);
+        assert!(base_names(&p).await.contains(&"f1-run".to_string()));
+        let toml = f.root.join(".drgnx/search.toml");
+        std::fs::create_dir_all(toml.parent().unwrap()).unwrap();
+        ratatoskr::fsio::write(&toml, "ignore = [\"core/f1.el\"]\n").unwrap();
+        assert_eq!(p.refresh_now().await.unwrap().files_changed, 1);
+        let n = base_names(&p).await;
+        assert!(!n.contains(&"f1-run".to_string()), "{n:?}");
+        assert!(n.contains(&"f0-run".to_string()) && n.contains(&"f2-run".to_string()));
+        // a file that cannot be read is an error the listing reports, not the defaults
+        ratatoskr::fsio::write(&toml, "ignore = [\n").unwrap();
+        let e = p.refresh_now().await.unwrap_err();
+        assert!(e.to_string().contains("search.toml cannot be read"), "{e}");
+        std::fs::remove_file(&toml).unwrap();
+        assert_eq!(p.refresh_now().await.unwrap().files_changed, 1);
+        assert!(base_names(&p).await.contains(&"f1-run".to_string()));
+    })
 }
 
 /// Pattern D. The base-checkout setting (H16 overlay design §6.5): with another checkout as the base, tier 1 builds
 /// from it, a query there answers from the base, and the main checkout is a worktree with its own overlay. Changing
 /// the base back rebuilds from main and re-seeds the trees.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn base_setting_builds_from_that_checkout() {
-    let f = fixture(&lisp_files(3));
-    let next = f.home.path().join("src/proj-next");
-    git(
-        &f.root,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "next",
-            next.to_str().unwrap(),
-        ],
-    );
-    edit(&next, "core/f1.el", "next-line-fn");
-    git(&next, &["commit", "-qam", "next"]);
-    let mut spec = project_spec(&f, vec![], Path::new("/nonexistent"));
-    spec.base = Some(next.clone());
-    let p = Project::open(spec).await.unwrap();
-    p.refresh_now().await.unwrap();
-    assert!(base_names(&p).await.contains(&"next-line-fn".to_string()));
-    assert_eq!(
-        p.view_for(&next, false).await.unwrap().view,
-        hrafn::View::Base
-    );
-    let key = seeded(&p, &f.root).await;
-    assert_eq!(
-        tree_rows(&p, &key)
+#[test]
+fn base_setting_builds_from_that_checkout() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let f = fixture(&lisp_files(3));
+        let next = f.home.path().join("src/proj-next");
+        git(
+            &f.root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "next",
+                next.to_str().unwrap(),
+            ],
+        );
+        edit(&next, "core/f1.el", "next-line-fn");
+        git(&next, &["commit", "-qam", "next"]);
+        let mut spec = project_spec(&f, vec![], Path::new("/nonexistent"));
+        spec.base = Some(next.clone());
+        let p = Project::open(spec).await.unwrap();
+        p.refresh_now().await.unwrap();
+        assert!(base_names(&p).await.contains(&"next-line-fn".to_string()));
+        assert_eq!(
+            p.view_for(&next, false).await.unwrap().view,
+            hrafn::View::Base
+        );
+        let key = seeded(&p, &f.root).await;
+        assert_eq!(
+            tree_rows(&p, &key)
+                .await
+                .iter()
+                .map(|r| r.0.as_str())
+                .collect::<Vec<_>>(),
+            ["core/f1.el"],
+            "main differs from the base in f1"
+        );
+        drop(p);
+        // back to main as the base: tier 1 rebuilds from it
+        let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
             .await
-            .iter()
-            .map(|r| r.0.as_str())
-            .collect::<Vec<_>>(),
-        ["core/f1.el"],
-        "main differs from the base in f1"
-    );
-    drop(p);
-    // back to main as the base: tier 1 rebuilds from it
-    let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
-        .await
-        .unwrap();
-    p.refresh_now().await.unwrap();
-    let n = base_names(&p).await;
-    assert!(!n.contains(&"next-line-fn".to_string()), "{n:?}");
-    assert_eq!(
-        p.view_for(&f.root, false).await.unwrap().view,
-        hrafn::View::Base
-    );
+            .unwrap();
+        p.refresh_now().await.unwrap();
+        let n = base_names(&p).await;
+        assert!(!n.contains(&"next-line-fn".to_string()), "{n:?}");
+        assert_eq!(
+            p.view_for(&f.root, false).await.unwrap().view,
+            hrafn::View::Base
+        );
+    })
 }

@@ -143,10 +143,7 @@ impl Search {
         let exe = engine_install::installed(asset, &engine_install::dir_for(cache, asset))
             .filter(|_| engine_install::gguf_ready(&self.models, gguf))
             .ok_or_else(not_installed)?;
-        let mut held = self
-            .engine
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut held = saman::lock(&self.engine);
         Ok(held
             .get_or_insert_with(|| {
                 Arc::new(engine::LocalEngine::new(engine::EngineSpec {
@@ -321,20 +318,22 @@ mod tests {
         assert!(model_base(Some("not a url")).is_err());
     }
 
-    #[tokio::test]
-    async fn the_consent_survives_a_restart() {
-        let dir = tempfile::tempdir().unwrap();
-        let consent = Consent {
-            model: "m".into(),
-            bytes: 302,
-            at: 1.5,
-        };
-        {
+    #[test]
+    fn the_consent_survives_a_restart() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let consent = Consent {
+                model: "m".into(),
+                bytes: 302,
+                at: 1.5,
+            };
+            {
+                let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
+                assert!(stored_consent(&db).await.is_none());
+                store_consent(&db, &consent).await;
+            }
             let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
-            assert!(stored_consent(&db).await.is_none());
-            store_consent(&db, &consent).await;
-        }
-        let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
-        assert_eq!(stored_consent(&db).await, Some(consent));
+            assert_eq!(stored_consent(&db).await, Some(consent));
+        })
     }
 }

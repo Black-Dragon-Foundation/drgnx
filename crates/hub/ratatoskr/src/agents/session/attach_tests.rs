@@ -150,170 +150,180 @@ fn fork_of(source: &str, at: Option<&str>) -> Attach {
     }
 }
 
-#[tokio::test]
-async fn fork_keeps_the_lock() {
-    let fx = Fx::new();
-    let (src, _rx) = fx.launch("mock-claude", &Attach::New).await.unwrap();
-    let source = src.acp.0.to_string();
-    let (l, _rx2) = fx
-        .launch("mock-claude", &fork_of(&source, None))
-        .await
-        .expect("a fork");
-    assert_eq!(l.level, Some(RestoreLevel::Message));
-    assert_ne!(&*l.acp.0, source.as_str());
-    let fork = fx.logged("a.log", "session/fork");
-    assert_eq!(fork.len(), 1, "{fork:?}");
-    assert_eq!(fork[0]["from"], json!(source));
-    assert!(
-        fork[0]["claude_options"].is_object(),
-        "the lock's options go with the fork: {fork:?}"
-    );
-    // the lock is verified after a fork as after `session/new`: one that does not hold ends the launch
-    let refused = fx
-        .launch("mock-claude-refusing", &fork_of(&source, None))
-        .await;
-    let Err(e) = refused else {
-        panic!("a fork whose lock does not hold launched")
-    };
-    assert!(e.message.contains("refused"), "{}", e.message);
-    assert_eq!(fx.logged("b.log", "session/fork").len(), 1, "it was a fork");
+#[test]
+fn fork_keeps_the_lock() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let (src, _rx) = fx.launch("mock-claude", &Attach::New).await.unwrap();
+        let source = src.acp.0.to_string();
+        let (l, _rx2) = fx
+            .launch("mock-claude", &fork_of(&source, None))
+            .await
+            .expect("a fork");
+        assert_eq!(l.level, Some(RestoreLevel::Message));
+        assert_ne!(&*l.acp.0, source.as_str());
+        let fork = fx.logged("a.log", "session/fork");
+        assert_eq!(fork.len(), 1, "{fork:?}");
+        assert_eq!(fork[0]["from"], json!(source));
+        assert!(
+            fork[0]["claude_options"].is_object(),
+            "the lock's options go with the fork: {fork:?}"
+        );
+        // the lock is verified after a fork as after `session/new`: one that does not hold ends the launch
+        let refused = fx
+            .launch("mock-claude-refusing", &fork_of(&source, None))
+            .await;
+        let Err(e) = refused else {
+            panic!("a fork whose lock does not hold launched")
+        };
+        assert!(e.message.contains("refused"), "{}", e.message);
+        assert_eq!(fx.logged("b.log", "session/fork").len(), 1, "it was a fork");
+    })
 }
 
-#[tokio::test]
-async fn fork_failure_falls_back_to_summary() {
-    let fx = Fx::new();
-    let (src, _rx) = fx.launch("mock-claude", &Attach::New).await.unwrap();
-    let source = src.acp.0.to_string();
-    // the provider's transcript is gone
-    std::fs::remove_file(fx.dir.path().join("state").join(format!("{source}.json"))).unwrap();
-    drop(src);
-    let (l, _rx2) = fx
-        .launch("mock-claude", &fork_of(&source, Some("a-1-1")))
-        .await
-        .expect("the session lands though its fork does not");
-    assert_eq!(l.level, Some(RestoreLevel::Summary));
-    assert!(l.level_why.is_some(), "the reason is returned");
-    assert!(fx.logged("a.log", "session/fork").is_empty());
-    let new: Vec<Value> = fx.logged("a.log", "session/new");
-    assert!(
-        new.iter().any(|n| n["sessionId"] == json!(&*l.acp.0)),
-        "a new conversation: {new:?}"
-    );
-    let block = hermod::ContentBlock::Text(hermod::schema::v1::TextContent::new("hello"));
-    l.conn
-        .prompt(&l.acp, vec![block], None)
-        .await
-        .expect("the session is alive");
+#[test]
+fn fork_failure_falls_back_to_summary() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let (src, _rx) = fx.launch("mock-claude", &Attach::New).await.unwrap();
+        let source = src.acp.0.to_string();
+        // the provider's transcript is gone
+        std::fs::remove_file(fx.dir.path().join("state").join(format!("{source}.json"))).unwrap();
+        drop(src);
+        let (l, _rx2) = fx
+            .launch("mock-claude", &fork_of(&source, Some("a-1-1")))
+            .await
+            .expect("the session lands though its fork does not");
+        assert_eq!(l.level, Some(RestoreLevel::Summary));
+        assert!(l.level_why.is_some(), "the reason is returned");
+        assert!(fx.logged("a.log", "session/fork").is_empty());
+        let new: Vec<Value> = fx.logged("a.log", "session/new");
+        assert!(
+            new.iter().any(|n| n["sessionId"] == json!(&*l.acp.0)),
+            "a new conversation: {new:?}"
+        );
+        let block = hermod::ContentBlock::Text(hermod::schema::v1::TextContent::new("hello"));
+        l.conn
+            .prompt(&l.acp, vec![block], None)
+            .await
+            .expect("the session is alive");
+    })
 }
 
-#[tokio::test]
-async fn gemini_lands_as_summary() {
-    let fx = Fx::new();
-    let (l, _rx) = fx
-        .launch("mock-gemini", &fork_of("s1", None))
-        .await
-        .expect("a session");
-    assert_eq!(l.level, Some(RestoreLevel::Summary));
-    assert!(l.level_why.is_some());
-    assert_eq!(fx.logged("g.log", "session/new").len(), 1);
+#[test]
+fn gemini_lands_as_summary() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let (l, _rx) = fx
+            .launch("mock-gemini", &fork_of("s1", None))
+            .await
+            .expect("a session");
+        assert_eq!(l.level, Some(RestoreLevel::Summary));
+        assert!(l.level_why.is_some());
+        assert_eq!(fx.logged("g.log", "session/new").len(), 1);
+    })
 }
 
 /// A session's file that waits on the disk holds none of the hub's two workers: its queue file is a FIFO with no
 /// reader (an open for writing waits there, as one waits on a slow disk), a reader of the session's state comes
 /// next, and the runtime still runs a task.  The write lands once the disk answers.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_write_that_waits_on_the_disk_holds_no_worker() {
-    let fx = Fx::new();
-    let p: runstav::methods::agents::StartParams =
-        serde_json::from_value(json!({"profile": "mock-claude", "cwd": fx.work()})).unwrap();
-    let agents = &fx.front.core.agents;
-    let sid = agents
-        .start(&fx.front, p, &crate::runner::user())
-        .await
-        .expect("a session")
-        .id;
-    // a turn that stays busy, and a message queued behind it: the queue on disk holds "later" alone once the turn has
-    // taken "silent 30" (a file that still held both was written again when the turn began)
-    agents.send(&sid, "silent 30".into()).unwrap();
-    agents.send(&sid, "later".into()).unwrap();
-    let queue = fx
-        .dir
-        .path()
-        .join(format!("hub/transcripts/{sid}.queue.json"));
-    let q = queue.clone();
-    crate::clock::blocking(move || {
-        skuld::wait_until("the queue on disk", 60, || {
-            crate::fsio::read_to_string(&q)
-                .ok()
-                .filter(|t| t.contains("later") && !t.contains("silent 30"))
+#[test]
+fn a_write_that_waits_on_the_disk_holds_no_worker() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let fx = Fx::new();
+        let p: runstav::methods::agents::StartParams =
+            serde_json::from_value(json!({"profile": "mock-claude", "cwd": fx.work()})).unwrap();
+        let agents = &fx.front.core.agents;
+        let sid = agents
+            .start(&fx.front, p, &crate::runner::user())
+            .await
+            .expect("a session")
+            .id;
+        // a turn that stays busy, and a message queued behind it: the queue on disk holds "later" alone once the turn has
+        // taken "silent 30" (a file that still held both was written again when the turn began)
+        agents.send(&sid, "silent 30".into()).unwrap();
+        agents.send(&sid, "later".into()).unwrap();
+        let queue = fx
+            .dir
+            .path()
+            .join(format!("hub/transcripts/{sid}.queue.json"));
+        let q = queue.clone();
+        crate::clock::blocking(move || {
+            skuld::wait_until("the queue on disk", 60, || {
+                crate::fsio::read_to_string(&q)
+                    .ok()
+                    .filter(|t| t.contains("later") && !t.contains("silent 30"))
+            })
         })
-    })
-    .await
-    .unwrap();
-    let s = agents.find(&sid).unwrap();
-    s.disk.written().await;
-    // the disk is held: the queue file's write waits until it is let go
-    let slow = crate::fsio::disk::slow(&queue);
-    // the write is queued and the task that asked for it ends, on a worker, while the write waits on the disk (a write
-    // done in the task held its worker and the state lock until a reader came: the test hung here)
-    let w = s.clone();
-    tokio::spawn(async move { w.persist_queue() })
         .await
         .unwrap();
-    // the state is free for the next reader, on a worker
-    let r = s.clone();
-    tokio::spawn(async move {
-        r.observe();
+        let s = agents.find(&sid).unwrap();
+        s.disk.written().await;
+        // the disk is held: the queue file's write waits until it is let go
+        let slow = crate::fsio::disk::slow(&queue);
+        // the write is queued and the task that asked for it ends, on a worker, while the write waits on the disk (a write
+        // done in the task held its worker and the state lock until a reader came: the test hung here)
+        let w = s.clone();
+        tokio::spawn(async move { w.persist_queue() })
+            .await
+            .unwrap();
+        // the state is free for the next reader, on a worker
+        let r = s.clone();
+        tokio::spawn(async move {
+            r.observe();
+        })
+        .await
+        .unwrap();
+        let mut landed = std::pin::pin!(s.disk.written());
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(
+            std::future::Future::poll(landed.as_mut(), &mut cx).is_pending(),
+            "the queue's write still waits on the disk"
+        );
+        // the disk answers: the write waiting on it goes on
+        slow.release();
+        landed.await;
+        let written = crate::fsio::read_to_string(&queue).unwrap();
+        assert!(written.contains("later"), "the queue written: {written}");
     })
-    .await
-    .unwrap();
-    let mut landed = std::pin::pin!(s.disk.written());
-    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
-    assert!(
-        std::future::Future::poll(landed.as_mut(), &mut cx).is_pending(),
-        "the queue's write still waits on the disk"
-    );
-    // the disk answers: the write waiting on it goes on
-    slow.release();
-    landed.await;
-    let written = crate::fsio::read_to_string(&queue).unwrap();
-    assert!(written.contains("later"), "the queue written: {written}");
 }
 
 /// A resume whose files wait on the disk holds no thread of the runtime: the closed session's meta file is held
 /// ([`crate::fsio::disk`]) until the runtime has run another task, on a runtime of one thread.  A read done in the
 /// resume's task held that thread, so the other task never ran and the disk never went on: the test hung here.
-#[tokio::test]
-async fn a_resume_that_waits_on_the_disk_holds_no_thread() {
-    let fx = Fx::new();
-    let p: runstav::methods::agents::StartParams =
-        serde_json::from_value(json!({"profile": "mock-claude", "cwd": fx.work()})).unwrap();
-    let agents = &fx.front.core.agents;
-    let sid = agents
-        .start(&fx.front, p, &crate::runner::user())
-        .await
-        .expect("a session")
-        .id;
-    agents.find(&sid).unwrap().close_now().await;
-    let meta = fx
-        .dir
-        .path()
-        .join(format!("hub/transcripts/{sid}.meta.json"));
-    // the disk: the resume's read of the meta file waits until it is told to go on
-    let slow = crate::fsio::disk::slow(&meta);
-    let slow = std::sync::Arc::new(slow);
-    let waiting = slow.clone();
-    let other = async {
-        crate::clock::blocking(move || waiting.reached())
+#[test]
+fn a_resume_that_waits_on_the_disk_holds_no_thread() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let p: runstav::methods::agents::StartParams =
+            serde_json::from_value(json!({"profile": "mock-claude", "cwd": fx.work()})).unwrap();
+        let agents = &fx.front.core.agents;
+        let sid = agents
+            .start(&fx.front, p, &crate::runner::user())
             .await
-            .unwrap();
-        // another task runs while the resume waits on the disk
-        tokio::task::yield_now().await;
-        slow.release();
-    };
-    let (resumed, ()) = tokio::join!(
-        crate::agents::session::resume_closed(agents, &fx.front, &sid),
-        other
-    );
-    resumed.expect("the session resumes");
+            .expect("a session")
+            .id;
+        agents.find(&sid).unwrap().close_now().await;
+        let meta = fx
+            .dir
+            .path()
+            .join(format!("hub/transcripts/{sid}.meta.json"));
+        // the disk: the resume's read of the meta file waits until it is told to go on
+        let slow = crate::fsio::disk::slow(&meta);
+        let slow = std::sync::Arc::new(slow);
+        let waiting = slow.clone();
+        let other = async {
+            crate::clock::blocking(move || waiting.reached())
+                .await
+                .unwrap();
+            // another task runs while the resume waits on the disk
+            tokio::task::yield_now().await;
+            slow.release();
+        };
+        let (resumed, ()) = tokio::join!(
+            crate::agents::session::resume_closed(agents, &fx.front, &sid),
+            other
+        );
+        resumed.expect("the session resumes");
+    })
 }

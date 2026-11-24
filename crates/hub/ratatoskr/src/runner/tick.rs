@@ -798,51 +798,53 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn tasks_starting_together_all_get_the_job_branchs_commit() {
-        // the task that lost the race to make the branch took the branch's name as its base, which moved when the
-        // first task merged: its own merge was refused ever after
-        let dir = tempfile::tempdir().unwrap();
-        let repo = dir.path();
-        let ok = crate::proc::Command::new("git")
-            .current_dir(repo)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env(stig::HOME_VAR, repo)
-            .args(["init", "-q"])
-            .status_async()
-            .await
-            .unwrap()
-            .success()
-            && crate::proc::Command::new("git")
+    #[test]
+    fn tasks_starting_together_all_get_the_job_branchs_commit() {
+        saman::block_on_current(async move {
+            // the task that lost the race to make the branch took the branch's name as its base, which moved when the
+            // first task merged: its own merge was refused ever after
+            let dir = tempfile::tempdir().unwrap();
+            let repo = dir.path();
+            let ok = crate::proc::Command::new("git")
                 .current_dir(repo)
                 .env("GIT_CONFIG_NOSYSTEM", "1")
                 .env(stig::HOME_VAR, repo)
-                .args([
-                    "-c",
-                    "user.name=t",
-                    "-c",
-                    "user.email=t@t",
-                    "commit",
-                    "-q",
-                    "--allow-empty",
-                    "-m",
-                    "i",
-                ])
+                .args(["init", "-q"])
                 .status_async()
                 .await
                 .unwrap()
-                .success();
-        assert!(ok);
-        let head = git(repo, &["rev-parse", "HEAD"]).await.unwrap();
-        let (a, b, c, d) = tokio::join!(
-            branch_tip(repo, "job/j"),
-            branch_tip(repo, "job/j"),
-            branch_tip(repo, "job/j"),
-            branch_tip(repo, "job/j"),
-        );
-        assert_eq!(
-            [a, b, c, d],
-            [head.clone(), head.clone(), head.clone(), head]
-        );
+                .success()
+                && crate::proc::Command::new("git")
+                    .current_dir(repo)
+                    .env("GIT_CONFIG_NOSYSTEM", "1")
+                    .env(stig::HOME_VAR, repo)
+                    .args([
+                        "-c",
+                        "user.name=t",
+                        "-c",
+                        "user.email=t@t",
+                        "commit",
+                        "-q",
+                        "--allow-empty",
+                        "-m",
+                        "i",
+                    ])
+                    .status_async()
+                    .await
+                    .unwrap()
+                    .success();
+            assert!(ok);
+            let head = git(repo, &["rev-parse", "HEAD"]).await.unwrap();
+            let (a, b, c, d) = tokio::join!(
+                branch_tip(repo, "job/j"),
+                branch_tip(repo, "job/j"),
+                branch_tip(repo, "job/j"),
+                branch_tip(repo, "job/j"),
+            );
+            assert_eq!(
+                [a, b, c, d],
+                [head.clone(), head.clone(), head.clone(), head]
+            );
+        })
     }
 }

@@ -46,7 +46,7 @@ thread_local! {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 #[cfg(target_os = "linux")]

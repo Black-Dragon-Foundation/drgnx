@@ -75,7 +75,7 @@ pub struct Hub {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 impl Hub {

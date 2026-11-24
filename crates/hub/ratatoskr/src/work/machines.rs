@@ -140,7 +140,7 @@ pub struct Machines {
 
 impl Machines {
     fn lock(&self) -> std::sync::MutexGuard<'_, Registry> {
-        self.reg.lock().expect("machines")
+        saman::lock(&self.reg)
     }
 }
 

@@ -107,7 +107,7 @@ fn last(v: &Value) -> &str {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(&m)
 }
 
 /// Whether E is GCE's "not found".
@@ -1294,264 +1294,273 @@ mod tests {
     }
 
     // [B] the mock's virtual clock and the sweeper's NOW values
-    #[tokio::test]
-    async fn a_stopped_vm_is_deleted_by_the_sweeper() {
-        let m = Mock::start();
-        let gcp = m.gcp();
-        let a = gcp
-            .start(&req("tok-a", "drgnx-a", Market::OnDemand))
-            .await
-            .unwrap();
-        let b = gcp
-            .start(&req("tok-b", "drgnx-b", Market::Spot))
-            .await
-            .unwrap();
-        let c = gcp
-            .start(&req("tok-c", "drgnx-c", Market::Spot))
-            .await
-            .unwrap();
-        assert_eq!(a.id, "us-central1-a/drgnx-a");
-        assert_eq!(
-            gcp.describe(&a.id).await.unwrap().state,
-            InstanceState::Running
-        );
-        // a power-off inside the guest stops a GCE VM: its disk bills on and its deadline is cleared (H6)
-        m.knob("poweroff", json!({"id": numeric_id(&m, "drgnx-a").await}))
-            .await;
-        assert_eq!(
-            gcp.describe(&a.id).await.unwrap().state,
-            InstanceState::Stopped
-        );
-        let bounds = Bounds {
-            lifetime_s: 8 * 3600,
-            unreachable_s: 300,
-        };
-        let mut s = Sweeper::new(HUB, bounds).with_idle(900);
-        // b's watchdog reported it idle (through `serve`); c is busy
-        s.idle_since(&b.id, Some(T0));
-        let all = |_: &str| true;
-        assert_eq!(
-            done(s.pass(&gcp, T0 + 10, &all, CapState::Under).await),
-            [(a.id.clone(), Ended::Stopped)],
-            "a stopped VM is deleted, whoever stopped it"
-        );
-        assert!(done(s.pass(&gcp, T0 + 899, &all, CapState::Under).await).is_empty());
-        assert_eq!(
-            done(s.pass(&gcp, T0 + 900, &all, CapState::Under).await),
-            [(b.id.clone(), Ended::Idle)],
-            "on GCP the idle stop is the hub's delete"
-        );
-        for gone in [&a.id, &b.id] {
-            assert_eq!(gcp.describe(gone).await.unwrap().state, InstanceState::Gone);
-        }
-        let left: Vec<String> = gcp
-            .list_ours()
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|i| i.id)
-            .collect();
-        assert_eq!(left, std::slice::from_ref(&c.id));
-        // deleting one already gone is what an end wants
-        gcp.end(&a.id).await.unwrap();
+    #[test]
+    fn a_stopped_vm_is_deleted_by_the_sweeper() {
+        saman::block_on_current(async move {
+            let m = Mock::start();
+            let gcp = m.gcp();
+            let a = gcp
+                .start(&req("tok-a", "drgnx-a", Market::OnDemand))
+                .await
+                .unwrap();
+            let b = gcp
+                .start(&req("tok-b", "drgnx-b", Market::Spot))
+                .await
+                .unwrap();
+            let c = gcp
+                .start(&req("tok-c", "drgnx-c", Market::Spot))
+                .await
+                .unwrap();
+            assert_eq!(a.id, "us-central1-a/drgnx-a");
+            assert_eq!(
+                gcp.describe(&a.id).await.unwrap().state,
+                InstanceState::Running
+            );
+            // a power-off inside the guest stops a GCE VM: its disk bills on and its deadline is cleared (H6)
+            m.knob("poweroff", json!({"id": numeric_id(&m, "drgnx-a").await}))
+                .await;
+            assert_eq!(
+                gcp.describe(&a.id).await.unwrap().state,
+                InstanceState::Stopped
+            );
+            let bounds = Bounds {
+                lifetime_s: 8 * 3600,
+                unreachable_s: 300,
+            };
+            let mut s = Sweeper::new(HUB, bounds).with_idle(900);
+            // b's watchdog reported it idle (through `serve`); c is busy
+            s.idle_since(&b.id, Some(T0));
+            let all = |_: &str| true;
+            assert_eq!(
+                done(s.pass(&gcp, T0 + 10, &all, CapState::Under).await),
+                [(a.id.clone(), Ended::Stopped)],
+                "a stopped VM is deleted, whoever stopped it"
+            );
+            assert!(done(s.pass(&gcp, T0 + 899, &all, CapState::Under).await).is_empty());
+            assert_eq!(
+                done(s.pass(&gcp, T0 + 900, &all, CapState::Under).await),
+                [(b.id.clone(), Ended::Idle)],
+                "on GCP the idle stop is the hub's delete"
+            );
+            for gone in [&a.id, &b.id] {
+                assert_eq!(gcp.describe(gone).await.unwrap().state, InstanceState::Gone);
+            }
+            let left: Vec<String> = gcp
+                .list_ours()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|i| i.id)
+                .collect();
+            assert_eq!(left, std::slice::from_ref(&c.id));
+            // deleting one already gone is what an end wants
+            gcp.end(&a.id).await.unwrap();
+        })
     }
 
     // [B] the mock's virtual clock: the deadline passes when the test moves it, with no hub running
-    #[tokio::test]
-    async fn the_deadline_deletes_with_the_hub_down() {
-        let m = Mock::start();
-        let (id, deadline) = {
-            let gcp = m.gcp();
-            let rules = ensure_firewall(&gcp).await.unwrap();
-            assert_eq!(rules, ["drgnx-hub-1-ssh", "drgnx-hub-1-ssh6"]);
-            assert_eq!(
-                ensure_firewall(&gcp).await.unwrap(),
-                rules,
-                "found again, not made twice"
-            );
-            let started = gcp
-                .start(&req("tok-d", "drgnx-d", Market::Spot))
-                .await
-                .unwrap();
-            // a retry after a crash returns the same machine
-            let again = m
-                .gcp()
-                .start(&req("tok-d", "drgnx-d", Market::Spot))
-                .await
-                .unwrap();
-            assert_eq!(again, started);
-            let sch = gcp.scheduling(&started.id).await.unwrap();
-            assert!(sch.spot);
-            assert_eq!(sch.action, "DELETE");
-            let deadline = sch.termination.expect("every GCP machine has a deadline");
-            let info = gcp.describe(&started.id).await.unwrap();
-            assert_eq!(info.state, InstanceState::Running);
-            assert_eq!(info.tags.get(HUB_TAG).map(String::as_str), Some(HUB));
-            assert!(info.address.is_some());
-            assert!(
-                gcp.console(&started.id)
+    #[test]
+    fn the_deadline_deletes_with_the_hub_down() {
+        saman::block_on_current(async move {
+            let m = Mock::start();
+            let (id, deadline) = {
+                let gcp = m.gcp();
+                let rules = ensure_firewall(&gcp).await.unwrap();
+                assert_eq!(rules, ["drgnx-hub-1-ssh", "drgnx-hub-1-ssh6"]);
+                assert_eq!(
+                    ensure_firewall(&gcp).await.unwrap(),
+                    rules,
+                    "found again, not made twice"
+                );
+                let started = gcp
+                    .start(&req("tok-d", "drgnx-d", Market::Spot))
                     .await
-                    .unwrap()
-                    .contains("BEGIN SSH HOST KEY FINGERPRINTS")
-            );
-            let p = gcp.prices(&["n2-standard-4".into()]).await.unwrap();
-            let p = p.0["n2-standard-4"];
-            assert!(p.spot.is_some() && p.on_demand.is_some(), "{p:?}");
-            (
-                started.id,
-                deadline
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-            )
-        };
-        // the hub is gone: nothing of drgnx's runs, only the provider's clock
-        m.knob("clock", json!({"set": deadline - 1})).await;
-        assert_eq!(
-            m.gcp().describe(&id).await.unwrap().state,
-            InstanceState::Running
-        );
-        m.knob("clock", json!({"set": deadline})).await;
-        let back = m.gcp();
-        assert_eq!(back.describe(&id).await.unwrap().state, InstanceState::Gone);
-        assert!(back.list_ours().await.unwrap().is_empty());
-        // and the firewall rules carry the hub id, TCP 22 only
-        let r = m.resources().await;
-        let fw: Vec<&Value> = r["resources"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|x| x["kind"] == "firewall")
-            .collect();
-        assert_eq!(fw.len(), 2, "{r}");
-        for f in fw {
+                    .unwrap();
+                // a retry after a crash returns the same machine
+                let again = m
+                    .gcp()
+                    .start(&req("tok-d", "drgnx-d", Market::Spot))
+                    .await
+                    .unwrap();
+                assert_eq!(again, started);
+                let sch = gcp.scheduling(&started.id).await.unwrap();
+                assert!(sch.spot);
+                assert_eq!(sch.action, "DELETE");
+                let deadline = sch.termination.expect("every GCP machine has a deadline");
+                let info = gcp.describe(&started.id).await.unwrap();
+                assert_eq!(info.state, InstanceState::Running);
+                assert_eq!(info.tags.get(HUB_TAG).map(String::as_str), Some(HUB));
+                assert!(info.address.is_some());
+                assert!(
+                    gcp.console(&started.id)
+                        .await
+                        .unwrap()
+                        .contains("BEGIN SSH HOST KEY FINGERPRINTS")
+                );
+                let p = gcp.prices(&["n2-standard-4".into()]).await.unwrap();
+                let p = p.0["n2-standard-4"];
+                assert!(p.spot.is_some() && p.on_demand.is_some(), "{p:?}");
+                (
+                    started.id,
+                    deadline
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                )
+            };
+            // the hub is gone: nothing of drgnx's runs, only the provider's clock
+            m.knob("clock", json!({"set": deadline - 1})).await;
             assert_eq!(
-                f["data"]["allowed"],
-                json!([{"IPProtocol": "tcp", "ports": ["22"]}])
+                m.gcp().describe(&id).await.unwrap().state,
+                InstanceState::Running
             );
-            assert_eq!(f["data"]["targetTags"], json!(["drgnx-hub-1-ssh"]));
-            assert!(
-                f["data"]["description"]
-                    .as_str()
-                    .unwrap()
-                    .contains("drgnx-hub=hub-1")
+            m.knob("clock", json!({"set": deadline})).await;
+            let back = m.gcp();
+            assert_eq!(back.describe(&id).await.unwrap().state, InstanceState::Gone);
+            assert!(back.list_ours().await.unwrap().is_empty());
+            // and the firewall rules carry the hub id, TCP 22 only
+            let r = m.resources().await;
+            let fw: Vec<&Value> = r["resources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|x| x["kind"] == "firewall")
+                .collect();
+            assert_eq!(fw.len(), 2, "{r}");
+            for f in fw {
+                assert_eq!(
+                    f["data"]["allowed"],
+                    json!([{"IPProtocol": "tcp", "ports": ["22"]}])
+                );
+                assert_eq!(f["data"]["targetTags"], json!(["drgnx-hub-1-ssh"]));
+                assert!(
+                    f["data"]["description"]
+                        .as_str()
+                        .unwrap()
+                        .contains("drgnx-hub=hub-1")
+                );
+            }
+            assert_eq!(
+                r["unknown_requests"],
+                json!([]),
+                "every call is one the mock knows"
             );
-        }
-        assert_eq!(
-            r["unknown_requests"],
-            json!([]),
-            "every call is one the mock knows"
-        );
-        // an expired token is a login, never a retry
-        m.knob("expire", json!({})).await;
-        assert!(matches!(
-            back.describe(&id).await,
-            Err(CloudError::NeedsLogin(_))
-        ));
+            // an expired token is a login, never a retry
+            m.knob("expire", json!({})).await;
+            assert!(matches!(
+                back.describe(&id).await,
+                Err(CloudError::NeedsLogin(_))
+            ));
+        })
     }
 
     // [B]
-    #[tokio::test]
-    async fn a_shared_project_gets_the_conditional_role_warning() {
-        let m = Mock::start();
-        let gcp = m.gcp();
-        let member = "user:me@example.org";
-        gcp.start(&req("tok-s", "drgnx-s", Market::Spot))
-            .await
-            .unwrap();
-        // a project of drgnx's own (its machines only): the plain binding
-        let s = setup_check(&gcp, member).await.unwrap();
-        assert!(s.others.is_empty() && s.warning.is_none(), "{s:?}");
-        assert!(
-            s.commands
+    #[test]
+    fn a_shared_project_gets_the_conditional_role_warning() {
+        saman::block_on_current(async move {
+            let m = Mock::start();
+            let gcp = m.gcp();
+            let member = "user:me@example.org";
+            gcp.start(&req("tok-s", "drgnx-s", Market::Spot))
+                .await
+                .unwrap();
+            // a project of drgnx's own (its machines only): the plain binding
+            let s = setup_check(&gcp, member).await.unwrap();
+            assert!(s.others.is_empty() && s.warning.is_none(), "{s:?}");
+            assert!(
+                s.commands
+                    .iter()
+                    .any(|c| c.contains("add-iam-policy-binding p1")
+                        && c.contains("--condition=None")),
+                "{s:?}"
+            );
+            assert!(
+                s.commands
+                    .iter()
+                    .any(|c| c.contains("gcloud iam roles create drgnxRunner --project=p1")),
+                "{s:?}"
+            );
+            // a VM drgnx did not start: a warning, and the role bound only to instances named drgnx-
+            m.knob(
+                "seed",
+                json!({"provider": "gcp", "id": "web-1", "tags": {}}),
+            )
+            .await;
+            let s = setup_check(&gcp, member).await.unwrap();
+            assert_eq!(s.others, ["us-central1-a/web-1"]);
+            let w = s.warning.clone().unwrap();
+            assert!(w.contains("web-1") && w.contains("condition"), "{w}");
+            let bind = s
+                .commands
                 .iter()
-                .any(|c| c.contains("add-iam-policy-binding p1") && c.contains("--condition=None")),
-            "{s:?}"
-        );
-        assert!(
-            s.commands
-                .iter()
-                .any(|c| c.contains("gcloud iam roles create drgnxRunner --project=p1")),
-            "{s:?}"
-        );
-        // a VM drgnx did not start: a warning, and the role bound only to instances named drgnx-
-        m.knob(
-            "seed",
-            json!({"provider": "gcp", "id": "web-1", "tags": {}}),
-        )
-        .await;
-        let s = setup_check(&gcp, member).await.unwrap();
-        assert_eq!(s.others, ["us-central1-a/web-1"]);
-        let w = s.warning.clone().unwrap();
-        assert!(w.contains("web-1") && w.contains("condition"), "{w}");
-        let bind = s
-            .commands
-            .iter()
-            .find(|c| c.contains("add-iam-policy-binding"))
-            .unwrap();
-        assert!(bind.contains(&condition("p1")), "{bind}");
-        assert!(bind.contains(member), "{bind}");
-        let cond = condition("p1");
-        assert!(
-            cond.contains("resource.name.startsWith(\"projects/p1/zones/\")"),
-            "{cond}"
-        );
-        assert!(
-            cond.contains("resource.name.extract(\"/instances/{name}\").startsWith(\"drgnx-\")"),
-            "{cond}"
-        );
-        assert!(
-            !cond.contains(','),
-            "gcloud's --condition splits on commas: {cond}"
-        );
-        assert!(
-            cond.contains("resource.type != \"compute.googleapis.com/Instance\""),
-            "{cond}"
-        );
-        // the role: what drgnx calls, and never a stop, a service account or IAM
-        let p = permissions();
-        for want in [
-            "compute.instances.create",
-            "compute.instances.delete",
-            "compute.instances.get",
-            "compute.instances.list",
-            "compute.instances.getSerialPortOutput",
-            "compute.firewalls.create",
-            "compute.images.getFromFamily",
-            "compute.zoneOperations.get",
-        ] {
-            assert!(p.iter().any(|x| x == want), "{want} in the role");
-        }
-        for never in [
-            "compute.instances.stop",
-            "compute.instances.setServiceAccount",
-            "iam.serviceAccounts.actAs",
-        ] {
-            assert!(!p.iter().any(|x| x == never), "{never} is not in the role");
-        }
-        assert!(!p.iter().any(|x| x.contains("setIamPolicy")), "{p:?}");
-        // the pre-flight tests every one of them, and names a missing one and the other VM
-        m.knob(
-            "deny-permissions",
-            json!({"permissions": ["compute.instances.delete"]}),
-        )
-        .await;
-        let checks = gcp.preflight().await;
-        let line = |n: &str| {
-            checks
-                .iter()
-                .find(|c| c.name == n)
-                .unwrap_or_else(|| panic!("no {n}: {checks:?}"))
-        };
-        assert!(line("credentials").ok, "{checks:?}");
-        assert!(line("base image").ok, "{checks:?}");
-        let perm = line("permissions");
-        assert!(
-            !perm.ok && perm.detail.contains("compute.instances.delete"),
-            "{perm:?}"
-        );
-        let other = line("other machines");
-        assert!(!other.ok && other.detail.contains("web-1"), "{other:?}");
-        assert!(line("firewall rules").ok, "{checks:?}");
+                .find(|c| c.contains("add-iam-policy-binding"))
+                .unwrap();
+            assert!(bind.contains(&condition("p1")), "{bind}");
+            assert!(bind.contains(member), "{bind}");
+            let cond = condition("p1");
+            assert!(
+                cond.contains("resource.name.startsWith(\"projects/p1/zones/\")"),
+                "{cond}"
+            );
+            assert!(
+                cond.contains(
+                    "resource.name.extract(\"/instances/{name}\").startsWith(\"drgnx-\")"
+                ),
+                "{cond}"
+            );
+            assert!(
+                !cond.contains(','),
+                "gcloud's --condition splits on commas: {cond}"
+            );
+            assert!(
+                cond.contains("resource.type != \"compute.googleapis.com/Instance\""),
+                "{cond}"
+            );
+            // the role: what drgnx calls, and never a stop, a service account or IAM
+            let p = permissions();
+            for want in [
+                "compute.instances.create",
+                "compute.instances.delete",
+                "compute.instances.get",
+                "compute.instances.list",
+                "compute.instances.getSerialPortOutput",
+                "compute.firewalls.create",
+                "compute.images.getFromFamily",
+                "compute.zoneOperations.get",
+            ] {
+                assert!(p.iter().any(|x| x == want), "{want} in the role");
+            }
+            for never in [
+                "compute.instances.stop",
+                "compute.instances.setServiceAccount",
+                "iam.serviceAccounts.actAs",
+            ] {
+                assert!(!p.iter().any(|x| x == never), "{never} is not in the role");
+            }
+            assert!(!p.iter().any(|x| x.contains("setIamPolicy")), "{p:?}");
+            // the pre-flight tests every one of them, and names a missing one and the other VM
+            m.knob(
+                "deny-permissions",
+                json!({"permissions": ["compute.instances.delete"]}),
+            )
+            .await;
+            let checks = gcp.preflight().await;
+            let line = |n: &str| {
+                checks
+                    .iter()
+                    .find(|c| c.name == n)
+                    .unwrap_or_else(|| panic!("no {n}: {checks:?}"))
+            };
+            assert!(line("credentials").ok, "{checks:?}");
+            assert!(line("base image").ok, "{checks:?}");
+            let perm = line("permissions");
+            assert!(
+                !perm.ok && perm.detail.contains("compute.instances.delete"),
+                "{perm:?}"
+            );
+            let other = line("other machines");
+            assert!(!other.ok && other.detail.contains("web-1"), "{other:?}");
+            assert!(line("firewall rules").ok, "{checks:?}");
+        })
     }
 }

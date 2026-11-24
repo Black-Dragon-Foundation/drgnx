@@ -175,33 +175,36 @@ mod tests {
         path
     }
 
-    #[tokio::test]
-    async fn no_file_is_schema_0_and_no_events_then_the_file_is_read_once_it_is_there() {
-        let dir = tempfile::tempdir().unwrap();
-        let w = WorkDb::spawn(dir.path().join("work.db")).unwrap();
-        assert_eq!(w.schema().await.unwrap(), 0);
-        let page = w.events_since(None, None).await.unwrap();
-        assert_eq!(
-            serde_json::to_value(&page).unwrap(),
-            json!({"since": 0, "last": 0, "events": []})
-        );
-        assert_eq!(w.events_since(Some(7), None).await.unwrap().last, 7);
-        assert_eq!(w.last_event_id().await.unwrap(), 0);
-        assert!(!dir.path().join("work.db").exists(), "a read makes no file");
-        db(
-            dir.path(),
-            "create table meta(key text primary key, value text); insert into meta values ('schema', '6');",
-        );
-        assert_eq!(w.schema().await.unwrap(), 6);
-        // a schema-6 file without an event table yet: no events, not an error
-        assert!(w.events_since(None, None).await.unwrap().events.is_empty());
-        assert_eq!(w.last_event_id().await.unwrap(), 0);
+    #[test]
+    fn no_file_is_schema_0_and_no_events_then_the_file_is_read_once_it_is_there() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let w = WorkDb::spawn(dir.path().join("work.db")).unwrap();
+            assert_eq!(w.schema().await.unwrap(), 0);
+            let page = w.events_since(None, None).await.unwrap();
+            assert_eq!(
+                serde_json::to_value(&page).unwrap(),
+                json!({"since": 0, "last": 0, "events": []})
+            );
+            assert_eq!(w.events_since(Some(7), None).await.unwrap().last, 7);
+            assert_eq!(w.last_event_id().await.unwrap(), 0);
+            assert!(!dir.path().join("work.db").exists(), "a read makes no file");
+            db(
+                dir.path(),
+                "create table meta(key text primary key, value text); insert into meta values ('schema', '6');",
+            );
+            assert_eq!(w.schema().await.unwrap(), 6);
+            // a schema-6 file without an event table yet: no events, not an error
+            assert!(w.events_since(None, None).await.unwrap().events.is_empty());
+            assert_eq!(w.last_event_id().await.unwrap(), 0);
+        })
     }
 
-    #[tokio::test]
-    async fn events_are_paged_oldest_first_with_their_data_parsed() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = db(
+    #[test]
+    fn events_are_paged_oldest_first_with_their_data_parsed() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let path = db(
             dir.path(),
             "create table event (id integer primary key autoincrement, at real, agent text, job text, task text, \
              kind text, summary text, data text);
@@ -209,32 +212,34 @@ mod tests {
              insert into event(at, kind, summary, data) values (2, 'note', 's2', 'not json');
              insert into event(at, agent, kind, data) values ('3', 7, 'note', '[1]');",
         );
-        let w = WorkDb::spawn(path).unwrap();
-        assert_eq!(w.last_event_id().await.unwrap(), 3);
-        let page = serde_json::to_value(w.events_since(Some(0), Some(2)).await.unwrap()).unwrap();
-        assert_eq!(
-            page,
-            json!({"since": 0, "last": 2, "events": [
+            let w = WorkDb::spawn(path).unwrap();
+            assert_eq!(w.last_event_id().await.unwrap(), 3);
+            let page =
+                serde_json::to_value(w.events_since(Some(0), Some(2)).await.unwrap()).unwrap();
+            assert_eq!(
+                page,
+                json!({"since": 0, "last": 2, "events": [
                 {"id": 1, "at": 1.5, "agent": "a", "job": "j", "kind": "job", "summary": "s1", "data": {"status": "stopped"}},
                 {"id": 2, "at": 2.0, "kind": "note", "summary": "s2"}]})
-        );
-        let rest = serde_json::to_value(w.events_since(Some(2), None).await.unwrap()).unwrap();
-        assert_eq!(
-            rest,
-            json!({"since": 2, "last": 3, "events": [{"id": 3, "at": 3.0, "agent": "7", "kind": "note"}]})
-        );
-        // the answer is what the registry says events/since returns
-        let m = runstav::registry::find("events/since").unwrap();
-        assert_eq!((m.check_result)(&page).unwrap(), page);
-        // a limit of 0 is the default, a huge one the maximum
-        assert_eq!(w.events_since(None, Some(0)).await.unwrap().events.len(), 3);
-        assert_eq!(
-            w.events_since(None, Some(u64::MAX))
-                .await
-                .unwrap()
-                .events
-                .len(),
-            3
-        );
+            );
+            let rest = serde_json::to_value(w.events_since(Some(2), None).await.unwrap()).unwrap();
+            assert_eq!(
+                rest,
+                json!({"since": 2, "last": 3, "events": [{"id": 3, "at": 3.0, "agent": "7", "kind": "note"}]})
+            );
+            // the answer is what the registry says events/since returns
+            let m = runstav::registry::find("events/since").unwrap();
+            assert_eq!((m.check_result)(&page).unwrap(), page);
+            // a limit of 0 is the default, a huge one the maximum
+            assert_eq!(w.events_since(None, Some(0)).await.unwrap().events.len(), 3);
+            assert_eq!(
+                w.events_since(None, Some(u64::MAX))
+                    .await
+                    .unwrap()
+                    .events
+                    .len(),
+                3
+            );
+        })
     }
 }

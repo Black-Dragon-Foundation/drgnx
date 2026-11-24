@@ -86,90 +86,96 @@ fn short(l: &Link) -> String {
     )
 }
 
-#[tokio::test]
-async fn the_trail_of_a_value_follows_its_operands_three_levels() {
-    let tmp = tempfile::tempdir().unwrap();
-    let r = Direct {
-        dir: tmp.path().to_owned(),
-        script: STOCK,
-        old: false,
-    };
-    let mut levels = Vec::new();
-    let t = trail(&r, "r1", 3, "shortfall", 3, Vec::new, |l| {
-        levels.push(l.len())
+#[test]
+fn the_trail_of_a_value_follows_its_operands_three_levels() {
+    saman::block_on_current(async move {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = Direct {
+            dir: tmp.path().to_owned(),
+            script: STOCK,
+            old: false,
+        };
+        let mut levels = Vec::new();
+        let t = trail(&r, "r1", 3, "shortfall", 3, Vec::new, |l| {
+            levels.push(l.len())
+        })
+        .await
+        .unwrap();
+        let got: Vec<String> = t.links.iter().map(short).collect();
+        assert_eq!(
+            got,
+            vec![
+                "1 shortfall: shortfall = 16 @stock.py 15 [item.min=10 item.qty=2 item.reserve=8]",
+                "2 item.min: self.min = 10 @stock.py 4 [minimum=10]",
+                "2 item.qty: self.qty = 2 @stock.py 3 [qty=2]",
+                // the last store before the stop: load's, not __init__'s 0
+                "2 item.reserve: item.reserve = 8 @stock.py 10 []",
+            ],
+            "{got:#?}"
+        );
+        // a level per replay; the parameters have no store, so the third level finds nothing
+        assert_eq!(levels, vec![1, 3, 0]);
+        assert!(t.note.is_none());
+        assert!(t.links.iter().all(|l| l.traced));
     })
-    .await
-    .unwrap();
-    let got: Vec<String> = t.links.iter().map(short).collect();
-    assert_eq!(
-        got,
-        vec![
-            "1 shortfall: shortfall = 16 @stock.py 15 [item.min=10 item.qty=2 item.reserve=8]",
-            "2 item.min: self.min = 10 @stock.py 4 [minimum=10]",
-            "2 item.qty: self.qty = 2 @stock.py 3 [qty=2]",
-            // the last store before the stop: load's, not __init__'s 0
-            "2 item.reserve: item.reserve = 8 @stock.py 10 []",
-        ],
-        "{got:#?}"
-    );
-    // a level per replay; the parameters have no store, so the third level finds nothing
-    assert_eq!(levels, vec![1, 3, 0]);
-    assert!(t.note.is_none());
-    assert!(t.links.iter().all(|l| l.traced));
 }
 
-#[tokio::test]
-async fn a_change_through_a_call_is_a_link_inside_the_method() {
-    let tmp = tempfile::tempdir().unwrap();
-    let r = Direct {
-        dir: tmp.path().to_owned(),
-        script: STOCK,
-        old: false,
-    };
-    let t = trail(&r, "r1", 3, "log", 1, Vec::new, |_| {})
-        .await
-        .unwrap();
-    let got: Vec<String> = t.links.iter().map(short).collect();
-    assert_eq!(
-        got,
-        vec!["1 log: log = [16] @stock.py 22 [s=16] inside list.append"],
-        "{got:#?}"
-    );
+#[test]
+fn a_change_through_a_call_is_a_link_inside_the_method() {
+    saman::block_on_current(async move {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = Direct {
+            dir: tmp.path().to_owned(),
+            script: STOCK,
+            old: false,
+        };
+        let t = trail(&r, "r1", 3, "log", 1, Vec::new, |_| {})
+            .await
+            .unwrap();
+        let got: Vec<String> = t.links.iter().map(short).collect();
+        assert_eq!(
+            got,
+            vec!["1 log: log = [16] @stock.py 22 [s=16] inside list.append"],
+            "{got:#?}"
+        );
+    })
 }
 
-#[tokio::test]
-async fn python_before_3_12_gets_labelled_candidates() {
-    let tmp = tempfile::tempdir().unwrap();
-    let r = Direct {
-        dir: tmp.path().to_owned(),
-        script: STOCK,
-        old: true,
-    };
-    let files = || vec![("/p/stock.py".to_owned(), STOCK.to_owned())];
-    let t = trail(&r, "r1", 3, "item.reserve", 3, files, |_| {})
-        .await
-        .unwrap();
-    let got: Vec<(String, u32, bool)> = t
-        .links
-        .iter()
-        .map(|l| (l.target.clone(), l.line, l.traced))
-        .collect();
-    assert_eq!(
-        got,
-        vec![
-            ("self.reserve".into(), 5, false),
-            ("item.reserve".into(), 10, false)
-        ]
-    );
-    assert!(
-        t.note
-            .as_deref()
-            .unwrap()
-            .contains("candidates, not traced")
-    );
-    // a plain name, augmented assignments included
-    let c = origin::candidates(&[("/p/a.py".into(), "x = 1\ny = x\nx += 2\n".into())], "x");
-    assert_eq!(c.iter().map(|l| l.line).collect::<Vec<_>>(), vec![1, 3]);
+#[test]
+fn python_before_3_12_gets_labelled_candidates() {
+    saman::block_on_current(async move {
+        let tmp = tempfile::tempdir().unwrap();
+        let r = Direct {
+            dir: tmp.path().to_owned(),
+            script: STOCK,
+            old: true,
+        };
+        let files = || vec![("/p/stock.py".to_owned(), STOCK.to_owned())];
+        let t = trail(&r, "r1", 3, "item.reserve", 3, files, |_| {})
+            .await
+            .unwrap();
+        let got: Vec<(String, u32, bool)> = t
+            .links
+            .iter()
+            .map(|l| (l.target.clone(), l.line, l.traced))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("self.reserve".into(), 5, false),
+                ("item.reserve".into(), 10, false)
+            ]
+        );
+        assert!(
+            t.note
+                .as_deref()
+                .unwrap()
+                .contains("candidates, not traced")
+        );
+        // a plain name, augmented assignments included
+        let c = origin::candidates(&[("/p/a.py".into(), "x = 1\ny = x\nx += 2\n".into())], "x");
+        assert_eq!(c.iter().map(|l| l.line).collect::<Vec<_>>(), vec![1, 3]);
+    })
 }
 
 #[test]

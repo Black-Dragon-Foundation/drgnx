@@ -153,7 +153,7 @@ pub struct Trails {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 impl Trails {

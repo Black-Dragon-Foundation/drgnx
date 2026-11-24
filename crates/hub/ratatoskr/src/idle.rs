@@ -365,16 +365,18 @@ mod tests {
 
     /// The same commit is another build when its build id differs (a rebuild that says `unknown` or the same
     /// `HEAD-dirty`), or when the file names none (a build from before the id); only the same pair is the same build.
-    #[tokio::test]
-    async fn the_same_commit_with_another_build_id_is_another_build() {
-        let dir = tempfile::tempdir().unwrap();
-        let said = |text: &str| version_program(dir.path(), text);
-        let p = said(r#"{"commit":"abc","build_id":"7"}"#);
-        assert_eq!(build_at(&p, "abc", "7").await, Build::Same);
-        assert!(matches!(build_at(&p, "abc", "6").await, Build::Other(_)));
-        assert!(matches!(build_at(&p, "xyz", "7").await, Build::Other(_)));
-        let p = said(r#"{"commit":"abc"}"#);
-        assert!(matches!(build_at(&p, "abc", "7").await, Build::Other(_)));
+    #[test]
+    fn the_same_commit_with_another_build_id_is_another_build() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let said = |text: &str| version_program(dir.path(), text);
+            let p = said(r#"{"commit":"abc","build_id":"7"}"#);
+            assert_eq!(build_at(&p, "abc", "7").await, Build::Same);
+            assert!(matches!(build_at(&p, "abc", "6").await, Build::Other(_)));
+            assert!(matches!(build_at(&p, "xyz", "7").await, Build::Other(_)));
+            let p = said(r#"{"commit":"abc"}"#);
+            assert!(matches!(build_at(&p, "abc", "7").await, Build::Other(_)));
+        })
     }
 
     /// A source the test drives: the stamp, what the build says and the turns.

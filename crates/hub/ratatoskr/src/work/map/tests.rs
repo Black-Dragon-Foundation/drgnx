@@ -613,10 +613,7 @@ fn rows_map(n: u64, width: u32) -> (Arc<Map>, Inner, ViewId) {
 }
 
 fn log(map: &Map) -> Vec<&'static str> {
-    map.log
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
+    saman::lock(&map.log).clone()
 }
 
 /// [A] A view gets its model and rows for a relayout and a delta; hidden, it gets nothing (its editor hid it).
@@ -1610,72 +1607,74 @@ fn a_proposal_on_the_strip_says_what_to_approve_and_which_job() {
 
 /// `work/target/set` writes a plan's or spec's `target_at` into its data, null removes it, and an id that is no
 /// live entity answers false.
-#[tokio::test]
-async fn the_target_of_a_plan_is_written_and_null_clears_it() {
-    use crate::agents::session::attach_tests::Fx;
-    use runstav::methods::work::TargetSetParams;
-    let fx = Fx::new();
-    let db = &fx.front.writer.db;
-    db.write(
-        urdr::graph::TxMeta::new("user", urdr::graph::Class::User, "test"),
-        |tx| {
-            urdr::graph::entity::create(
-                tx,
-                urdr::graph::entity::EntityNew {
-                    id: "plan:p1".into(),
-                    kind: "plan".into(),
-                    project: None,
-                    title: Some("p".into()),
-                    status: None,
-                    body: None,
-                    priority: None,
-                    assignee: None,
-                    data: serde_json::json!({}),
-                    origin: urdr::graph::entity::Origin::Recorded,
-                    source: None,
-                },
-            )?;
-            Ok(())
-        },
-    )
-    .await
-    .unwrap();
-    let caller = crate::dispatch::Caller {
-        class: runstav::registry::Class::User,
-        sid: None,
-        job: None,
-        conn_id: 1,
-    };
-    let set = |item: &str, at: Option<f64>| TargetSetParams {
-        item: runstav::types::Bounded(item.into()),
-        target_at: at,
-    };
-    assert!(
-        super::target_set(&fx.front, &caller, set("plan:p1", Some(1.8e9)))
-            .await
-            .unwrap()
-    );
-    let read = || {
-        db.read(|c| {
-            Ok(c.query_row(
-                "select json_extract(data, '$.target_at') from entity where id = 'plan:p1'",
-                [],
-                |r| r.get::<_, Option<f64>>(0),
-            )?)
-        })
-    };
-    assert_eq!(read().await.unwrap(), Some(1.8e9));
-    assert!(
-        super::target_set(&fx.front, &caller, set("plan:p1", None))
-            .await
-            .unwrap()
-    );
-    assert_eq!(read().await.unwrap(), None);
-    assert!(
-        !super::target_set(&fx.front, &caller, set("plan:nope", Some(1.0)))
-            .await
-            .unwrap()
-    );
+#[test]
+fn the_target_of_a_plan_is_written_and_null_clears_it() {
+    saman::block_on_current(async move {
+        use crate::agents::session::attach_tests::Fx;
+        use runstav::methods::work::TargetSetParams;
+        let fx = Fx::new();
+        let db = &fx.front.writer.db;
+        db.write(
+            urdr::graph::TxMeta::new("user", urdr::graph::Class::User, "test"),
+            |tx| {
+                urdr::graph::entity::create(
+                    tx,
+                    urdr::graph::entity::EntityNew {
+                        id: "plan:p1".into(),
+                        kind: "plan".into(),
+                        project: None,
+                        title: Some("p".into()),
+                        status: None,
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: serde_json::json!({}),
+                        origin: urdr::graph::entity::Origin::Recorded,
+                        source: None,
+                    },
+                )?;
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        let caller = crate::dispatch::Caller {
+            class: runstav::registry::Class::User,
+            sid: None,
+            job: None,
+            conn_id: 1,
+        };
+        let set = |item: &str, at: Option<f64>| TargetSetParams {
+            item: runstav::types::Bounded(item.into()),
+            target_at: at,
+        };
+        assert!(
+            super::target_set(&fx.front, &caller, set("plan:p1", Some(1.8e9)))
+                .await
+                .unwrap()
+        );
+        let read = || {
+            db.read(|c| {
+                Ok(c.query_row(
+                    "select json_extract(data, '$.target_at') from entity where id = 'plan:p1'",
+                    [],
+                    |r| r.get::<_, Option<f64>>(0),
+                )?)
+            })
+        };
+        assert_eq!(read().await.unwrap(), Some(1.8e9));
+        assert!(
+            super::target_set(&fx.front, &caller, set("plan:p1", None))
+                .await
+                .unwrap()
+        );
+        assert_eq!(read().await.unwrap(), None);
+        assert!(
+            !super::target_set(&fx.front, &caller, set("plan:nope", Some(1.0)))
+                .await
+                .unwrap()
+        );
+    })
 }
 /// A session on TASK (a bare task id), in state STATE.
 fn task_session(core: &mut Core, i: u64, task: &str, state: State) {
@@ -1757,64 +1756,68 @@ fn a_plan_task_with_a_live_agent_is_a_task_item_linked_both_ways() {
 }
 
 /// [D] The store's reader: a task with no plan sits under a "No plan" plan item instead of being skipped.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_task_without_a_plan_sits_under_no_plan() {
-    use urdr::graph::entity::{self, EntityNew, Origin};
-    let dir = tempfile::tempdir().unwrap();
-    let front = Front::new(
-        runstav::proof::Cap::generate().unwrap(),
-        dir.path().join("hub-x.sock"),
-        crate::store::WorkDb::spawn(dir.path().join("work.db")).unwrap(),
-        norn::store::CoordDb::spawn(dir.path().join("work.db")),
-    );
-    front
-        .writer
-        .write(&crate::runner::service(), "test", |tx| {
-            let mut mk = |id: &str, kind: &str| {
-                entity::create(
-                    tx,
-                    EntityNew {
-                        id: id.into(),
-                        kind: kind.into(),
-                        project: None,
-                        title: Some(id.into()),
-                        status: None,
-                        body: None,
-                        priority: None,
-                        assignee: None,
-                        data: json!({}),
-                        origin: Origin::Recorded,
-                        source: None,
-                    },
-                )
-                .map(|e| e.n)
-                .map_err(|e| norn::store::CoordError::Refused(e.to_string()))
-            };
-            let plan = mk("plan:p1", "plan")?;
-            let t1 = mk("task:t1", "task")?;
-            mk("task:t2", "task")?;
-            urdr::graph::link::add(tx, plan, "parent_of", t1, None, Origin::Recorded, None)
-                .map_err(|e| norn::store::CoordError::Refused(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .unwrap();
-    let (events, _) = read_store(&front).await;
-    let task_plan = |id: &str| {
-        events.iter().find_map(|e| match e {
-            vegvisir::Event::Graph(vegvisir::GraphFact::Task { id: t, plan, .. }) if t == id => {
-                Some(plan.clone())
-            }
-            _ => None,
-        })
-    };
-    assert_eq!(task_plan("t1").as_deref(), Some("p1"));
-    assert_eq!(task_plan("t2").as_deref(), Some("no-plan"));
-    assert!(events.iter().any(|e| matches!(
-        e,
-        vegvisir::Event::Graph(vegvisir::GraphFact::Plan { id, title, .. })
-            if id == "no-plan" && title == "No plan"
-    )));
+#[test]
+fn a_task_without_a_plan_sits_under_no_plan() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        use urdr::graph::entity::{self, EntityNew, Origin};
+        let dir = tempfile::tempdir().unwrap();
+        let front = Front::new(
+            runstav::proof::Cap::generate().unwrap(),
+            dir.path().join("hub-x.sock"),
+            crate::store::WorkDb::spawn(dir.path().join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(dir.path().join("work.db")),
+        );
+        front
+            .writer
+            .write(&crate::runner::service(), "test", |tx| {
+                let mut mk = |id: &str, kind: &str| {
+                    entity::create(
+                        tx,
+                        EntityNew {
+                            id: id.into(),
+                            kind: kind.into(),
+                            project: None,
+                            title: Some(id.into()),
+                            status: None,
+                            body: None,
+                            priority: None,
+                            assignee: None,
+                            data: json!({}),
+                            origin: Origin::Recorded,
+                            source: None,
+                        },
+                    )
+                    .map(|e| e.n)
+                    .map_err(|e| norn::store::CoordError::Refused(e.to_string()))
+                };
+                let plan = mk("plan:p1", "plan")?;
+                let t1 = mk("task:t1", "task")?;
+                mk("task:t2", "task")?;
+                urdr::graph::link::add(tx, plan, "parent_of", t1, None, Origin::Recorded, None)
+                    .map_err(|e| norn::store::CoordError::Refused(e.to_string()))?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let (events, _) = read_store(&front).await;
+        let task_plan = |id: &str| {
+            events.iter().find_map(|e| match e {
+                vegvisir::Event::Graph(vegvisir::GraphFact::Task { id: t, plan, .. })
+                    if t == id =>
+                {
+                    Some(plan.clone())
+                }
+                _ => None,
+            })
+        };
+        assert_eq!(task_plan("t1").as_deref(), Some("p1"));
+        assert_eq!(task_plan("t2").as_deref(), Some("no-plan"));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            vegvisir::Event::Graph(vegvisir::GraphFact::Plan { id, title, .. })
+                if id == "no-plan" && title == "No plan"
+        )));
+    })
 }
 
 /// [D] A map opens in List mode: the model's descriptor says `list`, and the arrows walk the rows.

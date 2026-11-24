@@ -16,10 +16,7 @@ struct Fake {
 
 impl Probe for Fake {
     fn variables(&self, reference: i64) -> BoxFut<'_, villa::Result<Vec<Value>>> {
-        self.asked
-            .lock()
-            .unwrap()
-            .push(format!("variables {reference}"));
+        saman::lock(&self.asked).push(format!("variables {reference}"));
         let r = self
             .children
             .get(&reference)
@@ -33,10 +30,7 @@ impl Probe for Fake {
             .get(&expression)
             .cloned()
             .ok_or_else(|| villa::Error::invalid(format!("cannot evaluate {expression}")));
-        self.asked
-            .lock()
-            .unwrap()
-            .push(format!("evaluate {expression}"));
+        saman::lock(&self.asked).push(format!("evaluate {expression}"));
         Box::pin(async move { r })
     }
 }
@@ -90,198 +84,209 @@ fn to(n: &heap::Node, field: &str) -> Option<String> {
         .and_then(|f| f.to.clone())
 }
 
-#[tokio::test]
-async fn a_ring_and_a_shared_reference_are_three_objects() {
-    let (f, roots) = python();
-    let g = heap::walk(&f, Ident::Python, roots, Limits::default()).await;
-    assert_eq!(g.nodes.len(), 3, "a, b, c once each: {g:#?}");
-    let (a, b, c) = ("1001", "1002", "1003");
-    assert_eq!(to(node(&g, a), "next").as_deref(), Some(b));
-    assert_eq!(to(node(&g, b), "next").as_deref(), Some(c));
-    assert_eq!(
-        to(node(&g, c), "next").as_deref(),
-        Some(a),
-        "the ring closes"
-    );
-    let root = |n: &str| {
-        g.roots
-            .iter()
-            .find(|(r, _)| r == n)
-            .and_then(|(_, id)| id.clone())
-    };
-    assert_eq!(root("shared"), root("b"), "shared is b");
-    assert_eq!(
-        node(&g, a)
-            .fields
-            .iter()
-            .find(|f| f.name == "v")
-            .map(|f| f.value.as_str()),
-        Some("1")
-    );
-    assert!(
-        node(&g, a)
-            .fields
-            .iter()
-            .all(|f| f.name != "special variables"),
-        "debugpy's groups are not fields"
-    );
-    assert_eq!(g.cut, 0);
-    // each object is expanded once
-    let asked = f.asked.lock().unwrap();
-    let expanded = asked.iter().filter(|a| a.starts_with("variables")).count();
-    assert_eq!(expanded, 3, "{asked:?}");
+#[test]
+fn a_ring_and_a_shared_reference_are_three_objects() {
+    saman::block_on_current(async move {
+        let (f, roots) = python();
+        let g = heap::walk(&f, Ident::Python, roots, Limits::default()).await;
+        assert_eq!(g.nodes.len(), 3, "a, b, c once each: {g:#?}");
+        let (a, b, c) = ("1001", "1002", "1003");
+        assert_eq!(to(node(&g, a), "next").as_deref(), Some(b));
+        assert_eq!(to(node(&g, b), "next").as_deref(), Some(c));
+        assert_eq!(
+            to(node(&g, c), "next").as_deref(),
+            Some(a),
+            "the ring closes"
+        );
+        let root = |n: &str| {
+            g.roots
+                .iter()
+                .find(|(r, _)| r == n)
+                .and_then(|(_, id)| id.clone())
+        };
+        assert_eq!(root("shared"), root("b"), "shared is b");
+        assert_eq!(
+            node(&g, a)
+                .fields
+                .iter()
+                .find(|f| f.name == "v")
+                .map(|f| f.value.as_str()),
+            Some("1")
+        );
+        assert!(
+            node(&g, a)
+                .fields
+                .iter()
+                .all(|f| f.name != "special variables"),
+            "debugpy's groups are not fields"
+        );
+        assert_eq!(g.cut, 0);
+        // each object is expanded once
+        let asked = saman::lock(&f.asked);
+        let expanded = asked.iter().filter(|a| a.starts_with("variables")).count();
+        assert_eq!(expanded, 3, "{asked:?}");
+    })
 }
 
-#[tokio::test]
-async fn the_limit_cuts_and_counts_what_it_left() {
-    let (f, roots) = python();
-    let g = heap::walk(
-        &f,
-        Ident::Python,
-        roots,
-        Limits {
-            nodes: 2,
-            ..Limits::default()
-        },
-    )
-    .await;
-    assert_eq!(g.nodes.len(), 2, "{g:#?}");
-    assert!(
-        g.cut >= 1,
-        "the reference past the limit is counted: {g:#?}"
-    );
+#[test]
+fn the_limit_cuts_and_counts_what_it_left() {
+    saman::block_on_current(async move {
+        let (f, roots) = python();
+        let g = heap::walk(
+            &f,
+            Ident::Python,
+            roots,
+            Limits {
+                nodes: 2,
+                ..Limits::default()
+            },
+        )
+        .await;
+        assert_eq!(g.nodes.len(), 2, "{g:#?}");
+        assert!(
+            g.cut >= 1,
+            "the reference past the limit is counted: {g:#?}"
+        );
+    })
 }
 
 /// delve: a pointer `*main.Node` has one child `(*a)`, the struct, whose children are the fields.
-#[tokio::test]
-async fn a_go_pointers_object_is_its_one_dereferenced_child() {
-    let mut f = Fake::default();
-    let objs = [("1", 2), ("2", 3), ("3", 1)];
-    let addr = |k: i64| format!("{} = 0x{:x}", 4096 + k * 16, 4096 + k * 16);
-    let mut roots = vec![];
-    for (name, k) in [("a", 1i64), ("b", 2), ("c", 3), ("shared", 2)] {
-        roots.push(var(name, "*main.Node {V: …}", "*main.Node", name, k * 10));
-    }
-    for (name, k) in [("a", 1i64), ("b", 2), ("c", 3), ("shared", 2)] {
-        let (mut e, mut k) = (name.to_owned(), k);
-        for _ in 0..4 {
-            let (v, next) = objs[k as usize - 1];
-            f.values.insert(format!("uintptr({e})"), addr(k));
-            // delve names the dereferenced struct "" and gives the path only as its evaluateName (measured)
-            let d = format!("(*{e})");
-            f.children.entry(k * 10).or_insert(vec![var(
-                "",
-                "main.Node {V: …}",
-                "main.Node",
-                &d,
-                k * 10 + 1,
-            )]);
-            f.children.entry(k * 10 + 1).or_insert(vec![
-                var("V", v, "int", &format!("{d}.V"), 0),
-                var(
-                    "Next",
-                    "*main.Node {V: …}",
-                    "*main.Node",
-                    &format!("{d}.Next"),
-                    next * 10,
-                ),
-            ]);
-            e = format!("{d}.Next");
-            k = next;
+#[test]
+fn a_go_pointers_object_is_its_one_dereferenced_child() {
+    saman::block_on_current(async move {
+        let mut f = Fake::default();
+        let objs = [("1", 2), ("2", 3), ("3", 1)];
+        let addr = |k: i64| format!("{} = 0x{:x}", 4096 + k * 16, 4096 + k * 16);
+        let mut roots = vec![];
+        for (name, k) in [("a", 1i64), ("b", 2), ("c", 3), ("shared", 2)] {
+            roots.push(var(name, "*main.Node {V: …}", "*main.Node", name, k * 10));
         }
-    }
-    let g = heap::walk(&f, Ident::Go, roots, Limits::default()).await;
-    assert_eq!(g.nodes.len(), 3, "{g:#?}");
-    let a = node(&g, "0x1010");
-    assert_eq!(a.ty, "main.Node");
-    assert_eq!(to(a, "Next").as_deref(), Some("0x1020"));
-    assert_eq!(to(node(&g, "0x1030"), "Next").as_deref(), Some("0x1010"));
+        for (name, k) in [("a", 1i64), ("b", 2), ("c", 3), ("shared", 2)] {
+            let (mut e, mut k) = (name.to_owned(), k);
+            for _ in 0..4 {
+                let (v, next) = objs[k as usize - 1];
+                f.values.insert(format!("uintptr({e})"), addr(k));
+                // delve names the dereferenced struct "" and gives the path only as its evaluateName (measured)
+                let d = format!("(*{e})");
+                f.children.entry(k * 10).or_insert(vec![var(
+                    "",
+                    "main.Node {V: …}",
+                    "main.Node",
+                    &d,
+                    k * 10 + 1,
+                )]);
+                f.children.entry(k * 10 + 1).or_insert(vec![
+                    var("V", v, "int", &format!("{d}.V"), 0),
+                    var(
+                        "Next",
+                        "*main.Node {V: …}",
+                        "*main.Node",
+                        &format!("{d}.Next"),
+                        next * 10,
+                    ),
+                ]);
+                e = format!("{d}.Next");
+                k = next;
+            }
+        }
+        let g = heap::walk(&f, Ident::Go, roots, Limits::default()).await;
+        assert_eq!(g.nodes.len(), 3, "{g:#?}");
+        let a = node(&g, "0x1010");
+        assert_eq!(a.ty, "main.Node");
+        assert_eq!(to(a, "Next").as_deref(), Some("0x1020"));
+        assert_eq!(to(node(&g, "0x1030"), "Next").as_deref(), Some("0x1010"));
+    })
 }
 
 /// lldb-dap: a pointer's children are the fields; `(void *)(E)` is the address.
-#[tokio::test]
-async fn a_native_pointer_is_named_by_its_address() {
-    let mut f = Fake::default();
-    let objs = [("1", 2), ("2", 3), ("3", 1)];
-    let addr = |k: i64| format!("0x{:016x}", 0x1000 + k * 0x20);
-    let mut roots = vec![];
-    for (name, k) in [("a", 1i64), ("b", 2), ("c", 3), ("shared", 2)] {
-        roots.push(var(name, &addr(k), "Node *", name, k * 10));
-    }
-    for (name, k) in [("a", 1i64), ("b", 2), ("c", 3), ("shared", 2)] {
-        let (mut e, mut k) = (name.to_owned(), k);
-        for _ in 0..4 {
-            let (v, next) = objs[k as usize - 1];
-            f.values.insert(format!("(void *)({e})"), addr(k));
-            f.children.entry(k * 10).or_insert(vec![
-                var("v", v, "int", &format!("{e}->v"), 0),
-                var(
-                    "next",
-                    &addr(next),
-                    "Node *",
-                    &format!("{e}->next"),
-                    next * 10,
-                ),
-            ]);
-            e = format!("{e}->next");
-            k = next;
+#[test]
+fn a_native_pointer_is_named_by_its_address() {
+    saman::block_on_current(async move {
+        let mut f = Fake::default();
+        let objs = [("1", 2), ("2", 3), ("3", 1)];
+        let addr = |k: i64| format!("0x{:016x}", 0x1000 + k * 0x20);
+        let mut roots = vec![];
+        for (name, k) in [("a", 1i64), ("b", 2), ("c", 3), ("shared", 2)] {
+            roots.push(var(name, &addr(k), "Node *", name, k * 10));
         }
-    }
-    let g = heap::walk(&f, Ident::Native, roots, Limits::default()).await;
-    assert_eq!(g.nodes.len(), 3, "{g:#?}");
-    assert_eq!(to(node(&g, &addr(3)), "next"), Some(addr(1)));
-    assert_eq!(node(&g, &addr(1)).ty, "Node *");
+        for (name, k) in [("a", 1i64), ("b", 2), ("c", 3), ("shared", 2)] {
+            let (mut e, mut k) = (name.to_owned(), k);
+            for _ in 0..4 {
+                let (v, next) = objs[k as usize - 1];
+                f.values.insert(format!("(void *)({e})"), addr(k));
+                f.children.entry(k * 10).or_insert(vec![
+                    var("v", v, "int", &format!("{e}->v"), 0),
+                    var(
+                        "next",
+                        &addr(next),
+                        "Node *",
+                        &format!("{e}->next"),
+                        next * 10,
+                    ),
+                ]);
+                e = format!("{e}->next");
+                k = next;
+            }
+        }
+        let g = heap::walk(&f, Ident::Native, roots, Limits::default()).await;
+        assert_eq!(g.nodes.len(), 3, "{g:#?}");
+        assert_eq!(to(node(&g, &addr(3)), "next"), Some(addr(1)));
+        assert_eq!(node(&g, &addr(1)).ty, "Node *");
+    })
 }
 
 /// No identity (an adapter not in the table): a tree, cut by the depth, and js-debug's internal slots skipped.
-#[tokio::test]
-async fn without_identity_the_walk_is_a_tree_cut_at_its_depth() {
-    let mut f = Fake::default();
-    let roots = vec![var("a", "Node", "Node", "a", 10)];
-    for d in 0..6 {
-        let e = format!("a{}", ".next".repeat(d));
-        f.children.insert(
-            10 + d as i64,
-            vec![
-                var("v", "1", "number", &format!("{e}.v"), 0),
-                var("next", "Node", "Node", &format!("{e}.next"), 11 + d as i64),
-                var(
-                    "[[Prototype]]",
-                    "Object",
-                    "Object",
-                    &format!("{e}[\"[[Prototype]]\"]"),
-                    500,
-                ),
-            ],
+#[test]
+fn without_identity_the_walk_is_a_tree_cut_at_its_depth() {
+    saman::block_on_current(async move {
+        let mut f = Fake::default();
+        let roots = vec![var("a", "Node", "Node", "a", 10)];
+        for d in 0..6 {
+            let e = format!("a{}", ".next".repeat(d));
+            f.children.insert(
+                10 + d as i64,
+                vec![
+                    var("v", "1", "number", &format!("{e}.v"), 0),
+                    var("next", "Node", "Node", &format!("{e}.next"), 11 + d as i64),
+                    var(
+                        "[[Prototype]]",
+                        "Object",
+                        "Object",
+                        &format!("{e}[\"[[Prototype]]\"]"),
+                        500,
+                    ),
+                ],
+            );
+        }
+        let g = heap::walk(
+            &f,
+            Ident::Paths,
+            roots,
+            Limits {
+                depth: 3,
+                ..Limits::default()
+            },
+        )
+        .await;
+        assert_eq!(g.nodes.len(), 3, "depth 3: a, a.next, a.next.next: {g:#?}");
+        assert_eq!(g.nodes[0].id, "a");
+        assert!(
+            g.nodes
+                .iter()
+                .all(|n| n.fields.iter().all(|f| !f.name.starts_with("[[")))
         );
-    }
-    let g = heap::walk(
-        &f,
-        Ident::Paths,
-        roots,
-        Limits {
-            depth: 3,
-            ..Limits::default()
-        },
-    )
-    .await;
-    assert_eq!(g.nodes.len(), 3, "depth 3: a, a.next, a.next.next: {g:#?}");
-    assert_eq!(g.nodes[0].id, "a");
-    assert!(
-        g.nodes
-            .iter()
-            .all(|n| n.fields.iter().all(|f| !f.name.starts_with("[[")))
-    );
-    assert_eq!(g.cut, 1, "a.next.next's next is left: {g:#?}");
+        assert_eq!(g.cut, 1, "a.next.next's next is left: {g:#?}");
+    })
 }
 
 /// A reference left at the depth stays on its field with what is behind it: a list's elements as the adapter counts
 /// them, an object as one.
-#[tokio::test]
-async fn a_cut_field_says_how_much_it_left() {
-    let mut f = Fake::default();
-    let roots = vec![var("b", "Box", "Box", "b", 10)];
-    f.children.insert(
+#[test]
+fn a_cut_field_says_how_much_it_left() {
+    saman::block_on_current(async move {
+        let mut f = Fake::default();
+        let roots = vec![var("b", "Box", "Box", "b", 10)];
+        f.children.insert(
         10,
         vec![
             var("v", "1", "int", "b.v", 0),
@@ -290,73 +295,76 @@ async fn a_cut_field_says_how_much_it_left() {
             var("owner", "User", "User", "b.owner", 30),
         ],
     );
-    let g = heap::walk(
-        &f,
-        Ident::Paths,
-        roots,
-        Limits {
-            depth: 1,
-            ..Limits::default()
-        },
-    )
-    .await;
-    assert_eq!(g.nodes.len(), 1, "{g:#?}");
-    let cut = |name: &str| {
-        g.nodes[0]
-            .fields
-            .iter()
-            .find(|f| f.name == name)
-            .and_then(|f| f.cut)
-    };
-    assert_eq!(cut("tags"), Some(40), "{g:#?}");
-    assert_eq!(cut("owner"), Some(1), "{g:#?}");
-    assert_eq!(cut("v"), None);
-    assert_eq!(g.cut, 2);
+        let g = heap::walk(
+            &f,
+            Ident::Paths,
+            roots,
+            Limits {
+                depth: 1,
+                ..Limits::default()
+            },
+        )
+        .await;
+        assert_eq!(g.nodes.len(), 1, "{g:#?}");
+        let cut = |name: &str| {
+            g.nodes[0]
+                .fields
+                .iter()
+                .find(|f| f.name == name)
+                .and_then(|f| f.cut)
+        };
+        assert_eq!(cut("tags"), Some(40), "{g:#?}");
+        assert_eq!(cut("owner"), Some(1), "{g:#?}");
+        assert_eq!(cut("v"), None);
+        assert_eq!(g.cut, 2);
+    })
 }
 
 /// js-debug: every object and function gets the hidden map's tag; a primitive gets null and stays a field.
-#[tokio::test]
-async fn javascript_objects_are_named_by_the_hidden_maps_tag() {
-    let mut f = Fake::default();
-    let tag = |e: &str| heap::JS_TAG.replace("{}", e);
-    let roots = vec![
-        var("a", "Node {v: 1, next: Node}", "Node", "a", 10),
-        var("shared", "Node {v: 2, next: Node}", "Node", "shared", 20),
-    ];
-    f.values.insert(tag("a"), "1".into());
-    f.values.insert(tag("shared"), "2".into());
-    f.values.insert(tag("a.next"), "2".into());
-    f.values.insert(tag("a.next.next"), "1".into());
-    f.children.insert(
-        10,
-        vec![
-            var("v", "1", "number", "a.v", 0),
-            var("next", "Node", "Node", "a.next", 20),
-        ],
-    );
-    f.children.insert(
-        20,
-        vec![
-            var("v", "2", "number", "a.next.v", 0),
-            var("next", "Node", "Node", "a.next.next", 10),
-            var(
-                "[[Prototype]]",
-                "Object",
-                "Object",
-                "a.next[\"[[Prototype]]\"]",
-                30,
-            ),
-        ],
-    );
-    let g = heap::walk(&f, Ident::of("pwa-node"), roots, Limits::default()).await;
-    assert_eq!(g.nodes.len(), 2, "{g:#?}");
-    assert_eq!(to(node(&g, "js:1"), "next").as_deref(), Some("js:2"));
-    assert_eq!(
-        to(node(&g, "js:2"), "next").as_deref(),
-        Some("js:1"),
-        "the ring closes"
-    );
-    assert_eq!(g.roots[1].1.as_deref(), Some("js:2"), "shared is a.next");
+#[test]
+fn javascript_objects_are_named_by_the_hidden_maps_tag() {
+    saman::block_on_current(async move {
+        let mut f = Fake::default();
+        let tag = |e: &str| heap::JS_TAG.replace("{}", e);
+        let roots = vec![
+            var("a", "Node {v: 1, next: Node}", "Node", "a", 10),
+            var("shared", "Node {v: 2, next: Node}", "Node", "shared", 20),
+        ];
+        f.values.insert(tag("a"), "1".into());
+        f.values.insert(tag("shared"), "2".into());
+        f.values.insert(tag("a.next"), "2".into());
+        f.values.insert(tag("a.next.next"), "1".into());
+        f.children.insert(
+            10,
+            vec![
+                var("v", "1", "number", "a.v", 0),
+                var("next", "Node", "Node", "a.next", 20),
+            ],
+        );
+        f.children.insert(
+            20,
+            vec![
+                var("v", "2", "number", "a.next.v", 0),
+                var("next", "Node", "Node", "a.next.next", 10),
+                var(
+                    "[[Prototype]]",
+                    "Object",
+                    "Object",
+                    "a.next[\"[[Prototype]]\"]",
+                    30,
+                ),
+            ],
+        );
+        let g = heap::walk(&f, Ident::of("pwa-node"), roots, Limits::default()).await;
+        assert_eq!(g.nodes.len(), 2, "{g:#?}");
+        assert_eq!(to(node(&g, "js:1"), "next").as_deref(), Some("js:2"));
+        assert_eq!(
+            to(node(&g, "js:2"), "next").as_deref(),
+            Some("js:1"),
+            "the ring closes"
+        );
+        assert_eq!(g.roots[1].1.as_deref(), Some("js:2"), "shared is a.next");
+    })
 }
 
 /// An adapter that takes a second for each object's children.
@@ -374,17 +382,20 @@ impl Probe for Slow {
     }
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_slow_adapter_gets_a_partial_graph_at_the_time_limit() {
-    let (f, roots) = python();
-    let limits = Limits {
-        within: std::time::Duration::from_millis(1500),
-        ..Limits::default()
-    };
-    let g = heap::walk(&Slow(f), Ident::Python, roots, limits).await;
-    // a at 1 s, b at 2 s: then the time is up, and what was left is counted
-    assert_eq!(g.nodes.len(), 2, "{g:#?}");
-    assert!(g.cut >= 2, "{g:#?}");
+#[test]
+fn a_slow_adapter_gets_a_partial_graph_at_the_time_limit() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let (f, roots) = python();
+        let limits = Limits {
+            within: std::time::Duration::from_millis(1500),
+            ..Limits::default()
+        };
+        let g = heap::walk(&Slow(f), Ident::Python, roots, limits).await;
+        // a at 1 s, b at 2 s: then the time is up, and what was left is counted
+        assert_eq!(g.nodes.len(), 2, "{g:#?}");
+        assert!(g.cut >= 2, "{g:#?}");
+    })
 }
 
 #[test]
@@ -428,78 +439,80 @@ fn the_next_stops_graph_says_what_was_added_changed_and_gone() {
     assert_eq!(d.gone, vec!["C".to_owned()]);
 }
 
-#[tokio::test]
-async fn a_frames_locals_are_its_first_card_and_a_shared_local_is_one_object() {
-    let (mut f, _) = python();
-    // the Locals scope (reference 7): a, shared (= a.next, b) and a scalar
-    f.children.insert(
-        7,
-        vec![
-            json!({"name": "special variables", "value": "", "variablesReference": 999,
+#[test]
+fn a_frames_locals_are_its_first_card_and_a_shared_local_is_one_object() {
+    saman::block_on_current(async move {
+        let (mut f, _) = python();
+        // the Locals scope (reference 7): a, shared (= a.next, b) and a scalar
+        f.children.insert(
+            7,
+            vec![
+                json!({"name": "special variables", "value": "", "variablesReference": 999,
                    "presentationHint": {"kind": "class"}}),
-            var("a", "<Node>", "Node", "a", 10),
-            var("shared", "<Node>", "Node", "shared", 20),
-            var("threshold", "40", "int", "threshold", 0),
-        ],
-    );
-    let g = heap::locals(&f, Ident::Python, 7, Limits::default()).await;
-    let fr = &g.nodes[0];
-    assert_eq!(
-        (fr.id.as_str(), fr.ty.as_str(), fr.path.as_str()),
-        ("frame", "frame", "Locals"),
-        "{g:#?}"
-    );
-    assert_eq!(
-        g.roots,
-        vec![("Locals".to_owned(), Some("frame".to_owned()))]
-    );
-    let names: Vec<&str> = fr.fields.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(names, ["a", "shared", "threshold"]);
-    assert_eq!(to(fr, "a").as_deref(), Some("1001"));
-    assert_eq!(to(fr, "shared").as_deref(), Some("1002"));
-    assert_eq!(
-        to(node(&g, "1001"), "next").as_deref(),
-        Some("1002"),
-        "shared is a.next: one card"
-    );
-    assert_eq!(
-        (to(fr, "threshold"), fr.fields[2].value.as_str()),
-        (None, "40")
-    );
-    assert_eq!(g.nodes.len(), 4, "the frame, a, b, c");
-    assert!(
-        !f.asked.lock().unwrap().iter().any(|a| a.contains("Locals")),
-        "the frame has no identity to ask for"
-    );
-    let l = super::heap_layout::layout(&g, None);
-    assert_eq!(l.cards[0].id, "frame");
-    let first = &l.cards[0];
-    assert!(
-        l.cards[1..].iter().all(|c| c.col > first.col),
-        "the frame is the first layer, alone: {l:#?}"
-    );
-    let from_frame: Vec<(u32, &str)> = l
-        .edges
-        .iter()
-        .filter(|e| e.from == "frame")
-        .map(|e| (e.field, e.to.as_str()))
-        .collect();
-    assert_eq!(from_frame, [(0, "1001"), (1, "1002")]);
-    // the answer, the push at the next stop and the recorded run's copy are this
-    let w = json!(super::heap_wire::wire(
-        "h1",
-        "d1",
-        None,
-        &g,
-        &l,
-        heap::diff(&[], &g.nodes)
-    ));
-    assert_eq!(
-        (&w["expr"], &w["locals"], &w["node"]),
-        (&json!(""), &json!(true), &json!("frame"))
-    );
-    assert_eq!(w["nodes"][0]["type"], "frame");
-    assert_eq!(w["cards"][0]["id"], "frame");
+                var("a", "<Node>", "Node", "a", 10),
+                var("shared", "<Node>", "Node", "shared", 20),
+                var("threshold", "40", "int", "threshold", 0),
+            ],
+        );
+        let g = heap::locals(&f, Ident::Python, 7, Limits::default()).await;
+        let fr = &g.nodes[0];
+        assert_eq!(
+            (fr.id.as_str(), fr.ty.as_str(), fr.path.as_str()),
+            ("frame", "frame", "Locals"),
+            "{g:#?}"
+        );
+        assert_eq!(
+            g.roots,
+            vec![("Locals".to_owned(), Some("frame".to_owned()))]
+        );
+        let names: Vec<&str> = fr.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["a", "shared", "threshold"]);
+        assert_eq!(to(fr, "a").as_deref(), Some("1001"));
+        assert_eq!(to(fr, "shared").as_deref(), Some("1002"));
+        assert_eq!(
+            to(node(&g, "1001"), "next").as_deref(),
+            Some("1002"),
+            "shared is a.next: one card"
+        );
+        assert_eq!(
+            (to(fr, "threshold"), fr.fields[2].value.as_str()),
+            (None, "40")
+        );
+        assert_eq!(g.nodes.len(), 4, "the frame, a, b, c");
+        assert!(
+            !saman::lock(&f.asked).iter().any(|a| a.contains("Locals")),
+            "the frame has no identity to ask for"
+        );
+        let l = super::heap_layout::layout(&g, None);
+        assert_eq!(l.cards[0].id, "frame");
+        let first = &l.cards[0];
+        assert!(
+            l.cards[1..].iter().all(|c| c.col > first.col),
+            "the frame is the first layer, alone: {l:#?}"
+        );
+        let from_frame: Vec<(u32, &str)> = l
+            .edges
+            .iter()
+            .filter(|e| e.from == "frame")
+            .map(|e| (e.field, e.to.as_str()))
+            .collect();
+        assert_eq!(from_frame, [(0, "1001"), (1, "1002")]);
+        // the answer, the push at the next stop and the recorded run's copy are this
+        let w = json!(super::heap_wire::wire(
+            "h1",
+            "d1",
+            None,
+            &g,
+            &l,
+            heap::diff(&[], &g.nodes)
+        ));
+        assert_eq!(
+            (&w["expr"], &w["locals"], &w["node"]),
+            (&json!(""), &json!(true), &json!("frame"))
+        );
+        assert_eq!(w["nodes"][0]["type"], "frame");
+        assert_eq!(w["cards"][0]["id"], "frame");
+    })
 }
 
 #[test]

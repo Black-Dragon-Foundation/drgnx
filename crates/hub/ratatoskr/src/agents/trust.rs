@@ -132,7 +132,7 @@ pub struct Answer {
 /// file trusts nothing and says nothing; any other problem is in `problem` once per change of the file.
 pub fn trusts(file: &Path, home: &Path, dir: &Path) -> Answer {
     let stamp = std::fs::metadata(file).and_then(|m| m.modified()).ok();
-    let mut files = FILES.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut files = saman::lock(&FILES);
     let fresh = files.get(file).is_some_and(|c| c.stamp == stamp);
     if !fresh {
         let read = match std::fs::read(file) {

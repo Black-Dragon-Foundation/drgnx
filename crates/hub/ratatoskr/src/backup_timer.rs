@@ -74,7 +74,7 @@ static EXCISING: AtomicUsize = AtomicUsize::new(0);
 
 /// The record, as it is now.
 pub fn last() -> Last {
-    *LAST.lock().unwrap_or_else(|e| e.into_inner())
+    *saman::lock(&LAST)
 }
 
 /// The last night's copies of the edit histories: when, and whether every project's copy was good.
@@ -82,17 +82,17 @@ static HISTORY: Mutex<Option<(u64, bool)>> = Mutex::new(None);
 
 /// The edit histories were copied (or failed to be) at AT.
 pub fn record_history(at: u64, ok: bool) {
-    *HISTORY.lock().unwrap_or_else(|e| e.into_inner()) = Some((at, ok));
+    *saman::lock(&HISTORY) = Some((at, ok));
 }
 
 /// The last copy of the edit histories, as it is now.
 pub fn last_history() -> Option<(u64, bool)> {
-    *HISTORY.lock().unwrap_or_else(|e| e.into_inner())
+    *saman::lock(&HISTORY)
 }
 
 /// A copy made (or failed) at AT.
 pub fn record(at: u64, ok: bool) {
-    let mut l = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let mut l = saman::lock(&LAST);
     l.attempt = Some((at, ok));
     if ok {
         l.ok_at = Some(at);
@@ -123,7 +123,7 @@ static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::n
 pub fn seed(dir: &Path) {
     STARTED.get_or_init(std::time::Instant::now);
     if let Some(at) = newest_copy(dir) {
-        let mut l = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        let mut l = saman::lock(&LAST);
         if l.attempt.is_none() {
             l.attempt = Some((at, true));
             l.ok_at = Some(at);

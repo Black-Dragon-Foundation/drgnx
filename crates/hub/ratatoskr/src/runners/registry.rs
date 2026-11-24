@@ -189,33 +189,19 @@ pub struct MemStore(Mutex<BTreeMap<String, Record>>);
 
 impl Store for MemStore {
     fn list(&self) -> BoxFuture<'_, Result<Vec<Record>, String>> {
-        Box::pin(async move {
-            Ok(self
-                .0
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .values()
-                .cloned()
-                .collect())
-        })
+        Box::pin(async move { Ok(saman::lock(&self.0).values().cloned().collect()) })
     }
 
     fn put<'a>(&'a self, r: &'a Record) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            self.0
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(r.name.clone(), r.clone());
+            saman::lock(&self.0).insert(r.name.clone(), r.clone());
             Ok(())
         })
     }
 
     fn remove<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            self.0
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .remove(name);
+            saman::lock(&self.0).remove(name);
             Ok(())
         })
     }

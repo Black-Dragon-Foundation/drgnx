@@ -264,56 +264,60 @@ fn run_to_cursor_is_one_sessions_until_its_next_stop() {
     assert!(s.send_list("d1", "/p/b.py").is_empty());
 }
 
-#[tokio::test]
-async fn the_store_survives_the_hub_and_writes_atomically() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("bps.json");
-    {
-        let mut s = Store::open(Some(file.clone()));
-        s.apply(add("/p/a.py", 5));
-        s.apply(Op::Edit {
-            id: 1,
-            enabled: None,
-            condition: Some("x".into()),
-            hit: None,
-            log: None,
-        });
-        s.add_temp("d1", "/p/a.py", 8);
-        s.apply(Op::AddFunction {
-            name: "main".into(),
-            condition: None,
-        });
-        s.set_filters("debugpy", vec!["raised".into()]);
-        s.disk().unwrap().written().await;
-    }
-    let names: Vec<_> = std::fs::read_dir(dir.path())
-        .unwrap()
-        .map(|e| e.unwrap().file_name())
-        .collect();
-    assert_eq!(names, vec![std::ffi::OsString::from("bps.json")]);
-    let mut s = Store::open(Some(file));
-    assert_eq!(bp(&s, "/p/a.py", 1)["condition"], "x");
-    assert_eq!(
-        s.send_list("d1", "/p/a.py"),
-        vec![json!({"line": 5, "condition": "x"})]
-    );
-    assert_eq!(s.functions(), vec![json!({"name": "main"})]);
-    assert_eq!(s.filters("debugpy", &json!({})), vec!["raised".to_owned()]);
-    // ids go on from where they were
-    assert_eq!(s.apply(add("/p/a.py", 6)).unwrap().id, Some(2));
+#[test]
+fn the_store_survives_the_hub_and_writes_atomically() {
+    saman::block_on_current(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("bps.json");
+        {
+            let mut s = Store::open(Some(file.clone()));
+            s.apply(add("/p/a.py", 5));
+            s.apply(Op::Edit {
+                id: 1,
+                enabled: None,
+                condition: Some("x".into()),
+                hit: None,
+                log: None,
+            });
+            s.add_temp("d1", "/p/a.py", 8);
+            s.apply(Op::AddFunction {
+                name: "main".into(),
+                condition: None,
+            });
+            s.set_filters("debugpy", vec!["raised".into()]);
+            s.disk().unwrap().written().await;
+        }
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("bps.json")]);
+        let mut s = Store::open(Some(file));
+        assert_eq!(bp(&s, "/p/a.py", 1)["condition"], "x");
+        assert_eq!(
+            s.send_list("d1", "/p/a.py"),
+            vec![json!({"line": 5, "condition": "x"})]
+        );
+        assert_eq!(s.functions(), vec![json!({"name": "main"})]);
+        assert_eq!(s.filters("debugpy", &json!({})), vec!["raised".to_owned()]);
+        // ids go on from where they were
+        assert_eq!(s.apply(add("/p/a.py", 6)).unwrap().id, Some(2));
+    })
 }
 
-#[tokio::test]
-async fn a_damaged_file_starts_empty_and_is_kept_aside() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("bps.json");
-    crate::fsio::write(&file, "{not json").unwrap();
-    let mut s = Store::open(Some(file.clone()));
-    assert!(s.paths().is_empty());
-    assert!(dir.path().join("bps.json.damaged").exists());
-    s.apply(add("/p/a.py", 1));
-    s.disk().unwrap().written().await;
-    assert!(crate::fsio::read_to_string(&file).unwrap().contains("a.py"));
+#[test]
+fn a_damaged_file_starts_empty_and_is_kept_aside() {
+    saman::block_on_current(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("bps.json");
+        crate::fsio::write(&file, "{not json").unwrap();
+        let mut s = Store::open(Some(file.clone()));
+        assert!(s.paths().is_empty());
+        assert!(dir.path().join("bps.json.damaged").exists());
+        s.apply(add("/p/a.py", 1));
+        s.disk().unwrap().written().await;
+        assert!(crate::fsio::read_to_string(&file).unwrap().contains("a.py"));
+    })
 }
 
 #[test]
@@ -570,29 +574,31 @@ fn columns_turn_between_characters_and_utf16_units() {
 
 /// A save that waits on the disk (here a held path, `fsio::disk`) holds no async worker: the
 /// operation answers at once and the file lands once the disk does.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_save_that_waits_on_the_disk_holds_no_worker() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("bps.json");
-    let path = file.clone();
-    let mut store = Store::open(Some(file.clone()));
-    // the disk is held from here: the load is done, the save waits
-    let slow = crate::fsio::disk::slow(&file);
-    let applied = crate::clock::spawn("debug:test-save", async move {
-        store.apply(add("/p/a.py", 7)).is_some()
-    });
-    let answered = crate::clock::timeout(std::time::Duration::from_secs(10), applied).await;
-    assert!(
-        matches!(answered, Ok(Ok(true))),
-        "the operation waited for the disk on a worker"
-    );
-    // the disk answers: the write waiting on it goes on and the file lands
-    slow.reached();
-    slow.release();
-    let written = skuld::wait_until("the file lands", 30, || {
-        crate::fsio::read_to_string(&path).ok()
-    });
-    assert!(written.contains("a.py"), "{written}");
+#[test]
+fn a_save_that_waits_on_the_disk_holds_no_worker() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("bps.json");
+        let path = file.clone();
+        let mut store = Store::open(Some(file.clone()));
+        // the disk is held from here: the load is done, the save waits
+        let slow = crate::fsio::disk::slow(&file);
+        let applied = crate::clock::spawn("debug:test-save", async move {
+            store.apply(add("/p/a.py", 7)).is_some()
+        });
+        let answered = crate::clock::timeout(std::time::Duration::from_secs(10), applied).await;
+        assert!(
+            matches!(answered, Ok(Ok(true))),
+            "the operation waited for the disk on a worker"
+        );
+        // the disk answers: the write waiting on it goes on and the file lands
+        slow.reached();
+        slow.release();
+        let written = skuld::wait_until("the file lands", 30, || {
+            crate::fsio::read_to_string(&path).ok()
+        });
+        assert!(written.contains("a.py"), "{written}");
+    })
 }
 
 #[test]

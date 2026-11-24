@@ -240,30 +240,34 @@ async fn a_real_kernel_lives(transport: Transport) -> (tempfile::TempDir, PathBu
     (d, folder)
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: a real ipykernel (the adapter image: test/container/Containerfile.debug)"]
-async fn a_real_ipykernel_lives_over_ipc() {
-    let (_keep, folder) = a_real_kernel_lives(Transport::Ipc).await;
-    // the sockets were files in the 0700 folder, and went with the kernel
-    assert!(
-        std::fs::read_dir(&folder)
-            .unwrap()
-            .flatten()
-            .all(|e| !e.file_name().to_string_lossy().starts_with("k-live-"))
-    );
+fn a_real_ipykernel_lives_over_ipc() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_keep, folder) = a_real_kernel_lives(Transport::Ipc).await;
+        // the sockets were files in the 0700 folder, and went with the kernel
+        assert!(
+            std::fs::read_dir(&folder)
+                .unwrap()
+                .flatten()
+                .all(|e| !e.file_name().to_string_lossy().starts_with("k-live-"))
+        );
+    })
 }
 
 /// The positive path of the tcp transport and of `debug::ports::owned` over a kernel's group: a kernelspec that says it cannot
 /// use ipc gets loopback ports the hub claimed, and the hub connects only once every listener on them is the kernel's.
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: a real ipykernel (the adapter image: test/container/Containerfile.debug)"]
-async fn a_real_ipykernel_lives_over_tcp() {
-    let (_keep, folder) = a_real_kernel_lives(Transport::Tcp).await;
-    // no socket files in the folder: the sockets were loopback ports, released with the kernel
-    assert!(
-        std::fs::read_dir(&folder)
-            .unwrap()
-            .flatten()
-            .all(|e| !e.file_name().to_string_lossy().starts_with("k-live"))
-    );
+fn a_real_ipykernel_lives_over_tcp() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_keep, folder) = a_real_kernel_lives(Transport::Tcp).await;
+        // no socket files in the folder: the sockets were loopback ports, released with the kernel
+        assert!(
+            std::fs::read_dir(&folder)
+                .unwrap()
+                .flatten()
+                .all(|e| !e.file_name().to_string_lossy().starts_with("k-live"))
+        );
+    })
 }

@@ -609,280 +609,303 @@ mod tests {
 
     const TX: &str = "select count(*) from tx";
 
-    #[tokio::test]
-    async fn a_new_spec_creates_its_file_adopted_and_in_the_graph() {
-        let f = fix();
-        let r = created(&f).await;
-        let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
-        let want = saga::spec::new_text(
-            "Menus",
-            "proposed",
-            &[
-                ("Goals".into(), "Small.\n\n".into()),
-                ("Data".into(), "Rows.\n".into()),
-            ],
-        );
-        assert_eq!(text, want);
-        let adopted = adopted_key(&file_of(&f));
-        let marks: i64 =
-            f.db.read(move |c| {
-                Ok(
-                    c.query_row("select count(*) from kv where key = ?1", [&adopted], |r| {
-                        r.get(0)
-                    })?,
-                )
-            })
-            .await
-            .unwrap();
-        assert_eq!(marks, 1);
-        assert_eq!(r.sections.len(), 2);
-        assert!(r.record.starts_with("spec:rec-"));
-        let st = status_core(&f.db, &f.views, Some(&file_of(&f)))
-            .await
-            .unwrap();
-        assert_eq!(st.views.len(), 1);
-        let n = f
+    #[test]
+    fn a_new_spec_creates_its_file_adopted_and_in_the_graph() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let r = created(&f).await;
+            let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
+            let want = saga::spec::new_text(
+                "Menus",
+                "proposed",
+                &[
+                    ("Goals".into(), "Small.\n\n".into()),
+                    ("Data".into(), "Rows.\n".into()),
+                ],
+            );
+            assert_eq!(text, want);
+            let adopted = adopted_key(&file_of(&f));
+            let marks: i64 =
+                f.db.read(move |c| {
+                    Ok(
+                        c.query_row("select count(*) from kv where key = ?1", [&adopted], |r| {
+                            r.get(0)
+                        })?,
+                    )
+                })
+                .await
+                .unwrap();
+            assert_eq!(marks, 1);
+            assert_eq!(r.sections.len(), 2);
+            assert!(r.record.starts_with("spec:rec-"));
+            let st = status_core(&f.db, &f.views, Some(&file_of(&f)))
+                .await
+                .unwrap();
+            assert_eq!(st.views.len(), 1);
+            let n = f
             .count("select count(*) from entity where source like 'records:%' and json_extract(data, '$.records.file') like '%/r/menus.md' and retired_tx is null")
             .await;
-        assert_eq!(n, 3, "a head and two sections");
+            assert_eq!(n, 3, "a head and two sections");
+        })
     }
 
-    #[tokio::test]
-    async fn a_write_behind_base_version_is_refused_and_writes_nothing() {
-        let f = fix();
-        let r = created(&f).await;
-        let before = f.count(TX).await;
-        let stale = w(json!({"record": r.record, "kind": "spec",
+    #[test]
+    fn a_write_behind_base_version_is_refused_and_writes_nothing() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let r = created(&f).await;
+            let before = f.count(TX).await;
+            let stale = w(json!({"record": r.record, "kind": "spec",
             "sections": [{"key": key_id_key("data"), "heading": "Data", "body": "X.\n"}],
             "base_version": r.version - 1}));
-        let e = write_core(&f.db, &f.views, &user(&f), stale)
-            .await
-            .unwrap_err();
-        assert!(e.message.contains("changed since"), "{}", e.message);
-        assert_eq!(f.count(TX).await, before);
+            let e = write_core(&f.db, &f.views, &user(&f), stale)
+                .await
+                .unwrap_err();
+            assert!(e.message.contains("changed since"), "{}", e.message);
+            assert_eq!(f.count(TX).await, before);
+        })
     }
 
     fn key_id_key(slug: &str) -> String {
         format!("section {slug}")
     }
 
-    #[tokio::test]
-    async fn a_section_edit_reaches_the_file_and_keeps_other_ids() {
-        let f = fix();
-        let r = created(&f).await;
-        let edit = w(json!({"record": r.record, "kind": "spec",
+    #[test]
+    fn a_section_edit_reaches_the_file_and_keeps_other_ids() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let r = created(&f).await;
+            let edit = w(json!({"record": r.record, "kind": "spec",
             "sections": [{"key": "section data", "heading": "Data", "body": "New rows.\n"}],
             "base_version": r.version}));
-        let r2 = write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
-        let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
-        assert!(text.contains("New rows."), "{text}");
-        assert!(text.contains("Small."), "{text}");
-        assert_eq!(key_id(&r, "section goals"), key_id(&r2, "section goals"));
-        assert_eq!(key_id(&r, "section data"), key_id(&r2, "section data"));
-        assert!(r2.version > r.version);
+            let r2 = write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
+            let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
+            assert!(text.contains("New rows."), "{text}");
+            assert!(text.contains("Small."), "{text}");
+            assert_eq!(key_id(&r, "section goals"), key_id(&r2, "section goals"));
+            assert_eq!(key_id(&r, "section data"), key_id(&r2, "section data"));
+            assert!(r2.version > r.version);
+        })
     }
 
-    #[tokio::test]
-    async fn a_hand_edit_of_another_section_is_merged() {
-        let f = fix();
-        let r = created(&f).await;
-        let p = file_of(&f);
-        let hand = crate::fsio::read_to_string(&p)
-            .unwrap()
-            .replace("Rows.", "Hand rows.");
-        crate::fsio::write(&p, hand).unwrap();
-        let edit = w(json!({"record": r.record, "kind": "spec",
+    #[test]
+    fn a_hand_edit_of_another_section_is_merged() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let r = created(&f).await;
+            let p = file_of(&f);
+            let hand = crate::fsio::read_to_string(&p)
+                .unwrap()
+                .replace("Rows.", "Hand rows.");
+            crate::fsio::write(&p, hand).unwrap();
+            let edit = w(json!({"record": r.record, "kind": "spec",
             "sections": [{"key": "section goals", "heading": "Goals", "body": "Graph goals.\n\n"}],
             "base_version": r.version}));
-        write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
-        let text = crate::fsio::read_to_string(&p).unwrap();
-        assert!(text.contains("Hand rows."), "{text}");
-        assert!(text.contains("Graph goals."), "{text}");
+            write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
+            let text = crate::fsio::read_to_string(&p).unwrap();
+            assert!(text.contains("Hand rows."), "{text}");
+            assert!(text.contains("Graph goals."), "{text}");
+        })
     }
 
-    #[tokio::test]
-    async fn a_hand_edit_of_the_same_section_is_a_conflict() {
-        let f = fix();
-        let r = created(&f).await;
-        let p = file_of(&f);
-        let hand = crate::fsio::read_to_string(&p)
-            .unwrap()
-            .replace("Small.", "Hand small.");
-        crate::fsio::write(&p, hand).unwrap();
-        let edit = w(json!({"record": r.record, "kind": "spec",
+    #[test]
+    fn a_hand_edit_of_the_same_section_is_a_conflict() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let r = created(&f).await;
+            let p = file_of(&f);
+            let hand = crate::fsio::read_to_string(&p)
+                .unwrap()
+                .replace("Small.", "Hand small.");
+            crate::fsio::write(&p, hand).unwrap();
+            let edit = w(json!({"record": r.record, "kind": "spec",
             "sections": [{"key": "section goals", "heading": "Goals", "body": "Graph goals.\n\n"}],
             "base_version": r.version}));
-        write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
-        let text = crate::fsio::read_to_string(&p).unwrap();
-        assert!(
-            text.contains("Hand small."),
-            "the file keeps its text: {text}"
-        );
-        assert!(!text.contains("Graph goals."), "{text}");
-        let st = status_core(&f.db, &f.views, Some(&p)).await.unwrap();
-        assert_eq!(st.views[0].conflicts.len(), 1, "{:?}", st.views);
+            write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
+            let text = crate::fsio::read_to_string(&p).unwrap();
+            assert!(
+                text.contains("Hand small."),
+                "the file keeps its text: {text}"
+            );
+            assert!(!text.contains("Graph goals."), "{text}");
+            let st = status_core(&f.db, &f.views, Some(&p)).await.unwrap();
+            assert_eq!(st.views[0].conflicts.len(), 1, "{:?}", st.views);
+        })
     }
 
-    #[tokio::test]
-    async fn remove_retires_the_section() {
-        let f = fix();
-        let r = created(&f).await;
-        let edit = w(
-            json!({"record": r.record, "kind": "spec", "remove": ["section data"],
+    #[test]
+    fn remove_retires_the_section() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let r = created(&f).await;
+            let edit = w(
+                json!({"record": r.record, "kind": "spec", "remove": ["section data"],
             "base_version": r.version}),
-        );
-        write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
-        let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
-        assert!(!text.contains("## Data"), "{text}");
-        let id = key_id(&r, "section data");
-        let live: i64 =
-            f.db.read(move |c| {
-                Ok(c.query_row(
-                    "select count(*) from entity where id = ?1 and retired_tx is null",
-                    [&id],
-                    |r| r.get(0),
-                )?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(live, 0);
+            );
+            write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
+            let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
+            assert!(!text.contains("## Data"), "{text}");
+            let id = key_id(&r, "section data");
+            let live: i64 =
+                f.db.read(move |c| {
+                    Ok(c.query_row(
+                        "select count(*) from entity where id = ?1 and retired_tx is null",
+                        [&id],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(live, 0);
+        })
     }
 
-    #[tokio::test]
-    async fn an_agent_cannot_approve_by_status_or_by_text() {
-        let f = fix();
-        let r = created(&f).await;
-        let me = agent(&f, "s-7", false);
-        for status in ["done", "approved", "accepted"] {
-            let before = f.count(TX).await;
-            let edit = w(json!({"record": r.record, "kind": "spec", "status": status,
+    #[test]
+    fn an_agent_cannot_approve_by_status_or_by_text() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let r = created(&f).await;
+            let me = agent(&f, "s-7", false);
+            for status in ["done", "approved", "accepted"] {
+                let before = f.count(TX).await;
+                let edit = w(json!({"record": r.record, "kind": "spec", "status": status,
                 "base_version": r.version}));
-            let e = write_core(&f.db, &f.views, &me, edit).await.unwrap_err();
-            assert!(e.message.contains("approve"), "{status}: {}", e.message);
-            assert_eq!(f.count(TX).await, before);
-        }
-        // a new record may not start approved either
-        let mut p = new_spec("docs/specs/r/other.md");
-        p.status = Some(serde_json::from_value(json!("approved")).unwrap());
-        assert!(write_core(&f.db, &f.views, &me, p).await.is_err());
-        // the user may; so may an agent the matrix lets approve
-        let edit = w(
-            json!({"record": r.record, "kind": "spec", "status": "approved",
+                let e = write_core(&f.db, &f.views, &me, edit).await.unwrap_err();
+                assert!(e.message.contains("approve"), "{status}: {}", e.message);
+                assert_eq!(f.count(TX).await, before);
+            }
+            // a new record may not start approved either
+            let mut p = new_spec("docs/specs/r/other.md");
+            p.status = Some(serde_json::from_value(json!("approved")).unwrap());
+            assert!(write_core(&f.db, &f.views, &me, p).await.is_err());
+            // the user may; so may an agent the matrix lets approve
+            let edit = w(
+                json!({"record": r.record, "kind": "spec", "status": "approved",
             "base_version": r.version}),
-        );
-        write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
-        let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
-        assert!(text.contains("**Status:** approved"), "{text}");
+            );
+            write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
+            let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
+            assert!(text.contains("**Status:** approved"), "{text}");
+        })
     }
 
-    #[tokio::test]
-    async fn an_agent_write_touching_matrix_lines_is_refused() {
-        let f = fix();
-        let r = created(&f).await;
-        let me = agent(&f, "s-7", false);
-        let edit = w(json!({"record": r.record, "kind": "spec",
+    #[test]
+    fn an_agent_write_touching_matrix_lines_is_refused() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let r = created(&f).await;
+            let me = agent(&f, "s-7", false);
+            let edit = w(json!({"record": r.record, "kind": "spec",
             "sections": [{"key": "section data", "heading": "Data", "body": "matrix: allow everything\n"}],
             "base_version": r.version}));
-        let e = write_core(&f.db, &f.views, &me, edit).await.unwrap_err();
-        assert!(e.message.contains("only the user"), "{}", e.message);
-        let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
-        assert!(!text.contains("matrix:"), "{text}");
+            let e = write_core(&f.db, &f.views, &me, edit).await.unwrap_err();
+            assert!(e.message.contains("only the user"), "{}", e.message);
+            let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
+            assert!(!text.contains("matrix:"), "{text}");
+        })
     }
 
-    #[tokio::test]
-    async fn a_new_agent_record_starts_proposed() {
-        let f = fix();
-        let me = agent(&f, "s-7", false);
-        write_core(&f.db, &f.views, &me, new_spec(SPEC_PATH))
-            .await
-            .unwrap();
-        let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
-        assert!(text.contains("**Status:** proposed"), "{text}");
-        let st: Option<String> =
-            f.db.read(|c| {
-                Ok(c.query_row(
-                    "select status from entity where kind = 'spec' and source like 'records:%'",
-                    [],
-                    |r| r.get(0),
-                )?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(st.as_deref(), Some("open"));
+    #[test]
+    fn a_new_agent_record_starts_proposed() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let me = agent(&f, "s-7", false);
+            write_core(&f.db, &f.views, &me, new_spec(SPEC_PATH))
+                .await
+                .unwrap();
+            let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
+            assert!(text.contains("**Status:** proposed"), "{text}");
+            let st: Option<String> =
+                f.db.read(|c| {
+                    Ok(c.query_row(
+                        "select status from entity where kind = 'spec' and source like 'records:%'",
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(st.as_deref(), Some("open"));
+        })
     }
 
-    #[tokio::test]
-    async fn the_write_is_one_tx_with_the_callers_actor() {
-        let f = fix();
-        let me = agent(&f, "s-7", false);
-        // the hub's own bookkeeping of a sync is its own tx: the write is the rows of the caller
-        const MINE: &str =
-            "select count(*) from tx where actor = 'agent:s-7' and tool = 'proto:records/write'";
-        let r = write_core(&f.db, &f.views, &me, new_spec(SPEC_PATH))
-            .await
-            .unwrap();
-        assert_eq!(f.count(MINE).await, 1, "a new record is one tx");
-        let edit = w(json!({"record": r.record, "kind": "spec",
+    #[test]
+    fn the_write_is_one_tx_with_the_callers_actor() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let me = agent(&f, "s-7", false);
+            // the hub's own bookkeeping of a sync is its own tx: the write is the rows of the caller
+            const MINE: &str = "select count(*) from tx where actor = 'agent:s-7' and tool = 'proto:records/write'";
+            let r = write_core(&f.db, &f.views, &me, new_spec(SPEC_PATH))
+                .await
+                .unwrap();
+            assert_eq!(f.count(MINE).await, 1, "a new record is one tx");
+            let edit = w(json!({"record": r.record, "kind": "spec",
             "sections": [{"key": "section data", "heading": "Data", "body": "Again.\n"}],
             "base_version": r.version}));
-        write_core(&f.db, &f.views, &me, edit).await.unwrap();
-        assert_eq!(f.count(MINE).await, 2, "an edit is one tx more");
-        let other: i64 = f
+            write_core(&f.db, &f.views, &me, edit).await.unwrap();
+            assert_eq!(f.count(MINE).await, 2, "an edit is one tx more");
+            let other: i64 = f
             .count("select count(*) from tx where tool = 'proto:records/write' and actor != 'agent:s-7'")
             .await;
-        assert_eq!(other, 0);
+            assert_eq!(other, 0);
+        })
     }
 
-    #[tokio::test]
-    async fn records_read_lists_pieces_keys_links_and_version() {
-        let f = fix();
-        let r = created(&f).await;
-        let v = super::super::read::read_core(
-            &f.db,
-            &user(&f),
-            serde_json::from_value(json!({"record": r.record})).unwrap(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(v.record, r.record);
-        assert_eq!(v.version, r.version);
-        assert_eq!(v.title.as_deref(), Some("Menus"));
-        assert_eq!(v.status.as_deref(), Some("open"));
-        assert!(v.head.starts_with("# Menus"));
-        let keys: Vec<&str> = v.sections.iter().map(|s| s.key.as_str()).collect();
-        assert_eq!(keys, ["section goals", "section data"]);
-        assert_eq!(v.sections[0].heading, "Goals");
-        assert!(v.sections[1].body.contains("Rows."));
-        assert!(!v.sections[0].conflict);
-        assert!(v.links.is_empty());
-        assert!(v.path.ends_with("docs/specs/r/menus.md"));
+    #[test]
+    fn records_read_lists_pieces_keys_links_and_version() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let r = created(&f).await;
+            let v = super::super::read::read_core(
+                &f.db,
+                &user(&f),
+                serde_json::from_value(json!({"record": r.record})).unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(v.record, r.record);
+            assert_eq!(v.version, r.version);
+            assert_eq!(v.title.as_deref(), Some("Menus"));
+            assert_eq!(v.status.as_deref(), Some("open"));
+            assert!(v.head.starts_with("# Menus"));
+            let keys: Vec<&str> = v.sections.iter().map(|s| s.key.as_str()).collect();
+            assert_eq!(keys, ["section goals", "section data"]);
+            assert_eq!(v.sections[0].heading, "Goals");
+            assert!(v.sections[1].body.contains("Rows."));
+            assert!(!v.sections[0].conflict);
+            assert!(v.links.is_empty());
+            assert!(v.path.ends_with("docs/specs/r/menus.md"));
+        })
     }
 
-    #[tokio::test]
-    async fn another_projects_record_is_refused() {
-        let f = fix();
-        let r = created(&f).await;
-        let mut other = agent(&f, "s-9", true);
-        other.scope = Scope::Project {
-            id: Some("project:b".into()),
-            root: Some(f.root.join("elsewhere")),
-            jobs: vec![],
-            sessions: vec![],
-        };
-        other.root = Some(f.root.join("elsewhere"));
-        let read = super::super::read::read_core(
-            &f.db,
-            &other,
-            serde_json::from_value(json!({"record": r.record})).unwrap(),
-        )
-        .await;
-        assert!(read.is_err());
-        let before = f.count(TX).await;
-        let edit = w(json!({"record": r.record, "kind": "spec",
+    #[test]
+    fn another_projects_record_is_refused() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let r = created(&f).await;
+            let mut other = agent(&f, "s-9", true);
+            other.scope = Scope::Project {
+                id: Some("project:b".into()),
+                root: Some(f.root.join("elsewhere")),
+                jobs: vec![],
+                sessions: vec![],
+            };
+            other.root = Some(f.root.join("elsewhere"));
+            let read = super::super::read::read_core(
+                &f.db,
+                &other,
+                serde_json::from_value(json!({"record": r.record})).unwrap(),
+            )
+            .await;
+            assert!(read.is_err());
+            let before = f.count(TX).await;
+            let edit = w(json!({"record": r.record, "kind": "spec",
             "sections": [{"key": "section data", "heading": "Data", "body": "Mine.\n"}],
             "base_version": r.version}));
-        assert!(write_core(&f.db, &f.views, &other, edit).await.is_err());
-        assert_eq!(f.count(TX).await, before);
+            assert!(write_core(&f.db, &f.views, &other, edit).await.is_err());
+            assert_eq!(f.count(TX).await, before);
+        })
     }
 
     // ---- a new plan's view file ----
@@ -897,51 +920,55 @@ mod tests {
         serde_json::from_value(v).unwrap()
     }
 
-    #[tokio::test]
-    async fn a_new_plan_with_a_path_has_its_view_file() {
-        let f = fix();
-        let got = create_plan_core(
-            &f.db,
-            &f.views,
-            &user(&f),
-            &plan_params(json!({})),
-            "docs/plans/r/p2.md",
-        )
-        .await
-        .unwrap();
-        let text = crate::fsio::read_to_string(f.root.join("docs/plans/r/p2.md")).unwrap();
-        let d = saga::plan::parse(&text);
-        assert_eq!(d.title, "A plan");
-        let nums: Vec<&str> = d.tasks.iter().map(|t| t.number.as_str()).collect();
-        assert_eq!(nums, ["1", "2"]);
-        assert_eq!(d.tasks[0].steps.len(), 1);
-        assert_eq!(got.tasks.len(), 2);
-        assert_eq!(got.tasks[0].number, "1");
-        assert!(got.plan.starts_with("plan:rec-"), "{}", got.plan);
-        // `plans/get` shows them
-        let plan = got.plan.clone();
-        let view =
-            f.db.read(move |c| crate::runner::effects::load_view(c, &plan))
-                .await
-                .unwrap();
-        assert_eq!(view.tasks.len(), 2);
-        assert_eq!(view.tasks[1].deps, ["1"]);
+    #[test]
+    fn a_new_plan_with_a_path_has_its_view_file() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let got = create_plan_core(
+                &f.db,
+                &f.views,
+                &user(&f),
+                &plan_params(json!({})),
+                "docs/plans/r/p2.md",
+            )
+            .await
+            .unwrap();
+            let text = crate::fsio::read_to_string(f.root.join("docs/plans/r/p2.md")).unwrap();
+            let d = saga::plan::parse(&text);
+            assert_eq!(d.title, "A plan");
+            let nums: Vec<&str> = d.tasks.iter().map(|t| t.number.as_str()).collect();
+            assert_eq!(nums, ["1", "2"]);
+            assert_eq!(d.tasks[0].steps.len(), 1);
+            assert_eq!(got.tasks.len(), 2);
+            assert_eq!(got.tasks[0].number, "1");
+            assert!(got.plan.starts_with("plan:rec-"), "{}", got.plan);
+            // `plans/get` shows them
+            let plan = got.plan.clone();
+            let view =
+                f.db.read(move |c| crate::runner::effects::load_view(c, &plan))
+                    .await
+                    .unwrap();
+            assert_eq!(view.tasks.len(), 2);
+            assert_eq!(view.tasks[1].deps, ["1"]);
+        })
     }
 
-    #[tokio::test]
-    async fn a_plan_path_under_specs_is_refused() {
-        let f = fix();
-        let e = create_plan_core(
-            &f.db,
-            &f.views,
-            &user(&f),
-            &plan_params(json!({})),
-            "docs/specs/r/p.md",
-        )
-        .await
-        .unwrap_err();
-        assert!(e.message.contains("docs/plans"), "{}", e.message);
-        assert!(!f.root.join("docs/specs/r/p.md").exists());
+    #[test]
+    fn a_plan_path_under_specs_is_refused() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let e = create_plan_core(
+                &f.db,
+                &f.views,
+                &user(&f),
+                &plan_params(json!({})),
+                "docs/specs/r/p.md",
+            )
+            .await
+            .unwrap_err();
+            assert!(e.message.contains("docs/plans"), "{}", e.message);
+            assert!(!f.root.join("docs/specs/r/p.md").exists());
+        })
     }
 
     #[test]
@@ -957,57 +984,61 @@ mod tests {
         assert!((m.decode)(&ok).is_ok());
     }
 
-    #[tokio::test]
-    async fn an_agents_new_plan_needs_a_path() {
-        let f = fix();
-        let front = crate::runner::effects::tests::front_in(f._dir.path());
-        let c = Caller {
-            class: Class::Agent,
-            sid: Some("s-7".into()),
-            job: None,
-            conn_id: 0,
-        };
-        let e = crate::runner::effects::plans_write(&front, &c, plan_params(json!({})))
-            .await
-            .unwrap_err();
-        assert!(e.message.contains("names its view file"), "{}", e.message);
+    #[test]
+    fn an_agents_new_plan_needs_a_path() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let front = crate::runner::effects::tests::front_in(f._dir.path());
+            let c = Caller {
+                class: Class::Agent,
+                sid: Some("s-7".into()),
+                job: None,
+                conn_id: 0,
+            };
+            let e = crate::runner::effects::plans_write(&front, &c, plan_params(json!({})))
+                .await
+                .unwrap_err();
+            assert!(e.message.contains("names its view file"), "{}", e.message);
+        })
     }
 
-    #[tokio::test]
-    async fn a_plan_write_reaches_the_file_at_the_next_sync() {
-        let f = fix();
-        let user = user(&f);
-        let got = create_plan_core(
-            &f.db,
-            &f.views,
-            &user,
-            &plan_params(json!({})),
-            "docs/plans/r/p3.md",
-        )
-        .await
-        .unwrap();
-        let p = f.root.join("docs/plans/r/p3.md");
-        // a hand edit of task 2, in the file
-        let hand = crate::fsio::read_to_string(&p)
-            .unwrap()
-            .replace("### Task 2: second", "### Task 2: second (hand)");
-        crate::fsio::write(&p, hand).unwrap();
-        // plan_write changes task 1's title, body and steps
-        let change: WriteParams = serde_json::from_value(json!({"plan": got.plan, "tasks": [
-            {"number": "1", "title": "first, renamed", "body": "Do it differently.\n",
-             "steps": [{"done": false, "text": "think"}, {"done": false, "text": "write"}]}]}))
-        .unwrap();
-        crate::runner::effects::write_plan_as(&f.db, &user.meta, &change, &user.scope)
+    #[test]
+    fn a_plan_write_reaches_the_file_at_the_next_sync() {
+        saman::block_on_current(async move {
+            let f = fix();
+            let user = user(&f);
+            let got = create_plan_core(
+                &f.db,
+                &f.views,
+                &user,
+                &plan_params(json!({})),
+                "docs/plans/r/p3.md",
+            )
             .await
             .unwrap();
-        f.sync(&p).await;
-        let text = crate::fsio::read_to_string(&p).unwrap();
-        assert!(text.contains("### Task 1: first, renamed"), "{text}");
-        assert!(text.contains("Do it differently."), "{text}");
-        assert!(text.contains("- [ ] think"), "{text}");
-        assert!(
-            text.contains("### Task 2: second (hand)"),
-            "the hand edit stays: {text}"
-        );
+            let p = f.root.join("docs/plans/r/p3.md");
+            // a hand edit of task 2, in the file
+            let hand = crate::fsio::read_to_string(&p)
+                .unwrap()
+                .replace("### Task 2: second", "### Task 2: second (hand)");
+            crate::fsio::write(&p, hand).unwrap();
+            // plan_write changes task 1's title, body and steps
+            let change: WriteParams = serde_json::from_value(json!({"plan": got.plan, "tasks": [
+            {"number": "1", "title": "first, renamed", "body": "Do it differently.\n",
+             "steps": [{"done": false, "text": "think"}, {"done": false, "text": "write"}]}]}))
+            .unwrap();
+            crate::runner::effects::write_plan_as(&f.db, &user.meta, &change, &user.scope)
+                .await
+                .unwrap();
+            f.sync(&p).await;
+            let text = crate::fsio::read_to_string(&p).unwrap();
+            assert!(text.contains("### Task 1: first, renamed"), "{text}");
+            assert!(text.contains("Do it differently."), "{text}");
+            assert!(text.contains("- [ ] think"), "{text}");
+            assert!(
+                text.contains("### Task 2: second (hand)"),
+                "the hand edit stays: {text}"
+            );
+        })
     }
 }

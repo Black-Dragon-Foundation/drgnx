@@ -914,7 +914,7 @@ impl Route for QRoute {
         // the path first: the queue's lock is never taken under the redactors' (the queue takes them in that order)
         let path = self.log_path(runner, r)?;
         let key = (r.job.clone(), r.attempt);
-        let mut red = q.redact.lock().unwrap_or_else(|e| e.into_inner());
+        let mut red = saman::lock(&q.redact);
         let Some(rd) = red.get_mut(&key) else {
             tracing::info!(
                 "runners: {runner}: the log of keyed job {} attempt {} is not kept: its keys aren't back yet",
@@ -1082,11 +1082,11 @@ impl Queue {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, St> {
-        self.st.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.st)
     }
 
     fn redactors(&self) -> std::sync::MutexGuard<'_, HashMap<(String, u32), Redacting>> {
-        self.redact.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.redact)
     }
 
     /// The job keys the hub holds, and their audit.
@@ -1713,13 +1713,13 @@ impl Queue {
 
     /// Count what each job here uses from now on, as READ says (design §0.3 R2, C1): the hub gives its jobs' slices.
     pub fn read_local_use(&self, read: LocalUse) {
-        *self.local_use.lock().unwrap() = Some(read);
+        *saman::lock(&self.local_use) = Some(read);
     }
 
     /// Each running job here counts what its slice uses now: a job whose slice can't be read counts its whole
     /// reservation, and the queue says so once for it.
     fn count_local_use(&self, st: &mut St) {
-        let read = self.local_use.lock().unwrap();
+        let read = saman::lock(&self.local_use);
         let Some(read) = read.as_ref() else { return };
         let St {
             local_running,
@@ -4288,152 +4288,156 @@ mod tests {
 
     // [D] pure (a runner's link fed by hand): attempt 1 is lost after every row is in the hub's copy of its log; the
     // job ends from those rows, judged as a finish is, and nothing runs again
-    #[tokio::test]
-    async fn a_requeue_with_every_row_done_finishes_from_the_rows() {
-        use super::super::transport::{Channel, Channels};
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = Queue::new(QueueCfg {
-            hub_id: "h".into(),
-            exec_root: dir.path().to_path_buf(),
-            local: LocalRunner::new(super::super::local::Admission::Fixed(1), dir.path()),
-            db: None,
-        });
-        q.adopt("xbusy", Priority::P1, 100);
-        let idle = || Channel::new(Box::new(tokio::io::sink()), Box::new(tokio::io::empty()));
-        let session = Session::start(
-            "r1",
-            Channels {
-                control: idle(),
-                bulk_in: idle(),
-                bulk_out: idle(),
-            },
-            q.route(),
-            q.link_events(),
-        );
-        q.add_runner(
-            RemoteRunner {
-                os: Default::default(),
-                name: "r1".into(),
-                trust: RunnerTrust::Mine,
-                accept: Accept::All,
-                grace_s: 0,
-                image: None,
-            },
-            session,
-        );
-        let hello = Frame::HelloOk {
-            version: PROTO_VERSION,
-            bundle: String::new(),
-            hub_id: "h".into(),
-            runner_id: String::new(),
-            boot_id: String::new(),
-            linger: false,
-            attempts: vec![],
-            missing: vec![],
-        };
-        q.on_link(
-            LinkEvent::Frame {
-                runner: "r1".into(),
-                frame: hello,
-            },
-            100,
-        );
-        let listed: Vec<String> = ["t1", "t2", "t3"].map(String::from).to_vec();
-        let mut spec = blank_spec("x1");
-        spec.command = vec!["run".into(), ROWS.into()];
-        q.submit(
-            Submit {
-                id: "x1".into(),
-                session: Some("s1".into()),
-                own: Priority::P3,
-                spec,
-                place: Placement {
-                    heavy: true,
-                    suite: Some(Suite {
-                        parser: "plist".into(),
-                        listed,
-                    }),
-                    ..Placement::default()
+    #[test]
+    fn a_requeue_with_every_row_done_finishes_from_the_rows() {
+        saman::block_on_current(async move {
+            use super::super::transport::{Channel, Channels};
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = Queue::new(QueueCfg {
+                hub_id: "h".into(),
+                exec_root: dir.path().to_path_buf(),
+                local: LocalRunner::new(super::super::local::Admission::Fixed(1), dir.path()),
+                db: None,
+            });
+            q.adopt("xbusy", Priority::P1, 100);
+            let idle = || Channel::new(Box::new(tokio::io::sink()), Box::new(tokio::io::empty()));
+            let session = Session::start(
+                "r1",
+                Channels {
+                    control: idle(),
+                    bulk_in: idle(),
+                    bulk_out: idle(),
                 },
-                pending: Value::Null,
-                inputs: None,
-            },
-            100,
-        );
-        q.tick(100);
-        assert_eq!(q.row("x1").and_then(|r| r.machine), Some("r1".into()));
-        // every listed row reached the hub's copy before the link was lost
-        std::fs::create_dir_all(dir.path().join("x1")).unwrap();
-        let rows = "(:name \"t1\" :verdict pass)\n(:name \"t2\" :verdict skip)\n(:name \"t3\" :verdict pass)\n";
-        crate::fsio::write(dir.path().join("x1/log"), rows).unwrap();
-        let out = q.on_link(
-            LinkEvent::Lost {
-                runner: "r1".into(),
-                why: "test".into(),
-            },
-            110,
-        );
-        let [
-            Outcome::Done {
-                id,
-                attempt: 1,
-                result,
-                shared: None,
-                ..
-            },
-        ] = &out[..]
-        else {
-            panic!("the job didn't end from its rows: {out:?}");
-        };
-        assert_eq!(id, "x1");
-        assert_eq!(result["verdict"], "Pass", "{result}");
-        assert_eq!(
-            result["counts"],
-            json!({"ran": 2, "passed": 2, "failed": 0, "skipped": 1, "crashed": 0})
-        );
-        assert_eq!(q.row("x1"), None, "the job left the queue");
-        assert!(q.tick(120).starts.is_empty());
+                q.route(),
+                q.link_events(),
+            );
+            q.add_runner(
+                RemoteRunner {
+                    os: Default::default(),
+                    name: "r1".into(),
+                    trust: RunnerTrust::Mine,
+                    accept: Accept::All,
+                    grace_s: 0,
+                    image: None,
+                },
+                session,
+            );
+            let hello = Frame::HelloOk {
+                version: PROTO_VERSION,
+                bundle: String::new(),
+                hub_id: "h".into(),
+                runner_id: String::new(),
+                boot_id: String::new(),
+                linger: false,
+                attempts: vec![],
+                missing: vec![],
+            };
+            q.on_link(
+                LinkEvent::Frame {
+                    runner: "r1".into(),
+                    frame: hello,
+                },
+                100,
+            );
+            let listed: Vec<String> = ["t1", "t2", "t3"].map(String::from).to_vec();
+            let mut spec = blank_spec("x1");
+            spec.command = vec!["run".into(), ROWS.into()];
+            q.submit(
+                Submit {
+                    id: "x1".into(),
+                    session: Some("s1".into()),
+                    own: Priority::P3,
+                    spec,
+                    place: Placement {
+                        heavy: true,
+                        suite: Some(Suite {
+                            parser: "plist".into(),
+                            listed,
+                        }),
+                        ..Placement::default()
+                    },
+                    pending: Value::Null,
+                    inputs: None,
+                },
+                100,
+            );
+            q.tick(100);
+            assert_eq!(q.row("x1").and_then(|r| r.machine), Some("r1".into()));
+            // every listed row reached the hub's copy before the link was lost
+            std::fs::create_dir_all(dir.path().join("x1")).unwrap();
+            let rows = "(:name \"t1\" :verdict pass)\n(:name \"t2\" :verdict skip)\n(:name \"t3\" :verdict pass)\n";
+            crate::fsio::write(dir.path().join("x1/log"), rows).unwrap();
+            let out = q.on_link(
+                LinkEvent::Lost {
+                    runner: "r1".into(),
+                    why: "test".into(),
+                },
+                110,
+            );
+            let [
+                Outcome::Done {
+                    id,
+                    attempt: 1,
+                    result,
+                    shared: None,
+                    ..
+                },
+            ] = &out[..]
+            else {
+                panic!("the job didn't end from its rows: {out:?}");
+            };
+            assert_eq!(id, "x1");
+            assert_eq!(result["verdict"], "Pass", "{result}");
+            assert_eq!(
+                result["counts"],
+                json!({"ran": 2, "passed": 2, "failed": 0, "skipped": 1, "crashed": 0})
+            );
+            assert_eq!(q.row("x1"), None, "the job left the queue");
+            assert!(q.tick(120).starts.is_empty());
+        })
     }
 
     // [D] pure (runtime.db in a folder): what placement learned comes back after a hub restart; with no history,
     // nothing is learned and placement is the static rule's
-    #[tokio::test]
-    async fn learned_placement_comes_back_after_a_restart() {
-        let dir = tempfile::tempdir().unwrap();
-        let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
-        let queue = |db: Option<urdr::Handle>| {
-            Queue::new(QueueCfg {
-                hub_id: "h".into(),
-                exec_root: dir.path().to_path_buf(),
-                local: LocalRunner::new(super::super::local::Admission::Fixed(1), dir.path()),
-                db,
-            })
-            .0
-        };
-        let fresh = queue(None);
-        fresh.restore_kept(kept(&db).await);
-        assert_eq!(fresh.lock().learned, Learned::default());
-        assert!(fresh.lock().history.is_empty());
-        let mut spec = blank_spec("x1");
-        spec.command = vec!["make".into(), "check".into()];
-        let ran = |verdict: &str, wall: f64, disturbed: bool| json!({"verdict": verdict, "wall_s": wall, "cpu_s": wall, "mem_peak_mib": 100, "disturbed": disturbed});
-        let q = queue(Some(db.clone()));
-        {
-            let mut st = q.lock();
-            q.record_run(&mut st, &spec, "desktop", &ran("Pass", 600.0, false), 10);
-            q.record_run(&mut st, &spec, "laptop", &ran("Red", 900.0, false), 20);
-            // a disturbed run and a timeout teach nothing
-            q.record_run(&mut st, &spec, "laptop", &ran("Pass", 9000.0, true), 30);
-            q.record_run(&mut st, &spec, "laptop", &ran("Timeout", 9000.0, false), 40);
-        }
-        q.flush().await;
-        let live = q.lock().learned.clone();
-        assert_eq!(live.ratio("laptop", "desktop"), Some(1.5));
-        let again = queue(None);
-        again.restore_kept(kept(&db).await);
-        let st = again.lock();
-        assert_eq!(st.learned, live);
-        assert_eq!(st.history_of(&forseti::history_key(&spec)).len(), 2);
+    #[test]
+    fn learned_placement_comes_back_after_a_restart() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
+            let queue = |db: Option<urdr::Handle>| {
+                Queue::new(QueueCfg {
+                    hub_id: "h".into(),
+                    exec_root: dir.path().to_path_buf(),
+                    local: LocalRunner::new(super::super::local::Admission::Fixed(1), dir.path()),
+                    db,
+                })
+                .0
+            };
+            let fresh = queue(None);
+            fresh.restore_kept(kept(&db).await);
+            assert_eq!(fresh.lock().learned, Learned::default());
+            assert!(fresh.lock().history.is_empty());
+            let mut spec = blank_spec("x1");
+            spec.command = vec!["make".into(), "check".into()];
+            let ran = |verdict: &str, wall: f64, disturbed: bool| json!({"verdict": verdict, "wall_s": wall, "cpu_s": wall, "mem_peak_mib": 100, "disturbed": disturbed});
+            let q = queue(Some(db.clone()));
+            {
+                let mut st = q.lock();
+                q.record_run(&mut st, &spec, "desktop", &ran("Pass", 600.0, false), 10);
+                q.record_run(&mut st, &spec, "laptop", &ran("Red", 900.0, false), 20);
+                // a disturbed run and a timeout teach nothing
+                q.record_run(&mut st, &spec, "laptop", &ran("Pass", 9000.0, true), 30);
+                q.record_run(&mut st, &spec, "laptop", &ran("Timeout", 9000.0, false), 40);
+            }
+            q.flush().await;
+            let live = q.lock().learned.clone();
+            assert_eq!(live.ratio("laptop", "desktop"), Some(1.5));
+            let again = queue(None);
+            again.restore_kept(kept(&db).await);
+            let st = again.lock();
+            assert_eq!(st.learned, live);
+            assert_eq!(st.history_of(&forseti::history_key(&spec)).len(), 2);
+        })
     }
 
     // [D] pure (design §0.3 R6): admission reads the job's history. A runner's offer carries what the job's runs there
@@ -4655,36 +4659,38 @@ mod tests {
 
     // [D] pure (a link fed by hand): the same on a runner: its P5 attempt is cancelled there and the job requeued,
     // saying why; its P4 work runs on
-    #[tokio::test]
-    async fn p5_upkeep_on_a_runner_is_requeued_for_the_drain() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, false);
-        add(&q, "r1", 600);
-        hello(&q, "r1", true, 100);
-        for (id, p) in [("p5", Priority::P5), ("w", Priority::P4)] {
-            let mut s = job(id, p, 64);
-            s.place.machine = Machine::Runner("r1".into());
-            q.submit(s, 100);
-        }
-        q.tick(100);
-        for id in ["p5", "w"] {
-            let r = current(&q, id);
-            admitted(&q, "r1", &r, 64, 101);
-            started(&q, "r1", &r, 102);
-        }
-        q.submit(whole_run(Machine::Runner("r1".into())), 103);
-        q.tick(103);
-        let late = 103 + forseti::drain::DRAIN_EVICT_P5_S;
-        q.tick(late);
-        let row = q.row("p5").unwrap();
-        assert_eq!(row.machine, None, "{row:?}");
-        assert!(
-            row.waiting
-                .as_deref()
-                .is_some_and(|w| w.contains("evicted for a whole-machine run")),
-            "{row:?}"
-        );
-        assert_eq!(q.row("w").unwrap().machine.as_deref(), Some("r1"));
+    #[test]
+    fn p5_upkeep_on_a_runner_is_requeued_for_the_drain() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, false);
+            add(&q, "r1", 600);
+            hello(&q, "r1", true, 100);
+            for (id, p) in [("p5", Priority::P5), ("w", Priority::P4)] {
+                let mut s = job(id, p, 64);
+                s.place.machine = Machine::Runner("r1".into());
+                q.submit(s, 100);
+            }
+            q.tick(100);
+            for id in ["p5", "w"] {
+                let r = current(&q, id);
+                admitted(&q, "r1", &r, 64, 101);
+                started(&q, "r1", &r, 102);
+            }
+            q.submit(whole_run(Machine::Runner("r1".into())), 103);
+            q.tick(103);
+            let late = 103 + forseti::drain::DRAIN_EVICT_P5_S;
+            q.tick(late);
+            let row = q.row("p5").unwrap();
+            assert_eq!(row.machine, None, "{row:?}");
+            assert!(
+                row.waiting
+                    .as_deref()
+                    .is_some_and(|w| w.contains("evicted for a whole-machine run")),
+                "{row:?}"
+            );
+            assert_eq!(q.row("w").unwrap().machine.as_deref(), Some("r1"));
+        })
     }
 
     // [D] pure (design §5.2 item 2): a job waits for its needs as `needs`, holding no slot and no reservation; it is
@@ -4922,74 +4928,78 @@ mod tests {
 
     // [D] pure (a link fed by hand, runtime.db in a folder): once its runner says `started`, the attempt is kept
     // `running` in runtime.db, not `offered`
-    #[tokio::test]
-    async fn a_started_attempt_is_kept_running_in_runtime_db() {
-        let dir = tempfile::tempdir().unwrap();
-        let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
-        let (q, _rx) = test_queue(dir.path(), Some(db.clone()), true);
-        add(&q, "r1", 600);
-        hello(&q, "r1", true, 100);
-        q.submit(job("x1", Priority::P3, 64), 100);
-        q.tick(100);
-        let r = current(&q, "x1");
-        admitted(&q, "r1", &r, 64, 101);
-        started(&q, "r1", &r, 102);
-        q.flush().await;
-        let state: String = db
-            .read(|c| {
-                Ok(c.query_row(
-                    "select state from rq_attempt where job = 'x1' and attempt = 1",
-                    [],
-                    |r| r.get(0),
-                )?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(state, "running");
+    #[test]
+    fn a_started_attempt_is_kept_running_in_runtime_db() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
+            let (q, _rx) = test_queue(dir.path(), Some(db.clone()), true);
+            add(&q, "r1", 600);
+            hello(&q, "r1", true, 100);
+            q.submit(job("x1", Priority::P3, 64), 100);
+            q.tick(100);
+            let r = current(&q, "x1");
+            admitted(&q, "r1", &r, 64, 101);
+            started(&q, "r1", &r, 102);
+            q.flush().await;
+            let state: String = db
+                .read(|c| {
+                    Ok(c.query_row(
+                        "select state from rq_attempt where job = 'x1' and attempt = 1",
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(state, "running");
+        })
     }
 
     // [D] pure (a link fed by hand): a `hello` without linger says the runner's jobs end with its link, so a lost link
     // requeues its attempt at once; a later `hello` with linger gives the registry's grace back, and the next lost
     // link only detaches the attempt
-    #[tokio::test]
-    async fn a_hello_without_linger_ends_its_attempts_with_the_link() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        add(&q, "r1", 600);
-        hello(&q, "r1", false, 100);
-        q.submit(job("x1", Priority::P3, 64), 100);
-        q.tick(100);
-        let r = current(&q, "x1");
-        started(&q, "r1", &r, 101);
-        lost(&q, "r1", 110);
-        let row = q.row("x1").unwrap();
-        assert_eq!(row.machine, None, "{row:?}");
-        assert_eq!(
-            row.waiting.as_deref(),
-            Some("requeued (infra: runner lost)")
-        );
-        assert!(q.set_session(
-            "r1",
-            Session::start("r1", idle(), q.route(), q.link_events())
-        ));
-        hello(&q, "r1", true, 120);
-        q.tick(120);
-        let r = current(&q, "x1");
-        assert_eq!(r.attempt, 2);
-        started(&q, "r1", &r, 121);
-        lost(&q, "r1", 130);
-        let row = q.row("x1").unwrap();
-        assert_eq!(
-            (row.machine.as_deref(), row.attempt),
-            (Some("r1"), Some(2)),
-            "{row:?}"
-        );
-        let st = q.lock();
-        let a = st.attempts.attempt("x1", 2).unwrap();
-        assert!(
-            matches!(a.state, attempts::AttemptState::Detached { .. }),
-            "{a:?}"
-        );
+    #[test]
+    fn a_hello_without_linger_ends_its_attempts_with_the_link() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            add(&q, "r1", 600);
+            hello(&q, "r1", false, 100);
+            q.submit(job("x1", Priority::P3, 64), 100);
+            q.tick(100);
+            let r = current(&q, "x1");
+            started(&q, "r1", &r, 101);
+            lost(&q, "r1", 110);
+            let row = q.row("x1").unwrap();
+            assert_eq!(row.machine, None, "{row:?}");
+            assert_eq!(
+                row.waiting.as_deref(),
+                Some("requeued (infra: runner lost)")
+            );
+            assert!(q.set_session(
+                "r1",
+                Session::start("r1", idle(), q.route(), q.link_events())
+            ));
+            hello(&q, "r1", true, 120);
+            q.tick(120);
+            let r = current(&q, "x1");
+            assert_eq!(r.attempt, 2);
+            started(&q, "r1", &r, 121);
+            lost(&q, "r1", 130);
+            let row = q.row("x1").unwrap();
+            assert_eq!(
+                (row.machine.as_deref(), row.attempt),
+                (Some("r1"), Some(2)),
+                "{row:?}"
+            );
+            let st = q.lock();
+            let a = st.attempts.attempt("x1", 2).unwrap();
+            assert!(
+                matches!(a.state, attempts::AttemptState::Detached { .. }),
+                "{a:?}"
+            );
+        })
     }
 
     /// A Mac runner `m1` running a job, whose last `ready` said ON_BATTERY; then its link is lost.
@@ -5029,68 +5039,72 @@ mod tests {
 
     // [D] pure: a Mac job needing a Homebrew package or a toolchain no Mac runner has waits, and its reason is the
     // user's line to fix it (the runner user never installs into Homebrew) and the check that installs the toolchain
-    #[tokio::test]
-    async fn a_job_needing_a_missing_package_waits_with_the_install_line() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        q.add_runner(
-            RemoteRunner {
-                os: Os::Macos,
-                image: None,
-                ..remote("m1", 600)
-            },
-            Session::start("m1", idle(), q.route(), q.link_events()),
-        );
-        hello(&q, "m1", true, 100);
-        assert_eq!(q.available_mib("m1"), None);
-        ready(&q, "m1", 8192, &[], &[], 100);
-        // what the runner list counts the room for jobs from
-        assert_eq!(q.available_mib("m1"), Some(7000));
-        let mut s = job("x1", Priority::P3, 64);
-        s.spec.os = Os::Macos;
-        s.spec.features = vec!["brew:cmake@3.31".into(), "tool:rust@1.95".into()];
-        s.place.image = None;
-        q.submit(s, 100);
-        q.tick(100);
-        let row = q.row("x1").unwrap();
-        assert_eq!(row.machine, None, "{row:?}");
-        let why = row.waiting.unwrap_or_default();
-        assert!(why.contains("brew install cmake"), "{why}");
-        assert!(
-            why.contains("`drgnx runner check` on the Mac installs the toolchains"),
-            "{why}"
-        );
+    #[test]
+    fn a_job_needing_a_missing_package_waits_with_the_install_line() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            q.add_runner(
+                RemoteRunner {
+                    os: Os::Macos,
+                    image: None,
+                    ..remote("m1", 600)
+                },
+                Session::start("m1", idle(), q.route(), q.link_events()),
+            );
+            hello(&q, "m1", true, 100);
+            assert_eq!(q.available_mib("m1"), None);
+            ready(&q, "m1", 8192, &[], &[], 100);
+            // what the runner list counts the room for jobs from
+            assert_eq!(q.available_mib("m1"), Some(7000));
+            let mut s = job("x1", Priority::P3, 64);
+            s.spec.os = Os::Macos;
+            s.spec.features = vec!["brew:cmake@3.31".into(), "tool:rust@1.95".into()];
+            s.place.image = None;
+            q.submit(s, 100);
+            q.tick(100);
+            let row = q.row("x1").unwrap();
+            assert_eq!(row.machine, None, "{row:?}");
+            let why = row.waiting.unwrap_or_default();
+            assert!(why.contains("brew install cmake"), "{why}");
+            assert!(
+                why.contains("`drgnx runner check` on the Mac installs the toolchains"),
+                "{why}"
+            );
+        })
     }
 
     // [D] pure: a Linux runner has the features its probe offered, not the job's: a `gpu` job is
     // not placed on a runner whose probe lacks it, and is once its probe offers it
-    #[tokio::test]
-    async fn a_linux_runner_has_only_its_probes_features() {
-        let feature = "gpu";
-        {
-            let dir = tempfile::tempdir().unwrap();
-            let (q, _rx) = test_queue(dir.path(), None, true);
-            add(&q, "r1", 600);
-            hello(&q, "r1", true, 100);
-            let probe = |features: &[&str]| Frame::ProbeResult {
-                facts: None,
-                missing: vec![],
-                limits: None,
-                features: features.iter().map(|f| f.to_string()).collect(),
-                mem_available_mib: 16_384,
-            };
-            frame(&q, "r1", probe(&["podman"]), 100);
-            let mut s = job("x1", Priority::P3, 64);
-            s.spec.features = vec![feature.into()];
-            q.submit(s, 100);
-            q.tick(100);
-            let row = q.row("x1").unwrap();
-            assert_eq!(row.machine, None, "{feature}: {row:?}");
-            frame(&q, "r1", probe(&["podman", feature]), 101);
-            q.tick(101);
-            let row = q.row("x1").unwrap();
-            assert_eq!(row.machine.as_deref(), Some("r1"), "{feature}: {row:?}");
-        }
+    #[test]
+    fn a_linux_runner_has_only_its_probes_features() {
+        saman::block_on_current(async move {
+            let feature = "gpu";
+            {
+                let dir = tempfile::tempdir().unwrap();
+                let (q, _rx) = test_queue(dir.path(), None, true);
+                add(&q, "r1", 600);
+                hello(&q, "r1", true, 100);
+                let probe = |features: &[&str]| Frame::ProbeResult {
+                    facts: None,
+                    missing: vec![],
+                    limits: None,
+                    features: features.iter().map(|f| f.to_string()).collect(),
+                    mem_available_mib: 16_384,
+                };
+                frame(&q, "r1", probe(&["podman"]), 100);
+                let mut s = job("x1", Priority::P3, 64);
+                s.spec.features = vec![feature.into()];
+                q.submit(s, 100);
+                q.tick(100);
+                let row = q.row("x1").unwrap();
+                assert_eq!(row.machine, None, "{feature}: {row:?}");
+                frame(&q, "r1", probe(&["podman", feature]), 101);
+                q.tick(101);
+                let row = q.row("x1").unwrap();
+                assert_eq!(row.machine.as_deref(), Some("r1"), "{feature}: {row:?}");
+            }
+        })
     }
 
     /// A queue with runner `r1` whose probe found PROBED, and a job `x1` of project "drgnx" that needs FEATURES; the
@@ -5135,118 +5149,134 @@ mod tests {
 
     // [D] pure: an opt-in feature (`render`, with the GPU its probe found) is offered to a job of the project it was
     // enabled for, on a `mine` runner only; the same enabling on `my-cloud` or `shared` offers nothing
-    #[tokio::test]
-    async fn a_feature_is_offered_only_when_enabled_on_a_mine_runner() {
-        let (_d, q) = feature_queue(&["podman", "gpu"], &["render"], "drgnx");
-        assert_eq!(placed(&q, 100), None, "nothing enabled");
-        enable(&q, &[(Feature::Render, "drgnx")]);
-        for trust in [RunnerTrust::MyCloud, RunnerTrust::Shared] {
-            q.set_runner("r1", trust, Accept::All);
-            assert_eq!(placed(&q, 101), None, "{trust:?}");
-        }
-        q.set_runner("r1", RunnerTrust::Mine, Accept::All);
-        assert_eq!(placed(&q, 102).as_deref(), Some("r1"));
+    #[test]
+    fn a_feature_is_offered_only_when_enabled_on_a_mine_runner() {
+        saman::block_on_current(async move {
+            let (_d, q) = feature_queue(&["podman", "gpu"], &["render"], "drgnx");
+            assert_eq!(placed(&q, 100), None, "nothing enabled");
+            enable(&q, &[(Feature::Render, "drgnx")]);
+            for trust in [RunnerTrust::MyCloud, RunnerTrust::Shared] {
+                q.set_runner("r1", trust, Accept::All);
+                assert_eq!(placed(&q, 101), None, "{trust:?}");
+            }
+            q.set_runner("r1", RunnerTrust::Mine, Accept::All);
+            assert_eq!(placed(&q, 102).as_deref(), Some("r1"));
+        })
     }
 
     // [D] pure: an opt-in for one project does not reach a job of another (the waiting reason is `features`)
-    #[tokio::test]
-    async fn an_opt_in_for_one_project_refuses_another() {
-        let (_d, q) = feature_queue(&["podman", "gpu"], &["render"], "b");
-        enable(&q, &[(Feature::Render, "a")]);
-        assert_eq!(placed(&q, 100), None);
-        enable(&q, &[(Feature::Render, "a"), (Feature::Render, "b")]);
-        assert_eq!(placed(&q, 101).as_deref(), Some("r1"));
+    #[test]
+    fn an_opt_in_for_one_project_refuses_another() {
+        saman::block_on_current(async move {
+            let (_d, q) = feature_queue(&["podman", "gpu"], &["render"], "b");
+            enable(&q, &[(Feature::Render, "a")]);
+            assert_eq!(placed(&q, 100), None);
+            enable(&q, &[(Feature::Render, "a"), (Feature::Render, "b")]);
+            assert_eq!(placed(&q, 101).as_deref(), Some("r1"));
+        })
     }
 
     // [D] pure: `kvm` on a `my-cloud` runner (a `shared` one takes no private job at all) needs the hub's opt-in and the runner's own, both naming the job's project
-    #[tokio::test]
-    async fn kvm_on_a_shared_runner_needs_both_opt_ins() {
-        // the hub's opt-in only
-        let (_d, q) = feature_queue(&["podman", "kvm"], &["kvm"], "drgnx");
-        q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
-        enable(&q, &[(Feature::Kvm, "drgnx")]);
-        assert_eq!(placed(&q, 100), None, "hub only");
-        // the runner's only
-        let (_d, q) = feature_queue(&["podman", "kvm", "kvm-for:drgnx"], &["kvm"], "drgnx");
-        q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
-        assert_eq!(placed(&q, 100), None, "runner only");
-        // the runner's names another project
-        let (_d, q) = feature_queue(&["podman", "kvm", "kvm-for:other"], &["kvm"], "drgnx");
-        q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
-        enable(&q, &[(Feature::Kvm, "drgnx")]);
-        assert_eq!(
-            placed(&q, 100),
-            None,
-            "the runner's opt-in is for another project"
-        );
-        // both
-        let (_d, q) = feature_queue(&["podman", "kvm", "kvm-for:drgnx"], &["kvm"], "drgnx");
-        q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
-        enable(&q, &[(Feature::Kvm, "drgnx")]);
-        assert_eq!(placed(&q, 100).as_deref(), Some("r1"), "both");
+    #[test]
+    fn kvm_on_a_shared_runner_needs_both_opt_ins() {
+        saman::block_on_current(async move {
+            // the hub's opt-in only
+            let (_d, q) = feature_queue(&["podman", "kvm"], &["kvm"], "drgnx");
+            q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
+            enable(&q, &[(Feature::Kvm, "drgnx")]);
+            assert_eq!(placed(&q, 100), None, "hub only");
+            // the runner's only
+            let (_d, q) = feature_queue(&["podman", "kvm", "kvm-for:drgnx"], &["kvm"], "drgnx");
+            q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
+            assert_eq!(placed(&q, 100), None, "runner only");
+            // the runner's names another project
+            let (_d, q) = feature_queue(&["podman", "kvm", "kvm-for:other"], &["kvm"], "drgnx");
+            q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
+            enable(&q, &[(Feature::Kvm, "drgnx")]);
+            assert_eq!(
+                placed(&q, 100),
+                None,
+                "the runner's opt-in is for another project"
+            );
+            // both
+            let (_d, q) = feature_queue(&["podman", "kvm", "kvm-for:drgnx"], &["kvm"], "drgnx");
+            q.set_runner("r1", RunnerTrust::MyCloud, Accept::All);
+            enable(&q, &[(Feature::Kvm, "drgnx")]);
+            assert_eq!(placed(&q, 100).as_deref(), Some("r1"), "both");
+        })
     }
 
     // [D] pure: on a `mine` runner `kvm` is a probe fact, offered to any project with nothing enabled
-    #[tokio::test]
-    async fn kvm_on_a_mine_runner_is_a_probe_fact() {
-        let (_d, q) = feature_queue(&["podman", "kvm"], &["kvm"], "anything");
-        assert_eq!(placed(&q, 100).as_deref(), Some("r1"));
+    #[test]
+    fn kvm_on_a_mine_runner_is_a_probe_fact() {
+        saman::block_on_current(async move {
+            let (_d, q) = feature_queue(&["podman", "kvm"], &["kvm"], "anything");
+            assert_eq!(placed(&q, 100).as_deref(), Some("r1"));
+        })
     }
 
     // [D] pure: a job that needs `udmabuf` is not placed on a runner whose probe found the device until the user
     // enables it for the job's project
-    #[tokio::test]
-    async fn a_job_needing_an_unoffered_feature_waits_as_features() {
-        let (_d, q) = feature_queue(&["podman", "udmabuf"], &["udmabuf"], "drgnx");
-        assert_eq!(placed(&q, 100), None);
-        enable(&q, &[(Feature::Udmabuf, "drgnx")]);
-        assert_eq!(placed(&q, 101).as_deref(), Some("r1"));
+    #[test]
+    fn a_job_needing_an_unoffered_feature_waits_as_features() {
+        saman::block_on_current(async move {
+            let (_d, q) = feature_queue(&["podman", "udmabuf"], &["udmabuf"], "drgnx");
+            assert_eq!(placed(&q, 100), None);
+            enable(&q, &[(Feature::Udmabuf, "drgnx")]);
+            assert_eq!(placed(&q, 101).as_deref(), Some("r1"));
+        })
     }
 
     // [D] pure: a Mac whose last `ready` said it ran on battery is `sleeping` when it goes quiet (a lid closed), not
     // `unreachable`: its attempt stays detached for the grace, and the lost link is no strike
-    #[tokio::test]
-    async fn a_mac_on_battery_that_goes_quiet_is_sleeping() {
-        let (_dir, q) = mac_goes_quiet(true);
-        let row = q.runner("m1").unwrap();
-        assert_eq!(
-            (row.state.as_str(), row.strikes),
-            ("sleeping", 0),
-            "{row:?}"
-        );
-        let st = q.lock();
-        let a = st.attempts.attempt("x1", 1).unwrap();
-        assert!(
-            matches!(a.state, attempts::AttemptState::Detached { .. }),
-            "{a:?}"
-        );
+    #[test]
+    fn a_mac_on_battery_that_goes_quiet_is_sleeping() {
+        saman::block_on_current(async move {
+            let (_dir, q) = mac_goes_quiet(true);
+            let row = q.runner("m1").unwrap();
+            assert_eq!(
+                (row.state.as_str(), row.strikes),
+                ("sleeping", 0),
+                "{row:?}"
+            );
+            let st = q.lock();
+            let a = st.attempts.attempt("x1", 1).unwrap();
+            assert!(
+                matches!(a.state, attempts::AttemptState::Detached { .. }),
+                "{a:?}"
+            );
+        })
     }
 
     // [D] pure: on mains power the same silence is a lost link, as on Linux
-    #[tokio::test]
-    async fn a_mac_on_mains_that_goes_quiet_is_unreachable() {
-        let (_dir, q) = mac_goes_quiet(false);
-        let row = q.runner("m1").unwrap();
-        assert_eq!(row.state, "unreachable", "{row:?}");
+    #[test]
+    fn a_mac_on_mains_that_goes_quiet_is_unreachable() {
+        saman::block_on_current(async move {
+            let (_dir, q) = mac_goes_quiet(false);
+            let row = q.runner("m1").unwrap();
+            assert_eq!(row.state, "unreachable", "{row:?}");
+        })
     }
 
     // [D] pure: a runner's job gets the hosts its network grant reaches in its `start`, for its proxy there
-    #[tokio::test]
-    async fn a_runner_job_gets_its_grants_hosts() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        add(&q, "r1", 600);
-        hello(&q, "r1", true, 100);
-        let mut s = job("x1", Priority::P3, 64);
-        s.place.net_hosts = vec!["crates.io:443".into()];
-        q.submit(s, 100);
-        q.tick(100);
-        let r = current(&q, "x1");
-        let st = q.lock();
-        let Frame::Start { net_hosts, .. } = Queue::start_frame(&st, "r1", &r) else {
-            panic!("not a start");
-        };
-        assert_eq!(net_hosts, vec!["crates.io:443".to_string()]);
+    #[test]
+    fn a_runner_job_gets_its_grants_hosts() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            add(&q, "r1", 600);
+            hello(&q, "r1", true, 100);
+            let mut s = job("x1", Priority::P3, 64);
+            s.place.net_hosts = vec!["crates.io:443".into()];
+            q.submit(s, 100);
+            q.tick(100);
+            let r = current(&q, "x1");
+            let st = q.lock();
+            let Frame::Start { net_hosts, .. } = Queue::start_frame(&st, "r1", &r) else {
+                panic!("not a start");
+            };
+            assert_eq!(net_hosts, vec!["crates.io:443".to_string()]);
+        })
     }
 
     /// A transport whose every dial fails with its error.
@@ -5276,87 +5306,91 @@ mod tests {
     // [D] pure (a transport that refuses): a dial refused for a changed host key, or for a login the user must do,
     // puts the runner in `needs a login` with the command its card shows, and placement passes it by; a lost link on
     // its own does not; the runner's next `hello` puts it back
-    #[tokio::test]
-    async fn a_changed_host_key_puts_the_runner_in_needs_login() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        add(&q, "r1", 600);
-        hello(&q, "r1", true, 100);
-        let cfg = super::super::RunnerCfg {
-            name: "r1".into(),
-            host: "r1.example".into(),
-            linger: true,
-            cloud: None,
-            remote: super::super::Remote {
-                control: vec!["serve".into()],
-                bulk_in: vec!["cat".into()],
-                bulk_out: vec!["cat".into()],
-            },
-        };
-        for e in [
-            LinkError::HostKeyChanged,
-            LinkError::NeedsLogin(Login::Passphrase),
-        ] {
+    #[test]
+    fn a_changed_host_key_puts_the_runner_in_needs_login() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            add(&q, "r1", 600);
             hello(&q, "r1", true, 100);
+            let cfg = super::super::RunnerCfg {
+                name: "r1".into(),
+                host: "r1.example".into(),
+                linger: true,
+                cloud: None,
+                remote: super::super::Remote {
+                    control: vec!["serve".into()],
+                    bulk_in: vec!["cat".into()],
+                    bulk_out: vec!["cat".into()],
+                },
+            };
+            for e in [
+                LinkError::HostKeyChanged,
+                LinkError::NeedsLogin(Login::Passphrase),
+            ] {
+                hello(&q, "r1", true, 100);
+                assert_eq!(
+                    q.dial(&Refusing(e.clone()), &cfg, remote("r1", 600)).await,
+                    Err(e.clone())
+                );
+                assert_eq!(
+                    q.runner("r1").unwrap().state,
+                    "needs a login: ssh r1.example true",
+                    "{e}"
+                );
+            }
+            q.submit(job("x1", Priority::P3, 64), 100);
+            q.tick(100);
+            assert_eq!(q.row("x1").unwrap().machine, None);
+            hello(&q, "r1", true, 110);
+            assert_eq!(q.runner("r1").unwrap().state, "ready");
             assert_eq!(
-                q.dial(&Refusing(e.clone()), &cfg, remote("r1", 600)).await,
-                Err(e.clone())
+                q.dial(&Refusing(LinkError::Lost), &cfg, remote("r1", 600))
+                    .await,
+                Err(LinkError::Lost)
             );
-            assert_eq!(
-                q.runner("r1").unwrap().state,
-                "needs a login: ssh r1.example true",
-                "{e}"
-            );
-        }
-        q.submit(job("x1", Priority::P3, 64), 100);
-        q.tick(100);
-        assert_eq!(q.row("x1").unwrap().machine, None);
-        hello(&q, "r1", true, 110);
-        assert_eq!(q.runner("r1").unwrap().state, "ready");
-        assert_eq!(
-            q.dial(&Refusing(LinkError::Lost), &cfg, remote("r1", 600))
-                .await,
-            Err(LinkError::Lost)
-        );
-        assert_eq!(q.runner("r1").unwrap().state, "ready");
+            assert_eq!(q.runner("r1").unwrap().state, "ready");
+        })
     }
 
     // [D] pure (links fed by hand): the head (priority 1, 3,500 MiB) fits no machine now (r1 has 1,000 MiB free), so
     // it reserves r1 from when r1's running job is expected to end (+300 s). A priority-4 job expected to take 10
     // minutes would still run then, and waits for the head; one whose runs took 100 s ends first and backfills r1
-    #[tokio::test]
-    async fn the_head_reserves_a_runner_and_a_short_job_backfills_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        add(&q, "r1", 600);
-        hello(&q, "r1", true, 100);
-        ready(&q, "r1", 8000, &[], &[], 100);
-        q.submit(job("xa", Priority::P4, 3000), 100);
-        q.tick(100);
-        let a = current(&q, "xa");
-        admitted(&q, "r1", &a, 3000, 100);
-        started(&q, "r1", &a, 100);
-        ready(&q, "r1", 1000, &[], &[], 400);
-        let short = job("xs2", Priority::P4, 512);
-        {
-            let mut st = q.lock();
-            let ran = json!({"verdict": "Pass", "wall_s": 100.0});
-            q.record_run(&mut st, &short.spec, "r1", &ran, 50);
-        }
-        q.submit(job("xh", Priority::P1, 3500), 400);
-        // the order reads history, so xs2 (100 s) is placed before xs; xs is small enough to fit after it, so only
-        // the head's room keeps it waiting
-        q.submit(job("xs", Priority::P4, 256), 400);
-        q.submit(short, 400);
-        q.tick(400);
-        let row = |id: &str| q.row(id).unwrap();
-        assert_eq!(row("xh").machine, None, "{:?}", row("xh"));
-        assert_eq!(row("xs").machine, None, "{:?}", row("xs"));
-        assert_eq!(
-            row("xs").waiting.as_deref(),
-            Some("room is kept for job xh")
-        );
-        assert_eq!(row("xs2").machine.as_deref(), Some("r1"));
+    #[test]
+    fn the_head_reserves_a_runner_and_a_short_job_backfills_it() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            add(&q, "r1", 600);
+            hello(&q, "r1", true, 100);
+            ready(&q, "r1", 8000, &[], &[], 100);
+            q.submit(job("xa", Priority::P4, 3000), 100);
+            q.tick(100);
+            let a = current(&q, "xa");
+            admitted(&q, "r1", &a, 3000, 100);
+            started(&q, "r1", &a, 100);
+            ready(&q, "r1", 1000, &[], &[], 400);
+            let short = job("xs2", Priority::P4, 512);
+            {
+                let mut st = q.lock();
+                let ran = json!({"verdict": "Pass", "wall_s": 100.0});
+                q.record_run(&mut st, &short.spec, "r1", &ran, 50);
+            }
+            q.submit(job("xh", Priority::P1, 3500), 400);
+            // the order reads history, so xs2 (100 s) is placed before xs; xs is small enough to fit after it, so only
+            // the head's room keeps it waiting
+            q.submit(job("xs", Priority::P4, 256), 400);
+            q.submit(short, 400);
+            q.tick(400);
+            let row = |id: &str| q.row(id).unwrap();
+            assert_eq!(row("xh").machine, None, "{:?}", row("xh"));
+            assert_eq!(row("xs").machine, None, "{:?}", row("xs"));
+            assert_eq!(
+                row("xs").waiting.as_deref(),
+                Some("room is kept for job xh")
+            );
+            assert_eq!(row("xs2").machine.as_deref(), Some("r1"));
+        })
     }
 
     /// A runner whose control channel the test reads, and the end it would answer on (held, so its link stays up).
@@ -5416,37 +5450,39 @@ mod tests {
     // [D] pure (links fed by hand): the head reserved on r1 (as in the backfill row: from +300 s, needing 3,500 MiB)
     // reaches r1 in a `head` frame once, so a grow there leaves it that room; a tick that changes nothing sends no
     // other; once the head is placed, r1 hears `at` 0
-    #[tokio::test]
-    async fn the_heads_runner_hears_its_reservation() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        let (mut heard, _answer) = add_heard(&q, "r1");
-        hello(&q, "r1", true, 100);
-        ready(&q, "r1", 8000, &[], &[], 100);
-        q.submit(job("xa", Priority::P4, 3000), 100);
-        q.tick(100);
-        let a = current(&q, "xa");
-        admitted(&q, "r1", &a, 3000, 100);
-        started(&q, "r1", &a, 100);
-        ready(&q, "r1", 1000, &[], &[], 400);
-        q.submit(job("xh", Priority::P1, 3500), 400);
-        q.tick(400);
-        let at = |f: &Value| f["at"].as_u64().unwrap();
-        let hs = heads_heard(&q, "r1", &mut heard, 1).await;
-        assert_eq!(hs.len(), 1, "{hs:?}");
-        assert!(at(&hs[0]) > 400, "{hs:?}");
-        assert_eq!(hs[0]["mem_mib"], 3500, "{hs:?}");
-        q.tick(401);
-        assert_eq!(
-            heads_heard(&q, "r1", &mut heard, 2).await,
-            Vec::<Value>::new()
-        );
-        // r1's job is gone: the head fits now and is offered there
-        ready(&q, "r1", 8000, &[], &[], 402);
-        q.tick(402);
-        assert_eq!(q.row("xh").unwrap().machine.as_deref(), Some("r1"));
-        let hs = heads_heard(&q, "r1", &mut heard, 3).await;
-        assert_eq!(hs.iter().map(at).collect::<Vec<_>>(), vec![0], "{hs:?}");
+    #[test]
+    fn the_heads_runner_hears_its_reservation() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            let (mut heard, _answer) = add_heard(&q, "r1");
+            hello(&q, "r1", true, 100);
+            ready(&q, "r1", 8000, &[], &[], 100);
+            q.submit(job("xa", Priority::P4, 3000), 100);
+            q.tick(100);
+            let a = current(&q, "xa");
+            admitted(&q, "r1", &a, 3000, 100);
+            started(&q, "r1", &a, 100);
+            ready(&q, "r1", 1000, &[], &[], 400);
+            q.submit(job("xh", Priority::P1, 3500), 400);
+            q.tick(400);
+            let at = |f: &Value| f["at"].as_u64().unwrap();
+            let hs = heads_heard(&q, "r1", &mut heard, 1).await;
+            assert_eq!(hs.len(), 1, "{hs:?}");
+            assert!(at(&hs[0]) > 400, "{hs:?}");
+            assert_eq!(hs[0]["mem_mib"], 3500, "{hs:?}");
+            q.tick(401);
+            assert_eq!(
+                heads_heard(&q, "r1", &mut heard, 2).await,
+                Vec::<Value>::new()
+            );
+            // r1's job is gone: the head fits now and is offered there
+            ready(&q, "r1", 8000, &[], &[], 402);
+            q.tick(402);
+            assert_eq!(q.row("xh").unwrap().machine.as_deref(), Some("r1"));
+            let hs = heads_heard(&q, "r1", &mut heard, 3).await;
+            assert_eq!(hs.iter().map(at).collect::<Vec<_>>(), vec![0], "{hs:?}");
+        })
     }
 
     fn frozen(key: &str, size: u64) -> Frozen {
@@ -5484,111 +5520,119 @@ mod tests {
 
     // [D] pure (links fed by hand): a bundle's answer times the link (10 MiB in 10 s: 1 MiB/s to r1), and a job's
     // inputs r1 lacks (600 MiB at that rate) count in r1's estimate, so the job goes to r2, which synced them before
-    #[tokio::test]
-    async fn a_timed_bundle_teaches_the_link_and_placement_counts_the_transfer() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        for r in ["r1", "r2"] {
-            add(&q, r, 600);
-            hello(&q, r, true, 100);
-            ready(&q, r, 8000, &[], &[], 100);
-        }
-        let mut j0 = job("x0", Priority::P3, 64);
-        j0.place.machine = Machine::Runner("r2".into());
-        j0.inputs = Some(frozen("K", 600 << 20));
-        q.submit(j0, 100);
-        q.tick(100);
-        let r0 = current(&q, "x0");
-        admitted(&q, "r2", &r0, 64, 100);
-        sync_done(&q, "r2", &r0, 101);
-        let mut j1 = job("x1", Priority::P3, 64);
-        j1.place.machine = Machine::Runner("r1".into());
-        j1.inputs = Some(frozen("K1", 0));
-        q.submit(j1, 102);
-        q.tick(102);
-        let r1 = current(&q, "x1");
-        admitted(&q, "r1", &r1, 64, 102);
-        {
-            let mut st = q.lock();
-            let s = st.syncs.get_mut(&("x1".to_string(), 1)).expect("x1 syncs");
-            s.bundle = Some(sync::BundleFile {
-                path: dir.path().join("x1.bundle"),
-                sha256: [0; 32],
-                size: 10 << 20,
-            });
-            s.sent_at = 110;
-        }
-        sync_done(&q, "r1", &r1, 120);
-        assert_eq!(
-            q.lock().learned.link("r1"),
-            Some((10u64 << 20) as f64 / 10.0)
-        );
-        let mut j2 = job("x2", Priority::P3, 64);
-        j2.inputs = Some(frozen("K", 600 << 20));
-        q.submit(j2, 130);
-        q.tick(130);
-        assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r2"));
+    #[test]
+    fn a_timed_bundle_teaches_the_link_and_placement_counts_the_transfer() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            for r in ["r1", "r2"] {
+                add(&q, r, 600);
+                hello(&q, r, true, 100);
+                ready(&q, r, 8000, &[], &[], 100);
+            }
+            let mut j0 = job("x0", Priority::P3, 64);
+            j0.place.machine = Machine::Runner("r2".into());
+            j0.inputs = Some(frozen("K", 600 << 20));
+            q.submit(j0, 100);
+            q.tick(100);
+            let r0 = current(&q, "x0");
+            admitted(&q, "r2", &r0, 64, 100);
+            sync_done(&q, "r2", &r0, 101);
+            let mut j1 = job("x1", Priority::P3, 64);
+            j1.place.machine = Machine::Runner("r1".into());
+            j1.inputs = Some(frozen("K1", 0));
+            q.submit(j1, 102);
+            q.tick(102);
+            let r1 = current(&q, "x1");
+            admitted(&q, "r1", &r1, 64, 102);
+            {
+                let mut st = q.lock();
+                let s = st.syncs.get_mut(&("x1".to_string(), 1)).expect("x1 syncs");
+                s.bundle = Some(sync::BundleFile {
+                    path: dir.path().join("x1.bundle"),
+                    sha256: [0; 32],
+                    size: 10 << 20,
+                });
+                s.sent_at = 110;
+            }
+            sync_done(&q, "r1", &r1, 120);
+            assert_eq!(
+                q.lock().learned.link("r1"),
+                Some((10u64 << 20) as f64 / 10.0)
+            );
+            let mut j2 = job("x2", Priority::P3, 64);
+            j2.inputs = Some(frozen("K", 600 << 20));
+            q.submit(j2, 130);
+            q.tick(130);
+            assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r2"));
+        })
     }
 
     // [D] pure (links fed by hand): r2's `ready` lists the job's slot and image, r1's nothing; otherwise equal, the
     // warm start wins (by name alone it would be r1)
-    #[tokio::test]
-    async fn a_runner_with_the_jobs_slot_and_image_wins_a_tie() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        let j = job("x1", Priority::P3, 64);
-        let slot = sleipnir::sync::slot::SlotId::of(&j.spec).id();
-        for r in ["r1", "r2"] {
-            add(&q, r, 600);
-            hello(&q, r, true, 100);
-        }
-        ready(&q, "r1", 8000, &[], &[], 100);
-        ready(&q, "r2", 8000, &[slot], &[IMG], 100);
-        q.submit(j, 100);
-        q.tick(100);
-        assert_eq!(q.row("x1").unwrap().machine.as_deref(), Some("r2"));
+    #[test]
+    fn a_runner_with_the_jobs_slot_and_image_wins_a_tie() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            let j = job("x1", Priority::P3, 64);
+            let slot = sleipnir::sync::slot::SlotId::of(&j.spec).id();
+            for r in ["r1", "r2"] {
+                add(&q, r, 600);
+                hello(&q, r, true, 100);
+            }
+            ready(&q, "r1", 8000, &[], &[], 100);
+            ready(&q, "r2", 8000, &[slot], &[IMG], 100);
+            q.submit(j, 100);
+            q.tick(100);
+            assert_eq!(q.row("x1").unwrap().machine.as_deref(), Some("r2"));
+        })
     }
 
     // [D] pure: a job that ran here is history placement learns from, as this machine's run
-    #[tokio::test]
-    async fn a_run_here_is_this_machines_history() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, false);
-        let j = job("x1", Priority::P3, 64);
-        let key = forseti::history_key(&j.spec);
-        q.submit(j, 100);
-        assert_eq!(q.tick(100).starts, vec!["x1".to_string()]);
-        q.ran_here("x1", &json!({"verdict": "Pass", "wall_s": 42.0}), 150);
-        let st = q.lock();
-        let rows = st.history_of(&key);
-        assert_eq!(rows.len(), 1, "{rows:?}");
-        assert_eq!((rows[0].machine.as_str(), rows[0].wall_s), (LOCAL, 42.0));
+    #[test]
+    fn a_run_here_is_this_machines_history() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, false);
+            let j = job("x1", Priority::P3, 64);
+            let key = forseti::history_key(&j.spec);
+            q.submit(j, 100);
+            assert_eq!(q.tick(100).starts, vec!["x1".to_string()]);
+            q.ran_here("x1", &json!({"verdict": "Pass", "wall_s": 42.0}), 150);
+            let st = q.lock();
+            let rows = st.history_of(&key);
+            assert_eq!(rows.len(), 1, "{rows:?}");
+            assert_eq!((rows[0].machine.as_str(), rows[0].wall_s), (LOCAL, 42.0));
+        })
     }
 
     // [D] pure: a keyed job runs here as any other does (the hub's key socket hands it its keys): with no runner it
     // starts here; with this machine full, it goes to a runner that may get its keys
-    #[tokio::test]
-    async fn a_keyed_job_runs_here_too() {
-        let keyed = |id: &str| {
-            let mut j = job(id, Priority::P3, 64);
-            j.spec.keys = vec!["TOKEN".into()];
-            j.spec.trust = JobTrust::PrivateKeys;
-            j.place.keys = vec!["TOKEN".into()];
-            j
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, false);
-        q.submit(keyed("x1"), 100);
-        assert_eq!(q.tick(100).starts, vec!["x1".to_string()]);
-        assert_eq!(q.row("x1").unwrap().machine.as_deref(), Some(LOCAL));
-        // busy here: a runner of the user's own takes it
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        add(&q, "r1", 600);
-        hello(&q, "r1", true, 100);
-        q.submit(keyed("x2"), 100);
-        assert!(q.tick(100).starts.is_empty());
-        assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r1"));
+    #[test]
+    fn a_keyed_job_runs_here_too() {
+        saman::block_on_current(async move {
+            let keyed = |id: &str| {
+                let mut j = job(id, Priority::P3, 64);
+                j.spec.keys = vec!["TOKEN".into()];
+                j.spec.trust = JobTrust::PrivateKeys;
+                j.place.keys = vec!["TOKEN".into()];
+                j
+            };
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, false);
+            q.submit(keyed("x1"), 100);
+            assert_eq!(q.tick(100).starts, vec!["x1".to_string()]);
+            assert_eq!(q.row("x1").unwrap().machine.as_deref(), Some(LOCAL));
+            // busy here: a runner of the user's own takes it
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            add(&q, "r1", 600);
+            hello(&q, "r1", true, 100);
+            q.submit(keyed("x2"), 100);
+            assert!(q.tick(100).starts.is_empty());
+            assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r1"));
+        })
     }
 
     /// Runners R1 and R2, linked and ready (8000 MiB free), and the local slot held: a job goes to a runner.
@@ -5602,167 +5646,181 @@ mod tests {
 
     // [D] pure: a placed job's row says why that machine and not the others: the pick first, then each other
     // machine's reason (here: this machine's one slot is held)
-    #[tokio::test]
-    async fn a_placed_row_records_why_here() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        add(&q, "r1", 600);
-        hello(&q, "r1", false, 100);
-        ready(&q, "r1", 8000, &[], &[], 100);
-        q.submit(job("x1", Priority::P3, 64), 100);
-        q.tick(100);
-        let row = q.row("x1").unwrap();
-        assert_eq!(row.machine.as_deref(), Some("r1"), "{row:?}");
-        let why = row.placed_why.expect("a placed row says why");
-        assert!(why.starts_with("r1: "), "{why}");
-        assert!(
-            why.contains("local: every job slot of the machine is in use"),
-            "{why}"
-        );
-        // a job back in the queue (its runner's link lost, with no linger) says why it waits, not where it was placed
-        lost(&q, "r1", 110);
-        assert_eq!(q.row("x1").unwrap().placed_why, None);
+    #[test]
+    fn a_placed_row_records_why_here() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            add(&q, "r1", 600);
+            hello(&q, "r1", false, 100);
+            ready(&q, "r1", 8000, &[], &[], 100);
+            q.submit(job("x1", Priority::P3, 64), 100);
+            q.tick(100);
+            let row = q.row("x1").unwrap();
+            assert_eq!(row.machine.as_deref(), Some("r1"), "{row:?}");
+            let why = row.placed_why.expect("a placed row says why");
+            assert!(why.starts_with("r1: "), "{why}");
+            assert!(
+                why.contains("local: every job slot of the machine is in use"),
+                "{why}"
+            );
+            // a job back in the queue (its runner's link lost, with no linger) says why it waits, not where it was placed
+            lost(&q, "r1", 110);
+            assert_eq!(q.row("x1").unwrap().placed_why, None);
+        })
     }
 
     // [D] pure: a machine the user chose is the whole reason
-    #[tokio::test]
-    async fn a_pinned_row_says_pinned_by_you() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        two_runners(&q, 100);
-        let mut s = job("x1", Priority::P1, 64);
-        s.session = None;
-        s.place.machine = Machine::Runner("r2".into());
-        s.place.by_user = true;
-        q.submit(s, 100);
-        q.tick(100);
-        let row = q.row("x1").unwrap();
-        assert_eq!(row.machine.as_deref(), Some("r2"), "{row:?}");
-        assert_eq!(row.placed_why.as_deref(), Some("pinned by you"));
+    #[test]
+    fn a_pinned_row_says_pinned_by_you() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            two_runners(&q, 100);
+            let mut s = job("x1", Priority::P1, 64);
+            s.session = None;
+            s.place.machine = Machine::Runner("r2".into());
+            s.place.by_user = true;
+            q.submit(s, 100);
+            q.tick(100);
+            let row = q.row("x1").unwrap();
+            assert_eq!(row.machine.as_deref(), Some("r2"), "{row:?}");
+            assert_eq!(row.placed_why.as_deref(), Some("pinned by you"));
+        })
     }
 
     // [D] pure: a queued job moved to r2 is placed there, though r1 would win the pick; its row says the user chose
-    #[tokio::test]
-    async fn move_requeues_a_queued_job_on_the_target() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        q.submit(job("x1", Priority::P3, 64), 100);
-        q.tick(100);
-        assert_eq!(q.row("x1").unwrap().machine, None);
-        two_runners(&q, 101);
-        assert_eq!(
-            q.move_job("x1", Machine::Runner("r2".into())),
-            Ok(Moved::Requeued)
-        );
-        q.tick(102);
-        let row = q.row("x1").unwrap();
-        assert_eq!(row.machine.as_deref(), Some("r2"), "{row:?}");
-        assert_eq!(row.placed_why.as_deref(), Some("pinned by you"));
+    #[test]
+    fn move_requeues_a_queued_job_on_the_target() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            q.submit(job("x1", Priority::P3, 64), 100);
+            q.tick(100);
+            assert_eq!(q.row("x1").unwrap().machine, None);
+            two_runners(&q, 101);
+            assert_eq!(
+                q.move_job("x1", Machine::Runner("r2".into())),
+                Ok(Moved::Requeued)
+            );
+            q.tick(102);
+            let row = q.row("x1").unwrap();
+            assert_eq!(row.machine.as_deref(), Some("r2"), "{row:?}");
+            assert_eq!(row.placed_why.as_deref(), Some("pinned by you"));
+        })
     }
 
     // [D] pure: a move of a job that runs stops nothing: the answer names where it runs (the hub asks the user on a
     // card), its attempt keeps running and its runner is sent nothing; a move to where it runs is a no-op
-    #[tokio::test]
-    async fn move_on_a_running_job_opens_a_card_and_stops_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        two_runners(&q, 100);
-        q.submit(job("x1", Priority::P3, 64), 100);
-        q.tick(100);
-        let r = current(&q, "x1");
-        started(&q, "r1", &r, 101);
-        let before = q.row("x1").unwrap();
-        assert_eq!(
-            q.move_job("x1", Machine::Runner("r2".into())),
-            Ok(Moved::Running("r1".into()))
-        );
-        assert_eq!(q.row("x1").unwrap(), before);
-        let st = q.lock();
-        let (n, a) = st.attempts.current("x1").unwrap();
-        assert_eq!((n, a.state), (1, attempts::AttemptState::Running));
-        drop(st);
-        assert_eq!(
-            q.move_job("x1", Machine::Runner("r1".into())),
-            Ok(Moved::Same)
-        );
-        let card = crate::work::machines::move_card("x1", "make x1", "r2", "r1");
-        assert_eq!(
-            card.title.as_deref(),
-            Some("Restart make x1 on r2? It stops the run on r1")
-        );
-        assert_eq!(
-            card.data.unwrap(),
-            json!({"job": "x1", "machine": "r2", "choices": ["restart", "keep"]})
-        );
-        // only the card's Restart requeues: the attempt on r1 is cancelled there, and the job goes to r2
-        q.restart_on("x1", Machine::Runner("r2".into()), 102)
-            .unwrap();
-        let st = q.lock();
-        assert_eq!(
-            st.attempts.attempt("x1", 1).map(|a| a.state),
-            Some(attempts::AttemptState::Requeued)
-        );
-        drop(st);
-        q.tick(103);
-        assert_eq!(q.row("x1").unwrap().machine.as_deref(), Some("r2"));
+    #[test]
+    fn move_on_a_running_job_opens_a_card_and_stops_nothing() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            two_runners(&q, 100);
+            q.submit(job("x1", Priority::P3, 64), 100);
+            q.tick(100);
+            let r = current(&q, "x1");
+            started(&q, "r1", &r, 101);
+            let before = q.row("x1").unwrap();
+            assert_eq!(
+                q.move_job("x1", Machine::Runner("r2".into())),
+                Ok(Moved::Running("r1".into()))
+            );
+            assert_eq!(q.row("x1").unwrap(), before);
+            let st = q.lock();
+            let (n, a) = st.attempts.current("x1").unwrap();
+            assert_eq!((n, a.state), (1, attempts::AttemptState::Running));
+            drop(st);
+            assert_eq!(
+                q.move_job("x1", Machine::Runner("r1".into())),
+                Ok(Moved::Same)
+            );
+            let card = crate::work::machines::move_card("x1", "make x1", "r2", "r1");
+            assert_eq!(
+                card.title.as_deref(),
+                Some("Restart make x1 on r2? It stops the run on r1")
+            );
+            assert_eq!(
+                card.data.unwrap(),
+                json!({"job": "x1", "machine": "r2", "choices": ["restart", "keep"]})
+            );
+            // only the card's Restart requeues: the attempt on r1 is cancelled there, and the job goes to r2
+            q.restart_on("x1", Machine::Runner("r2".into()), 102)
+                .unwrap();
+            let st = q.lock();
+            assert_eq!(
+                st.attempts.attempt("x1", 1).map(|a| a.state),
+                Some(attempts::AttemptState::Requeued)
+            );
+            drop(st);
+            q.tick(103);
+            assert_eq!(q.row("x1").unwrap().machine.as_deref(), Some("r2"));
+        })
     }
 
     // [D] pure: a session's preference pins its next jobs; another session's jobs are placed as before
-    #[tokio::test]
-    async fn move_on_a_session_sets_its_next_jobs_machine() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        two_runners(&q, 100);
-        q.prefer("s1", Machine::Runner("r2".into())).unwrap();
-        q.submit(job("x1", Priority::P3, 64), 100);
-        let mut other = job("x2", Priority::P3, 64);
-        other.session = Some("s2".into());
-        q.submit(other, 100);
-        q.tick(100);
-        assert_eq!(q.row("x1").unwrap().machine.as_deref(), Some("r2"));
-        assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r1"));
+    #[test]
+    fn move_on_a_session_sets_its_next_jobs_machine() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            two_runners(&q, 100);
+            q.prefer("s1", Machine::Runner("r2".into())).unwrap();
+            q.submit(job("x1", Priority::P3, 64), 100);
+            let mut other = job("x2", Priority::P3, 64);
+            other.session = Some("s2".into());
+            q.submit(other, 100);
+            q.tick(100);
+            assert_eq!(q.row("x1").unwrap().machine.as_deref(), Some("r2"));
+            assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r1"));
+        })
     }
 
     // [D] pure (runtime.db in a folder): the machine the user moved a session to is kept with the session's recorded
     // row and comes back after a hub restart: the session's next job goes there
-    #[tokio::test]
-    async fn a_sessions_machine_comes_back_after_a_restart() {
-        let dir = tempfile::tempdir().unwrap();
-        let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
-        db.write(|c| {
-            Ok(c.execute(
-                "insert into asession(sid, name, profile, at) values ('s1', 'a', 'p', 1.0)",
-                [],
-            )?)
+    #[test]
+    fn a_sessions_machine_comes_back_after_a_restart() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
+            db.write(|c| {
+                Ok(c.execute(
+                    "insert into asession(sid, name, profile, at) values ('s1', 'a', 'p', 1.0)",
+                    [],
+                )?)
+            })
+            .await
+            .unwrap();
+            let (q, _rx) = test_queue(dir.path(), Some(db.clone()), true);
+            two_runners(&q, 100);
+            q.prefer("s1", Machine::Runner("r2".into())).unwrap();
+            q.flush().await;
+            let (again, _rx2) = test_queue(dir.path(), None, true);
+            again.restore_kept(kept(&db).await);
+            two_runners(&again, 200);
+            again.submit(job("x1", Priority::P3, 64), 200);
+            again.tick(200);
+            let row = again.row("x1").unwrap();
+            assert_eq!(row.machine.as_deref(), Some("r2"), "{row:?}");
         })
-        .await
-        .unwrap();
-        let (q, _rx) = test_queue(dir.path(), Some(db.clone()), true);
-        two_runners(&q, 100);
-        q.prefer("s1", Machine::Runner("r2".into())).unwrap();
-        q.flush().await;
-        let (again, _rx2) = test_queue(dir.path(), None, true);
-        again.restore_kept(kept(&db).await);
-        two_runners(&again, 200);
-        again.submit(job("x1", Priority::P3, 64), 200);
-        again.tick(200);
-        let row = again.row("x1").unwrap();
-        assert_eq!(row.machine.as_deref(), Some("r2"), "{row:?}");
     }
 
     // [D] pure: a machine the queue doesn't know is refused, saying so; nothing changes
-    #[tokio::test]
-    async fn move_to_an_unknown_machine_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        q.submit(job("x1", Priority::P3, 64), 100);
-        let e = q
-            .move_job("x1", Machine::Runner("nope".into()))
-            .unwrap_err();
-        assert!(e.message().contains("no runner nope"), "{e}");
-        let e = q.prefer("s1", Machine::Runner("nope".into())).unwrap_err();
-        assert!(e.message().contains("no runner nope"), "{e}");
-        assert_eq!(q.lock().jobs["x1"].s.place.machine, Machine::Auto);
+    #[test]
+    fn move_to_an_unknown_machine_is_refused() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            q.submit(job("x1", Priority::P3, 64), 100);
+            let e = q
+                .move_job("x1", Machine::Runner("nope".into()))
+                .unwrap_err();
+            assert!(e.message().contains("no runner nope"), "{e}");
+            let e = q.prefer("s1", Machine::Runner("nope".into())).unwrap_err();
+            assert!(e.message().contains("no runner nope"), "{e}");
+            assert_eq!(q.lock().jobs["x1"].s.place.machine, Machine::Auto);
+        })
     }
 
     // [D] pure: the design's table, row by row

@@ -98,7 +98,7 @@ pub struct BoundGuard {
 
 impl Drop for BoundGuard {
     fn drop(&mut self) {
-        let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        let mut live = saman::lock(&self.live);
         if let Some(list) = live.by_id.get_mut(&self.id) {
             list.retain(|(t, _)| *t != self.ticket);
             if list.is_empty() {
@@ -112,7 +112,7 @@ impl Bound {
     /// A attaches (the latest bridge still attached is the agent's); the guard detaches it.
     pub fn attach(&self, a: OutsideActor) -> BoundGuard {
         let id = a.id.clone();
-        let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        let mut live = saman::lock(&self.live);
         live.next += 1;
         let ticket = live.next;
         live.by_id.entry(id.clone()).or_default().push((ticket, a));
@@ -125,9 +125,7 @@ impl Bound {
 
     /// The attached bridge ID (its latest one still attached), if one is.
     pub fn get(&self, id: &str) -> Option<OutsideActor> {
-        self.live
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.live)
             .by_id
             .get(id)
             .and_then(|l| l.last())

@@ -544,7 +544,7 @@ pub struct Map {
 }
 
 fn lock(m: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 fn minute() -> u64 {
@@ -809,7 +809,7 @@ impl Map {
     /// The strip's forecast and cost chips of a test hub's scene.
     #[cfg(feature = "test-hooks")]
     pub fn scene_strip(&self, chips: Vec<String>) {
-        *self.strip.lock().unwrap_or_else(PoisonError::into_inner) = chips;
+        *saman::lock(&self.strip) = chips;
     }
 
     /// The chips left of the machines' on the strip: one for each weekly meter, then the selected plan's budget (see
@@ -822,11 +822,7 @@ impl Map {
     ) -> Vec<String> {
         #[cfg(feature = "test-hooks")]
         {
-            let scene = self
-                .strip
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone();
+            let scene = saman::lock(&self.strip).clone();
             if !scene.is_empty() {
                 return scene;
             }
@@ -1446,7 +1442,7 @@ impl Map {
             .map(|l| model::doc(m, l, &v.sent, &v.state));
         #[cfg(test)]
         {
-            let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut log = saman::lock(&self.log);
             if doc.is_some() {
                 log.push("model");
             }
@@ -2183,34 +2179,18 @@ fn detail_facts(f: &Front, sel: Option<&ItemId>) -> Option<budget_detail::Facts>
     let item = format!("{kind}:{id}");
     // a plan's forecast is read in the background the first time Detail shows it, then Detail draws again
     if kind == "plan"
-        && f.core
-            .map
-            .forecast_asked
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(item.clone())
+        && saman::lock(&f.core.map.forecast_asked).insert(item.clone())
         && let Some(fr) = f.core.map.front.get().and_then(std::sync::Weak::upgrade)
     {
         let (plan, key) = (id.to_owned(), item.clone());
         crate::clock::spawn("map:detail-forecast", async move {
             if let Some(fc) = plan_forecast(&fr, &plan).await {
-                fr.core
-                    .map
-                    .forecasts
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(key, fc);
+                saman::lock(&fr.core.map.forecasts).insert(key, fc);
                 fr.core.map.redraw_details(&fr);
             }
         });
     }
-    let cache = f
-        .core
-        .map
-        .forecasts
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
+    let cache = saman::lock(&f.core.map.forecasts).clone();
     Some(budget_detail::facts_for(
         &f.core.budgets.views_along(&scope),
         &item,

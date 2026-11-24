@@ -272,7 +272,7 @@ fn a_notebook_of_ten_thousand_cells_is_opened_synced_and_given_tails_by_index() 
         );
         b.sync(&plan);
         let cells = b.cells();
-        *s2.lock().unwrap() = Some((
+        *saman::lock(&s2) = Some((
             tails,
             cells.len(),
             cells[0].id.clone(),
@@ -282,7 +282,7 @@ fn a_notebook_of_ten_thousand_cells_is_opened_synced_and_given_tails_by_index() 
         ));
     });
     let (tails, n, first, seventh, c5_gone, added) =
-        skuld::wait_until("the notebook", 60, || slot.lock().unwrap().take());
+        skuld::wait_until("the notebook", 60, || saman::lock(&slot).take());
     assert_eq!((tails, n), (MAX_CELLS, MAX_CELLS));
     assert_eq!(
         (first.as_str(), seventh.as_str(), c5_gone, added),

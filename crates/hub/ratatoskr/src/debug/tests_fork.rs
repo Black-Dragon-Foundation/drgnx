@@ -34,7 +34,7 @@ impl Mocks {
         })
     }
     async fn logs(&self) -> Vec<vor::mock::Log> {
-        let ms: Vec<Mock> = std::mem::take(&mut *self.running.lock().unwrap());
+        let ms: Vec<Mock> = std::mem::take(&mut *saman::lock(&self.running));
         let mut out = vec![];
         for m in ms {
             out.push(m.finish().await.expect("the script played to its end"));
@@ -46,10 +46,7 @@ impl Mocks {
 impl Launcher for Mocks {
     fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
-            let steps = self
-                .scripts
-                .lock()
-                .unwrap()
+            let steps = saman::lock(&self.scripts)
                 .pop_front()
                 .ok_or("no script left")
                 .map_err(|e| villa::Error::invalid(e.to_string()))?;
@@ -57,10 +54,7 @@ impl Launcher for Mocks {
             let (a, b) = tokio::io::duplex(1 << 20);
             let (cr, cw) = tokio::io::split(a);
             let (mr, mw) = tokio::io::split(b);
-            self.running
-                .lock()
-                .unwrap()
-                .push(Mock::start(script, mr, mw));
+            saman::lock(&self.running).push(Mock::start(script, mr, mw));
             let (client, incoming) = vor::Client::new(cr, cw);
             Ok(Connected {
                 client,
@@ -340,64 +334,67 @@ fn hits(h: &[RunHit]) -> Vec<(String, String)> {
 }
 
 /// The mockup's fork: line 20, hit 3; `item.reserve` set; the probe's hits split at the point; run to the end.
-#[tokio::test(start_paused = true)]
-async fn hit_three_is_counted_by_the_hub_and_the_value_set_before_it_runs_on() {
-    let item = json!([{"name": "item", "value": "Item(...)", "variablesReference": 11, "evaluateName": "item"}]);
-    let mut s = launch(
-        caps(),
-        vec![
-            json!({"expect": "setBreakpoints", "args": {"source": {"path": PY},
+#[test]
+fn hit_three_is_counted_by_the_hub_and_the_value_set_before_it_runs_on() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let item = json!([{"name": "item", "value": "Item(...)", "variablesReference": 11, "evaluateName": "item"}]);
+        let mut s = launch(
+            caps(),
+            vec![
+                json!({"expect": "setBreakpoints", "args": {"source": {"path": PY},
                       "breakpoints": [{"line": 20}, {"line": 22, "logMessage": format!("\u{1e}drgnx:shortfall:{{{THREAD}}}:{{repr(shortfall)}}")}]},
                       "ok": {"breakpoints": [{"verified": true}, {"verified": true}]}}),
-        ],
-    );
-    // passes 1 and 2 run on; the probe hits once per pass
-    for v in ["16", "12"] {
+            ],
+        );
+        // passes 1 and 2 run on; the probe hits once per pass
+        for v in ["16", "12"] {
+            s.extend(stopped_at(20, "breakpoint", item.clone()));
+            s.push(cont());
+            s.push(probe_out("shortfall", v));
+        }
         s.extend(stopped_at(20, "breakpoint", item.clone()));
-        s.push(cont());
-        s.push(probe_out("shortfall", v));
-    }
-    s.extend(stopped_at(20, "breakpoint", item.clone()));
-    s.push(json!({"expect": "evaluate", "args": {"expression": THREAD, "frameId": 5}, "ok": {"result": "140"}}));
-    s.push(json!({"expect": "variables", "args": {"variablesReference": 11},
+        s.push(json!({"expect": "evaluate", "args": {"expression": THREAD, "frameId": 5}, "ok": {"result": "140"}}));
+        s.push(json!({"expect": "variables", "args": {"variablesReference": 11},
                   "ok": {"variables": [{"name": "reserve", "value": "8", "variablesReference": 0, "evaluateName": "item.reserve"}]}}));
-    s.push(json!({"expect": "setVariable", "args": {"variablesReference": 11, "name": "reserve", "value": "0"}, "ok": {"value": "0"}}));
-    // the fork line's breakpoint goes; the probe stays
-    s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": [{"line": 22}]}, "ok": {"breakpoints": [{"verified": true}]}}));
-    s.push(cont());
-    s.push(probe_out("shortfall", "1"));
-    s.extend(exited(0));
-    let m = Mocks::with(vec![s]);
-    let out = fork::drive(Drive {
-        launcher: m.clone(),
-        start: start(),
-        adapter: "debugpy".into(),
-        target: target(3, &[]),
-        probes: probes(),
-        change: Change::Value {
-            path: vec!["item".into(), "reserve".into()],
-            text: "0".into(),
-        },
-        until: Until::Exit,
-        later: vec![],
+        s.push(json!({"expect": "setVariable", "args": {"variablesReference": 11, "name": "reserve", "value": "0"}, "ok": {"value": "0"}}));
+        // the fork line's breakpoint goes; the probe stays
+        s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": [{"line": 22}]}, "ok": {"breakpoints": [{"verified": true}]}}));
+        s.push(cont());
+        s.push(probe_out("shortfall", "1"));
+        s.extend(exited(0));
+        let m = Mocks::with(vec![s]);
+        let out = fork::drive(Drive {
+            launcher: m.clone(),
+            start: start(),
+            adapter: "debugpy".into(),
+            target: target(3, &[]),
+            probes: probes(),
+            change: Change::Value {
+                path: vec!["item".into(), "reserve".into()],
+                text: "0".into(),
+            },
+            until: Until::Exit,
+            later: vec![],
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            hits(&out.before),
+            [hit("shortfall", "16"), hit("shortfall", "12")]
+        );
+        assert_eq!(hits(&out.after), [hit("shortfall", "1")]);
+        assert_eq!(out.thread.as_deref(), Some("140"));
+        assert_eq!(out.applied.as_deref(), Some("0"));
+        assert_eq!(out.at, (PY.to_owned(), 20));
+        assert_eq!(out.end, End::Exit { code: Some(0) });
+        let log = &m.logs().await[0];
+        // two continues before the point (the hub counted), one after
+        assert_eq!(
+            log.commands().iter().filter(|c| **c == "continue").count(),
+            3
+        );
     })
-    .await
-    .unwrap();
-    assert_eq!(
-        hits(&out.before),
-        [hit("shortfall", "16"), hit("shortfall", "12")]
-    );
-    assert_eq!(hits(&out.after), [hit("shortfall", "1")]);
-    assert_eq!(out.thread.as_deref(), Some("140"));
-    assert_eq!(out.applied.as_deref(), Some("0"));
-    assert_eq!(out.at, (PY.to_owned(), 20));
-    assert_eq!(out.end, End::Exit { code: Some(0) });
-    let log = &m.logs().await[0];
-    // two continues before the point (the hub counted), one after
-    assert_eq!(
-        log.commands().iter().filter(|c| **c == "continue").count(),
-        3
-    );
 }
 
 /// The adapter's script for a fork to hit 3 of line 20 that the adapter counts (`hitCondition`): the probe's two hits,
@@ -435,152 +432,163 @@ fn counted_drive(m: Arc<Mocks>, before: usize) -> Drive {
 }
 
 /// Pass 3 counted by the adapter: one stop, no continue before the point, the landing checked against the run.
-#[tokio::test(start_paused = true)]
-async fn an_adapter_with_hit_conditions_counts_the_passes() {
-    let mut s = counted_by_the_adapter();
-    s.push(json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}));
-    s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": [{"line": 22}]}, "ok": {"breakpoints": [{"verified": true}]}}));
-    s.push(cont());
-    s.push(probe_out("shortfall", "1"));
-    s.extend(exited(0));
-    let m = Mocks::with(vec![s]);
-    let out = fork::drive(counted_drive(m.clone(), 2)).await.unwrap();
-    assert_eq!(
-        hits(&out.before),
-        [hit("shortfall", "16"), hit("shortfall", "12")]
-    );
-    assert_eq!(out.end, End::Exit { code: Some(0) });
-    let log = &m.logs().await[0];
-    assert_eq!(
-        log.commands().iter().filter(|c| **c == "continue").count(),
-        1
-    );
+#[test]
+fn an_adapter_with_hit_conditions_counts_the_passes() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let mut s = counted_by_the_adapter();
+        s.push(
+            json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}),
+        );
+        s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": [{"line": 22}]}, "ok": {"breakpoints": [{"verified": true}]}}));
+        s.push(cont());
+        s.push(probe_out("shortfall", "1"));
+        s.extend(exited(0));
+        let m = Mocks::with(vec![s]);
+        let out = fork::drive(counted_drive(m.clone(), 2)).await.unwrap();
+        assert_eq!(
+            hits(&out.before),
+            [hit("shortfall", "16"), hit("shortfall", "12")]
+        );
+        assert_eq!(out.end, End::Exit { code: Some(0) });
+        let log = &m.logs().await[0];
+        assert_eq!(
+            log.commands().iter().filter(|c| **c == "continue").count(),
+            1
+        );
+    })
 }
 
 /// js-debug counts with a condition V8 runs (its `hitCondition` pauses at every pass).
-#[tokio::test(start_paused = true)]
-async fn js_debug_counts_the_passes_in_a_condition() {
-    let mut caps = caps();
-    caps["supportsConditionalBreakpoints"] = json!(true);
-    caps["supportsHitConditionalBreakpoints"] = json!(true);
-    let cond = "(globalThis[Symbol.for('drgnx.forkPass')] = (globalThis[Symbol.for('drgnx.forkPass')] || 0) + 1) === 3";
-    let mut s = launch(
-        caps,
-        vec![
-            json!({"expect": "setBreakpoints", "args": {"source": {"path": PY},
+#[test]
+fn js_debug_counts_the_passes_in_a_condition() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let mut caps = caps();
+        caps["supportsConditionalBreakpoints"] = json!(true);
+        caps["supportsHitConditionalBreakpoints"] = json!(true);
+        let cond = "(globalThis[Symbol.for('drgnx.forkPass')] = (globalThis[Symbol.for('drgnx.forkPass')] || 0) + 1) === 3";
+        let mut s = launch(
+            caps,
+            vec![
+                json!({"expect": "setBreakpoints", "args": {"source": {"path": PY},
                       "breakpoints": [{"line": 20, "condition": cond}]},
                       "ok": {"breakpoints": [{"verified": true}]}}),
-        ],
-    );
-    s.extend(stopped_at(20, "breakpoint", json!([])));
-    s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": []}, "ok": {"breakpoints": []}}));
-    s.push(cont());
-    s.extend(exited(0));
-    let m = Mocks::with(vec![s]);
-    let mut st = start();
-    st.adapter_id = "pwa-node".into();
-    let mut d = counted_drive(m.clone(), 0);
-    d.start = st;
-    d.adapter = "js-debug".into();
-    d.probes = vec![];
-    let out = fork::drive(d).await.unwrap();
-    assert_eq!(out.end, End::Exit { code: Some(0) });
-    let log = &m.logs().await[0];
-    assert!(!log.requests[3].1.to_string().contains("hitCondition"));
-    assert_eq!(
-        log.commands().iter().filter(|c| **c == "continue").count(),
-        1
-    );
+            ],
+        );
+        s.extend(stopped_at(20, "breakpoint", json!([])));
+        s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": []}, "ok": {"breakpoints": []}}));
+        s.push(cont());
+        s.extend(exited(0));
+        let m = Mocks::with(vec![s]);
+        let mut st = start();
+        st.adapter_id = "pwa-node".into();
+        let mut d = counted_drive(m.clone(), 0);
+        d.start = st;
+        d.adapter = "js-debug".into();
+        d.probes = vec![];
+        let out = fork::drive(d).await.unwrap();
+        assert_eq!(out.end, End::Exit { code: Some(0) });
+        let log = &m.logs().await[0];
+        assert!(!log.requests[3].1.to_string().contains("hitCondition"));
+        assert_eq!(
+            log.commands().iter().filter(|c| **c == "continue").count(),
+            1
+        );
+    })
 }
 
 /// A run without probes: the adapter's landing is checked against what the run recorded at that stop, its stack and
 /// its plain locals. Where the run recorded other passes of the line, only the locals that change from pass to pass
 /// count (`i`; the clock's `t` does not), and landing on another pass fails. Without them a differing local may be an
 /// unreplayed value: the fork stops, saying so, and goes on when the user forks at this pass anyway.
-#[tokio::test(start_paused = true)]
-async fn without_probes_the_landing_is_checked_against_the_recorded_stop() {
-    let recorded = json!({"frames": [{"id": 1, "name": "f", "line": 20}],
+#[test]
+fn without_probes_the_landing_is_checked_against_the_recorded_stop() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let recorded = json!({"frames": [{"id": 1, "name": "f", "line": 20}],
                           "scopes": [{"scope": {"name": "Locals"},
                                       "variables": [{"name": "i", "value": "2", "variablesReference": 0},
                                                     {"name": "t", "value": "1.0", "variablesReference": 0},
                                                     {"name": "item", "value": "<Item at 0x1>", "variablesReference": 11}]}]});
-    let script = |i: &str, t: &str, goes_on: bool| {
-        let mut caps = caps();
-        caps["supportsHitConditionalBreakpoints"] = json!(true);
-        let mut s = launch(
-            caps,
-            vec![
-                json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": [{"line": 20, "hitCondition": "3"}]},
+        let script = |i: &str, t: &str, goes_on: bool| {
+            let mut caps = caps();
+            caps["supportsHitConditionalBreakpoints"] = json!(true);
+            let mut s = launch(
+                caps,
+                vec![
+                    json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": [{"line": 20, "hitCondition": "3"}]},
                         "ok": {"breakpoints": [{"verified": true}]}}),
-            ],
-        );
-        // the object's address differs from the run's: only plain values are compared
-        s.extend(stopped_at(20, "breakpoint", json!([{"name": "i", "value": i, "variablesReference": 0},
+                ],
+            );
+            // the object's address differs from the run's: only plain values are compared
+            s.extend(stopped_at(20, "breakpoint", json!([{"name": "i", "value": i, "variablesReference": 0},
                                                       {"name": "t", "value": t, "variablesReference": 0},
                                                       {"name": "item", "value": "<Item at 0x9>", "variablesReference": 11}])));
-        if goes_on {
-            s.push(json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}));
-            s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": []}, "ok": {"breakpoints": []}}));
-            s.push(cont());
-            s.extend(exited(0));
-        } else {
-            s.push(json!({"expect": "terminate", "ok": {}}));
-            s.push(json!({"event": "terminated"}));
-            s.push(json!({"expect": "disconnect", "ok": {}}));
-            s.push(json!({"die": true}));
-        }
-        s
-    };
-    let drive = |s: Vec<Value>, varying: Option<&[&str]>, anyway: bool| {
-        let mut d = counted_drive(Mocks::with(vec![s]), 0);
+            if goes_on {
+                s.push(json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}));
+                s.push(json!({"expect": "setBreakpoints", "args": {"source": {"path": PY}, "breakpoints": []}, "ok": {"breakpoints": []}}));
+                s.push(cont());
+                s.extend(exited(0));
+            } else {
+                s.push(json!({"expect": "terminate", "ok": {}}));
+                s.push(json!({"event": "terminated"}));
+                s.push(json!({"expect": "disconnect", "ok": {}}));
+                s.push(json!({"die": true}));
+            }
+            s
+        };
+        let drive = |s: Vec<Value>, varying: Option<&[&str]>, anyway: bool| {
+            let mut d = counted_drive(Mocks::with(vec![s]), 0);
+            d.probes = vec![];
+            d.target.recorded = Some(recorded.clone());
+            d.target.varying = varying.map(|v| v.iter().map(|n| (*n).to_owned()).collect());
+            d.target.anyway = anyway;
+            fork::drive(d)
+        };
+        let iv: &[&str] = &["i"];
+        // the run recorded the line's passes: `i` changes from pass to pass, so another `i` is another pass
+        let e = drive(script("5", "9.5", false), Some(iv), false)
+            .await
+            .unwrap_err();
+        assert!(
+            e.message().contains("not the run's pass")
+                && e.message()
+                    .contains("i was 2 in the run there, 5 in the fork"),
+            "{e}"
+        );
+        assert!(!e.message().contains(fork::MAY_BE_UNREPLAYED), "{e}");
+        // the run's pass, the clock's value apart: it goes on
+        let out = drive(script("2", "9.5", true), Some(iv), false)
+            .await
+            .unwrap();
+        assert_eq!(out.end, End::Exit { code: Some(0) });
+        // no record of other passes: the clock's value stops it, saying it may be unreplayed
+        let e = drive(script("2", "9.5", false), None, false)
+            .await
+            .unwrap_err();
+        assert!(
+            e.message()
+                .contains("t was 1.0 in the run there, 9.5 in the fork")
+                && e.message().contains(fork::MAY_BE_UNREPLAYED)
+                && e.message().contains("fork at this pass anyway"),
+            "{e}"
+        );
+        // and the user forks at this pass anyway
+        let out = drive(script("2", "9.5", true), None, true).await.unwrap();
+        assert_eq!(out.end, End::Exit { code: Some(0) });
+        // a stack that is not the run's fails, anyway or not
+        let mut d = counted_drive(Mocks::with(vec![script("2", "1.0", false)]), 0);
         d.probes = vec![];
-        d.target.recorded = Some(recorded.clone());
-        d.target.varying = varying.map(|v| v.iter().map(|n| (*n).to_owned()).collect());
-        d.target.anyway = anyway;
-        fork::drive(d)
-    };
-    let iv: &[&str] = &["i"];
-    // the run recorded the line's passes: `i` changes from pass to pass, so another `i` is another pass
-    let e = drive(script("5", "9.5", false), Some(iv), false)
-        .await
-        .unwrap_err();
-    assert!(
-        e.message().contains("not the run's pass")
-            && e.message()
-                .contains("i was 2 in the run there, 5 in the fork"),
-        "{e}"
-    );
-    assert!(!e.message().contains(fork::MAY_BE_UNREPLAYED), "{e}");
-    // the run's pass, the clock's value apart: it goes on
-    let out = drive(script("2", "9.5", true), Some(iv), false)
-        .await
-        .unwrap();
-    assert_eq!(out.end, End::Exit { code: Some(0) });
-    // no record of other passes: the clock's value stops it, saying it may be unreplayed
-    let e = drive(script("2", "9.5", false), None, false)
-        .await
-        .unwrap_err();
-    assert!(
-        e.message()
-            .contains("t was 1.0 in the run there, 9.5 in the fork")
-            && e.message().contains(fork::MAY_BE_UNREPLAYED)
-            && e.message().contains("fork at this pass anyway"),
-        "{e}"
-    );
-    // and the user forks at this pass anyway
-    let out = drive(script("2", "9.5", true), None, true).await.unwrap();
-    assert_eq!(out.end, End::Exit { code: Some(0) });
-    // a stack that is not the run's fails, anyway or not
-    let mut d = counted_drive(Mocks::with(vec![script("2", "1.0", false)]), 0);
-    d.probes = vec![];
-    d.target.recorded = Some(json!({"frames": [{"name": "g", "line": 20}], "scopes": []}));
-    d.target.anyway = true;
-    let e = fork::drive(d).await.unwrap_err();
-    assert!(
-        e.message()
-            .contains("the run's stack there was g:20, the fork's f:20"),
-        "{e}"
-    );
+        d.target.recorded = Some(json!({"frames": [{"name": "g", "line": 20}], "scopes": []}));
+        d.target.anyway = true;
+        let e = fork::drive(d).await.unwrap_err();
+        assert!(
+            e.message()
+                .contains("the run's stack there was g:20, the fork's f:20"),
+            "{e}"
+        );
+    })
 }
 
 /// The locals that tell a line's passes apart: those every recorded pass has, whose values are not all the same.
@@ -614,260 +622,288 @@ fn varying_locals_are_those_that_change_between_the_runs_passes() {
 }
 
 /// The adapter's count landed somewhere the run was not: the fork fails, naming both counts.
-#[tokio::test(start_paused = true)]
-async fn a_landing_that_is_not_the_runs_pass_fails_loudly() {
-    let mut s = counted_by_the_adapter();
-    s.push(json!({"expect": "terminate", "ok": {}}));
-    s.push(json!({"event": "terminated"}));
-    s.push(json!({"expect": "disconnect", "ok": {}}));
-    s.push(json!({"die": true}));
-    let m = Mocks::with(vec![s]);
-    let e = fork::drive(counted_drive(m, 5)).await.unwrap_err();
-    assert!(
-        e.message().contains("not the run's pass")
-            && e.message().contains("the run had 5")
-            && e.message().contains("the fork 2"),
-        "{e}"
-    );
+#[test]
+fn a_landing_that_is_not_the_runs_pass_fails_loudly() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let mut s = counted_by_the_adapter();
+        s.push(json!({"expect": "terminate", "ok": {}}));
+        s.push(json!({"event": "terminated"}));
+        s.push(json!({"expect": "disconnect", "ok": {}}));
+        s.push(json!({"die": true}));
+        let m = Mocks::with(vec![s]);
+        let e = fork::drive(counted_drive(m, 5)).await.unwrap_err();
+        assert!(
+            e.message().contains("not the run's pass")
+                && e.message().contains("the run had 5")
+                && e.message().contains("the fork 2"),
+            "{e}"
+        );
+    })
 }
 
 /// `setExpression` when the adapter has it and the value an `evaluateName`.
-#[tokio::test(start_paused = true)]
-async fn set_expression_is_preferred() {
-    let mut c = caps();
-    c["supportsSetExpression"] = json!(true);
-    let mut s = launch(
-        c,
-        vec![json!({"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true}]}})],
-    );
-    s.extend(stopped_at(
-        20,
-        "breakpoint",
-        json!([{"name": "n", "value": "3", "variablesReference": 0, "evaluateName": "n"}]),
-    ));
-    s.push(json!({"expect": "evaluate", "ok": {"result": "140"}}));
-    s.push(json!({"expect": "setExpression", "args": {"expression": "n", "value": "n + 1", "frameId": 5}, "ok": {"value": "4"}}));
-    s.push(
+#[test]
+fn set_expression_is_preferred() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let mut c = caps();
+        c["supportsSetExpression"] = json!(true);
+        let mut s = launch(
+            c,
+            vec![json!({"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true}]}})],
+        );
+        s.extend(stopped_at(
+            20,
+            "breakpoint",
+            json!([{"name": "n", "value": "3", "variablesReference": 0, "evaluateName": "n"}]),
+        ));
+        s.push(json!({"expect": "evaluate", "ok": {"result": "140"}}));
+        s.push(json!({"expect": "setExpression", "args": {"expression": "n", "value": "n + 1", "frameId": 5}, "ok": {"value": "4"}}));
+        s.push(
         json!({"expect": "setBreakpoints", "args": {"breakpoints": []}, "ok": {"breakpoints": []}}),
     );
-    s.push(cont());
-    s.extend(stopped_at(
-        30,
-        "breakpoint",
-        json!([{"name": "n", "value": "4", "variablesReference": 0}]),
-    ));
-    s.push(json!({"expect": "terminate", "ok": {}}));
-    s.push(json!({"event": "terminated"}));
-    s.push(json!({"expect": "disconnect", "ok": {}}));
-    s.push(json!({"die": true}));
-    let m = Mocks::with(vec![s]);
-    let out = fork::drive(Drive {
-        launcher: m.clone(),
-        start: start(),
-        adapter: "debugpy".into(),
-        target: target(1, &[]),
-        probes: vec![],
-        change: Change::Value {
-            path: vec!["n".into()],
-            text: "n + 1".into(),
-        },
-        until: Until::NextStop,
-        later: vec![],
+        s.push(cont());
+        s.extend(stopped_at(
+            30,
+            "breakpoint",
+            json!([{"name": "n", "value": "4", "variablesReference": 0}]),
+        ));
+        s.push(json!({"expect": "terminate", "ok": {}}));
+        s.push(json!({"event": "terminated"}));
+        s.push(json!({"expect": "disconnect", "ok": {}}));
+        s.push(json!({"die": true}));
+        let m = Mocks::with(vec![s]);
+        let out = fork::drive(Drive {
+            launcher: m.clone(),
+            start: start(),
+            adapter: "debugpy".into(),
+            target: target(1, &[]),
+            probes: vec![],
+            change: Change::Value {
+                path: vec!["n".into()],
+                text: "n + 1".into(),
+            },
+            until: Until::NextStop,
+            later: vec![],
+        })
+        .await
+        .unwrap();
+        assert_eq!(out.applied.as_deref(), Some("4"));
+        let End::Stop { line, locals, .. } = out.end else {
+            panic!("{:?}", out.end);
+        };
+        assert_eq!((line, locals[0]["value"].clone()), (30, json!("4")));
+        m.logs().await;
     })
-    .await
-    .unwrap();
-    assert_eq!(out.applied.as_deref(), Some("4"));
-    let End::Stop { line, locals, .. } = out.end else {
-        panic!("{:?}", out.end);
-    };
-    assert_eq!((line, locals[0]["value"].clone()), (30, json!("4")));
-    m.logs().await;
 }
 
 /// A step stop: hit 2, then the two recorded `next`s.
-#[tokio::test(start_paused = true)]
-async fn a_step_stop_is_reached_by_repeating_the_recorded_steps() {
-    let mut s = launch(
-        caps(),
-        vec![json!({"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true}]}})],
-    );
-    s.extend(stopped_at(20, "breakpoint", json!([])));
-    s.push(cont());
-    s.extend(stopped_at(20, "breakpoint", json!([])));
-    s.push(json!({"expect": "next", "args": {"threadId": 1}, "ok": {}}));
-    s.extend(stopped_at(21, "step", json!([])));
-    s.push(json!({"expect": "next", "args": {"threadId": 1}, "ok": {}}));
-    s.extend(stopped_at(22, "step", json!([])));
-    s.push(json!({"expect": "evaluate", "ok": {"result": "140"}}));
-    s.push(json!({"expect": "setBreakpoints", "ok": {"breakpoints": []}}));
-    s.push(cont());
-    s.extend(exited(3));
-    let m = Mocks::with(vec![s]);
-    let out = fork::drive(Drive {
-        launcher: m.clone(),
-        start: start(),
-        adapter: "debugpy".into(),
-        target: target(2, &["next", "next"]),
-        probes: vec![],
-        change: Change::Nothing,
-        until: Until::Exit,
-        later: vec![],
+#[test]
+fn a_step_stop_is_reached_by_repeating_the_recorded_steps() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let mut s = launch(
+            caps(),
+            vec![json!({"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true}]}})],
+        );
+        s.extend(stopped_at(20, "breakpoint", json!([])));
+        s.push(cont());
+        s.extend(stopped_at(20, "breakpoint", json!([])));
+        s.push(json!({"expect": "next", "args": {"threadId": 1}, "ok": {}}));
+        s.extend(stopped_at(21, "step", json!([])));
+        s.push(json!({"expect": "next", "args": {"threadId": 1}, "ok": {}}));
+        s.extend(stopped_at(22, "step", json!([])));
+        s.push(json!({"expect": "evaluate", "ok": {"result": "140"}}));
+        s.push(json!({"expect": "setBreakpoints", "ok": {"breakpoints": []}}));
+        s.push(cont());
+        s.extend(exited(3));
+        let m = Mocks::with(vec![s]);
+        let out = fork::drive(Drive {
+            launcher: m.clone(),
+            start: start(),
+            adapter: "debugpy".into(),
+            target: target(2, &["next", "next"]),
+            probes: vec![],
+            change: Change::Nothing,
+            until: Until::Exit,
+            later: vec![],
+        })
+        .await
+        .unwrap();
+        assert_eq!(out.at, (PY.to_owned(), 22));
+        assert_eq!(out.end, End::Exit { code: Some(3) });
+        m.logs().await;
     })
-    .await
-    .unwrap();
-    assert_eq!(out.at, (PY.to_owned(), 22));
-    assert_eq!(out.end, End::Exit { code: Some(3) });
-    m.logs().await;
 }
 
 /// A program that ends before hit N says how far it got.
-#[tokio::test(start_paused = true)]
-async fn ending_before_hit_n_says_how_far_it_got() {
-    let mut s = launch(
-        caps(),
-        vec![json!({"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true}]}})],
-    );
-    for _ in 0..2 {
-        s.extend(stopped_at(20, "breakpoint", json!([])));
-        s.push(cont());
-    }
-    s.extend(exited(0));
-    let m = Mocks::with(vec![s]);
-    let e = fork::drive(Drive {
-        launcher: m.clone(),
-        start: start(),
-        adapter: "debugpy".into(),
-        target: target(3, &[]),
-        probes: vec![],
-        change: Change::Nothing,
-        until: Until::Exit,
-        later: vec![],
+#[test]
+fn ending_before_hit_n_says_how_far_it_got() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let mut s = launch(
+            caps(),
+            vec![json!({"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true}]}})],
+        );
+        for _ in 0..2 {
+            s.extend(stopped_at(20, "breakpoint", json!([])));
+            s.push(cont());
+        }
+        s.extend(exited(0));
+        let m = Mocks::with(vec![s]);
+        let e = fork::drive(Drive {
+            launcher: m.clone(),
+            start: start(),
+            adapter: "debugpy".into(),
+            target: target(3, &[]),
+            probes: vec![],
+            change: Change::Nothing,
+            until: Until::Exit,
+            later: vec![],
+        })
+        .await
+        .unwrap_err();
+        assert!(e.message().contains("2 of 3"), "{e}");
+        m.logs().await;
     })
-    .await
-    .unwrap_err();
-    assert!(e.message().contains("2 of 3"), "{e}");
-    m.logs().await;
 }
 
 /// A probe on the fork line gives way to the plain breakpoint and is read at each of its stops; the run ends at the
 /// probe's next hit after the point.
-#[tokio::test(start_paused = true)]
-async fn a_probe_on_the_fork_line_is_read_at_its_stops() {
-    let p = vec![RunProbe {
-        id: "total".into(),
-        path: PY.into(),
-        line: 20,
-        expr: "total".into(),
-    }];
-    let mut s = launch(
-        caps(),
-        vec![
-            json!({"expect": "setBreakpoints", "args": {"breakpoints": [{"line": 20}]}, "ok": {"breakpoints": [{"verified": true}]}}),
-        ],
-    );
-    s.extend(stopped_at(20, "breakpoint", json!([])));
-    s.push(json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}));
-    s.push(json!({"expect": "evaluate", "args": {"expression": "total"}, "ok": {"result": "4"}}));
-    s.push(cont());
-    s.extend(stopped_at(20, "breakpoint", json!([])));
-    s.push(json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}));
-    s.push(json!({"expect": "evaluate", "args": {"expression": "total"}, "ok": {"result": "9"}}));
-    s.push(json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}));
-    // the logpoint comes back once the plain breakpoint goes
-    s.push(json!({"expect": "setBreakpoints", "args": {"breakpoints": [{"line": 20, "logMessage": format!("\u{1e}drgnx:total:{{{THREAD}}}:{{repr(total)}}")}]}, "ok": {"breakpoints": [{"verified": true}]}}));
-    s.push(cont());
-    s.push(probe_out("total", "15"));
-    s.push(json!({"expect": "terminate", "ok": {}}));
-    s.push(json!({"event": "terminated"}));
-    s.push(json!({"expect": "disconnect", "ok": {}}));
-    s.push(json!({"die": true}));
-    let m = Mocks::with(vec![s]);
-    let out = fork::drive(Drive {
-        launcher: m.clone(),
-        start: start(),
-        adapter: "debugpy".into(),
-        target: target(2, &[]),
-        probes: p,
-        change: Change::Nothing,
-        until: Until::Probe("total".into()),
-        later: vec![],
+#[test]
+fn a_probe_on_the_fork_line_is_read_at_its_stops() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let p = vec![RunProbe {
+            id: "total".into(),
+            path: PY.into(),
+            line: 20,
+            expr: "total".into(),
+        }];
+        let mut s = launch(
+            caps(),
+            vec![
+                json!({"expect": "setBreakpoints", "args": {"breakpoints": [{"line": 20}]}, "ok": {"breakpoints": [{"verified": true}]}}),
+            ],
+        );
+        s.extend(stopped_at(20, "breakpoint", json!([])));
+        s.push(
+            json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}),
+        );
+        s.push(
+            json!({"expect": "evaluate", "args": {"expression": "total"}, "ok": {"result": "4"}}),
+        );
+        s.push(cont());
+        s.extend(stopped_at(20, "breakpoint", json!([])));
+        s.push(
+            json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}),
+        );
+        s.push(
+            json!({"expect": "evaluate", "args": {"expression": "total"}, "ok": {"result": "9"}}),
+        );
+        s.push(
+            json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}),
+        );
+        // the logpoint comes back once the plain breakpoint goes
+        s.push(json!({"expect": "setBreakpoints", "args": {"breakpoints": [{"line": 20, "logMessage": format!("\u{1e}drgnx:total:{{{THREAD}}}:{{repr(total)}}")}]}, "ok": {"breakpoints": [{"verified": true}]}}));
+        s.push(cont());
+        s.push(probe_out("total", "15"));
+        s.push(json!({"expect": "terminate", "ok": {}}));
+        s.push(json!({"event": "terminated"}));
+        s.push(json!({"expect": "disconnect", "ok": {}}));
+        s.push(json!({"die": true}));
+        let m = Mocks::with(vec![s]);
+        let out = fork::drive(Drive {
+            launcher: m.clone(),
+            start: start(),
+            adapter: "debugpy".into(),
+            target: target(2, &[]),
+            probes: p,
+            change: Change::Nothing,
+            until: Until::Probe("total".into()),
+            later: vec![],
+        })
+        .await
+        .unwrap();
+        assert_eq!(hits(&out.before), [hit("total", "4"), hit("total", "9")]);
+        assert_eq!(
+            out.end,
+            End::Probe {
+                probe: "total".into(),
+                value: "15".into()
+            }
+        );
+        m.logs().await;
     })
-    .await
-    .unwrap();
-    assert_eq!(hits(&out.before), [hit("total", "4"), hit("total", "9")]);
-    assert_eq!(
-        out.end,
-        End::Probe {
-            probe: "total".into(),
-            value: "15".into()
-        }
-    );
-    m.logs().await;
 }
 
 /// js-debug: the program is a child session (`startDebugging`), whose stops count.
-#[tokio::test(start_paused = true)]
-async fn js_debugs_child_session_is_where_it_stops() {
-    let js = "/f/app.js";
-    let root = vec![
-        json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}),
-        json!({"expect": "launch", "ok": {}}),
-        json!({"event": "initialized"}),
-        json!({"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true}]}}),
-        json!({"expect": "configurationDone"}),
-        json!({"reverse": "startDebugging", "arguments": {"request": "attach", "configuration": {"type": "pwa-node", "__pendingTargetId": "t1"}}}),
-        // the fork line's breakpoint goes from every session
-        json!({"expect": "setBreakpoints", "ok": {"breakpoints": []}}),
-        json!({"expect": "disconnect", "ok": {}}),
-        json!({"die": true}),
-    ];
-    let child = vec![
-        json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true, "supportsSetVariable": true}}),
-        json!({"expect": "attach", "args": {"__pendingTargetId": "t1"}, "ok": {}}),
-        json!({"event": "initialized"}),
-        json!({"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true}]}}),
-        json!({"expect": "configurationDone"}),
-        json!({"event": "stopped", "body": {"reason": "breakpoint", "threadId": 1}}),
-        json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}),
-        json!({"expect": "stackTrace", "ok": {"stackFrames": [{"id": 5, "name": "f", "line": 4, "column": 1, "source": {"path": js}}]}}),
-        json!({"expect": "scopes", "ok": {"scopes": []}}),
-        json!({"expect": "setBreakpoints", "ok": {"breakpoints": []}}),
-        json!({"expect": "continue", "ok": {}}),
-        json!({"event": "stopped", "body": {"reason": "breakpoint", "threadId": 1}}),
-        json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}),
-        json!({"expect": "stackTrace", "ok": {"stackFrames": [{"id": 6, "name": "g", "line": 9, "column": 1, "source": {"path": js}}]}}),
-        json!({"expect": "scopes", "ok": {"scopes": []}}),
-        json!({"expect": "disconnect", "ok": {}}),
-        json!({"die": true}),
-    ];
-    let m = Mocks::with(vec![root, child]);
-    let mut st = start();
-    st.adapter_id = "pwa-node".into();
-    let out = fork::drive(Drive {
-        launcher: m.clone(),
-        start: st,
-        adapter: "js-debug".into(),
-        target: Target {
-            path: js.into(),
-            line: 4,
-            hit: 1,
-            steps: vec![],
-            seq: None,
-            before: None,
-            landing: None,
-            recorded: None,
-            varying: None,
-            anyway: false,
-        },
-        probes: vec![],
-        change: Change::Nothing,
-        until: Until::NextStop,
-        later: vec![(js.into(), 9)],
+#[test]
+fn js_debugs_child_session_is_where_it_stops() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let js = "/f/app.js";
+        let root = vec![
+            json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}),
+            json!({"expect": "launch", "ok": {}}),
+            json!({"event": "initialized"}),
+            json!({"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true}]}}),
+            json!({"expect": "configurationDone"}),
+            json!({"reverse": "startDebugging", "arguments": {"request": "attach", "configuration": {"type": "pwa-node", "__pendingTargetId": "t1"}}}),
+            // the fork line's breakpoint goes from every session
+            json!({"expect": "setBreakpoints", "ok": {"breakpoints": []}}),
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ];
+        let child = vec![
+            json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true, "supportsSetVariable": true}}),
+            json!({"expect": "attach", "args": {"__pendingTargetId": "t1"}, "ok": {}}),
+            json!({"event": "initialized"}),
+            json!({"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true}]}}),
+            json!({"expect": "configurationDone"}),
+            json!({"event": "stopped", "body": {"reason": "breakpoint", "threadId": 1}}),
+            json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}),
+            json!({"expect": "stackTrace", "ok": {"stackFrames": [{"id": 5, "name": "f", "line": 4, "column": 1, "source": {"path": js}}]}}),
+            json!({"expect": "scopes", "ok": {"scopes": []}}),
+            json!({"expect": "setBreakpoints", "ok": {"breakpoints": []}}),
+            json!({"expect": "continue", "ok": {}}),
+            json!({"event": "stopped", "body": {"reason": "breakpoint", "threadId": 1}}),
+            json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}),
+            json!({"expect": "stackTrace", "ok": {"stackFrames": [{"id": 6, "name": "g", "line": 9, "column": 1, "source": {"path": js}}]}}),
+            json!({"expect": "scopes", "ok": {"scopes": []}}),
+            json!({"expect": "disconnect", "ok": {}}),
+            json!({"die": true}),
+        ];
+        let m = Mocks::with(vec![root, child]);
+        let mut st = start();
+        st.adapter_id = "pwa-node".into();
+        let out = fork::drive(Drive {
+            launcher: m.clone(),
+            start: st,
+            adapter: "js-debug".into(),
+            target: Target {
+                path: js.into(),
+                line: 4,
+                hit: 1,
+                steps: vec![],
+                seq: None,
+                before: None,
+                landing: None,
+                recorded: None,
+                varying: None,
+                anyway: false,
+            },
+            probes: vec![],
+            change: Change::Nothing,
+            until: Until::NextStop,
+            later: vec![(js.into(), 9)],
+        })
+        .await
+        .unwrap();
+        // JavaScript names no thread: neither do the run's hits
+        assert_eq!(out.thread.as_deref(), Some(""));
+        assert!(matches!(out.end, End::Stop { line: 9, .. }));
+        m.logs().await;
     })
-    .await
-    .unwrap();
-    // JavaScript names no thread: neither do the run's hits
-    assert_eq!(out.thread.as_deref(), Some(""));
-    assert!(matches!(out.end, End::Stop { line: 9, .. }));
-    m.logs().await;
 }

@@ -246,7 +246,7 @@ fn name(rule: Rule) -> String {
 impl Supervisor {
     /// The rules of FOUND (for session SID) that did not hold at the last look; the others are remembered.
     fn fresh(&self, sid: &str, found: Vec<(Rule, String)>) -> Vec<(Rule, String)> {
-        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held = saman::lock(&self.held);
         held.retain(|(s, r)| s != sid || found.iter().any(|(f, _)| &name(*f) == r));
         found
             .into_iter()
@@ -256,7 +256,7 @@ impl Supervisor {
 
     /// Sessions the hub no longer holds are forgotten.
     fn only(&self, sids: &HashSet<&str>) {
-        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held = saman::lock(&self.held);
         held.retain(|(s, _)| sids.contains(s.as_str()));
     }
 

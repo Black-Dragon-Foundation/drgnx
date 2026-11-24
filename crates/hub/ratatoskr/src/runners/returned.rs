@@ -1432,55 +1432,57 @@ mod tests {
 
     /// [D]22b: an applied patch is one version of the project's history, the starting session's, with every file it
     /// wrote, recorded before the files change.
-    #[tokio::test]
-    async fn an_applied_patch_is_one_history_version() {
-        let (t, tree, job) = returned(|c| {
-            crate::fsio::write(c.join("README"), "one\ntwo\n").unwrap();
-            crate::fsio::write(c.join("src/b.rs"), "fn b() {}\n").unwrap();
-        });
-        let git = |args: &[&str]| {
-            let ok = crate::proc::Command::new("git")
-                .args([
-                    "-c",
-                    "user.name=t",
-                    "-c",
-                    "user.email=t@t",
-                    "-c",
-                    "commit.gpgsign=false",
-                ])
-                .args(args)
-                .current_dir(&tree)
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_CONFIG_NOSYSTEM", "1")
-                .status()
-                .unwrap()
-                .success();
-            assert!(ok, "git {args:?}");
-        };
-        git(&["init", "-q", "-b", "main"]);
-        git(&["add", "."]);
-        git(&["commit", "-q", "-m", "base"]);
-        let hubs = crate::history::wire::Hubs::default();
-        let state = t.path().join("state");
-        fs::create_dir_all(&state).unwrap();
-        let made = std::cell::RefCell::new(Vec::new());
-        let record = |at: &Path, w: &Writes| {
-            let (hub, tree) = hubs.of_tree(&state, at).map_err(|e| e.message)?;
-            let v = hub
-                .on_returned_writes(&tree, w, Some("s1"), "desk", 10.0)
-                .map_err(|e| e.to_string())?;
-            made.borrow_mut().extend(v);
-            Ok(())
-        };
-        let lines = take_back(&job, &back(&tree), false, &record);
-        assert_eq!(lines, vec!["runner desk's changes were applied to 2 files"]);
-        let made = made.into_inner();
-        let mut paths: Vec<&str> = made.iter().map(|v| v.path.as_str()).collect();
-        paths.sort();
-        assert_eq!(paths, ["README", "src/b.rs"]);
-        assert!(
-            made.iter().all(|v| v.op == made[0].op),
-            "one version: {made:?}"
-        );
+    #[test]
+    fn an_applied_patch_is_one_history_version() {
+        saman::block_on_current(async move {
+            let (t, tree, job) = returned(|c| {
+                crate::fsio::write(c.join("README"), "one\ntwo\n").unwrap();
+                crate::fsio::write(c.join("src/b.rs"), "fn b() {}\n").unwrap();
+            });
+            let git = |args: &[&str]| {
+                let ok = crate::proc::Command::new("git")
+                    .args([
+                        "-c",
+                        "user.name=t",
+                        "-c",
+                        "user.email=t@t",
+                        "-c",
+                        "commit.gpgsign=false",
+                    ])
+                    .args(args)
+                    .current_dir(&tree)
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                    .env("GIT_CONFIG_NOSYSTEM", "1")
+                    .status()
+                    .unwrap()
+                    .success();
+                assert!(ok, "git {args:?}");
+            };
+            git(&["init", "-q", "-b", "main"]);
+            git(&["add", "."]);
+            git(&["commit", "-q", "-m", "base"]);
+            let hubs = crate::history::wire::Hubs::default();
+            let state = t.path().join("state");
+            fs::create_dir_all(&state).unwrap();
+            let made = std::cell::RefCell::new(Vec::new());
+            let record = |at: &Path, w: &Writes| {
+                let (hub, tree) = hubs.of_tree(&state, at).map_err(|e| e.message)?;
+                let v = hub
+                    .on_returned_writes(&tree, w, Some("s1"), "desk", 10.0)
+                    .map_err(|e| e.to_string())?;
+                made.borrow_mut().extend(v);
+                Ok(())
+            };
+            let lines = take_back(&job, &back(&tree), false, &record);
+            assert_eq!(lines, vec!["runner desk's changes were applied to 2 files"]);
+            let made = made.into_inner();
+            let mut paths: Vec<&str> = made.iter().map(|v| v.path.as_str()).collect();
+            paths.sort();
+            assert_eq!(paths, ["README", "src/b.rs"]);
+            assert!(
+                made.iter().all(|v| v.op == made[0].op),
+                "one version: {made:?}"
+            );
+        })
     }
 }

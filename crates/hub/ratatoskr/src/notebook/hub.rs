@@ -102,16 +102,14 @@ struct Open {
 
 impl Open {
     fn state_of(&self, cell: &str) -> &'static str {
-        self.states
-            .lock()
-            .expect("states")
+        saman::lock(&self.states)
             .get(cell)
             .copied()
             .unwrap_or("idle")
     }
 
     fn set_state(&self, cell: &str, state: Option<&'static str>) {
-        let mut s = self.states.lock().expect("states");
+        let mut s = saman::lock(&self.states);
         match state {
             Some(st) => s.insert(cell.to_string(), st),
             None => s.remove(cell),
@@ -139,7 +137,7 @@ impl Open {
     /// The tail event a caller asks for: the latest sent while the cell is queued or running, else the book's.
     fn tail_now(&self, book: &Book, cell: &str) -> Option<Value> {
         if self.state_of(cell) != "idle"
-            && let Some(v) = self.live.lock().expect("live").get(cell)
+            && let Some(v) = saman::lock(&self.live).get(cell)
         {
             return Some(v.clone());
         }
@@ -244,7 +242,7 @@ impl Place<'_> {
     }
 
     fn release(nb: &Notebooks, conn: u64) {
-        let mut r = nb.reserved.lock().expect("reserved");
+        let mut r = saman::lock(&nb.reserved);
         if let Some(n) = r.get_mut(&conn) {
             *n -= 1;
             if *n == 0 {
@@ -268,7 +266,7 @@ struct Reserved<'a>(&'a Open, bool);
 impl Drop for Reserved<'_> {
     fn drop(&mut self) {
         if self.1 {
-            let mut k = self.0.kernel.lock().expect("kernel");
+            let mut k = saman::lock(&self.0.kernel);
             if matches!(*k, Slot::Starting) {
                 *k = Slot::Empty;
             }
@@ -296,9 +294,7 @@ impl Notebooks {
 
     /// Notebook ID if it is CONN's: any other is "no open notebook" (an id says nothing to a connection it is not).
     fn get(&self, conn: u64, id: &str) -> villa::Result<Arc<Open>> {
-        self.books
-            .lock()
-            .expect("books")
+        saman::lock(&self.books)
             .get(id)
             .filter(|o| o.conn == conn)
             .cloned()
@@ -337,8 +333,8 @@ impl Notebooks {
         }
         // a place is taken under the books lock before anything is awaited: concurrent opens cannot pass the limit together
         let mut place = {
-            let books = self.books.lock().expect("books");
-            let mut reserved = self.reserved.lock().expect("reserved");
+            let books = saman::lock(&self.books);
+            let mut reserved = saman::lock(&self.reserved);
             let held = books.values().filter(|o| o.conn == conn).count()
                 + reserved.get(&conn).copied().unwrap_or(0);
             if held >= MAX_OPEN {
@@ -414,7 +410,7 @@ impl Notebooks {
         };
         {
             // the open notebook takes the place the reservation held, in one step
-            let mut books = self.books.lock().expect("books");
+            let mut books = saman::lock(&self.books);
             books.insert(id, open);
             place.commit();
         }
@@ -514,7 +510,7 @@ impl Notebooks {
             .get(conn, id)
             .map_err(|e| villa::Error::invalid(e.to_string()))?;
         {
-            let mut slot = open.kernel.lock().expect("kernel");
+            let mut slot = saman::lock(&open.kernel);
             if !matches!(*slot, Slot::Empty) {
                 return Err(villa::Error::invalid(
                     "this notebook already has a kernel (or one is starting)",
@@ -560,10 +556,7 @@ impl Notebooks {
             .await
             .inspect_err(|_| self.status(&open, "dead", None, 0))?;
         // the notebook may have been closed (or its editor gone) while the kernel started: then the kernel is not wanted
-        let registered = self
-            .books
-            .lock()
-            .expect("books")
+        let registered = saman::lock(&self.books)
             .get(id)
             .is_some_and(|o| Arc::ptr_eq(o, &open));
         if !registered {
@@ -574,7 +567,7 @@ impl Notebooks {
         }
         let (tx, rx) = mpsc::channel(64);
         let epoch = self.epochs.fetch_add(1, Ordering::SeqCst);
-        *open.kernel.lock().expect("kernel") = Slot::Running(Running {
+        *saman::lock(&open.kernel) = Slot::Running(Running {
             name: spec.name.clone(),
             cmds: tx,
             epoch,
@@ -590,7 +583,7 @@ impl Notebooks {
 
     async fn command(&self, conn: u64, id: &str, cmd: Cmd) -> villa::Result<()> {
         let open = self.get(conn, id)?;
-        let tx = match &*open.kernel.lock().expect("kernel") {
+        let tx = match &*saman::lock(&open.kernel) {
             Slot::Running(r) => r.cmds.clone(),
             _ => return Err(villa::Error::invalid("this notebook has no kernel")),
         };
@@ -665,14 +658,14 @@ impl Notebooks {
     pub async fn close(&self, conn: u64, id: &str) {
         if let Ok(open) = self.get(conn, id) {
             crate::soft::done(end_kernel(&open).await, "end_kernel");
-            self.books.lock().expect("books").remove(id);
+            saman::lock(&self.books).remove(id);
         }
     }
 
     /// The connection CONN is gone: its notebooks close and their kernels end.
     pub async fn gone(&self, conn: u64) {
         let opens: Vec<Arc<Open>> = {
-            let mut books = self.books.lock().expect("books");
+            let mut books = saman::lock(&self.books);
             let ids: Vec<String> = books
                 .iter()
                 .filter(|(_, o)| o.conn == conn)
@@ -696,7 +689,7 @@ impl Notebooks {
         let open = self
             .get(conn, id)
             .map_err(|e| villa::Error::invalid(e.to_string()))?;
-        let log = open.log.lock().expect("log");
+        let log = saman::lock(&open.log);
         let (entries, lost) = log.since(since);
         Ok((entries, log.last_seq(), lost))
     }
@@ -705,10 +698,7 @@ impl Notebooks {
     /// (what `run_of` and the view read) with every tail, and once now.
     pub fn watch_output(&self, conn: u64, id: &str, cell: &str, on: bool) {
         let Ok(open) = self.get(conn, id) else { return };
-        let (mut watched, mut resync) = (
-            open.watched.lock().expect("watched"),
-            open.resync.lock().expect("resync"),
-        );
+        let (mut watched, mut resync) = (saman::lock(&open.watched), saman::lock(&open.resync));
         if on {
             watched.insert(cell.to_owned());
             resync.insert(cell.to_owned());
@@ -767,7 +757,7 @@ impl Notebooks {
 
     /// The kernel's name for notebook ID, when it has one.
     pub fn kernel_name(&self, conn: u64, id: &str) -> Option<String> {
-        match &*self.get(conn, id).ok()?.kernel.lock().expect("kernel") {
+        match &*saman::lock(&self.get(conn, id).ok()?.kernel) {
             Slot::Running(r) => Some(r.name.clone()),
             _ => None,
         }
@@ -777,11 +767,11 @@ impl Notebooks {
 /// End OPEN's kernel and say how it ended.
 async fn end_kernel(open: &Open) -> villa::Result<Exit> {
     // taken in a statement of its own: the guard must not live through the match, whose Starting arm locks the slot again
-    let slot = std::mem::replace(&mut *open.kernel.lock().expect("kernel"), Slot::Empty);
+    let slot = std::mem::replace(&mut *saman::lock(&open.kernel), Slot::Empty);
     let cmds = match slot {
         Slot::Running(r) => r.cmds,
         Slot::Starting => {
-            *open.kernel.lock().expect("kernel") = Slot::Starting;
+            *saman::lock(&open.kernel) = Slot::Starting;
             return Err(villa::Error::invalid("the kernel is starting"));
         }
         Slot::Empty => return Err(villa::Error::invalid("this notebook has no kernel")),
@@ -902,12 +892,7 @@ impl Pump {
         let Some(e) = self.router.log().last().cloned() else {
             return;
         };
-        let seq = self
-            .open
-            .log
-            .lock()
-            .expect("log")
-            .push(&e.msg_type, &e.text);
+        let seq = saman::lock(&self.open.log).push(&e.msg_type, &e.text);
         let id = self.open.id.clone();
         self.emit_kept("log".into(), "notebook-log", json!({"id": id, "seq": seq}));
     }
@@ -963,7 +948,7 @@ impl Pump {
                 let t = tail::build(cell, run, version);
                 // the notebook gets a copy of the output now and then and when the cell is done, not with every tail
                 if finished
-                    || self.open.watched.lock().expect("watched").contains(cell)
+                    || saman::lock(&self.open.watched).contains(cell)
                     || self
                         .shown_at
                         .get(cell)
@@ -985,7 +970,7 @@ impl Pump {
         drop(book);
         let Some(event) = event else { return };
         {
-            let mut live = self.open.live.lock().expect("live");
+            let mut live = saman::lock(&self.open.live);
             if finished {
                 live.remove(cell);
             } else {
@@ -1061,7 +1046,7 @@ impl Pump {
         for cell in dropped {
             self.dirty.remove(&cell);
             self.open.set_state(&cell, None);
-            self.open.live.lock().expect("live").remove(&cell);
+            saman::lock(&self.open.live).remove(&cell);
             let mut book = self.open.book.lock().await;
             book.mark(&cell, why);
             if let Some(v) = self.open.tail_event(&book, &cell) {
@@ -1204,7 +1189,7 @@ impl Pump {
                 _ = tick.tick() => {
                     self.resend();
                     // a view asked for after the output came: the cell's tail is built again, which copies the output
-                    let again: Vec<String> = self.open.resync.lock().expect("resync").drain().collect();
+                    let again: Vec<String> = saman::lock(&self.open.resync).drain().collect();
                     for cell in again {
                         if self.latest.contains_key(&cell) {
                             self.dirty.insert(cell);
@@ -1228,7 +1213,7 @@ impl Pump {
         }
         {
             // the slot is cleared only if it is still this kernel's (a restart may have started the next)
-            let mut slot = self.open.kernel.lock().expect("kernel");
+            let mut slot = saman::lock(&self.open.kernel);
             if matches!(&*slot, Slot::Running(r) if r.epoch == self.epoch) {
                 *slot = Slot::Empty;
             }

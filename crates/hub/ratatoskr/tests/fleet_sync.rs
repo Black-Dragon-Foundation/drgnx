@@ -494,163 +494,171 @@ mod sync_rows {
     /// [C] a public project's job with one commit the origin lacks is `private`, so it never goes to the shared
     /// runner, and its row says "runs here: 1 commit not on origin". Once pushed, a new job of the project is
     /// public and is offered to it; the first job's inputs stay as they were frozen.
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn one_unpushed_commit_keeps_a_public_job_off_shared() {
-        let (prefix, hub) = ("flh7", "hubh7");
-        let root = root("r1", "fl-h7");
-        let img = image("r1");
-        let dir = tempfile::tempdir().unwrap();
-        let p = Project::new(dir.path(), "r1");
-        p.commit("ahead.txt", "not pushed\n");
-        let (q, mut events, _child) = queue_shared(dir.path(), &root, prefix, hub, &img);
-        let mut outcomes = vec![];
-        ready(&q, &mut events, &mut outcomes).await;
-        let ahead = p.freeze(false);
-        assert_eq!(ahead.trust(&[]), forseti::JobTrust::Private);
-        q.submit(job("xahead", "true", ahead, &img), now());
-        stays_here(&q, "xahead", "runs here: 1 commit not on origin");
-        p.push();
-        q.submit(job("xpushed", "true", p.freeze(false), &img), now());
-        let row = drive(&q, &mut events, &mut outcomes, "xpushed offered", |q, _| {
-            q.row("xpushed").filter(|r| r.machine.is_some())
+    fn one_unpushed_commit_keeps_a_public_job_off_shared() {
+        saman::block_on_current(async move {
+            let (prefix, hub) = ("flh7", "hubh7");
+            let root = root("r1", "fl-h7");
+            let img = image("r1");
+            let dir = tempfile::tempdir().unwrap();
+            let p = Project::new(dir.path(), "r1");
+            p.commit("ahead.txt", "not pushed\n");
+            let (q, mut events, _child) = queue_shared(dir.path(), &root, prefix, hub, &img);
+            let mut outcomes = vec![];
+            ready(&q, &mut events, &mut outcomes).await;
+            let ahead = p.freeze(false);
+            assert_eq!(ahead.trust(&[]), forseti::JobTrust::Private);
+            q.submit(job("xahead", "true", ahead, &img), now());
+            stays_here(&q, "xahead", "runs here: 1 commit not on origin");
+            p.push();
+            q.submit(job("xpushed", "true", p.freeze(false), &img), now());
+            let row = drive(&q, &mut events, &mut outcomes, "xpushed offered", |q, _| {
+                q.row("xpushed").filter(|r| r.machine.is_some())
+            })
+            .await;
+            assert_eq!((row.machine.as_deref(), row.attempt), (Some("r1"), Some(1)));
+            stays_here(&q, "xahead", "runs here: 1 commit not on origin");
         })
-        .await;
-        assert_eq!((row.machine.as_deref(), row.attempt), (Some("r1"), Some(1)));
-        stays_here(&q, "xahead", "runs here: 1 commit not on origin");
     }
 
     /// [C] A public job on the shared runner: the runner fetches the commit from the origin itself (into its mirror,
     /// with no bundle from the hub), checks its slot out, and the job reads the committed file.
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn the_shared_runner_fetches_from_origin() {
-        let (prefix, hub) = ("florigin", "huborigin");
-        let root = root("r1", "fl-origin");
-        let img = image("r1");
-        let dir = tempfile::tempdir().unwrap();
-        let p = Project::new(dir.path(), "r1");
-        let (q, mut events, _child) = queue_shared(dir.path(), &root, prefix, hub, &img);
-        let mut outcomes = vec![];
-        ready(&q, &mut events, &mut outcomes).await;
-        let f = p.freeze(false);
-        let repo = f.repo.clone();
-        q.submit(job("xorigin", "cat hello.txt", f, &img), now());
-        let r = result(&q, &mut events, &mut outcomes, "xorigin").await;
-        assert_eq!(r["verdict"], "Pass", "{r}");
-        let log = ratatoskr::fsio::read_to_string(dir.path().join("exec/xorigin/log"))
-            .unwrap_or_default();
-        assert!(log.contains("hello from origin"), "{log}");
-        let refs = sh(
-            "r1",
-            &format!("git --git-dir {root}/git/{repo} for-each-ref --format='%(refname)'"),
-        );
-        assert!(refs.contains("refs/origin/heads/main"), "{refs}");
-        assert!(
-            !refs.contains("refs/hub/"),
-            "nothing came from the hub: {refs}"
-        );
+    fn the_shared_runner_fetches_from_origin() {
+        saman::block_on_current(async move {
+            let (prefix, hub) = ("florigin", "huborigin");
+            let root = root("r1", "fl-origin");
+            let img = image("r1");
+            let dir = tempfile::tempdir().unwrap();
+            let p = Project::new(dir.path(), "r1");
+            let (q, mut events, _child) = queue_shared(dir.path(), &root, prefix, hub, &img);
+            let mut outcomes = vec![];
+            ready(&q, &mut events, &mut outcomes).await;
+            let f = p.freeze(false);
+            let repo = f.repo.clone();
+            q.submit(job("xorigin", "cat hello.txt", f, &img), now());
+            let r = result(&q, &mut events, &mut outcomes, "xorigin").await;
+            assert_eq!(r["verdict"], "Pass", "{r}");
+            let log = ratatoskr::fsio::read_to_string(dir.path().join("exec/xorigin/log"))
+                .unwrap_or_default();
+            assert!(log.contains("hello from origin"), "{log}");
+            let refs = sh(
+                "r1",
+                &format!("git --git-dir {root}/git/{repo} for-each-ref --format='%(refname)'"),
+            );
+            assert!(refs.contains("refs/origin/heads/main"), "{refs}");
+            assert!(
+                !refs.contains("refs/hub/"),
+                "nothing came from the hub: {refs}"
+            );
+        })
     }
 
     /// [C] An uncommitted file keeps a public job off the shared runner while the project's
     /// `drgnx-runners-shared-overlay` is off; on, a file that looks like a secret still does, naming it; a clean
     /// overlay goes, the job reads it, and its result comes back as the shared runner's.
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn shared_overlay_off_by_default_and_scanned_when_on() {
-        let (prefix, hub) = ("flover", "hubover");
-        let root = root("r1", "fl-over");
-        let img = image("r1");
-        let dir = tempfile::tempdir().unwrap();
-        let p = Project::new(dir.path(), "r1");
-        ratatoskr::fsio::write(p.work.join("note.txt"), "overlay!\n").unwrap();
-        let (q, mut events, _child) = queue_shared(dir.path(), &root, prefix, hub, &img);
-        let mut outcomes = vec![];
-        ready(&q, &mut events, &mut outcomes).await;
-        q.submit(job("xoff", "cat note.txt", p.freeze(false), &img), now());
-        stays_here(&q, "xoff", "drgnx-runners-shared-overlay");
-        // split, so the repository's own secret check passes this file
-        let key = concat!("AKIA", "IOSFODNN7EXAMPLE");
-        ratatoskr::fsio::write(
-            p.work.join("leak.txt"),
-            format!("aws_access_key_id = {key}\n"),
-        )
-        .unwrap();
-        q.submit(job("xleak", "cat note.txt", p.freeze(true), &img), now());
-        stays_here(&q, "xleak", "leak.txt");
-        std::fs::remove_file(p.work.join("leak.txt")).unwrap();
-        q.submit(job("xon", "cat note.txt", p.freeze(true), &img), now());
-        let r = result(&q, &mut events, &mut outcomes, "xon").await;
-        assert_eq!(r["verdict"], "Pass", "{r}");
-        // a shared runner's result comes back named as the shared runner's, so it is labelled and never counts for a
-        // gate
-        let shared = outcomes.iter().find_map(|o| match o {
-            Outcome::Done { id, shared, .. } if id == "xon" => Some(shared.clone()),
-            _ => None,
-        });
-        assert_eq!(shared, Some(Some("r1".to_string())), "{outcomes:?}");
-        let log =
-            ratatoskr::fsio::read_to_string(dir.path().join("exec/xon/log")).unwrap_or_default();
-        assert!(log.contains("overlay!"), "{log}");
-        stays_here(&q, "xoff", "drgnx-runners-shared-overlay");
+    fn shared_overlay_off_by_default_and_scanned_when_on() {
+        saman::block_on_current(async move {
+            let (prefix, hub) = ("flover", "hubover");
+            let root = root("r1", "fl-over");
+            let img = image("r1");
+            let dir = tempfile::tempdir().unwrap();
+            let p = Project::new(dir.path(), "r1");
+            ratatoskr::fsio::write(p.work.join("note.txt"), "overlay!\n").unwrap();
+            let (q, mut events, _child) = queue_shared(dir.path(), &root, prefix, hub, &img);
+            let mut outcomes = vec![];
+            ready(&q, &mut events, &mut outcomes).await;
+            q.submit(job("xoff", "cat note.txt", p.freeze(false), &img), now());
+            stays_here(&q, "xoff", "drgnx-runners-shared-overlay");
+            // split, so the repository's own secret check passes this file
+            let key = concat!("AKIA", "IOSFODNN7EXAMPLE");
+            ratatoskr::fsio::write(
+                p.work.join("leak.txt"),
+                format!("aws_access_key_id = {key}\n"),
+            )
+            .unwrap();
+            q.submit(job("xleak", "cat note.txt", p.freeze(true), &img), now());
+            stays_here(&q, "xleak", "leak.txt");
+            std::fs::remove_file(p.work.join("leak.txt")).unwrap();
+            q.submit(job("xon", "cat note.txt", p.freeze(true), &img), now());
+            let r = result(&q, &mut events, &mut outcomes, "xon").await;
+            assert_eq!(r["verdict"], "Pass", "{r}");
+            // a shared runner's result comes back named as the shared runner's, so it is labelled and never counts for a
+            // gate
+            let shared = outcomes.iter().find_map(|o| match o {
+                Outcome::Done { id, shared, .. } if id == "xon" => Some(shared.clone()),
+                _ => None,
+            });
+            assert_eq!(shared, Some(Some("r1".to_string())), "{outcomes:?}");
+            let log = ratatoskr::fsio::read_to_string(dir.path().join("exec/xon/log"))
+                .unwrap_or_default();
+            assert!(log.contains("overlay!"), "{log}");
+            stays_here(&q, "xoff", "drgnx-runners-shared-overlay");
+        })
     }
 
     /// [C] A job that declares `writes` and `outputs`, on a `mine` runner, runs in a private copy: its change comes
     /// back as a patch and its output as an archive, both in the job's folder before its verdict; at the verdict the
     /// change is applied to the worktree (it is as the job's inputs were frozen) and the output unpacked.
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn a_runners_changes_and_outputs_come_back() {
-        let (prefix, hub) = ("flret", "hubret");
-        let root = root("r1", "fl-ret");
-        let img = image("r1");
-        let dir = tempfile::tempdir().unwrap();
-        let p = Project::new(dir.path(), "r1");
-        let (q, mut events, _child) =
-            queue_on(dir.path(), &root, prefix, hub, &img, RunnerTrust::Mine);
-        let mut outcomes = vec![];
-        ready(&q, &mut events, &mut outcomes).await;
-        let script =
-            "echo 'from the runner' >> hello.txt && mkdir -p dist && echo built > dist/out.txt";
-        let mut s = job("xret", script, p.freeze(false), &img);
-        s.place.writes = vec!["hello.txt".into()];
-        s.spec.outputs = vec!["dist/**".into()];
-        q.submit(s, now());
-        let done = drive(&q, &mut events, &mut outcomes, "xret's result", |_, o| {
-            o.iter().find_map(|o| match o {
-                Outcome::Done { id, .. } if id == "xret" => Some(o.clone()),
-                _ => None,
+    fn a_runners_changes_and_outputs_come_back() {
+        saman::block_on_current(async move {
+            let (prefix, hub) = ("flret", "hubret");
+            let root = root("r1", "fl-ret");
+            let img = image("r1");
+            let dir = tempfile::tempdir().unwrap();
+            let p = Project::new(dir.path(), "r1");
+            let (q, mut events, _child) =
+                queue_on(dir.path(), &root, prefix, hub, &img, RunnerTrust::Mine);
+            let mut outcomes = vec![];
+            ready(&q, &mut events, &mut outcomes).await;
+            let script =
+                "echo 'from the runner' >> hello.txt && mkdir -p dist && echo built > dist/out.txt";
+            let mut s = job("xret", script, p.freeze(false), &img);
+            s.place.writes = vec!["hello.txt".into()];
+            s.spec.outputs = vec!["dist/**".into()];
+            q.submit(s, now());
+            let done = drive(&q, &mut events, &mut outcomes, "xret's result", |_, o| {
+                o.iter().find_map(|o| match o {
+                    Outcome::Done { id, .. } if id == "xret" => Some(o.clone()),
+                    _ => None,
+                })
             })
+            .await;
+            let Outcome::Done { result, back, .. } = done else {
+                unreachable!()
+            };
+            assert_eq!(result["verdict"], "Pass", "{result}");
+            let job_dir = dir.path().join("exec/xret");
+            let patch =
+                ratatoskr::fsio::read_to_string(job_dir.join("returned.patch")).unwrap_or_default();
+            assert!(patch.contains("+from the runner"), "{patch:?}");
+            assert!(job_dir.join("returned.outputs").exists());
+            let back = back.expect("what came back");
+            let lines = returned::take_back(&job_dir, &back, false, &|_, _| Ok(()));
+            assert_eq!(
+                lines,
+                vec![
+                    format!(
+                        "its outputs: 1 file in {}",
+                        job_dir.join("outputs").display()
+                    ),
+                    "runner r1's changes were applied to 1 file".to_string(),
+                ]
+            );
+            assert_eq!(
+                ratatoskr::fsio::read_to_string(p.work.join("hello.txt")).unwrap(),
+                "hello from origin\nfrom the runner\n"
+            );
+            assert_eq!(
+                ratatoskr::fsio::read_to_string(job_dir.join("outputs/dist/out.txt")).unwrap(),
+                "built\n"
+            );
         })
-        .await;
-        let Outcome::Done { result, back, .. } = done else {
-            unreachable!()
-        };
-        assert_eq!(result["verdict"], "Pass", "{result}");
-        let job_dir = dir.path().join("exec/xret");
-        let patch =
-            ratatoskr::fsio::read_to_string(job_dir.join("returned.patch")).unwrap_or_default();
-        assert!(patch.contains("+from the runner"), "{patch:?}");
-        assert!(job_dir.join("returned.outputs").exists());
-        let back = back.expect("what came back");
-        let lines = returned::take_back(&job_dir, &back, false, &|_, _| Ok(()));
-        assert_eq!(
-            lines,
-            vec![
-                format!(
-                    "its outputs: 1 file in {}",
-                    job_dir.join("outputs").display()
-                ),
-                "runner r1's changes were applied to 1 file".to_string(),
-            ]
-        );
-        assert_eq!(
-            ratatoskr::fsio::read_to_string(p.work.join("hello.txt")).unwrap(),
-            "hello from origin\nfrom the runner\n"
-        );
-        assert_eq!(
-            ratatoskr::fsio::read_to_string(job_dir.join("outputs/dist/out.txt")).unwrap(),
-            "built\n"
-        );
     }
 }

@@ -200,281 +200,291 @@ fn no_power() -> PathBuf {
 
 /// Pattern C. A pause during a request lets that batch finish and be written, then tier 2 holds: it says so, and no
 /// other request goes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pause_finishes_the_batch_then_holds() {
-    let (home, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let root = repo(home.path(), "a", 20, false);
-    let id = ident("main");
-    let hold = Arc::new(Semaphore::new(0));
-    let e = Gated::new(SourceKind::Embed, &id, Some(hold.clone()));
-    let permits = Arc::new(Semaphore::new(100));
-    let p = open(
-        home.path(),
-        state.path(),
-        &root,
-        vec![e.clone()],
-        &no_power(),
-        &permits,
-    )
-    .await;
-    let before = missing(&p, &id).await;
-    p.start_tier2();
-    until_calls(&e, 1).await;
-    p.pause().await.unwrap();
-    assert_eq!(p.state(), RootState::Paused(PauseWhy::User));
-    hold.add_permits(1000);
-    until(&p, "held", |t| *t == Tier2::Paused).await;
-    assert_eq!(e.calls(), 1, "no request after the pause");
-    assert_eq!(e.texts().len(), 8, "the batch in flight finished");
-    assert_eq!(missing(&p, &id).await, before - 8, "and was written");
-}
-
-/// Pattern C. The pause is kept in the store: a new hub (the project opened again) starts paused, and a change to the
-/// files does not lift it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pause_survives_a_hub_restart() {
-    let (home, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let root = repo(home.path(), "a", 5, false);
-    let id = ident("main");
-    let permits = Arc::new(Semaphore::new(100));
-    {
+#[test]
+fn pause_finishes_the_batch_then_holds() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (home, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let root = repo(home.path(), "a", 20, false);
+        let id = ident("main");
+        let hold = Arc::new(Semaphore::new(0));
+        let e = Gated::new(SourceKind::Embed, &id, Some(hold.clone()));
+        let permits = Arc::new(Semaphore::new(100));
         let p = open(
             home.path(),
             state.path(),
             &root,
-            Vec::new(),
+            vec![e.clone()],
             &no_power(),
             &permits,
         )
         .await;
+        let before = missing(&p, &id).await;
+        p.start_tier2();
+        until_calls(&e, 1).await;
         p.pause().await.unwrap();
-    }
-    let e = Gated::new(SourceKind::Embed, &id, None);
-    let p = open(
-        home.path(),
-        state.path(),
-        &root,
-        vec![e.clone()],
-        &no_power(),
-        &permits,
-    )
-    .await;
-    assert_eq!(
-        p.state(),
-        RootState::Paused(PauseWhy::User),
-        "kept across the restart"
-    );
-    p.start_tier2();
-    until(&p, "held", |t| *t == Tier2::Paused).await;
-    ratatoskr::fsio::write(
-        root.join("core/new.el"),
-        ";;; new.el\n(defun new-run () 1)\n",
-    )
-    .unwrap();
-    let r = p.refresh_now().await.unwrap();
-    assert!(r.files_changed > 0);
-    until(&p, "held after the change", |t| *t == Tier2::Paused).await;
-    assert_eq!(
-        p.state(),
-        RootState::Paused(PauseWhy::User),
-        "a change does not lift it"
-    );
-    assert!(
-        e.texts().is_empty(),
-        "embedded while paused: {:?}",
-        e.texts()
-    );
+        assert_eq!(p.state(), RootState::Paused(PauseWhy::User));
+        hold.add_permits(1000);
+        until(&p, "held", |t| *t == Tier2::Paused).await;
+        assert_eq!(e.calls(), 1, "no request after the pause");
+        assert_eq!(e.texts().len(), 8, "the batch in flight finished");
+        assert_eq!(missing(&p, &id).await, before - 8, "and was written");
+    })
+}
+
+/// Pattern C. The pause is kept in the store: a new hub (the project opened again) starts paused, and a change to the
+/// files does not lift it.
+#[test]
+fn pause_survives_a_hub_restart() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (home, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let root = repo(home.path(), "a", 5, false);
+        let id = ident("main");
+        let permits = Arc::new(Semaphore::new(100));
+        {
+            let p = open(
+                home.path(),
+                state.path(),
+                &root,
+                Vec::new(),
+                &no_power(),
+                &permits,
+            )
+            .await;
+            p.pause().await.unwrap();
+        }
+        let e = Gated::new(SourceKind::Embed, &id, None);
+        let p = open(
+            home.path(),
+            state.path(),
+            &root,
+            vec![e.clone()],
+            &no_power(),
+            &permits,
+        )
+        .await;
+        assert_eq!(
+            p.state(),
+            RootState::Paused(PauseWhy::User),
+            "kept across the restart"
+        );
+        p.start_tier2();
+        until(&p, "held", |t| *t == Tier2::Paused).await;
+        ratatoskr::fsio::write(
+            root.join("core/new.el"),
+            ";;; new.el\n(defun new-run () 1)\n",
+        )
+        .unwrap();
+        let r = p.refresh_now().await.unwrap();
+        assert!(r.files_changed > 0);
+        until(&p, "held after the change", |t| *t == Tier2::Paused).await;
+        assert_eq!(
+            p.state(),
+            RootState::Paused(PauseWhy::User),
+            "a change does not lift it"
+        );
+        assert!(
+            e.texts().is_empty(),
+            "embedded while paused: {:?}",
+            e.texts()
+        );
+    })
 }
 
 /// Pattern C. After a pause, resume sends exactly the keys still missing: nothing done is sent again.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resume_redoes_nothing() {
-    let (home, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let root = repo(home.path(), "a", 20, false);
-    let id = ident("main");
-    let e = Gated::new(SourceKind::Embed, &id, None);
-    // two passes, then tier 2 waits for a permit
-    let permits = Arc::new(Semaphore::new(2));
-    let p = open(
-        home.path(),
-        state.path(),
-        &root,
-        vec![e.clone()],
-        &no_power(),
-        &permits,
-    )
-    .await;
-    p.start_tier2();
-    until_calls(&e, 2).await;
-    p.pause().await.unwrap();
-    permits.add_permits(1000);
-    until(&p, "held", |t| *t == Tier2::Paused).await;
-    let done = e.texts().len();
-    let left = missing(&p, &id).await;
-    assert!(done > 0 && left > 0, "{done} done, {left} left");
-    p.resume().await.unwrap();
-    until(&p, "done", |t| *t == Tier2::Idle).await;
-    assert_eq!(missing(&p, &id).await, 0);
-    assert_eq!(
-        e.texts().len() - done,
-        left,
-        "resume sent only the keys left"
-    );
-    let mut all = e.texts();
-    all.sort();
-    all.dedup();
-    assert_eq!(all.len(), e.texts().len(), "no text was sent twice");
+#[test]
+fn resume_redoes_nothing() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (home, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let root = repo(home.path(), "a", 20, false);
+        let id = ident("main");
+        let e = Gated::new(SourceKind::Embed, &id, None);
+        // two passes, then tier 2 waits for a permit
+        let permits = Arc::new(Semaphore::new(2));
+        let p = open(
+            home.path(),
+            state.path(),
+            &root,
+            vec![e.clone()],
+            &no_power(),
+            &permits,
+        )
+        .await;
+        p.start_tier2();
+        until_calls(&e, 2).await;
+        p.pause().await.unwrap();
+        permits.add_permits(1000);
+        until(&p, "held", |t| *t == Tier2::Paused).await;
+        let done = e.texts().len();
+        let left = missing(&p, &id).await;
+        assert!(done > 0 && left > 0, "{done} done, {left} left");
+        p.resume().await.unwrap();
+        until(&p, "done", |t| *t == Tier2::Idle).await;
+        assert_eq!(missing(&p, &id).await, 0);
+        assert_eq!(
+            e.texts().len() - done,
+            left,
+            "resume sent only the keys left"
+        );
+        let mut all = e.texts();
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), e.texts().len(), "no text was sent twice");
+    })
 }
 
 /// Pattern C. Stop cancels the request in flight at once and keeps what was written before it; the watcher's next
 /// change (a refresh) goes on from there.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stop_keeps_the_done_part_and_the_watcher() {
-    let (home, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let root = repo(home.path(), "a", 20, false);
-    let id = ident("main");
-    // the first request answers, the second waits
-    let hold = Arc::new(Semaphore::new(1));
-    let e = Gated::new(SourceKind::Embed, &id, Some(hold.clone()));
-    let permits = Arc::new(Semaphore::new(100));
-    let p = open(
-        home.path(),
-        state.path(),
-        &root,
-        vec![e.clone()],
-        &no_power(),
-        &permits,
-    )
-    .await;
-    let before = missing(&p, &id).await;
-    p.start_tier2();
-    until_calls(&e, 2).await;
-    p.stop().await.unwrap();
-    assert_eq!(p.state(), RootState::Stopped);
-    until(&p, "stopped", |t| *t == Tier2::Stopped).await;
-    hold.add_permits(1000);
-    tokio::task::yield_now().await;
-    assert_eq!(e.texts().len(), 8, "the request in flight was cancelled");
-    assert_eq!(
-        missing(&p, &id).await,
-        before - 8,
-        "the first batch is kept"
-    );
-    // a change: tier 2 goes on from the keys left
-    ratatoskr::fsio::write(
-        root.join("core/new.el"),
-        ";;; new.el\n(defun new-run () 1)\n",
-    )
-    .unwrap();
-    p.refresh_now().await.unwrap();
-    assert_ne!(p.state(), RootState::Stopped);
-    until(&p, "done", |t| *t == Tier2::Idle).await;
-    assert_eq!(missing(&p, &id).await, 0);
-    let mut all = e.texts();
-    all.sort();
-    all.dedup();
-    assert_eq!(
-        all.len(),
-        e.texts().len(),
-        "the kept part was not sent again"
-    );
+#[test]
+fn stop_keeps_the_done_part_and_the_watcher() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (home, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let root = repo(home.path(), "a", 20, false);
+        let id = ident("main");
+        // the first request answers, the second waits
+        let hold = Arc::new(Semaphore::new(1));
+        let e = Gated::new(SourceKind::Embed, &id, Some(hold.clone()));
+        let permits = Arc::new(Semaphore::new(100));
+        let p = open(
+            home.path(),
+            state.path(),
+            &root,
+            vec![e.clone()],
+            &no_power(),
+            &permits,
+        )
+        .await;
+        let before = missing(&p, &id).await;
+        p.start_tier2();
+        until_calls(&e, 2).await;
+        p.stop().await.unwrap();
+        assert_eq!(p.state(), RootState::Stopped);
+        until(&p, "stopped", |t| *t == Tier2::Stopped).await;
+        hold.add_permits(1000);
+        tokio::task::yield_now().await;
+        assert_eq!(e.texts().len(), 8, "the request in flight was cancelled");
+        assert_eq!(
+            missing(&p, &id).await,
+            before - 8,
+            "the first batch is kept"
+        );
+        // a change: tier 2 goes on from the keys left
+        ratatoskr::fsio::write(
+            root.join("core/new.el"),
+            ";;; new.el\n(defun new-run () 1)\n",
+        )
+        .unwrap();
+        p.refresh_now().await.unwrap();
+        assert_ne!(p.state(), RootState::Stopped);
+        until(&p, "done", |t| *t == Tier2::Idle).await;
+        assert_eq!(missing(&p, &id).await, 0);
+        let mut all = e.texts();
+        all.sort();
+        all.dedup();
+        assert_eq!(
+            all.len(),
+            e.texts().len(),
+            "the kept part was not sent again"
+        );
+    })
 }
 
 /// Pattern C. Deleting a root removes its store, its packs and the vectors only it held; a vector another root's store
 /// holds stays, as does the other root's own.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delete_frees_the_root_and_keeps_shared_vectors() {
-    let (home, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let (ra, rb) = (
-        repo(home.path(), "a", 3, true),
-        repo(home.path(), "b", 3, true),
-    );
-    let id = ident("main");
-    let permits = Arc::new(Semaphore::new(1000));
-    let e = Gated::new(SourceKind::Embed, &id, None);
-    let a = open(
-        home.path(),
-        state.path(),
-        &ra,
-        vec![e.clone()],
-        &no_power(),
-        &permits,
-    )
-    .await;
-    let b = open(
-        home.path(),
-        state.path(),
-        &rb,
-        vec![e.clone()],
-        &no_power(),
-        &permits,
-    )
-    .await;
-    for p in [&a, &b] {
-        p.start_tier2();
-        until(p, "done", |t| *t == Tier2::Idle).await;
-        assert_eq!(missing(p, &id).await, 0);
-    }
-    let cache: Arc<VectorCache> = a.cache(&id).await.unwrap();
-    // a file's one chunk key, from its store
-    async fn key(p: &Project, rel: &str) -> [u8; 32] {
-        let rel = rel.to_owned();
-        let k: Vec<u8> = p
-            .store()
-            .handle()
-            .read(move |c| {
-                Ok(c.query_row("select key from chunk where path = ?1", [rel], |r| r.get(0))?)
-            })
+#[test]
+fn delete_frees_the_root_and_keeps_shared_vectors() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (home, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (ra, rb) = (
+            repo(home.path(), "a", 3, true),
+            repo(home.path(), "b", 3, true),
+        );
+        let id = ident("main");
+        let permits = Arc::new(Semaphore::new(1000));
+        let e = Gated::new(SourceKind::Embed, &id, None);
+        let a = open(
+            home.path(),
+            state.path(),
+            &ra,
+            vec![e.clone()],
+            &no_power(),
+            &permits,
+        )
+        .await;
+        let b = open(
+            home.path(),
+            state.path(),
+            &rb,
+            vec![e.clone()],
+            &no_power(),
+            &permits,
+        )
+        .await;
+        for p in [&a, &b] {
+            p.start_tier2();
+            until(p, "done", |t| *t == Tier2::Idle).await;
+            assert_eq!(missing(p, &id).await, 0);
+        }
+        let cache: Arc<VectorCache> = a.cache(&id).await.unwrap();
+        // a file's one chunk key, from its store
+        async fn key(p: &Project, rel: &str) -> [u8; 32] {
+            let rel = rel.to_owned();
+            let k: Vec<u8> = p
+                .store()
+                .handle()
+                .read(move |c| {
+                    Ok(c.query_row("select key from chunk where path = ?1", [rel], |r| r.get(0))?)
+                })
+                .await
+                .unwrap();
+            k.try_into().unwrap()
+        }
+        let (only_a, shared, only_b) = (
+            key(&a, "core/a0.el").await,
+            key(&a, "core/shared.el").await,
+            key(&b, "core/b0.el").await,
+        );
+        assert_eq!(
+            shared,
+            key(&b, "core/shared.el").await,
+            "the same text, the same key"
+        );
+        let packs = ra.join(".drgnx/packs");
+        std::fs::create_dir_all(&packs).unwrap();
+        ratatoskr::fsio::write(packs.join("0123456789abcdef.vpack"), b"pack").unwrap();
+        let a_id = a.id().to_owned();
+        drop(a);
+        let caches = Caches::shared(state.path());
+        let gone = manage::delete_root(&caches, &a_id, Some(&ra))
             .await
             .unwrap();
-        k.try_into().unwrap()
-    }
-    let (only_a, shared, only_b) = (
-        key(&a, "core/a0.el").await,
-        key(&a, "core/shared.el").await,
-        key(&b, "core/b0.el").await,
-    );
-    assert_eq!(
-        shared,
-        key(&b, "core/shared.el").await,
-        "the same text, the same key"
-    );
-    let packs = ra.join(".drgnx/packs");
-    std::fs::create_dir_all(&packs).unwrap();
-    ratatoskr::fsio::write(packs.join("0123456789abcdef.vpack"), b"pack").unwrap();
-    let a_id = a.id().to_owned();
-    drop(a);
-    let caches = Caches::shared(state.path());
-    let gone = manage::delete_root(&caches, &a_id, Some(&ra))
-        .await
-        .unwrap();
-    assert!(
-        !store_path(state.path(), &a_id).exists(),
-        "the store is gone"
-    );
-    assert!(!packs.exists(), "the packs are gone");
-    assert_eq!(gone.packs, 1);
-    assert!(gone.bytes > 0);
-    assert_eq!(
-        cache
-            .has(KeyKind::Chunk, &[only_a, shared, only_b])
-            .await
-            .unwrap(),
-        [false, true, true],
-        "only a's own vectors went"
-    );
-    assert_eq!(
-        cache
-            .has(KeyKind::Path, &[hrafn::path_key("core/shared.el")])
-            .await
-            .unwrap(),
-        [true],
-        "a path both repos have stays"
-    );
-    // a's three files: three chunks and three paths, none shared
-    assert_eq!(gone.vectors, 6, "{gone:?}");
-    assert_eq!(missing(&b, &id).await, 0, "b lost nothing");
-    assert!(!Caches::shared(state.path()).stores().contains(&a_id));
+        assert!(
+            !store_path(state.path(), &a_id).exists(),
+            "the store is gone"
+        );
+        assert!(!packs.exists(), "the packs are gone");
+        assert_eq!(gone.packs, 1);
+        assert!(gone.bytes > 0);
+        assert_eq!(
+            cache
+                .has(KeyKind::Chunk, &[only_a, shared, only_b])
+                .await
+                .unwrap(),
+            [false, true, true],
+            "only a's own vectors went"
+        );
+        assert_eq!(
+            cache
+                .has(KeyKind::Path, &[hrafn::path_key("core/shared.el")])
+                .await
+                .unwrap(),
+            [true],
+            "a path both repos have stays"
+        );
+        // a's three files: three chunks and three paths, none shared
+        assert_eq!(gone.vectors, 6, "{gone:?}");
+        assert_eq!(missing(&b, &id).await, 0, "b lost nothing");
+        assert!(!Caches::shared(state.path()).stores().contains(&a_id));
+    })
 }
 
 /// A stand-in sysfs: one mains supply, ONLINE or not.
@@ -488,48 +498,50 @@ fn power(dir: &Path, online: bool) -> PathBuf {
 
 /// Pattern C. The battery pauses by itself, and the user's pause comes first; when the battery's reason clears, the
 /// user's pause still holds and nothing is embedded until resume.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_auto_pause_never_clears_a_user_pause() {
-    let (home, state, sys) = (
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-    );
-    let root = repo(home.path(), "a", 5, false);
-    let id = ident("builtin");
-    let local = Gated::new(SourceKind::Builtin, &id, None);
-    let permits = Arc::new(Semaphore::new(1000));
-    let sysfs = power(sys.path(), false);
-    let p = open(
-        home.path(),
-        state.path(),
-        &root,
-        vec![local.clone()],
-        &sysfs,
-        &permits,
-    )
-    .await;
-    p.start_tier2();
-    until(&p, "on battery", |t| *t == Tier2::Battery).await;
-    assert_eq!(p.state(), RootState::Paused(PauseWhy::Battery));
-    p.pause().await.unwrap();
-    assert_eq!(
-        p.state(),
-        RootState::Paused(PauseWhy::User),
-        "the user's reason first"
-    );
-    // the battery's reason clears: AC, and the setting that lets local sources run on battery (it wakes tier 2)
-    power(sys.path(), true);
-    p.set_battery_engine(true);
-    until(&p, "held by the user", |t| *t == Tier2::Paused).await;
-    assert_eq!(p.state(), RootState::Paused(PauseWhy::User));
-    assert!(
-        local.texts().is_empty(),
-        "the auto pause's end lifted the user's"
-    );
-    p.resume().await.unwrap();
-    until(&p, "done", |t| *t == Tier2::Idle).await;
-    assert!(!local.texts().is_empty());
+#[test]
+fn an_auto_pause_never_clears_a_user_pause() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (home, state, sys) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let root = repo(home.path(), "a", 5, false);
+        let id = ident("builtin");
+        let local = Gated::new(SourceKind::Builtin, &id, None);
+        let permits = Arc::new(Semaphore::new(1000));
+        let sysfs = power(sys.path(), false);
+        let p = open(
+            home.path(),
+            state.path(),
+            &root,
+            vec![local.clone()],
+            &sysfs,
+            &permits,
+        )
+        .await;
+        p.start_tier2();
+        until(&p, "on battery", |t| *t == Tier2::Battery).await;
+        assert_eq!(p.state(), RootState::Paused(PauseWhy::Battery));
+        p.pause().await.unwrap();
+        assert_eq!(
+            p.state(),
+            RootState::Paused(PauseWhy::User),
+            "the user's reason first"
+        );
+        // the battery's reason clears: AC, and the setting that lets local sources run on battery (it wakes tier 2)
+        power(sys.path(), true);
+        p.set_battery_engine(true);
+        until(&p, "held by the user", |t| *t == Tier2::Paused).await;
+        assert_eq!(p.state(), RootState::Paused(PauseWhy::User));
+        assert!(
+            local.texts().is_empty(),
+            "the auto pause's end lifted the user's"
+        );
+        p.resume().await.unwrap();
+        until(&p, "done", |t| *t == Tier2::Idle).await;
+        assert!(!local.texts().is_empty());
+    })
 }
 
 /// The stand-in machine beside a stand-in sysfs (`search::host`): a load average of LOAD over CPUS online, and AVAIL
@@ -552,139 +564,147 @@ const GB: u64 = 1 << 30;
 /// Pattern C. A busy machine pauses tier 2 by itself (a load of 9 on 4 CPUs): it says so, and nothing is asked of the
 /// source; `index now` goes through the load; quiet again, a root that was not overridden goes on by itself (woken by
 /// the next change; here `resume`, which changes nothing else for a root the user never paused).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn load_pauses_until_the_machine_is_quiet() {
-    let (home, state, sys) = (
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-    );
-    let root = repo(home.path(), "a", 5, false);
-    let id = ident("builtin");
-    let local = Gated::new(SourceKind::Builtin, &id, None);
-    let permits = Arc::new(Semaphore::new(1000));
-    let host = machine(sys.path(), 9.0, 4, 500 * GB, 1000 * GB);
-    let p = open(
-        home.path(),
-        state.path(),
-        &root,
-        vec![local.clone()],
-        &host,
-        &permits,
-    )
-    .await;
-    p.start_tier2();
-    until(&p, "held by the load", |t| *t == Tier2::Load).await;
-    assert_eq!(p.state(), RootState::Paused(PauseWhy::Load));
-    assert!(local.texts().is_empty(), "a busy machine embedded");
-    machine(sys.path(), 7.9, 4, 500 * GB, 1000 * GB);
-    p.resume().await.unwrap();
-    until(&p, "done", |t| *t == Tier2::Idle).await;
-    assert!(!local.texts().is_empty());
-    assert_eq!(p.state(), RootState::Idle);
+#[test]
+fn load_pauses_until_the_machine_is_quiet() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (home, state, sys) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let root = repo(home.path(), "a", 5, false);
+        let id = ident("builtin");
+        let local = Gated::new(SourceKind::Builtin, &id, None);
+        let permits = Arc::new(Semaphore::new(1000));
+        let host = machine(sys.path(), 9.0, 4, 500 * GB, 1000 * GB);
+        let p = open(
+            home.path(),
+            state.path(),
+            &root,
+            vec![local.clone()],
+            &host,
+            &permits,
+        )
+        .await;
+        p.start_tier2();
+        until(&p, "held by the load", |t| *t == Tier2::Load).await;
+        assert_eq!(p.state(), RootState::Paused(PauseWhy::Load));
+        assert!(local.texts().is_empty(), "a busy machine embedded");
+        machine(sys.path(), 7.9, 4, 500 * GB, 1000 * GB);
+        p.resume().await.unwrap();
+        until(&p, "done", |t| *t == Tier2::Idle).await;
+        assert!(!local.texts().is_empty());
+        assert_eq!(p.state(), RootState::Idle);
+    })
 }
 
 /// Pattern C. `index now` overrides the load: a busy machine embeds when asked to now.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn index_now_goes_through_the_load() {
-    let (home, state, sys) = (
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-    );
-    let root = repo(home.path(), "a", 5, false);
-    let id = ident("builtin");
-    let local = Gated::new(SourceKind::Builtin, &id, None);
-    let permits = Arc::new(Semaphore::new(1000));
-    let host = machine(sys.path(), 9.0, 4, 500 * GB, 1000 * GB);
-    let p = open(
-        home.path(),
-        state.path(),
-        &root,
-        vec![local.clone()],
-        &host,
-        &permits,
-    )
-    .await;
-    p.start_tier2();
-    until(&p, "held by the load", |t| *t == Tier2::Load).await;
-    p.index_now();
-    until(&p, "done", |t| *t == Tier2::Idle).await;
-    assert!(!local.texts().is_empty());
+#[test]
+fn index_now_goes_through_the_load() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (home, state, sys) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let root = repo(home.path(), "a", 5, false);
+        let id = ident("builtin");
+        let local = Gated::new(SourceKind::Builtin, &id, None);
+        let permits = Arc::new(Semaphore::new(1000));
+        let host = machine(sys.path(), 9.0, 4, 500 * GB, 1000 * GB);
+        let p = open(
+            home.path(),
+            state.path(),
+            &root,
+            vec![local.clone()],
+            &host,
+            &permits,
+        )
+        .await;
+        p.start_tier2();
+        until(&p, "held by the load", |t| *t == Tier2::Load).await;
+        p.index_now();
+        until(&p, "done", |t| *t == Tier2::Idle).await;
+        assert!(!local.texts().is_empty());
+    })
 }
 
 /// Pattern C. Below the disk floor (1 GB free of 10: under the 2 GB floor) tier 2 waits, even for `index now`, since it
 /// writes vectors; with space again it goes on.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_disk_floor_pauses_even_index_now() {
-    let (home, state, sys) = (
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-        tempfile::tempdir().unwrap(),
-    );
-    let root = repo(home.path(), "a", 5, false);
-    let id = ident("builtin");
-    let local = Gated::new(SourceKind::Builtin, &id, None);
-    let permits = Arc::new(Semaphore::new(1000));
-    let host = machine(sys.path(), 0.5, 4, GB, 10 * GB);
-    let p = open(
-        home.path(),
-        state.path(),
-        &root,
-        vec![local.clone()],
-        &host,
-        &permits,
-    )
-    .await;
-    // asked to go now before tier 2 starts: its first gates already see the override, and the floor still holds
-    p.index_now();
-    p.start_tier2();
-    until(&p, "held by the disk floor", |t| *t == Tier2::DiskFloor).await;
-    assert_eq!(p.state(), RootState::Paused(PauseWhy::DiskFloor));
-    assert!(
-        local.texts().is_empty(),
-        "below the floor, index now embedded"
-    );
-    machine(sys.path(), 0.5, 4, 3 * GB, 10 * GB);
-    p.resume().await.unwrap();
-    until(&p, "done", |t| *t == Tier2::Idle).await;
-    assert!(!local.texts().is_empty());
+#[test]
+fn the_disk_floor_pauses_even_index_now() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (home, state, sys) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let root = repo(home.path(), "a", 5, false);
+        let id = ident("builtin");
+        let local = Gated::new(SourceKind::Builtin, &id, None);
+        let permits = Arc::new(Semaphore::new(1000));
+        let host = machine(sys.path(), 0.5, 4, GB, 10 * GB);
+        let p = open(
+            home.path(),
+            state.path(),
+            &root,
+            vec![local.clone()],
+            &host,
+            &permits,
+        )
+        .await;
+        // asked to go now before tier 2 starts: its first gates already see the override, and the floor still holds
+        p.index_now();
+        p.start_tier2();
+        until(&p, "held by the disk floor", |t| *t == Tier2::DiskFloor).await;
+        assert_eq!(p.state(), RootState::Paused(PauseWhy::DiskFloor));
+        assert!(
+            local.texts().is_empty(),
+            "below the floor, index now embedded"
+        );
+        machine(sys.path(), 0.5, 4, 3 * GB, 10 * GB);
+        p.resume().await.unwrap();
+        until(&p, "done", |t| *t == Tier2::Idle).await;
+        assert!(!local.texts().is_empty());
+    })
 }
 
 /// Pattern D and C. Each reason has its words, and a root says which one holds: no embedder at all, an embedder that
 /// is down, the battery (above), the user.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn status_names_why_it_waits() {
-    for (why, words) in [
-        (PauseWhy::User, "paused by the user"),
-        (PauseWhy::Battery, "on battery"),
-        (PauseWhy::Load, "busy"),
-        (PauseWhy::DiskFloor, "disk"),
-        (PauseWhy::NoEmbedder, "no embedder"),
-    ] {
-        assert!(why.text().contains(words), "{why:?}: {}", why.text());
-    }
-    let (home, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let root = repo(home.path(), "a", 3, false);
-    let permits = Arc::new(Semaphore::new(1000));
-    let p = open(
-        home.path(),
-        state.path(),
-        &root,
-        Vec::new(),
-        &no_power(),
-        &permits,
-    )
-    .await;
-    p.start_tier2();
-    until(&p, "settled", |t| *t != Tier2::Stopped).await;
-    assert_eq!(
-        p.state(),
-        RootState::Paused(PauseWhy::NoEmbedder),
-        "keys missing, nothing to fill them"
-    );
-    p.pause().await.unwrap();
-    assert_eq!(p.state().why(), Some(PauseWhy::User));
-    p.resume().await.unwrap();
-    assert_eq!(p.state(), RootState::Paused(PauseWhy::NoEmbedder));
+#[test]
+fn status_names_why_it_waits() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        for (why, words) in [
+            (PauseWhy::User, "paused by the user"),
+            (PauseWhy::Battery, "on battery"),
+            (PauseWhy::Load, "busy"),
+            (PauseWhy::DiskFloor, "disk"),
+            (PauseWhy::NoEmbedder, "no embedder"),
+        ] {
+            assert!(why.text().contains(words), "{why:?}: {}", why.text());
+        }
+        let (home, state) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let root = repo(home.path(), "a", 3, false);
+        let permits = Arc::new(Semaphore::new(1000));
+        let p = open(
+            home.path(),
+            state.path(),
+            &root,
+            Vec::new(),
+            &no_power(),
+            &permits,
+        )
+        .await;
+        p.start_tier2();
+        until(&p, "settled", |t| *t != Tier2::Stopped).await;
+        assert_eq!(
+            p.state(),
+            RootState::Paused(PauseWhy::NoEmbedder),
+            "keys missing, nothing to fill them"
+        );
+        p.pause().await.unwrap();
+        assert_eq!(p.state().why(), Some(PauseWhy::User));
+        p.resume().await.unwrap();
+        assert_eq!(p.state(), RootState::Paused(PauseWhy::NoEmbedder));
+    })
 }

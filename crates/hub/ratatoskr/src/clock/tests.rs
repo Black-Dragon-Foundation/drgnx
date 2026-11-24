@@ -14,7 +14,7 @@ fn log() -> Log {
 }
 
 fn seen(l: &Log) -> Vec<&'static str> {
-    l.lock().unwrap().clone()
+    saman::lock(&l).clone()
 }
 
 #[test]
@@ -24,7 +24,7 @@ fn virtual_time_moves_only_on_advance() {
         let mine = l.clone();
         spawn("t", async move {
             sleep(ms(50)).await;
-            mine.lock().unwrap().push("woke");
+            saman::lock(&mine).push("woke");
         });
         // real time passes; the virtual clock stands still
         tokio::time::sleep(ms(200)).await;
@@ -48,7 +48,7 @@ fn a_timer_through_drgnx_clock_moves_with_the_hubs_clock() {
         let mine = l.clone();
         spawn("other-crate", async move {
             stund::sleep(ms(50)).await;
-            mine.lock().unwrap().push("woke");
+            saman::lock(&mine).push("woke");
         });
         advance(Duration::ZERO).await;
         let a = advance(ms(49)).await;
@@ -68,7 +68,7 @@ fn due_sleepers_wake_in_deadline_then_registration_order() {
             let mine = l.clone();
             spawn(name, async move {
                 sleep(ms(after)).await;
-                mine.lock().unwrap().push(name);
+                saman::lock(&mine).push(name);
             });
             // each task has run (and registered) before the next is spawned
             advance(Duration::ZERO).await;
@@ -89,15 +89,15 @@ fn advance_returns_after_woken_tasks_park() {
             for _ in 0..20 {
                 tokio::task::yield_now().await;
             }
-            mine.lock().unwrap().push("woken");
+            saman::lock(&mine).push("woken");
             let child = mine.clone();
             spawn("child", async move {
                 tokio::task::yield_now().await;
-                child.lock().unwrap().push("child");
+                saman::lock(&child).push("child");
             });
             // parked again
             sleep(ms(1000)).await;
-            mine.lock().unwrap().push("late");
+            saman::lock(&mine).push("late");
         });
         let a = advance(ms(10)).await;
         assert_eq!((a.woken, a.busy.len()), (1, 0), "{a:?}");
@@ -131,7 +131,7 @@ fn a_task_idle_on_a_channel_after_its_wake_is_parked() {
         let (_keep, rx) = tokio::sync::oneshot::channel::<()>();
         spawn("t", async move {
             sleep(ms(10)).await;
-            mine.lock().unwrap().push("woke");
+            saman::lock(&mine).push("woke");
             crate::soft::done(rx.await, "tests");
         });
         let a = advance(ms(10)).await;
@@ -162,7 +162,7 @@ fn timeouts_and_intervals_follow_virtual_time() {
         spawn("timeout", async move {
             let never = std::future::pending::<()>();
             if timeout(ms(100), never).await == Err(Elapsed) {
-                mine.lock().unwrap().push("elapsed");
+                saman::lock(&mine).push("elapsed");
             }
             // a ready future registers no sleeper and wins
             assert_eq!(timeout(ms(1), async { 7 }).await, Ok(7));
@@ -172,7 +172,7 @@ fn timeouts_and_intervals_follow_virtual_time() {
             let mut every = interval(ms(40));
             for _ in 0..3 {
                 every.tick().await;
-                mine.lock().unwrap().push("tick");
+                saman::lock(&mine).push("tick");
             }
         });
         advance(ms(99)).await;
@@ -192,7 +192,7 @@ fn a_real_wait_is_waited_for_and_one_that_lasts_is_named() {
         // a job's watcher: the child's end, under the clock's time box
         spawn("job:watch", async move {
             crate::soft::done(timeout(ms(5000), real_long(rx)).await, "timeout");
-            mine.lock().unwrap().push("after");
+            saman::lock(&mine).push("after");
         });
         // an advance counts it parked: the advance may be what ends it
         let a = advance(Duration::ZERO).await;
@@ -227,7 +227,7 @@ fn a_blocking_call_is_a_real_wait() {
         let mine = l.clone();
         spawn("work:edits", async move {
             crate::soft::done(blocking(move || held.recv()).await, "blocking");
-            mine.lock().unwrap().push("done");
+            saman::lock(&mine).push("done");
         });
         advance(Duration::ZERO).await;
         assert_eq!(waiting(ms(100), &[]).await, ["work:edits"]);
@@ -363,7 +363,7 @@ fn a_task_woken_by_another_tasks_real_wait_is_waited_for() {
                 for _ in 0..20 {
                     tokio::task::yield_now().await;
                 }
-                mine.lock().unwrap().push("woke");
+                saman::lock(&mine).push("woke");
             });
             advance(Duration::ZERO).await;
             go.send(()).unwrap();
@@ -406,7 +406,7 @@ fn a_store_threads_answer_is_a_real_wait() {
                 .await,
                 "tests",
             );
-            mine.lock().unwrap().push("read");
+            saman::lock(&mine).push("read");
         });
         advance(Duration::ZERO).await;
         assert_eq!(waiting(ms(100), &[]).await, ["records:follow"]);
@@ -429,7 +429,7 @@ fn an_advance_waits_for_a_real_wait_inside_a_clock_timeout() {
             spawn("search:download", async move {
                 sleep(ms(10)).await;
                 crate::soft::done(timeout(ms(5000), real(rx)).await, "timeout");
-                mine.lock().unwrap().push("after");
+                saman::lock(&mine).push("after");
             });
             advance(Duration::ZERO).await;
             tokio::spawn(async move {
@@ -478,7 +478,7 @@ fn a_barrier_waits_for_a_store_answer_that_takes_longer_than_busy_after() {
                 .await,
                 "tests",
             );
-            mine.lock().unwrap().push("written");
+            saman::lock(&mine).push("written");
         });
         advance(Duration::ZERO).await;
         assert_eq!(barrier().await, Vec::<String>::new());

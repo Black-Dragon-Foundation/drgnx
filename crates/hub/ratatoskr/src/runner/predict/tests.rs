@@ -250,8 +250,9 @@ fn uncommitted_work_counts() {
 /// [D] A check's bases come from `work.db` when the session's row is there, and from the edit history when it is not
 /// written yet (the hub writes it after the session starts, unordered with the agent's first edit: the clash row
 /// `clash/sessions-outside-a-run-get-clashes` missed its card when B's row came late).
-#[tokio::test(flavor = "multi_thread")]
-async fn a_tree_whose_base_row_is_not_written_yet_has_a_base() {
+#[test]
+fn a_tree_whose_base_row_is_not_written_yet_has_a_base() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let fx = crate::agents::session::attach_tests::Fx::new();
     let (main, wt) = (fx.work(), fx.dir.path().join("wt-b"));
     sh(
@@ -266,4 +267,5 @@ async fn a_tree_whose_base_row_is_not_written_yet_has_a_base() {
         .map(|t| (t.to_string_lossy().into_owned(), head.clone()))
         .collect();
     assert_eq!(got, want);
+})
 }

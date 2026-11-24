@@ -838,7 +838,7 @@ impl Settings {
     }
 
     pub fn current(&self) -> Arc<Current> {
-        self.current.lock().expect("settings").clone()
+        saman::lock(&self.current).clone()
     }
 
     /// Whether [`Settings::open`] was called (the hub; a test front has no config folder).
@@ -849,8 +849,8 @@ impl Settings {
     /// Put the global overrides over the file's values: what is in effect now. The file is copied under the overrides'
     /// lock, which is held until the result is published.
     fn compose(&self) {
-        let overrides = self.overrides.lock().expect("settings");
-        let file = self.file.lock().expect("settings").clone();
+        let overrides = saman::lock(&self.overrides);
+        let file = saman::lock(&self.file).clone();
         let current = match overrides.scope(None) {
             None | Some([]) => file,
             Some(list) => {
@@ -869,14 +869,14 @@ impl Settings {
                 })
             }
         };
-        *self.current.lock().expect("settings") = current;
+        *saman::lock(&self.current) = current;
     }
 
     /// NAME's value in effect for PROJECT (none: global), as JSON of its runtime type, and whether PROJECT has ever
     /// sent its values (phase 6's card asks).  The project's override, else the global one, else `settings.el`, else
     /// the shipped default.  None for a name that is not a runtime setting.
     pub fn effective(&self, name: &str, project: Option<&str>) -> Option<(Value, bool)> {
-        let overrides = self.overrides.lock().expect("settings");
+        let overrides = saman::lock(&self.overrides);
         let seen = project.is_none_or(|p| overrides.scope(Some(p)).is_some());
         let own = project
             .and_then(|p| overrides.scope(Some(p)))
@@ -891,7 +891,7 @@ impl Settings {
     /// NAME's value in PROJECT's own set, or none when PROJECT never sent one for it (unlike [`Self::effective`], which
     /// falls back to the global value): a setting a project's value is added to, not put in place of.
     pub fn project_value(&self, name: &str, project: &str) -> Option<Value> {
-        let overrides = self.overrides.lock().expect("settings");
+        let overrides = saman::lock(&self.overrides);
         overrides
             .scope(Some(project))?
             .iter()
@@ -904,7 +904,7 @@ impl Settings {
     /// nothing): what a runner set up for all projects at once needs (a Mac's toolchains).
     pub fn values_everywhere(&self, name: &str) -> Vec<Value> {
         let projects: Vec<String> = {
-            let overrides = self.overrides.lock().expect("settings");
+            let overrides = saman::lock(&self.overrides);
             overrides.projects().map(String::from).collect()
         };
         self.effective(name, None)
@@ -944,7 +944,7 @@ impl Settings {
                 .await;
         }
         let n = list.len() as u64;
-        self.overrides.lock().expect("settings").set(project, list);
+        saman::lock(&self.overrides).set(project, list);
         self.compose();
         Ok(n)
     }
@@ -958,7 +958,7 @@ impl Settings {
         let _one = self.reading.lock().await;
         if !self.overrides_loaded.swap(true, Ordering::Relaxed) {
             let kept = overrides::Overrides::load(db).await;
-            let mut mine = self.overrides.lock().expect("settings");
+            let mut mine = saman::lock(&self.overrides);
             // a set sent before the first read stays
             for scope in std::iter::once(None).chain(kept.projects().map(Some)) {
                 if mine.scope(scope).is_none()
@@ -968,7 +968,7 @@ impl Settings {
                 }
             }
         }
-        let before = self.file.lock().expect("settings").clone();
+        let before = saman::lock(&self.file).clone();
         let stamp = load::stamp(&dir.join(load::FILE));
         if before.stamp.is_some() && before.stamp == Some(stamp) {
             self.compose();
@@ -999,7 +999,7 @@ impl Settings {
             .filter(|p| !before.loaded.problems.contains(p))
             .map(notice)
             .collect();
-        *self.file.lock().expect("settings") = Arc::new(Current {
+        *saman::lock(&self.file) = Arc::new(Current {
             stamp: Some(stamp),
             loaded,
         });

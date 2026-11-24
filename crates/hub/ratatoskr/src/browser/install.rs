@@ -819,250 +819,263 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn an_install_lands_whole() {
-        let tmp = tempfile::tempdir().unwrap();
-        let zip = good_zip();
-        let (base, pins) = fixture(tmp.path(), &zip, &sha(&zip));
-        let done = run(tmp.path(), &pins, &base, None).await.unwrap();
-        assert!(!done.already);
-        assert_eq!(done.version, V);
-        assert_eq!(
-            fs::metadata(&done.binary).unwrap().permissions().mode() & 0o777,
-            0o755
-        );
-        assert_eq!(
-            fs::read(done.dir.join("chrome-headless-shell-x/lib/data.bin")).unwrap(),
-            b"data"
-        );
-        assert!(!done.dir.join("download.zip").exists());
-        assert_eq!(leftovers(tmp.path()), [V]);
-        let marker: InstalledFile = serde_json::from_str(
-            &crate::fsio::read_to_string(done.dir.join("installed.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            (marker.version.as_str(), marker.sha256.as_str()),
-            (V, sha(&zip).as_str())
-        );
-        // again: nothing is downloaded
-        let again = run(
-            tmp.path(),
-            &pins,
-            &Base::Dir(tmp.path().join("nowhere")),
-            None,
-        )
-        .await
-        .unwrap();
-        assert!(again.already);
-        assert_eq!(again.binary, done.binary);
-    }
-
-    #[tokio::test]
-    async fn digest_mismatch_leaves_nothing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (base, pins) = fixture(tmp.path(), &good_zip(), &"ab".repeat(32));
-        let err = run(tmp.path(), &pins, &base, None).await.unwrap_err();
-        assert!(matches!(err, InstallError::DigestMismatch { .. }), "{err}");
-        assert_eq!(leftovers(tmp.path()), Vec::<String>::new());
-    }
-
-    #[tokio::test]
-    async fn zip_slip_and_symlinks_are_refused() {
-        let outside = tempfile::tempdir().unwrap();
-        let target = outside.path().join("evil");
-        let abs = target.to_str().unwrap().to_string();
-        let link_mode = 0o120777;
-        let cases: Vec<(&str, Vec<u8>)> = vec![
-            ("climbs", zip_of(&[("../../evil", b"x", 0o644)])),
-            ("absolute", {
-                // the writer strips a leading slash: write an X and turn it into one in the bytes
-                let named = format!("X{}", &abs[1..]);
-                let mut z = zip_of(&[(&named, b"x", 0o644)]);
-                let at: Vec<usize> = (0..z.len() - named.len())
-                    .filter(|i| &z[*i..*i + named.len()] == named.as_bytes())
-                    .collect();
-                assert_eq!(
-                    at.len(),
-                    2,
-                    "the name is in the local header and the directory"
-                );
-                for i in at {
-                    z[i] = b'/';
-                }
-                z
-            }),
-            (
-                "symlink",
-                zip_of(&[("d/ok", b"x", 0o644), ("d/link", abs.as_bytes(), link_mode)]),
-            ),
-            (
-                "a file over a folder",
-                zip_of(&[("d", b"x", 0o644), ("d/f", b"y", 0o644)]),
-            ),
-            ("the same name twice", {
-                // the writer refuses a repeated name: make two of the same length, then rename one in the bytes
-                let mut z = zip_of(&[("d/f", b"x", 0o644), ("d/g", b"y", 0o644)]);
-                let at: Vec<usize> = (0..z.len() - 2)
-                    .filter(|i| &z[*i..*i + 3] == b"d/g")
-                    .collect();
-                assert_eq!(
-                    at.len(),
-                    2,
-                    "the name is in the local header and the directory"
-                );
-                for i in at {
-                    z[i + 2] = b'f';
-                }
-                z
-            }),
-        ];
-        for (what, zip) in cases {
+    #[test]
+    fn an_install_lands_whole() {
+        saman::block_on_current(async move {
             let tmp = tempfile::tempdir().unwrap();
+            let zip = good_zip();
+            let (base, pins) = fixture(tmp.path(), &zip, &sha(&zip));
+            let done = run(tmp.path(), &pins, &base, None).await.unwrap();
+            assert!(!done.already);
+            assert_eq!(done.version, V);
+            assert_eq!(
+                fs::metadata(&done.binary).unwrap().permissions().mode() & 0o777,
+                0o755
+            );
+            assert_eq!(
+                fs::read(done.dir.join("chrome-headless-shell-x/lib/data.bin")).unwrap(),
+                b"data"
+            );
+            assert!(!done.dir.join("download.zip").exists());
+            assert_eq!(leftovers(tmp.path()), [V]);
+            let marker: InstalledFile = serde_json::from_str(
+                &crate::fsio::read_to_string(done.dir.join("installed.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                (marker.version.as_str(), marker.sha256.as_str()),
+                (V, sha(&zip).as_str())
+            );
+            // again: nothing is downloaded
+            let again = run(
+                tmp.path(),
+                &pins,
+                &Base::Dir(tmp.path().join("nowhere")),
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(again.already);
+            assert_eq!(again.binary, done.binary);
+        })
+    }
+
+    #[test]
+    fn digest_mismatch_leaves_nothing() {
+        saman::block_on_current(async move {
+            let tmp = tempfile::tempdir().unwrap();
+            let (base, pins) = fixture(tmp.path(), &good_zip(), &"ab".repeat(32));
+            let err = run(tmp.path(), &pins, &base, None).await.unwrap_err();
+            assert!(matches!(err, InstallError::DigestMismatch { .. }), "{err}");
+            assert_eq!(leftovers(tmp.path()), Vec::<String>::new());
+        })
+    }
+
+    #[test]
+    fn zip_slip_and_symlinks_are_refused() {
+        saman::block_on_current(async move {
+            let outside = tempfile::tempdir().unwrap();
+            let target = outside.path().join("evil");
+            let abs = target.to_str().unwrap().to_string();
+            let link_mode = 0o120777;
+            let cases: Vec<(&str, Vec<u8>)> = vec![
+                ("climbs", zip_of(&[("../../evil", b"x", 0o644)])),
+                ("absolute", {
+                    // the writer strips a leading slash: write an X and turn it into one in the bytes
+                    let named = format!("X{}", &abs[1..]);
+                    let mut z = zip_of(&[(&named, b"x", 0o644)]);
+                    let at: Vec<usize> = (0..z.len() - named.len())
+                        .filter(|i| &z[*i..*i + named.len()] == named.as_bytes())
+                        .collect();
+                    assert_eq!(
+                        at.len(),
+                        2,
+                        "the name is in the local header and the directory"
+                    );
+                    for i in at {
+                        z[i] = b'/';
+                    }
+                    z
+                }),
+                (
+                    "symlink",
+                    zip_of(&[("d/ok", b"x", 0o644), ("d/link", abs.as_bytes(), link_mode)]),
+                ),
+                (
+                    "a file over a folder",
+                    zip_of(&[("d", b"x", 0o644), ("d/f", b"y", 0o644)]),
+                ),
+                ("the same name twice", {
+                    // the writer refuses a repeated name: make two of the same length, then rename one in the bytes
+                    let mut z = zip_of(&[("d/f", b"x", 0o644), ("d/g", b"y", 0o644)]);
+                    let at: Vec<usize> = (0..z.len() - 2)
+                        .filter(|i| &z[*i..*i + 3] == b"d/g")
+                        .collect();
+                    assert_eq!(
+                        at.len(),
+                        2,
+                        "the name is in the local header and the directory"
+                    );
+                    for i in at {
+                        z[i + 2] = b'f';
+                    }
+                    z
+                }),
+            ];
+            for (what, zip) in cases {
+                let tmp = tempfile::tempdir().unwrap();
+                let (base, pins) = fixture(tmp.path(), &zip, &sha(&zip));
+                let err = run(tmp.path(), &pins, &base, None).await.unwrap_err();
+                assert!(
+                    matches!(
+                        err,
+                        InstallError::Unsafe(_) | InstallError::Io(_) | InstallError::Archive(_)
+                    ),
+                    "{what}: {err}"
+                );
+                if what != "a file over a folder" && what != "the same name twice" {
+                    assert!(matches!(err, InstallError::Unsafe(_)), "{what}: {err}");
+                }
+                assert_eq!(leftovers(tmp.path()), Vec::<String>::new(), "{what}");
+                assert!(!target.exists(), "{what}: wrote outside");
+            }
+        })
+    }
+
+    #[test]
+    fn an_archive_without_the_binary_or_over_the_limits_fails_clean() {
+        saman::block_on_current(async move {
+            let tmp = tempfile::tempdir().unwrap();
+            let zip = zip_of(&[("chrome-headless-shell-x/other", b"x", 0o755)]);
             let (base, pins) = fixture(tmp.path(), &zip, &sha(&zip));
             let err = run(tmp.path(), &pins, &base, None).await.unwrap_err();
-            assert!(
-                matches!(
-                    err,
-                    InstallError::Unsafe(_) | InstallError::Io(_) | InstallError::Archive(_)
-                ),
-                "{what}: {err}"
+            assert!(matches!(err, InstallError::Archive(_)), "{err}");
+            assert_eq!(leftovers(tmp.path()), Vec::<String>::new());
+            // an entry larger than the limit, however it is declared
+            let zip = good_zip();
+            let (base, pins) = fixture(tmp.path(), &zip, &sha(&zip));
+            let small = Limits {
+                entry: 8,
+                ..Limits::default()
+            };
+            let err = install_with(&tmp.path().join("data"), &pins, None, &base, small, &|_| {})
+                .await
+                .unwrap_err();
+            assert!(matches!(err, InstallError::TooLarge(_)), "{err}");
+            let small = Limits {
+                download: 10,
+                ..Limits::default()
+            };
+            let err = install_with(&tmp.path().join("data"), &pins, None, &base, small, &|_| {})
+                .await
+                .unwrap_err();
+            assert!(matches!(err, InstallError::TooLarge(_)), "{err}");
+            let small = Limits {
+                entries: 1,
+                ..Limits::default()
+            };
+            let err = install_with(&tmp.path().join("data"), &pins, None, &base, small, &|_| {})
+                .await
+                .unwrap_err();
+            assert!(matches!(err, InstallError::TooLarge(_)), "{err}");
+            assert_eq!(leftovers(tmp.path()), Vec::<String>::new());
+        })
+    }
+
+    #[test]
+    fn a_partial_install_is_ignored_and_replaced() {
+        saman::block_on_current(async move {
+            let tmp = tempfile::tempdir().unwrap();
+            let data = tmp.path().join("data");
+            // an earlier try died halfway: a partial folder with junk, and a link where a folder would go
+            let partial = browsers_dir(&data).join(format!("{V}.partial"));
+            fs::create_dir_all(partial.join("chrome-headless-shell-x")).unwrap();
+            crate::fsio::write(
+                partial.join("chrome-headless-shell-x/chrome-headless-shell"),
+                "half",
+            )
+            .unwrap();
+            crate::fsio::write(partial.join("download.zip"), "half").unwrap();
+            crate::fsio::write(partial.join("junk"), "x").unwrap();
+            assert_eq!(
+                super::super::resolve::installed(&data).len(),
+                0,
+                "a partial folder is not an install"
             );
-            if what != "a file over a folder" && what != "the same name twice" {
-                assert!(matches!(err, InstallError::Unsafe(_)), "{what}: {err}");
-            }
-            assert_eq!(leftovers(tmp.path()), Vec::<String>::new(), "{what}");
-            assert!(!target.exists(), "{what}: wrote outside");
-        }
+            let zip = good_zip();
+            let (base, pins) = fixture(tmp.path(), &zip, &sha(&zip));
+            let done = run(tmp.path(), &pins, &base, None).await.unwrap();
+            assert_eq!(fs::read(&done.binary).unwrap(), b"#!/bin/sh\necho hi\n");
+            assert!(!done.dir.join("junk").exists());
+            assert_eq!(leftovers(tmp.path()), [V]);
+            assert_eq!(super::super::resolve::installed(&data).len(), 1);
+            // and a version folder with no marker (a crash between the steps) is replaced too
+            fs::remove_file(done.dir.join("installed.json")).unwrap();
+            crate::fsio::write(done.dir.join("junk"), "x").unwrap();
+            let done = run(tmp.path(), &pins, &base, None).await.unwrap();
+            assert!(!done.already && !done.dir.join("junk").exists());
+        })
     }
 
-    #[tokio::test]
-    async fn an_archive_without_the_binary_or_over_the_limits_fails_clean() {
-        let tmp = tempfile::tempdir().unwrap();
-        let zip = zip_of(&[("chrome-headless-shell-x/other", b"x", 0o755)]);
-        let (base, pins) = fixture(tmp.path(), &zip, &sha(&zip));
-        let err = run(tmp.path(), &pins, &base, None).await.unwrap_err();
-        assert!(matches!(err, InstallError::Archive(_)), "{err}");
-        assert_eq!(leftovers(tmp.path()), Vec::<String>::new());
-        // an entry larger than the limit, however it is declared
-        let zip = good_zip();
-        let (base, pins) = fixture(tmp.path(), &zip, &sha(&zip));
-        let small = Limits {
-            entry: 8,
-            ..Limits::default()
-        };
-        let err = install_with(&tmp.path().join("data"), &pins, None, &base, small, &|_| {})
-            .await
-            .unwrap_err();
-        assert!(matches!(err, InstallError::TooLarge(_)), "{err}");
-        let small = Limits {
-            download: 10,
-            ..Limits::default()
-        };
-        let err = install_with(&tmp.path().join("data"), &pins, None, &base, small, &|_| {})
-            .await
-            .unwrap_err();
-        assert!(matches!(err, InstallError::TooLarge(_)), "{err}");
-        let small = Limits {
-            entries: 1,
-            ..Limits::default()
-        };
-        let err = install_with(&tmp.path().join("data"), &pins, None, &base, small, &|_| {})
-            .await
-            .unwrap_err();
-        assert!(matches!(err, InstallError::TooLarge(_)), "{err}");
-        assert_eq!(leftovers(tmp.path()), Vec::<String>::new());
-    }
-
-    #[tokio::test]
-    async fn a_partial_install_is_ignored_and_replaced() {
-        let tmp = tempfile::tempdir().unwrap();
-        let data = tmp.path().join("data");
-        // an earlier try died halfway: a partial folder with junk, and a link where a folder would go
-        let partial = browsers_dir(&data).join(format!("{V}.partial"));
-        fs::create_dir_all(partial.join("chrome-headless-shell-x")).unwrap();
-        crate::fsio::write(
-            partial.join("chrome-headless-shell-x/chrome-headless-shell"),
-            "half",
-        )
-        .unwrap();
-        crate::fsio::write(partial.join("download.zip"), "half").unwrap();
-        crate::fsio::write(partial.join("junk"), "x").unwrap();
-        assert_eq!(
-            super::super::resolve::installed(&data).len(),
-            0,
-            "a partial folder is not an install"
-        );
-        let zip = good_zip();
-        let (base, pins) = fixture(tmp.path(), &zip, &sha(&zip));
-        let done = run(tmp.path(), &pins, &base, None).await.unwrap();
-        assert_eq!(fs::read(&done.binary).unwrap(), b"#!/bin/sh\necho hi\n");
-        assert!(!done.dir.join("junk").exists());
-        assert_eq!(leftovers(tmp.path()), [V]);
-        assert_eq!(super::super::resolve::installed(&data).len(), 1);
-        // and a version folder with no marker (a crash between the steps) is replaced too
-        fs::remove_file(done.dir.join("installed.json")).unwrap();
-        crate::fsio::write(done.dir.join("junk"), "x").unwrap();
-        let done = run(tmp.path(), &pins, &base, None).await.unwrap();
-        assert!(!done.already && !done.dir.join("junk").exists());
-    }
-
-    #[tokio::test]
-    async fn only_pinned_versions_install() {
-        let tmp = tempfile::tempdir().unwrap();
-        let zip = good_zip();
-        let (base, mut pins) = fixture(tmp.path(), &zip, &sha(&zip));
-        let err = run(tmp.path(), &pins, &base, Some("1.2.3.4"))
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(&err, InstallError::NotPinned { asked, .. } if asked == "1.2.3.4"),
-            "{err}"
-        );
-        let err = run(tmp.path(), &pins, &base, Some("../../x"))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, InstallError::NotPinned { .. }), "{err}");
-        // a platform without a digest cannot be installed
-        pins[0].platforms.values_mut().for_each(|p| p.sha256 = None);
-        let err = run(tmp.path(), &pins, &base, None).await.unwrap_err();
-        assert!(matches!(err, InstallError::PlatformNotPinned(_)), "{err}");
-        // a pin whose URL is not https is refused before any request
-        let (_, mut pins) = fixture(tmp.path(), &zip, &sha(&zip));
-        pins[0]
-            .platforms
-            .values_mut()
-            .for_each(|p| p.url = "http://example.invalid/a.zip".into());
-        let err = run(tmp.path(), &pins, &Base::Pinned, None)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, InstallError::NotHttps(_)), "{err}");
-        assert_eq!(leftovers(tmp.path()), Vec::<String>::new());
-        // the newest of several wins
-        let (base, mut two) = fixture(tmp.path(), &zip, &sha(&zip));
-        let mut older = two[0].clone();
-        older.version = "99.0.0.1".into();
-        two.insert(0, older);
-        assert_eq!(run(tmp.path(), &two, &base, None).await.unwrap().version, V);
+    #[test]
+    fn only_pinned_versions_install() {
+        saman::block_on_current(async move {
+            let tmp = tempfile::tempdir().unwrap();
+            let zip = good_zip();
+            let (base, mut pins) = fixture(tmp.path(), &zip, &sha(&zip));
+            let err = run(tmp.path(), &pins, &base, Some("1.2.3.4"))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, InstallError::NotPinned { asked, .. } if asked == "1.2.3.4"),
+                "{err}"
+            );
+            let err = run(tmp.path(), &pins, &base, Some("../../x"))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, InstallError::NotPinned { .. }), "{err}");
+            // a platform without a digest cannot be installed
+            pins[0].platforms.values_mut().for_each(|p| p.sha256 = None);
+            let err = run(tmp.path(), &pins, &base, None).await.unwrap_err();
+            assert!(matches!(err, InstallError::PlatformNotPinned(_)), "{err}");
+            // a pin whose URL is not https is refused before any request
+            let (_, mut pins) = fixture(tmp.path(), &zip, &sha(&zip));
+            pins[0]
+                .platforms
+                .values_mut()
+                .for_each(|p| p.url = "http://example.invalid/a.zip".into());
+            let err = run(tmp.path(), &pins, &Base::Pinned, None)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, InstallError::NotHttps(_)), "{err}");
+            assert_eq!(leftovers(tmp.path()), Vec::<String>::new());
+            // the newest of several wins
+            let (base, mut two) = fixture(tmp.path(), &zip, &sha(&zip));
+            let mut older = two[0].clone();
+            older.version = "99.0.0.1".into();
+            two.insert(0, older);
+            assert_eq!(run(tmp.path(), &two, &base, None).await.unwrap().version, V);
+        })
     }
 
     /// A pinned download may be redirected, a few hops, and only to https (or, for a test's server, http): the digest is
     /// what holds the content, the redirect only says where it is.
-    #[tokio::test]
-    async fn a_download_follows_redirects_a_few_hops_and_refuses_the_rest() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            while let Ok((mut s, _)) = listener.accept().await {
-                let mut buf = [0u8; 2048];
-                let n = s.read(&mut buf).await.unwrap_or(0);
-                let path = String::from_utf8_lossy(&buf[..n])
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap_or("/")
-                    .to_owned();
-                let reply = match path.as_str() {
+    #[test]
+    fn a_download_follows_redirects_a_few_hops_and_refuses_the_rest() {
+        saman::block_on_current(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                while let Ok((mut s, _)) = listener.accept().await {
+                    let mut buf = [0u8; 2048];
+                    let n = s.read(&mut buf).await.unwrap_or(0);
+                    let path = String::from_utf8_lossy(&buf[..n])
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("/")
+                        .to_owned();
+                    let reply = match path.as_str() {
                     "/a" => format!("HTTP/1.1 302 Found\r\nlocation: http://127.0.0.1:{port}/b\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"),
                     "/b" => "HTTP/1.1 301 Moved\r\nlocation: /c\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
                     "/rel/x" => "HTTP/1.1 302 Found\r\nlocation: b\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
@@ -1074,10 +1087,47 @@ mod tests {
                     "/ftp" => "HTTP/1.1 302 Found\r\nlocation: ftp://x/y\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
                     _ => "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
                 };
-                crate::soft::done(s.write_all(reply.as_bytes()).await, "install");
-            }
-        });
-        let get = |path: &'static str| async move {
+                    crate::soft::done(s.write_all(reply.as_bytes()).await, "install");
+                }
+            });
+            let get = |path: &'static str| async move {
+                let dir = tempfile::tempdir().unwrap();
+                let file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(dir.path().join("d"))
+                    .unwrap();
+                let mut sink = Sink {
+                    file,
+                    hasher: Sha256::new(),
+                    written: 0,
+                    max: 1 << 20,
+                };
+                over_http(
+                    &format!("http://127.0.0.1:{port}{path}"),
+                    true,
+                    &mut sink,
+                    Limits::default(),
+                )
+                .await
+                .map(|()| sink.finish())
+            };
+            // two hops (an absolute http one, a relative one) reach the body
+            assert_eq!(get("/a").await.unwrap(), sha(b"hello"));
+            // a relative Location (`b`, `../b`) is resolved against the URL just asked; `//host/x` keeps the scheme and
+            // changes the host, it is never a path on the current host
+            assert_eq!(get("/rel/x").await.unwrap(), sha(b"hello"));
+            assert_eq!(get("/rel/dot/x").await.unwrap(), sha(b"hello"));
+            assert_eq!(get("/proto").await.unwrap(), sha(b"hello"));
+            assert!(
+                get("/loop")
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("redirects")
+            );
+            assert!(matches!(get("/ftp").await, Err(InstallError::NotHttps(_))));
+            // without the test's plain http an `http://` start is refused before any request
             let dir = tempfile::tempdir().unwrap();
             let file = OpenOptions::new()
                 .write(true)
@@ -1090,87 +1140,53 @@ mod tests {
                 written: 0,
                 max: 1 << 20,
             };
-            over_http(
-                &format!("http://127.0.0.1:{port}{path}"),
-                true,
-                &mut sink,
-                Limits::default(),
-            )
-            .await
-            .map(|()| sink.finish())
-        };
-        // two hops (an absolute http one, a relative one) reach the body
-        assert_eq!(get("/a").await.unwrap(), sha(b"hello"));
-        // a relative Location (`b`, `../b`) is resolved against the URL just asked; `//host/x` keeps the scheme and
-        // changes the host, it is never a path on the current host
-        assert_eq!(get("/rel/x").await.unwrap(), sha(b"hello"));
-        assert_eq!(get("/rel/dot/x").await.unwrap(), sha(b"hello"));
-        assert_eq!(get("/proto").await.unwrap(), sha(b"hello"));
-        assert!(
-            get("/loop")
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("redirects")
-        );
-        assert!(matches!(get("/ftp").await, Err(InstallError::NotHttps(_))));
-        // without the test's plain http an `http://` start is refused before any request
-        let dir = tempfile::tempdir().unwrap();
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(dir.path().join("d"))
-            .unwrap();
-        let mut sink = Sink {
-            file,
-            hasher: Sha256::new(),
-            written: 0,
-            max: 1 << 20,
-        };
-        assert!(matches!(
-            over_http(
-                &format!("http://127.0.0.1:{port}/a"),
-                false,
-                &mut sink,
-                Limits::default()
-            )
-            .await,
-            Err(InstallError::NotHttps(_))
-        ));
+            assert!(matches!(
+                over_http(
+                    &format!("http://127.0.0.1:{port}/a"),
+                    false,
+                    &mut sink,
+                    Limits::default()
+                )
+                .await,
+                Err(InstallError::NotHttps(_))
+            ));
+        })
     }
 
     /// The network path, against a local plain-HTTP server.
-    #[tokio::test]
-    async fn a_download_over_http_streams_and_is_checked() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let zip = good_zip();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let body = zip.clone();
-        tokio::spawn(async move {
-            while let Ok((mut s, _)) = listener.accept().await {
-                let mut buf = [0u8; 2048];
-                crate::soft::done(s.read(&mut buf).await, "install");
-                let head = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-                    body.len()
-                );
-                crate::soft::done(s.write_all(head.as_bytes()).await, "install");
-                crate::soft::done(s.write_all(&body).await, "install");
-            }
-        });
-        for (digest, ok) in [(sha(&zip), true), ("cd".repeat(32), false)] {
-            let tmp = tempfile::tempdir().unwrap();
-            let (_, mut pins) = fixture(tmp.path(), &zip, &digest);
-            pins[0].platforms.values_mut().for_each(|p| {
-                p.url = format!("http://127.0.0.1:{port}/chrome-headless-shell-x.zip")
+    #[test]
+    fn a_download_over_http_streams_and_is_checked() {
+        saman::block_on_current(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let zip = good_zip();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let body = zip.clone();
+            tokio::spawn(async move {
+                while let Ok((mut s, _)) = listener.accept().await {
+                    let mut buf = [0u8; 2048];
+                    crate::soft::done(s.read(&mut buf).await, "install");
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    crate::soft::done(s.write_all(head.as_bytes()).await, "install");
+                    crate::soft::done(s.write_all(&body).await, "install");
+                }
             });
-            let got = run(tmp.path(), &pins, &Base::PlainHttp, None).await;
-            assert_eq!(got.is_ok(), ok, "{got:?}");
-            assert_eq!(
-                leftovers(tmp.path()),
-                if ok { vec![V.to_string()] } else { vec![] }
-            );
-        }
+            for (digest, ok) in [(sha(&zip), true), ("cd".repeat(32), false)] {
+                let tmp = tempfile::tempdir().unwrap();
+                let (_, mut pins) = fixture(tmp.path(), &zip, &digest);
+                pins[0].platforms.values_mut().for_each(|p| {
+                    p.url = format!("http://127.0.0.1:{port}/chrome-headless-shell-x.zip")
+                });
+                let got = run(tmp.path(), &pins, &Base::PlainHttp, None).await;
+                assert_eq!(got.is_ok(), ok, "{got:?}");
+                assert_eq!(
+                    leftovers(tmp.path()),
+                    if ok { vec![V.to_string()] } else { vec![] }
+                );
+            }
+        })
     }
 }

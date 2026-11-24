@@ -854,39 +854,42 @@ fn a_job_removes_the_stubs_its_launch_made() {
 // GL-T12-4: `run_probe` reads the helper's status line without holding the runtime's thread. On a runtime of one
 // thread, a task that wakes only when the child signals (after the read has begun) writes the line the read waits
 // for. With the read on the thread itself the task never runs and the read times out.
-#[tokio::test(flavor = "current_thread")]
-async fn run_probe_reads_the_status_without_holding_the_runtime_thread() {
-    use std::io::Write;
-    use std::os::fd::OwnedFd;
-    let (status_r, mut status_w) = std::io::pipe().unwrap();
-    let (go_r, go_w) = std::io::pipe().unwrap();
-    let prepared = gleipnir::backend::Prepared {
-        invocation: gleipnir::backend::Invocation {
-            program: "/bin/sh".into(),
-            args: vec!["-c".into(), "sleep 0.3; echo go >&5; exec sleep 30".into()],
-            env: vec![("PATH".into(), "/usr/bin:/bin".into())],
-            cwd: None,
-            fds: vec![(OwnedFd::from(go_w), 5)],
-            new_session: false,
-        },
-        status: Some(OwnedFd::from(status_r)),
-        layers: None,
-        browser: false,
-    };
-    let task = tokio::spawn(async move {
-        let go =
-            tokio::net::unix::pipe::Receiver::from_file(std::fs::File::from(OwnedFd::from(go_r)))
-                .unwrap();
-        go.readable().await.unwrap();
-        status_w
-            .write_all(b"{\"ok\":false,\"error\":\"from the task\"}\n")
+#[test]
+fn run_probe_reads_the_status_without_holding_the_runtime_thread() {
+    saman::block_on_current(async move {
+        use std::io::Write;
+        use std::os::fd::OwnedFd;
+        let (status_r, mut status_w) = std::io::pipe().unwrap();
+        let (go_r, go_w) = std::io::pipe().unwrap();
+        let prepared = gleipnir::backend::Prepared {
+            invocation: gleipnir::backend::Invocation {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), "sleep 0.3; echo go >&5; exec sleep 30".into()],
+                env: vec![("PATH".into(), "/usr/bin:/bin".into())],
+                cwd: None,
+                fds: vec![(OwnedFd::from(go_w), 5)],
+                new_session: false,
+            },
+            status: Some(OwnedFd::from(status_r)),
+            layers: None,
+            browser: false,
+        };
+        let task = tokio::spawn(async move {
+            let go = tokio::net::unix::pipe::Receiver::from_file(std::fs::File::from(
+                OwnedFd::from(go_r),
+            ))
             .unwrap();
-        status_w
-    });
-    let ran = run_probe(prepared, Duration::from_millis(2500)).await;
-    let _w = task.await.unwrap();
-    let why = ran.layers.expect_err("the line says ok false").message;
-    assert!(why.contains("from the task"), "{why}");
+            go.readable().await.unwrap();
+            status_w
+                .write_all(b"{\"ok\":false,\"error\":\"from the task\"}\n")
+                .unwrap();
+            status_w
+        });
+        let ran = run_probe(prepared, Duration::from_millis(2500)).await;
+        let _w = task.await.unwrap();
+        let why = ran.layers.expect_err("the line says ok false").message;
+        assert!(why.contains("from the task"), "{why}");
+    })
 }
 
 // GL-T15-4: a refused start's `exit` in the result file is the helper's setup failure, whichever of the helper and

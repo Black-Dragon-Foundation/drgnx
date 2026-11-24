@@ -182,7 +182,7 @@ impl Launch for Sandboxed {
                         draugr::reap::GRACE,
                         &draugr::RealSignaller,
                     ));
-                    let mut c = ender.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut c = saman::lock(&ender);
                     crate::soft::done(
                         runtime().block_on(async {
                             crate::clock::timeout(Duration::from_secs(5), c.wait()).await
@@ -190,9 +190,7 @@ impl Launch for Sandboxed {
                         "runtime",
                     );
                 }),
-                stderr: Box::new(move || {
-                    tail.lock().unwrap_or_else(|e| e.into_inner()).stderr_tail()
-                }),
+                stderr: Box::new(move || saman::lock(&tail).stderr_tail()),
             })
         })
     }
@@ -338,7 +336,7 @@ pub mod fixture {
     }
 
     pub fn install_csharp(pack: &str, ext: &str) -> Installed {
-        let guard = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = saman::lock(&ONE_AT_A_TIME);
         let lock = PathBuf::from(std::env::var_os("DRGNX_PACK_LOCK").expect("DRGNX_PACK_LOCK"));
         let grammars =
             PathBuf::from(std::env::var_os("DRGNX_PACK_GRAMMARS").expect("DRGNX_PACK_GRAMMARS"));

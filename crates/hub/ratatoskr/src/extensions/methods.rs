@@ -117,7 +117,7 @@ pub struct Hub {
 type Ids = Arc<HashSet<String>>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 /// A search's filters named a Recommended version this connection's set is not at.
@@ -160,7 +160,7 @@ impl Hub {
     async fn index_with(&self, plugins: Option<Vec<w::Row>>) -> Result<Arc<Index>, Error> {
         let (cache, files) = (self.cache.clone(), self.files()?);
         crate::clock::blocking(move || {
-            let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut cache = saman::lock(&cache);
             if let Some(rows) = plugins {
                 cache.set_plugins(rows);
             }
@@ -172,14 +172,9 @@ impl Hub {
 
     async fn set_modules(&self, modules: Vec<w::ModuleEntry>) -> Result<(), Error> {
         let cache = self.cache.clone();
-        crate::clock::blocking(move || {
-            cache
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .set_modules(modules)
-        })
-        .await
-        .map_err(internal)
+        crate::clock::blocking(move || saman::lock(&cache).set_modules(modules))
+            .await
+            .map_err(internal)
     }
 
     /// CONN's Recommended set is VERSION's now.

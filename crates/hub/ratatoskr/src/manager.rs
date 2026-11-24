@@ -92,7 +92,7 @@ pub struct Managers {
 
 impl Managers {
     fn st(&self) -> std::sync::MutexGuard<'_, State> {
-        self.st.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.st)
     }
 
     /// The user dismissed the before-commit hook for BRANCH: the manager's next merge of it skips the hooks.

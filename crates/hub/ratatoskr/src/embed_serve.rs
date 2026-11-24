@@ -489,7 +489,7 @@ impl Running {
     /// A new token, shown once: the old one is refused from the next request.
     pub fn new_token(&self) -> std::io::Result<String> {
         let (token, sha) = mint_token(&self.dir)?;
-        *self.token_sha.lock().unwrap_or_else(|p| p.into_inner()) = sha;
+        *saman::lock(&self.token_sha) = sha;
         Ok(token)
     }
 
@@ -731,7 +731,7 @@ fn authorized(sh: &Shared, req: &hyper::Request<hyper::body::Incoming>) -> bool 
     else {
         return false;
     };
-    let want = *sh.token_sha.lock().unwrap_or_else(|p| p.into_inner());
+    let want = *saman::lock(&sh.token_sha);
     bool::from(sha256(token.trim().as_bytes()).ct_eq(&want))
 }
 

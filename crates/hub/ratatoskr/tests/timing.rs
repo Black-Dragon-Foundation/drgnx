@@ -252,16 +252,20 @@ async fn query_row(chunks: usize, budget: Duration) {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "timing: search/query p95 at 50,000 chunks"]
-async fn query_p95_at_50k_chunks() {
-    query_row(50_000, QUERY_P95).await;
+fn query_p95_at_50k_chunks() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        query_row(50_000, QUERY_P95).await;
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "timing: search/query p95 at 100,000 chunks"]
-async fn query_p95_at_100k_chunks() {
-    query_row(100_000, QUERY_P95_100K).await;
+fn query_p95_at_100k_chunks() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        query_row(100_000, QUERY_P95_100K).await;
+    })
 }
 
 /// The agent tools at 50,000 chunks with references (the plan's estimates; the ledger has the measurements):
@@ -290,128 +294,130 @@ where
     t
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "timing: repo map, usages, symbols and outline at 50,000 chunks"]
-async fn agent_tools_at_50k_chunks() {
-    use hrafn::map::{MapAsk, repo_map, usages};
-    use hrafn::symbols::{Find, Match, find, outline};
-    let dir = tempfile::tempdir().unwrap();
-    let built = Instant::now();
-    let (store, _cache) = synthetic(dir.path(), 50_000, true).await;
-    let files = 25_000;
-    let refs: i64 = store
-        .handle()
-        .read(|c| Ok(c.query_row("select sum(n) from ref", [], |r| r.get(0))?))
-        .await
-        .unwrap();
-    ratatoskr::soft::out_line(&format!(
-        "50000 chunks with {refs} references built in {:?}",
-        built.elapsed()
-    ));
-    let view = hrafn::View::Base;
-    let ask = |budget: usize, focus: Vec<String>| MapAsk {
-        budget,
-        focus,
-        names: vec![],
-        all: false,
-    };
-
-    let started = Instant::now();
-    let m = repo_map(&store, view, &ask(2_000, vec![])).await.unwrap();
-    let cold = started.elapsed();
-    assert!(m.built && !m.files.is_empty());
-    ratatoskr::soft::out_line(&format!(
-        "map cold: {cold:?} ({} files, ~{} tokens)",
-        m.files.len(),
-        m.tokens
-    ));
-    let cache = hrafn::graph::cache_bytes(&store);
-    ratatoskr::soft::out_line(&format!(
-        "graph cache: {:.1} MB",
-        cache as f64 / (1 << 20) as f64
-    ));
-
-    let budgets = [1_000, 2_000, 4_000, 8_000];
-    let warm = timed(20, |r| {
-        let a = ask(
-            budgets[r % 4],
-            vec![format!("src/m{}.rs", (r * 997) % files)],
-        );
-        let s = &store;
-        async move {
-            let m = repo_map(s, view, &a).await.unwrap();
-            assert!(!m.built && m.tokens <= a.budget);
-        }
-    })
-    .await;
-    let used = timed(20, |r| {
-        let name = fn_name((r * r * 31) % 200, r % FNS);
-        let s = &store;
-        async move {
-            usages(s, view, &name, Scope::All, 20).await.unwrap();
-        }
-    })
-    .await;
-    let syms = timed(40, |r| {
-        let (name, mode) = if r % 2 == 0 {
-            (fn_name((r * 613) % files, r % FNS), Match::Exact)
-        } else {
-            (
-                format!("{}_{}", VERBS[r % 12], NOUNS[r % 16]),
-                Match::Prefix,
-            )
-        };
-        let s = &store;
-        async move {
-            let f = Find {
-                name,
-                mode,
-                kinds: vec![],
-                glob: None,
-                scope: Scope::All,
-                k: 20,
-            };
-            find(s, view, &f).await.unwrap();
-        }
-    })
-    .await;
-    let outlined = timed(40, |r| {
-        let path = format!("src/m{}.rs", (r * 389) % files);
-        let s = &store;
-        async move {
-            assert_eq!(outline(s, view, &path).await.unwrap().entries.len(), FNS);
-        }
-    })
-    .await;
-    for (what, t) in [
-        ("map warm", &warm),
-        ("usages", &used),
-        ("symbols", &syms),
-        ("outline", &outlined),
-    ] {
+fn agent_tools_at_50k_chunks() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        use hrafn::map::{MapAsk, repo_map, usages};
+        use hrafn::symbols::{Find, Match, find, outline};
+        let dir = tempfile::tempdir().unwrap();
+        let built = Instant::now();
+        let (store, _cache) = synthetic(dir.path(), 50_000, true).await;
+        let files = 25_000;
+        let refs: i64 = store
+            .handle()
+            .read(|c| Ok(c.query_row("select sum(n) from ref", [], |r| r.get(0))?))
+            .await
+            .unwrap();
         ratatoskr::soft::out_line(&format!(
-            "{what}: p50 {:?} p95 {:?} max {:?}",
-            percentile(t, 0.5),
-            percentile(t, 0.95),
-            t.last().unwrap()
+            "50000 chunks with {refs} references built in {:?}",
+            built.elapsed()
         ));
-    }
-    let over: Vec<String> = [
-        ("map cold", cold, MAP_COLD),
-        ("map warm p95", percentile(&warm, 0.95), MAP_WARM_P95),
-        ("usages p95", percentile(&used, 0.95), USAGES_P95),
-        ("symbols p95", percentile(&syms, 0.95), SYMBOLS_P95),
-        ("outline p95", percentile(&outlined, 0.95), OUTLINE_P95),
-    ]
-    .iter()
-    .filter(|(_, t, b)| t > b)
-    .map(|(w, t, b)| format!("{w} {t:?} over {b:?}"))
-    .chain(
-        (cache > GRAPH_CACHE_BYTES)
-            .then(|| format!("graph cache {cache} over {GRAPH_CACHE_BYTES}")),
-    )
-    .collect();
-    assert!(over.is_empty(), "{over:?}");
+        let view = hrafn::View::Base;
+        let ask = |budget: usize, focus: Vec<String>| MapAsk {
+            budget,
+            focus,
+            names: vec![],
+            all: false,
+        };
+
+        let started = Instant::now();
+        let m = repo_map(&store, view, &ask(2_000, vec![])).await.unwrap();
+        let cold = started.elapsed();
+        assert!(m.built && !m.files.is_empty());
+        ratatoskr::soft::out_line(&format!(
+            "map cold: {cold:?} ({} files, ~{} tokens)",
+            m.files.len(),
+            m.tokens
+        ));
+        let cache = hrafn::graph::cache_bytes(&store);
+        ratatoskr::soft::out_line(&format!(
+            "graph cache: {:.1} MB",
+            cache as f64 / (1 << 20) as f64
+        ));
+
+        let budgets = [1_000, 2_000, 4_000, 8_000];
+        let warm = timed(20, |r| {
+            let a = ask(
+                budgets[r % 4],
+                vec![format!("src/m{}.rs", (r * 997) % files)],
+            );
+            let s = &store;
+            async move {
+                let m = repo_map(s, view, &a).await.unwrap();
+                assert!(!m.built && m.tokens <= a.budget);
+            }
+        })
+        .await;
+        let used = timed(20, |r| {
+            let name = fn_name((r * r * 31) % 200, r % FNS);
+            let s = &store;
+            async move {
+                usages(s, view, &name, Scope::All, 20).await.unwrap();
+            }
+        })
+        .await;
+        let syms = timed(40, |r| {
+            let (name, mode) = if r % 2 == 0 {
+                (fn_name((r * 613) % files, r % FNS), Match::Exact)
+            } else {
+                (
+                    format!("{}_{}", VERBS[r % 12], NOUNS[r % 16]),
+                    Match::Prefix,
+                )
+            };
+            let s = &store;
+            async move {
+                let f = Find {
+                    name,
+                    mode,
+                    kinds: vec![],
+                    glob: None,
+                    scope: Scope::All,
+                    k: 20,
+                };
+                find(s, view, &f).await.unwrap();
+            }
+        })
+        .await;
+        let outlined = timed(40, |r| {
+            let path = format!("src/m{}.rs", (r * 389) % files);
+            let s = &store;
+            async move {
+                assert_eq!(outline(s, view, &path).await.unwrap().entries.len(), FNS);
+            }
+        })
+        .await;
+        for (what, t) in [
+            ("map warm", &warm),
+            ("usages", &used),
+            ("symbols", &syms),
+            ("outline", &outlined),
+        ] {
+            ratatoskr::soft::out_line(&format!(
+                "{what}: p50 {:?} p95 {:?} max {:?}",
+                percentile(t, 0.5),
+                percentile(t, 0.95),
+                t.last().unwrap()
+            ));
+        }
+        let over: Vec<String> = [
+            ("map cold", cold, MAP_COLD),
+            ("map warm p95", percentile(&warm, 0.95), MAP_WARM_P95),
+            ("usages p95", percentile(&used, 0.95), USAGES_P95),
+            ("symbols p95", percentile(&syms, 0.95), SYMBOLS_P95),
+            ("outline p95", percentile(&outlined, 0.95), OUTLINE_P95),
+        ]
+        .iter()
+        .filter(|(_, t, b)| t > b)
+        .map(|(w, t, b)| format!("{w} {t:?} over {b:?}"))
+        .chain(
+            (cache > GRAPH_CACHE_BYTES)
+                .then(|| format!("graph cache {cache} over {GRAPH_CACHE_BYTES}")),
+        )
+        .collect();
+        assert!(over.is_empty(), "{over:?}");
+    })
 }
 
 /// A worktree's search (H16 overlay design §7): p95 ≤ 50 ms, and ≤ 1.15× the same query in the base view.
@@ -431,9 +437,10 @@ fn line_text(f: usize, line: usize) -> String {
 /// differing in about 32 % of the base's files (the measured p50 share), siblings sharing their line's content; the
 /// same questions in the base view and in a tree's. It prints both and the ratio, and never fails on them; the
 /// pinned island judges it. It also shows what `chunk.blob` after `embed_text` costs a row read by id.
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "timing: search/query p95 in a worktree's view, report only"]
-async fn worktree_search_p95() {
+fn worktree_search_p95() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = tempfile::tempdir().unwrap();
     let built = Instant::now();
     let (store, cache) = synthetic(dir.path(), 50_000, false).await;
@@ -520,6 +527,7 @@ async fn worktree_search_p95() {
         percentile(&tree, 0.5),
         t.as_secs_f64() / b.as_secs_f64()
     ));
+})
 }
 
 /// The text files of drgnx's own checkout (this crate's workspace and the Lisp), as a project's listing.
@@ -575,208 +583,212 @@ fn lang_of(path: &str) -> (Lang, Class) {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "timing: tier 1 of a drgnx checkout, and one saved file"]
-async fn tier1_of_a_checkout_and_one_saved_file() {
-    let files = checkout_files();
-    let texts: HashMap<String, Vec<u8>> = files
-        .iter()
-        .filter_map(|(rel, p)| std::fs::read(p).ok().map(|b| (rel.clone(), b)))
-        .collect();
-    let mut list: Vec<Listed> = texts
-        .iter()
-        .map(|(rel, b)| {
-            let (lang, class) = lang_of(rel);
-            Listed {
-                path: rel.clone(),
-                blob: format!("b{}", b.len()),
-                class,
-                lang,
-                generated: false,
-                embed: true,
-                size: b.len() as u64,
+fn tier1_of_a_checkout_and_one_saved_file() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let files = checkout_files();
+        let texts: HashMap<String, Vec<u8>> = files
+            .iter()
+            .filter_map(|(rel, p)| std::fs::read(p).ok().map(|b| (rel.clone(), b)))
+            .collect();
+        let mut list: Vec<Listed> = texts
+            .iter()
+            .map(|(rel, b)| {
+                let (lang, class) = lang_of(rel);
+                Listed {
+                    path: rel.clone(),
+                    blob: format!("b{}", b.len()),
+                    class,
+                    lang,
+                    generated: false,
+                    embed: true,
+                    size: b.len() as u64,
+                }
+            })
+            .collect();
+        list.sort_by(|a, b| a.path.cmp(&b.path));
+        let dir = tempfile::tempdir().unwrap();
+        let store = CodeStore::open(&dir.path().join("code.db")).unwrap();
+        let started = Instant::now();
+        let read = |p: &str| {
+            texts
+                .get(p)
+                .cloned()
+                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+        };
+        let r = refresh(&store, &list, &read, &[]).await.unwrap();
+        let full = started.elapsed();
+        ratatoskr::soft::out_line(&format!(
+            "tier 1 of {} files, {} chunks: {full:?}",
+            list.len(),
+            r.chunks_written
+        ));
+        assert!(
+            full <= TIER1_FULL_INDEX,
+            "{full:?} over {TIER1_FULL_INDEX:?}"
+        );
+
+        // one saved file: its blob changes, tier 1 reads it again, and its new name is found by symbol and keyword
+        let mut texts = texts;
+        let target = "core/drgnx-timer.el".to_string();
+        let mut text = texts[&target].clone();
+        text.extend_from_slice(
+            b"\n(defun drgnx-bench-brand-new-symbol () \"A brand new function.\" 1)\n",
+        );
+        texts.insert(target.clone(), text);
+        for l in &mut list {
+            if l.path == target {
+                l.blob = "changed".into();
             }
-        })
-        .collect();
-    list.sort_by(|a, b| a.path.cmp(&b.path));
-    let dir = tempfile::tempdir().unwrap();
-    let store = CodeStore::open(&dir.path().join("code.db")).unwrap();
-    let started = Instant::now();
-    let read = |p: &str| {
-        texts
-            .get(p)
-            .cloned()
-            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
-    };
-    let r = refresh(&store, &list, &read, &[]).await.unwrap();
-    let full = started.elapsed();
-    ratatoskr::soft::out_line(&format!(
-        "tier 1 of {} files, {} chunks: {full:?}",
-        list.len(),
-        r.chunks_written
-    ));
-    assert!(
-        full <= TIER1_FULL_INDEX,
-        "{full:?} over {TIER1_FULL_INDEX:?}"
-    );
-
-    // one saved file: its blob changes, tier 1 reads it again, and its new name is found by symbol and keyword
-    let mut texts = texts;
-    let target = "core/drgnx-timer.el".to_string();
-    let mut text = texts[&target].clone();
-    text.extend_from_slice(
-        b"\n(defun drgnx-bench-brand-new-symbol () \"A brand new function.\" 1)\n",
-    );
-    texts.insert(target.clone(), text);
-    for l in &mut list {
-        if l.path == target {
-            l.blob = "changed".into();
         }
-    }
-    let read = |p: &str| {
-        texts
-            .get(p)
-            .cloned()
-            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
-    };
-    let started = Instant::now();
-    refresh(&store, &list, &read, &[]).await.unwrap();
-    let a = search(
-        &store,
-        &Query {
-            text: "drgnx-bench-brand-new-symbol".into(),
-            scope: Scope::Code,
-            k: 5,
-            path_weight: hrafn::query::PATH_WEIGHT,
-            dir_weight: hrafn::query::DIR_WEIGHT,
-        },
-        hrafn::View::Base,
-        None,
-        &|_: &str| None,
-    )
-    .await
-    .unwrap();
-    let saved = started.elapsed();
-    ratatoskr::soft::out_line(&format!("one saved file, to its symbol found: {saved:?}"));
-    assert_eq!(a.hits[0].path, target);
-    assert!(
-        saved <= ONE_FILE_SEARCHABLE,
-        "{saved:?} over {ONE_FILE_SEARCHABLE:?}"
-    );
-
-    // what the references add to the store: the pages of `ref` and its index against the rest (reported)
-    let (total, refs): (i64, i64) = store
-        .handle()
-        .read(|c| {
-            let pages: i64 = c.query_row("pragma page_count", [], |r| r.get(0))?;
-            let page: i64 = c.query_row("pragma page_size", [], |r| r.get(0))?;
-            let refs: i64 = c.query_row(
-                "select coalesce(sum(pgsize), 0) from dbstat where name in ('ref', 'ref_name')",
-                [],
-                |r| r.get(0),
-            )?;
-            Ok((pages * page, refs))
-        })
+        let read = |p: &str| {
+            texts
+                .get(p)
+                .cloned()
+                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+        };
+        let started = Instant::now();
+        refresh(&store, &list, &read, &[]).await.unwrap();
+        let a = search(
+            &store,
+            &Query {
+                text: "drgnx-bench-brand-new-symbol".into(),
+                scope: Scope::Code,
+                k: 5,
+                path_weight: hrafn::query::PATH_WEIGHT,
+                dir_weight: hrafn::query::DIR_WEIGHT,
+            },
+            hrafn::View::Base,
+            None,
+            &|_: &str| None,
+        )
         .await
         .unwrap();
-    ratatoskr::soft::out_line(&format!(
-        "store {total} bytes, of which references {refs}: +{:.1} % over the rest",
-        refs as f64 * 100.0 / (total - refs) as f64
-    ));
+        let saved = started.elapsed();
+        ratatoskr::soft::out_line(&format!("one saved file, to its symbol found: {saved:?}"));
+        assert_eq!(a.hits[0].path, target);
+        assert!(
+            saved <= ONE_FILE_SEARCHABLE,
+            "{saved:?} over {ONE_FILE_SEARCHABLE:?}"
+        );
+
+        // what the references add to the store: the pages of `ref` and its index against the rest (reported)
+        let (total, refs): (i64, i64) = store
+            .handle()
+            .read(|c| {
+                let pages: i64 = c.query_row("pragma page_count", [], |r| r.get(0))?;
+                let page: i64 = c.query_row("pragma page_size", [], |r| r.get(0))?;
+                let refs: i64 = c.query_row(
+                    "select coalesce(sum(pgsize), 0) from dbstat where name in ('ref', 'ref_name')",
+                    [],
+                    |r| r.get(0),
+                )?;
+                Ok((pages * page, refs))
+            })
+            .await
+            .unwrap();
+        ratatoskr::soft::out_line(&format!(
+            "store {total} bytes, of which references {refs}: +{:.1} % over the rest",
+            refs as f64 * 100.0 / (total - refs) as f64
+        ));
+    })
 }
 
 /// The hub's steps around a Symbol search's index lookup in a git project of 25,000 synthetic files (50,000 chunks,
 /// with references), each timed over ROUNDS calls: the freshness check before a query, the view, the lookup itself and
 /// the answer's lag. Their sum is what `search/usages` costs before its first row can be drawn (spec §8: the Symbol
 /// view's first rows within 50 ms).
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "timing: the steps of search/usages in a project of 50,000 chunks"]
-async fn usages_steps_at_50k_chunks() {
-    use ratatoskr::search::project::{Project, ProjectSpec};
-    let files = 25_000;
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("p");
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    for f in 0..files {
-        ratatoskr::fsio::write(root.join(format!("src/m{f}.rs")), file_text(f, Some(files)))
-            .unwrap();
-    }
-    for args in [
-        &["init", "-q"][..],
-        &["add", "-A"],
-        &[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@example.invalid",
-            "commit",
-            "-q",
-            "-m",
-            "one",
-        ],
-    ] {
-        let st = ratatoskr::proc::Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(st.success(), "git {args:?}");
-    }
-    let (state, home) = (dir.path().join("state"), dir.path().join("home"));
-    std::fs::create_dir_all(&home).unwrap();
-    let p = Project::open(ProjectSpec {
-        root: root.clone(),
-        state,
-        home: home.clone(),
-        config_dir: home.join(".config/drgnx"),
-        config: hrafn::Config::default(),
-        embedders: Vec::new(),
-        power_root: PathBuf::from("/nonexistent"),
-        base: None,
-        #[cfg(feature = "test-hooks")]
-        test_permits: None,
-    })
-    .await
-    .unwrap();
-    let built = Instant::now();
-    let r = p.refresh_now().await.unwrap();
-    ratatoskr::soft::out_line(&format!(
-        "tier 1: {} chunks in {:?}",
-        r.chunks_written,
-        built.elapsed()
-    ));
-    let name = fn_name(0, 0);
-    let rounds = 100;
-    let fresh = timed(rounds, |_| async {
-        p.fresh_for_query().await.unwrap();
-    })
-    .await;
-    let view = timed(rounds, |_| async {
-        p.view_for(&root, false).await.unwrap();
-    })
-    .await;
-    let lookup = timed(rounds, |_| async {
-        hrafn::map::usages(p.store(), hrafn::View::Base, &name, Scope::All, 100)
-            .await
-            .unwrap();
-    })
-    .await;
-    let lag = timed(rounds, |_| async {
-        p.lag_in(None, hrafn::View::Base).await.unwrap();
-    })
-    .await;
-    for (what, t) in [
-        ("fresh_for_query", &fresh),
-        ("view_for", &view),
-        ("usages", &lookup),
-        ("lag", &lag),
-    ] {
+fn usages_steps_at_50k_chunks() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        use ratatoskr::search::project::{Project, ProjectSpec};
+        let files = 25_000;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("p");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        for f in 0..files {
+            ratatoskr::fsio::write(root.join(format!("src/m{f}.rs")), file_text(f, Some(files)))
+                .unwrap();
+        }
+        for args in [
+            &["init", "-q"][..],
+            &["add", "-A"],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "-q",
+                "-m",
+                "one",
+            ],
+        ] {
+            let st = ratatoskr::proc::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {args:?}");
+        }
+        let (state, home) = (dir.path().join("state"), dir.path().join("home"));
+        std::fs::create_dir_all(&home).unwrap();
+        let p = Project::open(ProjectSpec {
+            root: root.clone(),
+            state,
+            home: home.clone(),
+            config_dir: home.join(".config/drgnx"),
+            config: hrafn::Config::default(),
+            embedders: Vec::new(),
+            power_root: PathBuf::from("/nonexistent"),
+            base: None,
+            #[cfg(feature = "test-hooks")]
+            test_permits: None,
+        })
+        .await
+        .unwrap();
+        let built = Instant::now();
+        let r = p.refresh_now().await.unwrap();
         ratatoskr::soft::out_line(&format!(
-            "{what}: p50 {:?} p95 {:?} max {:?}",
-            percentile(t, 0.5),
-            percentile(t, 0.95),
-            t.last().unwrap()
+            "tier 1: {} chunks in {:?}",
+            r.chunks_written,
+            built.elapsed()
         ));
-    }
+        let name = fn_name(0, 0);
+        let rounds = 100;
+        let fresh = timed(rounds, |_| async {
+            p.fresh_for_query().await.unwrap();
+        })
+        .await;
+        let view = timed(rounds, |_| async {
+            p.view_for(&root, false).await.unwrap();
+        })
+        .await;
+        let lookup = timed(rounds, |_| async {
+            hrafn::map::usages(p.store(), hrafn::View::Base, &name, Scope::All, 100)
+                .await
+                .unwrap();
+        })
+        .await;
+        let lag = timed(rounds, |_| async {
+            p.lag_in(None, hrafn::View::Base).await.unwrap();
+        })
+        .await;
+        for (what, t) in [
+            ("fresh_for_query", &fresh),
+            ("view_for", &view),
+            ("usages", &lookup),
+            ("lag", &lag),
+        ] {
+            ratatoskr::soft::out_line(&format!(
+                "{what}: p50 {:?} p95 {:?} max {:?}",
+                percentile(t, 0.5),
+                percentile(t, 0.95),
+                t.last().unwrap()
+            ));
+        }
+    })
 }

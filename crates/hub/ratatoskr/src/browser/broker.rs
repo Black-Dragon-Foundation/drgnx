@@ -888,9 +888,7 @@ pub fn test_endpoint(socket: &std::path::Path) -> villa::Result<String> {
         stderr: None,
     };
     let handle = start(cfg, listener, ours);
-    KEPT.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push((handle, theirs));
+    saman::lock(&KEPT).push((handle, theirs));
     Ok(secret.iter().map(|b| format!("{b:02x}")).collect())
 }
 

@@ -304,9 +304,7 @@ static NOTICED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec:
 #[cfg_attr(any(test, feature = "test-hooks"), allow(dead_code))]
 pub(crate) fn no_browser_notice(front: &crate::front::Front, n: &crate::sandbox::NoBrowser) {
     let first = {
-        let mut seen = NOTICED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut seen = saman::lock(&NOTICED);
         let first = !seen.contains(&n.kind);
         if first {
             seen.push(n.kind);

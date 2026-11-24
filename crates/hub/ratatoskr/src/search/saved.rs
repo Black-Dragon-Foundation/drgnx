@@ -148,7 +148,7 @@ impl Saved {
         root: &Path,
         f: impl FnOnce(&mut Project) -> (R, bool),
     ) -> std::io::Result<(R, Option<Vec<u8>>)> {
-        let mut map = self.projects.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = saman::lock(&self.projects);
         if !map.contains_key(root) {
             if map.len() >= PROJECTS_MAX {
                 map.retain(|_, p| !p.pending.is_empty());
@@ -195,7 +195,7 @@ impl Saved {
 
     /// Write ROOT's searches as they are now. One flush at a time: a later one writes what is newer.
     pub fn flush(&self, root: &Path) -> std::io::Result<()> {
-        let _one = self.flushing.lock().unwrap_or_else(|e| e.into_inner());
+        let _one = saman::lock(&self.flushing);
         let ((), body) = self.with_body(root, |_| ((), true))?;
         match body {
             Some(body) => self.write(root, &body),

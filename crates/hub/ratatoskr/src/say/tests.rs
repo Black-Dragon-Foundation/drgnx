@@ -212,34 +212,36 @@ fn check_says_every_problem_at_once() {
 
 /// Pure (D): a temp store.  The planning session is told the profiles, routes, roles and the project's id, and
 /// nothing of the graph: no plan's title, no task's text.
-#[tokio::test(flavor = "multi_thread")]
-async fn the_digest_holds_no_graph_text() {
-    use crate::runner::graph_plan_tests::{front, set_profiles};
-    let dir = tempfile::tempdir().unwrap();
-    let f = front(dir.path());
-    set_profiles(
-        &f,
-        json!({"opus": {"command": ["claude-agent-acp"], "model": "claude-opus-5-5"}}),
-    )
-    .await;
-    crate::runner::effects::plans_write(
-        &f,
-        &crate::runner::user(),
-        serde_json::from_value(json!({"title": "SECRET PLAN", "tasks": [
+#[test]
+fn the_digest_holds_no_graph_text() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        use crate::runner::graph_plan_tests::{front, set_profiles};
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        set_profiles(
+            &f,
+            json!({"opus": {"command": ["claude-agent-acp"], "model": "claude-opus-5-5"}}),
+        )
+        .await;
+        crate::runner::effects::plans_write(
+            &f,
+            &crate::runner::user(),
+            serde_json::from_value(json!({"title": "SECRET PLAN", "tasks": [
             {"number": "1", "title": "SECRET TASK", "body": "SECRET BODY"}]}))
-        .unwrap(),
-    )
-    .await
-    .unwrap();
-    let d = digest(&f, Some("project:p1"));
-    assert!(
-        d.contains("opus") && d.contains("claude-opus-5-5") && d.contains("project:p1"),
-        "{d}"
-    );
-    for role in ROLES {
-        assert!(d.contains(&format!("- {role}: ")), "{d}");
-    }
-    assert!(!d.contains("SECRET"), "{d}");
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let d = digest(&f, Some("project:p1"));
+        assert!(
+            d.contains("opus") && d.contains("claude-opus-5-5") && d.contains("project:p1"),
+            "{d}"
+        );
+        for role in ROLES {
+            assert!(d.contains(&format!("- {role}: ")), "{d}");
+        }
+        assert!(!d.contains("SECRET"), "{d}");
+    })
 }
 
 /// Pure (D): the planning session is a chat in its own scratch folder: no repository, no task, no job.
@@ -254,8 +256,9 @@ fn a_chat_session_gets_no_repo() {
 }
 
 /// Pure (D): a temp store.  The planning line holds numbers only, whatever the session's steps say.
-#[tokio::test(flavor = "multi_thread")]
-async fn the_planning_line_is_numbers_only() {
+#[test]
+fn the_planning_line_is_numbers_only() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = tempfile::tempdir().unwrap();
     let f = crate::runner::graph_plan_tests::front(dir.path());
     f.writer
@@ -284,6 +287,7 @@ async fn the_planning_line_is_numbers_only() {
     assert_eq!(line["tokens"], 137);
     assert_eq!(line["usd_est"], 0.5);
     assert!(!line.to_string().contains("SECRET"));
+})
 }
 
 // ---- the order of one planning session, in every order (A) -----------------------------------------------------
@@ -629,149 +633,169 @@ fn priced(usd: f64) -> Forecast {
 }
 
 /// Pure (D): Balanced never starts a proposal alone, however small.
-#[tokio::test(flavor = "multi_thread")]
-async fn balanced_waits() {
-    let e = rule_in("balanced", priced(1.0), 1, &[]).await.unwrap_err();
-    assert!(e.message().contains("balanced"), "{e}");
-    assert!(rule_in("cautious", priced(1.0), 1, &[]).await.is_err());
+#[test]
+fn balanced_waits() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let e = rule_in("balanced", priced(1.0), 1, &[]).await.unwrap_err();
+        assert!(e.message().contains("balanced"), "{e}");
+        assert!(rule_in("cautious", priced(1.0), 1, &[]).await.is_err());
+    })
 }
 
 /// Pure (D): 4 tasks, p90 $30 under the manager's $150: it starts.
-#[tokio::test(flavor = "multi_thread")]
-async fn autonomous_within_its_cells_starts() {
-    assert_eq!(rule_in("autonomous", priced(30.0), 4, &[]).await, Ok(()));
+#[test]
+fn autonomous_within_its_cells_starts() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        assert_eq!(rule_in("autonomous", priced(30.0), 4, &[]).await, Ok(()));
+    })
 }
 
 /// Pure (D): p90 above the spend cell waits, and says spend.
-#[tokio::test(flavor = "multi_thread")]
-async fn autonomous_over_the_spend_cell_waits() {
-    let e = rule_in("autonomous", priced(151.0), 4, &[])
-        .await
-        .unwrap_err();
-    assert!(e.message().contains("spend"), "{e}");
+#[test]
+fn autonomous_over_the_spend_cell_waits() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let e = rule_in("autonomous", priced(151.0), 4, &[])
+            .await
+            .unwrap_err();
+        assert!(e.message().contains("spend"), "{e}");
+    })
 }
 
 /// Pure (D): `usd` p90 100 and `usd-est` p90 60 are $160 against the $150 cell: it waits on the sum; either alone
 /// starts.
-#[tokio::test(flavor = "multi_thread")]
-async fn autonomous_with_mixed_units_checks_each() {
-    let both = forecast(&[(Unit::Usd, 100.0), (Unit::UsdEst, 60.0)], &[], Vec::new());
-    let e = rule_in("autonomous", both, 2, &[]).await.unwrap_err();
-    assert!(
-        e.message().contains("spend") && e.message().contains("160"),
-        "{e}"
-    );
-    assert_eq!(rule_in("autonomous", priced(100.0), 2, &[]).await, Ok(()));
-    let est = forecast(&[(Unit::UsdEst, 60.0)], &[], Vec::new());
-    assert_eq!(rule_in("autonomous", est, 2, &[]).await, Ok(()));
+#[test]
+fn autonomous_with_mixed_units_checks_each() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let both = forecast(&[(Unit::Usd, 100.0), (Unit::UsdEst, 60.0)], &[], Vec::new());
+        let e = rule_in("autonomous", both, 2, &[]).await.unwrap_err();
+        assert!(
+            e.message().contains("spend") && e.message().contains("160"),
+            "{e}"
+        );
+        assert_eq!(rule_in("autonomous", priced(100.0), 2, &[]).await, Ok(()));
+        let est = forecast(&[(Unit::UsdEst, 60.0)], &[], Vec::new());
+        assert_eq!(rule_in("autonomous", est, 2, &[]).await, Ok(()));
+    })
 }
 
 /// Pure (D): a subscription-only plan's `usd-est` p90 of 160 counts as dollars: it waits on spend.
-#[tokio::test(flavor = "multi_thread")]
-async fn autonomous_counts_an_estimate_as_dollars() {
-    let f = forecast(
-        &[(Unit::UsdEst, 160.0)],
-        &[],
-        vec![week("claude", 0.1, Some(range(0.01, 0.02)))],
-    );
-    let e = rule_in("autonomous", f, 2, &["claude"]).await.unwrap_err();
-    assert!(e.message().contains("spend"), "{e}");
+#[test]
+fn autonomous_counts_an_estimate_as_dollars() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let f = forecast(
+            &[(Unit::UsdEst, 160.0)],
+            &[],
+            vec![week("claude", 0.1, Some(range(0.01, 0.02)))],
+        );
+        let e = rule_in("autonomous", f, 2, &["claude"]).await.unwrap_err();
+        assert!(e.message().contains("spend"), "{e}");
+    })
 }
 
 /// Pure (D): used 0.9, the plan's p90 adds 0.15 before the reset: it waits, naming the provider and the week.
-#[tokio::test(flavor = "multi_thread")]
-async fn autonomous_waits_when_the_week_would_run_out() {
-    let pace = week("claude", 0.9, Some(range(0.05, 0.15)));
-    assert!(pace.runs_out_p90 && pace.window == PaceWindow::Week);
-    let f = forecast(&[(Unit::UsdEst, 10.0)], &[], vec![pace]);
-    let e = rule_in("autonomous", f, 2, &["claude"]).await.unwrap_err();
-    assert!(
-        e.message().contains("claude") && e.message().contains("week"),
-        "{e}"
-    );
-    // the same plan with room in the week starts
-    let f = forecast(
-        &[(Unit::UsdEst, 10.0)],
-        &[],
-        vec![week("claude", 0.2, Some(range(0.05, 0.15)))],
-    );
-    assert_eq!(rule_in("autonomous", f, 2, &["claude"]).await, Ok(()));
+#[test]
+fn autonomous_waits_when_the_week_would_run_out() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let pace = week("claude", 0.9, Some(range(0.05, 0.15)));
+        assert!(pace.runs_out_p90 && pace.window == PaceWindow::Week);
+        let f = forecast(&[(Unit::UsdEst, 10.0)], &[], vec![pace]);
+        let e = rule_in("autonomous", f, 2, &["claude"]).await.unwrap_err();
+        assert!(
+            e.message().contains("claude") && e.message().contains("week"),
+            "{e}"
+        );
+        // the same plan with room in the week starts
+        let f = forecast(
+            &[(Unit::UsdEst, 10.0)],
+            &[],
+            vec![week("claude", 0.2, Some(range(0.05, 0.15)))],
+        );
+        assert_eq!(rule_in("autonomous", f, 2, &["claude"]).await, Ok(()));
+    })
 }
 
 /// Pure (D): the week's last day.  The meter reads 0.90 and resets in 20 h, so the pace speaks of this window, not
 /// the week; the plan's p90 adds 0.15: it waits all the same, naming the provider and the reset.  A meter with no
 /// reset known waits too.
-#[tokio::test(flavor = "multi_thread")]
-async fn autonomous_waits_when_any_window_would_run_out() {
-    for resets_at in [Some(NOW + 20.0 * 3600.0), None] {
-        let meter = runstav::methods::timeline::Pace {
-            provider: "claude".into(),
-            used_share: 0.9,
-            rate_per_hour: 0.0,
-            exhausted_at: None,
-            resets_at,
-            estimate: true,
-            window: "week".into(),
-            rate_7d_per_hour: None,
-            history: Vec::new(),
-        };
-        let pace = crate::forecast::pace_effect(&meter, Some(range(0.05, 0.15)), NOW).0;
-        assert!(pace.runs_out_p90 && pace.window == PaceWindow::Short);
-        let f = forecast(&[(Unit::UsdEst, 10.0)], &[], vec![pace]);
-        let e = rule_in("autonomous", f, 2, &["claude"]).await.unwrap_err();
-        assert!(
-            e.message().contains("claude") && e.message().contains("before it resets"),
-            "{e}"
-        );
-    }
+#[test]
+fn autonomous_waits_when_any_window_would_run_out() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        for resets_at in [Some(NOW + 20.0 * 3600.0), None] {
+            let meter = runstav::methods::timeline::Pace {
+                provider: "claude".into(),
+                used_share: 0.9,
+                rate_per_hour: 0.0,
+                exhausted_at: None,
+                resets_at,
+                estimate: true,
+                window: "week".into(),
+                rate_7d_per_hour: None,
+                history: Vec::new(),
+            };
+            let pace = crate::forecast::pace_effect(&meter, Some(range(0.05, 0.15)), NOW).0;
+            assert!(pace.runs_out_p90 && pace.window == PaceWindow::Short);
+            let f = forecast(&[(Unit::UsdEst, 10.0)], &[], vec![pace]);
+            let e = rule_in("autonomous", f, 2, &["claude"]).await.unwrap_err();
+            assert!(
+                e.message().contains("claude") && e.message().contains("before it resets"),
+                "{e}"
+            );
+        }
+    })
 }
 
 /// Pure (D): a subscription provider with no meter reading, or a meter with no share per dollar yet, waits: the
 /// week cannot be checked.
-#[tokio::test(flavor = "multi_thread")]
-async fn autonomous_waits_with_no_pace_yet() {
-    let none = forecast(&[(Unit::UsdEst, 10.0)], &[], Vec::new());
-    let e = rule_in("autonomous", none, 2, &["claude"])
-        .await
-        .unwrap_err();
-    assert!(
-        e.message().contains("claude") && e.message().contains("no pace yet"),
-        "{e}"
-    );
-    let unknown = forecast(
-        &[(Unit::UsdEst, 10.0)],
-        &[],
-        vec![week("claude", 0.2, None)],
-    );
-    let e = rule_in("autonomous", unknown, 2, &["claude"])
-        .await
-        .unwrap_err();
-    assert!(e.message().contains("no pace yet"), "{e}");
-    // another provider's pace is not this one's
-    let other = forecast(
-        &[(Unit::UsdEst, 10.0)],
-        &[],
-        vec![week("gemini", 0.2, Some(range(0.01, 0.02)))],
-    );
-    assert!(rule_in("autonomous", other, 2, &["claude"]).await.is_err());
+#[test]
+fn autonomous_waits_with_no_pace_yet() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let none = forecast(&[(Unit::UsdEst, 10.0)], &[], Vec::new());
+        let e = rule_in("autonomous", none, 2, &["claude"])
+            .await
+            .unwrap_err();
+        assert!(
+            e.message().contains("claude") && e.message().contains("no pace yet"),
+            "{e}"
+        );
+        let unknown = forecast(
+            &[(Unit::UsdEst, 10.0)],
+            &[],
+            vec![week("claude", 0.2, None)],
+        );
+        let e = rule_in("autonomous", unknown, 2, &["claude"])
+            .await
+            .unwrap_err();
+        assert!(e.message().contains("no pace yet"), "{e}");
+        // another provider's pace is not this one's
+        let other = forecast(
+            &[(Unit::UsdEst, 10.0)],
+            &[],
+            vec![week("gemini", 0.2, Some(range(0.01, 0.02)))],
+        );
+        assert!(rule_in("autonomous", other, 2, &["claude"]).await.is_err());
+    })
 }
 
 /// Pure (D): a profile with no price is never zero: it waits.
-#[tokio::test(flavor = "multi_thread")]
-async fn autonomous_with_an_unpriced_task_waits() {
-    let f = forecast(&[(Unit::Usd, 5.0)], &["local-llm"], Vec::new());
-    let e = rule_in("autonomous", f, 2, &[]).await.unwrap_err();
-    assert!(e.message().contains("local-llm"), "{e}");
+#[test]
+fn autonomous_with_an_unpriced_task_waits() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let f = forecast(&[(Unit::Usd, 5.0)], &["local-llm"], Vec::new());
+        let e = rule_in("autonomous", f, 2, &[]).await.unwrap_err();
+        assert!(e.message().contains("local-llm"), "{e}");
+    })
 }
 
 /// Pure (D): nine agents are over the manager's eight.
-#[tokio::test(flavor = "multi_thread")]
-async fn autonomous_over_the_agent_cell_waits() {
-    let e = rule_in("autonomous", priced(5.0), 9, &[])
-        .await
-        .unwrap_err();
-    assert!(e.message().contains("agents"), "{e}");
-    assert_eq!(rule_in("autonomous", priced(5.0), 8, &[]).await, Ok(()));
+#[test]
+fn autonomous_over_the_agent_cell_waits() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let e = rule_in("autonomous", priced(5.0), 9, &[])
+            .await
+            .unwrap_err();
+        assert!(e.message().contains("agents"), "{e}");
+        assert_eq!(rule_in("autonomous", priced(5.0), 8, &[]).await, Ok(()));
+    })
 }
 
 /// A front with the `opus` profile (Claude, no key: a subscription).
@@ -830,8 +854,9 @@ async fn sql_rows(f: &Front, sql: String) -> Vec<Value> {
 
 /// Pure (D): a temp store, Balanced.  The user's words and the block's say "approved" and "auto start"; neither is
 /// an input of the rule: the job is proposed with its card open, and nothing records a start.
-#[tokio::test(flavor = "multi_thread")]
-async fn the_users_words_do_not_change_the_rule() {
+#[test]
+fn the_users_words_do_not_change_the_rule() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = tempfile::tempdir().unwrap();
     let f = say_front(dir.path()).await;
     let mut live = planning(dir.path());
@@ -866,12 +891,14 @@ async fn the_users_words_do_not_change_the_rule() {
         rows[0][3].as_str().is_some_and(|w| w.contains("balanced")),
         "{rows:?}"
     );
+})
 }
 
 /// Pure (D): a temp store.  A block titled "APPROVED BY USER": the job's title is the block's, the card's is the
 /// hub's and holds none of it.
-#[tokio::test(flavor = "multi_thread")]
-async fn the_card_title_has_no_text_from_the_block() {
+#[test]
+fn the_card_title_has_no_text_from_the_block() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = tempfile::tempdir().unwrap();
     let f = say_front(dir.path()).await;
     let mut live = planning(dir.path());
@@ -898,12 +925,14 @@ async fn the_card_title_has_no_text_from_the_block() {
     assert_eq!(rows[0][0], json!("APPROVED BY USER"));
     let card = rows[0][1].as_str().unwrap();
     assert!(!card.to_lowercase().contains("approved"), "{card}");
+})
 }
 
 /// Pure (D): a temp store.  A revision of a standing proposal stops it (its card settled reject) and the next
 /// block is a new proposal of the same planning session.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_revision_replaces_the_proposal() {
+#[test]
+fn a_revision_replaces_the_proposal() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = tempfile::tempdir().unwrap();
     let f = say_front(dir.path()).await;
     let mut live = planning(dir.path());
@@ -951,101 +980,106 @@ async fn a_revision_replaces_the_proposal() {
             json!([second, "proposed", "open", null])
         ]
     );
+})
 }
 
 /// Pure (D): a temp store.  The user approves the proposal, then revises it: the running job is not a proposal to
 /// replace, so the revision is refused, the planning ends, and the next block (had the agent been asked) makes no
 /// second job; `say/revise` then names the job that started.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_revision_after_the_job_started_makes_no_second_job() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = say_front(dir.path()).await;
-    let mut live = planning(dir.path());
-    f.core.say.begin(Input::Start {
-        sid: "s1".into(),
-        repo: String::new(),
-        project: None,
-        prompt: String::new(),
-    });
-    feed(
-        &f,
-        &mut live,
-        SayEvent::TurnEnded {
-            message: block(GOOD),
-        },
-    )
-    .await;
-    let job = job_of(&live);
-    let user = crate::runner::user();
-    let approve: runstav::methods::jobs::WithLimits =
-        serde_json::from_value(json!({ "id": job })).unwrap();
-    crate::runner::approve(&f, &user, approve).await.unwrap();
-    feed(
-        &f,
-        &mut live,
-        SayEvent::Revise {
-            text: "also the docs".into(),
-        },
-    )
-    .await;
-    let mut v = good();
-    v["title"] = json!("Settings review, and the docs");
-    feed(
-        &f,
-        &mut live,
-        SayEvent::TurnEnded {
-            message: block(&v.to_string()),
-        },
-    )
-    .await;
-    let rows = sql_rows(&f, "select json_array(id, status) from job".into()).await;
-    assert_eq!(rows, [json!([job, "running"])]);
-    assert!(live.is_empty() && !f.core.say.has("s1"));
-    let again: SayRevise = serde_json::from_value(json!({"id": "s1", "text": "more"})).unwrap();
-    let e = revise(&f, &user, again).await.unwrap_err();
-    assert_eq!(
-        e.message,
-        format!("{job} has started: stop it, then say it again")
-    );
+#[test]
+fn a_revision_after_the_job_started_makes_no_second_job() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = say_front(dir.path()).await;
+        let mut live = planning(dir.path());
+        f.core.say.begin(Input::Start {
+            sid: "s1".into(),
+            repo: String::new(),
+            project: None,
+            prompt: String::new(),
+        });
+        feed(
+            &f,
+            &mut live,
+            SayEvent::TurnEnded {
+                message: block(GOOD),
+            },
+        )
+        .await;
+        let job = job_of(&live);
+        let user = crate::runner::user();
+        let approve: runstav::methods::jobs::WithLimits =
+            serde_json::from_value(json!({ "id": job })).unwrap();
+        crate::runner::approve(&f, &user, approve).await.unwrap();
+        feed(
+            &f,
+            &mut live,
+            SayEvent::Revise {
+                text: "also the docs".into(),
+            },
+        )
+        .await;
+        let mut v = good();
+        v["title"] = json!("Settings review, and the docs");
+        feed(
+            &f,
+            &mut live,
+            SayEvent::TurnEnded {
+                message: block(&v.to_string()),
+            },
+        )
+        .await;
+        let rows = sql_rows(&f, "select json_array(id, status) from job".into()).await;
+        assert_eq!(rows, [json!([job, "running"])]);
+        assert!(live.is_empty() && !f.core.say.has("s1"));
+        let again: SayRevise = serde_json::from_value(json!({"id": "s1", "text": "more"})).unwrap();
+        let e = revise(&f, &user, again).await.unwrap_err();
+        assert_eq!(
+            e.message,
+            format!("{job} has started: stop it, then say it again")
+        );
+    })
 }
 
 /// Pure (D): a temp store.  `say/end` forgets the planning session: a revision is then refused, a second end is
 /// false, and the proposal stays a job.
-#[tokio::test(flavor = "multi_thread")]
-async fn say_end_closes_the_planning_session() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = say_front(dir.path()).await;
-    let mut live = planning(dir.path());
-    f.core.say.begin(Input::Start {
-        sid: "s1".into(),
-        repo: String::new(),
-        project: None,
-        prompt: String::new(),
-    });
-    feed(
-        &f,
-        &mut live,
-        SayEvent::TurnEnded {
-            message: block(GOOD),
-        },
-    )
-    .await;
-    let job = job_of(&live);
-    let user = crate::runner::user();
-    let by_id: SayById = serde_json::from_value(json!({"id": "s1"})).unwrap();
-    assert!(end(&f, &user, by_id.clone()).await.unwrap());
-    // `run` takes the end from the channel; here the test is the shell
-    feed(&f, &mut live, SayEvent::End).await;
-    assert!(live.is_empty() && !f.core.say.has("s1"));
-    assert!(!end(&f, &user, by_id).await.unwrap());
-    let revise_params: SayRevise =
-        serde_json::from_value(json!({"id": "s1", "text": "more"})).unwrap();
-    let e = revise(&f, &user, revise_params).await.unwrap_err();
-    assert!(e.message.contains("say it again"), "{e:?}");
-    let rows = sql_rows(
-        &f,
-        format!("select json_array(status) from job where id = '{job}'"),
-    )
-    .await;
-    assert_eq!(rows, [json!(["proposed"])]);
+#[test]
+fn say_end_closes_the_planning_session() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = say_front(dir.path()).await;
+        let mut live = planning(dir.path());
+        f.core.say.begin(Input::Start {
+            sid: "s1".into(),
+            repo: String::new(),
+            project: None,
+            prompt: String::new(),
+        });
+        feed(
+            &f,
+            &mut live,
+            SayEvent::TurnEnded {
+                message: block(GOOD),
+            },
+        )
+        .await;
+        let job = job_of(&live);
+        let user = crate::runner::user();
+        let by_id: SayById = serde_json::from_value(json!({"id": "s1"})).unwrap();
+        assert!(end(&f, &user, by_id.clone()).await.unwrap());
+        // `run` takes the end from the channel; here the test is the shell
+        feed(&f, &mut live, SayEvent::End).await;
+        assert!(live.is_empty() && !f.core.say.has("s1"));
+        assert!(!end(&f, &user, by_id).await.unwrap());
+        let revise_params: SayRevise =
+            serde_json::from_value(json!({"id": "s1", "text": "more"})).unwrap();
+        let e = revise(&f, &user, revise_params).await.unwrap_err();
+        assert!(e.message.contains("say it again"), "{e:?}");
+        let rows = sql_rows(
+            &f,
+            format!("select json_array(status) from job where id = '{job}'"),
+        )
+        .await;
+        assert_eq!(rows, [json!(["proposed"])]);
+    })
 }

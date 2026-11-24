@@ -128,7 +128,7 @@ pub struct Terms {
 }
 
 fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
-    m.lock().unwrap_or_else(|p| p.into_inner())
+    saman::lock(&m)
 }
 
 fn new_id() -> String {

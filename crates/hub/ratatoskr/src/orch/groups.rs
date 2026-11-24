@@ -155,14 +155,14 @@ async fn listing(
     tree: &str,
 ) -> villa::Result<Result<Vec<Check>, Gate>> {
     let wt = listing_tree(dir, commit);
-    let running = front.groups.running.lock().unwrap().get(tree).cloned();
+    let running = saman::lock(&front.groups.running).get(tree).cloned();
     if let Some(id) = running {
         let Some(done) = front.core.exec.done(&id) else {
             return Ok(Err(Gate::Wait(
                 "the batch's groups are being listed".into(),
             )));
         };
-        front.groups.running.lock().unwrap().remove(tree);
+        saman::lock(&front.groups.running).remove(tree);
         let text = crate::fsio::read_to_string(wt.join(LISTING_OUT)).ok();
         let end = listing_end(done.status, done.exit, text.as_deref());
         let (d, w) = (dir.to_owned(), wt.clone());
@@ -172,13 +172,13 @@ async fn listing(
         );
         match end {
             Ok(g) => {
-                front.groups.ends.lock().unwrap().remove(tree);
+                saman::lock(&front.groups.ends).remove(tree);
                 return Ok(Ok(g));
             }
             Err(class) => {
                 let said = front.core.exec.log_slice(&id, 0, 3).join(" / ");
                 let hold = {
-                    let mut ends = front.groups.ends.lock().unwrap();
+                    let mut ends = saman::lock(&front.groups.ends);
                     let e = ends.entry(tree.to_owned()).or_default();
                     e.push((class, said));
                     listing_hold(e)
@@ -215,12 +215,7 @@ async fn listing(
     };
     match crate::exec::start_sealed(front, &gate, params).await {
         Ok(s) => {
-            front
-                .groups
-                .running
-                .lock()
-                .unwrap()
-                .insert(tree.to_owned(), s.id);
+            saman::lock(&front.groups.running).insert(tree.to_owned(), s.id);
             Ok(Err(Gate::Wait(
                 "the batch's groups are being listed".into(),
             )))
@@ -264,7 +259,7 @@ pub async fn gate(
     let (head, commit, tree) = crate::clock::blocking(move || combined(&d, &b))
         .await
         .map_err(|e| villa::Error::invalid(e.to_string()))??;
-    let cached = front.groups.by_tree.lock().unwrap().get(&tree).cloned();
+    let cached = saman::lock(&front.groups.by_tree).get(&tree).cloned();
     let groups = match cached {
         Some(g) => g,
         None => {
@@ -298,12 +293,7 @@ pub async fn gate(
                 }
                 Err(gate) => return Ok(gate),
             };
-            front
-                .groups
-                .by_tree
-                .lock()
-                .unwrap()
-                .insert(tree.clone(), g.clone());
+            saman::lock(&front.groups.by_tree).insert(tree.clone(), g.clone());
             g
         }
     };

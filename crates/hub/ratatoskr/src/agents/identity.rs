@@ -36,7 +36,7 @@ pub struct Pool {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 /// The lowest number from 1 that USED does not hold.

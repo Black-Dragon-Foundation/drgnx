@@ -100,57 +100,67 @@ impl Rig {
 }
 
 // [C] handshake: hooks/after-edit-annotates-the-step
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_annotation_reaches_the_outcome_with_its_path() {
-    let r = rig(&["annotate-edit"]).await;
-    let out = r.ask("src/a.rs", None).await;
-    assert_eq!(out.annotations, ["edited src/a.rs"]);
-    assert_eq!(out.decision, Decision::Proceed { changed: None });
+#[test]
+fn an_annotation_reaches_the_outcome_with_its_path() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["annotate-edit"]).await;
+        let out = r.ask("src/a.rs", None).await;
+        assert_eq!(out.annotations, ["edited src/a.rs"]);
+        assert_eq!(out.decision, Decision::Proceed { changed: None });
+    })
 }
 
 // [C] handshake: hooks/after-edit-change-rewrites-an-fs-write
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_change_rewrites_an_fs_write() {
-    let r = rig(&["change-edit"]).await;
-    let out = r.ask("a.txt", Some("one\n")).await;
-    assert_eq!(
-        changed_content(&out),
-        Some(("one\n// checked\n".to_owned(), "change-edit".to_owned()))
-    );
+#[test]
+fn a_change_rewrites_an_fs_write() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["change-edit"]).await;
+        let out = r.ask("a.txt", Some("one\n")).await;
+        assert_eq!(
+            changed_content(&out),
+            Some(("one\n// checked\n".to_owned(), "change-edit".to_owned()))
+        );
+    })
 }
 
 // [C] handshake: hooks/after-edit-deny-refuses-an-fs-write
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_deny_refuses_an_fs_write_with_its_reason() {
-    let r = rig(&["deny-edit"]).await;
-    let out = r.ask("Cargo.lock", Some("x")).await;
-    let (name, reason) = refusal_of(&out).expect("denied");
-    assert!(name.contains("deny-edit"), "{name}");
-    assert_eq!(reason, "lock files are generated");
-    assert_eq!(
-        refusal_message(&reason),
-        "drgnx refused the write: lock files are generated"
-    );
-    // another file is not refused
-    assert_eq!(refusal_of(&r.ask("a.txt", Some("x")).await), None);
+#[test]
+fn a_deny_refuses_an_fs_write_with_its_reason() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["deny-edit"]).await;
+        let out = r.ask("Cargo.lock", Some("x")).await;
+        let (name, reason) = refusal_of(&out).expect("denied");
+        assert!(name.contains("deny-edit"), "{name}");
+        assert_eq!(reason, "lock files are generated");
+        assert_eq!(
+            refusal_message(&reason),
+            "drgnx refused the write: lock files are generated"
+        );
+        // another file is not refused
+        assert_eq!(refusal_of(&r.ask("a.txt", Some("x")).await), None);
+    })
 }
 
 // [C] handshake: hooks/after-edit-deny-on-an-agent-edit-is-recorded
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_deny_on_an_agents_own_edit_is_a_refusal_to_mark() {
-    let r = rig(&["deny-edit"]).await;
-    let out = r.ask("Cargo.lock", None).await;
-    assert!(refusal_of(&out).is_some(), "{out:?}");
+#[test]
+fn a_deny_on_an_agents_own_edit_is_a_refusal_to_mark() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["deny-edit"]).await;
+        let out = r.ask("Cargo.lock", None).await;
+        assert!(refusal_of(&out).is_some(), "{out:?}");
+    })
 }
 
 // [C] handshake: an edit the agent made itself cannot be changed
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_change_on_an_agents_own_edit_changes_nothing() {
-    let r = rig(&["change-edit"]).await;
-    let out = r.ask("a.txt", None).await;
-    assert_eq!(changed_content(&out), None);
-    let (_, reason) = refusal_of(&out).expect("a change here is a failure");
-    assert!(reason.contains("not accepted"), "{reason}");
+#[test]
+fn a_change_on_an_agents_own_edit_changes_nothing() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&["change-edit"]).await;
+        let out = r.ask("a.txt", None).await;
+        assert_eq!(changed_content(&out), None);
+        let (_, reason) = refusal_of(&out).expect("a change here is a failure");
+        assert!(reason.contains("not accepted"), "{reason}");
+    })
 }
 
 // [D] pure: hooks/a-changed-write-tells-the-agent
@@ -163,10 +173,12 @@ fn a_changed_write_tells_the_agent() {
 }
 
 // [D] pure: no hook is asked when none is listed
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn no_hooks_is_no_outcome() {
-    let r = rig(&[]).await;
-    let out = r.ask("a.txt", Some("x")).await;
-    assert_eq!(out.decision, Decision::Proceed { changed: None });
-    assert!(out.annotations.is_empty() && out.provenance.is_empty());
+#[test]
+fn no_hooks_is_no_outcome() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let r = rig(&[]).await;
+        let out = r.ask("a.txt", Some("x")).await;
+        assert_eq!(out.decision, Decision::Proceed { changed: None });
+        assert!(out.annotations.is_empty() && out.provenance.is_empty());
+    })
 }

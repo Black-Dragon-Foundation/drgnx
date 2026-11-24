@@ -45,7 +45,7 @@ impl Runs {
         selector: &str,
         ended: impl Fn(&str) -> bool,
     ) -> Option<String> {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = saman::lock(&self.jobs);
         if jobs
             .iter()
             .any(|(id, r)| r.task == task && r.key.0 == key && r.key.1 == selector && !ended(id))
@@ -64,33 +64,31 @@ impl Runs {
 
     /// The claim CLAIM started as job ID.
     fn started(&self, claim: &str, id: String, run: Run) {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = saman::lock(&self.jobs);
         jobs.remove(claim);
         jobs.insert(id, run);
     }
 
     /// The claim CLAIM started nothing (or started already: then nothing changes).
     fn release(&self, claim: &str) {
-        self.jobs.lock().unwrap().remove(claim);
+        saman::lock(&self.jobs).remove(claim);
     }
 
     /// Whether TASK waits on a gate's run (`gate-wait`): one is in flight (one whose job ENDED isn't).
     pub fn waiting(&self, task: &str, ended: impl Fn(&str) -> bool) -> bool {
-        self.jobs
-            .lock()
-            .unwrap()
+        saman::lock(&self.jobs)
             .iter()
             .any(|(id, r)| r.task == task && !ended(id))
     }
 
     /// Job ID's run, once it ended (taken out).
     pub fn take(&self, id: &str) -> Option<Run> {
-        self.jobs.lock().unwrap().remove(id)
+        saman::lock(&self.jobs).remove(id)
     }
 
     /// The runs whose jobs ENDED (never a claim), taken out: what a watcher that lagged behind the job events missed.
     pub fn take_ended(&self, ended: impl Fn(&str) -> bool) -> Vec<(String, Run)> {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = saman::lock(&self.jobs);
         let ids: Vec<String> = jobs
             .keys()
             .filter(|id| !id.starts_with("claim:") && ended(id))
@@ -667,29 +665,31 @@ mod tests {
     /// A run that ends, and has its evidence recorded, right after the gate read the task's evidence is still busy in
     /// the gate's answer: it waits for it, never holds on "no run to repeat" over evidence read before the run's end
     /// (PR 5, macOS: the run's evidence landed between the gate's read and its busy check).
-    #[tokio::test]
-    async fn a_run_that_ends_after_the_evidence_read_is_busy_in_the_answer() {
-        // the run is busy and has no evidence yet; the read is the moment it ends and its evidence is recorded
-        let state = std::sync::Mutex::new((true, Vec::<&str>::new()));
-        let (busy, evidence) = busy_then_read(async { state.lock().unwrap().0 }, async {
-            let mut s = state.lock().unwrap();
-            let read = s.1.clone();
-            *s = (false, vec!["the run's red"]);
-            Ok::<_, ()>(read)
+    #[test]
+    fn a_run_that_ends_after_the_evidence_read_is_busy_in_the_answer() {
+        saman::block_on_current(async move {
+            // the run is busy and has no evidence yet; the read is the moment it ends and its evidence is recorded
+            let state = std::sync::Mutex::new((true, Vec::<&str>::new()));
+            let (busy, evidence) = busy_then_read(async { saman::lock(&state).0 }, async {
+                let mut s = saman::lock(&state);
+                let read = s.1.clone();
+                *s = (false, vec!["the run's red"]);
+                Ok::<_, ()>(read)
+            })
+            .await
+            .unwrap();
+            assert!(
+                busy || !evidence.is_empty(),
+                "the run is in neither: busy {busy}, evidence {evidence:?}"
+            );
+            // a run that ended before: its evidence is read, and nothing is busy
+            let state = std::sync::Mutex::new((false, vec!["the run's red"]));
+            let (busy, evidence) = busy_then_read(async { saman::lock(&state).0 }, async {
+                Ok::<_, ()>(saman::lock(&state).1.clone())
+            })
+            .await
+            .unwrap();
+            assert_eq!((busy, evidence), (false, vec!["the run's red"]));
         })
-        .await
-        .unwrap();
-        assert!(
-            busy || !evidence.is_empty(),
-            "the run is in neither: busy {busy}, evidence {evidence:?}"
-        );
-        // a run that ended before: its evidence is read, and nothing is busy
-        let state = std::sync::Mutex::new((false, vec!["the run's red"]));
-        let (busy, evidence) = busy_then_read(async { state.lock().unwrap().0 }, async {
-            Ok::<_, ()>(state.lock().unwrap().1.clone())
-        })
-        .await
-        .unwrap();
-        assert_eq!((busy, evidence), (false, vec!["the run's red"]));
     }
 }

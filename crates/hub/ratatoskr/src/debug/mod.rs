@@ -363,7 +363,7 @@ pub struct Debug {
 }
 
 fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 impl Debug {
@@ -498,11 +498,7 @@ impl Debug {
 
     /// F on ROOT's breakpoint store.
     fn store<R>(&self, root: &str, f: impl FnOnce(&mut Store) -> R) -> R {
-        let mut stores = self
-            .inner
-            .stores
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stores = saman::lock(&self.inner.stores);
         let s = stores.entry(root.to_owned()).or_insert_with(|| {
             let file = self.inner.store_dir.as_ref().map(|d| {
                 d.join(format!(
@@ -517,11 +513,7 @@ impl Debug {
 
     /// Every breakpoint store's saves queued so far have landed (or failed).
     pub async fn written(&self) {
-        let disks: Vec<_> = self
-            .inner
-            .stores
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        let disks: Vec<_> = saman::lock(&self.inner.stores)
             .values()
             .filter_map(Store::disk)
             .collect();
@@ -554,11 +546,7 @@ impl Debug {
             e.caps.get("supportsANSIStyling").and_then(Value::as_bool) == Some(true)
         });
         let full = {
-            let mut c = self
-                .inner
-                .consoles
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut c = saman::lock(&self.inner.consoles);
             let con = c.entry(id.to_owned()).or_default();
             con.set_time(wall_ms());
             con.output(body, ansi);
@@ -566,13 +554,7 @@ impl Debug {
         };
         if full {
             self.console_flush(id, false);
-        } else if self
-            .inner
-            .armed
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id.to_owned())
-        {
+        } else if saman::lock(&self.inner.armed).insert(id.to_owned()) {
             let d = self.clone();
             let id = id.to_owned();
             crate::clock::spawn("debug:console", async move {
@@ -585,17 +567,9 @@ impl Debug {
     /// Send ID's console batch (`debug-output {session, lines, skipped?}`) to every editor; END: the session is over
     /// (its last line goes without its newline, and its console with it).
     pub fn console_flush(&self, id: &str, end: bool) {
-        self.inner
-            .armed
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(id);
+        saman::lock(&self.inner.armed).remove(id);
         let batch = {
-            let mut c = self
-                .inner
-                .consoles
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut c = saman::lock(&self.inner.consoles);
             let b = c.get_mut(id).and_then(|con| con.take(end));
             if end {
                 c.remove(id);
@@ -624,20 +598,11 @@ impl Debug {
 
     /// Tell F of every change of a session or a breakpoint from now on.
     pub fn on_change(&self, f: Listener) {
-        self.inner
-            .listeners
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(f);
+        saman::lock(&self.inner.listeners).push(f);
     }
 
     fn changed(&self) {
-        let ls = self
-            .inner
-            .listeners
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let ls = saman::lock(&self.inner.listeners).clone();
         for f in ls {
             f();
         }

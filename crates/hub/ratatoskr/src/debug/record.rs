@@ -399,7 +399,7 @@ pub struct Records {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 /// A name safe as a file name and in a ref.

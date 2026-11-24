@@ -786,161 +786,173 @@ fn raise_params(card: u64, limits: Vec<Limit>, resume: bool) -> BudgetRaiseParam
 
 /// Review Focus 2: a worker's own limit is reached inside a run; the card's raise is the worker's, the run's limit is
 /// untouched.
-#[tokio::test(flavor = "multi_thread")]
-async fn raise_sets_the_scope_that_hit_not_the_run() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = raise_front(dir.path());
-    let b = &f.core.budgets;
-    let (w, run) = (sc(json!({"worker": "w1"})), sc(json!({"run": "job-1"})));
-    b.link_up(&[w.clone(), run.clone()]);
-    b.set(&run, vec![lim(50.0, Unit::Usd)]);
-    b.set(&w, vec![lim(5.0, Unit::Usd)]);
-    assert_eq!(b.spend(&w, Unit::Usd, 5.0).len(), 1);
-    let card = open_card(&f, "budget", &w, Unit::Usd, &["w1"]).await;
-    let got = raise(
-        &f,
-        &crate::runner::service(),
-        raise_params(card, vec![lim(10.0, Unit::Usd)], false),
-    )
-    .await
-    .unwrap();
-    assert_eq!(got.view.scope, w);
-    assert_eq!(b.limits(&w), [lim(10.0, Unit::Usd)]);
-    assert_eq!(b.limits(&run), [lim(50.0, Unit::Usd)]);
-    assert_eq!(left(b, &w, Unit::Usd), Some(5.0));
-    assert!(got.held.is_empty(), "{got:?}");
+#[test]
+fn raise_sets_the_scope_that_hit_not_the_run() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = raise_front(dir.path());
+        let b = &f.core.budgets;
+        let (w, run) = (sc(json!({"worker": "w1"})), sc(json!({"run": "job-1"})));
+        b.link_up(&[w.clone(), run.clone()]);
+        b.set(&run, vec![lim(50.0, Unit::Usd)]);
+        b.set(&w, vec![lim(5.0, Unit::Usd)]);
+        assert_eq!(b.spend(&w, Unit::Usd, 5.0).len(), 1);
+        let card = open_card(&f, "budget", &w, Unit::Usd, &["w1"]).await;
+        let got = raise(
+            &f,
+            &crate::runner::service(),
+            raise_params(card, vec![lim(10.0, Unit::Usd)], false),
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.view.scope, w);
+        assert_eq!(b.limits(&w), [lim(10.0, Unit::Usd)]);
+        assert_eq!(b.limits(&run), [lim(50.0, Unit::Usd)]);
+        assert_eq!(left(b, &w, Unit::Usd), Some(5.0));
+        assert!(got.held.is_empty(), "{got:?}");
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn raise_keeps_the_scopes_other_units() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = raise_front(dir.path());
-    let b = &f.core.budgets;
-    let w = sc(json!({"worker": "w1"}));
-    b.enroll(&w);
-    b.set(&w, vec![lim(5.0, Unit::Usd), lim(0.2, Unit::LimitShare)]);
-    b.spend(&w, Unit::Usd, 5.0);
-    let card = open_card(&f, "budget", &w, Unit::Usd, &["w1"]).await;
-    raise(
-        &f,
-        &crate::runner::service(),
-        raise_params(card, vec![lim(8.0, Unit::Usd)], false),
-    )
-    .await
-    .unwrap();
-    let mut got = b.limits(&w);
-    got.sort_by_key(|l| l.unit);
-    let mut want = vec![lim(8.0, Unit::Usd), lim(0.2, Unit::LimitShare)];
-    want.sort_by_key(|l| l.unit);
-    assert_eq!(got, want);
+#[test]
+fn raise_keeps_the_scopes_other_units() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = raise_front(dir.path());
+        let b = &f.core.budgets;
+        let w = sc(json!({"worker": "w1"}));
+        b.enroll(&w);
+        b.set(&w, vec![lim(5.0, Unit::Usd), lim(0.2, Unit::LimitShare)]);
+        b.spend(&w, Unit::Usd, 5.0);
+        let card = open_card(&f, "budget", &w, Unit::Usd, &["w1"]).await;
+        raise(
+            &f,
+            &crate::runner::service(),
+            raise_params(card, vec![lim(8.0, Unit::Usd)], false),
+        )
+        .await
+        .unwrap();
+        let mut got = b.limits(&w);
+        got.sort_by_key(|l| l.unit);
+        let mut want = vec![lim(8.0, Unit::Usd), lim(0.2, Unit::LimitShare)];
+        want.sort_by_key(|l| l.unit);
+        assert_eq!(got, want);
+    })
 }
 
 /// Without `resume` nothing is sent the continue; the card is settled as a raise, with its limits.
-#[tokio::test(flavor = "multi_thread")]
-async fn raise_without_resume_leaves_sessions_paused() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = raise_front(dir.path());
-    let w = sc(json!({"worker": "w1"}));
-    f.core.budgets.enroll(&w);
-    f.core.budgets.set(&w, vec![lim(1.0, Unit::Usd)]);
-    f.core.budgets.spend(&w, Unit::Usd, 1.0);
-    let card = open_card(&f, "budget", &w, Unit::Usd, &["w1"]).await;
-    let got = raise(
-        &f,
-        &crate::runner::service(),
-        raise_params(card, vec![lim(2.0, Unit::Usd)], false),
-    )
-    .await
-    .unwrap();
-    assert!(got.resumed.is_empty(), "{got:?}");
-    let cid = i64::try_from(card).unwrap();
-    let c = f
-        .writer
-        .db
-        .read(move |c| norn::read::cards::card(c, cid))
+#[test]
+fn raise_without_resume_leaves_sessions_paused() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = raise_front(dir.path());
+        let w = sc(json!({"worker": "w1"}));
+        f.core.budgets.enroll(&w);
+        f.core.budgets.set(&w, vec![lim(1.0, Unit::Usd)]);
+        f.core.budgets.spend(&w, Unit::Usd, 1.0);
+        let card = open_card(&f, "budget", &w, Unit::Usd, &["w1"]).await;
+        let got = raise(
+            &f,
+            &crate::runner::service(),
+            raise_params(card, vec![lim(2.0, Unit::Usd)], false),
+        )
         .await
-        .unwrap()
         .unwrap();
-    assert_eq!(
-        (c.state.as_deref(), c.choice.as_deref()),
-        (Some("settled"), Some("raise"))
-    );
-    assert_eq!(
-        c.data.unwrap()["raised"],
-        json!([{"amount": 2.0, "unit": "usd"}])
-    );
+        assert!(got.resumed.is_empty(), "{got:?}");
+        let cid = i64::try_from(card).unwrap();
+        let c = f
+            .writer
+            .db
+            .read(move |c| norn::read::cards::card(c, cid))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (c.state.as_deref(), c.choice.as_deref()),
+            (Some("settled"), Some("raise"))
+        );
+        assert_eq!(
+            c.data.unwrap()["raised"],
+            json!([{"amount": 2.0, "unit": "usd"}])
+        );
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_settled_card_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = raise_front(dir.path());
-    let w = sc(json!({"worker": "w1"}));
-    f.core.budgets.enroll(&w);
-    let card = open_card(&f, "budget", &w, Unit::Usd, &["w1"]).await;
-    let svc = crate::runner::service();
-    raise(
-        &f,
-        &svc,
-        raise_params(card, vec![lim(2.0, Unit::Usd)], false),
-    )
-    .await
-    .unwrap();
-    let e = raise(
-        &f,
-        &svc,
-        raise_params(card, vec![lim(3.0, Unit::Usd)], false),
-    )
-    .await
-    .unwrap_err();
-    assert!(e.message.contains("already settled"), "{}", e.message);
-    // the refused raise set nothing
-    assert_eq!(f.core.budgets.limits(&w), [lim(2.0, Unit::Usd)]);
+#[test]
+fn a_settled_card_is_refused() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = raise_front(dir.path());
+        let w = sc(json!({"worker": "w1"}));
+        f.core.budgets.enroll(&w);
+        let card = open_card(&f, "budget", &w, Unit::Usd, &["w1"]).await;
+        let svc = crate::runner::service();
+        raise(
+            &f,
+            &svc,
+            raise_params(card, vec![lim(2.0, Unit::Usd)], false),
+        )
+        .await
+        .unwrap();
+        let e = raise(
+            &f,
+            &svc,
+            raise_params(card, vec![lim(3.0, Unit::Usd)], false),
+        )
+        .await
+        .unwrap_err();
+        assert!(e.message.contains("already settled"), "{}", e.message);
+        // the refused raise set nothing
+        assert_eq!(f.core.budgets.limits(&w), [lim(2.0, Unit::Usd)]);
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_non_budget_card_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = raise_front(dir.path());
-    let w = sc(json!({"worker": "w1"}));
-    f.core.budgets.enroll(&w);
-    let card = open_card(&f, "ask", &w, Unit::Usd, &["w1"]).await;
-    let e = raise(
-        &f,
-        &crate::runner::service(),
-        raise_params(card, vec![lim(2.0, Unit::Usd)], false),
-    )
-    .await
-    .unwrap_err();
-    assert!(e.message.contains("not a budget card"), "{}", e.message);
-    assert!(f.core.budgets.limits(&w).is_empty());
+#[test]
+fn a_non_budget_card_is_refused() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = raise_front(dir.path());
+        let w = sc(json!({"worker": "w1"}));
+        f.core.budgets.enroll(&w);
+        let card = open_card(&f, "ask", &w, Unit::Usd, &["w1"]).await;
+        let e = raise(
+            &f,
+            &crate::runner::service(),
+            raise_params(card, vec![lim(2.0, Unit::Usd)], false),
+        )
+        .await
+        .unwrap_err();
+        assert!(e.message.contains("not a budget card"), "{}", e.message);
+        assert!(f.core.budgets.limits(&w).is_empty());
+    })
 }
 
 /// A raise of the worker's own limit under a run whose limit is reached too: the worker stays held, by the run.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_session_an_ancestor_still_holds_is_named() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = raise_front(dir.path());
-    let b = &f.core.budgets;
-    let (w, run) = (sc(json!({"worker": "w1"})), sc(json!({"run": "job-1"})));
-    b.link_up(&[w.clone(), run.clone()]);
-    b.set(&run, vec![lim(5.0, Unit::Usd)]);
-    b.set(&w, vec![lim(5.0, Unit::Usd)]);
-    b.spend(&w, Unit::Usd, 5.0);
-    let card = open_card(&f, "budget", &w, Unit::Usd, &["w1"]).await;
-    let got = raise(
-        &f,
-        &crate::runner::service(),
-        raise_params(card, vec![lim(10.0, Unit::Usd)], true),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        got.held,
-        [runstav::methods::timeline::BudgetHeld {
-            id: "w1".into(),
-            by: run
-        }]
-    );
-    assert!(got.resumed.is_empty(), "{got:?}");
+#[test]
+fn a_session_an_ancestor_still_holds_is_named() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = raise_front(dir.path());
+        let b = &f.core.budgets;
+        let (w, run) = (sc(json!({"worker": "w1"})), sc(json!({"run": "job-1"})));
+        b.link_up(&[w.clone(), run.clone()]);
+        b.set(&run, vec![lim(5.0, Unit::Usd)]);
+        b.set(&w, vec![lim(5.0, Unit::Usd)]);
+        b.spend(&w, Unit::Usd, 5.0);
+        let card = open_card(&f, "budget", &w, Unit::Usd, &["w1"]).await;
+        let got = raise(
+            &f,
+            &crate::runner::service(),
+            raise_params(card, vec![lim(10.0, Unit::Usd)], true),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            got.held,
+            [runstav::methods::timeline::BudgetHeld {
+                id: "w1".into(),
+                by: run
+            }]
+        );
+        assert!(got.resumed.is_empty(), "{got:?}");
+    })
 }

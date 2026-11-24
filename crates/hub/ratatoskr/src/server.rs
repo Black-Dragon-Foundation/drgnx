@@ -1261,70 +1261,75 @@ mod tests {
         assert_eq!(unsafe { libc::prctl(libc::PR_GET_DUMPABLE) }, 1);
     }
 
-    #[tokio::test]
-    async fn the_listening_socket_is_cloexec() {
-        let dir = tempfile::tempdir().unwrap();
-        let (listener, _cap) = bind(
-            &dir.path().join("hub-x.sock"),
-            &dir.path().join("hub-x.cap"),
-        )
-        .unwrap();
-        let cloexec = |fd: std::os::fd::BorrowedFd<'_>| {
-            rustix::io::fcntl_getfd(fd)
-                .unwrap()
-                .contains(rustix::io::FdFlags::CLOEXEC)
-        };
-        use std::os::fd::AsFd;
-        assert!(cloexec(listener.as_fd()), "the main socket");
-        // and the gateway's loopback listener, bound as `Gate::listen` binds it
-        let tcp = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
+    #[test]
+    fn the_listening_socket_is_cloexec() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (listener, _cap) = bind(
+                &dir.path().join("hub-x.sock"),
+                &dir.path().join("hub-x.cap"),
+            )
             .unwrap();
-        assert!(cloexec(tcp.as_fd()), "the gateway's listener");
+            let cloexec = |fd: std::os::fd::BorrowedFd<'_>| {
+                rustix::io::fcntl_getfd(fd)
+                    .unwrap()
+                    .contains(rustix::io::FdFlags::CLOEXEC)
+            };
+            use std::os::fd::AsFd;
+            assert!(cloexec(listener.as_fd()), "the main socket");
+            // and the gateway's loopback listener, bound as `Gate::listen` binds it
+            let tcp = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            assert!(cloexec(tcp.as_fd()), "the gateway's listener");
+        })
     }
 
     /// A signal tokio buffered before the wait for the store threads began (a second SIGTERM during the hub's first
     /// steps of ending) does not abandon their queues; one that comes during the wait does.  SIGUSR2 stands in for
     /// SIGTERM and SIGINT: this test process handles it, through tokio, from the first `signal` on.
-    #[tokio::test]
-    async fn only_a_signal_during_the_wait_abandons_the_store_threads() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        let kind = SignalKind::user_defined2();
-        let (mut term, mut int, mut seen) = (
-            signal(kind).unwrap(),
-            signal(kind).unwrap(),
-            signal(kind).unwrap(),
-        );
-        // raised, and handed to every listener (SEEN's recv returns once tokio has dispatched it)
-        let raise = || {
-            // SAFETY: raise(3) of a signal this process handles from the `signal` calls above on.
-            assert_eq!(unsafe { libc::raise(libc::SIGUSR2) }, 0);
-        };
-        raise();
-        seen.recv().await;
-        let (release, released) = std::sync::mpsc::channel::<()>();
-        let done = Arc::new(AtomicBool::new(false));
-        let d = done.clone();
-        let threads = vec![Stopping::start(
-            "a test thread",
-            || 1,
-            move || {
-                crate::soft::done(released.recv(), "server");
-                d.store(true, Ordering::SeqCst);
-            },
-        )];
-        let mut wait = Box::pin(stop_threads(threads, &mut term, &mut int));
-        let ended =
-            std::future::poll_fn(|cx| std::task::Poll::Ready(wait.as_mut().poll(cx).is_ready()))
-                .await;
-        assert!(!ended, "a signal from before the wait abandoned the queue");
-        raise();
-        seen.recv().await;
-        wait.await;
-        assert!(
-            !done.load(Ordering::SeqCst),
-            "the signal during the wait abandoned it"
-        );
-        release.send(()).unwrap();
+    #[test]
+    fn only_a_signal_during_the_wait_abandons_the_store_threads() {
+        saman::block_on_current(async move {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            let kind = SignalKind::user_defined2();
+            let (mut term, mut int, mut seen) = (
+                signal(kind).unwrap(),
+                signal(kind).unwrap(),
+                signal(kind).unwrap(),
+            );
+            // raised, and handed to every listener (SEEN's recv returns once tokio has dispatched it)
+            let raise = || {
+                // SAFETY: raise(3) of a signal this process handles from the `signal` calls above on.
+                assert_eq!(unsafe { libc::raise(libc::SIGUSR2) }, 0);
+            };
+            raise();
+            seen.recv().await;
+            let (release, released) = std::sync::mpsc::channel::<()>();
+            let done = Arc::new(AtomicBool::new(false));
+            let d = done.clone();
+            let threads = vec![Stopping::start(
+                "a test thread",
+                || 1,
+                move || {
+                    crate::soft::done(released.recv(), "server");
+                    d.store(true, Ordering::SeqCst);
+                },
+            )];
+            let mut wait = Box::pin(stop_threads(threads, &mut term, &mut int));
+            let ended = std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(wait.as_mut().poll(cx).is_ready())
+            })
+            .await;
+            assert!(!ended, "a signal from before the wait abandoned the queue");
+            raise();
+            seen.recv().await;
+            wait.await;
+            assert!(
+                !done.load(Ordering::SeqCst),
+                "the signal during the wait abandoned it"
+            );
+            release.send(()).unwrap();
+        })
     }
 }

@@ -144,7 +144,7 @@ impl Outbox {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Queue> {
-        self.queue.lock().expect("the queue lock")
+        saman::lock(&self.queue)
     }
 
     /// EV through the core (WHY logged if it is the connection's first close).

@@ -1026,267 +1026,279 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn not_ready_is_internal_with_its_text() {
-        let dir = tempfile::tempdir().unwrap();
-        // a schema-5 file: the opening rule's text, as an internal error
-        let file = dir.path().join("work.db");
-        urdr::Connection::open(&file)
+    #[test]
+    fn not_ready_is_internal_with_its_text() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            // a schema-5 file: the opening rule's text, as an internal error
+            let file = dir.path().join("work.db");
+            urdr::Connection::open(&file)
             .unwrap()
             .execute_batch(
                 "create table meta (key text primary key, value text); insert into meta values ('schema', '5');",
             )
             .unwrap();
-        let w = writer(dir.path());
-        let e = call(&w, "cards/settle", json!({"card": 1, "choice": "ok"}))
-            .await
-            .unwrap_err();
-        assert_eq!(
-            (e.code, e.message.as_str()),
-            (
-                ErrorCode::Internal,
-                "work.db is schema 5; open it once with drgnx 6 first, or remove it (installs are disposable)"
-            )
-        );
-        assert_eq!(w.signals.writes(), 0);
-        // the daily prune never fails its caller
-        assert_eq!(
-            call(&w, "coord/prune", json!({})).await.unwrap(),
-            json!({"pruned": false})
-        );
-        // another method's params come back
-        assert!(
-            serve(&w, &caller(), params("job/status", json!({})))
+            let w = writer(dir.path());
+            let e = call(&w, "cards/settle", json!({"card": 1, "choice": "ok"}))
                 .await
-                .is_err()
-        );
-        // once a schema-6 file is there (made, say, by an older drgnx), the next write migrates it and goes through
-        // (no tick needed)
-        let next = dir.path().join("next.db");
-        urdr::Connection::open(&next)
-            .unwrap()
-            .execute_batch(DDL)
-            .unwrap();
-        for ext in ["-wal", "-shm"] {
-            crate::soft::done(
-                std::fs::remove_file(dir.path().join(format!("work.db{ext}"))),
-                "std::fs::remove_file",
+                .unwrap_err();
+            assert_eq!(
+                (e.code, e.message.as_str()),
+                (
+                    ErrorCode::Internal,
+                    "work.db is schema 5; open it once with drgnx 6 first, or remove it (installs are disposable)"
+                )
             );
-        }
-        crate::fsio::rename(&next, &file).unwrap();
-        let card = call(
-            &w,
-            "coord/card-create",
-            json!({"kind": "ask", "title": "t"}),
-        )
-        .await
-        .unwrap();
-        assert!(card["id"].as_u64().is_some(), "{card}");
-        assert_eq!(w.signals.writes(), 1);
+            assert_eq!(w.signals.writes(), 0);
+            // the daily prune never fails its caller
+            assert_eq!(
+                call(&w, "coord/prune", json!({})).await.unwrap(),
+                json!({"pruned": false})
+            );
+            // another method's params come back
+            assert!(
+                serve(&w, &caller(), params("job/status", json!({})))
+                    .await
+                    .is_err()
+            );
+            // once a schema-6 file is there (made, say, by an older drgnx), the next write migrates it and goes through
+            // (no tick needed)
+            let next = dir.path().join("next.db");
+            urdr::Connection::open(&next)
+                .unwrap()
+                .execute_batch(DDL)
+                .unwrap();
+            for ext in ["-wal", "-shm"] {
+                crate::soft::done(
+                    std::fs::remove_file(dir.path().join(format!("work.db{ext}"))),
+                    "std::fs::remove_file",
+                );
+            }
+            crate::fsio::rename(&next, &file).unwrap();
+            let card = call(
+                &w,
+                "coord/card-create",
+                json!({"kind": "ask", "title": "t"}),
+            )
+            .await
+            .unwrap();
+            assert!(card["id"].as_u64().is_some(), "{card}");
+            assert_eq!(w.signals.writes(), 1);
+        })
     }
 
-    #[tokio::test]
-    async fn read_only_is_schema() {
-        let dir = tempfile::tempdir().unwrap();
-        urdr::Connection::open(dir.path().join("work.db"))
+    #[test]
+    fn read_only_is_schema() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            urdr::Connection::open(dir.path().join("work.db"))
             .unwrap()
             .execute_batch(
                 "create table meta (key text primary key, value text); insert into meta values ('schema', '99');",
             )
             .unwrap();
-        let w = writer(dir.path());
-        let e = call(&w, "events/add", json!({"kind": "job"}))
-            .await
-            .unwrap_err();
-        assert_eq!(
-            (e.code, e.message.as_str()),
-            (
-                ErrorCode::Schema,
-                "work.db is schema 99, newer than this drgnx: read-only"
-            )
-        );
-    }
-
-    #[tokio::test]
-    async fn writes_are_typed_and_counted() {
-        let dir = tempfile::tempdir().unwrap();
-        urdr::Connection::open(dir.path().join("work.db"))
-            .unwrap()
-            .execute_batch(DDL)
-            .unwrap();
-        let w = writer(dir.path());
-        let card = call(
-            &w,
-            "coord/card-create",
-            json!({"kind": "ask", "title": "t"}),
-        )
-        .await
-        .unwrap();
-        let id = card["id"].clone();
-        let settle = json!({"card": id, "choice": "yes"});
-        assert_eq!(
-            call(&w, "cards/settle", settle.clone()).await.unwrap(),
-            json!({"settled": true})
-        );
-        assert_eq!(
-            call(&w, "cards/settle", settle).await.unwrap(),
-            json!({"settled": false})
-        );
-        let e = call(
-            &w,
-            "messages/send",
-            json!({"recipient": "a1", "text": "hi", "sender": "a2"}),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(
-            (e.code, e.path.as_deref()),
-            (ErrorCode::InvalidParams, Some("sender"))
-        );
-        let sent = call(
-            &w,
-            "messages/send",
-            json!({"recipient": "a1", "text": "hi"}),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            (sent["ok"].clone(), sent["state"].clone()),
-            (json!(true), json!("queued"))
-        );
-        // every answer fits its method's result
-        let added = call(&w, "events/add", json!({"kind": "comment", "summary": "s"}))
-            .await
-            .unwrap();
-        for (method, v) in [
-            ("coord/card-create", card),
-            ("messages/send", sent),
-            ("events/add", added),
-        ] {
+            let w = writer(dir.path());
+            let e = call(&w, "events/add", json!({"kind": "job"}))
+                .await
+                .unwrap_err();
             assert_eq!(
-                (find(method).unwrap().check_result)(&v).unwrap(),
-                v,
-                "{method}"
+                (e.code, e.message.as_str()),
+                (
+                    ErrorCode::Schema,
+                    "work.db is schema 99, newer than this drgnx: read-only"
+                )
             );
-        }
-        assert_eq!(w.signals.writes(), 5);
-        // the refused send wrote nothing
-        let n: i64 = urdr::Connection::open(dir.path().join("work.db"))
-            .unwrap()
-            .query_row("select count(*) from message", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(n, 1);
+        })
     }
 
-    #[tokio::test]
-    async fn a_tool_write_reaches_the_view() {
-        let signals = Arc::new(Signals::default());
-        let hub = ToolHub {
-            signals: signals.clone(),
-            editors: Arc::new(Default::default()),
-            settings: Arc::new(crate::settings::Settings::new()),
-            front: Default::default(),
-        };
-        // the tools call `notify` after each write: the records' follower wakes
-        hub.notify();
-        tokio::time::timeout(Duration::from_millis(500), signals.records.notified())
+    #[test]
+    fn writes_are_typed_and_counted() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            urdr::Connection::open(dir.path().join("work.db"))
+                .unwrap()
+                .execute_batch(DDL)
+                .unwrap();
+            let w = writer(dir.path());
+            let card = call(
+                &w,
+                "coord/card-create",
+                json!({"kind": "ask", "title": "t"}),
+            )
             .await
-            .expect("the follower was not woken");
-    }
-
-    #[tokio::test]
-    async fn sender_is_refused_for_every_class() {
-        let dir = tempfile::tempdir().unwrap();
-        urdr::Connection::open(dir.path().join("work.db"))
-            .unwrap()
-            .execute_batch(DDL)
             .unwrap();
-        let w = writer(dir.path());
-        for c in [
-            caller(),
-            Caller {
-                class: Class::Service,
-                ..caller()
-            },
-            Caller {
-                class: Class::Agent,
-                sid: Some("s-1".into()),
-                ..caller()
-            },
-        ] {
-            let p = params(
+            let id = card["id"].clone();
+            let settle = json!({"card": id, "choice": "yes"});
+            assert_eq!(
+                call(&w, "cards/settle", settle.clone()).await.unwrap(),
+                json!({"settled": true})
+            );
+            assert_eq!(
+                call(&w, "cards/settle", settle).await.unwrap(),
+                json!({"settled": false})
+            );
+            let e = call(
+                &w,
                 "messages/send",
                 json!({"recipient": "a1", "text": "hi", "sender": "a2"}),
-            );
-            let e = match serve(&w, &c, p).await {
-                Ok(answer) => answer.unwrap_err(),
-                Err(_) => panic!("messages/send is not the writer's"),
-            };
+            )
+            .await
+            .unwrap_err();
             assert_eq!(
                 (e.code, e.path.as_deref()),
-                (ErrorCode::InvalidParams, Some("sender")),
-                "{:?}",
-                c.class
+                (ErrorCode::InvalidParams, Some("sender"))
             );
-        }
-        assert_eq!(w.signals.writes(), 0, "a refused send writes nothing");
+            let sent = call(
+                &w,
+                "messages/send",
+                json!({"recipient": "a1", "text": "hi"}),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                (sent["ok"].clone(), sent["state"].clone()),
+                (json!(true), json!("queued"))
+            );
+            // every answer fits its method's result
+            let added = call(&w, "events/add", json!({"kind": "comment", "summary": "s"}))
+                .await
+                .unwrap();
+            for (method, v) in [
+                ("coord/card-create", card),
+                ("messages/send", sent),
+                ("events/add", added),
+            ] {
+                assert_eq!(
+                    (find(method).unwrap().check_result)(&v).unwrap(),
+                    v,
+                    "{method}"
+                );
+            }
+            assert_eq!(w.signals.writes(), 5);
+            // the refused send wrote nothing
+            let n: i64 = urdr::Connection::open(dir.path().join("work.db"))
+                .unwrap()
+                .query_row("select count(*) from message", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 1);
+        })
     }
 
-    #[tokio::test]
-    async fn tool_hub_sessions_are_the_fronts() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join("work.db");
-        urdr::Connection::open(&db)
-            .unwrap()
-            .execute_batch(DDL)
-            .unwrap();
-        let (config, work) = (dir.path().join("config"), dir.path().join("work"));
-        std::fs::create_dir_all(&config).unwrap();
-        std::fs::create_dir_all(&work).unwrap();
-        let mock = crate::embed::tests::mock_binary();
-        let file = config.join("settings.el");
-        crate::fsio::write(
+    #[test]
+    fn a_tool_write_reaches_the_view() {
+        saman::block_on_current(async move {
+            let signals = Arc::new(Signals::default());
+            let hub = ToolHub {
+                signals: signals.clone(),
+                editors: Arc::new(Default::default()),
+                settings: Arc::new(crate::settings::Settings::new()),
+                front: Default::default(),
+            };
+            // the tools call `notify` after each write: the records' follower wakes
+            hub.notify();
+            tokio::time::timeout(Duration::from_millis(500), signals.records.notified())
+                .await
+                .expect("the follower was not woken");
+        })
+    }
+
+    #[test]
+    fn sender_is_refused_for_every_class() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            urdr::Connection::open(dir.path().join("work.db"))
+                .unwrap()
+                .execute_batch(DDL)
+                .unwrap();
+            let w = writer(dir.path());
+            for c in [
+                caller(),
+                Caller {
+                    class: Class::Service,
+                    ..caller()
+                },
+                Caller {
+                    class: Class::Agent,
+                    sid: Some("s-1".into()),
+                    ..caller()
+                },
+            ] {
+                let p = params(
+                    "messages/send",
+                    json!({"recipient": "a1", "text": "hi", "sender": "a2"}),
+                );
+                let e = match serve(&w, &c, p).await {
+                    Ok(answer) => answer.unwrap_err(),
+                    Err(_) => panic!("messages/send is not the writer's"),
+                };
+                assert_eq!(
+                    (e.code, e.path.as_deref()),
+                    (ErrorCode::InvalidParams, Some("sender")),
+                    "{:?}",
+                    c.class
+                );
+            }
+            assert_eq!(w.signals.writes(), 0, "a refused send writes nothing");
+        })
+    }
+
+    #[test]
+    fn tool_hub_sessions_are_the_fronts() {
+        saman::block_on_current(async move {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("work.db");
+            urdr::Connection::open(&db)
+                .unwrap()
+                .execute_batch(DDL)
+                .unwrap();
+            let (config, work) = (dir.path().join("config"), dir.path().join("work"));
+            std::fs::create_dir_all(&config).unwrap();
+            std::fs::create_dir_all(&work).unwrap();
+            let mock = crate::embed::tests::mock_binary();
+            let file = config.join("settings.el");
+            crate::fsio::write(
             &file,
             format!(
                 "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command ({mock:?} \"acp\" \"--as\" \"claude\")))))\n"
             ),
         )
         .unwrap();
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let front = Arc::new(Front::new(
-            runstav::proof::Cap::generate().unwrap(),
-            dir.path().join("hub-x.sock"),
-            crate::store::WorkDb::spawn(db.clone()).unwrap(),
-            CoordDb::spawn(db),
-        ));
-        let (_store, runtime) = crate::runtime_db::open(dir.path()).unwrap();
-        front.settings.open(config, runtime);
-        let hub: Arc<ToolHub> = front.tool_hub.clone();
-        assert!(hub.sessions().await.is_none(), "no front bound yet");
-        hub.bind(&front);
-        assert_eq!(hub.sessions().await.map(|s| s.len()), Some(0));
-        let user = caller();
-        let start = params(
-            "agents/start",
-            json!({"profile": "mock-claude", "cwd": work.display().to_string()}),
-        );
-        let id = match crate::agent_core::serve(&front, &user, start).await {
-            Ok(Ok(v)) => v["id"].as_str().unwrap().to_owned(),
-            Ok(Err(e)) => panic!("agents/start: {}", e.message),
-            Err(_) => panic!("agents/start is not the agent core's"),
-        };
-        // listed at once, from the front's own table: no request, no deadline
-        let rows = hub.sessions().await.expect("the front is bound");
-        assert!(
-            rows.iter().any(|r| r.id == id),
-            "{id} not in {:?}",
-            rows.iter().map(|r| &r.id).collect::<Vec<_>>()
-        );
-        let kill = params("agents/kill", json!({"id": id}));
-        crate::soft::done(
-            crate::agent_core::serve(&front, &user, kill).await,
-            "crate::agent_core::serve",
-        );
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let front = Arc::new(Front::new(
+                runstav::proof::Cap::generate().unwrap(),
+                dir.path().join("hub-x.sock"),
+                crate::store::WorkDb::spawn(db.clone()).unwrap(),
+                CoordDb::spawn(db),
+            ));
+            let (_store, runtime) = crate::runtime_db::open(dir.path()).unwrap();
+            front.settings.open(config, runtime);
+            let hub: Arc<ToolHub> = front.tool_hub.clone();
+            assert!(hub.sessions().await.is_none(), "no front bound yet");
+            hub.bind(&front);
+            assert_eq!(hub.sessions().await.map(|s| s.len()), Some(0));
+            let user = caller();
+            let start = params(
+                "agents/start",
+                json!({"profile": "mock-claude", "cwd": work.display().to_string()}),
+            );
+            let id = match crate::agent_core::serve(&front, &user, start).await {
+                Ok(Ok(v)) => v["id"].as_str().unwrap().to_owned(),
+                Ok(Err(e)) => panic!("agents/start: {}", e.message),
+                Err(_) => panic!("agents/start is not the agent core's"),
+            };
+            // listed at once, from the front's own table: no request, no deadline
+            let rows = hub.sessions().await.expect("the front is bound");
+            assert!(
+                rows.iter().any(|r| r.id == id),
+                "{id} not in {:?}",
+                rows.iter().map(|r| &r.id).collect::<Vec<_>>()
+            );
+            let kill = params("agents/kill", json!({"id": id}));
+            crate::soft::done(
+                crate::agent_core::serve(&front, &user, kill).await,
+                "crate::agent_core::serve",
+            );
+        })
     }
 }

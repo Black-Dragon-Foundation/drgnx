@@ -15,7 +15,7 @@ type Job = Box<dyn FnOnce() -> std::io::Result<()> + Send>;
 type Report = Arc<dyn Fn(&str, std::io::Error) + Send + Sync>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 #[derive(Default)]
@@ -125,50 +125,56 @@ mod tests {
         (seen, failed, o)
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn writes_land_in_the_order_they_were_queued() {
-        let (seen, failed, o) = order();
-        for i in 0..64 {
+    #[test]
+    fn writes_land_in_the_order_they_were_queued() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let (seen, failed, o) = order();
+            for i in 0..64 {
+                let s = seen.clone();
+                o.push(format!("write {i}"), move || {
+                    lock(&s).push(i);
+                    Ok(())
+                });
+            }
+            o.written().await;
+            assert_eq!(*lock(&seen), (0..64).collect::<Vec<_>>());
+            assert!(lock(&failed).is_empty());
+        })
+    }
+
+    #[test]
+    fn a_failed_write_is_reported_and_the_next_still_lands() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let (seen, failed, o) = order();
+            o.push("the queue", || Err(std::io::Error::other("disk full")));
             let s = seen.clone();
-            o.push(format!("write {i}"), move || {
-                lock(&s).push(i);
+            o.push("the meta", move || {
+                lock(&s).push(1);
                 Ok(())
             });
-        }
-        o.written().await;
-        assert_eq!(*lock(&seen), (0..64).collect::<Vec<_>>());
-        assert!(lock(&failed).is_empty());
+            o.written().await;
+            assert_eq!(*lock(&failed), vec!["the queue: disk full".to_string()]);
+            assert_eq!(*lock(&seen), vec![1]);
+        })
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_failed_write_is_reported_and_the_next_still_lands() {
-        let (seen, failed, o) = order();
-        o.push("the queue", || Err(std::io::Error::other("disk full")));
-        let s = seen.clone();
-        o.push("the meta", move || {
-            lock(&s).push(1);
-            Ok(())
-        });
-        o.written().await;
-        assert_eq!(*lock(&failed), vec!["the queue: disk full".to_string()]);
-        assert_eq!(*lock(&seen), vec![1]);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_write_that_panics_stops_neither_the_queue_nor_its_waiters() {
-        let (seen, failed, o) = order();
-        o.push("the panic", || panic!("a write's bug"));
-        let s = seen.clone();
-        o.push("after", move || {
-            lock(&s).push(2);
-            Ok(())
-        });
-        o.written().await;
-        assert_eq!(*lock(&seen), vec![2]);
-        let failed = lock(&failed);
-        assert!(
-            failed.len() == 1 && failed[0].starts_with("the panic: "),
-            "{failed:?}"
-        );
+    #[test]
+    fn a_write_that_panics_stops_neither_the_queue_nor_its_waiters() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let (seen, failed, o) = order();
+            o.push("the panic", || panic!("a write's bug"));
+            let s = seen.clone();
+            o.push("after", move || {
+                lock(&s).push(2);
+                Ok(())
+            });
+            o.written().await;
+            assert_eq!(*lock(&seen), vec![2]);
+            let failed = lock(&failed);
+            assert!(
+                failed.len() == 1 && failed[0].starts_with("the panic: "),
+                "{failed:?}"
+            );
+        })
     }
 }

@@ -288,7 +288,7 @@ pub static GROUPS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 
 fn started(group: i32) {
     #[cfg(feature = "test-hooks")]
-    GROUPS.lock().unwrap_or_else(|e| e.into_inner()).push(group);
+    saman::lock(&GROUPS).push(group);
     let _only_when_used_elsewhere = &group;
 }
 
@@ -407,18 +407,13 @@ struct Pair {
 }
 
 fn note(notes: &Mutex<Vec<String>>, n: String) {
-    notes.lock().unwrap_or_else(|e| e.into_inner()).push(n);
+    saman::lock(&notes).push(n);
 }
 
 impl Proc for Pair {
     fn signal(&mut self, sig: Sig) {
         Proc::signal(&mut self.adapter, sig);
-        if let Some(d) = self
-            .debuggee
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_mut()
-        {
+        if let Some(d) = saman::lock(&self.debuggee).as_mut() {
             Proc::signal(d, sig);
         }
     }
@@ -428,11 +423,7 @@ impl Proc for Pair {
             if let Some(s) = self.starter.take() {
                 s.abort();
             }
-            let d = self
-                .debuggee
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .take();
+            let d = saman::lock(&self.debuggee).take();
             if let Some(mut d) = d {
                 Proc::signal(&mut d, Sig::Kill);
                 Proc::wait(&mut d).await;
@@ -448,7 +439,7 @@ impl Proc for Pair {
     }
     fn stderr_tail(&self) -> String {
         let mut s = self.adapter.stderr_tail();
-        for n in self.notes.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+        for n in saman::lock(&self.notes).iter() {
             s.push_str(&format!("\n{n}"));
         }
         s
@@ -526,7 +517,7 @@ impl Launcher for Blocked {
                     Proc::wait(&mut d).await;
                     return Err(e);
                 }
-                *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(d);
+                *saman::lock(&slot) = Some(d);
             }
             let adapter = draugr::spawn(
                 self.seal(self.spec(&self.plan.adapter, &[], &self.cwd)?)
@@ -537,7 +528,7 @@ impl Launcher for Blocked {
             .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let adapter_pid = adapter.id();
             started(adapter_pid);
-            *self.adapter_group.lock().unwrap_or_else(|e| e.into_inner()) = Some(adapter_pid);
+            *saman::lock(&self.adapter_group) = Some(adapter_pid);
             let mut pair = Pair {
                 adapter,
                 debuggee: slot.clone(),
@@ -592,7 +583,7 @@ impl Launcher for Blocked {
                         }
                     }
                     match start_debuggee(spec).await {
-                        Ok(d) => *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(d),
+                        Ok(d) => *saman::lock(&slot) = Some(d),
                         Err(e) => {
                             tracing::debug!(target: "drgnx::debug", "the program did not start: {e}");
                             note(&notes, format!("the program did not start: {e}"));
@@ -615,7 +606,7 @@ impl Launcher for Blocked {
     /// js-debug's children (`startDebugging`) are second connections to the adapter's port.
     fn child(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
-            let group = (*self.adapter_group.lock().unwrap_or_else(|e| e.into_inner()))
+            let group = (*saman::lock(&self.adapter_group))
                 .ok_or("the session's adapter is not running")
                 .map_err(|e| villa::Error::invalid(e.to_string()))?;
             wait_owned(self.plan.port, group, DEBUGGEE_LISTEN_WITHIN).await?;

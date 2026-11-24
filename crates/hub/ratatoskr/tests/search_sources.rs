@@ -187,250 +187,264 @@ async fn has_all(cache: &VectorCache, range: std::ops::Range<u8>) -> bool {
 }
 
 /// Pattern D. A key the cache has is neither looked up nor embedded: no source is asked.
-#[tokio::test]
-async fn cache_hit_sends_nothing() {
-    let state = tempfile::tempdir().unwrap();
-    let id = ident("hit");
-    let cache = Caches::shared(state.path()).get(&id).await.unwrap();
-    cache
-        .put(KeyKind::Chunk, DIMS as u32, &[([1; 32], vec![0.5; DIMS])])
-        .await
-        .unwrap();
-    let (look, e) = (
-        Arc::new(Fake::new("look", SourceKind::Lookup, None)),
-        Fake::embedder("e", &id),
-    );
-    let mut c = chain(&id, &[&look, &e]);
-    let out = c.fill(&cache, &items(1..2), t0()).await;
-    assert_eq!(
-        out,
-        FillOutcome::Filled {
-            n: 1,
-            from: "cache".into()
-        }
-    );
-    assert!(e.embeds().is_empty() && look.lookups().is_empty());
+#[test]
+fn cache_hit_sends_nothing() {
+    saman::block_on_current(async move {
+        let state = tempfile::tempdir().unwrap();
+        let id = ident("hit");
+        let cache = Caches::shared(state.path()).get(&id).await.unwrap();
+        cache
+            .put(KeyKind::Chunk, DIMS as u32, &[([1; 32], vec![0.5; DIMS])])
+            .await
+            .unwrap();
+        let (look, e) = (
+            Arc::new(Fake::new("look", SourceKind::Lookup, None)),
+            Fake::embedder("e", &id),
+        );
+        let mut c = chain(&id, &[&look, &e]);
+        let out = c.fill(&cache, &items(1..2), t0()).await;
+        assert_eq!(
+            out,
+            FillOutcome::Filled {
+                n: 1,
+                from: "cache".into()
+            }
+        );
+        assert!(e.embeds().is_empty() && look.lookups().is_empty());
+    })
 }
 
 /// Pattern C. Lookup sources are asked first, with keys; only the keys they miss reach the embedder, as texts. TEI is
 /// `ratatoskr-mock embed` through the gateway.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lookup_before_embed() {
-    let dir = tempfile::tempdir().unwrap();
-    let server = Server::start(dir.path());
-    let g = gate(
-        dir.path(),
-        json!([tei(&format!("http://127.0.0.1:{}", server.port))]),
-    )
-    .await;
-    let e = g.embedders(&[]).unwrap().remove(0);
-    let id = DocEmbedder::probe(&e).await.unwrap();
-    let state = tempfile::tempdir().unwrap();
-    let cache = Caches::shared(state.path()).get(&id).await.unwrap();
-    // the remote holds the first two keys
-    let theirs = tempfile::tempdir().unwrap();
-    let remote = Caches::shared(theirs.path()).get(&id).await.unwrap();
-    remote
-        .put(
-            KeyKind::Chunk,
-            DIMS as u32,
-            &[([0; 32], vec![0.25; DIMS]), ([1; 32], vec![0.75; DIMS])],
+#[test]
+fn lookup_before_embed() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let server = Server::start(dir.path());
+        let g = gate(
+            dir.path(),
+            json!([tei(&format!("http://127.0.0.1:{}", server.port))]),
         )
-        .await
-        .unwrap();
-    let mut look = Fake::new("look", SourceKind::Lookup, None);
-    look.remote = Some(remote);
-    let look = Arc::new(look);
-    let provider: Arc<dyn Source> = Arc::new(DocSource::new(Arc::new(e)));
-    let mut c = SourceChain::new(id.fp, vec![look.clone(), provider]);
-    let out = c.fill(&cache, &items(0..3), t0()).await;
-    assert_eq!(
-        out,
-        FillOutcome::Filled {
-            n: 3,
-            from: "tei".into()
-        }
-    );
-    assert!(has_all(&cache, 0..3).await);
-    assert_eq!(look.lookups(), [(KeyKind::Chunk, 3)], "keys, asked once");
-    // the server saw the one text the remote could not answer, and none of the others
-    let sent: Vec<String> = server
-        .embeds()
-        .iter()
-        .flat_map(|(_, b)| b["inputs"].as_array().cloned().unwrap_or_default())
-        .map(|t| t.as_str().unwrap().to_owned())
-        .collect();
-    assert_eq!(sent, ["text2"], "{sent:?}");
+        .await;
+        let e = g.embedders(&[]).unwrap().remove(0);
+        let id = DocEmbedder::probe(&e).await.unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let cache = Caches::shared(state.path()).get(&id).await.unwrap();
+        // the remote holds the first two keys
+        let theirs = tempfile::tempdir().unwrap();
+        let remote = Caches::shared(theirs.path()).get(&id).await.unwrap();
+        remote
+            .put(
+                KeyKind::Chunk,
+                DIMS as u32,
+                &[([0; 32], vec![0.25; DIMS]), ([1; 32], vec![0.75; DIMS])],
+            )
+            .await
+            .unwrap();
+        let mut look = Fake::new("look", SourceKind::Lookup, None);
+        look.remote = Some(remote);
+        let look = Arc::new(look);
+        let provider: Arc<dyn Source> = Arc::new(DocSource::new(Arc::new(e)));
+        let mut c = SourceChain::new(id.fp, vec![look.clone(), provider]);
+        let out = c.fill(&cache, &items(0..3), t0()).await;
+        assert_eq!(
+            out,
+            FillOutcome::Filled {
+                n: 3,
+                from: "tei".into()
+            }
+        );
+        assert!(has_all(&cache, 0..3).await);
+        assert_eq!(look.lookups(), [(KeyKind::Chunk, 3)], "keys, asked once");
+        // the server saw the one text the remote could not answer, and none of the others
+        let sent: Vec<String> = server
+            .embeds()
+            .iter()
+            .flat_map(|(_, b)| b["inputs"].as_array().cloned().unwrap_or_default())
+            .map(|t| t.as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(sent, ["text2"], "{sent:?}");
+    })
 }
 
 /// Pattern D. A lookup source never receives a text, even when it claims it may: the wrapper refuses before the source
 /// is reached, and the chain ends with nothing to send to.
-#[tokio::test]
-async fn lookup_only_source_never_sees_text() {
-    let state = tempfile::tempdir().unwrap();
-    let id = ident("lookup-only");
-    let cache = Caches::shared(state.path()).get(&id).await.unwrap();
-    // it even states the model, so only the guard stands between it and the text
-    let mut look = Fake::new("look", SourceKind::Lookup, Some(id.clone()));
-    look.may_text = true;
-    let look = Arc::new(look);
-    let mut c = chain(&id, &[&look]);
-    assert_eq!(
-        c.fill(&cache, &items(0..2), t0()).await,
-        FillOutcome::AllDown
-    );
-    assert_eq!(look.lookups(), [(KeyKind::Chunk, 2)]);
-    assert!(look.embeds().is_empty(), "text reached a lookup source");
-    // and a source that may not send text (a remote not marked trusted) gets none either
-    let mut shy = Fake::new("shy", SourceKind::Embed, Some(id.clone()));
-    shy.may_text = false;
-    let shy = Arc::new(shy);
-    let mut c = chain(&id, &[&shy]);
-    assert_eq!(
-        c.fill(&cache, &items(0..2), t0()).await,
-        FillOutcome::AllDown
-    );
-    assert!(shy.embeds().is_empty(), "text reached an untrusted source");
+#[test]
+fn lookup_only_source_never_sees_text() {
+    saman::block_on_current(async move {
+        let state = tempfile::tempdir().unwrap();
+        let id = ident("lookup-only");
+        let cache = Caches::shared(state.path()).get(&id).await.unwrap();
+        // it even states the model, so only the guard stands between it and the text
+        let mut look = Fake::new("look", SourceKind::Lookup, Some(id.clone()));
+        look.may_text = true;
+        let look = Arc::new(look);
+        let mut c = chain(&id, &[&look]);
+        assert_eq!(
+            c.fill(&cache, &items(0..2), t0()).await,
+            FillOutcome::AllDown
+        );
+        assert_eq!(look.lookups(), [(KeyKind::Chunk, 2)]);
+        assert!(look.embeds().is_empty(), "text reached a lookup source");
+        // and a source that may not send text (a remote not marked trusted) gets none either
+        let mut shy = Fake::new("shy", SourceKind::Embed, Some(id.clone()));
+        shy.may_text = false;
+        let shy = Arc::new(shy);
+        let mut c = chain(&id, &[&shy]);
+        assert_eq!(
+            c.fill(&cache, &items(0..2), t0()).await,
+            FillOutcome::AllDown
+        );
+        assert!(shy.embeds().is_empty(), "text reached an untrusted source");
+    })
 }
 
 /// Pattern D. A source that fails marks itself down and the same batch, in the same order, goes to the next one.
-#[tokio::test]
-async fn failure_falls_through_same_batch() {
-    let state = tempfile::tempdir().unwrap();
-    let id = ident("fall");
-    let cache = Caches::shared(state.path()).get(&id).await.unwrap();
-    let (e1, e2) = (Fake::embedder("e1", &id).down(), Fake::embedder("e2", &id));
-    let mut c = chain(&id, &[&e1, &e2]);
-    let out = c.fill(&cache, &items(0..3), t0()).await;
-    assert_eq!(
-        out,
-        FillOutcome::Filled {
-            n: 3,
-            from: "e2".into()
-        }
-    );
-    let texts: Vec<String> = ["text0", "text1", "text2"].map(String::from).to_vec();
-    assert_eq!(
-        e1.embeds(),
-        std::slice::from_ref(&texts),
-        "asked once, and it failed"
-    );
-    assert_eq!(
-        e2.embeds(),
-        std::slice::from_ref(&texts),
-        "the same batch, the same order"
-    );
-    assert!(has_all(&cache, 0..3).await);
+#[test]
+fn failure_falls_through_same_batch() {
+    saman::block_on_current(async move {
+        let state = tempfile::tempdir().unwrap();
+        let id = ident("fall");
+        let cache = Caches::shared(state.path()).get(&id).await.unwrap();
+        let (e1, e2) = (Fake::embedder("e1", &id).down(), Fake::embedder("e2", &id));
+        let mut c = chain(&id, &[&e1, &e2]);
+        let out = c.fill(&cache, &items(0..3), t0()).await;
+        assert_eq!(
+            out,
+            FillOutcome::Filled {
+                n: 3,
+                from: "e2".into()
+            }
+        );
+        let texts: Vec<String> = ["text0", "text1", "text2"].map(String::from).to_vec();
+        assert_eq!(
+            e1.embeds(),
+            std::slice::from_ref(&texts),
+            "asked once, and it failed"
+        );
+        assert_eq!(
+            e2.embeds(),
+            std::slice::from_ref(&texts),
+            "the same batch, the same order"
+        );
+        assert!(has_all(&cache, 0..3).await);
+    })
 }
 
 /// Pattern D (virtual clock: the `now` each fill is given). Each source waits its own 1, 5 and 30 minutes; the one that
 /// answers is never held back by the one that is down.
-#[tokio::test]
-async fn backoff_per_source_on_virtual_clock() {
-    let state = tempfile::tempdir().unwrap();
-    let id = ident("backoff");
-    let cache = Caches::shared(state.path()).get(&id).await.unwrap();
-    let (e1, e2) = (Fake::embedder("e1", &id).down(), Fake::embedder("e2", &id));
-    let mut c = chain(&id, &[&e1, &e2]);
-    let s = Duration::from_secs;
-    let mut next = 0u8;
-    let mut fill = async |at: Duration| {
-        let batch = items(next..next + 1);
-        next += 1;
-        c.fill(&cache, &batch, t0() + at).await
-    };
-    fill(s(0)).await;
-    assert_eq!((e1.embeds().len(), e2.embeds().len()), (1, 1));
-    fill(s(30)).await;
-    assert_eq!(
-        (e1.embeds().len(), e2.embeds().len()),
-        (1, 2),
-        "e1 waits its minute, e2 goes on"
-    );
-    fill(s(61)).await;
-    assert_eq!(e1.embeds().len(), 2, "asked again after a minute");
-    fill(s(61 + 299)).await;
-    assert_eq!(e1.embeds().len(), 2, "its second wait is five minutes");
-    fill(s(61 + 301)).await;
-    assert_eq!(e1.embeds().len(), 3);
-    // it answers again once its wait is over, and takes the first place back
-    e1.set_up(true);
-    fill(s(61 + 301 + 30 * 60 - 1)).await;
-    assert_eq!(e1.embeds().len(), 3, "its third wait is thirty minutes");
-    let out = fill(s(61 + 301 + 30 * 60 + 1)).await;
-    assert_eq!(
-        out,
-        FillOutcome::Filled {
-            n: 1,
-            from: "e1".into()
-        }
-    );
+#[test]
+fn backoff_per_source_on_virtual_clock() {
+    saman::block_on_current(async move {
+        let state = tempfile::tempdir().unwrap();
+        let id = ident("backoff");
+        let cache = Caches::shared(state.path()).get(&id).await.unwrap();
+        let (e1, e2) = (Fake::embedder("e1", &id).down(), Fake::embedder("e2", &id));
+        let mut c = chain(&id, &[&e1, &e2]);
+        let s = Duration::from_secs;
+        let mut next = 0u8;
+        let mut fill = async |at: Duration| {
+            let batch = items(next..next + 1);
+            next += 1;
+            c.fill(&cache, &batch, t0() + at).await
+        };
+        fill(s(0)).await;
+        assert_eq!((e1.embeds().len(), e2.embeds().len()), (1, 1));
+        fill(s(30)).await;
+        assert_eq!(
+            (e1.embeds().len(), e2.embeds().len()),
+            (1, 2),
+            "e1 waits its minute, e2 goes on"
+        );
+        fill(s(61)).await;
+        assert_eq!(e1.embeds().len(), 2, "asked again after a minute");
+        fill(s(61 + 299)).await;
+        assert_eq!(e1.embeds().len(), 2, "its second wait is five minutes");
+        fill(s(61 + 301)).await;
+        assert_eq!(e1.embeds().len(), 3);
+        // it answers again once its wait is over, and takes the first place back
+        e1.set_up(true);
+        fill(s(61 + 301 + 30 * 60 - 1)).await;
+        assert_eq!(e1.embeds().len(), 3, "its third wait is thirty minutes");
+        let out = fill(s(61 + 301 + 30 * 60 + 1)).await;
+        assert_eq!(
+            out,
+            FillOutcome::Filled {
+                n: 1,
+                from: "e1".into()
+            }
+        );
+    })
 }
 
 /// Pattern D. While every source is down and none is due, a step reads no store rows; when one is due it reads again.
-#[tokio::test]
-async fn all_down_reads_no_store_rows() {
-    let state = tempfile::tempdir().unwrap();
-    let id = ident("all-down");
-    let cache = Caches::shared(state.path()).get(&id).await.unwrap();
-    let store = CodeStore::open(&state.path().join("code.db")).unwrap();
-    let e = Fake::embedder("e", &id).down();
-    let mut c = chain(&id, &[&e]);
-    assert_eq!(
-        c.fill(&cache, &items(0..2), t0()).await,
-        FillOutcome::AllDown
-    );
-    let mut reads = 0;
-    let s = Duration::from_secs;
-    let out = c
-        .step(&store, &cache, &[], t0() + s(10), &mut reads)
-        .await
-        .unwrap();
-    assert_eq!((out, reads), (FillOutcome::AllDown, 0), "down, none due");
-    let out = c
-        .step(&store, &cache, &[], t0() + s(61), &mut reads)
-        .await
-        .unwrap();
-    assert_eq!(
-        (out, reads),
-        (FillOutcome::Nothing, 1),
-        "due: the store is read"
-    );
+#[test]
+fn all_down_reads_no_store_rows() {
+    saman::block_on_current(async move {
+        let state = tempfile::tempdir().unwrap();
+        let id = ident("all-down");
+        let cache = Caches::shared(state.path()).get(&id).await.unwrap();
+        let store = CodeStore::open(&state.path().join("code.db")).unwrap();
+        let e = Fake::embedder("e", &id).down();
+        let mut c = chain(&id, &[&e]);
+        assert_eq!(
+            c.fill(&cache, &items(0..2), t0()).await,
+            FillOutcome::AllDown
+        );
+        let mut reads = 0;
+        let s = Duration::from_secs;
+        let out = c
+            .step(&store, &cache, &[], t0() + s(10), &mut reads)
+            .await
+            .unwrap();
+        assert_eq!((out, reads), (FillOutcome::AllDown, 0), "down, none due");
+        let out = c
+            .step(&store, &cache, &[], t0() + s(61), &mut reads)
+            .await
+            .unwrap();
+        assert_eq!(
+            (out, reads),
+            (FillOutcome::Nothing, 1),
+            "due: the store is read"
+        );
+    })
 }
 
 /// Pattern D. A remote that is not on this machine and not marked trusted never receives a text (Task 14: loopback
 /// only, until Task 23's `trusted`).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn untrusted_remote_never_receives_text() {
-    for (base, trusted) in [
-        ("http://localhost:8080", true),
-        ("http://127.0.0.1:1", true),
-        ("http://[::1]:5", true),
-        ("https://127.0.0.2/x", true),
-        ("http://tei.example:80", false),
-        ("http://10.0.0.5:8", false),
-        ("http://localhost.evil.example", false),
-    ] {
-        assert_eq!(is_loopback(base), trusted, "{base}");
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let g = gate(dir.path(), json!([tei("http://192.0.2.1:9")])).await;
-    let e = g.embedders(&[]).unwrap().remove(0);
-    let s = DocSource::new(Arc::new(e));
-    assert_eq!((s.kind(), s.may_send_text()), (SourceKind::Embed, false));
-    let dir2 = tempfile::tempdir().unwrap();
-    let near = Server::start(dir2.path());
-    let g = gate(
-        dir2.path(),
-        json!([tei(&format!("http://127.0.0.1:{}", near.port))]),
-    )
-    .await;
-    let e = g.embedders(&[]).unwrap().remove(0);
-    let s = DocSource::new(Arc::new(e));
-    assert_eq!(
-        (s.kind(), s.may_send_text(), s.max_batch()),
-        (SourceKind::Embed, true, 8)
-    );
+#[test]
+fn untrusted_remote_never_receives_text() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        for (base, trusted) in [
+            ("http://localhost:8080", true),
+            ("http://127.0.0.1:1", true),
+            ("http://[::1]:5", true),
+            ("https://127.0.0.2/x", true),
+            ("http://tei.example:80", false),
+            ("http://10.0.0.5:8", false),
+            ("http://localhost.evil.example", false),
+        ] {
+            assert_eq!(is_loopback(base), trusted, "{base}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let g = gate(dir.path(), json!([tei("http://192.0.2.1:9")])).await;
+        let e = g.embedders(&[]).unwrap().remove(0);
+        let s = DocSource::new(Arc::new(e));
+        assert_eq!((s.kind(), s.may_send_text()), (SourceKind::Embed, false));
+        let dir2 = tempfile::tempdir().unwrap();
+        let near = Server::start(dir2.path());
+        let g = gate(
+            dir2.path(),
+            json!([tei(&format!("http://127.0.0.1:{}", near.port))]),
+        )
+        .await;
+        let e = g.embedders(&[]).unwrap().remove(0);
+        let s = DocSource::new(Arc::new(e));
+        assert_eq!(
+            (s.kind(), s.may_send_text(), s.max_batch()),
+            (SourceKind::Embed, true, 8)
+        );
+    })
 }
 
 // ---- Task 15: the chains of a project, one pass at a time
@@ -485,198 +499,208 @@ async fn slot(p: &Project, id: &Identity, sources: &[&Arc<Fake>]) -> Slot {
 
 /// Pattern D (MP-15). The built-in model's chain runs only when the main chain has nothing to fill: while the main one
 /// fills batches, the built-in one is not asked, and it starts in the pass the main one finishes in.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn builtin_never_runs_while_main_has_work() {
-    let (_h, _s, p) = project(20).await;
-    let (main_id, own_id) = (ident("main"), ident("builtin"));
-    let main = Fake::embedder("main", &main_id);
-    let builtin = Arc::new(Fake::new(
-        "builtin",
-        SourceKind::Builtin,
-        Some(own_id.clone()),
-    ));
-    let mut slots = vec![
-        slot(&p, &main_id, &[&main]).await,
-        slot(&p, &own_id, &[&builtin]).await,
-    ];
-    let mut reads = 0;
-    let mut main_done = false;
-    for pass in 0..12 {
-        let before = main.embeds().len();
-        let out = run_pass(&mut slots, p.store(), &[], t0(), &mut reads)
-            .await
-            .unwrap();
-        if main.embeds().len() > before {
-            assert!(
-                builtin.embeds().is_empty(),
-                "pass {pass}: the built-in chain ran while the main one had work"
-            );
-        } else {
-            main_done = true;
+#[test]
+fn builtin_never_runs_while_main_has_work() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_h, _s, p) = project(20).await;
+        let (main_id, own_id) = (ident("main"), ident("builtin"));
+        let main = Fake::embedder("main", &main_id);
+        let builtin = Arc::new(Fake::new(
+            "builtin",
+            SourceKind::Builtin,
+            Some(own_id.clone()),
+        ));
+        let mut slots = vec![
+            slot(&p, &main_id, &[&main]).await,
+            slot(&p, &own_id, &[&builtin]).await,
+        ];
+        let mut reads = 0;
+        let mut main_done = false;
+        for pass in 0..12 {
+            let before = main.embeds().len();
+            let out = run_pass(&mut slots, p.store(), &[], t0(), &mut reads)
+                .await
+                .unwrap();
+            if main.embeds().len() > before {
+                assert!(
+                    builtin.embeds().is_empty(),
+                    "pass {pass}: the built-in chain ran while the main one had work"
+                );
+            } else {
+                main_done = true;
+            }
+            if main_done && out.filled {
+                break;
+            }
         }
-        if main_done && out.filled {
-            break;
-        }
-    }
-    assert!(main_done);
-    let main_cache = p.cache(&main_id).await.unwrap();
-    assert!(
-        hrafn::missing(p.store(), &main_cache, 1000)
-            .await
-            .unwrap()
-            .is_empty(),
-        "the main model covers everything first"
-    );
-    assert!(!builtin.embeds().is_empty(), "then the built-in one fills");
+        assert!(main_done);
+        let main_cache = p.cache(&main_id).await.unwrap();
+        assert!(
+            hrafn::missing(p.store(), &main_cache, 1000)
+                .await
+                .unwrap()
+                .is_empty(),
+            "the main model covers everything first"
+        );
+        assert!(!builtin.embeds().is_empty(), "then the built-in one fills");
+    })
 }
 
 /// Pattern D (MP-15). With the main source down, the built-in chain fills in the same pass; the main one is not asked
 /// again before its backoff is over.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn builtin_fills_while_main_is_down() {
-    let (_h, _s, p) = project(6).await;
-    let (main_id, own_id) = (ident("main"), ident("builtin"));
-    let main = Fake::embedder("main", &main_id).down();
-    let builtin = Arc::new(Fake::new(
-        "builtin",
-        SourceKind::Builtin,
-        Some(own_id.clone()),
-    ));
-    let mut slots = vec![
-        slot(&p, &main_id, &[&main]).await,
-        slot(&p, &own_id, &[&builtin]).await,
-    ];
-    let mut reads = 0;
-    let out = run_pass(&mut slots, p.store(), &[], t0(), &mut reads)
+#[test]
+fn builtin_fills_while_main_is_down() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_h, _s, p) = project(6).await;
+        let (main_id, own_id) = (ident("main"), ident("builtin"));
+        let main = Fake::embedder("main", &main_id).down();
+        let builtin = Arc::new(Fake::new(
+            "builtin",
+            SourceKind::Builtin,
+            Some(own_id.clone()),
+        ));
+        let mut slots = vec![
+            slot(&p, &main_id, &[&main]).await,
+            slot(&p, &own_id, &[&builtin]).await,
+        ];
+        let mut reads = 0;
+        let out = run_pass(&mut slots, p.store(), &[], t0(), &mut reads)
+            .await
+            .unwrap();
+        assert!(out.filled, "{out:?}");
+        assert_eq!((main.embeds().len(), builtin.embeds().len()), (1, 1));
+        run_pass(
+            &mut slots,
+            p.store(),
+            &[],
+            t0() + Duration::from_secs(5),
+            &mut reads,
+        )
         .await
         .unwrap();
-    assert!(out.filled, "{out:?}");
-    assert_eq!((main.embeds().len(), builtin.embeds().len()), (1, 1));
-    run_pass(
-        &mut slots,
-        p.store(),
-        &[],
-        t0() + Duration::from_secs(5),
-        &mut reads,
-    )
-    .await
-    .unwrap();
-    assert_eq!(main.embeds().len(), 1, "waits its backoff");
-    assert_eq!(builtin.embeds().len(), 2);
+        assert_eq!(main.embeds().len(), 1, "waits its backoff");
+        assert_eq!(builtin.embeds().len(), 2);
+    })
 }
 
 /// Pattern D (MP-14). The paths named in the order come first.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn open_files_first() {
-    let (_h, _s, p) = project(20).await;
-    let id = ident("main");
-    let main = Fake::embedder("main", &id);
-    let mut slots = vec![slot(&p, &id, &[&main]).await];
-    let mut reads = 0;
-    let order = vec!["core/f13.el".to_string()];
-    run_pass(&mut slots, p.store(), &order, t0(), &mut reads)
-        .await
-        .unwrap();
-    let first = &main.embeds()[0];
-    assert!(first[0].contains("f13-run"), "{first:?}");
+#[test]
+fn open_files_first() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_h, _s, p) = project(20).await;
+        let id = ident("main");
+        let main = Fake::embedder("main", &id);
+        let mut slots = vec![slot(&p, &id, &[&main]).await];
+        let mut reads = 0;
+        let order = vec!["core/f13.el".to_string()];
+        run_pass(&mut slots, p.store(), &order, t0(), &mut reads)
+            .await
+            .unwrap();
+        let first = &main.embeds()[0];
+        assert!(first[0].contains("f13-run"), "{first:?}");
+    })
 }
 
 /// Pattern D (MP-15). On battery the local sources wait and the remote ones do not; `index now` lets the local ones
 /// run.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn battery_holds_local_not_remote() {
-    let (_h, _s, p) = project(10).await;
-    let (main_id, own_id) = (ident("main"), ident("builtin"));
-    let main = Fake::embedder("main", &main_id);
-    let builtin = Arc::new(Fake::new(
-        "builtin",
-        SourceKind::Builtin,
-        Some(own_id.clone()),
-    ));
-    let mut slots = vec![
-        slot(&p, &main_id, &[&main]).await,
-        slot(&p, &own_id, &[&builtin]).await,
-    ];
-    for s in &mut slots {
-        s.chain.set_gates(true, false);
-    }
-    let mut reads = 0;
-    // the remote fills on battery
-    let out = run_pass(&mut slots, p.store(), &[], t0(), &mut reads)
-        .await
-        .unwrap();
-    assert!(out.filled && !main.embeds().is_empty());
-    // with the remote down too, only the local one could fill: it is held, and says so
-    main.set_up(false);
-    let mut later = t0() + Duration::from_secs(10 * 60);
-    for _ in 0..4 {
-        let out = run_pass(&mut slots, p.store(), &[], later, &mut reads)
+#[test]
+fn battery_holds_local_not_remote() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_h, _s, p) = project(10).await;
+        let (main_id, own_id) = (ident("main"), ident("builtin"));
+        let main = Fake::embedder("main", &main_id);
+        let builtin = Arc::new(Fake::new(
+            "builtin",
+            SourceKind::Builtin,
+            Some(own_id.clone()),
+        ));
+        let mut slots = vec![
+            slot(&p, &main_id, &[&main]).await,
+            slot(&p, &own_id, &[&builtin]).await,
+        ];
+        for s in &mut slots {
+            s.chain.set_gates(true, false);
+        }
+        let mut reads = 0;
+        // the remote fills on battery
+        let out = run_pass(&mut slots, p.store(), &[], t0(), &mut reads)
             .await
             .unwrap();
-        if out.held {
-            break;
+        assert!(out.filled && !main.embeds().is_empty());
+        // with the remote down too, only the local one could fill: it is held, and says so
+        main.set_up(false);
+        let mut later = t0() + Duration::from_secs(10 * 60);
+        for _ in 0..4 {
+            let out = run_pass(&mut slots, p.store(), &[], later, &mut reads)
+                .await
+                .unwrap();
+            if out.held {
+                break;
+            }
+            later += Duration::from_secs(10 * 60);
         }
-        later += Duration::from_secs(10 * 60);
-    }
-    assert!(
-        builtin.embeds().is_empty(),
-        "the built-in model ran on battery"
-    );
-    // `index now`
-    for s in &mut slots {
-        s.chain.set_gates(true, true);
-    }
-    let out = run_pass(
-        &mut slots,
-        p.store(),
-        &[],
-        later + Duration::from_secs(3600),
-        &mut reads,
-    )
-    .await
-    .unwrap();
-    assert!(out.filled && !builtin.embeds().is_empty(), "{out:?}");
+        assert!(
+            builtin.embeds().is_empty(),
+            "the built-in model ran on battery"
+        );
+        // `index now`
+        for s in &mut slots {
+            s.chain.set_gates(true, true);
+        }
+        let out = run_pass(
+            &mut slots,
+            p.store(),
+            &[],
+            later + Duration::from_secs(3600),
+            &mut reads,
+        )
+        .await
+        .unwrap();
+        assert!(out.filled && !builtin.embeds().is_empty(), "{out:?}");
+    })
 }
 
 /// Pattern D (Task 23). A `vectors` remote that does not answer is marked down (Task 14's backoff) and the same keys go
 /// to the local engine in the same fill; the remote is not asked again before its wait is over.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_down_falls_through_to_local_engine() {
-    use ratatoskr::search::remote::{MemPins, RemoteSpec, RemoteVectors};
-    let dead = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let remote = Arc::new(RemoteVectors::new(RemoteSpec {
-        id: "desk".into(),
-        url: format!("http://127.0.0.1:{dead}"),
-        token: Some("t".into()),
-        trusted: false,
-        pins: Arc::new(MemPins::default()),
-        ledger: None,
-    }));
-    let state = tempfile::tempdir().unwrap();
-    let id = ident("engine");
-    let cache = Caches::shared(state.path()).get(&id).await.unwrap();
-    let engine = Arc::new(Fake::new(
-        "llama",
-        SourceKind::LocalEngine,
-        Some(id.clone()),
-    ));
-    let mut c = SourceChain::new(id.fp, vec![remote.clone(), engine.clone()]);
-    let out = c.fill(&cache, &items(0..3), t0()).await;
-    assert_eq!(
-        out,
-        FillOutcome::Filled {
-            n: 3,
-            from: "llama".into()
-        }
-    );
-    assert_eq!(engine.embeds().len(), 1, "the same batch, at once");
-    assert!(has_all(&cache, 0..3).await);
-    let status = c.status();
-    let desk = status.iter().find(|e| e.id == "desk").unwrap();
-    assert_eq!(desk.state, "down", "{status:?}");
-    assert!(c.next_due(t0()).is_some(), "it waits its backoff");
+#[test]
+fn remote_down_falls_through_to_local_engine() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        use ratatoskr::search::remote::{MemPins, RemoteSpec, RemoteVectors};
+        let dead = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let remote = Arc::new(RemoteVectors::new(RemoteSpec {
+            id: "desk".into(),
+            url: format!("http://127.0.0.1:{dead}"),
+            token: Some("t".into()),
+            trusted: false,
+            pins: Arc::new(MemPins::default()),
+            ledger: None,
+        }));
+        let state = tempfile::tempdir().unwrap();
+        let id = ident("engine");
+        let cache = Caches::shared(state.path()).get(&id).await.unwrap();
+        let engine = Arc::new(Fake::new(
+            "llama",
+            SourceKind::LocalEngine,
+            Some(id.clone()),
+        ));
+        let mut c = SourceChain::new(id.fp, vec![remote.clone(), engine.clone()]);
+        let out = c.fill(&cache, &items(0..3), t0()).await;
+        assert_eq!(
+            out,
+            FillOutcome::Filled {
+                n: 3,
+                from: "llama".into()
+            }
+        );
+        assert_eq!(engine.embeds().len(), 1, "the same batch, at once");
+        assert!(has_all(&cache, 0..3).await);
+        let status = c.status();
+        let desk = status.iter().find(|e| e.id == "desk").unwrap();
+        assert_eq!(desk.state, "down", "{status:?}");
+        assert!(c.next_due(t0()).is_some(), "it waits its backoff");
+    })
 }

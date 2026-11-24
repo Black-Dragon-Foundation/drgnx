@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(&m)
 }
 
 /// The lines of one hunk shown before "… N more".

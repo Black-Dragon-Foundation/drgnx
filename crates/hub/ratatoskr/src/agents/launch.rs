@@ -252,7 +252,7 @@ static USABLE: std::sync::Mutex<Option<Tier>> = std::sync::Mutex::new(None);
 /// when its check passes, else a refusal with the full tier's reason and fix.
 pub async fn detect() -> Result<Sandbox, Refusal> {
     let helper = sandbox::helper().map_err(|e| refusal(&format!("the helper's own path: {e}")))?;
-    let known = *USABLE.lock().unwrap_or_else(|e| e.into_inner());
+    let known = *saman::lock(&USABLE);
     let tier = match known {
         Some(t) => t,
         None => {
@@ -265,7 +265,7 @@ pub async fn detect() -> Result<Sandbox, Refusal> {
                 .unwrap_or_else(|e| gleipnir::check::Check::failed(format!("the check: {e}"), None))
             })
             .await?;
-            *USABLE.lock().unwrap_or_else(|e| e.into_inner()) = Some(t);
+            *saman::lock(&USABLE) = Some(t);
             t
         }
     };

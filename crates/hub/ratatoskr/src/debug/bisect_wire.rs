@@ -304,9 +304,7 @@ impl Bisects {
     }
 
     fn live(&self) -> std::sync::MutexGuard<'_, HashMap<String, Live>> {
-        self.live
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        saman::lock(&self.live)
     }
 }
 
@@ -345,7 +343,7 @@ impl Jobs {
             .map_err(|e| villa::Error::invalid(e.to_string()))?
             .id;
         drop(front);
-        self.running.lock().expect("bisect jobs").insert(id.clone());
+        saman::lock(&self.running).insert(id.clone());
         let r = loop {
             match events.recv().await {
                 Ok(JobEvent::Done(d)) if d.id == id => break Ok(d.exit),
@@ -363,7 +361,7 @@ impl Jobs {
                 Err(_) => break Err(villa::Error::invalid("the hub is stopping")),
             }
         };
-        self.running.lock().expect("bisect jobs").remove(&id);
+        saman::lock(&self.running).remove(&id);
         r
     }
 }
@@ -469,7 +467,7 @@ impl Prober for Jobs {
     }
 
     fn cancel(&self) {
-        let ids: Vec<String> = std::mem::take(&mut *self.running.lock().expect("bisect jobs"))
+        let ids: Vec<String> = std::mem::take(&mut *saman::lock(&self.running))
             .into_iter()
             .collect();
         let Some(front) = self.front.upgrade() else {
@@ -501,10 +499,7 @@ impl Events {
 impl bisect::Sink for Events {
     fn event(&self, mut v: Value) {
         let rows = {
-            let mut card = self
-                .card
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut card = saman::lock(&self.card);
             super::bisect_card::merge(&mut card, &v);
             super::bisect_card::rows(&card)
         };

@@ -489,18 +489,14 @@ impl LspLauncher {
     }
 
     fn live(&self) -> Option<(Arc<Client>, u16)> {
-        self.live
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        saman::lock(&self.live)
             .as_ref()
             .map(|l| (l.client.clone(), l.port))
     }
 
     /// The server's process id and this session's folder.
     fn live_proc(&self) -> Option<(i32, PathBuf)> {
-        self.live
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        saman::lock(&self.live)
             .as_ref()
             .map(|l| (l.pid, l.session.clone()))
     }
@@ -549,7 +545,7 @@ impl LspLauncher {
         };
         match self.bootstrap(&client, &vars, &proc).await {
             Ok((port, stream)) => {
-                *self.live.lock().unwrap_or_else(PoisonError::into_inner) = Some(Live {
+                *saman::lock(&self.live) = Some(Live {
                     client,
                     port,
                     pid: proc.child.id(),

@@ -111,11 +111,11 @@ struct Shared {
 
 impl Shared {
     fn touch(&self) {
-        *self.last_use.lock().unwrap_or_else(PoisonError::into_inner) = crate::clock::now();
+        *saman::lock(&self.last_use) = crate::clock::now();
     }
 
     fn set_pid(&self, was: Option<i32>, now: Option<i32>) {
-        let mut p = self.pid.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut p = saman::lock(&self.pid);
         if was.is_none() || *p == was {
             *p = now;
         }
@@ -250,11 +250,7 @@ impl LocalEngine {
 
     /// The running process's pid; none while none runs.
     pub fn pid(&self) -> Option<i32> {
-        *self
-            .shared
-            .pid
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        *saman::lock(&self.shared.pid)
     }
 
     /// The fingerprint of its vectors, which it knows without a start.
@@ -432,7 +428,7 @@ impl LocalEngine {
                     if s.busy.load(Ordering::SeqCst) > 0 {
                         idle
                     } else {
-                        let last = *s.last_use.lock().unwrap_or_else(PoisonError::into_inner);
+                        let last = *saman::lock(&s.last_use);
                         (last + idle).saturating_duration_since(crate::clock::now())
                     }
                 };

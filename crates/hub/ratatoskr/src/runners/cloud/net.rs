@@ -107,38 +107,40 @@ mod tests {
     use serde_json::{Value, json};
 
     // [B] the mock models the fixture policy: a group made without the hub's tag would be refused
-    #[tokio::test]
-    async fn the_rule_is_port_22_only_and_tagged() {
-        let m = Mock::start();
-        let aws = m.aws();
-        let id = ensure_rule(&aws).await.unwrap();
-        assert!(id.starts_with("sg-"), "{id}");
-        assert_eq!(
-            ensure_rule(&aws).await.unwrap(),
-            id,
-            "one group, found again"
-        );
-        let r = m.resources().await;
-        let groups: Vec<&Value> = r["resources"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|x| x["kind"] == "sg")
-            .collect();
-        assert_eq!(groups.len(), 1, "{r}");
-        let g = groups[0];
-        assert_eq!(g["id"], id.as_str());
-        assert_eq!(g["tags"]["drgnx-hub"], HUB);
-        assert_eq!(g["data"]["name"], group_name(HUB));
-        assert_eq!(
-            g["data"]["rules"],
-            json!([{"proto": "tcp", "from": "22", "to": "22", "cidr": ["0.0.0.0/0"], "cidr6": ["::/0"]}]),
-            "TCP 22 only, IPv4 and IPv6"
-        );
-        assert_eq!(
-            r["unknown_requests"],
-            json!([]),
-            "every call is one the mock knows"
-        );
+    #[test]
+    fn the_rule_is_port_22_only_and_tagged() {
+        saman::block_on_current(async move {
+            let m = Mock::start();
+            let aws = m.aws();
+            let id = ensure_rule(&aws).await.unwrap();
+            assert!(id.starts_with("sg-"), "{id}");
+            assert_eq!(
+                ensure_rule(&aws).await.unwrap(),
+                id,
+                "one group, found again"
+            );
+            let r = m.resources().await;
+            let groups: Vec<&Value> = r["resources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|x| x["kind"] == "sg")
+                .collect();
+            assert_eq!(groups.len(), 1, "{r}");
+            let g = groups[0];
+            assert_eq!(g["id"], id.as_str());
+            assert_eq!(g["tags"]["drgnx-hub"], HUB);
+            assert_eq!(g["data"]["name"], group_name(HUB));
+            assert_eq!(
+                g["data"]["rules"],
+                json!([{"proto": "tcp", "from": "22", "to": "22", "cidr": ["0.0.0.0/0"], "cidr6": ["::/0"]}]),
+                "TCP 22 only, IPv4 and IPv6"
+            );
+            assert_eq!(
+                r["unknown_requests"],
+                json!([]),
+                "every call is one the mock knows"
+            );
+        })
     }
 }

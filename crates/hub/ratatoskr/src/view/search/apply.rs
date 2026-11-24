@@ -87,7 +87,7 @@ struct St {
 }
 
 fn lock(m: &Mutex<St>) -> std::sync::MutexGuard<'_, St> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 impl Changes {

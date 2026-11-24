@@ -329,7 +329,7 @@ impl Hub {
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+        saman::lock(&self.inner)
     }
 
     /// The store, for a reader that needs more than the methods below give.

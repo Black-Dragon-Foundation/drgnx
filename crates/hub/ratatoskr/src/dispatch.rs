@@ -463,7 +463,7 @@ pub(crate) mod tests {
         fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
             CAPTURE.with(|c| {
                 if let Some(buf) = &*c.borrow() {
-                    buf.lock().unwrap().extend_from_slice(b);
+                    saman::lock(&buf).extend_from_slice(b);
                 }
             });
             Ok(b.len())
@@ -492,86 +492,90 @@ pub(crate) mod tests {
         buf
     }
 
-    #[tokio::test]
-    async fn a_refusal_log_has_no_params() {
-        const CANARY: &str = "sk-canary-1f2e3d";
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let log = capture_log();
-        let out = Arc::new(Outbox::new(1));
-        // a service connection: not-allowed
-        let mut service = Session::new(f.next_conn(), Socket::Main);
-        f.line(
+    #[test]
+    fn a_refusal_log_has_no_params() {
+        saman::block_on_current(async move {
+            const CANARY: &str = "sk-canary-1f2e3d";
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let log = capture_log();
+            let out = Arc::new(Outbox::new(1));
+            // a service connection: not-allowed
+            let mut service = Session::new(f.next_conn(), Socket::Main);
+            f.line(
             &mut service,
             &out,
             &format!(r#"{{"id":1,"method":"gateway/keys","params":{{"keys":{{"openrouter":"{CANARY}"}}}}}}"#),
         )
         .await;
-        // a user connection: invalid-params whose decode error quotes the value
-        let mut u = user(&f);
-        f.line(
-            &mut u,
-            &out,
-            &format!(r#"{{"id":2,"method":"gateway/keys","params":{{"keys":"{CANARY}"}}}}"#),
-        )
-        .await;
-        let answers = out.take_lines();
-        assert_eq!(answers.len(), 2, "{answers:?}");
-        assert!(answers[0].contains("not-allowed"), "{answers:?}");
-        // the client gets the message (it sent the value); the log and status never do
-        assert!(
-            answers[1].contains("invalid-params") && answers[1].contains(CANARY),
-            "{answers:?}"
-        );
-        let logged = String::from_utf8(log.lock().unwrap().clone()).unwrap();
-        assert!(
-            logged.contains("gateway/keys"),
-            "the refusals are logged: {logged}"
-        );
-        assert!(logged.contains("invalid-params"), "{logged}");
-        assert!(
-            !logged.contains("canary"),
-            "the log has the params: {logged}"
-        );
-        let status = serde_json::to_string(&f.status()).unwrap();
-        assert!(status.contains("\"count\":2"), "{status}");
-        assert!(
-            !status.contains("canary"),
-            "status has the params: {status}"
-        );
+            // a user connection: invalid-params whose decode error quotes the value
+            let mut u = user(&f);
+            f.line(
+                &mut u,
+                &out,
+                &format!(r#"{{"id":2,"method":"gateway/keys","params":{{"keys":"{CANARY}"}}}}"#),
+            )
+            .await;
+            let answers = out.take_lines();
+            assert_eq!(answers.len(), 2, "{answers:?}");
+            assert!(answers[0].contains("not-allowed"), "{answers:?}");
+            // the client gets the message (it sent the value); the log and status never do
+            assert!(
+                answers[1].contains("invalid-params") && answers[1].contains(CANARY),
+                "{answers:?}"
+            );
+            let logged = String::from_utf8(saman::lock(&log).clone()).unwrap();
+            assert!(
+                logged.contains("gateway/keys"),
+                "the refusals are logged: {logged}"
+            );
+            assert!(logged.contains("invalid-params"), "{logged}");
+            assert!(
+                !logged.contains("canary"),
+                "the log has the params: {logged}"
+            );
+            let status = serde_json::to_string(&f.status()).unwrap();
+            assert!(status.contains("\"count\":2"), "{status}");
+            assert!(
+                !status.contains("canary"),
+                "status has the params: {status}"
+            );
+        })
     }
 
     /// Review m2 (design §6.2, fail closed): a hub that could not be hardened (on macOS, started under a debugger)
     /// takes no key over `gateway/keys`, says why, and its status says so too; once hardened it takes them.
-    #[tokio::test]
-    async fn an_unhardened_hub_takes_no_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let out = Arc::new(Outbox::new(1));
-        let mut u = user(&f);
-        let keys =
-            r#"{"id":1,"method":"gateway/keys","params":{"keys":{"openrouter":"sk-canary-m2"}}}"#;
-        f.gate.set_hardened(Err(villa::Error::unavailable(
-            "cannot deny debuggers the hub: busy",
-        )));
-        f.line(&mut u, &out, keys).await;
-        let answer = out.take_lines().join("\n");
-        assert!(
-            answer.contains("not-allowed")
-                && answer.contains("this hub cannot protect keys: cannot deny debuggers the hub"),
-            "{answer}"
-        );
-        assert!(f.gate.keys_held().providers.is_empty());
-        let status = f.gate.status();
-        assert_eq!(
-            status.keys_refused.as_deref(),
-            Some("cannot deny debuggers the hub: busy")
-        );
-        f.gate.set_hardened(Ok(()));
-        f.line(&mut u, &out, keys).await;
-        let answer = out.take_lines().join("\n");
-        assert!(answer.contains(r#""result":true"#), "{answer}");
-        assert_eq!(f.gate.keys_held().providers.len(), 1);
-        assert!(f.gate.status().keys_refused.is_none());
+    #[test]
+    fn an_unhardened_hub_takes_no_key() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let out = Arc::new(Outbox::new(1));
+            let mut u = user(&f);
+            let keys = r#"{"id":1,"method":"gateway/keys","params":{"keys":{"openrouter":"sk-canary-m2"}}}"#;
+            f.gate.set_hardened(Err(villa::Error::unavailable(
+                "cannot deny debuggers the hub: busy",
+            )));
+            f.line(&mut u, &out, keys).await;
+            let answer = out.take_lines().join("\n");
+            assert!(
+                answer.contains("not-allowed")
+                    && answer
+                        .contains("this hub cannot protect keys: cannot deny debuggers the hub"),
+                "{answer}"
+            );
+            assert!(f.gate.keys_held().providers.is_empty());
+            let status = f.gate.status();
+            assert_eq!(
+                status.keys_refused.as_deref(),
+                Some("cannot deny debuggers the hub: busy")
+            );
+            f.gate.set_hardened(Ok(()));
+            f.line(&mut u, &out, keys).await;
+            let answer = out.take_lines().join("\n");
+            assert!(answer.contains(r#""result":true"#), "{answer}");
+            assert_eq!(f.gate.keys_held().providers.len(), 1);
+            assert!(f.gate.status().keys_refused.is_none());
+        })
     }
 }

@@ -812,11 +812,7 @@ pub struct Started {
 /// a write a session makes is always after the mark, never hidden by it. None when the inbox is taken already.
 pub async fn start(front: &Front) -> Option<Started> {
     let asks = &front.core.asks;
-    let rx = asks
-        .rx
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take()?;
+    let rx = saman::lock(&asks.rx).take()?;
     let mut sh = Shell {
         core: AskCore::new(),
         ids: BTreeMap::new(),

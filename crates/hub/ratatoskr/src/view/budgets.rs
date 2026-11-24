@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, MutexGuard};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(&m)
 }
 
 /// What a page shows: the tree read so far, the meters, and the plans' forecasts (a plan's id → its cost range).

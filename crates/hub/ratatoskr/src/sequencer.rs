@@ -56,7 +56,7 @@ pub(crate) async fn in_serving_step<F: Future>(f: F) -> F::Output {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 /// A line a client sent, `__seq` taken out.

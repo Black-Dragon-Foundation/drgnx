@@ -440,8 +440,8 @@ fn kernel_json_is_opened_without_waiting_on_a_fifo_and_without_following_a_link(
     // an open that waits for a writer never comes back: the test would hang, so it asks from a thread and waits with a deadline
     let done = std::sync::Arc::new(std::sync::Mutex::new(None));
     let d2 = done.clone();
-    std::thread::spawn(move || *d2.lock().unwrap() = Some(open_spec_file(&fifo).err()));
-    let why = skuld::wait_until("the open to come back", 30, || done.lock().unwrap().take());
+    std::thread::spawn(move || *saman::lock(&d2) = Some(open_spec_file(&fifo).err()));
+    let why = skuld::wait_until("the open to come back", 30, || saman::lock(&done).take());
     assert_eq!(why.as_deref(), Some("kernel.json is not a regular file"));
     let real = t.path().join("real.json");
     crate::fsio::write(&real, PY).unwrap();

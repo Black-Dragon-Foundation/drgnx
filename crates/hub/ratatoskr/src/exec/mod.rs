@@ -181,26 +181,23 @@ pub struct Live(
 
 impl Live {
     fn add(&self, id: &str, session: Option<String>) {
-        self.0.lock().unwrap().insert(id.to_string(), session);
+        saman::lock(&self.0).insert(id.to_string(), session);
     }
 
     /// Job ID's name (its given name, else its argv) and start time, for the session's background list.
     fn describe(&self, id: &str, name: Option<&str>, argv: &[String], started: f64) {
         let label = name.map_or_else(|| argv.join(" "), str::to_string);
-        self.1
-            .lock()
-            .unwrap()
-            .insert(id.to_string(), (label, started));
+        saman::lock(&self.1).insert(id.to_string(), (label, started));
     }
 
     fn remove(&self, id: &str) {
-        self.0.lock().unwrap().remove(id);
-        self.1.lock().unwrap().remove(id);
+        saman::lock(&self.0).remove(id);
+        saman::lock(&self.1).remove(id);
     }
 
     /// The running jobs SESSION started, as (id, name, start time in seconds), by id.
     pub fn jobs(&self, session: &str) -> Vec<(String, String, f64)> {
-        let labels = self.1.lock().unwrap();
+        let labels = saman::lock(&self.1);
         self.ids(session)
             .into_iter()
             .map(|id| {
@@ -211,7 +208,7 @@ impl Live {
     }
 
     fn has(&self, id: &str) -> bool {
-        self.0.lock().unwrap().contains_key(id)
+        saman::lock(&self.0).contains_key(id)
     }
 
     /// Job ID of SESSION runs, as a start records it (for the tests of the modules that read the running jobs).
@@ -222,10 +219,7 @@ impl Live {
 
     /// The running jobs SESSION started.
     pub fn ids(&self, session: &str) -> Vec<String> {
-        let mut ids: Vec<String> = self
-            .0
-            .lock()
-            .unwrap()
+        let mut ids: Vec<String> = saman::lock(&self.0)
             .iter()
             .filter(|(_, s)| s.as_deref() == Some(session))
             .map(|(id, _)| id.clone())
@@ -610,7 +604,7 @@ pub(crate) struct Starting<'a> {
 
 impl Drop for Starting<'_> {
     fn drop(&mut self) {
-        let mut s = self.runner.starting.lock().unwrap();
+        let mut s = saman::lock(&self.runner.starting);
         if let Some(i) = s.iter().position(|w| *w == self.worktree) {
             s.swap_remove(i);
         }
@@ -894,7 +888,7 @@ impl Runner {
         let i = self.inner()?.clone();
         let facts = facts_of(&spec).await;
         if let Some((f, _)) = &facts
-            && vordr::facts::cacheable(&f.selector, &self.no_cache.lock().unwrap())
+            && vordr::facts::cacheable(&f.selector, &saman::lock(&self.no_cache))
             && let Some(id) = i.green_with(f)
         {
             return Ok((id, true));
@@ -905,7 +899,7 @@ impl Runner {
     /// The words the rule pack marks `no-cache` (clock-, network- or machine-dependent groups): a job whose selector
     /// holds one is never served from the cache.
     pub fn set_no_cache(&self, words: Vec<String>) {
-        *self.no_cache.lock().unwrap() = words;
+        *saman::lock(&self.no_cache) = words;
     }
 
     /// Job ID's facts as recorded at its submit, with the machine it ran on (a runner's job: `runner/NAME`, its env
@@ -1022,7 +1016,7 @@ impl Runner {
     /// are (the next hub adopts them).
     pub async fn end_networked(&self) {
         let Some(i) = self.inner.get() else { return };
-        let stops: Vec<NetStop> = i.nets.lock().unwrap().drain().map(|(_, s)| s).collect();
+        let stops: Vec<NetStop> = saman::lock(&i.nets).drain().map(|(_, s)| s).collect();
         let mut acks = Vec::new();
         for s in stops {
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -1077,7 +1071,7 @@ impl Runner {
 
     /// A session's `exec/start` in WORKTREE is on its way until the answer drops.
     pub(crate) fn starting(&self, worktree: PathBuf) -> Starting<'_> {
-        self.starting.lock().unwrap().push(worktree.clone());
+        saman::lock(&self.starting).push(worktree.clone());
         Starting {
             runner: self,
             worktree,
@@ -1092,12 +1086,12 @@ impl Runner {
 
     /// The end of job ID was taken (its evidence recorded, or it is no one's).
     pub fn settled(&self, id: &str) {
-        self.unsettled.jobs.lock().unwrap().retain(|(j, _)| j != id);
+        saman::lock(&self.unsettled.jobs).retain(|(j, _)| j != id);
     }
 
     /// Every end so far was taken (the reader missed some: they are no one's evidence).
     pub fn settled_all(&self) {
-        self.unsettled.jobs.lock().unwrap().clear();
+        saman::lock(&self.unsettled.jobs).clear();
     }
 
     /// [`Runner::busy_in`] of the tree TOP names, by its true name (read off the hub's workers): a job's folder is
@@ -1114,16 +1108,10 @@ impl Runner {
     /// job there queued or running, or one that ended whose end the reader of the ends has not taken yet.  TOP is a
     /// true name (no link on the way), as the jobs' folders are recorded: [`Runner::busy_in_tree`] finds it.
     pub fn busy_in(&self, top: &Path) -> bool {
-        self.starting
-            .lock()
-            .unwrap()
+        saman::lock(&self.starting)
             .iter()
             .any(|w| w.starts_with(top))
-            || self
-                .unsettled
-                .jobs
-                .lock()
-                .unwrap()
+            || saman::lock(&self.unsettled.jobs)
                 .iter()
                 .any(|(_, cwd)| cwd.starts_with(top))
             || self
@@ -1400,16 +1388,16 @@ impl Inner {
         }
         // this start owns the job until its own tick: a tick of the queue's in between (its first, before this start
         // runs) leaves it claimed for this start rather than launching it on another task
-        self.admit.lock().unwrap().owned.insert(id.clone());
+        saman::lock(&self.admit).owned.insert(id.clone());
         if let Err(e) = self.enqueue(&id, &dir, &spec) {
-            self.admit.lock().unwrap().owned.remove(&id);
+            saman::lock(&self.admit).owned.remove(&id);
             crate::soft::done(std::fs::remove_dir_all(&dir), "std::fs::remove_dir_all");
             return Err(e);
         }
         gap(&self);
         // admitted at once: started here, so a refused launch is the start's answer (one that waits is the queue's)
         let (t, claimed) = {
-            let mut a = self.admit.lock().unwrap();
+            let mut a = saman::lock(&self.admit);
             let t = self.queue.tick(now() as u64);
             a.owned.remove(&id);
             (t, a.claimed.remove(&id))
@@ -1579,7 +1567,7 @@ impl Inner {
     /// A tick of the queue: start what this machine admits, carry out what ended on runners.
     fn pump(self: &Arc<Self>) {
         let t = {
-            let mut a = self.admit.lock().unwrap();
+            let mut a = saman::lock(&self.admit);
             let mut t = self.queue.tick(now() as u64);
             // a job whose start is on its way is that start's to launch
             t.starts.retain(|id| {
@@ -2317,7 +2305,7 @@ impl Inner {
         // a networked job's relay answers for as long as the job runs; a graceful hub stop ends it through `nets`
         let relay = relay.map(|net| {
             let (tx, stop) = tokio::sync::oneshot::channel();
-            self.nets.lock().unwrap().insert(id.clone(), tx);
+            saman::lock(&self.nets).insert(id.clone(), tx);
             Net { net, stop }
         });
         let guard = guard_of(&spec);
@@ -2340,10 +2328,7 @@ impl Inner {
         if self.hooks.editors.is_none() {
             return;
         }
-        self.progress
-            .lock()
-            .unwrap()
-            .insert(id.to_owned(), (file, progress::Watch::default()));
+        saman::lock(&self.progress).insert(id.to_owned(), (file, progress::Watch::default()));
         let me = self.clone();
         let id = id.to_owned();
         crate::clock::spawn("exec:progress", async move {
@@ -2351,14 +2336,14 @@ impl Inner {
                 crate::clock::sleep(progress::EVERY).await;
             }
             // a job that left the table without its end (lost) takes its watch with it
-            me.progress.lock().unwrap().remove(&id);
+            saman::lock(&me.progress).remove(&id);
         });
     }
 
     /// One look at job ID's progress: what changed goes to the editors as `exec-progress`. LAST: the job ended, its
     /// watch goes. False when the job has no watch (any more).
     fn look_progress(&self, id: &str, last: bool) -> bool {
-        let mut all = self.progress.lock().unwrap();
+        let mut all = saman::lock(&self.progress);
         let Some((file, watch)) = all.get_mut(id) else {
             return false;
         };
@@ -2531,7 +2516,7 @@ impl Inner {
                 pump.abort();
             }
         }
-        self.nets.lock().unwrap().remove(id);
+        saman::lock(&self.nets).remove(id);
         self.finish(id).await;
         for ack in acks {
             crate::soft::done(ack.send(()), "ack send");
@@ -2541,13 +2526,13 @@ impl Inner {
     /// Write the job's result once: status from `why` and the exit file, the summary from the log; record it in the
     /// store; tell the subscribers.
     async fn finish(&self, id: &str) {
-        if self.end(id).is_some() || !self.finishing.lock().unwrap().insert(id.to_string()) {
+        if self.end(id).is_some() || !saman::lock(&self.finishing).insert(id.to_string()) {
             return;
         }
         let Some(meta) = self.meta(id) else { return };
         // busy in its tree from before its result shows until the reader of the ends has taken it ([`Unsettled`])
         if self.unsettled.on.load(Ordering::SeqCst) {
-            (self.unsettled.jobs.lock().unwrap()).push((id.to_string(), PathBuf::from(&meta.cwd)));
+            (saman::lock(&self.unsettled.jobs)).push((id.to_string(), PathBuf::from(&meta.cwd)));
         }
         let dir = self.dir(id);
         crate::sandbox::remove_made(&dir.join(STUBS));

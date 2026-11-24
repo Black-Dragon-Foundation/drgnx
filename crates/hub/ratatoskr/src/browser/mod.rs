@@ -379,65 +379,69 @@ mod tests {
     }
 
     /// The watch stops the browser once per rise above the mark, and ends with its cgroup.
-    #[tokio::test]
-    async fn the_memory_watch_stops_once_per_rise_and_ends_with_its_cgroup() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::time::Duration;
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("memory.current");
-        // whole values only, as the kernel's file gives them
-        let set = |v: &str| {
-            let tmp = dir.path().join("memory.tmp");
-            crate::fsio::write(&tmp, v).unwrap();
-            crate::fsio::rename(&tmp, dir.path().join("memory.current")).unwrap();
-        };
-        set("10\n");
-        let stops = Arc::new(AtomicUsize::new(0));
-        let seen = stops.clone();
-        let watch = tokio::spawn({
-            let file = file.clone();
-            async move {
-                watch_memory_file(&file, 100, 75, Duration::from_millis(5), move || {
-                    seen.fetch_add(1, Ordering::SeqCst);
-                    true
+    #[test]
+    fn the_memory_watch_stops_once_per_rise_and_ends_with_its_cgroup() {
+        saman::block_on_current(async move {
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            use std::time::Duration;
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("memory.current");
+            // whole values only, as the kernel's file gives them
+            let set = |v: &str| {
+                let tmp = dir.path().join("memory.tmp");
+                crate::fsio::write(&tmp, v).unwrap();
+                crate::fsio::rename(&tmp, dir.path().join("memory.current")).unwrap();
+            };
+            set("10\n");
+            let stops = Arc::new(AtomicUsize::new(0));
+            let seen = stops.clone();
+            let watch = tokio::spawn({
+                let file = file.clone();
+                async move {
+                    watch_memory_file(&file, 100, 75, Duration::from_millis(5), move || {
+                        seen.fetch_add(1, Ordering::SeqCst);
+                        true
+                    })
+                    .await;
+                }
+            });
+            // each wait ends once the watch did what it waits for (10 s bounds a failure only)
+            let until = |n: usize| {
+                let stops = stops.clone();
+                async move {
+                    skuld::wait_until_async("the watch stopped the browser", 10, || {
+                        let stops = stops.clone();
+                        async move { (stops.load(Ordering::SeqCst) >= n).then_some(()) }
+                    })
+                    .await
+                }
+            };
+            // a window in which the watch (on this runtime's thread) keeps reading and must not stop the browser again
+            let window = |nothing: &'static str| async move {
+                tokio::task::spawn_blocking(move || {
+                    skuld::window(Duration::from_millis(200), nothing)
                 })
-                .await;
-            }
-        });
-        // each wait ends once the watch did what it waits for (10 s bounds a failure only)
-        let until = |n: usize| {
-            let stops = stops.clone();
-            async move {
-                skuld::wait_until_async("the watch stopped the browser", 10, || {
-                    let stops = stops.clone();
-                    async move { (stops.load(Ordering::SeqCst) >= n).then_some(()) }
-                })
-                .await
-            }
-        };
-        // a window in which the watch (on this runtime's thread) keeps reading and must not stop the browser again
-        let window = |nothing: &'static str| async move {
-            tokio::task::spawn_blocking(move || skuld::window(Duration::from_millis(200), nothing))
                 .await
                 .unwrap();
-        };
-        set("80\n");
-        until(1).await;
-        // still above: no second stop; below, then above again: the second
-        window("no second stop while it stays above").await;
-        assert_eq!(stops.load(Ordering::SeqCst), 1);
-        set("20\n");
-        window("no stop below the mark").await;
-        assert_eq!(stops.load(Ordering::SeqCst), 1);
-        set("90\n");
-        until(2).await;
-        // the cgroup goes: the watch ends
-        std::fs::remove_file(&file).unwrap();
-        tokio::time::timeout(Duration::from_secs(10), watch)
-            .await
-            .expect("the watch ended")
-            .unwrap();
-        assert_eq!(stops.load(Ordering::SeqCst), 2);
+            };
+            set("80\n");
+            until(1).await;
+            // still above: no second stop; below, then above again: the second
+            window("no second stop while it stays above").await;
+            assert_eq!(stops.load(Ordering::SeqCst), 1);
+            set("20\n");
+            window("no stop below the mark").await;
+            assert_eq!(stops.load(Ordering::SeqCst), 1);
+            set("90\n");
+            until(2).await;
+            // the cgroup goes: the watch ends
+            std::fs::remove_file(&file).unwrap();
+            tokio::time::timeout(Duration::from_secs(10), watch)
+                .await
+                .expect("the watch ended")
+                .unwrap();
+            assert_eq!(stops.load(Ordering::SeqCst), 2);
+        })
     }
 }

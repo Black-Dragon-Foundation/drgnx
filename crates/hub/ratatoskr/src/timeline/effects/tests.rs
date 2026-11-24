@@ -190,124 +190,133 @@ fn target(sid: &str, seq: i64) -> Target {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn lists_a_pushed_commit() {
-    let (dir, d, remote) = (
-        tempfile::tempdir().unwrap(),
-        repo(),
-        tempfile::tempdir().unwrap(),
-    );
-    let f = front_in(dir.path());
-    sh(remote.path(), &["init", "-q", "--bare"]);
-    commit(d.path(), "a.txt", "base\n", "base");
-    sh(
-        d.path(),
-        &["remote", "add", "origin", &remote.path().to_string_lossy()],
-    );
-    sh(d.path(), &["push", "-q", "origin", "main"]);
-    step(&f, "s1", 1, 0.0, None, 0).await;
-    let c1 = commit(d.path(), "a.txt", "one\n", "c1");
-    sh(d.path(), &["push", "-q", "origin", "main"]);
-    let c2 = commit(d.path(), "a.txt", "two\n", "c2");
-    commit_entity(&f, &c1, "s1", d.path()).await;
-    commit_entity(&f, &c2, "s1", d.path()).await;
-    let e = of(&f, &target("s1", 1)).await.unwrap();
-    // c2 is only here; c1 reached the remote
-    assert_eq!(
-        e.pushed,
-        [Pushed {
-            commit: c1,
-            refs: vec!["origin/main".into()]
-        }]
-    );
-    assert_eq!(e.label, "computed");
+#[test]
+fn lists_a_pushed_commit() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (dir, d, remote) = (
+            tempfile::tempdir().unwrap(),
+            repo(),
+            tempfile::tempdir().unwrap(),
+        );
+        let f = front_in(dir.path());
+        sh(remote.path(), &["init", "-q", "--bare"]);
+        commit(d.path(), "a.txt", "base\n", "base");
+        sh(
+            d.path(),
+            &["remote", "add", "origin", &remote.path().to_string_lossy()],
+        );
+        sh(d.path(), &["push", "-q", "origin", "main"]);
+        step(&f, "s1", 1, 0.0, None, 0).await;
+        let c1 = commit(d.path(), "a.txt", "one\n", "c1");
+        sh(d.path(), &["push", "-q", "origin", "main"]);
+        let c2 = commit(d.path(), "a.txt", "two\n", "c2");
+        commit_entity(&f, &c1, "s1", d.path()).await;
+        commit_entity(&f, &c2, "s1", d.path()).await;
+        let e = of(&f, &target("s1", 1)).await.unwrap();
+        // c2 is only here; c1 reached the remote
+        assert_eq!(
+            e.pushed,
+            [Pushed {
+                commit: c1,
+                refs: vec!["origin/main".into()]
+            }]
+        );
+        assert_eq!(e.label, "computed");
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn lists_read_messages_only() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = front_in(dir.path());
-    step(&f, "s1", 1, 100.0, None, 0).await;
-    let ids = f
-        .writer
-        .db
-        .write(meta(None, "test"), |tx| {
-            let mut ids = Vec::new();
-            for (sender, at, state) in [
-                ("agent:mock", 50.0, "read"),
-                ("agent:mock", 150.0, "read"),
-                ("agent:mock", 160.0, "delivered"),
-                ("agent:mock", 170.0, "acted"),
-                ("agent:other", 150.0, "read"),
-            ] {
-                let s = Send {
-                    sender: Some(sender.into()),
-                    recipient: "user".into(),
-                    text: "hi".into(),
-                    ..Send::default()
-                };
-                let messages::SendResult::Ok { id, .. } = messages::send(tx, s, at)? else {
-                    panic!("held")
-                };
-                assert!(messages::mark(tx, id, state, at + 1.0)?);
-                ids.push(id);
-            }
-            Ok(ids)
-        })
-        .await
-        .unwrap();
-    let e = of(&f, &target("s1", 1)).await.unwrap();
-    // before the step, only delivered, and another agent's: not listed
-    assert_eq!(e.messages_read, [ids[1], ids[3]]);
+#[test]
+fn lists_read_messages_only() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front_in(dir.path());
+        step(&f, "s1", 1, 100.0, None, 0).await;
+        let ids = f
+            .writer
+            .db
+            .write(meta(None, "test"), |tx| {
+                let mut ids = Vec::new();
+                for (sender, at, state) in [
+                    ("agent:mock", 50.0, "read"),
+                    ("agent:mock", 150.0, "read"),
+                    ("agent:mock", 160.0, "delivered"),
+                    ("agent:mock", 170.0, "acted"),
+                    ("agent:other", 150.0, "read"),
+                ] {
+                    let s = Send {
+                        sender: Some(sender.into()),
+                        recipient: "user".into(),
+                        text: "hi".into(),
+                        ..Send::default()
+                    };
+                    let messages::SendResult::Ok { id, .. } = messages::send(tx, s, at)? else {
+                        panic!("held")
+                    };
+                    assert!(messages::mark(tx, id, state, at + 1.0)?);
+                    ids.push(id);
+                }
+                Ok(ids)
+            })
+            .await
+            .unwrap();
+        let e = of(&f, &target("s1", 1)).await.unwrap();
+        // before the step, only delivered, and another agent's: not listed
+        assert_eq!(e.messages_read, [ids[1], ids[3]]);
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn lists_filed_tasks_and_spend_after_the_step() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = front_in(dir.path());
-    made(&f, "s1", "mcp:task_write", "task:early", "task").await;
-    let start = last_at(&f).await;
-    step(&f, "s1", 1, start, Some((2.0, "usd")), 100).await;
-    step(&f, "s1", 2, start, Some((0.25, "usd")), 10).await;
-    step(&f, "s1", 3, start, Some((0.5, "usd-est")), 1).await;
-    made(&f, "s1", "mcp:task_write", "task:late", "task").await;
-    made(&f, "s2", "mcp:task_write", "task:other", "task").await;
-    made(
-        &f,
-        "s1",
-        norn::tools::settings::PROPOSED_TOOL,
-        "setting:x",
-        "setting",
-    )
-    .await;
-    assert!(last_at(&f).await > start);
-    let e = of(&f, &target("s1", 1)).await.unwrap();
-    assert_eq!(e.tasks_filed, ["task:late"]);
-    assert_eq!(e.settings, ["setting:x"]);
-    // the steps after the step: not the step's own
-    assert_eq!(
-        e.spent.cost_by_unit,
-        [("usd".to_string(), 0.25), ("usd-est".to_string(), 0.5)]
-            .into_iter()
-            .collect()
-    );
-    assert_eq!(e.spent.tokens, 22);
+#[test]
+fn lists_filed_tasks_and_spend_after_the_step() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front_in(dir.path());
+        made(&f, "s1", "mcp:task_write", "task:early", "task").await;
+        let start = last_at(&f).await;
+        step(&f, "s1", 1, start, Some((2.0, "usd")), 100).await;
+        step(&f, "s1", 2, start, Some((0.25, "usd")), 10).await;
+        step(&f, "s1", 3, start, Some((0.5, "usd-est")), 1).await;
+        made(&f, "s1", "mcp:task_write", "task:late", "task").await;
+        made(&f, "s2", "mcp:task_write", "task:other", "task").await;
+        made(
+            &f,
+            "s1",
+            norn::tools::settings::PROPOSED_TOOL,
+            "setting:x",
+            "setting",
+        )
+        .await;
+        assert!(last_at(&f).await > start);
+        let e = of(&f, &target("s1", 1)).await.unwrap();
+        assert_eq!(e.tasks_filed, ["task:late"]);
+        assert_eq!(e.settings, ["setting:x"]);
+        // the steps after the step: not the step's own
+        assert_eq!(
+            e.spent.cost_by_unit,
+            [("usd".to_string(), 0.25), ("usd-est".to_string(), 0.5)]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(e.spent.tokens, 22);
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn lists_running_jobs() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = front_in(dir.path());
-    step(&f, "s1", 1, 0.0, None, 0).await;
-    let live = f.core.exec.live();
-    live.started("j1", "s1");
-    live.started("j2", "s2");
-    let e = of(&f, &target("s1", 1)).await.unwrap();
-    assert_eq!(e.jobs_running, ["j1 (here)"]);
+#[test]
+fn lists_running_jobs() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front_in(dir.path());
+        step(&f, "s1", 1, 0.0, None, 0).await;
+        let live = f.core.exec.live();
+        live.started("j1", "s1");
+        live.started("j2", "s2");
+        let e = of(&f, &target("s1", 1)).await.unwrap();
+        assert_eq!(e.jobs_running, ["j1 (here)"]);
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn lists_queued_and_remote_jobs() {
+#[test]
+fn lists_queued_and_remote_jobs() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let dir = tempfile::tempdir().unwrap();
     let f = front_in(dir.path());
     let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
@@ -327,6 +336,7 @@ async fn lists_queued_and_remote_jobs() {
     .unwrap();
     let e = of(&f, &target("s1", 1)).await.unwrap();
     assert_eq!(e.jobs_running, ["q1 (queued)", "r1 (on box)"]);
+})
 }
 
 /// Session S1's decision with a commit on line 3 of a file, and a later commit by AUTHOR on the same line, with its
@@ -343,35 +353,39 @@ async fn dependent_on_top(f: &Front, d: &Path, author: &str) -> (i64, i64, Strin
     (d1, d2, c2)
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn blocked_when_a_dependent_merged_on_top() {
-    let (dir, d) = (tempfile::tempdir().unwrap(), repo());
-    let f = front_in(dir.path());
-    let (d1, d2, c2) = dependent_on_top(&f, d.path(), "s2").await;
-    let deps = crate::runner::effects::dependents(&f, d1).await.unwrap();
-    assert_eq!(deps.decisions, [d2]);
-    let b = blocked(&f, &deps, "s1").await.unwrap();
-    assert_eq!(
-        b,
-        [Blocked {
-            decision: d2,
-            commit: c2,
-            session: "s2".into(),
-            branch: "main".into()
-        }]
-    );
-    // the session's own decision that another relies on is listed among what cannot be undone
-    let e = of(&f, &target("s1", 1)).await.unwrap();
-    assert_eq!(e.decisions_relied_on, [d1]);
+#[test]
+fn blocked_when_a_dependent_merged_on_top() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (dir, d) = (tempfile::tempdir().unwrap(), repo());
+        let f = front_in(dir.path());
+        let (d1, d2, c2) = dependent_on_top(&f, d.path(), "s2").await;
+        let deps = crate::runner::effects::dependents(&f, d1).await.unwrap();
+        assert_eq!(deps.decisions, [d2]);
+        let b = blocked(&f, &deps, "s1").await.unwrap();
+        assert_eq!(
+            b,
+            [Blocked {
+                decision: d2,
+                commit: c2,
+                session: "s2".into(),
+                branch: "main".into()
+            }]
+        );
+        // the session's own decision that another relies on is listed among what cannot be undone
+        let e = of(&f, &target("s1", 1)).await.unwrap();
+        assert_eq!(e.decisions_relied_on, [d1]);
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn not_blocked_by_the_sessions_own_merge() {
-    let (dir, d) = (tempfile::tempdir().unwrap(), repo());
-    let f = front_in(dir.path());
-    let (d1, d2, _c2) = dependent_on_top(&f, d.path(), "s1").await;
-    let deps = crate::runner::effects::dependents(&f, d1).await.unwrap();
-    assert_eq!(deps.decisions, [d2]);
-    // the dependent is the session's own: the revert takes it too
-    assert!(blocked(&f, &deps, "s1").await.unwrap().is_empty());
+#[test]
+fn not_blocked_by_the_sessions_own_merge() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (dir, d) = (tempfile::tempdir().unwrap(), repo());
+        let f = front_in(dir.path());
+        let (d1, d2, _c2) = dependent_on_top(&f, d.path(), "s1").await;
+        let deps = crate::runner::effects::dependents(&f, d1).await.unwrap();
+        assert_eq!(deps.decisions, [d2]);
+        // the dependent is the session's own: the revert takes it too
+        assert!(blocked(&f, &deps, "s1").await.unwrap().is_empty());
+    })
 }

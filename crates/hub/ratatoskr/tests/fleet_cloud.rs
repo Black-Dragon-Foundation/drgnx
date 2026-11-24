@@ -351,88 +351,92 @@ mod ca {
     use super::*;
 
     // [C] a real machine that announces its host keys; real sshd answers or refuses
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn a_cloud_machine_is_reached_by_certificate_only() {
-        let m = start("c1").await;
-        // the user's agent: a listener that records any connection
-        let users = m.runtime.path().join("users-agent.sock");
-        let fake = std::os::unix::net::UnixListener::bind(&users).unwrap();
-        fake.set_nonblocking(true).unwrap();
-        // SAFETY: the rows run one at a time (--test-threads=1); the ssh the transport starts inherits it
-        unsafe { std::env::set_var("SSH_AUTH_SOCK", &users) };
-        let t = OpensshTransport::new(m.runtime.path());
-        let ch = t
-            .open(&m.cfg)
-            .await
-            .expect("the machine takes the hub's certificate");
-        // with the sessions closed a session is free, so the round trip is a real `true` on the machine (with all
-        // three open it waits for the control channel's next ping, which these `cat` sessions never send)
-        drop(ch);
-        t.round_trip("c1").await.expect("a real round trip");
-        t.stop("c1").await;
+    fn a_cloud_machine_is_reached_by_certificate_only() {
+        saman::block_on_current(async move {
+            let m = start("c1").await;
+            // the user's agent: a listener that records any connection
+            let users = m.runtime.path().join("users-agent.sock");
+            let fake = std::os::unix::net::UnixListener::bind(&users).unwrap();
+            fake.set_nonblocking(true).unwrap();
+            // SAFETY: the rows run one at a time (--test-threads=1); the ssh the transport starts inherits it
+            unsafe { std::env::set_var("SSH_AUTH_SOCK", &users) };
+            let t = OpensshTransport::new(m.runtime.path());
+            let ch = t
+                .open(&m.cfg)
+                .await
+                .expect("the machine takes the hub's certificate");
+            // with the sessions closed a session is free, so the round trip is a real `true` on the machine (with all
+            // three open it waits for the control channel's next ping, which these `cat` sessions never send)
+            drop(ch);
+            t.round_trip("c1").await.expect("a real round trip");
+            t.stop("c1").await;
 
-        // the same key in the same agent without its certificate: refused, the machine takes certificates only
-        let mut plain = m.cfg.clone();
-        plain.name = "c1-plain".into();
-        plain.cloud.as_mut().unwrap().certificate = m.runtime.path().join("no-certificate.pub");
-        match t.open(&plain).await {
-            Err(LinkError::Refused(why)) => assert!(why.contains("Permission denied"), "{why}"),
-            Err(e) => panic!("a plain key should be refused by sshd, not {e:?}"),
-            Ok(_) => panic!("a plain key reached the machine"),
-        }
-        t.stop("c1-plain").await;
+            // the same key in the same agent without its certificate: refused, the machine takes certificates only
+            let mut plain = m.cfg.clone();
+            plain.name = "c1-plain".into();
+            plain.cloud.as_mut().unwrap().certificate = m.runtime.path().join("no-certificate.pub");
+            match t.open(&plain).await {
+                Err(LinkError::Refused(why)) => assert!(why.contains("Permission denied"), "{why}"),
+                Err(e) => panic!("a plain key should be refused by sshd, not {e:?}"),
+                Ok(_) => panic!("a plain key reached the machine"),
+            }
+            t.stop("c1-plain").await;
 
-        // a certificate for another machine's principal: refused
-        let mut other = m.cfg.clone();
-        other.name = "c1-other".into();
-        let cert = m.ca.sign(
-            &m.key.public(),
-            "drgnx-elsewhere",
-            Duration::from_secs(3600),
-        );
-        let path = ssh_config::write_in(
-            m.runtime.path(),
-            "c1-other",
-            "id-cert.pub",
-            &cert.to_openssh(),
-        )
-        .unwrap();
-        other.cloud.as_mut().unwrap().certificate = path;
-        assert!(matches!(t.open(&other).await, Err(LinkError::Refused(_))));
-        t.stop("c1-other").await;
+            // a certificate for another machine's principal: refused
+            let mut other = m.cfg.clone();
+            other.name = "c1-other".into();
+            let cert = m.ca.sign(
+                &m.key.public(),
+                "drgnx-elsewhere",
+                Duration::from_secs(3600),
+            );
+            let path = ssh_config::write_in(
+                m.runtime.path(),
+                "c1-other",
+                "id-cert.pub",
+                &cert.to_openssh(),
+            )
+            .unwrap();
+            other.cloud.as_mut().unwrap().certificate = path;
+            assert!(matches!(t.open(&other).await, Err(LinkError::Refused(_))));
+            t.stop("c1-other").await;
 
-        unsafe { std::env::remove_var("SSH_AUTH_SOCK") };
-        match fake.accept() {
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            other => panic!("the user's agent was asked: {other:?}"),
-        }
-        drop(m.agent);
-        m.aws.end(&m.id).await.unwrap();
+            unsafe { std::env::remove_var("SSH_AUTH_SOCK") };
+            match fake.accept() {
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                other => panic!("the user's agent was asked: {other:?}"),
+            }
+            drop(m.agent);
+            m.aws.end(&m.id).await.unwrap();
+        })
     }
 
     // [C] a real machine whose sshd is given new host keys after the pin
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn a_changed_host_key_is_refused() {
-        let m = start("c2").await;
-        let t = OpensshTransport::new(m.runtime.path());
-        drop(
-            t.open(&m.cfg)
-                .await
-                .expect("reached through the pinned key"),
-        );
-        t.stop("c2").await;
-        // the machine's sshd restarts with new host keys (the knob returns once it has)
-        knob("rotate-hostkey", &format!("{{\"id\": \"{}\"}}", m.id));
-        match t.open(&m.cfg).await {
-            Err(LinkError::HostKeyChanged) => {}
-            Err(e) => panic!("a changed host key must be refused as one, not {e:?}"),
-            Ok(_) => panic!("a host key that is not the pinned one was accepted"),
-        }
-        t.stop("c2").await;
-        drop(m.agent);
-        m.aws.end(&m.id).await.unwrap();
+    fn a_changed_host_key_is_refused() {
+        saman::block_on_current(async move {
+            let m = start("c2").await;
+            let t = OpensshTransport::new(m.runtime.path());
+            drop(
+                t.open(&m.cfg)
+                    .await
+                    .expect("reached through the pinned key"),
+            );
+            t.stop("c2").await;
+            // the machine's sshd restarts with new host keys (the knob returns once it has)
+            knob("rotate-hostkey", &format!("{{\"id\": \"{}\"}}", m.id));
+            match t.open(&m.cfg).await {
+                Err(LinkError::HostKeyChanged) => {}
+                Err(e) => panic!("a changed host key must be refused as one, not {e:?}"),
+                Ok(_) => panic!("a host key that is not the pinned one was accepted"),
+            }
+            t.stop("c2").await;
+            drop(m.agent);
+            m.aws.end(&m.id).await.unwrap();
+        })
     }
 }
 
@@ -612,97 +616,99 @@ mod cloud {
     /// no verdict. Then the provider takes the machine back (the mock's clock past the notice's 2 minutes): the machine
     /// is gone, its link is lost, and the hub's "machine gone" step finds nothing left to judge. Still no strike, no
     /// red: the job waits in the queue.
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn a_spot_notice_requeues_with_no_strike_and_no_red() {
-        let hub = "hubcspot";
-        let m = start_on("cspot", Market::Spot).await;
-        let root = m.install("fl-cspot");
-        let img = m.base_image();
-        let w = m.watchdog(&root, DESIGN);
-        let dir = tempfile::tempdir().unwrap();
-        let (q, mut events) = queue(dir.path(), hub);
-        let _ssh = attach(&q, &m, &root, hub, &w.dir, &img);
-        q.submit(parked("xcspot", &img), now());
-        let mut outcomes = vec![];
-        running(&q, &mut events, &mut outcomes, dir.path(), &m, "xcspot").await;
+    fn a_spot_notice_requeues_with_no_strike_and_no_red() {
+        saman::block_on_current(async move {
+            let hub = "hubcspot";
+            let m = start_on("cspot", Market::Spot).await;
+            let root = m.install("fl-cspot");
+            let img = m.base_image();
+            let w = m.watchdog(&root, DESIGN);
+            let dir = tempfile::tempdir().unwrap();
+            let (q, mut events) = queue(dir.path(), hub);
+            let _ssh = attach(&q, &m, &root, hub, &w.dir, &img);
+            q.submit(parked("xcspot", &img), now());
+            let mut outcomes = vec![];
+            running(&q, &mut events, &mut outcomes, dir.path(), &m, "xcspot").await;
 
-        knob(
-            "spot-notice",
-            &format!(r#"{{"id": "{}", "in_s": 0}}"#, m.id),
-        );
-        // the requeue's reason shows until the next tick says why the job waits now: each event is looked at as it
-        // is taken in, before any tick
-        let row = skuld::wait_until_async("the attempt requeued for the notice", WAIT, || {
-            let mut got = None;
-            while got.is_none()
-                && let Ok(ev) = events.try_recv()
-            {
-                if let LinkEvent::Lost { why, .. } = &ev {
-                    panic!("the link was lost before the notice was sent up: {why}");
+            knob(
+                "spot-notice",
+                &format!(r#"{{"id": "{}", "in_s": 0}}"#, m.id),
+            );
+            // the requeue's reason shows until the next tick says why the job waits now: each event is looked at as it
+            // is taken in, before any tick
+            let row = skuld::wait_until_async("the attempt requeued for the notice", WAIT, || {
+                let mut got = None;
+                while got.is_none()
+                    && let Ok(ev) = events.try_recv()
+                {
+                    if let LinkEvent::Lost { why, .. } = &ev {
+                        panic!("the link was lost before the notice was sent up: {why}");
+                    }
+                    outcomes.extend(q.on_link(ev, now()));
+                    got = q
+                        .row("xcspot")
+                        .filter(|r| r.waiting.as_deref().is_some_and(|w| w.contains("requeued")));
                 }
-                outcomes.extend(q.on_link(ev, now()));
-                got = q
-                    .row("xcspot")
-                    .filter(|r| r.waiting.as_deref().is_some_and(|w| w.contains("requeued")));
-            }
-            if got.is_none() {
-                outcomes.extend(q.tick(now()).outcomes);
-            }
-            std::future::ready(got)
-        })
-        .await;
-        assert_eq!(
-            row.waiting.as_deref(),
-            Some("requeued (infra: preempted)"),
-            "{row:?}"
-        );
-        assert_eq!(row.machine, None, "{row:?}");
-        let r = q.runner(m.name()).expect("the cloud runner");
-        assert_eq!(
-            (r.state.as_str(), r.strikes, r.last.as_deref()),
-            ("preempting", 0, None),
-            "a preemption is no strike: {r:?}"
-        );
-        assert!(
-            !verdict_for(&outcomes, "xcspot"),
-            "a preemption is no verdict: {outcomes:?}"
-        );
-        assert!(
-            !m.sh(&format!("cat {}/preempting", w.dir)).is_empty(),
-            "the watchdog's notice"
-        );
+                if got.is_none() {
+                    outcomes.extend(q.tick(now()).outcomes);
+                }
+                std::future::ready(got)
+            })
+            .await;
+            assert_eq!(
+                row.waiting.as_deref(),
+                Some("requeued (infra: preempted)"),
+                "{row:?}"
+            );
+            assert_eq!(row.machine, None, "{row:?}");
+            let r = q.runner(m.name()).expect("the cloud runner");
+            assert_eq!(
+                (r.state.as_str(), r.strikes, r.last.as_deref()),
+                ("preempting", 0, None),
+                "a preemption is no strike: {r:?}"
+            );
+            assert!(
+                !verdict_for(&outcomes, "xcspot"),
+                "a preemption is no verdict: {outcomes:?}"
+            );
+            assert!(
+                !m.sh(&format!("cat {}/preempting", w.dir)).is_empty(),
+                "the watchdog's notice"
+            );
 
-        // the interruption, 2 minutes after the notice: the provider ends the machine
-        knob("clock", r#"{"advance_s": 121}"#);
-        skuld::wait_until("the machine taken back", WAIT, || {
-            ended(&m.id).then_some(())
-        });
-        let mut lost = false;
-        skuld::wait_until_async("the link to the ended machine lost", WAIT, || {
-            while let Ok(ev) = events.try_recv() {
-                lost |= matches!(ev, LinkEvent::Lost { .. });
-                outcomes.extend(q.on_link(ev, now()));
-            }
+            // the interruption, 2 minutes after the notice: the provider ends the machine
+            knob("clock", r#"{"advance_s": 121}"#);
+            skuld::wait_until("the machine taken back", WAIT, || {
+                ended(&m.id).then_some(())
+            });
+            let mut lost = false;
+            skuld::wait_until_async("the link to the ended machine lost", WAIT, || {
+                while let Ok(ev) = events.try_recv() {
+                    lost |= matches!(ev, LinkEvent::Lost { .. });
+                    outcomes.extend(q.on_link(ev, now()));
+                }
+                outcomes.extend(q.tick(now()).outcomes);
+                std::future::ready(lost.then_some(()))
+            })
+            .await;
+            // the hub's step for a cloud machine that is gone (the sweeper's, or the cap's)
+            outcomes.extend(q.cloud_gone(m.name(), now()));
             outcomes.extend(q.tick(now()).outcomes);
-            std::future::ready(lost.then_some(()))
+            let r = q.runner(m.name()).expect("the cloud runner");
+            assert_eq!(
+                r.strikes, 0,
+                "a machine the provider took back is no strike: {r:?}"
+            );
+            assert!(
+                !verdict_for(&outcomes, "xcspot"),
+                "no red, no verdict: {outcomes:?}"
+            );
+            let row = q.row("xcspot").expect("the job is still the queue's");
+            assert_eq!(row.machine, None, "{row:?}");
+            assert!(row.waiting.is_some(), "it waits for a machine: {row:?}");
         })
-        .await;
-        // the hub's step for a cloud machine that is gone (the sweeper's, or the cap's)
-        outcomes.extend(q.cloud_gone(m.name(), now()));
-        outcomes.extend(q.tick(now()).outcomes);
-        let r = q.runner(m.name()).expect("the cloud runner");
-        assert_eq!(
-            r.strikes, 0,
-            "a machine the provider took back is no strike: {r:?}"
-        );
-        assert!(
-            !verdict_for(&outcomes, "xcspot"),
-            "no red, no verdict: {outcomes:?}"
-        );
-        let row = q.row("xcspot").expect("the job is still the queue's");
-        assert_eq!(row.machine, None, "{row:?}");
-        assert!(row.waiting.is_some(), "it waits for a machine: {row:?}");
     }
 
     /// [C] With the hub gone, every AWS machine ends by its own watchdog. Two machines the hub started: one idle, and
@@ -711,62 +717,64 @@ mod cloud {
     /// it; the busy one is still there past its idle time (it has a job) and 60 s before the unattended lifetime
     /// since the hub's last contact, and ends at it. Each end is the machine powering itself off, which the mock
     /// turns into a terminated instance, as AWS does for `InstanceInitiatedShutdownBehavior=terminate`.
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn with_the_hub_gone_every_aws_machine_ends_by_its_watchdog() {
-        let hub = "hubcgone";
-        let idle = start("cidle").await;
-        let idle_root = idle.install("fl-cidle");
-        let iw = idle.watchdog(&idle_root, DESIGN);
-        let busy = start("cbusy").await;
-        let busy_root = busy.install("fl-cbusy");
-        let img = busy.base_image();
-        let bw = busy.watchdog(&busy_root, DESIGN);
+    fn with_the_hub_gone_every_aws_machine_ends_by_its_watchdog() {
+        saman::block_on_current(async move {
+            let hub = "hubcgone";
+            let idle = start("cidle").await;
+            let idle_root = idle.install("fl-cidle");
+            let iw = idle.watchdog(&idle_root, DESIGN);
+            let busy = start("cbusy").await;
+            let busy_root = busy.install("fl-cbusy");
+            let img = busy.base_image();
+            let bw = busy.watchdog(&busy_root, DESIGN);
 
-        let dir = tempfile::tempdir().unwrap();
-        let (q, mut events) = queue(dir.path(), hub);
-        let mut ssh = attach(&q, &busy, &busy_root, hub, &bw.dir, &img);
-        q.submit(parked("xcbusy", &img), now());
-        let mut outcomes = vec![];
-        running(&q, &mut events, &mut outcomes, dir.path(), &busy, "xcbusy").await;
-        // the hub dies: its ssh killed, its queue gone
-        ssh.kill().await.unwrap();
-        drop(q);
-        let hb: serde_json::Value =
-            serde_json::from_str(&busy.sh(&format!("cat {busy_root}/heartbeat.json"))).unwrap();
-        let contact = hb["contact"].as_u64().expect("the heartbeat's contact");
-        assert!(contact >= bw.t0, "{hb}");
-        let jobs = || {
-            busy.sh(&format!(
-                "podman ps --filter label=drgnx.runner={hub} --format '{{{{.Names}}}}'"
-            ))
-        };
-        assert!(!jobs().is_empty(), "the job runs on with the hub gone");
+            let dir = tempfile::tempdir().unwrap();
+            let (q, mut events) = queue(dir.path(), hub);
+            let mut ssh = attach(&q, &busy, &busy_root, hub, &bw.dir, &img);
+            q.submit(parked("xcbusy", &img), now());
+            let mut outcomes = vec![];
+            running(&q, &mut events, &mut outcomes, dir.path(), &busy, "xcbusy").await;
+            // the hub dies: its ssh killed, its queue gone
+            ssh.kill().await.unwrap();
+            drop(q);
+            let hb: serde_json::Value =
+                serde_json::from_str(&busy.sh(&format!("cat {busy_root}/heartbeat.json"))).unwrap();
+            let contact = hb["contact"].as_u64().expect("the heartbeat's contact");
+            assert!(contact >= bw.t0, "{hb}");
+            let jobs = || {
+                busy.sh(&format!(
+                    "podman ps --filter label=drgnx.runner={hub} --format '{{{{.Names}}}}'"
+                ))
+            };
+            assert!(!jobs().is_empty(), "the job runs on with the hub gone");
 
-        // the idle machine: 60 s before its idle time it stays, at it it ends
-        idle.set_clock(&iw, iw.t0 + DESIGN.idle - 60);
-        skuld::window(TWO_LOOKS, "the idle machine ending early");
-        assert_eq!(state_of(&idle.id), "running");
-        idle.set_clock(&iw, iw.t0 + DESIGN.idle);
-        skuld::wait_until("the idle machine ended by its watchdog", WAIT, || {
-            ended(&idle.id).then_some(())
-        });
+            // the idle machine: 60 s before its idle time it stays, at it it ends
+            idle.set_clock(&iw, iw.t0 + DESIGN.idle - 60);
+            skuld::window(TWO_LOOKS, "the idle machine ending early");
+            assert_eq!(state_of(&idle.id), "running");
+            idle.set_clock(&iw, iw.t0 + DESIGN.idle);
+            skuld::wait_until("the idle machine ended by its watchdog", WAIT, || {
+                ended(&idle.id).then_some(())
+            });
 
-        // the busy machine: past its idle time it stays (it has a job), and 60 s before the unattended lifetime
-        busy.set_clock(&bw, bw.t0 + DESIGN.idle + 60);
-        skuld::window(TWO_LOOKS, "the busy machine ending while idle-timed");
-        assert_eq!(state_of(&busy.id), "running");
-        assert!(!jobs().is_empty(), "its job still runs");
-        busy.set_clock(&bw, contact + DESIGN.unattended - 60);
-        skuld::window(
-            TWO_LOOKS,
-            "the busy machine ending before its unattended lifetime",
-        );
-        assert_eq!(state_of(&busy.id), "running");
-        busy.set_clock(&bw, contact + DESIGN.unattended);
-        skuld::wait_until("the busy machine ended by its watchdog", WAIT, || {
-            ended(&busy.id).then_some(())
-        });
+            // the busy machine: past its idle time it stays (it has a job), and 60 s before the unattended lifetime
+            busy.set_clock(&bw, bw.t0 + DESIGN.idle + 60);
+            skuld::window(TWO_LOOKS, "the busy machine ending while idle-timed");
+            assert_eq!(state_of(&busy.id), "running");
+            assert!(!jobs().is_empty(), "its job still runs");
+            busy.set_clock(&bw, contact + DESIGN.unattended - 60);
+            skuld::window(
+                TWO_LOOKS,
+                "the busy machine ending before its unattended lifetime",
+            );
+            assert_eq!(state_of(&busy.id), "running");
+            busy.set_clock(&bw, contact + DESIGN.unattended);
+            skuld::wait_until("the busy machine ended by its watchdog", WAIT, || {
+                ended(&busy.id).then_some(())
+            });
+        })
     }
 
     /// [C] The credentials expire (the mock answers every call `ExpiredToken`) while two machines run: one with its
@@ -774,83 +782,85 @@ mod cloud {
     /// gives the card's words); the sweeper pauses and ends nothing. The layers on the machines still work: the first
     /// machine's watchdog ends it at its lifetime. Once the user logs in (the mock takes the token again), the
     /// sweeper's next pass resumes and ends the second, past its lifetime by then.
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn expired_credentials_card_no_starts_layers_end_sweeper_resumes() {
-        let watched = start("cwatch").await;
-        let root = watched.install("fl-cwatch");
-        let w = watched.watchdog(&root, DESIGN);
-        let unwatched = start("cbare").await;
-        let aws = aws();
-        let t_mock = resources()["now"].as_u64().expect("the mock's clock");
-        let machines = || resources()["instances"].as_array().map_or(0, Vec::len);
-        let before = machines();
+    fn expired_credentials_card_no_starts_layers_end_sweeper_resumes() {
+        saman::block_on_current(async move {
+            let watched = start("cwatch").await;
+            let root = watched.install("fl-cwatch");
+            let w = watched.watchdog(&root, DESIGN);
+            let unwatched = start("cbare").await;
+            let aws = aws();
+            let t_mock = resources()["now"].as_u64().expect("the mock's clock");
+            let machines = || resources()["instances"].as_array().map_or(0, Vec::len);
+            let before = machines();
 
-        knob("expire", "{}");
-        let req = StartReq {
-            token: format!("tok-cnew-{}", std::process::id()),
-            name: "drgnx-cnew".into(),
-            size: "m7g.large".into(),
-            image: "ami-base0fedora45x86".into(),
-            market: Market::OnDemand,
-            user_data: "drgnx-principal: drgnx-cnew\n".into(),
-            security_group: None,
-        };
-        let cmd = match aws.start(&req).await {
-            Err(CloudError::NeedsLogin(cmd)) => cmd,
-            other => panic!("a start with expired credentials must ask for a login: {other:?}"),
-        };
-        let card = Meter::new(Rates::default(), 0.0)
-            .gate(now(), 50.0, "m7g.large", 0.1, 600, 900, &[], Some(&cmd))
-            .expect_err("the gate refuses every start while the credentials need a login");
-        assert_eq!(card, needs_login_text(&cmd));
-        assert!(card.ends_with("then Runners: Retry Cloud"), "{card}");
+            knob("expire", "{}");
+            let req = StartReq {
+                token: format!("tok-cnew-{}", std::process::id()),
+                name: "drgnx-cnew".into(),
+                size: "m7g.large".into(),
+                image: "ami-base0fedora45x86".into(),
+                market: Market::OnDemand,
+                user_data: "drgnx-principal: drgnx-cnew\n".into(),
+                security_group: None,
+            };
+            let cmd = match aws.start(&req).await {
+                Err(CloudError::NeedsLogin(cmd)) => cmd,
+                other => panic!("a start with expired credentials must ask for a login: {other:?}"),
+            };
+            let card = Meter::new(Rates::default(), 0.0)
+                .gate(now(), 50.0, "m7g.large", 0.1, 600, 900, &[], Some(&cmd))
+                .expect_err("the gate refuses every start while the credentials need a login");
+            assert_eq!(card, needs_login_text(&cmd));
+            assert!(card.ends_with("then Runners: Retry Cloud"), "{card}");
 
-        let bounds = Bounds {
-            lifetime_s: DESIGN.lifetime,
-            unreachable_s: 300,
-        };
-        let mut sweeper = Sweeper::new(HUB, bounds);
-        let late = t_mock + DESIGN.lifetime + 600;
-        let reached = |_: &str| true;
-        match sweeper.pass(&aws, late, &reached, CapState::Under).await {
-            Pass::Paused(c) => assert_eq!(c, cmd),
-            other => panic!("the sweeper must pause on expired credentials: {other:?}"),
-        }
-        for id in [&watched.id, &unwatched.id] {
-            assert_eq!(state_of(id), "running", "a paused sweeper ends nothing");
-        }
-        assert_eq!(machines(), before, "nothing new started");
+            let bounds = Bounds {
+                lifetime_s: DESIGN.lifetime,
+                unreachable_s: 300,
+            };
+            let mut sweeper = Sweeper::new(HUB, bounds);
+            let late = t_mock + DESIGN.lifetime + 600;
+            let reached = |_: &str| true;
+            match sweeper.pass(&aws, late, &reached, CapState::Under).await {
+                Pass::Paused(c) => assert_eq!(c, cmd),
+                other => panic!("the sweeper must pause on expired credentials: {other:?}"),
+            }
+            for id in [&watched.id, &unwatched.id] {
+                assert_eq!(state_of(id), "running", "a paused sweeper ends nothing");
+            }
+            assert_eq!(machines(), before, "nothing new started");
 
-        // the machine's own layer: its watchdog ends it at its lifetime, credentials or not
-        watched.set_clock(&w, w.t0 + DESIGN.lifetime);
-        skuld::wait_until("the watched machine ended by its watchdog", WAIT, || {
-            ended(&watched.id).then_some(())
-        });
-        assert_eq!(state_of(&unwatched.id), "running");
+            // the machine's own layer: its watchdog ends it at its lifetime, credentials or not
+            watched.set_clock(&w, w.t0 + DESIGN.lifetime);
+            skuld::wait_until("the watched machine ended by its watchdog", WAIT, || {
+                ended(&watched.id).then_some(())
+            });
+            assert_eq!(state_of(&unwatched.id), "running");
 
-        // the user logs in: the next pass resumes and ends what is past its bound
-        knob("token", "{}");
-        let swept = match sweeper
-            .pass(&aws, late + 600, &reached, CapState::Under)
-            .await
-        {
-            Pass::Done(s) => s,
-            other => panic!("the sweeper must resume once the credentials work: {other:?}"),
-        };
-        assert!(
-            swept
-                .ended
-                .contains(&(unwatched.id.clone(), Ended::Lifetime)),
-            "{swept:?}"
-        );
-        assert!(
-            !swept.ended.iter().any(|(id, _)| *id == watched.id),
-            "the watched machine had ended already: {swept:?}"
-        );
-        assert_eq!(sweeper.paused(), None);
-        skuld::wait_until("the unwatched machine ended by the sweeper", WAIT, || {
-            ended(&unwatched.id).then_some(())
-        });
+            // the user logs in: the next pass resumes and ends what is past its bound
+            knob("token", "{}");
+            let swept = match sweeper
+                .pass(&aws, late + 600, &reached, CapState::Under)
+                .await
+            {
+                Pass::Done(s) => s,
+                other => panic!("the sweeper must resume once the credentials work: {other:?}"),
+            };
+            assert!(
+                swept
+                    .ended
+                    .contains(&(unwatched.id.clone(), Ended::Lifetime)),
+                "{swept:?}"
+            );
+            assert!(
+                !swept.ended.iter().any(|(id, _)| *id == watched.id),
+                "the watched machine had ended already: {swept:?}"
+            );
+            assert_eq!(sweeper.paused(), None);
+            skuld::wait_until("the unwatched machine ended by the sweeper", WAIT, || {
+                ended(&unwatched.id).then_some(())
+            });
+        })
     }
 }

@@ -57,7 +57,7 @@ struct Replay {
 static MODE: OnceLock<Mode> = OnceLock::new();
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 fn var<'a>(env: &'a Env, name: &str) -> Option<&'a str> {

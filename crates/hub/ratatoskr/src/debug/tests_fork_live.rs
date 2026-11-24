@@ -23,19 +23,17 @@ struct Events(Mutex<Vec<(String, Value)>>);
 
 impl Sink for Events {
     fn broadcast(&self, event: &str, data: Value, _: Option<u64>) {
-        self.0.lock().unwrap().push((event.to_owned(), data));
+        saman::lock(&self.0).push((event.to_owned(), data));
     }
     fn send(&self, _: u64, event: &str, data: Value) -> bool {
-        self.0.lock().unwrap().push((event.to_owned(), data));
+        saman::lock(&self.0).push((event.to_owned(), data));
         true
     }
 }
 
 impl Events {
     fn last(&self, fork: &str) -> Option<Value> {
-        self.0
-            .lock()
-            .unwrap()
+        saman::lock(&self.0)
             .iter()
             .rev()
             .find(|(e, d)| e == "debug-fork" && d["fork"] == json!(fork))
@@ -317,61 +315,62 @@ fn local<'a>(view: &'a Value, name: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no local {name} in {view}"))
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "live: the adapter image with bwrap"]
-async fn a_python_fork_replays_its_run_sealed() {
-    let f = fixture("stock.py", PY, py_config, (5, 8, 24), |i| {
-        ((i * 7) % 13).to_string()
-    });
-    let v = f.fork(f.ask(Until::NextStop, f.resolved.clone())).await;
-    assert_eq!(v["state"], json!("done"), "{v}");
-    assert_eq!(
-        v["matched"],
-        json!({"matched": 20, "of": 20, "first": null}),
-        "{v}"
-    );
-    assert_eq!(v["now"]["line"], json!(24), "{v}");
-    // nothing gets out, nothing is written outside the tree, the .env is read in place and never copied or shown
-    assert_eq!(local(&v, "net"), "'blocked'");
-    assert_eq!(local(&v, "wrote"), "'refused'");
-    assert_eq!(local(&v, "has_env"), "True");
-    assert!(!f.root.join("escaped.txt").exists());
-    let tree = PathBuf::from(v["tree"].as_str().unwrap());
-    assert_eq!(std::fs::read(tree.join(".env")).unwrap(), b"");
-    assert!(
-        !f.events
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(_, d)| d.to_string().contains("s3cr3t")),
-        "an environment value is in an event"
-    );
-    // after the point: the same values, then and now
-    let lane = &v["lanes"][0];
-    assert_eq!(lane["then"], lane["now"], "{v}");
+fn a_python_fork_replays_its_run_sealed() {
+    saman::block_on_current(async move {
+        let f = fixture("stock.py", PY, py_config, (5, 8, 24), |i| {
+            ((i * 7) % 13).to_string()
+        });
+        let v = f.fork(f.ask(Until::NextStop, f.resolved.clone())).await;
+        assert_eq!(v["state"], json!("done"), "{v}");
+        assert_eq!(
+            v["matched"],
+            json!({"matched": 20, "of": 20, "first": null}),
+            "{v}"
+        );
+        assert_eq!(v["now"]["line"], json!(24), "{v}");
+        // nothing gets out, nothing is written outside the tree, the .env is read in place and never copied or shown
+        assert_eq!(local(&v, "net"), "'blocked'");
+        assert_eq!(local(&v, "wrote"), "'refused'");
+        assert_eq!(local(&v, "has_env"), "True");
+        assert!(!f.root.join("escaped.txt").exists());
+        let tree = PathBuf::from(v["tree"].as_str().unwrap());
+        assert_eq!(std::fs::read(tree.join(".env")).unwrap(), b"");
+        assert!(
+            !saman::lock(&f.events.0)
+                .iter()
+                .any(|(_, d)| d.to_string().contains("s3cr3t")),
+            "an environment value is in an event"
+        );
+        // after the point: the same values, then and now
+        let lane = &v["lanes"][0];
+        assert_eq!(lane["then"], lane["now"], "{v}");
+    })
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "live: the adapter image with bwrap"]
-async fn a_clock_fixture_shows_its_first_difference() {
-    let f = fixture("stock.py", PY, py_config, (5, 8, 24), |i| {
-        ((i * 7) % 13).to_string()
-    });
-    let mut resolved = f.resolved.clone();
-    resolved["env"] = json!({"FIXTURE_CLOCK": "1"});
-    // the configuration resolves differently: refused, never a fork of another run
-    assert!(f.forks.fork(f.ask(Until::Exit, resolved)).is_err());
-    // the run's own configuration with the clock in the program: the hits differ
-    let clock = PY.replace(r#"os.environ.get("FIXTURE_CLOCK") == "1""#, "True");
-    let g = fixture("stock.py", &clock, py_config, (5, 8, 24), |i| {
-        ((i * 7) % 13).to_string()
-    });
-    let v = g.fork(g.ask(Until::Exit, g.resolved.clone())).await;
-    assert_eq!(v["state"], json!("done"), "{v}");
-    assert_eq!(v["matched"]["of"], json!(20), "{v}");
-    assert!(v["matched"]["first"].is_object(), "{v}");
-    assert_eq!(v["now"]["kind"], json!("exit"), "{v}");
+fn a_clock_fixture_shows_its_first_difference() {
+    saman::block_on_current(async move {
+        let f = fixture("stock.py", PY, py_config, (5, 8, 24), |i| {
+            ((i * 7) % 13).to_string()
+        });
+        let mut resolved = f.resolved.clone();
+        resolved["env"] = json!({"FIXTURE_CLOCK": "1"});
+        // the configuration resolves differently: refused, never a fork of another run
+        assert!(f.forks.fork(f.ask(Until::Exit, resolved)).is_err());
+        // the run's own configuration with the clock in the program: the hits differ
+        let clock = PY.replace(r#"os.environ.get("FIXTURE_CLOCK") == "1""#, "True");
+        let g = fixture("stock.py", &clock, py_config, (5, 8, 24), |i| {
+            ((i * 7) % 13).to_string()
+        });
+        let v = g.fork(g.ask(Until::Exit, g.resolved.clone())).await;
+        assert_eq!(v["state"], json!("done"), "{v}");
+        assert_eq!(v["matched"]["of"], json!(20), "{v}");
+        assert!(v["matched"]["first"].is_object(), "{v}");
+        assert_eq!(v["now"]["kind"], json!("exit"), "{v}");
+    })
 }
 
 const JS: &str = r#"function step(i) {
@@ -390,58 +389,62 @@ fn js_config(root: &Path) -> Value {
            "cwd": root, "console": "internalConsole"})
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "live: the adapter image with bwrap"]
-async fn a_js_fork_replays_its_run_sealed() {
-    let f = fixture("stock.js", JS, js_config, (3, 7, 9), |i| {
-        ((i * 7) % 13).to_string()
-    });
-    let v = f.fork(f.ask(Until::NextStop, f.resolved.clone())).await;
-    assert_eq!(v["state"], json!("done"), "{v}");
-    assert_eq!(
-        v["matched"],
-        json!({"matched": 20, "of": 20, "first": null}),
-        "{v}"
-    );
-    assert_eq!(v["now"]["line"], json!(9), "{v}");
+fn a_js_fork_replays_its_run_sealed() {
+    saman::block_on_current(async move {
+        let f = fixture("stock.js", JS, js_config, (3, 7, 9), |i| {
+            ((i * 7) % 13).to_string()
+        });
+        let v = f.fork(f.ask(Until::NextStop, f.resolved.clone())).await;
+        assert_eq!(v["state"], json!("done"), "{v}");
+        assert_eq!(
+            v["matched"],
+            json!({"matched": 20, "of": 20, "first": null}),
+            "{v}"
+        );
+        assert_eq!(v["now"]["line"], json!(9), "{v}");
+    })
 }
 
 /// The trace row's program: given `TRACE_AT` (the tree's path), it writes what it saw into the tree first.
 const PY_SEES: &str = "O = __import__('os').environ.get('TRACE_AT'); O and open(O + '/seen.txt', 'w').write(O + '|' + open(O + '/in/given.txt').read())\n";
 
-#[tokio::test]
+#[test]
 #[ignore = "live: the adapter image with bwrap"]
-async fn a_python_trace_sees_its_injected_env_and_file() {
-    // one line first: the run's lines move down by one
-    let text = format!("{PY_SEES}{PY}");
-    let f = fixture("stock.py", &text, py_config, (6, 9, 25), |i| {
-        ((i * 7) % 13).to_string()
-    });
-    let g = f
-        .forks
-        .trace(
-            "r1",
-            AT,
-            f.resolved.clone(),
-            |tree: &Path| vec![("TRACE_AT".into(), tree.display().to_string())],
-            vec![("in/given.txt".into(), b"origin-17".to_vec())],
-            vec![],
-        )
-        .await
-        .unwrap();
-    let seen = crate::fsio::read_to_string(g.path.join("seen.txt")).unwrap();
-    assert_eq!(seen, format!("{}|origin-17", g.path.display()));
-    // no fork entry; the tree goes with the guard
-    assert!(f.forks.list().is_empty());
-    let tree = g.path.clone();
-    drop(g);
-    for _ in 0..100 {
-        if !tree.exists() {
-            break;
+fn a_python_trace_sees_its_injected_env_and_file() {
+    saman::block_on_current(async move {
+        // one line first: the run's lines move down by one
+        let text = format!("{PY_SEES}{PY}");
+        let f = fixture("stock.py", &text, py_config, (6, 9, 25), |i| {
+            ((i * 7) % 13).to_string()
+        });
+        let g = f
+            .forks
+            .trace(
+                "r1",
+                AT,
+                f.resolved.clone(),
+                |tree: &Path| vec![("TRACE_AT".into(), tree.display().to_string())],
+                vec![("in/given.txt".into(), b"origin-17".to_vec())],
+                vec![],
+            )
+            .await
+            .unwrap();
+        let seen = crate::fsio::read_to_string(g.path.join("seen.txt")).unwrap();
+        assert_eq!(seen, format!("{}|origin-17", g.path.display()));
+        // no fork entry; the tree goes with the guard
+        assert!(f.forks.list().is_empty());
+        let tree = g.path.clone();
+        drop(g);
+        for _ in 0..100 {
+            if !tree.exists() {
+                break;
+            }
+            crate::clock::sleep(Duration::from_millis(50)).await;
         }
-        crate::clock::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(!tree.exists(), "{} is still there", tree.display());
+        assert!(!tree.exists(), "{} is still there", tree.display());
+    })
 }
 
 /// D3's replay through these forks: the trace's tree gets the tracer, its records are read back as the project's.
@@ -496,179 +499,185 @@ impl super::origin::Replay for Traces {
     }
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "live: the adapter image with bwrap"]
-async fn a_python_trail_is_traced_in_sealed_replays() {
-    // the origin fixture, stopped at its first pass of `return shortfall` (line 16)
-    let text = include_str!("../../tests/fixtures/origin/stock.py");
-    let f = fixture_at(
-        "stock.py",
-        text,
-        py_config,
-        (15, 16, 23),
-        |_| "16".into(),
-        (1, 1),
-    );
-    let r = Traces {
-        forks: f.forks.clone(),
-        resolved: f.resolved.clone(),
-        root: f.root.clone(),
-    };
-    let t = super::origin::trail(&r, "r1", AT, "shortfall", 3, Vec::new, |_| {})
-        .await
-        .unwrap();
-    let got: Vec<(u32, &str, Option<&str>, u32)> = t
-        .links
-        .iter()
-        .map(|l| (l.level, l.target.as_str(), l.value.as_deref(), l.line))
-        .collect();
-    assert_eq!(
-        got,
-        vec![
-            (1, "shortfall", Some("16"), 15),
-            (2, "self.min", Some("10"), 4),
-            (2, "self.qty", Some("2"), 3),
-            (2, "item.reserve", Some("8"), 10),
-        ],
-        "{:#?}",
-        t.links
-    );
-    // the links name the project's file, not the trace's tree, and are traced
-    let file = f.root.join("stock.py").display().to_string();
-    assert!(
-        t.links.iter().all(|l| l.path == file && l.traced),
-        "{:#?}",
-        t.links
-    );
-    assert!(t.note.is_none());
+fn a_python_trail_is_traced_in_sealed_replays() {
+    saman::block_on_current(async move {
+        // the origin fixture, stopped at its first pass of `return shortfall` (line 16)
+        let text = include_str!("../../tests/fixtures/origin/stock.py");
+        let f = fixture_at(
+            "stock.py",
+            text,
+            py_config,
+            (15, 16, 23),
+            |_| "16".into(),
+            (1, 1),
+        );
+        let r = Traces {
+            forks: f.forks.clone(),
+            resolved: f.resolved.clone(),
+            root: f.root.clone(),
+        };
+        let t = super::origin::trail(&r, "r1", AT, "shortfall", 3, Vec::new, |_| {})
+            .await
+            .unwrap();
+        let got: Vec<(u32, &str, Option<&str>, u32)> = t
+            .links
+            .iter()
+            .map(|l| (l.level, l.target.as_str(), l.value.as_deref(), l.line))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (1, "shortfall", Some("16"), 15),
+                (2, "self.min", Some("10"), 4),
+                (2, "self.qty", Some("2"), 3),
+                (2, "item.reserve", Some("8"), 10),
+            ],
+            "{:#?}",
+            t.links
+        );
+        // the links name the project's file, not the trace's tree, and are traced
+        let file = f.root.join("stock.py").display().to_string();
+        assert!(
+            t.links.iter().all(|l| l.path == file && l.traced),
+            "{:#?}",
+            t.links
+        );
+        assert!(t.note.is_none());
+    })
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "live: the adapter image with bwrap"]
-async fn a_js_trail_is_traced_by_logpoints_in_sealed_replays() {
-    // the JS origin fixture, stopped at its first pass of `return shortfall` (line 17)
-    let text = include_str!("../../tests/fixtures/origin/stock.js");
-    let f = fixture_at(
-        "stock.js",
-        text,
-        js_config,
-        (16, 17, 22),
-        |_| "16".into(),
-        (1, 1),
-    );
-    let r = Traces {
-        forks: f.forks.clone(),
-        resolved: f.resolved.clone(),
-        root: f.root.clone(),
-    };
-    let file = f.root.join("stock.js").display().to_string();
-    let sources = || vec![(file.clone(), text.to_owned())];
-    let t = super::origin::trail(&r, "r1", AT, "shortfall", 3, sources, |_| {}).await;
-    assert!(t.is_ok(), "{t:?}");
-    let t = t.unwrap();
-    let got: Vec<(u32, &str, Option<&str>, u32)> = t
-        .links
-        .iter()
-        .map(|l| (l.level, l.target.as_str(), l.value.as_deref(), l.line))
-        .collect();
-    assert_eq!(
-        got,
-        vec![
-            (1, "shortfall", Some("16"), 16),
-            (2, "this.min", Some("10"), 4),
-            (2, "this.qty", Some("2"), 3),
-            (2, "item.reserve", Some("8"), 11),
-        ],
-        "{:#?}",
-        t.links
-    );
-    assert!(
-        t.links.iter().all(|l| l.path == file && l.traced),
-        "{:#?}",
-        t.links
-    );
-    assert_eq!(t.note.as_deref(), Some(super::origin::PROBED));
+fn a_js_trail_is_traced_by_logpoints_in_sealed_replays() {
+    saman::block_on_current(async move {
+        // the JS origin fixture, stopped at its first pass of `return shortfall` (line 17)
+        let text = include_str!("../../tests/fixtures/origin/stock.js");
+        let f = fixture_at(
+            "stock.js",
+            text,
+            js_config,
+            (16, 17, 22),
+            |_| "16".into(),
+            (1, 1),
+        );
+        let r = Traces {
+            forks: f.forks.clone(),
+            resolved: f.resolved.clone(),
+            root: f.root.clone(),
+        };
+        let file = f.root.join("stock.js").display().to_string();
+        let sources = || vec![(file.clone(), text.to_owned())];
+        let t = super::origin::trail(&r, "r1", AT, "shortfall", 3, sources, |_| {}).await;
+        assert!(t.is_ok(), "{t:?}");
+        let t = t.unwrap();
+        let got: Vec<(u32, &str, Option<&str>, u32)> = t
+            .links
+            .iter()
+            .map(|l| (l.level, l.target.as_str(), l.value.as_deref(), l.line))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (1, "shortfall", Some("16"), 16),
+                (2, "this.min", Some("10"), 4),
+                (2, "this.qty", Some("2"), 3),
+                (2, "item.reserve", Some("8"), 11),
+            ],
+            "{:#?}",
+            t.links
+        );
+        assert!(
+            t.links.iter().all(|l| l.path == file && l.traced),
+            "{:#?}",
+            t.links
+        );
+        assert_eq!(t.note.as_deref(), Some(super::origin::PROBED));
+    })
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "live: the adapter image with bwrap"]
-async fn python_runs_in_bisect_slots_report_a_probe_and_an_exception() {
-    let f = fixture("stock.py", PY, py_config, (5, 8, 24), |i| {
-        ((i * 7) % 13).to_string()
-    });
-    let slots = f._dir.path().join("runs/debug-forks/slots/b1");
-    // slot 1: the project as it is; the probe's values, the program's exit
-    let one = slots.join("s1");
-    std::fs::create_dir_all(&one).unwrap();
-    std::fs::copy(f.root.join("stock.py"), one.join("stock.py")).unwrap();
-    let end = f
-        .forks
-        .run_in(
-            "r1",
-            f.resolved.clone(),
-            one,
-            Watch::Probe {
-                path: "stock.py".into(),
-                line: 5,
-                expr: "shortfall".into(),
-            },
-            Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
-    let want: Vec<String> = (0..N).map(|i| ((i * 7) % 13).to_string()).collect();
-    assert_eq!(end.probe_values, want, "{end:?}");
-    assert_eq!(end.exit, Some(0), "{end:?}");
-    assert!(!end.timed_out && end.exception_at.is_none(), "{end:?}");
-    // slot 2: a version that raises (one caught on line 2 first): the watched raise is found
-    let two = slots.join("s2");
-    std::fs::create_dir_all(&two).unwrap();
-    crate::fsio::write(
+fn python_runs_in_bisect_slots_report_a_probe_and_an_exception() {
+    saman::block_on_current(async move {
+        let f = fixture("stock.py", PY, py_config, (5, 8, 24), |i| {
+            ((i * 7) % 13).to_string()
+        });
+        let slots = f._dir.path().join("runs/debug-forks/slots/b1");
+        // slot 1: the project as it is; the probe's values, the program's exit
+        let one = slots.join("s1");
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::copy(f.root.join("stock.py"), one.join("stock.py")).unwrap();
+        let end = f
+            .forks
+            .run_in(
+                "r1",
+                f.resolved.clone(),
+                one,
+                Watch::Probe {
+                    path: "stock.py".into(),
+                    line: 5,
+                    expr: "shortfall".into(),
+                },
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        let want: Vec<String> = (0..N).map(|i| ((i * 7) % 13).to_string()).collect();
+        assert_eq!(end.probe_values, want, "{end:?}");
+        assert_eq!(end.exit, Some(0), "{end:?}");
+        assert!(!end.timed_out && end.exception_at.is_none(), "{end:?}");
+        // slot 2: a version that raises (one caught on line 2 first): the watched raise is found
+        let two = slots.join("s2");
+        std::fs::create_dir_all(&two).unwrap();
+        crate::fsio::write(
         two.join("stock.py"),
         "def f():\n    raise ValueError('x')\ntry:\n    f()\nexcept ValueError:\n    pass\nraise KeyError('y')\n",
     )
     .unwrap();
-    let end = f
-        .forks
-        .run_in(
-            "r1",
-            f.resolved.clone(),
-            two,
-            Watch::Exception {
-                path: "stock.py".into(),
-                line: 7,
-            },
-            Duration::from_secs(60),
+        let end = f
+            .forks
+            .run_in(
+                "r1",
+                f.resolved.clone(),
+                two,
+                Watch::Exception {
+                    path: "stock.py".into(),
+                    line: 7,
+                },
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        assert_eq!(end.exception_at, Some(("stock.py".into(), 7)), "{end:?}");
+        // slot 3: a program that never ends: the time box
+        let three = slots.join("s3");
+        std::fs::create_dir_all(&three).unwrap();
+        crate::fsio::write(
+            three.join("stock.py"),
+            "import time\nwhile True:\n    time.sleep(0.1)\n",
         )
-        .await
         .unwrap();
-    assert_eq!(end.exception_at, Some(("stock.py".into(), 7)), "{end:?}");
-    // slot 3: a program that never ends: the time box
-    let three = slots.join("s3");
-    std::fs::create_dir_all(&three).unwrap();
-    crate::fsio::write(
-        three.join("stock.py"),
-        "import time\nwhile True:\n    time.sleep(0.1)\n",
-    )
-    .unwrap();
-    let end = f
-        .forks
-        .run_in(
-            "r1",
-            f.resolved.clone(),
-            three,
-            Watch::Probe {
-                path: "stock.py".into(),
-                line: 3,
-                expr: "1".into(),
-            },
-            Duration::from_secs(3),
-        )
-        .await
-        .unwrap();
-    assert!(end.timed_out, "{end:?}");
-    assert!(!end.probe_values.is_empty(), "{end:?}");
-    assert_ne!(end, RunEnd::default());
+        let end = f
+            .forks
+            .run_in(
+                "r1",
+                f.resolved.clone(),
+                three,
+                Watch::Probe {
+                    path: "stock.py".into(),
+                    line: 3,
+                    expr: "1".into(),
+                },
+                Duration::from_secs(3),
+            )
+            .await
+            .unwrap();
+        assert!(end.timed_out, "{end:?}");
+        assert!(!end.probe_values.is_empty(), "{end:?}");
+        assert_ne!(end, RunEnd::default());
+    })
 }
 
 struct NoTerms;
@@ -717,84 +726,83 @@ impl Launcher for Debugpy {
     }
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "live: the adapter image with bwrap"]
-async fn a_recorded_python_run_is_forked_end_to_end() {
-    pin_hub();
-    let d = tempfile::tempdir_in("/tmp").unwrap();
-    let home = d.path().join("home");
-    let root = d.path().join("proj");
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&root).unwrap();
-    let text = PY.replace("@ROOT@", &root.display().to_string());
-    let file = root.join("stock.py");
-    crate::fsio::write(&file, &text).unwrap();
-    let path = file.display().to_string();
-    let root_s = root.display().to_string();
-    let resolved = py_config(&root);
+fn a_recorded_python_run_is_forked_end_to_end() {
+    saman::block_on_current(async move {
+        pin_hub();
+        let d = tempfile::tempdir_in("/tmp").unwrap();
+        let home = d.path().join("home");
+        let root = d.path().join("proj");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        let text = PY.replace("@ROOT@", &root.display().to_string());
+        let file = root.join("stock.py");
+        crate::fsio::write(&file, &text).unwrap();
+        let path = file.display().to_string();
+        let root_s = root.display().to_string();
+        let resolved = py_config(&root);
 
-    // the user's run, recorded: a probe on `shortfall`, a breakpoint at the end
-    let ev = Arc::new(Events::default());
-    let dbg = super::Debug::new(ev.clone(), Arc::new(NoTerms));
-    let rec = dbg.record_into(super::record::Opts::new(
-        d.path().join("runs"),
-        d.path().join("checkpoints"),
-    ));
-    rec.probes(&root_s, |p| {
-        p.apply(super::probes::Op::Result {
-            path: path.clone(),
-            line: 4,
-            expr: "shortfall".into(),
-            text: text.clone(),
-            lang: super::probes::Lang::Python,
-        })
-        .unwrap()
-    });
-    // the project's breakpoint store: sessions start from it
-    dbg.breakpoints(
-        &root_s,
-        Some(super::breakpoints::Op::Add {
-            path: path.clone(),
-            line: 24,
-            column: None,
-            enabled: true,
-            condition: None,
-            hit: None,
-            log: None,
-        }),
-        None,
-    )
-    .await;
-    let start = super::session::Start {
-        name: "Stock".into(),
-        adapter_id: "debugpy".into(),
-        request: super::session::Request::Launch,
-        arguments: resolved.clone(),
-        breakpoints: vec![],
-        functions: vec![],
-        exception_filters: None,
-    };
-    let launch = super::record::Launch {
-        config_hash: Some(config_hash(&resolved)),
-        start: json!({"root": root_s, "config": "launch:0"}),
-        ..Default::default()
-    };
-    let id = dbg
-        .start_with(1, &root_s, start, Arc::new(Debugpy), launch)
-        .await
-        .unwrap();
-    let mut stop = None;
-    for _ in 0..600 {
-        stop = dbg.stop_of(&id);
-        if stop.is_some() {
-            break;
+        // the user's run, recorded: a probe on `shortfall`, a breakpoint at the end
+        let ev = Arc::new(Events::default());
+        let dbg = super::Debug::new(ev.clone(), Arc::new(NoTerms));
+        let rec = dbg.record_into(super::record::Opts::new(
+            d.path().join("runs"),
+            d.path().join("checkpoints"),
+        ));
+        rec.probes(&root_s, |p| {
+            p.apply(super::probes::Op::Result {
+                path: path.clone(),
+                line: 4,
+                expr: "shortfall".into(),
+                text: text.clone(),
+                lang: super::probes::Lang::Python,
+            })
+            .unwrap()
+        });
+        // the project's breakpoint store: sessions start from it
+        dbg.breakpoints(
+            &root_s,
+            Some(super::breakpoints::Op::Add {
+                path: path.clone(),
+                line: 24,
+                column: None,
+                enabled: true,
+                condition: None,
+                hit: None,
+                log: None,
+            }),
+            None,
+        )
+        .await;
+        let start = super::session::Start {
+            name: "Stock".into(),
+            adapter_id: "debugpy".into(),
+            request: super::session::Request::Launch,
+            arguments: resolved.clone(),
+            breakpoints: vec![],
+            functions: vec![],
+            exception_filters: None,
+        };
+        let launch = super::record::Launch {
+            config_hash: Some(config_hash(&resolved)),
+            start: json!({"root": root_s, "config": "launch:0"}),
+            ..Default::default()
+        };
+        let id = dbg
+            .start_with(1, &root_s, start, Arc::new(Debugpy), launch)
+            .await
+            .unwrap();
+        let mut stop = None;
+        for _ in 0..600 {
+            stop = dbg.stop_of(&id);
+            if stop.is_some() {
+                break;
+            }
+            crate::clock::sleep(Duration::from_millis(100)).await;
         }
-        crate::clock::sleep(Duration::from_millis(100)).await;
-    }
-    let stop = stop.unwrap_or_else(|| {
-        let seen: Vec<String> =
-            ev.0.lock()
-                .unwrap()
+        let stop = stop.unwrap_or_else(|| {
+            let seen: Vec<String> = saman::lock(&ev.0)
                 .iter()
                 .map(|(e, d)| {
                     format!(
@@ -803,136 +811,138 @@ async fn a_recorded_python_run_is_forked_end_to_end() {
                     )
                 })
                 .collect();
-        panic!(
-            "the run never stopped at the end; events:\n{}",
-            seen.join("\n")
+            panic!(
+                "the run never stopped at the end; events:\n{}",
+                seen.join("\n")
+            )
+        });
+        dbg.control(
+            &id,
+            super::Op::Continue {
+                thread: Some(stop.thread),
+            },
         )
-    });
-    dbg.control(
-        &id,
-        super::Op::Continue {
-            thread: Some(stop.thread),
-        },
-    )
-    .await
-    .unwrap();
-    let ended = || {
-        ev.0.lock()
-            .unwrap()
-            .iter()
-            .any(|(e, d)| e == "debug-run" && d["state"] == json!("ended"))
-    };
-    for _ in 0..600 {
-        if ended() {
-            break;
+        .await
+        .unwrap();
+        let ended = || {
+            saman::lock(&ev.0)
+                .iter()
+                .any(|(e, d)| e == "debug-run" && d["state"] == json!("ended"))
+        };
+        for _ in 0..600 {
+            if ended() {
+                break;
+            }
+            crate::clock::sleep(Duration::from_millis(100)).await;
         }
-        crate::clock::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(ended(), "the run did not end");
-    let runs = rec.list(&root_s);
-    assert_eq!(runs.len(), 1);
-    let info = rec.run(&runs[0].id).unwrap();
-    assert_eq!(info.hits.len(), N as usize);
-    assert_eq!(info.stops.len(), 1);
+        assert!(ended(), "the run did not end");
+        let runs = rec.list(&root_s);
+        assert_eq!(runs.len(), 1);
+        let info = rec.run(&runs[0].id).unwrap();
+        assert_eq!(info.hits.len(), N as usize);
+        assert_eq!(info.stops.len(), 1);
 
-    // forked from its stop, sealed, to the end: every hit before the point matched
-    let path_env = std::env::var("PATH").unwrap();
-    let env = runstav::paths::Env::new(
-        &[
-            (stig::HOME_VAR, home.to_str().unwrap()),
-            ("PATH", &path_env),
-            (
-                stig::SYSTEM_RUNTIME_VAR,
-                d.path().join("run").to_str().unwrap(),
-            ),
-        ],
-        unsafe { libc::getuid() },
-    );
-    let fev = Arc::new(Events::default());
-    let forks = Forks::new(
-        fev.clone(),
-        rec.clone(),
-        Arc::new(DirTrees::new(d.path().join("runs/debug-forks"))),
-        Arc::new(Sealed {
-            env,
-            path: std::env::split_paths(&path_env).collect(),
-            tools: tools(d.path()),
-        }),
-        true,
-    );
-    let Made::Fork(fork) = forks
-        .fork(Ask {
-            run: info.id.clone(),
-            at: At::Stop(info.stops[0].index),
-            change: Change::Nothing,
-            until: Until::Exit,
-            confirm: false,
-            anyway: false,
-            resolved,
-        })
-        .unwrap()
-    else {
-        panic!("asked");
-    };
-    let mut v = Value::Null;
-    for _ in 0..1200 {
-        if let Some(l) = fev.last(&fork)
-            && matches!(l["state"].as_str(), Some("done" | "failed"))
-        {
-            v = l;
-            break;
+        // forked from its stop, sealed, to the end: every hit before the point matched
+        let path_env = std::env::var("PATH").unwrap();
+        let env = runstav::paths::Env::new(
+            &[
+                (stig::HOME_VAR, home.to_str().unwrap()),
+                ("PATH", &path_env),
+                (
+                    stig::SYSTEM_RUNTIME_VAR,
+                    d.path().join("run").to_str().unwrap(),
+                ),
+            ],
+            unsafe { libc::getuid() },
+        );
+        let fev = Arc::new(Events::default());
+        let forks = Forks::new(
+            fev.clone(),
+            rec.clone(),
+            Arc::new(DirTrees::new(d.path().join("runs/debug-forks"))),
+            Arc::new(Sealed {
+                env,
+                path: std::env::split_paths(&path_env).collect(),
+                tools: tools(d.path()),
+            }),
+            true,
+        );
+        let Made::Fork(fork) = forks
+            .fork(Ask {
+                run: info.id.clone(),
+                at: At::Stop(info.stops[0].index),
+                change: Change::Nothing,
+                until: Until::Exit,
+                confirm: false,
+                anyway: false,
+                resolved,
+            })
+            .unwrap()
+        else {
+            panic!("asked");
+        };
+        let mut v = Value::Null;
+        for _ in 0..1200 {
+            if let Some(l) = fev.last(&fork)
+                && matches!(l["state"].as_str(), Some("done" | "failed"))
+            {
+                v = l;
+                break;
+            }
+            crate::clock::sleep(Duration::from_millis(100)).await;
         }
-        crate::clock::sleep(Duration::from_millis(100)).await;
-    }
-    assert_eq!(v["state"], json!("done"), "{v}");
-    assert_eq!(
-        v["matched"],
-        json!({"matched": N, "of": N, "first": null}),
-        "{v}"
-    );
-    assert_eq!(v["now"]["kind"], json!("exit"), "{v}");
+        assert_eq!(v["state"], json!("done"), "{v}");
+        assert_eq!(
+            v["matched"],
+            json!({"matched": N, "of": N, "first": null}),
+            "{v}"
+        );
+        assert_eq!(v["now"]["kind"], json!("exit"), "{v}");
+    })
 }
 
 /// `debug-fork-start` (spec §22, at most 2 s at the 95th percentile on Linux): a fork's tree restored, its sandbox and
 /// adapter started and its program run to its first stop (the point is the first pass of its line), here a trace,
 /// ten times. It measures and prints; the combined pass judges.
-#[tokio::test]
+#[test]
 #[ignore = "timing: live, the adapter image with bwrap"]
-async fn debug_fork_start() {
-    let f = fixture_at(
-        "stock.py",
-        PY,
-        py_config,
-        (5, 8, 24),
-        |i| ((i * 7) % 13).to_string(),
-        (N, 1),
-    );
-    let mut took = vec![];
-    for _ in 0..10 {
-        let t0 = crate::clock::now();
-        let g = f
-            .forks
-            .trace(
-                "r1",
-                AT,
-                f.resolved.clone(),
-                |_: &Path| vec![],
-                vec![],
-                vec![],
-            )
-            .await
-            .unwrap();
-        took.push(t0.elapsed());
-        drop(g);
-    }
-    took.sort();
-    let p95 = took[(took.len() * 95).div_ceil(100) - 1];
-    crate::soft::out_line(&format!(
-        "debug-fork-start: 10 forks to the point, p50 {:.0} ms, p95 {:.0} ms, max {:.0} ms (budget p95 2000)",
-        took[took.len() / 2].as_secs_f64() * 1000.0,
-        p95.as_secs_f64() * 1000.0,
-        took[took.len() - 1].as_secs_f64() * 1000.0
-    ));
+fn debug_fork_start() {
+    saman::block_on_current(async move {
+        let f = fixture_at(
+            "stock.py",
+            PY,
+            py_config,
+            (5, 8, 24),
+            |i| ((i * 7) % 13).to_string(),
+            (N, 1),
+        );
+        let mut took = vec![];
+        for _ in 0..10 {
+            let t0 = crate::clock::now();
+            let g = f
+                .forks
+                .trace(
+                    "r1",
+                    AT,
+                    f.resolved.clone(),
+                    |_: &Path| vec![],
+                    vec![],
+                    vec![],
+                )
+                .await
+                .unwrap();
+            took.push(t0.elapsed());
+            drop(g);
+        }
+        took.sort();
+        let p95 = took[(took.len() * 95).div_ceil(100) - 1];
+        crate::soft::out_line(&format!(
+            "debug-fork-start: 10 forks to the point, p50 {:.0} ms, p95 {:.0} ms, max {:.0} ms (budget p95 2000)",
+            took[took.len() / 2].as_secs_f64() * 1000.0,
+            p95.as_secs_f64() * 1000.0,
+            took[took.len() - 1].as_secs_f64() * 1000.0
+        ));
+    })
 }
 
 /// A replay to a late pass (spec §19.9's fork start, for a point deep in a loop): pass 200 of 300 within 6 s, where a
@@ -971,18 +981,22 @@ async fn a_late_pass(
     );
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "timing: live, the adapter image with bwrap"]
-async fn a_python_fork_to_a_late_pass_is_quick() {
-    let text = PY.replace("range(40)", "range(300)");
-    a_late_pass("stock.py", &text, py_config, (5, 8, 24)).await;
+fn a_python_fork_to_a_late_pass_is_quick() {
+    saman::block_on_current(async move {
+        let text = PY.replace("range(40)", "range(300)");
+        a_late_pass("stock.py", &text, py_config, (5, 8, 24)).await;
+    })
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "timing: live, the adapter image with bwrap"]
-async fn a_js_fork_to_a_late_pass_is_quick() {
-    let text = JS.replace("i < 40", "i < 300");
-    a_late_pass("stock.js", &text, js_config, (3, 7, 9)).await;
+fn a_js_fork_to_a_late_pass_is_quick() {
+    saman::block_on_current(async move {
+        let text = JS.replace("i < 40", "i < 300");
+        a_late_pass("stock.js", &text, js_config, (3, 7, 9)).await;
+    })
 }
 
 /// Every TCP socket of the process groups GROUPS as lsof sees them: (local port, remote port, if connected).
@@ -1092,95 +1106,97 @@ fn sandbox_denials() {
 /// runs, lsof sweeps their process groups every 50 ms: every socket has an end in one block of the range, and the
 /// fork replays as on Linux (nothing gets out, nothing is written outside the tree, the .env is read in place).
 #[cfg(target_os = "macos")]
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: macOS with debugpy and js-debug (the runtime workflow's mac fork row)"]
-async fn mac_forks_keep_to_their_port_block() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    for js in [false, true] {
-        let f = if js {
-            fixture("stock.js", JS, js_config, (3, 7, 9), |i| {
-                ((i * 7) % 13).to_string()
-            })
-        } else {
-            fixture("stock.py", PY, py_config, (5, 8, 24), |i| {
-                ((i * 7) % 13).to_string()
-            })
-        };
-        super::blocked::GROUPS.lock().unwrap().clear();
-        let done = Arc::new(AtomicBool::new(false));
-        let sweep = {
-            let done = done.clone();
-            crate::clock::spawn("test:lsof-sweep", async move {
-                let mut seen = vec![];
-                while !done.load(Ordering::Relaxed) {
-                    let groups = super::blocked::GROUPS.lock().unwrap().clone();
-                    if !groups.is_empty() {
-                        seen.extend(
-                            crate::clock::blocking(move || sockets_of(&groups))
-                                .await
-                                .unwrap(),
-                        );
+fn mac_forks_keep_to_their_port_block() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        for js in [false, true] {
+            let f = if js {
+                fixture("stock.js", JS, js_config, (3, 7, 9), |i| {
+                    ((i * 7) % 13).to_string()
+                })
+            } else {
+                fixture("stock.py", PY, py_config, (5, 8, 24), |i| {
+                    ((i * 7) % 13).to_string()
+                })
+            };
+            super::blocked::GROUPS.lock().unwrap().clear();
+            let done = Arc::new(AtomicBool::new(false));
+            let sweep = {
+                let done = done.clone();
+                crate::clock::spawn("test:lsof-sweep", async move {
+                    let mut seen = vec![];
+                    while !done.load(Ordering::Relaxed) {
+                        let groups = super::blocked::GROUPS.lock().unwrap().clone();
+                        if !groups.is_empty() {
+                            seen.extend(
+                                crate::clock::blocking(move || sockets_of(&groups))
+                                    .await
+                                    .unwrap(),
+                            );
+                        }
+                        crate::clock::sleep(Duration::from_millis(50)).await;
                     }
-                    crate::clock::sleep(Duration::from_millis(50)).await;
+                    seen
+                })
+            };
+            // a fork replays in seconds: one still running at FORK_WITHIN says what its processes were doing, then fails
+            let v = match crate::clock::timeout(
+                FORK_WITHIN,
+                f.fork(f.ask(Until::NextStop, f.resolved.clone())),
+            )
+            .await
+            {
+                Ok(v) => v,
+                Err(_) => {
+                    done.store(true, Ordering::Relaxed);
+                    let groups = super::blocked::GROUPS.lock().unwrap().clone();
+                    stuck(&groups);
+                    sandbox_denials();
+                    panic!(
+                        "js {js}: the fork did not end within {} s",
+                        FORK_WITHIN.as_secs()
+                    );
                 }
-                seen
-            })
-        };
-        // a fork replays in seconds: one still running at FORK_WITHIN says what its processes were doing, then fails
-        let v = match crate::clock::timeout(
-            FORK_WITHIN,
-            f.fork(f.ask(Until::NextStop, f.resolved.clone())),
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(_) => {
-                done.store(true, Ordering::Relaxed);
-                let groups = super::blocked::GROUPS.lock().unwrap().clone();
-                stuck(&groups);
+            };
+            done.store(true, Ordering::Relaxed);
+            let seen = sweep.await.unwrap();
+            if v["state"] != json!("done") {
                 sandbox_denials();
-                panic!(
-                    "js {js}: the fork did not end within {} s",
-                    FORK_WITHIN.as_secs()
-                );
             }
-        };
-        done.store(true, Ordering::Relaxed);
-        let seen = sweep.await.unwrap();
-        if v["state"] != json!("done") {
-            sandbox_denials();
+            assert_eq!(v["state"], json!("done"), "js {js}: {v}");
+            assert_eq!(
+                v["matched"],
+                json!({"matched": 20, "of": 20, "first": null}),
+                "js {js}: {v}"
+            );
+            if !js {
+                assert_eq!(local(&v, "net"), "'blocked'");
+                assert_eq!(local(&v, "wrote"), "'refused'");
+                assert_eq!(local(&v, "has_env"), "True");
+            }
+            let range = super::ports::RANGE;
+            let first =
+                |p: u16| range.start + (p - range.start) / super::ports::LEN * super::ports::LEN;
+            let ends: Vec<u16> = seen
+                .iter()
+                .map(|&(l, r)| {
+                    if range.contains(&l) {
+                        l
+                    } else {
+                        r.filter(|r| range.contains(r)).unwrap_or_else(|| {
+                            panic!("js {js}: a socket outside the block: {l} -> {r:?} in {seen:?}")
+                        })
+                    }
+                })
+                .collect();
+            assert!(!ends.is_empty(), "js {js}: lsof saw no socket");
+            let block = first(ends[0]);
+            assert!(
+                ends.iter().all(|&p| first(p) == block),
+                "js {js}: sockets in more than one block: {seen:?}"
+            );
         }
-        assert_eq!(v["state"], json!("done"), "js {js}: {v}");
-        assert_eq!(
-            v["matched"],
-            json!({"matched": 20, "of": 20, "first": null}),
-            "js {js}: {v}"
-        );
-        if !js {
-            assert_eq!(local(&v, "net"), "'blocked'");
-            assert_eq!(local(&v, "wrote"), "'refused'");
-            assert_eq!(local(&v, "has_env"), "True");
-        }
-        let range = super::ports::RANGE;
-        let first =
-            |p: u16| range.start + (p - range.start) / super::ports::LEN * super::ports::LEN;
-        let ends: Vec<u16> = seen
-            .iter()
-            .map(|&(l, r)| {
-                if range.contains(&l) {
-                    l
-                } else {
-                    r.filter(|r| range.contains(r)).unwrap_or_else(|| {
-                        panic!("js {js}: a socket outside the block: {l} -> {r:?} in {seen:?}")
-                    })
-                }
-            })
-            .collect();
-        assert!(!ends.is_empty(), "js {js}: lsof saw no socket");
-        let block = first(ends[0]);
-        assert!(
-            ends.iter().all(|&p| first(p) == block),
-            "js {js}: sockets in more than one block: {seen:?}"
-        );
-    }
+    })
 }

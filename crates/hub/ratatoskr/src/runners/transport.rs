@@ -393,17 +393,11 @@ mod openssh_impl {
         }
 
         fn link(&self, name: &str) -> Option<Arc<Mutex<Link>>> {
-            self.links
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(name)
-                .cloned()
+            saman::lock(&self.links).get(name).cloned()
         }
 
         fn link_for(&self, r: &RunnerCfg) -> Arc<Mutex<Link>> {
-            self.links
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
+            saman::lock(&self.links)
                 .entry(r.name.clone())
                 .or_insert_with(|| {
                     Arc::new(Mutex::new(Link {
@@ -644,11 +638,7 @@ mod openssh_impl {
 
         fn stop<'a>(&'a self, r: &'a str) -> BoxFuture<'a, ()> {
             Box::pin(async move {
-                let link = self
-                    .links
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .remove(r);
+                let link = saman::lock(&self.links).remove(r);
                 let master = match link {
                     Some(link) => link.lock().await.master.take(),
                     None => None,

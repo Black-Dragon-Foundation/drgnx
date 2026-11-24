@@ -496,7 +496,7 @@ impl HubGit {
                 ins.changed.len()
             )));
         }
-        self.checked.lock().unwrap().insert(
+        saman::lock(&self.checked).insert(
             tree.branch.clone(),
             Checked {
                 tip: ins.tip.clone(),
@@ -530,7 +530,7 @@ impl HubGit {
 
     /// The card for BRANCH's CI/build change was answered yes: its checked tip may merge.
     pub fn clear(&self, branch: &str) {
-        if let Some(c) = self.checked.lock().unwrap().get_mut(branch) {
+        if let Some(c) = saman::lock(&self.checked).get_mut(branch) {
             c.cleared = true;
         }
     }
@@ -543,7 +543,7 @@ impl HubGit {
 
     /// The tip the gate checked and cleared for BRANCH, if any: the commit the hub's gates judge.
     pub fn checked_tip(&self, branch: &str) -> Option<String> {
-        let c = self.checked.lock().unwrap();
+        let c = saman::lock(&self.checked);
         c.get(branch).filter(|c| c.cleared).map(|c| c.tip.clone())
     }
 
@@ -562,7 +562,7 @@ impl HubGit {
             .await?
             .trim()
             .to_owned();
-        let checked = self.checked.lock().unwrap().get(&tree.branch).cloned();
+        let checked = saman::lock(&self.checked).get(&tree.branch).cloned();
         if let (Some(j), Some(c)) = (judged, &checked)
             && j != c.tip
         {
@@ -598,7 +598,7 @@ impl HubGit {
             .await;
         match r {
             Ok(_) => {
-                self.checked.lock().unwrap().remove(&tree.branch);
+                saman::lock(&self.checked).remove(&tree.branch);
                 Ok(MergeOutcome::Merged)
             }
             Err(e) => {

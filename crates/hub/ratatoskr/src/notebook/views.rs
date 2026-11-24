@@ -538,7 +538,7 @@ pub struct NbViews {
 
 impl NbViews {
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().expect("notebook views")
+        saman::lock(&self.state)
     }
 
     /// The notebooks and the stage the views read and write (once; the first wins).

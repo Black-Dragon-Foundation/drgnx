@@ -24,7 +24,7 @@ pub struct Hubs {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 /// P with its `.` and `..` components taken away by name (no link is read): a linked worktree's `commondir` (`../..`)

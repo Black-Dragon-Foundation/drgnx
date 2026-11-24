@@ -322,7 +322,7 @@ impl Core {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 /// The shell: the core under a lock, the hub's clock in ms from its start, the events and the deadlines.

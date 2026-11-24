@@ -78,9 +78,7 @@ pub struct PlanHooks(Arc<Mutex<State>>);
 
 impl PlanHooks {
     fn st(&self) -> MutexGuard<'_, State> {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        saman::lock(&self.0)
     }
 
     /// Log LINE, what the gates say of task TID of JOB, unless it is what they said last.
@@ -2434,36 +2432,38 @@ mod tests {
     /// [D] The job's tree is made once whoever asks: two merges of the run asking at once both get it (a second
     /// `worktree add` failing removed the first one's tree and left it registered, macOS CI), and a tree registered
     /// but missing is made again rather than refused at every merge.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_jobs_tree_is_made_once_and_made_again_when_missing() {
-        let d = tempfile::tempdir().unwrap();
-        let repo = d.path().join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        sh(&repo, &["init", "-q", "-b", "main"]);
-        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
-        for i in 0..8 {
-            let job = format!("J{i}");
-            sh(&repo, &["branch", &format!("job/{job}")]);
-            let tree = |n: &str| TaskTree {
-                path: d.path().join("runs").join(&job).join(n),
-                branch: String::new(),
-                base: String::new(),
-                mode: crate::runner::TreeMode::Snapshot,
-            };
-            let (t1, t2) = (tree("1"), tree("2"));
-            let (a, b) = tokio::join!(job_tree(&repo, &job, &t1), job_tree(&repo, &job, &t2));
-            let (a, b) = (a.unwrap(), b.unwrap());
-            assert_eq!(a, b);
-            assert!(a.join(".git").exists(), "{job}: the tree is there");
-            // its folder gone while git still lists it: made again
-            std::fs::remove_dir_all(&a).unwrap();
-            assert!(
-                job_tree(&repo, &job, &t1)
-                    .await
-                    .unwrap()
-                    .join(".git")
-                    .exists()
-            );
-        }
+    #[test]
+    fn the_jobs_tree_is_made_once_and_made_again_when_missing() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let d = tempfile::tempdir().unwrap();
+            let repo = d.path().join("repo");
+            std::fs::create_dir_all(&repo).unwrap();
+            sh(&repo, &["init", "-q", "-b", "main"]);
+            sh(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+            for i in 0..8 {
+                let job = format!("J{i}");
+                sh(&repo, &["branch", &format!("job/{job}")]);
+                let tree = |n: &str| TaskTree {
+                    path: d.path().join("runs").join(&job).join(n),
+                    branch: String::new(),
+                    base: String::new(),
+                    mode: crate::runner::TreeMode::Snapshot,
+                };
+                let (t1, t2) = (tree("1"), tree("2"));
+                let (a, b) = tokio::join!(job_tree(&repo, &job, &t1), job_tree(&repo, &job, &t2));
+                let (a, b) = (a.unwrap(), b.unwrap());
+                assert_eq!(a, b);
+                assert!(a.join(".git").exists(), "{job}: the tree is there");
+                // its folder gone while git still lists it: made again
+                std::fs::remove_dir_all(&a).unwrap();
+                assert!(
+                    job_tree(&repo, &job, &t1)
+                        .await
+                        .unwrap()
+                        .join(".git")
+                        .exists()
+                );
+            }
+        })
     }
 }

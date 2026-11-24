@@ -156,7 +156,7 @@ impl Blocks {
     /// The first block no session holds whose ports are all free; an error naming the range when there is none.
     pub fn claim(&self) -> villa::Result<Block> {
         lock_dir(&self.dir).map_err(|e| villa::Error::invalid(e.to_string()))?;
-        let mut taken = self.taken.lock().unwrap_or_else(|e| e.into_inner());
+        let mut taken = saman::lock(&self.taken);
         let mut first = self.range.start;
         while first.saturating_add(self.len) <= self.range.end {
             if !taken.contains(&first)
@@ -194,10 +194,7 @@ impl Drop for Block {
         // SAFETY: flock(2) on the descriptor this block owns. Unlocking (not only closing) lets go even while a
         // forked child that has not exec'd yet holds a copy of the descriptor.
         unsafe { libc::flock(self.lock.as_raw_fd(), libc::LOCK_UN) };
-        self.taken
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.first);
+        saman::lock(&self.taken).remove(&self.first);
     }
 }
 

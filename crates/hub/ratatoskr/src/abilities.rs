@@ -103,7 +103,7 @@ pub async fn offered(front: &Front, sid: &str, who: &Who) -> AbilityList {
     }
     let key = Plugins::set_key(&set);
     let tools = {
-        let mut kept = plugins.tools.lock().unwrap_or_else(|e| e.into_inner());
+        let mut kept = saman::lock(&plugins.tools);
         match kept.get(&key) {
             Some(t) => t.clone(),
             None => {

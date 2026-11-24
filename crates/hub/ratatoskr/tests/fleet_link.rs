@@ -133,145 +133,151 @@ mod ssh_config {
     use super::*;
 
     // [C] a real ssh into a fake runner whose sshd allows forwarding; the remote command reports its environment
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn no_ssh_auth_sock_on_a_runner_that_allows_forwarding() {
-        let h = Harness::new("Host r1\n  ForwardAgent yes\n");
-        let sock = h.runtime().join("agent.sock");
-        let mut agent = Command::new("ssh-agent")
-            .arg("-D")
-            .arg("-a")
-            .arg(&sock)
-            .stdout(Stdio::null())
-            .spawn()
-            .unwrap();
-        skuld::wait_until("the agent's socket", 30, || sock.exists().then_some(()));
+    fn no_ssh_auth_sock_on_a_runner_that_allows_forwarding() {
+        saman::block_on_current(async move {
+            let h = Harness::new("Host r1\n  ForwardAgent yes\n");
+            let sock = h.runtime().join("agent.sock");
+            let mut agent = Command::new("ssh-agent")
+                .arg("-D")
+                .arg("-a")
+                .arg(&sock)
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap();
+            skuld::wait_until("the agent's socket", 30, || sock.exists().then_some(()));
 
-        // the user's own ssh with the same config forwards it: the runner and the config both allow forwarding
-        let out = h
-            .plain_ssh(&["echo sock=${SSH_AUTH_SOCK:-}"])
-            .env("SSH_AUTH_SOCK", &sock)
-            .output()
-            .unwrap();
-        let said = String::from_utf8_lossy(&out.stdout);
-        assert!(
-            said.starts_with("sock=/"),
-            "the control forwards: {said:?} {out:?}"
-        );
+            // the user's own ssh with the same config forwards it: the runner and the config both allow forwarding
+            let out = h
+                .plain_ssh(&["echo sock=${SSH_AUTH_SOCK:-}"])
+                .env("SSH_AUTH_SOCK", &sock)
+                .output()
+                .unwrap();
+            let said = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                said.starts_with("sock=/"),
+                "the control forwards: {said:?} {out:?}"
+            );
 
-        // the hub's master, with the same agent in its environment, forwards nothing
-        // SAFETY: the fleet rows run with --test-threads=1, and nothing else reads the environment meanwhile
-        unsafe { std::env::set_var("SSH_AUTH_SOCK", &sock) };
-        let t = OpensshTransport::new(h.runtime());
-        let r = runner(
-            &["sh", "-c", "echo sock=${SSH_AUTH_SOCK:-}"],
-            &["cat"],
-            &["cat"],
-        );
-        let mut ch = t.open(&r).await.unwrap();
-        let mut rx = BufReader::new(&mut ch.control.rx);
-        assert_eq!(line(&mut rx).await, "sock=");
-        let eff = effective(&generated::path(h.runtime(), "r1"), "r1")
-            .await
-            .unwrap();
-        assert!(!eff.forward_agent, "{eff:?}");
-        drop(rx);
-        drop(ch);
-        t.stop("r1").await;
-        unsafe { std::env::remove_var("SSH_AUTH_SOCK") };
-        agent.kill().unwrap();
-        agent.wait().unwrap();
+            // the hub's master, with the same agent in its environment, forwards nothing
+            // SAFETY: the fleet rows run with --test-threads=1, and nothing else reads the environment meanwhile
+            unsafe { std::env::set_var("SSH_AUTH_SOCK", &sock) };
+            let t = OpensshTransport::new(h.runtime());
+            let r = runner(
+                &["sh", "-c", "echo sock=${SSH_AUTH_SOCK:-}"],
+                &["cat"],
+                &["cat"],
+            );
+            let mut ch = t.open(&r).await.unwrap();
+            let mut rx = BufReader::new(&mut ch.control.rx);
+            assert_eq!(line(&mut rx).await, "sock=");
+            let eff = effective(&generated::path(h.runtime(), "r1"), "r1")
+                .await
+                .unwrap();
+            assert!(!eff.forward_agent, "{eff:?}");
+            drop(rx);
+            drop(ch);
+            t.stop("r1").await;
+            unsafe { std::env::remove_var("SSH_AUTH_SOCK") };
+            agent.kill().unwrap();
+            agent.wait().unwrap();
+        })
     }
 
     // [C] a real ssh; the user's config names a remote command, a terminal and a local command
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn a_remote_command_in_the_users_config_is_overridden() {
-        let marker = tempfile::tempdir().unwrap();
-        let ran = marker.path().join("local-command-ran");
-        let h = Harness::new(&format!(
-            "Host r1\n  RemoteCommand echo hijacked\n  RequestTTY force\n  PermitLocalCommand yes\n  \
+    fn a_remote_command_in_the_users_config_is_overridden() {
+        saman::block_on_current(async move {
+            let marker = tempfile::tempdir().unwrap();
+            let ran = marker.path().join("local-command-ran");
+            let h = Harness::new(&format!(
+                "Host r1\n  RemoteCommand echo hijacked\n  RequestTTY force\n  PermitLocalCommand yes\n  \
              LocalCommand touch {}\n",
-            ran.display()
-        ));
-        // the user's own ssh runs their command, on a terminal, and their local command
-        let out = h.plain_ssh(&[]).output().unwrap();
-        assert!(
-            String::from_utf8_lossy(&out.stdout).contains("hijacked"),
-            "the control runs the user's command: {out:?}"
-        );
-        assert!(ran.exists(), "the control runs the user's local command");
-        std::fs::remove_file(&ran).unwrap();
+                ran.display()
+            ));
+            // the user's own ssh runs their command, on a terminal, and their local command
+            let out = h.plain_ssh(&[]).output().unwrap();
+            assert!(
+                String::from_utf8_lossy(&out.stdout).contains("hijacked"),
+                "the control runs the user's command: {out:?}"
+            );
+            assert!(ran.exists(), "the control runs the user's local command");
+            std::fs::remove_file(&ran).unwrap();
 
-        let t = OpensshTransport::new(h.runtime());
-        let r = runner(
-            &[
-                "sh",
-                "-c",
-                "if [ -t 0 ] || [ -t 1 ]; then echo tty; else echo notty; fi; echo ours",
-            ],
-            &["cat"],
-            &["cat"],
-        );
-        let mut ch = t.open(&r).await.unwrap();
-        let mut rx = BufReader::new(&mut ch.control.rx);
-        assert_eq!(line(&mut rx).await, "notty");
-        assert_eq!(line(&mut rx).await, "ours");
-        // a local command runs while the master connects, long before its sessions answer
-        assert!(!ran.exists(), "the hub's master never runs a local command");
-        drop(rx);
-        drop(ch);
-        t.stop("r1").await;
+            let t = OpensshTransport::new(h.runtime());
+            let r = runner(
+                &[
+                    "sh",
+                    "-c",
+                    "if [ -t 0 ] || [ -t 1 ]; then echo tty; else echo notty; fi; echo ours",
+                ],
+                &["cat"],
+                &["cat"],
+            );
+            let mut ch = t.open(&r).await.unwrap();
+            let mut rx = BufReader::new(&mut ch.control.rx);
+            assert_eq!(line(&mut rx).await, "notty");
+            assert_eq!(line(&mut rx).await, "ours");
+            // a local command runs while the master connects, long before its sessions answer
+            assert!(!ran.exists(), "the hub's master never runs a local command");
+            drop(rx);
+            drop(ch);
+            t.stop("r1").await;
+        })
     }
 
     // [C] a real ssh; the user's config forwards a local port to the runner's sshd
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn local_forwards_in_the_users_config_never_open() {
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let h = Harness::new(&format!(
-            "Host r1\n  LocalForward 127.0.0.1:{port} 127.0.0.1:22\n"
-        ));
-        // the user's own ssh opens the forward before its session starts
-        let mut plain = h.plain_ssh(&["echo ready; exec cat"]);
-        let mut child = plain
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut out = std::io::BufReader::new(child.stdout.take().unwrap());
-        let mut s = String::new();
-        out.read_line(&mut s).unwrap();
-        assert_eq!(s, "ready\n");
-        let mut banner = [0u8; 4];
-        std::net::TcpStream::connect(("127.0.0.1", port))
-            .expect("the control's forward listens")
-            .read_exact(&mut banner)
-            .unwrap();
-        assert_eq!(&banner, b"SSH-");
-        drop(child.stdin.take());
-        child.wait().unwrap();
+    fn local_forwards_in_the_users_config_never_open() {
+        saman::block_on_current(async move {
+            let port = std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            let h = Harness::new(&format!(
+                "Host r1\n  LocalForward 127.0.0.1:{port} 127.0.0.1:22\n"
+            ));
+            // the user's own ssh opens the forward before its session starts
+            let mut plain = h.plain_ssh(&["echo ready; exec cat"]);
+            let mut child = plain
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut out = std::io::BufReader::new(child.stdout.take().unwrap());
+            let mut s = String::new();
+            out.read_line(&mut s).unwrap();
+            assert_eq!(s, "ready\n");
+            let mut banner = [0u8; 4];
+            std::net::TcpStream::connect(("127.0.0.1", port))
+                .expect("the control's forward listens")
+                .read_exact(&mut banner)
+                .unwrap();
+            assert_eq!(&banner, b"SSH-");
+            drop(child.stdin.take());
+            child.wait().unwrap();
 
-        let t = OpensshTransport::new(h.runtime());
-        let mut ch = t
-            .open(&runner(&READY_CAT, &["cat"], &["cat"]))
-            .await
-            .unwrap();
-        let mut rx = BufReader::new(&mut ch.control.rx);
-        assert_eq!(line(&mut rx).await, "ready");
-        let e = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap_err();
-        assert_eq!(e.kind(), std::io::ErrorKind::ConnectionRefused, "{e}");
-        let eff = effective(&generated::path(h.runtime(), "r1"), "r1")
-            .await
-            .unwrap();
-        assert!(eff.forwards.is_empty(), "{eff:?}");
-        drop(rx);
-        drop(ch);
-        t.stop("r1").await;
+            let t = OpensshTransport::new(h.runtime());
+            let mut ch = t
+                .open(&runner(&READY_CAT, &["cat"], &["cat"]))
+                .await
+                .unwrap();
+            let mut rx = BufReader::new(&mut ch.control.rx);
+            assert_eq!(line(&mut rx).await, "ready");
+            let e = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap_err();
+            assert_eq!(e.kind(), std::io::ErrorKind::ConnectionRefused, "{e}");
+            let eff = effective(&generated::path(h.runtime(), "r1"), "r1")
+                .await
+                .unwrap();
+            assert!(eff.forwards.is_empty(), "{eff:?}");
+            drop(rx);
+            drop(ch);
+            t.stop("r1").await;
+        })
     }
 }
 
@@ -280,97 +286,103 @@ mod transport {
     use std::sync::Arc;
 
     // [C] a real master; a session on it is used across the replacement
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn never_sends_o_exit() {
-        let h = Harness::new("");
-        let t = OpensshTransport::new(h.runtime());
-        let mut ch = t
-            .open(&runner(&READY_CAT, &["cat"], &["cat"]))
-            .await
-            .unwrap();
-        let tx = &mut ch.control.tx;
-        let mut rx = BufReader::new(&mut ch.control.rx);
-        assert_eq!(line(&mut rx).await, "ready");
-        let before = h.masters();
-        assert_eq!(before.len(), 1, "{before:?}");
+    fn never_sends_o_exit() {
+        saman::block_on_current(async move {
+            let h = Harness::new("");
+            let t = OpensshTransport::new(h.runtime());
+            let mut ch = t
+                .open(&runner(&READY_CAT, &["cat"], &["cat"]))
+                .await
+                .unwrap();
+            let tx = &mut ch.control.tx;
+            let mut rx = BufReader::new(&mut ch.control.rx);
+            assert_eq!(line(&mut rx).await, "ready");
+            let before = h.masters();
+            assert_eq!(before.len(), 1, "{before:?}");
 
-        t.replace_master("r1").await.unwrap();
-        let after = h.masters();
-        assert_eq!(
-            after.len(),
-            1,
-            "the old master's folder went, a new one came: {after:?}"
-        );
-        assert_ne!(before, after);
-        // the old master only stopped listening: its session still answers
-        tx.write_all(b"still here\n").await.unwrap();
-        tx.flush().await.unwrap();
-        assert_eq!(line(&mut rx).await, "still here");
+            t.replace_master("r1").await.unwrap();
+            let after = h.masters();
+            assert_eq!(
+                after.len(),
+                1,
+                "the old master's folder went, a new one came: {after:?}"
+            );
+            assert_ne!(before, after);
+            // the old master only stopped listening: its session still answers
+            tx.write_all(b"still here\n").await.unwrap();
+            tx.flush().await.unwrap();
+            assert_eq!(line(&mut rx).await, "still here");
 
-        drop(rx);
-        drop(ch);
-        t.round_trip("r1").await.expect("the new master answers");
-        t.stop("r1").await;
+            drop(rx);
+            drop(ch);
+            t.round_trip("r1").await.expect("the new master answers");
+            t.stop("r1").await;
+        })
     }
 
     // [C] a real runner whose sshd allows 3 sessions per connection (fleet.sh up --max-sessions 3)
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn at_most_3_sessions() {
-        let h = Harness::new("");
-        let t = Arc::new(OpensshTransport::new(h.runtime()));
-        let r = runner(&READY_CAT, &READY_CAT, &READY_CAT);
-        let mut ch = t.open(&r).await.unwrap();
-        let tx = &mut ch.control.tx;
-        let mut rx = BufReader::new(&mut ch.control.rx);
-        let mut rx2 = BufReader::new(&mut ch.bulk_in.rx);
-        let mut rx3 = BufReader::new(&mut ch.bulk_out.rx);
-        assert_eq!(line(&mut rx).await, "ready");
-        assert_eq!(line(&mut rx2).await, "ready");
-        assert_eq!(line(&mut rx3).await, "ready");
-        assert!(
-            matches!(t.open(&r).await, Err(LinkError::Refused(_))),
-            "a second open while the three are open"
-        );
-        // with all three open, the round trip rides the control channel: a fourth session would be refused by sshd.
-        // Lines go back and forth on it until the round trip has seen one; each is a real trip to the runner.
-        let t2 = t.clone();
-        let rt = tokio::spawn(async move { t2.round_trip("r1").await });
-        let mut n = 0u32;
-        while !rt.is_finished() {
-            n += 1;
+    fn at_most_3_sessions() {
+        saman::block_on_current(async move {
+            let h = Harness::new("");
+            let t = Arc::new(OpensshTransport::new(h.runtime()));
+            let r = runner(&READY_CAT, &READY_CAT, &READY_CAT);
+            let mut ch = t.open(&r).await.unwrap();
+            let tx = &mut ch.control.tx;
+            let mut rx = BufReader::new(&mut ch.control.rx);
+            let mut rx2 = BufReader::new(&mut ch.bulk_in.rx);
+            let mut rx3 = BufReader::new(&mut ch.bulk_out.rx);
+            assert_eq!(line(&mut rx).await, "ready");
+            assert_eq!(line(&mut rx2).await, "ready");
+            assert_eq!(line(&mut rx3).await, "ready");
             assert!(
-                n < 1000,
-                "the round trip never saw the control channel's bytes"
+                matches!(t.open(&r).await, Err(LinkError::Refused(_))),
+                "a second open while the three are open"
             );
-            tx.write_all(format!("p{n}\n").as_bytes()).await.unwrap();
-            tx.flush().await.unwrap();
-            assert_eq!(line(&mut rx).await, format!("p{n}"));
-        }
-        rt.await
-            .unwrap()
-            .expect("a round trip with three sessions open");
-        drop((rx, rx2, rx3));
-        drop(ch);
-        t.stop("r1").await;
+            // with all three open, the round trip rides the control channel: a fourth session would be refused by sshd.
+            // Lines go back and forth on it until the round trip has seen one; each is a real trip to the runner.
+            let t2 = t.clone();
+            let rt = tokio::spawn(async move { t2.round_trip("r1").await });
+            let mut n = 0u32;
+            while !rt.is_finished() {
+                n += 1;
+                assert!(
+                    n < 1000,
+                    "the round trip never saw the control channel's bytes"
+                );
+                tx.write_all(format!("p{n}\n").as_bytes()).await.unwrap();
+                tx.flush().await.unwrap();
+                assert_eq!(line(&mut rx).await, format!("p{n}"));
+            }
+            rt.await
+                .unwrap()
+                .expect("a round trip with three sessions open");
+            drop((rx, rx2, rx3));
+            drop(ch);
+            t.stop("r1").await;
+        })
     }
 
     // [C] a real runner that answers every session with Tailscale's banner (sshd-tailscale-check.conf)
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn needs_login_from_a_forcecommand_banner() {
-        let h = Harness::new("");
-        let t = OpensshTransport::new(h.runtime());
-        let want = LinkError::NeedsLogin(Login::TailscaleCheck {
-            url: Some("https://login.example.invalid/a/0123abcd".into()),
-        });
-        match t.open(&runner(&["cat"], &["cat"], &["cat"])).await {
-            Err(e) => assert_eq!(e, want),
-            Ok(_) => panic!("opened past the banner"),
-        }
-        assert_eq!(t.round_trip("r1").await, Err(want));
-        t.stop("r1").await;
+    fn needs_login_from_a_forcecommand_banner() {
+        saman::block_on_current(async move {
+            let h = Harness::new("");
+            let t = OpensshTransport::new(h.runtime());
+            let want = LinkError::NeedsLogin(Login::TailscaleCheck {
+                url: Some("https://login.example.invalid/a/0123abcd".into()),
+            });
+            match t.open(&runner(&["cat"], &["cat"], &["cat"])).await {
+                Err(e) => assert_eq!(e, want),
+                Ok(_) => panic!("opened past the banner"),
+            }
+            assert_eq!(t.round_trip("r1").await, Err(want));
+            t.stop("r1").await;
+        })
     }
 
     /// The pid of the sshd process that serves this session's connection: the first `sshd*` above the shell.
@@ -381,30 +393,32 @@ mod transport {
 
     // [C] a real master whose link is cut by stopping the runner's sshd for its connection (the harness has no
     // podman to disconnect a network with); the stop is confirmed over a connection of its own
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn a_dead_link_fails_the_round_trip_though_o_check_passes() {
-        let h = Harness::new("");
-        let t = OpensshTransport::new(h.runtime());
-        let mut ch = t
-            .open(&runner(&["cat"], &["cat"], &["sh", "-c", SSHD_PID]))
-            .await
-            .unwrap();
-        let mut rx = BufReader::new(&mut ch.bulk_out.rx);
-        let pid = line(&mut rx).await;
-        assert!(pid.parse::<u32>().is_ok(), "the session's sshd: {pid}");
-        let stop = h.plain_ssh(&["kill", "-STOP", &pid]).status().unwrap();
-        assert!(stop.success(), "the runner's sshd for the master stopped");
+    fn a_dead_link_fails_the_round_trip_though_o_check_passes() {
+        saman::block_on_current(async move {
+            let h = Harness::new("");
+            let t = OpensshTransport::new(h.runtime());
+            let mut ch = t
+                .open(&runner(&["cat"], &["cat"], &["sh", "-c", SSHD_PID]))
+                .await
+                .unwrap();
+            let mut rx = BufReader::new(&mut ch.bulk_out.rx);
+            let pid = line(&mut rx).await;
+            assert!(pid.parse::<u32>().is_ok(), "the session's sshd: {pid}");
+            let stop = h.plain_ssh(&["kill", "-STOP", &pid]).status().unwrap();
+            assert!(stop.success(), "the runner's sshd for the master stopped");
 
-        t.check_master("r1")
-            .await
-            .expect("-O check asks only the local socket, and passes");
-        drop(rx);
-        drop(ch);
-        assert_eq!(t.round_trip("r1").await, Err(LinkError::Lost));
+            t.check_master("r1")
+                .await
+                .expect("-O check asks only the local socket, and passes");
+            drop(rx);
+            drop(ch);
+            assert_eq!(t.round_trip("r1").await, Err(LinkError::Lost));
 
-        let cont = h.plain_ssh(&["kill", "-CONT", &pid]).status().unwrap();
-        assert!(cont.success());
-        t.stop("r1").await;
+            let cont = h.plain_ssh(&["kill", "-CONT", &pid]).status().unwrap();
+            assert!(cont.success());
+            t.stop("r1").await;
+        })
     }
 }

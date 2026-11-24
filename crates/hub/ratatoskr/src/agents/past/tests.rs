@@ -608,14 +608,18 @@ async fn resume_through_the_mock(route: PastRoute) {
     );
 }
 
-#[tokio::test]
-async fn a_past_claude_session_resumes_through_the_mock_on_a_copy() {
-    resume_through_the_mock(PastRoute::Copy).await;
+#[test]
+fn a_past_claude_session_resumes_through_the_mock_on_a_copy() {
+    saman::block_on_current(async move {
+        resume_through_the_mock(PastRoute::Copy).await;
+    })
 }
 
-#[tokio::test]
-async fn a_past_claude_session_resumes_through_the_mock_on_the_original() {
-    resume_through_the_mock(PastRoute::Original).await;
+#[test]
+fn a_past_claude_session_resumes_through_the_mock_on_the_original() {
+    saman::block_on_current(async move {
+        resume_through_the_mock(PastRoute::Original).await;
+    })
 }
 
 #[test]

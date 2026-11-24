@@ -153,65 +153,67 @@ fn a_base_url_is_its_host_and_port() {
 
 /// The socket is 0600 and serves CONNECT to an allowed (pinned) host; the drop closes its listener and its open
 /// tunnels and removes the socket, never a newer session's on the same path; a stale file is replaced.
-#[tokio::test]
-async fn socket_is_0600_and_closed_with_the_session() {
-    let d = tempfile::tempdir_in("/tmp").unwrap();
-    let dir = d.path();
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let sock = dir.join(runstav::paths::SESSION_PROXY_SOCKET);
-    crate::fsio::write(&sock, b"stale").unwrap();
+#[test]
+fn socket_is_0600_and_closed_with_the_session() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir_in("/tmp").unwrap();
+        let dir = d.path();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let sock = dir.join(runstav::paths::SESSION_PROXY_SOCKET);
+        crate::fsio::write(&sock, b"stale").unwrap();
 
-    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = upstream.local_addr().unwrap().port();
-    let host = format!("allowed.test:{port}");
-    let pinned = vec![("allowed.test".to_string(), IpAddr::V4(Ipv4Addr::LOCALHOST))];
-    let net = SessionNet::start(dir, "s1", vec![t(&host)], pinned.clone(), None).unwrap();
-    assert_eq!(net.socket(), sock.as_path());
-    let mode = std::fs::symlink_metadata(&sock)
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = upstream.local_addr().unwrap().port();
+        let host = format!("allowed.test:{port}");
+        let pinned = vec![("allowed.test".to_string(), IpAddr::V4(Ipv4Addr::LOCALHOST))];
+        let net = SessionNet::start(dir, "s1", vec![t(&host)], pinned.clone(), None).unwrap();
+        assert_eq!(net.socket(), sock.as_path());
+        let mode = std::fs::symlink_metadata(&sock)
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "{mode:o}");
 
-    let mut c = tokio::net::UnixStream::connect(&sock).await.unwrap();
-    c.write_all(format!("CONNECT {host} HTTP/1.1\r\n\r\n").as_bytes())
-        .await
-        .unwrap();
-    let (mut up, _) = tokio::time::timeout(Duration::from_secs(5), upstream.accept())
-        .await
-        .unwrap()
-        .unwrap();
-    let mut head = [0u8; 39];
-    c.read_exact(&mut head).await.unwrap();
-    assert!(
-        head.starts_with(b"HTTP/1.1 200"),
-        "{:?}",
-        head.escape_ascii()
-    );
-    c.write_all(b"ping").await.unwrap();
-    let mut got = [0u8; 4];
-    up.read_exact(&mut got).await.unwrap();
-    assert_eq!(&got, b"ping");
+        let mut c = tokio::net::UnixStream::connect(&sock).await.unwrap();
+        c.write_all(format!("CONNECT {host} HTTP/1.1\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let (mut up, _) = tokio::time::timeout(Duration::from_secs(5), upstream.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let mut head = [0u8; 39];
+        c.read_exact(&mut head).await.unwrap();
+        assert!(
+            head.starts_with(b"HTTP/1.1 200"),
+            "{:?}",
+            head.escape_ascii()
+        );
+        c.write_all(b"ping").await.unwrap();
+        let mut got = [0u8; 4];
+        up.read_exact(&mut got).await.unwrap();
+        assert_eq!(&got, b"ping");
 
-    drop(net);
-    assert!(
-        std::fs::symlink_metadata(&sock).is_err(),
-        "the socket stays"
-    );
-    assert!(tokio::net::UnixStream::connect(&sock).await.is_err());
-    // the open tunnel ends with it
-    let mut rest = Vec::new();
-    let end = tokio::time::timeout(Duration::from_secs(5), c.read_to_end(&mut rest)).await;
-    assert!(end.is_ok(), "the tunnel outlived the session");
+        drop(net);
+        assert!(
+            std::fs::symlink_metadata(&sock).is_err(),
+            "the socket stays"
+        );
+        assert!(tokio::net::UnixStream::connect(&sock).await.is_err());
+        // the open tunnel ends with it
+        let mut rest = Vec::new();
+        let end = tokio::time::timeout(Duration::from_secs(5), c.read_to_end(&mut rest)).await;
+        assert!(end.is_ok(), "the tunnel outlived the session");
 
-    // a session bound again on the same path keeps its socket when the older one goes
-    let old = SessionNet::start(dir, "s1", vec![], vec![], None).unwrap();
-    let new = SessionNet::start(dir, "s1", vec![], vec![], None).unwrap();
-    drop(old);
-    assert!(
-        std::fs::symlink_metadata(&sock).is_ok(),
-        "the newer socket went"
-    );
-    drop(new);
-    assert!(std::fs::symlink_metadata(&sock).is_err());
+        // a session bound again on the same path keeps its socket when the older one goes
+        let old = SessionNet::start(dir, "s1", vec![], vec![], None).unwrap();
+        let new = SessionNet::start(dir, "s1", vec![], vec![], None).unwrap();
+        drop(old);
+        assert!(
+            std::fs::symlink_metadata(&sock).is_ok(),
+            "the newer socket went"
+        );
+        drop(new);
+        assert!(std::fs::symlink_metadata(&sock).is_err());
+    })
 }

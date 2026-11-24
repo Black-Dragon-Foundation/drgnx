@@ -18,7 +18,7 @@ pub struct Ledger {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(&m)
 }
 
 /// FNV-1a of TEXT in hex: a short, stable name for a title.

@@ -254,7 +254,7 @@ pub struct Live {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 /// One check to run: the other session, its worktree, its job and task.

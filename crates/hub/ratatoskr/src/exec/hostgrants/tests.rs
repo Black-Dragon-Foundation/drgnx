@@ -219,91 +219,99 @@ async fn job_loop(f: &Front, held: bool) -> (mpsc::Sender<ProxyEvent>, watch::Re
     (tx, steps)
 }
 
-#[tokio::test]
-async fn the_card_says_the_grant_is_the_sessions() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = front(dir.path());
-    let (tx, mut s) = job_loop(&f, true).await;
-    tx.send(private("host.drgnx.internal:8080")).await.unwrap();
-    steps(&mut s, 1).await;
-    let c = cards(&f).await;
-    assert_eq!(c.len(), 1, "{c:?}");
-    let d = &c[0].2;
-    assert_eq!(c[0].1, "open");
-    assert_eq!(d["session"], "s1");
-    let title = f
-        .writer
-        .db
-        .read({
-            let id = c[0].0;
-            move |c| {
-                Ok(
-                    c.query_row("select title from card where id = ?1", [id], |r| {
-                        r.get::<_, String>(0)
-                    })?,
-                )
-            }
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        title,
-        "Job j1 wants your port 8080 (`host.drgnx.internal:8080`)"
-    );
-    let body = d["body"].as_str().unwrap();
-    assert!(
-        body.starts_with(
-            "Allowing it opens the port for this session: its browser and its other jobs too."
-        ),
-        "{body}"
-    );
-    assert!(
-        body.ends_with("Connections already open stay until they end; end the job to cut them."),
-        "{body}"
-    );
-}
-
-#[tokio::test]
-async fn the_card_offers_only_the_reserved_host_port() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = front(dir.path());
-    let (tx, mut s) = job_loop(&f, true).await;
-    // a LAN literal is the allow-list's: no card
-    tx.send(private("192.168.1.5:80")).await.unwrap();
-    tx.send(private("host.drgnx.internal:8080")).await.unwrap();
-    steps(&mut s, 2).await;
-    let c = cards(&f).await;
-    assert_eq!(c.len(), 1, "{c:?}");
-    let d = &c[0].2;
-    assert_eq!(
-        d["facts"]["target"],
-        json!({"host_port": "host.drgnx.internal:8080"})
-    );
-    assert_eq!(d["facts"]["job"], "j1");
-    let ids: Vec<&str> = d["choices"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["id"].as_str().unwrap())
-        .collect();
-    // the browser's scopes, never a CIDR or "all private"
-    assert_eq!(ids, ["once", "session", "refuse"]);
-}
-
-#[tokio::test]
-async fn a_session_that_cannot_be_read_asks_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = front(dir.path());
-    let (tx, _s) = job_loop(&f, false).await;
-    tx.send(private("host.drgnx.internal:8080")).await.unwrap();
-    // the drain took it (a full channel would not take 16 more)
-    for _ in 0..32 {
-        timeout(WAIT, tx.send(private("host.drgnx.internal:8081")))
+#[test]
+fn the_card_says_the_grant_is_the_sessions() {
+    saman::block_on_current(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let (tx, mut s) = job_loop(&f, true).await;
+        tx.send(private("host.drgnx.internal:8080")).await.unwrap();
+        steps(&mut s, 1).await;
+        let c = cards(&f).await;
+        assert_eq!(c.len(), 1, "{c:?}");
+        let d = &c[0].2;
+        assert_eq!(c[0].1, "open");
+        assert_eq!(d["session"], "s1");
+        let title = f
+            .writer
+            .db
+            .read({
+                let id = c[0].0;
+                move |c| {
+                    Ok(
+                        c.query_row("select title from card where id = ?1", [id], |r| {
+                            r.get::<_, String>(0)
+                        })?,
+                    )
+                }
+            })
             .await
-            .unwrap()
             .unwrap();
-    }
-    assert!(cards(&f).await.is_empty());
+        assert_eq!(
+            title,
+            "Job j1 wants your port 8080 (`host.drgnx.internal:8080`)"
+        );
+        let body = d["body"].as_str().unwrap();
+        assert!(
+            body.starts_with(
+                "Allowing it opens the port for this session: its browser and its other jobs too."
+            ),
+            "{body}"
+        );
+        assert!(
+            body.ends_with(
+                "Connections already open stay until they end; end the job to cut them."
+            ),
+            "{body}"
+        );
+    })
+}
+
+#[test]
+fn the_card_offers_only_the_reserved_host_port() {
+    saman::block_on_current(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let (tx, mut s) = job_loop(&f, true).await;
+        // a LAN literal is the allow-list's: no card
+        tx.send(private("192.168.1.5:80")).await.unwrap();
+        tx.send(private("host.drgnx.internal:8080")).await.unwrap();
+        steps(&mut s, 2).await;
+        let c = cards(&f).await;
+        assert_eq!(c.len(), 1, "{c:?}");
+        let d = &c[0].2;
+        assert_eq!(
+            d["facts"]["target"],
+            json!({"host_port": "host.drgnx.internal:8080"})
+        );
+        assert_eq!(d["facts"]["job"], "j1");
+        let ids: Vec<&str> = d["choices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap())
+            .collect();
+        // the browser's scopes, never a CIDR or "all private"
+        assert_eq!(ids, ["once", "session", "refuse"]);
+    })
+}
+
+#[test]
+fn a_session_that_cannot_be_read_asks_nothing() {
+    saman::block_on_current(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let (tx, _s) = job_loop(&f, false).await;
+        tx.send(private("host.drgnx.internal:8080")).await.unwrap();
+        // the drain took it (a full channel would not take 16 more)
+        for _ in 0..32 {
+            timeout(WAIT, tx.send(private("host.drgnx.internal:8081")))
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        assert!(cards(&f).await.is_empty());
+    })
 }
 
 fn user() -> Caller {
@@ -354,60 +362,62 @@ async fn connect_to(path: &Path, target: &str) -> (UnixStream, u16) {
     (s, code)
 }
 
-#[tokio::test]
-async fn a_settled_card_opens_the_port_for_the_next_request() {
-    let dir = tempfile::tempdir().unwrap();
-    let f = front(dir.path());
-    let up = echo().await;
-    let target = format!("host.drgnx.internal:{}", up.port());
-    // the job's proxy under the job policy, on a socket in place of the relay's streams
-    let web = crate::exec::net::job_web(Some(&f.browser_nevers));
-    let (ptx, prx) = mpsc::channel(16);
-    let handle = proxy::start(
-        crate::exec::net::proxy_config(vec![], &[], web.clone()),
-        Arc::new(proxy::SystemResolver),
-        ptx,
-    );
-    let sock = dir.path().join("job.sock");
-    handle.listen(
-        proxy::Listener::Unix(crate::sessions::bind_socket(&sock).unwrap()),
-        1,
-    );
-    let (_task, mut s) = start(hub(&f, true), "j1", "s1", web, prx).await;
-    let (_c, code) = connect_to(&sock, &target).await;
-    assert_eq!(code, 403);
-    steps(&mut s, 1).await;
-    let c = cards(&f).await;
-    assert_eq!(c.len(), 1, "{c:?}");
-    let (card, _, d) = c[0].clone();
-    let wire = d["facts"]["target"].clone();
-    // the user's yes for the session, as settling the card writes it
-    f.writer
-        .write(&user(), "cards/settle", move |tx| {
-            assert!(card_settle(tx, card, "session", crate::clock::wall_secs())?);
-            grants::create_matrix(
-                tx,
-                grants::Who::Session("s1".into()),
-                "browser.private",
-                Some(wire),
-                None,
-                None,
-                card,
-            )?;
-            Ok(())
-        })
-        .await
-        .unwrap();
-    // the barrier: the loop has read the settle
-    steps(&mut s, 2).await;
-    let (mut conn, code) = connect_to(&sock, &target).await;
-    assert_eq!(code, 200);
-    conn.write_all(b"port").await.unwrap();
-    let mut got = [0u8; 4];
-    timeout(WAIT, conn.read_exact(&mut got))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(&got, b"port");
-    handle.shutdown();
+#[test]
+fn a_settled_card_opens_the_port_for_the_next_request() {
+    saman::block_on_current(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let up = echo().await;
+        let target = format!("host.drgnx.internal:{}", up.port());
+        // the job's proxy under the job policy, on a socket in place of the relay's streams
+        let web = crate::exec::net::job_web(Some(&f.browser_nevers));
+        let (ptx, prx) = mpsc::channel(16);
+        let handle = proxy::start(
+            crate::exec::net::proxy_config(vec![], &[], web.clone()),
+            Arc::new(proxy::SystemResolver),
+            ptx,
+        );
+        let sock = dir.path().join("job.sock");
+        handle.listen(
+            proxy::Listener::Unix(crate::sessions::bind_socket(&sock).unwrap()),
+            1,
+        );
+        let (_task, mut s) = start(hub(&f, true), "j1", "s1", web, prx).await;
+        let (_c, code) = connect_to(&sock, &target).await;
+        assert_eq!(code, 403);
+        steps(&mut s, 1).await;
+        let c = cards(&f).await;
+        assert_eq!(c.len(), 1, "{c:?}");
+        let (card, _, d) = c[0].clone();
+        let wire = d["facts"]["target"].clone();
+        // the user's yes for the session, as settling the card writes it
+        f.writer
+            .write(&user(), "cards/settle", move |tx| {
+                assert!(card_settle(tx, card, "session", crate::clock::wall_secs())?);
+                grants::create_matrix(
+                    tx,
+                    grants::Who::Session("s1".into()),
+                    "browser.private",
+                    Some(wire),
+                    None,
+                    None,
+                    card,
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        // the barrier: the loop has read the settle
+        steps(&mut s, 2).await;
+        let (mut conn, code) = connect_to(&sock, &target).await;
+        assert_eq!(code, 200);
+        conn.write_all(b"port").await.unwrap();
+        let mut got = [0u8; 4];
+        timeout(WAIT, conn.read_exact(&mut got))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&got, b"port");
+        handle.shutdown();
+    })
 }

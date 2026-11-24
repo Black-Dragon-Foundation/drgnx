@@ -424,141 +424,32 @@ mod macos {
     /// `aarch64-apple-darwin` bundle is copied into the runner root `~/.drgnx-runner.noindex` (Spotlight skips it),
     /// checked by `shasum`; the root is mode 0700 and excluded from Time Machine. (The fake bundle here doesn't serve, so
     /// the add then fails at the probe; the probe of a Mac is the macOS CI's.)
-    #[tokio::test]
-    async fn runner_add_of_a_mac_stages_its_bundle() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("bin");
-        let home = dir.path().join("home");
-        std::fs::create_dir_all(&home).unwrap();
-        let tm = dir.path().join("tmutil.log");
-        mac_tools(&bin, "0", &tm);
-        let bundle = dir.path().join("bundles/aarch64-apple-darwin");
-        std::fs::create_dir_all(&bundle).unwrap();
-        let fake = b"#!/bin/sh\nexit 3\n";
-        ratatoskr::fsio::write(bundle.join("sleipnir"), fake).unwrap();
-        let (queue, _events) = Queue::new(QueueCfg {
-            hub_id: "hub".into(),
-            exec_root: dir.path().join("exec"),
-            local: LocalRunner::new(Admission::Fixed(1), dir.path()),
-            db: None,
-        });
-        let store = Arc::new(MemStore::default());
-        let reg = Registry::new(Cfg {
-            transport: Arc::new(MacHost {
-                bin,
-                home: home.clone(),
-            }),
-            store: store.clone(),
-            queue,
-            hub_id: "hub".into(),
-            hub_boot_id: "boot".into(),
-            runtime_dir: dir.path().to_path_buf(),
-            bundles: dir.path().join("bundles"),
-            images: Arc::new(Vec::new),
-            toolchains: Arc::new(Vec::new),
-        });
-        let p: AddParams =
-            serde_json::from_value(json!({"host": "a-mac", "trust": "mine", "name": "mac"}))
-                .unwrap();
-        let why = match reg.add(p).await {
-            Err(RegError::Refused(w) | RegError::Failed(w)) => w,
-            other => panic!("the fake bundle served: {other:?}"),
-        };
-        assert!(!why.contains("runs Darwin"), "{why}");
-        let root = home.join(".drgnx-runner.noindex");
-        let copied: Vec<_> = std::fs::read_dir(root.join("bin"))
-            .unwrap()
-            .map(|e| e.unwrap().path().join("sleipnir"))
-            .collect();
-        assert_eq!(copied.len(), 1, "{copied:?}");
-        assert_eq!(std::fs::read(&copied[0]).unwrap(), fake);
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700);
-        let tm = ratatoskr::fsio::read_to_string(&tm).unwrap();
-        assert_eq!(tm.trim(), format!("addexclusion {}", root.display()));
-        use ratatoskr::runners::registry::Store;
-        assert!(store.list().await.unwrap().is_empty());
-    }
-
-    /// [C] `runner add` of a Mac installs every project's toolchains before the probe: the bundle's `sleipnir tools`
-    /// runs in the runner root with each pin, as the runner account and outside any job. (The fake bundle answers
-    /// `tools` and refuses to serve, so the add then fails at the probe.)
-    #[tokio::test]
-    async fn runner_add_of_a_mac_installs_its_toolchains() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("bin");
-        let home = dir.path().join("home");
-        std::fs::create_dir_all(&home).unwrap();
-        mac_tools(&bin, "0", &dir.path().join("tm.log"));
-        let bundle = dir.path().join("bundles/aarch64-apple-darwin");
-        std::fs::create_dir_all(&bundle).unwrap();
-        let log = dir.path().join("sleipnir.log");
-        ratatoskr::fsio::write(
-            bundle.join("sleipnir"),
-            format!(
-                "#!/bin/sh\necho \"$*\" >> '{}'\n[ \"$1\" = tools ] && {{ echo '{{\"outcomes\":[],\"features\":[]}}'; exit 0; }}\nexit 3\n",
-                log.display()
-            ),
-        )
-        .unwrap();
-        let (queue, _events) = Queue::new(QueueCfg {
-            hub_id: "hub".into(),
-            exec_root: dir.path().join("exec"),
-            local: LocalRunner::new(Admission::Fixed(1), dir.path()),
-            db: None,
-        });
-        let reg = Registry::new(Cfg {
-            transport: Arc::new(MacHost {
-                bin,
-                home: home.clone(),
-            }),
-            store: Arc::new(MemStore::default()),
-            queue,
-            hub_id: "hub".into(),
-            hub_boot_id: "boot".into(),
-            runtime_dir: dir.path().to_path_buf(),
-            bundles: dir.path().join("bundles"),
-            images: Arc::new(Vec::new),
-            toolchains: Arc::new(|| vec!["node@22".into(), "rust@1.95".into()]),
-        });
-        let p: AddParams =
-            serde_json::from_value(json!({"host": "a-mac", "trust": "mine", "name": "mac"}))
-                .unwrap();
-        assert!(reg.add(p).await.is_err(), "the fake bundle served");
-        let root = home.join(".drgnx-runner.noindex");
-        let calls = ratatoskr::fsio::read_to_string(&log).unwrap();
-        assert_eq!(
-            calls.lines().next(),
-            Some(format!("tools --root {} node@22 rust@1.95", root.display()).as_str()),
-            "{calls}"
-        );
-    }
-
-    /// [C] `runner add` of an Intel Mac is refused (no bundle for it); a Mac whose shell runs under Rosetta (x86_64,
-    /// translated) is Apple silicon and takes the arm64 bundle, so it gets as far as the bundle.
-    #[tokio::test]
-    async fn runner_add_of_an_intel_mac_is_refused() {
-        for (translated, refused) in [("0", true), ("1", false)] {
+    #[test]
+    fn runner_add_of_a_mac_stages_its_bundle() {
+        saman::block_on_current(async move {
             let dir = tempfile::tempdir().unwrap();
             let bin = dir.path().join("bin");
             let home = dir.path().join("home");
             std::fs::create_dir_all(&home).unwrap();
-            mac_tools(&bin, translated, &dir.path().join("tm.log"));
-            ratatoskr::fsio::write(
-                bin.join("uname"),
-                "#!/bin/sh\ncase \"$1\" in -m) echo x86_64 ;; -s) echo Darwin ;; esac\n",
-            )
-            .unwrap();
+            let tm = dir.path().join("tmutil.log");
+            mac_tools(&bin, "0", &tm);
+            let bundle = dir.path().join("bundles/aarch64-apple-darwin");
+            std::fs::create_dir_all(&bundle).unwrap();
+            let fake = b"#!/bin/sh\nexit 3\n";
+            ratatoskr::fsio::write(bundle.join("sleipnir"), fake).unwrap();
             let (queue, _events) = Queue::new(QueueCfg {
                 hub_id: "hub".into(),
                 exec_root: dir.path().join("exec"),
                 local: LocalRunner::new(Admission::Fixed(1), dir.path()),
                 db: None,
             });
+            let store = Arc::new(MemStore::default());
             let reg = Registry::new(Cfg {
-                transport: Arc::new(MacHost { bin, home }),
-                store: Arc::new(MemStore::default()),
+                transport: Arc::new(MacHost {
+                    bin,
+                    home: home.clone(),
+                }),
+                store: store.clone(),
                 queue,
                 hub_id: "hub".into(),
                 hub_boot_id: "boot".into(),
@@ -570,100 +461,220 @@ mod macos {
             let p: AddParams =
                 serde_json::from_value(json!({"host": "a-mac", "trust": "mine", "name": "mac"}))
                     .unwrap();
-            let Err(RegError::Refused(why)) = reg.add(p).await else {
-                panic!("an add with no bundle went through");
+            let why = match reg.add(p).await {
+                Err(RegError::Refused(w) | RegError::Failed(w)) => w,
+                other => panic!("the fake bundle served: {other:?}"),
             };
-            if refused {
-                assert!(why.contains("Intel"), "{why}");
-            } else {
-                // Rosetta: the arm64 bundle is what is looked for (and this test has none)
-                assert!(why.contains("aarch64-apple-darwin"), "{why}");
+            assert!(!why.contains("runs Darwin"), "{why}");
+            let root = home.join(".drgnx-runner.noindex");
+            let copied: Vec<_> = std::fs::read_dir(root.join("bin"))
+                .unwrap()
+                .map(|e| e.unwrap().path().join("sleipnir"))
+                .collect();
+            assert_eq!(copied.len(), 1, "{copied:?}");
+            assert_eq!(std::fs::read(&copied[0]).unwrap(), fake);
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+            let tm = ratatoskr::fsio::read_to_string(&tm).unwrap();
+            assert_eq!(tm.trim(), format!("addexclusion {}", root.display()));
+            use ratatoskr::runners::registry::Store;
+            assert!(store.list().await.unwrap().is_empty());
+        })
+    }
+
+    /// [C] `runner add` of a Mac installs every project's toolchains before the probe: the bundle's `sleipnir tools`
+    /// runs in the runner root with each pin, as the runner account and outside any job. (The fake bundle answers
+    /// `tools` and refuses to serve, so the add then fails at the probe.)
+    #[test]
+    fn runner_add_of_a_mac_installs_its_toolchains() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            let home = dir.path().join("home");
+            std::fs::create_dir_all(&home).unwrap();
+            mac_tools(&bin, "0", &dir.path().join("tm.log"));
+            let bundle = dir.path().join("bundles/aarch64-apple-darwin");
+            std::fs::create_dir_all(&bundle).unwrap();
+            let log = dir.path().join("sleipnir.log");
+            ratatoskr::fsio::write(
+            bundle.join("sleipnir"),
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\n[ \"$1\" = tools ] && {{ echo '{{\"outcomes\":[],\"features\":[]}}'; exit 0; }}\nexit 3\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+            let (queue, _events) = Queue::new(QueueCfg {
+                hub_id: "hub".into(),
+                exec_root: dir.path().join("exec"),
+                local: LocalRunner::new(Admission::Fixed(1), dir.path()),
+                db: None,
+            });
+            let reg = Registry::new(Cfg {
+                transport: Arc::new(MacHost {
+                    bin,
+                    home: home.clone(),
+                }),
+                store: Arc::new(MemStore::default()),
+                queue,
+                hub_id: "hub".into(),
+                hub_boot_id: "boot".into(),
+                runtime_dir: dir.path().to_path_buf(),
+                bundles: dir.path().join("bundles"),
+                images: Arc::new(Vec::new),
+                toolchains: Arc::new(|| vec!["node@22".into(), "rust@1.95".into()]),
+            });
+            let p: AddParams =
+                serde_json::from_value(json!({"host": "a-mac", "trust": "mine", "name": "mac"}))
+                    .unwrap();
+            assert!(reg.add(p).await.is_err(), "the fake bundle served");
+            let root = home.join(".drgnx-runner.noindex");
+            let calls = ratatoskr::fsio::read_to_string(&log).unwrap();
+            assert_eq!(
+                calls.lines().next(),
+                Some(format!("tools --root {} node@22 rust@1.95", root.display()).as_str()),
+                "{calls}"
+            );
+        })
+    }
+
+    /// [C] `runner add` of an Intel Mac is refused (no bundle for it); a Mac whose shell runs under Rosetta (x86_64,
+    /// translated) is Apple silicon and takes the arm64 bundle, so it gets as far as the bundle.
+    #[test]
+    fn runner_add_of_an_intel_mac_is_refused() {
+        saman::block_on_current(async move {
+            for (translated, refused) in [("0", true), ("1", false)] {
+                let dir = tempfile::tempdir().unwrap();
+                let bin = dir.path().join("bin");
+                let home = dir.path().join("home");
+                std::fs::create_dir_all(&home).unwrap();
+                mac_tools(&bin, translated, &dir.path().join("tm.log"));
+                ratatoskr::fsio::write(
+                    bin.join("uname"),
+                    "#!/bin/sh\ncase \"$1\" in -m) echo x86_64 ;; -s) echo Darwin ;; esac\n",
+                )
+                .unwrap();
+                let (queue, _events) = Queue::new(QueueCfg {
+                    hub_id: "hub".into(),
+                    exec_root: dir.path().join("exec"),
+                    local: LocalRunner::new(Admission::Fixed(1), dir.path()),
+                    db: None,
+                });
+                let reg = Registry::new(Cfg {
+                    transport: Arc::new(MacHost { bin, home }),
+                    store: Arc::new(MemStore::default()),
+                    queue,
+                    hub_id: "hub".into(),
+                    hub_boot_id: "boot".into(),
+                    runtime_dir: dir.path().to_path_buf(),
+                    bundles: dir.path().join("bundles"),
+                    images: Arc::new(Vec::new),
+                    toolchains: Arc::new(Vec::new),
+                });
+                let p: AddParams = serde_json::from_value(
+                    json!({"host": "a-mac", "trust": "mine", "name": "mac"}),
+                )
+                .unwrap();
+                let Err(RegError::Refused(why)) = reg.add(p).await else {
+                    panic!("an add with no bundle went through");
+                };
+                if refused {
+                    assert!(why.contains("Intel"), "{why}");
+                } else {
+                    // Rosetta: the arm64 bundle is what is looked for (and this test has none)
+                    assert!(why.contains("aarch64-apple-darwin"), "{why}");
+                }
             }
-        }
+        })
     }
 
     /// [C] What a Linux runner's add was refused with before: kept for the wording of a host that is neither.
-    #[tokio::test]
-    async fn runner_add_of_another_kernel_is_refused_with_the_contract() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        let uname = bin.join("uname");
-        hlaup::write(
-            &uname,
-            "#!/bin/sh\ncase \"$1\" in -m) echo amd64 ;; -s) echo FreeBSD ;; esac\n",
-        )
-        .unwrap();
-        let (queue, _events) = Queue::new(QueueCfg {
-            hub_id: "hub".into(),
-            exec_root: dir.path().join("exec"),
-            local: LocalRunner::new(Admission::Fixed(1), dir.path()),
-            db: None,
-        });
-        let store = Arc::new(MemStore::default());
-        let reg = Registry::new(Cfg {
-            transport: Arc::new(MacHost {
-                bin,
-                home: dir.path().join("home"),
-            }),
-            store: store.clone(),
-            queue,
-            hub_id: "hub".into(),
-            hub_boot_id: "boot".into(),
-            runtime_dir: dir.path().to_path_buf(),
-            bundles: dir.path().join("bundles"),
-            images: Arc::new(Vec::new),
-            toolchains: Arc::new(Vec::new),
-        });
-        let p: AddParams =
-            serde_json::from_value(json!({"host": "a-bsd", "trust": "mine", "name": "bsd"}))
-                .unwrap();
-        let Err(RegError::Refused(why)) = reg.add(p).await else {
-            panic!("a FreeBSD host was taken as a runner");
-        };
-        for want in ["a-bsd", "FreeBSD", "Linux", "macOS"] {
-            assert!(why.contains(want), "{want}: {why}");
-        }
-        use ratatoskr::runners::registry::Store;
-        assert!(store.list().await.unwrap().is_empty());
+    #[test]
+    fn runner_add_of_another_kernel_is_refused_with_the_contract() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let uname = bin.join("uname");
+            hlaup::write(
+                &uname,
+                "#!/bin/sh\ncase \"$1\" in -m) echo amd64 ;; -s) echo FreeBSD ;; esac\n",
+            )
+            .unwrap();
+            let (queue, _events) = Queue::new(QueueCfg {
+                hub_id: "hub".into(),
+                exec_root: dir.path().join("exec"),
+                local: LocalRunner::new(Admission::Fixed(1), dir.path()),
+                db: None,
+            });
+            let store = Arc::new(MemStore::default());
+            let reg = Registry::new(Cfg {
+                transport: Arc::new(MacHost {
+                    bin,
+                    home: dir.path().join("home"),
+                }),
+                store: store.clone(),
+                queue,
+                hub_id: "hub".into(),
+                hub_boot_id: "boot".into(),
+                runtime_dir: dir.path().to_path_buf(),
+                bundles: dir.path().join("bundles"),
+                images: Arc::new(Vec::new),
+                toolchains: Arc::new(Vec::new),
+            });
+            let p: AddParams =
+                serde_json::from_value(json!({"host": "a-bsd", "trust": "mine", "name": "bsd"}))
+                    .unwrap();
+            let Err(RegError::Refused(why)) = reg.add(p).await else {
+                panic!("a FreeBSD host was taken as a runner");
+            };
+            for want in ["a-bsd", "FreeBSD", "Linux", "macOS"] {
+                assert!(why.contains(want), "{want}: {why}");
+            }
+            use ratatoskr::runners::registry::Store;
+            assert!(store.list().await.unwrap().is_empty());
+        })
     }
 
     /// [C] The generated ssh config against a localhost `sshd` (the lane's Remote Login, a throwaway key): the forced
     /// options win over the user's file (`ssh -G` shows no agent and no forwards), and the transport opens a session
     /// whose command's output comes back whole. The lane sets `DRGNX_TEST_SSHD_HOST`; a row that finds it unset fails.
-    #[tokio::test]
+    #[test]
     #[ignore = "macos-sshd"]
-    async fn the_generated_config_against_a_localhost_sshd() {
-        use tokio::io::AsyncReadExt;
-        let host =
-            std::env::var("DRGNX_TEST_SSHD_HOST").expect("DRGNX_TEST_SSHD_HOST: the lane sets it");
-        let dir = tempfile::tempdir().unwrap();
-        let run = dir.path().join("run");
-        std::fs::create_dir_all(&run).unwrap();
-        let cfg = RunnerCfg {
-            name: "localsshd".into(),
-            host: host.clone(),
-            linger: true,
-            cloud: None,
-            remote: Remote {
-                control: vec!["echo".into(), "from-sshd".into()],
-                bulk_in: vec!["true".into()],
-                bulk_out: vec!["true".into()],
-            },
-        };
-        cfg.check().unwrap();
-        let config = ssh_config::write(&run, &cfg.name, &ssh_config::render(&cfg)).unwrap();
-        let effective = ratatoskr::runners::transport::effective(&config, &host)
-            .await
-            .unwrap();
-        assert!(!effective.forward_agent, "{effective:?}");
-        assert!(effective.forwards.is_empty(), "{effective:?}");
-        let transport = OpensshTransport::new(&run);
-        let channels = transport.open(&cfg).await.expect("the session opens");
-        let (_tx, mut rx, _err, _hold) = channels.control.split();
-        let mut out = String::new();
-        rx.read_to_string(&mut out).await.unwrap();
-        assert_eq!(out.trim(), "from-sshd");
-        transport.stop(&cfg.name).await;
+    fn the_generated_config_against_a_localhost_sshd() {
+        saman::block_on_current(async move {
+            use tokio::io::AsyncReadExt;
+            let host = std::env::var("DRGNX_TEST_SSHD_HOST")
+                .expect("DRGNX_TEST_SSHD_HOST: the lane sets it");
+            let dir = tempfile::tempdir().unwrap();
+            let run = dir.path().join("run");
+            std::fs::create_dir_all(&run).unwrap();
+            let cfg = RunnerCfg {
+                name: "localsshd".into(),
+                host: host.clone(),
+                linger: true,
+                cloud: None,
+                remote: Remote {
+                    control: vec!["echo".into(), "from-sshd".into()],
+                    bulk_in: vec!["true".into()],
+                    bulk_out: vec!["true".into()],
+                },
+            };
+            cfg.check().unwrap();
+            let config = ssh_config::write(&run, &cfg.name, &ssh_config::render(&cfg)).unwrap();
+            let effective = ratatoskr::runners::transport::effective(&config, &host)
+                .await
+                .unwrap();
+            assert!(!effective.forward_agent, "{effective:?}");
+            assert!(effective.forwards.is_empty(), "{effective:?}");
+            let transport = OpensshTransport::new(&run);
+            let channels = transport.open(&cfg).await.expect("the session opens");
+            let (_tx, mut rx, _err, _hold) = channels.control.split();
+            let mut out = String::new();
+            rx.read_to_string(&mut out).await.unwrap();
+            assert_eq!(out.trim(), "from-sshd");
+            transport.stop(&cfg.name).await;
+        })
     }
 }

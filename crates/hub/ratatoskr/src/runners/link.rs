@@ -69,7 +69,7 @@ struct Shared {
 
 impl Shared {
     fn tasks(&self) -> std::sync::MutexGuard<'_, Vec<tokio::task::JoinHandle<()>>> {
-        self.tasks.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.tasks)
     }
 }
 

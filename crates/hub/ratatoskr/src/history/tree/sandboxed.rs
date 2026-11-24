@@ -80,111 +80,120 @@ fn sandbox() -> Sandbox {
 
 /// A finished worker's tree (no session row: nothing of its launch is read) committed inside the sandbox: one forward
 /// commit with the subject, read from the ref files, and the launch made the session's own folder.
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "the sandbox lane: a real Gleipnir child"]
-async fn commit_runs_inside_the_sandbox() {
-    let fx = Fx::new();
-    let wt = fx.repo("wt");
-    crate::fsio::write(wt.join("a.txt"), "two").unwrap();
-    let (sb, env) = (sandbox(), fx.env());
-    let before = snapshot::head_of(&wt);
-    let made = commit_with(
-        Some((&sb, &env)),
-        "S1",
-        &wt,
-        &[PathBuf::from("a.txt")],
-        "revert to step 3",
-    )
-    .await
-    .unwrap();
-    assert!(made.is_some() && made != before, "{made:?}");
-    assert_eq!(made, snapshot::head_of(&wt));
-    assert_eq!(git(&wt, &["log", "-1", "--format=%s"]), "revert to step 3");
-    // the worktree's own index matches the commit, the placeholders the sandbox made to pin the absent protected
-    // files (`.envrc`, `mise.toml`) went with it, and the commit's index is gone
-    assert_eq!(git(&wt, &["status", "--porcelain"]), "");
-    assert!(!wt.join(".envrc").exists() && !wt.join("mise.toml").exists());
-    assert!(!wt.join(".git").join(COMMIT_INDEX).exists());
-    let dir = runstav::paths::session_dir(&env, &runstav::paths::socket_path(&env), "S1").unwrap();
-    assert!(dir.is_dir(), "{}", dir.display());
+fn commit_runs_inside_the_sandbox() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let fx = Fx::new();
+        let wt = fx.repo("wt");
+        crate::fsio::write(wt.join("a.txt"), "two").unwrap();
+        let (sb, env) = (sandbox(), fx.env());
+        let before = snapshot::head_of(&wt);
+        let made = commit_with(
+            Some((&sb, &env)),
+            "S1",
+            &wt,
+            &[PathBuf::from("a.txt")],
+            "revert to step 3",
+        )
+        .await
+        .unwrap();
+        assert!(made.is_some() && made != before, "{made:?}");
+        assert_eq!(made, snapshot::head_of(&wt));
+        assert_eq!(git(&wt, &["log", "-1", "--format=%s"]), "revert to step 3");
+        // the worktree's own index matches the commit, the placeholders the sandbox made to pin the absent protected
+        // files (`.envrc`, `mise.toml`) went with it, and the commit's index is gone
+        assert_eq!(git(&wt, &["status", "--porcelain"]), "");
+        assert!(!wt.join(".envrc").exists() && !wt.join("mise.toml").exists());
+        assert!(!wt.join(".git").join(COMMIT_INDEX).exists());
+        let dir =
+            runstav::paths::session_dir(&env, &runstav::paths::socket_path(&env), "S1").unwrap();
+        assert!(dir.is_dir(), "{}", dir.display());
+    })
 }
 
 /// The same session's commit for a finished worker: there is no row and no entity to read, and the commit is the same.
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "the sandbox lane: a real Gleipnir child"]
-async fn commit_for_a_finished_worker_uses_its_entity() {
-    let fx = Fx::new();
-    let wt = fx.repo("wt");
-    std::fs::remove_file(wt.join("a.txt")).unwrap();
-    crate::fsio::write(wt.join("b.txt"), "new").unwrap();
-    let (sb, env) = (sandbox(), fx.env());
-    let paths = [PathBuf::from("a.txt"), PathBuf::from("b.txt")];
-    let made = commit_with(Some((&sb, &env)), "S2", &wt, &paths, "revert")
-        .await
-        .unwrap();
-    assert!(made.is_some());
-    assert_eq!(git(&wt, &["ls-files"]), "b.txt");
-    assert_eq!(git(&wt, &["status", "--porcelain"]), "");
-    // again after a crash: the deletion is committed already, so neither side has a.txt; nothing to commit, quiet
-    let again = commit_with(Some((&sb, &env)), "S2", &wt, &paths, "revert").await;
-    assert_eq!(again, Ok(None));
+fn commit_for_a_finished_worker_uses_its_entity() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let fx = Fx::new();
+        let wt = fx.repo("wt");
+        std::fs::remove_file(wt.join("a.txt")).unwrap();
+        crate::fsio::write(wt.join("b.txt"), "new").unwrap();
+        let (sb, env) = (sandbox(), fx.env());
+        let paths = [PathBuf::from("a.txt"), PathBuf::from("b.txt")];
+        let made = commit_with(Some((&sb, &env)), "S2", &wt, &paths, "revert")
+            .await
+            .unwrap();
+        assert!(made.is_some());
+        assert_eq!(git(&wt, &["ls-files"]), "b.txt");
+        assert_eq!(git(&wt, &["status", "--porcelain"]), "");
+        // again after a crash: the deletion is committed already, so neither side has a.txt; nothing to commit, quiet
+        let again = commit_with(Some((&sb, &env)), "S2", &wt, &paths, "revert").await;
+        assert_eq!(again, Ok(None));
+    })
 }
 
 /// A linked worktree's commit must write the common folder, outside the tree: the sandbox refuses it, the error says
 /// so, and the files stand.
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "the sandbox lane: a real Gleipnir child"]
-async fn commit_in_a_linked_worktree_is_reported_not_fatal() {
-    let fx = Fx::new();
-    let main = fx.repo("main");
-    let lw = fx.p("lw");
-    git(
-        &main,
-        &["worktree", "add", "-q", "-b", "side", lw.to_str().unwrap()],
-    );
-    crate::fsio::write(lw.join("a.txt"), "changed").unwrap();
-    let (sb, env) = (sandbox(), fx.env());
-    let before = snapshot::head_of(&lw);
-    let r = commit_with(
-        Some((&sb, &env)),
-        "S3",
-        &lw,
-        &[PathBuf::from("a.txt")],
-        "revert",
-    )
-    .await;
-    assert!(r.is_err(), "{r:?}");
-    assert_eq!(snapshot::head_of(&lw), before);
-    assert_eq!(
-        crate::fsio::read_to_string(lw.join("a.txt")).unwrap(),
-        "changed"
-    );
+fn commit_in_a_linked_worktree_is_reported_not_fatal() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let fx = Fx::new();
+        let main = fx.repo("main");
+        let lw = fx.p("lw");
+        git(
+            &main,
+            &["worktree", "add", "-q", "-b", "side", lw.to_str().unwrap()],
+        );
+        crate::fsio::write(lw.join("a.txt"), "changed").unwrap();
+        let (sb, env) = (sandbox(), fx.env());
+        let before = snapshot::head_of(&lw);
+        let r = commit_with(
+            Some((&sb, &env)),
+            "S3",
+            &lw,
+            &[PathBuf::from("a.txt")],
+            "revert",
+        )
+        .await;
+        assert!(r.is_err(), "{r:?}");
+        assert_eq!(snapshot::head_of(&lw), before);
+        assert_eq!(
+            crate::fsio::read_to_string(lw.join("a.txt")).unwrap(),
+            "changed"
+        );
+    })
 }
 
 /// A git that fails (a repository with no commit: HEAD cannot be read): the error carries git's message, and nothing
 /// else changed.
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "the sandbox lane: a real Gleipnir child"]
-async fn commit_failure_is_reported_not_fatal() {
-    let fx = Fx::new();
-    let wt = fx.p("wt");
-    std::fs::create_dir_all(&wt).unwrap();
-    git(&wt, &["init", "-q", "-b", "main"]);
-    crate::fsio::write(wt.join("a.txt"), "two").unwrap();
-    let (sb, env) = (sandbox(), fx.env());
-    let r = commit_with(
-        Some((&sb, &env)),
-        "S4",
-        &wt,
-        &[PathBuf::from("a.txt")],
-        "revert",
-    )
-    .await;
-    let e = r.unwrap_err();
-    assert!(e.contains("HEAD"), "{e}");
-    assert_eq!(snapshot::head_of(&wt), None);
-    assert_eq!(
-        crate::fsio::read_to_string(wt.join("a.txt")).unwrap(),
-        "two"
-    );
+fn commit_failure_is_reported_not_fatal() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let fx = Fx::new();
+        let wt = fx.p("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        git(&wt, &["init", "-q", "-b", "main"]);
+        crate::fsio::write(wt.join("a.txt"), "two").unwrap();
+        let (sb, env) = (sandbox(), fx.env());
+        let r = commit_with(
+            Some((&sb, &env)),
+            "S4",
+            &wt,
+            &[PathBuf::from("a.txt")],
+            "revert",
+        )
+        .await;
+        let e = r.unwrap_err();
+        assert!(e.contains("HEAD"), "{e}");
+        assert_eq!(snapshot::head_of(&wt), None);
+        assert_eq!(
+            crate::fsio::read_to_string(wt.join("a.txt")).unwrap(),
+            "two"
+        );
+    })
 }

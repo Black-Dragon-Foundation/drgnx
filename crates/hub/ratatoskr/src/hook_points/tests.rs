@@ -147,130 +147,136 @@ fn a_row_with_16_records_keeps_its_outcome_and_sources() {
 
 // [D] pure: hook_points::tests::events_carry_provenance. One row per point run, written as `hub:hooks`, read back as
 // the step's provenance (its sources, verdicts and outcome).
-#[tokio::test]
-async fn events_carry_provenance() {
-    let dir = tempfile::tempdir().unwrap();
-    let w = writer(dir.path());
-    let out = outcome(
-        Decision::Deny("no rm -rf".into()),
-        Some(1),
-        vec![
-            rule("notes", Some(Verdict::Annotate("careful".into()))),
-            plugin(
-                "deny-rm-hook",
-                Some(Verdict::Deny("no rm -rf".into())),
-                None,
-            ),
-        ],
-    );
-    write_row(&w, Point::BeforeTool, &ctx("s1", 4), &out).await;
-    write_row(&w, Point::BeforeTool, &ctx("s1", 5), &out).await;
-    let got = w.db.read(|c| provenance(c, "s1", 4)).await.unwrap();
-    assert_eq!(got.len(), 1, "{got:?}");
-    let row = &got[0];
-    assert_eq!(row["outcome"], json!("deny"));
-    assert_eq!(row["records"][0]["source"], json!("rule:notes"));
-    assert_eq!(row["records"][0]["verdict"], json!("annotate"));
-    assert!(
-        row["records"][1]["source"]
-            .as_str()
-            .unwrap()
-            .starts_with("plugin:deny-rm-hook@0.1.0#abababab")
-    );
-    assert_eq!(row["records"][1]["reason"], json!("no rm -rf"));
-    let summary: String =
-        w.db.read(|c| {
-            Ok(c.query_row(
-                "select summary from event where json_extract(data, '$.step') = 4",
-                [],
-                |r| r.get(0),
-            )?)
-        })
-        .await
-        .unwrap();
-    assert_eq!(summary, "hook: deny-rm-hook refused Bash");
+#[test]
+fn events_carry_provenance() {
+    saman::block_on_current(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let w = writer(dir.path());
+        let out = outcome(
+            Decision::Deny("no rm -rf".into()),
+            Some(1),
+            vec![
+                rule("notes", Some(Verdict::Annotate("careful".into()))),
+                plugin(
+                    "deny-rm-hook",
+                    Some(Verdict::Deny("no rm -rf".into())),
+                    None,
+                ),
+            ],
+        );
+        write_row(&w, Point::BeforeTool, &ctx("s1", 4), &out).await;
+        write_row(&w, Point::BeforeTool, &ctx("s1", 5), &out).await;
+        let got = w.db.read(|c| provenance(c, "s1", 4)).await.unwrap();
+        assert_eq!(got.len(), 1, "{got:?}");
+        let row = &got[0];
+        assert_eq!(row["outcome"], json!("deny"));
+        assert_eq!(row["records"][0]["source"], json!("rule:notes"));
+        assert_eq!(row["records"][0]["verdict"], json!("annotate"));
+        assert!(
+            row["records"][1]["source"]
+                .as_str()
+                .unwrap()
+                .starts_with("plugin:deny-rm-hook@0.1.0#abababab")
+        );
+        assert_eq!(row["records"][1]["reason"], json!("no rm -rf"));
+        let summary: String =
+            w.db.read(|c| {
+                Ok(c.query_row(
+                    "select summary from event where json_extract(data, '$.step') = 4",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(summary, "hook: deny-rm-hook refused Bash");
+    })
 }
 
 // [D] pure: `events/add` is a user-class method that takes any data, so a row it writes with
 // `{"hook": true}` is never provenance: only rows whose tx actor is the hub's hook writer are.
-#[tokio::test]
-async fn an_events_add_hook_row_is_not_provenance() {
-    let dir = tempfile::tempdir().unwrap();
-    let w = writer(dir.path());
-    let user = Caller {
-        class: Class::User,
-        sid: None,
-        job: None,
-        conn_id: 1,
-    };
-    let forged = json!({"hook": true, "point": "before-tool", "session": "s1", "step": 4,
+#[test]
+fn an_events_add_hook_row_is_not_provenance() {
+    saman::block_on_current(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let w = writer(dir.path());
+        let user = Caller {
+            class: Class::User,
+            sid: None,
+            job: None,
+            conn_id: 1,
+        };
+        let forged = json!({"hook": true, "point": "before-tool", "session": "s1", "step": 4,
                         "records": [{"source": "rule:mine", "verdict": "allow", "ms": 0}], "outcome": "allow"});
-    w.write(&user, "events/add", move |tx| {
-        event(
-            tx,
-            Event {
-                at: 1.0,
-                agent: Some("s1".into()),
-                job: None,
-                task: None,
-                kind: EventKind::Status,
-                summary: "hook: forged".into(),
-                data: Some(forged),
-                turn: false,
-            },
-        )
+        w.write(&user, "events/add", move |tx| {
+            event(
+                tx,
+                Event {
+                    at: 1.0,
+                    agent: Some("s1".into()),
+                    job: None,
+                    task: None,
+                    kind: EventKind::Status,
+                    summary: "hook: forged".into(),
+                    data: Some(forged),
+                    turn: false,
+                },
+            )
+        })
+        .await
+        .unwrap();
+        assert!(
+            w.db.read(|c| provenance(c, "s1", 4))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let out = outcome(
+            Decision::Proceed { changed: None },
+            None,
+            vec![rule("mine", Some(Verdict::Allow))],
+        );
+        write_row(&w, Point::BeforeTool, &ctx("s1", 4), &out).await;
+        let got = w.db.read(|c| provenance(c, "s1", 4)).await.unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["outcome"], json!("allow"));
+        // and the name the hub writes under is no wire method
+        assert!(runstav::registry::find(crate::coord::HOOKS_METHOD).is_none());
     })
-    .await
-    .unwrap();
-    assert!(
-        w.db.read(|c| provenance(c, "s1", 4))
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    let out = outcome(
-        Decision::Proceed { changed: None },
-        None,
-        vec![rule("mine", Some(Verdict::Allow))],
-    );
-    write_row(&w, Point::BeforeTool, &ctx("s1", 4), &out).await;
-    let got = w.db.read(|c| provenance(c, "s1", 4)).await.unwrap();
-    assert_eq!(got.len(), 1);
-    assert_eq!(got[0]["outcome"], json!("allow"));
-    // and the name the hub writes under is no wire method
-    assert!(runstav::registry::find(crate::coord::HOOKS_METHOD).is_none());
 }
 
 // [D] pure: a fork's step the adapter and the seam both hook is one step with one provenance row (the seam's, which
 // has the matrix's cell). A step only the adapter hooked (it refused it, so no permission request followed) keeps its
 // row, and another step's rows are not touched.
-#[tokio::test]
-async fn a_step_hooked_at_the_adapter_and_the_seam_shows_one_row() {
-    let dir = tempfile::tempdir().unwrap();
-    let w = writer(dir.path());
-    let allow = outcome(
-        Decision::Proceed { changed: None },
-        None,
-        vec![rule("watch", Some(Verdict::Allow))],
-    );
-    let deny = outcome(
-        Decision::Deny("no".into()),
-        Some(0),
-        vec![rule("watch", Some(Verdict::Deny("no".into())))],
-    );
-    let at = |step: i64, at: &'static str| RowCtx {
-        at: Some(at),
-        ..ctx("s1", step)
-    };
-    write_row(&w, Point::BeforeTool, &at(4, "adapter"), &allow).await;
-    write_row(&w, Point::BeforeTool, &at(4, "seam"), &allow).await;
-    write_row(&w, Point::BeforeTool, &at(5, "adapter"), &deny).await;
-    let two = w.db.read(|c| provenance(c, "s1", 4)).await.unwrap();
-    assert_eq!(two.len(), 1, "{two:?}");
-    assert_eq!(two[0]["at"], json!("seam"));
-    let only = w.db.read(|c| provenance(c, "s1", 5)).await.unwrap();
-    assert_eq!(only.len(), 1, "{only:?}");
-    assert_eq!(only[0]["at"], json!("adapter"));
+#[test]
+fn a_step_hooked_at_the_adapter_and_the_seam_shows_one_row() {
+    saman::block_on_current(async move {
+        let dir = tempfile::tempdir().unwrap();
+        let w = writer(dir.path());
+        let allow = outcome(
+            Decision::Proceed { changed: None },
+            None,
+            vec![rule("watch", Some(Verdict::Allow))],
+        );
+        let deny = outcome(
+            Decision::Deny("no".into()),
+            Some(0),
+            vec![rule("watch", Some(Verdict::Deny("no".into())))],
+        );
+        let at = |step: i64, at: &'static str| RowCtx {
+            at: Some(at),
+            ..ctx("s1", step)
+        };
+        write_row(&w, Point::BeforeTool, &at(4, "adapter"), &allow).await;
+        write_row(&w, Point::BeforeTool, &at(4, "seam"), &allow).await;
+        write_row(&w, Point::BeforeTool, &at(5, "adapter"), &deny).await;
+        let two = w.db.read(|c| provenance(c, "s1", 4)).await.unwrap();
+        assert_eq!(two.len(), 1, "{two:?}");
+        assert_eq!(two[0]["at"], json!("seam"));
+        let only = w.db.read(|c| provenance(c, "s1", 5)).await.unwrap();
+        assert_eq!(only.len(), 1, "{only:?}");
+        assert_eq!(only[0]["at"], json!("adapter"));
+    })
 }
 
 struct Rig {
@@ -335,11 +341,12 @@ fn bash(command: &str) -> ToolCallInfo {
 // [D] pure: hook_points::tests::no_match_is_todays_seam. With no rule and no hook for the step, the
 // point has nothing to run: the seam is today's (no `dry`, no row; the `agents/permission-*` rows hold `decide` as
 // before). A rule for another kind does not subscribe either; one for this kind does.
-#[tokio::test]
-async fn no_match_is_todays_seam() {
-    let r = rig().await;
-    assert!(prepare(&r.plugins, &site(None), &bash("ls")).is_none());
-    r.set(
+#[test]
+fn no_match_is_todays_seam() {
+    saman::block_on_current(async move {
+        let r = rig().await;
+        assert!(prepare(&r.plugins, &site(None), &bash("ls")).is_none());
+        r.set(
         None,
         &[(
             "drgnx-agents-hook-rules",
@@ -347,8 +354,8 @@ async fn no_match_is_todays_seam() {
         )],
     )
     .await;
-    assert!(prepare(&r.plugins, &site(None), &bash("ls")).is_none());
-    r.set(
+        assert!(prepare(&r.plugins, &site(None), &bash("ls")).is_none());
+        r.set(
         None,
         &[(
             "drgnx-agents-hook-rules",
@@ -356,37 +363,40 @@ async fn no_match_is_todays_seam() {
         )],
     )
     .await;
-    assert!(prepare(&r.plugins, &site(None), &bash("ls")).is_none());
-    assert!(prepare(&r.plugins, &site(None), &bash("rm -rf x")).is_some());
+        assert!(prepare(&r.plugins, &site(None), &bash("ls")).is_none());
+        assert!(prepare(&r.plugins, &site(None), &bash("rm -rf x")).is_some());
+    })
 }
 
 // [D] pure: hooks/project-rules-add-to-global-rules. A project's rules add to the global ones, and an
 // `id` on its off list removes that global rule, for that project only.
-#[tokio::test]
-async fn project_rules_add_to_global_rules() {
-    let r = rig().await;
-    let deny = |id: &str| json!({"id": id, "point": "before-tool", "tool-kinds": ["execute"], "verdict": "deny", "reason": id});
-    r.set(
-        None,
-        &[("drgnx-agents-hook-rules", json!([deny("g1"), deny("g2")]))],
-    )
-    .await;
-    r.set(
-        Some("project:alpha"),
-        &[
-            ("drgnx-agents-hook-rules", json!([deny("p1")])),
-            ("drgnx-agents-hook-rules-off", json!(["g1"])),
-        ],
-    )
-    .await;
-    let ids = |p: Option<&str>| -> Vec<String> {
-        prepare(&r.plugins, &site(p), &bash("ls"))
-            .map(|p| p.rules.iter().filter_map(|r| r.id.clone()).collect())
-            .unwrap_or_default()
-    };
-    assert_eq!(ids(None), ["g1", "g2"]);
-    assert_eq!(ids(Some("project:alpha")), ["g2", "p1"]);
-    assert_eq!(ids(Some("project:other")), ["g1", "g2"]);
+#[test]
+fn project_rules_add_to_global_rules() {
+    saman::block_on_current(async move {
+        let r = rig().await;
+        let deny = |id: &str| json!({"id": id, "point": "before-tool", "tool-kinds": ["execute"], "verdict": "deny", "reason": id});
+        r.set(
+            None,
+            &[("drgnx-agents-hook-rules", json!([deny("g1"), deny("g2")]))],
+        )
+        .await;
+        r.set(
+            Some("project:alpha"),
+            &[
+                ("drgnx-agents-hook-rules", json!([deny("p1")])),
+                ("drgnx-agents-hook-rules-off", json!(["g1"])),
+            ],
+        )
+        .await;
+        let ids = |p: Option<&str>| -> Vec<String> {
+            prepare(&r.plugins, &site(p), &bash("ls"))
+                .map(|p| p.rules.iter().filter_map(|r| r.id.clone()).collect())
+                .unwrap_or_default()
+        };
+        assert_eq!(ids(None), ["g1", "g2"]);
+        assert_eq!(ids(Some("project:alpha")), ["g2", "p1"]);
+        assert_eq!(ids(Some("project:other")), ["g1", "g2"]);
+    })
 }
 
 // [D] pure: hooks/kind-from-the-folded-tool-call and hooks/notebook-edit-is-an-edit. A request

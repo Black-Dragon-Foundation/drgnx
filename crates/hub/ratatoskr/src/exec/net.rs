@@ -384,50 +384,53 @@ mod tests {
     /// removed `-t 0`, and the sidecar's stdin closes before the sidecar is stopped, so it exits by itself rather than
     /// waiting out `STOP_LIMIT`.  The stand-in `podman run` exits when its stdin closes, like drgnx-px.
     #[cfg(unix)]
-    #[tokio::test]
-    async fn the_end_removes_the_job_at_once_and_lets_the_sidecar_exit() {
-        let dir = tempfile::tempdir().unwrap();
-        let (podman, rms) = (dir.path().join("podman"), dir.path().join("rm"));
-        hlaup::write(&podman,
+    #[test]
+    fn the_end_removes_the_job_at_once_and_lets_the_sidecar_exit() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (podman, rms) = (dir.path().join("podman"), dir.path().join("rm"));
+            hlaup::write(&podman,
             format!(
                 "#!/bin/sh\ncase \"$1\" in\nrun) cat >/dev/null; exit 0 ;;\nrm) echo \"$*\" >> {} ;;\nesac\n",
                 rms.display()
             ),
         ).unwrap();
-        let mut sidecar = Sidecar::start(&podman, vec!["run".into()], &[])
-            .await
-            .expect("the stand-in starts");
-        let io = sidecar.take_io().expect("its stdio");
-        let (ptx, prx) = tokio::sync::mpsc::channel(16);
-        let net = JobNetwork {
-            _proxy: gleipnir::net::proxy::start(
-                proxy_config(vec![], &[], job_web(None)),
-                std::sync::Arc::new(gleipnir::net::proxy::SystemResolver),
-                ptx,
-            ),
-            web: job_web(None),
-            sidecar: Some(sidecar),
-            names: container::net_names(&container::placement("ffffffff", None, 0), "x1").unwrap(),
-            job: container::name_of("x1").unwrap(),
-            // the channel holds the sidecar's stdio while the relay runs
-            channel: tokio::spawn(async move {
-                let _io = io;
-                std::future::pending::<End>().await
-            }),
-            log: tokio::spawn(async {}),
-            events: Some(prx),
-            asker: None,
-            podman,
-            env: vec![],
-        };
-        let job = net.job.clone();
-        assert_eq!(net.end().await, Some(0), "the sidecar exits by itself");
-        let rms = crate::fsio::read_to_string(&rms).unwrap();
-        assert_eq!(
-            rms.lines().next(),
-            Some(format!("rm -f -t 0 {job}").as_str()),
-            "{rms}"
-        );
+            let mut sidecar = Sidecar::start(&podman, vec!["run".into()], &[])
+                .await
+                .expect("the stand-in starts");
+            let io = sidecar.take_io().expect("its stdio");
+            let (ptx, prx) = tokio::sync::mpsc::channel(16);
+            let net = JobNetwork {
+                _proxy: gleipnir::net::proxy::start(
+                    proxy_config(vec![], &[], job_web(None)),
+                    std::sync::Arc::new(gleipnir::net::proxy::SystemResolver),
+                    ptx,
+                ),
+                web: job_web(None),
+                sidecar: Some(sidecar),
+                names: container::net_names(&container::placement("ffffffff", None, 0), "x1")
+                    .unwrap(),
+                job: container::name_of("x1").unwrap(),
+                // the channel holds the sidecar's stdio while the relay runs
+                channel: tokio::spawn(async move {
+                    let _io = io;
+                    std::future::pending::<End>().await
+                }),
+                log: tokio::spawn(async {}),
+                events: Some(prx),
+                asker: None,
+                podman,
+                env: vec![],
+            };
+            let job = net.job.clone();
+            assert_eq!(net.end().await, Some(0), "the sidecar exits by itself");
+            let rms = crate::fsio::read_to_string(&rms).unwrap();
+            assert_eq!(
+                rms.lines().next(),
+                Some(format!("rm -f -t 0 {job}").as_str()),
+                "{rms}"
+            );
+        })
     }
 
     #[test]

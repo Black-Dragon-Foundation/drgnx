@@ -112,276 +112,298 @@ fn of(prompts: &[Value], acp: &str) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test]
-async fn keeps_the_sid_budget_task_and_queue() {
-    let fx = Fx::new();
-    let sid = start(&fx, "mock-claude").await;
-    let seq = turn(&fx, &sid, "one").await;
-    let before = row_acp(&fx, &sid).await.unwrap();
-    // a turn the rewind cuts off, and a message queued behind it
-    hub(&fx).send(&sid, "silent 30".into()).unwrap();
-    prompted(&fx, "a.log", "silent 30").await;
-    hub(&fx).send(&sid, "later".into()).unwrap();
-    let level = rewind_conversation(hub(&fx), &fx.front, &target(&sid, seq), None)
-        .await
-        .expect("the rewind");
-    assert_eq!(level, RestoreLevel::Message);
-    let after = row_acp(&fx, &sid).await.expect("the row stays");
-    assert_ne!(after, before, "a new conversation under the same session");
-    assert!(hub(&fx).find(&sid).is_ok());
-    let prompts = prompted(&fx, "a.log", "later").await;
-    assert_eq!(
-        of(&prompts, &after),
-        ["later"],
-        "the queued message, once, in the new conversation"
-    );
-    assert!(!of(&prompts, &before).contains(&"later".to_string()));
+#[test]
+fn keeps_the_sid_budget_task_and_queue() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let sid = start(&fx, "mock-claude").await;
+        let seq = turn(&fx, &sid, "one").await;
+        let before = row_acp(&fx, &sid).await.unwrap();
+        // a turn the rewind cuts off, and a message queued behind it
+        hub(&fx).send(&sid, "silent 30".into()).unwrap();
+        prompted(&fx, "a.log", "silent 30").await;
+        hub(&fx).send(&sid, "later".into()).unwrap();
+        let level = rewind_conversation(hub(&fx), &fx.front, &target(&sid, seq), None)
+            .await
+            .expect("the rewind");
+        assert_eq!(level, RestoreLevel::Message);
+        let after = row_acp(&fx, &sid).await.expect("the row stays");
+        assert_ne!(after, before, "a new conversation under the same session");
+        assert!(hub(&fx).find(&sid).is_ok());
+        let prompts = prompted(&fx, "a.log", "later").await;
+        assert_eq!(
+            of(&prompts, &after),
+            ["later"],
+            "the queued message, once, in the new conversation"
+        );
+        assert!(!of(&prompts, &before).contains(&"later".to_string()));
+    })
 }
 
-#[tokio::test]
-async fn seq_continues_after_rewind() {
-    let fx = Fx::new();
-    let sid = start(&fx, "mock-claude").await;
-    let seq = turn(&fx, &sid, "one").await;
-    turn(&fx, &sid, "two").await;
-    let top = steps_of(&fx, &sid)
-        .await
-        .iter()
-        .map(|s| s.seq)
-        .max()
-        .unwrap();
-    let mut steps = hub(&fx).subscribe_steps();
-    rewind_conversation(
-        hub(&fx),
-        &fx.front,
-        &target(&sid, seq),
-        Some("again".into()),
-    )
-    .await
-    .unwrap();
-    let end = turn_end(&mut steps, &sid).await;
-    assert!(end > top, "{end} after {top}");
-    let acp = row_acp(&fx, &sid).await;
-    let all = steps_of(&fx, &sid).await;
-    let last = all.iter().find(|s| s.seq == end).unwrap();
-    assert_eq!(last.acp, acp, "the step names the new conversation");
-}
-
-#[tokio::test]
-async fn second_rewind_earlier_uses_the_steps_own_conversation() {
-    let fx = Fx::new();
-    let sid = start(&fx, "mock-claude").await;
-    let first = turn(&fx, &sid, "one").await;
-    let second = turn(&fx, &sid, "two").await;
-    let a = row_acp(&fx, &sid).await.unwrap();
-    rewind_conversation(hub(&fx), &fx.front, &target(&sid, second), None)
+#[test]
+fn seq_continues_after_rewind() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let sid = start(&fx, "mock-claude").await;
+        let seq = turn(&fx, &sid, "one").await;
+        turn(&fx, &sid, "two").await;
+        let top = steps_of(&fx, &sid)
+            .await
+            .iter()
+            .map(|s| s.seq)
+            .max()
+            .unwrap();
+        let mut steps = hub(&fx).subscribe_steps();
+        rewind_conversation(
+            hub(&fx),
+            &fx.front,
+            &target(&sid, seq),
+            Some("again".into()),
+        )
         .await
         .unwrap();
-    let b = row_acp(&fx, &sid).await.unwrap();
-    turn(&fx, &sid, "three").await;
-    rewind_conversation(hub(&fx), &fx.front, &target(&sid, first), None)
-        .await
-        .unwrap();
-    let forks = lines(&fx.dir.path().join("a.log"), "session/fork");
-    assert_eq!(forks.len(), 2, "{forks:?}");
-    assert_eq!(forks[0]["from"], json!(a));
-    assert_eq!(
-        forks[1]["from"],
-        json!(a),
-        "the earlier step ran in {a}, not in {b}"
-    );
-    let at = steps_of(&fx, &sid)
-        .await
-        .into_iter()
-        .find(|s| s.seq == first)
-        .and_then(|s| s.message_id);
-    assert_eq!(forks[1]["messageId"], json!(at));
+        let end = turn_end(&mut steps, &sid).await;
+        assert!(end > top, "{end} after {top}");
+        let acp = row_acp(&fx, &sid).await;
+        let all = steps_of(&fx, &sid).await;
+        let last = all.iter().find(|s| s.seq == end).unwrap();
+        assert_eq!(last.acp, acp, "the step names the new conversation");
+    })
 }
 
-#[tokio::test]
-async fn failed_launch_leaves_the_row_resumable() {
-    let fx = Fx::new();
-    let sid = start(&fx, "mock-claude").await;
-    let seq = turn(&fx, &sid, "one").await;
-    let a = row_acp(&fx, &sid).await.unwrap();
-    // its profile is gone: the rewind plans a summary (so it takes a message), and the launch after the close cannot
-    // land
-    fx.write_settings(Some("mock-claude"));
-    fx.front.refresh_settings().await;
-    let r = rewind_conversation(
-        hub(&fx),
-        &fx.front,
-        &target(&sid, seq),
-        Some("again".into()),
-    )
-    .await;
-    assert!(r.is_err(), "{r:?}");
-    assert_eq!(row_acp(&fx, &sid).await.as_deref(), Some(a.as_str()));
-    fx.write_settings(None);
-    fx.front.refresh_settings().await;
-    crate::agents::session::resume_closed(hub(&fx), &fx.front, &sid)
-        .await
-        .expect("the session resumes on its recorded conversation");
-    let resumed = lines(&fx.dir.path().join("a.log"), "session/resume");
-    assert_eq!(
-        resumed.last().map(|r| r["sessionId"].clone()),
-        Some(json!(a))
-    );
-}
-
-#[tokio::test]
-async fn summary_without_a_message_is_refused() {
-    let fx = Fx::new();
-    let sid = start(&fx, "mock-gemini").await;
-    let seq = turn(&fx, &sid, "one").await;
-    let a = row_acp(&fx, &sid).await;
-    let r = rewind_conversation(hub(&fx), &fx.front, &target(&sid, seq), None).await;
-    let Err(e) = r else {
-        panic!("a summary rewind without a message ran")
-    };
-    assert!(e.message.contains("needs-message"), "{}", e.message);
-    // refused before anything changed
-    let s = hub(&fx).find(&sid).unwrap();
-    assert!(!s.is_closed() && s.status() != SessionStatus::Exited);
-    assert_eq!(row_acp(&fx, &sid).await, a);
-}
-
-#[tokio::test]
-async fn runs_with_no_live_session() {
-    let fx = Fx::new();
-    let sid = start(&fx, "mock-claude").await;
-    let seq = turn(&fx, &sid, "one").await;
-    let a = row_acp(&fx, &sid).await.unwrap();
-    hub(&fx).find(&sid).unwrap().close_now().await;
-    // as at start-up: a hub that holds no session yet, on the same runtime.db
-    let fresh = Hub::default();
-    fresh.open_store(fx.runtime.clone());
-    let level = rewind_conversation(&fresh, &fx.front, &target(&sid, seq), None)
-        .await
-        .expect("a rewind from the row alone");
-    assert_eq!(level, RestoreLevel::Message);
-    assert!(fresh.find(&sid).is_ok());
-    assert_ne!(row_acp(&fx, &sid).await.unwrap(), a);
-}
-
-#[tokio::test]
-async fn a_gone_session_is_session_gone() {
-    let fx = Fx::new();
-    let sid = start(&fx, "mock-claude").await;
-    let seq = turn(&fx, &sid, "one").await;
-    hub(&fx).kill(&sid).await.unwrap();
-    let r = rewind_conversation(hub(&fx), &fx.front, &target(&sid, seq), Some("x".into())).await;
-    let Err(e) = r else {
-        panic!("a rewind of a finished session ran")
-    };
-    assert!(e.message.contains(SESSION_GONE), "{}", e.message);
-}
-
-#[tokio::test]
-async fn first_prompt_reaches_the_agent() {
-    let fx = Fx::new();
-    let sid = start(&fx, "mock-claude").await;
-    let seq = turn(&fx, &sid, "one").await;
-    hub(&fx).send(&sid, "silent 30".into()).unwrap();
-    prompted(&fx, "a.log", "silent 30").await;
-    hub(&fx).send(&sid, "later".into()).unwrap();
-    rewind_conversation(
-        hub(&fx),
-        &fx.front,
-        &target(&sid, seq),
-        Some("again".into()),
-    )
-    .await
-    .unwrap();
-    let after = row_acp(&fx, &sid).await.unwrap();
-    let prompts = prompted(&fx, "a.log", "later").await;
-    assert_eq!(
-        of(&prompts, &after),
-        ["again", "later"],
-        "the first prompt, then the queue saved behind it"
-    );
-}
-
-#[tokio::test]
-async fn no_first_prompt_at_message_level_means_no_turn() {
-    let fx = Fx::new();
-    let sid = start(&fx, "mock-claude").await;
-    let seq = turn(&fx, &sid, "one").await;
-    rewind_conversation(hub(&fx), &fx.front, &target(&sid, seq), None)
-        .await
-        .unwrap();
-    let after = row_acp(&fx, &sid).await.unwrap();
-    // the first prompt the new conversation gets is the user's next one
-    hub(&fx).send(&sid, "probe".into()).unwrap();
-    let prompts = prompted(&fx, "a.log", "probe").await;
-    assert_eq!(of(&prompts, &after), ["probe"]);
-}
-
-#[tokio::test]
-async fn spend_after_a_rewind_is_counted() {
-    let fx = Fx::new();
-    let sid = start(&fx, "mock-claude").await;
-    let seq = turn(&fx, &sid, "one").await;
-    let scope = crate::agents::session::scope_of(Role::Chat, &sid);
-    let spent = || {
-        fx.front
-            .core
-            .budgets
-            .view(&scope)
-            .spent
+#[test]
+fn second_rewind_earlier_uses_the_steps_own_conversation() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let sid = start(&fx, "mock-claude").await;
+        let first = turn(&fx, &sid, "one").await;
+        let second = turn(&fx, &sid, "two").await;
+        let a = row_acp(&fx, &sid).await.unwrap();
+        rewind_conversation(hub(&fx), &fx.front, &target(&sid, second), None)
+            .await
+            .unwrap();
+        let b = row_acp(&fx, &sid).await.unwrap();
+        turn(&fx, &sid, "three").await;
+        rewind_conversation(hub(&fx), &fx.front, &target(&sid, first), None)
+            .await
+            .unwrap();
+        let forks = lines(&fx.dir.path().join("a.log"), "session/fork");
+        assert_eq!(forks.len(), 2, "{forks:?}");
+        assert_eq!(forks[0]["from"], json!(a));
+        assert_eq!(
+            forks[1]["from"],
+            json!(a),
+            "the earlier step ran in {a}, not in {b}"
+        );
+        let at = steps_of(&fx, &sid)
+            .await
             .into_iter()
-            .find(|l| l.unit == Unit::UsdEst)
-            .map_or(0.0, |l| l.amount)
-    };
-    // the mock's Claude reports its conversation's running cost: 0.01 a turn so far
-    assert!((spent() - 0.01).abs() < 1e-9, "{}", spent());
-    let mut steps = hub(&fx).subscribe_steps();
-    rewind_conversation(
-        hub(&fx),
-        &fx.front,
-        &target(&sid, seq),
-        Some("again".into()),
-    )
-    .await
-    .unwrap();
-    turn_end(&mut steps, &sid).await;
-    // the fork's first reading (0.02, its second turn) counts from zero in the new conversation
-    assert!((spent() - 0.03).abs() < 1e-9, "{}", spent());
+            .find(|s| s.seq == first)
+            .and_then(|s| s.message_id);
+        assert_eq!(forks[1]["messageId"], json!(at));
+    })
 }
 
-#[tokio::test]
-async fn fork_keeps_the_source_running() {
-    let fx = Fx::new();
-    let sid = start(&fx, "mock-claude").await;
-    let seq = turn(&fx, &sid, "one").await;
-    let a = row_acp(&fx, &sid).await.unwrap();
-    let cwd = fx.dir.path().join("fork");
-    std::fs::create_dir_all(&cwd).unwrap();
-    let (started, level) = fork_conversation(
-        hub(&fx),
-        &fx.front,
-        &crate::runner::user(),
-        &target(&sid, seq),
-        &cwd,
-        None,
-        "go on".into(),
-        None,
-        None,
-    )
-    .await
-    .expect("a fork");
-    assert_eq!(level, RestoreLevel::Message);
-    assert_ne!(started.id, sid);
-    let s = hub(&fx).find(&sid).unwrap();
-    assert!(!s.is_closed() && s.status() != SessionStatus::Exited);
-    assert_eq!(row_acp(&fx, &sid).await.as_deref(), Some(a.as_str()));
-    let b = row_acp(&fx, &started.id).await.unwrap();
-    let prompts = prompted(&fx, "a.log", "go on").await;
-    assert_eq!(of(&prompts, &b), ["go on"]);
-    let forks = lines(&fx.dir.path().join("a.log"), "session/fork");
-    assert_eq!((forks.len(), &forks[0]["from"]), (1, &json!(a)));
-    let (new, src) = (format!("session:{}", started.id), format!("session:{sid}"));
-    let link: Option<String> = fx
+#[test]
+fn failed_launch_leaves_the_row_resumable() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let sid = start(&fx, "mock-claude").await;
+        let seq = turn(&fx, &sid, "one").await;
+        let a = row_acp(&fx, &sid).await.unwrap();
+        // its profile is gone: the rewind plans a summary (so it takes a message), and the launch after the close cannot
+        // land
+        fx.write_settings(Some("mock-claude"));
+        fx.front.refresh_settings().await;
+        let r = rewind_conversation(
+            hub(&fx),
+            &fx.front,
+            &target(&sid, seq),
+            Some("again".into()),
+        )
+        .await;
+        assert!(r.is_err(), "{r:?}");
+        assert_eq!(row_acp(&fx, &sid).await.as_deref(), Some(a.as_str()));
+        fx.write_settings(None);
+        fx.front.refresh_settings().await;
+        crate::agents::session::resume_closed(hub(&fx), &fx.front, &sid)
+            .await
+            .expect("the session resumes on its recorded conversation");
+        let resumed = lines(&fx.dir.path().join("a.log"), "session/resume");
+        assert_eq!(
+            resumed.last().map(|r| r["sessionId"].clone()),
+            Some(json!(a))
+        );
+    })
+}
+
+#[test]
+fn summary_without_a_message_is_refused() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let sid = start(&fx, "mock-gemini").await;
+        let seq = turn(&fx, &sid, "one").await;
+        let a = row_acp(&fx, &sid).await;
+        let r = rewind_conversation(hub(&fx), &fx.front, &target(&sid, seq), None).await;
+        let Err(e) = r else {
+            panic!("a summary rewind without a message ran")
+        };
+        assert!(e.message.contains("needs-message"), "{}", e.message);
+        // refused before anything changed
+        let s = hub(&fx).find(&sid).unwrap();
+        assert!(!s.is_closed() && s.status() != SessionStatus::Exited);
+        assert_eq!(row_acp(&fx, &sid).await, a);
+    })
+}
+
+#[test]
+fn runs_with_no_live_session() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let sid = start(&fx, "mock-claude").await;
+        let seq = turn(&fx, &sid, "one").await;
+        let a = row_acp(&fx, &sid).await.unwrap();
+        hub(&fx).find(&sid).unwrap().close_now().await;
+        // as at start-up: a hub that holds no session yet, on the same runtime.db
+        let fresh = Hub::default();
+        fresh.open_store(fx.runtime.clone());
+        let level = rewind_conversation(&fresh, &fx.front, &target(&sid, seq), None)
+            .await
+            .expect("a rewind from the row alone");
+        assert_eq!(level, RestoreLevel::Message);
+        assert!(fresh.find(&sid).is_ok());
+        assert_ne!(row_acp(&fx, &sid).await.unwrap(), a);
+    })
+}
+
+#[test]
+fn a_gone_session_is_session_gone() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let sid = start(&fx, "mock-claude").await;
+        let seq = turn(&fx, &sid, "one").await;
+        hub(&fx).kill(&sid).await.unwrap();
+        let r =
+            rewind_conversation(hub(&fx), &fx.front, &target(&sid, seq), Some("x".into())).await;
+        let Err(e) = r else {
+            panic!("a rewind of a finished session ran")
+        };
+        assert!(e.message.contains(SESSION_GONE), "{}", e.message);
+    })
+}
+
+#[test]
+fn first_prompt_reaches_the_agent() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let sid = start(&fx, "mock-claude").await;
+        let seq = turn(&fx, &sid, "one").await;
+        hub(&fx).send(&sid, "silent 30".into()).unwrap();
+        prompted(&fx, "a.log", "silent 30").await;
+        hub(&fx).send(&sid, "later".into()).unwrap();
+        rewind_conversation(
+            hub(&fx),
+            &fx.front,
+            &target(&sid, seq),
+            Some("again".into()),
+        )
+        .await
+        .unwrap();
+        let after = row_acp(&fx, &sid).await.unwrap();
+        let prompts = prompted(&fx, "a.log", "later").await;
+        assert_eq!(
+            of(&prompts, &after),
+            ["again", "later"],
+            "the first prompt, then the queue saved behind it"
+        );
+    })
+}
+
+#[test]
+fn no_first_prompt_at_message_level_means_no_turn() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let sid = start(&fx, "mock-claude").await;
+        let seq = turn(&fx, &sid, "one").await;
+        rewind_conversation(hub(&fx), &fx.front, &target(&sid, seq), None)
+            .await
+            .unwrap();
+        let after = row_acp(&fx, &sid).await.unwrap();
+        // the first prompt the new conversation gets is the user's next one
+        hub(&fx).send(&sid, "probe".into()).unwrap();
+        let prompts = prompted(&fx, "a.log", "probe").await;
+        assert_eq!(of(&prompts, &after), ["probe"]);
+    })
+}
+
+#[test]
+fn spend_after_a_rewind_is_counted() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let sid = start(&fx, "mock-claude").await;
+        let seq = turn(&fx, &sid, "one").await;
+        let scope = crate::agents::session::scope_of(Role::Chat, &sid);
+        let spent = || {
+            fx.front
+                .core
+                .budgets
+                .view(&scope)
+                .spent
+                .into_iter()
+                .find(|l| l.unit == Unit::UsdEst)
+                .map_or(0.0, |l| l.amount)
+        };
+        // the mock's Claude reports its conversation's running cost: 0.01 a turn so far
+        assert!((spent() - 0.01).abs() < 1e-9, "{}", spent());
+        let mut steps = hub(&fx).subscribe_steps();
+        rewind_conversation(
+            hub(&fx),
+            &fx.front,
+            &target(&sid, seq),
+            Some("again".into()),
+        )
+        .await
+        .unwrap();
+        turn_end(&mut steps, &sid).await;
+        // the fork's first reading (0.02, its second turn) counts from zero in the new conversation
+        assert!((spent() - 0.03).abs() < 1e-9, "{}", spent());
+    })
+}
+
+#[test]
+fn fork_keeps_the_source_running() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let sid = start(&fx, "mock-claude").await;
+        let seq = turn(&fx, &sid, "one").await;
+        let a = row_acp(&fx, &sid).await.unwrap();
+        let cwd = fx.dir.path().join("fork");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let (started, level) = fork_conversation(
+            hub(&fx),
+            &fx.front,
+            &crate::runner::user(),
+            &target(&sid, seq),
+            &cwd,
+            None,
+            "go on".into(),
+            None,
+            None,
+        )
+        .await
+        .expect("a fork");
+        assert_eq!(level, RestoreLevel::Message);
+        assert_ne!(started.id, sid);
+        let s = hub(&fx).find(&sid).unwrap();
+        assert!(!s.is_closed() && s.status() != SessionStatus::Exited);
+        assert_eq!(row_acp(&fx, &sid).await.as_deref(), Some(a.as_str()));
+        let b = row_acp(&fx, &started.id).await.unwrap();
+        let prompts = prompted(&fx, "a.log", "go on").await;
+        assert_eq!(of(&prompts, &b), ["go on"]);
+        let forks = lines(&fx.dir.path().join("a.log"), "session/fork");
+        assert_eq!((forks.len(), &forks[0]["from"]), (1, &json!(a)));
+        let (new, src) = (format!("session:{}", started.id), format!("session:{sid}"));
+        let link: Option<String> = fx
         .front
         .writer
         .db
@@ -396,70 +418,75 @@ async fn fork_keeps_the_source_running() {
         })
         .await
         .unwrap();
-    let data: Value = serde_json::from_str(&link.expect("forked_from")).unwrap();
-    assert_eq!(
-        (data["seq"].as_i64(), data["level"].as_str()),
-        (Some(seq), Some("message"))
-    );
+        let data: Value = serde_json::from_str(&link.expect("forked_from")).unwrap();
+        assert_eq!(
+            (data["seq"].as_i64(), data["level"].as_str()),
+            (Some(seq), Some("message"))
+        );
+    })
 }
 
-#[tokio::test]
-async fn fork_cross_provider_is_a_labelled_summary() {
-    let fx = Fx::new();
-    let sid = start(&fx, "mock-claude").await;
-    let seq = turn(&fx, &sid, "one").await;
-    let (_, level) = fork_conversation(
-        hub(&fx),
-        &fx.front,
-        &crate::runner::user(),
-        &target(&sid, seq),
-        &fx.work(),
-        Some("mock-gemini"),
-        "go on".into(),
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(level, RestoreLevel::Summary);
-    let prompts = prompted(&fx, "g.log", "go on").await;
-    let text = prompts[0]["text"].as_str().unwrap();
-    assert!(
-        text.contains("[Handoff") && text.ends_with("go on"),
-        "{text}"
-    );
-    assert!(lines(&fx.dir.path().join("a.log"), "session/fork").is_empty());
+#[test]
+fn fork_cross_provider_is_a_labelled_summary() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let sid = start(&fx, "mock-claude").await;
+        let seq = turn(&fx, &sid, "one").await;
+        let (_, level) = fork_conversation(
+            hub(&fx),
+            &fx.front,
+            &crate::runner::user(),
+            &target(&sid, seq),
+            &fx.work(),
+            Some("mock-gemini"),
+            "go on".into(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(level, RestoreLevel::Summary);
+        let prompts = prompted(&fx, "g.log", "go on").await;
+        let text = prompts[0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("[Handoff") && text.ends_with("go on"),
+            "{text}"
+        );
+        assert!(lines(&fx.dir.path().join("a.log"), "session/fork").is_empty());
+    })
 }
 
-#[tokio::test]
-async fn fork_of_a_finished_session_reads_its_entity() {
-    let fx = Fx::new();
-    let sid = start(&fx, "mock-claude").await;
-    let seq = turn(&fx, &sid, "one").await;
-    let a = row_acp(&fx, &sid).await.unwrap();
-    hub(&fx).kill(&sid).await.unwrap();
-    assert_eq!(
-        row_acp(&fx, &sid).await,
-        None,
-        "a finished session has no row"
-    );
-    let (started, level) = fork_conversation(
-        hub(&fx),
-        &fx.front,
-        &crate::runner::user(),
-        &target(&sid, seq),
-        &fx.work(),
-        None,
-        "go on".into(),
-        None,
-        None,
-    )
-    .await
-    .expect("a fork of what the session left");
-    assert_eq!(level, RestoreLevel::Message);
-    let forks = lines(&fx.dir.path().join("a.log"), "session/fork");
-    assert_eq!(forks[0]["from"], json!(a));
-    let b = row_acp(&fx, &started.id).await.unwrap();
-    let prompts = prompted(&fx, "a.log", "go on").await;
-    assert_eq!(of(&prompts, &b), ["go on"]);
+#[test]
+fn fork_of_a_finished_session_reads_its_entity() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let sid = start(&fx, "mock-claude").await;
+        let seq = turn(&fx, &sid, "one").await;
+        let a = row_acp(&fx, &sid).await.unwrap();
+        hub(&fx).kill(&sid).await.unwrap();
+        assert_eq!(
+            row_acp(&fx, &sid).await,
+            None,
+            "a finished session has no row"
+        );
+        let (started, level) = fork_conversation(
+            hub(&fx),
+            &fx.front,
+            &crate::runner::user(),
+            &target(&sid, seq),
+            &fx.work(),
+            None,
+            "go on".into(),
+            None,
+            None,
+        )
+        .await
+        .expect("a fork of what the session left");
+        assert_eq!(level, RestoreLevel::Message);
+        let forks = lines(&fx.dir.path().join("a.log"), "session/fork");
+        assert_eq!(forks[0]["from"], json!(a));
+        let b = row_acp(&fx, &started.id).await.unwrap();
+        let prompts = prompted(&fx, "a.log", "go on").await;
+        assert_eq!(of(&prompts, &b), ["go on"]);
+    })
 }

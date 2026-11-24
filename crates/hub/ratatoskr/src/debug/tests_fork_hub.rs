@@ -18,19 +18,17 @@ struct Events(Mutex<Vec<(String, Value)>>);
 
 impl Sink for Events {
     fn broadcast(&self, event: &str, data: Value, _: Option<u64>) {
-        self.0.lock().unwrap().push((event.to_owned(), data));
+        saman::lock(&self.0).push((event.to_owned(), data));
     }
     fn send(&self, _: u64, event: &str, data: Value) -> bool {
-        self.0.lock().unwrap().push((event.to_owned(), data));
+        saman::lock(&self.0).push((event.to_owned(), data));
         true
     }
 }
 
 impl Events {
     fn forks(&self) -> Vec<Value> {
-        self.0
-            .lock()
-            .unwrap()
+        saman::lock(&self.0)
             .iter()
             .filter(|(e, _)| e == "debug-fork")
             .map(|(_, d)| d.clone())
@@ -69,7 +67,7 @@ impl FakeTrees {
 impl Trees for FakeTrees {
     fn make<'a>(&'a self, _: &'a RunInfo, id: &'a str) -> BoxFut<'a, villa::Result<PathBuf>> {
         Box::pin(async move {
-            self.made.lock().unwrap().push(id.to_owned());
+            saman::lock(&self.made).push(id.to_owned());
             let w = self.root().join(id).join("w");
             if self.base.is_some() {
                 std::fs::create_dir_all(&w).unwrap();
@@ -88,7 +86,7 @@ impl Trees for FakeTrees {
         Box::pin(async { vec!["stock.py".to_owned()] })
     }
     fn remove<'a>(&'a self, tree: &'a Path) -> BoxFut<'a, ()> {
-        Box::pin(async move { self.removed.lock().unwrap().push(tree.to_path_buf()) })
+        Box::pin(async move { saman::lock(&self.removed).push(tree.to_path_buf()) })
     }
 }
 
@@ -127,10 +125,7 @@ impl Launcher for OneMock {
     }
     fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
-            let steps = self
-                .script
-                .lock()
-                .unwrap()
+            let steps = saman::lock(&self.script)
                 .take()
                 .ok_or("no script")
                 .map_err(|e| villa::Error::invalid(e.to_string()))?;
@@ -138,10 +133,7 @@ impl Launcher for OneMock {
             let (a, b) = tokio::io::duplex(1 << 20);
             let (cr, cw) = tokio::io::split(a);
             let (mr, mw) = tokio::io::split(b);
-            self.running
-                .lock()
-                .unwrap()
-                .push(Mock::start(script, mr, mw));
+            saman::lock(&self.running).push(Mock::start(script, mr, mw));
             let (client, incoming) = vor::Client::new(cr, cw);
             Ok(Connected {
                 client,
@@ -164,10 +156,10 @@ impl Sealer for MockSealer {
         assert_eq!(adapter, "debugpy");
         // the sandbox's temp is never inside the tree
         assert!(!tmp.starts_with(tree), "{tmp:?} in {tree:?}");
-        self.trees.lock().unwrap().push(tree.to_path_buf());
-        self.configs.lock().unwrap().push(config.clone());
+        saman::lock(&self.trees).push(tree.to_path_buf());
+        saman::lock(&self.configs).push(config.clone());
         Ok(Arc::new(OneMock {
-            script: Mutex::new(self.scripts.lock().unwrap().pop_front()),
+            script: Mutex::new(saman::lock(&self.scripts).pop_front()),
             running: self.running.clone(),
             own: self.own.clone(),
         }))
@@ -310,136 +302,146 @@ async fn until(mut cond: impl FnMut() -> bool) {
     panic!("never happened");
 }
 
-#[tokio::test(start_paused = true)]
-async fn what_is_refused_and_what_asks() {
-    let (f, ev, _, _) = setup(vec![]);
-    let mut a = ask(Change::Nothing);
-    a.run = "nope".into();
-    assert!(f.fork(a).unwrap_err().message().contains("no recorded run"));
-    // the configuration resolves differently now: refused
-    let mut a = ask(Change::Nothing);
-    a.resolved["program"] = json!("/p/other.py");
-    assert!(f.fork(a).unwrap_err().message().contains("differently"));
-    assert!(ev.forks().is_empty());
+#[test]
+fn what_is_refused_and_what_asks() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let (f, ev, _, _) = setup(vec![]);
+        let mut a = ask(Change::Nothing);
+        a.run = "nope".into();
+        assert!(f.fork(a).unwrap_err().message().contains("no recorded run"));
+        // the configuration resolves differently now: refused
+        let mut a = ask(Change::Nothing);
+        a.resolved["program"] = json!("/p/other.py");
+        assert!(f.fork(a).unwrap_err().message().contains("differently"));
+        assert!(ev.forks().is_empty());
+    })
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_slow_point_asks_before_anything_is_made() {
-    let mut r = run();
-    r.stops[1].t_ms = 90_000;
-    let ev = Arc::new(Events::default());
-    let trees = Arc::new(FakeTrees::default());
-    let f = Forks::new(
-        ev.clone(),
-        Arc::new(OneRun(r)),
-        trees.clone(),
-        Arc::new(MockSealer::default()),
-        true,
-    );
-    let Made::Ask(q) = f.fork(ask(Change::Nothing)).unwrap() else {
-        panic!("made");
-    };
-    assert!(q.contains("90 s"), "{q}");
-    assert!(trees.made.lock().unwrap().is_empty());
+#[test]
+fn a_slow_point_asks_before_anything_is_made() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let mut r = run();
+        r.stops[1].t_ms = 90_000;
+        let ev = Arc::new(Events::default());
+        let trees = Arc::new(FakeTrees::default());
+        let f = Forks::new(
+            ev.clone(),
+            Arc::new(OneRun(r)),
+            trees.clone(),
+            Arc::new(MockSealer::default()),
+            true,
+        );
+        let Made::Ask(q) = f.fork(ask(Change::Nothing)).unwrap() else {
+            panic!("made");
+        };
+        assert!(q.contains("90 s"), "{q}");
+        assert!(saman::lock(&trees.made).is_empty());
+    })
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_fork_goes_from_preparing_to_done_with_its_comparison() {
-    let (f, ev, _, sealer) = setup(vec![script()]);
-    let Made::Fork(id) = f.fork(ask(Change::Nothing)).unwrap() else {
-        panic!("asked");
-    };
-    assert_eq!(id, "f1");
-    until(|| ev.states().last().map(String::as_str) == Some("done")).await;
-    assert_eq!(ev.states(), ["preparing", "running", "done"]);
-    let v = ev.forks().pop().unwrap();
-    // the run's hits before stop 5: one ("16"), matched; after it: "12", "9" then, "11" now
-    assert_eq!(v["matched"], json!({"matched": 1, "of": 1, "first": null}));
-    assert_eq!(
-        v["lanes"],
-        json!([{"probe": "shortfall", "then": ["12", "9"], "now": ["11"]}])
-    );
-    assert_eq!(v["at"]["path"], json!("/p/stock.py"));
-    assert_eq!(v["now"], json!({"kind": "exit", "code": 0}));
-    assert_eq!(v["root"], json!("/p"));
-    assert_eq!(f.compare("r1", "f1").unwrap(), v);
-    assert!(f.compare("r2", "f1").is_err());
-    // the launch ran in the tree, with the run's hash seed
-    let c = sealer.configs.lock().unwrap()[0].clone();
-    assert_eq!(c["program"], json!(PY));
-    assert_eq!(c["env"]["PYTHONHASHSEED"], json!("1234"));
-    // an environment value reaches the launch, never an event
-    assert_eq!(c["env"]["API_TOKEN"], json!("s3cr3t-value"));
-    assert!(
-        !ev.0
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(_, d)| d.to_string().contains("s3cr3t")),
-        "an environment value is in an event"
-    );
-    let mocks: Vec<Mock> = std::mem::take(&mut *sealer.running.lock().unwrap());
-    for m in mocks {
-        m.finish().await.unwrap();
-    }
+#[test]
+fn a_fork_goes_from_preparing_to_done_with_its_comparison() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let (f, ev, _, sealer) = setup(vec![script()]);
+        let Made::Fork(id) = f.fork(ask(Change::Nothing)).unwrap() else {
+            panic!("asked");
+        };
+        assert_eq!(id, "f1");
+        until(|| ev.states().last().map(String::as_str) == Some("done")).await;
+        assert_eq!(ev.states(), ["preparing", "running", "done"]);
+        let v = ev.forks().pop().unwrap();
+        // the run's hits before stop 5: one ("16"), matched; after it: "12", "9" then, "11" now
+        assert_eq!(v["matched"], json!({"matched": 1, "of": 1, "first": null}));
+        assert_eq!(
+            v["lanes"],
+            json!([{"probe": "shortfall", "then": ["12", "9"], "now": ["11"]}])
+        );
+        assert_eq!(v["at"]["path"], json!("/p/stock.py"));
+        assert_eq!(v["now"], json!({"kind": "exit", "code": 0}));
+        assert_eq!(v["root"], json!("/p"));
+        assert_eq!(f.compare("r1", "f1").unwrap(), v);
+        assert!(f.compare("r2", "f1").is_err());
+        // the launch ran in the tree, with the run's hash seed
+        let c = saman::lock(&sealer.configs)[0].clone();
+        assert_eq!(c["program"], json!(PY));
+        assert_eq!(c["env"]["PYTHONHASHSEED"], json!("1234"));
+        // an environment value reaches the launch, never an event
+        assert_eq!(c["env"]["API_TOKEN"], json!("s3cr3t-value"));
+        assert!(
+            !saman::lock(&ev.0)
+                .iter()
+                .any(|(_, d)| d.to_string().contains("s3cr3t")),
+            "an environment value is in an event"
+        );
+        let mocks: Vec<Mock> = std::mem::take(&mut *saman::lock(&sealer.running));
+        for m in mocks {
+            m.finish().await.unwrap();
+        }
+    })
 }
 
 /// A launcher that starts the program itself (macOS's port block: debugpy attached and listening for it) has the
 /// fork send its attach: a launch there has debugpy open a listener the block's Seatbelt profile refuses.
-#[tokio::test(start_paused = true)]
-async fn a_fork_sends_its_launchers_own_request() {
-    let listen = json!({"request": "attach", "listen": {"host": "127.0.0.1", "port": 47001}});
-    let mut s = script();
-    s[1] = json!({"expect": "attach", "args": listen, "ok": {}});
-    let ev = Arc::new(Events::default());
-    let sealer = Arc::new(MockSealer {
-        scripts: Mutex::new(vec![s].into()),
-        own: Some(listen.clone()),
-        ..Default::default()
-    });
-    let f = Forks::new(
-        ev.clone(),
-        Arc::new(OneRun(run())),
-        Arc::new(FakeTrees::default()),
-        sealer.clone(),
-        true,
-    );
-    let Made::Fork(_) = f.fork(ask(Change::Nothing)).unwrap() else {
-        panic!("asked");
-    };
-    until(|| ev.states().last().map(String::as_str) == Some("done")).await;
-    assert_eq!(ev.states(), ["preparing", "running", "done"]);
-    let mocks: Vec<Mock> = std::mem::take(&mut *sealer.running.lock().unwrap());
-    for m in mocks {
-        m.finish().await.unwrap();
-    }
+#[test]
+fn a_fork_sends_its_launchers_own_request() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let listen = json!({"request": "attach", "listen": {"host": "127.0.0.1", "port": 47001}});
+        let mut s = script();
+        s[1] = json!({"expect": "attach", "args": listen, "ok": {}});
+        let ev = Arc::new(Events::default());
+        let sealer = Arc::new(MockSealer {
+            scripts: Mutex::new(vec![s].into()),
+            own: Some(listen.clone()),
+            ..Default::default()
+        });
+        let f = Forks::new(
+            ev.clone(),
+            Arc::new(OneRun(run())),
+            Arc::new(FakeTrees::default()),
+            sealer.clone(),
+            true,
+        );
+        let Made::Fork(_) = f.fork(ask(Change::Nothing)).unwrap() else {
+            panic!("asked");
+        };
+        until(|| ev.states().last().map(String::as_str) == Some("done")).await;
+        assert_eq!(ev.states(), ["preparing", "running", "done"]);
+        let mocks: Vec<Mock> = std::mem::take(&mut *saman::lock(&sealer.running));
+        for m in mocks {
+            m.finish().await.unwrap();
+        }
+    })
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_code_what_if_waits_for_its_edit_then_runs() {
-    let (f, ev, trees, sealer) = setup(vec![script()]);
-    let Made::Fork(id) = f.fork(ask(Change::Code)).unwrap() else {
-        panic!("asked");
-    };
-    until(|| ev.states().last().map(String::as_str) == Some("editing")).await;
-    assert_eq!(ev.forks().last().unwrap()["tree"], json!("/forks/f1/w"));
-    assert!(
-        sealer.configs.lock().unwrap().is_empty(),
-        "ran before the edit"
-    );
-    f.resume(&id).unwrap();
-    assert!(f.resume(&id).is_err(), "resumed twice");
-    until(|| ev.states().last().map(String::as_str) == Some("done")).await;
-    // what the edit changed, measured before it ran
-    assert_eq!(ev.forks().last().unwrap()["changed"], json!(["stock.py"]));
-    assert!(f.resume(&id).is_err(), "a done fork resumed");
-    f.drop_fork(&id).await.unwrap();
-    assert_eq!(
-        *trees.removed.lock().unwrap(),
-        [PathBuf::from("/forks/f1/w")]
-    );
-    assert_eq!(ev.states().last().map(String::as_str), Some("dropped"));
-    assert!(f.list().is_empty());
+#[test]
+fn a_code_what_if_waits_for_its_edit_then_runs() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let (f, ev, trees, sealer) = setup(vec![script()]);
+        let Made::Fork(id) = f.fork(ask(Change::Code)).unwrap() else {
+            panic!("asked");
+        };
+        until(|| ev.states().last().map(String::as_str) == Some("editing")).await;
+        assert_eq!(ev.forks().last().unwrap()["tree"], json!("/forks/f1/w"));
+        assert!(
+            saman::lock(&sealer.configs).is_empty(),
+            "ran before the edit"
+        );
+        f.resume(&id).unwrap();
+        assert!(f.resume(&id).is_err(), "resumed twice");
+        until(|| ev.states().last().map(String::as_str) == Some("done")).await;
+        // what the edit changed, measured before it ran
+        assert_eq!(ev.forks().last().unwrap()["changed"], json!(["stock.py"]));
+        assert!(f.resume(&id).is_err(), "a done fork resumed");
+        f.drop_fork(&id).await.unwrap();
+        assert_eq!(*saman::lock(&trees.removed), [PathBuf::from("/forks/f1/w")]);
+        assert_eq!(ev.states().last().map(String::as_str), Some("dropped"));
+        assert!(f.list().is_empty());
+    })
 }
 
 fn setup_in(
@@ -475,82 +477,85 @@ fn stop_at(path: &str, line: u32, reason: &str) -> Vec<Value> {
     ]
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_trace_reaches_its_stop_with_the_env_and_files_it_was_given() {
-    let dir = tempfile::tempdir().unwrap();
-    let base = dir.path().to_path_buf();
-    let tree = base.join("t1").join("w");
-    let py = tree.join("stock.py").display().to_string();
-    let origin = tree.join(".drgnx-origin").display().to_string();
-    // the program gets the injected value, the tree's own path in it, with the run's seed
-    let mut s = vec![
-        json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true, "supportsLogPoints": true}}),
-        json!({"expect": "launch", "args": {"program": py, "env": {"PYTHONHASHSEED": "1234", "PYTHONPATH": origin}}, "ok": {}}),
-        json!({"event": "initialized"}),
-        json!({"expect": "setBreakpoints", "args": {"source": {"path": py}}, "ok": {"breakpoints": [{"verified": true}, {"verified": true}]}}),
-        json!({"expect": "configurationDone"}),
-    ];
-    // stop 2 of the run: line 20's first pass; the trace ends there
-    s.extend(stop_at(&py, 20, "breakpoint"));
-    s.push(json!({"expect": "evaluate", "ok": {"result": "999"}}));
-    s.push(json!({"expect": "disconnect", "ok": {}}));
-    s.push(json!({"die": true}));
-    let (f, ev, trees, sealer) = setup_in(vec![s], &base);
-    let g = f
-        .trace(
-            "r1",
-            2,
-            resolved(),
-            |t: &Path| {
+#[test]
+fn a_trace_reaches_its_stop_with_the_env_and_files_it_was_given() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().to_path_buf();
+        let tree = base.join("t1").join("w");
+        let py = tree.join("stock.py").display().to_string();
+        let origin = tree.join(".drgnx-origin").display().to_string();
+        // the program gets the injected value, the tree's own path in it, with the run's seed
+        let mut s = vec![
+            json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true, "supportsLogPoints": true}}),
+            json!({"expect": "launch", "args": {"program": py, "env": {"PYTHONHASHSEED": "1234", "PYTHONPATH": origin}}, "ok": {}}),
+            json!({"event": "initialized"}),
+            json!({"expect": "setBreakpoints", "args": {"source": {"path": py}}, "ok": {"breakpoints": [{"verified": true}, {"verified": true}]}}),
+            json!({"expect": "configurationDone"}),
+        ];
+        // stop 2 of the run: line 20's first pass; the trace ends there
+        s.extend(stop_at(&py, 20, "breakpoint"));
+        s.push(json!({"expect": "evaluate", "ok": {"result": "999"}}));
+        s.push(json!({"expect": "disconnect", "ok": {}}));
+        s.push(json!({"die": true}));
+        let (f, ev, trees, sealer) = setup_in(vec![s], &base);
+        let g = f
+            .trace(
+                "r1",
+                2,
+                resolved(),
+                |t: &Path| {
+                    vec![(
+                        "PYTHONPATH".into(),
+                        t.join(".drgnx-origin").display().to_string(),
+                    )]
+                },
                 vec![(
-                    "PYTHONPATH".into(),
-                    t.join(".drgnx-origin").display().to_string(),
-                )]
-            },
-            vec![(
-                ".drgnx-origin/sitecustomize.py".into(),
-                b"import tracer\n".to_vec(),
-            )],
-            vec![],
-        )
-        .await
-        .unwrap();
-    assert_eq!(g.path, tree);
-    assert_eq!(
-        std::fs::read(tree.join(".drgnx-origin/sitecustomize.py")).unwrap(),
-        b"import tracer\n"
-    );
-    let config = sealer.configs.lock().unwrap()[0].clone();
-    assert_eq!(config["env"]["PYTHONPATH"], json!(origin));
-    // the user's environment values still reach it; no fork entry, no event
-    assert_eq!(config["env"]["API_TOKEN"], json!("s3cr3t-value"));
-    assert!(ev.forks().is_empty());
-    assert!(f.list().is_empty());
-    // the tree goes with the guard
-    drop(g);
-    until(|| trees.removed.lock().unwrap().contains(&tree)).await;
-    // a file outside the tree is refused before anything is made
-    let e = f
-        .trace(
-            "r1",
-            2,
-            resolved(),
-            |_: &Path| vec![],
-            vec![("../x".into(), vec![])],
-            vec![],
-        )
-        .await
-        .unwrap_err();
-    assert!(e.message().contains("inside the tree"), "{e}");
-    assert_eq!(*trees.made.lock().unwrap(), ["t1"]);
-    // a configuration resolved differently is refused too
-    let mut r = resolved();
-    r["program"] = json!("/p/other.py");
-    let e = f
-        .trace("r1", 2, r, |_: &Path| vec![], vec![], vec![])
-        .await
-        .unwrap_err();
-    assert!(e.message().contains("differently"), "{e}");
+                    ".drgnx-origin/sitecustomize.py".into(),
+                    b"import tracer\n".to_vec(),
+                )],
+                vec![],
+            )
+            .await
+            .unwrap();
+        assert_eq!(g.path, tree);
+        assert_eq!(
+            std::fs::read(tree.join(".drgnx-origin/sitecustomize.py")).unwrap(),
+            b"import tracer\n"
+        );
+        let config = saman::lock(&sealer.configs)[0].clone();
+        assert_eq!(config["env"]["PYTHONPATH"], json!(origin));
+        // the user's environment values still reach it; no fork entry, no event
+        assert_eq!(config["env"]["API_TOKEN"], json!("s3cr3t-value"));
+        assert!(ev.forks().is_empty());
+        assert!(f.list().is_empty());
+        // the tree goes with the guard
+        drop(g);
+        until(|| saman::lock(&trees.removed).contains(&tree)).await;
+        // a file outside the tree is refused before anything is made
+        let e = f
+            .trace(
+                "r1",
+                2,
+                resolved(),
+                |_: &Path| vec![],
+                vec![("../x".into(), vec![])],
+                vec![],
+            )
+            .await
+            .unwrap_err();
+        assert!(e.message().contains("inside the tree"), "{e}");
+        assert_eq!(*saman::lock(&trees.made), ["t1"]);
+        // a configuration resolved differently is refused too
+        let mut r = resolved();
+        r["program"] = json!("/p/other.py");
+        let e = f
+            .trace("r1", 2, r, |_: &Path| vec![], vec![], vec![])
+            .await
+            .unwrap_err();
+        assert!(e.message().contains("differently"), "{e}");
+    })
 }
 
 /// A plain run's adapter: launch in TREE, then BODY, then the session's end.
@@ -567,148 +572,157 @@ fn plain(tree: &Path, caps: Value, configure: Vec<Value>, body: Vec<Value>) -> V
     s
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_plain_run_finds_the_watched_exception_and_runs_past_others() {
-    let dir = tempfile::tempdir().unwrap();
-    let slot = dir.path().join("slots/b1/slot-1");
-    std::fs::create_dir_all(&slot).unwrap();
-    let py = slot.join("stock.py").display().to_string();
-    let mut body = stop_at(&py, 9, "exception");
-    body.push(json!({"expect": "continue", "ok": {}}));
-    body.extend(stop_at(&py, 30, "exception"));
-    body.push(json!({"expect": "disconnect", "ok": {}}));
-    body.push(json!({"die": true}));
-    let s = plain(
-        &slot,
-        json!({"supportsConfigurationDoneRequest": true,
+#[test]
+fn a_plain_run_finds_the_watched_exception_and_runs_past_others() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let dir = tempfile::tempdir().unwrap();
+        let slot = dir.path().join("slots/b1/slot-1");
+        std::fs::create_dir_all(&slot).unwrap();
+        let py = slot.join("stock.py").display().to_string();
+        let mut body = stop_at(&py, 9, "exception");
+        body.push(json!({"expect": "continue", "ok": {}}));
+        body.extend(stop_at(&py, 30, "exception"));
+        body.push(json!({"expect": "disconnect", "ok": {}}));
+        body.push(json!({"die": true}));
+        let s = plain(
+            &slot,
+            json!({"supportsConfigurationDoneRequest": true,
                "exceptionBreakpointFilters": [{"filter": "raised", "label": "Raised"}]}),
-        vec![
-            json!({"expect": "setExceptionBreakpoints", "args": {"filters": ["raised"]}, "ok": {}}),
-        ],
-        body,
-    );
-    let (f, ev, trees, sealer) = setup_in(vec![s], dir.path());
-    let end = f
-        .run_in(
-            "r1",
-            resolved(),
-            slot.clone(),
-            Watch::Exception {
-                path: "stock.py".into(),
-                line: 30,
-            },
-            Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        end,
-        RunEnd {
-            exception_at: Some(("stock.py".into(), 30)),
-            ..RunEnd::default()
-        }
-    );
-    // the caller's tree is used as it is: neither made nor removed; the temp beside it goes
-    assert_eq!(*sealer.trees.lock().unwrap(), vec![slot]);
-    assert!(trees.made.lock().unwrap().is_empty());
-    assert_eq!(*trees.removed.lock().unwrap(), [dir.path().join("r1/tmp")]);
-    assert!(ev.forks().is_empty());
+            vec![
+                json!({"expect": "setExceptionBreakpoints", "args": {"filters": ["raised"]}, "ok": {}}),
+            ],
+            body,
+        );
+        let (f, ev, trees, sealer) = setup_in(vec![s], dir.path());
+        let end = f
+            .run_in(
+                "r1",
+                resolved(),
+                slot.clone(),
+                Watch::Exception {
+                    path: "stock.py".into(),
+                    line: 30,
+                },
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            end,
+            RunEnd {
+                exception_at: Some(("stock.py".into(), 30)),
+                ..RunEnd::default()
+            }
+        );
+        // the caller's tree is used as it is: neither made nor removed; the temp beside it goes
+        assert_eq!(*saman::lock(&sealer.trees), vec![slot]);
+        assert!(saman::lock(&trees.made).is_empty());
+        assert_eq!(*saman::lock(&trees.removed), [dir.path().join("r1/tmp")]);
+        assert!(ev.forks().is_empty());
+    })
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_plain_run_returns_a_probes_values_and_its_exit() {
-    let dir = tempfile::tempdir().unwrap();
-    let slot = dir.path().join("slots/b1/slot-2");
-    std::fs::create_dir_all(&slot).unwrap();
-    let py = slot.join("stock.py").display().to_string();
-    let out = |v: &str| json!({"event": "output", "body": {"output": format!("\u{1e}drgnx:watch:1:{v}\n")}});
-    let s = plain(
-        &slot,
-        json!({"supportsConfigurationDoneRequest": true, "supportsLogPoints": true}),
-        vec![
-            json!({"expect": "setBreakpoints", "args": {"source": {"path": py}}, "ok": {"breakpoints": [{"verified": true}]}}),
-        ],
-        vec![
-            out("16"),
-            out("12"),
-            json!({"event": "exited", "body": {"exitCode": 3}}),
-            json!({"event": "terminated"}),
-            json!({"expect": "disconnect", "ok": {}}),
-            json!({"die": true}),
-        ],
-    );
-    let (f, _, _, _) = setup_in(vec![s], dir.path());
-    let end = f
-        .run_in(
-            "r1",
-            resolved(),
-            slot,
-            Watch::Probe {
-                path: "stock.py".into(),
-                line: 22,
-                expr: "shortfall".into(),
-            },
-            Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
-    assert_eq!(end.probe_values, ["16", "12"]);
-    assert_eq!(end.exit, Some(3));
-    assert!(!end.timed_out && end.exception_at.is_none());
+#[test]
+fn a_plain_run_returns_a_probes_values_and_its_exit() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let dir = tempfile::tempdir().unwrap();
+        let slot = dir.path().join("slots/b1/slot-2");
+        std::fs::create_dir_all(&slot).unwrap();
+        let py = slot.join("stock.py").display().to_string();
+        let out = |v: &str| json!({"event": "output", "body": {"output": format!("\u{1e}drgnx:watch:1:{v}\n")}});
+        let s = plain(
+            &slot,
+            json!({"supportsConfigurationDoneRequest": true, "supportsLogPoints": true}),
+            vec![
+                json!({"expect": "setBreakpoints", "args": {"source": {"path": py}}, "ok": {"breakpoints": [{"verified": true}]}}),
+            ],
+            vec![
+                out("16"),
+                out("12"),
+                json!({"event": "exited", "body": {"exitCode": 3}}),
+                json!({"event": "terminated"}),
+                json!({"expect": "disconnect", "ok": {}}),
+                json!({"die": true}),
+            ],
+        );
+        let (f, _, _, _) = setup_in(vec![s], dir.path());
+        let end = f
+            .run_in(
+                "r1",
+                resolved(),
+                slot,
+                Watch::Probe {
+                    path: "stock.py".into(),
+                    line: 22,
+                    expr: "shortfall".into(),
+                },
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        assert_eq!(end.probe_values, ["16", "12"]);
+        assert_eq!(end.exit, Some(3));
+        assert!(!end.timed_out && end.exception_at.is_none());
+    })
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_plain_run_past_its_time_box_is_timed_out_not_an_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let slot = dir.path().join("slots/b1/slot-3");
-    std::fs::create_dir_all(&slot).unwrap();
-    let py = slot.join("stock.py").display().to_string();
-    let out = |v: &str| json!({"event": "output", "body": {"output": format!("\u{1e}drgnx:watch:1:{v}\n")}});
-    // one value, then the program runs on and on
-    let s = plain(
-        &slot,
-        json!({"supportsConfigurationDoneRequest": true, "supportsLogPoints": true}),
-        vec![
-            json!({"expect": "setBreakpoints", "args": {"source": {"path": py}}, "ok": {"breakpoints": [{"verified": true}]}}),
-        ],
-        vec![
-            out("7"),
-            json!({"expect": "disconnect", "ok": {}}),
-            json!({"die": true}),
-        ],
-    );
-    let (f, _, _, _) = setup_in(vec![s], dir.path());
-    let end = f
-        .run_in(
-            "r1",
-            resolved(),
-            slot,
-            Watch::Probe {
-                path: "stock.py".into(),
-                line: 22,
-                expr: "shortfall".into(),
-            },
-            Duration::from_secs(5),
-        )
-        .await
-        .unwrap();
-    assert!(end.timed_out);
-    assert_eq!(end.probe_values, ["7"]);
-    // a watched path out of the tree is refused
-    let e = f
-        .run_in(
-            "r1",
-            resolved(),
-            dir.path().join("slots/b1/slot-3"),
-            Watch::Exception {
-                path: "/etc/passwd".into(),
-                line: 1,
-            },
-            Duration::from_secs(5),
-        )
-        .await
-        .unwrap_err();
-    assert!(e.message().contains("inside the tree"), "{e}");
+#[test]
+fn a_plain_run_past_its_time_box_is_timed_out_not_an_error() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let dir = tempfile::tempdir().unwrap();
+        let slot = dir.path().join("slots/b1/slot-3");
+        std::fs::create_dir_all(&slot).unwrap();
+        let py = slot.join("stock.py").display().to_string();
+        let out = |v: &str| json!({"event": "output", "body": {"output": format!("\u{1e}drgnx:watch:1:{v}\n")}});
+        // one value, then the program runs on and on
+        let s = plain(
+            &slot,
+            json!({"supportsConfigurationDoneRequest": true, "supportsLogPoints": true}),
+            vec![
+                json!({"expect": "setBreakpoints", "args": {"source": {"path": py}}, "ok": {"breakpoints": [{"verified": true}]}}),
+            ],
+            vec![
+                out("7"),
+                json!({"expect": "disconnect", "ok": {}}),
+                json!({"die": true}),
+            ],
+        );
+        let (f, _, _, _) = setup_in(vec![s], dir.path());
+        let end = f
+            .run_in(
+                "r1",
+                resolved(),
+                slot,
+                Watch::Probe {
+                    path: "stock.py".into(),
+                    line: 22,
+                    expr: "shortfall".into(),
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        assert!(end.timed_out);
+        assert_eq!(end.probe_values, ["7"]);
+        // a watched path out of the tree is refused
+        let e = f
+            .run_in(
+                "r1",
+                resolved(),
+                dir.path().join("slots/b1/slot-3"),
+                Watch::Exception {
+                    path: "/etc/passwd".into(),
+                    line: 1,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap_err();
+        assert!(e.message().contains("inside the tree"), "{e}");
+    })
 }
 
 #[test]
@@ -737,64 +751,70 @@ fn a_plain_run_takes_only_a_tree_strictly_under_the_slots_root() {
 /// D4's fix check: the fix's files go into a fresh tree of the run's launch snapshot, the run's configuration runs
 /// there to its end with the predicate's watch, and the tree goes; a file outside the tree is refused before anything
 /// runs.
-#[tokio::test(start_paused = true)]
-async fn a_fix_is_run_in_a_fresh_tree_with_its_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let tree = dir.path().join("x1/w");
-    let py = tree.join("stock.py").display().to_string();
-    let s = plain(
-        &tree,
-        json!({"supportsConfigurationDoneRequest": true,
+#[test]
+fn a_fix_is_run_in_a_fresh_tree_with_its_files() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let dir = tempfile::tempdir().unwrap();
+        let tree = dir.path().join("x1/w");
+        let py = tree.join("stock.py").display().to_string();
+        let s = plain(
+            &tree,
+            json!({"supportsConfigurationDoneRequest": true,
                "exceptionBreakpointFilters": [{"filter": "raised", "label": "Raised"}]}),
-        vec![
-            json!({"expect": "setExceptionBreakpoints", "args": {"filters": ["raised"]}, "ok": {}}),
-        ],
-        vec![
-            json!({"event": "exited", "body": {"exitCode": 0}}),
-            json!({"event": "terminated"}),
-            json!({"expect": "disconnect", "ok": {}}),
-            json!({"die": true}),
-        ],
-    );
-    let (f, _, trees, _) = setup_in(vec![s], dir.path());
-    let files = vec![("stock.py".to_owned(), "fixed = True\n".to_owned())];
-    let watch = Watch::Exception {
-        path: "stock.py".into(),
-        line: 9,
-    };
-    let end = f
-        .check_fix(
-            "r1",
-            resolved(),
-            &files,
-            watch.clone(),
-            Duration::from_secs(60),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        (end.exit, end.exception_at, end.timed_out),
-        (Some(0), None, false)
-    );
-    assert_eq!(crate::fsio::read_to_string(&py).unwrap(), "fixed = True\n");
-    assert!(trees.removed.lock().unwrap().contains(&tree));
-    let bad = vec![("../escape.py".to_owned(), "x".to_owned())];
-    let e = f
-        .check_fix("r1", resolved(), &bad, watch, Duration::from_secs(60))
-        .await
-        .unwrap_err();
-    assert!(e.message().contains("not a path inside the tree"), "{e}");
+            vec![
+                json!({"expect": "setExceptionBreakpoints", "args": {"filters": ["raised"]}, "ok": {}}),
+            ],
+            vec![
+                json!({"event": "exited", "body": {"exitCode": 0}}),
+                json!({"event": "terminated"}),
+                json!({"expect": "disconnect", "ok": {}}),
+                json!({"die": true}),
+            ],
+        );
+        let (f, _, trees, _) = setup_in(vec![s], dir.path());
+        let files = vec![("stock.py".to_owned(), "fixed = True\n".to_owned())];
+        let watch = Watch::Exception {
+            path: "stock.py".into(),
+            line: 9,
+        };
+        let end = f
+            .check_fix(
+                "r1",
+                resolved(),
+                &files,
+                watch.clone(),
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            (end.exit, end.exception_at, end.timed_out),
+            (Some(0), None, false)
+        );
+        assert_eq!(crate::fsio::read_to_string(&py).unwrap(), "fixed = True\n");
+        assert!(saman::lock(&trees.removed).contains(&tree));
+        let bad = vec![("../escape.py".to_owned(), "x".to_owned())];
+        let e = f
+            .check_fix("r1", resolved(), &bad, watch, Duration::from_secs(60))
+            .await
+            .unwrap_err();
+        assert!(e.message().contains("not a path inside the tree"), "{e}");
+    })
 }
 
 /// A fork an agent made says whose it is in its view, which `view` reads back.
-#[tokio::test(start_paused = true)]
-async fn a_forks_view_names_the_agent_that_made_it() {
-    let (f, _, _, _) = setup(vec![]);
-    assert!(f.view("f9").unwrap_err().message().contains("no fork f9"));
-    let Made::Fork(id) = f.fork(ask(Change::Nothing)).unwrap() else {
-        panic!("no fork")
-    };
-    f.mark(&id, "s1");
-    let v = f.view(&id).unwrap();
-    assert_eq!(v["agent"], json!("s1"));
+#[test]
+fn a_forks_view_names_the_agent_that_made_it() {
+    saman::block_on_current(async move {
+        tokio::time::pause();
+        let (f, _, _, _) = setup(vec![]);
+        assert!(f.view("f9").unwrap_err().message().contains("no fork f9"));
+        let Made::Fork(id) = f.fork(ask(Change::Nothing)).unwrap() else {
+            panic!("no fork")
+        };
+        f.mark(&id, "s1");
+        let v = f.view(&id).unwrap();
+        assert_eq!(v["agent"], json!("s1"));
+    })
 }

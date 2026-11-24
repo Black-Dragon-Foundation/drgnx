@@ -103,7 +103,7 @@ impl Hub {
     }
 
     pub(super) fn is_trusted(&self, root: &str) -> bool {
-        self.trusted.lock().expect("debug trust").contains(root)
+        saman::lock(&self.trusted).contains(root)
     }
 
     /// The hub is stopping: every session stops (children first).
@@ -295,13 +295,7 @@ async fn configs(front: &Front, p: DebugConfigs) -> Result<DebugConfigList, Erro
             ));
         }
     }
-    let last = front
-        .debug
-        .last
-        .lock()
-        .expect("debug last")
-        .get(&p.root)
-        .cloned();
+    let last = saman::lock(&front.debug.last).get(&p.root).cloned();
     Ok(DebugConfigList {
         configs: out,
         last,
@@ -558,12 +552,7 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
             }
         });
     }
-    front
-        .debug
-        .last
-        .lock()
-        .expect("debug last")
-        .insert(p.root, p.config);
+    saman::lock(&front.debug.last).insert(p.root, p.config);
     Ok(DebugStarted {
         session: Some(id),
         ..DebugStarted::default()
@@ -687,12 +676,7 @@ async fn start_compound(
             }
         });
     }
-    front
-        .debug
-        .last
-        .lock()
-        .expect("debug last")
-        .insert(p.root.clone(), p.config.clone());
+    saman::lock(&front.debug.last).insert(p.root.clone(), p.config.clone());
     Ok(DebugStarted {
         session: ids.first().cloned(),
         sessions: ids,
@@ -757,20 +741,10 @@ async fn select(front: &Front, p: DebugSelect) -> Result<bool, Error> {
 
 async fn trust(front: &Front, p: DebugTrust) -> Result<bool, Error> {
     if p.trusted {
-        front
-            .debug
-            .trusted
-            .lock()
-            .expect("debug trust")
-            .insert(p.root);
+        saman::lock(&front.debug.trusted).insert(p.root);
         return Ok(true);
     }
-    front
-        .debug
-        .trusted
-        .lock()
-        .expect("debug trust")
-        .remove(&p.root);
+    saman::lock(&front.debug.trusted).remove(&p.root);
     let d = front.debug.debug(front);
     for id in d.in_root(&p.root) {
         crate::soft::done(

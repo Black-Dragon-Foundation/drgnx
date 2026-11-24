@@ -875,15 +875,17 @@ mod pack_tests {
         }
     }
 
-    #[tokio::test]
-    async fn a_language_with_no_grammar_says_so_on_its_trail() {
-        // text has no grammar in any build: the stores cannot be looked for, and the card must not look like a
-        // program that never stored the value
-        let files = vec![("/p/a.txt".to_owned(), "x = 1\n".to_owned())];
-        let t = probed_trail(&Never, "r1", 1, "x", 3, Lang::Text, &files, |_| {})
-            .await
-            .unwrap();
-        assert!(t.links.is_empty());
-        assert_eq!(t.note.as_deref(), Some("no grammar for text"));
+    #[test]
+    fn a_language_with_no_grammar_says_so_on_its_trail() {
+        saman::block_on_current(async move {
+            // text has no grammar in any build: the stores cannot be looked for, and the card must not look like a
+            // program that never stored the value
+            let files = vec![("/p/a.txt".to_owned(), "x = 1\n".to_owned())];
+            let t = probed_trail(&Never, "r1", 1, "x", 3, Lang::Text, &files, |_| {})
+                .await
+                .unwrap();
+            assert!(t.links.is_empty());
+            assert_eq!(t.note.as_deref(), Some("no grammar for text"));
+        })
     }
 }

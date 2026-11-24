@@ -154,7 +154,7 @@ pub struct MemoryState {
 impl KeyStore for Memory {
     fn key(&self, create: bool) -> BoxFut<'_, Result<Key, Unavailable>> {
         Box::pin(async move {
-            let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut s = saman::lock(&self.state);
             if s.absent {
                 return Err(Unavailable::Missing("no keyring".into()));
             }

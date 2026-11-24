@@ -89,7 +89,7 @@ fn write<T>(l: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 /// One registration as the hub keeps it.
@@ -1480,175 +1480,184 @@ mod tests {
             .collect()
     }
 
-    #[tokio::test]
-    async fn the_row_is_written_before_the_answer() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        table(g).await;
-        let me = std::process::id();
-        let r = g
-            .register(
-                register_params(
-                    json!({"chain": [["local", "m"]], "job": "j1", "agent": "agent-1",
+    #[test]
+    fn the_row_is_written_before_the_answer() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            table(g).await;
+            let me = std::process::id();
+            let r = g
+                .register(
+                    register_params(
+                        json!({"chain": [["local", "m"]], "job": "j1", "agent": "agent-1",
                                        "budget": 2, "owner": me}),
-                ),
-                None,
-                &h.front.mcp,
-            )
-            .await
-            .unwrap();
-        assert_eq!(r.token.len(), 64);
-        assert_eq!(
-            r.url.as_deref(),
-            Some(format!("http://127.0.0.1:{}", g.status().port.unwrap()).as_str())
-        );
-        // the moment the answer is there, the row is: its hash, never the token
-        let rows = rows_of(
-            h.dir.path(),
-            "select hash, class, listener, job, agent, chain, budget, owner from registration",
-        );
-        assert_eq!(
-            rows,
-            vec![vec![
-                json!(token_hash(r.token.as_bytes())),
-                json!("agent"),
-                json!("loopback"),
-                json!("j1"),
-                json!("agent-1"),
-                json!(r#"[["local","m"]]"#),
-                json!(2.0),
-                json!(me),
-            ]]
-        );
-        let all = rows_of(h.dir.path(), "select * from registration");
-        assert!(
-            !format!("{all:?}").contains(&r.token),
-            "the token is kept nowhere"
-        );
-        assert_eq!(g.status().registrations, 1);
-        // unregistered: gone from both
-        assert!(g.unregister(&r.token).await.unwrap());
-        assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
-        assert_eq!(g.status().registrations, 0);
+                    ),
+                    None,
+                    &h.front.mcp,
+                )
+                .await
+                .unwrap();
+            assert_eq!(r.token.len(), 64);
+            assert_eq!(
+                r.url.as_deref(),
+                Some(format!("http://127.0.0.1:{}", g.status().port.unwrap()).as_str())
+            );
+            // the moment the answer is there, the row is: its hash, never the token
+            let rows = rows_of(
+                h.dir.path(),
+                "select hash, class, listener, job, agent, chain, budget, owner from registration",
+            );
+            assert_eq!(
+                rows,
+                vec![vec![
+                    json!(token_hash(r.token.as_bytes())),
+                    json!("agent"),
+                    json!("loopback"),
+                    json!("j1"),
+                    json!("agent-1"),
+                    json!(r#"[["local","m"]]"#),
+                    json!(2.0),
+                    json!(me),
+                ]]
+            );
+            let all = rows_of(h.dir.path(), "select * from registration");
+            assert!(
+                !format!("{all:?}").contains(&r.token),
+                "the token is kept nowhere"
+            );
+            assert_eq!(g.status().registrations, 1);
+            // unregistered: gone from both
+            assert!(g.unregister(&r.token).await.unwrap());
+            assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
+            assert_eq!(g.status().registrations, 0);
+        })
     }
 
-    #[tokio::test]
-    async fn budget_from_the_job_when_absent() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        table(g).await;
-        urdr::Connection::open(h.dir.path().join("work.db"))
+    #[test]
+    fn budget_from_the_job_when_absent() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            table(g).await;
+            urdr::Connection::open(h.dir.path().join("work.db"))
             .unwrap()
             .execute_batch(
                 r#"insert into job(id, title, status, created, data) values ('j1', 't', 'running', 1, '{"budget": 2.5}');
                    insert into job(id, title, status, created) values ('j2', 't', 'running', 1);"#,
             )
             .unwrap();
-        let reg = |job: &str| register_params(json!({"chain": [["local", null]], "job": job}));
-        let budgets =
-            |dir: &Path| rows_of(dir, "select job, budget from registration order by job");
-        g.register(reg("j1"), None, &h.front.mcp).await.unwrap();
-        g.register(reg("j2"), None, &h.front.mcp).await.unwrap();
-        // the params' budget wins over the job's
-        g.register(
-            register_params(json!({"chain": [["local", null]], "job": "j1", "budget": 0.5})),
-            None,
-            &h.front.mcp,
-        )
-        .await
-        .unwrap();
-        let mut got = budgets(h.dir.path());
-        got.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
-        assert_eq!(
-            got,
-            vec![
-                vec![json!("j1"), json!(0.5)],
-                vec![json!("j1"), json!(2.5)],
-                vec![json!("j2"), Value::Null],
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn set_budget_updates_every_registration_of_the_job() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        table(g).await;
-        for job in ["j1", "j1", "j2"] {
+            let reg = |job: &str| register_params(json!({"chain": [["local", null]], "job": job}));
+            let budgets =
+                |dir: &Path| rows_of(dir, "select job, budget from registration order by job");
+            g.register(reg("j1"), None, &h.front.mcp).await.unwrap();
+            g.register(reg("j2"), None, &h.front.mcp).await.unwrap();
+            // the params' budget wins over the job's
             g.register(
-                register_params(json!({"chain": [["local", null]], "job": job, "budget": 1})),
+                register_params(json!({"chain": [["local", null]], "job": "j1", "budget": 0.5})),
                 None,
                 &h.front.mcp,
             )
             .await
             .unwrap();
-        }
-        let p: SetBudgetParams = decoded("gateway/set-budget", json!({"job": "j1", "budget": 7}));
-        assert!(g.set_budget(p).await.unwrap());
-        let mut got = rows_of(h.dir.path(), "select job, budget from registration");
-        got.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
-        assert_eq!(
-            got,
-            vec![
-                vec![json!("j1"), json!(7.0)],
-                vec![json!("j1"), json!(7.0)],
-                vec![json!("j2"), json!(1.0)],
-            ]
-        );
-        // in memory too: what the engine admits by
-        let memory: Vec<Option<f64>> = read(&g.regs.0)
-            .values()
-            .filter(|k| k.reg.job.as_deref() == Some("j1"))
-            .map(|k| k.reg.budget)
-            .collect();
-        assert_eq!(memory, vec![Some(7.0), Some(7.0)]);
+            let mut got = budgets(h.dir.path());
+            got.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+            assert_eq!(
+                got,
+                vec![
+                    vec![json!("j1"), json!(0.5)],
+                    vec![json!("j1"), json!(2.5)],
+                    vec![json!("j2"), Value::Null],
+                ]
+            );
+        })
     }
 
-    #[tokio::test]
-    async fn a_reused_owner_pid_prunes() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        table(g).await;
-        let me = std::process::id();
-        g.register(
-            register_params(json!({"chain": [["local", null]], "owner": me})),
-            None,
-            &h.front.mcp,
-        )
-        .await
-        .unwrap();
-        g.prune(&h.front.mcp).await;
-        assert_eq!(g.status().registrations, 1, "its owner lives");
-        // the pid is the same, its start time another: another process
-        for k in write(&g.regs.0).values_mut() {
-            let (pid, start) = k.owner.unwrap();
-            k.owner = Some((pid, start + 1));
-        }
-        g.prune(&h.front.mcp).await;
-        assert_eq!(g.status().registrations, 0);
-        assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
-        // and at start: a row whose owner is another process is dropped, one of a live owner kept
-        let mine = sessions::owner_start(me as i32).unwrap();
-        let db = g.db().unwrap().clone();
-        db.write(move |c| {
-            c.execute_batch(&format!(
+    #[test]
+    fn set_budget_updates_every_registration_of_the_job() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            table(g).await;
+            for job in ["j1", "j1", "j2"] {
+                g.register(
+                    register_params(json!({"chain": [["local", null]], "job": job, "budget": 1})),
+                    None,
+                    &h.front.mcp,
+                )
+                .await
+                .unwrap();
+            }
+            let p: SetBudgetParams =
+                decoded("gateway/set-budget", json!({"job": "j1", "budget": 7}));
+            assert!(g.set_budget(p).await.unwrap());
+            let mut got = rows_of(h.dir.path(), "select job, budget from registration");
+            got.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+            assert_eq!(
+                got,
+                vec![
+                    vec![json!("j1"), json!(7.0)],
+                    vec![json!("j1"), json!(7.0)],
+                    vec![json!("j2"), json!(1.0)],
+                ]
+            );
+            // in memory too: what the engine admits by
+            let memory: Vec<Option<f64>> = read(&g.regs.0)
+                .values()
+                .filter(|k| k.reg.job.as_deref() == Some("j1"))
+                .map(|k| k.reg.budget)
+                .collect();
+            assert_eq!(memory, vec![Some(7.0), Some(7.0)]);
+        })
+    }
+
+    #[test]
+    fn a_reused_owner_pid_prunes() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            table(g).await;
+            let me = std::process::id();
+            g.register(
+                register_params(json!({"chain": [["local", null]], "owner": me})),
+                None,
+                &h.front.mcp,
+            )
+            .await
+            .unwrap();
+            g.prune(&h.front.mcp).await;
+            assert_eq!(g.status().registrations, 1, "its owner lives");
+            // the pid is the same, its start time another: another process
+            for k in write(&g.regs.0).values_mut() {
+                let (pid, start) = k.owner.unwrap();
+                k.owner = Some((pid, start + 1));
+            }
+            g.prune(&h.front.mcp).await;
+            assert_eq!(g.status().registrations, 0);
+            assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
+            // and at start: a row whose owner is another process is dropped, one of a live owner kept
+            let mine = sessions::owner_start(me as i32).unwrap();
+            let db = g.db().unwrap().clone();
+            db.write(move |c| {
+                c.execute_batch(&format!(
                 "insert into registration(hash, listener, chain, owner, owner_start, at) values \
                  ('a', 'loopback', '[[\"local\",null]]', {me}, {mine}, 1), \
                  ('b', 'loopback', '[[\"local\",null]]', {me}, {}, 1), \
                  ('c', 'loopback', '[[\"local\",null]]', null, null, 1)",
                 mine + 1
             ))?;
-            Ok(())
+                Ok(())
+            })
+            .await
+            .unwrap();
+            g.restore(&h.front.mcp).await;
+            assert_eq!(
+                rows_of(h.dir.path(), "select hash from registration order by hash"),
+                vec![vec![json!("a")], vec![json!("c")]],
+                "an owner-less one stays until unregistered"
+            );
+            assert_eq!(g.status().registrations, 2);
         })
-        .await
-        .unwrap();
-        g.restore(&h.front.mcp).await;
-        assert_eq!(
-            rows_of(h.dir.path(), "select hash from registration order by hash"),
-            vec![vec![json!("a")], vec![json!("c")]],
-            "an owner-less one stays until unregistered"
-        );
-        assert_eq!(g.status().registrations, 2);
     }
 
     /// Pattern D (the squatter holds the port before the hub listens: nothing races).  The kept port is taken at start:
@@ -1656,43 +1665,46 @@ mod tests {
     /// dropped, so a process squatting it collects only dead tokens; their holders ask again.
     /// Pure (D) over a real `runtime.db`. A deleted key is gone (not kept as an empty value): `kv_get` has none, and a
     /// second delete says it was not there; the other keys stay.
-    #[tokio::test]
-    async fn kv_del_removes_the_key() {
-        let h = unopened().await;
-        let db = h.front.gate.db().unwrap().clone();
-        kv_set(&db, "vectors.pin.desk", "ab12").await;
-        kv_set(&db, "vectors.pin.team", "cd34").await;
-        assert!(kv_del(&db, "vectors.pin.desk").await);
-        assert_eq!(kv_get(&db, "vectors.pin.desk").await, None);
-        let rows: i64 = db
-            .read(|c| {
-                Ok(c.query_row(
-                    "select count(*) from kv where key = 'vectors.pin.desk'",
-                    [],
-                    |r| r.get(0),
-                )?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(rows, 0, "no row left behind");
-        assert!(!kv_del(&db, "vectors.pin.desk").await);
-        assert_eq!(
-            kv_get(&db, "vectors.pin.team").await.as_deref(),
-            Some("cd34")
-        );
+    #[test]
+    fn kv_del_removes_the_key() {
+        saman::block_on_current(async move {
+            let h = unopened().await;
+            let db = h.front.gate.db().unwrap().clone();
+            kv_set(&db, "vectors.pin.desk", "ab12").await;
+            kv_set(&db, "vectors.pin.team", "cd34").await;
+            assert!(kv_del(&db, "vectors.pin.desk").await);
+            assert_eq!(kv_get(&db, "vectors.pin.desk").await, None);
+            let rows: i64 = db
+                .read(|c| {
+                    Ok(c.query_row(
+                        "select count(*) from kv where key = 'vectors.pin.desk'",
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(rows, 0, "no row left behind");
+            assert!(!kv_del(&db, "vectors.pin.desk").await);
+            assert_eq!(
+                kv_get(&db, "vectors.pin.team").await.as_deref(),
+                Some("cd34")
+            );
+        })
     }
 
-    #[tokio::test]
-    async fn a_moved_port_drops_the_tokens_issued_for_the_old_one() {
-        let h = unopened().await;
-        let g = &h.front.gate;
-        let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let old = squatter.local_addr().unwrap().port();
-        let db = g.db().unwrap().clone();
-        kv_set(&db, KV_PORT, &old.to_string()).await;
-        let me = me();
-        let mine = sessions::owner_start(me).unwrap();
-        db.write(move |c| {
+    #[test]
+    fn a_moved_port_drops_the_tokens_issued_for_the_old_one() {
+        saman::block_on_current(async move {
+            let h = unopened().await;
+            let g = &h.front.gate;
+            let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let old = squatter.local_addr().unwrap().port();
+            let db = g.db().unwrap().clone();
+            kv_set(&db, KV_PORT, &old.to_string()).await;
+            let me = me();
+            let mine = sessions::owner_start(me).unwrap();
+            db.write(move |c| {
             c.execute_batch(&format!(
                 "insert into registration(hash, class, listener, chain, owner, owner_start, at) values \
                  ('e', 'editor', 'loopback', '[]', {me}, {mine}, 1), \
@@ -1702,95 +1714,100 @@ mod tests {
         })
         .await
         .unwrap();
-        g.listen(None).await.unwrap();
-        let now = g.status().port.unwrap();
-        assert_ne!(now, u64::from(old));
-        assert_eq!(kv_get(&db, KV_PORT).await, Some(now.to_string()));
-        g.restore(&h.front.mcp).await;
-        assert_eq!(
-            rows_of(h.dir.path(), "select hash from registration"),
-            Vec::<Vec<Value>>::new(),
-            "a token issued for port {old} outlived the move"
-        );
-        assert_eq!(g.status().registrations, 0);
-        drop(squatter);
+            g.listen(None).await.unwrap();
+            let now = g.status().port.unwrap();
+            assert_ne!(now, u64::from(old));
+            assert_eq!(kv_get(&db, KV_PORT).await, Some(now.to_string()));
+            g.restore(&h.front.mcp).await;
+            assert_eq!(
+                rows_of(h.dir.path(), "select hash from registration"),
+                Vec::<Vec<Value>>::new(),
+                "a token issued for port {old} outlived the move"
+            );
+            assert_eq!(g.status().registrations, 0);
+            drop(squatter);
+        })
     }
 
-    #[tokio::test]
-    async fn no_usable_step_is_refused_with_each_reason() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        table(g).await;
-        let e = g
-            .register(
-                register_params(
-                    json!({"chain": [["nowhere", null], ["chat", "m"], ["keyed", null]]}),
-                ),
-                None,
-                &h.front.mcp,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            (e.code, e.path.as_deref(), e.message.as_str()),
-            (
-                ErrorCode::InvalidParams,
-                Some("chain"),
-                "no step of the chain can be used: nowhere: not configured; chat: the gateway cannot carry it; \
+    #[test]
+    fn no_usable_step_is_refused_with_each_reason() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            table(g).await;
+            let e = g
+                .register(
+                    register_params(
+                        json!({"chain": [["nowhere", null], ["chat", "m"], ["keyed", null]]}),
+                    ),
+                    None,
+                    &h.front.mcp,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                (e.code, e.path.as_deref(), e.message.as_str()),
+                (
+                    ErrorCode::InvalidParams,
+                    Some("chain"),
+                    "no step of the chain can be used: nowhere: not configured; chat: the gateway cannot carry it; \
                  keyed: no key"
-            )
-        );
-        assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
-        assert_eq!(g.status().registrations, 0);
-        // one usable step is enough
-        g.register(
-            register_params(json!({"chain": [["nowhere", null], ["local", null]]})),
-            None,
-            &h.front.mcp,
-        )
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn missing_keys_only_says_how_without_the_false_advice() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        table(g).await;
-        let e = g
-            .register(
-                register_params(json!({"chain": [["keyed", null]]})),
-                None,
-                &h.front.mcp,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            (e.path.as_deref(), e.message.as_str()),
-            (
-                Some("chain"),
-                "No key for keyed in the drgnx hub: an editor hands its keys over when it connects"
-            )
-        );
-        assert!(!e.message.contains("drgnx hub start"));
-        // the registration's own keys go to memory first, and then it is usable
-        let r = g
-            .register(
-                register_params(
-                    json!({"chain": [["keyed", null]], "keys": {"keyed": "canary-key-1"}}),
-                ),
+                )
+            );
+            assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
+            assert_eq!(g.status().registrations, 0);
+            // one usable step is enough
+            g.register(
+                register_params(json!({"chain": [["nowhere", null], ["local", null]]})),
                 None,
                 &h.front.mcp,
             )
             .await
             .unwrap();
-        assert_eq!(g.status().keys_held, vec!["keyed".to_string()]);
-        let all = rows_of(h.dir.path(), "select * from registration");
-        assert!(
-            !format!("{all:?}").contains("canary-key-1"),
-            "no key in runtime.db"
-        );
-        assert!(!r.token.is_empty());
+        })
+    }
+
+    #[test]
+    fn missing_keys_only_says_how_without_the_false_advice() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            table(g).await;
+            let e = g
+                .register(
+                    register_params(json!({"chain": [["keyed", null]]})),
+                    None,
+                    &h.front.mcp,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                (e.path.as_deref(), e.message.as_str()),
+                (
+                    Some("chain"),
+                    "No key for keyed in the drgnx hub: an editor hands its keys over when it connects"
+                )
+            );
+            assert!(!e.message.contains("drgnx hub start"));
+            // the registration's own keys go to memory first, and then it is usable
+            let r = g
+                .register(
+                    register_params(
+                        json!({"chain": [["keyed", null]], "keys": {"keyed": "canary-key-1"}}),
+                    ),
+                    None,
+                    &h.front.mcp,
+                )
+                .await
+                .unwrap();
+            assert_eq!(g.status().keys_held, vec!["keyed".to_string()]);
+            let all = rows_of(h.dir.path(), "select * from registration");
+            assert!(
+                !format!("{all:?}").contains("canary-key-1"),
+                "no key in runtime.db"
+            );
+            assert!(!r.token.is_empty());
+        })
     }
 
     /// The status of one `POST PATH` with TOKEN over S (Host: HOST), the connection closed after.
@@ -1823,377 +1840,395 @@ mod tests {
         std::process::id() as i32
     }
 
-    #[tokio::test]
-    async fn an_editor_token_is_loopback_only() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        table(g).await;
-        let t = g.editor_token(Some(me())).await.unwrap();
-        let port = g.status().port.unwrap();
-        assert_eq!(t.url, format!("http://127.0.0.1:{port}"));
-        assert_eq!(
-            g.regs
-                .find(&token_hash(t.token.expose().as_bytes()))
-                .map(|r| r.listener),
-            Some(ListenerId::Loopback)
-        );
-        // a live session with its own gateway.sock (an agent's registration bound it)
-        let p: runstav::methods::mcp::SessionParams =
-            decoded("mcp/session", json!({"agent": "s-1", "owner": me()}));
-        let sid = h.front.mcp.open(p).await.unwrap().sid;
-        let agent = g
-            .register(
-                register_params(json!({"chain": [["local", null]], "sid": sid.as_str()})),
-                None,
-                &h.front.mcp,
-            )
+    #[test]
+    fn an_editor_token_is_loopback_only() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            table(g).await;
+            let t = g.editor_token(Some(me())).await.unwrap();
+            let port = g.status().port.unwrap();
+            assert_eq!(t.url, format!("http://127.0.0.1:{port}"));
+            assert_eq!(
+                g.regs
+                    .find(&token_hash(t.token.expose().as_bytes()))
+                    .map(|r| r.listener),
+                Some(ListenerId::Loopback)
+            );
+            // a live session with its own gateway.sock (an agent's registration bound it)
+            let p: runstav::methods::mcp::SessionParams =
+                decoded("mcp/session", json!({"agent": "s-1", "owner": me()}));
+            let sid = h.front.mcp.open(p).await.unwrap().sid;
+            let agent = g
+                .register(
+                    register_params(json!({"chain": [["local", null]], "sid": sid.as_str()})),
+                    None,
+                    &h.front.mcp,
+                )
+                .await
+                .unwrap();
+            let sock = agent.socket.unwrap();
+            // the editor's token: not on the session's socket, on the loopback listener its own path (admitted: the
+            // keyless provider at 127.0.0.1:8 does not answer, so 502)
+            let path = "/p/chat/chat/completions";
+            let unix = || async { tokio::net::UnixStream::connect(&sock).await.unwrap() };
+            assert_eq!(
+                status_over(unix().await, "localhost", t.token.expose(), path).await,
+                401
+            );
+            let tcp = || async {
+                tokio::net::TcpStream::connect(("127.0.0.1", port as u16))
+                    .await
+                    .unwrap()
+            };
+            let host = format!("127.0.0.1:{port}");
+            assert_eq!(
+                status_over(tcp().await, &host, t.token.expose(), path).await,
+                502
+            );
+            // and the agent's token never reaches /p/…
+            assert_eq!(
+                status_over(unix().await, "localhost", &agent.token, path).await,
+                404
+            );
+            // a kept editor row bound to a session is dropped at start, not admitted
+            let db = g.db().unwrap().clone();
+            let sid2 = sid.as_str().to_owned();
+            db.write(move |c| {
+                c.execute(
+                    "update registration set listener = ?1 where class = 'editor'",
+                    [format!("session:{sid2}")],
+                )?;
+                Ok(())
+            })
             .await
             .unwrap();
-        let sock = agent.socket.unwrap();
-        // the editor's token: not on the session's socket, on the loopback listener its own path (admitted: the
-        // keyless provider at 127.0.0.1:8 does not answer, so 502)
-        let path = "/p/chat/chat/completions";
-        let unix = || async { tokio::net::UnixStream::connect(&sock).await.unwrap() };
-        assert_eq!(
-            status_over(unix().await, "localhost", t.token.expose(), path).await,
-            401
-        );
-        let tcp = || async {
-            tokio::net::TcpStream::connect(("127.0.0.1", port as u16))
-                .await
-                .unwrap()
-        };
-        let host = format!("127.0.0.1:{port}");
-        assert_eq!(
-            status_over(tcp().await, &host, t.token.expose(), path).await,
-            502
-        );
-        // and the agent's token never reaches /p/…
-        assert_eq!(
-            status_over(unix().await, "localhost", &agent.token, path).await,
-            404
-        );
-        // a kept editor row bound to a session is dropped at start, not admitted
-        let db = g.db().unwrap().clone();
-        let sid2 = sid.as_str().to_owned();
-        db.write(move |c| {
-            c.execute(
-                "update registration set listener = ?1 where class = 'editor'",
-                [format!("session:{sid2}")],
-            )?;
-            Ok(())
+            write(&g.regs.0).clear();
+            g.restore(&h.front.mcp).await;
+            assert!(
+                g.regs
+                    .find(&token_hash(t.token.expose().as_bytes()))
+                    .is_none()
+            );
+            assert_eq!(
+                rows_of(h.dir.path(), "select class from registration"),
+                vec![vec![json!("agent")]]
+            );
         })
-        .await
-        .unwrap();
-        write(&g.regs.0).clear();
-        g.restore(&h.front.mcp).await;
-        assert!(
-            g.regs
-                .find(&token_hash(t.token.expose().as_bytes()))
-                .is_none()
-        );
-        assert_eq!(
-            rows_of(h.dir.path(), "select class from registration"),
-            vec![vec![json!("agent")]]
-        );
     }
 
-    #[tokio::test]
-    async fn a_second_editor_token_replaces_the_first() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        let first = g.editor_token(Some(me())).await.unwrap();
-        // another process's editor token is its own
-        let mut other = std::process::Command::new("sleep")
-            .arg("60")
-            .spawn()
-            .unwrap();
-        let theirs = g.editor_token(Some(other.id() as i32)).await.unwrap();
-        let second = g.editor_token(Some(me())).await.unwrap();
-        assert_ne!(first.token.expose(), second.token.expose());
-        assert!(
-            g.regs
-                .find(&token_hash(first.token.expose().as_bytes()))
-                .is_none()
-        );
-        assert!(
-            g.regs
-                .find(&token_hash(second.token.expose().as_bytes()))
-                .is_some()
-        );
-        assert!(
-            g.regs
-                .find(&token_hash(theirs.token.expose().as_bytes()))
-                .is_some()
-        );
-        let mut hashes = rows_of(
-            h.dir.path(),
-            "select hash from registration where class = 'editor'",
-        );
-        hashes.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
-        let mut want = vec![
-            vec![json!(token_hash(second.token.expose().as_bytes()))],
-            vec![json!(token_hash(theirs.token.expose().as_bytes()))],
-        ];
-        want.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
-        assert_eq!(hashes, want, "one row per owner");
-        // pruned with its owner
-        other.kill().unwrap();
-        other.wait().unwrap();
-        g.prune(&h.front.mcp).await;
-        assert!(
-            g.regs
-                .find(&token_hash(theirs.token.expose().as_bytes()))
-                .is_none()
-        );
-        assert_eq!(g.status().registrations, 1);
-        // a caller whose process cannot be read gets none
-        let e = g.editor_token(None).await.unwrap_err();
-        assert_eq!(e.code, ErrorCode::NotAllowed);
-    }
-
-    #[tokio::test]
-    async fn editor_rows_carry_no_chain_budget_or_restrictions() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        let t = g.editor_token(Some(me())).await.unwrap();
-        let hash = token_hash(t.token.expose().as_bytes());
-        assert_eq!(g.regs.find(&hash), Some(Registration::editor()));
-        assert_eq!(
-            rows_of(
+    #[test]
+    fn a_second_editor_token_replaces_the_first() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            let first = g.editor_token(Some(me())).await.unwrap();
+            // another process's editor token is its own
+            let mut other = std::process::Command::new("sleep")
+                .arg("60")
+                .spawn()
+                .unwrap();
+            let theirs = g.editor_token(Some(other.id() as i32)).await.unwrap();
+            let second = g.editor_token(Some(me())).await.unwrap();
+            assert_ne!(first.token.expose(), second.token.expose());
+            assert!(
+                g.regs
+                    .find(&token_hash(first.token.expose().as_bytes()))
+                    .is_none()
+            );
+            assert!(
+                g.regs
+                    .find(&token_hash(second.token.expose().as_bytes()))
+                    .is_some()
+            );
+            assert!(
+                g.regs
+                    .find(&token_hash(theirs.token.expose().as_bytes()))
+                    .is_some()
+            );
+            let mut hashes = rows_of(
                 h.dir.path(),
-                "select class, listener, job, task, agent, chain, budget, openrouter, owner from registration"
-            ),
-            vec![vec![
-                json!("editor"),
-                json!("loopback"),
-                Value::Null,
-                Value::Null,
-                json!("editor"),
-                json!("[]"),
-                Value::Null,
-                Value::Null,
-                json!(me()),
-            ]]
-        );
-        // a row that says more is read back as the editor's all the same, and a budget never reaches it
-        let db = g.db().unwrap().clone();
-        db.write(|c| {
-            c.execute_batch(
+                "select hash from registration where class = 'editor'",
+            );
+            hashes.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+            let mut want = vec![
+                vec![json!(token_hash(second.token.expose().as_bytes()))],
+                vec![json!(token_hash(theirs.token.expose().as_bytes()))],
+            ];
+            want.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+            assert_eq!(hashes, want, "one row per owner");
+            // pruned with its owner
+            other.kill().unwrap();
+            other.wait().unwrap();
+            g.prune(&h.front.mcp).await;
+            assert!(
+                g.regs
+                    .find(&token_hash(theirs.token.expose().as_bytes()))
+                    .is_none()
+            );
+            assert_eq!(g.status().registrations, 1);
+            // a caller whose process cannot be read gets none
+            let e = g.editor_token(None).await.unwrap_err();
+            assert_eq!(e.code, ErrorCode::NotAllowed);
+        })
+    }
+
+    #[test]
+    fn editor_rows_carry_no_chain_budget_or_restrictions() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            let t = g.editor_token(Some(me())).await.unwrap();
+            let hash = token_hash(t.token.expose().as_bytes());
+            assert_eq!(g.regs.find(&hash), Some(Registration::editor()));
+            assert_eq!(
+                rows_of(
+                    h.dir.path(),
+                    "select class, listener, job, task, agent, chain, budget, openrouter, owner from registration"
+                ),
+                vec![vec![
+                    json!("editor"),
+                    json!("loopback"),
+                    Value::Null,
+                    Value::Null,
+                    json!("editor"),
+                    json!("[]"),
+                    Value::Null,
+                    Value::Null,
+                    json!(me()),
+                ]]
+            );
+            // a row that says more is read back as the editor's all the same, and a budget never reaches it
+            let db = g.db().unwrap().clone();
+            db.write(|c| {
+                c.execute_batch(
                 "update registration set job = 'j1', chain = '[[\"keyed\",\"m\"]]', budget = 1, \
                  openrouter = '{\"zdr\": true}' where class = 'editor'",
             )?;
-            Ok(())
+                Ok(())
+            })
+            .await
+            .unwrap();
+            write(&g.regs.0).clear();
+            g.restore(&h.front.mcp).await;
+            assert_eq!(g.regs.find(&hash), Some(Registration::editor()));
+            let p: SetBudgetParams =
+                decoded("gateway/set-budget", json!({"job": "j1", "budget": 7}));
+            g.set_budget(p).await.unwrap();
+            assert_eq!(g.regs.find(&hash).and_then(|r| r.budget), None);
+            // an editor row without an owner is dropped
+            db.write(|c| {
+                c.execute_batch("update registration set owner = null, owner_start = null")?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+            write(&g.regs.0).clear();
+            g.restore(&h.front.mcp).await;
+            assert!(g.regs.find(&hash).is_none());
+            assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
         })
-        .await
-        .unwrap();
-        write(&g.regs.0).clear();
-        g.restore(&h.front.mcp).await;
-        assert_eq!(g.regs.find(&hash), Some(Registration::editor()));
-        let p: SetBudgetParams = decoded("gateway/set-budget", json!({"job": "j1", "budget": 7}));
-        g.set_budget(p).await.unwrap();
-        assert_eq!(g.regs.find(&hash).and_then(|r| r.budget), None);
-        // an editor row without an owner is dropped
-        db.write(|c| {
-            c.execute_batch("update registration set owner = null, owner_start = null")?;
-            Ok(())
-        })
-        .await
-        .unwrap();
-        write(&g.regs.0).clear();
-        g.restore(&h.front.mcp).await;
-        assert!(g.regs.find(&hash).is_none());
-        assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
     }
 
     /// Review m2: a hub whose hardening failed refuses a registration that carries keys, takes none of them, and
     /// says why; a registration without keys is not affected.  A gate no one hardened refuses too (fail closed).
-    #[tokio::test]
-    async fn an_unhardened_hub_refuses_a_keyed_registration() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        table(g).await;
-        g.set_hardened(Err(villa::Error::unavailable(
-            "cannot make the hub not dumpable: EPERM",
-        )));
-        let e = g
-            .register(
-                register_params(
-                    json!({"chain": [["keyed", null]], "keys": {"keyed": "canary-key-m2"}}),
-                ),
-                None,
-                &h.front.mcp,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            (e.code, e.path.as_deref(), e.message.as_str()),
-            (
-                ErrorCode::NotAllowed,
-                Some("keys"),
-                "this hub cannot protect keys: cannot make the hub not dumpable: EPERM"
-            )
-        );
-        assert!(g.status().keys_held.is_empty());
-        assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
-        assert!(
-            g.register(
-                register_params(json!({"chain": [["local", null]]})),
-                None,
-                &h.front.mcp
-            )
-            .await
-            .is_ok()
-        );
-        assert!(Gate::new(g.coord.clone()).protects_keys().is_err());
+    #[test]
+    fn an_unhardened_hub_refuses_a_keyed_registration() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            table(g).await;
+            g.set_hardened(Err(villa::Error::unavailable(
+                "cannot make the hub not dumpable: EPERM",
+            )));
+            let e = g
+                .register(
+                    register_params(
+                        json!({"chain": [["keyed", null]], "keys": {"keyed": "canary-key-m2"}}),
+                    ),
+                    None,
+                    &h.front.mcp,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                (e.code, e.path.as_deref(), e.message.as_str()),
+                (
+                    ErrorCode::NotAllowed,
+                    Some("keys"),
+                    "this hub cannot protect keys: cannot make the hub not dumpable: EPERM"
+                )
+            );
+            assert!(g.status().keys_held.is_empty());
+            assert!(rows_of(h.dir.path(), "select hash from registration").is_empty());
+            assert!(
+                g.register(
+                    register_params(json!({"chain": [["local", null]]})),
+                    None,
+                    &h.front.mcp
+                )
+                .await
+                .is_ok()
+            );
+            assert!(Gate::new(g.coord.clone()).protects_keys().is_err());
+        })
     }
 
-    #[tokio::test]
-    async fn keys_held_is_ids_only() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        assert!(g.keys_held().providers.is_empty());
-        let keys: runstav::methods::gateway::KeysParams = decoded(
-            "gateway/keys",
-            json!({"keys": {"openrouter": "canary-key-7", "anthropic": "canary-key-8"}}),
-        );
-        g.take_keys(keys.keys);
-        let held = g.keys_held();
-        let ids: Vec<&str> = held.providers.iter().map(Id::as_str).collect();
-        assert_eq!(ids, ["anthropic", "openrouter"]);
-        let text = serde_json::to_string(&held).unwrap();
-        assert_eq!(text, r#"{"providers":["anthropic","openrouter"]}"#);
-        assert!(!text.contains("canary"));
-        // the answer passes the registry's check of gateway/keys-held's result
-        let m = registry::find("gateway/keys-held").unwrap();
-        assert_eq!((m.check_result)(&json!(held)).unwrap(), json!(held));
+    #[test]
+    fn keys_held_is_ids_only() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            assert!(g.keys_held().providers.is_empty());
+            let keys: runstav::methods::gateway::KeysParams = decoded(
+                "gateway/keys",
+                json!({"keys": {"openrouter": "canary-key-7", "anthropic": "canary-key-8"}}),
+            );
+            g.take_keys(keys.keys);
+            let held = g.keys_held();
+            let ids: Vec<&str> = held.providers.iter().map(Id::as_str).collect();
+            assert_eq!(ids, ["anthropic", "openrouter"]);
+            let text = serde_json::to_string(&held).unwrap();
+            assert_eq!(text, r#"{"providers":["anthropic","openrouter"]}"#);
+            assert!(!text.contains("canary"));
+            // the answer passes the registry's check of gateway/keys-held's result
+            let m = registry::find("gateway/keys-held").unwrap();
+            assert_eq!((m.check_result)(&json!(held)).unwrap(), json!(held));
+        })
     }
 
-    #[tokio::test]
-    async fn a_revoked_key_is_forgotten_and_the_others_stay() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        let keys: runstav::methods::gateway::KeysParams = decoded(
-            "gateway/keys",
-            json!({"keys": {"openrouter": "canary-key-1", "anthropic": "canary-key-2"}}),
-        );
-        g.take_keys(keys.keys);
-        assert!(g.revoke_key("openrouter"));
-        let ids: Vec<String> = g
-            .keys_held()
-            .providers
-            .iter()
-            .map(|i| i.as_str().to_owned())
-            .collect();
-        assert_eq!(ids, ["anthropic"]);
-        assert!(read(&g.keys).get("openrouter").is_none());
-        assert!(read(&g.keys).get("anthropic").is_some());
-        // once; and a provider never held is no error, only false
-        assert!(!g.revoke_key("openrouter"));
-        assert!(!g.revoke_key("never-held"));
-        // the method's params and answer go through the registry
-        let m = registry::find("gateway/revoke-key").expect("registered");
-        assert!((m.check_result)(&json!(true)).is_ok());
+    #[test]
+    fn a_revoked_key_is_forgotten_and_the_others_stay() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            let keys: runstav::methods::gateway::KeysParams = decoded(
+                "gateway/keys",
+                json!({"keys": {"openrouter": "canary-key-1", "anthropic": "canary-key-2"}}),
+            );
+            g.take_keys(keys.keys);
+            assert!(g.revoke_key("openrouter"));
+            let ids: Vec<String> = g
+                .keys_held()
+                .providers
+                .iter()
+                .map(|i| i.as_str().to_owned())
+                .collect();
+            assert_eq!(ids, ["anthropic"]);
+            assert!(read(&g.keys).get("openrouter").is_none());
+            assert!(read(&g.keys).get("anthropic").is_some());
+            // once; and a provider never held is no error, only false
+            assert!(!g.revoke_key("openrouter"));
+            assert!(!g.revoke_key("never-held"));
+            // the method's params and answer go through the registry
+            let m = registry::find("gateway/revoke-key").expect("registered");
+            assert!((m.check_result)(&json!(true)).is_ok());
+        })
     }
 
-    #[tokio::test]
-    async fn a_clear_text_keyed_provider_is_applied_with_a_warning() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        let t: Vec<ProviderConfig> = serde_json::from_value(json!([
+    #[test]
+    fn a_clear_text_keyed_provider_is_applied_with_a_warning() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            let t: Vec<ProviderConfig> = serde_json::from_value(json!([
             {"id": "lan", "kind": "openai", "base": "http://192.0.2.10:8080", "auth": "bearer",
              "messages": false, "caps": ["chat"]},
             {"id": "lan-free", "kind": "ollama", "base": "http://192.0.2.11:11434", "auth": "none",
              "messages": false, "caps": ["chat"]},
             {"id": "local", "kind": "ollama", "base": "http://127.0.0.1:11434", "auth": "bearer",
              "messages": false, "caps": ["chat"]}]))
-        .unwrap();
-        let warnings = g.apply(&t).unwrap();
-        assert_eq!(
-            warnings,
-            vec![ProviderWarning {
-                provider: "lan".into(),
-                text: "lan's key travels in clear text over http://192.0.2.10; use https".into()
-            }]
-        );
-        assert_eq!(g.status().providers, 3);
-        assert_eq!(g.status().warnings.len(), 1);
+            .unwrap();
+            let warnings = g.apply(&t).unwrap();
+            assert_eq!(
+                warnings,
+                vec![ProviderWarning {
+                    provider: "lan".into(),
+                    text: "lan's key travels in clear text over http://192.0.2.10; use https"
+                        .into()
+                }]
+            );
+            assert_eq!(g.status().providers, 3);
+            assert_eq!(g.status().warnings.len(), 1);
+        })
     }
 
-    #[tokio::test]
-    async fn an_agents_spend_is_its_own_jobs() {
-        let h = hub().await;
-        let g = &h.front.gate;
-        // the rows the engine records, through the ledger
-        let ledger = WorkLedger(h.coord.clone(), None);
-        for (job, agent, input, output, cost) in
-            [("j1", "agent-1", 10, 2, 0.5), ("j2", "agent-2", 7, 1, 0.25)]
-        {
-            ledger
-                .record(SpendRow {
-                    job: Some(job.into()),
-                    task: Some(format!("{job}#1")),
-                    agent: Some(agent.into()),
-                    provider: "p".into(),
-                    model: Some("m".into()),
-                    input,
-                    output,
-                    cost,
-                    status: 200,
-                })
-                .await;
-        }
-        // each row carries the tx that wrote it: the hub's, as the gateway
-        let by: Vec<(String, String, String, String)> = h
-            .coord
-            .read(|c| {
-                let mut st = c.prepare(
+    #[test]
+    fn an_agents_spend_is_its_own_jobs() {
+        saman::block_on_current(async move {
+            let h = hub().await;
+            let g = &h.front.gate;
+            // the rows the engine records, through the ledger
+            let ledger = WorkLedger(h.coord.clone(), None);
+            for (job, agent, input, output, cost) in
+                [("j1", "agent-1", 10, 2, 0.5), ("j2", "agent-2", 7, 1, 0.25)]
+            {
+                ledger
+                    .record(SpendRow {
+                        job: Some(job.into()),
+                        task: Some(format!("{job}#1")),
+                        agent: Some(agent.into()),
+                        provider: "p".into(),
+                        model: Some("m".into()),
+                        input,
+                        output,
+                        cost,
+                        status: 200,
+                    })
+                    .await;
+            }
+            // each row carries the tx that wrote it: the hub's, as the gateway
+            let by: Vec<(String, String, String, String)> = h
+                .coord
+                .read(|c| {
+                    let mut st = c.prepare(
                     "select s.job, t.actor, t.class, t.tool from spend s join tx t on t.id = s.tx \
                      order by s.job",
                 )?;
-                let rows = st
-                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(rows)
-            })
-            .await
-            .unwrap();
-        let hub_tx = |job: &str| {
-            (
-                job.to_string(),
-                "hub".to_string(),
-                "system".to_string(),
-                "gateway".to_string(),
-            )
-        };
-        assert_eq!(by, vec![hub_tx("j1"), hub_tx("j2")]);
-        let caller = |class, job: Option<&str>| Caller {
-            class,
-            sid: None,
-            job: job.map(str::to_owned),
-            conn_id: 1,
-        };
-        let p = |v: Value| -> SpendParams { decoded("spend", v) };
-        let all = g
-            .spend(&caller(WireClass::User, None), p(json!({})))
-            .await
-            .unwrap();
-        assert_eq!((all.input, all.requests), (17, 2));
-        let own = g
-            .spend(&caller(WireClass::Agent, Some("j1")), p(json!({})))
-            .await
-            .unwrap();
-        assert_eq!(
-            (own.input, own.output, own.cost, own.requests),
-            (10, 2, 0.5, 1)
-        );
-        let e = g
-            .spend(
-                &caller(WireClass::Agent, Some("j1")),
-                p(json!({"job": "j2"})),
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(e.code, ErrorCode::NotAllowed);
+                    let rows = st
+                        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(rows)
+                })
+                .await
+                .unwrap();
+            let hub_tx = |job: &str| {
+                (
+                    job.to_string(),
+                    "hub".to_string(),
+                    "system".to_string(),
+                    "gateway".to_string(),
+                )
+            };
+            assert_eq!(by, vec![hub_tx("j1"), hub_tx("j2")]);
+            let caller = |class, job: Option<&str>| Caller {
+                class,
+                sid: None,
+                job: job.map(str::to_owned),
+                conn_id: 1,
+            };
+            let p = |v: Value| -> SpendParams { decoded("spend", v) };
+            let all = g
+                .spend(&caller(WireClass::User, None), p(json!({})))
+                .await
+                .unwrap();
+            assert_eq!((all.input, all.requests), (17, 2));
+            let own = g
+                .spend(&caller(WireClass::Agent, Some("j1")), p(json!({})))
+                .await
+                .unwrap();
+            assert_eq!(
+                (own.input, own.output, own.cost, own.requests),
+                (10, 2, 0.5, 1)
+            );
+            let e = g
+                .spend(
+                    &caller(WireClass::Agent, Some("j1")),
+                    p(json!({"job": "j2"})),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::NotAllowed);
+        })
     }
 }

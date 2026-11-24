@@ -70,7 +70,7 @@ const SYMBOL_MAX: usize = 2_000_000;
 const SYMBOL_CACHE: usize = 512;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&m)
 }
 
 /// What a frame shows of one file.

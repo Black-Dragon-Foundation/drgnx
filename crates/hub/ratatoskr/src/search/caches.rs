@@ -40,7 +40,7 @@ impl Caches {
     /// The caches of STATE (`STATE/vectors/`): one per state directory in this process, so two projects of the state
     /// share each cache's one writer.
     pub fn shared(state: &Path) -> Arc<Caches> {
-        let mut r = registry().lock().unwrap_or_else(PoisonError::into_inner);
+        let mut r = saman::lock(&registry());
         if let Some(c) = r.get(state).and_then(Weak::upgrade) {
             return c;
         }
@@ -120,7 +120,7 @@ impl Caches {
 
     /// `drgnx-search-cache-cap`: the bytes of unheld keys a collection keeps (none: MP-7's rule).
     pub fn set_cap(&self, cap: Option<u64>) {
-        *self.cap.lock().unwrap_or_else(PoisonError::into_inner) = cap;
+        *saman::lock(&self.cap) = cap;
     }
 
     /// The sweep, when [`CACHE_SWEEP`] has passed since the last (NOW the virtual clock's, NOW_MS the wall clock's
@@ -131,16 +131,13 @@ impl Caches {
         now_ms: i64,
     ) -> Result<Option<u32>, StoreError> {
         {
-            let mut last = self
-                .last_sweep
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut last = saman::lock(&self.last_sweep);
             if last.is_some_and(|t| now.saturating_duration_since(t) < CACHE_SWEEP) {
                 return Ok(None);
             }
             *last = Some(now);
         }
-        let cap = *self.cap.lock().unwrap_or_else(PoisonError::into_inner);
+        let cap = *saman::lock(&self.cap);
         let mut gone = 0u32;
         for c in self.opened().await {
             c.release_gone(now_ms, TREE_IDLE).await?;

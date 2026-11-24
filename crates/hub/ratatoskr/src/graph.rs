@@ -119,7 +119,7 @@ fn show(p: &Path) -> String {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(&m)
 }
 
 fn opt<T>(r: Result<T, urdr::SqliteError>) -> Result<Option<T>, urdr::SqliteError> {
@@ -467,16 +467,13 @@ mod hooks {
     pub(super) fn arm(db: &Path) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
         let (reached, told) = oneshot::channel();
         let (go, wait) = oneshot::channel();
-        ARMED
-            .lock()
-            .unwrap()
-            .push((db.to_path_buf(), reached, wait));
+        saman::lock(&ARMED).push((db.to_path_buf(), reached, wait));
         (told, go)
     }
 
     pub(super) async fn between_resolve_and_write(db: &Path) {
         let armed = {
-            let mut armed = ARMED.lock().unwrap_or_else(|e| e.into_inner());
+            let mut armed = saman::lock(&ARMED);
             armed
                 .iter()
                 .position(|(p, _, _)| p == db)
@@ -1859,7 +1856,7 @@ static HELD_COPIES: Mutex<BTreeMap<PathBuf, BTreeSet<PathBuf>>> =
 
 /// Remember FOUND for DB, forget REMOVED and any copy that no longer exists; those still held.
 fn held_copies(db: &Path, found: &[PathBuf], removed: &[PathBuf]) -> Vec<PathBuf> {
-    let mut all = HELD_COPIES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut all = saman::lock(&HELD_COPIES);
     let set = all.entry(db.to_path_buf()).or_default();
     set.extend(found.iter().cloned());
     set.retain(|p| !removed.contains(p) && p.is_file());
@@ -2209,7 +2206,7 @@ async fn tasks_write(
             w.signals.notify_soon();
             answer
         }
-        Err(e) => match kept.lock().unwrap_or_else(PoisonError::into_inner).take() {
+        Err(e) => match saman::lock(&kept).take() {
             Some(answer) => answer,
             None => return Err(coord::fail(e)),
         },
@@ -2438,266 +2435,282 @@ mod tests {
 
     /// After a revoke the user says no to deleting the backups that hold the file's text; a later `graph/privacy`
     /// still lists them (the excise blanked the values, so only the hub's memory can), and deleting them empties it.
-    #[tokio::test]
-    async fn backups_held_after_a_no_are_offered_again() {
-        let race = Race::new().await;
-        let r = race.reading().to_string_lossy().into_owned();
-        let p: api::PutParsedParams = serde_json::from_value(json!({"sources": [
-            {"source": {"kind": "spec", "path": r}, "mtime": 1.0,
-             "entities": [{"id": format!("spec:{r}"), "kind": "spec", "title": CANARY,
-                           "data": {"path": r, "line": 1}}]}
-        ]}))
-        .unwrap();
-        put_parsed(&race.w, &race.coord, p).await.unwrap();
-        let backup = race.dir.path().join("backup/old.db");
-        std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
-        crate::fsio::write(&backup, format!("row {CANARY} end")).unwrap();
-        let dirs = StoreDirs {
-            home: race.home.clone(),
-            config: race.config.clone(),
-            hub: race.dir.path().join("hub"),
-        };
-        let ask = |delete: Value| {
-            let (w, coord, dirs) = (race.w.clone(), race.coord.clone(), dirs.clone());
-            async move {
-                let mut p = json!({"reload": true});
-                if !delete.is_null() {
-                    p["delete_copies"] = delete;
+    #[test]
+    fn backups_held_after_a_no_are_offered_again() {
+        saman::block_on_current(async move {
+            let race = Race::new().await;
+            let r = race.reading().to_string_lossy().into_owned();
+            let p: api::PutParsedParams = serde_json::from_value(json!({"sources": [
+                {"source": {"kind": "spec", "path": r}, "mtime": 1.0,
+                 "entities": [{"id": format!("spec:{r}"), "kind": "spec", "title": CANARY,
+                               "data": {"path": r, "line": 1}}]}
+            ]}))
+            .unwrap();
+            put_parsed(&race.w, &race.coord, p).await.unwrap();
+            let backup = race.dir.path().join("backup/old.db");
+            std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
+            crate::fsio::write(&backup, format!("row {CANARY} end")).unwrap();
+            let dirs = StoreDirs {
+                home: race.home.clone(),
+                config: race.config.clone(),
+                hub: race.dir.path().join("hub"),
+            };
+            let ask = |delete: Value| {
+                let (w, coord, dirs) = (race.w.clone(), race.coord.clone(), dirs.clone());
+                async move {
+                    let mut p = json!({"reload": true});
+                    if !delete.is_null() {
+                        p["delete_copies"] = delete;
+                    }
+                    privacy(&w, &coord, Some(&dirs), serde_json::from_value(p).unwrap())
+                        .await
+                        .unwrap()
                 }
-                privacy(&w, &coord, Some(&dirs), serde_json::from_value(p).unwrap())
-                    .await
-                    .unwrap()
-            }
-        };
-        race.allow(&[]);
-        let held = json!([backup.to_string_lossy()]);
-        assert_eq!(ask(Value::Null).await["backups_holding"], held);
-        // The user said no: the next answer, with nothing new revoked, lists the copy again.
-        assert_eq!(ask(Value::Null).await["backups_holding"], held);
-        let a = ask(held.clone()).await;
-        assert_eq!(a["backups_removed"], held, "{a}");
-        assert_eq!(a["backups_holding"], json!([]), "{a}");
-        assert_eq!(ask(Value::Null).await["backups_holding"], json!([]));
+            };
+            race.allow(&[]);
+            let held = json!([backup.to_string_lossy()]);
+            assert_eq!(ask(Value::Null).await["backups_holding"], held);
+            // The user said no: the next answer, with nothing new revoked, lists the copy again.
+            assert_eq!(ask(Value::Null).await["backups_holding"], held);
+            let a = ask(held.clone()).await;
+            assert_eq!(a["backups_removed"], held, "{a}");
+            assert_eq!(a["backups_holding"], json!([]), "{a}");
+            assert_eq!(ask(Value::Null).await["backups_holding"], json!([]));
+        })
     }
 
     /// The revoke race (call 8), the scan's half: a `graph/put-parsed` that resolved its projects before the opt-in
     /// was revoked writes after the revoke's excise. It reads the deny-list inside the writer, so it stores nothing
     /// of the file. Held by the test seam between resolve and write, never by a wait.
-    #[tokio::test]
-    async fn a_put_resolved_before_a_revoke_stores_nothing() {
-        let race = Race::new().await;
-        let r = race.reading().to_string_lossy().into_owned();
-        let p: api::PutParsedParams = serde_json::from_value(json!({"sources": [
-            {"source": {"kind": "spec", "path": r}, "mtime": 1.0,
-             "entities": [{"id": format!("spec:{r}"), "kind": "spec", "title": CANARY,
-                           "data": {"path": r, "line": 1}}]}
-        ]}))
-        .unwrap();
-        let (reached, go) = hooks::arm(race.writer().path());
-        let (w, coord) = (race.w.clone(), race.coord.clone());
-        let scan = tokio::spawn(async move { put_parsed(&w, &coord, p).await });
-        reached.await.unwrap();
-        race.allow(&[]);
-        let revoked = race.reload().await;
-        assert_eq!(revoked.removed, [race.reading()]);
-        go.send(()).unwrap();
-        let answer = scan.await.unwrap().unwrap();
-        assert_eq!(
-            answer["refused"].as_array().map(Vec::len),
-            Some(1),
-            "{answer}"
-        );
-        assert_eq!(
-            race.canaries().await,
-            0,
-            "the put brought the file in after the revoke"
-        );
+    #[test]
+    fn a_put_resolved_before_a_revoke_stores_nothing() {
+        saman::block_on_current(async move {
+            let race = Race::new().await;
+            let r = race.reading().to_string_lossy().into_owned();
+            let p: api::PutParsedParams = serde_json::from_value(json!({"sources": [
+                {"source": {"kind": "spec", "path": r}, "mtime": 1.0,
+                 "entities": [{"id": format!("spec:{r}"), "kind": "spec", "title": CANARY,
+                               "data": {"path": r, "line": 1}}]}
+            ]}))
+            .unwrap();
+            let (reached, go) = hooks::arm(race.writer().path());
+            let (w, coord) = (race.w.clone(), race.coord.clone());
+            let scan = tokio::spawn(async move { put_parsed(&w, &coord, p).await });
+            reached.await.unwrap();
+            race.allow(&[]);
+            let revoked = race.reload().await;
+            assert_eq!(revoked.removed, [race.reading()]);
+            go.send(()).unwrap();
+            let answer = scan.await.unwrap().unwrap();
+            assert_eq!(
+                answer["refused"].as_array().map(Vec::len),
+                Some(1),
+                "{answer}"
+            );
+            assert_eq!(
+                race.canaries().await,
+                0,
+                "the put brought the file in after the revoke"
+            );
+        })
     }
 
     /// The same race for `graph/record`: a folder added to the user's deny file while a record resolves.
-    #[tokio::test]
-    async fn a_record_resolved_before_a_deny_entry_stores_nothing() {
-        let race = Race::new().await;
-        let repo = race.dir.path().join("w/repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        let repo = std::fs::canonicalize(&repo).unwrap();
-        race.w
-            .db
-            .write(system(), |tx| {
-                entity::create(
-                    tx,
-                    entity::EntityNew {
-                        id: "task:t1".into(),
-                        kind: "task".into(),
-                        project: None,
-                        title: Some("t".into()),
-                        status: Some("open".into()),
-                        body: None,
-                        priority: None,
-                        assignee: None,
-                        data: json!({}),
-                        origin: entity::Origin::Recorded,
-                        source: None,
-                    },
-                )?;
-                Ok(())
-            })
-            .await
+    #[test]
+    fn a_record_resolved_before_a_deny_entry_stores_nothing() {
+        saman::block_on_current(async move {
+            let race = Race::new().await;
+            let repo = race.dir.path().join("w/repo");
+            std::fs::create_dir_all(&repo).unwrap();
+            let repo = std::fs::canonicalize(&repo).unwrap();
+            race.w
+                .db
+                .write(system(), |tx| {
+                    entity::create(
+                        tx,
+                        entity::EntityNew {
+                            id: "task:t1".into(),
+                            kind: "task".into(),
+                            project: None,
+                            title: Some("t".into()),
+                            status: Some("open".into()),
+                            body: None,
+                            priority: None,
+                            assignee: None,
+                            data: json!({}),
+                            origin: entity::Origin::Recorded,
+                            source: None,
+                        },
+                    )?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            let p: api::RecordParams = serde_json::from_value(json!({
+                "task": "task:t1", "repo": repo,
+                "commits": [{"sha": "abcdef0123456789", "date": 1.0, "subject": CANARY}]
+            }))
             .unwrap();
-        let p: api::RecordParams = serde_json::from_value(json!({
-            "task": "task:t1", "repo": repo,
-            "commits": [{"sha": "abcdef0123456789", "date": 1.0, "subject": CANARY}]
-        }))
-        .unwrap();
-        let (reached, go) = hooks::arm(race.writer().path());
-        let (w, coord) = (race.w.clone(), race.coord.clone());
-        let rec = tokio::spawn(async move { record(&w, &coord, &user(), p).await });
-        reached.await.unwrap();
-        crate::fsio::write(
-            race.config.join(norn::deny::DENY_FILE),
-            json!({"version": 1, "entries": [{"kind": "folder", "path": repo}]}).to_string(),
-        )
-        .unwrap();
-        assert_eq!(race.reload().await.denied_added.len(), 1);
-        go.send(()).unwrap();
-        assert!(rec.await.unwrap().is_err(), "the record is refused");
-        assert_eq!(
-            race.canaries().await,
-            0,
-            "the record wrote after the deny entry"
-        );
+            let (reached, go) = hooks::arm(race.writer().path());
+            let (w, coord) = (race.w.clone(), race.coord.clone());
+            let rec = tokio::spawn(async move { record(&w, &coord, &user(), p).await });
+            reached.await.unwrap();
+            crate::fsio::write(
+                race.config.join(norn::deny::DENY_FILE),
+                json!({"version": 1, "entries": [{"kind": "folder", "path": repo}]}).to_string(),
+            )
+            .unwrap();
+            assert_eq!(race.reload().await.denied_added.len(), 1);
+            go.send(()).unwrap();
+            assert!(rec.await.unwrap().is_err(), "the record is refused");
+            assert_eq!(
+                race.canaries().await,
+                0,
+                "the record wrote after the deny entry"
+            );
+        })
     }
 
-    #[tokio::test]
-    async fn tasks_write_answers_the_new_title_and_a_conflict_commits_no_tx_row() {
-        let (_dir, w, _, _) = fixture().await;
-        let made = task_write(
-            &w,
-            json!({"op": "create", "title": "first", "project": MINE}),
-        )
-        .await;
-        let id = made["id"].as_str().unwrap().to_owned();
-        let renamed = task_write(
+    #[test]
+    fn tasks_write_answers_the_new_title_and_a_conflict_commits_no_tx_row() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            let made = task_write(
+                &w,
+                json!({"op": "create", "title": "first", "project": MINE}),
+            )
+            .await;
+            let id = made["id"].as_str().unwrap().to_owned();
+            let renamed = task_write(
             &w,
             json!({"op": "update", "id": id, "ver": made["ver"], "title": "second", "project": MINE}),
         )
         .await;
-        assert_eq!(renamed["title"], "second", "{renamed}");
-        let txs = count(&w, "select count(*) from tx").await;
-        let stale = task_write(
+            assert_eq!(renamed["title"], "second", "{renamed}");
+            let txs = count(&w, "select count(*) from tx").await;
+            let stale = task_write(
             &w,
             json!({"op": "update", "id": id, "ver": made["ver"], "title": "third", "project": MINE}),
         )
         .await;
-        assert!(stale.get("conflict").is_some(), "{stale}");
-        assert_eq!(count(&w, "select count(*) from tx").await, txs);
+            assert!(stale.get("conflict").is_some(), "{stale}");
+            assert_eq!(count(&w, "select count(*) from tx").await, txs);
+        })
     }
 
     /// The registry's class door stops an agent's `graph/grants` first (the row `grants/an-agent-cannot-grant-itself`);
     /// this one holds without it.
-    #[tokio::test]
-    async fn grants_refuse_an_agent_past_the_registry() {
-        let (_dir, w, _, _) = fixture().await;
-        for class in [Class::Agent, Class::Service] {
-            let caller = Caller {
-                class,
-                sid: Some("s1".into()),
-                job: None,
-                conn_id: 2,
-            };
-            for p in [
-                json!({"grant": {"who": "session:s1", "what": "*", "access": "read"}}),
-                json!({"revoke": "grant:x"}),
-            ] {
-                let e = grants_of(&w, &caller, serde_json::from_value(p).unwrap())
-                    .await
-                    .unwrap_err();
-                assert_eq!(e.code, ErrorCode::NotAllowed, "{class:?}");
+    #[test]
+    fn grants_refuse_an_agent_past_the_registry() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            for class in [Class::Agent, Class::Service] {
+                let caller = Caller {
+                    class,
+                    sid: Some("s1".into()),
+                    job: None,
+                    conn_id: 2,
+                };
+                for p in [
+                    json!({"grant": {"who": "session:s1", "what": "*", "access": "read"}}),
+                    json!({"revoke": "grant:x"}),
+                ] {
+                    let e = grants_of(&w, &caller, serde_json::from_value(p).unwrap())
+                        .await
+                        .unwrap_err();
+                    assert_eq!(e.code, ErrorCode::NotAllowed, "{class:?}");
+                }
             }
-        }
-        assert!(grants_now(&w).await.is_empty());
+            assert!(grants_now(&w).await.is_empty());
+        })
     }
 
-    #[tokio::test]
-    async fn access_card_settle_makes_a_grant() {
-        let (_dir, w, a, b) = fixture().await;
-        let card = access_card(&w, Some("p1")).await;
-        let r = settle(&w, &user(), card, "project".into(), now()).await;
-        assert_eq!(r.unwrap(), json!({"settled": true}));
-        let gs = grants_now(&w).await;
-        assert_eq!(gs.len(), 1);
-        assert_eq!(
-            (&gs[0].who, &gs[0].what, gs[0].access),
-            (&Who::Project(a), &What::Project(b), Access::Read)
-        );
-        // the requester hears it, and the card is settled once
-        let heard = count(
-            &w,
-            "select count(*) from message where recipient = 'agent:s1'",
-        )
-        .await;
-        assert_eq!(heard, 1);
-        let again = settle(&w, &user(), card, "project".into(), now()).await;
-        assert_eq!(again.unwrap(), json!({"settled": false}));
-        assert_eq!(grants_now(&w).await.len(), 1);
-        // a session grant and a profile grant name the session and its profile
-        let card = access_card(&w, Some("p1")).await;
-        settle(&w, &user(), card, "session".into(), now())
-            .await
-            .unwrap();
-        let card = access_card(&w, Some("p1")).await;
-        settle(&w, &user(), card, "profile".into(), now())
-            .await
-            .unwrap();
-        let whos: Vec<Who> = grants_now(&w).await.into_iter().map(|g| g.who).collect();
-        assert!(whos.contains(&Who::Session("s1".into())), "{whos:?}");
-        assert!(whos.contains(&Who::Profile("p1".into())), "{whos:?}");
-        // a profile choice for a session without one is refused, the card left open
-        let card = access_card(&w, None).await;
-        let e = settle(&w, &user(), card, "profile".into(), now())
-            .await
-            .unwrap_err();
-        assert_eq!(e.code, ErrorCode::InvalidParams);
-        let state: String =
-            w.db.read(move |c| {
-                Ok(c.query_row("select state from card where id = ?1", [card], |r| r.get(0))?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(state, "open");
-    }
-
-    #[tokio::test]
-    async fn an_unknown_choice_is_invalid() {
-        let (_dir, w, _, _) = fixture().await;
-        let card = access_card(&w, None).await;
-        let e = settle(&w, &user(), card, "maybe".into(), now())
-            .await
-            .unwrap_err();
-        assert_eq!(
-            (e.code, e.path.as_deref()),
-            (ErrorCode::InvalidParams, Some("choice"))
-        );
-        assert!(grants_now(&w).await.is_empty());
-        let open = count(&w, "select count(*) from card where state = 'open'").await;
-        assert_eq!(open, 1);
-    }
-
-    #[tokio::test]
-    async fn resolved_on_an_access_card_is_refuse() {
-        let (_dir, w, _, _) = fixture().await;
-        for choice in ["resolved", "refuse"] {
+    #[test]
+    fn access_card_settle_makes_a_grant() {
+        saman::block_on_current(async move {
+            let (_dir, w, a, b) = fixture().await;
             let card = access_card(&w, Some("p1")).await;
-            let r = settle(&w, &user(), card, choice.into(), now()).await;
-            assert_eq!(r.unwrap(), json!({"settled": true}), "{choice}");
-        }
-        assert!(grants_now(&w).await.is_empty());
-        let heard = count(
+            let r = settle(&w, &user(), card, "project".into(), now()).await;
+            assert_eq!(r.unwrap(), json!({"settled": true}));
+            let gs = grants_now(&w).await;
+            assert_eq!(gs.len(), 1);
+            assert_eq!(
+                (&gs[0].who, &gs[0].what, gs[0].access),
+                (&Who::Project(a), &What::Project(b), Access::Read)
+            );
+            // the requester hears it, and the card is settled once
+            let heard = count(
+                &w,
+                "select count(*) from message where recipient = 'agent:s1'",
+            )
+            .await;
+            assert_eq!(heard, 1);
+            let again = settle(&w, &user(), card, "project".into(), now()).await;
+            assert_eq!(again.unwrap(), json!({"settled": false}));
+            assert_eq!(grants_now(&w).await.len(), 1);
+            // a session grant and a profile grant name the session and its profile
+            let card = access_card(&w, Some("p1")).await;
+            settle(&w, &user(), card, "session".into(), now())
+                .await
+                .unwrap();
+            let card = access_card(&w, Some("p1")).await;
+            settle(&w, &user(), card, "profile".into(), now())
+                .await
+                .unwrap();
+            let whos: Vec<Who> = grants_now(&w).await.into_iter().map(|g| g.who).collect();
+            assert!(whos.contains(&Who::Session("s1".into())), "{whos:?}");
+            assert!(whos.contains(&Who::Profile("p1".into())), "{whos:?}");
+            // a profile choice for a session without one is refused, the card left open
+            let card = access_card(&w, None).await;
+            let e = settle(&w, &user(), card, "profile".into(), now())
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::InvalidParams);
+            let state: String =
+                w.db.read(move |c| {
+                    Ok(c.query_row("select state from card where id = ?1", [card], |r| r.get(0))?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(state, "open");
+        })
+    }
+
+    #[test]
+    fn an_unknown_choice_is_invalid() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            let card = access_card(&w, None).await;
+            let e = settle(&w, &user(), card, "maybe".into(), now())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                (e.code, e.path.as_deref()),
+                (ErrorCode::InvalidParams, Some("choice"))
+            );
+            assert!(grants_now(&w).await.is_empty());
+            let open = count(&w, "select count(*) from card where state = 'open'").await;
+            assert_eq!(open, 1);
+        })
+    }
+
+    #[test]
+    fn resolved_on_an_access_card_is_refuse() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            for choice in ["resolved", "refuse"] {
+                let card = access_card(&w, Some("p1")).await;
+                let r = settle(&w, &user(), card, choice.into(), now()).await;
+                assert_eq!(r.unwrap(), json!({"settled": true}), "{choice}");
+            }
+            assert!(grants_now(&w).await.is_empty());
+            let heard = count(
             &w,
             "select count(*) from message where recipient = 'agent:s1' and text like '%refused%'",
         )
         .await;
-        assert_eq!(heard, 2);
+            assert_eq!(heard, 2);
+        })
     }
 
     /// A user's task in project A, and a close card an agent proposed at its version: (task id, card).
@@ -2753,120 +2766,128 @@ mod tests {
             .unwrap()
     }
 
-    #[tokio::test]
-    async fn close_accept_sets_done() {
-        let (_dir, w, a, _) = fixture().await;
-        let (id, card) = close_card(&w, a).await;
-        let r = settle(&w, &user(), card, "accept".into(), now()).await;
-        assert_eq!(r.unwrap(), json!({"settled": true}));
-        assert_eq!(status_of(&w, &id).await.as_deref(), Some("done"));
-        // the change is the user's
-        let actor = text_of(
+    #[test]
+    fn close_accept_sets_done() {
+        saman::block_on_current(async move {
+            let (_dir, w, a, _) = fixture().await;
+            let (id, card) = close_card(&w, a).await;
+            let r = settle(&w, &user(), card, "accept".into(), now()).await;
+            assert_eq!(r.unwrap(), json!({"settled": true}));
+            assert_eq!(status_of(&w, &id).await.as_deref(), Some("done"));
+            // the change is the user's
+            let actor = text_of(
             &w,
             "select t.actor from entity e join tx t on t.id = e.updated_tx where e.kind = 'task'",
         )
         .await;
-        assert_eq!(actor, "user");
+            assert_eq!(actor, "user");
+        })
     }
 
-    #[tokio::test]
-    async fn close_accept_on_a_changed_task_conflicts() {
-        let (_dir, w, a, _) = fixture().await;
-        let (id, card) = close_card(&w, a).await;
-        let task = id.clone();
-        w.db.write(TxMeta::new("user", TxClass::User, "test"), move |tx| {
-            let e = entity::by_id(tx.sql(), &task)?.unwrap();
-            Ok(tracker::op(
-                tx,
-                &StoreCaller::user(),
-                TaskOp::Update {
-                    id: task.clone(),
-                    ver: e.ver,
-                    title: Some("renamed".into()),
-                    body: None,
-                    priority: None,
-                    acceptance: None,
-                    status: None,
-                },
-            )?)
-        })
-        .await
-        .unwrap();
-        let e = settle(&w, &user(), card, "accept".into(), now())
-            .await
-            .unwrap_err();
-        assert_eq!(e.code, ErrorCode::InvalidParams);
-        assert!(e.message.starts_with("conflict"), "{}", e.message);
-        assert_ne!(status_of(&w, &id).await.as_deref(), Some("done"));
-        let state: String =
-            w.db.read(move |c| {
-                Ok(c.query_row("select state from card where id = ?1", [card], |r| r.get(0))?)
+    #[test]
+    fn close_accept_on_a_changed_task_conflicts() {
+        saman::block_on_current(async move {
+            let (_dir, w, a, _) = fixture().await;
+            let (id, card) = close_card(&w, a).await;
+            let task = id.clone();
+            w.db.write(TxMeta::new("user", TxClass::User, "test"), move |tx| {
+                let e = entity::by_id(tx.sql(), &task)?.unwrap();
+                Ok(tracker::op(
+                    tx,
+                    &StoreCaller::user(),
+                    TaskOp::Update {
+                        id: task.clone(),
+                        ver: e.ver,
+                        title: Some("renamed".into()),
+                        body: None,
+                        priority: None,
+                        acceptance: None,
+                        status: None,
+                    },
+                )?)
             })
             .await
             .unwrap();
-        assert_eq!(state, "open", "the card stays open");
+            let e = settle(&w, &user(), card, "accept".into(), now())
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::InvalidParams);
+            assert!(e.message.starts_with("conflict"), "{}", e.message);
+            assert_ne!(status_of(&w, &id).await.as_deref(), Some("done"));
+            let state: String =
+                w.db.read(move |c| {
+                    Ok(c.query_row("select state from card where id = ?1", [card], |r| r.get(0))?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(state, "open", "the card stays open");
+        })
     }
 
-    #[tokio::test]
-    async fn close_reject_notifies() {
-        let (_dir, w, a, _) = fixture().await;
-        let (id, card) = close_card(&w, a).await;
-        let before = count(
-            &w,
-            "select count(*) from message where recipient = 'agent:s1'",
-        )
-        .await;
-        let r = settle(&w, &user(), card, "reject".into(), now()).await;
-        assert_eq!(r.unwrap(), json!({"settled": true}));
-        assert_ne!(status_of(&w, &id).await.as_deref(), Some("done"));
-        let after = count(
-            &w,
-            "select count(*) from message where recipient = 'agent:s1'",
-        )
-        .await;
-        assert_eq!(after, before + 1);
-        let text = text_of(
-            &w,
-            "select text from message where recipient = 'agent:s1' order by id desc limit 1",
-        )
-        .await;
-        assert!(text.contains("close rejected"), "{text}");
+    #[test]
+    fn close_reject_notifies() {
+        saman::block_on_current(async move {
+            let (_dir, w, a, _) = fixture().await;
+            let (id, card) = close_card(&w, a).await;
+            let before = count(
+                &w,
+                "select count(*) from message where recipient = 'agent:s1'",
+            )
+            .await;
+            let r = settle(&w, &user(), card, "reject".into(), now()).await;
+            assert_eq!(r.unwrap(), json!({"settled": true}));
+            assert_ne!(status_of(&w, &id).await.as_deref(), Some("done"));
+            let after = count(
+                &w,
+                "select count(*) from message where recipient = 'agent:s1'",
+            )
+            .await;
+            assert_eq!(after, before + 1);
+            let text = text_of(
+                &w,
+                "select text from message where recipient = 'agent:s1' order by id desc limit 1",
+            )
+            .await;
+            assert!(text.contains("close rejected"), "{text}");
+        })
     }
 
-    #[tokio::test]
-    async fn settings_are_user_only() {
-        let (_dir, w, _, _) = fixture().await;
-        let set = |on| api::SettingsParams {
-            get: None,
-            set: Some(api::SettingsSet {
-                only_user_closes: Some(on),
-            }),
-        };
-        assert_eq!(
-            settings(&w, &user(), set(true)).await.unwrap(),
-            json!({"only_user_closes": true})
-        );
-        // any other class is refused by the store itself
-        for meta in [
-            TxMeta::new("agent:s1", TxClass::Agent, "test"),
-            TxMeta::new("hub", TxClass::System, "test"),
-        ] {
-            let r =
-                w.db.write(meta, |tx| put_setting(tx, tracker::ONLY_USER_CLOSES, false))
-                    .await;
+    #[test]
+    fn settings_are_user_only() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            let set = |on| api::SettingsParams {
+                get: None,
+                set: Some(api::SettingsSet {
+                    only_user_closes: Some(on),
+                }),
+            };
             assert_eq!(
-                r,
-                Err(CoordError::Refused(grants::SETTINGS_ARE_THE_USERS.into()))
+                settings(&w, &user(), set(true)).await.unwrap(),
+                json!({"only_user_closes": true})
             );
-        }
-        let get = api::SettingsParams {
-            get: Some(runstav::methods::Empty::default()),
-            set: None,
-        };
-        assert_eq!(
-            settings(&w, &user(), get).await.unwrap(),
-            json!({"only_user_closes": true})
-        );
+            // any other class is refused by the store itself
+            for meta in [
+                TxMeta::new("agent:s1", TxClass::Agent, "test"),
+                TxMeta::new("hub", TxClass::System, "test"),
+            ] {
+                let r =
+                    w.db.write(meta, |tx| put_setting(tx, tracker::ONLY_USER_CLOSES, false))
+                        .await;
+                assert_eq!(
+                    r,
+                    Err(CoordError::Refused(grants::SETTINGS_ARE_THE_USERS.into()))
+                );
+            }
+            let get = api::SettingsParams {
+                get: Some(runstav::methods::Empty::default()),
+                set: None,
+            };
+            assert_eq!(
+                settings(&w, &user(), get).await.unwrap(),
+                json!({"only_user_closes": true})
+            );
+        })
     }
 
     /// An excise of a task whose title a kept backup and a session transcript both hold; `flags` are the
@@ -2899,262 +2920,276 @@ mod tests {
     }
 
     /// With the flags the kept backup is removed and the transcript redacted, and the answer lists them.
-    #[tokio::test]
-    async fn the_excise_removes_and_redacts_the_copies_when_asked() {
-        let (a, backup, transcript, _dir) =
-            excise_with_copies(json!({"rotate_backups": true, "transcripts": true})).await;
-        assert_eq!(
-            a["backups_removed"],
-            json!([backup.to_string_lossy()]),
-            "{a}"
-        );
-        assert_eq!(a["backups_holding"], json!([]), "{a}");
-        assert_eq!(
-            a["transcripts_redacted"],
-            json!([transcript.to_string_lossy()]),
-            "{a}"
-        );
-        assert_eq!(a["transcripts_holding"], json!([]), "{a}");
-        assert!(!backup.exists());
-        let t = crate::fsio::read_to_string(&transcript).unwrap();
-        assert!(!t.contains("secret title"), "{t}");
+    #[test]
+    fn the_excise_removes_and_redacts_the_copies_when_asked() {
+        saman::block_on_current(async move {
+            let (a, backup, transcript, _dir) =
+                excise_with_copies(json!({"rotate_backups": true, "transcripts": true})).await;
+            assert_eq!(
+                a["backups_removed"],
+                json!([backup.to_string_lossy()]),
+                "{a}"
+            );
+            assert_eq!(a["backups_holding"], json!([]), "{a}");
+            assert_eq!(
+                a["transcripts_redacted"],
+                json!([transcript.to_string_lossy()]),
+                "{a}"
+            );
+            assert_eq!(a["transcripts_holding"], json!([]), "{a}");
+            assert!(!backup.exists());
+            let t = crate::fsio::read_to_string(&transcript).unwrap();
+            assert!(!t.contains("secret title"), "{t}");
+        })
     }
 
     /// Without the flags both copies stay as they were and the answer lists them as still holding the text.
-    #[tokio::test]
-    async fn the_excise_leaves_the_copies_alone_unless_asked() {
-        let (a, backup, transcript, _dir) = excise_with_copies(json!({})).await;
-        assert_eq!(
-            a["backups_holding"],
-            json!([backup.to_string_lossy()]),
-            "{a}"
-        );
-        assert_eq!(a["backups_removed"], json!([]), "{a}");
-        assert_eq!(
-            a["transcripts_holding"],
-            json!([transcript.to_string_lossy()]),
-            "{a}"
-        );
-        assert_eq!(a["transcripts_redacted"], json!([]), "{a}");
-        assert_eq!(
-            crate::fsio::read_to_string(&backup).unwrap(),
-            "row secret title of the task end"
-        );
-        assert!(
-            crate::fsio::read_to_string(&transcript)
-                .unwrap()
-                .contains("secret title of the task")
-        );
+    #[test]
+    fn the_excise_leaves_the_copies_alone_unless_asked() {
+        saman::block_on_current(async move {
+            let (a, backup, transcript, _dir) = excise_with_copies(json!({})).await;
+            assert_eq!(
+                a["backups_holding"],
+                json!([backup.to_string_lossy()]),
+                "{a}"
+            );
+            assert_eq!(a["backups_removed"], json!([]), "{a}");
+            assert_eq!(
+                a["transcripts_holding"],
+                json!([transcript.to_string_lossy()]),
+                "{a}"
+            );
+            assert_eq!(a["transcripts_redacted"], json!([]), "{a}");
+            assert_eq!(
+                crate::fsio::read_to_string(&backup).unwrap(),
+                "row secret title of the task end"
+            );
+            assert!(
+                crate::fsio::read_to_string(&transcript)
+                    .unwrap()
+                    .contains("secret title of the task")
+            );
+        })
     }
 
     /// URDR-EXCISE-OF-MUTANTS-1: the answer of `graph/excise` reports each count of what the excise did (pinned
     /// field by field, so a dropped field fails here).
-    #[tokio::test]
-    async fn the_excise_answer_reports_each_count() {
-        let (_dir, w, _, _) = fixture().await;
-        let made = task_write(
-            &w,
-            json!({"op": "create", "title": "first title of the task", "project": MINE}),
-        )
-        .await;
-        let id = made["id"].as_str().unwrap().to_owned();
-        task_write(
+    #[test]
+    fn the_excise_answer_reports_each_count() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            let made = task_write(
+                &w,
+                json!({"op": "create", "title": "first title of the task", "project": MINE}),
+            )
+            .await;
+            let id = made["id"].as_str().unwrap().to_owned();
+            task_write(
             &w,
             json!({"op": "update", "id": id, "ver": made["ver"], "title": "second title of the task", "project": MINE}),
         )
         .await;
-        // a third tx whose note quotes the title: it is blanked too
-        let n = count(&w, "select n from entity where kind = 'task'").await;
-        let mut noted = TxMeta::new("agent:s1", TxClass::Agent, "test");
-        noted.note = Some("because first title of the task".into());
-        w.db.graph_writer()
-            .unwrap()
-            .write(noted, move |tx| {
-                urdr::graph::entity::update(
-                    tx,
-                    n,
-                    None,
-                    urdr::graph::entity::Changes {
-                        body: Some(Some("a body".into())),
-                        ..Default::default()
-                    },
-                )
-                .map(|_| ())
-            })
-            .await
-            .unwrap();
-        let before = count(&w, "select max(id) from tx").await;
-        let p: api::ExciseParams =
-            serde_json::from_value(json!({"target": id, "reason": "r"})).unwrap();
-        let a = excise_of(&w, None, &user(), p).await.unwrap();
-        let after = count(&w, "select max(id) from tx").await;
-        assert_eq!(after, before + 1, "the excise is one tx");
-        assert_eq!(a["tx"], json!(after), "{a}");
-        assert_eq!(a["entities"], json!(1), "{a}");
-        assert_eq!(a["versions"], json!(3), "{a}");
-        assert_eq!(a["txs_blanked"], json!(1), "{a}");
-        assert_eq!(a["blanked"], json!(2), "{a}");
+            // a third tx whose note quotes the title: it is blanked too
+            let n = count(&w, "select n from entity where kind = 'task'").await;
+            let mut noted = TxMeta::new("agent:s1", TxClass::Agent, "test");
+            noted.note = Some("because first title of the task".into());
+            w.db.graph_writer()
+                .unwrap()
+                .write(noted, move |tx| {
+                    urdr::graph::entity::update(
+                        tx,
+                        n,
+                        None,
+                        urdr::graph::entity::Changes {
+                            body: Some(Some("a body".into())),
+                            ..Default::default()
+                        },
+                    )
+                    .map(|_| ())
+                })
+                .await
+                .unwrap();
+            let before = count(&w, "select max(id) from tx").await;
+            let p: api::ExciseParams =
+                serde_json::from_value(json!({"target": id, "reason": "r"})).unwrap();
+            let a = excise_of(&w, None, &user(), p).await.unwrap();
+            let after = count(&w, "select max(id) from tx").await;
+            assert_eq!(after, before + 1, "the excise is one tx");
+            assert_eq!(a["tx"], json!(after), "{a}");
+            assert_eq!(a["entities"], json!(1), "{a}");
+            assert_eq!(a["versions"], json!(3), "{a}");
+            assert_eq!(a["txs_blanked"], json!(1), "{a}");
+            assert_eq!(a["blanked"], json!(2), "{a}");
+        })
     }
 
     /// The user's `graph/revert`: `cascade` only says what a tx's revert or a version put back would do (nothing is
     /// written); without it the entity is put back to the version.
-    #[tokio::test]
-    async fn a_cascade_revert_writes_nothing_and_a_version_is_put_back() {
-        let (_dir, w, _, _) = fixture().await;
-        let made = task_write(
-            &w,
-            json!({"op": "create", "title": "first", "project": MINE}),
-        )
-        .await;
-        let id = made["id"].as_str().unwrap().to_owned();
-        task_write(
+    #[test]
+    fn a_cascade_revert_writes_nothing_and_a_version_is_put_back() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            let made = task_write(
+                &w,
+                json!({"op": "create", "title": "first", "project": MINE}),
+            )
+            .await;
+            let id = made["id"].as_str().unwrap().to_owned();
+            task_write(
             &w,
             json!({"op": "update", "id": id, "ver": made["ver"], "title": "second", "project": MINE}),
         )
         .await;
-        let t = count(&w, "select max(id) from tx").await;
-        let n = count(&w, "select n from entity where kind = 'task'").await;
-        let txs = count(&w, "select count(*) from tx").await;
-        let me = user();
-        let rev = |p: Value| revert(&w, &me, serde_json::from_value(p).unwrap());
-        for p in [
-            json!({"tx": t, "cascade": true}),
-            json!({"entity": id, "ver": 1, "cascade": true}),
-        ] {
-            let r = rev(p.clone()).await.unwrap();
-            assert_eq!(
-                (&r["listed"], &r["reverted"]["entities"]),
-                (&json!(true), &json!([n])),
-                "{p}: {r}"
-            );
-            assert_eq!(count(&w, "select count(*) from tx").await, txs, "{p}");
+            let t = count(&w, "select max(id) from tx").await;
+            let n = count(&w, "select n from entity where kind = 'task'").await;
+            let txs = count(&w, "select count(*) from tx").await;
+            let me = user();
+            let rev = |p: Value| revert(&w, &me, serde_json::from_value(p).unwrap());
+            for p in [
+                json!({"tx": t, "cascade": true}),
+                json!({"entity": id, "ver": 1, "cascade": true}),
+            ] {
+                let r = rev(p.clone()).await.unwrap();
+                assert_eq!(
+                    (&r["listed"], &r["reverted"]["entities"]),
+                    (&json!(true), &json!([n])),
+                    "{p}: {r}"
+                );
+                assert_eq!(count(&w, "select count(*) from tx").await, txs, "{p}");
+                let title = text_of(&w, "select title from entity where kind = 'task'").await;
+                assert_eq!(title, "second", "{p}");
+            }
+            let r = rev(json!({"entity": id, "ver": 1})).await.unwrap();
+            assert_eq!(r["reverted"]["entities"], json!([n]), "{r}");
+            assert!(r.get("listed").is_none(), "{r}");
             let title = text_of(&w, "select title from entity where kind = 'task'").await;
-            assert_eq!(title, "second", "{p}");
-        }
-        let r = rev(json!({"entity": id, "ver": 1})).await.unwrap();
-        assert_eq!(r["reverted"]["entities"], json!([n]), "{r}");
-        assert!(r.get("listed").is_none(), "{r}");
-        let title = text_of(&w, "select title from entity where kind = 'task'").await;
-        assert_eq!(title, "first");
+            assert_eq!(title, "first");
+        })
     }
 
     /// The user's `graph/proposed`: `accept` marks an agent's proposed tx accepted and keeps its change; `reject`
     /// reverts it (a proposed entity is retired).
-    #[tokio::test]
-    async fn the_user_accepts_and_rejects_proposed_txs() {
-        let (_dir, w, _, _) = fixture().await;
-        let mut propose = Vec::new();
-        for id in ["task:p1", "task:p2"] {
-            let mut m = TxMeta::new("agent:s1", TxClass::Agent, "mcp:task_write/create");
-            m.session = Some("s1".into());
-            m.state = urdr::graph::TxState::Proposed;
-            let t =
-                w.db.write(m, move |tx| {
-                    entity::create(
-                        tx,
-                        entity::EntityNew {
-                            id: id.into(),
-                            kind: "task".into(),
-                            project: None,
-                            title: Some(id.into()),
-                            status: Some("open".into()),
-                            body: None,
-                            priority: None,
-                            assignee: None,
-                            data: json!({}),
-                            origin: entity::Origin::Recorded,
-                            source: None,
-                        },
-                    )?;
-                    Ok(tx.id())
+    #[test]
+    fn the_user_accepts_and_rejects_proposed_txs() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            let mut propose = Vec::new();
+            for id in ["task:p1", "task:p2"] {
+                let mut m = TxMeta::new("agent:s1", TxClass::Agent, "mcp:task_write/create");
+                m.session = Some("s1".into());
+                m.state = urdr::graph::TxState::Proposed;
+                let t =
+                    w.db.write(m, move |tx| {
+                        entity::create(
+                            tx,
+                            entity::EntityNew {
+                                id: id.into(),
+                                kind: "task".into(),
+                                project: None,
+                                title: Some(id.into()),
+                                status: Some("open".into()),
+                                body: None,
+                                priority: None,
+                                assignee: None,
+                                data: json!({}),
+                                origin: entity::Origin::Recorded,
+                                source: None,
+                            },
+                        )?;
+                        Ok(tx.id())
+                    })
+                    .await
+                    .unwrap();
+                propose.push(t);
+            }
+            let state = |t: i64| {
+                w.db.read(move |c| {
+                    Ok(c.query_row("select state from tx where id = ?1", [t], |r| {
+                        r.get::<_, String>(0)
+                    })?)
                 })
-                .await
-                .unwrap();
-            propose.push(t);
-        }
-        let state = |t: i64| {
-            w.db.read(move |c| {
-                Ok(c.query_row("select state from tx where id = ?1", [t], |r| {
-                    r.get::<_, String>(0)
-                })?)
-            })
-        };
-        let me = user();
-        let decide = |p: Value| proposed(&w, &me, serde_json::from_value(p).unwrap());
-        let r = decide(json!({"accept": [propose[0]]})).await.unwrap();
-        assert!(r["reverted"].is_object(), "{r}");
-        assert_eq!(state(propose[0]).await.unwrap(), "accepted");
-        let r = decide(json!({"reject": [propose[1]]})).await.unwrap();
-        let p2 = count(&w, "select n from entity where id = 'task:p2'").await;
-        assert_eq!(r["reverted"]["entities"], json!([p2]), "{r}");
-        assert_eq!(state(propose[1]).await.unwrap(), "reverted");
-        let live = count(
-            &w,
-            "select count(*) from entity where kind = 'task' and retired_tx is null",
-        )
-        .await;
-        assert_eq!(live, 1, "p1 kept, p2 retired");
+            };
+            let me = user();
+            let decide = |p: Value| proposed(&w, &me, serde_json::from_value(p).unwrap());
+            let r = decide(json!({"accept": [propose[0]]})).await.unwrap();
+            assert!(r["reverted"].is_object(), "{r}");
+            assert_eq!(state(propose[0]).await.unwrap(), "accepted");
+            let r = decide(json!({"reject": [propose[1]]})).await.unwrap();
+            let p2 = count(&w, "select n from entity where id = 'task:p2'").await;
+            assert_eq!(r["reverted"]["entities"], json!([p2]), "{r}");
+            assert_eq!(state(propose[1]).await.unwrap(), "reverted");
+            let live = count(
+                &w,
+                "select count(*) from entity where kind = 'task' and retired_tx is null",
+            )
+            .await;
+            assert_eq!(live, 1, "p1 kept, p2 retired");
+        })
     }
 
     /// An access card that names no session can't be settled with `session`: refused, no grant, the card open.
-    #[tokio::test]
-    async fn a_session_choice_on_a_card_without_a_session_is_refused() {
-        let (_dir, w, _, _) = fixture().await;
-        let data = json!({"profile": "p1", "project": MINE, "target": THEIRS, "reason": "r", "known": true,
+    #[test]
+    fn a_session_choice_on_a_card_without_a_session_is_refused() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            let data = json!({"profile": "p1", "project": MINE, "target": THEIRS, "reason": "r", "known": true,
                           "choices": ["session", "project", "profile", "refuse"]});
-        let card =
-            w.db.write(TxMeta::new("agent:s1", TxClass::Agent, "test"), move |tx| {
-                cards::card_create(
-                    tx,
-                    NewCard {
-                        job: None,
-                        task: None,
-                        kind: Some("access".into()),
-                        title: Some("asks to read".into()),
-                        data: Some(data),
-                    },
-                    1.0,
-                )
-            })
-            .await
-            .unwrap();
-        let e = settle(&w, &user(), card, "session".into(), now())
-            .await
-            .unwrap_err();
-        assert!(e.message.contains("names no session"), "{}", e.message);
-        assert!(grants_now(&w).await.is_empty());
-        let open = count(&w, "select count(*) from card where state = 'open'").await;
-        assert_eq!(open, 1);
+            let card =
+                w.db.write(TxMeta::new("agent:s1", TxClass::Agent, "test"), move |tx| {
+                    cards::card_create(
+                        tx,
+                        NewCard {
+                            job: None,
+                            task: None,
+                            kind: Some("access".into()),
+                            title: Some("asks to read".into()),
+                            data: Some(data),
+                        },
+                        1.0,
+                    )
+                })
+                .await
+                .unwrap();
+            let e = settle(&w, &user(), card, "session".into(), now())
+                .await
+                .unwrap_err();
+            assert!(e.message.contains("names no session"), "{}", e.message);
+            assert!(grants_now(&w).await.is_empty());
+            let open = count(&w, "select count(*) from card where state = 'open'").await;
+            assert_eq!(open, 1);
+        })
     }
 
     /// Review finding 10 (Task 15b: `expires` = the session's end for `session`): a session grant from an access card
     /// expires; a project or profile grant lasts until it is revoked.
-    #[tokio::test]
-    async fn a_session_grant_from_an_access_card_expires() {
-        let (_dir, w, _, _) = fixture().await;
-        let at = now();
-        let card = access_card(&w, Some("p1")).await;
-        settle(&w, &user(), card, "session".into(), at)
-            .await
-            .unwrap();
-        let card = access_card(&w, Some("p1")).await;
-        settle(&w, &user(), card, "project".into(), at)
-            .await
-            .unwrap();
-        let gs = grants_now(&w).await;
-        let session = gs
-            .iter()
-            .find(|g| g.who == Who::Session("s1".into()))
-            .unwrap();
-        let ends = session.expires.expect("a session grant expires");
-        assert!(ends > at, "{ends} after {at}");
-        assert!(ends <= at + SESSION_GRANT_SECS, "a day at most: {ends}");
-        assert!(session.active(at) && !session.active(ends));
-        let project = gs
-            .iter()
-            .find(|g| matches!(g.who, Who::Project(_)))
-            .unwrap();
-        assert_eq!(project.expires, None);
+    #[test]
+    fn a_session_grant_from_an_access_card_expires() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            let at = now();
+            let card = access_card(&w, Some("p1")).await;
+            settle(&w, &user(), card, "session".into(), at)
+                .await
+                .unwrap();
+            let card = access_card(&w, Some("p1")).await;
+            settle(&w, &user(), card, "project".into(), at)
+                .await
+                .unwrap();
+            let gs = grants_now(&w).await;
+            let session = gs
+                .iter()
+                .find(|g| g.who == Who::Session("s1".into()))
+                .unwrap();
+            let ends = session.expires.expect("a session grant expires");
+            assert!(ends > at, "{ends} after {at}");
+            assert!(ends <= at + SESSION_GRANT_SECS, "a day at most: {ends}");
+            assert!(session.active(at) && !session.active(ends));
+            let project = gs
+                .iter()
+                .find(|g| matches!(g.who, Who::Project(_)))
+                .unwrap();
+            assert_eq!(project.expires, None);
+        })
     }
 
     /// A settings access card (Task 32) of session s1 asking for NAME in SCOPE.
@@ -3189,188 +3224,194 @@ mod tests {
 
     /// Task 32: `session` makes an options grant of the card's one setting for its session (a day), `once` one of a
     /// minute that is revoked after the propose; `refuse` and `resolved` none. The session hears each.
-    #[tokio::test]
-    async fn a_settings_card_settles_into_a_grant_of_one_setting() {
-        let (_dir, w, _, _) = fixture().await;
-        let at = now();
-        let card = setting_card(&w, "global", "fill-column").await;
-        let r = settle(&w, &user(), card, "session".into(), at).await;
-        assert_eq!(r.unwrap(), json!({"settled": true}));
-        let gs = grants_now(&w).await;
-        assert_eq!(gs.len(), 1);
-        let g = &gs[0];
-        assert_eq!(
-            (&g.who, &g.what, g.access, &g.names),
-            (
-                &Who::Session("s1".into()),
-                &What::OptionsGlobal,
-                Access::Options,
-                &Some(vec!["fill-column".to_string()])
-            )
-        );
-        let near = |e: Option<f64>, want: f64| e.is_some_and(|e| (e - want).abs() < 0.01);
-        assert!(near(g.expires, at + SESSION_GRANT_SECS), "{:?}", g.expires);
-        assert!(g.active(at));
-        let heard = count(
+    #[test]
+    fn a_settings_card_settles_into_a_grant_of_one_setting() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            let at = now();
+            let card = setting_card(&w, "global", "fill-column").await;
+            let r = settle(&w, &user(), card, "session".into(), at).await;
+            assert_eq!(r.unwrap(), json!({"settled": true}));
+            let gs = grants_now(&w).await;
+            assert_eq!(gs.len(), 1);
+            let g = &gs[0];
+            assert_eq!(
+                (&g.who, &g.what, g.access, &g.names),
+                (
+                    &Who::Session("s1".into()),
+                    &What::OptionsGlobal,
+                    Access::Options,
+                    &Some(vec!["fill-column".to_string()])
+                )
+            );
+            let near = |e: Option<f64>, want: f64| e.is_some_and(|e| (e - want).abs() < 0.01);
+            assert!(near(g.expires, at + SESSION_GRANT_SECS), "{:?}", g.expires);
+            assert!(g.active(at));
+            let heard = count(
             &w,
             "select count(*) from message where recipient = 'agent:s1' \
              and text like 'your settings request (card %): allowed for this session: fill-column%'",
         )
         .await;
-        assert_eq!(heard, 1);
-        // a project scope's grant is options:project; once is revoked at once (no tools: nothing proposed, and the
-        // session hears that too)
-        let card = setting_card(&w, "shared", "tab-width").await;
-        settle(&w, &user(), card, "once".into(), at).await.unwrap();
-        let gs = grants_now(&w).await;
-        let once = gs
-            .iter()
-            .find(|g| g.names == Some(vec!["tab-width".to_string()]))
-            .unwrap();
-        assert_eq!(once.what, What::OptionsProject);
-        assert!(
-            near(once.expires, at + ONCE_GRANT_SECS),
-            "{:?}",
-            once.expires
-        );
-        assert_eq!(once.status, "revoked");
-        let heard = count(
+            assert_eq!(heard, 1);
+            // a project scope's grant is options:project; once is revoked at once (no tools: nothing proposed, and the
+            // session hears that too)
+            let card = setting_card(&w, "shared", "tab-width").await;
+            settle(&w, &user(), card, "once".into(), at).await.unwrap();
+            let gs = grants_now(&w).await;
+            let once = gs
+                .iter()
+                .find(|g| g.names == Some(vec!["tab-width".to_string()]))
+                .unwrap();
+            assert_eq!(once.what, What::OptionsProject);
+            assert!(
+                near(once.expires, at + ONCE_GRANT_SECS),
+                "{:?}",
+                once.expires
+            );
+            assert_eq!(once.status, "revoked");
+            let heard = count(
             &w,
             "select count(*) from message where recipient = 'agent:s1' and text like '%allowed once: tab-width%'",
         )
         .await;
-        assert_eq!(heard, 1);
-        let failed = count(
+            assert_eq!(heard, 1);
+            let failed = count(
             &w,
             "select count(*) from message where text like '%allowed, but it could not be proposed%'",
         )
         .await;
-        assert_eq!(failed, 2);
-        for choice in ["refuse", "resolved"] {
-            let card = setting_card(&w, "global", "fill-column").await;
-            let r = settle(&w, &user(), card, choice.into(), at).await;
-            assert_eq!(r.unwrap(), json!({"settled": true}), "{choice}");
-            assert_ne!(card_state(&w, card).await, "open", "{choice}");
-        }
-        assert_eq!(grants_now(&w).await.len(), 2);
-        let refused = count(
+            assert_eq!(failed, 2);
+            for choice in ["refuse", "resolved"] {
+                let card = setting_card(&w, "global", "fill-column").await;
+                let r = settle(&w, &user(), card, choice.into(), at).await;
+                assert_eq!(r.unwrap(), json!({"settled": true}), "{choice}");
+                assert_ne!(card_state(&w, card).await, "open", "{choice}");
+            }
+            assert_eq!(grants_now(&w).await.len(), 2);
+            let refused = count(
             &w,
             "select count(*) from message where text like '%refused: fill-column stays as it is'",
         )
         .await;
-        assert_eq!(refused, 2);
-        // settled once
-        let again = settle(&w, &user(), card, "session".into(), at).await;
-        assert_eq!(again.unwrap(), json!({"settled": false}));
-        assert_eq!(grants_now(&w).await.len(), 2);
+            assert_eq!(refused, 2);
+            // settled once
+            let again = settle(&w, &user(), card, "session".into(), at).await;
+            assert_eq!(again.unwrap(), json!({"settled": false}));
+            assert_eq!(grants_now(&w).await.len(), 2);
+        })
     }
 
     /// Task 32: a choice of another card kind is invalid; a card whose request no longer holds (a deny-listed or a
     /// glob name) is refused and stays open.
-    #[tokio::test]
-    async fn a_settings_card_is_the_users_and_is_checked_again() {
-        let (_dir, w, _, _) = fixture().await;
-        let card = setting_card(&w, "global", "fill-column").await;
-        for choice in ["project", "profile", "maybe"] {
-            let e = settle(&w, &user(), card, choice.into(), now())
-                .await
-                .unwrap_err();
-            assert_eq!(
-                (e.code, e.path.as_deref()),
-                (ErrorCode::InvalidParams, Some("choice")),
-                "{choice}"
-            );
-        }
-        assert_eq!(card_state(&w, card).await, "open");
-        assert!(grants_now(&w).await.is_empty());
-        for name in ["load-path", "after-save-hook", "fill-*"] {
-            let card = setting_card(&w, "global", name).await;
-            let e = settle(&w, &user(), card, "session".into(), now())
-                .await
-                .unwrap_err();
-            assert_eq!(e.code, ErrorCode::InvalidParams, "{name}: {}", e.message);
-            assert_eq!(card_state(&w, card).await, "open", "{name}");
-            // refusing it still works
-            let r = settle(&w, &user(), card, "refuse".into(), now()).await;
-            assert_eq!(r.unwrap(), json!({"settled": true}), "{name}");
-        }
-        assert!(grants_now(&w).await.is_empty());
+    #[test]
+    fn a_settings_card_is_the_users_and_is_checked_again() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            let card = setting_card(&w, "global", "fill-column").await;
+            for choice in ["project", "profile", "maybe"] {
+                let e = settle(&w, &user(), card, choice.into(), now())
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    (e.code, e.path.as_deref()),
+                    (ErrorCode::InvalidParams, Some("choice")),
+                    "{choice}"
+                );
+            }
+            assert_eq!(card_state(&w, card).await, "open");
+            assert!(grants_now(&w).await.is_empty());
+            for name in ["load-path", "after-save-hook", "fill-*"] {
+                let card = setting_card(&w, "global", name).await;
+                let e = settle(&w, &user(), card, "session".into(), now())
+                    .await
+                    .unwrap_err();
+                assert_eq!(e.code, ErrorCode::InvalidParams, "{name}: {}", e.message);
+                assert_eq!(card_state(&w, card).await, "open", "{name}");
+                // refusing it still works
+                let r = settle(&w, &user(), card, "refuse".into(), now()).await;
+                assert_eq!(r.unwrap(), json!({"settled": true}), "{name}");
+            }
+            assert!(grants_now(&w).await.is_empty());
+        })
     }
 
     /// Task 32: `settings/confirm` settles only an agent's proposed tx of `settings_change`; ok accepts it, else it is
     /// reverted; the agent hears either.
-    #[tokio::test]
-    async fn settings_confirm_settles_only_a_proposed_settings_change() {
-        let (_dir, w, _, _) = fixture().await;
-        let propose = |tool: &'static str, id: &'static str| {
-            let mut m = TxMeta::new("agent:s1", TxClass::Agent, tool);
-            m.session = Some("s1".into());
-            m.state = urdr::graph::TxState::Proposed;
-            w.db.write(m, move |tx| {
-                entity::create(
-                    tx,
-                    entity::EntityNew {
-                        id: id.into(),
-                        kind: "task".into(),
-                        project: None,
-                        title: Some(id.into()),
-                        status: Some("open".into()),
-                        body: None,
-                        priority: None,
-                        assignee: None,
-                        data: json!({}),
-                        origin: entity::Origin::Recorded,
-                        source: None,
-                    },
-                )?;
-                Ok(tx.id())
-            })
-        };
-        let other = propose("mcp:task_write/create", "task:p1").await.unwrap();
-        let mine = propose(norn::tools::settings::PROPOSED_TOOL, "task:p2")
-            .await
-            .unwrap();
-        let mine2 = propose(norn::tools::settings::PROPOSED_TOOL, "task:p3")
-            .await
-            .unwrap();
-        let wr = &w;
-        let confirm = |caller: Caller, tx: i64, ok: bool| {
-            let p = serde_json::from_value(json!({"tx": tx, "ok": ok, "error": "no"})).unwrap();
-            async move { settings_confirm(wr, &caller, p).await }
-        };
-        let e = confirm(user(), other, true).await.unwrap_err();
-        assert!(
-            e.message
-                .contains("not an agent's proposed settings change"),
-            "{}",
-            e.message
-        );
-        assert_eq!(
-            confirm(user(), mine, true).await.unwrap(),
-            json!({"state": "accepted"})
-        );
-        assert_eq!(
-            confirm(user(), mine2, false).await.unwrap(),
-            json!({"state": "reverted"})
-        );
-        let e = confirm(user(), mine, true).await.unwrap_err();
-        assert!(
-            e.message.contains("not an agent's proposed"),
-            "{}",
-            e.message
-        );
-        let states = text_of(
+    #[test]
+    fn settings_confirm_settles_only_a_proposed_settings_change() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            let propose = |tool: &'static str, id: &'static str| {
+                let mut m = TxMeta::new("agent:s1", TxClass::Agent, tool);
+                m.session = Some("s1".into());
+                m.state = urdr::graph::TxState::Proposed;
+                w.db.write(m, move |tx| {
+                    entity::create(
+                        tx,
+                        entity::EntityNew {
+                            id: id.into(),
+                            kind: "task".into(),
+                            project: None,
+                            title: Some(id.into()),
+                            status: Some("open".into()),
+                            body: None,
+                            priority: None,
+                            assignee: None,
+                            data: json!({}),
+                            origin: entity::Origin::Recorded,
+                            source: None,
+                        },
+                    )?;
+                    Ok(tx.id())
+                })
+            };
+            let other = propose("mcp:task_write/create", "task:p1").await.unwrap();
+            let mine = propose(norn::tools::settings::PROPOSED_TOOL, "task:p2")
+                .await
+                .unwrap();
+            let mine2 = propose(norn::tools::settings::PROPOSED_TOOL, "task:p3")
+                .await
+                .unwrap();
+            let wr = &w;
+            let confirm = |caller: Caller, tx: i64, ok: bool| {
+                let p = serde_json::from_value(json!({"tx": tx, "ok": ok, "error": "no"})).unwrap();
+                async move { settings_confirm(wr, &caller, p).await }
+            };
+            let e = confirm(user(), other, true).await.unwrap_err();
+            assert!(
+                e.message
+                    .contains("not an agent's proposed settings change"),
+                "{}",
+                e.message
+            );
+            assert_eq!(
+                confirm(user(), mine, true).await.unwrap(),
+                json!({"state": "accepted"})
+            );
+            assert_eq!(
+                confirm(user(), mine2, false).await.unwrap(),
+                json!({"state": "reverted"})
+            );
+            let e = confirm(user(), mine, true).await.unwrap_err();
+            assert!(
+                e.message.contains("not an agent's proposed"),
+                "{}",
+                e.message
+            );
+            let states = text_of(
             &w,
             "select group_concat(state, ' ') from (select state from tx where tool like 'mcp:%' order by id)",
         )
         .await;
-        assert_eq!(states, "proposed accepted reverted");
-        let heard = count(
+            assert_eq!(states, "proposed accepted reverted");
+            let heard = count(
             &w,
             "select count(*) from message where recipient = 'agent:s1' and text like 'your settings change (tx %'",
         )
         .await;
-        assert_eq!(heard, 2);
+            assert_eq!(heard, 2);
+        })
     }
 
     #[test]
@@ -3451,126 +3492,132 @@ mod tests {
 
     /// Each choice of a browser card writes its grant in the user's settle: once (the card's window, the web card's
     /// first host only), session, plan, a LAN literal's /24 and all private; `allow` is once.
-    #[tokio::test]
-    async fn a_browser_card_settles_into_its_grant() {
-        let (_dir, w, _, _) = fixture().await;
-        user_plan(&w, "plan:p1").await;
-        let at = now();
-        let lan = private("192.168.1.20:8080", "192.168.1.20:8080", "lan");
-        // in an order where no grant already covers the next card's question (the gate would allow it, no card)
-        let cases: [(&str, Value, &str, Option<&str>); 6] = [
-            (
-                "browser.web",
-                json!({"host": "example.com:443"}),
-                "plan",
-                Some("plan:p1"),
-            ),
-            (
-                "browser.web",
-                json!({"host": "example.com:443"}),
-                "allow",
-                None,
-            ),
-            ("browser.private", lan.clone(), "session/cidr", None),
-            (
-                "browser.private",
-                lan.clone(),
-                "plan/all-private",
-                Some("plan:p1"),
-            ),
-            ("browser.private", lan.clone(), "session", None),
-            ("browser", json!({}), "once", None),
-        ];
-        for (a, facts, choice, plan) in cases {
-            let card = browser_card(&w, a, plan, facts).await;
-            let r = settle(&w, &user(), card, choice.into(), at).await;
-            assert_eq!(r.unwrap(), json!({"settled": true}), "{a} {choice}");
-        }
-        let gs = grants_now(&w).await;
-        assert_eq!(gs.len(), 6, "{gs:?}");
-        let near = |e: Option<f64>, want: f64| e.is_some_and(|e| (e - want).abs() < 0.01);
-        let web: Vec<_> = gs
-            .iter()
-            .filter(|g| matches!(&g.what, What::Matrix { action, .. } if action == "browser.web"))
-            .collect();
-        // allow → once: the first host, for the window
-        let once = web.iter().find(|g| g.expires.is_some()).unwrap();
-        assert_eq!(once.who, Who::Session("s1".into()));
-        assert!(near(once.expires, at + 600.0), "{:?}", once.expires);
-        assert!(
-            matches!(&once.what, What::Matrix { host: Some(h), .. } if h == "example.com:443"),
-            "{:?}",
-            once.what
-        );
-        let plan = web.iter().find(|g| g.expires.is_none()).unwrap();
-        assert_eq!(plan.who, Who::Plan("plan:p1".into()));
-        assert!(matches!(&plan.what, What::Matrix { host: None, .. }));
-        let targets: Vec<(Who, Option<Value>)> = gs
-            .iter()
-            .filter_map(|g| match &g.what {
-                What::Matrix { action, target, .. } if action == "browser.private" => {
-                    Some((g.who.clone(), target.clone()))
-                }
-                _ => None,
-            })
-            .collect();
-        let s1 = || Who::Session("s1".into());
-        for want in [
-            (s1(), Some(json!({"host_port": "192.168.1.20:8080"}))),
-            (
-                s1(),
-                Some(json!({"cidr": "192.168.1.0/24", "ports": "8080"})),
-            ),
-            (Who::Plan("plan:p1".into()), Some(json!("all_private"))),
-        ] {
-            assert!(targets.contains(&want), "{want:?} in {targets:?}");
-        }
-        // the session hears each yes
-        let heard = count(
+    #[test]
+    fn a_browser_card_settles_into_its_grant() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            user_plan(&w, "plan:p1").await;
+            let at = now();
+            let lan = private("192.168.1.20:8080", "192.168.1.20:8080", "lan");
+            // in an order where no grant already covers the next card's question (the gate would allow it, no card)
+            let cases: [(&str, Value, &str, Option<&str>); 6] = [
+                (
+                    "browser.web",
+                    json!({"host": "example.com:443"}),
+                    "plan",
+                    Some("plan:p1"),
+                ),
+                (
+                    "browser.web",
+                    json!({"host": "example.com:443"}),
+                    "allow",
+                    None,
+                ),
+                ("browser.private", lan.clone(), "session/cidr", None),
+                (
+                    "browser.private",
+                    lan.clone(),
+                    "plan/all-private",
+                    Some("plan:p1"),
+                ),
+                ("browser.private", lan.clone(), "session", None),
+                ("browser", json!({}), "once", None),
+            ];
+            for (a, facts, choice, plan) in cases {
+                let card = browser_card(&w, a, plan, facts).await;
+                let r = settle(&w, &user(), card, choice.into(), at).await;
+                assert_eq!(r.unwrap(), json!({"settled": true}), "{a} {choice}");
+            }
+            let gs = grants_now(&w).await;
+            assert_eq!(gs.len(), 6, "{gs:?}");
+            let near = |e: Option<f64>, want: f64| e.is_some_and(|e| (e - want).abs() < 0.01);
+            let web: Vec<_> = gs
+                .iter()
+                .filter(
+                    |g| matches!(&g.what, What::Matrix { action, .. } if action == "browser.web"),
+                )
+                .collect();
+            // allow → once: the first host, for the window
+            let once = web.iter().find(|g| g.expires.is_some()).unwrap();
+            assert_eq!(once.who, Who::Session("s1".into()));
+            assert!(near(once.expires, at + 600.0), "{:?}", once.expires);
+            assert!(
+                matches!(&once.what, What::Matrix { host: Some(h), .. } if h == "example.com:443"),
+                "{:?}",
+                once.what
+            );
+            let plan = web.iter().find(|g| g.expires.is_none()).unwrap();
+            assert_eq!(plan.who, Who::Plan("plan:p1".into()));
+            assert!(matches!(&plan.what, What::Matrix { host: None, .. }));
+            let targets: Vec<(Who, Option<Value>)> = gs
+                .iter()
+                .filter_map(|g| match &g.what {
+                    What::Matrix { action, target, .. } if action == "browser.private" => {
+                        Some((g.who.clone(), target.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let s1 = || Who::Session("s1".into());
+            for want in [
+                (s1(), Some(json!({"host_port": "192.168.1.20:8080"}))),
+                (
+                    s1(),
+                    Some(json!({"cidr": "192.168.1.0/24", "ports": "8080"})),
+                ),
+                (Who::Plan("plan:p1".into()), Some(json!("all_private"))),
+            ] {
+                assert!(targets.contains(&want), "{want:?} in {targets:?}");
+            }
+            // the session hears each yes
+            let heard = count(
             &w,
             "select count(*) from message where recipient = 'agent:s1' and text like '%: allowed (%'",
         )
         .await;
-        assert_eq!(heard, 6);
+            assert_eq!(heard, 6);
+        })
     }
 
     /// A choice the card does not list is invalid at `choice` and the card stays open; `deny` is refuse, which marks
     /// the card refused and writes no grant; a plan choice for a session with no plan is not listed.
-    #[tokio::test]
-    async fn a_browser_card_takes_only_its_choices_and_records_a_refusal() {
-        let (_dir, w, _, _) = fixture().await;
-        let name = private("printer.local:631", "192.168.1.20:631", "lan");
-        let card = browser_card(&w, "browser.private", None, name).await;
-        for choice in [
-            "plan",
-            "session/cidr",
-            "session/all-private",
-            "project",
-            "maybe",
-        ] {
-            let e = settle(&w, &user(), card, choice.into(), now())
+    #[test]
+    fn a_browser_card_takes_only_its_choices_and_records_a_refusal() {
+        saman::block_on_current(async move {
+            let (_dir, w, _, _) = fixture().await;
+            let name = private("printer.local:631", "192.168.1.20:631", "lan");
+            let card = browser_card(&w, "browser.private", None, name).await;
+            for choice in [
+                "plan",
+                "session/cidr",
+                "session/all-private",
+                "project",
+                "maybe",
+            ] {
+                let e = settle(&w, &user(), card, choice.into(), now())
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    (e.code, e.path.as_deref()),
+                    (ErrorCode::InvalidParams, Some("choice")),
+                    "{choice}"
+                );
+            }
+            assert_eq!(card_state(&w, card).await, "open");
+            let r = settle(&w, &user(), card, "deny".into(), now()).await;
+            assert_eq!(r.unwrap(), json!({"settled": true}));
+            assert!(grants_now(&w).await.is_empty());
+            let (choice, refused): (String, bool) =
+                w.db.read(move |c| {
+                    Ok(c.query_row(
+                        "select choice, json_extract(data, '$.refused') from card where id = ?1",
+                        [card],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )?)
+                })
                 .await
-                .unwrap_err();
-            assert_eq!(
-                (e.code, e.path.as_deref()),
-                (ErrorCode::InvalidParams, Some("choice")),
-                "{choice}"
-            );
-        }
-        assert_eq!(card_state(&w, card).await, "open");
-        let r = settle(&w, &user(), card, "deny".into(), now()).await;
-        assert_eq!(r.unwrap(), json!({"settled": true}));
-        assert!(grants_now(&w).await.is_empty());
-        let (choice, refused): (String, bool) =
-            w.db.read(move |c| {
-                Ok(c.query_row(
-                    "select choice, json_extract(data, '$.refused') from card where id = ?1",
-                    [card],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )?)
-            })
-            .await
-            .unwrap();
-        assert_eq!((choice.as_str(), refused), ("refuse", true));
+                .unwrap();
+            assert_eq!((choice.as_str(), refused), ("refuse", true));
+        })
     }
 }

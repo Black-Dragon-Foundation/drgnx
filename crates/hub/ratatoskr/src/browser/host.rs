@@ -416,7 +416,7 @@ struct Out(Arc<Mutex<File>>);
 
 impl Out {
     fn frame(&self, kind: u8, payload: &[u8]) -> io::Result<()> {
-        let mut w = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut w = saman::lock(&self.0);
         write_frame(&mut w, kind, payload)
     }
 
@@ -428,7 +428,7 @@ impl Out {
     /// [`Self::control`], then THEN while no other frame can be written: whoever takes the stream after sees THEN's
     /// effect along with the event.
     fn control_then(&self, v: Value, then: impl FnOnce()) {
-        let mut w = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut w = saman::lock(&self.0);
         crate::soft::done(
             write_frame(&mut w, KIND_CONTROL, v.to_string().as_bytes()),
             "write_frame",
@@ -438,7 +438,7 @@ impl Out {
 
     /// F, once no frame is being written.
     fn between_frames<T>(&self, f: impl FnOnce() -> T) -> T {
-        let _w = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let _w = saman::lock(&self.0);
         f()
     }
 }
@@ -471,7 +471,7 @@ impl StderrSink {
     /// One line (without its newline). It is sent when no line was sent in the last [`STDERR_EVERY`], and the tail
     /// file is written then.
     fn line(&self, line: &[u8]) {
-        let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut st = saman::lock(&self.state);
         let (tail, last) = &mut *st;
         tail.extend(line);
         tail.push_back(b'\n');
@@ -489,7 +489,7 @@ impl StderrSink {
 
     /// At the end of a stderr: the tail file holds every line.
     fn flush(&self) {
-        let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut st = saman::lock(&self.state);
         write_tail(&self.path, &mut st.0);
     }
 }

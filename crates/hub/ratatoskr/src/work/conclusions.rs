@@ -373,10 +373,7 @@ pub struct Stamps(Mutex<StampCore>);
 
 impl Stamps {
     pub fn step(&self, ev: StampEv) -> Vec<Stamp> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .step(ev)
+        saman::lock(&self.0).step(ev)
     }
 }
 

@@ -172,36 +172,38 @@ fn a_resolved_conflict_is_one_correction() {
 
 /// The shell: a task's tree of the same project is merged as the union; a tree of another project (a snapshot task's
 /// own repository) only as git's result.
-#[tokio::test(flavor = "multi_thread")]
-async fn record_unions_only_one_projects_trees() {
-    let f = Fx::new();
-    let state = tempfile::tempdir().unwrap();
-    let hubs = Hubs::default();
-    let (hub, _) = hubs.of_tree(state.path(), &f.task).unwrap();
-    f.agent_writes(&hub, &BASE.replace("l2", "agent"));
-    let old = git(&f.main, &["rev-parse", "HEAD"]);
-    ok(&f.main, &["merge", "-q", "--no-ff", "-m", "merge t", "t"]);
-    super::record(&hubs, state.path(), &f.main, &f.task, Some(old.clone())).await;
-    let kinds = |hub: &Hub| {
-        hub.with(|h| {
-            (1..=h.count("op").unwrap())
-                .map(|i| h.op(OpId(i)).unwrap().kind)
-                .collect::<Vec<_>>()
-        })
-    };
-    assert_eq!(kinds(&hub), [Kind::AgentStep, Kind::Merge]);
-    // another project's tree: git's result only
-    let other = tempfile::tempdir().unwrap();
-    git(other.path(), &["init", "-q", "-b", "main"]);
-    ok(&f.main, &["checkout", "-q", "-b", "u"]);
-    crate::fsio::write(f.main.join("a.txt"), "u\n").unwrap();
-    ok(&f.main, &["commit", "-q", "-am", "u"]);
-    let before = ok(&f.main, &["checkout", "-q", "main"]);
-    ok(&f.main, &["merge", "-q", "--no-ff", "-m", "merge u", "u"]);
-    super::record(&hubs, state.path(), &f.main, other.path(), Some(before)).await;
-    assert_eq!(
-        kinds(&hub),
-        [Kind::AgentStep, Kind::Merge, Kind::External],
-        "no union with a tree of another project"
-    );
+#[test]
+fn record_unions_only_one_projects_trees() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let f = Fx::new();
+        let state = tempfile::tempdir().unwrap();
+        let hubs = Hubs::default();
+        let (hub, _) = hubs.of_tree(state.path(), &f.task).unwrap();
+        f.agent_writes(&hub, &BASE.replace("l2", "agent"));
+        let old = git(&f.main, &["rev-parse", "HEAD"]);
+        ok(&f.main, &["merge", "-q", "--no-ff", "-m", "merge t", "t"]);
+        super::record(&hubs, state.path(), &f.main, &f.task, Some(old.clone())).await;
+        let kinds = |hub: &Hub| {
+            hub.with(|h| {
+                (1..=h.count("op").unwrap())
+                    .map(|i| h.op(OpId(i)).unwrap().kind)
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(kinds(&hub), [Kind::AgentStep, Kind::Merge]);
+        // another project's tree: git's result only
+        let other = tempfile::tempdir().unwrap();
+        git(other.path(), &["init", "-q", "-b", "main"]);
+        ok(&f.main, &["checkout", "-q", "-b", "u"]);
+        crate::fsio::write(f.main.join("a.txt"), "u\n").unwrap();
+        ok(&f.main, &["commit", "-q", "-am", "u"]);
+        let before = ok(&f.main, &["checkout", "-q", "main"]);
+        ok(&f.main, &["merge", "-q", "--no-ff", "-m", "merge u", "u"]);
+        super::record(&hubs, state.path(), &f.main, other.path(), Some(before)).await;
+        assert_eq!(
+            kinds(&hub),
+            [Kind::AgentStep, Kind::Merge, Kind::External],
+            "no union with a tree of another project"
+        );
+    })
 }

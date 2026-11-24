@@ -443,7 +443,7 @@ impl std::fmt::Debug for Watch {
 impl Watch {
     /// F gets each later line of the task's output, and a last line when it ends by itself.
     pub fn listen(&self, f: Box<dyn Fn(&str) + Send + Sync>) {
-        *self.listener.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+        *saman::lock(&self.listener) = Some(f);
     }
 }
 
@@ -507,7 +507,7 @@ async fn watch(s: &Step, bg: &Background, env: &[(OsString, OsString)]) -> villa
     let label = s.label.clone();
     crate::clock::spawn("debug:background-task", async move {
         let say = |text: &str| {
-            if let Some(f) = &*to.lock().unwrap_or_else(|e| e.into_inner()) {
+            if let Some(f) = &*saman::lock(&to) {
                 f(text);
             }
         };

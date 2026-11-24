@@ -89,10 +89,7 @@ impl Hub {
         &self,
         make: impl FnOnce() -> villa::Result<Notebooks>,
     ) -> Result<Arc<Notebooks>, Error> {
-        let mut slot = self
-            .nb
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut slot = saman::lock(&self.nb);
         if let Some(nb) = &*slot {
             return Ok(nb.clone());
         }
@@ -104,11 +101,7 @@ impl Hub {
     /// The editor on connection CONN is gone: its notebooks close and their kernels end.
     pub fn gone(&self, conn: u64) {
         self.views.gone(conn);
-        let nb = self
-            .nb
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let nb = saman::lock(&self.nb).clone();
         if let Some(nb) = nb {
             crate::clock::spawn("notebook:gone", async move { nb.gone(conn).await });
         }

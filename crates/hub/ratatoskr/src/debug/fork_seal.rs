@@ -161,23 +161,14 @@ impl Trees for DirTrees {
             let m = crate::clock::blocking(move || manifest(&at))
                 .await
                 .map_err(|e| villa::Error::invalid(e.to_string()))?;
-            self.made
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(w.clone(), m);
+            saman::lock(&self.made).insert(w.clone(), m);
             Ok(w)
         })
     }
 
     fn changed<'a>(&'a self, tree: &'a Path) -> BoxFut<'a, Vec<String>> {
         Box::pin(async move {
-            let Some(before) = self
-                .made
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(tree)
-                .cloned()
-            else {
+            let Some(before) = saman::lock(&self.made).get(tree).cloned() else {
                 return vec![];
             };
             let at = tree.to_path_buf();
@@ -196,10 +187,7 @@ impl Trees for DirTrees {
 
     fn remove<'a>(&'a self, tree: &'a Path) -> BoxFut<'a, ()> {
         Box::pin(async move {
-            self.made
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .remove(tree);
+            saman::lock(&self.made).remove(tree);
             // the fork's own folder (the tree's parent), never anything outside the forks' root
             if let Some(dir) = tree
                 .parent()
@@ -661,7 +649,7 @@ impl Launcher for SealedLauncher {
             };
             let mux = Mux::new(stdout, stdin);
             let (client, incoming) = Self::open(&mux);
-            *self.mux.lock().unwrap_or_else(|e| e.into_inner()) = Some(mux);
+            *saman::lock(&self.mux) = Some(mux);
             Ok(Connected {
                 client,
                 incoming,
@@ -672,10 +660,7 @@ impl Launcher for SealedLauncher {
 
     fn child(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
-            let mux = self
-                .mux
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
+            let mux = saman::lock(&self.mux)
                 .clone()
                 .ok_or_else(|| villa::Error::unavailable("the fork's sandbox is not running"))?;
             let (client, incoming) = Self::open(&mux);

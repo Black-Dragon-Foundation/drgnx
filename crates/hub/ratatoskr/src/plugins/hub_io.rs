@@ -331,11 +331,7 @@ impl HubIo {
     /// A refusal of PLUGIN's request to HOST (WHY): logged, and a `proxy-denied` event once per host.
     async fn record(&self, plugin: &str, host: &str, why: &str) {
         tracing::info!(plugin, host, why, "a plugin's request was refused");
-        let first = self
-            .denied
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(host.to_owned());
+        let first = saman::lock(&self.denied).insert(host.to_owned());
         if !first {
             return;
         }

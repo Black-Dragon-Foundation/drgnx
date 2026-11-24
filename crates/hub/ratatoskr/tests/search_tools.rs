@@ -572,8 +572,9 @@ const TOOLS: [&str; 8] = [
 ];
 
 /// Pattern C. A session's search socket serves the three tools; their text answers; refusals are tool errors.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_session_socket_serves_symbols_and_outline() {
+#[test]
+fn the_session_socket_serves_symbols_and_outline() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let root = Root::new();
     settings(&root, "(drgnx-agents-mcp (coordination search))");
     let (proj, _wt) = project(&root, "proj");
@@ -698,41 +699,44 @@ async fn the_session_socket_serves_symbols_and_outline() {
         assert!(refused, "{tool} {bad}");
     }
     client.cancel().await.unwrap();
+})
 }
 
 /// Pattern C. `ratatoskr search mcp ROOT` on stdio serves the same tools and answers as the socket does.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stdio_serves_the_same_tools() {
-    let root = Root::new();
-    let (proj, _wt) = project(&root, "proj");
-    let (_hub, _c) = ready(&root);
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_ratatoskr"))
-        .args(["search", "mcp"])
-        .arg(&proj)
-        .envs(root.vars())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let (out, inp) = (child.stdout.take().unwrap(), child.stdin.take().unwrap());
-    let client = mcp_on!(out, inp);
-    let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(
-        tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>(),
-        TOOLS
-    );
-    let r = client
-        .call_tool(
-            CallToolRequestParams::new("symbols")
-                .with_arguments(args(json!({"name": "drgnx-hub", "match": "prefix"}))),
-        )
-        .await
-        .unwrap();
-    let text = text_of(&r);
-    assert!(
-        text.starts_with("matched: prefix\ncore/hub.el:3-5  function  drgnx-hub-call"),
-        "{text}"
-    );
-    client.cancel().await.unwrap();
+#[test]
+fn stdio_serves_the_same_tools() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let root = Root::new();
+        let (proj, _wt) = project(&root, "proj");
+        let (_hub, _c) = ready(&root);
+        let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_ratatoskr"))
+            .args(["search", "mcp"])
+            .arg(&proj)
+            .envs(root.vars())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let (out, inp) = (child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        let client = mcp_on!(out, inp);
+        let tools = client.list_all_tools().await.unwrap();
+        assert_eq!(
+            tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>(),
+            TOOLS
+        );
+        let r = client
+            .call_tool(
+                CallToolRequestParams::new("symbols")
+                    .with_arguments(args(json!({"name": "drgnx-hub", "match": "prefix"}))),
+            )
+            .await
+            .unwrap();
+        let text = text_of(&r);
+        assert!(
+            text.starts_with("matched: prefix\ncore/hub.el:3-5  function  drgnx-hub-call"),
+            "{text}"
+        );
+        client.cancel().await.unwrap();
+    })
 }

@@ -129,7 +129,7 @@ impl Heaps {
     pub async fn read(&self, d: &Debug, conn: u64, p: DebugHeap) -> villa::Result<DebugHeapGraph> {
         let (id, session, expr, lim, before) = match &p.graph {
             Some(g) => {
-                let open = self.open.lock().expect("heaps");
+                let open = saman::lock(&self.open);
                 let k = open
                     .get(g)
                     .ok_or_else(|| villa::Error::invalid(format!("no open heap graph {g}")))?;
@@ -163,7 +163,7 @@ impl Heaps {
         if let (Some(rec), Some(e)) = (d.records(), epoch) {
             rec.heap(&session, e, json!(out));
         }
-        let mut open = self.open.lock().expect("heaps");
+        let mut open = saman::lock(&self.open);
         // graphs of sessions that have ended go with them
         open.retain(|_, k| d.session(&k.session).is_some_and(|h| !h.is_ended()));
         open.insert(
@@ -183,14 +183,12 @@ impl Heaps {
 
     /// Forget GRAPH; whether it was open.
     pub fn close(&self, graph: &str) -> bool {
-        self.open.lock().expect("heaps").remove(graph).is_some()
+        saman::lock(&self.open).remove(graph).is_some()
     }
 
     /// Whether SESSION has an open graph.
     pub fn any_of(&self, session: &str) -> bool {
-        self.open
-            .lock()
-            .expect("heaps")
+        saman::lock(&self.open)
             .values()
             .any(|k| k.session == session)
     }
@@ -198,10 +196,7 @@ impl Heaps {
     /// A new stop (EPOCH) of SESSION: each of its open graphs not read at it is read again (the selected frame) and
     /// sent as `debug-heap` to the editor that opened it.
     pub async fn at_stop(&self, d: &Debug, session: &str, epoch: u64) {
-        let due: Vec<(String, u64)> = self
-            .open
-            .lock()
-            .expect("heaps")
+        let due: Vec<(String, u64)> = saman::lock(&self.open)
             .iter()
             .filter(|(_, k)| k.session == session && k.epoch != Some(epoch))
             .map(|(id, k)| (id.clone(), k.conn))

@@ -1115,10 +1115,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
 
 impl Inner {
     fn live<R>(&self, t: hrafn::TreeId, f: impl FnOnce(&mut Live) -> R) -> R {
-        let mut g = self
-            .trees
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut g = saman::lock(&self.trees);
         f(g.entry(t).or_default())
     }
 
@@ -1409,10 +1406,7 @@ impl Inner {
 
     /// The file list (blocking: git and a read of every file).
     fn list(&self) -> io::Result<Vec<Listed>> {
-        let mut snap = self
-            .listing
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut snap = saman::lock(&self.listing);
         hrafn::files::list_with(
             &self.base,
             &GitCli,

@@ -55,103 +55,108 @@ async fn gathered(db: &CoordDb, task: &'static str) -> (Vec<(BriefPart, String)>
         .unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_brief_says_what_the_gate_will_do_for_its_session() {
-    let (_d, db, _) = setup().await;
-    let gate = MatrixGate::default();
-    // the user's Never for one provider, and a manager's delegation that leaves out code.ci-config
-    gate.apply_setting(&json!({"cells": [
+#[test]
+fn a_brief_says_what_the_gate_will_do_for_its_session() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_d, db, _) = setup().await;
+        let gate = MatrixGate::default();
+        // the user's Never for one provider, and a manager's delegation that leaves out code.ci-config
+        gate.apply_setting(&json!({"cells": [
         {"action": "commit", "column": {"provider": "p1"}, "verdict": "never"}]}))
-        .unwrap();
-    let mgr = Who {
-        role: Some(Role::Manager),
-        ..Who::default()
-    };
-    let (g, m) = (gate.clone(), mgr.clone());
-    db.read(move |c| {
-        let mut asked = g.effective_for(c, &m, &ActionCtx::default(), 1.0);
-        asked.cells.remove(&Action::CodeCiConfig);
-        g.delegate(c, &m, &ActionCtx::default(), "w1", asked, 1.0)
             .unwrap();
-        Ok(())
+        let mgr = Who {
+            role: Some(Role::Manager),
+            ..Who::default()
+        };
+        let (g, m) = (gate.clone(), mgr.clone());
+        db.read(move |c| {
+            let mut asked = g.effective_for(c, &m, &ActionCtx::default(), 1.0);
+            asked.cells.remove(&Action::CodeCiConfig);
+            g.delegate(c, &m, &ActionCtx::default(), "w1", asked, 1.0)
+                .unwrap();
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let who = Who {
+            provider: Some("p1".into()),
+            ..worker()
+        };
+        let ctx = ActionCtx {
+            session: Some("w1".into()),
+            ..ActionCtx::default()
+        };
+        let (g, w, x) = (gate.clone(), who.clone(), ctx.clone());
+        let (parts, _) = db
+            .read(move |c| gather(c, &g, "J#1", (w, x), 1.0))
+            .await
+            .unwrap();
+        let m = &parts
+            .iter()
+            .find(|(p, _)| *p == BriefPart::Matrix)
+            .unwrap()
+            .1;
+        let seam = db
+            .read(move |c| Ok(gate.effective_for(c, &who, &ctx, 1.0)))
+            .await
+            .unwrap();
+        assert_eq!(*m, matrix_lines(&seam));
+        assert!(
+            !m.contains("- commit:") && !m.contains("- code.ci-config:"),
+            "{m}"
+        );
+        assert!(m.contains("- code.edit: allow"), "{m}");
     })
-    .await
-    .unwrap();
-    let who = Who {
-        provider: Some("p1".into()),
-        ..worker()
-    };
-    let ctx = ActionCtx {
-        session: Some("w1".into()),
-        ..ActionCtx::default()
-    };
-    let (g, w, x) = (gate.clone(), who.clone(), ctx.clone());
-    let (parts, _) = db
-        .read(move |c| gather(c, &g, "J#1", (w, x), 1.0))
-        .await
-        .unwrap();
-    let m = &parts
-        .iter()
-        .find(|(p, _)| *p == BriefPart::Matrix)
-        .unwrap()
-        .1;
-    let seam = db
-        .read(move |c| Ok(gate.effective_for(c, &who, &ctx, 1.0)))
-        .await
-        .unwrap();
-    assert_eq!(*m, matrix_lines(&seam));
-    assert!(
-        !m.contains("- commit:") && !m.contains("- code.ci-config:"),
-        "{m}"
-    );
-    assert!(m.contains("- code.edit: allow"), "{m}");
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn brief_has_every_part() {
-    let (_d, db, plan) = setup().await;
-    db.write(meta(Class::System), |tx| {
-        let t1 = entity::by_id(tx.sql(), "task:J#1")?.unwrap();
-        let r = entity::create(
-            tx,
-            EntityNew {
-                id: "report:xx-aaaaa".into(),
-                kind: "report".into(),
-                project: None,
-                title: None,
-                status: None,
-                body: None,
-                priority: None,
-                assignee: None,
-                data: json!({"interfaces": "fn one() -> u8"}),
-                origin: Origin::Recorded,
-                source: None,
-            },
-        )?;
-        link::add(tx, r.n, "report_of", t1.n, None, Origin::Recorded, None)?;
-        Ok(())
+#[test]
+fn brief_has_every_part() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_d, db, plan) = setup().await;
+        db.write(meta(Class::System), |tx| {
+            let t1 = entity::by_id(tx.sql(), "task:J#1")?.unwrap();
+            let r = entity::create(
+                tx,
+                EntityNew {
+                    id: "report:xx-aaaaa".into(),
+                    kind: "report".into(),
+                    project: None,
+                    title: None,
+                    status: None,
+                    body: None,
+                    priority: None,
+                    assignee: None,
+                    data: json!({"interfaces": "fn one() -> u8"}),
+                    origin: Origin::Recorded,
+                    source: None,
+                },
+            )?;
+            link::add(tx, r.n, "report_of", t1.n, None, Origin::Recorded, None)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let (parts, pointer) = gathered(&db, "J#2").await;
+        let (text, parts, cut) = assemble("J#2", parts, &pointer);
+        assert!(!cut);
+        let get = |p| parts.iter().find(|(q, _)| *q == p).unwrap().1.clone();
+        assert!(get(BriefPart::PlanSection).contains("Do two."));
+        assert!(!get(BriefPart::PlanSection).contains("Do one."));
+        assert!(get(BriefPart::AgentsMd).contains("be kind"));
+        let m = get(BriefPart::Matrix);
+        assert!(!m.is_empty() && !m.contains(": never"));
+        assert!(get(BriefPart::BaseBranch).contains("job/J (your branch is job/J-2"));
+        assert!(get(BriefPart::Interfaces).contains("J#1: fn one() -> u8"));
+        assert!(get(BriefPart::Check).contains("brief::"));
+        assert!(get(BriefPart::ViewPath).contains(&plan));
+        assert!(text.contains("## Interfaces from earlier tasks"));
     })
-    .await
-    .unwrap();
-    let (parts, pointer) = gathered(&db, "J#2").await;
-    let (text, parts, cut) = assemble("J#2", parts, &pointer);
-    assert!(!cut);
-    let get = |p| parts.iter().find(|(q, _)| *q == p).unwrap().1.clone();
-    assert!(get(BriefPart::PlanSection).contains("Do two."));
-    assert!(!get(BriefPart::PlanSection).contains("Do one."));
-    assert!(get(BriefPart::AgentsMd).contains("be kind"));
-    let m = get(BriefPart::Matrix);
-    assert!(!m.is_empty() && !m.contains(": never"));
-    assert!(get(BriefPart::BaseBranch).contains("job/J (your branch is job/J-2"));
-    assert!(get(BriefPart::Interfaces).contains("J#1: fn one() -> u8"));
-    assert!(get(BriefPart::Check).contains("brief::"));
-    assert!(get(BriefPart::ViewPath).contains(&plan));
-    assert!(text.contains("## Interfaces from earlier tasks"));
 }
 
 /// Pattern D: the brief names findings and decisions in the design's words.
-#[tokio::test(flavor = "multi_thread")]
-async fn brief_has_the_findings_paragraph() {
+#[test]
+fn brief_has_the_findings_paragraph() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let (_d, db, _plan) = setup().await;
     let (parts, pointer) = gathered(&db, "J#2").await;
     let (text, parts, _) = assemble("J#2", parts, &pointer);
@@ -165,147 +170,156 @@ async fn brief_has_the_findings_paragraph() {
         "When you establish a fact that changes what you do next, record it with `note_add` kind `finding`, naming its sources. When you choose between ways, use `record_decision`, as before."
     );
     assert!(text.contains(f.as_str()));
+})
 }
 
 /// Pattern D: a job under a rule pack gets a Gates block from it: each rule that gates the merge, what it checks and
 /// how to satisfy it; advice and routing rules are not gates; a job with no pack gets none.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_brief_says_what_the_merge_checks_and_how_to_pass() {
-    use vordr::pack::{Pack, Rule};
-    let (_d, db, _plan) = setup().await;
-    let (parts, _) = gathered(&db, "J#2").await;
-    let none = parts
-        .iter()
-        .find(|(p, _)| *p == BriefPart::Gates)
-        .map(|(_, t)| t.clone());
-    assert!(none.unwrap_or_default().is_empty());
-    let rule = |id: &str, kind: &str| Rule {
-        id: id.into(),
-        kind: kind.into(),
-        doc: format!("the {id} rule"),
-    };
-    let pack = Pack {
-        name: "drgnx-org".into(),
-        version: 4,
-        rules: vec![
-            rule("red-first", "enforced"),
-            rule("author-check", "enforced"),
-            rule("merge-notes", "checked"),
-            rule("review", "routing"),
-            rule("tidy", "advice"),
-        ],
-        test_globs: vec!["test/**".into()],
-        procedures: vec![
-            vordr::pack::Procedure {
-                name: "red-first".into(),
-                roles: vec!["implement".into()],
-                text: "Write the failing test, run it, commit it.".into(),
-                ..Default::default()
-            },
-            vordr::pack::Procedure {
-                name: "merging".into(),
-                roles: vec!["merge".into()],
-                text: "Resolve by both sides' intent.".into(),
-                ..Default::default()
-            },
-        ],
-        ..Pack::default()
-    };
-    db.write(meta(Class::System), move |tx| {
-        norn::write::evidence::rule_pack(tx, "J", &pack, None).map(|_| ())
-    })
-    .await
-    .unwrap();
-    let (parts, pointer) = gathered(&db, "J#2").await;
-    let (text, parts, _) = assemble("J#2", parts, &pointer);
-    let g = &parts
-        .iter()
-        .find(|(p, _)| *p == BriefPart::Gates)
-        .expect("gates")
-        .1;
-    assert!(g.contains("drgnx-org v4"), "{g}");
-    for want in [
-        "red-first",
-        "the red-first rule",
-        "commit the failing tests first",
-        "test/**",
-        "author-check",
-        "merge-notes",
-    ] {
-        assert!(g.contains(want), "no {want:?} in\n{g}");
-    }
-    assert!(!g.contains("tidy") && !g.contains("- review"), "{g}");
-    // the procedures by name, and the task's role's (an implement task) in full
-    assert!(
-        g.contains("procedure_get") && g.contains("red-first, merging"),
-        "{g}"
-    );
-    assert!(
-        g.contains("Write the failing test, run it, commit it."),
-        "{g}"
-    );
-    assert!(!g.contains("Resolve by both sides' intent."), "{g}");
-    assert!(
-        text.contains("## The gates (what the merge checks)"),
-        "{text}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn missing_reports_leave_interfaces_empty() {
-    let (_d, db, _) = setup().await;
-    let (parts, _) = gathered(&db, "task:J#2").await;
-    let i = parts
-        .iter()
-        .find(|(p, _)| *p == BriefPart::Interfaces)
+#[test]
+fn a_brief_says_what_the_merge_checks_and_how_to_pass() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        use vordr::pack::{Pack, Rule};
+        let (_d, db, _plan) = setup().await;
+        let (parts, _) = gathered(&db, "J#2").await;
+        let none = parts
+            .iter()
+            .find(|(p, _)| *p == BriefPart::Gates)
+            .map(|(_, t)| t.clone());
+        assert!(none.unwrap_or_default().is_empty());
+        let rule = |id: &str, kind: &str| Rule {
+            id: id.into(),
+            kind: kind.into(),
+            doc: format!("the {id} rule"),
+        };
+        let pack = Pack {
+            name: "drgnx-org".into(),
+            version: 4,
+            rules: vec![
+                rule("red-first", "enforced"),
+                rule("author-check", "enforced"),
+                rule("merge-notes", "checked"),
+                rule("review", "routing"),
+                rule("tidy", "advice"),
+            ],
+            test_globs: vec!["test/**".into()],
+            procedures: vec![
+                vordr::pack::Procedure {
+                    name: "red-first".into(),
+                    roles: vec!["implement".into()],
+                    text: "Write the failing test, run it, commit it.".into(),
+                    ..Default::default()
+                },
+                vordr::pack::Procedure {
+                    name: "merging".into(),
+                    roles: vec!["merge".into()],
+                    text: "Resolve by both sides' intent.".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Pack::default()
+        };
+        db.write(meta(Class::System), move |tx| {
+            norn::write::evidence::rule_pack(tx, "J", &pack, None).map(|_| ())
+        })
+        .await
         .unwrap();
-    assert!(i.1.is_empty());
-    assert_eq!(parts.len(), 9);
+        let (parts, pointer) = gathered(&db, "J#2").await;
+        let (text, parts, _) = assemble("J#2", parts, &pointer);
+        let g = &parts
+            .iter()
+            .find(|(p, _)| *p == BriefPart::Gates)
+            .expect("gates")
+            .1;
+        assert!(g.contains("drgnx-org v4"), "{g}");
+        for want in [
+            "red-first",
+            "the red-first rule",
+            "commit the failing tests first",
+            "test/**",
+            "author-check",
+            "merge-notes",
+        ] {
+            assert!(g.contains(want), "no {want:?} in\n{g}");
+        }
+        assert!(!g.contains("tidy") && !g.contains("- review"), "{g}");
+        // the procedures by name, and the task's role's (an implement task) in full
+        assert!(
+            g.contains("procedure_get") && g.contains("red-first, merging"),
+            "{g}"
+        );
+        assert!(
+            g.contains("Write the failing test, run it, commit it."),
+            "{g}"
+        );
+        assert!(!g.contains("Resolve by both sides' intent."), "{g}");
+        assert!(
+            text.contains("## The gates (what the merge checks)"),
+            "{text}"
+        );
+    })
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn edited_brief_wins() {
-    let (_d, db, _) = setup().await;
-    assert_eq!(db.read(|c| edited(c, "J#1")).await.unwrap(), None);
-    for text in ["mine", "mine, again"] {
-        let id = db
-            .write(meta(Class::User), move |tx| set_in(tx, "J#1", text.into()))
-            .await
+#[test]
+fn missing_reports_leave_interfaces_empty() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_d, db, _) = setup().await;
+        let (parts, _) = gathered(&db, "task:J#2").await;
+        let i = parts
+            .iter()
+            .find(|(p, _)| *p == BriefPart::Interfaces)
             .unwrap();
-        assert_eq!(id, "note:brief-J#1");
-    }
-    assert_eq!(
-        db.read(|c| edited(c, "task:J#1")).await.unwrap().as_deref(),
-        Some("mine, again")
-    );
-    assert!(
-        db.write(meta(Class::User), |tx| set_in(tx, "J#9", "x".into()))
-            .await
-            .is_err()
-    );
+        assert!(i.1.is_empty());
+        assert_eq!(parts.len(), 9);
+    })
+}
+
+#[test]
+fn edited_brief_wins() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_d, db, _) = setup().await;
+        assert_eq!(db.read(|c| edited(c, "J#1")).await.unwrap(), None);
+        for text in ["mine", "mine, again"] {
+            let id = db
+                .write(meta(Class::User), move |tx| set_in(tx, "J#1", text.into()))
+                .await
+                .unwrap();
+            assert_eq!(id, "note:brief-J#1");
+        }
+        assert_eq!(
+            db.read(|c| edited(c, "task:J#1")).await.unwrap().as_deref(),
+            Some("mine, again")
+        );
+        assert!(
+            db.write(meta(Class::User), |tx| set_in(tx, "J#9", "x".into()))
+                .await
+                .is_err()
+        );
+    })
 }
 
 /// Pure (D): a temp store.  A graph plan's task body is in its worker's brief, so a proposal from Say needs no
 /// `brief/set`.
-#[tokio::test(flavor = "multi_thread")]
-async fn the_brief_carries_the_body() {
-    use crate::runner::graph_plan_tests::{front, proposed};
-    let dir = tempfile::tempdir().unwrap();
-    let f = front(dir.path());
-    let (id, _) = proposed(
-        &f,
-        dir.path(),
-        json!([{"number": "1", "title": "look", "role": "review",
+#[test]
+fn the_brief_carries_the_body() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        use crate::runner::graph_plan_tests::{front, proposed};
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let (id, _) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "look", "role": "review",
                 "body": "Read the settings code and list each default."}]),
-    )
-    .await;
-    let b = build(&f, &format!("{id}#1"), None).await.unwrap();
-    assert!(
-        b.text
-            .contains("Read the settings code and list each default."),
-        "{}",
-        b.text
-    );
+        )
+        .await;
+        let b = build(&f, &format!("{id}#1"), None).await.unwrap();
+        assert!(
+            b.text
+                .contains("Read the settings code and list each default."),
+            "{}",
+            b.text
+        );
+    })
 }
 
 #[test]

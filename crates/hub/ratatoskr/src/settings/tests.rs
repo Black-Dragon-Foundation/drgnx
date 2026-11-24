@@ -548,36 +548,38 @@ fn a_bad_profile_has_a_path() {
     assert_eq!(l.values.profile_names().len(), 8);
 }
 
-#[tokio::test]
-async fn refresh_reads_again_only_when_the_stamp_changed() {
-    let dir = config(" (drgnx-agents-mcp (bogus))\n");
-    let db_dir = tempfile::tempdir().unwrap();
-    let (_store, db) = crate::runtime_db::open(db_dir.path()).unwrap();
-    let s = Settings::new();
-    assert!(s.refresh().await.is_empty(), "nothing before open");
-    s.open(dir.path().to_path_buf(), db.clone());
-    let told = s.refresh().await;
-    assert_eq!(told.len(), 1);
-    assert_eq!(told[0]["id"], "settings-drgnx-agents-mcp");
-    assert!(runstav::events::event("notice").is_some_and(|e| (e.check)(&told[0]).is_ok()));
-    assert!(
-        s.refresh().await.is_empty(),
-        "the same stamp: not read again"
-    );
-    // a good providers entry is kept in kv as the last good value
-    write(
-        dir.path(),
-        " (drgnx-agents-mcp (bogus))\n (drgnx-ai-providers ((m :kind openai :url \"https://m.example\")))\n",
-    );
-    assert!(
-        s.refresh().await.is_empty(),
-        "the same problem is not told again"
-    );
-    assert_eq!(s.current().status().presets, 17);
-    let kept = crate::gateway::kv_get(&db, load::KV_LAST_GOOD)
-        .await
-        .unwrap();
-    assert!(kept.contains("m.example"), "{kept}");
+#[test]
+fn refresh_reads_again_only_when_the_stamp_changed() {
+    saman::block_on_current(async move {
+        let dir = config(" (drgnx-agents-mcp (bogus))\n");
+        let db_dir = tempfile::tempdir().unwrap();
+        let (_store, db) = crate::runtime_db::open(db_dir.path()).unwrap();
+        let s = Settings::new();
+        assert!(s.refresh().await.is_empty(), "nothing before open");
+        s.open(dir.path().to_path_buf(), db.clone());
+        let told = s.refresh().await;
+        assert_eq!(told.len(), 1);
+        assert_eq!(told[0]["id"], "settings-drgnx-agents-mcp");
+        assert!(runstav::events::event("notice").is_some_and(|e| (e.check)(&told[0]).is_ok()));
+        assert!(
+            s.refresh().await.is_empty(),
+            "the same stamp: not read again"
+        );
+        // a good providers entry is kept in kv as the last good value
+        write(
+            dir.path(),
+            " (drgnx-agents-mcp (bogus))\n (drgnx-ai-providers ((m :kind openai :url \"https://m.example\")))\n",
+        );
+        assert!(
+            s.refresh().await.is_empty(),
+            "the same problem is not told again"
+        );
+        assert_eq!(s.current().status().presets, 17);
+        let kept = crate::gateway::kv_get(&db, load::KV_LAST_GOOD)
+            .await
+            .unwrap();
+        assert!(kept.contains("m.example"), "{kept}");
+    })
 }
 
 // ACP v2 is a draft: only the `claude` and `codex` profiles ask for it unless a profile says so, and `off` never does.
